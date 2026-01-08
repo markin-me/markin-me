@@ -26,6 +26,7 @@
     $("[data-shop-cart]");
 
   const elCartContent = $("#shopCartContent");
+  const elCartHeaderTitle = $("#shopCartHeaderTitle");
 
   // address (right cart panel)
   const elAddressChip = $("#shopAddressChip");
@@ -70,9 +71,21 @@
 
   // desktop cart footer
   const elCartFooter = $("#shopCartFooter");
+  const elCartFooterActions = $("#shopCartFooterActions");
+  const elCheckoutFooterActions = $("#shopCheckoutFooterActions");
   const elCheckoutBtn = $("#shopCheckoutBtn");
   const elCartClearBtn = $("#shopCartClearBtn");
+  const elCheckoutBackBtn = $("#shopCheckoutBackBtn");
+  const elCheckoutSubmitBtn = $("#shopCheckoutSubmitBtn");
   const elCheckoutContent = $("#shopCheckoutContent");
+  const elProfileContent = $("#shopProfileContent");
+  const elProfileHeaderActions = $("#shopProfileHeaderActions");
+  const elProfileCloseBtn = $("#shopProfileCloseBtn");
+  const elProfileSettingsBtn = $("#shopProfileSettingsBtn");
+  const elProfileMenu = $("#shopProfileMenu");
+  const elProfileEditBtn = $("#shopProfileEditBtn");
+  const elProfileSettingsMenuBtn = $("#shopProfileSettingsMenuBtn");
+  const elProfileLogoutBtn = $("#shopProfileLogoutBtn");
 
   if (!elProductsGrid || !elCatsList) return;
 
@@ -170,6 +183,15 @@
     return raw;
   }
 
+  function formatBirthdayDisplay(raw) {
+    const v = str(raw || "").trim();
+    if (!v) return "—";
+    if (/^\d{2}\.\d{2}\.\d{4}$/.test(v)) return v;
+    const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return `${m[3]}.${m[2]}.${m[1]}`;
+    return v;
+  }
+
   // -----------------------------
   // Customer token/cache
   // -----------------------------
@@ -242,10 +264,13 @@
     addresses: [],
     selectedAddress: null,
     addressEditingId: null,
+    _addressFormBackMode: null,
+    _addressListBackMode: null,
   };
 
   let openCartSheetCtx = null;
   let openProductCtx = null;
+  let cartViewMode = "cart";
 
   function loadCart() {
     try {
@@ -423,6 +448,23 @@
     elAddressChip.title = line || "";
   }
 
+  function setCartHeader({ title, showAddressChip = true, showProfileActions = false } = {}) {
+    if (elCartHeaderTitle && typeof title === "string") {
+      elCartHeaderTitle.textContent = title;
+    }
+    if (elAddressChip) elAddressChip.classList.toggle("hidden", !showAddressChip);
+    if (elProfileHeaderActions) elProfileHeaderActions.classList.toggle("hidden", !showProfileActions);
+    if (!showProfileActions && elProfileMenu) elProfileMenu.classList.add("hidden");
+  }
+
+  function setCartFooterMode(mode) {
+    if (!elCartFooter) return;
+    const isHidden = mode === "hidden";
+    elCartFooter.classList.toggle("hidden", isHidden);
+    if (elCartFooterActions) elCartFooterActions.classList.toggle("hidden", mode !== "cart");
+    if (elCheckoutFooterActions) elCheckoutFooterActions.classList.toggle("hidden", mode !== "checkout");
+  }
+
   function setSelectedAddress(addr) {
     state.selectedAddress = addr || null;
     updateAddressChip();
@@ -442,33 +484,44 @@
   }
 
   function showCartView() {
+    cartViewMode = "cart";
     if (elAddressContent) elAddressContent.classList.add("hidden");
     if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
     if (elCartContent) elCartContent.classList.remove("hidden");
+    if (elProfileContent) elProfileContent.classList.add("hidden");
     if (elCartFooter) {
       // вернём как было: footer показывается только если корзина не пустая (renderCart решает)
       // тут ничего не делаем
     }
+    setCartHeader({ title: "Корзина", showAddressChip: true, showProfileActions: false });
+    setCartFooterMode("cart");
     renderCart();
   }
 
   function showCheckoutView() {
+    cartViewMode = "checkout";
     if (elCartContent) elCartContent.classList.add("hidden");
     if (elAddressContent) elAddressContent.classList.add("hidden");
-    if (elCartFooter) elCartFooter.classList.add("hidden");
     if (elCheckoutContent) elCheckoutContent.classList.remove("hidden");
+    if (elProfileContent) elProfileContent.classList.add("hidden");
+    setCartHeader({ title: "Корзина", showAddressChip: true, showProfileActions: false });
+    setCartFooterMode("checkout");
   }
 
-  function showAddressListView() {
+  function showAddressListView(backMode = "cart") {
     if (!elAddressContent || !elAddressListView || !elAddressFormView) return;
+    cartViewMode = "address";
+    state._addressListBackMode = backMode;
     if (elCartContent) elCartContent.classList.add("hidden");
-    if (elCartFooter) elCartFooter.classList.add("hidden");
     if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
+    if (elProfileContent) elProfileContent.classList.add("hidden");
 
     elAddressContent.classList.remove("hidden");
     elAddressListView.classList.remove("hidden");
     elAddressFormView.classList.add("hidden");
 
+    setCartHeader({ title: "Введите адрес", showAddressChip: true, showProfileActions: false });
+    setCartFooterMode("hidden");
     renderAddressList();
   }
 
@@ -477,6 +530,7 @@
 
     state.addressEditingId = editingId ? Number(editingId) : null;
     state._addressFormBackMode = backMode || (state.selectedAddress ? "list" : "cart");
+    cartViewMode = "address";
 
     if (elAddrStreet) elAddrStreet.value = str(prefill?.street || "");
     if (elAddrHouse) elAddrHouse.value = str(prefill?.house || "");
@@ -486,14 +540,26 @@
     if (elAddrComment) elAddrComment.value = str(prefill?.comment || "");
 
     if (elCartContent) elCartContent.classList.add("hidden");
-    if (elCartFooter) elCartFooter.classList.add("hidden");
     if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
+    if (elProfileContent) elProfileContent.classList.add("hidden");
 
     elAddressContent.classList.remove("hidden");
     elAddressFormView.classList.remove("hidden");
     elAddressListView.classList.add("hidden");
 
+    setCartHeader({ title: "Введите адрес", showAddressChip: true, showProfileActions: false });
+    setCartFooterMode("hidden");
     setTimeout(() => { try { elAddrStreet?.focus?.(); } catch {} }, 0);
+  }
+
+  function showProfileView() {
+    cartViewMode = "profile";
+    if (elCartContent) elCartContent.classList.add("hidden");
+    if (elAddressContent) elAddressContent.classList.add("hidden");
+    if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
+    if (elProfileContent) elProfileContent.classList.remove("hidden");
+    setCartHeader({ title: "Профиль", showAddressChip: false, showProfileActions: true });
+    setCartFooterMode("hidden");
   }
 
   async function reloadAddressesFromServer() {
@@ -551,6 +617,22 @@
     setSelectedAddress(draft ? { ...draft, _local: true } : null);
   }
 
+  function backAfterAddressSelection() {
+    const back = state._addressListBackMode || state._addressFormBackMode || "cart";
+    if (back === "checkout" && elCheckoutContent) {
+      showCheckoutView();
+      openCheckoutView({
+        container: elCheckoutContent,
+        onBack: showCartView,
+        hasAddressEditor: true,
+        isSheet: false,
+        actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
+      });
+      return;
+    }
+    showCartView();
+  }
+
   function renderAddressList() {
     if (!elAddressList) return;
 
@@ -594,13 +676,13 @@
         if (token && a.id) {
           // уже выбран (и скорее всего default) — просто закрываем
           if (state.selectedAddress && state.selectedAddress.id && Number(state.selectedAddress.id) === Number(a.id)) {
-            showCartView();
+            backAfterAddressSelection();
             return;
           }
           try {
             await apiJson(`/api/public/me/addresses/${a.id}/default`, { method: "PUT" });
             await refreshAddressState();
-            showCartView();
+            backAfterAddressSelection();
           } catch (e) {
             alert("Не удалось выбрать адрес");
           }
@@ -609,7 +691,7 @@
 
         // guest
         setSelectedAddress({ ...a, _local: true });
-        showCartView();
+        backAfterAddressSelection();
       });
 
       const actions = document.createElement("div");
@@ -638,7 +720,7 @@
             await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
             await refreshAddressState();
             renderAddressList();
-            if (!getSelectedAddressLine()) showCartView();
+            if (!getSelectedAddressLine()) backAfterAddressSelection();
           } catch (err) {
             alert("Не удалось удалить адрес");
           }
@@ -649,7 +731,7 @@
         clearAddressDraft();
         setSelectedAddress(null);
         renderAddressList();
-        showCartView();
+        backAfterAddressSelection();
       });
       actions.appendChild(btnDel);
 
@@ -658,10 +740,17 @@
     });
   }
 
-  function openAddressEditorFromCheckout() {
-    // переключаем правую корзину на форму
-    const prefill = state.selectedAddress && !state.selectedAddress._local ? state.selectedAddress : (loadAddressDraft() || state.selectedAddress);
-    showAddressFormView(prefill || null, null, "checkout");
+  async function openAddressEditorFromCheckout() {
+    await refreshAddressState();
+    const token = getCustomerToken();
+    const hasList = token ? (state.addresses || []).length : !!loadAddressDraft();
+    const prefill = state.selectedAddress && !state.selectedAddress._local
+      ? state.selectedAddress
+      : (loadAddressDraft() || state.selectedAddress);
+
+    if (hasList) showAddressListView("checkout");
+    else showAddressFormView(prefill || null, null, "checkout");
+
     try { document.querySelector("#shopCartPanel")?.scrollIntoView({ behavior: "smooth", block: "start" }); } catch {}
   }
 
@@ -690,6 +779,7 @@
               onBack: showCartView,
               hasAddressEditor: true,
               isSheet: false,
+              actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
             });
           } else {
             showCartView();
@@ -733,6 +823,7 @@
                 onBack: showCartView,
                 hasAddressEditor: true,
                 isSheet: false,
+                actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
               });
             } else {
               showCartView();
@@ -748,6 +839,7 @@
                 onBack: showCartView,
                 hasAddressEditor: true,
                 isSheet: false,
+                actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
               });
             } else {
               showCartView();
@@ -1159,7 +1251,9 @@
 
     const { items, total } = renderCartInto(elCartList, elCartTotal, elCartEmpty);
 
-    if (elCartFooter) elCartFooter.classList.toggle("hidden", items.length === 0);
+    if (elCartFooter && cartViewMode === "cart") {
+      elCartFooter.classList.toggle("hidden", items.length === 0);
+    }
     if (elCheckoutBtn) elCheckoutBtn.disabled = items.length === 0;
 
     if (elCheckoutBtn) {
@@ -1197,6 +1291,49 @@
       if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
       if (openCartSheetCtx.checkoutBtn) openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
     }
+  }
+
+  function attachTwoStepClear(btn, onConfirm) {
+    if (!btn) return;
+    let armed = false;
+    let timer = null;
+
+    const reset = () => {
+      armed = false;
+      btn.classList.remove("is-confirm");
+      btn.textContent = "×";
+      btn.title = "Очистить корзину";
+      btn.setAttribute("aria-label", "Очистить корзину");
+      if (timer) clearTimeout(timer);
+      timer = null;
+    };
+
+    const arm = () => {
+      armed = true;
+      btn.classList.add("is-confirm");
+      btn.textContent = "Очистить корзину?";
+      btn.title = "Очистить корзину?";
+      btn.setAttribute("aria-label", "Очистить корзину?");
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(reset, 6500);
+    };
+
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (cartCountTotal() <= 0) return;
+      if (!armed) {
+        arm();
+        return;
+      }
+      reset();
+      onConfirm();
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!armed) return;
+      if (btn.contains(e.target)) return;
+      reset();
+    });
   }
 
   // -----------------------------
@@ -1481,6 +1618,7 @@
 
       row.addEventListener("click", () => {
         selectCategory(c.id, c.title);
+        closeShopSheetIfOpen();
       });
 
       list.appendChild(row);
@@ -1491,6 +1629,13 @@
       title: "Категории",
       content: list,
     });
+  }
+
+  function setCartSheetFooterMode(ctx, mode) {
+    if (!ctx?.footerEl) return;
+    ctx.footerEl.classList.toggle("hidden", mode === "hidden");
+    if (ctx.cartActionsEl) ctx.cartActionsEl.classList.toggle("hidden", mode !== "cart");
+    if (ctx.checkoutActionsEl) ctx.checkoutActionsEl.classList.toggle("hidden", mode !== "checkout");
   }
 
   function openCartSheet() {
@@ -1507,8 +1652,72 @@
     checkoutWrap.className = "shop-checkout-content hidden";
     wrap.appendChild(checkoutWrap);
 
+    const addressWrap = document.createElement("div");
+    addressWrap.className = "shop-address-content hidden";
+    wrap.appendChild(addressWrap);
+
+    const addressListView = document.createElement("div");
+    addressListView.className = "shop-address-list-view hidden";
+
+    const addressListTop = document.createElement("div");
+    addressListTop.className = "shop-address-list-top";
+
+    const addressNewBtn = document.createElement("button");
+    addressNewBtn.type = "button";
+    addressNewBtn.className = "chip chip-plus";
+    addressNewBtn.innerHTML = `<i class="fas fa-plus"></i> Новый адрес`;
+    addressListTop.appendChild(addressNewBtn);
+
+    const addressList = document.createElement("div");
+    addressList.className = "shop-address-list";
+
+    addressListView.appendChild(addressListTop);
+    addressListView.appendChild(addressList);
+    addressWrap.appendChild(addressListView);
+
+    const addressFormView = document.createElement("div");
+    addressFormView.className = "shop-address-form-view hidden";
+    addressFormView.innerHTML = `
+      <div class="shop-address-form-grid">
+        <div class="shop-address-form-row shop-address-form-row--full">
+          <label class="field-label">Улица</label>
+          <input class="control" data-a="street" type="text" />
+        </div>
+        <div class="shop-address-form-row shop-address-form-row--grid">
+          <div class="shop-address-form-field">
+            <label class="field-label">Дом</label>
+            <input class="control" data-a="house" type="text" />
+          </div>
+          <div class="shop-address-form-field">
+            <label class="field-label">Подъезд</label>
+            <input class="control" data-a="entrance" type="text" />
+          </div>
+          <div class="shop-address-form-field">
+            <label class="field-label">Этаж</label>
+            <input class="control" data-a="floor" type="text" />
+          </div>
+          <div class="shop-address-form-field">
+            <label class="field-label">Квартира</label>
+            <input class="control" data-a="apartment" type="text" />
+          </div>
+        </div>
+        <div class="shop-address-form-row shop-address-form-row--full">
+          <label class="field-label">Комментарий</label>
+          <input class="control" data-a="comment" type="text" />
+        </div>
+      </div>
+      <div class="shop-address-form-actions">
+        <button class="btn btn-primary" type="button" data-a="save">Сохранить</button>
+        <button class="btn" type="button" data-a="cancel">Отмена</button>
+      </div>
+    `;
+    addressWrap.appendChild(addressFormView);
+
     const footer = document.createElement("div");
     footer.className = "shop-cart-sheet-footer";
+
+    const cartActions = document.createElement("div");
+    cartActions.className = "shop-cart-footer-actions";
 
     const clearBtn = document.createElement("button");
     clearBtn.type = "button";
@@ -1518,11 +1727,30 @@
 
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "btn btn-primary shop-checkout-btn";
+    btn.className = "shop-checkout-btn";
     btn.innerHTML = `Оформить <span class="shop-sheet-checkout-total">0 ₽</span>`;
 
-    footer.appendChild(clearBtn);
-    footer.appendChild(btn);
+    cartActions.appendChild(clearBtn);
+    cartActions.appendChild(btn);
+    footer.appendChild(cartActions);
+
+    const checkoutActions = document.createElement("div");
+    checkoutActions.className = "shop-checkout-footer-actions hidden";
+
+    const backBtn = document.createElement("button");
+    backBtn.type = "button";
+    backBtn.className = "shop-checkout-back";
+    backBtn.innerHTML = `<i class="fas fa-arrow-left"></i>`;
+
+    const submitBtn = document.createElement("button");
+    submitBtn.type = "button";
+    submitBtn.className = "shop-checkout-submit-btn";
+    submitBtn.textContent = "Заказать";
+
+    checkoutActions.appendChild(backBtn);
+    checkoutActions.appendChild(submitBtn);
+    footer.appendChild(checkoutActions);
+
     wrap.appendChild(footer);
 
     const totalSpan = $(".shop-sheet-checkout-total", btn);
@@ -1541,29 +1769,235 @@
       },
     });
 
-    openCartSheetCtx = { listEl: list, totalEl: totalSpan, footerEl: footer, checkoutBtn: btn, clearBtn, checkoutEl: checkoutWrap };
+    openCartSheetCtx = {
+      listEl: list,
+      totalEl: totalSpan,
+      footerEl: footer,
+      cartActionsEl: cartActions,
+      checkoutActionsEl: checkoutActions,
+      checkoutBtn: btn,
+      clearBtn,
+      checkoutEl: checkoutWrap,
+    };
 
-    clearBtn.addEventListener("click", () => {
-      if (cartCountTotal() <= 0) return;
-      if (!window.confirm("Очистить корзину?")) return;
-      clearCartAll();
-    });
+    setCartSheetFooterMode(openCartSheetCtx, items.length ? "cart" : "hidden");
+    attachTwoStepClear(clearBtn, () => clearCartAll());
+
+    let sheetEditingId = null;
+
+    function showSheetCheckout() {
+      checkoutWrap.classList.remove("hidden");
+      list.classList.add("hidden");
+      addressWrap.classList.add("hidden");
+      setCartSheetFooterMode(openCartSheetCtx, "checkout");
+      if (window.AppModal?.setTitle) window.AppModal.setTitle("Корзина");
+    }
+
+    function showSheetCart() {
+      checkoutWrap.classList.add("hidden");
+      list.classList.remove("hidden");
+      addressWrap.classList.add("hidden");
+      setCartSheetFooterMode(openCartSheetCtx, "cart");
+      if (window.AppModal?.setTitle) window.AppModal.setTitle("Корзина");
+    }
+
+    function showSheetAddressList() {
+      checkoutWrap.classList.add("hidden");
+      list.classList.add("hidden");
+      addressWrap.classList.remove("hidden");
+      addressListView.classList.remove("hidden");
+      addressFormView.classList.add("hidden");
+      setCartSheetFooterMode(openCartSheetCtx, "hidden");
+      if (window.AppModal?.setTitle) window.AppModal.setTitle("Введите адрес");
+      renderSheetAddressList();
+    }
+
+    function showSheetAddressForm(prefill, editingId) {
+      sheetEditingId = editingId ? Number(editingId) : null;
+      const get = (k) => addressFormView.querySelector(`[data-a="${k}"]`);
+      const setVal = (k, v) => { const el = get(k); if (el) el.value = str(v || ""); };
+      setVal("street", prefill?.street);
+      setVal("house", prefill?.house);
+      setVal("entrance", prefill?.entrance);
+      setVal("floor", prefill?.floor);
+      setVal("apartment", prefill?.apartment);
+      setVal("comment", prefill?.comment);
+      checkoutWrap.classList.add("hidden");
+      list.classList.add("hidden");
+      addressWrap.classList.remove("hidden");
+      addressListView.classList.add("hidden");
+      addressFormView.classList.remove("hidden");
+      setCartSheetFooterMode(openCartSheetCtx, "hidden");
+      if (window.AppModal?.setTitle) window.AppModal.setTitle("Введите адрес");
+      setTimeout(() => { try { get("street")?.focus?.(); } catch {} }, 0);
+    }
+
+    function renderSheetAddressList() {
+      addressList.innerHTML = "";
+      const token = getCustomerToken();
+      const listData = (token ? state.addresses : []) || [];
+      const local = (!token && loadAddressDraft()) ? [{ ...loadAddressDraft(), id: null, _local: true }] : [];
+      const effectiveList = token ? listData : local;
+
+      if (!effectiveList.length) {
+        addressList.innerHTML = `<div class="muted">Адресов пока нет.</div>`;
+        return;
+      }
+
+      effectiveList.forEach((a) => {
+        const row = document.createElement("div");
+        row.className = "shop-address-row";
+
+        const isSelected = state.selectedAddress
+          ? (a.id && state.selectedAddress.id ? Number(a.id) === Number(state.selectedAddress.id) : !!a._local && !!state.selectedAddress._local)
+          : false;
+        if (isSelected) row.classList.add("is-selected");
+
+        const title = formatAddressLine(a);
+        const sub = a.comment ? str(a.comment) : "";
+
+        row.innerHTML = `
+          <div class="shop-address-row-top">
+            <div>
+              <div class="shop-address-row-title">${title || ""}</div>
+              ${sub ? `<div class="shop-address-row-sub">${sub}</div>` : ""}
+            </div>
+            ${token && Number(a.is_default) === 1 ? `<div class="muted">основной</div>` : ``}
+          </div>
+        `;
+
+        row.addEventListener("click", async () => {
+          if (token && a.id) {
+            try {
+              await apiJson(`/api/public/me/addresses/${a.id}/default`, { method: "PUT" });
+              await refreshAddressState();
+              showSheetCheckout();
+            } catch (e) {
+              alert("Не удалось выбрать адрес");
+            }
+            return;
+          }
+
+          setSelectedAddress({ ...a, _local: true });
+          showSheetCheckout();
+        });
+
+        const actions = document.createElement("div");
+        actions.className = "shop-address-actions";
+
+        const btnEdit = document.createElement("button");
+        btnEdit.type = "button";
+        btnEdit.className = "btn";
+        btnEdit.textContent = "Редактировать";
+        btnEdit.addEventListener("click", (e) => {
+          e.stopPropagation();
+          showSheetAddressForm(a, token ? a.id : null);
+        });
+        actions.appendChild(btnEdit);
+
+        const btnDel = document.createElement("button");
+        btnDel.type = "button";
+        btnDel.className = "btn";
+        btnDel.textContent = "Удалить";
+        btnDel.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          if (!window.confirm("Удалить адрес?")) return;
+
+          if (token && a.id) {
+            try {
+              await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
+              await refreshAddressState();
+              renderSheetAddressList();
+            } catch (err) {
+              alert("Не удалось удалить адрес");
+            }
+            return;
+          }
+
+          clearAddressDraft();
+          setSelectedAddress(null);
+          renderSheetAddressList();
+        });
+        actions.appendChild(btnDel);
+
+        row.appendChild(actions);
+        addressList.appendChild(row);
+      });
+    }
+
+    addressNewBtn.addEventListener("click", () => showSheetAddressForm(null, null));
+
+    const sheetSaveBtn = addressFormView.querySelector('[data-a="save"]');
+    const sheetCancelBtn = addressFormView.querySelector('[data-a="cancel"]');
+
+    if (sheetCancelBtn) {
+      sheetCancelBtn.addEventListener("click", () => showSheetAddressList());
+    }
+
+    if (sheetSaveBtn) {
+      sheetSaveBtn.addEventListener("click", async () => {
+        const get = (k) => str(addressFormView.querySelector(`[data-a="${k}"]`)?.value || "").trim();
+        const payload = normalizeAddressPayload({
+          street: get("street"),
+          house: get("house"),
+          entrance: get("entrance"),
+          floor: get("floor"),
+          apartment: get("apartment"),
+          comment: get("comment"),
+        });
+
+        if (!payload.street) return alert("Укажите улицу");
+        if (!payload.house) return alert("Укажите дом");
+
+        sheetSaveBtn.disabled = true;
+        sheetSaveBtn.textContent = "Сохраняем…";
+
+        try {
+          const me = await fetchMeSafe();
+          const token = getCustomerToken();
+
+          if (me && token) {
+            if (sheetEditingId) {
+              await apiJson(`/api/public/me/addresses/${sheetEditingId}`, { method: "PUT", body: payload });
+            } else {
+              await apiJson("/api/public/me/addresses", { method: "POST", body: { ...payload, is_default: 1 } });
+            }
+            await refreshAddressState();
+            showSheetCheckout();
+          } else {
+            saveAddressDraft(payload);
+            setSelectedAddress({ ...payload, _local: true });
+            showSheetCheckout();
+          }
+        } catch (e) {
+          console.error(e);
+          alert("Не удалось сохранить адрес");
+        } finally {
+          sheetSaveBtn.disabled = false;
+          sheetSaveBtn.textContent = "Сохранить";
+        }
+      });
+    }
+
+    async function openSheetAddressEditor() {
+      await refreshAddressState();
+      const token = getCustomerToken();
+      const effectiveList = token ? state.addresses : (loadAddressDraft() ? [{ ...loadAddressDraft(), _local: true }] : []);
+      if (effectiveList.length) showSheetAddressList();
+      else showSheetAddressForm(loadAddressDraft(), null);
+    }
 
     btn.addEventListener("click", () => {
       if (!checkoutWrap) return;
-      checkoutWrap.classList.remove("hidden");
-      list.classList.add("hidden");
-      footer.classList.add("hidden");
+      showSheetCheckout();
 
       openCheckoutView({
         container: checkoutWrap,
-        onBack: () => {
-          checkoutWrap.classList.add("hidden");
-          list.classList.remove("hidden");
-          footer.classList.remove("hidden");
-        },
-        hasAddressEditor: false,
+        onBack: () => showSheetCart(),
+        hasAddressEditor: true,
         isSheet: true,
+        actions: { submitBtn, backBtn },
+        onEditAddress: () => openSheetAddressEditor(),
       });
     });
   }
@@ -1612,20 +2046,7 @@
     }
   }
 
-  async function openProfileSheet() {
-    if (!window.AppModal) return;
-
-    const me = await fetchMeSafe();
-    if (!me) {
-      openLoginSheet();
-      return;
-    }
-    openCabinetSheet(me);
-  }
-
-  function openLoginSheet() {
-    if (!window.AppModal) return;
-
+  function buildLoginContent({ onSuccess }) {
     const wrap = document.createElement("div");
     wrap.className = "shop-auth";
 
@@ -1636,7 +2057,7 @@
 
     const note = document.createElement("div");
     note.className = "shop-auth-text muted";
-    note.textContent = "Введите телефон и дату рождения (дд.мм.гггг).";
+    note.textContent = "Введите телефон, затем дату рождения (дд.мм.гггг).";
     wrap.appendChild(note);
 
     const form = document.createElement("div");
@@ -1669,6 +2090,7 @@
     bday.className = "control";
     bday.type = "text";
     bday.placeholder = "дд.мм.гггг";
+    bday.inputMode = "numeric";
     bWrap.appendChild(bLabel);
     bWrap.appendChild(bday);
 
@@ -1694,7 +2116,8 @@
         alert("Введите телефон (РФ): +7XXXXXXXXXX");
         return;
       }
-      bWrap.style.display = "";
+      nextBtn.style.display = "none";
+      bWrap.style.display = "grid";
       bday.focus();
     });
 
@@ -1726,7 +2149,7 @@
         const me = await fetchMeSafe();
         await refreshAddressState();
         if (me) {
-          openCabinetSheet(me);
+          if (typeof onSuccess === "function") onSuccess(me);
         } else {
           alert("Не удалось войти");
         }
@@ -1740,6 +2163,12 @@
       }
     });
 
+    return wrap;
+  }
+
+  function openLoginSheet({ onSuccess } = {}) {
+    if (!window.AppModal) return;
+    const wrap = buildLoginContent({ onSuccess });
     setAppModalMode("shop");
     window.AppModal.open({
       title: "Профиль",
@@ -1747,110 +2176,160 @@
     });
   }
 
-  async function openCabinetSheet(me) {
-    if (!window.AppModal) return;
+  function buildProfileContent({ host, me, onLogout }) {
+    host.innerHTML = "";
 
     const wrap = document.createElement("div");
-    wrap.className = "shop-cabinet";
+    wrap.className = "shop-profile";
 
     const top = document.createElement("div");
-    top.className = "shop-cabinet-top";
+    top.className = "shop-profile-top";
 
-    const nmLabel = document.createElement("label");
-    nmLabel.className = "field-label";
-    nmLabel.textContent = "Имя";
-    const nm = document.createElement("input");
-    nm.className = "control";
-    nm.type = "text";
-    nm.value = str(me.name || "");
-    top.appendChild(nmLabel);
-    top.appendChild(nm);
+    const photo = document.createElement("div");
+    photo.className = "shop-profile-photo";
+    top.appendChild(photo);
 
-    const saveName = document.createElement("button");
-    saveName.type = "button";
-    saveName.className = "btn btn-primary";
-    saveName.style.width = "100%";
-    saveName.textContent = "Сохранить имя";
-    top.appendChild(saveName);
+    const info = document.createElement("div");
+    info.className = "shop-profile-info";
 
-    const ro = document.createElement("div");
-    ro.className = "muted";
-    ro.style.marginTop = "8px";
-    ro.textContent = `Телефон: ${formatPhonePlus7(me.phone || "")} • ДР: ${me.birthday ? me.birthday : "—"}`;
-    top.appendChild(ro);
+    function addLine(title, value) {
+      const line = document.createElement("div");
+      line.className = "shop-profile-line";
+      const t = document.createElement("div");
+      t.className = "shop-profile-line-title";
+      t.textContent = title;
+      const v = document.createElement("div");
+      v.className = "shop-profile-line-value";
+      v.textContent = value;
+      line.appendChild(t);
+      line.appendChild(v);
+      info.appendChild(line);
+      return v;
+    }
 
-    const logout = document.createElement("button");
-    logout.type = "button";
-    logout.className = "btn";
-    logout.style.width = "100%";
-    logout.style.marginTop = "10px";
-    logout.textContent = "Выйти";
-    top.appendChild(logout);
+    const nameLine = addLine("Имя", str(me?.name || "—"));
+    const phoneLine = addLine("Телефон", me?.phone ? formatPhonePlus7(me.phone) : "—");
+    const bdayLine = addLine("Дата рождения", formatBirthdayDisplay(me?.birthday || ""));
 
+    top.appendChild(info);
     wrap.appendChild(top);
 
-    const hr1 = document.createElement("div");
-    hr1.style.height = "12px";
-    wrap.appendChild(hr1);
+    const editWrap = document.createElement("div");
+    editWrap.className = "shop-profile-edit";
 
-    // addresses
-    const aTitle = document.createElement("div");
-    aTitle.className = "shop-checkout-section-title";
-    aTitle.textContent = "Адреса";
-    wrap.appendChild(aTitle);
+    const editLabel = document.createElement("label");
+    editLabel.className = "field-label";
+    editLabel.textContent = "Имя";
+    const editInput = document.createElement("input");
+    editInput.className = "control";
+    editInput.type = "text";
+    editInput.value = str(me?.name || "");
+    const editSave = document.createElement("button");
+    editSave.type = "button";
+    editSave.className = "btn btn-primary";
+    editSave.textContent = "Сохранить имя";
+    editWrap.appendChild(editLabel);
+    editWrap.appendChild(editInput);
+    editWrap.appendChild(editSave);
+    wrap.appendChild(editWrap);
 
-    const aList = document.createElement("div");
-    aList.className = "shop-cabinet-list";
-    wrap.appendChild(aList);
+    const tabs = document.createElement("div");
+    tabs.className = "shop-profile-tabs";
 
-    const aForm = document.createElement("div");
-    aForm.className = "shop-cabinet-form";
+    const tabAddresses = document.createElement("button");
+    tabAddresses.type = "button";
+    tabAddresses.className = "shop-profile-tab is-active";
+    tabAddresses.textContent = "Адреса";
+    tabAddresses.dataset.tab = "addresses";
 
-    aForm.innerHTML = `
-      <label class="field-label">Улица</label>
-      <input class="control" data-a="street" type="text" />
-      <label class="field-label">Дом</label>
-      <input class="control" data-a="house" type="text" />
-      <label class="field-label">Подъезд</label>
-      <input class="control" data-a="entrance" type="text" />
-      <label class="field-label">Этаж</label>
-      <input class="control" data-a="floor" type="text" />
-      <label class="field-label">Квартира</label>
-      <input class="control" data-a="apartment" type="text" />
-      <label class="field-label">Комментарий</label>
-      <input class="control" data-a="comment" type="text" />
+    const tabOrders = document.createElement("button");
+    tabOrders.type = "button";
+    tabOrders.className = "shop-profile-tab";
+    tabOrders.textContent = "История заказов";
+    tabOrders.dataset.tab = "orders";
+
+    tabs.appendChild(tabAddresses);
+    tabs.appendChild(tabOrders);
+    wrap.appendChild(tabs);
+
+    const addressesPanel = document.createElement("div");
+    addressesPanel.className = "shop-profile-tab-panel is-active";
+    addressesPanel.dataset.tab = "addresses";
+
+    const addressesList = document.createElement("div");
+    addressesList.className = "shop-profile-list";
+    addressesPanel.appendChild(addressesList);
+
+    const addressFormCard = document.createElement("div");
+    addressFormCard.className = "shop-profile-card";
+    addressFormCard.innerHTML = `
+      <div class="shop-address-form-grid">
+        <div class="shop-address-form-row shop-address-form-row--full">
+          <label class="field-label">Улица</label>
+          <input class="control" data-a="street" type="text" />
+        </div>
+        <div class="shop-address-form-row shop-address-form-row--grid">
+          <div class="shop-address-form-field">
+            <label class="field-label">Дом</label>
+            <input class="control" data-a="house" type="text" />
+          </div>
+          <div class="shop-address-form-field">
+            <label class="field-label">Подъезд</label>
+            <input class="control" data-a="entrance" type="text" />
+          </div>
+          <div class="shop-address-form-field">
+            <label class="field-label">Этаж</label>
+            <input class="control" data-a="floor" type="text" />
+          </div>
+          <div class="shop-address-form-field">
+            <label class="field-label">Квартира</label>
+            <input class="control" data-a="apartment" type="text" />
+          </div>
+        </div>
+        <div class="shop-address-form-row shop-address-form-row--full">
+          <label class="field-label">Комментарий</label>
+          <input class="control" data-a="comment" type="text" />
+        </div>
+      </div>
       <button type="button" class="btn btn-primary" style="width:100%; margin-top:10px;" data-a="add">Добавить адрес</button>
     `;
-    wrap.appendChild(aForm);
+    addressesPanel.appendChild(addressFormCard);
 
-    const hr2 = document.createElement("div");
-    hr2.style.height = "12px";
-    wrap.appendChild(hr2);
+    const ordersPanel = document.createElement("div");
+    ordersPanel.className = "shop-profile-tab-panel";
+    ordersPanel.dataset.tab = "orders";
 
-    // orders
-    const oTitle = document.createElement("div");
-    oTitle.className = "shop-checkout-section-title";
-    oTitle.textContent = "История заказов";
-    wrap.appendChild(oTitle);
+    const ordersList = document.createElement("div");
+    ordersList.className = "shop-profile-list";
+    ordersPanel.appendChild(ordersList);
 
-    const oList = document.createElement("div");
-    oList.className = "shop-cabinet-list";
-    wrap.appendChild(oList);
+    wrap.appendChild(addressesPanel);
+    wrap.appendChild(ordersPanel);
+
+    host.appendChild(wrap);
+
+    function setActiveTab(tab) {
+      [tabAddresses, tabOrders].forEach((btn) => btn.classList.toggle("is-active", btn.dataset.tab === tab));
+      [addressesPanel, ordersPanel].forEach((panel) => panel.classList.toggle("is-active", panel.dataset.tab === tab));
+    }
+
+    tabAddresses.addEventListener("click", () => setActiveTab("addresses"));
+    tabOrders.addEventListener("click", () => setActiveTab("orders"));
 
     async function reloadAddresses() {
-      aList.innerHTML = `<div class="muted">Загрузка…</div>`;
+      addressesList.innerHTML = `<div class="muted">Загрузка…</div>`;
       try {
         const json = await apiJson("/api/public/me/addresses");
         const list = Array.isArray(json.data) ? json.data : [];
         if (!list.length) {
-          aList.innerHTML = `<div class="muted">Адресов пока нет.</div>`;
+          addressesList.innerHTML = `<div class="muted">Адресов пока нет.</div>`;
           return;
         }
 
-        aList.innerHTML = "";
+        addressesList.innerHTML = "";
         list.forEach((a) => {
           const row = document.createElement("div");
-          row.className = "shop-cabinet-item";
+          row.className = "shop-profile-card";
 
           const txt = [
             `${str(a.street)} ${str(a.house)}`,
@@ -1880,6 +2359,7 @@
               try {
                 await apiJson(`/api/public/me/addresses/${a.id}/default`, { method: "PUT" });
                 await reloadAddresses();
+                await refreshAddressState();
               } catch (e) {
                 alert("Не удалось изменить основной адрес");
               }
@@ -1896,6 +2376,7 @@
             try {
               await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
               await reloadAddresses();
+              await refreshAddressState();
             } catch (e) {
               alert("Не удалось удалить адрес");
             }
@@ -1903,27 +2384,27 @@
           actions.appendChild(bDel);
 
           row.appendChild(actions);
-          aList.appendChild(row);
+          addressesList.appendChild(row);
         });
       } catch (e) {
-        aList.innerHTML = `<div class="muted">Ошибка загрузки адресов</div>`;
+        addressesList.innerHTML = `<div class="muted">Ошибка загрузки адресов</div>`;
       }
     }
 
     async function reloadOrders() {
-      oList.innerHTML = `<div class="muted">Загрузка…</div>`;
+      ordersList.innerHTML = `<div class="muted">Загрузка…</div>`;
       try {
         const json = await apiJson("/api/public/me/orders");
         const list = Array.isArray(json.data) ? json.data : [];
         if (!list.length) {
-          oList.innerHTML = `<div class="muted">Заказов пока нет.</div>`;
+          ordersList.innerHTML = `<div class="muted">Заказов пока нет.</div>`;
           return;
         }
 
-        oList.innerHTML = "";
+        ordersList.innerHTML = "";
         list.forEach((o) => {
           const row = document.createElement("div");
-          row.className = "shop-cabinet-item";
+          row.className = "shop-profile-card";
 
           let itemsCount = 0;
           if (Array.isArray(o.items)) {
@@ -1935,84 +2416,278 @@
             <div class="muted">${new Date(o.created_at).toLocaleString("ru-RU")}</div>
             <div><strong>${money(o.total_price || 0)}</strong> <span class="muted">• позиций: ${itemsCount}</span></div>
           `;
-          oList.appendChild(row);
+          ordersList.appendChild(row);
         });
       } catch (e) {
-        oList.innerHTML = `<div class="muted">Ошибка загрузки заказов</div>`;
+        ordersList.innerHTML = `<div class="muted">Ошибка загрузки заказов</div>`;
       }
     }
 
-    saveName.addEventListener("click", async () => {
-      const v = str(nm.value).trim();
+    const addBtn = $('[data-a="add"]', addressFormCard);
+    if (addBtn) {
+      addBtn.addEventListener("click", async () => {
+        const get = (k) => str($(`[data-a="${k}"]`, addressFormCard)?.value || "").trim();
+
+        const payload = {
+          street: get("street"),
+          house: get("house"),
+          entrance: get("entrance") || null,
+          floor: get("floor") || null,
+          apartment: get("apartment") || null,
+          comment: get("comment") || null,
+        };
+
+        if (!payload.street) return alert("Укажите улицу");
+        if (!payload.house) return alert("Укажите дом");
+
+        addBtn.disabled = true;
+        addBtn.textContent = "Добавляем…";
+        try {
+          await apiJson("/api/public/me/addresses", { method: "POST", body: payload });
+          ["street","house","entrance","floor","apartment","comment"].forEach(k => {
+            const el = $(`[data-a="${k}"]`, addressFormCard);
+            if (el) el.value = "";
+          });
+          await reloadAddresses();
+          await refreshAddressState();
+        } catch (e) {
+          alert("Не удалось добавить адрес");
+        } finally {
+          addBtn.disabled = false;
+          addBtn.textContent = "Добавить адрес";
+        }
+      });
+    }
+
+    editSave.addEventListener("click", async () => {
+      const v = str(editInput.value).trim();
       if (!v) {
         alert("Введите имя");
         return;
       }
-      saveName.disabled = true;
-      saveName.textContent = "Сохраняем…";
+      editSave.disabled = true;
+      editSave.textContent = "Сохраняем…";
       try {
         await apiJson("/api/public/me", { method: "PUT", body: { name: v } });
         const me2 = await fetchMeSafe();
-        if (me2) nm.value = str(me2.name || "");
+        if (me2) {
+          editInput.value = str(me2.name || "");
+          nameLine.textContent = str(me2.name || "—");
+        }
       } catch (e) {
         alert("Не удалось сохранить имя");
       } finally {
-        saveName.disabled = false;
-        saveName.textContent = "Сохранить имя";
+        editSave.disabled = false;
+        editSave.textContent = "Сохранить имя";
       }
     });
 
-    logout.addEventListener("click", async () => {
-      try { await apiJson("/api/public/auth/logout", { method: "POST", body: {} }); } catch {}
-      clearCustomer();
-      await refreshAddressState();
-      window.AppModal.close("sheet");
+    reloadAddresses();
+    reloadOrders();
+
+    return {
+      showEdit: () => editWrap.classList.add("is-active"),
+      hideEdit: () => editWrap.classList.remove("is-active"),
+    };
+  }
+
+  let profileMenuListenerAttached = false;
+
+  function attachProfileMenuOutsideClose(menuEl, toggleBtn) {
+    if (profileMenuListenerAttached) return;
+    profileMenuListenerAttached = true;
+    document.addEventListener("click", (e) => {
+      if (!menuEl || menuEl.classList.contains("hidden")) return;
+      if (toggleBtn && toggleBtn.contains(e.target)) return;
+      if (menuEl.contains(e.target)) return;
+      menuEl.classList.add("hidden");
+    });
+  }
+
+  async function handleProfileLogout({ closeModal } = {}) {
+    try { await apiJson("/api/public/auth/logout", { method: "POST", body: {} }); } catch {}
+    clearCustomer();
+    await refreshAddressState();
+    if (closeModal && window.AppModal) window.AppModal.close("sheet");
+  }
+
+  async function openProfilePanel(meOverride) {
+    showProfileView();
+    if (!elProfileContent) return;
+
+    const me = meOverride || await fetchMeSafe();
+    if (!me) {
+      const loginWrap = buildLoginContent({
+        onSuccess: (me2) => {
+          openProfilePanel(me2);
+        },
+      });
+      elProfileContent.innerHTML = "";
+      elProfileContent.appendChild(loginWrap);
+      if (elProfileHeaderActions) elProfileHeaderActions.classList.add("hidden");
+      setCartHeader({ title: "Профиль", showAddressChip: false, showProfileActions: false });
+      return;
+    }
+
+    const ctx = buildProfileContent({
+      host: elProfileContent,
+      me,
+      onLogout: () => handleProfileLogout(),
     });
 
-    const addBtn = $('[data-a="add"]', aForm);
-    addBtn.addEventListener("click", async () => {
-      const get = (k) => str($(`[data-a="${k}"]`, aForm)?.value || "").trim();
+    setCartHeader({ title: "Профиль", showAddressChip: false, showProfileActions: true });
 
-      const payload = {
-        street: get("street"),
-        house: get("house"),
-        entrance: get("entrance") || null,
-        floor: get("floor") || null,
-        apartment: get("apartment") || null,
-        comment: get("comment") || null,
+    if (elProfileSettingsBtn && elProfileMenu) {
+      elProfileSettingsBtn.onclick = (e) => {
+        e.stopPropagation();
+        elProfileMenu.classList.toggle("hidden");
       };
+    }
 
-      if (!payload.street) return alert("Укажите улицу");
-      if (!payload.house) return alert("Укажите дом");
+    if (elProfileEditBtn && elProfileMenu) {
+      elProfileEditBtn.onclick = () => {
+        elProfileMenu.classList.add("hidden");
+        ctx.showEdit();
+      };
+    }
 
-      addBtn.disabled = true;
-      addBtn.textContent = "Добавляем…";
-      try {
-        await apiJson("/api/public/me/addresses", { method: "POST", body: payload });
-        // очистим
-        ["street","house","entrance","floor","apartment","comment"].forEach(k => {
-          const el = $(`[data-a="${k}"]`, aForm);
-          if (el) el.value = "";
-        });
-        await reloadAddresses();
-        await refreshAddressState();
-      } catch (e) {
-        alert("Не удалось добавить адрес");
-      } finally {
-        addBtn.disabled = false;
-        addBtn.textContent = "Добавить адрес";
-      }
+    if (elProfileSettingsMenuBtn && elProfileMenu) {
+      elProfileSettingsMenuBtn.onclick = () => {
+        elProfileMenu.classList.add("hidden");
+        alert("Настройки скоро появятся");
+      };
+    }
+
+    if (elProfileLogoutBtn && elProfileMenu) {
+      elProfileLogoutBtn.onclick = async () => {
+        elProfileMenu.classList.add("hidden");
+        await handleProfileLogout();
+        openProfilePanel();
+      };
+    }
+
+    if (elProfileCloseBtn) {
+      elProfileCloseBtn.onclick = () => {
+        showCartView();
+      };
+    }
+
+    if (elProfileMenu && elProfileSettingsBtn) {
+      attachProfileMenuOutsideClose(elProfileMenu, elProfileSettingsBtn);
+    }
+  }
+
+  function mountProfileModalMenu({ onEdit, onSettings, onLogout }) {
+    const header = document.querySelector(".app-modal-header");
+    if (!header) return () => {};
+
+    let settingsBtn = header.querySelector(".shop-profile-modal-settings");
+    if (!settingsBtn) {
+      settingsBtn = document.createElement("button");
+      settingsBtn.type = "button";
+      settingsBtn.className = "btn btn-icon shop-profile-modal-settings";
+      settingsBtn.innerHTML = `<i class="fas fa-gear"></i>`;
+      settingsBtn.setAttribute("aria-label", "Настройки профиля");
+      header.appendChild(settingsBtn);
+    }
+
+    let menu = header.querySelector(".shop-profile-menu");
+    if (!menu) {
+      menu = document.createElement("div");
+      menu.className = "shop-profile-menu hidden";
+      menu.innerHTML = `
+        <button class="shop-profile-menu-item" data-role="edit" type="button">Редактировать профиль</button>
+        <button class="shop-profile-menu-item" data-role="settings" type="button">Настройки</button>
+        <button class="shop-profile-menu-item" data-role="logout" type="button">Выйти</button>
+      `;
+      header.appendChild(menu);
+    }
+
+    const editBtn = menu.querySelector('[data-role="edit"]');
+    const settingsMenuBtn = menu.querySelector('[data-role="settings"]');
+    const logoutBtn = menu.querySelector('[data-role="logout"]');
+
+    const onDocClick = (e) => {
+      if (menu.classList.contains("hidden")) return;
+      if (settingsBtn.contains(e.target) || menu.contains(e.target)) return;
+      menu.classList.add("hidden");
+    };
+
+    settingsBtn.onclick = (e) => {
+      e.stopPropagation();
+      menu.classList.toggle("hidden");
+    };
+
+    if (editBtn) editBtn.onclick = () => {
+      menu.classList.add("hidden");
+      if (typeof onEdit === "function") onEdit();
+    };
+
+    if (settingsMenuBtn) settingsMenuBtn.onclick = () => {
+      menu.classList.add("hidden");
+      if (typeof onSettings === "function") onSettings();
+    };
+
+    if (logoutBtn) logoutBtn.onclick = async () => {
+      menu.classList.add("hidden");
+      if (typeof onLogout === "function") onLogout();
+    };
+
+    document.addEventListener("click", onDocClick);
+
+    return () => {
+      document.removeEventListener("click", onDocClick);
+      settingsBtn?.remove();
+      menu?.remove();
+    };
+  }
+
+  async function openProfileSheet() {
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (!isMobile) {
+      await openProfilePanel();
+      return;
+    }
+
+    if (!window.AppModal) return;
+
+    const me = await fetchMeSafe();
+    if (!me) {
+      openLoginSheet({
+        onSuccess: (me2) => openProfileModal(me2),
+      });
+      return;
+    }
+
+    openProfileModal(me);
+  }
+
+  function openProfileModal(me) {
+    if (!window.AppModal) return;
+
+    const wrap = document.createElement("div");
+    const ctx = buildProfileContent({
+      host: wrap,
+      me,
+      onLogout: () => handleProfileLogout({ closeModal: true }),
     });
 
     setAppModalMode("shop");
+    const cleanupMenu = mountProfileModalMenu({
+      onEdit: () => ctx.showEdit(),
+      onSettings: () => alert("Настройки скоро появятся"),
+      onLogout: async () => {
+        await handleProfileLogout({ closeModal: true });
+      },
+    });
+
     window.AppModal.open({
       title: "Профиль",
       content: wrap,
+      onClose: () => {
+        cleanupMenu();
+      },
     });
-
-    // initial load
-    reloadAddresses();
-    reloadOrders();
   }
 
   // -----------------------------
@@ -2102,7 +2777,7 @@
     return "";
   }
 
-  async function openCheckoutView({ container, onBack, hasAddressEditor, isSheet }) {
+  async function openCheckoutView({ container, onBack, hasAddressEditor, isSheet, actions, onEditAddress }) {
     if (!container) return;
 
     const items = cartItemsResolved();
@@ -2119,21 +2794,13 @@
 
     container.innerHTML = "";
 
+    if (actions?.submitBtn) {
+      actions.submitBtn.disabled = false;
+      actions.submitBtn.textContent = "Заказать";
+    }
+
     const wrap = document.createElement("div");
     wrap.className = "shop-checkout";
-
-    if (onBack) {
-      const backBtn = document.createElement("button");
-      backBtn.type = "button";
-      backBtn.className = "btn";
-      backBtn.textContent = "Назад в корзину";
-      backBtn.addEventListener("click", () => onBack());
-      wrap.appendChild(backBtn);
-
-      const space = document.createElement("div");
-      space.style.height = "8px";
-      wrap.appendChild(space);
-    }
 
     const title = document.createElement("div");
     title.className = "shop-checkout-title";
@@ -2210,7 +2877,9 @@
     const changeAddrBtn = document.createElement("button");
     changeAddrBtn.type = "button";
     changeAddrBtn.className = "btn shop-checkout-change-address";
-    changeAddrBtn.textContent = "Изменить";
+    changeAddrBtn.innerHTML = `<i class="fas fa-pen"></i>`;
+    changeAddrBtn.setAttribute("aria-label", "Изменить адрес");
+    changeAddrBtn.title = "Изменить адрес";
 
     addrRow.appendChild(addrLabel);
     addrRow.appendChild(changeAddrBtn);
@@ -2227,14 +2896,11 @@
     addrWrap.appendChild(address);
     wrap.appendChild(addrWrap);
 
-    if (!hasAddressEditor) {
-      changeAddrBtn.style.display = "none";
-    }
-
     function refreshAddressVisibility() {
       const v = getRadioValue(methodGroup, "method");
       const isDelivery = v === "delivery";
       addrWrap.style.display = isDelivery ? "" : "none";
+      changeAddrBtn.style.display = (isDelivery && hasAddressEditor) ? "" : "none";
       if (isDelivery && hasAddressEditor) {
         address.value = getSelectedAddressLine() || address.value || "";
       }
@@ -2339,20 +3005,19 @@
           payment_code: pay.value || payDefault || "cash",
           change_from: change.value ? Number(change.value) : null,
         });
-        openAddressEditorFromCheckout();
+        if (typeof onEditAddress === "function") onEditAddress();
+        else openAddressEditorFromCheckout();
       });
     }
 
-    // submit
-    const submit = document.createElement("button");
-    submit.type = "button";
-    submit.className = "btn btn-primary shop-checkout-submit";
-    submit.textContent = "Заказать";
-    wrap.appendChild(submit);
-
     container.appendChild(wrap);
 
-    submit.addEventListener("click", async () => {
+    if (actions?.backBtn && typeof onBack === "function") {
+      actions.backBtn.onclick = () => onBack();
+    }
+
+    if (actions?.submitBtn) {
+      actions.submitBtn.onclick = async () => {
       const payload = {
         customer_name: str(name.value).trim(),
         customer_phone: str(phone.value).trim(),
@@ -2412,8 +3077,8 @@
         change_from: payload.change_from,
       });
 
-      submit.disabled = true;
-      submit.textContent = "Отправляем…";
+      actions.submitBtn.disabled = true;
+      actions.submitBtn.textContent = "Отправляем…";
 
       try {
         const res = await apiJson("/api/public/orders", { method: "POST", body: payload });
@@ -2431,10 +3096,11 @@
       } catch (e) {
         console.error(e);
         alert("Ошибка оформления заказа: " + (e.message || "UNKNOWN"));
-        submit.disabled = false;
-        submit.textContent = "Заказать";
+        actions.submitBtn.disabled = false;
+        actions.submitBtn.textContent = "Заказать";
       }
-    });
+      };
+    }
   }
 
   // -----------------------------
@@ -2458,11 +3124,7 @@
       await initAddresses();
 
       if (elCartClearBtn) {
-        elCartClearBtn.addEventListener("click", () => {
-          if (cartCountTotal() <= 0) return;
-          if (!window.confirm("Очистить корзину?")) return;
-          clearCartAll();
-        });
+        attachTwoStepClear(elCartClearBtn, () => clearCartAll());
       }
       if (elCheckoutBtn) {
         elCheckoutBtn.addEventListener("click", async () => {
@@ -2473,6 +3135,7 @@
             onBack: showCartView,
             hasAddressEditor: true,
             isSheet: false,
+            actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
           });
         });
       }
