@@ -1,0 +1,85 @@
+<div class="panel" id="productInfoPanel">
+  <!-- Header скрыт по умолчанию. Показываем только когда выбран товар -->
+  <div class="panel-header product-info-header hidden" id="productInfoHeader">
+    <div class="product-info-header-left">
+      <div class="panel-title product-header-title" id="productTitle">Информация</div>
+      <div class="muted product-header-sku" id="productSku">Артикул: —</div>
+    </div>
+
+    <div class="product-info-header-actions">
+      <button class="btn btn-icon" id="productMoreBtn" type="button" title="Действия" aria-label="Действия">
+        <i class="fas fa-ellipsis-h"></i>
+      </button>
+
+      <button class="btn btn-icon" id="editProductBtn" type="button" title="Редактировать" aria-label="Редактировать">
+        <i class="fas fa-pen"></i>
+      </button>
+
+      <button class="btn btn-icon" id="closeProductInfoBtn" type="button" title="Закрыть" aria-label="Закрыть">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+  </div>
+
+  <div class="panel-body no-scrollbar" id="productInfoBody">
+    <!-- Empty state -->
+    <div id="productEmpty" class="empty-state">
+      <div class="empty-icon"><i class="fas fa-mouse-pointer"></i></div>
+      <div class="empty-title">Выберите товар</div>
+      <div class="empty-text">Нажмите на любой товар для просмотра подробной информации</div>
+    </div>
+
+    <!-- Product info -->
+    <div id="productInfo" class="hidden">
+      <!-- TOP: фото слева, справа info-card -->
+      <div class="product-info-top">
+        <div class="product-info-photoCol">
+          <div class="product-photo-main">
+            <img id="infoMainPhoto" class="product-photo-img hidden" alt="">
+            <div id="infoPhotoPlaceholder" class="product-photo-placeholder">Нет фото</div>
+          </div>
+
+          <div class="product-photo-thumbs" id="infoPhotoThumbs"></div>
+        </div>
+
+        <div class="info-card">
+          <div class="info-row">
+            <div class="info-text">Цена</div>
+            <div class="info-title" id="productPrice">—</div>
+          </div>
+
+          <div class="info-row">
+            <div class="info-text">Старая цена</div>
+            <div class="info-title" id="productOldPrice">—</div>
+          </div>
+
+          <div class="info-row">
+            <div class="info-text">Себестоимость</div>
+            <div class="info-title" id="productCostPrice">—</div>
+          </div>
+
+          <div class="info-row">
+            <div class="info-text">Статус</div>
+            <div class="info-title" id="productStatus">—</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Категории (chips) -->
+      <div class="info-card" style="margin-top:12px;">
+        <div class="kv-label">Категории</div>
+        <div class="chips" id="infoCategoryChips"></div>
+      </div>
+
+      <div class="info-card">
+        <div class="kv-label">Короткое описание</div>
+        <div class="kv-value" style="font-weight:500;" id="productDescShort">—</div>
+      </div>
+
+      <div class="info-card">
+        <div class="kv-label">Описание</div>
+        <div class="kv-value" style="font-weight:500;" id="productDesc">—</div>
+      </div>
+    </div>
+  </div>
+</div>

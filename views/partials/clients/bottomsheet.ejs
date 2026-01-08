@@ -1,0 +1,51 @@
+<div id="clientSheetBackdrop" class="sheet-backdrop" aria-hidden="true"></div>
+
+<div id="clientSheet" class="bottom-sheet" aria-hidden="true">
+  <div class="sheet-header">
+    <div class="sheet-title">Клиент</div>
+    <button id="clientSheetClose" class="icon-btn" type="button" aria-label="Закрыть">
+      <i class="fas fa-times"></i>
+    </button>
+  </div>
+
+  <div class="sheet-body no-scrollbar">
+    <div class="order-info">
+      <div class="order-info-title" id="sheetClientInfoTitle">Клиент не выбран</div>
+      <div class="order-info-meta" id="sheetClientInfoMeta">—</div>
+
+      <div class="info-grid" style="margin-top:14px;">
+        <div class="info-row">
+          <div class="info-label">Имя</div>
+          <div class="info-value" id="sheetClientInfoName">—</div>
+        </div>
+        <div class="info-row">
+          <div class="info-label">Телефон</div>
+          <div class="info-value" id="sheetClientInfoPhone">—</div>
+        </div>
+        <div class="info-row">
+          <div class="info-label">Дата рождения</div>
+          <div class="info-value" id="sheetClientInfoBirthday">—</div>
+        </div>
+        <div class="info-row">
+          <div class="info-label">Заказов</div>
+          <div class="info-value" id="sheetClientInfoOrders">—</div>
+        </div>
+        <div class="info-row">
+          <div class="info-label">Сумма</div>
+          <div class="info-value" id="sheetClientInfoSpent">—</div>
+        </div>
+        <div class="info-row">
+          <div class="info-label">Последний заказ</div>
+          <div class="info-value" id="sheetClientInfoLastOrder">—</div>
+        </div>
+      </div>
+
+      <div style="height:14px;"></div>
+      <div class="panel-title" style="font-size:14px;">Адреса</div>
+
+      <div id="sheetClientAddresses" style="display:grid; gap:10px; margin-top:10px;">
+        <!-- JS -->
+      </div>
+    </div>
+  </div>
+</div>

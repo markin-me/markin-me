@@ -1,0 +1,903 @@
+/* ==========================================================================
+   SHOP (витрина) — отдельные стили
+   Подключай ПОСЛЕ style.css
+   ========================================================================== */
+
+:root{
+  /* цвета */
+  --shop-buy: #f97316;
+  --shop-buy-hover: #ea580c;
+  --shop-buy-text: #ffffff;
+
+  --shop-radius: 18px;
+  --shop-gap: 14px;
+
+  --shop-bottomnav-h: 74px;
+}
+
+html[data-theme="dark"]{
+  --shop-buy: #f97316;
+  --shop-buy-hover: #ea580c;
+}
+
+/* ==========================================================================
+   Layout
+   ========================================================================== */
+
+body.page-shop .main-container{
+  height: calc(100vh - var(--header-height));
+  padding: 14px;
+}
+
+.shop-grid{
+  height: 100%;
+  display: grid;
+  /* правая колонка фиксированная 500px */
+  grid-template-columns: 260px 1fr 500px;
+  gap: var(--shop-gap);
+  align-items: stretch;
+}
+
+.shop-col .panel{
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.shop-col .panel-body{
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* чтобы в products-panel можно было масштабировать элементы через container queries */
+.shop-col-products .panel-body{
+  container-type: inline-size;
+}
+
+/* мобилка: показываем только товары, категории/корзина через нижнее меню */
+@media (max-width: 768px){
+  body.page-shop .main-container{
+    padding: 12px;
+  }
+
+  .shop-grid{
+    grid-template-columns: 1fr;
+  }
+
+  .shop-col-cats,
+  .shop-col-cart{
+    display: none;
+  }
+
+  /* чтобы контент не уезжал под нижний таббар */
+  .shop-col-products .panel-body{
+    padding-bottom: calc(var(--shop-bottomnav-h) + 16px);
+  }
+}
+
+/* ==========================================================================
+   Categories list
+   ========================================================================== */
+
+.shop-cats-list{
+  display: grid;
+  gap: 10px;
+}
+
+.shop-cat-item{
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: 14px;
+  padding: 10px 12px;
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-smooth), border-color var(--dur-fast) var(--ease-smooth);
+}
+
+.shop-cat-item:hover{ background: var(--color-surface-2); }
+.shop-cat-item.is-active{
+  border-color: var(--primary-45);
+  box-shadow: 0 0 0 3px var(--primary-12);
+}
+
+.shop-cat-icon{
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.shop-cat-icon-img{
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.shop-cat-icon-ph{
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--color-text-muted);
+  opacity: .35;
+}
+
+.shop-cat-text{ min-width: 0; }
+.shop-cat-title{
+  font-weight: 900;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   Products grid & cards
+   Требование: на десктопе 2..5 карточек в ряд, без пустот.
+   Карточка и контент внутри "масштабируются" вместе.
+   ========================================================================== */
+
+.shop-products-grid{
+  display: grid;
+  gap: 12px;
+
+  /* по умолчанию: 5 карточек в ряд на десктопе */
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  justify-content: stretch;
+  align-items: stretch;
+}
+
+/* уменьшение ширины экрана — уменьшаем количество колонок по порядку */
+@media (max-width: 1200px){
+  .shop-products-grid{ grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 980px){
+  .shop-products-grid{ grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 820px){
+  .shop-products-grid{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* мобилка оставляем как есть */
+@media (max-width: 768px){
+  .shop-products-grid{
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* --- "масштабирование" размеров UI в карточке от ширины контейнера (без JS) --- */
+/* базовые значения будут меняться плавно, чтобы при 5 в ряд всё было компактнее,
+   при 2-3 в ряд — чуть крупнее. */
+:root{
+  --sp-pad: 12px;
+  --sp-title-size: 14px;
+  --sp-sub-size: 12px;
+  --sp-gap: 8px;
+  --sp-pill-h: 32px;
+  --sp-pill-side: 44px;
+}
+
+/* container query: ширина панели товаров */
+@container (max-width: 520px){
+  :root{
+    --sp-pad: 10px;
+    --sp-title-size: 13px;
+    --sp-sub-size: 11px;
+    --sp-gap: 7px;
+    --sp-pill-h: 30px;
+    --sp-pill-side: 42px;
+  }
+}
+@container (min-width: 760px){
+  :root{
+    --sp-pad: 12px;
+    --sp-title-size: 14px;
+    --sp-sub-size: 12px;
+    --sp-gap: 8px;
+    --sp-pill-h: 32px;
+    --sp-pill-side: 44px;
+  }
+}
+@container (min-width: 980px){
+  :root{
+    --sp-pad: 13px;
+    --sp-title-size: 15px;
+    --sp-sub-size: 12px;
+    --sp-gap: 9px;
+    --sp-pill-h: 34px;
+    --sp-pill-side: 46px;
+  }
+}
+
+/* карточка */
+.sp-card{
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: var(--shop-radius);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+
+  /* фиксируем визуальную "геометрию" без зависимости от текста:
+     высота определяется структурой: квадратное фото + фикс блоки текста + кнопка снизу */
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-smooth), background var(--dur-fast) var(--ease-smooth);
+}
+
+.sp-card:hover{
+  transform: translateY(-1px);
+  background: var(--color-surface);
+}
+
+.sp-media{
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: var(--color-surface-2);
+  position: relative;
+  overflow: hidden;
+}
+
+.sp-img{
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* затемнение при добавлении */
+.sp-media.is-dim .sp-img{
+  filter: brightness(.62);
+}
+
+/* qty overlay */
+.sp-qtyOverlay{
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.sp-qtyOverlay.hidden{ display: none; }
+
+.qty-carousel{
+  width: 56px;
+  height: 48px;
+  border-radius: 16px;
+  background: transparent;
+  color: #fff;
+  font-weight: 900;
+  font-size: 36px;
+  text-shadow: 0 6px 18px rgba(0,0,0,.55);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  position: relative;
+}
+
+/* для анимации цифр */
+.qty-num{
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  transition: transform 110ms linear;
+  will-change: transform;
+}
+
+/* info */
+.sp-info{
+  padding: var(--sp-pad);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-gap);
+  min-width: 0;
+  flex: 1;
+}
+
+.sp-title{
+  font-weight: 900;
+  color: var(--color-text);
+  line-height: 1.15;
+  font-size: var(--sp-title-size);
+  min-width: 0;
+
+  display: -webkit-box;
+  -webkit-line-clamp: 2;             /* 2 строки */
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.sp-sub{
+  color: var(--color-text-muted);
+  font-size: var(--sp-sub-size);
+  line-height: 1.2;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  /* даже если описания нет — место резервируем, чтобы карточка не прыгала */
+  min-height: 14px;
+}
+
+.sp-bottom{
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  gap: 10px;
+
+  /* кнопка всегда внизу */
+  margin-top: auto;
+}
+
+/* ========================================================================
+   Единый контрол количества/покупки (каталог / корзина / модалка)
+   Требования:
+   - без внутренних полосок/разделителей
+   - одинаковая ширина +/- (hit-area)
+   - кнопка в карточке снизу слева
+   - ширина пилюли растёт вправо под контент (old, price, +/-)
+   - старая цена слева внутри кнопки (когда qty=0)
+   - при добавлении старая цена исчезает и появляется "—"
+   ======================================================================== */
+
+/* общие размеры через переменные (подхватывают container query выше) */
+:root{
+  --qty-pill-h: var(--sp-pill-h);
+  --qty-pill-side: var(--sp-pill-side);
+}
+
+/* базовый pill */
+.qty-pill{
+  height: var(--qty-pill-h);
+  border-radius: 999px;
+  background: var(--shop-buy);
+  color: var(--shop-buy-text);
+
+  display: inline-flex;
+  align-items: center;
+
+  /* растём вправо под контент */
+  width: max-content;
+  max-width: 100%;
+
+  overflow: hidden;
+  user-select: none;
+}
+
+/* никаких внутренних разделителей */
+.qty-pill, .qty-pill *{
+  border: 0;
+  outline: none;
+  box-shadow: none;
+}
+.qty-pill::before, .qty-pill::after{ content:none !important; }
+
+.qty-pill:hover{ background: var(--shop-buy-hover); }
+
+/* кнопки +/- одинаковой ширины */
+.qty-pill__btn{
+  width: var(--qty-pill-side);
+  height: 100%;
+  background: transparent;
+  color: inherit;
+  font-weight: 900;
+  font-size: 18px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.qty-pill__btn:active{ transform: scale(.98); }
+
+.qty-pill__btn.is-disabled{
+  opacity: .35;
+  pointer-events: none;
+}
+
+/* центр */
+.qty-pill__center{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+
+  text-align: center;
+  font-weight: 900;
+  font-size: 14px;
+  white-space: nowrap;
+  padding: 0 10px;
+}
+
+/* старая цена внутри кнопки слева от текущей */
+.qty-pill__center .old{
+  text-decoration: line-through;
+  opacity: .85;
+}
+
+/* когда корзина пустая — прячем "минус", показываем old (если есть) */
+.qty-pill.is-empty .qty-pill__btn--minus{
+  display: none;
+}
+
+/* когда товар добавлен — old скрываем (JS может добавлять класс .has-qty) */
+.qty-pill.has-qty .qty-pill__center .old{
+  display: none;
+}
+
+/* вариант для корзины (серый) */
+.qty-pill--muted{
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+.qty-pill--muted:hover{ background: var(--color-surface-2); }
+.qty-pill--muted .qty-pill__btn:hover{
+  background: rgba(0,0,0,.06);
+}
+html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
+  background: rgba(255,255,255,.08);
+}
+
+/* крупнее в деталке товара */
+.qty-pill--big{
+  --qty-pill-h: 52px;
+  --qty-pill-side: 56px;
+}
+.qty-pill--big .qty-pill__center{ font-size: 16px; }
+
+/* ==========================================================================
+   Cart (desktop panel + sheet)
+   ========================================================================== */
+
+.cart-row{
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: 16px;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 92px 1fr auto;
+  gap: 12px;
+  align-items: stretch;
+  margin-bottom: 10px;
+}
+
+.cart-thumb{
+  width: 92px;
+  height: 100%;
+  border-radius: 18px;
+  object-fit: cover;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+}
+
+.cart-mid{
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.cart-title{
+  font-weight: 900;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap; /* 1 строка */
+}
+
+.cart-sub{
+  font-size: 12px;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap; /* 1 строка */
+  min-height: 1.2em;
+}
+
+.cart-qty{ display: inline-flex; }
+
+.cart-right{
+  text-align: right;
+  display: grid;
+  gap: 4px;
+}
+
+.cart-old{
+  font-size: 12px;
+  color: var(--color-text-muted);
+  text-decoration: line-through;
+}
+
+.cart-old.hidden{ display: none; }
+
+.cart-price{
+  font-weight: 900;
+  color: var(--color-text);
+}
+
+/* пустая корзина в шите */
+.shop-cart-empty-sheet{
+  padding: 16px;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-weight: 700;
+}
+
+/* футер корзины в шите/панели — липкий снизу */
+.shop-cart-sheet-footer{
+  position: sticky;
+  bottom: 0;
+  margin-top: 12px;
+  padding: 12px 0 2px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.shop-cart-sheet-total{
+  display: grid;
+  gap: 4px;
+  color: var(--color-text);
+}
+
+.shop-cart-sheet-total span{
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.shop-checkout-btn{
+  height: 52px;
+  border-radius: 999px;
+  padding: 0 18px;
+}
+
+/* ==========================================================================
+   Bottom nav (mobile)
+   ========================================================================== */
+
+.shop-nav,
+.shop-bottom-nav{
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--shop-bottomnav-h);
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  display: none;
+  z-index: 120;
+  padding: 8px 10px;
+  gap: 8px;
+  grid-template-columns: repeat(4, 1fr);
+}
+
+@media (max-width: 768px){
+  .shop-nav,
+  .shop-bottom-nav{ display: grid; }
+}
+
+.shop-nav-btn{
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: 14px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  cursor: pointer;
+  position: relative;
+}
+
+.shop-nav-btn span{
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.shop-nav-btn i{
+  color: var(--color-text);
+  font-size: 16px;
+}
+
+.shop-nav-badge{
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--shop-buy);
+  color: #fff;
+  font-weight: 900;
+  font-size: 11px;
+  display: grid;
+  place-items: center;
+  padding: 0 6px;
+}
+
+.shop-nav-badge.hidden{ display: none; }
+
+/* ==========================================================================
+   Sheets content
+   ========================================================================== */
+
+.shop-sheet-list{
+  display: grid;
+  gap: 10px;
+}
+
+.shop-sheet-row{
+  width: 100%;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: 14px;
+  padding: 10px 12px;
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 10px;
+  align-items: center;
+  text-align: left;
+  cursor: pointer;
+}
+
+.shop-sheet-row.is-active{
+  border-color: var(--primary-45);
+  box-shadow: 0 0 0 3px var(--primary-12);
+}
+
+.shop-sheet-row-title{
+  font-weight: 900;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   Product Details (modal/sheet)
+   ========================================================================== */
+
+.shop-pd{
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.shop-pd-scroll{
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+}
+
+.shop-pd-footer{
+  position: sticky;
+  bottom: 0;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  padding: 12px 0 2px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.shop-pd-fav{
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.shop-pd-fav.is-active{
+  border-color: var(--shop-buy);
+  box-shadow: 0 0 0 4px rgba(249,115,22,.18);
+}
+
+.shop-pd-head{
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.shop-pd-thumb{
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  object-fit: cover;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+}
+
+.shop-pd-meta{
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.shop-pd-title{
+  font-weight: 900;
+  color: var(--color-text);
+  line-height: 1.15;
+
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.shop-pd-sub{
+  font-size: 12px;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shop-pd-prices{
+  text-align: right;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+}
+
+.shop-pd-old{
+  font-size: 12px;
+  color: var(--color-text-muted);
+  text-decoration: line-through;
+}
+
+.shop-pd-old.hidden{ display:none; }
+
+.shop-pd-price{
+  font-weight: 900;
+  color: var(--color-text);
+}
+
+.shop-pd-desc{
+  color: var(--color-text);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+/* ==========================================================================
+   Auth sheet placeholder
+   ========================================================================== */
+
+.shop-auth{
+  display: grid;
+  gap: 10px;
+}
+
+.shop-auth-title{
+  font-weight: 900;
+  color: var(--color-text);
+}
+
+.shop-auth-form{
+  display: grid;
+  gap: 10px;
+}
+/* ================= Address in cart ================= */
+.shop-cart-header-right{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-width:0;
+}
+.shop-address-chip{
+  cursor:pointer;
+  max-width:280px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.shop-address-content{
+  padding-top:4px;
+}
+
+.shop-address-list-top{
+  display:flex;
+  justify-content:flex-start;
+  margin-bottom:10px;
+}
+
+.shop-address-list{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+
+.shop-address-row{
+  border:1px solid var(--color-border);
+  border-radius:14px;
+  padding:10px 12px;
+  background:var(--color-surface);
+  cursor:pointer;
+}
+.shop-address-row:hover{
+  background:var(--color-surface-2);
+}
+.shop-address-row.is-selected{
+  border-color:var(--primary-25);
+  box-shadow:0 0 0 2px var(--primary-14) inset;
+}
+
+.shop-address-row-top{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+}
+
+.shop-address-row-title{font-weight:800;}
+.shop-address-row-sub{
+  margin-top:4px;
+  font-size:13px;
+  color:var(--color-text-2);
+}
+
+.shop-address-actions{
+  display:flex;
+  gap:8px;
+  margin-top:10px;
+}
+.shop-address-actions .btn{
+  padding:6px 10px;
+  height:32px;
+  border-radius:10px;
+}
+
+.shop-address-form-actions{
+  display:flex;
+  gap:10px;
+  margin-top:12px;
+}
+.shop-address-form-actions .btn{flex:1;}
+.shop-address-form-grid{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+
+/* Checkout: read-only address + change */
+.shop-checkout-address-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+.shop-checkout-change-address{
+  padding:6px 10px;
+  height:32px;
+  border-radius:10px;
+}
+.shop-checkout-address input[readonly]{
+  background:var(--color-surface-2);
+}

@@ -1,0 +1,179 @@
+<div class="center-stack">
+  <div class="panel">
+    <div class="toolbar">
+      <div class="toolbar-title">
+        <i class="fas fa-box"></i>
+        <span id="productsToolbarText">Товары</span>
+      </div>
+
+      <div class="toolbar-right">
+        <button class="btn btn-icon btn-primary" id="addMainBtn" type="button" title="Создать">
+          <i class="fas fa-plus"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-body no-scrollbar">
+
+      <div class="content-view" data-view-content="products">
+        <div class="orders-list" id="productsList"></div>
+        <div class="empty-hint" id="productsEmptyHint">Пока нет товаров...</div>
+      </div>
+
+      <div class="content-view hidden" data-view-content="categories">
+        <div class="orders-list" id="categoriesMainList"></div>
+        <div class="empty-hint" id="categoriesEmptyHint">Пока нет категорий...</div>
+      </div>
+
+      <div class="content-view hidden" data-view-content="variants"><div class="info-card">Содержимое для вариантов...</div></div>
+      <div class="content-view hidden" data-view-content="options"><div class="info-card">Содержимое для опций...</div></div>
+      <div class="content-view hidden" data-view-content="units"><div class="info-card">Единицы измерения...</div></div>
+      <div class="content-view hidden" data-view-content="allergens"><div class="info-card">Аллергены...</div></div>
+      <div class="content-view hidden" data-view-content="diets"><div class="info-card">Диеты...</div></div>
+      <div class="content-view hidden" data-view-content="stock-in"><div class="info-card">Приход...</div></div>
+      <div class="content-view hidden" data-view-content="stock-out"><div class="info-card">Списание...</div></div>
+      <div class="content-view hidden" data-view-content="stock-movements"><div class="info-card">Движения...</div></div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Product editor -->
+<template id="tplProductEditor">
+  <form id="productEditorForm" class="form-grid" autocomplete="off">
+
+    <!-- TOP: Фото 150x150 слева, справа основные поля -->
+    <div class="product-editor-top">
+      <div>
+        <div class="product-photo-main">
+          <img id="pePhotoMain" class="img-main hidden" alt="" />
+          <div class="product-photo-placeholder" id="pePhotoPlaceholder">Нет фото</div>
+        </div>
+
+        <!-- миниатюры (JS рисует .img-thumb внутри) -->
+        <div class="product-photo-thumbs img-thumbs" id="pePhotoThumbs"></div>
+
+        <div class="product-photo-tools">
+          <input id="pePhotosInput" type="file" accept="image/*" multiple class="hidden" />
+          <button class="btn" type="button" id="peAddPhotosBtn">
+            <i class="fas fa-image"></i> Фото
+          </button>
+          <div class="muted" id="pePhotosCounter">0/10</div>
+        </div>
+      </div>
+
+      <div class="product-editor-meta">
+        <div>
+          <label class="field-label" for="pe_name">Название *</label>
+          <input class="control" id="pe_name" name="name" type="text" placeholder="Например: Бургер" required />
+        </div>
+
+        <div>
+          <label class="field-label">Категории</label>
+          <div class="chips" id="peCategoryChips"></div>
+
+          <!-- inline picker -->
+          <div class="inline-backdrop hidden" id="peCatBackdrop"></div>
+          <div class="inline-modal hidden" id="peCatModal" role="dialog" aria-modal="true">
+            <div class="inline-modal-header">
+              <div class="inline-modal-title">Категории</div>
+              <button class="btn btn-icon" type="button" id="peCatClose"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="inline-modal-body no-scrollbar" id="peCatList"></div>
+          </div>
+        </div>
+
+        <div>
+          <label class="field-label" for="pe_sku">Артикул (SKU)</label>
+          <input class="control" id="pe_sku" name="sku" type="text" placeholder="BRG-001" />
+        </div>
+      </div>
+    </div>
+
+    <!-- дальше поля как и были -->
+    <div class="form-row-2">
+      <div>
+        <label class="field-label" for="pe_price">Цена</label>
+        <input class="control" id="pe_price" name="price" type="number" step="0.01" min="0" placeholder="0" />
+      </div>
+      <div>
+        <label class="field-label" for="pe_old_price">Старая цена</label>
+        <input class="control" id="pe_old_price" name="old_price" type="number" step="0.01" min="0" placeholder="0" />
+      </div>
+    </div>
+
+    <div class="form-row-2">
+      <div>
+        <label class="field-label" for="pe_cost_price">Себестоимость</label>
+        <input class="control" id="pe_cost_price" name="cost_price" type="number" step="0.01" min="0" placeholder="0" />
+      </div>
+      <div></div>
+    </div>
+
+    <div>
+      <label class="field-label" for="pe_desc_short">Короткое описание</label>
+      <textarea class="textarea" id="pe_desc_short" name="description_short" rows="3"></textarea>
+    </div>
+
+    <div>
+      <label class="field-label" for="pe_desc">Описание</label>
+      <textarea class="textarea" id="pe_desc" name="description" rows="5"></textarea>
+    </div>
+
+    <div class="form-row-2">
+      <label class="switch">
+        <input class="switch-input" type="checkbox" name="is_active" checked />
+        <span class="switch-ui" aria-hidden="true"></span>
+        <span class="switch-text">Активен</span>
+      </label>
+
+      <label class="switch">
+        <input class="switch-input" type="checkbox" name="site_visibility" checked />
+        <span class="switch-ui" aria-hidden="true"></span>
+        <span class="switch-text">Показывать на сайте</span>
+      </label>
+    </div>
+  </form>
+</template>
+
+<!-- Category editor -->
+<template id="tplCategoryEditor">
+  <form id="categoryEditorForm" class="form-grid" autocomplete="off">
+    <div>
+      <label class="field-label" for="ce_title">Название *</label>
+      <input class="control" id="ce_title" name="title" type="text" required />
+    </div>
+
+    <div class="form-row-2">
+      <div>
+        <label class="field-label" for="ce_code">Code</label>
+        <input class="control" id="ce_code" name="code" type="text" placeholder="burgers" />
+      </div>
+      <div>
+        <label class="field-label" for="ce_icon">Icon</label>
+        <input class="control" id="ce_icon" name="icon" type="text" placeholder="fas fa-hamburger" />
+      </div>
+    </div>
+
+    <div>
+      <label class="field-label" for="ce_sort">Sort order</label>
+      <input class="control" id="ce_sort" name="sort_order" type="number" step="1" />
+    </div>
+
+    <div class="form-row-2">
+      <label class="switch">
+        <input class="switch-input" type="checkbox" name="is_active" checked />
+        <span class="switch-ui" aria-hidden="true"></span>
+        <span class="switch-text">Активна</span>
+      </label>
+
+      <label class="switch">
+        <input class="switch-input" type="checkbox" name="site_visibility" checked />
+        <span class="switch-ui" aria-hidden="true"></span>
+        <span class="switch-text">Показывать на сайте</span>
+      </label>
+    </div>
+  </form>
+</template>

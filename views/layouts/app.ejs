@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title><%= pageTitle || 'Админка' %></title>
+
+  <script>
+    (function () {
+      try {
+        var c = localStorage.getItem('sidebar:collapsed');
+        document.documentElement.setAttribute('data-sidebar-collapsed', c === '1' ? '1' : '0');
+
+        var t = localStorage.getItem('theme');
+        if (!t) {
+          t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+        }
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    })();
+  </script>
+
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+</head>
+
+<body class="<%= pageClass || '' %>">
+  <%- include('../partials/header') %>
+
+  <div class="main-container app-grid">
+    <%- include('../partials/sidebar', { activePage: activePage || '' }) %>
+
+    <section class="page-col page-col-left">
+      <%- include(leftPartial) %>
+    </section>
+
+    <section class="page-col page-col-center">
+      <%- include(centerPartial) %>
+    </section>
+
+    <section class="page-col page-col-right">
+      <%- include(rightPartial) %>
+    </section>
+  </div>
+
+  <div id="sidebarOverlay" class="sidebar-overlay"></div>
+
+  <!-- ✅ Универсальная модалка -->
+  <%- include('../partials/modal') %>
+
+  <% if (typeof extraPartial !== 'undefined' && extraPartial) { %>
+    <%- include(extraPartial) %>
+  <% } %>
+
+  <script src="/static/js/theme.js"></script>
+  <script src="/static/js/sidebar.js"></script>
+
+  <!-- ✅ Модалка -->
+  <script src="/static/js/appModal.js"></script>
+
+  <% if (Array.isArray(pageScripts)) { %>
+    <% pageScripts.forEach(function (src) { %>
+      <script src="<%= src %>"></script>
+    <% }) %>
+  <% } %>
+</body>
+</html>

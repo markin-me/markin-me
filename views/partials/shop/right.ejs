@@ -1,0 +1,75 @@
+<div class="panel" id="shopCartPanel">
+  <div class="panel-header shop-cart-header">
+    <div class="panel-title">Корзина</div>
+
+    <div class="shop-cart-header-right">
+      <button class="chip shop-address-chip chip-plus" id="shopAddressChip" type="button">Введите адрес</button>
+    </div>
+  </div>
+
+  <div class="panel-body no-scrollbar">
+    <div class="shop-cart" id="shopCartWrap">
+      <!-- CART VIEW -->
+      <div class="shop-cart-content" id="shopCartContent">
+        <div class="shop-cart-empty" id="shopCartEmpty">
+          <div class="empty-state">
+            <div class="empty-icon"><i class="fas fa-shopping-cart"></i></div>
+            <div class="empty-title">Корзина пуста</div>
+            <div class="empty-text">Добавьте товары из каталога</div>
+          </div>
+        </div>
+
+        <div class="shop-cart-list" id="shopCartList"></div>
+      </div>
+
+      <!-- ADDRESS VIEW -->
+      <div class="shop-address-content hidden" id="shopAddressContent">
+        <!-- LIST -->
+        <div class="shop-address-list-view hidden" id="shopAddressListView">
+          <div class="shop-address-list-top">
+            <button class="chip chip-plus" id="shopAddressNewBtn" type="button">
+              <i class="fas fa-plus"></i> Новый адрес
+            </button>
+          </div>
+
+          <div class="shop-address-list" id="shopAddressList"></div>
+        </div>
+
+        <!-- FORM -->
+        <div class="shop-address-form-view hidden" id="shopAddressFormView">
+          <div class="shop-address-form-grid">
+            <label class="field-label">Улица</label>
+            <input class="control" id="shopAddrStreet" type="text" />
+
+            <label class="field-label">Дом</label>
+            <input class="control" id="shopAddrHouse" type="text" />
+
+            <label class="field-label">Подъезд</label>
+            <input class="control" id="shopAddrEntrance" type="text" />
+
+            <label class="field-label">Этаж</label>
+            <input class="control" id="shopAddrFloor" type="text" />
+
+            <label class="field-label">Квартира</label>
+            <input class="control" id="shopAddrApartment" type="text" />
+
+            <label class="field-label">Комментарий</label>
+            <input class="control" id="shopAddrComment" type="text" />
+          </div>
+
+          <div class="shop-address-form-actions">
+            <button class="btn btn-primary" id="shopAddressSaveBtn" type="button">Сохранить</button>
+            <button class="btn" id="shopAddressCancelBtn" type="button">Отмена</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="shop-cart-footer hidden" id="shopCartFooter">
+        <button class="shop-cart-clear" id="shopCartClearBtn" type="button" title="Очистить корзину" aria-label="Очистить корзину">×</button>
+        <button class="shop-checkout-btn" id="shopCheckoutBtn" type="button">
+          Оформить <span class="shop-checkout-total" id="shopCartTotal">0 ₽</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

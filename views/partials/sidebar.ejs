@@ -1,0 +1,40 @@
+<aside id="app-sidebar" class="panel app-sidebar">
+  <nav class="app-sidebar-nav no-scrollbar">
+    <ul class="app-sidebar-list">
+      <li>
+        <a href="/dashboard/products" class="nav-item <%= activePage === 'products' ? 'active-nav' : '' %>">
+          <i class="fas fa-box nav-icon"></i>
+          <span class="nav-text">Товары</span>
+        </a>
+      </li>
+
+      <li>
+        <a href="/dashboard/orders" class="nav-item <%= activePage === 'orders' ? 'active-nav' : '' %>">
+          <i class="fas fa-shopping-cart nav-icon"></i>
+          <span class="nav-text">Заказы</span>
+        </a>
+      </li>
+
+      <li>
+        <a href="/dashboard/clients" class="nav-item <%= activePage === 'clients' ? 'active-nav' : '' %>">
+          <i class="fas fa-users nav-icon"></i>
+          <span class="nav-text">Клиенты</span>
+        </a>
+      </li>
+
+      <li>
+        <a href="/dashboard/team" class="nav-item <%= activePage === 'team' ? 'active-nav' : '' %>">
+          <i class="fas fa-user-tie nav-icon"></i>
+          <span class="nav-text">Команда</span>
+        </a>
+      </li>
+
+      <li>
+        <a href="/dashboard/settings" class="nav-item <%= activePage === 'settings' ? 'active-nav' : '' %>">
+          <i class="fas fa-cog nav-icon"></i>
+          <span class="nav-text">Настройки</span>
+        </a>
+      </li>
+    </ul>
+  </nav>
+</aside>
