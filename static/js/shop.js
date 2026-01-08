@@ -72,6 +72,7 @@
   const elCartFooter = $("#shopCartFooter");
   const elCheckoutBtn = $("#shopCheckoutBtn");
   const elCartClearBtn = $("#shopCartClearBtn");
+  const elCheckoutContent = $("#shopCheckoutContent");
 
   if (!elProductsGrid || !elCatsList) return;
 
@@ -434,10 +435,15 @@
         if (inp) inp.value = getSelectedAddressLine();
       }
     } catch {}
+
+    document.querySelectorAll('[data-role="delivery-address"]').forEach((inp) => {
+      inp.value = getSelectedAddressLine();
+    });
   }
 
   function showCartView() {
     if (elAddressContent) elAddressContent.classList.add("hidden");
+    if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
     if (elCartContent) elCartContent.classList.remove("hidden");
     if (elCartFooter) {
       // вернём как было: footer показывается только если корзина не пустая (renderCart решает)
@@ -446,10 +452,18 @@
     renderCart();
   }
 
+  function showCheckoutView() {
+    if (elCartContent) elCartContent.classList.add("hidden");
+    if (elAddressContent) elAddressContent.classList.add("hidden");
+    if (elCartFooter) elCartFooter.classList.add("hidden");
+    if (elCheckoutContent) elCheckoutContent.classList.remove("hidden");
+  }
+
   function showAddressListView() {
     if (!elAddressContent || !elAddressListView || !elAddressFormView) return;
     if (elCartContent) elCartContent.classList.add("hidden");
     if (elCartFooter) elCartFooter.classList.add("hidden");
+    if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
 
     elAddressContent.classList.remove("hidden");
     elAddressListView.classList.remove("hidden");
@@ -473,6 +487,7 @@
 
     if (elCartContent) elCartContent.classList.add("hidden");
     if (elCartFooter) elCartFooter.classList.add("hidden");
+    if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
 
     elAddressContent.classList.remove("hidden");
     elAddressFormView.classList.remove("hidden");
@@ -646,7 +661,7 @@
   function openAddressEditorFromCheckout() {
     // переключаем правую корзину на форму
     const prefill = state.selectedAddress && !state.selectedAddress._local ? state.selectedAddress : (loadAddressDraft() || state.selectedAddress);
-    showAddressFormView(prefill || null, null, "cart");
+    showAddressFormView(prefill || null, null, "checkout");
     try { document.querySelector("#shopCartPanel")?.scrollIntoView({ behavior: "smooth", block: "start" }); } catch {}
   }
 
@@ -667,7 +682,19 @@
       elAddressCancelBtn.addEventListener("click", () => {
         const back = state._addressFormBackMode || "cart";
         if (back === "list" && getSelectedAddressLine()) showAddressListView();
-        else showCartView();
+        else if (back === "checkout") {
+          if (elCheckoutContent) {
+            showCheckoutView();
+            openCheckoutView({
+              container: elCheckoutContent,
+              onBack: showCartView,
+              hasAddressEditor: true,
+              isSheet: false,
+            });
+          } else {
+            showCartView();
+          }
+        } else showCartView();
       });
     }
 
@@ -699,12 +726,32 @@
               await apiJson("/api/public/me/addresses", { method: "POST", body: { ...payload, is_default: 1 } });
             }
             await refreshAddressState();
-            showCartView();
+            if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
+              showCheckoutView();
+              openCheckoutView({
+                container: elCheckoutContent,
+                onBack: showCartView,
+                hasAddressEditor: true,
+                isSheet: false,
+              });
+            } else {
+              showCartView();
+            }
           } else {
             // guest
             saveAddressDraft(payload);
             setSelectedAddress({ ...payload, _local: true });
-            showCartView();
+            if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
+              showCheckoutView();
+              openCheckoutView({
+                container: elCheckoutContent,
+                onBack: showCartView,
+                hasAddressEditor: true,
+                isSheet: false,
+              });
+            } else {
+              showCartView();
+            }
           }
         } catch (e) {
           console.error(e);
@@ -1456,6 +1503,10 @@
     list.className = "shop-cart-list";
     wrap.appendChild(list);
 
+    const checkoutWrap = document.createElement("div");
+    checkoutWrap.className = "shop-checkout-content hidden";
+    wrap.appendChild(checkoutWrap);
+
     const footer = document.createElement("div");
     footer.className = "shop-cart-sheet-footer";
 
@@ -1490,7 +1541,7 @@
       },
     });
 
-    openCartSheetCtx = { listEl: list, totalEl: totalSpan, footerEl: footer, checkoutBtn: btn, clearBtn };
+    openCartSheetCtx = { listEl: list, totalEl: totalSpan, footerEl: footer, checkoutBtn: btn, clearBtn, checkoutEl: checkoutWrap };
 
     clearBtn.addEventListener("click", () => {
       if (cartCountTotal() <= 0) return;
@@ -1499,7 +1550,21 @@
     });
 
     btn.addEventListener("click", () => {
-      openCheckoutSheet();
+      if (!checkoutWrap) return;
+      checkoutWrap.classList.remove("hidden");
+      list.classList.add("hidden");
+      footer.classList.add("hidden");
+
+      openCheckoutView({
+        container: checkoutWrap,
+        onBack: () => {
+          checkoutWrap.classList.add("hidden");
+          list.classList.remove("hidden");
+          footer.classList.remove("hidden");
+        },
+        hasAddressEditor: false,
+        isSheet: true,
+      });
     });
   }
 
@@ -2020,12 +2085,30 @@
     return fallback || null;
   }
 
-  async function openCheckoutSheet() {
-    if (!window.AppModal) return;
+  function getTodayDateString() {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function extractTimeValue(raw) {
+    const v = str(raw || "").trim();
+    if (!v) return "";
+    if (v.includes("T")) return v.split("T")[1]?.slice(0, 5) || "";
+    if (v.includes(" ")) return v.split(" ")[1]?.slice(0, 5) || "";
+    if (/^\d{1,2}:\d{2}/.test(v)) return v.slice(0, 5);
+    return "";
+  }
+
+  async function openCheckoutView({ container, onBack, hasAddressEditor, isSheet }) {
+    if (!container) return;
 
     const items = cartItemsResolved();
     if (!items.length) {
       alert("Корзина пуста");
+      if (onBack) onBack();
       return;
     }
 
@@ -2034,8 +2117,23 @@
 
     const me = await fetchMeSafe(); // если залогинен — подставим
 
+    container.innerHTML = "";
+
     const wrap = document.createElement("div");
     wrap.className = "shop-checkout";
+
+    if (onBack) {
+      const backBtn = document.createElement("button");
+      backBtn.type = "button";
+      backBtn.className = "btn";
+      backBtn.textContent = "Назад в корзину";
+      backBtn.addEventListener("click", () => onBack());
+      wrap.appendChild(backBtn);
+
+      const space = document.createElement("div");
+      space.style.height = "8px";
+      wrap.appendChild(space);
+    }
 
     const title = document.createElement("div");
     title.className = "shop-checkout-title";
@@ -2080,6 +2178,10 @@
     phone.placeholder = "+7 (999) 000-00-00";
     phone.value = me ? formatPhonePlus7(me.phone || "") : (draft.customer_phone || "");
     if (me) phone.disabled = true; // как договорились: нельзя менять
+    if (!me) {
+      phone.addEventListener("input", () => enforcePhonePrefix(phone));
+      phone.addEventListener("focus", () => enforcePhonePrefix(phone));
+    }
     wrap.appendChild(phoneLabel);
     wrap.appendChild(phone);
 
@@ -2117,7 +2219,7 @@
     address.className = "control";
     address.type = "text";
     address.placeholder = "Улица / Дом / Подъезд / Этаж / Квартира";
-    address.readOnly = true;
+    address.readOnly = !!hasAddressEditor;
     address.setAttribute("data-role", "delivery-address");
     address.value = getSelectedAddressLine() || draft.delivery_address || "";
 
@@ -2125,18 +2227,15 @@
     addrWrap.appendChild(address);
     wrap.appendChild(addrWrap);
 
-    changeAddrBtn.addEventListener("click", () => {
-      try { window.AppModal.close("change-address"); } catch {}
-      openAddressEditorFromCheckout();
-    });
-
+    if (!hasAddressEditor) {
+      changeAddrBtn.style.display = "none";
+    }
 
     function refreshAddressVisibility() {
       const v = getRadioValue(methodGroup, "method");
       const isDelivery = v === "delivery";
       addrWrap.style.display = isDelivery ? "" : "none";
-      changeAddrBtn.style.display = isDelivery ? "" : "none";
-      if (isDelivery) {
+      if (isDelivery && hasAddressEditor) {
         address.value = getSelectedAddressLine() || address.value || "";
       }
     }
@@ -2171,8 +2270,8 @@
 
     const timeInput = document.createElement("input");
     timeInput.className = "control";
-    timeInput.type = "datetime-local";
-    timeInput.value = draft.scheduled_at || "";
+    timeInput.type = "time";
+    timeInput.value = extractTimeValue(draft.scheduled_at);
 
     timeInputWrap.appendChild(timeInput);
     wrap.appendChild(timeInputWrap);
@@ -2184,22 +2283,6 @@
     }
     timeGroup.addEventListener("change", refreshTimeInputVisibility);
     refreshTimeInputVisibility();
-
-    // cutlery
-    const cutLabel = document.createElement("label");
-    cutLabel.className = "field-label";
-    cutLabel.textContent = "Количество приборов";
-    const cutlery = document.createElement("select");
-    cutlery.className = "control";
-    for (let i = 0; i <= 10; i++) {
-      const opt = document.createElement("option");
-      opt.value = String(i);
-      opt.textContent = String(i);
-      cutlery.appendChild(opt);
-    }
-    cutlery.value = String(Number.isFinite(Number(draft.cutlery_qty)) ? Number(draft.cutlery_qty) : 0);
-    wrap.appendChild(cutLabel);
-    wrap.appendChild(cutlery);
 
     // payment
     const payLabel = document.createElement("label");
@@ -2242,6 +2325,24 @@
     pay.addEventListener("change", refreshChangeVisibility);
     refreshChangeVisibility();
 
+    if (hasAddressEditor) {
+      changeAddrBtn.addEventListener("click", () => {
+        saveCheckoutDraft({
+          promo_code: str(promo.value).trim() || null,
+          customer_name: str(name.value).trim(),
+          customer_phone: str(phone.value).trim(),
+          method_code: getRadioValue(methodGroup, "method") || methodDefault || "takeaway",
+          delivery_address: str(address.value).trim() || null,
+          comment: str(comment.value).trim() || null,
+          time_option_code: getRadioValue(timeGroup, "timeopt") || timeDefault || "asap",
+          scheduled_at: timeInput.value || "",
+          payment_code: pay.value || payDefault || "cash",
+          change_from: change.value ? Number(change.value) : null,
+        });
+        openAddressEditorFromCheckout();
+      });
+    }
+
     // submit
     const submit = document.createElement("button");
     submit.type = "button";
@@ -2249,11 +2350,7 @@
     submit.textContent = "Заказать";
     wrap.appendChild(submit);
 
-    setAppModalMode("shop");
-    window.AppModal.open({
-      title: "",
-      content: wrap,
-    });
+    container.appendChild(wrap);
 
     submit.addEventListener("click", async () => {
       const payload = {
@@ -2266,7 +2363,7 @@
         time_option_code: getRadioValue(timeGroup, "timeopt") || timeDefault || "asap",
         scheduled_at: null,
         payment_code: pay.value || payDefault || "cash",
-        cutlery_qty: Number(cutlery.value || 0),
+        cutlery_qty: 0,
         change_from: change.value ? Number(change.value) : null,
         items: cartItemsResolved().map(x => ({ product_id: x.product.id, qty: x.qty })),
       };
@@ -2274,8 +2371,11 @@
       const isAuthed = !!(getCustomerToken() && me);
 
       if (!payload.customer_name) {
-        alert("Введите имя");
-        return;
+        if (isAuthed) payload.customer_name = "Клиент";
+        else {
+          alert("Введите имя");
+          return;
+        }
       }
 
       if (!isAuthed) {
@@ -2293,10 +2393,10 @@
 
       if ((payload.time_option_code === "at_time" || payload.time_option_code === "on_date")) {
         if (!timeInput.value) {
-          alert("Укажите дату и время");
+          alert("Укажите время");
           return;
         }
-        payload.scheduled_at = timeInput.value.replace("T", " ") + ":00";
+        payload.scheduled_at = `${getTodayDateString()} ${timeInput.value}:00`;
       }
 
       saveCheckoutDraft({
@@ -2309,7 +2409,6 @@
         time_option_code: payload.time_option_code,
         scheduled_at: timeInput.value || "",
         payment_code: payload.payment_code,
-        cutlery_qty: payload.cutlery_qty,
         change_from: payload.change_from,
       });
 
@@ -2324,6 +2423,10 @@
         }
 
         clearCartAll();
+        saveCheckoutDraft({});
+        if (isSheet && window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen()) {
+          window.AppModal.close("sheet");
+        }
         window.location.href = "/shop";
       } catch (e) {
         console.error(e);
@@ -2362,7 +2465,16 @@
         });
       }
       if (elCheckoutBtn) {
-        elCheckoutBtn.addEventListener("click", () => openCheckoutSheet());
+        elCheckoutBtn.addEventListener("click", async () => {
+          if (!elCheckoutContent) return;
+          showCheckoutView();
+          await openCheckoutView({
+            container: elCheckoutContent,
+            onBack: showCartView,
+            hasAddressEditor: true,
+            isSheet: false,
+          });
+        });
       }
 
       // Nav
