@@ -538,6 +538,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 /* футер корзины в шите/панели — липкий снизу */
+.shop-cart-footer,
 .shop-cart-sheet-footer{
   position: sticky;
   bottom: 0;
@@ -562,10 +563,26 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   color: var(--color-text-muted);
 }
 
+.shop-cart-clear{
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
 .shop-checkout-btn{
   height: 52px;
   border-radius: 999px;
   padding: 0 18px;
+  width: 100%;
+  flex: 1 1 auto;
 }
 
 /* ==========================================================================
