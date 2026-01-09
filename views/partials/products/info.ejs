@@ -21,12 +21,37 @@
     </div>
   </div>
 
+  <!-- Header скрыт по умолчанию. Показываем только когда выбрана категория -->
+  <div class="panel-header product-info-header hidden" id="categoryInfoHeader">
+    <div class="product-info-header-left">
+      <div class="panel-title product-header-title" id="categoryTitle">Категория</div>
+      <div class="muted product-header-sku" id="categoryMeta">—</div>
+    </div>
+
+    <div class="product-info-header-actions">
+      <button class="btn btn-icon" id="editCategoryBtn" type="button" title="Редактировать" aria-label="Редактировать">
+        <i class="fas fa-pen"></i>
+      </button>
+
+      <button class="btn btn-icon" id="closeCategoryInfoBtn" type="button" title="Закрыть" aria-label="Закрыть">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+  </div>
+
   <div class="panel-body no-scrollbar" id="productInfoBody">
     <!-- Empty state -->
     <div id="productEmpty" class="empty-state">
       <div class="empty-icon"><i class="fas fa-mouse-pointer"></i></div>
       <div class="empty-title">Выберите товар</div>
       <div class="empty-text">Нажмите на любой товар для просмотра подробной информации</div>
+    </div>
+
+    <!-- Empty state for categories -->
+    <div id="categoryEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-folder-open"></i></div>
+      <div class="empty-title">Выберите категорию</div>
+      <div class="empty-text">Нажмите на категорию слева для просмотра подробной информации</div>
     </div>
 
     <!-- Product info -->
@@ -79,6 +104,29 @@
       <div class="info-card">
         <div class="kv-label">Описание</div>
         <div class="kv-value" style="font-weight:500;" id="productDesc">—</div>
+      </div>
+    </div>
+
+    <!-- Category info -->
+    <div id="categoryInfo" class="hidden">
+      <div class="product-info-top">
+        <div class="product-info-photoCol">
+          <div class="product-photo-main">
+            <img id="categoryIconPreview" class="product-photo-img hidden" alt="">
+            <div id="categoryIconPlaceholder" class="product-photo-placeholder">Нет фото</div>
+          </div>
+        </div>
+
+        <div class="info-card">
+          <div class="info-row">
+            <div class="info-text">Статус</div>
+            <div class="info-title" id="categoryStatus">—</div>
+          </div>
+          <div class="info-row">
+            <div class="info-text">Показывать на сайте</div>
+            <div class="info-title" id="categoryVisibility">—</div>
+          </div>
+        </div>
       </div>
     </div>
   </div>

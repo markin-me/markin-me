@@ -104,6 +104,106 @@ async function nextSortOrderForCategories(db, tenantId, step = 10) {
   return Number(rows?.[0]?.m || 0) + step;
 }
 
+async function getEffectiveOptionGroupsForProduct(db, tenantId, productId) {
+  const [cats] = await db.query(
+    `SELECT category_id FROM prod_product_categories WHERE tenant_id=? AND product_id=?`,
+    [tenantId, productId]
+  );
+  const categoryIds = cats.map(r => Number(r.category_id)).filter(n => Number.isFinite(n));
+
+  const params = [tenantId, productId];
+  let sql = `
+    SELECT id, assign_type, assign_id, group_id, priority, sort_order, is_active
+    FROM prod_option_assignments
+    WHERE tenant_id=? AND is_active=1 AND (
+      (assign_type='product' AND assign_id=?)
+    `;
+  if (categoryIds.length) {
+    sql += ` OR (assign_type='category' AND assign_id IN (${categoryIds.map(() => '?').join(',')}))`;
+    params.push(...categoryIds);
+  }
+  sql += ')';
+
+  const [assignments] = await db.query(sql, params);
+  if (!assignments.length) return [];
+
+  assignments.sort((a, b) => {
+    const aProd = a.assign_type === 'product' ? 1 : 0;
+    const bProd = b.assign_type === 'product' ? 1 : 0;
+    if (aProd !== bProd) return bProd - aProd;
+    const pr = (Number(b.priority || 0) - Number(a.priority || 0));
+    if (pr !== 0) return pr;
+    const so = (Number(a.sort_order || 0) - Number(b.sort_order || 0));
+    if (so !== 0) return so;
+    return Number(a.id) - Number(b.id);
+  });
+
+  const byGroup = new Map();
+  for (const a of assignments) {
+    const gid = Number(a.group_id);
+    if (!byGroup.has(gid)) byGroup.set(gid, a);
+  }
+
+  const groupIds = Array.from(byGroup.keys());
+  if (!groupIds.length) return [];
+
+  const [excl] = await db.query(
+    `SELECT group_id FROM prod_option_exclusions WHERE tenant_id=? AND product_id=?`,
+    [tenantId, productId]
+  );
+  const excluded = new Set(excl.map(r => Number(r.group_id)));
+  const effectiveGroupIds = groupIds.filter(id => !excluded.has(id));
+  if (!effectiveGroupIds.length) return [];
+
+  const [groups] = await db.query(
+    `SELECT id, title, selection_type, min_select, max_select, sort_order, is_active
+     FROM prod_option_groups
+     WHERE tenant_id=? AND is_active=1 AND id IN (${effectiveGroupIds.map(() => '?').join(',')})`,
+    [tenantId, ...effectiveGroupIds]
+  );
+
+  if (!groups.length) return [];
+
+  const [overrides] = await db.query(
+    `SELECT id, group_id, selection_type, min_select, max_select, sort_order
+     FROM prod_option_overrides
+     WHERE tenant_id=? AND product_id=? AND group_id IN (${effectiveGroupIds.map(() => '?').join(',')})`,
+    [tenantId, productId, ...effectiveGroupIds]
+  );
+  const overrideByGroup = new Map(overrides.map(o => [Number(o.group_id), o]));
+
+  const [items] = await db.query(
+    `SELECT id, group_id, title, target_type, target_id, price_mode, unit_price, sort_order, is_active
+     FROM prod_option_items
+     WHERE tenant_id=? AND is_active=1 AND group_id IN (${effectiveGroupIds.map(() => '?').join(',')})
+     ORDER BY sort_order ASC, id ASC`,
+    [tenantId, ...effectiveGroupIds]
+  );
+  const itemsByGroup = new Map();
+  for (const item of items) {
+    const gid = Number(item.group_id);
+    if (!itemsByGroup.has(gid)) itemsByGroup.set(gid, []);
+    itemsByGroup.get(gid).push(item);
+  }
+
+  const normalized = groups.map((g) => {
+    const gid = Number(g.id);
+    const override = overrideByGroup.get(gid);
+    return {
+      id: gid,
+      title: g.title,
+      selection_type: override?.selection_type ?? g.selection_type,
+      min_select: override?.min_select ?? g.min_select ?? 0,
+      max_select: override?.max_select ?? g.max_select ?? null,
+      sort_order: override?.sort_order ?? g.sort_order ?? 0,
+      items: itemsByGroup.get(gid) || [],
+    };
+  });
+
+  normalized.sort((a, b) => (Number(a.sort_order || 0) - Number(b.sort_order || 0)) || a.id - b.id);
+  return normalized;
+}
+
 /**
  * Seed категорий по умолчанию для tenant:
  * - all (Все товары)
@@ -233,6 +333,7 @@ module.exports = {
   getIdByCode,
   nextSortOrderForCategory,
   nextSortOrderForCategories,
+  getEffectiveOptionGroupsForProduct,
   ensureDefaultCategories,
   getAllCategoryId,
   setProductCategories,

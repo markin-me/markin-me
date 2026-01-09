@@ -46,6 +46,45 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   });
 
   // ------------------------------
+  // Upload: category icon
+  // POST /api/upload/category-icon
+  // ------------------------------
+  const categoryIconStorage = multer.diskStorage({
+    destination(req, file, cb) {
+      const tenantId = helpers.getTenantId(req);
+      const folder = path.join(__dirname, '..', '..', 'static', 'uploads', 'categories', String(tenantId));
+      helpers.ensureDir(folder);
+      cb(null, folder);
+    },
+    filename(req, file, cb) {
+      const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';
+      const name = crypto.randomBytes(16).toString('hex') + ext;
+      cb(null, name);
+    }
+  });
+
+  const categoryIconUpload = multer({
+    storage: categoryIconStorage,
+    limits: { files: 1, fileSize: 5 * 1024 * 1024 },
+    fileFilter(req, file, cb) {
+      const ok = /^image\/(jpeg|png|webp)$/.test(file.mimetype);
+      cb(ok ? null : new Error('ONLY_IMAGES'), ok);
+    }
+  });
+
+  router.post('/upload/category-icon', categoryIconUpload.single('icon'), (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      if (!req.file) return res.status(400).json({ ok: false, error: 'NO_FILE' });
+      const url = `/static/uploads/categories/${tenantId}/${req.file.filename}`;
+      res.json({ ok: true, url });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
+    }
+  });
+
+  // ------------------------------
   // Categories: /api/prod_categories
   // ------------------------------
   router.get('/prod_categories', async (req, res) => {
@@ -296,6 +335,376 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const categoryIds = Array.isArray(req.body.category_ids) ? req.body.category_ids : [];
       await helpers.setProductCategories(db, tenantId, id, categoryIds);
 
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // ------------------------------
+  // Option groups/items/assignments
+  // ------------------------------
+
+  router.get('/prod_option_groups', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const [rows] = await db.query(
+        `SELECT id, title, selection_type, min_select, max_select, sort_order, is_active
+         FROM prod_option_groups
+         WHERE tenant_id=?
+         ORDER BY sort_order ASC, id ASC`,
+        [tenantId]
+      );
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/prod_option_groups', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const title = helpers.strOrNull(req.body.title);
+      if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+      const selectionType = helpers.strOrNull(req.body.selection_type) || 'multi';
+      const minSelect = helpers.numOrNull(req.body.min_select);
+      const maxSelect = helpers.numOrNull(req.body.max_select);
+      const sortOrder = helpers.numOrNull(req.body.sort_order);
+      const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+      const [result] = await db.query(
+        `INSERT INTO prod_option_groups
+         (tenant_id, title, selection_type, min_select, max_select, sort_order, is_active)
+         VALUES (?,?,?,?,?,?,?)`,
+        [tenantId, title, selectionType, minSelect, maxSelect, sortOrder, isActive]
+      );
+      res.json({ ok: true, id: result.insertId });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/prod_option_groups/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const title = helpers.strOrNull(req.body.title);
+      if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+      const selectionType = helpers.strOrNull(req.body.selection_type) || 'multi';
+      const minSelect = helpers.numOrNull(req.body.min_select);
+      const maxSelect = helpers.numOrNull(req.body.max_select);
+      const sortOrder = helpers.numOrNull(req.body.sort_order);
+      const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+      await db.query(
+        `UPDATE prod_option_groups
+         SET title=?, selection_type=?, min_select=?, max_select=?, sort_order=?, is_active=?
+         WHERE tenant_id=? AND id=?`,
+        [title, selectionType, minSelect, maxSelect, sortOrder, isActive, tenantId, id]
+      );
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/prod_option_groups/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      await db.query(`DELETE FROM prod_option_groups WHERE tenant_id=? AND id=?`, [tenantId, id]);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/prod_option_groups/:id/items', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const groupId = Number(req.params.id);
+      if (!Number.isFinite(groupId) || groupId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const [rows] = await db.query(
+        `SELECT id, group_id, title, target_type, target_id, price_mode, unit_price, sort_order, is_active
+         FROM prod_option_items
+         WHERE tenant_id=? AND group_id=?
+         ORDER BY sort_order ASC, id ASC`,
+        [tenantId, groupId]
+      );
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/prod_option_groups/:id/items', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const groupId = Number(req.params.id);
+      if (!Number.isFinite(groupId) || groupId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const title = helpers.strOrNull(req.body.title);
+      if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+      const targetType = helpers.strOrNull(req.body.target_type) || 'custom';
+      const targetId = helpers.numOrNull(req.body.target_id);
+      const priceMode = helpers.strOrNull(req.body.price_mode) || 'fixed';
+      const unitPrice = helpers.numOrNull(req.body.unit_price);
+      const sortOrder = helpers.numOrNull(req.body.sort_order);
+      const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+      const [result] = await db.query(
+        `INSERT INTO prod_option_items
+         (tenant_id, group_id, title, target_type, target_id, price_mode, unit_price, sort_order, is_active)
+         VALUES (?,?,?,?,?,?,?,?,?)`,
+        [tenantId, groupId, title, targetType, targetId, priceMode, unitPrice, sortOrder, isActive]
+      );
+      res.json({ ok: true, id: result.insertId });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/prod_option_items/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const title = helpers.strOrNull(req.body.title);
+      if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+      const targetType = helpers.strOrNull(req.body.target_type) || 'custom';
+      const targetId = helpers.numOrNull(req.body.target_id);
+      const priceMode = helpers.strOrNull(req.body.price_mode) || 'fixed';
+      const unitPrice = helpers.numOrNull(req.body.unit_price);
+      const sortOrder = helpers.numOrNull(req.body.sort_order);
+      const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+      await db.query(
+        `UPDATE prod_option_items
+         SET title=?, target_type=?, target_id=?, price_mode=?, unit_price=?, sort_order=?, is_active=?
+         WHERE tenant_id=? AND id=?`,
+        [title, targetType, targetId, priceMode, unitPrice, sortOrder, isActive, tenantId, id]
+      );
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/prod_option_items/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      await db.query(`DELETE FROM prod_option_items WHERE tenant_id=? AND id=?`, [tenantId, id]);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/prod_option_assignments', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const [rows] = await db.query(
+        `SELECT id, assign_type, assign_id, group_id, priority, sort_order, is_active
+         FROM prod_option_assignments
+         WHERE tenant_id=?
+         ORDER BY priority DESC, sort_order ASC, id ASC`,
+        [tenantId]
+      );
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/prod_option_assignments', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const assignType = helpers.strOrNull(req.body.assign_type);
+      const assignId = helpers.numOrNull(req.body.assign_id);
+      const groupId = helpers.numOrNull(req.body.group_id);
+      if (!assignType || !assignId || !groupId) return res.status(400).json({ ok: false, error: 'BAD_ASSIGNMENT' });
+      const priority = helpers.numOrNull(req.body.priority) ?? 0;
+      const sortOrder = helpers.numOrNull(req.body.sort_order) ?? 0;
+      const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+      const [result] = await db.query(
+        `INSERT INTO prod_option_assignments
+         (tenant_id, assign_type, assign_id, group_id, priority, sort_order, is_active)
+         VALUES (?,?,?,?,?,?,?)`,
+        [tenantId, assignType, assignId, groupId, priority, sortOrder, isActive]
+      );
+      res.json({ ok: true, id: result.insertId });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/prod_option_assignments/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const assignType = helpers.strOrNull(req.body.assign_type);
+      const assignId = helpers.numOrNull(req.body.assign_id);
+      const groupId = helpers.numOrNull(req.body.group_id);
+      if (!assignType || !assignId || !groupId) return res.status(400).json({ ok: false, error: 'BAD_ASSIGNMENT' });
+      const priority = helpers.numOrNull(req.body.priority) ?? 0;
+      const sortOrder = helpers.numOrNull(req.body.sort_order) ?? 0;
+      const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+      await db.query(
+        `UPDATE prod_option_assignments
+         SET assign_type=?, assign_id=?, group_id=?, priority=?, sort_order=?, is_active=?
+         WHERE tenant_id=? AND id=?`,
+        [assignType, assignId, groupId, priority, sortOrder, isActive, tenantId, id]
+      );
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/prod_option_assignments/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      await db.query(`DELETE FROM prod_option_assignments WHERE tenant_id=? AND id=?`, [tenantId, id]);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/prod_option_exclusions', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const [rows] = await db.query(
+        `SELECT id, product_id, group_id
+         FROM prod_option_exclusions
+         WHERE tenant_id=?
+         ORDER BY id DESC`,
+        [tenantId]
+      );
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/prod_option_exclusions', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const productId = helpers.numOrNull(req.body.product_id);
+      const groupId = helpers.numOrNull(req.body.group_id);
+      if (!productId || !groupId) return res.status(400).json({ ok: false, error: 'BAD_EXCLUSION' });
+      const [result] = await db.query(
+        `INSERT INTO prod_option_exclusions (tenant_id, product_id, group_id)
+         VALUES (?,?,?)`,
+        [tenantId, productId, groupId]
+      );
+      res.json({ ok: true, id: result.insertId });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/prod_option_exclusions/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      await db.query(`DELETE FROM prod_option_exclusions WHERE tenant_id=? AND id=?`, [tenantId, id]);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/prod_option_overrides', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const [rows] = await db.query(
+        `SELECT id, product_id, group_id, selection_type, min_select, max_select, sort_order
+         FROM prod_option_overrides
+         WHERE tenant_id=?
+         ORDER BY id DESC`,
+        [tenantId]
+      );
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/prod_option_overrides', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const productId = helpers.numOrNull(req.body.product_id);
+      const groupId = helpers.numOrNull(req.body.group_id);
+      if (!productId || !groupId) return res.status(400).json({ ok: false, error: 'BAD_OVERRIDE' });
+      const selectionType = helpers.strOrNull(req.body.selection_type);
+      const minSelect = helpers.numOrNull(req.body.min_select);
+      const maxSelect = helpers.numOrNull(req.body.max_select);
+      const sortOrder = helpers.numOrNull(req.body.sort_order);
+      const [result] = await db.query(
+        `INSERT INTO prod_option_overrides
+         (tenant_id, product_id, group_id, selection_type, min_select, max_select, sort_order)
+         VALUES (?,?,?,?,?,?,?)`,
+        [tenantId, productId, groupId, selectionType, minSelect, maxSelect, sortOrder]
+      );
+      res.json({ ok: true, id: result.insertId });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/prod_option_overrides/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const productId = helpers.numOrNull(req.body.product_id);
+      const groupId = helpers.numOrNull(req.body.group_id);
+      if (!productId || !groupId) return res.status(400).json({ ok: false, error: 'BAD_OVERRIDE' });
+      const selectionType = helpers.strOrNull(req.body.selection_type);
+      const minSelect = helpers.numOrNull(req.body.min_select);
+      const maxSelect = helpers.numOrNull(req.body.max_select);
+      const sortOrder = helpers.numOrNull(req.body.sort_order);
+      await db.query(
+        `UPDATE prod_option_overrides
+         SET product_id=?, group_id=?, selection_type=?, min_select=?, max_select=?, sort_order=?
+         WHERE tenant_id=? AND id=?`,
+        [productId, groupId, selectionType, minSelect, maxSelect, sortOrder, tenantId, id]
+      );
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/prod_option_overrides/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      await db.query(`DELETE FROM prod_option_overrides WHERE tenant_id=? AND id=?`, [tenantId, id]);
       res.json({ ok: true });
     } catch (e) {
       console.error(e);

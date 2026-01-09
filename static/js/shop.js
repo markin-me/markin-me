@@ -249,6 +249,21 @@
     return json;
   }
 
+  async function apiUploadAvatar(file) {
+    const token = getCustomerToken();
+    if (!token) throw new Error("UNAUTHORIZED");
+    const fd = new FormData();
+    fd.append("photo", file);
+    const res = await fetch("/api/public/me/photo", {
+      method: "POST",
+      headers: { "x-tenant-id": String(tenantId), "x-customer-token": token },
+      body: fd,
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.ok === false) throw new Error((data && data.error) || `HTTP_${res.status}`);
+    return data.photoUrl;
+  }
+
   // -----------------------------
   // State
   // -----------------------------
@@ -287,13 +302,23 @@
     } catch {}
   }
 
+  function normalizeCartLine(raw) {
+    if (raw && typeof raw === "object") {
+      return {
+        qty: Math.max(0, Number(raw.qty || 0)),
+        options: Array.isArray(raw.options) ? raw.options : [],
+      };
+    }
+    return { qty: Math.max(0, Number(raw || 0)), options: [] };
+  }
+
   function cartQty(productId) {
-    return Number(state.cart[String(productId)] || 0);
+    return normalizeCartLine(state.cart[String(productId)]).qty;
   }
 
   function cartCountTotal() {
     let total = 0;
-    for (const k of Object.keys(state.cart)) total += Number(state.cart[k] || 0);
+    for (const k of Object.keys(state.cart)) total += normalizeCartLine(state.cart[k]).qty;
     return total;
   }
 
@@ -301,12 +326,50 @@
     const items = [];
     for (const k of Object.keys(state.cart)) {
       const pid = Number(k);
-      const qty = Number(state.cart[k] || 0);
-      if (!qty || !Number.isFinite(pid)) continue;
+      const line = normalizeCartLine(state.cart[k]);
+      if (!line.qty || !Number.isFinite(pid)) continue;
       const p = state.productCache.get(pid);
-      if (p) items.push({ product: p, qty });
+      if (p) items.push({ product: p, qty: line.qty, options: line.options || [] });
     }
     return items;
+  }
+
+  function calcOptionsUnitTotal(options) {
+    const groups = Array.isArray(options) ? options : [];
+    let total = 0;
+    groups.forEach((g) => {
+      const selections = Array.isArray(g.selections) ? g.selections : [];
+      selections.forEach((s) => {
+        const price = s.unit_price_snapshot != null ? Number(s.unit_price_snapshot) : Number(s.unit_price || 0);
+        total += price * Math.max(1, Number(s.qty || 1));
+      });
+    });
+    return total;
+  }
+
+  function calcLineTotal(product, line) {
+    const basePrice = Number(product?.price || 0);
+    const optionsUnitTotal = calcOptionsUnitTotal(line?.options);
+    return (basePrice + optionsUnitTotal) * Math.max(1, Number(line?.qty || 1));
+  }
+
+  function serializeOptionsForOrder(options) {
+    const groups = Array.isArray(options) ? options : [];
+    return groups
+      .map((g) => {
+        const groupId = Number(g.group_id || g.id);
+        if (!Number.isFinite(groupId)) return null;
+        const selections = Array.isArray(g.selections) ? g.selections : [];
+        return {
+          group_id: groupId,
+          selections: selections.map((s) => ({
+            item_id: Number(s.item_id),
+            qty: Math.max(1, Number(s.qty || 1)),
+            resolved_product_id: Number.isFinite(Number(s.resolved_product_id)) ? Number(s.resolved_product_id) : null,
+          })),
+        };
+      })
+      .filter(Boolean);
   }
 
   // -----------------------------
@@ -317,7 +380,7 @@
     const missing = [];
     for (const k of Object.keys(state.cart)) {
       const pid = Number(k);
-      const qty = Number(state.cart[k] || 0);
+      const qty = normalizeCartLine(state.cart[k]).qty;
       if (!qty || !Number.isFinite(pid)) continue;
       if (!state.productCache.has(pid)) missing.push(pid);
     }
@@ -657,6 +720,7 @@
         ? (a.id && state.selectedAddress.id ? Number(a.id) === Number(state.selectedAddress.id) : !!a._local && !!state.selectedAddress._local)
         : false;
       if (isSelected) row.classList.add("is-selected");
+      if (token && Number(a.is_default) === 1) row.classList.add("is-default");
 
       const title = formatAddressLine(a);
       const sub = a.comment ? str(a.comment) : "";
@@ -665,9 +729,9 @@
         <div class="shop-address-row-top">
           <div>
             <div class="shop-address-row-title">${title || ""}</div>
-            ${sub ? `<div class="shop-address-row-sub">${sub}</div>` : ""}
+            ${sub ? `<div class="shop-address-row-sub">${sub}</div>` : ""} 
           </div>
-          ${token && Number(a.is_default) === 1 ? `<div class="muted">основной</div>` : ``}
+          ${token && Number(a.is_default) === 1 ? `<div class="shop-address-star" title="Основной"><i class="fas fa-star"></i></div>` : ``}
         </div>
       `;
 
@@ -1166,10 +1230,11 @@
 
     let total = 0;
 
-    items.forEach(({ product, qty }) => {
+    items.forEach(({ product, qty, options }) => {
       const old = Number(product.old_price || 0);
       const price = Number(product.price || 0);
-      total += price * qty;
+      const lineTotal = calcLineTotal(product, { qty, options });
+      total += lineTotal;
 
       const row = document.createElement("div");
       row.className = "cart-row";
@@ -1233,7 +1298,7 @@
 
       const pr = document.createElement("div");
       pr.className = "cart-price";
-      pr.textContent = money(price * qty);
+      pr.textContent = money(lineTotal);
 
       right.appendChild(oldEl);
       right.appendChild(pr);
@@ -1343,11 +1408,12 @@
     const pid = Number(productId);
     if (!Number.isFinite(pid)) return;
 
-    const prev = cartQty(pid);
+    const current = normalizeCartLine(state.cart[String(pid)]);
+    const prev = current.qty;
     const next = Math.max(0, prev + delta);
 
     if (next <= 0) delete state.cart[String(pid)];
-    else state.cart[String(pid)] = next;
+    else state.cart[String(pid)] = { ...current, qty: next };
 
     saveCart();
 
@@ -2187,6 +2253,35 @@
 
     const photo = document.createElement("div");
     photo.className = "shop-profile-photo";
+    const photoImg = document.createElement("img");
+    photoImg.className = "shop-profile-photo-img";
+    photoImg.alt = "Фото профиля";
+    const photoPlaceholder = document.createElement("div");
+    photoPlaceholder.className = "shop-profile-photo-placeholder";
+    photoPlaceholder.innerHTML = `<i class="fas fa-user"></i>`;
+    const photoActions = document.createElement("div");
+    photoActions.className = "shop-profile-photo-actions";
+    const photoLabel = document.createElement("label");
+    photoLabel.className = "btn shop-profile-photo-upload";
+    photoLabel.textContent = "Изменить фото";
+    const photoInput = document.createElement("input");
+    photoInput.type = "file";
+    photoInput.accept = "image/*";
+    photoInput.className = "shop-profile-photo-input";
+    photoLabel.appendChild(photoInput);
+    photoActions.appendChild(photoLabel);
+    photo.appendChild(photoImg);
+    photo.appendChild(photoPlaceholder);
+    photo.appendChild(photoActions);
+    const currentPhoto = str(me?.photo || "");
+    if (currentPhoto) {
+      photoImg.src = currentPhoto;
+      photoImg.classList.remove("hidden");
+      photoPlaceholder.classList.add("hidden");
+    } else {
+      photoImg.classList.add("hidden");
+      photoPlaceholder.classList.remove("hidden");
+    }
     top.appendChild(photo);
 
     const info = document.createElement("div");
@@ -2330,6 +2425,7 @@
         list.forEach((a) => {
           const row = document.createElement("div");
           row.className = "shop-profile-card";
+          if (Number(a.is_default) === 1) row.classList.add("is-default");
 
           const txt = [
             `${str(a.street)} ${str(a.house)}`,
@@ -2340,7 +2436,10 @@
 
           row.innerHTML = `
             <div>
-              <div><strong>${txt}</strong> ${Number(a.is_default) === 1 ? '<span class="muted">• основной</span>' : ''}</div>
+              <div>
+                ${Number(a.is_default) === 1 ? '<span class="shop-address-star" title="Основной"><i class="fas fa-star"></i></span>' : ''}
+                <strong>${txt}</strong>
+              </div>
               ${a.comment ? `<div class="muted">${str(a.comment)}</div>` : ''}
             </div>
           `;
@@ -2482,6 +2581,34 @@
       }
     });
 
+    photoInput.addEventListener("change", async () => {
+      const file = photoInput.files && photoInput.files[0];
+      if (!file) return;
+      photoLabel.classList.add("is-loading");
+      const previewUrl = URL.createObjectURL(file);
+      photoImg.src = previewUrl;
+      photoImg.classList.remove("hidden");
+      photoPlaceholder.classList.add("hidden");
+      try {
+        const url = await apiUploadAvatar(file);
+        photoImg.src = `${url}?t=${Date.now()}`;
+        me.photo = url;
+        setCustomerCache({ ...me, photo: url });
+      } catch (e) {
+        alert("Не удалось загрузить фото");
+        if (!me.photo) {
+          photoImg.classList.add("hidden");
+          photoPlaceholder.classList.remove("hidden");
+        } else {
+          photoImg.src = `${me.photo}?t=${Date.now()}`;
+        }
+      } finally {
+        URL.revokeObjectURL(previewUrl);
+        photoInput.value = "";
+        photoLabel.classList.remove("is-loading");
+      }
+    });
+
     reloadAddresses();
     reloadOrders();
 
@@ -2542,6 +2669,7 @@
         e.stopPropagation();
         elProfileMenu.classList.toggle("hidden");
       };
+      elProfileMenu.addEventListener("click", (e) => e.stopPropagation());
     }
 
     if (elProfileEditBtn && elProfileMenu) {
@@ -2580,18 +2708,19 @@
   function mountProfileModalMenu({ onEdit, onSettings, onLogout }) {
     const header = document.querySelector(".app-modal-header");
     if (!header) return () => {};
+    const actions = header.querySelector(".app-modal-actions") || header;
 
-    let settingsBtn = header.querySelector(".shop-profile-modal-settings");
+    let settingsBtn = actions.querySelector(".shop-profile-modal-settings");
     if (!settingsBtn) {
       settingsBtn = document.createElement("button");
       settingsBtn.type = "button";
       settingsBtn.className = "btn btn-icon shop-profile-modal-settings";
       settingsBtn.innerHTML = `<i class="fas fa-gear"></i>`;
       settingsBtn.setAttribute("aria-label", "Настройки профиля");
-      header.appendChild(settingsBtn);
+      actions.appendChild(settingsBtn);
     }
 
-    let menu = header.querySelector(".shop-profile-menu");
+    let menu = actions.querySelector(".shop-profile-menu");
     if (!menu) {
       menu = document.createElement("div");
       menu.className = "shop-profile-menu hidden";
@@ -2600,7 +2729,7 @@
         <button class="shop-profile-menu-item" data-role="settings" type="button">Настройки</button>
         <button class="shop-profile-menu-item" data-role="logout" type="button">Выйти</button>
       `;
-      header.appendChild(menu);
+      actions.appendChild(menu);
     }
 
     const editBtn = menu.querySelector('[data-role="edit"]');
@@ -2617,6 +2746,7 @@
       e.stopPropagation();
       menu.classList.toggle("hidden");
     };
+    menu.addEventListener("click", (e) => e.stopPropagation());
 
     if (editBtn) editBtn.onclick = () => {
       menu.classList.add("hidden");
@@ -3030,7 +3160,11 @@
         payment_code: pay.value || payDefault || "cash",
         cutlery_qty: 0,
         change_from: change.value ? Number(change.value) : null,
-        items: cartItemsResolved().map(x => ({ product_id: x.product.id, qty: x.qty })),
+        items: cartItemsResolved().map(x => ({
+          product_id: x.product.id,
+          qty: x.qty,
+          options: serializeOptionsForOrder(x.options),
+        })),
       };
 
       const isAuthed = !!(getCustomerToken() && me);

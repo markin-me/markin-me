@@ -16,12 +16,35 @@
   const productsEmptyHint = $("#productsEmptyHint");
   const categoriesMainList = $("#categoriesMainList");
   const categoriesEmptyHint = $("#categoriesEmptyHint");
+  const optionGroupsList = $("#optionGroupsList");
+  const optionItemsList = $("#optionItemsList");
+  const optionAssignmentsList = $("#optionAssignmentsList");
+  const optionExclusionsList = $("#optionExclusionsList");
+  const optionOverridesList = $("#optionOverridesList");
+  const addOptionGroupBtn = $("#addOptionGroupBtn");
+  const addOptionItemBtn = $("#addOptionItemBtn");
+  const addOptionAssignmentBtn = $("#addOptionAssignmentBtn");
+  const addOptionExclusionBtn = $("#addOptionExclusionBtn");
+  const addOptionOverrideBtn = $("#addOptionOverrideBtn");
+  const optionItemsTitle = $("#optionItemsTitle");
 
   // right info
   const productEmpty = $("#productEmpty");
   const productInfo = $("#productInfo");
   const closeProductInfoBtn = $("#closeProductInfoBtn");
   const editProductBtn = $("#editProductBtn");
+  const productInfoHeader = $("#productInfoHeader");
+  const categoryInfoHeader = $("#categoryInfoHeader");
+  const categoryTitle = $("#categoryTitle");
+  const categoryMeta = $("#categoryMeta");
+  const categoryStatus = $("#categoryStatus");
+  const categoryVisibility = $("#categoryVisibility");
+  const categoryIconPreview = $("#categoryIconPreview");
+  const categoryIconPlaceholder = $("#categoryIconPlaceholder");
+  const categoryEmpty = $("#categoryEmpty");
+  const categoryInfo = $("#categoryInfo");
+  const closeCategoryInfoBtn = $("#closeCategoryInfoBtn");
+  const editCategoryBtn = $("#editCategoryBtn");
 
   const productTitle = $("#productTitle");
   const productSku = $("#productSku");
@@ -52,6 +75,14 @@
     allCategoryId: null,
     selectedProductId: null,
     selectedProductCategories: [], // full objects
+    selectedCategoryId: null,
+    optionGroups: [],
+    optionItems: [],
+    optionAssignments: [],
+    optionExclusions: [],
+    optionOverrides: [],
+    selectedOptionGroupId: null,
+    allProducts: [],
   };
 
   // ---------------- API ----------------
@@ -79,6 +110,19 @@
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) throw new Error((data && data.error) || `HTTP_${res.status}`);
     return data.urls || [];
+  }
+
+  async function apiUploadCategoryIcon(file) {
+    const fd = new FormData();
+    fd.append("icon", file);
+    const res = await fetch("/api/upload/category-icon", {
+      method: "POST",
+      headers: { "x-tenant-id": String(TENANT_ID) },
+      body: fd,
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.ok === false) throw new Error((data && data.error) || `HTTP_${res.status}`);
+    return data.url;
   }
 
   // ---------------- Accordion (height fix) ----------------
@@ -142,6 +186,8 @@
     const cat = getCurrentCategory();
     setToolbarTitle(cat ? cat.title : "Товары");
     showView("products");
+    clearCategorySelection();
+    clearProductSelection();
   }
 
   function enterCategoriesMode() {
@@ -149,6 +195,7 @@
     setToolbarTitle("Категории");
     showView("categories");
     clearProductSelection();
+    clearCategorySelection();
   }
 
   // ---------------- Load ----------------
@@ -173,6 +220,46 @@
     state.products = Array.isArray(res.data) ? res.data : [];
   }
 
+  async function loadAllProducts() {
+    if (!state.allCategoryId) return;
+    const res = await api(`/api/prod_products?tenant_id=${TENANT_ID}&category_id=${state.allCategoryId}`);
+    state.allProducts = Array.isArray(res.data) ? res.data : [];
+  }
+
+  async function loadOptionGroups() {
+    const res = await api(`/api/prod_option_groups?tenant_id=${TENANT_ID}`);
+    state.optionGroups = Array.isArray(res.data) ? res.data : [];
+    const hasSelected = state.optionGroups.some((g) => Number(g.id) === Number(state.selectedOptionGroupId));
+    if (!hasSelected) {
+      state.selectedOptionGroupId = state.optionGroups.length ? Number(state.optionGroups[0].id) : null;
+    }
+  }
+
+  async function loadOptionItems(groupId) {
+    const gid = Number(groupId || state.selectedOptionGroupId);
+    if (!Number.isFinite(gid) || gid <= 0) {
+      state.optionItems = [];
+      return;
+    }
+    const res = await api(`/api/prod_option_groups/${gid}/items?tenant_id=${TENANT_ID}`);
+    state.optionItems = Array.isArray(res.data) ? res.data : [];
+  }
+
+  async function loadOptionAssignments() {
+    const res = await api(`/api/prod_option_assignments?tenant_id=${TENANT_ID}`);
+    state.optionAssignments = Array.isArray(res.data) ? res.data : [];
+  }
+
+  async function loadOptionExclusions() {
+    const res = await api(`/api/prod_option_exclusions?tenant_id=${TENANT_ID}`);
+    state.optionExclusions = Array.isArray(res.data) ? res.data : [];
+  }
+
+  async function loadOptionOverrides() {
+    const res = await api(`/api/prod_option_overrides?tenant_id=${TENANT_ID}`);
+    state.optionOverrides = Array.isArray(res.data) ? res.data : [];
+  }
+
   // ---------------- Render: left nav ----------------
 
   function escapeHtml(s) {
@@ -184,6 +271,20 @@
       .replace(/'/g, "&#039;");
   }
 
+  function looksLikeUrl(v) {
+    const s = String(v || "").trim();
+    return !!s && (s.startsWith("/") || s.startsWith("http://") || s.startsWith("https://"));
+  }
+
+  function renderCategoryIcon(icon) {
+    const v = String(icon || "").trim();
+    if (looksLikeUrl(v)) {
+      return `<img class="category-icon-img" src="${escapeHtml(v)}" alt="" />`;
+    }
+    const cls = v || "fas fa-folder";
+    return `<i class="${escapeHtml(cls)}"></i>`;
+  }
+
   function renderCategoriesNav() {
     if (!categoriesNav) return;
 
@@ -193,11 +294,10 @@
 
     categoriesNav.innerHTML = list.map((c) => {
       const isActive = state.mode === "products" && c.id === state.currentCategoryId;
-      const icon = c.icon ? c.icon : "fas fa-folder";
       return `
         <button class="stage-item ${isActive ? "is-active" : ""}" type="button" data-category-id="${c.id}">
-          <span class="stage-icon"><i class="${icon}"></i></span>
-          <span class="stage-meta stage-text"><b>${escapeHtml(c.title)}</b><small>${escapeHtml(c.code || "")}</small></span>
+          <span class="stage-icon">${renderCategoryIcon(c.icon)}</span>
+          <span class="stage-meta stage-text"><b>${escapeHtml(c.title)}</b></span>
           <span class="acc-spacer"></span>
         </button>
       `;
@@ -288,22 +388,17 @@
       .slice()
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
 
-    categoriesMainList.innerHTML = list.map((c) => {
-      const icon = c.icon ? c.icon : "fas fa-folder";
-      return `
-        <div class="order-row category-row" data-id="${c.id}" draggable="true">
-          <div>
-            <div class="order-num"><i class="${icon}"></i></div>
-            <div class="order-time">${escapeHtml(c.code || "")}</div>
-          </div>
-          <div>
-            <div class="order-line"><b>${escapeHtml(c.title)}</b></div>
-            <div class="order-time">sort: ${escapeHtml(String(c.sort_order ?? ""))}</div>
-          </div>
-          <div class="pill">${c.is_active ? "Активна" : "Выключена"}</div>
+    categoriesMainList.innerHTML = list.map((c) => `
+      <div class="order-row category-row" data-id="${c.id}" draggable="true">
+        <div>
+          <div class="order-num">${renderCategoryIcon(c.icon)}</div>
         </div>
-      `;
-    }).join("");
+        <div>
+          <div class="order-line"><b>${escapeHtml(c.title)}</b></div>
+        </div>
+        <div class="pill">${c.is_active ? "Активна" : "Выключена"}</div>
+      </div>
+    `).join("");
 
     const empty = list.length === 0;
     if (categoriesEmptyHint) categoriesEmptyHint.style.display = empty ? "block" : "none";
@@ -318,12 +413,260 @@
 
     // dblclick edit
     $$(".category-row", categoriesMainList).forEach((row) => {
+      row.addEventListener("click", () => {
+        const id = Number(row.dataset.id);
+        const cat = state.categories.find((x) => x.id === id);
+        if (!cat) return;
+        state.selectedCategoryId = id;
+        $$(".category-row", categoriesMainList).forEach((x) => x.classList.toggle("is-active", Number(x.dataset.id) === id));
+        showCategoryDetails(cat);
+      });
       row.addEventListener("dblclick", () => {
         const id = Number(row.dataset.id);
         const cat = state.categories.find((x) => x.id === id);
         if (cat) openCategoryModal({ mode: "edit", category: cat });
       });
     });
+  }
+
+  // ---------------- Options ----------------
+
+  function getGroupTitle(id) {
+    return (state.optionGroups.find((g) => Number(g.id) === Number(id)) || {}).title || `#${id}`;
+  }
+
+  function getCategoryTitle(id) {
+    return (state.categories.find((c) => Number(c.id) === Number(id)) || {}).title || `#${id}`;
+  }
+
+  function getProductTitle(id) {
+    return (state.allProducts.find((p) => Number(p.id) === Number(id)) || {}).name || `#${id}`;
+  }
+
+  function renderOptionGroups() {
+    if (!optionGroupsList) return;
+    if (!state.optionGroups.length) {
+      optionGroupsList.innerHTML = `<div class="muted">Групп пока нет.</div>`;
+      return;
+    }
+
+    optionGroupsList.innerHTML = state.optionGroups.map((g) => `
+      <div class="order-row option-row" data-id="${g.id}">
+        <div>
+          <div class="order-line"><b>${escapeHtml(g.title || "—")}</b></div>
+          <div class="order-time">${escapeHtml(g.selection_type || "multi")} · min ${g.min_select ?? 0} / max ${g.max_select ?? "∞"}</div>
+        </div>
+        <div class="order-actions">
+          <button class="btn btn-icon" type="button" data-edit="${g.id}" title="Редактировать"><i class="fas fa-pen"></i></button>
+          <button class="btn btn-icon" type="button" data-del="${g.id}" title="Удалить"><i class="fas fa-trash"></i></button>
+        </div>
+      </div>
+    `).join("");
+
+    $$(".option-row", optionGroupsList).forEach((row) => {
+      const id = Number(row.dataset.id);
+      row.classList.toggle("is-active", id === state.selectedOptionGroupId);
+      row.addEventListener("click", async () => {
+        state.selectedOptionGroupId = id;
+        await loadOptionItems(id);
+        renderOptionGroups();
+        renderOptionItems();
+      });
+    });
+
+    $$("[data-edit]", optionGroupsList).forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const id = Number(btn.dataset.edit);
+        const group = state.optionGroups.find((g) => Number(g.id) === id);
+        if (group) openOptionGroupModal({ mode: "edit", group });
+      });
+    });
+
+    $$("[data-del]", optionGroupsList).forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const id = Number(btn.dataset.del);
+        if (!Number.isFinite(id)) return;
+        if (!window.confirm("Удалить группу?")) return;
+        await api(`/api/prod_option_groups/${id}`, { method: "DELETE" });
+        await refreshOptionsView();
+      });
+    });
+  }
+
+  function renderOptionItems() {
+    if (!optionItemsList) return;
+    const activeGroup = state.optionGroups.find((g) => Number(g.id) === Number(state.selectedOptionGroupId));
+    if (optionItemsTitle) optionItemsTitle.textContent = activeGroup ? `Опции: ${activeGroup.title}` : "Опции группы";
+
+    if (!state.selectedOptionGroupId) {
+      optionItemsList.innerHTML = `<div class="muted">Выберите группу.</div>`;
+      return;
+    }
+
+    if (!state.optionItems.length) {
+      optionItemsList.innerHTML = `<div class="muted">Опций пока нет.</div>`;
+      return;
+    }
+
+    optionItemsList.innerHTML = state.optionItems.map((it) => `
+      <div class="order-row option-row" data-id="${it.id}">
+        <div>
+          <div class="order-line"><b>${escapeHtml(it.title || "—")}</b></div>
+          <div class="order-time">${escapeHtml(it.target_type || "custom")} · ${escapeHtml(it.price_mode || "fixed")} ${it.unit_price != null ? `· ${formatMoney(it.unit_price)}` : ""}</div>
+        </div>
+        <div class="order-actions">
+          <button class="btn btn-icon" type="button" data-edit-item="${it.id}" title="Редактировать"><i class="fas fa-pen"></i></button>
+          <button class="btn btn-icon" type="button" data-del-item="${it.id}" title="Удалить"><i class="fas fa-trash"></i></button>
+        </div>
+      </div>
+    `).join("");
+
+    $$("[data-edit-item]", optionItemsList).forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const id = Number(btn.dataset.editItem);
+        const item = state.optionItems.find((x) => Number(x.id) === id);
+        if (item) openOptionItemModal({ mode: "edit", item });
+      });
+    });
+
+    $$("[data-del-item]", optionItemsList).forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const id = Number(btn.dataset.delItem);
+        if (!Number.isFinite(id)) return;
+        if (!window.confirm("Удалить опцию?")) return;
+        await api(`/api/prod_option_items/${id}`, { method: "DELETE" });
+        await refreshOptionsView();
+      });
+    });
+  }
+
+  function renderOptionAssignments() {
+    if (!optionAssignmentsList) return;
+    if (!state.optionAssignments.length) {
+      optionAssignmentsList.innerHTML = `<div class="muted">Назначений пока нет.</div>`;
+      return;
+    }
+    optionAssignmentsList.innerHTML = state.optionAssignments.map((a) => {
+      const target = a.assign_type === "category" ? getCategoryTitle(a.assign_id) : getProductTitle(a.assign_id);
+      return `
+        <div class="order-row option-row" data-id="${a.id}">
+          <div>
+            <div class="order-line"><b>${escapeHtml(getGroupTitle(a.group_id))}</b></div>
+            <div class="order-time">${escapeHtml(a.assign_type)}: ${escapeHtml(target)} · priority ${a.priority ?? 0} / sort ${a.sort_order ?? 0}</div>
+          </div>
+          <div class="order-actions">
+            <button class="btn btn-icon" type="button" data-edit-assign="${a.id}" title="Редактировать"><i class="fas fa-pen"></i></button>
+            <button class="btn btn-icon" type="button" data-del-assign="${a.id}" title="Удалить"><i class="fas fa-trash"></i></button>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    $$("[data-edit-assign]", optionAssignmentsList).forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const id = Number(btn.dataset.editAssign);
+        const assignment = state.optionAssignments.find((x) => Number(x.id) === id);
+        if (assignment) openOptionAssignmentModal({ mode: "edit", assignment });
+      });
+    });
+
+    $$("[data-del-assign]", optionAssignmentsList).forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const id = Number(btn.dataset.delAssign);
+        if (!Number.isFinite(id)) return;
+        if (!window.confirm("Удалить назначение?")) return;
+        await api(`/api/prod_option_assignments/${id}`, { method: "DELETE" });
+        await refreshOptionsView();
+      });
+    });
+  }
+
+  function renderOptionExclusions() {
+    if (!optionExclusionsList) return;
+    if (!state.optionExclusions.length) {
+      optionExclusionsList.innerHTML = `<div class="muted">Исключений пока нет.</div>`;
+      return;
+    }
+    optionExclusionsList.innerHTML = state.optionExclusions.map((x) => `
+      <div class="order-row option-row">
+        <div>
+          <div class="order-line"><b>${escapeHtml(getGroupTitle(x.group_id))}</b></div>
+          <div class="order-time">product: ${escapeHtml(getProductTitle(x.product_id))}</div>
+        </div>
+        <div class="order-actions">
+          <button class="btn btn-icon" type="button" data-del-excl="${x.id}" title="Удалить"><i class="fas fa-trash"></i></button>
+        </div>
+      </div>
+    `).join("");
+
+    $$("[data-del-excl]", optionExclusionsList).forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = Number(btn.dataset.delExcl);
+        if (!Number.isFinite(id)) return;
+        if (!window.confirm("Удалить исключение?")) return;
+        await api(`/api/prod_option_exclusions/${id}`, { method: "DELETE" });
+        await refreshOptionsView();
+      });
+    });
+  }
+
+  function renderOptionOverrides() {
+    if (!optionOverridesList) return;
+    if (!state.optionOverrides.length) {
+      optionOverridesList.innerHTML = `<div class="muted">Переопределений пока нет.</div>`;
+      return;
+    }
+    optionOverridesList.innerHTML = state.optionOverrides.map((x) => `
+      <div class="order-row option-row">
+        <div>
+          <div class="order-line"><b>${escapeHtml(getGroupTitle(x.group_id))}</b></div>
+          <div class="order-time">product: ${escapeHtml(getProductTitle(x.product_id))} · ${escapeHtml(x.selection_type || "—")} · min ${x.min_select ?? "—"} / max ${x.max_select ?? "—"}</div>
+        </div>
+        <div class="order-actions">
+          <button class="btn btn-icon" type="button" data-edit-ovr="${x.id}" title="Редактировать"><i class="fas fa-pen"></i></button>
+          <button class="btn btn-icon" type="button" data-del-ovr="${x.id}" title="Удалить"><i class="fas fa-trash"></i></button>
+        </div>
+      </div>
+    `).join("");
+
+    $$("[data-edit-ovr]", optionOverridesList).forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = Number(btn.dataset.editOvr);
+        const override = state.optionOverrides.find((x) => Number(x.id) === id);
+        if (override) openOptionOverrideModal({ mode: "edit", override });
+      });
+    });
+
+    $$("[data-del-ovr]", optionOverridesList).forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = Number(btn.dataset.delOvr);
+        if (!Number.isFinite(id)) return;
+        if (!window.confirm("Удалить переопределение?")) return;
+        await api(`/api/prod_option_overrides/${id}`, { method: "DELETE" });
+        await refreshOptionsView();
+      });
+    });
+  }
+
+  async function refreshOptionsView() {
+    await loadCategories();
+    await loadAllProducts();
+    await loadOptionGroups();
+    await loadOptionItems();
+    await loadOptionAssignments();
+    await loadOptionExclusions();
+    await loadOptionOverrides();
+    renderOptionGroups();
+    renderOptionItems();
+    renderOptionAssignments();
+    renderOptionExclusions();
+    renderOptionOverrides();
   }
 
   // ---------------- Details (right) ----------------
@@ -415,6 +758,10 @@
 
     productEmpty && productEmpty.classList.add("hidden");
     productInfo && productInfo.classList.remove("hidden");
+    productInfoHeader && productInfoHeader.classList.remove("hidden");
+    categoryInfo && categoryInfo.classList.add("hidden");
+    categoryEmpty && categoryEmpty.classList.add("hidden");
+    categoryInfoHeader && categoryInfoHeader.classList.add("hidden");
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (isMobile && sheetHost && productInfo) {
@@ -434,8 +781,62 @@
     state.selectedProductCategories = [];
     productInfo && productInfo.classList.add("hidden");
     productEmpty && productEmpty.classList.remove("hidden");
+    productInfoHeader && productInfoHeader.classList.add("hidden");
+    categoryInfo && categoryInfo.classList.add("hidden");
+    categoryInfoHeader && categoryInfoHeader.classList.add("hidden");
+    categoryEmpty && categoryEmpty.classList.add("hidden");
     closeSheet();
     if (productsList) $$(".order-row", productsList).forEach((x) => x.classList.remove("is-active"));
+  }
+
+  function showCategoryDetails(c) {
+    if (!c) return;
+    categoryTitle.textContent = c.title || "—";
+    categoryMeta.textContent = `ID: ${c.id}`;
+    categoryStatus.textContent = c.is_active ? "Активна" : "Выключена";
+    categoryVisibility.textContent = c.site_visibility ? "Да" : "Нет";
+
+    const icon = String(c.icon || "").trim();
+    if (looksLikeUrl(icon)) {
+      categoryIconPreview.src = icon;
+      categoryIconPreview.classList.remove("hidden");
+      categoryIconPlaceholder.classList.add("hidden");
+    } else {
+      categoryIconPreview.classList.add("hidden");
+      categoryIconPlaceholder.classList.remove("hidden");
+      categoryIconPlaceholder.innerHTML = icon ? `<i class="${escapeHtml(icon)}"></i>` : "Нет фото";
+    }
+
+    categoryEmpty && categoryEmpty.classList.add("hidden");
+    categoryInfo && categoryInfo.classList.remove("hidden");
+    categoryInfoHeader && categoryInfoHeader.classList.remove("hidden");
+    productInfo && productInfo.classList.add("hidden");
+    productEmpty && productEmpty.classList.add("hidden");
+    productInfoHeader && productInfoHeader.classList.add("hidden");
+
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile && sheetHost && categoryInfo) {
+      sheetHost.innerHTML = "";
+      sheetHost.appendChild(categoryInfo);
+      openSheet();
+    } else {
+      if (detailsDesktopHost && categoryInfo && categoryInfo.parentElement !== detailsDesktopHost) {
+        detailsDesktopHost.appendChild(categoryInfo);
+      }
+      closeSheet();
+    }
+  }
+
+  function clearCategorySelection() {
+    state.selectedCategoryId = null;
+    categoryInfo && categoryInfo.classList.add("hidden");
+    categoryInfoHeader && categoryInfoHeader.classList.add("hidden");
+    categoryEmpty && categoryEmpty.classList.remove("hidden");
+    productInfo && productInfo.classList.add("hidden");
+    productInfoHeader && productInfoHeader.classList.add("hidden");
+    productEmpty && productEmpty.classList.add("hidden");
+    if (categoriesMainList) $$(".category-row", categoriesMainList).forEach((x) => x.classList.remove("is-active"));
+    closeSheet();
   }
 
   // ---------------- Modal: product (chips + photos) ----------------
@@ -578,7 +979,6 @@
           <div class="${rowCls}">
             <div class="picker-meta">
               <div class="picker-title">${escapeHtml(c.title)}</div>
-              <div class="muted" style="font-size:12px;">${escapeHtml(c.code || "")}</div>
             </div>
 
             <label class="switch">
@@ -746,6 +1146,22 @@
 
     const form = $("#categoryEditorForm", window.AppModal.body);
     if (!form) return;
+    const iconPreview = $("#ceIconPreview", form);
+    const iconFile = $("#ce_icon_file", form);
+
+    function renderIconPreview(value) {
+      if (!iconPreview) return;
+      const v = String(value || "").trim();
+      if (looksLikeUrl(v)) {
+        iconPreview.innerHTML = `<img src="${escapeHtml(v)}" alt="" />`;
+        return;
+      }
+      if (v) {
+        iconPreview.innerHTML = `<i class="${escapeHtml(v)}"></i>`;
+        return;
+      }
+      iconPreview.textContent = "Нет иконки";
+    }
 
     if (isEdit && category) {
       form.title.value = category.title || "";
@@ -754,6 +1170,406 @@
       form.sort_order.value = category.sort_order != null ? String(category.sort_order) : "";
       form.is_active.checked = Boolean(category.is_active);
       form.site_visibility.checked = Boolean(category.site_visibility);
+      renderIconPreview(category.icon || "");
+    }
+
+    if (!isEdit) {
+      renderIconPreview(form.icon.value || "");
+    }
+
+    if (iconFile) {
+      iconFile.addEventListener("change", async () => {
+        const file = iconFile.files && iconFile.files[0];
+        if (!file) return;
+        iconFile.disabled = true;
+        try {
+          const url = await apiUploadCategoryIcon(file);
+          form.icon.value = url;
+          renderIconPreview(url);
+        } catch (e) {
+          alert("Не удалось загрузить иконку");
+        } finally {
+          iconFile.value = "";
+          iconFile.disabled = false;
+        }
+      });
+    }
+
+    if (form.icon) {
+      form.icon.addEventListener("input", () => renderIconPreview(form.icon.value));
+    }
+  }
+
+  function buildSelectOptions(list, value, { valueKey = "id", labelKey = "title" } = {}) {
+    const v = value != null ? String(value) : "";
+    return list.map((item) => {
+      const id = String(item[valueKey]);
+      const label = escapeHtml(item[labelKey] || item.name || item.title || id);
+      const selected = v === id ? "selected" : "";
+      return `<option value="${escapeHtml(id)}" ${selected}>${label}</option>`;
+    }).join("");
+  }
+
+  function openOptionGroupModal({ mode, group }) {
+    const isEdit = mode === "edit";
+    const body = document.createElement("form");
+    body.className = "form-grid";
+    body.innerHTML = `
+      <div>
+        <label class="field-label">Название *</label>
+        <input class="control" name="title" type="text" required />
+      </div>
+      <div class="form-row-2">
+        <div>
+          <label class="field-label">Тип выбора</label>
+          <select class="control" name="selection_type">
+            <option value="single">single</option>
+            <option value="multi">multi</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label">Sort order</label>
+          <input class="control" name="sort_order" type="number" step="1" />
+        </div>
+      </div>
+      <div class="form-row-2">
+        <div>
+          <label class="field-label">Min select</label>
+          <input class="control" name="min_select" type="number" step="1" min="0" />
+        </div>
+        <div>
+          <label class="field-label">Max select</label>
+          <input class="control" name="max_select" type="number" step="1" min="0" />
+        </div>
+      </div>
+      <label class="switch">
+        <input class="switch-input" type="checkbox" name="is_active" checked />
+        <span class="switch-ui" aria-hidden="true"></span>
+        <span class="switch-text">Активна</span>
+      </label>
+    `;
+
+    window.AppModal.open({
+      title: isEdit ? "Редактировать группу" : "Новая группа",
+      content: body,
+      onSave: async () => {
+        const title = String(body.title.value || "").trim();
+        if (!title) return false;
+        const payload = {
+          tenant_id: TENANT_ID,
+          title,
+          selection_type: body.selection_type.value || "multi",
+          min_select: body.min_select.value === "" ? null : Number(body.min_select.value),
+          max_select: body.max_select.value === "" ? null : Number(body.max_select.value),
+          sort_order: body.sort_order.value === "" ? null : Number(body.sort_order.value),
+          is_active: body.is_active.checked ? 1 : 0,
+        };
+        if (isEdit && group) {
+          await api(`/api/prod_option_groups/${group.id}`, { method: "PUT", body: JSON.stringify(payload) });
+        } else {
+          await api("/api/prod_option_groups", { method: "POST", body: JSON.stringify(payload) });
+        }
+        await refreshOptionsView();
+        return true;
+      },
+    });
+
+    if (isEdit && group) {
+      body.title.value = group.title || "";
+      body.selection_type.value = group.selection_type || "multi";
+      body.min_select.value = group.min_select != null ? String(group.min_select) : "";
+      body.max_select.value = group.max_select != null ? String(group.max_select) : "";
+      body.sort_order.value = group.sort_order != null ? String(group.sort_order) : "";
+      body.is_active.checked = Boolean(group.is_active);
+    }
+  }
+
+  function openOptionItemModal({ mode, item }) {
+    const isEdit = mode === "edit";
+    const body = document.createElement("form");
+    body.className = "form-grid";
+    body.innerHTML = `
+      <div>
+        <label class="field-label">Название *</label>
+        <input class="control" name="title" type="text" required />
+      </div>
+      <div class="form-row-2">
+        <div>
+          <label class="field-label">Тип цели</label>
+          <select class="control" name="target_type">
+            <option value="custom">custom</option>
+            <option value="product">product</option>
+            <option value="category_pick">category_pick</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label">Target ID</label>
+          <input class="control" name="target_id" type="number" step="1" />
+        </div>
+      </div>
+      <div class="form-row-2">
+        <div>
+          <label class="field-label">Price mode</label>
+          <select class="control" name="price_mode">
+            <option value="fixed">fixed</option>
+            <option value="delta">delta</option>
+            <option value="from_target">from_target</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label">Цена</label>
+          <input class="control" name="unit_price" type="number" step="0.01" />
+        </div>
+      </div>
+      <div class="form-row-2">
+        <div>
+          <label class="field-label">Sort order</label>
+          <input class="control" name="sort_order" type="number" step="1" />
+        </div>
+        <label class="switch">
+          <input class="switch-input" type="checkbox" name="is_active" checked />
+          <span class="switch-ui" aria-hidden="true"></span>
+          <span class="switch-text">Активна</span>
+        </label>
+      </div>
+    `;
+
+    window.AppModal.open({
+      title: isEdit ? "Редактировать опцию" : "Новая опция",
+      content: body,
+      onSave: async () => {
+        const title = String(body.title.value || "").trim();
+        if (!title) return false;
+        const payload = {
+          tenant_id: TENANT_ID,
+          group_id: isEdit && item ? item.group_id : state.selectedOptionGroupId,
+          title,
+          target_type: body.target_type.value || "custom",
+          target_id: body.target_id.value === "" ? null : Number(body.target_id.value),
+          price_mode: body.price_mode.value || "fixed",
+          unit_price: body.unit_price.value === "" ? null : Number(body.unit_price.value),
+          sort_order: body.sort_order.value === "" ? null : Number(body.sort_order.value),
+          is_active: body.is_active.checked ? 1 : 0,
+        };
+        if (isEdit && item) {
+          await api(`/api/prod_option_items/${item.id}`, { method: "PUT", body: JSON.stringify(payload) });
+        } else {
+          await api(`/api/prod_option_groups/${state.selectedOptionGroupId}/items`, { method: "POST", body: JSON.stringify(payload) });
+        }
+        await refreshOptionsView();
+        return true;
+      },
+    });
+
+    if (isEdit && item) {
+      body.title.value = item.title || "";
+      body.target_type.value = item.target_type || "custom";
+      body.target_id.value = item.target_id != null ? String(item.target_id) : "";
+      body.price_mode.value = item.price_mode || "fixed";
+      body.unit_price.value = item.unit_price != null ? String(item.unit_price) : "";
+      body.sort_order.value = item.sort_order != null ? String(item.sort_order) : "";
+      body.is_active.checked = Boolean(item.is_active);
+    }
+  }
+
+  function openOptionAssignmentModal({ mode, assignment }) {
+    const isEdit = mode === "edit";
+    const body = document.createElement("form");
+    body.className = "form-grid";
+    body.innerHTML = `
+      <div>
+        <label class="field-label">Группа</label>
+        <select class="control" name="group_id"></select>
+      </div>
+      <div class="form-row-2">
+        <div>
+          <label class="field-label">Тип назначения</label>
+          <select class="control" name="assign_type">
+            <option value="category">category</option>
+            <option value="product">product</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label">Назначение</label>
+          <select class="control" name="assign_id"></select>
+        </div>
+      </div>
+      <div class="form-row-2">
+        <div>
+          <label class="field-label">Priority</label>
+          <input class="control" name="priority" type="number" step="1" />
+        </div>
+        <div>
+          <label class="field-label">Sort order</label>
+          <input class="control" name="sort_order" type="number" step="1" />
+        </div>
+      </div>
+      <label class="switch">
+        <input class="switch-input" type="checkbox" name="is_active" checked />
+        <span class="switch-ui" aria-hidden="true"></span>
+        <span class="switch-text">Активно</span>
+      </label>
+    `;
+
+    const groupSelect = body.querySelector('[name="group_id"]');
+    const assignIdSelect = body.querySelector('[name="assign_id"]');
+
+    function fillGroups() {
+      if (!groupSelect) return;
+      groupSelect.innerHTML = buildSelectOptions(state.optionGroups, assignment?.group_id);
+    }
+
+    function fillAssignTargets(type, value) {
+      if (!assignIdSelect) return;
+      const list = type === "product" ? state.allProducts : state.categories;
+      const labelKey = type === "product" ? "name" : "title";
+      assignIdSelect.innerHTML = buildSelectOptions(list, value, { labelKey });
+    }
+
+    fillGroups();
+    fillAssignTargets(assignment?.assign_type || "category", assignment?.assign_id);
+
+    body.assign_type.addEventListener("change", () => {
+      fillAssignTargets(body.assign_type.value, null);
+    });
+
+    window.AppModal.open({
+      title: isEdit ? "Редактировать назначение" : "Новое назначение",
+      content: body,
+      onSave: async () => {
+        const payload = {
+          tenant_id: TENANT_ID,
+          assign_type: body.assign_type.value,
+          assign_id: Number(body.assign_id.value),
+          group_id: Number(body.group_id.value),
+          priority: body.priority.value === "" ? 0 : Number(body.priority.value),
+          sort_order: body.sort_order.value === "" ? 0 : Number(body.sort_order.value),
+          is_active: body.is_active.checked ? 1 : 0,
+        };
+        if (isEdit && assignment) {
+          await api(`/api/prod_option_assignments/${assignment.id}`, { method: "PUT", body: JSON.stringify(payload) });
+        } else {
+          await api(`/api/prod_option_assignments`, { method: "POST", body: JSON.stringify(payload) });
+        }
+        await refreshOptionsView();
+        return true;
+      },
+    });
+
+    if (isEdit && assignment) {
+      body.group_id.value = String(assignment.group_id);
+      body.assign_type.value = assignment.assign_type;
+      fillAssignTargets(assignment.assign_type, assignment.assign_id);
+      body.assign_id.value = String(assignment.assign_id);
+      body.priority.value = assignment.priority != null ? String(assignment.priority) : "0";
+      body.sort_order.value = assignment.sort_order != null ? String(assignment.sort_order) : "0";
+      body.is_active.checked = Boolean(assignment.is_active);
+    }
+  }
+
+  function openOptionExclusionModal() {
+    const body = document.createElement("form");
+    body.className = "form-grid";
+    body.innerHTML = `
+      <div>
+        <label class="field-label">Товар</label>
+        <select class="control" name="product_id"></select>
+      </div>
+      <div>
+        <label class="field-label">Группа</label>
+        <select class="control" name="group_id"></select>
+      </div>
+    `;
+    body.product_id.innerHTML = buildSelectOptions(state.allProducts, null, { labelKey: "name" });
+    body.group_id.innerHTML = buildSelectOptions(state.optionGroups, null);
+
+    window.AppModal.open({
+      title: "Исключение группы",
+      content: body,
+      onSave: async () => {
+        const payload = {
+          tenant_id: TENANT_ID,
+          product_id: Number(body.product_id.value),
+          group_id: Number(body.group_id.value),
+        };
+        await api("/api/prod_option_exclusions", { method: "POST", body: JSON.stringify(payload) });
+        await refreshOptionsView();
+        return true;
+      },
+    });
+  }
+
+  function openOptionOverrideModal({ mode, override } = {}) {
+    const isEdit = mode === "edit";
+    const body = document.createElement("form");
+    body.className = "form-grid";
+    body.innerHTML = `
+      <div>
+        <label class="field-label">Товар</label>
+        <select class="control" name="product_id"></select>
+      </div>
+      <div>
+        <label class="field-label">Группа</label>
+        <select class="control" name="group_id"></select>
+      </div>
+      <div class="form-row-2">
+        <div>
+          <label class="field-label">Тип выбора</label>
+          <select class="control" name="selection_type">
+            <option value="">—</option>
+            <option value="single">single</option>
+            <option value="multi">multi</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label">Sort order</label>
+          <input class="control" name="sort_order" type="number" step="1" />
+        </div>
+      </div>
+      <div class="form-row-2">
+        <div>
+          <label class="field-label">Min select</label>
+          <input class="control" name="min_select" type="number" step="1" min="0" />
+        </div>
+        <div>
+          <label class="field-label">Max select</label>
+          <input class="control" name="max_select" type="number" step="1" min="0" />
+        </div>
+      </div>
+    `;
+    body.product_id.innerHTML = buildSelectOptions(state.allProducts, override?.product_id, { labelKey: "name" });
+    body.group_id.innerHTML = buildSelectOptions(state.optionGroups, override?.group_id);
+
+    window.AppModal.open({
+      title: isEdit ? "Редактировать переопределение" : "Новое переопределение",
+      content: body,
+      onSave: async () => {
+        const payload = {
+          tenant_id: TENANT_ID,
+          product_id: Number(body.product_id.value),
+          group_id: Number(body.group_id.value),
+          selection_type: body.selection_type.value || null,
+          min_select: body.min_select.value === "" ? null : Number(body.min_select.value),
+          max_select: body.max_select.value === "" ? null : Number(body.max_select.value),
+          sort_order: body.sort_order.value === "" ? null : Number(body.sort_order.value),
+        };
+        if (isEdit && override) {
+          await api(`/api/prod_option_overrides/${override.id}`, { method: "PUT", body: JSON.stringify(payload) });
+        } else {
+          await api("/api/prod_option_overrides", { method: "POST", body: JSON.stringify(payload) });
+        }
+        await refreshOptionsView();
+        return true;
+      },
+    });
+
+    if (isEdit && override) {
+      body.product_id.value = String(override.product_id);
+      body.group_id.value = String(override.group_id);
+      body.selection_type.value = override.selection_type || "";
+      body.min_select.value = override.min_select != null ? String(override.min_select) : "";
+      body.max_select.value = override.max_select != null ? String(override.max_select) : "";
+      body.sort_order.value = override.sort_order != null ? String(override.sort_order) : "";
     }
   }
 
@@ -826,6 +1642,10 @@
       renderCategoriesMainList();
       return;
     }
+    if (state.mode === "options") {
+      await refreshOptionsView();
+      return;
+    }
     if (state.mode === "products") {
       await refreshProductsOnly();
     }
@@ -861,6 +1681,32 @@
       });
     }
 
+    if (addOptionGroupBtn) {
+      addOptionGroupBtn.addEventListener("click", () => openOptionGroupModal({ mode: "create" }));
+    }
+
+    if (addOptionItemBtn) {
+      addOptionItemBtn.addEventListener("click", () => {
+        if (!state.selectedOptionGroupId) {
+          alert("Сначала выберите группу");
+          return;
+        }
+        openOptionItemModal({ mode: "create" });
+      });
+    }
+
+    if (addOptionAssignmentBtn) {
+      addOptionAssignmentBtn.addEventListener("click", () => openOptionAssignmentModal({ mode: "create" }));
+    }
+
+    if (addOptionExclusionBtn) {
+      addOptionExclusionBtn.addEventListener("click", () => openOptionExclusionModal());
+    }
+
+    if (addOptionOverrideBtn) {
+      addOptionOverrideBtn.addEventListener("click", () => openOptionOverrideModal({ mode: "create" }));
+    }
+
     // left other views
     if (productsAccordion) {
       productsAccordion.addEventListener("click", (e) => {
@@ -868,15 +1714,24 @@
         if (!btn) return;
         const view = btn.getAttribute("data-view");
         state.mode = view;
-        setToolbarTitle(view === "products" ? (getCurrentCategory()?.title || "Товары") : view);
+        setToolbarTitle(view === "products" ? (getCurrentCategory()?.title || "Товары") : view === "categories" ? "Категории" : "Опции");
         showView(view);
         clearProductSelection();
+        clearCategorySelection();
+        if (view === "options") refreshOptionsView();
       });
     }
 
     if (closeProductInfoBtn) closeProductInfoBtn.addEventListener("click", clearProductSelection);
-    if (sheetCloseBtn) sheetCloseBtn.addEventListener("click", clearProductSelection);
-    if (sheetBackdrop) sheetBackdrop.addEventListener("click", clearProductSelection);
+    if (sheetCloseBtn) sheetCloseBtn.addEventListener("click", () => {
+      clearProductSelection();
+      clearCategorySelection();
+    });
+    if (sheetBackdrop) sheetBackdrop.addEventListener("click", () => {
+      clearProductSelection();
+      clearCategorySelection();
+    });
+    if (closeCategoryInfoBtn) closeCategoryInfoBtn.addEventListener("click", clearCategorySelection);
 
     if (editProductBtn) {
       editProductBtn.addEventListener("click", () => {
@@ -885,11 +1740,22 @@
       });
     }
 
+    if (editCategoryBtn) {
+      editCategoryBtn.addEventListener("click", () => {
+        const c = state.categories.find((x) => x.id === state.selectedCategoryId);
+        if (c) openCategoryModal({ mode: "edit", category: c });
+      });
+    }
+
     window.addEventListener("resize", () => {
       refreshOpenAccordions();
       const isMobile = window.matchMedia("(max-width: 768px)").matches;
       if (!isMobile && detailsDesktopHost && productInfo && productInfo.parentElement !== detailsDesktopHost) {
         detailsDesktopHost.appendChild(productInfo);
+        closeSheet();
+      }
+      if (!isMobile && detailsDesktopHost && categoryInfo && categoryInfo.parentElement !== detailsDesktopHost) {
+        detailsDesktopHost.appendChild(categoryInfo);
         closeSheet();
       }
     });

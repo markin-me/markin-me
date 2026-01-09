@@ -1,5 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
+const path = require('path');
+const multer = require('multer');
 
 module.exports = function makePublicShopRouter({ db, helpers }) {
   const router = express.Router();
@@ -63,6 +65,29 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   }
 
+  const avatarStorage = multer.diskStorage({
+    destination(req, file, cb) {
+      const tenantId = helpers.getTenantId(req);
+      const folder = path.join(__dirname, '..', '..', 'static', 'uploads', 'avatars', String(tenantId));
+      helpers.ensureDir(folder);
+      cb(null, folder);
+    },
+    filename(req, file, cb) {
+      const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';
+      const name = crypto.randomBytes(16).toString('hex') + ext;
+      cb(null, name);
+    }
+  });
+
+  const avatarUpload = multer({
+    storage: avatarStorage,
+    limits: { files: 1, fileSize: 5 * 1024 * 1024 },
+    fileFilter(req, file, cb) {
+      const ok = /^image\/(jpeg|png|webp)$/.test(file.mimetype);
+      cb(ok ? null : new Error('ONLY_IMAGES'), ok);
+    }
+  });
+
   async function getActiveStatusIdDefault(tenantId) {
     // пробуем "new", если нет — первый активный по sort
     const [r1] = await db.query(
@@ -91,7 +116,8 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
          c.name,
          c.phone,
          DATE_FORMAT(c.birthday, '%Y-%m-%d') AS birthday,
-         c.is_active
+         c.is_active,
+         c.photo
        FROM cust_customer_sessions s
        JOIN cust_customers c
          ON c.tenant_id=s.tenant_id AND c.id=s.customer_id
@@ -115,6 +141,7 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
       name: r.name,
       phone: r.phone,
       birthday: r.birthday || null,
+      photo: r.photo || null,
     };
   }
 
@@ -211,7 +238,7 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
       );
 
       const [me] = await db.query(
-        `SELECT id, name, phone, DATE_FORMAT(birthday, '%Y-%m-%d') AS birthday
+        `SELECT id, name, phone, DATE_FORMAT(birthday, '%Y-%m-%d') AS birthday, photo
          FROM cust_customers
          WHERE tenant_id=? AND id=?
          LIMIT 1`,
@@ -282,6 +309,33 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
       );
 
       res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // POST /api/public/me/photo (multipart/form-data: photo|avatar)
+  router.post('/me/photo', avatarUpload.fields([
+    { name: 'photo', maxCount: 1 },
+    { name: 'avatar', maxCount: 1 },
+  ]), async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const file = (req.files?.photo && req.files.photo[0]) || (req.files?.avatar && req.files.avatar[0]);
+      if (!file) return res.status(400).json({ ok: false, error: 'NO_FILE' });
+
+      const photoUrl = `/static/uploads/avatars/${tenantId}/${file.filename}`;
+      await db.query(
+        `UPDATE cust_customers SET photo=? WHERE tenant_id=? AND id=?`,
+        [photoUrl, tenantId, customer.id]
+      );
+
+      res.json({ ok: true, photoUrl });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -736,6 +790,19 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
     }
   });
 
+  router.get('/products/:id/options', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const groups = await helpers.getEffectiveOptionGroupsForProduct(db, tenantId, id);
+      res.json({ ok: true, data: groups });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   // ------------------------------
   // order-config (для оформления)
   // ВАЖНО: твой фронт ждёт methods / payments / timeOptions
@@ -865,15 +932,45 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
         }
       }
 
-      // calculate total from products
-      const ids = items.map(it => Number(it.product_id)).filter(n => Number.isFinite(n) && n > 0);
-      if (!ids.length) return res.status(400).json({ ok: false, error: 'BAD_ITEMS' });
+      // calculate total from products + options
+      const baseIds = items.map(it => Number(it.product_id)).filter(n => Number.isFinite(n) && n > 0);
+      if (!baseIds.length) return res.status(400).json({ ok: false, error: 'BAD_ITEMS' });
 
+      const optionGroupsByProduct = new Map();
+      const targetProductIds = new Set();
+      const requestedOptionsByProduct = new Map();
+
+      for (const it of items) {
+        const pid = Number(it.product_id);
+        if (!Number.isFinite(pid) || pid <= 0) continue;
+        const groups = await helpers.getEffectiveOptionGroupsForProduct(db, tenantId, pid);
+        optionGroupsByProduct.set(pid, groups);
+        requestedOptionsByProduct.set(pid, Array.isArray(it.options) ? it.options : []);
+
+        for (const g of groups) {
+          for (const item of g.items || []) {
+            if (item.target_type === 'product' && item.target_id) {
+              targetProductIds.add(Number(item.target_id));
+            }
+          }
+        }
+
+        const reqGroups = Array.isArray(it.options) ? it.options : [];
+        for (const g of reqGroups) {
+          const selections = Array.isArray(g.selections) ? g.selections : [];
+          for (const s of selections) {
+            const rid = Number(s.resolved_product_id);
+            if (Number.isFinite(rid) && rid > 0) targetProductIds.add(rid);
+          }
+        }
+      }
+
+      const allProductIds = Array.from(new Set([...baseIds, ...Array.from(targetProductIds)]));
       const [products] = await db.query(
         `SELECT id, name, price, old_price
          FROM prod_products
-         WHERE tenant_id=? AND id IN (${ids.map(() => '?').join(',')})`,
-        [tenantId, ...ids]
+         WHERE tenant_id=? AND id IN (${allProductIds.map(() => '?').join(',')})`,
+        [tenantId, ...allProductIds]
       );
       const byId = new Map(products.map(p => [Number(p.id), p]));
 
@@ -888,8 +985,102 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
 
         const price = Number(p.price || 0);
         const oldPrice = Number(p.old_price || 0);
-        const lineTotal = price * qty;
 
+        const groupDefs = optionGroupsByProduct.get(pid) || [];
+        const groupMap = new Map(groupDefs.map(g => [Number(g.id), g]));
+        const reqGroups = requestedOptionsByProduct.get(pid) || [];
+
+        const reqByGroup = new Map();
+        for (const g of reqGroups) {
+          const gid = Number(g.group_id);
+          if (Number.isFinite(gid)) reqByGroup.set(gid, g);
+        }
+
+        let optionsUnitTotal = 0;
+        const optionsSnapshot = [];
+
+        for (const [gid, reqGroup] of reqByGroup.entries()) {
+          const def = groupMap.get(gid);
+          if (!def) return res.status(400).json({ ok: false, error: 'OPTION_GROUP_NOT_ALLOWED' });
+          const selections = Array.isArray(reqGroup.selections) ? reqGroup.selections : [];
+          const resolvedSelections = [];
+          let count = 0;
+
+          for (const s of selections) {
+            const itemId = Number(s.item_id);
+            const defItem = (def.items || []).find((x) => Number(x.id) === itemId);
+            if (!defItem) return res.status(400).json({ ok: false, error: 'OPTION_ITEM_NOT_FOUND' });
+            const selQty = Math.max(1, Number(s.qty || 1));
+            count += selQty;
+
+            const targetType = defItem.target_type || 'custom';
+            let resolvedProductId = null;
+            if (targetType === 'product') {
+              resolvedProductId = defItem.target_id ? Number(defItem.target_id) : null;
+            } else if (targetType === 'category_pick') {
+              resolvedProductId = Number(s.resolved_product_id);
+              if (!Number.isFinite(resolvedProductId) || resolvedProductId <= 0) {
+                return res.status(400).json({ ok: false, error: 'RESOLVED_PRODUCT_REQUIRED' });
+              }
+            }
+
+            let unitPrice = 0;
+            if (defItem.price_mode === 'from_target') {
+              if (!resolvedProductId) return res.status(400).json({ ok: false, error: 'RESOLVED_PRODUCT_REQUIRED' });
+              const targetProduct = byId.get(resolvedProductId);
+              if (!targetProduct) return res.status(400).json({ ok: false, error: 'TARGET_PRODUCT_NOT_FOUND' });
+              unitPrice = Number(targetProduct.price || 0);
+            } else {
+              unitPrice = Number(defItem.unit_price || 0);
+            }
+
+            const titleSnapshot = resolvedProductId
+              ? (byId.get(resolvedProductId)?.name || defItem.title)
+              : defItem.title;
+
+            resolvedSelections.push({
+              item_id: itemId,
+              target_type: targetType,
+              resolved_product_id: resolvedProductId,
+              title_snapshot: titleSnapshot,
+              qty: selQty,
+              price_mode: defItem.price_mode || 'fixed',
+              unit_price_snapshot: unitPrice,
+            });
+            optionsUnitTotal += unitPrice * selQty;
+          }
+
+          const minSelect = Number(def.min_select || 0);
+          const maxSelect = def.max_select != null ? Number(def.max_select) : null;
+          const selectionType = def.selection_type || 'multi';
+          const effectiveMax = selectionType === 'single' && maxSelect == null ? 1 : maxSelect;
+
+          if (count < minSelect) return res.status(400).json({ ok: false, error: 'MIN_SELECT' });
+          if (effectiveMax != null && count > effectiveMax) return res.status(400).json({ ok: false, error: 'MAX_SELECT' });
+
+          optionsSnapshot.push({
+            group_id: gid,
+            group_title: def.title,
+            selection_type: selectionType,
+            min_select: minSelect,
+            max_select: effectiveMax,
+            selections: resolvedSelections,
+          });
+        }
+
+        for (const def of groupDefs) {
+          const gid = Number(def.id);
+          const reqGroup = reqByGroup.get(gid);
+          const selections = reqGroup ? (Array.isArray(reqGroup.selections) ? reqGroup.selections : []) : [];
+          const count = selections.reduce((sum, s) => sum + Math.max(1, Number(s.qty || 1)), 0);
+          const minSelect = Number(def.min_select || 0);
+          const selectionType = def.selection_type || 'multi';
+          const effectiveMax = selectionType === 'single' && def.max_select == null ? 1 : def.max_select;
+          if (count < minSelect) return res.status(400).json({ ok: false, error: 'MIN_SELECT' });
+          if (effectiveMax != null && count > Number(effectiveMax)) return res.status(400).json({ ok: false, error: 'MAX_SELECT' });
+        }
+
+        const lineTotal = (price + optionsUnitTotal) * qty;
         total += lineTotal;
 
         normItems.push({
@@ -899,6 +1090,7 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
           price,
           old_price: oldPrice,
           line_total: lineTotal,
+          options: optionsSnapshot,
         });
       }
 
