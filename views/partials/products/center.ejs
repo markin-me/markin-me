@@ -141,46 +141,48 @@
 <!-- Category editor -->
 <template id="tplCategoryEditor">
   <form id="categoryEditorForm" class="form-grid" autocomplete="off">
-    <div>
-      <label class="field-label" for="ce_title">Название *</label>
-      <input class="control" id="ce_title" name="title" type="text" required />
-    </div>
-
-    <div class="form-row-2">
-      <div>
-        <label class="field-label" for="ce_icon">Icon (FontAwesome)</label>
-        <input class="control" id="ce_icon" name="icon" type="text" placeholder="fas fa-hamburger" />
-      </div>
-      <div>
+    <div class="category-editor-layout">
+      <div class="category-editor-photo">
         <label class="field-label">Фото категории</label>
-        <div class="category-icon-upload">
-          <div class="product-photo-main category-icon-preview">
-            <img id="ceIconPreview" class="product-photo-img hidden" alt="" />
-            <div class="product-photo-placeholder" id="ceIconPlaceholder">Нет изображения</div>
-          </div>
-          <input id="ceIconFile" type="file" accept="image/*" class="hidden" />
+        <div class="category-editor-preview">
+          <img id="ceIconPreview" class="category-editor-img hidden" alt="" />
+          <div class="product-photo-placeholder" id="ceIconPlaceholder">Нет изображения</div>
+        </div>
+        <input id="ceIconFile" type="file" accept="image/*" class="hidden" />
+        <div class="category-editor-actions">
           <button class="btn" type="button" id="ceIconUploadBtn">
             <i class="fas fa-image"></i> Загрузить
           </button>
+          <button class="btn hidden" type="button" id="ceIconDeleteBtn">
+            <i class="fas fa-times"></i> Удалить
+          </button>
+        </div>
+      </div>
+
+      <div class="category-editor-fields">
+        <div>
+          <label class="field-label" for="ce_title">Название *</label>
+          <input class="control" id="ce_title" name="title" type="text" required />
+        </div>
+
+        <div class="form-row-2">
+          <label class="switch">
+            <input class="switch-input" type="checkbox" name="is_active" checked />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="switch-text">Активна</span>
+          </label>
+
+          <label class="switch">
+            <input class="switch-input" type="checkbox" name="site_visibility" checked />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="switch-text">Показывать на сайте</span>
+          </label>
         </div>
       </div>
     </div>
 
     <input id="ce_code" name="code" type="hidden" />
+    <input id="ce_icon" name="icon" type="hidden" />
     <input id="ce_sort" name="sort_order" type="hidden" />
-
-    <div class="form-row-2">
-      <label class="switch">
-        <input class="switch-input" type="checkbox" name="is_active" checked />
-        <span class="switch-ui" aria-hidden="true"></span>
-        <span class="switch-text">Активна</span>
-      </label>
-
-      <label class="switch">
-        <input class="switch-input" type="checkbox" name="site_visibility" checked />
-        <span class="switch-ui" aria-hidden="true"></span>
-        <span class="switch-text">Показывать на сайте</span>
-      </label>
-    </div>
   </form>
 </template>
