@@ -46,6 +46,44 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   });
 
   // ------------------------------
+  // Upload: category icon
+  // POST /api/upload/category-icon
+  // ------------------------------
+  const categoryIconStorage = multer.diskStorage({
+    destination(req, file, cb) {
+      const folder = path.join(__dirname, '..', '..', 'static', 'uploads', 'categories');
+      helpers.ensureDir(folder);
+      cb(null, folder);
+    },
+    filename(req, file, cb) {
+      const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';
+      const name = crypto.randomBytes(16).toString('hex') + ext;
+      cb(null, name);
+    }
+  });
+
+  const categoryIconUpload = multer({
+    storage: categoryIconStorage,
+    limits: { files: 1, fileSize: 5 * 1024 * 1024 },
+    fileFilter(req, file, cb) {
+      const ok = /^image\/(jpeg|png|webp)$/.test(file.mimetype);
+      cb(ok ? null : new Error('ONLY_IMAGES'), ok);
+    }
+  });
+
+  router.post('/upload/category-icon', categoryIconUpload.single('icon'), (req, res) => {
+    try {
+      const file = req.file;
+      if (!file) return res.status(400).json({ ok: false, error: 'ICON_REQUIRED' });
+      const url = `/static/uploads/categories/${file.filename}`;
+      res.json({ ok: true, url });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
+    }
+  });
+
+  // ------------------------------
   // Categories: /api/prod_categories
   // ------------------------------
   router.get('/prod_categories', async (req, res) => {
