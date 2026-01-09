@@ -691,6 +691,7 @@
     effectiveList.forEach((a) => {
       const row = document.createElement("div");
       row.className = "shop-address-row";
+      if (Number(a.is_default) === 1) row.classList.add("is-default");
 
       const isSelected = state.selectedAddress
         ? (a.id && state.selectedAddress.id ? Number(a.id) === Number(state.selectedAddress.id) : !!a._local && !!state.selectedAddress._local)
@@ -709,12 +710,6 @@
       const titleEl = document.createElement("div");
       titleEl.className = "shop-address-card-title";
       titleEl.appendChild(document.createTextNode(title || ""));
-      if (token && Number(a.is_default) === 1) {
-        const badge = document.createElement("span");
-        badge.className = "muted";
-        badge.textContent = " • основной";
-        titleEl.appendChild(badge);
-      }
       main.appendChild(titleEl);
 
       if (sub) {
@@ -726,6 +721,29 @@
 
       const actions = document.createElement("div");
       actions.className = "shop-address-actions shop-address-actions--compact";
+
+      if (token) {
+        const btnDef = document.createElement("button");
+        btnDef.type = "button";
+        btnDef.className = "shop-address-action-icon is-default";
+        btnDef.title = Number(a.is_default) === 1 ? "Основной адрес" : "Сделать основным";
+        btnDef.innerHTML = `<i class="fas fa-star"></i>`;
+        if (Number(a.is_default) !== 1) {
+          btnDef.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            try {
+              await apiJson(`/api/public/me/addresses/${a.id}/default`, { method: "PUT" });
+              await refreshAddressState();
+              renderAddressList();
+            } catch (e) {
+              alert("Не удалось изменить основной адрес");
+            }
+          });
+        } else {
+          btnDef.disabled = true;
+        }
+        actions.appendChild(btnDef);
+      }
 
       const btnEdit = document.createElement("button");
       btnEdit.type = "button";
@@ -1965,6 +1983,7 @@
       effectiveList.forEach((a) => {
         const row = document.createElement("div");
         row.className = "shop-address-row";
+        if (Number(a.is_default) === 1) row.classList.add("is-default");
 
         const isSelected = state.selectedAddress
           ? (a.id && state.selectedAddress.id ? Number(a.id) === Number(state.selectedAddress.id) : !!a._local && !!state.selectedAddress._local)
@@ -1983,12 +2002,6 @@
         const titleEl = document.createElement("div");
         titleEl.className = "shop-address-card-title";
         titleEl.appendChild(document.createTextNode(title || ""));
-        if (token && Number(a.is_default) === 1) {
-          const badge = document.createElement("span");
-          badge.className = "muted";
-          badge.textContent = " • основной";
-          titleEl.appendChild(badge);
-        }
         main.appendChild(titleEl);
 
         if (sub) {
@@ -2000,6 +2013,29 @@
 
         const actions = document.createElement("div");
         actions.className = "shop-address-actions shop-address-actions--compact";
+
+        if (token) {
+          const btnDef = document.createElement("button");
+          btnDef.type = "button";
+          btnDef.className = "shop-address-action-icon is-default";
+          btnDef.title = Number(a.is_default) === 1 ? "Основной адрес" : "Сделать основным";
+          btnDef.innerHTML = `<i class="fas fa-star"></i>`;
+          if (Number(a.is_default) !== 1) {
+            btnDef.addEventListener("click", async (e) => {
+              e.stopPropagation();
+              try {
+                await apiJson(`/api/public/me/addresses/${a.id}/default`, { method: "PUT" });
+                await refreshAddressState();
+                renderSheetAddressList();
+              } catch (e) {
+                alert("Не удалось изменить основной адрес");
+              }
+            });
+          } else {
+            btnDef.disabled = true;
+          }
+          actions.appendChild(btnDef);
+        }
 
         const btnEdit = document.createElement("button");
         btnEdit.type = "button";
@@ -2322,6 +2358,29 @@
 
     const photo = document.createElement("div");
     photo.className = "shop-profile-photo";
+
+    const photoImg = document.createElement("img");
+    photoImg.className = "shop-profile-photo-img hidden";
+    photoImg.alt = "Фото профиля";
+
+    const photoPlaceholder = document.createElement("div");
+    photoPlaceholder.className = "shop-profile-photo-placeholder";
+    photoPlaceholder.textContent = "Фото профиля";
+
+    const photoInput = document.createElement("input");
+    photoInput.type = "file";
+    photoInput.accept = "image/*";
+    photoInput.className = "hidden";
+
+    const photoBtn = document.createElement("button");
+    photoBtn.type = "button";
+    photoBtn.className = "btn shop-profile-photo-btn";
+    photoBtn.textContent = "Загрузить фото";
+
+    photo.appendChild(photoImg);
+    photo.appendChild(photoPlaceholder);
+    photo.appendChild(photoInput);
+    photo.appendChild(photoBtn);
     top.appendChild(photo);
 
     const info = document.createElement("div");
@@ -2550,6 +2609,7 @@
         list.forEach((a) => {
           const row = document.createElement("div");
           row.className = "shop-profile-card shop-profile-card--compact";
+          if (Number(a.is_default) === 1) row.classList.add("is-default");
 
           const txt = [
             `${str(a.street)} ${str(a.house)}`,
@@ -2585,12 +2645,12 @@
           const actions = document.createElement("div");
           actions.className = "shop-address-actions shop-address-actions--compact";
 
+          const bDef = document.createElement("button");
+          bDef.type = "button";
+          bDef.className = "shop-address-action-icon is-default";
+          bDef.title = Number(a.is_default) === 1 ? "Основной адрес" : "Сделать основным";
+          bDef.innerHTML = `<i class="fas fa-star"></i>`;
           if (Number(a.is_default) !== 1) {
-            const bDef = document.createElement("button");
-            bDef.type = "button";
-            bDef.className = "shop-address-action-icon";
-            bDef.title = "Сделать основным";
-            bDef.innerHTML = `<i class="fas fa-star"></i>`;
             bDef.addEventListener("click", async (e) => {
               e.stopPropagation();
               try {
@@ -2601,8 +2661,10 @@
                 alert("Не удалось изменить основной адрес");
               }
             });
-            actions.appendChild(bDef);
+          } else {
+            bDef.disabled = true;
           }
+          actions.appendChild(bDef);
 
           const bEdit = document.createElement("button");
           bEdit.type = "button";
@@ -2711,6 +2773,72 @@
       });
     }
 
+    function setProfilePhoto(url) {
+      const v = str(url || "").trim();
+      if (!v) {
+        photoImg.src = "";
+        photoImg.classList.add("hidden");
+        photoPlaceholder.classList.remove("hidden");
+        return;
+      }
+      photoImg.src = v;
+      photoImg.classList.remove("hidden");
+      photoPlaceholder.classList.add("hidden");
+    }
+
+    setProfilePhoto(me?.photo || "");
+
+    photoBtn.addEventListener("click", () => {
+      photoInput.click();
+    });
+
+    photoInput.addEventListener("change", async () => {
+      const file = photoInput.files && photoInput.files[0];
+      photoInput.value = "";
+      if (!file) return;
+
+      const allowed = ["image/jpeg", "image/png", "image/webp"];
+      if (!allowed.includes(file.type)) {
+        alert("Можно загрузить только JPG, PNG или WEBP");
+        return;
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        alert("Размер файла не должен превышать 5MB");
+        return;
+      }
+
+      const tempUrl = URL.createObjectURL(file);
+      setProfilePhoto(tempUrl);
+
+      photoBtn.disabled = true;
+      photoBtn.textContent = "Загружаем…";
+      try {
+        const token = getCustomerToken();
+        if (!token) throw new Error("UNAUTHORIZED");
+        const fd = new FormData();
+        fd.append("photo", file);
+        const res = await fetch("/api/public/me/photo", {
+          method: "POST",
+          headers: { "x-customer-token": token, "x-tenant-id": String(tenantId) },
+          body: fd,
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !json || json.ok === false) {
+          throw new Error((json && json.error) || `HTTP_${res.status}`);
+        }
+        const finalUrl = `${json.photoUrl}?t=${Date.now()}`;
+        setProfilePhoto(finalUrl);
+        setCustomerCache({ ...me, photo: json.photoUrl });
+      } catch (e) {
+        alert("Не удалось загрузить фото");
+        setProfilePhoto(me?.photo || "");
+      } finally {
+        photoBtn.disabled = false;
+        photoBtn.textContent = "Загрузить фото";
+        try { URL.revokeObjectURL(tempUrl); } catch {}
+      }
+    });
+
     editSave.addEventListener("click", async () => {
       const v = str(editInput.value).trim();
       if (!v) {
@@ -2748,6 +2876,12 @@
   function attachProfileMenuOutsideClose(menuEl, toggleBtn) {
     if (profileMenuListenerAttached) return;
     profileMenuListenerAttached = true;
+    if (menuEl && !menuEl.__stopClickBound) {
+      menuEl.__stopClickBound = true;
+      menuEl.addEventListener("click", (e) => {
+        e.stopPropagation();
+      });
+    }
     document.addEventListener("click", (e) => {
       if (!menuEl || menuEl.classList.contains("hidden")) return;
       if (toggleBtn && toggleBtn.contains(e.target)) return;
@@ -2826,17 +2960,24 @@
     const header = document.querySelector(".app-modal-header");
     if (!header) return () => {};
 
-    let settingsBtn = header.querySelector(".shop-profile-modal-settings");
+    let actionsWrap = header.querySelector(".shop-profile-header-actions");
+    if (!actionsWrap) {
+      actionsWrap = document.createElement("div");
+      actionsWrap.className = "shop-profile-header-actions shop-profile-modal-actions";
+      header.appendChild(actionsWrap);
+    }
+
+    let settingsBtn = actionsWrap.querySelector(".shop-profile-modal-settings");
     if (!settingsBtn) {
       settingsBtn = document.createElement("button");
       settingsBtn.type = "button";
       settingsBtn.className = "btn btn-icon shop-profile-modal-settings";
       settingsBtn.innerHTML = `<i class="fas fa-gear"></i>`;
       settingsBtn.setAttribute("aria-label", "Настройки профиля");
-      header.appendChild(settingsBtn);
+      actionsWrap.appendChild(settingsBtn);
     }
 
-    let menu = header.querySelector(".shop-profile-menu");
+    let menu = actionsWrap.querySelector(".shop-profile-menu");
     if (!menu) {
       menu = document.createElement("div");
       menu.className = "shop-profile-menu hidden";
@@ -2844,7 +2985,7 @@
         <button class="shop-profile-menu-item" data-role="edit" type="button">Редактировать профиль</button>
         <button class="shop-profile-menu-item" data-role="logout" type="button">Выйти</button>
       `;
-      header.appendChild(menu);
+      actionsWrap.appendChild(menu);
     }
 
     const editBtn = menu.querySelector('[data-role="edit"]');
@@ -2861,6 +3002,10 @@
       menu.classList.toggle("hidden");
     };
 
+    menu.addEventListener("click", (e) => {
+      e.stopPropagation();
+    });
+
     if (editBtn) editBtn.onclick = () => {
       menu.classList.add("hidden");
       if (typeof onEdit === "function") onEdit();
@@ -2875,8 +3020,7 @@
 
     return () => {
       document.removeEventListener("click", onDocClick);
-      settingsBtn?.remove();
-      menu?.remove();
+      actionsWrap?.remove();
     };
   }
 
