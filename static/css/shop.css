@@ -588,9 +588,11 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 @media (max-width: 768px){
-  .shop-cart-sheet-footer,
+  .shop-cart-sheet-footer{
+    padding-bottom: calc(12px + var(--shop-bottomnav-h) + env(safe-area-inset-bottom));
+  }
   .shop-cart-footer{
-    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    padding-bottom: calc(12px + var(--shop-bottomnav-h) + env(safe-area-inset-bottom));
   }
 }
 
@@ -1522,12 +1524,11 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   content: "" !important;
   display: block !important;
-  height: 8px !important; /* подбери 8–24px */
+  height: 16px !important; /* подбери 8–24px */
 }
 @media (max-width: 768px){
-  .shop-profile-content,
-  #shopProfileContent{
-    padding: 12px;
-    box-sizing: border-box;
+  .shop-cart-sheet-footer,
+  .shop-cart-footer{
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
   }
 }
