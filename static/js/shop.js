@@ -728,7 +728,9 @@
         btnDef.className = "shop-address-action-icon is-default";
         btnDef.title = Number(a.is_default) === 1 ? "Основной адрес" : "Сделать основным";
         btnDef.innerHTML = `<i class="fas fa-star"></i>`;
-        if (Number(a.is_default) !== 1) {
+        if (Number(a.is_default) === 1) {
+          btnDef.classList.add("is-active");
+        } else {
           btnDef.addEventListener("click", async (e) => {
             e.stopPropagation();
             try {
@@ -2020,7 +2022,9 @@
           btnDef.className = "shop-address-action-icon is-default";
           btnDef.title = Number(a.is_default) === 1 ? "Основной адрес" : "Сделать основным";
           btnDef.innerHTML = `<i class="fas fa-star"></i>`;
-          if (Number(a.is_default) !== 1) {
+          if (Number(a.is_default) === 1) {
+            btnDef.classList.add("is-active");
+          } else {
             btnDef.addEventListener("click", async (e) => {
               e.stopPropagation();
               try {
@@ -2189,13 +2193,36 @@
     if (inp.value === "+7") inp.value = "+7 ";
   }
 
-  function maskBirthday(inp) {
-    let d = str(inp.value).replace(/[^\d]/g, "").slice(0, 8); // ddmmyyyy
+  function formatBirthdayValue(raw) {
+    const d = str(raw).replace(/[^\d]/g, "").slice(0, 8); // ddmmyyyy
     const parts = [];
     if (d.length >= 2) parts.push(d.slice(0, 2));
     if (d.length >= 4) parts.push(d.slice(2, 4));
     if (d.length > 4) parts.push(d.slice(4));
-    inp.value = parts.join(".");
+    return parts.join(".");
+  }
+
+  function calcBirthdayCaret(value, digitsBefore) {
+    if (!Number.isFinite(digitsBefore)) return value.length;
+    let digits = 0;
+    for (let i = 0; i < value.length; i += 1) {
+      if (/\d/.test(value[i])) digits += 1;
+      if (digits >= digitsBefore) return i + 1;
+    }
+    return value.length;
+  }
+
+  function maskBirthday(inp) {
+    const start = inp.selectionStart;
+    const digitsBefore = Number.isFinite(start)
+      ? str(inp.value).slice(0, start).replace(/[^\d]/g, "").length
+      : null;
+    const next = formatBirthdayValue(inp.value);
+    inp.value = next;
+    if (typeof inp.setSelectionRange === "function") {
+      const pos = calcBirthdayCaret(next, digitsBefore ?? next.replace(/[^\d]/g, "").length);
+      inp.setSelectionRange(pos, pos);
+    }
   }
 
   async function fetchMeSafe() {
@@ -2287,6 +2314,7 @@
         alert("Введите телефон (РФ): +7XXXXXXXXXX");
         return;
       }
+      nextBtn.disabled = true;
       nextBtn.style.display = "none";
       bWrap.style.display = "grid";
       bday.focus();
@@ -2372,16 +2400,30 @@
     photoInput.accept = "image/*";
     photoInput.className = "hidden";
 
+    const photoActions = document.createElement("div");
+    photoActions.className = "shop-profile-photo-actions hidden";
+
     const photoBtn = document.createElement("button");
     photoBtn.type = "button";
     photoBtn.className = "btn shop-profile-photo-btn";
     photoBtn.textContent = "Загрузить фото";
 
+    const photoRemoveBtn = document.createElement("button");
+    photoRemoveBtn.type = "button";
+    photoRemoveBtn.className = "btn shop-profile-photo-btn shop-profile-photo-btn--ghost";
+    photoRemoveBtn.textContent = "Удалить фото";
+
     photo.appendChild(photoImg);
     photo.appendChild(photoPlaceholder);
     photo.appendChild(photoInput);
-    photo.appendChild(photoBtn);
-    top.appendChild(photo);
+    photoActions.appendChild(photoBtn);
+    photoActions.appendChild(photoRemoveBtn);
+
+    const photoWrap = document.createElement("div");
+    photoWrap.className = "shop-profile-photo-wrap";
+    photoWrap.appendChild(photo);
+    photoWrap.appendChild(photoActions);
+    top.appendChild(photoWrap);
 
     const info = document.createElement("div");
     info.className = "shop-profile-info";
@@ -2401,31 +2443,54 @@
       return v;
     }
 
-    const nameLine = addLine("Имя", str(me?.name || "—"));
-    const phoneLine = addLine("Телефон", me?.phone ? formatPhonePlus7(me.phone) : "—");
-    const bdayLine = addLine("Дата рождения", formatBirthdayDisplay(me?.birthday || ""));
+    const nameLine = document.createElement("div");
+    nameLine.className = "shop-profile-line";
+
+    const nameTitle = document.createElement("div");
+    nameTitle.className = "shop-profile-line-title";
+    nameTitle.textContent = "Имя";
+
+    const nameValue = document.createElement("div");
+    nameValue.className = "shop-profile-line-value";
+
+    const nameText = document.createElement("span");
+    nameText.className = "shop-profile-name-text";
+    nameText.textContent = str(me?.name || "—");
+
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.className = "control shop-profile-name-input hidden";
+    nameInput.value = str(me?.name || "");
+
+    const nameActions = document.createElement("div");
+    nameActions.className = "shop-profile-name-actions hidden";
+
+    const nameSave = document.createElement("button");
+    nameSave.type = "button";
+    nameSave.className = "btn btn-primary";
+    nameSave.textContent = "Сохранить";
+
+    const nameCancel = document.createElement("button");
+    nameCancel.type = "button";
+    nameCancel.className = "btn";
+    nameCancel.textContent = "Отмена";
+
+    nameActions.appendChild(nameSave);
+    nameActions.appendChild(nameCancel);
+
+    nameValue.appendChild(nameText);
+    nameValue.appendChild(nameInput);
+    nameValue.appendChild(nameActions);
+
+    nameLine.appendChild(nameTitle);
+    nameLine.appendChild(nameValue);
+    info.appendChild(nameLine);
+
+    addLine("Телефон", me?.phone ? formatPhonePlus7(me.phone) : "—");
+    addLine("Дата рождения", formatBirthdayDisplay(me?.birthday || ""));
 
     top.appendChild(info);
     wrap.appendChild(top);
-
-    const editWrap = document.createElement("div");
-    editWrap.className = "shop-profile-edit";
-
-    const editLabel = document.createElement("label");
-    editLabel.className = "field-label";
-    editLabel.textContent = "Имя";
-    const editInput = document.createElement("input");
-    editInput.className = "control";
-    editInput.type = "text";
-    editInput.value = str(me?.name || "");
-    const editSave = document.createElement("button");
-    editSave.type = "button";
-    editSave.className = "btn btn-primary";
-    editSave.textContent = "Сохранить имя";
-    editWrap.appendChild(editLabel);
-    editWrap.appendChild(editInput);
-    editWrap.appendChild(editSave);
-    wrap.appendChild(editWrap);
 
     const tabs = document.createElement("div");
     tabs.className = "shop-profile-tabs";
@@ -2463,7 +2528,7 @@
 
     const addressFormToggle = document.createElement("button");
     addressFormToggle.type = "button";
-    addressFormToggle.className = "btn btn-primary shop-profile-address-toggle";
+    addressFormToggle.className = "shop-chip-btn shop-profile-address-toggle";
     addressFormToggle.textContent = "+ Новый адрес";
     addressesPanel.appendChild(addressFormToggle);
 
@@ -2650,7 +2715,9 @@
           bDef.className = "shop-address-action-icon is-default";
           bDef.title = Number(a.is_default) === 1 ? "Основной адрес" : "Сделать основным";
           bDef.innerHTML = `<i class="fas fa-star"></i>`;
-          if (Number(a.is_default) !== 1) {
+          if (Number(a.is_default) === 1) {
+            bDef.classList.add("is-active");
+          } else {
             bDef.addEventListener("click", async (e) => {
               e.stopPropagation();
               try {
@@ -2773,23 +2840,59 @@
       });
     }
 
+    let currentName = str(me?.name || "");
+    let isEditing = false;
+
     function setProfilePhoto(url) {
       const v = str(url || "").trim();
       if (!v) {
         photoImg.src = "";
         photoImg.classList.add("hidden");
         photoPlaceholder.classList.remove("hidden");
+        photoRemoveBtn.classList.add("hidden");
         return;
       }
       photoImg.src = v;
       photoImg.classList.remove("hidden");
       photoPlaceholder.classList.add("hidden");
+      photoRemoveBtn.classList.remove("hidden");
     }
 
     setProfilePhoto(me?.photo || "");
 
+    function setEditingMode(next) {
+      isEditing = Boolean(next);
+      wrap.classList.toggle("is-editing", isEditing);
+      nameText.classList.toggle("hidden", isEditing);
+      nameInput.classList.toggle("hidden", !isEditing);
+      nameActions.classList.toggle("hidden", !isEditing);
+      photoActions.classList.toggle("hidden", !isEditing);
+      if (isEditing) {
+        nameInput.value = currentName;
+        setTimeout(() => nameInput.focus(), 0);
+      }
+    }
+
+    setEditingMode(false);
+
     photoBtn.addEventListener("click", () => {
+      if (!isEditing) return;
       photoInput.click();
+    });
+
+    photoRemoveBtn.addEventListener("click", async () => {
+      if (!isEditing) return;
+      if (!window.confirm("Удалить фото профиля?")) return;
+      photoRemoveBtn.disabled = true;
+      try {
+        await apiJson("/api/public/me/photo", { method: "DELETE" });
+        setProfilePhoto("");
+        setCustomerCache({ ...me, photo: "" });
+      } catch (e) {
+        alert("Не удалось удалить фото");
+      } finally {
+        photoRemoveBtn.disabled = false;
+      }
     });
 
     photoInput.addEventListener("change", async () => {
@@ -2839,35 +2942,42 @@
       }
     });
 
-    editSave.addEventListener("click", async () => {
-      const v = str(editInput.value).trim();
+    nameSave.addEventListener("click", async () => {
+      const v = str(nameInput.value).trim();
       if (!v) {
         alert("Введите имя");
         return;
       }
-      editSave.disabled = true;
-      editSave.textContent = "Сохраняем…";
+      nameSave.disabled = true;
+      nameSave.textContent = "Сохраняем…";
       try {
         await apiJson("/api/public/me", { method: "PUT", body: { name: v } });
         const me2 = await fetchMeSafe();
         if (me2) {
-          editInput.value = str(me2.name || "");
-          nameLine.textContent = str(me2.name || "—");
+          currentName = str(me2.name || "");
+          nameText.textContent = currentName || "—";
+          nameInput.value = currentName;
         }
+        setEditingMode(false);
       } catch (e) {
         alert("Не удалось сохранить имя");
       } finally {
-        editSave.disabled = false;
-        editSave.textContent = "Сохранить имя";
+        nameSave.disabled = false;
+        nameSave.textContent = "Сохранить";
       }
+    });
+
+    nameCancel.addEventListener("click", () => {
+      nameInput.value = currentName;
+      setEditingMode(false);
     });
 
     reloadAddresses();
     reloadOrders();
 
     return {
-      showEdit: () => editWrap.classList.add("is-active"),
-      hideEdit: () => editWrap.classList.remove("is-active"),
+      showEdit: () => setEditingMode(true),
+      hideEdit: () => setEditingMode(false),
     };
   }
 
@@ -2960,11 +3070,14 @@
     const header = document.querySelector(".app-modal-header");
     if (!header) return () => {};
 
-    let actionsWrap = header.querySelector(".shop-profile-header-actions");
+    const actionsRoot = header.querySelector(".app-modal-actions") || header;
+
+    let actionsWrap = actionsRoot.querySelector(".shop-profile-header-actions");
     if (!actionsWrap) {
       actionsWrap = document.createElement("div");
       actionsWrap.className = "shop-profile-header-actions shop-profile-modal-actions";
-      header.appendChild(actionsWrap);
+      if (actionsRoot === header) actionsRoot.appendChild(actionsWrap);
+      else actionsRoot.insertBefore(actionsWrap, actionsRoot.firstChild);
     }
 
     let settingsBtn = actionsWrap.querySelector(".shop-profile-modal-settings");

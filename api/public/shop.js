@@ -355,6 +355,28 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
     }
   );
 
+  // DELETE /api/public/me/photo
+  router.delete('/me/photo', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      await db.query(
+        `UPDATE cust_customers
+         SET photo=NULL
+         WHERE tenant_id=? AND id=?`,
+        [tenantId, customer.id]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   // GET /api/public/me/addresses
   router.get('/me/addresses', async (req, res) => {
     try {
