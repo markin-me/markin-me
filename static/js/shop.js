@@ -27,6 +27,7 @@
 
   const elCartContent = $("#shopCartContent");
   const elCartHeaderTitle = $("#shopCartHeaderTitle");
+  const elCartBackBtn = $("#shopCartBackBtn");
 
   // address (right cart panel)
   const elAddressChip = $("#shopAddressChip");
@@ -79,12 +80,12 @@
   const elCheckoutSubmitBtn = $("#shopCheckoutSubmitBtn");
   const elCheckoutContent = $("#shopCheckoutContent");
   const elProfileContent = $("#shopProfileContent");
+  const elProductContent = $("#shopProductContent");
   const elProfileHeaderActions = $("#shopProfileHeaderActions");
   const elProfileCloseBtn = $("#shopProfileCloseBtn");
   const elProfileSettingsBtn = $("#shopProfileSettingsBtn");
   const elProfileMenu = $("#shopProfileMenu");
   const elProfileEditBtn = $("#shopProfileEditBtn");
-  const elProfileSettingsMenuBtn = $("#shopProfileSettingsMenuBtn");
   const elProfileLogoutBtn = $("#shopProfileLogoutBtn");
 
   if (!elProductsGrid || !elCatsList) return;
@@ -448,12 +449,13 @@
     elAddressChip.title = line || "";
   }
 
-  function setCartHeader({ title, showAddressChip = true, showProfileActions = false } = {}) {
+  function setCartHeader({ title, showAddressChip = true, showProfileActions = false, showBack = false } = {}) {
     if (elCartHeaderTitle && typeof title === "string") {
       elCartHeaderTitle.textContent = title;
     }
     if (elAddressChip) elAddressChip.classList.toggle("hidden", !showAddressChip);
     if (elProfileHeaderActions) elProfileHeaderActions.classList.toggle("hidden", !showProfileActions);
+    if (elCartBackBtn) elCartBackBtn.classList.toggle("hidden", !showBack);
     if (!showProfileActions && elProfileMenu) elProfileMenu.classList.add("hidden");
   }
 
@@ -463,6 +465,22 @@
     elCartFooter.classList.toggle("hidden", isHidden);
     if (elCartFooterActions) elCartFooterActions.classList.toggle("hidden", mode !== "cart");
     if (elCheckoutFooterActions) elCheckoutFooterActions.classList.toggle("hidden", mode !== "checkout");
+  }
+
+  function applyTheme(nextTheme) {
+    const root = document.documentElement;
+    const next = nextTheme === "dark" ? "dark" : "light";
+    root.setAttribute("data-theme", next);
+    localStorage.setItem("theme", next);
+    const btn = document.getElementById("theme-toggle");
+    if (btn) {
+      const icon = btn.querySelector("i");
+      if (icon) icon.className = next === "dark" ? "fas fa-sun" : "fas fa-moon";
+    }
+  }
+
+  function getCurrentTheme() {
+    return document.documentElement.getAttribute("data-theme") || "light";
   }
 
   function setSelectedAddress(addr) {
@@ -485,42 +503,48 @@
 
   function showCartView() {
     cartViewMode = "cart";
+    openProductCtx = null;
     if (elAddressContent) elAddressContent.classList.add("hidden");
     if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
+    if (elProductContent) elProductContent.classList.add("hidden");
     if (elCartContent) elCartContent.classList.remove("hidden");
     if (elProfileContent) elProfileContent.classList.add("hidden");
     if (elCartFooter) {
       // вернём как было: footer показывается только если корзина не пустая (renderCart решает)
       // тут ничего не делаем
     }
-    setCartHeader({ title: "Корзина", showAddressChip: true, showProfileActions: false });
+    setCartHeader({ title: "Корзина", showAddressChip: true, showProfileActions: false, showBack: false });
     setCartFooterMode("cart");
     renderCart();
   }
 
   function showCheckoutView() {
     cartViewMode = "checkout";
+    openProductCtx = null;
     if (elCartContent) elCartContent.classList.add("hidden");
     if (elAddressContent) elAddressContent.classList.add("hidden");
+    if (elProductContent) elProductContent.classList.add("hidden");
     if (elCheckoutContent) elCheckoutContent.classList.remove("hidden");
     if (elProfileContent) elProfileContent.classList.add("hidden");
-    setCartHeader({ title: "Корзина", showAddressChip: true, showProfileActions: false });
+    setCartHeader({ title: "Корзина", showAddressChip: true, showProfileActions: false, showBack: false });
     setCartFooterMode("checkout");
   }
 
   function showAddressListView(backMode = "cart") {
     if (!elAddressContent || !elAddressListView || !elAddressFormView) return;
     cartViewMode = "address";
+    openProductCtx = null;
     state._addressListBackMode = backMode;
     if (elCartContent) elCartContent.classList.add("hidden");
     if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
+    if (elProductContent) elProductContent.classList.add("hidden");
     if (elProfileContent) elProfileContent.classList.add("hidden");
 
     elAddressContent.classList.remove("hidden");
     elAddressListView.classList.remove("hidden");
     elAddressFormView.classList.add("hidden");
 
-    setCartHeader({ title: "Введите адрес", showAddressChip: true, showProfileActions: false });
+    setCartHeader({ title: "Введите адрес", showAddressChip: true, showProfileActions: false, showBack: false });
     setCartFooterMode("hidden");
     renderAddressList();
   }
@@ -531,6 +555,7 @@
     state.addressEditingId = editingId ? Number(editingId) : null;
     state._addressFormBackMode = backMode || (state.selectedAddress ? "list" : "cart");
     cartViewMode = "address";
+    openProductCtx = null;
 
     if (elAddrStreet) elAddrStreet.value = str(prefill?.street || "");
     if (elAddrHouse) elAddrHouse.value = str(prefill?.house || "");
@@ -541,24 +566,38 @@
 
     if (elCartContent) elCartContent.classList.add("hidden");
     if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
+    if (elProductContent) elProductContent.classList.add("hidden");
     if (elProfileContent) elProfileContent.classList.add("hidden");
 
     elAddressContent.classList.remove("hidden");
     elAddressFormView.classList.remove("hidden");
     elAddressListView.classList.add("hidden");
 
-    setCartHeader({ title: "Введите адрес", showAddressChip: true, showProfileActions: false });
+    setCartHeader({ title: "Введите адрес", showAddressChip: true, showProfileActions: false, showBack: false });
     setCartFooterMode("hidden");
     setTimeout(() => { try { elAddrStreet?.focus?.(); } catch {} }, 0);
   }
 
   function showProfileView() {
     cartViewMode = "profile";
+    openProductCtx = null;
     if (elCartContent) elCartContent.classList.add("hidden");
     if (elAddressContent) elAddressContent.classList.add("hidden");
     if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
+    if (elProductContent) elProductContent.classList.add("hidden");
     if (elProfileContent) elProfileContent.classList.remove("hidden");
-    setCartHeader({ title: "Профиль", showAddressChip: false, showProfileActions: true });
+    setCartHeader({ title: "Профиль", showAddressChip: false, showProfileActions: true, showBack: false });
+    setCartFooterMode("hidden");
+  }
+
+  function showProductView(title) {
+    cartViewMode = "product";
+    if (elCartContent) elCartContent.classList.add("hidden");
+    if (elAddressContent) elAddressContent.classList.add("hidden");
+    if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
+    if (elProfileContent) elProfileContent.classList.add("hidden");
+    if (elProductContent) elProductContent.classList.remove("hidden");
+    setCartHeader({ title: title || "Товар", showAddressChip: false, showProfileActions: false, showBack: true });
     setCartFooterMode("hidden");
   }
 
@@ -661,15 +700,73 @@
       const title = formatAddressLine(a);
       const sub = a.comment ? str(a.comment) : "";
 
-      row.innerHTML = `
-        <div class="shop-address-row-top">
-          <div>
-            <div class="shop-address-row-title">${title || ""}</div>
-            ${sub ? `<div class="shop-address-row-sub">${sub}</div>` : ""}
-          </div>
-          ${token && Number(a.is_default) === 1 ? `<div class="muted">основной</div>` : ``}
-        </div>
-      `;
+      const card = document.createElement("div");
+      card.className = "shop-address-card";
+
+      const main = document.createElement("div");
+      main.className = "shop-address-card-main";
+
+      const titleEl = document.createElement("div");
+      titleEl.className = "shop-address-card-title";
+      titleEl.appendChild(document.createTextNode(title || ""));
+      if (token && Number(a.is_default) === 1) {
+        const badge = document.createElement("span");
+        badge.className = "muted";
+        badge.textContent = " • основной";
+        titleEl.appendChild(badge);
+      }
+      main.appendChild(titleEl);
+
+      if (sub) {
+        const subEl = document.createElement("div");
+        subEl.className = "shop-address-card-sub";
+        subEl.textContent = sub;
+        main.appendChild(subEl);
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "shop-address-actions shop-address-actions--compact";
+
+      const btnEdit = document.createElement("button");
+      btnEdit.type = "button";
+      btnEdit.className = "shop-address-action-icon";
+      btnEdit.innerHTML = `<i class="fas fa-pen"></i>`;
+      btnEdit.addEventListener("click", (e) => {
+        e.stopPropagation();
+        showAddressFormView(a, token ? a.id : null, "list");
+      });
+      actions.appendChild(btnEdit);
+
+      const btnDel = document.createElement("button");
+      btnDel.type = "button";
+      btnDel.className = "shop-address-action-icon is-danger";
+      btnDel.innerHTML = `<i class="fas fa-times"></i>`;
+      btnDel.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!window.confirm("Удалить адрес?")) return;
+
+        if (token && a.id) {
+          try {
+            await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
+            await refreshAddressState();
+            renderAddressList();
+            if (!getSelectedAddressLine()) backAfterAddressSelection();
+          } catch (err) {
+            alert("Не удалось удалить адрес");
+          }
+          return;
+        }
+
+        clearAddressDraft();
+        setSelectedAddress(null);
+        renderAddressList();
+        backAfterAddressSelection();
+      });
+      actions.appendChild(btnDel);
+
+      card.appendChild(main);
+      card.appendChild(actions);
+      row.appendChild(card);
 
       // select by click
       row.addEventListener("click", async () => {
@@ -694,48 +791,6 @@
         backAfterAddressSelection();
       });
 
-      const actions = document.createElement("div");
-      actions.className = "shop-address-actions";
-
-      const btnEdit = document.createElement("button");
-      btnEdit.type = "button";
-      btnEdit.className = "btn";
-      btnEdit.textContent = "Редактировать";
-      btnEdit.addEventListener("click", (e) => {
-        e.stopPropagation();
-        showAddressFormView(a, token ? a.id : null, "list");
-      });
-      actions.appendChild(btnEdit);
-
-      const btnDel = document.createElement("button");
-      btnDel.type = "button";
-      btnDel.className = "btn";
-      btnDel.textContent = "Удалить";
-      btnDel.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        if (!window.confirm("Удалить адрес?")) return;
-
-        if (token && a.id) {
-          try {
-            await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
-            await refreshAddressState();
-            renderAddressList();
-            if (!getSelectedAddressLine()) backAfterAddressSelection();
-          } catch (err) {
-            alert("Не удалось удалить адрес");
-          }
-          return;
-        }
-
-        // guest
-        clearAddressDraft();
-        setSelectedAddress(null);
-        renderAddressList();
-        backAfterAddressSelection();
-      });
-      actions.appendChild(btnDel);
-
-      row.appendChild(actions);
       elAddressList.appendChild(row);
     });
   }
@@ -1174,6 +1229,7 @@
       const row = document.createElement("div");
       row.className = "cart-row";
       row.setAttribute("data-product-id", String(product.id));
+      row.addEventListener("click", () => openProductDetails(product.id));
 
       const photos = safePhotos(product);
       const mainPhoto = photos[0] || "";
@@ -1468,22 +1524,33 @@
     return p;
   }
 
-  async function openProductDetails(productId) {
-    if (!window.AppModal) return;
-
-    const p = await ensureProduct(productId);
-    const qty = cartQty(p.id);
-    const photos = safePhotos(p);
-    const main = photos[0] || "";
-
+  function buildProductDetailsContent(product, qty, { onBack } = {}) {
     const wrap = document.createElement("div");
     wrap.className = "shop-pd";
+
+    if (typeof onBack === "function") {
+      const backRow = document.createElement("div");
+      backRow.className = "shop-pd-back";
+      const backBtn = document.createElement("button");
+      backBtn.type = "button";
+      backBtn.className = "btn";
+      backBtn.textContent = "Назад в корзину";
+      backBtn.addEventListener("click", () => {
+        onBack();
+        openProductCtx = null;
+      });
+      backRow.appendChild(backBtn);
+      wrap.appendChild(backRow);
+    }
 
     const scroll = document.createElement("div");
     scroll.className = "shop-pd-scroll";
 
     const head = document.createElement("div");
     head.className = "shop-pd-head";
+
+    const photos = safePhotos(product);
+    const main = photos[0] || "";
 
     const img = document.createElement("img");
     img.className = "shop-pd-thumb";
@@ -1496,13 +1563,13 @@
 
     const t = document.createElement("div");
     t.className = "shop-pd-title";
-    t.textContent = str(p.name);
+    t.textContent = str(product.name);
     meta.appendChild(t);
 
-    if (p.description_short) {
+    if (product.description_short) {
       const s = document.createElement("div");
       s.className = "shop-pd-sub";
-      s.textContent = str(p.description_short);
+      s.textContent = str(product.description_short);
       meta.appendChild(s);
     }
 
@@ -1511,8 +1578,8 @@
     const prices = document.createElement("div");
     prices.className = "shop-pd-prices";
 
-    const old = Number(p.old_price || 0);
-    const showOld = old > 0 && old > Number(p.price || 0);
+    const old = Number(product.old_price || 0);
+    const showOld = old > 0 && old > Number(product.price || 0);
 
     const oldEl = document.createElement("div");
     oldEl.className = "shop-pd-old";
@@ -1521,7 +1588,7 @@
 
     const pr = document.createElement("div");
     pr.className = "shop-pd-price";
-    pr.textContent = money(p.price);
+    pr.textContent = money(product.price);
 
     prices.appendChild(oldEl);
     prices.appendChild(pr);
@@ -1529,10 +1596,10 @@
 
     scroll.appendChild(head);
 
-    if (p.description) {
+    if (product.description) {
       const d = document.createElement("div");
       d.className = "shop-pd-desc";
-      d.textContent = str(p.description);
+      d.textContent = str(product.description);
       scroll.appendChild(d);
     }
 
@@ -1547,7 +1614,7 @@
     favBtn.innerHTML = "<span aria-hidden=\"true\">♡</span>";
 
     const favs = loadFavs();
-    if (favs.has(Number(p.id))) {
+    if (favs.has(Number(product.id))) {
       favBtn.classList.add("is-active");
       favBtn.innerHTML = "<span aria-hidden=\"true\">♥</span>";
     }
@@ -1555,7 +1622,7 @@
     const { pill, btnMinus, btnPlus, center } = createQtyPill({
       variant: "buy",
       big: true,
-      centerHtml: pdCenterHtml(p, qty),
+      centerHtml: pdCenterHtml(product, qty),
       minusEnabled: qty > 0,
     });
 
@@ -1563,30 +1630,48 @@
     footer.appendChild(pill);
     wrap.appendChild(footer);
 
-    setAppModalMode("shop");
-    window.AppModal.open({
-      title: "",
-      content: wrap,
-      onClose: () => {
-        openProductCtx = null;
-      },
-    });
+    return { wrap, center, btnMinus, btnPlus, favBtn };
+  }
 
-    openProductCtx = { productId: p.id, centerEl: center, minusBtn: btnMinus };
+  function renderProductDetailsInto(container, product, { onBack } = {}) {
+    if (!container) return;
+    const qty = cartQty(product.id);
+    container.innerHTML = "";
 
-    btnPlus.addEventListener("click", () => changeQty(p.id, +1));
-    btnMinus.addEventListener("click", () => changeQty(p.id, -1));
+    const { wrap, center, btnMinus, btnPlus, favBtn } = buildProductDetailsContent(product, qty, { onBack });
+    container.appendChild(wrap);
+
+    openProductCtx = { productId: product.id, centerEl: center, minusBtn: btnMinus };
+
+    btnPlus.addEventListener("click", () => changeQty(product.id, +1));
+    btnMinus.addEventListener("click", () => changeQty(product.id, -1));
 
     favBtn.addEventListener("click", () => {
       const set = loadFavs();
-      if (set.has(Number(p.id))) set.delete(Number(p.id));
-      else set.add(Number(p.id));
+      if (set.has(Number(product.id))) set.delete(Number(product.id));
+      else set.add(Number(product.id));
       saveFavs(set);
 
-      const active = set.has(Number(p.id));
+      const active = set.has(Number(product.id));
       favBtn.classList.toggle("is-active", active);
       favBtn.innerHTML = active ? "<span aria-hidden=\"true\">♥</span>" : "<span aria-hidden=\"true\">♡</span>";
     });
+  }
+
+  async function openProductDetails(productId) {
+    const p = await ensureProduct(productId);
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+
+    if (isMobile) {
+      if (!openCartSheetCtx) openCartSheet();
+      if (openCartSheetCtx?.showSheetProduct) {
+        openCartSheetCtx.showSheetProduct(p);
+      }
+      return;
+    }
+
+    showProductView(p.name);
+    renderProductDetailsInto(elProductContent, p);
   }
 
   // -----------------------------
@@ -1597,8 +1682,15 @@
     if (window.AppModal.isOpen()) window.AppModal.close("sheet");
   }
 
+  function clearProfileModalMenu() {
+    const header = document.querySelector(".app-modal-header");
+    if (!header) return;
+    header.querySelectorAll(".shop-profile-modal-settings, .shop-profile-menu").forEach((el) => el.remove());
+  }
+
   function openCategoriesSheet() {
     if (!window.AppModal) return;
+    clearProfileModalMenu();
 
     const list = document.createElement("div");
     list.className = "shop-sheet-list";
@@ -1640,6 +1732,7 @@
 
   function openCartSheet() {
     if (!window.AppModal) return;
+    clearProfileModalMenu();
 
     const wrap = document.createElement("div");
     wrap.className = "shop-cart-sheet";
@@ -1655,6 +1748,10 @@
     const addressWrap = document.createElement("div");
     addressWrap.className = "shop-address-content hidden";
     wrap.appendChild(addressWrap);
+
+    const productWrap = document.createElement("div");
+    productWrap.className = "shop-product-content hidden";
+    wrap.appendChild(productWrap);
 
     const addressListView = document.createElement("div");
     addressListView.className = "shop-address-list-view hidden";
@@ -1766,8 +1863,12 @@
       content: wrap,
       onClose: () => {
         openCartSheetCtx = null;
+        if (window.AppModal?.body) window.AppModal.body.classList.remove("shop-cart-sheet-body");
+        openProductCtx = null;
       },
     });
+
+    if (window.AppModal?.body) window.AppModal.body.classList.add("shop-cart-sheet-body");
 
     openCartSheetCtx = {
       listEl: list,
@@ -1778,6 +1879,8 @@
       checkoutBtn: btn,
       clearBtn,
       checkoutEl: checkoutWrap,
+      productEl: productWrap,
+      showSheetProduct,
     };
 
     setCartSheetFooterMode(openCartSheetCtx, items.length ? "cart" : "hidden");
@@ -1789,6 +1892,7 @@
       checkoutWrap.classList.remove("hidden");
       list.classList.add("hidden");
       addressWrap.classList.add("hidden");
+      productWrap.classList.add("hidden");
       setCartSheetFooterMode(openCartSheetCtx, "checkout");
       if (window.AppModal?.setTitle) window.AppModal.setTitle("Корзина");
     }
@@ -1797,8 +1901,10 @@
       checkoutWrap.classList.add("hidden");
       list.classList.remove("hidden");
       addressWrap.classList.add("hidden");
+      productWrap.classList.add("hidden");
       setCartSheetFooterMode(openCartSheetCtx, "cart");
       if (window.AppModal?.setTitle) window.AppModal.setTitle("Корзина");
+      openProductCtx = null;
     }
 
     function showSheetAddressList() {
@@ -1807,6 +1913,7 @@
       addressWrap.classList.remove("hidden");
       addressListView.classList.remove("hidden");
       addressFormView.classList.add("hidden");
+      productWrap.classList.add("hidden");
       setCartSheetFooterMode(openCartSheetCtx, "hidden");
       if (window.AppModal?.setTitle) window.AppModal.setTitle("Введите адрес");
       renderSheetAddressList();
@@ -1827,9 +1934,20 @@
       addressWrap.classList.remove("hidden");
       addressListView.classList.add("hidden");
       addressFormView.classList.remove("hidden");
+      productWrap.classList.add("hidden");
       setCartSheetFooterMode(openCartSheetCtx, "hidden");
       if (window.AppModal?.setTitle) window.AppModal.setTitle("Введите адрес");
       setTimeout(() => { try { get("street")?.focus?.(); } catch {} }, 0);
+    }
+
+    function showSheetProduct(product) {
+      checkoutWrap.classList.add("hidden");
+      list.classList.add("hidden");
+      addressWrap.classList.add("hidden");
+      productWrap.classList.remove("hidden");
+      setCartSheetFooterMode(openCartSheetCtx, "hidden");
+      if (window.AppModal?.setTitle) window.AppModal.setTitle(str(product?.name || "Товар"));
+      renderProductDetailsInto(productWrap, product, { onBack: showSheetCart });
     }
 
     function renderSheetAddressList() {
@@ -1856,39 +1974,37 @@
         const title = formatAddressLine(a);
         const sub = a.comment ? str(a.comment) : "";
 
-        row.innerHTML = `
-          <div class="shop-address-row-top">
-            <div>
-              <div class="shop-address-row-title">${title || ""}</div>
-              ${sub ? `<div class="shop-address-row-sub">${sub}</div>` : ""}
-            </div>
-            ${token && Number(a.is_default) === 1 ? `<div class="muted">основной</div>` : ``}
-          </div>
-        `;
+        const card = document.createElement("div");
+        card.className = "shop-address-card";
 
-        row.addEventListener("click", async () => {
-          if (token && a.id) {
-            try {
-              await apiJson(`/api/public/me/addresses/${a.id}/default`, { method: "PUT" });
-              await refreshAddressState();
-              showSheetCheckout();
-            } catch (e) {
-              alert("Не удалось выбрать адрес");
-            }
-            return;
-          }
+        const main = document.createElement("div");
+        main.className = "shop-address-card-main";
 
-          setSelectedAddress({ ...a, _local: true });
-          showSheetCheckout();
-        });
+        const titleEl = document.createElement("div");
+        titleEl.className = "shop-address-card-title";
+        titleEl.appendChild(document.createTextNode(title || ""));
+        if (token && Number(a.is_default) === 1) {
+          const badge = document.createElement("span");
+          badge.className = "muted";
+          badge.textContent = " • основной";
+          titleEl.appendChild(badge);
+        }
+        main.appendChild(titleEl);
+
+        if (sub) {
+          const subEl = document.createElement("div");
+          subEl.className = "shop-address-card-sub";
+          subEl.textContent = sub;
+          main.appendChild(subEl);
+        }
 
         const actions = document.createElement("div");
-        actions.className = "shop-address-actions";
+        actions.className = "shop-address-actions shop-address-actions--compact";
 
         const btnEdit = document.createElement("button");
         btnEdit.type = "button";
-        btnEdit.className = "btn";
-        btnEdit.textContent = "Редактировать";
+        btnEdit.className = "shop-address-action-icon";
+        btnEdit.innerHTML = `<i class="fas fa-pen"></i>`;
         btnEdit.addEventListener("click", (e) => {
           e.stopPropagation();
           showSheetAddressForm(a, token ? a.id : null);
@@ -1897,8 +2013,8 @@
 
         const btnDel = document.createElement("button");
         btnDel.type = "button";
-        btnDel.className = "btn";
-        btnDel.textContent = "Удалить";
+        btnDel.className = "shop-address-action-icon is-danger";
+        btnDel.innerHTML = `<i class="fas fa-times"></i>`;
         btnDel.addEventListener("click", async (e) => {
           e.stopPropagation();
           if (!window.confirm("Удалить адрес?")) return;
@@ -1920,7 +2036,26 @@
         });
         actions.appendChild(btnDel);
 
-        row.appendChild(actions);
+        card.appendChild(main);
+        card.appendChild(actions);
+        row.appendChild(card);
+
+        row.addEventListener("click", async () => {
+          if (token && a.id) {
+            try {
+              await apiJson(`/api/public/me/addresses/${a.id}/default`, { method: "PUT" });
+              await refreshAddressState();
+              showSheetCheckout();
+            } catch (e) {
+              alert("Не удалось выбрать адрес");
+            }
+            return;
+          }
+
+          setSelectedAddress({ ...a, _local: true });
+          showSheetCheckout();
+        });
+
         addressList.appendChild(row);
       });
     }
@@ -2248,8 +2383,15 @@
     tabOrders.textContent = "История заказов";
     tabOrders.dataset.tab = "orders";
 
+    const tabSettings = document.createElement("button");
+    tabSettings.type = "button";
+    tabSettings.className = "shop-profile-tab";
+    tabSettings.textContent = "Настройки";
+    tabSettings.dataset.tab = "settings";
+
     tabs.appendChild(tabAddresses);
     tabs.appendChild(tabOrders);
+    tabs.appendChild(tabSettings);
     wrap.appendChild(tabs);
 
     const addressesPanel = document.createElement("div");
@@ -2260,8 +2402,14 @@
     addressesList.className = "shop-profile-list";
     addressesPanel.appendChild(addressesList);
 
+    const addressFormToggle = document.createElement("button");
+    addressFormToggle.type = "button";
+    addressFormToggle.className = "btn btn-primary shop-profile-address-toggle";
+    addressFormToggle.textContent = "+ Новый адрес";
+    addressesPanel.appendChild(addressFormToggle);
+
     const addressFormCard = document.createElement("div");
-    addressFormCard.className = "shop-profile-card";
+    addressFormCard.className = "shop-profile-card hidden";
     addressFormCard.innerHTML = `
       <div class="shop-address-form-grid">
         <div class="shop-address-form-row shop-address-form-row--full">
@@ -2295,6 +2443,38 @@
     `;
     addressesPanel.appendChild(addressFormCard);
 
+    const addBtn = $('[data-a="add"]', addressFormCard);
+    let profileEditingId = null;
+
+    const profileAddressFields = ["street", "house", "entrance", "floor", "apartment", "comment"];
+
+    function setProfileAddressValues(values) {
+      profileAddressFields.forEach((k) => {
+        const el = $(`[data-a="${k}"]`, addressFormCard);
+        if (el) el.value = str(values?.[k] || "");
+      });
+    }
+
+    function openProfileAddressForm(address) {
+      profileEditingId = address?.id ? Number(address.id) : null;
+      setProfileAddressValues(address || {});
+      addressFormCard.classList.remove("hidden");
+      addressFormToggle.classList.add("hidden");
+      if (addBtn) addBtn.textContent = profileEditingId ? "Сохранить" : "Добавить адрес";
+    }
+
+    function closeProfileAddressForm() {
+      profileEditingId = null;
+      setProfileAddressValues({});
+      addressFormCard.classList.add("hidden");
+      addressFormToggle.classList.remove("hidden");
+      if (addBtn) addBtn.textContent = "Добавить адрес";
+    }
+
+    addressFormToggle.addEventListener("click", () => {
+      openProfileAddressForm(null);
+    });
+
     const ordersPanel = document.createElement("div");
     ordersPanel.className = "shop-profile-tab-panel";
     ordersPanel.dataset.tab = "orders";
@@ -2303,18 +2483,58 @@
     ordersList.className = "shop-profile-list";
     ordersPanel.appendChild(ordersList);
 
+    const settingsPanel = document.createElement("div");
+    settingsPanel.className = "shop-profile-tab-panel";
+    settingsPanel.dataset.tab = "settings";
+
+    const settingsWrap = document.createElement("div");
+    settingsWrap.className = "shop-profile-settings";
+
+    const themeRow = document.createElement("div");
+    themeRow.className = "shop-profile-settings-row";
+
+    const themeTitle = document.createElement("div");
+    themeTitle.className = "shop-profile-settings-title";
+    themeTitle.textContent = "Тема";
+
+    const themeSwitch = document.createElement("label");
+    themeSwitch.className = "switch";
+    const themeInput = document.createElement("input");
+    themeInput.type = "checkbox";
+    themeInput.className = "switch-input";
+    themeInput.checked = getCurrentTheme() === "dark";
+    themeInput.addEventListener("change", () => {
+      applyTheme(themeInput.checked ? "dark" : "light");
+    });
+    const themeUi = document.createElement("span");
+    themeUi.className = "switch-ui";
+    const themeText = document.createElement("span");
+    themeText.className = "switch-text";
+    themeText.textContent = "Тема";
+
+    themeSwitch.appendChild(themeInput);
+    themeSwitch.appendChild(themeUi);
+    themeSwitch.appendChild(themeText);
+
+    themeRow.appendChild(themeTitle);
+    themeRow.appendChild(themeSwitch);
+    settingsWrap.appendChild(themeRow);
+    settingsPanel.appendChild(settingsWrap);
+
     wrap.appendChild(addressesPanel);
     wrap.appendChild(ordersPanel);
+    wrap.appendChild(settingsPanel);
 
     host.appendChild(wrap);
 
     function setActiveTab(tab) {
-      [tabAddresses, tabOrders].forEach((btn) => btn.classList.toggle("is-active", btn.dataset.tab === tab));
-      [addressesPanel, ordersPanel].forEach((panel) => panel.classList.toggle("is-active", panel.dataset.tab === tab));
+      [tabAddresses, tabOrders, tabSettings].forEach((btn) => btn.classList.toggle("is-active", btn.dataset.tab === tab));
+      [addressesPanel, ordersPanel, settingsPanel].forEach((panel) => panel.classList.toggle("is-active", panel.dataset.tab === tab));
     }
 
     tabAddresses.addEventListener("click", () => setActiveTab("addresses"));
     tabOrders.addEventListener("click", () => setActiveTab("orders"));
+    tabSettings.addEventListener("click", () => setActiveTab("settings"));
 
     async function reloadAddresses() {
       addressesList.innerHTML = `<div class="muted">Загрузка…</div>`;
@@ -2329,7 +2549,7 @@
         addressesList.innerHTML = "";
         list.forEach((a) => {
           const row = document.createElement("div");
-          row.className = "shop-profile-card";
+          row.className = "shop-profile-card shop-profile-card--compact";
 
           const txt = [
             `${str(a.street)} ${str(a.house)}`,
@@ -2338,24 +2558,41 @@
             a.apartment ? `кв ${a.apartment}` : "",
           ].filter(Boolean).join(", ");
 
-          row.innerHTML = `
-            <div>
-              <div><strong>${txt}</strong> ${Number(a.is_default) === 1 ? '<span class="muted">• основной</span>' : ''}</div>
-              ${a.comment ? `<div class="muted">${str(a.comment)}</div>` : ''}
-            </div>
-          `;
+          const card = document.createElement("div");
+          card.className = "shop-address-card";
+
+          const main = document.createElement("div");
+          main.className = "shop-address-card-main";
+
+          const title = document.createElement("div");
+          title.className = "shop-address-card-title";
+          title.appendChild(document.createTextNode(txt || ""));
+          if (Number(a.is_default) === 1) {
+            const badge = document.createElement("span");
+            badge.className = "muted";
+            badge.textContent = " • основной";
+            title.appendChild(badge);
+          }
+          main.appendChild(title);
+
+          if (a.comment) {
+            const sub = document.createElement("div");
+            sub.className = "shop-address-card-sub";
+            sub.textContent = str(a.comment);
+            main.appendChild(sub);
+          }
 
           const actions = document.createElement("div");
-          actions.style.display = "flex";
-          actions.style.gap = "8px";
-          actions.style.marginTop = "8px";
+          actions.className = "shop-address-actions shop-address-actions--compact";
 
           if (Number(a.is_default) !== 1) {
             const bDef = document.createElement("button");
             bDef.type = "button";
-            bDef.className = "btn";
-            bDef.textContent = "Сделать основным";
-            bDef.addEventListener("click", async () => {
+            bDef.className = "shop-address-action-icon";
+            bDef.title = "Сделать основным";
+            bDef.innerHTML = `<i class="fas fa-star"></i>`;
+            bDef.addEventListener("click", async (e) => {
+              e.stopPropagation();
               try {
                 await apiJson(`/api/public/me/addresses/${a.id}/default`, { method: "PUT" });
                 await reloadAddresses();
@@ -2367,11 +2604,24 @@
             actions.appendChild(bDef);
           }
 
+          const bEdit = document.createElement("button");
+          bEdit.type = "button";
+          bEdit.className = "shop-address-action-icon";
+          bEdit.title = "Редактировать";
+          bEdit.innerHTML = `<i class="fas fa-pen"></i>`;
+          bEdit.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openProfileAddressForm(a);
+          });
+          actions.appendChild(bEdit);
+
           const bDel = document.createElement("button");
           bDel.type = "button";
-          bDel.className = "btn";
-          bDel.textContent = "Удалить";
-          bDel.addEventListener("click", async () => {
+          bDel.className = "shop-address-action-icon is-danger";
+          bDel.title = "Удалить";
+          bDel.innerHTML = `<i class="fas fa-times"></i>`;
+          bDel.addEventListener("click", async (e) => {
+            e.stopPropagation();
             if (!window.confirm("Удалить адрес?")) return;
             try {
               await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
@@ -2383,7 +2633,9 @@
           });
           actions.appendChild(bDel);
 
-          row.appendChild(actions);
+          card.appendChild(main);
+          card.appendChild(actions);
+          row.appendChild(card);
           addressesList.appendChild(row);
         });
       } catch (e) {
@@ -2423,7 +2675,6 @@
       }
     }
 
-    const addBtn = $('[data-a="add"]', addressFormCard);
     if (addBtn) {
       addBtn.addEventListener("click", async () => {
         const get = (k) => str($(`[data-a="${k}"]`, addressFormCard)?.value || "").trim();
@@ -2441,20 +2692,21 @@
         if (!payload.house) return alert("Укажите дом");
 
         addBtn.disabled = true;
-        addBtn.textContent = "Добавляем…";
+        addBtn.textContent = profileEditingId ? "Сохраняем…" : "Добавляем…";
         try {
-          await apiJson("/api/public/me/addresses", { method: "POST", body: payload });
-          ["street","house","entrance","floor","apartment","comment"].forEach(k => {
-            const el = $(`[data-a="${k}"]`, addressFormCard);
-            if (el) el.value = "";
-          });
+          if (profileEditingId) {
+            await apiJson(`/api/public/me/addresses/${profileEditingId}`, { method: "PUT", body: payload });
+          } else {
+            await apiJson("/api/public/me/addresses", { method: "POST", body: payload });
+          }
+          closeProfileAddressForm();
           await reloadAddresses();
           await refreshAddressState();
         } catch (e) {
-          alert("Не удалось добавить адрес");
+          alert(profileEditingId ? "Не удалось обновить адрес" : "Не удалось добавить адрес");
         } finally {
           addBtn.disabled = false;
-          addBtn.textContent = "Добавить адрес";
+          addBtn.textContent = profileEditingId ? "Сохранить" : "Добавить адрес";
         }
       });
     }
@@ -2551,13 +2803,6 @@
       };
     }
 
-    if (elProfileSettingsMenuBtn && elProfileMenu) {
-      elProfileSettingsMenuBtn.onclick = () => {
-        elProfileMenu.classList.add("hidden");
-        alert("Настройки скоро появятся");
-      };
-    }
-
     if (elProfileLogoutBtn && elProfileMenu) {
       elProfileLogoutBtn.onclick = async () => {
         elProfileMenu.classList.add("hidden");
@@ -2577,7 +2822,7 @@
     }
   }
 
-  function mountProfileModalMenu({ onEdit, onSettings, onLogout }) {
+  function mountProfileModalMenu({ onEdit, onLogout }) {
     const header = document.querySelector(".app-modal-header");
     if (!header) return () => {};
 
@@ -2597,14 +2842,12 @@
       menu.className = "shop-profile-menu hidden";
       menu.innerHTML = `
         <button class="shop-profile-menu-item" data-role="edit" type="button">Редактировать профиль</button>
-        <button class="shop-profile-menu-item" data-role="settings" type="button">Настройки</button>
         <button class="shop-profile-menu-item" data-role="logout" type="button">Выйти</button>
       `;
       header.appendChild(menu);
     }
 
     const editBtn = menu.querySelector('[data-role="edit"]');
-    const settingsMenuBtn = menu.querySelector('[data-role="settings"]');
     const logoutBtn = menu.querySelector('[data-role="logout"]');
 
     const onDocClick = (e) => {
@@ -2621,11 +2864,6 @@
     if (editBtn) editBtn.onclick = () => {
       menu.classList.add("hidden");
       if (typeof onEdit === "function") onEdit();
-    };
-
-    if (settingsMenuBtn) settingsMenuBtn.onclick = () => {
-      menu.classList.add("hidden");
-      if (typeof onSettings === "function") onSettings();
     };
 
     if (logoutBtn) logoutBtn.onclick = async () => {
@@ -2675,7 +2913,6 @@
     setAppModalMode("shop");
     const cleanupMenu = mountProfileModalMenu({
       onEdit: () => ctx.showEdit(),
-      onSettings: () => alert("Настройки скоро появятся"),
       onLogout: async () => {
         await handleProfileLogout({ closeModal: true });
       },
@@ -2702,55 +2939,61 @@
     return orderConfigCache;
   }
 
-  function buildSelect(options, value, placeholder) {
-    const sel = document.createElement("select");
-    sel.className = "control";
-    if (placeholder) {
-      const opt0 = document.createElement("option");
-      opt0.value = "";
-      opt0.textContent = placeholder;
-      sel.appendChild(opt0);
+  function buildDropdown(options, value) {
+    const wrap = document.createElement("div");
+    wrap.className = "shop-checkout-dropdown-wrap";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "shop-checkout-select";
+
+    const list = document.createElement("div");
+    list.className = "shop-checkout-dropdown";
+
+    let current = value || (options[0] ? options[0].code : "");
+
+    function render() {
+      const active = options.find(o => o.code === current) || options[0];
+      btn.textContent = active ? active.title : "Выбрать";
+      list.innerHTML = "";
+
+      options.filter(o => o.code !== current).forEach(o => {
+        const opt = document.createElement("button");
+        opt.type = "button";
+        opt.className = "shop-checkout-option";
+        opt.textContent = o.title;
+        opt.addEventListener("click", () => {
+          current = o.code;
+          render();
+          list.classList.remove("is-open");
+          wrap.dispatchEvent(new Event("change"));
+        });
+        list.appendChild(opt);
+      });
     }
-    options.forEach(o => {
-      const opt = document.createElement("option");
-      opt.value = o.code;
-      opt.textContent = o.title;
-      sel.appendChild(opt);
+
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      list.classList.toggle("is-open");
     });
-    if (value) sel.value = value;
-    return sel;
-  }
 
-  function buildRadioGroup(options, name, value) {
-    const box = document.createElement("div");
-    box.className = "shop-checkout-radios";
-    options.forEach(o => {
-      const label = document.createElement("label");
-      label.className = "shop-radio";
-
-      const input = document.createElement("input");
-      input.type = "radio";
-      input.name = name;
-      input.value = o.code;
-      input.checked = value ? (value === o.code) : false;
-
-      const span = document.createElement("span");
-      span.textContent = o.title;
-
-      label.appendChild(input);
-      label.appendChild(span);
-      box.appendChild(label);
+    document.addEventListener("click", (e) => {
+      if (!wrap.contains(e.target)) list.classList.remove("is-open");
     });
-    if (!value && options.length) {
-      const first = box.querySelector('input[type="radio"]');
-      if (first) first.checked = true;
-    }
-    return box;
-  }
 
-  function getRadioValue(root, name) {
-    const el = root.querySelector(`input[type="radio"][name="${name}"]:checked`);
-    return el ? el.value : null;
+    render();
+
+    wrap.appendChild(btn);
+    wrap.appendChild(list);
+
+    return {
+      root: wrap,
+      getValue: () => current,
+      setValue: (val) => {
+        current = val;
+        render();
+      },
+    };
   }
 
   function pickDefaultCode(options, preferred, fallback) {
@@ -2812,67 +3055,58 @@
     emptyNote.textContent = "Поля обязательные: имя и телефон.";
     wrap.appendChild(emptyNote);
 
-    // promo
-    const promoLabel = document.createElement("label");
-    promoLabel.className = "field-label";
-    promoLabel.textContent = "Промокод";
-    const promo = document.createElement("input");
-    promo.className = "control";
-    promo.type = "text";
-    promo.placeholder = "";
-    promo.value = draft.promo_code || "";
-    wrap.appendChild(promoLabel);
-    wrap.appendChild(promo);
+    const nameRow = document.createElement("div");
+    nameRow.className = "shop-checkout-grid-row";
 
-    // name
+    const nameWrap = document.createElement("div");
     const nameLabel = document.createElement("label");
     nameLabel.className = "field-label";
     nameLabel.textContent = "Имя";
     const name = document.createElement("input");
-    name.className = "control";
+    name.className = "control shop-checkout-name";
     name.type = "text";
     name.value = me ? str(me.name || "") : (draft.customer_name || "");
-    wrap.appendChild(nameLabel);
-    wrap.appendChild(name);
+    nameWrap.appendChild(nameLabel);
+    nameWrap.appendChild(name);
 
-    // phone
+    const phoneWrap = document.createElement("div");
     const phoneLabel = document.createElement("label");
     phoneLabel.className = "field-label";
     phoneLabel.textContent = "Телефон";
     const phone = document.createElement("input");
-    phone.className = "control";
+    phone.className = "control shop-checkout-phone";
     phone.type = "tel";
     phone.placeholder = "+7 (999) 000-00-00";
     phone.value = me ? formatPhonePlus7(me.phone || "") : (draft.customer_phone || "");
-    if (me) phone.disabled = true; // как договорились: нельзя менять
+    if (me) phone.disabled = true;
     if (!me) {
       phone.addEventListener("input", () => enforcePhonePrefix(phone));
       phone.addEventListener("focus", () => enforcePhonePrefix(phone));
     }
-    wrap.appendChild(phoneLabel);
-    wrap.appendChild(phone);
+    phoneWrap.appendChild(phoneLabel);
+    phoneWrap.appendChild(phone);
 
-    // method
-    const mLabel = document.createElement("div");
-    mLabel.className = "shop-checkout-section-title";
-    mLabel.textContent = "Способ:";
-    wrap.appendChild(mLabel);
+    nameRow.appendChild(nameWrap);
+    nameRow.appendChild(phoneWrap);
+    wrap.appendChild(nameRow);
 
     const methods = (cfg.methods || []).map(x => ({ code: x.code, title: x.title }));
     const methodDefault = pickDefaultCode(methods, draft.method_code, "takeaway");
-    const methodGroup = buildRadioGroup(methods, "method", methodDefault);
-    wrap.appendChild(methodGroup);
+    const methodSelect = buildDropdown(methods, methodDefault);
 
-    // delivery address
-    const addrWrap = document.createElement("div");
-    addrWrap.className = "shop-checkout-address";
+    const methodWrap = document.createElement("div");
+    const methodLabel = document.createElement("label");
+    methodLabel.className = "field-label";
+    methodLabel.textContent = "Способ";
+    methodWrap.appendChild(methodLabel);
+    methodWrap.appendChild(methodSelect.root);
 
-    const addrRow = document.createElement("div");
-    addrRow.className = "shop-checkout-address-row";
-
+    const addressWrap = document.createElement("div");
     const addrLabel = document.createElement("label");
     addrLabel.className = "field-label";
     addrLabel.textContent = "Адрес доставки";
+    const addressField = document.createElement("div");
+    addressField.className = "shop-checkout-address-field";
 
     const changeAddrBtn = document.createElement("button");
     changeAddrBtn.type = "button";
@@ -2880,9 +3114,6 @@
     changeAddrBtn.innerHTML = `<i class="fas fa-pen"></i>`;
     changeAddrBtn.setAttribute("aria-label", "Изменить адрес");
     changeAddrBtn.title = "Изменить адрес";
-
-    addrRow.appendChild(addrLabel);
-    addrRow.appendChild(changeAddrBtn);
 
     const address = document.createElement("input");
     address.className = "control";
@@ -2892,23 +3123,29 @@
     address.setAttribute("data-role", "delivery-address");
     address.value = getSelectedAddressLine() || draft.delivery_address || "";
 
-    addrWrap.appendChild(addrRow);
-    addrWrap.appendChild(address);
-    wrap.appendChild(addrWrap);
+    addressField.appendChild(address);
+    addressField.appendChild(changeAddrBtn);
+    addressWrap.appendChild(addrLabel);
+    addressWrap.appendChild(addressField);
+
+    const methodRow = document.createElement("div");
+    methodRow.className = "shop-checkout-grid-row shop-checkout-grid-row--two";
+    methodRow.appendChild(methodWrap);
+    methodRow.appendChild(addressWrap);
+    wrap.appendChild(methodRow);
 
     function refreshAddressVisibility() {
-      const v = getRadioValue(methodGroup, "method");
+      const v = methodSelect.getValue();
       const isDelivery = v === "delivery";
-      addrWrap.style.display = isDelivery ? "" : "none";
+      addressWrap.style.display = isDelivery ? "" : "none";
       changeAddrBtn.style.display = (isDelivery && hasAddressEditor) ? "" : "none";
       if (isDelivery && hasAddressEditor) {
         address.value = getSelectedAddressLine() || address.value || "";
       }
     }
-    methodGroup.addEventListener("change", refreshAddressVisibility);
+    methodSelect.root.addEventListener("change", refreshAddressVisibility);
     refreshAddressVisibility();
 
-    // comment
     const cLabel = document.createElement("label");
     cLabel.className = "field-label";
     cLabel.textContent = "Комментарий";
@@ -2920,16 +3157,15 @@
     wrap.appendChild(cLabel);
     wrap.appendChild(comment);
 
-    // time option
-    const tLabel = document.createElement("div");
-    tLabel.className = "shop-checkout-section-title";
-    tLabel.textContent = "Когда приготовить?";
-    wrap.appendChild(tLabel);
+    const timeLabel = document.createElement("label");
+    timeLabel.className = "field-label";
+    timeLabel.textContent = "Когда приготовить?";
+    wrap.appendChild(timeLabel);
 
     const timeOptions = (cfg.timeOptions || []).map(x => ({ code: x.code, title: x.title }));
     const timeDefault = pickDefaultCode(timeOptions, draft.time_option_code, "asap");
-    const timeGroup = buildRadioGroup(timeOptions, "timeopt", timeDefault);
-    wrap.appendChild(timeGroup);
+    const timeSelect = buildDropdown(timeOptions, timeDefault);
+    wrap.appendChild(timeSelect.root);
 
     const timeInputWrap = document.createElement("div");
     timeInputWrap.className = "shop-checkout-time-input";
@@ -2943,53 +3179,61 @@
     wrap.appendChild(timeInputWrap);
 
     function refreshTimeInputVisibility() {
-      const v = getRadioValue(timeGroup, "timeopt");
+      const v = timeSelect.getValue();
       const show = v === "at_time" || v === "on_date";
       timeInputWrap.style.display = show ? "" : "none";
     }
-    timeGroup.addEventListener("change", refreshTimeInputVisibility);
+    timeSelect.root.addEventListener("change", refreshTimeInputVisibility);
     refreshTimeInputVisibility();
 
-    // payment
+    const payments = (cfg.payments || []).map(x => ({ code: x.code, title: x.title }));
+    const payDefault = pickDefaultCode(payments, draft.payment_code, "cash");
+    const paySelect = buildDropdown(payments, payDefault);
+
+    const changeOptions = [
+      { code: "", title: "Сдача не нужна" },
+      ...[500, 1000, 2000, 5000].map(v => ({ code: String(v), title: String(v) })),
+    ];
+    const changeDefault = draft.change_from ? String(draft.change_from) : "";
+    const changeSelect = buildDropdown(changeOptions, changeDefault);
+
+    const payWrap = document.createElement("div");
     const payLabel = document.createElement("label");
     payLabel.className = "field-label";
     payLabel.textContent = "Оплата";
-    const payments = (cfg.payments || []).map(x => ({ code: x.code, title: x.title }));
-    const payDefault = pickDefaultCode(payments, draft.payment_code, "cash");
-    const pay = buildSelect(payments, payDefault, null);
-    wrap.appendChild(payLabel);
-    wrap.appendChild(pay);
-
-    // change from (only for cash)
-    const changeLabel = document.createElement("label");
-    changeLabel.className = "field-label";
-    changeLabel.textContent = "Сдача с";
-
-    const change = document.createElement("select");
-    change.className = "control";
-    const ch0 = document.createElement("option");
-    ch0.value = "";
-    ch0.textContent = "Сдача не нужна";
-    change.appendChild(ch0);
-    [500, 1000, 2000, 5000].forEach(v => {
-      const o = document.createElement("option");
-      o.value = String(v);
-      o.textContent = String(v);
-      change.appendChild(o);
-    });
-    change.value = draft.change_from ? String(draft.change_from) : "";
+    payWrap.appendChild(payLabel);
+    payWrap.appendChild(paySelect.root);
 
     const changeWrap = document.createElement("div");
     changeWrap.className = "shop-checkout-change";
+    const changeLabel = document.createElement("label");
+    changeLabel.className = "field-label";
+    changeLabel.textContent = "Сдача";
     changeWrap.appendChild(changeLabel);
-    changeWrap.appendChild(change);
-    wrap.appendChild(changeWrap);
+    changeWrap.appendChild(changeSelect.root);
+
+    const payRow = document.createElement("div");
+    payRow.className = "shop-checkout-grid-row shop-checkout-grid-row--two";
+    payRow.appendChild(payWrap);
+    payRow.appendChild(changeWrap);
+    wrap.appendChild(payRow);
 
     function refreshChangeVisibility() {
-      changeWrap.style.display = (pay.value === "cash") ? "" : "none";
+      changeWrap.style.display = (paySelect.getValue() === "cash") ? "" : "none";
     }
-    pay.addEventListener("change", refreshChangeVisibility);
+    paySelect.root.addEventListener("change", refreshChangeVisibility);
     refreshChangeVisibility();
+
+    const promoLabel = document.createElement("label");
+    promoLabel.className = "field-label";
+    promoLabel.textContent = "Промокод";
+    const promo = document.createElement("input");
+    promo.className = "control";
+    promo.type = "text";
+    promo.placeholder = "";
+    promo.value = draft.promo_code || "";
+    wrap.appendChild(promoLabel);
+    wrap.appendChild(promo);
 
     if (hasAddressEditor) {
       changeAddrBtn.addEventListener("click", () => {
@@ -2997,13 +3241,13 @@
           promo_code: str(promo.value).trim() || null,
           customer_name: str(name.value).trim(),
           customer_phone: str(phone.value).trim(),
-          method_code: getRadioValue(methodGroup, "method") || methodDefault || "takeaway",
+          method_code: methodSelect.getValue() || methodDefault || "takeaway",
           delivery_address: str(address.value).trim() || null,
           comment: str(comment.value).trim() || null,
-          time_option_code: getRadioValue(timeGroup, "timeopt") || timeDefault || "asap",
+          time_option_code: timeSelect.getValue() || timeDefault || "asap",
           scheduled_at: timeInput.value || "",
-          payment_code: pay.value || payDefault || "cash",
-          change_from: change.value ? Number(change.value) : null,
+          payment_code: paySelect.getValue() || payDefault || "cash",
+          change_from: changeSelect.getValue() ? Number(changeSelect.getValue()) : null,
         });
         if (typeof onEditAddress === "function") onEditAddress();
         else openAddressEditorFromCheckout();
@@ -3022,14 +3266,14 @@
         customer_name: str(name.value).trim(),
         customer_phone: str(phone.value).trim(),
         promo_code: str(promo.value).trim() || null,
-        method_code: getRadioValue(methodGroup, "method") || methodDefault || "takeaway",
+        method_code: methodSelect.getValue() || methodDefault || "takeaway",
         delivery_address: str(address.value).trim() || null,
         comment: str(comment.value).trim() || null,
-        time_option_code: getRadioValue(timeGroup, "timeopt") || timeDefault || "asap",
+        time_option_code: timeSelect.getValue() || timeDefault || "asap",
         scheduled_at: null,
-        payment_code: pay.value || payDefault || "cash",
+        payment_code: paySelect.getValue() || payDefault || "cash",
         cutlery_qty: 0,
-        change_from: change.value ? Number(change.value) : null,
+        change_from: changeSelect.getValue() ? Number(changeSelect.getValue()) : null,
         items: cartItemsResolved().map(x => ({ product_id: x.product.id, qty: x.qty })),
       };
 
@@ -3137,6 +3381,13 @@
             isSheet: false,
             actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
           });
+        });
+      }
+
+      if (elCartBackBtn) {
+        elCartBackBtn.addEventListener("click", () => {
+          openProductCtx = null;
+          showCartView();
         });
       }
 

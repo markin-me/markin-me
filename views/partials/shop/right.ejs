@@ -3,6 +3,9 @@
     <div class="panel-title" id="shopCartHeaderTitle">Корзина</div>
 
     <div class="shop-cart-header-right">
+      <button class="btn btn-icon shop-cart-back hidden" id="shopCartBackBtn" type="button" aria-label="Назад">
+        <i class="fas fa-arrow-left"></i>
+      </button>
       <button class="chip shop-address-chip chip-plus" id="shopAddressChip" type="button">Введите адрес</button>
 
       <div class="shop-profile-header-actions hidden" id="shopProfileHeaderActions">
@@ -15,14 +18,13 @@
 
         <div class="shop-profile-menu hidden" id="shopProfileMenu">
           <button class="shop-profile-menu-item" id="shopProfileEditBtn" type="button">Редактировать профиль</button>
-          <button class="shop-profile-menu-item" id="shopProfileSettingsMenuBtn" type="button">Настройки</button>
           <button class="shop-profile-menu-item" id="shopProfileLogoutBtn" type="button">Выйти</button>
         </div>
       </div>
     </div>
   </div>
 
-  <div class="panel-body no-scrollbar">
+  <div class="panel-body no-scrollbar shop-cart-body">
     <div class="shop-cart" id="shopCartWrap">
       <!-- CART VIEW -->
       <div class="shop-cart-content" id="shopCartContent">
@@ -93,6 +95,8 @@
       <div class="shop-checkout-content hidden" id="shopCheckoutContent"></div>
 
       <div class="shop-profile-content hidden" id="shopProfileContent"></div>
+
+      <div class="shop-product-content hidden" id="shopProductContent"></div>
 
       <div class="shop-cart-footer hidden" id="shopCartFooter">
         <div class="shop-cart-footer-actions" id="shopCartFooterActions">
