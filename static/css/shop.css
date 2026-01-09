@@ -1568,3 +1568,10 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     padding-bottom: calc(12px + env(safe-area-inset-bottom));
   }
 }
+@media (max-width: 768px){
+  .shop-profile-content,
+  #shopProfileContent{
+    padding: 12px;
+    box-sizing: border-box;
+  }
+}
