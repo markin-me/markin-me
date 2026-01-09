@@ -875,6 +875,7 @@
       iconPlaceholder: $("#ceIconPlaceholder", window.AppModal.body),
       iconFileInput: $("#ceIconFile", window.AppModal.body),
       iconUploadBtn: $("#ceIconUploadBtn", window.AppModal.body),
+      iconDeleteBtn: $("#ceIconDeleteBtn", window.AppModal.body),
     };
 
     if (isEdit && category) {
@@ -894,12 +895,14 @@
         ui.iconPreview.classList.remove("hidden");
         ui.iconPlaceholder.classList.add("hidden");
         ui.iconPlaceholder.textContent = "Нет изображения";
+        if (ui.iconDeleteBtn) ui.iconDeleteBtn.classList.remove("hidden");
         return;
       }
       ui.iconPreview.src = "";
       ui.iconPreview.classList.add("hidden");
       ui.iconPlaceholder.classList.remove("hidden");
       ui.iconPlaceholder.innerHTML = v ? `<i class="${escapeHtml(v)}"></i>` : "Нет изображения";
+      if (ui.iconDeleteBtn) ui.iconDeleteBtn.classList.add("hidden");
     }
 
     renderIconPreview(form.icon.value);
@@ -925,6 +928,18 @@
         draft.iconFile = file;
         draft.iconPreview = URL.createObjectURL(file);
         renderIconPreview(draft.iconPreview);
+      });
+    }
+
+    if (ui.iconDeleteBtn) {
+      ui.iconDeleteBtn.addEventListener("click", () => {
+        if (draft.iconPreview) {
+          try { URL.revokeObjectURL(draft.iconPreview); } catch {}
+        }
+        draft.iconPreview = "";
+        draft.iconFile = null;
+        form.icon.value = "";
+        renderIconPreview("");
       });
     }
 
