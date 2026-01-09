@@ -35,6 +35,12 @@
       <div class="empty-text">Нажмите на категорию слева, чтобы увидеть детали</div>
     </div>
 
+    <div id="optionEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-mouse-pointer"></i></div>
+      <div class="empty-title">Выберите опцию</div>
+      <div class="empty-text">Нажмите на опцию слева, чтобы увидеть детали</div>
+    </div>
+
     <!-- Product info -->
     <div id="productInfo" class="hidden">
       <!-- TOP: фото слева, справа info-card -->
@@ -108,6 +114,42 @@
             <div class="info-title" id="categoryVisibility">—</div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <div id="optionGroupInfo" class="hidden">
+      <div class="info-card option-group-meta">
+        <div class="info-row">
+          <div class="info-text">Тип выбора</div>
+          <div class="info-title" id="optionGroupSelection">—</div>
+        </div>
+        <div class="info-row">
+          <div class="info-text">Лимиты</div>
+          <div class="info-title" id="optionGroupLimits">—</div>
+        </div>
+      </div>
+
+      <div class="info-card">
+        <div class="option-section-header">
+          <div class="kv-label">Items</div>
+        </div>
+        <div class="option-items-table" id="optionItemsList"></div>
+      </div>
+
+      <div class="info-card">
+        <div class="option-section-header">
+          <div class="kv-label">Assignments</div>
+          <div class="option-actions">
+            <label class="checkbox">
+              <input type="checkbox" id="optionAssignmentsShowInactive" />
+              <span>Показать отключенные</span>
+            </label>
+            <button class="btn btn-sm" type="button" id="optionAssignmentsAddBtn">
+              <i class="fas fa-plus"></i> Добавить товары
+            </button>
+          </div>
+        </div>
+        <div class="option-assignments-table" id="optionAssignmentsList"></div>
       </div>
     </div>
   </div>
