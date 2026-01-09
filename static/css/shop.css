@@ -1188,6 +1188,23 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   place-items: center;
 }
 
+.shop-profile-photo-wrap{
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.shop-profile-photo-actions{
+  width: 100%;
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.shop-profile-photo-actions .shop-profile-photo-btn{
+  width: 100%;
+}
+
 .shop-profile-photo-img{
   width: 100%;
   height: 100%;
@@ -1203,12 +1220,13 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 .shop-profile-photo-btn{
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 8px;
   font-size: 12px;
   padding: 6px 8px;
+}
+
+.shop-profile-photo-btn--ghost{
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
 }
 
 .shop-profile-info{
@@ -1276,7 +1294,11 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 .shop-address-action-icon.is-default{
-  color: var(--color-primary);
+  color: #9ca3af;
+}
+
+.shop-address-action-icon.is-default.is-active{
+  color: #f59e0b;
 }
 
 .shop-address-action-icon.is-default:disabled{
@@ -1289,7 +1311,25 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 .shop-profile-address-toggle{
-  width: 100%;
+  align-self: flex-start;
+  width: auto;
+}
+
+.shop-chip-btn{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.shop-chip-btn:hover{
+  background: var(--color-surface-2);
 }
 
 .shop-profile-settings{
@@ -1471,6 +1511,23 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   color: var(--color-text);
 }
 
+.shop-profile-name-input{
+  width: 100%;
+  margin-top: 6px;
+}
+
+.shop-profile-name-actions{
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.shop-profile-name-input.hidden,
+.shop-profile-name-text.hidden,
+.shop-profile-name-actions.hidden{
+  display: none;
+}
+
 .shop-profile-tabs{
   display: flex;
   gap: 8px;
@@ -1523,7 +1580,10 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 .app-modal-header{
-  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .app-modal-body.shop-cart-sheet-body{
@@ -1552,10 +1612,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 .shop-profile-modal-settings{
-  position: absolute;
-  right: 52px;
-  top: 50%;
-  transform: translateY(-50%);
+  margin: 0;
 }
 body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   content: "" !important;
