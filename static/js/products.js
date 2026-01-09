@@ -20,6 +20,8 @@
   // right info
   const productEmpty = $("#productEmpty");
   const productInfo = $("#productInfo");
+  const categoryEmpty = $("#categoryEmpty");
+  const categoryInfo = $("#categoryInfo");
   const closeProductInfoBtn = $("#closeProductInfoBtn");
   const editProductBtn = $("#editProductBtn");
 
@@ -37,6 +39,11 @@
   const infoPhotoPlaceholder = $("#infoPhotoPlaceholder");
   const infoPhotoThumbs = $("#infoPhotoThumbs");
 
+  const categoryIconImg = $("#categoryIconImg");
+  const categoryIconPlaceholder = $("#categoryIconPlaceholder");
+  const categoryStatus = $("#categoryStatus");
+  const categoryVisibility = $("#categoryVisibility");
+
   // sheet (mobile)
   const sheet = $("#productSheet");
   const sheetBackdrop = $("#productSheetBackdrop");
@@ -51,6 +58,7 @@
     currentCategoryId: null,
     allCategoryId: null,
     selectedProductId: null,
+    selectedCategoryId: null,
     selectedProductCategories: [], // full objects
   };
 
@@ -79,6 +87,19 @@
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) throw new Error((data && data.error) || `HTTP_${res.status}`);
     return data.urls || [];
+  }
+
+  async function apiUploadCategoryIcon(file) {
+    const fd = new FormData();
+    fd.append("icon", file);
+    const res = await fetch("/api/upload/category-icon", {
+      method: "POST",
+      headers: { "x-tenant-id": String(TENANT_ID) },
+      body: fd,
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.ok === false) throw new Error((data && data.error) || `HTTP_${res.status}`);
+    return data.url || "";
   }
 
   // ---------------- Accordion (height fix) ----------------
@@ -142,6 +163,7 @@
     const cat = getCurrentCategory();
     setToolbarTitle(cat ? cat.title : "Товары");
     showView("products");
+    showDetailsEmpty();
   }
 
   function enterCategoriesMode() {
@@ -149,6 +171,7 @@
     setToolbarTitle("Категории");
     showView("categories");
     clearProductSelection();
+    showDetailsEmpty();
   }
 
   // ---------------- Load ----------------
@@ -184,6 +207,27 @@
       .replace(/'/g, "&#039;");
   }
 
+  function looksLikeUrl(v) {
+    const s = String(v || "").trim();
+    return (
+      s.startsWith("http://") ||
+      s.startsWith("https://") ||
+      s.startsWith("blob:") ||
+      s.startsWith("data:") ||
+      s.startsWith("/static/") ||
+      s.startsWith("/uploads/")
+    );
+  }
+
+  function renderCategoryIcon(icon, className = "stage-icon") {
+    const v = String(icon || "").trim();
+    if (looksLikeUrl(v)) {
+      return `<span class="${className}"><img src="${escapeHtml(v)}" alt="" /></span>`;
+    }
+    const cls = v || "fas fa-folder";
+    return `<span class="${className}"><i class="${escapeHtml(cls)}"></i></span>`;
+  }
+
   function renderCategoriesNav() {
     if (!categoriesNav) return;
 
@@ -193,11 +237,10 @@
 
     categoriesNav.innerHTML = list.map((c) => {
       const isActive = state.mode === "products" && c.id === state.currentCategoryId;
-      const icon = c.icon ? c.icon : "fas fa-folder";
       return `
         <button class="stage-item ${isActive ? "is-active" : ""}" type="button" data-category-id="${c.id}">
-          <span class="stage-icon"><i class="${icon}"></i></span>
-          <span class="stage-meta stage-text"><b>${escapeHtml(c.title)}</b><small>${escapeHtml(c.code || "")}</small></span>
+          ${renderCategoryIcon(c.icon, "stage-icon")}
+          <span class="stage-meta stage-text"><b>${escapeHtml(c.title)}</b></span>
           <span class="acc-spacer"></span>
         </button>
       `;
@@ -289,16 +332,14 @@
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
 
     categoriesMainList.innerHTML = list.map((c) => {
-      const icon = c.icon ? c.icon : "fas fa-folder";
+      const active = c.id === state.selectedCategoryId ? "is-active" : "";
       return `
-        <div class="order-row category-row" data-id="${c.id}" draggable="true">
+        <div class="order-row category-row ${active}" data-id="${c.id}" draggable="true">
           <div>
-            <div class="order-num"><i class="${icon}"></i></div>
-            <div class="order-time">${escapeHtml(c.code || "")}</div>
+            ${renderCategoryIcon(c.icon, "category-icon")}
           </div>
           <div>
             <div class="order-line"><b>${escapeHtml(c.title)}</b></div>
-            <div class="order-time">sort: ${escapeHtml(String(c.sort_order ?? ""))}</div>
           </div>
           <div class="pill">${c.is_active ? "Активна" : "Выключена"}</div>
         </div>
@@ -316,8 +357,18 @@
       renderCategoriesMainList();
     });
 
-    // dblclick edit
+    // click select
     $$(".category-row", categoriesMainList).forEach((row) => {
+      row.addEventListener("click", () => {
+        const id = Number(row.dataset.id);
+        const cat = state.categories.find((x) => x.id === id);
+        if (!cat) return;
+        state.selectedCategoryId = id;
+        $$(".category-row", categoriesMainList).forEach((x) => x.classList.toggle("is-active", Number(x.dataset.id) === id));
+        showCategoryDetails(cat);
+      });
+
+      // dblclick edit
       row.addEventListener("dblclick", () => {
         const id = Number(row.dataset.id);
         const cat = state.categories.find((x) => x.id === id);
@@ -402,6 +453,10 @@
 
     productTitle.textContent = p.name || "—";
     productSku.textContent = `Артикул: ${p.sku || "—"}`;
+    if (editProductBtn) {
+      editProductBtn.title = "Редактировать товар";
+      editProductBtn.setAttribute("aria-label", "Редактировать товар");
+    }
 
     productPrice.textContent = formatMoney(p.price);
     productOldPrice.textContent = p.old_price != null ? formatMoney(p.old_price) : "—";
@@ -414,6 +469,8 @@
     renderInfoPhotos(p.photos);
 
     productEmpty && productEmpty.classList.add("hidden");
+    categoryEmpty && categoryEmpty.classList.add("hidden");
+    categoryInfo && categoryInfo.classList.add("hidden");
     productInfo && productInfo.classList.remove("hidden");
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
@@ -429,13 +486,70 @@
     }
   }
 
+  function renderCategoryPreview(icon) {
+    if (!categoryIconImg || !categoryIconPlaceholder) return;
+    const v = String(icon || "").trim();
+    if (looksLikeUrl(v)) {
+      categoryIconImg.src = v;
+      categoryIconImg.classList.remove("hidden");
+      categoryIconPlaceholder.classList.add("hidden");
+      categoryIconPlaceholder.textContent = "Нет изображения";
+      return;
+    }
+    categoryIconImg.src = "";
+    categoryIconImg.classList.add("hidden");
+    categoryIconPlaceholder.classList.remove("hidden");
+    categoryIconPlaceholder.innerHTML = v ? `<i class="${escapeHtml(v)}"></i>` : "Нет изображения";
+  }
+
+  function showCategoryDetails(cat) {
+    if (!cat) return;
+
+    productTitle.textContent = cat.title || "—";
+    productSku.textContent = "Категория";
+    if (editProductBtn) {
+      editProductBtn.title = "Редактировать категорию";
+      editProductBtn.setAttribute("aria-label", "Редактировать категорию");
+    }
+
+    if (categoryStatus) categoryStatus.textContent = cat.is_active ? "Активна" : "Выключена";
+    if (categoryVisibility) categoryVisibility.textContent = cat.site_visibility ? "Показывается" : "Скрыта";
+    renderCategoryPreview(cat.icon);
+
+    productEmpty && productEmpty.classList.add("hidden");
+    productInfo && productInfo.classList.add("hidden");
+    categoryEmpty && categoryEmpty.classList.add("hidden");
+    categoryInfo && categoryInfo.classList.remove("hidden");
+
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile && sheetHost && categoryInfo) {
+      sheetHost.innerHTML = "";
+      sheetHost.appendChild(categoryInfo);
+      openSheet();
+    } else {
+      if (detailsDesktopHost && categoryInfo && categoryInfo.parentElement !== detailsDesktopHost) {
+        detailsDesktopHost.appendChild(categoryInfo);
+      }
+      closeSheet();
+    }
+  }
+
+  function showDetailsEmpty() {
+    const showCategory = state.mode === "categories";
+    productInfo && productInfo.classList.add("hidden");
+    categoryInfo && categoryInfo.classList.add("hidden");
+    if (productEmpty) productEmpty.classList.toggle("hidden", showCategory);
+    if (categoryEmpty) categoryEmpty.classList.toggle("hidden", !showCategory);
+    closeSheet();
+  }
+
   function clearProductSelection() {
     state.selectedProductId = null;
+    state.selectedCategoryId = null;
     state.selectedProductCategories = [];
-    productInfo && productInfo.classList.add("hidden");
-    productEmpty && productEmpty.classList.remove("hidden");
-    closeSheet();
+    showDetailsEmpty();
     if (productsList) $$(".order-row", productsList).forEach((x) => x.classList.remove("is-active"));
+    if (categoriesMainList) $$(".order-row", categoriesMainList).forEach((x) => x.classList.remove("is-active"));
   }
 
   // ---------------- Modal: product (chips + photos) ----------------
@@ -710,6 +824,10 @@
 
   function openCategoryModal({ mode, category }) {
     const isEdit = mode === "edit";
+    const draft = {
+      iconFile: null,
+      iconPreview: "",
+    };
 
     window.AppModal.open({
       title: isEdit ? "Редактировать категорию" : "Новая категория",
@@ -718,11 +836,16 @@
         const form = $("#categoryEditorForm", body);
         if (!form) return false;
 
+        let iconValue = String(form.icon.value || "").trim();
+        if (draft.iconFile) {
+          iconValue = await apiUploadCategoryIcon(draft.iconFile);
+        }
+
         const payload = {
           tenant_id: TENANT_ID,
           title: String(form.title.value || "").trim(),
           code: String(form.code.value || "").trim(),
-          icon: String(form.icon.value || "").trim(),
+          icon: iconValue,
           sort_order: form.sort_order.value === "" ? null : Number(form.sort_order.value),
           is_active: form.is_active.checked ? 1 : 0,
           site_visibility: form.site_visibility.checked ? 1 : 0,
@@ -747,6 +870,13 @@
     const form = $("#categoryEditorForm", window.AppModal.body);
     if (!form) return;
 
+    const ui = {
+      iconPreview: $("#ceIconPreview", window.AppModal.body),
+      iconPlaceholder: $("#ceIconPlaceholder", window.AppModal.body),
+      iconFileInput: $("#ceIconFile", window.AppModal.body),
+      iconUploadBtn: $("#ceIconUploadBtn", window.AppModal.body),
+    };
+
     if (isEdit && category) {
       form.title.value = category.title || "";
       form.code.value = category.code || "";
@@ -755,6 +885,57 @@
       form.is_active.checked = Boolean(category.is_active);
       form.site_visibility.checked = Boolean(category.site_visibility);
     }
+
+    function renderIconPreview(value) {
+      if (!ui.iconPreview || !ui.iconPlaceholder) return;
+      const v = String(value || "").trim();
+      if (looksLikeUrl(v)) {
+        ui.iconPreview.src = v;
+        ui.iconPreview.classList.remove("hidden");
+        ui.iconPlaceholder.classList.add("hidden");
+        ui.iconPlaceholder.textContent = "Нет изображения";
+        return;
+      }
+      ui.iconPreview.src = "";
+      ui.iconPreview.classList.add("hidden");
+      ui.iconPlaceholder.classList.remove("hidden");
+      ui.iconPlaceholder.innerHTML = v ? `<i class="${escapeHtml(v)}"></i>` : "Нет изображения";
+    }
+
+    renderIconPreview(form.icon.value);
+
+    if (ui.iconUploadBtn && ui.iconFileInput) {
+      ui.iconUploadBtn.addEventListener("click", () => ui.iconFileInput.click());
+      ui.iconFileInput.addEventListener("change", () => {
+        const file = ui.iconFileInput.files && ui.iconFileInput.files[0];
+        ui.iconFileInput.value = "";
+        if (!file) return;
+        const allowed = ["image/jpeg", "image/png", "image/webp"];
+        if (!allowed.includes(file.type)) {
+          alert("Можно загрузить только JPG, PNG или WEBP");
+          return;
+        }
+        if (file.size > 5 * 1024 * 1024) {
+          alert("Размер файла не должен превышать 5MB");
+          return;
+        }
+        if (draft.iconPreview) {
+          try { URL.revokeObjectURL(draft.iconPreview); } catch {}
+        }
+        draft.iconFile = file;
+        draft.iconPreview = URL.createObjectURL(file);
+        renderIconPreview(draft.iconPreview);
+      });
+    }
+
+    form.icon.addEventListener("input", () => {
+      if (draft.iconPreview) {
+        try { URL.revokeObjectURL(draft.iconPreview); } catch {}
+        draft.iconPreview = "";
+        draft.iconFile = null;
+      }
+      renderIconPreview(form.icon.value);
+    });
   }
 
   // ---------------- Sortable (HTML5) ----------------
@@ -822,6 +1003,11 @@
     await loadCategories();
     renderCategoriesNav();
 
+    if (state.selectedCategoryId && !state.categories.some((c) => c.id === state.selectedCategoryId)) {
+      state.selectedCategoryId = null;
+      showDetailsEmpty();
+    }
+
     if (state.mode === "categories") {
       renderCategoriesMainList();
       return;
@@ -880,6 +1066,11 @@
 
     if (editProductBtn) {
       editProductBtn.addEventListener("click", () => {
+        if (state.mode === "categories") {
+          const cat = state.categories.find((x) => x.id === state.selectedCategoryId);
+          if (cat) openCategoryModal({ mode: "edit", category: cat });
+          return;
+        }
         const p = state.products.find((x) => x.id === state.selectedProductId);
         if (p) openProductModal({ mode: "edit", product: p });
       });
@@ -888,8 +1079,13 @@
     window.addEventListener("resize", () => {
       refreshOpenAccordions();
       const isMobile = window.matchMedia("(max-width: 768px)").matches;
-      if (!isMobile && detailsDesktopHost && productInfo && productInfo.parentElement !== detailsDesktopHost) {
-        detailsDesktopHost.appendChild(productInfo);
+      if (!isMobile && detailsDesktopHost) {
+        if (productInfo && productInfo.parentElement !== detailsDesktopHost) {
+          detailsDesktopHost.appendChild(productInfo);
+        }
+        if (categoryInfo && categoryInfo.parentElement !== detailsDesktopHost) {
+          detailsDesktopHost.appendChild(categoryInfo);
+        }
         closeSheet();
       }
     });

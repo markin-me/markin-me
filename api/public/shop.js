@@ -1,8 +1,36 @@
 const express = require('express');
 const crypto = require('crypto');
+const path = require('path');
+const multer = require('multer');
 
 module.exports = function makePublicShopRouter({ db, helpers }) {
   const router = express.Router();
+
+  // ------------------------------
+  // Upload: customer avatar
+  // POST /api/public/me/photo (field: photo|avatar)
+  // ------------------------------
+  const avatarStorage = multer.diskStorage({
+    destination(req, file, cb) {
+      const folder = path.join(__dirname, '..', '..', 'static', 'uploads', 'avatars');
+      helpers.ensureDir(folder);
+      cb(null, folder);
+    },
+    filename(req, file, cb) {
+      const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';
+      const name = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`;
+      cb(null, name);
+    }
+  });
+
+  const avatarUpload = multer({
+    storage: avatarStorage,
+    limits: { files: 1, fileSize: 5 * 1024 * 1024 },
+    fileFilter(req, file, cb) {
+      const ok = /^image\/(jpeg|png|webp)$/.test(file.mimetype);
+      cb(ok ? null : new Error('ONLY_IMAGES'), ok);
+    }
+  });
 
   // ------------------------------
   // small utils (local)
@@ -91,6 +119,7 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
          c.name,
          c.phone,
          DATE_FORMAT(c.birthday, '%Y-%m-%d') AS birthday,
+         c.photo,
          c.is_active
        FROM cust_customer_sessions s
        JOIN cust_customers c
@@ -115,6 +144,7 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
       name: r.name,
       phone: r.phone,
       birthday: r.birthday || null,
+      photo: r.photo || null,
     };
   }
 
@@ -211,7 +241,7 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
       );
 
       const [me] = await db.query(
-        `SELECT id, name, phone, DATE_FORMAT(birthday, '%Y-%m-%d') AS birthday
+        `SELECT id, name, phone, DATE_FORMAT(birthday, '%Y-%m-%d') AS birthday, photo
          FROM cust_customers
          WHERE tenant_id=? AND id=?
          LIMIT 1`,
@@ -287,6 +317,43 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
+
+  // POST /api/public/me/photo (multipart/form-data, field: photo|avatar)
+  router.post(
+    '/me/photo',
+    avatarUpload.fields([
+      { name: 'photo', maxCount: 1 },
+      { name: 'avatar', maxCount: 1 }
+    ]),
+    async (req, res) => {
+      try {
+        const tenantId = helpers.getTenantId(req);
+        const token = str(req.headers['x-customer-token']);
+        const customer = await getCustomerByToken(tenantId, token);
+        if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+        const file =
+          (req.files && req.files.photo && req.files.photo[0]) ||
+          (req.files && req.files.avatar && req.files.avatar[0]);
+
+        if (!file) return res.status(400).json({ ok: false, error: 'PHOTO_REQUIRED' });
+
+        const photoUrl = `/static/uploads/avatars/${file.filename}`;
+
+        await db.query(
+          `UPDATE cust_customers
+           SET photo=?
+           WHERE tenant_id=? AND id=?`,
+          [photoUrl, tenantId, customer.id]
+        );
+
+        res.json({ ok: true, photoUrl });
+      } catch (e) {
+        console.error(e);
+        res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      }
+    }
+  );
 
   // GET /api/public/me/addresses
   router.get('/me/addresses', async (req, res) => {

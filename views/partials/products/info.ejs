@@ -29,6 +29,12 @@
       <div class="empty-text">Нажмите на любой товар для просмотра подробной информации</div>
     </div>
 
+    <div id="categoryEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-mouse-pointer"></i></div>
+      <div class="empty-title">Выберите категорию</div>
+      <div class="empty-text">Нажмите на категорию слева, чтобы увидеть детали</div>
+    </div>
+
     <!-- Product info -->
     <div id="productInfo" class="hidden">
       <!-- TOP: фото слева, справа info-card -->
@@ -79,6 +85,29 @@
       <div class="info-card">
         <div class="kv-label">Описание</div>
         <div class="kv-value" style="font-weight:500;" id="productDesc">—</div>
+      </div>
+    </div>
+
+    <!-- Category info -->
+    <div id="categoryInfo" class="hidden">
+      <div class="product-info-top">
+        <div class="product-info-photoCol">
+          <div class="product-photo-main">
+            <img id="categoryIconImg" class="product-photo-img hidden" alt="">
+            <div id="categoryIconPlaceholder" class="product-photo-placeholder">Нет изображения</div>
+          </div>
+        </div>
+
+        <div class="info-card">
+          <div class="info-row">
+            <div class="info-text">Статус</div>
+            <div class="info-title" id="categoryStatus">—</div>
+          </div>
+          <div class="info-row">
+            <div class="info-text">На сайте</div>
+            <div class="info-title" id="categoryVisibility">—</div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
