@@ -1,5 +1,8 @@
 const express = require('express');
 const crypto = require('crypto');
+const path = require('path');
+const multer = require('multer');
+const optionService = require('../optionService');
 
 module.exports = function makePublicShopRouter({ db, helpers }) {
   const router = express.Router();
@@ -91,7 +94,8 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
          c.name,
          c.phone,
          DATE_FORMAT(c.birthday, '%Y-%m-%d') AS birthday,
-         c.is_active
+         c.is_active,
+         c.photo
        FROM cust_customer_sessions s
        JOIN cust_customers c
          ON c.tenant_id=s.tenant_id AND c.id=s.customer_id
@@ -115,6 +119,7 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
       name: r.name,
       phone: r.phone,
       birthday: r.birthday || null,
+      photo: r.photo || null,
     };
   }
 
@@ -134,6 +139,33 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
     );
     return r2.length ? Number(r2[0].id) : null;
   }
+
+  // ------------------------------
+  // Upload: customer avatar
+  // POST /api/public/me/photo
+  // ------------------------------
+  const avatarStorage = multer.diskStorage({
+    destination(req, file, cb) {
+      const tenantId = helpers.getTenantId(req);
+      const folder = path.join(__dirname, '..', '..', 'static', 'uploads', 'avatars', String(tenantId));
+      helpers.ensureDir(folder);
+      cb(null, folder);
+    },
+    filename(req, file, cb) {
+      const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';
+      const name = crypto.randomBytes(16).toString('hex') + ext;
+      cb(null, name);
+    }
+  });
+
+  const avatarUpload = multer({
+    storage: avatarStorage,
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter(req, file, cb) {
+      const ok = /^image\/(jpeg|png|webp)$/.test(file.mimetype);
+      cb(ok ? null : new Error('ONLY_IMAGES'), ok);
+    }
+  });
 
   // ------------------------------
   // AUTH
@@ -211,7 +243,7 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
       );
 
       const [me] = await db.query(
-        `SELECT id, name, phone, DATE_FORMAT(birthday, '%Y-%m-%d') AS birthday
+        `SELECT id, name, phone, photo, DATE_FORMAT(birthday, '%Y-%m-%d') AS birthday
          FROM cust_customers
          WHERE tenant_id=? AND id=?
          LIMIT 1`,
@@ -285,6 +317,30 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // POST /api/public/me/photo
+  router.post('/me/photo', avatarUpload.fields([{ name: 'photo', maxCount: 1 }, { name: 'avatar', maxCount: 1 }]), async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const file = (req.files?.photo && req.files.photo[0]) || (req.files?.avatar && req.files.avatar[0]);
+      if (!file) return res.status(400).json({ ok: false, error: 'NO_FILE' });
+
+      const photoUrl = `/static/uploads/avatars/${tenantId}/${file.filename}`;
+      await db.query(
+        `UPDATE cust_customers SET photo=? WHERE tenant_id=? AND id=?`,
+        [photoUrl, tenantId, customer.id]
+      );
+
+      res.json({ ok: true, photoUrl });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
     }
   });
 
@@ -736,6 +792,20 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
     }
   });
 
+  router.get('/products/:id/options', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const groups = await optionService.getEffectiveOptionGroupsForProduct(db, tenantId, id);
+      res.json({ ok: true, data: groups });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   // ------------------------------
   // order-config (для оформления)
   // ВАЖНО: твой фронт ждёт methods / payments / timeOptions
@@ -879,6 +949,19 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
 
       const normItems = [];
       let total = 0;
+      const effectiveCache = new Map();
+
+      async function getEffectiveGroups(productId) {
+        if (effectiveCache.has(productId)) return effectiveCache.get(productId);
+        const groups = await optionService.getEffectiveOptionGroupsForProduct(db, tenantId, productId);
+        effectiveCache.set(productId, groups);
+        return groups;
+      }
+
+      function toQty(v) {
+        const n = Number(v || 0);
+        return Number.isFinite(n) && n > 0 ? n : 1;
+      }
 
       for (const it of items) {
         const pid = Number(it.product_id);
@@ -888,8 +971,115 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
 
         const price = Number(p.price || 0);
         const oldPrice = Number(p.old_price || 0);
-        const lineTotal = price * qty;
 
+        const payloadOptions = Array.isArray(it.options) ? it.options : [];
+        const effectiveGroups = await getEffectiveGroups(pid);
+        const groupMap = new Map(effectiveGroups.map(g => [Number(g.id), g]));
+
+        const payloadGroupMap = new Map();
+        payloadOptions.forEach((g) => {
+          const gid = Number(g.group_id);
+          if (!Number.isFinite(gid)) return;
+          payloadGroupMap.set(gid, g);
+        });
+
+        for (const gid of payloadGroupMap.keys()) {
+          if (!groupMap.has(gid)) {
+            return res.status(400).json({ ok: false, error: 'BAD_OPTION_GROUP' });
+          }
+        }
+
+        const itemOptionSnapshots = [];
+        let optionsUnitTotal = 0;
+
+        for (const group of effectiveGroups) {
+          const gid = Number(group.id);
+          const payloadGroup = payloadGroupMap.get(gid);
+          const selectionsRaw = Array.isArray(payloadGroup?.selections) ? payloadGroup.selections : [];
+          const selectionsCount = selectionsRaw.reduce((sum, s) => sum + toQty(s.qty), 0);
+
+          const minSelect = Number(group.min_select || 0);
+          const maxSelect = Number(group.max_select || 0);
+
+          if (minSelect > 0 && selectionsCount < minSelect) {
+            return res.status(400).json({ ok: false, error: 'OPTIONS_MIN' });
+          }
+          if (maxSelect > 0 && selectionsCount > maxSelect) {
+            return res.status(400).json({ ok: false, error: 'OPTIONS_MAX' });
+          }
+
+          if (!selectionsRaw.length) continue;
+
+          const itemMap = new Map((group.items || []).map(i => [Number(i.id), i]));
+          const selections = [];
+          const targetProductIds = [];
+
+          for (const sel of selectionsRaw) {
+            const itemId = Number(sel.item_id);
+            if (!Number.isFinite(itemId)) return res.status(400).json({ ok: false, error: 'BAD_OPTION_ITEM' });
+            const item = itemMap.get(itemId);
+            if (!item) return res.status(400).json({ ok: false, error: 'BAD_OPTION_ITEM' });
+
+            const selQty = toQty(sel.qty);
+            const targetType = item.target_type || 'custom';
+            const priceMode = item.price_mode || 'fixed';
+            const resolvedProductId = Number(sel.resolved_product_id || item.target_id || 0) || null;
+
+            if ((priceMode === 'from_target' || targetType === 'category_pick' || targetType === 'product') && !resolvedProductId) {
+              return res.status(400).json({ ok: false, error: 'RESOLVED_PRODUCT_REQUIRED' });
+            }
+
+            if (resolvedProductId) targetProductIds.push(resolvedProductId);
+
+            selections.push({
+              item_id: itemId,
+              qty: selQty,
+              target_type: targetType,
+              price_mode: priceMode,
+              resolved_product_id: resolvedProductId,
+              title_snapshot: item.title || null,
+              unit_price_snapshot: null,
+            });
+          }
+
+          let resolvedProducts = new Map();
+          if (targetProductIds.length) {
+            const uniq = Array.from(new Set(targetProductIds));
+            const [rows] = await db.query(
+              `SELECT id, name, price FROM prod_products WHERE tenant_id=? AND id IN (${uniq.map(() => '?').join(',')})`,
+              [tenantId, ...uniq]
+            );
+            resolvedProducts = new Map(rows.map(r => [Number(r.id), r]));
+          }
+
+          for (const sel of selections) {
+            let unitPrice = 0;
+            if (sel.price_mode === 'from_target') {
+              const resolved = sel.resolved_product_id ? resolvedProducts.get(sel.resolved_product_id) : null;
+              if (!resolved) {
+                return res.status(400).json({ ok: false, error: 'RESOLVED_PRODUCT_REQUIRED' });
+              }
+              sel.title_snapshot = resolved.name || sel.title_snapshot;
+              unitPrice = Number(resolved.price || 0);
+            } else {
+              const item = itemMap.get(sel.item_id);
+              unitPrice = Number(item?.price || 0);
+            }
+            sel.unit_price_snapshot = unitPrice;
+            optionsUnitTotal += unitPrice * sel.qty;
+          }
+
+          itemOptionSnapshots.push({
+            group_id: gid,
+            group_title: group.title || null,
+            selection_type: group.selection_type || null,
+            min_select: group.min_select ?? null,
+            max_select: group.max_select ?? null,
+            selections,
+          });
+        }
+
+        const lineTotal = (price + optionsUnitTotal) * qty;
         total += lineTotal;
 
         normItems.push({
@@ -899,6 +1089,7 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
           price,
           old_price: oldPrice,
           line_total: lineTotal,
+          options: itemOptionSnapshots,
         });
       }
 

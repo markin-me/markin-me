@@ -804,6 +804,113 @@ html[data-sidebar-collapsed="1"] .app-grid{
   box-shadow:0 0 0 4px var(--primary-12);
 }
 
+/* ================= Options (admin) ================= */
+.options-grid{
+  display:grid;
+  gap:12px;
+  grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));
+  margin-bottom:12px;
+}
+.options-panel{
+  border:1px solid var(--color-border);
+  background:var(--color-surface);
+  border-radius:12px;
+  padding:12px;
+  display:grid;
+  gap:10px;
+}
+.options-panel-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  font-weight:700;
+}
+.options-list{
+  display:grid;
+  gap:8px;
+}
+.options-row{
+  border:1px solid var(--color-border);
+  border-radius:10px;
+  padding:8px 10px;
+  background:var(--color-surface-2);
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+  cursor:pointer;
+}
+.options-row.is-active{
+  border-color:var(--primary-45);
+  background:var(--primary-12);
+}
+.options-row-title{
+  font-weight:700;
+}
+.options-row-meta{
+  font-size:12px;
+  color:var(--color-text-muted);
+}
+.options-row-actions{
+  display:flex;
+  gap:6px;
+}
+
+/* ================= Categories (admin) ================= */
+.category-icon-editor{
+  display:grid;
+  grid-template-columns:120px 1fr;
+  gap:12px;
+  align-items:center;
+}
+.category-icon-preview{
+  width:120px;
+  height:120px;
+  border-radius:12px;
+  border:1px solid var(--color-border);
+  background:var(--color-surface-2);
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+}
+.category-icon-preview img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+}
+.category-icon-placeholder{
+  font-size:12px;
+  color:var(--color-text-muted);
+}
+.category-icon-controls{
+  display:grid;
+  gap:8px;
+}
+.category-list-icon{
+  width:32px;
+  height:32px;
+  border-radius:8px;
+  background:var(--color-surface-2);
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+}
+.category-list-icon i{
+  font-size:18px;
+}
+.category-list-icon img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+}
+.stage-icon img{
+  width:24px;
+  height:24px;
+  object-fit:cover;
+  border-radius:6px;
+}
+
 /* Disabled states (buttons) */
 .btn:disabled,
 .icon-btn:disabled{

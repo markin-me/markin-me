@@ -272,11 +272,31 @@
   let openProductCtx = null;
   let cartViewMode = "cart";
 
+  function normalizeCartEntry(entry) {
+    if (entry === null || entry === undefined) return null;
+    if (typeof entry === "number") {
+      return { qty: Math.max(0, entry), options: [] };
+    }
+    if (typeof entry === "object") {
+      const qty = Math.max(0, Number(entry.qty || entry.quantity || 0));
+      const options = Array.isArray(entry.options) ? entry.options : [];
+      return { qty, options };
+    }
+    return null;
+  }
+
   function loadCart() {
     try {
       const raw = localStorage.getItem(CART_KEY);
       const parsed = raw ? JSON.parse(raw) : {};
-      if (parsed && typeof parsed === "object") return parsed;
+      if (parsed && typeof parsed === "object") {
+        const out = {};
+        Object.keys(parsed).forEach((k) => {
+          const entry = normalizeCartEntry(parsed[k]);
+          if (entry) out[k] = entry;
+        });
+        return out;
+      }
     } catch {}
     return {};
   }
@@ -287,13 +307,17 @@
     } catch {}
   }
 
+  function cartEntry(productId) {
+    return state.cart[String(productId)] || null;
+  }
+
   function cartQty(productId) {
-    return Number(state.cart[String(productId)] || 0);
+    return Number(cartEntry(productId)?.qty || 0);
   }
 
   function cartCountTotal() {
     let total = 0;
-    for (const k of Object.keys(state.cart)) total += Number(state.cart[k] || 0);
+    for (const k of Object.keys(state.cart)) total += Number(state.cart[k]?.qty || 0);
     return total;
   }
 
@@ -301,10 +325,11 @@
     const items = [];
     for (const k of Object.keys(state.cart)) {
       const pid = Number(k);
-      const qty = Number(state.cart[k] || 0);
+      const entry = state.cart[k];
+      const qty = Number(entry?.qty || 0);
       if (!qty || !Number.isFinite(pid)) continue;
       const p = state.productCache.get(pid);
-      if (p) items.push({ product: p, qty });
+      if (p) items.push({ product: p, qty, options: entry.options || [] });
     }
     return items;
   }
@@ -317,7 +342,7 @@
     const missing = [];
     for (const k of Object.keys(state.cart)) {
       const pid = Number(k);
-      const qty = Number(state.cart[k] || 0);
+      const qty = Number(state.cart[k]?.qty || 0);
       if (!qty || !Number.isFinite(pid)) continue;
       if (!state.productCache.has(pid)) missing.push(pid);
     }
@@ -1151,6 +1176,44 @@
   // -----------------------------
   // Cart render
   // -----------------------------
+  function optionsUnitTotal(options) {
+    const list = Array.isArray(options) ? options : [];
+    let sum = 0;
+    list.forEach((g) => {
+      const selections = Array.isArray(g.selections) ? g.selections : [];
+      selections.forEach((s) => {
+        const unit = Number(s.unit_price || 0);
+        const qty = Number(s.qty || 1);
+        sum += unit * qty;
+      });
+    });
+    return sum;
+  }
+
+  function lineTotalForItem(product, qty, options) {
+    const base = Number(product.price || 0);
+    const optUnit = optionsUnitTotal(options);
+    return (base + optUnit) * qty;
+  }
+
+  function serializeOrderOptions(options) {
+    const list = Array.isArray(options) ? options : [];
+    return list.map((g) => {
+      const gid = Number(g.group_id);
+      const selections = Array.isArray(g.selections) ? g.selections : [];
+      return {
+        group_id: gid,
+        selections: selections
+          .map((s) => ({
+            item_id: Number(s.item_id),
+            qty: Number(s.qty || 1),
+            resolved_product_id: s.resolved_product_id ? Number(s.resolved_product_id) : null,
+          }))
+          .filter((s) => Number.isFinite(s.item_id)),
+      };
+    }).filter((g) => Number.isFinite(g.group_id) && g.selections.length);
+  }
+
   function renderCartInto(listEl, totalEl, emptyPlaceholderEl) {
     const items = cartItemsResolved();
     if (listEl) listEl.innerHTML = "";
@@ -1166,10 +1229,11 @@
 
     let total = 0;
 
-    items.forEach(({ product, qty }) => {
+    items.forEach(({ product, qty, options }) => {
       const old = Number(product.old_price || 0);
       const price = Number(product.price || 0);
-      total += price * qty;
+      const lineTotal = lineTotalForItem(product, qty, options);
+      total += lineTotal;
 
       const row = document.createElement("div");
       row.className = "cart-row";
@@ -1233,7 +1297,7 @@
 
       const pr = document.createElement("div");
       pr.className = "cart-price";
-      pr.textContent = money(price * qty);
+      pr.textContent = money(lineTotal);
 
       right.appendChild(oldEl);
       right.appendChild(pr);
@@ -1347,7 +1411,10 @@
     const next = Math.max(0, prev + delta);
 
     if (next <= 0) delete state.cart[String(pid)];
-    else state.cart[String(pid)] = next;
+    else {
+      const existing = state.cart[String(pid)] || { qty: 0, options: [] };
+      state.cart[String(pid)] = { ...existing, qty: next };
+    }
 
     saveCart();
 
@@ -2187,6 +2254,80 @@
 
     const photo = document.createElement("div");
     photo.className = "shop-profile-photo";
+
+    const photoImg = document.createElement("img");
+    photoImg.alt = "";
+    photoImg.className = "hidden";
+
+    const photoPlaceholder = document.createElement("div");
+    photoPlaceholder.className = "shop-profile-photo-placeholder";
+    photoPlaceholder.textContent = "Нет фото";
+
+    const photoBtn = document.createElement("button");
+    photoBtn.type = "button";
+    photoBtn.className = "shop-profile-photo-btn";
+    photoBtn.textContent = "Изменить";
+
+    const photoInput = document.createElement("input");
+    photoInput.type = "file";
+    photoInput.accept = "image/*";
+    photoInput.className = "hidden";
+
+    function setPhotoSrc(url) {
+      if (url) {
+        photoImg.src = url;
+        photoImg.classList.remove("hidden");
+        photoPlaceholder.classList.add("hidden");
+      } else {
+        photoImg.src = "";
+        photoImg.classList.add("hidden");
+        photoPlaceholder.classList.remove("hidden");
+      }
+    }
+
+    setPhotoSrc(me?.photo || "");
+
+    photoBtn.addEventListener("click", () => photoInput.click());
+    photoInput.addEventListener("change", async () => {
+      const file = photoInput.files && photoInput.files[0];
+      if (!file) return;
+      const token = getCustomerToken();
+      if (!token) return;
+
+      const previewUrl = URL.createObjectURL(file);
+      setPhotoSrc(previewUrl);
+
+      const fd = new FormData();
+      fd.append("photo", file);
+
+      try {
+        const res = await fetch("/api/public/me/photo", {
+          method: "POST",
+          headers: { "x-customer-token": token },
+          body: fd,
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !json || json.ok === false) {
+          throw new Error(json?.error || `HTTP_${res.status}`);
+        }
+        const url = `${json.photoUrl}?t=${Date.now()}`;
+        setPhotoSrc(url);
+        const cached = getCustomerCache() || {};
+        setCustomerCache({ ...cached, photo: json.photoUrl });
+      } catch (e) {
+        console.error(e);
+        alert("Не удалось загрузить фото");
+        setPhotoSrc(me?.photo || "");
+      } finally {
+        photoInput.value = "";
+        try { URL.revokeObjectURL(previewUrl); } catch {}
+      }
+    });
+
+    photo.appendChild(photoImg);
+    photo.appendChild(photoPlaceholder);
+    photo.appendChild(photoBtn);
+    photo.appendChild(photoInput);
     top.appendChild(photo);
 
     const info = document.createElement("div");
@@ -2329,7 +2470,8 @@
         addressesList.innerHTML = "";
         list.forEach((a) => {
           const row = document.createElement("div");
-          row.className = "shop-profile-card";
+          row.className = "shop-profile-card shop-address-card";
+          if (Number(a.is_default) === 1) row.classList.add("is-default");
 
           const txt = [
             `${str(a.street)} ${str(a.house)}`,
@@ -2339,9 +2481,12 @@
           ].filter(Boolean).join(", ");
 
           row.innerHTML = `
-            <div>
-              <div><strong>${txt}</strong> ${Number(a.is_default) === 1 ? '<span class="muted">• основной</span>' : ''}</div>
-              ${a.comment ? `<div class="muted">${str(a.comment)}</div>` : ''}
+            <div class="shop-address-card-main">
+              <div class="shop-address-card-title">
+                ${txt}
+                ${Number(a.is_default) === 1 ? '<span class="shop-address-star"><i class="fas fa-star"></i> основной</span>' : ''}
+              </div>
+              ${a.comment ? `<div class="shop-address-card-sub">${str(a.comment)}</div>` : ''}
             </div>
           `;
 
@@ -2496,6 +2641,11 @@
   function attachProfileMenuOutsideClose(menuEl, toggleBtn) {
     if (profileMenuListenerAttached) return;
     profileMenuListenerAttached = true;
+    if (menuEl) {
+      menuEl.addEventListener("click", (e) => {
+        e.stopPropagation();
+      });
+    }
     document.addEventListener("click", (e) => {
       if (!menuEl || menuEl.classList.contains("hidden")) return;
       if (toggleBtn && toggleBtn.contains(e.target)) return;
@@ -2602,6 +2752,10 @@
       `;
       header.appendChild(menu);
     }
+
+    menu.addEventListener("click", (e) => {
+      e.stopPropagation();
+    });
 
     const editBtn = menu.querySelector('[data-role="edit"]');
     const settingsMenuBtn = menu.querySelector('[data-role="settings"]');
@@ -3030,7 +3184,11 @@
         payment_code: pay.value || payDefault || "cash",
         cutlery_qty: 0,
         change_from: change.value ? Number(change.value) : null,
-        items: cartItemsResolved().map(x => ({ product_id: x.product.id, qty: x.qty })),
+        items: cartItemsResolved().map(x => ({
+          product_id: x.product.id,
+          qty: x.qty,
+          options: serializeOrderOptions(x.options),
+        })),
       };
 
       const isAuthed = !!(getCustomerToken() && me);

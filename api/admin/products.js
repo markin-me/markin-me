@@ -46,6 +46,46 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   });
 
   // ------------------------------
+  // Upload: category icon
+  // POST /api/upload/category-icon
+  // ------------------------------
+  const categoryStorage = multer.diskStorage({
+    destination(req, file, cb) {
+      const tenantId = helpers.getTenantId(req);
+      const folder = path.join(__dirname, '..', '..', 'static', 'uploads', 'categories', String(tenantId));
+      helpers.ensureDir(folder);
+      cb(null, folder);
+    },
+    filename(req, file, cb) {
+      const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';
+      const name = crypto.randomBytes(16).toString('hex') + ext;
+      cb(null, name);
+    }
+  });
+
+  const categoryUpload = multer({
+    storage: categoryStorage,
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter(req, file, cb) {
+      const ok = /^image\/(jpeg|png|webp)$/.test(file.mimetype);
+      cb(ok ? null : new Error('ONLY_IMAGES'), ok);
+    }
+  });
+
+  router.post('/upload/category-icon', categoryUpload.single('icon'), (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const file = req.file;
+      if (!file) return res.status(400).json({ ok: false, error: 'NO_FILE' });
+      const url = `/static/uploads/categories/${tenantId}/${file.filename}`;
+      res.json({ ok: true, url });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
+    }
+  });
+
+  // ------------------------------
   // Categories: /api/prod_categories
   // ------------------------------
   router.get('/prod_categories', async (req, res) => {

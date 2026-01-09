@@ -28,7 +28,61 @@
       </div>
 
       <div class="content-view hidden" data-view-content="variants"><div class="info-card">Содержимое для вариантов...</div></div>
-      <div class="content-view hidden" data-view-content="options"><div class="info-card">Содержимое для опций...</div></div>
+      <div class="content-view hidden" data-view-content="options">
+        <div class="options-grid">
+          <div class="options-panel">
+            <div class="options-panel-header">
+              <div>Группы опций</div>
+              <button class="btn btn-icon btn-primary" id="optionGroupAddBtn" type="button" title="Добавить группу">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
+            <div class="options-list" id="optionGroupsList"></div>
+          </div>
+
+          <div class="options-panel">
+            <div class="options-panel-header">
+              <div>Элементы группы</div>
+              <button class="btn btn-icon btn-primary" id="optionItemAddBtn" type="button" title="Добавить элемент">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
+            <div class="options-list" id="optionItemsList"></div>
+          </div>
+        </div>
+
+        <div class="options-panel">
+          <div class="options-panel-header">
+            <div>Назначения</div>
+            <button class="btn btn-icon btn-primary" id="optionAssignmentAddBtn" type="button" title="Добавить назначение">
+              <i class="fas fa-plus"></i>
+            </button>
+          </div>
+          <div class="options-list" id="optionAssignmentsList"></div>
+        </div>
+
+        <div class="options-grid">
+          <div class="options-panel">
+            <div class="options-panel-header">
+              <div>Исключения</div>
+              <button class="btn btn-icon btn-primary" id="optionExclusionAddBtn" type="button" title="Добавить исключение">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
+            <div class="options-list" id="optionExclusionsList"></div>
+          </div>
+
+          <div class="options-panel">
+            <div class="options-panel-header">
+              <div>Переопределения</div>
+              <button class="btn btn-icon btn-primary" id="optionOverrideAddBtn" type="button" title="Добавить переопределение">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
+            <div class="options-list" id="optionOverridesList"></div>
+          </div>
+        </div>
+      </div>
       <div class="content-view hidden" data-view-content="units"><div class="info-card">Единицы измерения...</div></div>
       <div class="content-view hidden" data-view-content="allergens"><div class="info-card">Аллергены...</div></div>
       <div class="content-view hidden" data-view-content="diets"><div class="info-card">Диеты...</div></div>
@@ -146,20 +200,19 @@
       <input class="control" id="ce_title" name="title" type="text" required />
     </div>
 
-    <div class="form-row-2">
-      <div>
-        <label class="field-label" for="ce_code">Code</label>
-        <input class="control" id="ce_code" name="code" type="text" placeholder="burgers" />
-      </div>
-      <div>
-        <label class="field-label" for="ce_icon">Icon</label>
-        <input class="control" id="ce_icon" name="icon" type="text" placeholder="fas fa-hamburger" />
-      </div>
-    </div>
+    <input id="ce_code" name="code" type="hidden" />
+    <input id="ce_sort" name="sort_order" type="hidden" />
 
-    <div>
-      <label class="field-label" for="ce_sort">Sort order</label>
-      <input class="control" id="ce_sort" name="sort_order" type="number" step="1" />
+    <div class="category-icon-editor">
+      <div class="category-icon-preview" id="ceIconPreview">
+        <div class="category-icon-placeholder">Нет иконки</div>
+      </div>
+      <div class="category-icon-controls">
+        <label class="field-label" for="ce_icon">Иконка (класс или URL)</label>
+        <input class="control" id="ce_icon" name="icon" type="text" placeholder="fas fa-hamburger или /static/..." />
+        <input id="ceIconFile" type="file" accept="image/*" class="hidden" />
+        <button class="btn" type="button" id="ceIconUploadBtn"><i class="fas fa-image"></i> Загрузить картинку</button>
+      </div>
     </div>
 
     <div class="form-row-2">

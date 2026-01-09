@@ -9,6 +9,7 @@ const helpers = require('./api/helpers');
 const makeAdminClientsRouter = require('./api/admin/clients');
 const makeAdminOrdersRouter = require('./api/admin/orders');
 const makeAdminProductsRouter = require('./api/admin/products');
+const makeAdminOptionsRouter = require('./api/admin/options');
 const makePublicShopRouter = require('./api/public/shop');
 
 const app = express();
@@ -44,6 +45,7 @@ app.get('/shop', (req, res) => res.render('pages/shop'));
 // ------------------------------
 app.use('/api/admin/clients', makeAdminClientsRouter({ db, helpers }));
 app.use('/api/admin/orders', makeAdminOrdersRouter({ db, helpers }));
+app.use('/api', makeAdminOptionsRouter({ db, helpers }));
 
 // товары/категории/сортировка/загрузка — оставляем старые пути /api/prod_* и /api/sort/*
 app.use('/api', makeAdminProductsRouter({ db, helpers }));
