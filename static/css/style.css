@@ -877,6 +877,24 @@ input[type=number]{ -moz-appearance:textfield; }
   border-color:var(--primary-25);
 }
 .chip-plus i{font-size:12px}
+.chip-remove{
+  border:none;
+  background:transparent;
+  width:18px;
+  height:18px;
+  border-radius:999px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  color:var(--color-text-muted);
+  cursor:pointer;
+  padding:0;
+}
+.chip-remove i{font-size:10px}
+.chip-remove:hover{
+  color:var(--color-text);
+  background:var(--color-surface-2);
+}
 
 /* ================= Inline modal (категории внутри модалки) ================= */
 .inline-backdrop{
@@ -974,7 +992,12 @@ input[type=number]{ -moz-appearance:textfield; }
   display:flex;
   gap:8px;
   overflow-x:auto;
+  overflow-y:hidden;
+  flex-wrap:nowrap;
   padding-bottom:8px;
+}
+.option-picker-tabs.is-dragging{
+  cursor:grabbing;
 }
 .option-picker-tab{
   padding:6px 10px;
@@ -1004,6 +1027,8 @@ input[type=number]{ -moz-appearance:textfield; }
   border-radius:10px;
   border:1px solid #eef1f6;
   background:#fff;
+  cursor:pointer;
+  user-select:none;
 }
 .option-picker-row.is-selected{
   border-color:#c7d2fe;
@@ -1027,6 +1052,59 @@ input[type=number]{ -moz-appearance:textfield; }
   flex-direction:column;
   gap:10px;
 }
+.option-picker-checkbox{
+  position:absolute;
+  opacity:0;
+  pointer-events:none;
+  width:1px;
+  height:1px;
+}
+.option-summary-list{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+.option-summary-row{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  padding:8px 10px;
+  border-radius:10px;
+  border:1px solid #eef1f6;
+  background:#fff;
+}
+.option-summary-title{font-weight:600;}
+.option-summary-meta{font-size:12px;color:#6b7280;}
+.option-summary-price{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-end;
+  font-size:12px;
+  gap:4px;
+}
+.product-header-actions{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.info-accordion .stage-item{
+  padding:10px 12px;
+  border-radius:12px;
+  border:1px solid var(--color-border);
+  background:var(--color-surface);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  width:100%;
+}
+.info-accordion .stage-item .stage-meta{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
+.info-accordion .acc-panel-inner{margin-top:10px;}
 .inline-modal-header{
   padding:10px 12px;
   border-bottom:1px solid var(--color-border);
@@ -1437,11 +1515,13 @@ input[type=number]{ -moz-appearance:textfield; }
 /* ================= Fix: Hide product info header when nothing selected ================= */
 /* Работает автоматически через :has() (Chrome/Edge/Safari). */
 #productInfoPanel:has(#productEmpty:not(.hidden)) .product-info-header,
-#productInfoPanel:has(#categoryEmpty:not(.hidden)) .product-info-header{
+#productInfoPanel:has(#categoryEmpty:not(.hidden)) .product-info-header,
+#productInfoPanel:has(#optionEmpty:not(.hidden)) .product-info-header{
   display: none !important;
 }
 #productInfoPanel:has(#productInfo:not(.hidden)) .product-info-header,
-#productInfoPanel:has(#categoryInfo:not(.hidden)) .product-info-header{
+#productInfoPanel:has(#categoryInfo:not(.hidden)) .product-info-header,
+#productInfoPanel:has(#optionGroupInfo:not(.hidden)) .product-info-header{
   display: flex !important;
 }
 /* ================= Shop (витрина): 3 колонки без сайдбара ================= */
