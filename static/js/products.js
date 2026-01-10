@@ -26,6 +26,13 @@
   const categoryInfo = $("#categoryInfo");
   const optionEmpty = $("#optionEmpty");
   const optionGroupInfo = $("#optionGroupInfo");
+  const productInfoHeader = $("#productInfoHeader");
+  const optionGroupHeader = $("#optionGroupHeader");
+  const optionHeaderTitle = $("#optionHeaderTitle");
+  const optionHeaderSubtitle = $("#optionHeaderSubtitle");
+  const optionHeaderBackBtn = $("#optionHeaderBackBtn");
+  const optionHeaderPrimaryBtn = $("#optionHeaderPrimaryBtn");
+  const optionHeaderCloseBtn = $("#optionHeaderCloseBtn");
   const closeProductInfoBtn = $("#closeProductInfoBtn");
   const editProductBtn = $("#editProductBtn");
 
@@ -48,12 +55,23 @@
   const categoryStatus = $("#categoryStatus");
   const categoryVisibility = $("#categoryVisibility");
 
-  const optionGroupSelection = $("#optionGroupSelection");
-  const optionGroupLimits = $("#optionGroupLimits");
+  const optionLevelGroup = $("#optionLevelGroup");
+  const optionLevelPicker = $("#optionLevelPicker");
+  const optionGroupForm = $("#optionGroupForm");
+  const optionGroupTitleInput = $("#optionGroupTitle");
+  const optionGroupSelectionInput = $("#optionGroupSelectionType");
+  const optionGroupMinInput = $("#optionGroupMinSelect");
+  const optionGroupMaxInput = $("#optionGroupMaxSelect");
+  const optionGroupSortInput = $("#optionGroupSortOrder");
+  const optionGroupActiveInput = $("#optionGroupActive");
   const optionItemsList = $("#optionItemsList");
+  const optionItemsAddBtn = $("#optionItemsAddBtn");
   const optionAssignmentsList = $("#optionAssignmentsList");
   const optionAssignmentsAddBtn = $("#optionAssignmentsAddBtn");
   const optionAssignmentsShowInactive = $("#optionAssignmentsShowInactive");
+  const optionPickerTabs = $("#optionPickerTabs");
+  const optionPickerSearch = $("#optionPickerSearch");
+  const optionPickerList = $("#optionPickerList");
 
   // sheet (mobile)
   const sheet = $("#productSheet");
@@ -75,6 +93,16 @@
     selectedOptionGroupId: null,
     optionGroupDetails: null,
     catalogCategories: [],
+    optionPanel: {
+      level: "empty", // empty | group | picker
+      mode: "view", // view | edit | create
+      pickerMode: "items", // items | assignments
+      pickerSelection: new Set(),
+      pickerCategoryId: null,
+      pickerProducts: [],
+      pickerQuery: "",
+    },
+    optionDraft: null,
   };
 
   // ---------------- API ----------------
@@ -129,11 +157,26 @@
     return api("/api/admin/options/group-bundle", { method: "POST", body: JSON.stringify(payload) });
   }
 
+  async function apiPatchOptionGroup(id, payload) {
+    return api(`/api/admin/options/groups/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+  }
+
+  async function apiAddGroupItems(groupId, items) {
+    return api(`/api/admin/options/groups/${groupId}/items`, {
+      method: "POST",
+      body: JSON.stringify({ items }),
+    });
+  }
+
   async function apiAddGroupAssignments(groupId, assignIds) {
     return api(`/api/admin/options/groups/${groupId}/assignments`, {
       method: "POST",
       body: JSON.stringify({ assign_ids: assignIds }),
     });
+  }
+
+  async function apiPatchItem(id, payload) {
+    return api(`/api/admin/options/items/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
   }
 
   async function apiPatchAssignment(id, payload) {
@@ -307,6 +350,10 @@
     );
   }
 
+  function getSelectionLabel(type) {
+    return type === "multiple" ? "Несколько" : "Один";
+  }
+
   function renderCategoryIcon(icon, className = "stage-icon") {
     const v = String(icon || "").trim();
     if (looksLikeUrl(v)) {
@@ -358,11 +405,11 @@
         <div class="options-row ${isActive ? "is-active" : ""}" data-option-group-id="${group.id}">
           <div>
             <div class="options-row-title">${escapeHtml(group.title || "")}</div>
-            <div class="options-row-meta">Тип: ${escapeHtml(group.selection_type || "")}</div>
+            <div class="options-row-meta">Тип: ${escapeHtml(getSelectionLabel(group.selection_type))}</div>
           </div>
-          <div class="options-row-meta">Max: ${escapeHtml(maxLabel)}</div>
-          <div class="options-row-meta">Items: ${group.items_count ?? 0}</div>
-          <div class="options-row-meta">Assignments: ${group.assignments_count ?? 0}</div>
+          <div class="options-row-meta">Лимит: ${escapeHtml(maxLabel)}</div>
+          <div class="options-row-meta">Пункты: ${group.items_count ?? 0}</div>
+          <div class="options-row-meta">Назначения: ${group.assignments_count ?? 0}</div>
           <div class="options-row-meta">${group.is_active ? "Активна" : "Выключена"}</div>
         </div>
       `;
@@ -375,7 +422,7 @@
         state.selectedOptionGroupId = id;
         await loadOptionGroupDetails(id);
         renderOptionGroupsList();
-        showOptionGroupDetails(state.optionGroupDetails);
+        showOptionGroupDetails(state.optionGroupDetails, { mode: "view" });
       });
     });
   }
@@ -603,6 +650,8 @@
     categoryEmpty && categoryEmpty.classList.add("hidden");
     categoryInfo && categoryInfo.classList.add("hidden");
     productInfo && productInfo.classList.remove("hidden");
+    if (productInfoHeader) productInfoHeader.classList.remove("hidden");
+    if (optionGroupHeader) optionGroupHeader.classList.add("hidden");
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (isMobile && sheetHost && productInfo) {
@@ -652,6 +701,8 @@
     productInfo && productInfo.classList.add("hidden");
     categoryEmpty && categoryEmpty.classList.add("hidden");
     categoryInfo && categoryInfo.classList.remove("hidden");
+    if (productInfoHeader) productInfoHeader.classList.remove("hidden");
+    if (optionGroupHeader) optionGroupHeader.classList.add("hidden");
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (isMobile && sheetHost && categoryInfo) {
@@ -666,106 +717,473 @@
     }
   }
 
-  function renderOptionItems(items) {
-    if (!optionItemsList) return;
-    if (!items.length) {
-      optionItemsList.innerHTML = `<div class="empty-hint">Пока нет items...</div>`;
+  function getOptionGroupSelectionType() {
+    if (optionGroupSelectionInput) return optionGroupSelectionInput.value === "multiple" ? "multiple" : "single";
+    if (state.optionGroupDetails?.group?.selection_type) return state.optionGroupDetails.group.selection_type;
+    return "single";
+  }
+
+  function isOptionEditable() {
+    return state.optionPanel.mode === "edit" || state.optionPanel.mode === "create";
+  }
+
+  function getOptionItemsSource() {
+    if (state.optionPanel.mode === "create") return state.optionDraft?.items || [];
+    return state.optionGroupDetails?.items || [];
+  }
+
+  function getOptionAssignmentsSource() {
+    if (state.optionPanel.mode === "create") return state.optionDraft?.assignments || [];
+    return state.optionGroupDetails?.assignments || [];
+  }
+
+  function syncOptionDraftGroupFromForm() {
+    if (state.optionPanel.mode !== "create" || !state.optionDraft) return;
+    state.optionDraft.group = {
+      title: String(optionGroupTitleInput?.value || "").trim(),
+      selection_type: optionGroupSelectionInput?.value === "multiple" ? "multiple" : "single",
+      min_select: optionGroupMinInput?.value === "" ? 0 : Number(optionGroupMinInput?.value),
+      max_select: optionGroupMaxInput?.value === "" ? null : Number(optionGroupMaxInput?.value),
+      is_active: optionGroupActiveInput?.checked ? 1 : 0,
+      sort_order: optionGroupSortInput?.value === "" ? 0 : Number(optionGroupSortInput?.value),
+    };
+  }
+
+  function setOptionGroupFormDisabled(disabled) {
+    if (!optionGroupForm) return;
+    $$("input, select, textarea", optionGroupForm).forEach((el) => {
+      if (el.type === "checkbox") {
+        el.disabled = disabled;
+      } else {
+        el.disabled = disabled;
+      }
+    });
+  }
+
+  function fillOptionGroupForm(group) {
+    if (!group) return;
+    if (optionGroupTitleInput) optionGroupTitleInput.value = group.title || "";
+    if (optionGroupSelectionInput) optionGroupSelectionInput.value = group.selection_type === "multiple" ? "multiple" : "single";
+    if (optionGroupMinInput) optionGroupMinInput.value = group.min_select ?? 0;
+    if (optionGroupMaxInput) optionGroupMaxInput.value = group.max_select == null ? "" : String(group.max_select);
+    if (optionGroupSortInput) optionGroupSortInput.value = group.sort_order ?? 0;
+    if (optionGroupActiveInput) optionGroupActiveInput.checked = Boolean(group.is_active);
+  }
+
+  function renderOptionHeader() {
+    if (!optionGroupHeader) return;
+    if (state.optionPanel.level === "empty") {
+      optionGroupHeader.classList.add("hidden");
       return;
     }
 
+    optionGroupHeader.classList.remove("hidden");
+    const mode = state.optionPanel.mode;
+    const level = state.optionPanel.level;
+    const isPicker = level === "picker";
+    const groupTitle = state.optionGroupDetails?.group?.title || "Новая группа";
+    if (optionHeaderTitle) {
+      optionHeaderTitle.textContent = isPicker
+        ? (state.optionPanel.pickerMode === "assignments" ? "Выбор товаров для назначений" : "Выбор товаров для пунктов")
+        : groupTitle;
+    }
+    if (optionHeaderSubtitle) {
+      if (isPicker) {
+        optionHeaderSubtitle.textContent = `Выбрано: ${state.optionPanel.pickerSelection.size}`;
+      } else if (mode === "create") {
+        optionHeaderSubtitle.textContent = "Создание группы опций";
+      } else {
+        const selectionLabel = getSelectionLabel(state.optionGroupDetails?.group?.selection_type);
+        optionHeaderSubtitle.textContent = `Тип: ${selectionLabel}`;
+      }
+    }
+
+    if (optionHeaderBackBtn) {
+      optionHeaderBackBtn.classList.toggle("hidden", !isPicker);
+    }
+    if (optionHeaderPrimaryBtn) {
+      if (isPicker) {
+        const count = state.optionPanel.pickerSelection.size;
+        optionHeaderPrimaryBtn.textContent = count ? `Добавить (${count})` : "Готово";
+      } else if (mode === "view") {
+        optionHeaderPrimaryBtn.textContent = "Редактировать";
+      } else {
+        optionHeaderPrimaryBtn.textContent = "Сохранить";
+      }
+    }
+  }
+
+  function renderOptionItems(items) {
+    if (!optionItemsList) return;
+    const editable = isOptionEditable();
+    if (!items.length) {
+      optionItemsList.innerHTML = `<div class="empty-hint">Пока нет пунктов...</div>`;
+      return;
+    }
+
+    const selectionType = getOptionGroupSelectionType();
+    const isDraft = state.optionPanel.mode === "create";
     optionItemsList.innerHTML = items.map((item) => {
+      const isInactive = item.is_active === 0;
+      const itemKey = item.tempId ?? item.id;
       const catalogPrice = item.product_price != null ? Number(item.product_price).toFixed(2) : "—";
-      const priceLabel = item.price_mode === "fixed" && item.price_value != null
-        ? `Фикс: ${Number(item.price_value).toFixed(2)}`
-        : "По каталогу";
-      const qtyLabel = `${item.qty_min ?? 1} — ${item.qty_max ?? 1}`;
+      const overrideValue = isDraft ? item.newPrice : item.price_value;
+      const hasOverride = isDraft
+        ? overrideValue !== "" && overrideValue != null
+        : item.price_mode === "fixed" && item.price_value != null;
+      const priceValue = hasOverride ? Number(overrideValue).toFixed(2) : "";
+      const qtyMin = item.qty_min ?? 1;
+      const qtyMax = item.qty_max ?? 1;
+      const qtyControls = selectionType === "single"
+        ? `<div class="muted">Кол-во: 1 — 1</div><div></div>`
+        : `
+          <input class="control" type="number" min="1" data-item-field="qty_min" data-item-id="${itemKey}" value="${qtyMin}" ${editable ? "" : "disabled"} />
+          <input class="control" type="number" min="1" data-item-field="qty_max" data-item-id="${itemKey}" value="${qtyMax}" ${editable ? "" : "disabled"} />
+        `;
+
       return `
-        <div class="option-item-row">
+        <div class="option-item-row ${isInactive ? "is-disabled" : ""}">
           <div>
-            <div class="options-row-title">${escapeHtml(item.product_name || "")}</div>
-            <div class="muted">Каталог: ${catalogPrice}</div>
+            <div class="options-row-title">${escapeHtml(item.product_name || item.name || "")}</div>
+            <div class="muted">${hasOverride ? `<s>Каталог: ${catalogPrice}</s>` : `Каталог: ${catalogPrice}`}</div>
+            ${isInactive ? `<div class="muted">Отключено</div>` : ""}
           </div>
-          <div class="muted">${priceLabel}</div>
-          <div class="muted">Кол-во: ${qtyLabel}</div>
-          <div></div>
-          <div></div>
+          ${editable ? `
+            <input class="control" type="number" step="0.01" min="0" placeholder="Новая цена" data-item-field="price" data-item-id="${itemKey}" value="${priceValue}" />
+          ` : `
+            <div>${hasOverride ? `<b>Новая цена: ${priceValue}</b>` : `<span class="muted">Цена по каталогу</span>`}</div>
+          `}
+          ${qtyControls}
+          ${editable ? `
+            <button class="btn btn-icon" type="button" data-item-remove="${itemKey}" title="Отключить"><i class="fas fa-times"></i></button>
+          ` : "<div></div>"}
         </div>
       `;
     }).join("");
+
+    if (!editable) return;
+
+    optionItemsList.querySelectorAll("[data-item-remove]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.itemRemove;
+        if (state.optionPanel.mode === "create") {
+          state.optionDraft.items = state.optionDraft.items.filter((x) => String(x.tempId) !== String(id));
+          renderOptionItems(getOptionItemsSource());
+          return;
+        }
+        const itemId = Number(id);
+        if (!Number.isFinite(itemId)) return;
+        await apiPatchItem(itemId, { is_active: 0 });
+        if (state.optionGroupDetails) {
+          state.optionGroupDetails.items = state.optionGroupDetails.items.map((x) =>
+            x.id === itemId ? { ...x, is_active: 0 } : x
+          );
+          renderOptionItems(state.optionGroupDetails.items);
+        }
+        await loadOptionGroups();
+        renderOptionGroupsList();
+      });
+    });
+
+    const debounceMap = new Map();
+    optionItemsList.querySelectorAll("input[data-item-field]").forEach((input) => {
+      input.addEventListener("input", () => {
+        const field = input.dataset.itemField;
+        const id = input.dataset.itemId;
+        if (state.optionPanel.mode === "create") {
+          const item = state.optionDraft.items.find((x) => String(x.tempId) === String(id));
+          if (!item || !field) return;
+          if (field === "price") {
+            item.newPrice = input.value === "" ? "" : Number(input.value);
+          } else if (field === "qty_min") {
+            item.qty_min = input.value === "" ? 1 : Number(input.value);
+          } else if (field === "qty_max") {
+            item.qty_max = input.value === "" ? 1 : Number(input.value);
+          }
+          return;
+        }
+
+        const itemId = Number(id);
+        if (!Number.isFinite(itemId) || !field) return;
+        const value = input.value;
+        const current = debounceMap.get(itemId);
+        if (current) clearTimeout(current);
+        const timer = setTimeout(async () => {
+          if (field === "price") {
+            const hasPrice = value !== "";
+            await apiPatchItem(itemId, {
+              price_mode: hasPrice ? "fixed" : "from_target",
+              price_value: hasPrice ? Number(value) : null,
+            });
+          } else if (field === "qty_min") {
+            await apiPatchItem(itemId, { qty_min: value === "" ? 1 : Number(value) });
+          } else if (field === "qty_max") {
+            await apiPatchItem(itemId, { qty_max: value === "" ? 1 : Number(value) });
+          }
+        }, 400);
+        debounceMap.set(itemId, timer);
+      });
+    });
   }
 
   function renderOptionAssignments(assignments) {
     if (!optionAssignmentsList) return;
+    const editable = isOptionEditable();
     const showInactive = optionAssignmentsShowInactive && optionAssignmentsShowInactive.checked;
     const filtered = assignments.filter((a) => showInactive || a.is_active);
     if (!filtered.length) {
-      optionAssignmentsList.innerHTML = `<div class="empty-hint">Пока нет привязок...</div>`;
+      optionAssignmentsList.innerHTML = `<div class="empty-hint">Пока нет назначений...</div>`;
       return;
     }
 
     optionAssignmentsList.innerHTML = filtered.map((assignment) => {
       const disabled = assignment.is_active ? "" : "is-disabled";
+      const controlsDisabled = !assignment.is_active || !editable;
+      const assignmentKey = assignment.tempId ?? assignment.id;
       return `
         <div class="option-assignment-row ${disabled}">
           <div>
-            <div class="options-row-title">${escapeHtml(assignment.product_name || "")}</div>
+            <div class="options-row-title">${escapeHtml(assignment.product_name || assignment.name || "")}</div>
             ${assignment.is_active ? "" : `<div class="muted">Отключено</div>`}
           </div>
-          <input class="control" type="number" min="0" value="${assignment.priority ?? 0}" data-assignment-field="priority" data-assignment-id="${assignment.id}" ${assignment.is_active ? "" : "disabled"} />
-          <input class="control" type="number" min="0" value="${assignment.sort_order ?? 0}" data-assignment-field="sort_order" data-assignment-id="${assignment.id}" ${assignment.is_active ? "" : "disabled"} />
-          <button class="btn btn-icon" type="button" data-assignment-remove="${assignment.id}" title="Удалить"><i class="fas fa-times"></i></button>
+          <input class="control" type="number" min="0" value="${assignment.priority ?? 0}" data-assignment-field="priority" data-assignment-id="${assignmentKey}" ${controlsDisabled ? "disabled" : ""} />
+          <input class="control" type="number" min="0" value="${assignment.sort_order ?? 0}" data-assignment-field="sort_order" data-assignment-id="${assignmentKey}" ${controlsDisabled ? "disabled" : ""} />
+          ${editable ? `<button class="btn btn-icon" type="button" data-assignment-remove="${assignmentKey}" title="Убрать"><i class="fas fa-times"></i></button>` : "<div></div>"}
         </div>
       `;
     }).join("");
 
+    if (!editable) return;
+
     optionAssignmentsList.querySelectorAll("[data-assignment-remove]").forEach((btn) => {
       btn.addEventListener("click", async () => {
-        const id = Number(btn.dataset.assignmentRemove);
-        if (!Number.isFinite(id)) return;
-        await apiPatchAssignment(id, { is_active: 0 });
+        const id = btn.dataset.assignmentRemove;
+        if (state.optionPanel.mode === "create") {
+          state.optionDraft.assignments = state.optionDraft.assignments.filter((x) => String(x.tempId) !== String(id));
+          renderOptionAssignments(getOptionAssignmentsSource());
+          return;
+        }
+        const assignmentId = Number(id);
+        if (!Number.isFinite(assignmentId)) return;
+        await apiPatchAssignment(assignmentId, { is_active: 0 });
         if (state.optionGroupDetails) {
           state.optionGroupDetails.assignments = state.optionGroupDetails.assignments.map((a) =>
-            a.id === id ? { ...a, is_active: 0 } : a
+            a.id === assignmentId ? { ...a, is_active: 0 } : a
           );
           renderOptionAssignments(state.optionGroupDetails.assignments);
         }
+        await loadOptionGroups();
+        renderOptionGroupsList();
       });
     });
 
     const debounceMap = new Map();
     optionAssignmentsList.querySelectorAll("input[data-assignment-field]").forEach((input) => {
       input.addEventListener("input", () => {
-        const id = Number(input.dataset.assignmentId);
         const field = input.dataset.assignmentField;
-        if (!Number.isFinite(id) || !field) return;
+        const id = input.dataset.assignmentId;
+        if (state.optionPanel.mode === "create") {
+          const item = state.optionDraft.assignments.find((x) => String(x.tempId) === String(id));
+          if (!item || !field) return;
+          item[field] = input.value === "" ? 0 : Number(input.value);
+          return;
+        }
+
+        const assignmentId = Number(id);
+        if (!Number.isFinite(assignmentId) || !field) return;
         const value = input.value === "" ? 0 : Number(input.value);
-        const current = debounceMap.get(id);
+        const current = debounceMap.get(assignmentId);
         if (current) clearTimeout(current);
         const timer = setTimeout(async () => {
-          await apiPatchAssignment(id, { [field]: value });
+          await apiPatchAssignment(assignmentId, { [field]: value });
         }, 400);
-        debounceMap.set(id, timer);
+        debounceMap.set(assignmentId, timer);
       });
     });
   }
 
-  function showOptionGroupDetails(details) {
-    if (!details || !details.group) return;
-    const group = details.group;
-    productTitle.textContent = group.title || "—";
-    productSku.textContent = "Опция товара";
+  function renderOptionGroupLevel() {
+    if (!optionLevelGroup) return;
+    const editable = isOptionEditable();
+    optionLevelGroup.classList.remove("hidden");
+    if (optionLevelPicker) optionLevelPicker.classList.add("hidden");
+
+    if (state.optionPanel.mode === "create") {
+      fillOptionGroupForm(state.optionDraft.group);
+    } else if (state.optionGroupDetails?.group) {
+      fillOptionGroupForm(state.optionGroupDetails.group);
+    }
+
+    setOptionGroupFormDisabled(!editable);
+    if (optionItemsAddBtn) optionItemsAddBtn.classList.toggle("hidden", !editable);
+    if (optionAssignmentsAddBtn) optionAssignmentsAddBtn.classList.toggle("hidden", !editable);
+
+    renderOptionItems(getOptionItemsSource());
+    renderOptionAssignments(getOptionAssignmentsSource());
+    renderOptionHeader();
+  }
+
+  function renderOptionPickerTabs() {
+    if (!optionPickerTabs) return;
+    optionPickerTabs.innerHTML = state.catalogCategories.map((cat) => {
+      const active = Number(cat.id) === Number(state.optionPanel.pickerCategoryId);
+      return `
+        <button class="option-picker-tab ${active ? "is-active" : ""}" type="button" data-cat-id="${cat.id}">
+          ${escapeHtml(cat.title || "")}
+        </button>
+      `;
+    }).join("");
+
+    optionPickerTabs.querySelectorAll("[data-cat-id]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        state.optionPanel.pickerCategoryId = Number(btn.dataset.catId);
+        await refreshOptionPickerProducts();
+      });
+    });
+  }
+
+  function renderOptionPickerList() {
+    if (!optionPickerList) return;
+    optionPickerList.innerHTML = state.optionPanel.pickerProducts.map((product) => {
+      const checked = state.optionPanel.pickerSelection.has(product.id);
+      return `
+        <div class="option-picker-row ${checked ? "is-selected" : ""}">
+          <div class="option-picker-meta">
+            <div class="options-row-title">${escapeHtml(product.name || "")}</div>
+            <div class="options-row-meta">Цена: ${product.price != null ? Number(product.price).toFixed(2) : "—"}</div>
+          </div>
+          <label class="switch">
+            <input class="switch-input" type="checkbox" data-product-id="${product.id}" ${checked ? "checked" : ""} />
+            <span class="switch-ui"></span>
+          </label>
+        </div>
+      `;
+    }).join("");
+
+    optionPickerList.querySelectorAll("input[data-product-id]").forEach((input) => {
+      input.addEventListener("change", () => {
+        const id = Number(input.dataset.productId);
+        if (!Number.isFinite(id)) return;
+        if (input.checked) state.optionPanel.pickerSelection.add(id);
+        else state.optionPanel.pickerSelection.delete(id);
+        renderOptionHeader();
+      });
+    });
+  }
+
+  async function refreshOptionPickerProducts() {
+    const res = await apiGetCatalogProducts({
+      categoryId: state.optionPanel.pickerCategoryId,
+      query: state.optionPanel.pickerQuery,
+    });
+    state.optionPanel.pickerProducts = Array.isArray(res.data) ? res.data : [];
+    renderOptionPickerList();
+  }
+
+  async function openOptionPicker(mode) {
+    syncOptionDraftGroupFromForm();
+    if (!state.catalogCategories.length) {
+      await loadCatalogCategories();
+    }
+    state.optionPanel.level = "picker";
+    state.optionPanel.pickerMode = mode;
+    state.optionPanel.pickerSelection = new Set();
+    state.optionPanel.pickerCategoryId = state.catalogCategories[0] ? Number(state.catalogCategories[0].id) : null;
+    state.optionPanel.pickerQuery = "";
+    if (optionPickerSearch) optionPickerSearch.value = "";
+    await refreshOptionPickerProducts();
+    renderOptionPickerLevel();
+  }
+
+  async function applyOptionPickerSelection() {
+    const selectedIds = Array.from(state.optionPanel.pickerSelection);
+    if (!selectedIds.length) {
+      state.optionPanel.level = "group";
+      renderOptionGroupLevel();
+      return;
+    }
+
+    if (state.optionPanel.pickerMode === "items") {
+      if (state.optionPanel.mode === "create") {
+        const existing = new Set(state.optionDraft.items.map((x) => x.id));
+        state.optionPanel.pickerProducts.forEach((product) => {
+          if (!state.optionPanel.pickerSelection.has(product.id)) return;
+          if (existing.has(product.id)) return;
+          state.optionDraft.items.push({
+            tempId: `${product.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            id: product.id,
+            name: product.name,
+            product_name: product.name,
+            product_price: product.price,
+            newPrice: "",
+            qty_min: 1,
+            qty_max: 1,
+            is_active: 1,
+          });
+        });
+      } else if (state.selectedOptionGroupId) {
+        const payload = selectedIds.map((id, idx) => ({
+          target_product_id: id,
+          price_mode: "from_target",
+          price_value: null,
+          qty_min: getOptionGroupSelectionType() === "single" ? 1 : 1,
+          qty_max: getOptionGroupSelectionType() === "single" ? 1 : 1,
+          sort_order: idx * 10,
+          is_active: 1,
+        }));
+        await apiAddGroupItems(state.selectedOptionGroupId, payload);
+        await loadOptionGroupDetails(state.selectedOptionGroupId);
+        await loadOptionGroups();
+        renderOptionGroupsList();
+      }
+    } else {
+      if (state.optionPanel.mode === "create") {
+        const existing = new Set(state.optionDraft.assignments.map((x) => x.id));
+        state.optionPanel.pickerProducts.forEach((product) => {
+          if (!state.optionPanel.pickerSelection.has(product.id)) return;
+          if (existing.has(product.id)) return;
+          state.optionDraft.assignments.push({
+            tempId: `${product.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            id: product.id,
+            name: product.name,
+            product_name: product.name,
+            priority: 0,
+            sort_order: 0,
+            is_active: 1,
+          });
+        });
+      } else if (state.selectedOptionGroupId) {
+        const res = await apiAddGroupAssignments(state.selectedOptionGroupId, selectedIds);
+        if (res.skipped && res.skipped.length) {
+          alert("Некоторые товары уже добавлены.");
+        }
+        await loadOptionGroupDetails(state.selectedOptionGroupId);
+        await loadOptionGroups();
+        renderOptionGroupsList();
+      }
+    }
+
+    state.optionPanel.level = "group";
+    renderOptionGroupLevel();
+  }
+
+  function renderOptionPickerLevel() {
+    if (!optionLevelPicker) return;
+    if (optionLevelGroup) optionLevelGroup.classList.add("hidden");
+    optionLevelPicker.classList.remove("hidden");
+    renderOptionPickerTabs();
+    renderOptionPickerList();
+    renderOptionHeader();
+  }
+
+  function showOptionGroupDetails(details, { mode }) {
+    if (!details && mode !== "create") return;
+    state.optionPanel.level = "group";
+    state.optionPanel.mode = mode || "view";
+    state.optionPanel.pickerSelection = new Set();
+    productTitle.textContent = details?.group?.title || "—";
+    productSku.textContent = "Опции товара";
     if (editProductBtn) editProductBtn.classList.add("hidden");
-
-    if (optionGroupSelection) {
-      optionGroupSelection.textContent = group.selection_type || "—";
-    }
-    if (optionGroupLimits) {
-      const maxLabel = group.max_select == null ? "∞" : group.max_select;
-      optionGroupLimits.textContent = `${group.min_select ?? 0} — ${maxLabel}`;
-    }
-
-    renderOptionItems(details.items || []);
-    renderOptionAssignments(details.assignments || []);
 
     productEmpty && productEmpty.classList.add("hidden");
     categoryEmpty && categoryEmpty.classList.add("hidden");
@@ -773,6 +1191,7 @@
     productInfo && productInfo.classList.add("hidden");
     categoryInfo && categoryInfo.classList.add("hidden");
     optionGroupInfo && optionGroupInfo.classList.remove("hidden");
+    if (productInfoHeader) productInfoHeader.classList.add("hidden");
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (isMobile && sheetHost && optionGroupInfo) {
@@ -785,6 +1204,110 @@
       }
       closeSheet();
     }
+
+    renderOptionGroupLevel();
+  }
+
+  function startOptionCreate() {
+    state.selectedOptionGroupId = null;
+    state.optionGroupDetails = null;
+    state.optionDraft = {
+      group: {
+        title: "",
+        selection_type: "single",
+        min_select: 0,
+        max_select: null,
+        sort_order: 0,
+        is_active: 1,
+      },
+      items: [],
+      assignments: [],
+    };
+    renderOptionGroupsList();
+    showOptionGroupDetails({ group: state.optionDraft.group }, { mode: "create" });
+  }
+
+  function startOptionEdit() {
+    if (!state.optionGroupDetails?.group) return;
+    state.optionPanel.mode = "edit";
+    renderOptionGroupLevel();
+  }
+
+  async function saveOptionGroup() {
+    if (!optionGroupForm) return;
+    const payload = {
+      title: String(optionGroupTitleInput?.value || "").trim(),
+      selection_type: optionGroupSelectionInput?.value === "multiple" ? "multiple" : "single",
+      min_select: optionGroupMinInput?.value === "" ? 0 : Number(optionGroupMinInput?.value),
+      max_select: optionGroupMaxInput?.value === "" ? null : Number(optionGroupMaxInput?.value),
+      is_active: optionGroupActiveInput?.checked ? 1 : 0,
+      sort_order: optionGroupSortInput?.value === "" ? 0 : Number(optionGroupSortInput?.value),
+    };
+
+    if (!payload.title) {
+      optionGroupTitleInput?.focus();
+      return;
+    }
+
+    if (state.optionPanel.mode === "create") {
+      const itemsPayload = state.optionDraft.items.map((item, idx) => {
+        const isFixed = item.newPrice !== "" && item.newPrice != null;
+        return {
+          target_product_id: item.id,
+          price_mode: isFixed ? "fixed" : "from_target",
+          price_value: isFixed ? Number(item.newPrice) : null,
+          qty_min: payload.selection_type === "single" ? 1 : (item.qty_min ?? 1),
+          qty_max: payload.selection_type === "single" ? 1 : (item.qty_max ?? 1),
+          sort_order: idx * 10,
+          is_active: 1,
+        };
+      });
+
+      const assignmentsPayload = state.optionDraft.assignments.map((item, idx) => ({
+        assign_id: item.id,
+        priority: item.priority ?? 0,
+        sort_order: item.sort_order ?? idx * 10,
+        is_active: 1,
+      }));
+
+      const res = await apiCreateOptionGroup({
+        group: payload,
+        items: itemsPayload,
+        assignments: assignmentsPayload,
+      });
+      state.selectedOptionGroupId = res.id;
+      await loadOptionGroups();
+      await loadOptionGroupDetails(res.id);
+      renderOptionGroupsList();
+      state.optionDraft = null;
+      showOptionGroupDetails(state.optionGroupDetails, { mode: "view" });
+      return;
+    }
+
+    if (state.selectedOptionGroupId) {
+      await apiPatchOptionGroup(state.selectedOptionGroupId, payload);
+      await loadOptionGroups();
+      await loadOptionGroupDetails(state.selectedOptionGroupId);
+      renderOptionGroupsList();
+      state.optionPanel.mode = "view";
+      renderOptionGroupLevel();
+    }
+  }
+
+  function closeOptionPicker() {
+    state.optionPanel.level = "group";
+    state.optionPanel.pickerSelection = new Set();
+    renderOptionGroupLevel();
+  }
+
+  function closeOptionDetails() {
+    state.selectedOptionGroupId = null;
+    state.optionGroupDetails = null;
+    state.optionDraft = null;
+    state.optionPanel.level = "empty";
+    state.optionPanel.mode = "view";
+    renderOptionGroupsList();
+    showDetailsEmpty();
   }
 
   function showDetailsEmpty() {
@@ -793,6 +1316,8 @@
     productInfo && productInfo.classList.add("hidden");
     categoryInfo && categoryInfo.classList.add("hidden");
     optionGroupInfo && optionGroupInfo.classList.add("hidden");
+    if (productInfoHeader) productInfoHeader.classList.add("hidden");
+    if (optionGroupHeader) optionGroupHeader.classList.add("hidden");
     if (productEmpty) productEmpty.classList.toggle("hidden", showCategory || showOption);
     if (categoryEmpty) categoryEmpty.classList.toggle("hidden", !showCategory);
     if (optionEmpty) optionEmpty.classList.toggle("hidden", !showOption);
@@ -806,6 +1331,10 @@
     state.selectedProductCategories = [];
     state.selectedOptionGroupId = null;
     state.optionGroupDetails = null;
+    state.optionPanel.level = "empty";
+    state.optionPanel.mode = "view";
+    state.optionPanel.pickerSelection = new Set();
+    state.optionDraft = null;
     showDetailsEmpty();
     if (productsList) $$(".order-row", productsList).forEach((x) => x.classList.remove("is-active"));
     if (categoriesMainList) $$(".order-row", categoriesMainList).forEach((x) => x.classList.remove("is-active"));
@@ -1069,7 +1598,7 @@
           <div class="option-picker-row ${checked ? "is-selected" : ""}">
             <div class="option-picker-meta">
               <div class="options-row-title">${escapeHtml(g.title || "")}</div>
-              <div class="options-row-meta">${escapeHtml(g.selection_type || "")}</div>
+              <div class="options-row-meta">${escapeHtml(getSelectionLabel(g.selection_type))}</div>
             </div>
             <label class="switch">
               <input class="switch-input" type="checkbox" data-option-id="${g.id}" ${checked ? "checked" : ""} />
@@ -1363,385 +1892,6 @@
     });
   }
 
-  // ---------------- Modal: option group ----------------
-
-  function openOptionGroupModal() {
-    const draft = {
-      items: [],
-      assignments: [],
-    };
-
-    window.AppModal.open({
-      title: "Новая опция",
-      content: "#tplOptionGroupEditor",
-      onSave: async ({ body }) => {
-        const form = $("#optionGroupForm", body);
-        if (!form) return false;
-
-        const groupPayload = {
-          title: String(form.title.value || "").trim(),
-          selection_type: form.selection_type.value === "multiple" ? "multiple" : "single",
-          min_select: form.min_select.value === "" ? 0 : Number(form.min_select.value),
-          max_select: form.max_select.value === "" ? null : Number(form.max_select.value),
-          is_active: form.is_active.checked ? 1 : 0,
-          sort_order: form.sort_order.value === "" ? 0 : Number(form.sort_order.value),
-        };
-
-        if (!groupPayload.title) {
-          form.title.focus();
-          return false;
-        }
-
-        const itemsPayload = draft.items.map((item, idx) => {
-          const isFixed = item.newPrice !== "" && item.newPrice != null;
-          return {
-            target_product_id: item.id,
-            price_mode: isFixed ? "fixed" : "from_target",
-            price_value: isFixed ? Number(item.newPrice) : null,
-            qty_min: groupPayload.selection_type === "single" ? 1 : (item.qty_min ?? 1),
-            qty_max: groupPayload.selection_type === "single" ? 1 : (item.qty_max ?? 1),
-            sort_order: idx * 10,
-            is_active: 1,
-          };
-        });
-
-        const assignmentsPayload = draft.assignments.map((item, idx) => ({
-          assign_id: item.id,
-          priority: 0,
-          sort_order: idx * 10,
-          is_active: 1,
-        }));
-
-        await apiCreateOptionGroup({
-          group: groupPayload,
-          items: itemsPayload,
-          assignments: assignmentsPayload,
-        });
-
-        await refreshAll();
-        return true;
-      },
-    });
-
-    const body = window.AppModal.body;
-    if (!body) return;
-
-    const ui = {
-      selectionType: $("#og_selection", body),
-      itemsTable: $("#ogItemsTable", body),
-      assignmentsTable: $("#ogAssignmentsTable", body),
-      addItemsBtn: $("#ogAddItemsBtn", body),
-      addAssignmentsBtn: $("#ogAddAssignmentsBtn", body),
-      pickerBackdrop: $("#ogPickerBackdrop", body),
-      pickerModal: $("#ogPickerModal", body),
-      pickerTitle: $("#ogPickerTitle", body),
-      pickerTabs: $("#ogPickerTabs", body),
-      pickerSearch: $("#ogPickerSearch", body),
-      pickerList: $("#ogPickerList", body),
-      pickerClose: $("#ogPickerClose", body),
-      pickerCancel: $("#ogPickerCancel", body),
-      pickerApply: $("#ogPickerApply", body),
-    };
-
-    let pickerMode = "items";
-    let pickerSelection = new Set();
-    let pickerCategoryId = null;
-    let pickerProducts = [];
-
-    function renderItemsTable() {
-      if (!ui.itemsTable) return;
-      if (!draft.items.length) {
-        ui.itemsTable.innerHTML = `<div class="empty-hint">Выберите товары для items...</div>`;
-        return;
-      }
-
-      const isSingle = ui.selectionType && ui.selectionType.value === "single";
-
-      ui.itemsTable.innerHTML = draft.items.map((item) => {
-        const catalogPrice = item.price != null ? Number(item.price).toFixed(2) : "—";
-        return `
-          <div class="option-item-row">
-            <div>
-              <div class="options-row-title">${escapeHtml(item.name || "")}</div>
-              <div class="muted">Каталог: ${catalogPrice}</div>
-            </div>
-            <input class="control" type="number" step="0.01" min="0" placeholder="Новая цена" data-item-field="price" data-item-id="${item.id}" value="${item.newPrice ?? ""}" />
-            <input class="control" type="number" min="1" ${isSingle ? "disabled" : ""} data-item-field="qty_min" data-item-id="${item.id}" value="${item.qty_min ?? 1}" />
-            <input class="control" type="number" min="1" ${isSingle ? "disabled" : ""} data-item-field="qty_max" data-item-id="${item.id}" value="${item.qty_max ?? 1}" />
-            <button class="btn btn-icon" type="button" data-item-remove="${item.id}"><i class="fas fa-times"></i></button>
-          </div>
-        `;
-      }).join("");
-
-      ui.itemsTable.querySelectorAll("[data-item-remove]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const id = Number(btn.dataset.itemRemove);
-          if (!Number.isFinite(id)) return;
-          draft.items = draft.items.filter((x) => x.id !== id);
-          renderItemsTable();
-        });
-      });
-
-      ui.itemsTable.querySelectorAll("input[data-item-field]").forEach((input) => {
-        input.addEventListener("input", () => {
-          const id = Number(input.dataset.itemId);
-          const field = input.dataset.itemField;
-          const item = draft.items.find((x) => x.id === id);
-          if (!item || !field) return;
-          if (field === "price") {
-            item.newPrice = input.value === "" ? "" : Number(input.value);
-          } else if (field === "qty_min") {
-            item.qty_min = input.value === "" ? 1 : Number(input.value);
-          } else if (field === "qty_max") {
-            item.qty_max = input.value === "" ? 1 : Number(input.value);
-          }
-        });
-      });
-    }
-
-    function renderAssignmentsTable() {
-      if (!ui.assignmentsTable) return;
-      if (!draft.assignments.length) {
-        ui.assignmentsTable.innerHTML = `<div class="empty-hint">Выберите товары для assignments...</div>`;
-        return;
-      }
-
-      ui.assignmentsTable.innerHTML = draft.assignments.map((item) => `
-        <div class="option-assignment-row">
-          <div class="options-row-title">${escapeHtml(item.name || "")}</div>
-          <div class="muted">priority=0</div>
-          <div class="muted">sort=0</div>
-          <button class="btn btn-icon" type="button" data-assign-remove="${item.id}">
-            <i class="fas fa-times"></i>
-          </button>
-        </div>
-      `).join("");
-
-      ui.assignmentsTable.querySelectorAll("[data-assign-remove]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const id = Number(btn.dataset.assignRemove);
-          if (!Number.isFinite(id)) return;
-          draft.assignments = draft.assignments.filter((x) => x.id !== id);
-          renderAssignmentsTable();
-        });
-      });
-    }
-
-    function closePicker() {
-      if (ui.pickerBackdrop) ui.pickerBackdrop.classList.add("hidden");
-      if (ui.pickerModal) ui.pickerModal.classList.add("hidden");
-      if (ui.pickerSearch) ui.pickerSearch.value = "";
-      pickerSelection = new Set();
-    }
-
-    function renderPickerTabs() {
-      if (!ui.pickerTabs) return;
-      ui.pickerTabs.innerHTML = state.catalogCategories.map((cat) => {
-        const active = Number(cat.id) === Number(pickerCategoryId);
-        return `
-          <button class="option-picker-tab ${active ? "is-active" : ""}" type="button" data-cat-id="${cat.id}">
-            ${escapeHtml(cat.title || "")}
-          </button>
-        `;
-      }).join("");
-
-      ui.pickerTabs.querySelectorAll("[data-cat-id]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          pickerCategoryId = Number(btn.dataset.catId);
-          await refreshPickerProducts();
-        });
-      });
-    }
-
-    async function refreshPickerProducts() {
-      const res = await apiGetCatalogProducts({ categoryId: pickerCategoryId, query: ui.pickerSearch.value });
-      pickerProducts = Array.isArray(res.data) ? res.data : [];
-      renderPickerList();
-    }
-
-    function renderPickerList() {
-      if (!ui.pickerList) return;
-      ui.pickerList.innerHTML = pickerProducts.map((product) => {
-        const checked = pickerSelection.has(product.id);
-        return `
-          <div class="option-picker-row ${checked ? "is-selected" : ""}">
-            <div class="option-picker-meta">
-              <div class="options-row-title">${escapeHtml(product.name || "")}</div>
-              <div class="options-row-meta">Цена: ${product.price != null ? Number(product.price).toFixed(2) : "—"}</div>
-            </div>
-            <label class="switch">
-              <input class="switch-input" type="checkbox" data-product-id="${product.id}" ${checked ? "checked" : ""} />
-              <span class="switch-ui"></span>
-            </label>
-          </div>
-        `;
-      }).join("");
-
-      ui.pickerList.querySelectorAll("input[data-product-id]").forEach((input) => {
-        input.addEventListener("change", () => {
-          const id = Number(input.dataset.productId);
-          if (!Number.isFinite(id)) return;
-          if (input.checked) pickerSelection.add(id);
-          else pickerSelection.delete(id);
-          if (ui.pickerApply) ui.pickerApply.textContent = `Добавить (${pickerSelection.size})`;
-        });
-      });
-    }
-
-    async function openPicker(mode) {
-      pickerMode = mode;
-      if (!state.catalogCategories.length) {
-        await loadCatalogCategories();
-      }
-      pickerCategoryId = state.catalogCategories[0] ? Number(state.catalogCategories[0].id) : null;
-      pickerSelection = new Set();
-      renderPickerTabs();
-      await refreshPickerProducts();
-      if (ui.pickerApply) ui.pickerApply.textContent = `Добавить (${pickerSelection.size})`;
-      if (ui.pickerTitle) ui.pickerTitle.textContent = mode === "items" ? "Добавить товары (items)" : "Добавить товары (assignments)";
-      if (ui.pickerBackdrop) ui.pickerBackdrop.classList.remove("hidden");
-      if (ui.pickerModal) ui.pickerModal.classList.remove("hidden");
-    }
-
-    if (ui.addItemsBtn) ui.addItemsBtn.addEventListener("click", () => openPicker("items"));
-    if (ui.addAssignmentsBtn) ui.addAssignmentsBtn.addEventListener("click", () => openPicker("assignments"));
-    if (ui.pickerClose) ui.pickerClose.addEventListener("click", closePicker);
-    if (ui.pickerCancel) ui.pickerCancel.addEventListener("click", closePicker);
-    if (ui.pickerBackdrop) ui.pickerBackdrop.addEventListener("click", closePicker);
-    if (ui.pickerSearch) ui.pickerSearch.addEventListener("input", refreshPickerProducts);
-    if (ui.selectionType) ui.selectionType.addEventListener("change", renderItemsTable);
-
-    if (ui.pickerApply) {
-      ui.pickerApply.addEventListener("click", () => {
-        const selectedProducts = pickerProducts.filter((p) => pickerSelection.has(p.id));
-        if (pickerMode === "items") {
-          for (const product of selectedProducts) {
-            if (draft.items.some((x) => x.id === product.id)) continue;
-            draft.items.push({ id: product.id, name: product.name, price: product.price, newPrice: "", qty_min: 1, qty_max: 1 });
-          }
-          renderItemsTable();
-        } else {
-          for (const product of selectedProducts) {
-            if (draft.assignments.some((x) => x.id === product.id)) continue;
-            draft.assignments.push({ id: product.id, name: product.name });
-          }
-          renderAssignmentsTable();
-        }
-        closePicker();
-      });
-    }
-
-    renderItemsTable();
-    renderAssignmentsTable();
-  }
-
-  async function openAssignmentsPickerForGroup(groupId) {
-    if (!window.AppModal) return;
-    if (!state.catalogCategories.length) {
-      await loadCatalogCategories();
-    }
-
-    const pickerState = {
-      categoryId: state.catalogCategories[0] ? Number(state.catalogCategories[0].id) : null,
-      selected: new Set(),
-      products: [],
-      query: "",
-    };
-
-    window.AppModal.open({
-      title: "Добавить товары",
-      content: `
-        <div class="option-group-section">
-          <div class="option-picker-tabs" id="agPickerTabs"></div>
-          <div class="option-picker-search">
-            <input class="control" id="agPickerSearch" type="search" placeholder="Поиск по названию" />
-          </div>
-          <div class="option-picker-list" id="agPickerList"></div>
-        </div>
-      `,
-      saveText: "Добавить",
-      onSave: async () => {
-        const ids = Array.from(pickerState.selected);
-        if (!ids.length) return true;
-        const res = await apiAddGroupAssignments(groupId, ids);
-        if (res.skipped && res.skipped.length) {
-          alert("Некоторые товары уже добавлены.");
-        }
-        await loadOptionGroupDetails(groupId);
-        renderOptionGroupsList();
-        showOptionGroupDetails(state.optionGroupDetails);
-        return true;
-      },
-    });
-
-    const body = window.AppModal.body;
-    const tabsEl = $("#agPickerTabs", body);
-    const searchEl = $("#agPickerSearch", body);
-    const listEl = $("#agPickerList", body);
-
-    function renderTabs() {
-      if (!tabsEl) return;
-      tabsEl.innerHTML = state.catalogCategories.map((cat) => {
-        const active = Number(cat.id) === Number(pickerState.categoryId);
-        return `
-          <button class="option-picker-tab ${active ? "is-active" : ""}" type="button" data-cat-id="${cat.id}">
-            ${escapeHtml(cat.title || "")}
-          </button>
-        `;
-      }).join("");
-      tabsEl.querySelectorAll("[data-cat-id]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          pickerState.categoryId = Number(btn.dataset.catId);
-          await refreshProducts();
-        });
-      });
-    }
-
-    async function refreshProducts() {
-      const res = await apiGetCatalogProducts({ categoryId: pickerState.categoryId, query: pickerState.query });
-      pickerState.products = Array.isArray(res.data) ? res.data : [];
-      renderList();
-    }
-
-    function renderList() {
-      if (!listEl) return;
-      listEl.innerHTML = pickerState.products.map((product) => {
-        const checked = pickerState.selected.has(product.id);
-        return `
-          <div class="option-picker-row ${checked ? "is-selected" : ""}">
-            <div class="option-picker-meta">
-              <div class="options-row-title">${escapeHtml(product.name || "")}</div>
-              <div class="options-row-meta">Цена: ${product.price != null ? Number(product.price).toFixed(2) : "—"}</div>
-            </div>
-            <label class="switch">
-              <input class="switch-input" type="checkbox" data-product-id="${product.id}" ${checked ? "checked" : ""} />
-              <span class="switch-ui"></span>
-            </label>
-          </div>
-        `;
-      }).join("");
-
-      listEl.querySelectorAll("input[data-product-id]").forEach((input) => {
-        input.addEventListener("change", () => {
-          const id = Number(input.dataset.productId);
-          if (!Number.isFinite(id)) return;
-          if (input.checked) pickerState.selected.add(id);
-          else pickerState.selected.delete(id);
-        });
-      });
-    }
-
-    if (searchEl) {
-      searchEl.addEventListener("input", async () => {
-        pickerState.query = searchEl.value;
-        await refreshProducts();
-      });
-    }
-
-    renderTabs();
-    await refreshProducts();
-  }
-
   // ---------------- Sortable (HTML5) ----------------
 
   function makeSortable(container, itemSelector, onDropPersist) {
@@ -1822,7 +1972,13 @@
       if (state.selectedOptionGroupId && !state.optionGroups.some((g) => g.id === state.selectedOptionGroupId)) {
         state.selectedOptionGroupId = null;
         state.optionGroupDetails = null;
+        state.optionPanel.level = "empty";
         showDetailsEmpty();
+      } else if (state.selectedOptionGroupId && state.optionPanel.mode !== "create") {
+        await loadOptionGroupDetails(state.selectedOptionGroupId);
+        if (state.optionPanel.level !== "empty") {
+          showOptionGroupDetails(state.optionGroupDetails, { mode: state.optionPanel.mode });
+        }
       }
       return;
     }
@@ -1858,7 +2014,7 @@
       addMainBtn.addEventListener("click", () => {
         if (state.mode === "categories") return openCategoryModal({ mode: "create" });
         if (state.mode === "products") return openProductModal({ mode: "create" });
-        if (state.mode === "options") return openOptionGroupModal();
+        if (state.mode === "options") return startOptionCreate();
       });
     }
 
@@ -1896,18 +2052,77 @@
       });
     }
 
+    if (optionItemsAddBtn) {
+      optionItemsAddBtn.addEventListener("click", () => {
+        if (state.optionPanel.mode === "create" || state.selectedOptionGroupId) {
+          openOptionPicker("items");
+        }
+      });
+    }
+
     if (optionAssignmentsAddBtn) {
       optionAssignmentsAddBtn.addEventListener("click", () => {
-        if (!state.selectedOptionGroupId) return;
-        openAssignmentsPickerForGroup(state.selectedOptionGroupId);
+        if (state.optionPanel.mode === "create" || state.selectedOptionGroupId) {
+          openOptionPicker("assignments");
+        }
       });
     }
 
     if (optionAssignmentsShowInactive) {
       optionAssignmentsShowInactive.addEventListener("change", () => {
-        if (state.optionGroupDetails) {
-          renderOptionAssignments(state.optionGroupDetails.assignments || []);
+        renderOptionAssignments(getOptionAssignmentsSource());
+      });
+    }
+
+    if (optionGroupForm) {
+      optionGroupForm.addEventListener("input", () => {
+        syncOptionDraftGroupFromForm();
+      });
+      optionGroupForm.addEventListener("change", () => {
+        syncOptionDraftGroupFromForm();
+      });
+    }
+
+    if (optionGroupSelectionInput) {
+      optionGroupSelectionInput.addEventListener("change", () => {
+        renderOptionItems(getOptionItemsSource());
+      });
+    }
+
+    if (optionPickerSearch) {
+      optionPickerSearch.addEventListener("input", async () => {
+        state.optionPanel.pickerQuery = optionPickerSearch.value;
+        await refreshOptionPickerProducts();
+      });
+    }
+
+    if (optionHeaderPrimaryBtn) {
+      optionHeaderPrimaryBtn.addEventListener("click", async () => {
+        if (state.optionPanel.level === "picker") {
+          await applyOptionPickerSelection();
+          return;
         }
+        if (state.optionPanel.mode === "view") {
+          startOptionEdit();
+          return;
+        }
+        await saveOptionGroup();
+      });
+    }
+
+    if (optionHeaderBackBtn) {
+      optionHeaderBackBtn.addEventListener("click", () => {
+        if (state.optionPanel.level === "picker") closeOptionPicker();
+      });
+    }
+
+    if (optionHeaderCloseBtn) {
+      optionHeaderCloseBtn.addEventListener("click", () => {
+        if (state.optionPanel.level === "picker") {
+          closeOptionPicker();
+          return;
+        }
+        closeOptionDetails();
       });
     }
 
