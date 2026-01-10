@@ -28,7 +28,10 @@
       </div>
 
       <div class="content-view hidden" data-view-content="variants"><div class="info-card">Содержимое для вариантов...</div></div>
-      <div class="content-view hidden" data-view-content="options"><div class="info-card">Содержимое для опций...</div></div>
+      <div class="content-view hidden" data-view-content="options">
+        <div class="options-list" id="optionsGroupsList"></div>
+        <div class="empty-hint" id="optionsGroupsEmpty">Пока нет опций...</div>
+      </div>
       <div class="content-view hidden" data-view-content="units"><div class="info-card">Единицы измерения...</div></div>
       <div class="content-view hidden" data-view-content="allergens"><div class="info-card">Аллергены...</div></div>
       <div class="content-view hidden" data-view-content="diets"><div class="info-card">Диеты...</div></div>
@@ -82,6 +85,29 @@
               <button class="btn btn-icon" type="button" id="peCatClose"><i class="fas fa-times"></i></button>
             </div>
             <div class="inline-modal-body no-scrollbar" id="peCatList"></div>
+          </div>
+        </div>
+
+        <div>
+          <label class="field-label">Опции</label>
+          <div class="chips" id="peOptionChips"></div>
+
+          <div class="inline-backdrop hidden" id="peOptionBackdrop"></div>
+          <div class="inline-modal hidden" id="peOptionModal" role="dialog" aria-modal="true">
+            <div class="inline-modal-header">
+              <div class="inline-modal-title">Опции товара</div>
+              <button class="btn btn-icon" type="button" id="peOptionClose"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="inline-modal-body no-scrollbar">
+              <div class="option-picker-search">
+                <input class="control" id="peOptionSearch" type="search" placeholder="Поиск по названию" />
+              </div>
+              <div class="option-picker-list" id="peOptionList"></div>
+            </div>
+            <div class="inline-modal-footer">
+              <button class="btn" type="button" id="peOptionCancel">Отмена</button>
+              <button class="btn btn-primary" type="button" id="peOptionApply">Добавить (0)</button>
+            </div>
           </div>
         </div>
 
@@ -184,5 +210,93 @@
     <input id="ce_code" name="code" type="hidden" />
     <input id="ce_icon" name="icon" type="hidden" />
     <input id="ce_sort" name="sort_order" type="hidden" />
+  </form>
+</template>
+
+<!-- Option group editor -->
+<template id="tplOptionGroupEditor">
+  <form id="optionGroupForm" class="form-grid" autocomplete="off">
+    <div class="option-group-section">
+      <div class="section-title">Группа</div>
+
+      <div>
+        <label class="field-label" for="og_title">Название *</label>
+        <input class="control" id="og_title" name="title" type="text" required />
+      </div>
+
+      <div class="form-row-2">
+        <div>
+          <label class="field-label" for="og_selection">Тип выбора</label>
+          <select class="control" id="og_selection" name="selection_type">
+            <option value="single">single</option>
+            <option value="multiple">multiple</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="field-label" for="og_min_select">Min (шт.)</label>
+          <input class="control" id="og_min_select" name="min_select" type="number" min="0" value="0" />
+        </div>
+      </div>
+
+      <div class="form-row-2">
+        <div>
+          <label class="field-label" for="og_max_select">Max (шт., пусто = ∞)</label>
+          <input class="control" id="og_max_select" name="max_select" type="number" min="0" placeholder="∞" />
+        </div>
+
+        <div>
+          <label class="field-label" for="og_sort_order">Sort order</label>
+          <input class="control" id="og_sort_order" name="sort_order" type="number" min="0" value="0" />
+        </div>
+      </div>
+
+      <label class="switch">
+        <input class="switch-input" type="checkbox" name="is_active" checked />
+        <span class="switch-ui" aria-hidden="true"></span>
+        <span class="switch-text">Активна</span>
+      </label>
+    </div>
+
+    <div class="option-group-section">
+      <div class="section-header">
+        <div class="section-title">Items</div>
+        <button class="btn btn-sm" type="button" id="ogAddItemsBtn">
+          <i class="fas fa-plus"></i> Добавить товары
+        </button>
+      </div>
+
+      <div class="option-items-table" id="ogItemsTable"></div>
+    </div>
+
+    <div class="option-group-section">
+      <div class="section-header">
+        <div class="section-title">Assignments</div>
+        <button class="btn btn-sm" type="button" id="ogAddAssignmentsBtn">
+          <i class="fas fa-plus"></i> Добавить товары
+        </button>
+      </div>
+
+      <div class="option-assignments-table" id="ogAssignmentsTable"></div>
+    </div>
+
+    <div class="inline-backdrop hidden" id="ogPickerBackdrop"></div>
+    <div class="inline-modal hidden option-picker-modal" id="ogPickerModal" role="dialog" aria-modal="true">
+      <div class="inline-modal-header">
+        <div class="inline-modal-title" id="ogPickerTitle">Выбор товаров</div>
+        <button class="btn btn-icon" type="button" id="ogPickerClose"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="inline-modal-body no-scrollbar">
+        <div class="option-picker-tabs" id="ogPickerTabs"></div>
+        <div class="option-picker-search">
+          <input class="control" id="ogPickerSearch" type="search" placeholder="Поиск по названию" />
+        </div>
+        <div class="option-picker-list" id="ogPickerList"></div>
+      </div>
+      <div class="inline-modal-footer">
+        <button class="btn" type="button" id="ogPickerCancel">Отмена</button>
+        <button class="btn btn-primary" type="button" id="ogPickerApply">Добавить (0)</button>
+      </div>
+    </div>
   </form>
 </template>
