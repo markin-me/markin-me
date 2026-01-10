@@ -415,8 +415,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const tenantId = helpers.getTenantId(req);
       const [rows] = await db.query(
         `SELECT g.*,
-                (SELECT COUNT(*) FROM prod_option_items i WHERE i.tenant_id=g.tenant_id AND i.group_id=g.id AND i.is_active=1) AS items_count,
-                (SELECT COUNT(*) FROM prod_option_assignments a WHERE a.tenant_id=g.tenant_id AND a.group_id=g.id AND a.is_active=1) AS assignments_count
+                (SELECT COUNT(*) FROM prod_option_items i WHERE i.tenant_id=g.tenant_id AND i.group_id=g.id) AS items_count,
+                (SELECT COUNT(*) FROM prod_option_assignments a WHERE a.tenant_id=g.tenant_id AND a.group_id=g.id) AS assignments_count
          FROM prod_option_groups g
          WHERE g.tenant_id=?
          ORDER BY g.sort_order ASC, g.id ASC`,
@@ -506,7 +506,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
             priceValue,
             helpers.numOrNull(item.qty_min) ?? 1,
             helpers.numOrNull(item.qty_max) ?? 1,
-            helpers.toBool(item.is_active, true) ? 1 : 0,
+            1,
             helpers.numOrNull(item.sort_order) ?? idx * 10
           ];
         });
@@ -526,14 +526,13 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
           Number(assignment.assign_id),
           helpers.numOrNull(assignment.priority) ?? 0,
           helpers.numOrNull(assignment.sort_order) ?? idx * 10,
-          helpers.toBool(assignment.is_active, true) ? 1 : 0
+          1
         ]));
         await conn.query(
           `INSERT INTO prod_option_assignments
            (tenant_id, group_id, assign_type, assign_id, priority, sort_order, is_active)
            VALUES ?
            ON DUPLICATE KEY UPDATE
-             is_active=VALUES(is_active),
              priority=VALUES(priority),
              sort_order=VALUES(sort_order)`,
           [values]
@@ -604,6 +603,86 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     }
   });
 
+  async function tableExists(conn, tableName) {
+    const [[row]] = await conn.query(
+      `SELECT COUNT(*) AS cnt
+       FROM information_schema.tables
+       WHERE table_schema=DATABASE() AND table_name=?`,
+      [tableName]
+    );
+    return Boolean(row && row.cnt);
+  }
+
+  router.delete('/admin/options/groups/:id', async (req, res) => {
+    const tenantId = helpers.getTenantId(req);
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [[group]] = await conn.query(
+        'SELECT id FROM prod_option_groups WHERE tenant_id=? AND id=? LIMIT 1 FOR UPDATE',
+        [tenantId, id]
+      );
+      if (!group) {
+        await conn.rollback();
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      const [[itemsRow]] = await conn.query(
+        'SELECT COUNT(*) AS cnt FROM prod_option_items WHERE tenant_id=? AND group_id=?',
+        [tenantId, id]
+      );
+      const [[assignmentsRow]] = await conn.query(
+        'SELECT COUNT(*) AS cnt FROM prod_option_assignments WHERE tenant_id=? AND group_id=?',
+        [tenantId, id]
+      );
+
+      let overridesCount = 0;
+      let exclusionsCount = 0;
+      if (await tableExists(conn, 'prod_option_overrides')) {
+        const [[overridesRow]] = await conn.query(
+          'SELECT COUNT(*) AS cnt FROM prod_option_overrides WHERE tenant_id=? AND group_id=?',
+          [tenantId, id]
+        );
+        overridesCount = overridesRow?.cnt || 0;
+      }
+      if (await tableExists(conn, 'prod_option_exclusions')) {
+        const [[exclusionsRow]] = await conn.query(
+          'SELECT COUNT(*) AS cnt FROM prod_option_exclusions WHERE tenant_id=? AND group_id=?',
+          [tenantId, id]
+        );
+        exclusionsCount = exclusionsRow?.cnt || 0;
+      }
+
+      const hasRelations = (itemsRow?.cnt || 0) > 0
+        || (assignmentsRow?.cnt || 0) > 0
+        || overridesCount > 0
+        || exclusionsCount > 0;
+
+      if (hasRelations) {
+        await conn.rollback();
+        return res.status(409).json({ ok: false, error: 'Нельзя удалить опцию — есть связанные данные' });
+      }
+
+      await conn.query(
+        'DELETE FROM prod_option_groups WHERE tenant_id=? AND id=?',
+        [tenantId, id]
+      );
+
+      await conn.commit();
+      res.json({ ok: true });
+    } catch (e) {
+      await conn.rollback();
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      conn.release();
+    }
+  });
+
   router.post('/admin/options/groups/:id/items', async (req, res) => {
     const tenantId = helpers.getTenantId(req);
     const groupId = Number(req.params.id);
@@ -618,7 +697,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     try {
       await conn.beginTransaction();
       const [existing] = await conn.query(
-        `SELECT id, target_product_id, is_active
+        `SELECT id, target_product_id
          FROM prod_option_items
          WHERE tenant_id=? AND group_id=? AND target_type='product'
            AND target_product_id IN (${targetIds.map(() => '?').join(',')})`,
@@ -637,14 +716,13 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         const qtyMin = helpers.numOrNull(item.qty_min) ?? 1;
         const qtyMax = helpers.numOrNull(item.qty_max) ?? 1;
         const sortOrder = helpers.numOrNull(item.sort_order) ?? 0;
-        const isActive = helpers.toBool(item.is_active, true) ? 1 : 0;
 
         if (!row) {
           await conn.query(
             `INSERT INTO prod_option_items
              (tenant_id, group_id, target_type, target_product_id, price_mode, price_value, qty_min, qty_max, is_active, sort_order)
              VALUES (?,?,?,?,?,?,?,?,?,?)`,
-            [tenantId, groupId, 'product', targetId, priceMode, priceValue, qtyMin, qtyMax, isActive, sortOrder]
+            [tenantId, groupId, 'product', targetId, priceMode, priceValue, qtyMin, qtyMax, 1, sortOrder]
           );
           added.push(targetId);
           continue;
@@ -652,9 +730,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
         await conn.query(
           `UPDATE prod_option_items
-           SET price_mode=?, price_value=?, qty_min=?, qty_max=?, is_active=?, sort_order=?
+           SET price_mode=?, price_value=?, qty_min=?, qty_max=?, sort_order=?
            WHERE tenant_id=? AND id=?`,
-          [priceMode, priceValue, qtyMin, qtyMax, isActive, sortOrder, tenantId, row.id]
+          [priceMode, priceValue, qtyMin, qtyMax, sortOrder, tenantId, row.id]
         );
         updated.push(targetId);
       }
@@ -700,10 +778,6 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         fields.push('qty_max=?');
         values.push(helpers.numOrNull(req.body.qty_max) ?? 1);
       }
-      if (Object.prototype.hasOwnProperty.call(req.body, 'is_active')) {
-        fields.push('is_active=?');
-        values.push(helpers.toBool(req.body.is_active, true) ? 1 : 0);
-      }
       if (Object.prototype.hasOwnProperty.call(req.body, 'sort_order')) {
         fields.push('sort_order=?');
         values.push(helpers.numOrNull(req.body.sort_order) ?? 0);
@@ -726,6 +800,25 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     }
   });
 
+  router.delete('/admin/options/items/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      await db.query(
+        `DELETE FROM prod_option_items
+         WHERE tenant_id=? AND id=?`,
+        [tenantId, id]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.post('/admin/options/groups/:id/assignments', async (req, res) => {
     const tenantId = helpers.getTenantId(req);
     const groupId = Number(req.params.id);
@@ -734,11 +827,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     const norm = Array.from(new Set(assignIds.map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0)));
     if (!norm.length) return res.status(400).json({ ok: false, error: 'EMPTY' });
 
-    const conn = await db.getConnection();
-    try {
-      await conn.beginTransaction();
-      const [existing] = await conn.query(
-        `SELECT id, assign_id, is_active
+      const conn = await db.getConnection();
+      try {
+        await conn.beginTransaction();
+        const [existing] = await conn.query(
+        `SELECT id, assign_id
          FROM prod_option_assignments
          WHERE tenant_id=? AND group_id=? AND assign_type='product'
            AND assign_id IN (${norm.map(() => '?').join(',')})`,
@@ -747,7 +840,6 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const map = new Map(existing.map((row) => [Number(row.assign_id), row]));
 
       const added = [];
-      const reenabled = [];
       const skipped = [];
 
       for (const id of norm) {
@@ -762,21 +854,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
           added.push(id);
           continue;
         }
-        if (row.is_active) {
-          skipped.push(id);
-          continue;
-        }
-        await conn.query(
-          `UPDATE prod_option_assignments
-           SET is_active=1, priority=0, sort_order=0
-           WHERE tenant_id=? AND id=?`,
-          [tenantId, row.id]
-        );
-        reenabled.push(id);
+        skipped.push(id);
       }
 
       await conn.commit();
-      res.json({ ok: true, added, reenabled, skipped });
+      res.json({ ok: true, added, skipped });
     } catch (e) {
       await conn.rollback();
       console.error(e);
@@ -794,15 +876,32 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const priority = helpers.numOrNull(req.body.priority);
       const sortOrder = helpers.numOrNull(req.body.sort_order);
-      const isActive = req.body.is_active == null ? null : (helpers.toBool(req.body.is_active, true) ? 1 : 0);
 
       await db.query(
         `UPDATE prod_option_assignments
          SET priority=COALESCE(?, priority),
-             sort_order=COALESCE(?, sort_order),
-             is_active=COALESCE(?, is_active)
+             sort_order=COALESCE(?, sort_order)
          WHERE tenant_id=? AND id=?`,
-        [priority, sortOrder, isActive, tenantId, id]
+        [priority, sortOrder, tenantId, id]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/admin/options/assignments/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      await db.query(
+        `DELETE FROM prod_option_assignments
+         WHERE tenant_id=? AND id=?`,
+        [tenantId, id]
       );
 
       res.json({ ok: true });
