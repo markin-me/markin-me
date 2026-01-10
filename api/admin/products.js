@@ -407,5 +407,394 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     }
   });
 
+  // ------------------------------
+  // Options: groups/items/assignments
+  // ------------------------------
+  router.get('/admin/options/groups', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const [rows] = await db.query(
+        `SELECT g.*,
+                (SELECT COUNT(*) FROM prod_option_items i WHERE i.tenant_id=g.tenant_id AND i.group_id=g.id AND i.is_active=1) AS items_count,
+                (SELECT COUNT(*) FROM prod_option_assignments a WHERE a.tenant_id=g.tenant_id AND a.group_id=g.id AND a.is_active=1) AS assignments_count
+         FROM prod_option_groups g
+         WHERE g.tenant_id=?
+         ORDER BY g.sort_order ASC, g.id ASC`,
+        [tenantId]
+      );
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/admin/options/groups/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const [[group]] = await db.query(
+        'SELECT * FROM prod_option_groups WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, id]
+      );
+      if (!group) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+
+      const [items] = await db.query(
+        `SELECT i.*, p.name AS product_name, p.price AS product_price
+         FROM prod_option_items i
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
+         WHERE i.tenant_id=? AND i.group_id=? AND i.target_type='product'
+         ORDER BY i.sort_order ASC, i.id ASC`,
+        [tenantId, id]
+      );
+
+      const [assignments] = await db.query(
+        `SELECT a.*, p.name AS product_name
+         FROM prod_option_assignments a
+         JOIN prod_products p ON p.tenant_id=a.tenant_id AND p.id=a.assign_id
+         WHERE a.tenant_id=? AND a.group_id=? AND a.assign_type='product'
+         ORDER BY a.sort_order ASC, a.id ASC`,
+        [tenantId, id]
+      );
+
+      res.json({ ok: true, data: { group, items, assignments } });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/options/group-bundle', async (req, res) => {
+    const tenantId = helpers.getTenantId(req);
+    const group = req.body.group || req.body || {};
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    const assignments = Array.isArray(req.body.assignments) ? req.body.assignments : [];
+
+    const title = helpers.strOrNull(group.title);
+    if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+
+    const selectionType = group.selection_type === 'multiple' ? 'multiple' : 'single';
+    const minSelect = helpers.numOrNull(group.min_select) ?? 0;
+    const maxSelect = helpers.numOrNull(group.max_select);
+    const isActive = helpers.toBool(group.is_active, true) ? 1 : 0;
+    const sortOrder = helpers.numOrNull(group.sort_order) ?? 0;
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [result] = await conn.query(
+        `INSERT INTO prod_option_groups
+         (tenant_id, title, selection_type, min_select, max_select, is_active, sort_order)
+         VALUES (?,?,?,?,?,?,?)`,
+        [tenantId, title, selectionType, minSelect, maxSelect, isActive, sortOrder]
+      );
+      const groupId = result.insertId;
+
+      if (items.length) {
+        const values = items.map((item, idx) => {
+          const priceMode = item.price_mode === 'fixed' ? 'fixed' : 'from_target';
+          const priceValue = priceMode === 'fixed' ? helpers.numOrNull(item.price_value) : null;
+          return [
+            tenantId,
+            groupId,
+            'product',
+            Number(item.target_product_id),
+            priceMode,
+            priceValue,
+            helpers.numOrNull(item.qty_min) ?? 1,
+            helpers.numOrNull(item.qty_max) ?? 1,
+            helpers.toBool(item.is_active, true) ? 1 : 0,
+            helpers.numOrNull(item.sort_order) ?? idx * 10
+          ];
+        });
+        await conn.query(
+          `INSERT INTO prod_option_items
+           (tenant_id, group_id, target_type, target_product_id, price_mode, price_value, qty_min, qty_max, is_active, sort_order)
+           VALUES ?`,
+          [values]
+        );
+      }
+
+      if (assignments.length) {
+        const values = assignments.map((assignment, idx) => ([
+          tenantId,
+          groupId,
+          'product',
+          Number(assignment.assign_id),
+          helpers.numOrNull(assignment.priority) ?? 0,
+          helpers.numOrNull(assignment.sort_order) ?? idx * 10,
+          helpers.toBool(assignment.is_active, true) ? 1 : 0
+        ]));
+        await conn.query(
+          `INSERT INTO prod_option_assignments
+           (tenant_id, group_id, assign_type, assign_id, priority, sort_order, is_active)
+           VALUES ?
+           ON DUPLICATE KEY UPDATE
+             is_active=VALUES(is_active),
+             priority=VALUES(priority),
+             sort_order=VALUES(sort_order)`,
+          [values]
+        );
+      }
+
+      await conn.commit();
+      res.json({ ok: true, id: groupId });
+    } catch (e) {
+      await conn.rollback();
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  router.post('/admin/options/groups/:id/assignments', async (req, res) => {
+    const tenantId = helpers.getTenantId(req);
+    const groupId = Number(req.params.id);
+    if (!Number.isFinite(groupId) || groupId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+    const assignIds = Array.isArray(req.body.assign_ids) ? req.body.assign_ids : [];
+    const norm = Array.from(new Set(assignIds.map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0)));
+    if (!norm.length) return res.status(400).json({ ok: false, error: 'EMPTY' });
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [existing] = await conn.query(
+        `SELECT id, assign_id, is_active
+         FROM prod_option_assignments
+         WHERE tenant_id=? AND group_id=? AND assign_type='product'
+           AND assign_id IN (${norm.map(() => '?').join(',')})`,
+        [tenantId, groupId, ...norm]
+      );
+      const map = new Map(existing.map((row) => [Number(row.assign_id), row]));
+
+      const added = [];
+      const reenabled = [];
+      const skipped = [];
+
+      for (const id of norm) {
+        const row = map.get(id);
+        if (!row) {
+          await conn.query(
+            `INSERT INTO prod_option_assignments
+             (tenant_id, group_id, assign_type, assign_id, priority, sort_order, is_active)
+             VALUES (?,?,?,?,?,?,1)`,
+            [tenantId, groupId, 'product', id, 0, 0]
+          );
+          added.push(id);
+          continue;
+        }
+        if (row.is_active) {
+          skipped.push(id);
+          continue;
+        }
+        await conn.query(
+          `UPDATE prod_option_assignments
+           SET is_active=1, priority=0, sort_order=0
+           WHERE tenant_id=? AND id=?`,
+          [tenantId, row.id]
+        );
+        reenabled.push(id);
+      }
+
+      await conn.commit();
+      res.json({ ok: true, added, reenabled, skipped });
+    } catch (e) {
+      await conn.rollback();
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  router.patch('/admin/options/assignments/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const priority = helpers.numOrNull(req.body.priority);
+      const sortOrder = helpers.numOrNull(req.body.sort_order);
+      const isActive = req.body.is_active == null ? null : (helpers.toBool(req.body.is_active, true) ? 1 : 0);
+
+      await db.query(
+        `UPDATE prod_option_assignments
+         SET priority=COALESCE(?, priority),
+             sort_order=COALESCE(?, sort_order),
+             is_active=COALESCE(?, is_active)
+         WHERE tenant_id=? AND id=?`,
+        [priority, sortOrder, isActive, tenantId, id]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/admin/catalog/categories', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const [rows] = await db.query(
+        `SELECT id, title, code, sort_order
+         FROM prod_categories
+         WHERE tenant_id=? AND is_active=1
+         ORDER BY sort_order ASC, id ASC`,
+        [tenantId]
+      );
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/admin/catalog/products', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const categoryId = helpers.numOrNull(req.query.category_id);
+      const q = helpers.strOrNull(req.query.q);
+
+      const params = [];
+      let sql =
+        `SELECT p.id, p.name, p.price
+         FROM prod_products p`;
+
+      if (categoryId) {
+        sql += ` JOIN prod_product_categories pc
+                 ON pc.tenant_id=p.tenant_id AND pc.product_id=p.id AND pc.category_id=?`;
+        params.push(categoryId);
+      }
+
+      sql += ` WHERE p.tenant_id=?`;
+      params.push(tenantId);
+
+      if (q) {
+        sql += ` AND p.name LIKE ?`;
+        params.push(`%${q}%`);
+      }
+
+      sql += ` ORDER BY p.name ASC, p.id ASC LIMIT 200`;
+
+      const [rows] = await db.query(sql, params);
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/admin/products/:id/option-assignments', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const productId = Number(req.params.id);
+      if (!Number.isFinite(productId) || productId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const [rows] = await db.query(
+        `SELECT a.id AS assignment_id, a.group_id, a.priority, a.sort_order, a.is_active,
+                g.title, g.selection_type, g.min_select, g.max_select
+         FROM prod_option_assignments a
+         JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id
+         WHERE a.tenant_id=? AND a.assign_type='product' AND a.assign_id=?
+         ORDER BY a.sort_order ASC, a.id ASC`,
+        [tenantId, productId]
+      );
+
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/products/:id/option-assignments', async (req, res) => {
+    const tenantId = helpers.getTenantId(req);
+    const productId = Number(req.params.id);
+    if (!Number.isFinite(productId) || productId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+    const groupIds = Array.isArray(req.body.group_ids) ? req.body.group_ids : [];
+    const norm = Array.from(new Set(groupIds.map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0)));
+    if (!norm.length) return res.status(400).json({ ok: false, error: 'EMPTY' });
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [existing] = await conn.query(
+        `SELECT id, group_id, is_active
+         FROM prod_option_assignments
+         WHERE tenant_id=? AND assign_type='product' AND assign_id=?
+           AND group_id IN (${norm.map(() => '?').join(',')})`,
+        [tenantId, productId, ...norm]
+      );
+      const map = new Map(existing.map((row) => [Number(row.group_id), row]));
+      const added = [];
+      const reenabled = [];
+      const skipped = [];
+
+      for (const groupId of norm) {
+        const row = map.get(groupId);
+        if (!row) {
+          await conn.query(
+            `INSERT INTO prod_option_assignments
+             (tenant_id, group_id, assign_type, assign_id, priority, sort_order, is_active)
+             VALUES (?,?,?,?,?,?,1)`,
+            [tenantId, groupId, 'product', productId, 0, 0]
+          );
+          added.push(groupId);
+          continue;
+        }
+        if (row.is_active) {
+          skipped.push(groupId);
+          continue;
+        }
+        await conn.query(
+          `UPDATE prod_option_assignments
+           SET is_active=1, priority=0, sort_order=0
+           WHERE tenant_id=? AND id=?`,
+          [tenantId, row.id]
+        );
+        reenabled.push(groupId);
+      }
+
+      await conn.commit();
+      res.json({ ok: true, added, reenabled, skipped });
+    } catch (e) {
+      await conn.rollback();
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  async function disableProductAssignment(req, res) {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const productId = Number(req.params.id);
+      const groupId = Number(req.params.groupId);
+      if (!Number.isFinite(productId) || productId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      if (!Number.isFinite(groupId) || groupId <= 0) return res.status(400).json({ ok: false, error: 'BAD_GROUP_ID' });
+
+      await db.query(
+        `UPDATE prod_option_assignments
+         SET is_active=0
+         WHERE tenant_id=? AND assign_type='product' AND assign_id=? AND group_id=?`,
+        [tenantId, productId, groupId]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  }
+
+  router.patch('/admin/products/:id/option-assignments/:groupId', disableProductAssignment);
+  router.delete('/admin/products/:id/option-assignments/:groupId', disableProductAssignment);
+
   return router;
 };
