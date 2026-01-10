@@ -89,29 +89,6 @@
         </div>
 
         <div>
-          <label class="field-label">Опции</label>
-          <div class="chips" id="peOptionChips"></div>
-
-          <div class="inline-backdrop hidden" id="peOptionBackdrop"></div>
-          <div class="inline-modal hidden" id="peOptionModal" role="dialog" aria-modal="true">
-            <div class="inline-modal-header">
-              <div class="inline-modal-title">Опции товара</div>
-              <button class="btn btn-icon" type="button" id="peOptionClose"><i class="fas fa-times"></i></button>
-            </div>
-            <div class="inline-modal-body no-scrollbar">
-              <div class="option-picker-search">
-                <input class="control" id="peOptionSearch" type="search" placeholder="Поиск по названию" />
-              </div>
-              <div class="option-picker-list" id="peOptionList"></div>
-            </div>
-            <div class="inline-modal-footer">
-              <button class="btn" type="button" id="peOptionCancel">Отмена</button>
-              <button class="btn btn-primary" type="button" id="peOptionApply">Добавить (0)</button>
-            </div>
-          </div>
-        </div>
-
-        <div>
           <label class="field-label" for="pe_sku">Артикул (SKU)</label>
           <input class="control" id="pe_sku" name="sku" type="text" placeholder="BRG-001" />
         </div>
@@ -160,6 +137,36 @@
         <span class="switch-ui" aria-hidden="true"></span>
         <span class="switch-text">Показывать на сайте</span>
       </label>
+    </div>
+
+    <div class="info-card product-options-card">
+      <div class="option-section-header">
+        <div class="kv-label">Опции</div>
+        <div class="option-actions">
+          <button class="btn btn-sm" type="button" id="peOptionManageBtn">
+            <i class="fas fa-plus"></i> Добавить
+          </button>
+        </div>
+      </div>
+      <div class="info-accordion" id="peOptionAccordion"></div>
+    </div>
+
+    <div class="inline-backdrop hidden" id="peOptionBackdrop"></div>
+    <div class="inline-modal hidden" id="peOptionModal" role="dialog" aria-modal="true">
+      <div class="inline-modal-header">
+        <div class="inline-modal-title">Опции товара</div>
+        <button class="btn btn-icon" type="button" id="peOptionClose"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="inline-modal-body no-scrollbar">
+        <div class="option-picker-search">
+          <input class="control" id="peOptionSearch" type="search" placeholder="Поиск по названию" />
+        </div>
+        <div class="option-picker-list" id="peOptionList"></div>
+      </div>
+      <div class="inline-modal-footer">
+        <button class="btn" type="button" id="peOptionCancel">Отмена</button>
+        <button class="btn btn-primary" type="button" id="peOptionApply">Добавить (0)</button>
+      </div>
     </div>
   </form>
 </template>
