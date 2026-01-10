@@ -31,6 +31,7 @@
   const optionHeaderActions = $("#optionHeaderActions");
   const optionHeaderBackBtn = $("#optionHeaderBackBtn");
   const optionHeaderPrimaryBtn = $("#optionHeaderPrimaryBtn");
+  const optionHeaderDeleteBtn = $("#optionHeaderDeleteBtn");
   const optionHeaderCloseBtn = $("#optionHeaderCloseBtn");
   const closeProductInfoBtn = $("#closeProductInfoBtn");
   const editProductBtn = $("#editProductBtn");
@@ -69,7 +70,6 @@
   const optionAssignmentsList = $("#optionAssignmentsList");
   const optionAssignmentsCount = $("#optionAssignmentsCount");
   const optionAssignmentsAddBtn = $("#optionAssignmentsAddBtn");
-  const optionAssignmentsShowInactive = $("#optionAssignmentsShowInactive");
   const optionPickerTabs = $("#optionPickerTabs");
   const optionPickerSearch = $("#optionPickerSearch");
   const optionPickerList = $("#optionPickerList");
@@ -107,6 +107,8 @@
       pickerQuery: "",
       pickerTabsScrollLeft: 0,
       returnTo: null,
+      formSnapshot: null,
+      snapshotMode: null,
     },
     optionDraft: null,
   };
@@ -167,6 +169,10 @@
     return api(`/api/admin/options/groups/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
   }
 
+  async function apiDeleteOptionGroup(id) {
+    return api(`/api/admin/options/groups/${id}`, { method: "DELETE" });
+  }
+
   async function apiAddGroupItems(groupId, items) {
     return api(`/api/admin/options/groups/${groupId}/items`, {
       method: "POST",
@@ -185,8 +191,16 @@
     return api(`/api/admin/options/items/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
   }
 
+  async function apiDeleteItem(id) {
+    return api(`/api/admin/options/items/${id}`, { method: "DELETE" });
+  }
+
   async function apiPatchAssignment(id, payload) {
     return api(`/api/admin/options/assignments/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+  }
+
+  async function apiDeleteAssignment(id) {
+    return api(`/api/admin/options/assignments/${id}`, { method: "DELETE" });
   }
 
   async function apiGetCatalogCategories() {
@@ -944,9 +958,8 @@
     return state.optionGroupDetails?.assignments || [];
   }
 
-  function syncOptionDraftGroupFromForm() {
-    if (state.optionPanel.mode !== "create" || !state.optionDraft) return;
-    state.optionDraft.group = {
+  function getOptionGroupFormValues() {
+    return {
       title: String(optionGroupTitleInput?.value || "").trim(),
       selection_type: optionGroupSelectionInput?.value === "multiple" ? "multiple" : "single",
       min_select: optionGroupMinInput?.value === "" ? 0 : Number(optionGroupMinInput?.value),
@@ -954,6 +967,17 @@
       is_active: optionGroupActiveInput?.checked ? 1 : 0,
       sort_order: optionGroupSortInput?.value === "" ? 0 : Number(optionGroupSortInput?.value),
     };
+  }
+
+  function isOptionGroupDirty() {
+    if (!state.optionPanel.formSnapshot) return false;
+    const current = getOptionGroupFormValues();
+    return JSON.stringify(current) !== JSON.stringify(state.optionPanel.formSnapshot);
+  }
+
+  function syncOptionDraftGroupFromForm() {
+    if (state.optionPanel.mode !== "create" || !state.optionDraft) return;
+    state.optionDraft.group = getOptionGroupFormValues();
   }
 
   function setOptionGroupFormDisabled(disabled) {
@@ -1006,16 +1030,31 @@
     }
 
     if (optionHeaderBackBtn) {
-      optionHeaderBackBtn.classList.toggle("hidden", !isPicker);
+      optionHeaderBackBtn.classList.remove("hidden");
+    }
+    if (optionHeaderDeleteBtn) {
+      optionHeaderDeleteBtn.classList.toggle("hidden", mode !== "edit" || isPicker);
     }
     if (optionHeaderPrimaryBtn) {
+      const icon = optionHeaderPrimaryBtn.querySelector("i");
       if (isPicker) {
         const count = state.optionPanel.pickerSelection.size;
-        optionHeaderPrimaryBtn.textContent = count ? `Добавить (${count})` : "Готово";
+        const label = count ? `Добавить (${count})` : "Готово";
+        optionHeaderPrimaryBtn.title = label;
+        optionHeaderPrimaryBtn.setAttribute("aria-label", label);
+        if (icon) icon.className = "fas fa-check";
+        optionHeaderPrimaryBtn.disabled = false;
       } else if (mode === "view") {
-        optionHeaderPrimaryBtn.textContent = "Редактировать";
+        optionHeaderPrimaryBtn.title = "Редактировать";
+        optionHeaderPrimaryBtn.setAttribute("aria-label", "Редактировать");
+        if (icon) icon.className = "fas fa-pen";
+        optionHeaderPrimaryBtn.disabled = false;
       } else {
-        optionHeaderPrimaryBtn.textContent = "Сохранить";
+        optionHeaderPrimaryBtn.title = "Сохранить";
+        optionHeaderPrimaryBtn.setAttribute("aria-label", "Сохранить");
+        if (icon) icon.className = "fas fa-check";
+        const formValid = optionGroupForm ? optionGroupForm.checkValidity() : true;
+        optionHeaderPrimaryBtn.disabled = !formValid || !isOptionGroupDirty();
       }
     }
   }
@@ -1032,7 +1071,6 @@
     const selectionType = getOptionGroupSelectionType();
     const isDraft = state.optionPanel.mode === "create";
     optionItemsList.innerHTML = items.map((item) => {
-      const isInactive = item.is_active === 0;
       const itemKey = item.tempId ?? item.id;
       const catalogPrice = item.product_price != null ? Number(item.product_price).toFixed(2) : "—";
       const overrideValue = isDraft ? item.newPrice : item.price_value;
@@ -1050,11 +1088,10 @@
         `;
 
       return `
-        <div class="option-item-row ${isInactive ? "is-disabled" : ""}">
+        <div class="option-item-row">
           <div>
             <div class="options-row-title">${escapeHtml(item.product_name || item.name || "")}</div>
             <div class="muted">${hasOverride ? `<s>Каталог: ${catalogPrice}</s>` : `Каталог: ${catalogPrice}`}</div>
-            ${isInactive ? `<div class="muted">Отключено</div>` : ""}
           </div>
           ${editable ? `
             <input class="control" type="number" step="0.01" min="0" placeholder="Новая цена" data-item-field="price" data-item-id="${itemKey}" value="${priceValue}" />
@@ -1063,7 +1100,7 @@
           `}
           ${qtyControls}
           ${editable ? `
-            <button class="btn btn-icon" type="button" data-item-remove="${itemKey}" title="Отключить"><i class="fas fa-times"></i></button>
+            <button class="btn btn-icon" type="button" data-item-remove="${itemKey}" title="Удалить"><i class="fas fa-times"></i></button>
           ` : "<div></div>"}
         </div>
       `;
@@ -1084,11 +1121,9 @@
         }
         const itemId = Number(id);
         if (!Number.isFinite(itemId)) return;
-        await apiPatchItem(itemId, { is_active: 0 });
+        await apiDeleteItem(itemId);
         if (state.optionGroupDetails) {
-          state.optionGroupDetails.items = state.optionGroupDetails.items.map((x) =>
-            x.id === itemId ? { ...x, is_active: 0 } : x
-          );
+          state.optionGroupDetails.items = state.optionGroupDetails.items.filter((x) => x.id !== itemId);
           renderOptionItems(state.optionGroupDetails.items);
         }
         await loadOptionGroups();
@@ -1141,27 +1176,23 @@
   function renderOptionAssignments(assignments) {
     if (!optionAssignmentsList) return;
     const editable = isOptionEditable();
-    const showInactive = optionAssignmentsShowInactive && optionAssignmentsShowInactive.checked;
     if (optionAssignmentsCount) optionAssignmentsCount.textContent = `(${assignments.length})`;
-    const filtered = assignments.filter((a) => showInactive || a.is_active);
-    if (!filtered.length) {
+    if (!assignments.length) {
       optionAssignmentsList.innerHTML = `<div class="empty-hint">Пока нет назначений...</div>`;
       return;
     }
 
-    optionAssignmentsList.innerHTML = filtered.map((assignment) => {
-      const disabled = assignment.is_active ? "" : "is-disabled";
-      const controlsDisabled = !assignment.is_active || !editable;
+    optionAssignmentsList.innerHTML = assignments.map((assignment) => {
+      const controlsDisabled = !editable;
       const assignmentKey = assignment.tempId ?? assignment.id;
       return `
-        <div class="option-assignment-row ${disabled}">
+        <div class="option-assignment-row">
           <div>
             <div class="options-row-title">${escapeHtml(assignment.product_name || assignment.name || "")}</div>
-            ${assignment.is_active ? "" : `<div class="muted">Отключено</div>`}
           </div>
           <input class="control" type="number" min="0" value="${assignment.priority ?? 0}" data-assignment-field="priority" data-assignment-id="${assignmentKey}" ${controlsDisabled ? "disabled" : ""} />
           <input class="control" type="number" min="0" value="${assignment.sort_order ?? 0}" data-assignment-field="sort_order" data-assignment-id="${assignmentKey}" ${controlsDisabled ? "disabled" : ""} />
-          ${editable ? `<button class="btn btn-icon" type="button" data-assignment-remove="${assignmentKey}" title="Убрать"><i class="fas fa-times"></i></button>` : "<div></div>"}
+          ${editable ? `<button class="btn btn-icon" type="button" data-assignment-remove="${assignmentKey}" title="Удалить"><i class="fas fa-times"></i></button>` : "<div></div>"}
         </div>
       `;
     }).join("");
@@ -1181,11 +1212,9 @@
         }
         const assignmentId = Number(id);
         if (!Number.isFinite(assignmentId)) return;
-        await apiPatchAssignment(assignmentId, { is_active: 0 });
+        await apiDeleteAssignment(assignmentId);
         if (state.optionGroupDetails) {
-          state.optionGroupDetails.assignments = state.optionGroupDetails.assignments.map((a) =>
-            a.id === assignmentId ? { ...a, is_active: 0 } : a
-          );
+          state.optionGroupDetails.assignments = state.optionGroupDetails.assignments.filter((a) => a.id !== assignmentId);
           renderOptionAssignments(state.optionGroupDetails.assignments);
         }
         await loadOptionGroups();
@@ -1229,6 +1258,14 @@
       fillOptionGroupForm(state.optionDraft.group);
     } else if (state.optionGroupDetails?.group) {
       fillOptionGroupForm(state.optionGroupDetails.group);
+    }
+
+    if (state.optionPanel.mode === "view") {
+      state.optionPanel.formSnapshot = null;
+      state.optionPanel.snapshotMode = null;
+    } else if (state.optionPanel.snapshotMode !== state.optionPanel.mode) {
+      state.optionPanel.formSnapshot = getOptionGroupFormValues();
+      state.optionPanel.snapshotMode = state.optionPanel.mode;
     }
 
     setOptionGroupFormDisabled(!editable);
@@ -1356,7 +1393,6 @@
             newPrice: "",
             qty_min: 1,
             qty_max: 1,
-            is_active: 1,
           });
         });
       } else if (state.selectedOptionGroupId) {
@@ -1367,7 +1403,6 @@
           qty_min: getOptionGroupSelectionType() === "single" ? 1 : 1,
           qty_max: getOptionGroupSelectionType() === "single" ? 1 : 1,
           sort_order: idx * 10,
-          is_active: 1,
         }));
         await apiAddGroupItems(state.selectedOptionGroupId, payload);
         await loadOptionGroupDetails(state.selectedOptionGroupId);
@@ -1387,7 +1422,6 @@
             product_name: product.name,
             priority: 0,
             sort_order: 0,
-            is_active: 1,
           });
         });
       } else if (state.selectedOptionGroupId) {
@@ -1475,14 +1509,7 @@
 
   async function saveOptionGroup() {
     if (!optionGroupForm) return;
-    const payload = {
-      title: String(optionGroupTitleInput?.value || "").trim(),
-      selection_type: optionGroupSelectionInput?.value === "multiple" ? "multiple" : "single",
-      min_select: optionGroupMinInput?.value === "" ? 0 : Number(optionGroupMinInput?.value),
-      max_select: optionGroupMaxInput?.value === "" ? null : Number(optionGroupMaxInput?.value),
-      is_active: optionGroupActiveInput?.checked ? 1 : 0,
-      sort_order: optionGroupSortInput?.value === "" ? 0 : Number(optionGroupSortInput?.value),
-    };
+    const payload = getOptionGroupFormValues();
 
     if (!payload.title) {
       optionGroupTitleInput?.focus();
@@ -1499,7 +1526,6 @@
           qty_min: payload.selection_type === "single" ? 1 : (item.qty_min ?? 1),
           qty_max: payload.selection_type === "single" ? 1 : (item.qty_max ?? 1),
           sort_order: idx * 10,
-          is_active: 1,
         };
       });
 
@@ -1507,7 +1533,6 @@
         assign_id: item.id,
         priority: item.priority ?? 0,
         sort_order: item.sort_order ?? idx * 10,
-        is_active: 1,
       }));
 
       const res = await apiCreateOptionGroup({
@@ -1534,6 +1559,30 @@
     }
   }
 
+  function confirmOptionGroupDelete() {
+    if (!state.selectedOptionGroupId || !window.AppModal) return;
+    const groupId = state.selectedOptionGroupId;
+    window.AppModal.open({
+      title: "Удалить опцию?",
+      content: `<div class="modal-text">Опция будет удалена без возможности восстановления.</div>`,
+      saveText: "Удалить",
+      cancelText: "Отмена",
+      onSave: async () => {
+        try {
+          await apiDeleteOptionGroup(groupId);
+          state.optionGroupCache.delete(groupId);
+          await loadOptionGroups();
+          closeOptionDetails();
+          return true;
+        } catch (e) {
+          const message = e && e.message ? e.message : "Не удалось удалить опцию.";
+          alert(message);
+          return false;
+        }
+      },
+    });
+  }
+
   function closeOptionPicker() {
     state.optionPanel.level = "group";
     state.optionPanel.pickerSelection = new Set();
@@ -1548,6 +1597,8 @@
     state.optionPanel.level = "empty";
     state.optionPanel.mode = "view";
     state.optionPanel.returnTo = null;
+    state.optionPanel.formSnapshot = null;
+    state.optionPanel.snapshotMode = null;
     renderOptionGroupsList();
     if (returnTo && returnTo.type === "product") {
       const p = state.products.find((x) => x.id === returnTo.id);
@@ -2405,18 +2456,14 @@
       });
     }
 
-    if (optionAssignmentsShowInactive) {
-      optionAssignmentsShowInactive.addEventListener("change", () => {
-        renderOptionAssignments(getOptionAssignmentsSource());
-      });
-    }
-
     if (optionGroupForm) {
       optionGroupForm.addEventListener("input", () => {
         syncOptionDraftGroupFromForm();
+        renderOptionHeader();
       });
       optionGroupForm.addEventListener("change", () => {
         syncOptionDraftGroupFromForm();
+        renderOptionHeader();
       });
     }
 
@@ -2449,7 +2496,18 @@
 
     if (optionHeaderBackBtn) {
       optionHeaderBackBtn.addEventListener("click", () => {
-        if (state.optionPanel.level === "picker") closeOptionPicker();
+        if (state.optionPanel.level === "picker") {
+          closeOptionPicker();
+          return;
+        }
+        closeOptionDetails();
+      });
+    }
+
+    if (optionHeaderDeleteBtn) {
+      optionHeaderDeleteBtn.addEventListener("click", () => {
+        if (state.optionPanel.mode !== "edit") return;
+        confirmOptionGroupDelete();
       });
     }
 
