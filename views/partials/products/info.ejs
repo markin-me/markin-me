@@ -22,10 +22,15 @@
       </div>
 
       <div class="product-header-actions hidden" id="optionHeaderActions">
-        <button class="btn btn-sm hidden" id="optionHeaderBackBtn" type="button">
-          <i class="fas fa-arrow-left"></i> Назад
+        <button class="btn btn-icon hidden" id="optionHeaderBackBtn" type="button" title="Назад" aria-label="Назад">
+          <i class="fas fa-arrow-left"></i>
         </button>
-        <button class="btn btn-sm btn-primary" id="optionHeaderPrimaryBtn" type="button">Редактировать</button>
+        <button class="btn btn-icon btn-primary" id="optionHeaderPrimaryBtn" type="button" title="Редактировать" aria-label="Редактировать">
+          <i class="fas fa-pen"></i>
+        </button>
+        <button class="btn btn-icon btn-danger hidden" id="optionHeaderDeleteBtn" type="button" title="Удалить опцию" aria-label="Удалить опцию">
+          <i class="fas fa-trash"></i>
+        </button>
         <button class="btn btn-icon" id="optionHeaderCloseBtn" type="button" title="Закрыть" aria-label="Закрыть">
           <i class="fas fa-times"></i>
         </button>
@@ -182,23 +187,20 @@
 
         <div class="info-card info-accordion">
           <div class="acc-item">
-            <button class="stage-item acc-trigger" type="button" data-acc-trigger>
-              <span class="stage-meta stage-text">
-                <b>Пункты</b>
-                <small id="optionItemsCount">(0)</small>
-              </span>
-              <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
-            </button>
+            <div class="acc-header">
+              <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+                <span class="stage-meta stage-text">
+                  <b>Пункты</b>
+                  <small id="optionItemsCount">(0)</small>
+                </span>
+                <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+              </button>
+              <button class="btn btn-icon acc-add" type="button" id="optionItemsAddBtn" title="Добавить пункт" aria-label="Добавить пункт">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
             <div class="acc-panel" data-acc-panel>
               <div class="acc-panel-inner">
-                <div class="option-section-header">
-                  <div class="kv-label">Пункты</div>
-                  <div class="option-actions">
-                    <button class="btn btn-sm" type="button" id="optionItemsAddBtn">
-                      <i class="fas fa-plus"></i> Добавить товары
-                    </button>
-                  </div>
-                </div>
                 <div class="option-items-table" id="optionItemsList"></div>
               </div>
             </div>
@@ -207,27 +209,21 @@
 
         <div class="info-card info-accordion">
           <div class="acc-item">
-            <button class="stage-item acc-trigger" type="button" data-acc-trigger>
-              <span class="stage-meta stage-text">
-                <b>Назначения</b>
-                <small id="optionAssignmentsCount">(0)</small>
-              </span>
-              <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
-            </button>
+            <div class="acc-header">
+              <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+                <span class="stage-meta stage-text">
+                  <b>Назначения</b>
+                  <small class="muted">привязки к товарам</small>
+                  <small id="optionAssignmentsCount">(0)</small>
+                </span>
+                <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+              </button>
+              <button class="btn btn-icon acc-add" type="button" id="optionAssignmentsAddBtn" title="Добавить назначение" aria-label="Добавить назначение">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
             <div class="acc-panel" data-acc-panel>
               <div class="acc-panel-inner">
-                <div class="option-section-header">
-                  <div class="kv-label">Назначения <span class="muted">привязки к товарам</span></div>
-                  <div class="option-actions">
-                    <label class="checkbox">
-                      <input type="checkbox" id="optionAssignmentsShowInactive" />
-                      <span>Показать отключенные</span>
-                    </label>
-                    <button class="btn btn-sm" type="button" id="optionAssignmentsAddBtn">
-                      <i class="fas fa-plus"></i> Добавить товары
-                    </button>
-                  </div>
-                </div>
                 <div class="option-assignments-table" id="optionAssignmentsList"></div>
               </div>
             </div>
