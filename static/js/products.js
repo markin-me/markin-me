@@ -112,6 +112,7 @@
       returnTo: null,
       formSnapshot: null,
       snapshotMode: null,
+      itemsDirty: false,
     },
     optionDraft: null,
   };
@@ -975,7 +976,7 @@
   function isOptionGroupDirty() {
     if (!state.optionPanel.formSnapshot) return false;
     const current = getOptionGroupFormValues();
-    return JSON.stringify(current) !== JSON.stringify(state.optionPanel.formSnapshot);
+    return JSON.stringify(current) !== JSON.stringify(state.optionPanel.formSnapshot) || state.optionPanel.itemsDirty;
   }
 
   function syncOptionDraftGroupFromForm() {
@@ -1007,7 +1008,7 @@
   function updateOptionGroupSelectionUi() {
     const selectionType = optionGroupSelectionInput?.value === "multiple" ? "multiple" : "single";
     if (optionGroupLimitsRow) optionGroupLimitsRow.classList.toggle("hidden", selectionType !== "multiple");
-    updateOptionGroupSelectionUi();
+    // NOTE: avoid recursive calls here; we only toggle UI and let callers re-render header.
   }
 
   function renderOptionHeader() {
@@ -1276,6 +1277,7 @@
     if (state.optionPanel.mode === "view") {
       state.optionPanel.formSnapshot = null;
       state.optionPanel.snapshotMode = null;
+      state.optionPanel.itemsDirty = false;
     } else if (state.optionPanel.snapshotMode !== state.optionPanel.mode) {
       state.optionPanel.formSnapshot = getOptionGroupFormValues();
       state.optionPanel.snapshotMode = state.optionPanel.mode;
@@ -1324,6 +1326,7 @@
     optionPickerTabs.querySelectorAll("[data-cat-id]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         state.optionPanel.pickerCategoryId = Number(btn.dataset.catId);
+        renderOptionPickerTabs();
         await refreshOptionPickerProducts();
       });
     });
@@ -1423,6 +1426,7 @@
             qty_max: 1,
           });
         });
+        state.optionPanel.itemsDirty = true;
       } else if (state.selectedOptionGroupId) {
         const payload = selectedIds.map((id, idx) => ({
           target_product_id: id,
@@ -1436,6 +1440,7 @@
         await loadOptionGroupDetails(state.selectedOptionGroupId);
         await loadOptionGroups();
         renderOptionGroupsList();
+        state.optionPanel.itemsDirty = true;
       }
     } else {
       if (state.optionPanel.mode === "create") {
@@ -1452,6 +1457,7 @@
             sort_order: 0,
           });
         });
+        state.optionPanel.itemsDirty = true;
       } else if (state.selectedOptionGroupId) {
         const res = await apiAddGroupAssignments(state.selectedOptionGroupId, selectedIds);
         if (res.skipped && res.skipped.length) {
@@ -1460,6 +1466,7 @@
         await loadOptionGroupDetails(state.selectedOptionGroupId);
         await loadOptionGroups();
         renderOptionGroupsList();
+        state.optionPanel.itemsDirty = true;
       }
     }
 
@@ -1480,6 +1487,7 @@
     if (!details && mode !== "create") return;
     state.optionPanel.level = "group";
     state.optionPanel.mode = mode || "view";
+    state.optionPanel.itemsDirty = false;
     state.optionPanel.pickerSelection = new Set();
     if (productTitle) productTitle.textContent = details?.group?.title || "—";
     if (productSku) productSku.textContent = "Опции товара";
@@ -1525,6 +1533,7 @@
       items: [],
       assignments: [],
     };
+    state.optionPanel.itemsDirty = false;
     renderOptionGroupsList();
     showOptionGroupDetails({ group: state.optionDraft.group }, { mode: "create" });
   }
@@ -1573,6 +1582,7 @@
       await loadOptionGroupDetails(res.id);
       renderOptionGroupsList();
       state.optionDraft = null;
+      state.optionPanel.itemsDirty = false;
       showOptionGroupDetails(state.optionGroupDetails, { mode: "view" });
       return;
     }
@@ -1583,6 +1593,7 @@
       await loadOptionGroupDetails(state.selectedOptionGroupId);
       renderOptionGroupsList();
       state.optionPanel.mode = "view";
+      state.optionPanel.itemsDirty = false;
       renderOptionGroupLevel();
     }
   }
@@ -1627,6 +1638,7 @@
     state.optionPanel.returnTo = null;
     state.optionPanel.formSnapshot = null;
     state.optionPanel.snapshotMode = null;
+    state.optionPanel.itemsDirty = false;
     renderOptionGroupsList();
     if (returnTo && returnTo.type === "product") {
       const p = state.products.find((x) => x.id === returnTo.id);
