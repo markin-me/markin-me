@@ -16,12 +16,16 @@
   const productsEmptyHint = $("#productsEmptyHint");
   const categoriesMainList = $("#categoriesMainList");
   const categoriesEmptyHint = $("#categoriesEmptyHint");
+  const optionsGroupsList = $("#optionsGroupsList");
+  const optionsGroupsEmpty = $("#optionsGroupsEmpty");
 
   // right info
   const productEmpty = $("#productEmpty");
   const productInfo = $("#productInfo");
   const categoryEmpty = $("#categoryEmpty");
   const categoryInfo = $("#categoryInfo");
+  const optionEmpty = $("#optionEmpty");
+  const optionGroupInfo = $("#optionGroupInfo");
   const closeProductInfoBtn = $("#closeProductInfoBtn");
   const editProductBtn = $("#editProductBtn");
 
@@ -44,6 +48,13 @@
   const categoryStatus = $("#categoryStatus");
   const categoryVisibility = $("#categoryVisibility");
 
+  const optionGroupSelection = $("#optionGroupSelection");
+  const optionGroupLimits = $("#optionGroupLimits");
+  const optionItemsList = $("#optionItemsList");
+  const optionAssignmentsList = $("#optionAssignmentsList");
+  const optionAssignmentsAddBtn = $("#optionAssignmentsAddBtn");
+  const optionAssignmentsShowInactive = $("#optionAssignmentsShowInactive");
+
   // sheet (mobile)
   const sheet = $("#productSheet");
   const sheetBackdrop = $("#productSheetBackdrop");
@@ -60,6 +71,10 @@
     selectedProductId: null,
     selectedCategoryId: null,
     selectedProductCategories: [], // full objects
+    optionGroups: [],
+    selectedOptionGroupId: null,
+    optionGroupDetails: null,
+    catalogCategories: [],
   };
 
   // ---------------- API ----------------
@@ -100,6 +115,56 @@
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) throw new Error((data && data.error) || `HTTP_${res.status}`);
     return data.url || "";
+  }
+
+  async function apiGetOptionGroups() {
+    return api("/api/admin/options/groups");
+  }
+
+  async function apiGetOptionGroup(id) {
+    return api(`/api/admin/options/groups/${id}`);
+  }
+
+  async function apiCreateOptionGroup(payload) {
+    return api("/api/admin/options/group-bundle", { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  async function apiAddGroupAssignments(groupId, assignIds) {
+    return api(`/api/admin/options/groups/${groupId}/assignments`, {
+      method: "POST",
+      body: JSON.stringify({ assign_ids: assignIds }),
+    });
+  }
+
+  async function apiPatchAssignment(id, payload) {
+    return api(`/api/admin/options/assignments/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+  }
+
+  async function apiGetCatalogCategories() {
+    return api("/api/admin/catalog/categories");
+  }
+
+  async function apiGetCatalogProducts({ categoryId, query }) {
+    const params = new URLSearchParams();
+    if (categoryId) params.set("category_id", String(categoryId));
+    if (query) params.set("q", query);
+    const qs = params.toString();
+    return api(`/api/admin/catalog/products${qs ? `?${qs}` : ""}`);
+  }
+
+  async function apiGetProductOptionAssignments(productId) {
+    return api(`/api/admin/products/${productId}/option-assignments`);
+  }
+
+  async function apiAddProductOptionAssignments(productId, groupIds) {
+    return api(`/api/admin/products/${productId}/option-assignments`, {
+      method: "POST",
+      body: JSON.stringify({ group_ids: groupIds }),
+    });
+  }
+
+  async function apiDisableProductOptionAssignment(productId, groupId) {
+    return api(`/api/admin/products/${productId}/option-assignments/${groupId}`, { method: "PATCH" });
   }
 
   // ---------------- Accordion (height fix) ----------------
@@ -174,6 +239,14 @@
     showDetailsEmpty();
   }
 
+  function enterOptionsMode() {
+    state.mode = "options";
+    setToolbarTitle("Опции товара");
+    showView("options");
+    clearProductSelection();
+    showDetailsEmpty();
+  }
+
   // ---------------- Load ----------------
 
   async function loadCategories() {
@@ -194,6 +267,21 @@
     }
     const res = await api(`/api/prod_products?tenant_id=${TENANT_ID}&category_id=${cid}`);
     state.products = Array.isArray(res.data) ? res.data : [];
+  }
+
+  async function loadOptionGroups() {
+    const res = await apiGetOptionGroups();
+    state.optionGroups = Array.isArray(res.data) ? res.data : [];
+  }
+
+  async function loadOptionGroupDetails(id) {
+    const res = await apiGetOptionGroup(id);
+    state.optionGroupDetails = res.data || null;
+  }
+
+  async function loadCatalogCategories() {
+    const res = await apiGetCatalogCategories();
+    state.catalogCategories = Array.isArray(res.data) ? res.data : [];
   }
 
   // ---------------- Render: left nav ----------------
@@ -248,6 +336,48 @@
 
     // ✅ после рендера: аккордеон должен раскрыться до конца
     requestAnimationFrame(refreshOpenAccordions);
+  }
+
+  function renderOptionGroupsList() {
+    if (!optionsGroupsList || !optionsGroupsEmpty) return;
+    const list = state.optionGroups
+      .slice()
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+
+    if (!list.length) {
+      optionsGroupsList.innerHTML = "";
+      optionsGroupsEmpty.classList.remove("hidden");
+      return;
+    }
+
+    optionsGroupsEmpty.classList.add("hidden");
+    optionsGroupsList.innerHTML = list.map((group) => {
+      const maxLabel = group.max_select == null ? "∞" : group.max_select;
+      const isActive = group.id === state.selectedOptionGroupId;
+      return `
+        <div class="options-row ${isActive ? "is-active" : ""}" data-option-group-id="${group.id}">
+          <div>
+            <div class="options-row-title">${escapeHtml(group.title || "")}</div>
+            <div class="options-row-meta">Тип: ${escapeHtml(group.selection_type || "")}</div>
+          </div>
+          <div class="options-row-meta">Max: ${escapeHtml(maxLabel)}</div>
+          <div class="options-row-meta">Items: ${group.items_count ?? 0}</div>
+          <div class="options-row-meta">Assignments: ${group.assignments_count ?? 0}</div>
+          <div class="options-row-meta">${group.is_active ? "Активна" : "Выключена"}</div>
+        </div>
+      `;
+    }).join("");
+
+    optionsGroupsList.querySelectorAll("[data-option-group-id]").forEach((row) => {
+      row.addEventListener("click", async () => {
+        const id = Number(row.dataset.optionGroupId);
+        if (!Number.isFinite(id)) return;
+        state.selectedOptionGroupId = id;
+        await loadOptionGroupDetails(id);
+        renderOptionGroupsList();
+        showOptionGroupDetails(state.optionGroupDetails);
+      });
+    });
   }
 
   // ---------------- Products list ----------------
@@ -454,6 +584,7 @@
     productTitle.textContent = p.name || "—";
     productSku.textContent = `Артикул: ${p.sku || "—"}`;
     if (editProductBtn) {
+      editProductBtn.classList.remove("hidden");
       editProductBtn.title = "Редактировать товар";
       editProductBtn.setAttribute("aria-label", "Редактировать товар");
     }
@@ -508,6 +639,7 @@
     productTitle.textContent = cat.title || "—";
     productSku.textContent = "Категория";
     if (editProductBtn) {
+      editProductBtn.classList.remove("hidden");
       editProductBtn.title = "Редактировать категорию";
       editProductBtn.setAttribute("aria-label", "Редактировать категорию");
     }
@@ -534,12 +666,137 @@
     }
   }
 
-  function showDetailsEmpty() {
-    const showCategory = state.mode === "categories";
+  function renderOptionItems(items) {
+    if (!optionItemsList) return;
+    if (!items.length) {
+      optionItemsList.innerHTML = `<div class="empty-hint">Пока нет items...</div>`;
+      return;
+    }
+
+    optionItemsList.innerHTML = items.map((item) => {
+      const catalogPrice = item.product_price != null ? Number(item.product_price).toFixed(2) : "—";
+      const priceLabel = item.price_mode === "fixed" && item.price_value != null
+        ? `Фикс: ${Number(item.price_value).toFixed(2)}`
+        : "По каталогу";
+      const qtyLabel = `${item.qty_min ?? 1} — ${item.qty_max ?? 1}`;
+      return `
+        <div class="option-item-row">
+          <div>
+            <div class="options-row-title">${escapeHtml(item.product_name || "")}</div>
+            <div class="muted">Каталог: ${catalogPrice}</div>
+          </div>
+          <div class="muted">${priceLabel}</div>
+          <div class="muted">Кол-во: ${qtyLabel}</div>
+          <div></div>
+          <div></div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderOptionAssignments(assignments) {
+    if (!optionAssignmentsList) return;
+    const showInactive = optionAssignmentsShowInactive && optionAssignmentsShowInactive.checked;
+    const filtered = assignments.filter((a) => showInactive || a.is_active);
+    if (!filtered.length) {
+      optionAssignmentsList.innerHTML = `<div class="empty-hint">Пока нет привязок...</div>`;
+      return;
+    }
+
+    optionAssignmentsList.innerHTML = filtered.map((assignment) => {
+      const disabled = assignment.is_active ? "" : "is-disabled";
+      return `
+        <div class="option-assignment-row ${disabled}">
+          <div>
+            <div class="options-row-title">${escapeHtml(assignment.product_name || "")}</div>
+            ${assignment.is_active ? "" : `<div class="muted">Отключено</div>`}
+          </div>
+          <input class="control" type="number" min="0" value="${assignment.priority ?? 0}" data-assignment-field="priority" data-assignment-id="${assignment.id}" ${assignment.is_active ? "" : "disabled"} />
+          <input class="control" type="number" min="0" value="${assignment.sort_order ?? 0}" data-assignment-field="sort_order" data-assignment-id="${assignment.id}" ${assignment.is_active ? "" : "disabled"} />
+          <button class="btn btn-icon" type="button" data-assignment-remove="${assignment.id}" title="Удалить"><i class="fas fa-times"></i></button>
+        </div>
+      `;
+    }).join("");
+
+    optionAssignmentsList.querySelectorAll("[data-assignment-remove]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = Number(btn.dataset.assignmentRemove);
+        if (!Number.isFinite(id)) return;
+        await apiPatchAssignment(id, { is_active: 0 });
+        if (state.optionGroupDetails) {
+          state.optionGroupDetails.assignments = state.optionGroupDetails.assignments.map((a) =>
+            a.id === id ? { ...a, is_active: 0 } : a
+          );
+          renderOptionAssignments(state.optionGroupDetails.assignments);
+        }
+      });
+    });
+
+    const debounceMap = new Map();
+    optionAssignmentsList.querySelectorAll("input[data-assignment-field]").forEach((input) => {
+      input.addEventListener("input", () => {
+        const id = Number(input.dataset.assignmentId);
+        const field = input.dataset.assignmentField;
+        if (!Number.isFinite(id) || !field) return;
+        const value = input.value === "" ? 0 : Number(input.value);
+        const current = debounceMap.get(id);
+        if (current) clearTimeout(current);
+        const timer = setTimeout(async () => {
+          await apiPatchAssignment(id, { [field]: value });
+        }, 400);
+        debounceMap.set(id, timer);
+      });
+    });
+  }
+
+  function showOptionGroupDetails(details) {
+    if (!details || !details.group) return;
+    const group = details.group;
+    productTitle.textContent = group.title || "—";
+    productSku.textContent = "Опция товара";
+    if (editProductBtn) editProductBtn.classList.add("hidden");
+
+    if (optionGroupSelection) {
+      optionGroupSelection.textContent = group.selection_type || "—";
+    }
+    if (optionGroupLimits) {
+      const maxLabel = group.max_select == null ? "∞" : group.max_select;
+      optionGroupLimits.textContent = `${group.min_select ?? 0} — ${maxLabel}`;
+    }
+
+    renderOptionItems(details.items || []);
+    renderOptionAssignments(details.assignments || []);
+
+    productEmpty && productEmpty.classList.add("hidden");
+    categoryEmpty && categoryEmpty.classList.add("hidden");
+    optionEmpty && optionEmpty.classList.add("hidden");
     productInfo && productInfo.classList.add("hidden");
     categoryInfo && categoryInfo.classList.add("hidden");
-    if (productEmpty) productEmpty.classList.toggle("hidden", showCategory);
+    optionGroupInfo && optionGroupInfo.classList.remove("hidden");
+
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile && sheetHost && optionGroupInfo) {
+      sheetHost.innerHTML = "";
+      sheetHost.appendChild(optionGroupInfo);
+      openSheet();
+    } else {
+      if (detailsDesktopHost && optionGroupInfo && optionGroupInfo.parentElement !== detailsDesktopHost) {
+        detailsDesktopHost.appendChild(optionGroupInfo);
+      }
+      closeSheet();
+    }
+  }
+
+  function showDetailsEmpty() {
+    const showCategory = state.mode === "categories";
+    const showOption = state.mode === "options";
+    productInfo && productInfo.classList.add("hidden");
+    categoryInfo && categoryInfo.classList.add("hidden");
+    optionGroupInfo && optionGroupInfo.classList.add("hidden");
+    if (productEmpty) productEmpty.classList.toggle("hidden", showCategory || showOption);
     if (categoryEmpty) categoryEmpty.classList.toggle("hidden", !showCategory);
+    if (optionEmpty) optionEmpty.classList.toggle("hidden", !showOption);
+    if (editProductBtn && showOption) editProductBtn.classList.add("hidden");
     closeSheet();
   }
 
@@ -547,9 +804,12 @@
     state.selectedProductId = null;
     state.selectedCategoryId = null;
     state.selectedProductCategories = [];
+    state.selectedOptionGroupId = null;
+    state.optionGroupDetails = null;
     showDetailsEmpty();
     if (productsList) $$(".order-row", productsList).forEach((x) => x.classList.remove("is-active"));
     if (categoriesMainList) $$(".order-row", categoriesMainList).forEach((x) => x.classList.remove("is-active"));
+    if (optionsGroupsList) $$(".options-row", optionsGroupsList).forEach((x) => x.classList.remove("is-active"));
   }
 
   // ---------------- Modal: product (chips + photos) ----------------
@@ -569,6 +829,8 @@
       categories: defaultSelected,   // Set<number>
       photos: initialPhotos.map((url) => ({ kind: "url", url })), // {kind:'url'|'file', url|file, preview}
       activePhotoIdx: 0,
+      optionGroups: new Set(),
+      initialOptionGroups: new Set(),
     };
 
     // если edit — подгружаем категории товара
@@ -577,6 +839,17 @@
       const res = await api(`/api/prod_products/${product.id}/categories?tenant_id=${TENANT_ID}`);
       const arr = Array.isArray(res.data) ? res.data : [];
       arr.forEach((c) => draft.categories.add(Number(c.id)));
+    })();
+
+    const loadOptionsPromise = (async () => {
+      await loadOptionGroups();
+      if (!isEdit || !product) return;
+      const res = await apiGetProductOptionAssignments(product.id);
+      const arr = Array.isArray(res.data) ? res.data : [];
+      arr.filter((a) => a.is_active).forEach((a) => {
+        draft.optionGroups.add(Number(a.group_id));
+        draft.initialOptionGroups.add(Number(a.group_id));
+      });
     })();
 
     window.AppModal.open({
@@ -624,10 +897,28 @@
           return false;
         }
 
+        let productId = product && product.id;
         if (isEdit && product) {
           await api(`/api/prod_products/${product.id}`, { method: "PUT", body: JSON.stringify(payload) });
         } else {
-          await api("/api/prod_products", { method: "POST", body: JSON.stringify(payload) });
+          const created = await api("/api/prod_products", { method: "POST", body: JSON.stringify(payload) });
+          productId = created && created.id;
+        }
+
+        if (productId) {
+          const selected = new Set(Array.from(draft.optionGroups).filter((x) => Number.isFinite(x)));
+          if (isEdit) {
+            const toAdd = Array.from(selected).filter((id) => !draft.initialOptionGroups.has(id));
+            const toRemove = Array.from(draft.initialOptionGroups).filter((id) => !selected.has(id));
+            if (toAdd.length) {
+              await apiAddProductOptionAssignments(productId, toAdd);
+            }
+            for (const gid of toRemove) {
+              await apiDisableProductOptionAssignment(productId, gid);
+            }
+          } else if (selected.size) {
+            await apiAddProductOptionAssignments(productId, Array.from(selected));
+          }
         }
 
         await refreshAll();
@@ -658,6 +949,14 @@
       catModal: $("#peCatModal", body),
       catClose: $("#peCatClose", body),
       catList: $("#peCatList", body),
+      optionChips: $("#peOptionChips", body),
+      optionBackdrop: $("#peOptionBackdrop", body),
+      optionModal: $("#peOptionModal", body),
+      optionClose: $("#peOptionClose", body),
+      optionList: $("#peOptionList", body),
+      optionSearch: $("#peOptionSearch", body),
+      optionCancel: $("#peOptionCancel", body),
+      optionApply: $("#peOptionApply", body),
 
       photosInput: $("#pePhotosInput", body),
       addPhotosBtn: $("#peAddPhotosBtn", body),
@@ -740,6 +1039,107 @@
       });
     }
 
+    function openOptionPicker() {
+      if (!ui.optionBackdrop || !ui.optionModal) return;
+      ui.optionBackdrop.classList.remove("hidden");
+      ui.optionModal.classList.remove("hidden");
+    }
+
+    function closeOptionPicker() {
+      if (!ui.optionBackdrop || !ui.optionModal) return;
+      ui.optionBackdrop.classList.add("hidden");
+      ui.optionModal.classList.add("hidden");
+      if (ui.optionSearch) ui.optionSearch.value = "";
+      optionPickerSelection = null;
+    }
+
+    let optionPickerSelection = null;
+
+    function renderOptionPickerList(pickerSelection) {
+      if (!ui.optionList) return;
+      const query = String(ui.optionSearch.value || "").trim().toLowerCase();
+      const groups = state.optionGroups
+        .filter((g) => g.is_active)
+        .filter((g) => !query || String(g.title || "").toLowerCase().includes(query))
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+
+      ui.optionList.innerHTML = groups.map((g) => {
+        const checked = pickerSelection.has(g.id);
+        return `
+          <div class="option-picker-row ${checked ? "is-selected" : ""}">
+            <div class="option-picker-meta">
+              <div class="options-row-title">${escapeHtml(g.title || "")}</div>
+              <div class="options-row-meta">${escapeHtml(g.selection_type || "")}</div>
+            </div>
+            <label class="switch">
+              <input class="switch-input" type="checkbox" data-option-id="${g.id}" ${checked ? "checked" : ""} />
+              <span class="switch-ui"></span>
+            </label>
+          </div>
+        `;
+      }).join("");
+
+      ui.optionList.querySelectorAll("input[data-option-id]").forEach((input) => {
+        input.addEventListener("change", () => {
+          const id = Number(input.dataset.optionId);
+          if (!Number.isFinite(id)) return;
+          if (input.checked) pickerSelection.add(id);
+          else pickerSelection.delete(id);
+          renderOptionPickerList(pickerSelection);
+          if (ui.optionApply) ui.optionApply.textContent = `Добавить (${pickerSelection.size})`;
+        });
+      });
+    }
+
+    function renderOptionChips() {
+      if (!ui.optionChips) return;
+      const selected = Array.from(draft.optionGroups)
+        .map((id) => state.optionGroups.find((g) => Number(g.id) === Number(id)))
+        .filter(Boolean)
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+
+      const chips = selected.map((g) => `
+        <span class="chip">
+          ${escapeHtml(g.title || "")}
+          <button class="btn btn-icon" type="button" data-option-remove="${g.id}">
+            <i class="fas fa-times"></i>
+          </button>
+        </span>
+      `).join("");
+
+      ui.optionChips.innerHTML = `
+        ${chips}
+        <button type="button" class="chip chip-plus" id="peOptionPlus"><i class="fas fa-plus"></i></button>
+      `;
+
+      const plus = $("#peOptionPlus", ui.optionChips);
+      if (plus) {
+        plus.addEventListener("click", () => {
+          optionPickerSelection = new Set(draft.optionGroups);
+          renderOptionPickerList(optionPickerSelection);
+          if (ui.optionApply) ui.optionApply.textContent = `Добавить (${optionPickerSelection.size})`;
+          openOptionPicker();
+
+          if (ui.optionApply) {
+            ui.optionApply.onclick = () => {
+              draft.optionGroups = new Set(optionPickerSelection || []);
+              renderOptionChips();
+              closeOptionPicker();
+            };
+          }
+        });
+      }
+
+      ui.optionChips.querySelectorAll("[data-option-remove]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const id = Number(btn.dataset.optionRemove);
+          if (!Number.isFinite(id)) return;
+          draft.optionGroups.delete(id);
+          renderOptionChips();
+        });
+      });
+    }
+
     function renderPhotos() {
       const total = draft.photos.length;
       if (ui.counter) ui.counter.textContent = `${total}/10`;
@@ -810,11 +1210,21 @@
 
     ui.catClose.addEventListener("click", closeCatPicker);
     ui.catBackdrop.addEventListener("click", closeCatPicker);
+    if (ui.optionClose) ui.optionClose.addEventListener("click", closeOptionPicker);
+    if (ui.optionCancel) ui.optionCancel.addEventListener("click", closeOptionPicker);
+    if (ui.optionBackdrop) ui.optionBackdrop.addEventListener("click", closeOptionPicker);
+    if (ui.optionSearch) {
+      ui.optionSearch.addEventListener("input", () => {
+        renderOptionPickerList(optionPickerSelection || new Set(draft.optionGroups));
+      });
+    }
 
     // init UI after categories loaded (for edit)
     (async () => {
       await loadCatsPromise;
+      await loadOptionsPromise;
       renderCategoryChips();
+      renderOptionChips();
       renderPhotos();
       requestAnimationFrame(refreshOpenAccordions);
     })();
@@ -953,6 +1363,385 @@
     });
   }
 
+  // ---------------- Modal: option group ----------------
+
+  function openOptionGroupModal() {
+    const draft = {
+      items: [],
+      assignments: [],
+    };
+
+    window.AppModal.open({
+      title: "Новая опция",
+      content: "#tplOptionGroupEditor",
+      onSave: async ({ body }) => {
+        const form = $("#optionGroupForm", body);
+        if (!form) return false;
+
+        const groupPayload = {
+          title: String(form.title.value || "").trim(),
+          selection_type: form.selection_type.value === "multiple" ? "multiple" : "single",
+          min_select: form.min_select.value === "" ? 0 : Number(form.min_select.value),
+          max_select: form.max_select.value === "" ? null : Number(form.max_select.value),
+          is_active: form.is_active.checked ? 1 : 0,
+          sort_order: form.sort_order.value === "" ? 0 : Number(form.sort_order.value),
+        };
+
+        if (!groupPayload.title) {
+          form.title.focus();
+          return false;
+        }
+
+        const itemsPayload = draft.items.map((item, idx) => {
+          const isFixed = item.newPrice !== "" && item.newPrice != null;
+          return {
+            target_product_id: item.id,
+            price_mode: isFixed ? "fixed" : "from_target",
+            price_value: isFixed ? Number(item.newPrice) : null,
+            qty_min: groupPayload.selection_type === "single" ? 1 : (item.qty_min ?? 1),
+            qty_max: groupPayload.selection_type === "single" ? 1 : (item.qty_max ?? 1),
+            sort_order: idx * 10,
+            is_active: 1,
+          };
+        });
+
+        const assignmentsPayload = draft.assignments.map((item, idx) => ({
+          assign_id: item.id,
+          priority: 0,
+          sort_order: idx * 10,
+          is_active: 1,
+        }));
+
+        await apiCreateOptionGroup({
+          group: groupPayload,
+          items: itemsPayload,
+          assignments: assignmentsPayload,
+        });
+
+        await refreshAll();
+        return true;
+      },
+    });
+
+    const body = window.AppModal.body;
+    if (!body) return;
+
+    const ui = {
+      selectionType: $("#og_selection", body),
+      itemsTable: $("#ogItemsTable", body),
+      assignmentsTable: $("#ogAssignmentsTable", body),
+      addItemsBtn: $("#ogAddItemsBtn", body),
+      addAssignmentsBtn: $("#ogAddAssignmentsBtn", body),
+      pickerBackdrop: $("#ogPickerBackdrop", body),
+      pickerModal: $("#ogPickerModal", body),
+      pickerTitle: $("#ogPickerTitle", body),
+      pickerTabs: $("#ogPickerTabs", body),
+      pickerSearch: $("#ogPickerSearch", body),
+      pickerList: $("#ogPickerList", body),
+      pickerClose: $("#ogPickerClose", body),
+      pickerCancel: $("#ogPickerCancel", body),
+      pickerApply: $("#ogPickerApply", body),
+    };
+
+    let pickerMode = "items";
+    let pickerSelection = new Set();
+    let pickerCategoryId = null;
+    let pickerProducts = [];
+
+    function renderItemsTable() {
+      if (!ui.itemsTable) return;
+      if (!draft.items.length) {
+        ui.itemsTable.innerHTML = `<div class="empty-hint">Выберите товары для items...</div>`;
+        return;
+      }
+
+      const isSingle = ui.selectionType && ui.selectionType.value === "single";
+
+      ui.itemsTable.innerHTML = draft.items.map((item) => {
+        const catalogPrice = item.price != null ? Number(item.price).toFixed(2) : "—";
+        return `
+          <div class="option-item-row">
+            <div>
+              <div class="options-row-title">${escapeHtml(item.name || "")}</div>
+              <div class="muted">Каталог: ${catalogPrice}</div>
+            </div>
+            <input class="control" type="number" step="0.01" min="0" placeholder="Новая цена" data-item-field="price" data-item-id="${item.id}" value="${item.newPrice ?? ""}" />
+            <input class="control" type="number" min="1" ${isSingle ? "disabled" : ""} data-item-field="qty_min" data-item-id="${item.id}" value="${item.qty_min ?? 1}" />
+            <input class="control" type="number" min="1" ${isSingle ? "disabled" : ""} data-item-field="qty_max" data-item-id="${item.id}" value="${item.qty_max ?? 1}" />
+            <button class="btn btn-icon" type="button" data-item-remove="${item.id}"><i class="fas fa-times"></i></button>
+          </div>
+        `;
+      }).join("");
+
+      ui.itemsTable.querySelectorAll("[data-item-remove]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const id = Number(btn.dataset.itemRemove);
+          if (!Number.isFinite(id)) return;
+          draft.items = draft.items.filter((x) => x.id !== id);
+          renderItemsTable();
+        });
+      });
+
+      ui.itemsTable.querySelectorAll("input[data-item-field]").forEach((input) => {
+        input.addEventListener("input", () => {
+          const id = Number(input.dataset.itemId);
+          const field = input.dataset.itemField;
+          const item = draft.items.find((x) => x.id === id);
+          if (!item || !field) return;
+          if (field === "price") {
+            item.newPrice = input.value === "" ? "" : Number(input.value);
+          } else if (field === "qty_min") {
+            item.qty_min = input.value === "" ? 1 : Number(input.value);
+          } else if (field === "qty_max") {
+            item.qty_max = input.value === "" ? 1 : Number(input.value);
+          }
+        });
+      });
+    }
+
+    function renderAssignmentsTable() {
+      if (!ui.assignmentsTable) return;
+      if (!draft.assignments.length) {
+        ui.assignmentsTable.innerHTML = `<div class="empty-hint">Выберите товары для assignments...</div>`;
+        return;
+      }
+
+      ui.assignmentsTable.innerHTML = draft.assignments.map((item) => `
+        <div class="option-assignment-row">
+          <div class="options-row-title">${escapeHtml(item.name || "")}</div>
+          <div class="muted">priority=0</div>
+          <div class="muted">sort=0</div>
+          <button class="btn btn-icon" type="button" data-assign-remove="${item.id}">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+      `).join("");
+
+      ui.assignmentsTable.querySelectorAll("[data-assign-remove]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const id = Number(btn.dataset.assignRemove);
+          if (!Number.isFinite(id)) return;
+          draft.assignments = draft.assignments.filter((x) => x.id !== id);
+          renderAssignmentsTable();
+        });
+      });
+    }
+
+    function closePicker() {
+      if (ui.pickerBackdrop) ui.pickerBackdrop.classList.add("hidden");
+      if (ui.pickerModal) ui.pickerModal.classList.add("hidden");
+      if (ui.pickerSearch) ui.pickerSearch.value = "";
+      pickerSelection = new Set();
+    }
+
+    function renderPickerTabs() {
+      if (!ui.pickerTabs) return;
+      ui.pickerTabs.innerHTML = state.catalogCategories.map((cat) => {
+        const active = Number(cat.id) === Number(pickerCategoryId);
+        return `
+          <button class="option-picker-tab ${active ? "is-active" : ""}" type="button" data-cat-id="${cat.id}">
+            ${escapeHtml(cat.title || "")}
+          </button>
+        `;
+      }).join("");
+
+      ui.pickerTabs.querySelectorAll("[data-cat-id]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          pickerCategoryId = Number(btn.dataset.catId);
+          await refreshPickerProducts();
+        });
+      });
+    }
+
+    async function refreshPickerProducts() {
+      const res = await apiGetCatalogProducts({ categoryId: pickerCategoryId, query: ui.pickerSearch.value });
+      pickerProducts = Array.isArray(res.data) ? res.data : [];
+      renderPickerList();
+    }
+
+    function renderPickerList() {
+      if (!ui.pickerList) return;
+      ui.pickerList.innerHTML = pickerProducts.map((product) => {
+        const checked = pickerSelection.has(product.id);
+        return `
+          <div class="option-picker-row ${checked ? "is-selected" : ""}">
+            <div class="option-picker-meta">
+              <div class="options-row-title">${escapeHtml(product.name || "")}</div>
+              <div class="options-row-meta">Цена: ${product.price != null ? Number(product.price).toFixed(2) : "—"}</div>
+            </div>
+            <label class="switch">
+              <input class="switch-input" type="checkbox" data-product-id="${product.id}" ${checked ? "checked" : ""} />
+              <span class="switch-ui"></span>
+            </label>
+          </div>
+        `;
+      }).join("");
+
+      ui.pickerList.querySelectorAll("input[data-product-id]").forEach((input) => {
+        input.addEventListener("change", () => {
+          const id = Number(input.dataset.productId);
+          if (!Number.isFinite(id)) return;
+          if (input.checked) pickerSelection.add(id);
+          else pickerSelection.delete(id);
+          if (ui.pickerApply) ui.pickerApply.textContent = `Добавить (${pickerSelection.size})`;
+        });
+      });
+    }
+
+    async function openPicker(mode) {
+      pickerMode = mode;
+      if (!state.catalogCategories.length) {
+        await loadCatalogCategories();
+      }
+      pickerCategoryId = state.catalogCategories[0] ? Number(state.catalogCategories[0].id) : null;
+      pickerSelection = new Set();
+      renderPickerTabs();
+      await refreshPickerProducts();
+      if (ui.pickerApply) ui.pickerApply.textContent = `Добавить (${pickerSelection.size})`;
+      if (ui.pickerTitle) ui.pickerTitle.textContent = mode === "items" ? "Добавить товары (items)" : "Добавить товары (assignments)";
+      if (ui.pickerBackdrop) ui.pickerBackdrop.classList.remove("hidden");
+      if (ui.pickerModal) ui.pickerModal.classList.remove("hidden");
+    }
+
+    if (ui.addItemsBtn) ui.addItemsBtn.addEventListener("click", () => openPicker("items"));
+    if (ui.addAssignmentsBtn) ui.addAssignmentsBtn.addEventListener("click", () => openPicker("assignments"));
+    if (ui.pickerClose) ui.pickerClose.addEventListener("click", closePicker);
+    if (ui.pickerCancel) ui.pickerCancel.addEventListener("click", closePicker);
+    if (ui.pickerBackdrop) ui.pickerBackdrop.addEventListener("click", closePicker);
+    if (ui.pickerSearch) ui.pickerSearch.addEventListener("input", refreshPickerProducts);
+    if (ui.selectionType) ui.selectionType.addEventListener("change", renderItemsTable);
+
+    if (ui.pickerApply) {
+      ui.pickerApply.addEventListener("click", () => {
+        const selectedProducts = pickerProducts.filter((p) => pickerSelection.has(p.id));
+        if (pickerMode === "items") {
+          for (const product of selectedProducts) {
+            if (draft.items.some((x) => x.id === product.id)) continue;
+            draft.items.push({ id: product.id, name: product.name, price: product.price, newPrice: "", qty_min: 1, qty_max: 1 });
+          }
+          renderItemsTable();
+        } else {
+          for (const product of selectedProducts) {
+            if (draft.assignments.some((x) => x.id === product.id)) continue;
+            draft.assignments.push({ id: product.id, name: product.name });
+          }
+          renderAssignmentsTable();
+        }
+        closePicker();
+      });
+    }
+
+    renderItemsTable();
+    renderAssignmentsTable();
+  }
+
+  async function openAssignmentsPickerForGroup(groupId) {
+    if (!window.AppModal) return;
+    if (!state.catalogCategories.length) {
+      await loadCatalogCategories();
+    }
+
+    const pickerState = {
+      categoryId: state.catalogCategories[0] ? Number(state.catalogCategories[0].id) : null,
+      selected: new Set(),
+      products: [],
+      query: "",
+    };
+
+    window.AppModal.open({
+      title: "Добавить товары",
+      content: `
+        <div class="option-group-section">
+          <div class="option-picker-tabs" id="agPickerTabs"></div>
+          <div class="option-picker-search">
+            <input class="control" id="agPickerSearch" type="search" placeholder="Поиск по названию" />
+          </div>
+          <div class="option-picker-list" id="agPickerList"></div>
+        </div>
+      `,
+      saveText: "Добавить",
+      onSave: async () => {
+        const ids = Array.from(pickerState.selected);
+        if (!ids.length) return true;
+        const res = await apiAddGroupAssignments(groupId, ids);
+        if (res.skipped && res.skipped.length) {
+          alert("Некоторые товары уже добавлены.");
+        }
+        await loadOptionGroupDetails(groupId);
+        renderOptionGroupsList();
+        showOptionGroupDetails(state.optionGroupDetails);
+        return true;
+      },
+    });
+
+    const body = window.AppModal.body;
+    const tabsEl = $("#agPickerTabs", body);
+    const searchEl = $("#agPickerSearch", body);
+    const listEl = $("#agPickerList", body);
+
+    function renderTabs() {
+      if (!tabsEl) return;
+      tabsEl.innerHTML = state.catalogCategories.map((cat) => {
+        const active = Number(cat.id) === Number(pickerState.categoryId);
+        return `
+          <button class="option-picker-tab ${active ? "is-active" : ""}" type="button" data-cat-id="${cat.id}">
+            ${escapeHtml(cat.title || "")}
+          </button>
+        `;
+      }).join("");
+      tabsEl.querySelectorAll("[data-cat-id]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          pickerState.categoryId = Number(btn.dataset.catId);
+          await refreshProducts();
+        });
+      });
+    }
+
+    async function refreshProducts() {
+      const res = await apiGetCatalogProducts({ categoryId: pickerState.categoryId, query: pickerState.query });
+      pickerState.products = Array.isArray(res.data) ? res.data : [];
+      renderList();
+    }
+
+    function renderList() {
+      if (!listEl) return;
+      listEl.innerHTML = pickerState.products.map((product) => {
+        const checked = pickerState.selected.has(product.id);
+        return `
+          <div class="option-picker-row ${checked ? "is-selected" : ""}">
+            <div class="option-picker-meta">
+              <div class="options-row-title">${escapeHtml(product.name || "")}</div>
+              <div class="options-row-meta">Цена: ${product.price != null ? Number(product.price).toFixed(2) : "—"}</div>
+            </div>
+            <label class="switch">
+              <input class="switch-input" type="checkbox" data-product-id="${product.id}" ${checked ? "checked" : ""} />
+              <span class="switch-ui"></span>
+            </label>
+          </div>
+        `;
+      }).join("");
+
+      listEl.querySelectorAll("input[data-product-id]").forEach((input) => {
+        input.addEventListener("change", () => {
+          const id = Number(input.dataset.productId);
+          if (!Number.isFinite(id)) return;
+          if (input.checked) pickerState.selected.add(id);
+          else pickerState.selected.delete(id);
+        });
+      });
+    }
+
+    if (searchEl) {
+      searchEl.addEventListener("input", async () => {
+        pickerState.query = searchEl.value;
+        await refreshProducts();
+      });
+    }
+
+    renderTabs();
+    await refreshProducts();
+  }
+
   // ---------------- Sortable (HTML5) ----------------
 
   function makeSortable(container, itemSelector, onDropPersist) {
@@ -1027,6 +1816,16 @@
       renderCategoriesMainList();
       return;
     }
+    if (state.mode === "options") {
+      await loadOptionGroups();
+      renderOptionGroupsList();
+      if (state.selectedOptionGroupId && !state.optionGroups.some((g) => g.id === state.selectedOptionGroupId)) {
+        state.selectedOptionGroupId = null;
+        state.optionGroupDetails = null;
+        showDetailsEmpty();
+      }
+      return;
+    }
     if (state.mode === "products") {
       await refreshProductsOnly();
     }
@@ -1059,6 +1858,7 @@
       addMainBtn.addEventListener("click", () => {
         if (state.mode === "categories") return openCategoryModal({ mode: "create" });
         if (state.mode === "products") return openProductModal({ mode: "create" });
+        if (state.mode === "options") return openOptionGroupModal();
       });
     }
 
@@ -1068,6 +1868,11 @@
         const btn = e.target.closest("[data-view]");
         if (!btn) return;
         const view = btn.getAttribute("data-view");
+        if (view === "options") {
+          enterOptionsMode();
+          loadOptionGroups().then(renderOptionGroupsList);
+          return;
+        }
         state.mode = view;
         setToolbarTitle(view === "products" ? (getCurrentCategory()?.title || "Товары") : view);
         showView(view);
@@ -1091,6 +1896,21 @@
       });
     }
 
+    if (optionAssignmentsAddBtn) {
+      optionAssignmentsAddBtn.addEventListener("click", () => {
+        if (!state.selectedOptionGroupId) return;
+        openAssignmentsPickerForGroup(state.selectedOptionGroupId);
+      });
+    }
+
+    if (optionAssignmentsShowInactive) {
+      optionAssignmentsShowInactive.addEventListener("change", () => {
+        if (state.optionGroupDetails) {
+          renderOptionAssignments(state.optionGroupDetails.assignments || []);
+        }
+      });
+    }
+
     window.addEventListener("resize", () => {
       refreshOpenAccordions();
       const isMobile = window.matchMedia("(max-width: 768px)").matches;
@@ -1100,6 +1920,9 @@
         }
         if (categoryInfo && categoryInfo.parentElement !== detailsDesktopHost) {
           detailsDesktopHost.appendChild(categoryInfo);
+        }
+        if (optionGroupInfo && optionGroupInfo.parentElement !== detailsDesktopHost) {
+          detailsDesktopHost.appendChild(optionGroupInfo);
         }
         closeSheet();
       }
