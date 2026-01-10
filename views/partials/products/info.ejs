@@ -158,23 +158,23 @@
                   <option value="multiple">Несколько</option>
                 </select>
               </div>
+            </div>
 
+            <div class="form-row-2 option-group-limits hidden" id="optionGroupLimitsRow">
               <div>
                 <label class="field-label" for="optionGroupMinSelect">Минимум (шт.)</label>
                 <input class="control" id="optionGroupMinSelect" name="min_select" type="number" min="0" value="0" />
               </div>
-            </div>
 
-            <div class="form-row-2">
               <div>
                 <label class="field-label" for="optionGroupMaxSelect">Максимум (шт., пусто = ∞)</label>
                 <input class="control" id="optionGroupMaxSelect" name="max_select" type="number" min="0" placeholder="∞" />
               </div>
+            </div>
 
-              <div>
-                <label class="field-label" for="optionGroupSortOrder">Порядок сортировки</label>
-                <input class="control" id="optionGroupSortOrder" name="sort_order" type="number" min="0" value="0" />
-              </div>
+            <div class="hidden">
+              <label class="field-label" for="optionGroupSortOrder">Порядок сортировки</label>
+              <input class="control" id="optionGroupSortOrder" name="sort_order" type="number" min="0" value="0" />
             </div>
 
             <label class="switch">
@@ -191,7 +191,6 @@
               <button class="stage-item acc-trigger" type="button" data-acc-trigger>
                 <span class="stage-meta stage-text">
                   <b>Пункты</b>
-                  <small id="optionItemsCount">(0)</small>
                 </span>
                 <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
               </button>
@@ -214,7 +213,6 @@
                 <span class="stage-meta stage-text">
                   <b>Назначения</b>
                   <small class="muted">привязки к товарам</small>
-                  <small id="optionAssignmentsCount">(0)</small>
                 </span>
                 <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
               </button>
@@ -233,10 +231,16 @@
 
       <div id="optionLevelPicker" class="hidden">
         <div class="info-card">
-          <div class="option-group-section">
+          <div class="option-group-section option-picker-panel">
             <div class="option-picker-tabs" id="optionPickerTabs"></div>
-            <div class="option-picker-search">
-              <input class="control" id="optionPickerSearch" type="search" placeholder="Поиск по названию" />
+            <div class="option-picker-controls">
+              <div class="option-picker-search">
+                <input class="control" id="optionPickerSearch" type="search" placeholder="Поиск по названию" />
+              </div>
+              <label class="option-picker-select-all" for="optionPickerSelectAll">
+                <input id="optionPickerSelectAll" type="checkbox" aria-label="Выделить все в категории" />
+                <span id="optionPickerSelectAllLabel">Выделить все</span>
+              </label>
             </div>
             <div class="option-picker-list" id="optionPickerList"></div>
           </div>
