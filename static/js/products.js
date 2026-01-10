@@ -107,11 +107,13 @@
       pickerSelection: new Set(),
       pickerCategoryId: null,
       pickerProducts: [],
+      pickerProductsCache: new Map(),
       pickerQuery: "",
       pickerTabsScrollLeft: 0,
       returnTo: null,
       formSnapshot: null,
       snapshotMode: null,
+      listDirty: false,
     },
     optionDraft: null,
   };
@@ -973,6 +975,7 @@
   }
 
   function isOptionGroupDirty() {
+    if (state.optionPanel.listDirty) return true;
     if (!state.optionPanel.formSnapshot) return false;
     const current = getOptionGroupFormValues();
     return JSON.stringify(current) !== JSON.stringify(state.optionPanel.formSnapshot);
@@ -1007,7 +1010,8 @@
   function updateOptionGroupSelectionUi() {
     const selectionType = optionGroupSelectionInput?.value === "multiple" ? "multiple" : "single";
     if (optionGroupLimitsRow) optionGroupLimitsRow.classList.toggle("hidden", selectionType !== "multiple");
-    updateOptionGroupSelectionUi();
+    // Avoid recursive calls; only update limits + items render here.
+    renderOptionItems(getOptionItemsSource());
   }
 
   function renderOptionHeader() {
@@ -1324,6 +1328,8 @@
     optionPickerTabs.querySelectorAll("[data-cat-id]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         state.optionPanel.pickerCategoryId = Number(btn.dataset.catId);
+        // Re-render tabs to reflect the active category immediately.
+        renderOptionPickerTabs();
         await refreshOptionPickerProducts();
       });
     });
@@ -1380,6 +1386,9 @@
       query: state.optionPanel.pickerQuery,
     });
     state.optionPanel.pickerProducts = Array.isArray(res.data) ? res.data : [];
+    state.optionPanel.pickerProducts.forEach((product) => {
+      state.optionPanel.pickerProductsCache.set(product.id, product);
+    });
     renderOptionPickerList();
   }
 
@@ -1391,6 +1400,7 @@
     state.optionPanel.level = "picker";
     state.optionPanel.pickerMode = mode;
     state.optionPanel.pickerSelection = new Set();
+    state.optionPanel.pickerProductsCache = new Map();
     state.optionPanel.pickerCategoryId = state.catalogCategories[0] ? Number(state.catalogCategories[0].id) : null;
     state.optionPanel.pickerQuery = "";
     if (optionPickerSearch) optionPickerSearch.value = "";
@@ -1409,9 +1419,9 @@
     if (state.optionPanel.pickerMode === "items") {
       if (state.optionPanel.mode === "create") {
         const existing = new Set(state.optionDraft.items.map((x) => x.id));
-        state.optionPanel.pickerProducts.forEach((product) => {
-          if (!state.optionPanel.pickerSelection.has(product.id)) return;
-          if (existing.has(product.id)) return;
+        selectedIds.forEach((id) => {
+          const product = state.optionPanel.pickerProductsCache.get(id);
+          if (!product || existing.has(product.id)) return;
           state.optionDraft.items.push({
             tempId: `${product.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
             id: product.id,
@@ -1440,9 +1450,9 @@
     } else {
       if (state.optionPanel.mode === "create") {
         const existing = new Set(state.optionDraft.assignments.map((x) => x.id));
-        state.optionPanel.pickerProducts.forEach((product) => {
-          if (!state.optionPanel.pickerSelection.has(product.id)) return;
-          if (existing.has(product.id)) return;
+        selectedIds.forEach((id) => {
+          const product = state.optionPanel.pickerProductsCache.get(id);
+          if (!product || existing.has(product.id)) return;
           state.optionDraft.assignments.push({
             tempId: `${product.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
             id: product.id,
@@ -1464,6 +1474,7 @@
     }
 
     state.optionPanel.level = "group";
+    state.optionPanel.listDirty = true;
     renderOptionGroupLevel();
   }
 
@@ -1481,6 +1492,7 @@
     state.optionPanel.level = "group";
     state.optionPanel.mode = mode || "view";
     state.optionPanel.pickerSelection = new Set();
+    state.optionPanel.listDirty = false;
     if (productTitle) productTitle.textContent = details?.group?.title || "—";
     if (productSku) productSku.textContent = "Опции товара";
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
@@ -1513,6 +1525,7 @@
   function startOptionCreate() {
     state.selectedOptionGroupId = null;
     state.optionGroupDetails = null;
+    state.optionPanel.listDirty = false;
     state.optionDraft = {
       group: {
         title: "",
@@ -1532,6 +1545,7 @@
   function startOptionEdit() {
     if (!state.optionGroupDetails?.group) return;
     state.optionPanel.mode = "edit";
+    state.optionPanel.listDirty = false;
     renderOptionGroupLevel();
   }
 
@@ -1583,6 +1597,7 @@
       await loadOptionGroupDetails(state.selectedOptionGroupId);
       renderOptionGroupsList();
       state.optionPanel.mode = "view";
+      state.optionPanel.listDirty = false;
       renderOptionGroupLevel();
     }
   }
@@ -1627,6 +1642,7 @@
     state.optionPanel.returnTo = null;
     state.optionPanel.formSnapshot = null;
     state.optionPanel.snapshotMode = null;
+    state.optionPanel.listDirty = false;
     renderOptionGroupsList();
     if (returnTo && returnTo.type === "product") {
       const p = state.products.find((x) => x.id === returnTo.id);

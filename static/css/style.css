@@ -1048,6 +1048,11 @@ input[type=number]{ -moz-appearance:textfield; }
   overflow-y:hidden;
   flex-wrap:nowrap;
   padding-bottom:8px;
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+.option-picker-tabs::-webkit-scrollbar{
+  height:0;
 }
 .option-picker-tabs.is-dragging{
   cursor:grabbing;
