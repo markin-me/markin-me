@@ -60,6 +60,7 @@
   const optionGroupForm = $("#optionGroupForm");
   const optionGroupTitleInput = $("#optionGroupTitle");
   const optionGroupSelectionInput = $("#optionGroupSelectionType");
+  const optionGroupLimitsRow = $("#optionGroupLimitsRow");
   const optionGroupMinInput = $("#optionGroupMinSelect");
   const optionGroupMaxInput = $("#optionGroupMaxSelect");
   const optionGroupSortInput = $("#optionGroupSortOrder");
@@ -72,6 +73,8 @@
   const optionAssignmentsAddBtn = $("#optionAssignmentsAddBtn");
   const optionPickerTabs = $("#optionPickerTabs");
   const optionPickerSearch = $("#optionPickerSearch");
+  const optionPickerSelectAll = $("#optionPickerSelectAll");
+  const optionPickerSelectAllLabel = $("#optionPickerSelectAllLabel");
   const optionPickerList = $("#optionPickerList");
   const productOptionsAccordion = $("#productOptionsAccordion");
 
@@ -1001,6 +1004,12 @@
     if (optionGroupActiveInput) optionGroupActiveInput.checked = Boolean(group.is_active);
   }
 
+  function updateOptionGroupSelectionUi() {
+    const selectionType = optionGroupSelectionInput?.value === "multiple" ? "multiple" : "single";
+    if (optionGroupLimitsRow) optionGroupLimitsRow.classList.toggle("hidden", selectionType !== "multiple");
+    updateOptionGroupSelectionUi();
+  }
+
   function renderOptionHeader() {
     if (state.optionPanel.level === "empty") {
       if (productInfoHeader) productInfoHeader.classList.add("hidden");
@@ -1030,7 +1039,7 @@
     }
 
     if (optionHeaderBackBtn) {
-      optionHeaderBackBtn.classList.remove("hidden");
+      optionHeaderBackBtn.classList.toggle("hidden", !isPicker);
     }
     if (optionHeaderDeleteBtn) {
       optionHeaderDeleteBtn.classList.toggle("hidden", mode !== "edit" || isPicker);
@@ -1080,27 +1089,31 @@
       const priceValue = hasOverride ? Number(overrideValue).toFixed(2) : "";
       const qtyMin = item.qty_min ?? 1;
       const qtyMax = item.qty_max ?? 1;
-      const qtyControls = selectionType === "single"
-        ? `<div class="muted">Кол-во: 1 — 1</div><div></div>`
-        : `
-          <input class="control" type="number" min="1" data-item-field="qty_min" data-item-id="${itemKey}" value="${qtyMin}" ${editable ? "" : "disabled"} />
-          <input class="control" type="number" min="1" data-item-field="qty_max" data-item-id="${itemKey}" value="${qtyMax}" ${editable ? "" : "disabled"} />
-        `;
+      const qtyControls = selectionType === "multiple"
+        ? `
+          <div class="option-item-qty">
+            <input class="control" type="number" min="1" placeholder="Мин" aria-label="Минимум, шт." data-item-field="qty_min" data-item-id="${itemKey}" value="${qtyMin}" ${editable ? "" : "disabled"} />
+            <input class="control" type="number" min="1" placeholder="Макс" aria-label="Максимум, шт." data-item-field="qty_max" data-item-id="${itemKey}" value="${qtyMax}" ${editable ? "" : "disabled"} />
+          </div>
+        `
+        : "";
 
       return `
         <div class="option-item-row">
-          <div>
+          <div class="option-item-title">
             <div class="options-row-title">${escapeHtml(item.product_name || item.name || "")}</div>
-            <div class="muted">${hasOverride ? `<s>Каталог: ${catalogPrice}</s>` : `Каталог: ${catalogPrice}`}</div>
+          </div>
+          ${qtyControls}
+          <div class="option-item-price">
+            <span class="option-item-catalog">${hasOverride ? `<s>Каталог: ${catalogPrice}</s>` : `Каталог: ${catalogPrice}`}</span>
+            ${editable ? `
+              <input class="control" type="number" step="0.01" min="0" placeholder="Новая цена" aria-label="Новая цена" data-item-field="price" data-item-id="${itemKey}" value="${priceValue}" />
+            ` : `
+              <span>${hasOverride ? `<b>Новая цена: ${priceValue}</b>` : `<span class="muted">Цена по каталогу</span>`}</span>
+            `}
           </div>
           ${editable ? `
-            <input class="control" type="number" step="0.01" min="0" placeholder="Новая цена" data-item-field="price" data-item-id="${itemKey}" value="${priceValue}" />
-          ` : `
-            <div>${hasOverride ? `<b>Новая цена: ${priceValue}</b>` : `<span class="muted">Цена по каталогу</span>`}</div>
-          `}
-          ${qtyControls}
-          ${editable ? `
-            <button class="btn btn-icon" type="button" data-item-remove="${itemKey}" title="Удалить"><i class="fas fa-times"></i></button>
+            <button class="btn btn-icon" type="button" data-item-remove="${itemKey}" title="Удалить" aria-label="Удалить пункт"><i class="fas fa-times"></i></button>
           ` : "<div></div>"}
         </div>
       `;
@@ -1272,7 +1285,7 @@
     if (optionItemsAddBtn) optionItemsAddBtn.classList.toggle("hidden", !editable);
     if (optionAssignmentsAddBtn) optionAssignmentsAddBtn.classList.toggle("hidden", !editable);
 
-    renderOptionItems(getOptionItemsSource());
+    updateOptionGroupSelectionUi();
     renderOptionAssignments(getOptionAssignmentsSource());
     renderOptionHeader();
   }
@@ -1322,10 +1335,8 @@
       const checked = state.optionPanel.pickerSelection.has(product.id);
       return `
         <div class="option-picker-row ${checked ? "is-selected" : ""}" data-product-id="${product.id}">
-          <div class="option-picker-meta">
-            <div class="options-row-title">${escapeHtml(product.name || "")}</div>
-            <div class="options-row-meta">Цена: ${product.price != null ? Number(product.price).toFixed(2) : "—"}</div>
-          </div>
+          <div class="option-picker-title">${escapeHtml(product.name || "")}</div>
+          <div class="option-picker-price">Цена: ${product.price != null ? Number(product.price).toFixed(2) : "—"}</div>
           <input class="option-picker-checkbox" type="checkbox" data-product-id="${product.id}" ${checked ? "checked" : ""} />
         </div>
       `;
@@ -1344,6 +1355,23 @@
         renderOptionHeader();
       });
     });
+
+    updateOptionPickerSelectAllState();
+  }
+
+  function updateOptionPickerSelectAllState() {
+    if (!optionPickerSelectAll || !optionPickerSelectAllLabel) return;
+    const products = state.optionPanel.pickerProducts || [];
+    const ids = products.map((product) => product.id);
+    const selectedCount = ids.filter((id) => state.optionPanel.pickerSelection.has(id)).length;
+    const allSelected = ids.length > 0 && selectedCount === ids.length;
+    const noneSelected = selectedCount === 0;
+    optionPickerSelectAll.checked = allSelected;
+    optionPickerSelectAll.indeterminate = !allSelected && !noneSelected;
+    optionPickerSelectAll.disabled = ids.length === 0;
+    const label = allSelected ? "Сбросить все" : "Выделить все";
+    optionPickerSelectAllLabel.textContent = label;
+    optionPickerSelectAll.setAttribute("aria-label", label);
   }
 
   async function refreshOptionPickerProducts() {
@@ -2469,7 +2497,7 @@
 
     if (optionGroupSelectionInput) {
       optionGroupSelectionInput.addEventListener("change", () => {
-        renderOptionItems(getOptionItemsSource());
+        updateOptionGroupSelectionUi();
       });
     }
 
@@ -2477,6 +2505,22 @@
       optionPickerSearch.addEventListener("input", async () => {
         state.optionPanel.pickerQuery = optionPickerSearch.value;
         await refreshOptionPickerProducts();
+      });
+    }
+
+    if (optionPickerSelectAll) {
+      optionPickerSelectAll.addEventListener("change", () => {
+        const products = state.optionPanel.pickerProducts || [];
+        const ids = products.map((product) => product.id);
+        const selectedCount = ids.filter((id) => state.optionPanel.pickerSelection.has(id)).length;
+        const allSelected = ids.length > 0 && selectedCount === ids.length;
+        if (allSelected) {
+          ids.forEach((id) => state.optionPanel.pickerSelection.delete(id));
+        } else {
+          ids.forEach((id) => state.optionPanel.pickerSelection.add(id));
+        }
+        renderOptionPickerList();
+        renderOptionHeader();
       });
     }
 
