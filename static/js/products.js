@@ -1197,15 +1197,12 @@
     }
 
     optionAssignmentsList.innerHTML = assignments.map((assignment) => {
-      const controlsDisabled = !editable;
       const assignmentKey = assignment.tempId ?? assignment.id;
       return `
         <div class="option-assignment-row">
           <div>
             <div class="options-row-title">${escapeHtml(assignment.product_name || assignment.name || "")}</div>
           </div>
-          <input class="control" type="number" min="0" value="${assignment.priority ?? 0}" data-assignment-field="priority" data-assignment-id="${assignmentKey}" ${controlsDisabled ? "disabled" : ""} />
-          <input class="control" type="number" min="0" value="${assignment.sort_order ?? 0}" data-assignment-field="sort_order" data-assignment-id="${assignmentKey}" ${controlsDisabled ? "disabled" : ""} />
           ${editable ? `<button class="btn btn-icon" type="button" data-assignment-remove="${assignmentKey}" title="Удалить"><i class="fas fa-times"></i></button>` : "<div></div>"}
         </div>
       `;
@@ -1233,30 +1230,6 @@
         }
         await loadOptionGroups();
         renderOptionGroupsList();
-      });
-    });
-
-    const debounceMap = new Map();
-    optionAssignmentsList.querySelectorAll("input[data-assignment-field]").forEach((input) => {
-      input.addEventListener("input", () => {
-        const field = input.dataset.assignmentField;
-        const id = input.dataset.assignmentId;
-        if (state.optionPanel.mode === "create") {
-          const item = state.optionDraft.assignments.find((x) => String(x.tempId) === String(id));
-          if (!item || !field) return;
-          item[field] = input.value === "" ? 0 : Number(input.value);
-          return;
-        }
-
-        const assignmentId = Number(id);
-        if (!Number.isFinite(assignmentId) || !field) return;
-        const value = input.value === "" ? 0 : Number(input.value);
-        const current = debounceMap.get(assignmentId);
-        if (current) clearTimeout(current);
-        const timer = setTimeout(async () => {
-          await apiPatchAssignment(assignmentId, { [field]: value });
-        }, 400);
-        debounceMap.set(assignmentId, timer);
       });
     });
     refreshOpenAccordions();
@@ -1288,6 +1261,8 @@
     if (optionAssignmentsAddBtn) optionAssignmentsAddBtn.classList.toggle("hidden", !editable);
 
     updateOptionGroupSelectionUi();
+    // fix: re-render items after picker apply; missing call kept list empty.
+    renderOptionItems(getOptionItemsSource());
     renderOptionAssignments(getOptionAssignmentsSource());
     renderOptionHeader();
   }
