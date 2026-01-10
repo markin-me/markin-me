@@ -551,6 +551,181 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     }
   });
 
+  router.patch('/admin/options/groups/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const fields = [];
+      const values = [];
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'title')) {
+        const title = helpers.strOrNull(req.body.title);
+        if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+        fields.push('title=?');
+        values.push(title);
+      }
+      if (Object.prototype.hasOwnProperty.call(req.body, 'selection_type')) {
+        const selectionType = req.body.selection_type === 'multiple' ? 'multiple' : 'single';
+        fields.push('selection_type=?');
+        values.push(selectionType);
+      }
+      if (Object.prototype.hasOwnProperty.call(req.body, 'min_select')) {
+        fields.push('min_select=?');
+        values.push(helpers.numOrNull(req.body.min_select) ?? 0);
+      }
+      if (Object.prototype.hasOwnProperty.call(req.body, 'max_select')) {
+        fields.push('max_select=?');
+        values.push(helpers.numOrNull(req.body.max_select));
+      }
+      if (Object.prototype.hasOwnProperty.call(req.body, 'is_active')) {
+        fields.push('is_active=?');
+        values.push(helpers.toBool(req.body.is_active, true) ? 1 : 0);
+      }
+      if (Object.prototype.hasOwnProperty.call(req.body, 'sort_order')) {
+        fields.push('sort_order=?');
+        values.push(helpers.numOrNull(req.body.sort_order) ?? 0);
+      }
+
+      if (!fields.length) return res.json({ ok: true });
+
+      values.push(tenantId, id);
+      await db.query(
+        `UPDATE prod_option_groups
+         SET ${fields.join(', ')}
+         WHERE tenant_id=? AND id=?`,
+        values
+      );
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/options/groups/:id/items', async (req, res) => {
+    const tenantId = helpers.getTenantId(req);
+    const groupId = Number(req.params.id);
+    if (!Number.isFinite(groupId) || groupId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    if (!items.length) return res.status(400).json({ ok: false, error: 'EMPTY' });
+    const targetIds = Array.from(new Set(items.map((x) => Number(x.target_product_id)).filter((x) => Number.isFinite(x) && x > 0)));
+    if (!targetIds.length) return res.status(400).json({ ok: false, error: 'EMPTY' });
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [existing] = await conn.query(
+        `SELECT id, target_product_id, is_active
+         FROM prod_option_items
+         WHERE tenant_id=? AND group_id=? AND target_type='product'
+           AND target_product_id IN (${targetIds.map(() => '?').join(',')})`,
+        [tenantId, groupId, ...targetIds]
+      );
+      const map = new Map(existing.map((row) => [Number(row.target_product_id), row]));
+      const added = [];
+      const updated = [];
+
+      for (const item of items) {
+        const targetId = Number(item.target_product_id);
+        if (!Number.isFinite(targetId) || targetId <= 0) continue;
+        const row = map.get(targetId);
+        const priceMode = item.price_mode === 'fixed' ? 'fixed' : 'from_target';
+        const priceValue = priceMode === 'fixed' ? helpers.numOrNull(item.price_value) : null;
+        const qtyMin = helpers.numOrNull(item.qty_min) ?? 1;
+        const qtyMax = helpers.numOrNull(item.qty_max) ?? 1;
+        const sortOrder = helpers.numOrNull(item.sort_order) ?? 0;
+        const isActive = helpers.toBool(item.is_active, true) ? 1 : 0;
+
+        if (!row) {
+          await conn.query(
+            `INSERT INTO prod_option_items
+             (tenant_id, group_id, target_type, target_product_id, price_mode, price_value, qty_min, qty_max, is_active, sort_order)
+             VALUES (?,?,?,?,?,?,?,?,?,?)`,
+            [tenantId, groupId, 'product', targetId, priceMode, priceValue, qtyMin, qtyMax, isActive, sortOrder]
+          );
+          added.push(targetId);
+          continue;
+        }
+
+        await conn.query(
+          `UPDATE prod_option_items
+           SET price_mode=?, price_value=?, qty_min=?, qty_max=?, is_active=?, sort_order=?
+           WHERE tenant_id=? AND id=?`,
+          [priceMode, priceValue, qtyMin, qtyMax, isActive, sortOrder, tenantId, row.id]
+        );
+        updated.push(targetId);
+      }
+
+      await conn.commit();
+      res.json({ ok: true, added, updated });
+    } catch (e) {
+      await conn.rollback();
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  router.patch('/admin/options/items/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const fields = [];
+      const values = [];
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'price_mode')) {
+        const priceMode = req.body.price_mode === 'fixed' ? 'fixed' : 'from_target';
+        fields.push('price_mode=?');
+        values.push(priceMode);
+        if (Object.prototype.hasOwnProperty.call(req.body, 'price_value')) {
+          values.push(priceMode === 'fixed' ? helpers.numOrNull(req.body.price_value) : null);
+          fields.push('price_value=?');
+        }
+      } else if (Object.prototype.hasOwnProperty.call(req.body, 'price_value')) {
+        fields.push('price_value=?');
+        values.push(helpers.numOrNull(req.body.price_value));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'qty_min')) {
+        fields.push('qty_min=?');
+        values.push(helpers.numOrNull(req.body.qty_min) ?? 1);
+      }
+      if (Object.prototype.hasOwnProperty.call(req.body, 'qty_max')) {
+        fields.push('qty_max=?');
+        values.push(helpers.numOrNull(req.body.qty_max) ?? 1);
+      }
+      if (Object.prototype.hasOwnProperty.call(req.body, 'is_active')) {
+        fields.push('is_active=?');
+        values.push(helpers.toBool(req.body.is_active, true) ? 1 : 0);
+      }
+      if (Object.prototype.hasOwnProperty.call(req.body, 'sort_order')) {
+        fields.push('sort_order=?');
+        values.push(helpers.numOrNull(req.body.sort_order) ?? 0);
+      }
+
+      if (!fields.length) return res.json({ ok: true });
+
+      values.push(tenantId, id);
+      await db.query(
+        `UPDATE prod_option_items
+         SET ${fields.join(', ')}
+         WHERE tenant_id=? AND id=?`,
+        values
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.post('/admin/options/groups/:id/assignments', async (req, res) => {
     const tenantId = helpers.getTenantId(req);
     const groupId = Number(req.params.id);

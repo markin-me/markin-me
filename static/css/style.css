@@ -955,6 +955,7 @@ input[type=number]{ -moz-appearance:textfield; }
 }
 .option-item-row .control,.option-assignment-row .control{width:100%;}
 .option-item-row .muted{font-size:12px;}
+.option-item-row.is-disabled{opacity:.5;}
 .option-assignment-row{grid-template-columns:1.6fr .6fr .6fr 32px;}
 .option-assignment-row.is-disabled{opacity:.5;}
 .option-section-header{
