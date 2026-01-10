@@ -539,10 +539,11 @@
     return `${n.toFixed(0)} ₽`;
   }
 
-  function formatMoneyPrecise(v) {
+  function formatPriceInteger(v) {
     const n = Number(v);
     if (!Number.isFinite(n)) return "—";
-    return `${n.toFixed(2)} ₽`;
+    // format price as integer in UI
+    return n.toFixed(0);
   }
 
   function setHeaderMode(mode) {
@@ -563,9 +564,9 @@
     return `
       <div class="option-summary-list">
         ${items.map((item) => {
-          const basePrice = item.product_price != null ? formatMoneyPrecise(item.product_price) : "—";
+          const basePrice = item.product_price != null ? formatMoney(item.product_price) : "—";
           const hasOverride = item.price_mode === "fixed" && item.price_value != null;
-          const overridePrice = hasOverride ? formatMoneyPrecise(item.price_value) : "";
+          const overridePrice = hasOverride ? formatMoney(item.price_value) : "";
           const qtyMin = item.qty_min ?? 1;
           const qtyMax = item.qty_max ?? 1;
           const limitLabel = `Лимиты: ${qtyMin}–${qtyMax}`;
@@ -577,7 +578,7 @@
               </div>
               <div class="option-summary-price">
                 ${hasOverride ? `<s>${basePrice}</s>` : `<span>${basePrice}</span>`}
-                ${hasOverride ? `<span>${overridePrice}</span>` : `<span class="option-summary-meta">Цена по каталогу</span>`}
+                ${hasOverride ? `<span>${overridePrice}</span>` : ""}
               </div>
             </div>
           `;
@@ -1082,19 +1083,25 @@
     const isDraft = state.optionPanel.mode === "create";
     optionItemsList.innerHTML = items.map((item) => {
       const itemKey = item.tempId ?? item.id;
-      const catalogPrice = item.product_price != null ? Number(item.product_price).toFixed(2) : "—";
+      const catalogPrice = item.product_price != null ? formatPriceInteger(item.product_price) : "—";
       const overrideValue = isDraft ? item.newPrice : item.price_value;
       const hasOverride = isDraft
         ? overrideValue !== "" && overrideValue != null
         : item.price_mode === "fixed" && item.price_value != null;
-      const priceValue = hasOverride ? Number(overrideValue).toFixed(2) : "";
+      const priceValue = hasOverride ? formatPriceInteger(overrideValue) : "";
       const qtyMin = item.qty_min ?? 1;
       const qtyMax = item.qty_max ?? 1;
       const qtyControls = selectionType === "multiple"
         ? `
           <div class="option-item-qty">
-            <input class="control" type="number" min="1" placeholder="Мин" aria-label="Минимум, шт." data-item-field="qty_min" data-item-id="${itemKey}" value="${qtyMin}" ${editable ? "" : "disabled"} />
-            <input class="control" type="number" min="1" placeholder="Макс" aria-label="Максимум, шт." data-item-field="qty_max" data-item-id="${itemKey}" value="${qtyMax}" ${editable ? "" : "disabled"} />
+            <label class="option-item-qty-field">
+              <span class="option-item-qty-label">мин</span>
+              <input class="control" type="number" min="1" aria-label="Минимум, шт." data-item-field="qty_min" data-item-id="${itemKey}" value="${qtyMin}" ${editable ? "" : "disabled"} />
+            </label>
+            <label class="option-item-qty-field">
+              <span class="option-item-qty-label">макс</span>
+              <input class="control" type="number" min="1" aria-label="Максимум, шт." data-item-field="qty_max" data-item-id="${itemKey}" value="${qtyMax}" ${editable ? "" : "disabled"} />
+            </label>
           </div>
         `
         : "";
@@ -1106,11 +1113,11 @@
           </div>
           ${qtyControls}
           <div class="option-item-price">
-            <span class="option-item-catalog">${hasOverride ? `<s>Каталог: ${catalogPrice}</s>` : `Каталог: ${catalogPrice}`}</span>
+            <span class="option-item-catalog ${hasOverride ? "is-muted" : ""}">${hasOverride ? `<s class="option-item-price-value">${catalogPrice}</s>` : `<span class="option-item-price-value">${catalogPrice}</span>`}</span>
             ${editable ? `
-              <input class="control" type="number" step="0.01" min="0" placeholder="Новая цена" aria-label="Новая цена" data-item-field="price" data-item-id="${itemKey}" value="${priceValue}" />
+              <input class="control" type="number" step="1" min="0" aria-label="Новая цена" data-item-field="price" data-item-id="${itemKey}" value="${priceValue}" />
             ` : `
-              <span>${hasOverride ? `<b>Новая цена: ${priceValue}</b>` : `<span class="muted">Цена по каталогу</span>`}</span>
+              <span class="option-item-price-value ${hasOverride ? "is-accent" : "muted"}">${hasOverride ? priceValue : catalogPrice}</span>
             `}
           </div>
           ${editable ? `
@@ -1200,10 +1207,10 @@
       const assignmentKey = assignment.tempId ?? assignment.id;
       return `
         <div class="option-assignment-row">
-          <div>
+          <div class="option-assignment-title">
             <div class="options-row-title">${escapeHtml(assignment.product_name || assignment.name || "")}</div>
           </div>
-          ${editable ? `<button class="btn btn-icon" type="button" data-assignment-remove="${assignmentKey}" title="Удалить"><i class="fas fa-times"></i></button>` : "<div></div>"}
+          ${editable ? `<button class="btn btn-icon" type="button" data-assignment-remove="${assignmentKey}" title="Удалить"><i class="fas fa-times"></i></button>` : ""}
         </div>
       `;
     }).join("");
@@ -1314,7 +1321,7 @@
       return `
         <div class="option-picker-row ${checked ? "is-selected" : ""}" data-product-id="${product.id}">
           <div class="option-picker-title">${escapeHtml(product.name || "")}</div>
-          <div class="option-picker-price">Цена: ${product.price != null ? Number(product.price).toFixed(2) : "—"}</div>
+          <div class="option-picker-price">Цена: ${product.price != null ? formatPriceInteger(product.price) : "—"}</div>
           <input class="option-picker-checkbox" type="checkbox" data-product-id="${product.id}" ${checked ? "checked" : ""} />
         </div>
       `;
@@ -1368,7 +1375,20 @@
     }
     state.optionPanel.level = "picker";
     state.optionPanel.pickerMode = mode;
-    state.optionPanel.pickerSelection = new Set();
+    const existingSelection = new Set();
+    if (mode === "items") {
+      getOptionItemsSource().forEach((item) => {
+        const id = Number(item.target_product_id ?? item.id);
+        if (Number.isFinite(id)) existingSelection.add(id);
+      });
+    } else {
+      getOptionAssignmentsSource().forEach((assignment) => {
+        const id = Number(assignment.assign_id ?? assignment.id);
+        if (Number.isFinite(id)) existingSelection.add(id);
+      });
+    }
+    // keep selection on reopen
+    state.optionPanel.pickerSelection = existingSelection;
     state.optionPanel.pickerCategoryId = state.catalogCategories[0] ? Number(state.catalogCategories[0].id) : null;
     state.optionPanel.pickerQuery = "";
     if (optionPickerSearch) optionPickerSearch.value = "";
@@ -2485,6 +2505,8 @@
     if (optionGroupSelectionInput) {
       optionGroupSelectionInput.addEventListener("change", () => {
         updateOptionGroupSelectionUi();
+        // show qty controls immediately for "multiple"
+        renderOptionItems(getOptionItemsSource());
       });
     }
 
