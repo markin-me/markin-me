@@ -269,6 +269,14 @@ html[data-sidebar-collapsed="1"] .app-grid{
 .btn-primary{background:var(--color-primary);border-color:transparent;color:var(--on-primary)}
 .btn-primary:hover{background:var(--color-primary-hover)}
 .btn-icon{width:40px;padding:0;justify-content:center}
+.btn-danger{
+  border-color:#ef4444;
+  color:#ef4444;
+  background:transparent;
+}
+.btn-danger:hover{
+  background:rgba(239,68,68,.08);
+}
 
 /* ================= Pills / badges ================= */
 
@@ -576,6 +584,13 @@ html[data-sidebar-collapsed="1"] .app-grid{
   transition:max-height var(--dur-med) var(--ease-smooth);
 }
 .acc-panel-inner{margin-top:10px}
+
+.acc-header{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.acc-header .acc-trigger{flex:1}
 
 .acc-chevron{
   width:28px;height:28px;
