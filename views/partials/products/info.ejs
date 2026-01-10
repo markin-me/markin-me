@@ -21,6 +21,23 @@
     </div>
   </div>
 
+  <div class="panel-header product-info-header hidden" id="optionGroupHeader">
+    <div class="product-info-header-left">
+      <div class="panel-title product-header-title" id="optionHeaderTitle">Опции товара</div>
+      <div class="muted product-header-sku" id="optionHeaderSubtitle">—</div>
+    </div>
+
+    <div class="product-info-header-actions">
+      <button class="btn btn-sm hidden" id="optionHeaderBackBtn" type="button">
+        <i class="fas fa-arrow-left"></i> Назад
+      </button>
+      <button class="btn btn-sm btn-primary" id="optionHeaderPrimaryBtn" type="button">Редактировать</button>
+      <button class="btn btn-icon" id="optionHeaderCloseBtn" type="button" title="Закрыть" aria-label="Закрыть">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+  </div>
+
   <div class="panel-body no-scrollbar" id="productInfoBody">
     <!-- Empty state -->
     <div id="productEmpty" class="empty-state">
@@ -118,38 +135,90 @@
     </div>
 
     <div id="optionGroupInfo" class="hidden">
-      <div class="info-card option-group-meta">
-        <div class="info-row">
-          <div class="info-text">Тип выбора</div>
-          <div class="info-title" id="optionGroupSelection">—</div>
-        </div>
-        <div class="info-row">
-          <div class="info-text">Лимиты</div>
-          <div class="info-title" id="optionGroupLimits">—</div>
-        </div>
-      </div>
+      <div id="optionLevelGroup">
+        <form id="optionGroupForm" class="form-grid" autocomplete="off">
+          <div class="option-group-section">
+            <div class="section-title">Группа</div>
 
-      <div class="info-card">
-        <div class="option-section-header">
-          <div class="kv-label">Items</div>
-        </div>
-        <div class="option-items-table" id="optionItemsList"></div>
-      </div>
+            <div>
+              <label class="field-label" for="optionGroupTitle">Название *</label>
+              <input class="control" id="optionGroupTitle" name="title" type="text" required />
+            </div>
 
-      <div class="info-card">
-        <div class="option-section-header">
-          <div class="kv-label">Assignments</div>
-          <div class="option-actions">
-            <label class="checkbox">
-              <input type="checkbox" id="optionAssignmentsShowInactive" />
-              <span>Показать отключенные</span>
+            <div class="form-row-2">
+              <div>
+                <label class="field-label" for="optionGroupSelectionType">Тип выбора</label>
+                <select class="control" id="optionGroupSelectionType" name="selection_type">
+                  <option value="single">Один</option>
+                  <option value="multiple">Несколько</option>
+                </select>
+              </div>
+
+              <div>
+                <label class="field-label" for="optionGroupMinSelect">Минимум (шт.)</label>
+                <input class="control" id="optionGroupMinSelect" name="min_select" type="number" min="0" value="0" />
+              </div>
+            </div>
+
+            <div class="form-row-2">
+              <div>
+                <label class="field-label" for="optionGroupMaxSelect">Максимум (шт., пусто = ∞)</label>
+                <input class="control" id="optionGroupMaxSelect" name="max_select" type="number" min="0" placeholder="∞" />
+              </div>
+
+              <div>
+                <label class="field-label" for="optionGroupSortOrder">Порядок сортировки</label>
+                <input class="control" id="optionGroupSortOrder" name="sort_order" type="number" min="0" value="0" />
+              </div>
+            </div>
+
+            <label class="switch">
+              <input class="switch-input" type="checkbox" name="is_active" id="optionGroupActive" checked />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Активна</span>
             </label>
-            <button class="btn btn-sm" type="button" id="optionAssignmentsAddBtn">
-              <i class="fas fa-plus"></i> Добавить товары
-            </button>
+          </div>
+        </form>
+
+        <div class="info-card">
+          <div class="option-section-header">
+            <div class="kv-label">Пункты</div>
+            <div class="option-actions">
+              <button class="btn btn-sm" type="button" id="optionItemsAddBtn">
+                <i class="fas fa-plus"></i> Добавить товары
+              </button>
+            </div>
+          </div>
+          <div class="option-items-table" id="optionItemsList"></div>
+        </div>
+
+        <div class="info-card">
+          <div class="option-section-header">
+            <div class="kv-label">Назначения <span class="muted">привязки к товарам</span></div>
+            <div class="option-actions">
+              <label class="checkbox">
+                <input type="checkbox" id="optionAssignmentsShowInactive" />
+                <span>Показать отключенные</span>
+              </label>
+              <button class="btn btn-sm" type="button" id="optionAssignmentsAddBtn">
+                <i class="fas fa-plus"></i> Добавить товары
+              </button>
+            </div>
+          </div>
+          <div class="option-assignments-table" id="optionAssignmentsList"></div>
+        </div>
+      </div>
+
+      <div id="optionLevelPicker" class="hidden">
+        <div class="info-card">
+          <div class="option-group-section">
+            <div class="option-picker-tabs" id="optionPickerTabs"></div>
+            <div class="option-picker-search">
+              <input class="control" id="optionPickerSearch" type="search" placeholder="Поиск по названию" />
+            </div>
+            <div class="option-picker-list" id="optionPickerList"></div>
           </div>
         </div>
-        <div class="option-assignments-table" id="optionAssignmentsList"></div>
       </div>
     </div>
   </div>
