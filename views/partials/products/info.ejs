@@ -22,6 +22,11 @@
       </div>
 
       <div class="product-header-actions hidden" id="optionHeaderActions">
+        <label class="switch switch-compact option-header-switch" id="optionHeaderActiveSwitch">
+          <input class="switch-input" type="checkbox" id="optionHeaderActiveInput" aria-label="Активна" />
+          <span class="switch-ui" aria-hidden="true"></span>
+          <span class="switch-text">Активна</span>
+        </label>
         <button class="btn btn-icon hidden" id="optionHeaderBackBtn" type="button" title="Назад" aria-label="Назад">
           <i class="fas fa-arrow-left"></i>
         </button>
@@ -143,19 +148,19 @@
       <div id="optionLevelGroup">
         <form id="optionGroupForm" class="form-grid" autocomplete="off">
           <div class="option-group-section">
-            <div class="section-title">Группа</div>
+          <div class="section-title">Группа</div>
 
-            <div>
-              <label class="field-label" for="optionGroupTitle">Название *</label>
-              <input class="control" id="optionGroupTitle" name="title" type="text" required />
-            </div>
-
-            <div class="form-row-2">
-              <div>
+            <div class="option-group-row">
+              <div class="option-group-title-field">
+                <label class="field-label" for="optionGroupTitle">Название *</label>
+                <input class="control" id="optionGroupTitle" name="title" type="text" required />
+              </div>
+              <div class="option-group-select-field">
                 <label class="field-label" for="optionGroupSelectionType">Тип выбора</label>
                 <select class="control" id="optionGroupSelectionType" name="selection_type">
                   <option value="single">Один</option>
-                  <option value="multiple">Несколько</option>
+                  <option value="multiple_group">Несколько (лимит группы)</option>
+                  <option value="multiple_item">Несколько (лимит на товар)</option>
                 </select>
               </div>
             </div>

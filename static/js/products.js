@@ -33,6 +33,8 @@
   const optionHeaderPrimaryBtn = $("#optionHeaderPrimaryBtn");
   const optionHeaderDeleteBtn = $("#optionHeaderDeleteBtn");
   const optionHeaderCloseBtn = $("#optionHeaderCloseBtn");
+  const optionHeaderActiveSwitch = $("#optionHeaderActiveSwitch");
+  const optionHeaderActiveInput = $("#optionHeaderActiveInput");
   const closeProductInfoBtn = $("#closeProductInfoBtn");
   const editProductBtn = $("#editProductBtn");
 
@@ -109,10 +111,12 @@
       pickerProducts: [],
       pickerQuery: "",
       pickerTabsScrollLeft: 0,
+      pickerInitialSelection: new Set(),
       returnTo: null,
       formSnapshot: null,
       snapshotMode: null,
       itemsDirty: false,
+      activeToggleBusy: false,
     },
     optionDraft: null,
   };
@@ -447,7 +451,27 @@
   }
 
   function getSelectionLabel(type) {
+    if (type === "multiple_group") return "Несколько (лимит группы)";
+    if (type === "multiple_item") return "Несколько (лимит на товар)";
     return type === "multiple" ? "Несколько" : "Один";
+  }
+
+  function getSelectionUiTypeFromItems(items = []) {
+    const hasItemLimits = items.some((item) => {
+      const min = item.qty_min ?? 1;
+      const max = item.qty_max ?? 1;
+      return min !== 1 || max !== 1;
+    });
+    return hasItemLimits ? "multiple_item" : "multiple_group";
+  }
+
+  function getSelectionUiTypeFromGroup(group, items = []) {
+    if (!group || group.selection_type !== "multiple") return "single";
+    return getSelectionUiTypeFromItems(items);
+  }
+
+  function getSelectionPayloadType(selectionUi) {
+    return selectionUi === "single" ? "single" : "multiple";
   }
 
   function renderCategoryIcon(icon, className = "stage-icon") {
@@ -944,8 +968,13 @@
   }
 
   function getOptionGroupSelectionType() {
-    if (optionGroupSelectionInput) return optionGroupSelectionInput.value === "multiple" ? "multiple" : "single";
-    if (state.optionGroupDetails?.group?.selection_type) return state.optionGroupDetails.group.selection_type;
+    if (optionGroupSelectionInput?.value) return optionGroupSelectionInput.value;
+    if (state.optionPanel.mode === "create" && state.optionDraft?.group) {
+      return state.optionDraft.group.selection_type || "single";
+    }
+    if (state.optionGroupDetails?.group) {
+      return getSelectionUiTypeFromGroup(state.optionGroupDetails.group, state.optionGroupDetails.items || []);
+    }
     return "single";
   }
 
@@ -964,9 +993,10 @@
   }
 
   function getOptionGroupFormValues() {
+    const selectionUi = getOptionGroupSelectionType();
     return {
       title: String(optionGroupTitleInput?.value || "").trim(),
-      selection_type: optionGroupSelectionInput?.value === "multiple" ? "multiple" : "single",
+      selection_type: selectionUi,
       min_select: optionGroupMinInput?.value === "" ? 0 : Number(optionGroupMinInput?.value),
       max_select: optionGroupMaxInput?.value === "" ? null : Number(optionGroupMaxInput?.value),
       is_active: optionGroupActiveInput?.checked ? 1 : 0,
@@ -988,28 +1018,90 @@
   function setOptionGroupFormDisabled(disabled) {
     if (!optionGroupForm) return;
     $$("input, select, textarea", optionGroupForm).forEach((el) => {
-      if (el.type === "checkbox") {
-        el.disabled = disabled;
-      } else {
-        el.disabled = disabled;
+      if (el === optionGroupActiveInput) {
+        el.disabled = state.optionPanel.activeToggleBusy;
+        return;
       }
+      el.disabled = disabled;
     });
   }
 
-  function fillOptionGroupForm(group) {
+  function fillOptionGroupForm(group, items = []) {
     if (!group) return;
     if (optionGroupTitleInput) optionGroupTitleInput.value = group.title || "";
-    if (optionGroupSelectionInput) optionGroupSelectionInput.value = group.selection_type === "multiple" ? "multiple" : "single";
+    if (optionGroupSelectionInput) {
+      if (group.selection_type === "multiple") {
+        optionGroupSelectionInput.value = getSelectionUiTypeFromGroup(group, items);
+      } else if (group.selection_type === "multiple_group" || group.selection_type === "multiple_item") {
+        optionGroupSelectionInput.value = group.selection_type;
+      } else {
+        optionGroupSelectionInput.value = "single";
+      }
+    }
     if (optionGroupMinInput) optionGroupMinInput.value = group.min_select ?? 0;
     if (optionGroupMaxInput) optionGroupMaxInput.value = group.max_select == null ? "" : String(group.max_select);
     if (optionGroupSortInput) optionGroupSortInput.value = group.sort_order ?? 0;
-    if (optionGroupActiveInput) optionGroupActiveInput.checked = Boolean(group.is_active);
+    syncOptionActiveSwitches(Boolean(group.is_active));
   }
 
   function updateOptionGroupSelectionUi() {
-    const selectionType = optionGroupSelectionInput?.value === "multiple" ? "multiple" : "single";
-    if (optionGroupLimitsRow) optionGroupLimitsRow.classList.toggle("hidden", selectionType !== "multiple");
+    const selectionType = getOptionGroupSelectionType();
+    if (optionGroupLimitsRow) optionGroupLimitsRow.classList.toggle("hidden", selectionType !== "multiple_group");
     // NOTE: avoid recursive calls here; we only toggle UI and let callers re-render header.
+  }
+
+  let isSyncingOptionActive = false;
+
+  function syncOptionActiveSwitches(isActive) {
+    isSyncingOptionActive = true;
+    if (optionGroupActiveInput) optionGroupActiveInput.checked = Boolean(isActive);
+    if (optionHeaderActiveInput) optionHeaderActiveInput.checked = Boolean(isActive);
+    isSyncingOptionActive = false;
+  }
+
+  function setOptionActiveBusy(isBusy) {
+    state.optionPanel.activeToggleBusy = isBusy;
+    if (optionGroupActiveInput) optionGroupActiveInput.disabled = isBusy;
+    if (optionHeaderActiveInput) optionHeaderActiveInput.disabled = isBusy;
+  }
+
+  function showToast(message, type = "error") {
+    const existing = document.querySelector(".app-toast");
+    if (existing) existing.remove();
+    const toast = document.createElement("div");
+    toast.className = `app-toast ${type === "error" ? "is-error" : ""}`.trim();
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add("is-visible"));
+    setTimeout(() => {
+      toast.classList.remove("is-visible");
+      setTimeout(() => toast.remove(), 250);
+    }, 2800);
+  }
+
+  async function handleOptionActiveToggle(nextChecked) {
+    if (isSyncingOptionActive || state.optionPanel.activeToggleBusy) return;
+    const prev = Boolean(state.optionGroupDetails?.group?.is_active ?? state.optionDraft?.group?.is_active);
+    syncOptionActiveSwitches(nextChecked);
+
+    if (state.optionPanel.mode === "create" || !state.selectedOptionGroupId) {
+      if (state.optionDraft?.group) state.optionDraft.group.is_active = nextChecked ? 1 : 0;
+      return;
+    }
+
+    setOptionActiveBusy(true);
+    try {
+      await apiPatchOptionGroup(state.selectedOptionGroupId, { is_active: nextChecked ? 1 : 0 });
+      if (state.optionGroupDetails?.group) state.optionGroupDetails.group.is_active = nextChecked ? 1 : 0;
+      await loadOptionGroups();
+      renderOptionGroupsList();
+    } catch (e) {
+      // revert if update fails
+      syncOptionActiveSwitches(prev);
+      showToast("Не удалось обновить статус опции.");
+    } finally {
+      setOptionActiveBusy(false);
+    }
   }
 
   function renderOptionHeader() {
@@ -1035,9 +1127,13 @@
       } else if (mode === "create") {
         productSku.textContent = "Создание группы опций";
       } else {
-        const selectionLabel = getSelectionLabel(state.optionGroupDetails?.group?.selection_type);
+        const selectionLabel = getSelectionLabel(getOptionGroupSelectionType());
         productSku.textContent = `Тип: ${selectionLabel}`;
       }
+    }
+
+    if (optionHeaderActiveSwitch) {
+      optionHeaderActiveSwitch.classList.toggle("hidden", isPicker);
     }
 
     if (optionHeaderBackBtn) {
@@ -1065,9 +1161,30 @@
         optionHeaderPrimaryBtn.setAttribute("aria-label", "Сохранить");
         if (icon) icon.className = "fas fa-check";
         const formValid = optionGroupForm ? optionGroupForm.checkValidity() : true;
-        optionHeaderPrimaryBtn.disabled = !formValid || !isOptionGroupDirty();
+        const itemLimitsValid = optionItemsList ? !optionItemsList.querySelector(".is-invalid") : true;
+        optionHeaderPrimaryBtn.disabled = !formValid || !itemLimitsValid || !isOptionGroupDirty();
       }
     }
+
+    if (optionHeaderCloseBtn) {
+      const label = mode === "view" ? "Закрыть" : "Отмена изменений";
+      optionHeaderCloseBtn.title = label;
+      optionHeaderCloseBtn.setAttribute("aria-label", label);
+    }
+  }
+
+  function validateItemQtyBounds(row) {
+    const minInput = row.querySelector('input[data-item-field="qty_min"]');
+    const maxInput = row.querySelector('input[data-item-field="qty_max"]');
+    if (!minInput || !maxInput) return;
+    const min = minInput.value === "" ? 0 : Number(minInput.value);
+    const max = maxInput.value === "" ? 0 : Number(maxInput.value);
+    const invalid = Number.isFinite(min) && Number.isFinite(max) && min > max;
+    const message = invalid ? "Минимум не может быть больше максимума." : "";
+    [minInput, maxInput].forEach((input) => {
+      input.setCustomValidity(message);
+      input.classList.toggle("is-invalid", invalid);
+    });
   }
 
   function renderOptionItems(items) {
@@ -1080,6 +1197,7 @@
     }
 
     const selectionType = getOptionGroupSelectionType();
+    const showItemLimits = selectionType === "multiple_item";
     const isDraft = state.optionPanel.mode === "create";
     optionItemsList.innerHTML = items.map((item) => {
       const itemKey = item.tempId ?? item.id;
@@ -1091,7 +1209,7 @@
       const priceValue = hasOverride ? formatPriceInteger(overrideValue) : "";
       const qtyMin = item.qty_min ?? 1;
       const qtyMax = item.qty_max ?? 1;
-      const qtyControls = selectionType === "multiple"
+      const qtyControls = showItemLimits
         ? `
           <div class="option-item-qty">
             <label class="option-item-qty-field">
@@ -1113,19 +1231,29 @@
           </div>
           ${qtyControls}
           <div class="option-item-price">
-            <span class="option-item-catalog ${hasOverride ? "is-muted" : ""}">${hasOverride ? `<s class="option-item-price-value">${catalogPrice}</s>` : `<span class="option-item-price-value">${catalogPrice}</span>`}</span>
-            ${editable ? `
-              <input class="control" type="number" step="1" min="0" aria-label="Новая цена" data-item-field="price" data-item-id="${itemKey}" value="${priceValue}" />
-            ` : `
-              <span class="option-item-price-value ${hasOverride ? "is-accent" : "muted"}">${hasOverride ? priceValue : catalogPrice}</span>
-            `}
+            ${!editable
+              ? `
+                ${hasOverride
+                  ? `<span class="option-item-price-value is-muted">${catalogPrice}</span>
+                     <span class="option-item-price-value is-accent">${priceValue}</span>`
+                  : `<span class="option-item-price-value is-accent">${catalogPrice}</span>`}
+              `
+              : `
+                <span class="option-item-price-value ${hasOverride ? "is-muted" : "is-accent"}">${catalogPrice}</span>
+                <input class="control" type="number" step="1" min="0" aria-label="Новая цена" data-item-field="price" data-item-id="${itemKey}" value="${priceValue}" />
+              `}
           </div>
           ${editable ? `
-            <button class="btn btn-icon" type="button" data-item-remove="${itemKey}" title="Удалить" aria-label="Удалить пункт"><i class="fas fa-times"></i></button>
-          ` : "<div></div>"}
+            <button class="option-row-remove" type="button" data-item-remove="${itemKey}" title="Удалить" aria-label="Удалить пункт"><i class="fas fa-times"></i></button>
+          ` : ""}
         </div>
       `;
     }).join("");
+
+    if (editable && showItemLimits) {
+      // ensure min/max are valid on initial render
+      optionItemsList.querySelectorAll(".option-item-row").forEach((row) => validateItemQtyBounds(row));
+    }
 
     if (!editable) {
       refreshOpenAccordions();
@@ -1167,6 +1295,10 @@
           } else if (field === "qty_max") {
             item.qty_max = input.value === "" ? 1 : Number(input.value);
           }
+          if (field === "qty_min" || field === "qty_max") {
+            validateItemQtyBounds(input.closest(".option-item-row"));
+            renderOptionHeader();
+          }
           return;
         }
 
@@ -1189,6 +1321,10 @@
           }
         }, 400);
         debounceMap.set(itemId, timer);
+        if (field === "qty_min" || field === "qty_max") {
+          validateItemQtyBounds(input.closest(".option-item-row"));
+          renderOptionHeader();
+        }
       });
     });
     refreshOpenAccordions();
@@ -1210,7 +1346,7 @@
           <div class="option-assignment-title">
             <div class="options-row-title">${escapeHtml(assignment.product_name || assignment.name || "")}</div>
           </div>
-          ${editable ? `<button class="btn btn-icon" type="button" data-assignment-remove="${assignmentKey}" title="Удалить"><i class="fas fa-times"></i></button>` : ""}
+          ${editable ? `<button class="option-row-remove" type="button" data-assignment-remove="${assignmentKey}" title="Удалить" aria-label="Удалить назначение"><i class="fas fa-times"></i></button>` : ""}
         </div>
       `;
     }).join("");
@@ -1249,9 +1385,9 @@
     if (optionLevelPicker) optionLevelPicker.classList.add("hidden");
 
     if (state.optionPanel.mode === "create") {
-      fillOptionGroupForm(state.optionDraft.group);
+      fillOptionGroupForm(state.optionDraft.group, state.optionDraft.items || []);
     } else if (state.optionGroupDetails?.group) {
-      fillOptionGroupForm(state.optionGroupDetails.group);
+      fillOptionGroupForm(state.optionGroupDetails.group, state.optionGroupDetails.items || []);
     }
 
     if (state.optionPanel.mode === "view") {
@@ -1389,6 +1525,7 @@
     }
     // keep selection on reopen
     state.optionPanel.pickerSelection = existingSelection;
+    state.optionPanel.pickerInitialSelection = new Set(existingSelection);
     state.optionPanel.pickerCategoryId = state.catalogCategories[0] ? Number(state.catalogCategories[0].id) : null;
     state.optionPanel.pickerQuery = "";
     if (optionPickerSearch) optionPickerSearch.value = "";
@@ -1396,7 +1533,21 @@
     renderOptionPickerLevel();
   }
 
+  function isSameSelection(a, b) {
+    if (a.size !== b.size) return false;
+    for (const id of a) {
+      if (!b.has(id)) return false;
+    }
+    return true;
+  }
+
   async function applyOptionPickerSelection() {
+    if (isSameSelection(state.optionPanel.pickerSelection, state.optionPanel.pickerInitialSelection)) {
+      // close picker silently if nothing changed
+      state.optionPanel.level = "group";
+      renderOptionGroupLevel();
+      return;
+    }
     const selectedIds = Array.from(state.optionPanel.pickerSelection);
     if (!selectedIds.length) {
       state.optionPanel.level = "group";
@@ -1427,8 +1578,8 @@
           target_product_id: id,
           price_mode: "from_target",
           price_value: null,
-          qty_min: getOptionGroupSelectionType() === "single" ? 1 : 1,
-          qty_max: getOptionGroupSelectionType() === "single" ? 1 : 1,
+          qty_min: 1,
+          qty_max: 1,
           sort_order: idx * 10,
         }));
         await apiAddGroupItems(state.selectedOptionGroupId, payload);
@@ -1454,10 +1605,7 @@
         });
         state.optionPanel.itemsDirty = true;
       } else if (state.selectedOptionGroupId) {
-        const res = await apiAddGroupAssignments(state.selectedOptionGroupId, selectedIds);
-        if (res.skipped && res.skipped.length) {
-          alert("Некоторые товары уже добавлены.");
-        }
+        await apiAddGroupAssignments(state.selectedOptionGroupId, selectedIds);
         await loadOptionGroupDetails(state.selectedOptionGroupId);
         await loadOptionGroups();
         renderOptionGroupsList();
@@ -1539,9 +1687,29 @@
     renderOptionGroupLevel();
   }
 
+  function cancelOptionEdit() {
+    if (state.optionPanel.mode === "edit") {
+      // return to view without closing the panel
+      state.optionPanel.mode = "view";
+      state.optionPanel.itemsDirty = false;
+      renderOptionGroupLevel();
+      return;
+    }
+    if (state.optionPanel.mode === "create") {
+      closeOptionDetails();
+    }
+  }
+
   async function saveOptionGroup() {
     if (!optionGroupForm) return;
-    const payload = getOptionGroupFormValues();
+    const formValues = getOptionGroupFormValues();
+    const selectionUi = formValues.selection_type;
+    const payload = {
+      ...formValues,
+      selection_type: getSelectionPayloadType(selectionUi),
+      min_select: selectionUi === "multiple_group" ? formValues.min_select : 0,
+      max_select: selectionUi === "multiple_group" ? formValues.max_select : null,
+    };
 
     if (!payload.title) {
       optionGroupTitleInput?.focus();
@@ -1555,8 +1723,8 @@
           target_product_id: item.id,
           price_mode: isFixed ? "fixed" : "from_target",
           price_value: isFixed ? Number(item.newPrice) : null,
-          qty_min: payload.selection_type === "single" ? 1 : (item.qty_min ?? 1),
-          qty_max: payload.selection_type === "single" ? 1 : (item.qty_max ?? 1),
+          qty_min: selectionUi === "multiple_item" ? (item.qty_min ?? 1) : 1,
+          qty_max: selectionUi === "multiple_item" ? (item.qty_max ?? 1) : 1,
           sort_order: idx * 10,
         };
       });
@@ -2505,8 +2673,21 @@
     if (optionGroupSelectionInput) {
       optionGroupSelectionInput.addEventListener("change", () => {
         updateOptionGroupSelectionUi();
-        // show qty controls immediately for "multiple"
+        // show qty controls immediately for selection type switch
         renderOptionItems(getOptionItemsSource());
+        renderOptionHeader();
+      });
+    }
+
+    if (optionGroupActiveInput) {
+      optionGroupActiveInput.addEventListener("change", () => {
+        handleOptionActiveToggle(optionGroupActiveInput.checked);
+      });
+    }
+
+    if (optionHeaderActiveInput) {
+      optionHeaderActiveInput.addEventListener("change", () => {
+        handleOptionActiveToggle(optionHeaderActiveInput.checked);
       });
     }
 
@@ -2568,6 +2749,10 @@
       optionHeaderCloseBtn.addEventListener("click", () => {
         if (state.optionPanel.level === "picker") {
           closeOptionPicker();
+          return;
+        }
+        if (state.optionPanel.mode !== "view") {
+          cancelOptionEdit();
           return;
         }
         closeOptionDetails();
