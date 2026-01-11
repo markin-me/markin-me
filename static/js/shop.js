@@ -259,6 +259,7 @@
     activeCategoryTitle: "Все товары",
     products: [],
     productCache: new Map(),
+    productOptionsCache: new Map(),
     cart: loadCart(),
 
     // addresses (cart header chip)
@@ -273,13 +274,64 @@
   let openProductCtx = null;
   let cartViewMode = "cart";
 
+  function makeCartLineId() {
+    if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+    return `line_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+  }
+
+  function normalizeCartLines(lines) {
+    return (Array.isArray(lines) ? lines : [])
+      .map((line) => ({
+        id: line?.id || makeCartLineId(),
+        product_id: Number(line?.product_id),
+        qty: Math.max(0, Number(line?.qty || 0)),
+        options: Array.isArray(line?.options) ? line.options : [],
+      }))
+      .filter((line) => Number.isFinite(line.product_id) && line.qty > 0);
+  }
+
+  function buildOptionsSignature(options) {
+    const groups = (Array.isArray(options) ? options : []).map((g) => ({
+      group_id: Number(g.group_id),
+      selections: (Array.isArray(g.selections) ? g.selections : [])
+        .map((s) => ({
+          item_id: Number(s.item_id),
+          qty: Number(s.qty || 0),
+        }))
+        .filter((s) => Number.isFinite(s.item_id) && s.qty > 0)
+        .sort((a, b) => a.item_id - b.item_id),
+    }));
+
+    groups.sort((a, b) => a.group_id - b.group_id);
+    return JSON.stringify(groups);
+  }
+
+  function findLineByOptions(productId, options) {
+    const pid = Number(productId);
+    const signature = buildOptionsSignature(options);
+    return state.cart.find((line) => {
+      if (Number(line.product_id) !== pid) return false;
+      return buildOptionsSignature(line.options) === signature;
+    });
+  }
+
   function loadCart() {
     try {
       const raw = localStorage.getItem(CART_KEY);
-      const parsed = raw ? JSON.parse(raw) : {};
-      if (parsed && typeof parsed === "object") return parsed;
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(parsed)) return normalizeCartLines(parsed);
+      if (parsed && typeof parsed === "object") {
+        return normalizeCartLines(
+          Object.entries(parsed).map(([productId, qty]) => ({
+            id: makeCartLineId(),
+            product_id: Number(productId),
+            qty: Number(qty || 0),
+            options: [],
+          }))
+        );
+      }
     } catch {}
-    return {};
+    return [];
   }
 
   function saveCart() {
@@ -289,25 +341,67 @@
   }
 
   function cartQty(productId) {
-    return Number(state.cart[String(productId)] || 0);
+    const pid = Number(productId);
+    return state.cart.reduce((sum, line) => {
+      if (Number(line.product_id) !== pid) return sum;
+      return sum + Number(line.qty || 0);
+    }, 0);
   }
 
   function cartCountTotal() {
-    let total = 0;
-    for (const k of Object.keys(state.cart)) total += Number(state.cart[k] || 0);
-    return total;
+    return state.cart.reduce((sum, line) => sum + Number(line.qty || 0), 0);
   }
 
   function cartItemsResolved() {
-    const items = [];
-    for (const k of Object.keys(state.cart)) {
-      const pid = Number(k);
-      const qty = Number(state.cart[k] || 0);
-      if (!qty || !Number.isFinite(pid)) continue;
-      const p = state.productCache.get(pid);
-      if (p) items.push({ product: p, qty });
-    }
-    return items;
+    return state.cart
+      .map((line) => {
+        const pid = Number(line.product_id);
+        if (!Number.isFinite(pid) || !line.qty) return null;
+        const p = state.productCache.get(pid);
+        if (!p) return null;
+        return { line, product: p, qty: Number(line.qty || 0) };
+      })
+      .filter(Boolean);
+  }
+
+  function optionSelectionsFromGroups(groups) {
+    return (Array.isArray(groups) ? groups : [])
+      .map((g) => ({
+        group_id: Number(g.group_id),
+        selections: (Array.isArray(g.selections) ? g.selections : [])
+          .map((s) => ({
+            item_id: Number(s.item_id),
+            target_type: s.target_type || "custom",
+            resolved_product_id: s.resolved_product_id ? Number(s.resolved_product_id) : null,
+            qty: Math.max(0, Number(s.qty || 0)),
+            applied_unit_price: Number(s.applied_unit_price || 0),
+            catalog_unit_price: Number(s.catalog_unit_price || 0),
+            item_name: s.item_name || s.title || s.name || "",
+          }))
+          .filter((s) => Number.isFinite(s.item_id) && s.qty > 0),
+      }))
+      .filter((g) => Number.isFinite(g.group_id) && g.selections.length);
+  }
+
+  function optionUnitTotal(options) {
+    return optionSelectionsFromGroups(options).reduce((sum, g) => {
+      const groupSum = g.selections.reduce((acc, s) => acc + s.applied_unit_price * s.qty, 0);
+      return sum + groupSum;
+    }, 0);
+  }
+
+  function lineTotals(line, product) {
+    const qty = Number(line.qty || 0);
+    const basePrice = Number(product?.price || 0);
+    const optionTotal = optionUnitTotal(line.options);
+    const unitTotal = basePrice + optionTotal;
+    return {
+      qty,
+      basePrice,
+      optionUnitTotal: optionTotal,
+      unitTotal,
+      lineTotal: unitTotal * qty,
+    };
   }
 
   // -----------------------------
@@ -316,12 +410,11 @@
   // -----------------------------
   async function warmupCartProducts() {
     const missing = [];
-    for (const k of Object.keys(state.cart)) {
-      const pid = Number(k);
-      const qty = Number(state.cart[k] || 0);
-      if (!qty || !Number.isFinite(pid)) continue;
+    state.cart.forEach((line) => {
+      const pid = Number(line.product_id);
+      if (!line.qty || !Number.isFinite(pid)) return;
       if (!state.productCache.has(pid)) missing.push(pid);
-    }
+    });
     if (!missing.length) return;
 
     await Promise.all(
@@ -1085,6 +1178,32 @@
     return `${moneyNoSign(price)} ₽`;
   }
 
+  async function ensureProductOptions(productId) {
+    const pid = Number(productId);
+    if (!Number.isFinite(pid)) return [];
+    if (state.productOptionsCache.has(pid)) return state.productOptionsCache.get(pid);
+    try {
+      const json = await apiJson(`/api/public/products/${pid}/options`);
+      const groups = Array.isArray(json.data) ? json.data : [];
+      state.productOptionsCache.set(pid, groups);
+      return groups;
+    } catch (e) {
+      console.warn("Failed to load product options", pid, e);
+      state.productOptionsCache.set(pid, []);
+      return [];
+    }
+  }
+
+  function handleCatalogAdd(productId) {
+    ensureProductOptions(productId).then((groups) => {
+      if (Array.isArray(groups) && groups.length) {
+        openProductDetails(productId);
+        return;
+      }
+      changeQty(productId, +1);
+    });
+  }
+
   // -----------------------------
   // Products (КАРТОЧКИ НЕ ТРОГАЮ)
   // -----------------------------
@@ -1164,7 +1283,7 @@
 
       btnPlus.addEventListener("click", (e) => {
         e.stopPropagation();
-        changeQty(id, +1);
+        handleCatalogAdd(id);
       });
 
       btnMinus.addEventListener("click", (e) => {
@@ -1224,6 +1343,22 @@
   // -----------------------------
   // Cart render
   // -----------------------------
+  function buildCartOptionLines(line, lineQty) {
+    const groups = optionSelectionsFromGroups(line.options);
+    const lines = [];
+    groups.forEach((g) => {
+      g.selections.forEach((s) => {
+        const totalQty = s.qty * lineQty;
+        const price = s.applied_unit_price * totalQty;
+        lines.push({
+          label: `${str(s.item_name || "Опция")} × ${totalQty}`,
+          price,
+        });
+      });
+    });
+    return lines;
+  }
+
   function renderCartInto(listEl, totalEl, emptyPlaceholderEl) {
     const items = cartItemsResolved();
     if (listEl) listEl.innerHTML = "";
@@ -1239,14 +1374,16 @@
 
     let total = 0;
 
-    items.forEach(({ product, qty }) => {
+    items.forEach(({ product, qty, line }) => {
       const old = Number(product.old_price || 0);
       const price = Number(product.price || 0);
-      total += price * qty;
+      const totals = lineTotals(line, product);
+      total += totals.lineTotal;
 
       const row = document.createElement("div");
       row.className = "cart-row";
       row.setAttribute("data-product-id", String(product.id));
+      row.setAttribute("data-cart-line-id", String(line.id));
       row.addEventListener("click", () => openProductDetails(product.id));
 
       const photos = safePhotos(product);
@@ -1271,6 +1408,24 @@
       sub.textContent = str(product.description_short || "");
       mid.appendChild(sub);
 
+      const optionsList = buildCartOptionLines(line, qty);
+      if (optionsList.length) {
+        const optionsWrap = document.createElement("div");
+        optionsWrap.className = "cart-options";
+        optionsList.forEach((opt) => {
+          const lineEl = document.createElement("div");
+          lineEl.className = "cart-option-line";
+          const nameSpan = document.createElement("span");
+          nameSpan.textContent = opt.label;
+          const priceSpan = document.createElement("span");
+          priceSpan.textContent = money(opt.price);
+          lineEl.appendChild(nameSpan);
+          lineEl.appendChild(priceSpan);
+          optionsWrap.appendChild(lineEl);
+        });
+        mid.appendChild(optionsWrap);
+      }
+
       const q = document.createElement("div");
       q.className = "cart-qty";
 
@@ -1282,13 +1437,17 @@
 
       btnPlus.addEventListener("click", (e) => {
         e.stopPropagation();
-        changeQty(product.id, +1);
-        center.textContent = String(cartQty(product.id));
+        changeLineQty(line.id, +1);
+        saveCart();
+        renderCart();
+        updateCartBadge();
       });
       btnMinus.addEventListener("click", (e) => {
         e.stopPropagation();
-        changeQty(product.id, -1);
-        center.textContent = String(cartQty(product.id) || 0);
+        changeLineQty(line.id, -1);
+        saveCart();
+        renderCart();
+        updateCartBadge();
       });
 
       q.appendChild(pill);
@@ -1299,15 +1458,16 @@
       right.className = "cart-right";
 
       const showOld = old > 0 && old > price;
+      const oldLineTotal = showOld ? (old * qty) + totals.optionUnitTotal * qty : 0;
 
       const oldEl = document.createElement("div");
       oldEl.className = "cart-old";
-      oldEl.textContent = showOld ? moneyNoSign(old * qty) : "";
+      oldEl.textContent = showOld ? moneyNoSign(oldLineTotal) : "";
       if (!showOld) oldEl.classList.add("hidden");
 
       const pr = document.createElement("div");
       pr.className = "cart-price";
-      pr.textContent = money(price * qty);
+      pr.textContent = money(totals.lineTotal);
 
       right.appendChild(oldEl);
       right.appendChild(pr);
@@ -1354,7 +1514,7 @@
   }
 
   function clearCartAll() {
-    state.cart = {};
+    state.cart = [];
     saveCart();
     renderProducts();
     renderCart();
@@ -1413,15 +1573,55 @@
   // -----------------------------
   // Qty change
   // -----------------------------
+  function getDefaultLine(productId) {
+    const pid = Number(productId);
+    return state.cart.find((line) => Number(line.product_id) === pid && buildOptionsSignature(line.options) === "[]");
+  }
+
+  function changeLineQty(lineId, delta) {
+    const line = state.cart.find((l) => l.id === lineId);
+    if (!line) return;
+    line.qty = Math.max(0, Number(line.qty || 0) + delta);
+    if (line.qty <= 0) {
+      state.cart = state.cart.filter((l) => l.id !== lineId);
+    }
+  }
+
+  function addProductWithOptions(productId, options, delta = 1) {
+    const pid = Number(productId);
+    if (!Number.isFinite(pid)) return null;
+    const normalizedOptions = optionSelectionsFromGroups(options);
+    const existing = findLineByOptions(pid, normalizedOptions);
+    if (existing) {
+      existing.qty = Math.max(0, Number(existing.qty || 0) + delta);
+      if (existing.qty <= 0) {
+        state.cart = state.cart.filter((l) => l.id !== existing.id);
+      }
+      return existing;
+    }
+    if (delta <= 0) return null;
+    const line = {
+      id: makeCartLineId(),
+      product_id: pid,
+      qty: delta,
+      options: normalizedOptions,
+    };
+    state.cart.push(line);
+    return line;
+  }
+
   function changeQty(productId, delta, optionalCartNumEl) {
     const pid = Number(productId);
     if (!Number.isFinite(pid)) return;
 
-    const prev = cartQty(pid);
-    const next = Math.max(0, prev + delta);
+    let line = getDefaultLine(pid);
+    if (!line && delta > 0) {
+      line = addProductWithOptions(pid, [], delta);
+    } else if (line) {
+      changeLineQty(line.id, delta);
+    }
 
-    if (next <= 0) delete state.cart[String(pid)];
-    else state.cart[String(pid)] = next;
+    const next = cartQty(pid);
 
     saveCart();
 
@@ -1448,7 +1648,8 @@
       const prod = state.productCache.get(pid);
       if (prod && openProductCtx.centerEl) {
         const q = cartQty(pid);
-        openProductCtx.centerEl.innerHTML = pdCenterHtml(prod, q);
+        const optionTotal = openProductCtx.optionGroups ? optionGroupsUnitTotal(openProductCtx.optionGroups) : 0;
+        openProductCtx.centerEl.innerHTML = pdCenterHtml(prod, q, optionTotal);
         if (openProductCtx.minusBtn) openProductCtx.minusBtn.classList.toggle("is-disabled", q <= 0);
       }
     }
@@ -1521,14 +1722,15 @@
     }
   }
 
-  function pdCenterHtml(product, qty) {
+  function pdCenterHtml(product, qty, optionUnitTotal = 0) {
     const old = Number(product.old_price || 0);
     const price = Number(product.price || 0);
     const showOld = old > 0 && old > price;
+    const unitTotal = price + Number(optionUnitTotal || 0);
 
-    if (qty > 0) return `${qty} × ${moneyNoSign(price)} ₽`;
-    if (showOld) return `<span class="old">${moneyNoSign(old)} ₽</span>${moneyNoSign(price)} ₽`;
-    return `${moneyNoSign(price)} ₽`;
+    if (qty > 0) return `${qty} × ${moneyNoSign(unitTotal)} ₽`;
+    if (showOld) return `<span class="old">${moneyNoSign(old)} ₽</span>${moneyNoSign(unitTotal)} ₽`;
+    return `${moneyNoSign(unitTotal)} ₽`;
   }
 
   async function ensureProduct(pid) {
@@ -1542,7 +1744,86 @@
     return p;
   }
 
-  function buildProductDetailsContent(product, qty, { onBack } = {}) {
+  function optionGroupSelectedQty(group) {
+    if (group.selection_type === "single") return group.selectedItemId ? 1 : 0;
+    return group.items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+  }
+
+  function optionGroupsValid(groups) {
+    return groups.every((g) => {
+      const min = Number(g.min_select || 0);
+      return optionGroupSelectedQty(g) >= min;
+    });
+  }
+
+  function optionGroupsUnitTotal(groups) {
+    return groups.reduce((sum, g) => {
+      if (g.selection_type === "single") {
+        const item = g.items.find((i) => i.id === g.selectedItemId);
+        return item ? sum + Number(item.applied_unit_price || 0) : sum;
+      }
+      return sum + g.items.reduce((acc, item) => acc + Number(item.applied_unit_price || 0) * Number(item.qty || 0), 0);
+    }, 0);
+  }
+
+  function optionGroupsToSelections(groups) {
+    return groups
+      .map((g) => {
+        if (g.selection_type === "single") {
+          const item = g.items.find((i) => i.id === g.selectedItemId);
+          if (!item) return null;
+          return {
+            group_id: g.id,
+            selections: [
+              {
+                item_id: item.id,
+                target_type: item.target_type,
+                resolved_product_id: item.target_product_id,
+                qty: 1,
+                applied_unit_price: item.applied_unit_price,
+                catalog_unit_price: item.catalog_unit_price,
+                item_name: item.title,
+              },
+            ],
+          };
+        }
+        const selections = g.items
+          .filter((item) => Number(item.qty || 0) > 0)
+          .map((item) => ({
+            item_id: item.id,
+            target_type: item.target_type,
+            resolved_product_id: item.target_product_id,
+            qty: Number(item.qty || 0),
+            applied_unit_price: item.applied_unit_price,
+            catalog_unit_price: item.catalog_unit_price,
+            item_name: item.title,
+          }));
+        if (!selections.length) return null;
+        return { group_id: g.id, selections };
+      })
+      .filter(Boolean);
+  }
+
+  function createOptionPriceBlock(item) {
+    const wrap = document.createElement("div");
+    wrap.className = "shop-option-price";
+    const applied = Number(item.applied_unit_price || 0);
+    const catalog = Number(item.catalog_unit_price || 0);
+    const showOld = item.price_mode === "fixed" && catalog > 0 && catalog !== applied;
+    if (showOld) {
+      const oldEl = document.createElement("span");
+      oldEl.className = "shop-option-old";
+      oldEl.textContent = `${moneyNoSign(catalog)} ₽`;
+      wrap.appendChild(oldEl);
+    }
+    const newEl = document.createElement("span");
+    newEl.className = "shop-option-new";
+    newEl.textContent = `${moneyNoSign(applied)} ₽`;
+    wrap.appendChild(newEl);
+    return wrap;
+  }
+
+  function buildProductDetailsContent(product, qty, optionGroups, { onBack, onOptionsChange } = {}) {
     const wrap = document.createElement("div");
     wrap.className = "shop-pd";
 
@@ -1621,6 +1902,149 @@
       scroll.appendChild(d);
     }
 
+    if (Array.isArray(optionGroups) && optionGroups.length) {
+      const optionsWrap = document.createElement("div");
+      optionsWrap.className = "shop-pd-options";
+
+      optionGroups.forEach((group) => {
+        const groupEl = document.createElement("div");
+        groupEl.className = "shop-pd-option-group";
+
+        const title = document.createElement("div");
+        title.className = "shop-pd-option-title";
+        title.textContent = str(group.title || "Опции");
+        if (Number(group.min_select || 0) > 0) {
+          const req = document.createElement("span");
+          req.className = "shop-pd-option-required";
+          req.textContent = "• обязательно";
+          title.appendChild(req);
+        }
+        groupEl.appendChild(title);
+
+        if (group.selection_type === "single") {
+          const selectWrap = document.createElement("div");
+          selectWrap.className = "shop-pd-option-select";
+          const select = document.createElement("select");
+          select.className = "control";
+
+          if (Number(group.min_select || 0) === 0) {
+            const empty = document.createElement("option");
+            empty.value = "";
+            empty.textContent = "Не выбрано";
+            select.appendChild(empty);
+          }
+
+          group.items.forEach((item) => {
+            const opt = document.createElement("option");
+            opt.value = String(item.id);
+            opt.textContent = str(item.title || "Опция");
+            select.appendChild(opt);
+          });
+
+          const priceBlock = document.createElement("div");
+          priceBlock.className = "shop-pd-option-price-preview";
+
+          select.addEventListener("change", () => {
+            const val = select.value ? Number(select.value) : null;
+            group.selectedItemId = Number.isFinite(val) ? val : null;
+            priceBlock.innerHTML = "";
+            const current = group.items.find((i) => i.id === group.selectedItemId);
+            if (current) priceBlock.appendChild(createOptionPriceBlock(current));
+            if (typeof onOptionsChange === "function") onOptionsChange();
+          });
+
+          if (group.selectedItemId) {
+            select.value = String(group.selectedItemId);
+            const current = group.items.find((i) => i.id === group.selectedItemId);
+            if (current) priceBlock.appendChild(createOptionPriceBlock(current));
+          }
+
+          selectWrap.appendChild(select);
+          selectWrap.appendChild(priceBlock);
+          groupEl.appendChild(selectWrap);
+        } else {
+          const list = document.createElement("div");
+          list.className = "shop-pd-option-list";
+
+          const refreshGroupControls = () => {
+            const totalSelected = optionGroupSelectedQty(group);
+            const max = group.max_select !== null && group.max_select !== undefined ? Number(group.max_select) : null;
+            group.items.forEach((item) => {
+              if (!item._controls) return;
+              const { btnMinus, btnPlus, qtyEl } = item._controls;
+              qtyEl.textContent = String(item.qty || 0);
+              const maxReached = Number.isFinite(max) && totalSelected >= max;
+              const itemMax = item.qty_max !== null && item.qty_max !== undefined
+                ? Number(item.qty || 0) >= Number(item.qty_max)
+                : false;
+              btnPlus.classList.toggle("is-disabled", maxReached || itemMax);
+              btnMinus.classList.toggle("is-disabled", Number(item.qty || 0) <= 0);
+            });
+          };
+
+          group.items.forEach((item) => {
+            const row = document.createElement("div");
+            row.className = "shop-pd-option-row";
+
+            const left = document.createElement("div");
+            left.className = "shop-pd-option-main";
+            const name = document.createElement("div");
+            name.className = "shop-pd-option-name";
+            name.textContent = str(item.title || "Опция");
+            left.appendChild(name);
+            left.appendChild(createOptionPriceBlock(item));
+            row.appendChild(left);
+
+            const qtyWrap = document.createElement("div");
+            qtyWrap.className = "shop-pd-option-qty";
+            const { pill, btnMinus, btnPlus, center } = createQtyPill({
+              variant: "muted",
+              centerText: String(item.qty || 0),
+              minusEnabled: Number(item.qty || 0) > 0,
+            });
+
+            btnPlus.addEventListener("click", () => {
+              const totalSelected = optionGroupSelectedQty(group);
+              const max = group.max_select !== null && group.max_select !== undefined ? Number(group.max_select) : null;
+              const min = Math.max(1, Number(item.qty_min || 1));
+              let next = Number(item.qty || 0) > 0 ? Number(item.qty || 0) + 1 : min;
+              if (item.qty_max !== null && item.qty_max !== undefined) {
+                next = Math.min(next, Number(item.qty_max));
+              }
+              if (Number.isFinite(max) && totalSelected + (next - Number(item.qty || 0)) > max) return;
+              item.qty = next;
+              center.textContent = String(item.qty);
+              refreshGroupControls();
+              if (typeof onOptionsChange === "function") onOptionsChange();
+            });
+
+            btnMinus.addEventListener("click", () => {
+              const min = Math.max(1, Number(item.qty_min || 1));
+              const current = Number(item.qty || 0);
+              if (current <= 0) return;
+              const next = current <= min ? 0 : current - 1;
+              item.qty = next;
+              center.textContent = String(item.qty);
+              refreshGroupControls();
+              if (typeof onOptionsChange === "function") onOptionsChange();
+            });
+
+            item._controls = { btnMinus, btnPlus, qtyEl: center };
+            qtyWrap.appendChild(pill);
+            row.appendChild(qtyWrap);
+            list.appendChild(row);
+          });
+
+          groupEl.appendChild(list);
+          refreshGroupControls();
+        }
+
+        optionsWrap.appendChild(groupEl);
+      });
+
+      scroll.appendChild(optionsWrap);
+    }
+
     wrap.appendChild(scroll);
 
     const footer = document.createElement("div");
@@ -1640,7 +2064,7 @@
     const { pill, btnMinus, btnPlus, center } = createQtyPill({
       variant: "buy",
       big: true,
-      centerHtml: pdCenterHtml(product, qty),
+      centerHtml: pdCenterHtml(product, qty, optionGroupsUnitTotal(optionGroups)),
       minusEnabled: qty > 0,
     });
 
@@ -1651,18 +2075,83 @@
     return { wrap, center, btnMinus, btnPlus, favBtn };
   }
 
-  function renderProductDetailsInto(container, product, { onBack } = {}) {
+  async function renderProductDetailsInto(container, product, { onBack } = {}) {
     if (!container) return;
+    const groupsRaw = await ensureProductOptions(product.id);
+    const optionGroups = (Array.isArray(groupsRaw) ? groupsRaw : []).map((g) => {
+      const items = (Array.isArray(g.items) ? g.items : []).map((item) => ({
+        id: Number(item.id),
+        title: item.title || item.target_product_name || "",
+        target_type: item.target_type || "custom",
+        target_product_id: item.target_product_id ? Number(item.target_product_id) : null,
+        price_mode: item.price_mode || "from_target",
+        price_value: item.price_value !== null ? Number(item.price_value) : null,
+        qty_min: item.qty_min !== null ? Number(item.qty_min) : 1,
+        qty_max: item.qty_max !== null ? Number(item.qty_max) : null,
+        catalog_unit_price: Number(item.catalog_unit_price || 0),
+        applied_unit_price: Number(item.applied_unit_price || 0),
+        qty: 0,
+      }));
+      const minSelect = g.min_select !== null ? Number(g.min_select) : 0;
+      const selectionType = g.selection_type || "single";
+      let selectedItemId = null;
+      if (selectionType === "single" && minSelect > 0 && items.length) {
+        selectedItemId = items[0].id;
+      }
+      return {
+        id: Number(g.id),
+        title: g.title || "",
+        selection_type: selectionType,
+        min_select: minSelect,
+        max_select: g.max_select !== null ? Number(g.max_select) : null,
+        items,
+        selectedItemId,
+      };
+    });
+
     const qty = cartQty(product.id);
     container.innerHTML = "";
 
-    const { wrap, center, btnMinus, btnPlus, favBtn } = buildProductDetailsContent(product, qty, { onBack });
+    let updateFooter = () => {};
+    const { wrap, center, btnMinus, btnPlus, favBtn } = buildProductDetailsContent(product, qty, optionGroups, {
+      onBack,
+      onOptionsChange: () => updateFooter(),
+    });
     container.appendChild(wrap);
 
-    openProductCtx = { productId: product.id, centerEl: center, minusBtn: btnMinus };
+    updateFooter = () => {
+      const selections = optionGroupsToSelections(optionGroups);
+      const activeLine = findLineByOptions(product.id, selections);
+      const lineQty = activeLine ? Number(activeLine.qty || 0) : 0;
+      const optionTotal = optionGroupsUnitTotal(optionGroups);
+      center.innerHTML = pdCenterHtml(product, lineQty, optionTotal);
+      if (btnMinus) btnMinus.classList.toggle("is-disabled", lineQty <= 0);
+      if (btnPlus) btnPlus.classList.toggle("is-disabled", !optionGroupsValid(optionGroups));
+    };
 
-    btnPlus.addEventListener("click", () => changeQty(product.id, +1));
-    btnMinus.addEventListener("click", () => changeQty(product.id, -1));
+    openProductCtx = { productId: product.id, centerEl: center, minusBtn: btnMinus, optionGroups };
+
+    btnPlus.addEventListener("click", () => {
+      if (!optionGroupsValid(optionGroups)) return;
+      const selections = optionGroupsToSelections(optionGroups);
+      addProductWithOptions(product.id, selections, 1);
+      saveCart();
+      renderProducts();
+      renderCart();
+      updateCartBadge();
+      updateFooter();
+    });
+    btnMinus.addEventListener("click", () => {
+      const selections = optionGroupsToSelections(optionGroups);
+      const line = findLineByOptions(product.id, selections);
+      if (!line) return;
+      changeLineQty(line.id, -1);
+      saveCart();
+      renderProducts();
+      renderCart();
+      updateCartBadge();
+      updateFooter();
+    });
 
     favBtn.addEventListener("click", () => {
       const set = loadFavs();
@@ -1674,6 +2163,8 @@
       favBtn.classList.toggle("is-active", active);
       favBtn.innerHTML = active ? "<span aria-hidden=\"true\">♥</span>" : "<span aria-hidden=\"true\">♡</span>";
     });
+
+    updateFooter();
   }
 
   async function openProductDetails(productId) {
@@ -1689,7 +2180,7 @@
     }
 
     showProductView(p.name);
-    renderProductDetailsInto(elProductContent, p);
+    await renderProductDetailsInto(elProductContent, p);
   }
 
   // -----------------------------
@@ -1958,14 +2449,14 @@
       setTimeout(() => { try { get("street")?.focus?.(); } catch {} }, 0);
     }
 
-    function showSheetProduct(product) {
+    async function showSheetProduct(product) {
       checkoutWrap.classList.add("hidden");
       list.classList.add("hidden");
       addressWrap.classList.add("hidden");
       productWrap.classList.remove("hidden");
       setCartSheetFooterMode(openCartSheetCtx, "hidden");
       if (window.AppModal?.setTitle) window.AppModal.setTitle(str(product?.name || "Товар"));
-      renderProductDetailsInto(productWrap, product, { onBack: showSheetCart });
+      await renderProductDetailsInto(productWrap, product, { onBack: showSheetCart });
     }
 
     function renderSheetAddressList() {
@@ -2791,6 +3282,38 @@
             <div class="muted">${new Date(o.created_at).toLocaleString("ru-RU")}</div>
             <div><strong>${money(o.total_price || 0)}</strong> <span class="muted">• позиций: ${itemsCount}</span></div>
           `;
+
+          if (Array.isArray(o.items) && o.items.length) {
+            const itemsWrap = document.createElement("div");
+            itemsWrap.className = "shop-order-items";
+            o.items.forEach((it) => {
+              const itemRow = document.createElement("div");
+              itemRow.className = "shop-order-item";
+              const itemTitle = document.createElement("div");
+              itemTitle.className = "shop-order-item-title";
+              itemTitle.textContent = `${str(it.name || "Товар")} × ${Number(it.qty || 0)}`;
+              itemRow.appendChild(itemTitle);
+
+              const optionGroups = optionSelectionsFromGroups(it.options || []);
+              if (optionGroups.length) {
+                const optList = document.createElement("div");
+                optList.className = "shop-order-item-options";
+                optionGroups.forEach((g) => {
+                  g.selections.forEach((s) => {
+                    const opt = document.createElement("div");
+                    opt.className = "shop-order-item-option";
+                    const qty = Number(s.qty || 0) * Number(it.qty || 0);
+                    opt.textContent = `${str(s.item_name || "Опция")} × ${qty}`;
+                    optList.appendChild(opt);
+                  });
+                });
+                itemRow.appendChild(optList);
+              }
+
+              itemsWrap.appendChild(itemRow);
+            });
+            row.appendChild(itemsWrap);
+          }
           ordersList.appendChild(row);
         });
       } catch (e) {
@@ -3525,7 +4048,11 @@
         payment_code: paySelect.getValue() || payDefault || "cash",
         cutlery_qty: 0,
         change_from: changeSelect.getValue() ? Number(changeSelect.getValue()) : null,
-        items: cartItemsResolved().map(x => ({ product_id: x.product.id, qty: x.qty })),
+        items: cartItemsResolved().map(x => ({
+          product_id: x.product.id,
+          qty: x.qty,
+          options: x.line.options || [],
+        })),
       };
 
       const isAuthed = !!(getCustomerToken() && me);

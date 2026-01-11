@@ -919,6 +919,117 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   line-height: 1.35;
 }
 
+.shop-pd-options{
+  display: grid;
+  gap: 12px;
+}
+
+.shop-pd-option-group{
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+  background: var(--color-surface-2);
+}
+
+.shop-pd-option-title{
+  font-weight: 800;
+  color: var(--color-text);
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.shop-pd-option-required{
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.shop-pd-option-select{
+  display: grid;
+  gap: 8px;
+}
+
+.shop-pd-option-price-preview{
+  display: flex;
+  justify-content: flex-start;
+}
+
+.shop-pd-option-list{
+  display: grid;
+  gap: 10px;
+}
+
+.shop-pd-option-row{
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.shop-pd-option-name{
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.shop-option-price{
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+  margin-top: 4px;
+}
+
+.shop-option-old{
+  font-size: 12px;
+  color: var(--color-text-muted);
+  text-decoration: line-through;
+}
+
+.shop-option-new{
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.shop-pd-option-qty .qty-pill{
+  transform: scale(0.9);
+  transform-origin: right center;
+}
+
+.cart-options{
+  margin-top: 6px;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.cart-option-line{
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.shop-order-items{
+  margin-top: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.shop-order-item-title{
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.shop-order-item-options{
+  margin-top: 4px;
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
 /* ==========================================================================
    Auth sheet placeholder
    ========================================================================== */

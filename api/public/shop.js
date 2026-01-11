@@ -165,6 +165,86 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
     return r2.length ? Number(r2[0].id) : null;
   }
 
+  async function getProductOptionGroups(tenantId, productId) {
+    const [groups] = await db.query(
+      `SELECT
+         g.id,
+         g.title,
+         g.selection_type,
+         g.min_select,
+         g.max_select,
+         a.priority
+       FROM prod_option_assignments a
+       JOIN prod_option_groups g
+         ON g.tenant_id=a.tenant_id AND g.id=a.group_id
+       WHERE a.tenant_id=?
+         AND a.assign_type='product'
+         AND a.assign_id=?
+         AND a.is_active=1
+         AND g.is_active=1
+       ORDER BY a.priority ASC, g.id ASC`,
+      [tenantId, productId]
+    );
+
+    if (!groups.length) return [];
+
+    const groupIds = groups.map(g => Number(g.id)).filter(n => Number.isFinite(n));
+    if (!groupIds.length) return [];
+
+    const [items] = await db.query(
+      `SELECT
+         i.*,
+         p.name AS target_product_name,
+         p.price AS target_product_price
+       FROM prod_option_items i
+       LEFT JOIN prod_products p
+         ON p.tenant_id=i.tenant_id
+        AND p.id=i.target_product_id
+        AND i.target_type='product'
+       WHERE i.tenant_id=?
+         AND i.group_id IN (${groupIds.map(() => '?').join(',')})
+         AND i.is_active=1
+       ORDER BY i.sort_order ASC, i.id ASC`,
+      [tenantId, ...groupIds]
+    );
+
+    const byGroup = new Map();
+    items.forEach((item) => {
+      const gid = Number(item.group_id);
+      if (!byGroup.has(gid)) byGroup.set(gid, []);
+      const catalogPrice = item.target_type === 'product'
+        ? Number(item.target_product_price || 0)
+        : Number(item.price_value || 0);
+      const appliedPrice = item.price_mode === 'fixed'
+        ? Number(item.price_value || 0)
+        : Number(catalogPrice || 0);
+      byGroup.get(gid).push({
+        id: Number(item.id),
+        group_id: gid,
+        title: item.title || item.name || item.target_product_name || '',
+        target_type: item.target_type || 'custom',
+        target_product_id: item.target_product_id ? Number(item.target_product_id) : null,
+        price_mode: item.price_mode || 'from_target',
+        price_value: item.price_value !== null ? Number(item.price_value) : null,
+        qty_min: item.qty_min !== null ? Number(item.qty_min) : 1,
+        qty_max: item.qty_max !== null ? Number(item.qty_max) : null,
+        catalog_unit_price: catalogPrice,
+        applied_unit_price: appliedPrice,
+        target_product_name: item.target_product_name || null,
+      });
+    });
+
+    return groups.map((g) => ({
+      id: Number(g.id),
+      title: g.title || '',
+      selection_type: g.selection_type || 'single',
+      min_select: g.min_select !== null ? Number(g.min_select) : 0,
+      max_select: g.max_select !== null ? Number(g.max_select) : null,
+      priority: g.priority !== null ? Number(g.priority) : 0,
+      items: byGroup.get(Number(g.id)) || [],
+    }));
+  }
+
   // ------------------------------
   // AUTH
   // ------------------------------
@@ -800,6 +880,20 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
     }
   });
 
+  router.get('/products/:id/options', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const groups = await getProductOptionGroups(tenantId, id);
+      res.json({ ok: true, data: groups });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/products/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -977,7 +1071,37 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
 
         const price = Number(p.price || 0);
         const oldPrice = Number(p.old_price || 0);
-        const lineTotal = price * qty;
+        const rawOptions = Array.isArray(it.options) ? it.options : [];
+        const optionGroups = [];
+        let optionUnitTotal = 0;
+
+        rawOptions.forEach((g) => {
+          const groupId = Number(g.group_id);
+          if (!Number.isFinite(groupId)) return;
+          const selectionsRaw = Array.isArray(g.selections) ? g.selections : [];
+          const selections = selectionsRaw
+            .map((s) => ({
+              item_id: Number(s.item_id),
+              target_type: s.target_type || 'custom',
+              resolved_product_id: s.resolved_product_id ? Number(s.resolved_product_id) : null,
+              qty: Math.max(0, Number(s.qty || 0)),
+              applied_unit_price: Number(s.applied_unit_price || 0),
+              catalog_unit_price: Number(s.catalog_unit_price || 0),
+              item_name: s.item_name || s.title || s.name || null,
+            }))
+            .filter((s) => Number.isFinite(s.item_id) && s.qty > 0);
+
+          if (!selections.length) return;
+
+          selections.forEach((s) => {
+            optionUnitTotal += s.applied_unit_price * s.qty;
+          });
+
+          optionGroups.push({ group_id: groupId, selections });
+        });
+
+        const unitTotal = price + optionUnitTotal;
+        const lineTotal = unitTotal * qty;
 
         total += lineTotal;
 
@@ -987,6 +1111,9 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
           qty,
           price,
           old_price: oldPrice,
+          options: optionGroups,
+          option_unit_total: optionUnitTotal,
+          unit_total: unitTotal,
           line_total: lineTotal,
         });
       }
