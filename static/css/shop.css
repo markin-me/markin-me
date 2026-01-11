@@ -854,7 +854,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 
 .shop-pd-head{
   display: grid;
-  grid-template-columns: 56px 1fr auto;
+  grid-template-columns: 56px 1fr;
   gap: 10px;
   align-items: start;
 }
@@ -919,6 +919,58 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   line-height: 1.35;
 }
 
+.shop-pd-options{
+  display: grid;
+  gap: 12px;
+}
+
+.shop-pd-option{
+  display: grid;
+  gap: 6px;
+}
+
+.shop-pd-option-label{
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.shop-pd-option-select{
+  width: 100%;
+}
+
+.shop-pd-accordion{
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface-2);
+  padding: 6px 10px;
+}
+
+.shop-pd-accordion summary{
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--color-text);
+  outline: none;
+}
+
+.shop-pd-accordion-body{
+  padding: 8px 0 4px;
+  color: var(--color-text);
+  line-height: 1.35;
+}
+
+.shop-pd-action{
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 16px;
+}
+
+.shop-pd-action-price{
+  font-weight: 900;
+}
+
 /* ==========================================================================
    Auth sheet placeholder
    ========================================================================== */
@@ -936,6 +988,11 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 .shop-auth-form{
   display: grid;
   gap: 10px;
+}
+
+.shop-auth-error{
+  font-size: 12px;
+  color: #ef4444;
 }
 /* ================= Address in cart ================= */
 .shop-cart-header-right{

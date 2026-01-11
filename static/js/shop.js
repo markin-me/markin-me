@@ -272,14 +272,18 @@
   let openCartSheetCtx = null;
   let openProductCtx = null;
   let cartViewMode = "cart";
+  let previousPanelState = { mode: "cart" };
+
+  const optionGroupsCache = new Map();
+  const productOptionsCache = new Map();
 
   function loadCart() {
     try {
       const raw = localStorage.getItem(CART_KEY);
-      const parsed = raw ? JSON.parse(raw) : {};
-      if (parsed && typeof parsed === "object") return parsed;
+      const parsed = raw ? JSON.parse(raw) : null;
+      return normalizeCart(parsed);
     } catch {}
-    return {};
+    return [];
   }
 
   function saveCart() {
@@ -288,26 +292,275 @@
     } catch {}
   }
 
+  function normalizeCart(raw) {
+    if (Array.isArray(raw)) {
+      return raw.map(normalizeCartItem).filter(Boolean);
+    }
+    if (raw && typeof raw === "object") {
+      return Object.keys(raw).map((k) => {
+        const pid = Number(k);
+        const qty = Number(raw[k] || 0);
+        if (!Number.isFinite(pid) || qty <= 0) return null;
+        return normalizeCartItem({ product_id: pid, qty, options: [] });
+      }).filter(Boolean);
+    }
+    return [];
+  }
+
+  function normalizeCartItem(item) {
+    if (!item) return null;
+    const productId = Number(item.product_id ?? item.productId ?? item.id);
+    const qty = Number(item.qty ?? item.quantity ?? 0);
+    if (!Number.isFinite(productId) || qty <= 0) return null;
+    const options = normalizeCartOptions(item.options);
+    return {
+      key: buildConfigKey(productId, options),
+      product_id: productId,
+      qty,
+      options,
+    };
+  }
+
+  function normalizeCartOptions(options) {
+    if (!Array.isArray(options)) return [];
+    return options.map((opt) => {
+      const groupId = Number(opt.group_id ?? opt.groupId);
+      const itemId = Number(opt.item_id ?? opt.itemId);
+      if (!Number.isFinite(groupId) || !Number.isFinite(itemId)) return null;
+      return {
+        group_id: groupId,
+        item_id: itemId,
+        title: str(opt.title || ""),
+        price: Number(opt.price || 0),
+      };
+    }).filter(Boolean);
+  }
+
+  function buildConfigKey(productId, options) {
+    const pid = Number(productId);
+    if (!Number.isFinite(pid)) return "";
+    const normalized = (Array.isArray(options) ? options : [])
+      .map((opt) => ({ group_id: Number(opt.group_id), item_id: Number(opt.item_id) }))
+      .filter((opt) => Number.isFinite(opt.group_id) && Number.isFinite(opt.item_id))
+      .sort((a, b) => a.group_id - b.group_id);
+    const suffix = normalized.map((opt) => `${opt.group_id}:${opt.item_id}`).join("|");
+    return `${pid}::${suffix}`;
+  }
+
   function cartQty(productId) {
-    return Number(state.cart[String(productId)] || 0);
+    const pid = Number(productId);
+    if (!Number.isFinite(pid)) return 0;
+    return state.cart.reduce((acc, item) => acc + (item.product_id === pid ? Number(item.qty || 0) : 0), 0);
   }
 
   function cartCountTotal() {
-    let total = 0;
-    for (const k of Object.keys(state.cart)) total += Number(state.cart[k] || 0);
-    return total;
+    return state.cart.reduce((acc, item) => acc + Number(item.qty || 0), 0);
   }
 
   function cartItemsResolved() {
     const items = [];
-    for (const k of Object.keys(state.cart)) {
-      const pid = Number(k);
-      const qty = Number(state.cart[k] || 0);
+    for (const item of state.cart) {
+      const pid = Number(item.product_id);
+      const qty = Number(item.qty || 0);
       if (!qty || !Number.isFinite(pid)) continue;
       const p = state.productCache.get(pid);
-      if (p) items.push({ product: p, qty });
+      if (p) items.push({ product: p, qty, item });
     }
     return items;
+  }
+
+  function getCartItemOptionsTotal(item) {
+    return (item?.options || []).reduce((acc, opt) => acc + Number(opt.price || 0), 0);
+  }
+
+  function getCartItemUnitPrice(product, item) {
+    const base = Number(product?.price || 0);
+    return base + getCartItemOptionsTotal(item);
+  }
+
+  function updateProductCardQty(productId) {
+    const pid = Number(productId);
+    if (!Number.isFinite(pid)) return;
+    const card = elProductsGrid?.querySelector?.(`.sp-card[data-product-id="${pid}"]`);
+    const p = state.productCache.get(pid);
+    if (card && p) applyCardState(card, p, cartQty(pid), null);
+  }
+
+  function adjustCartItemQty(itemKey, delta) {
+    if (!itemKey) return;
+    const idx = state.cart.findIndex((x) => x.key === itemKey);
+    if (idx < 0) return;
+    state.cart[idx].qty = Math.max(0, Number(state.cart[idx].qty || 0) + delta);
+    if (state.cart[idx].qty <= 0) state.cart.splice(idx, 1);
+  }
+
+  async function changeQty(productId, delta, optionalCartNumEl) {
+    const pid = Number(productId);
+    if (!Number.isFinite(pid)) return;
+
+    if (delta > 0) {
+      const product = state.productCache.get(pid) || await ensureProduct(pid);
+      const groups = await loadProductOptionGroups(pid);
+      const options = buildSelectedOptions(groups, null);
+      addOrMergeCartItem(pid, options, 1);
+    } else if (delta < 0) {
+      const idx = findLastCartIndexByProduct(pid);
+      if (idx >= 0) {
+        state.cart[idx].qty = Math.max(0, Number(state.cart[idx].qty || 0) + delta);
+        if (state.cart[idx].qty <= 0) state.cart.splice(idx, 1);
+      }
+    }
+
+    saveCart();
+    updateProductCardQty(pid);
+    if (optionalCartNumEl) animateNumber(optionalCartNumEl, cartQty(pid) || 0, delta > 0 ? "inc" : "dec");
+    refreshCartViews();
+  }
+
+  function findLastCartIndexByProduct(productId) {
+    for (let i = state.cart.length - 1; i >= 0; i -= 1) {
+      if (Number(state.cart[i].product_id) === Number(productId)) return i;
+    }
+    return -1;
+  }
+
+  function addOrMergeCartItem(productId, options, qtyDelta) {
+    const key = buildConfigKey(productId, options);
+    const existing = state.cart.find((x) => x.key === key);
+    if (existing) {
+      existing.qty = Number(existing.qty || 0) + qtyDelta;
+    } else {
+      state.cart.push({
+        key,
+        product_id: Number(productId),
+        qty: qtyDelta,
+        options: options || [],
+      });
+    }
+  }
+
+  function updateCartItemConfig({ itemKey, productId, options }) {
+    const idx = state.cart.findIndex((x) => x.key === itemKey);
+    if (idx < 0) return;
+    const nextKey = buildConfigKey(productId, options);
+    if (nextKey === itemKey) {
+      state.cart[idx].options = options;
+      return;
+    }
+    const existingIdx = state.cart.findIndex((x) => x.key === nextKey);
+    if (existingIdx >= 0) {
+      state.cart[existingIdx].qty = Number(state.cart[existingIdx].qty || 0) + Number(state.cart[idx].qty || 0);
+      state.cart.splice(idx, 1);
+    } else {
+      state.cart[idx] = {
+        ...state.cart[idx],
+        key: nextKey,
+        product_id: Number(productId),
+        options,
+      };
+    }
+  }
+
+  function refreshCartViews() {
+    renderCart();
+    updateCartBadge();
+
+    if (openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
+      const { items, total } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
+      if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
+      if (openCartSheetCtx.checkoutBtn) {
+        openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
+        const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
+        if (tspan) tspan.textContent = money(total);
+      }
+    }
+  }
+
+  function getOptionItemPrice(item) {
+    if (!item) return 0;
+    if (item.price_mode === "fixed" && item.price_value != null) return Number(item.price_value || 0);
+    if (item.product_price != null) return Number(item.product_price || 0);
+    return Number(item.price || 0);
+  }
+
+  function normalizeOptionItem(item) {
+    return {
+      id: Number(item.id),
+      title: str(item.product_name || item.name || ""),
+      price: getOptionItemPrice(item),
+    };
+  }
+
+  async function loadProductOptionGroups(productId) {
+    const pid = Number(productId);
+    if (!Number.isFinite(pid)) return [];
+    if (productOptionsCache.has(pid)) return productOptionsCache.get(pid);
+
+    let assignments = [];
+    try {
+      const json = await apiJson(`/api/admin/products/${pid}/option-assignments`);
+      assignments = Array.isArray(json.data) ? json.data : [];
+    } catch {
+      productOptionsCache.set(pid, []);
+      return [];
+    }
+
+    const activeAssignments = assignments.filter((a) => Number(a.is_active) !== 0);
+    if (!activeAssignments.length) {
+      productOptionsCache.set(pid, []);
+      return [];
+    }
+
+    const groups = [];
+    for (const assignment of activeAssignments) {
+      const groupId = Number(assignment.group_id);
+      if (!Number.isFinite(groupId)) continue;
+
+      let data = optionGroupsCache.get(groupId);
+      if (!data) {
+        try {
+          const json = await apiJson(`/api/admin/options/groups/${groupId}`);
+          data = json.data;
+          optionGroupsCache.set(groupId, data);
+        } catch {
+          continue;
+        }
+      }
+
+      const group = data?.group;
+      const items = Array.isArray(data?.items) ? data.items : [];
+      const normalizedItems = items
+        .filter((item) => Number(item.is_active) !== 0)
+        .map(normalizeOptionItem)
+        .filter((item) => Number.isFinite(item.id));
+
+      groups.push({
+        id: groupId,
+        title: str(group?.title || ""),
+        selection_type: group?.selection_type || "single",
+        items: normalizedItems,
+      });
+    }
+
+    productOptionsCache.set(pid, groups);
+    return groups;
+  }
+
+  function buildSelectedOptions(groups, selectedMap) {
+    const options = [];
+    const map = selectedMap || new Map();
+    (groups || []).forEach((group) => {
+      const preferred = map.get(Number(group.id));
+      const picked = group.items.find((x) => Number(x.id) === Number(preferred)) || group.items[0];
+      if (!picked) return;
+      options.push({
+        group_id: Number(group.id),
+        item_id: Number(picked.id),
+        title: str(picked.title || ""),
+        price: Number(picked.price || 0),
+      });
+    });
+    return options;
   }
 
   // -----------------------------
@@ -316,9 +569,9 @@
   // -----------------------------
   async function warmupCartProducts() {
     const missing = [];
-    for (const k of Object.keys(state.cart)) {
-      const pid = Number(k);
-      const qty = Number(state.cart[k] || 0);
+    for (const item of state.cart) {
+      const pid = Number(item.product_id);
+      const qty = Number(item.qty || 0);
       if (!qty || !Number.isFinite(pid)) continue;
       if (!state.productCache.has(pid)) missing.push(pid);
     }
@@ -588,6 +841,67 @@
     if (elProfileContent) elProfileContent.classList.remove("hidden");
     setCartHeader({ title: "Профиль", showAddressChip: false, showProfileActions: true, showBack: false });
     setCartFooterMode("hidden");
+  }
+
+  function capturePanelState() {
+    if (cartViewMode === "product") {
+      return { mode: "product", productId: openProductCtx?.productId || state._lastProductId };
+    }
+    if (cartViewMode === "address") {
+      const isForm = !!(elAddressFormView && !elAddressFormView.classList.contains("hidden"));
+      const prefill = isForm ? {
+        street: elAddrStreet?.value,
+        house: elAddrHouse?.value,
+        entrance: elAddrEntrance?.value,
+        floor: elAddrFloor?.value,
+        apartment: elAddrApartment?.value,
+        comment: elAddrComment?.value,
+      } : null;
+      return {
+        mode: "address",
+        isForm,
+        prefill,
+        editingId: state.addressEditingId,
+        backMode: state._addressFormBackMode || state._addressListBackMode || "cart",
+      };
+    }
+    return { mode: cartViewMode || "cart" };
+  }
+
+  async function restorePanelState(prev) {
+    if (!prev?.mode || prev.mode === "cart") {
+      showCartView();
+      return;
+    }
+    if (prev.mode === "checkout") {
+      showCheckoutView();
+      await openCheckoutView({
+        container: elCheckoutContent,
+        onBack: showCartView,
+        hasAddressEditor: true,
+        isSheet: false,
+        actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
+      });
+      return;
+    }
+    if (prev.mode === "address") {
+      if (prev.isForm) {
+        showAddressFormView(prev.prefill || {}, prev.editingId, prev.backMode);
+      } else {
+        showAddressListView(prev.backMode || "cart");
+      }
+      return;
+    }
+    if (prev.mode === "product") {
+      const pid = Number(prev.productId);
+      if (Number.isFinite(pid)) {
+        const p = await ensureProduct(pid);
+        showProductView(p.name);
+        await renderProductDetailsInto(elProductContent, p);
+        return;
+      }
+    }
+    showCartView();
   }
 
   function showProductView(title) {
@@ -1239,15 +1553,15 @@
 
     let total = 0;
 
-    items.forEach(({ product, qty }) => {
-      const old = Number(product.old_price || 0);
-      const price = Number(product.price || 0);
+    items.forEach(({ product, qty, item }) => {
+      const price = getCartItemUnitPrice(product, item);
       total += price * qty;
 
       const row = document.createElement("div");
       row.className = "cart-row";
       row.setAttribute("data-product-id", String(product.id));
-      row.addEventListener("click", () => openProductDetails(product.id));
+      row.setAttribute("data-cart-key", item.key);
+      row.addEventListener("click", () => openProductDetails(product.id, { editingItem: item }));
 
       const photos = safePhotos(product);
       const mainPhoto = photos[0] || "";
@@ -1268,7 +1582,8 @@
 
       const sub = document.createElement("div");
       sub.className = "cart-sub";
-      sub.textContent = str(product.description_short || "");
+      const optionTitles = (item.options || []).map((opt) => opt.title).filter(Boolean);
+      sub.textContent = optionTitles.join(", ");
       mid.appendChild(sub);
 
       const q = document.createElement("div");
@@ -1282,13 +1597,17 @@
 
       btnPlus.addEventListener("click", (e) => {
         e.stopPropagation();
-        changeQty(product.id, +1);
-        center.textContent = String(cartQty(product.id));
+        adjustCartItemQty(item.key, +1);
+        saveCart();
+        updateProductCardQty(product.id);
+        refreshCartViews();
       });
       btnMinus.addEventListener("click", (e) => {
         e.stopPropagation();
-        changeQty(product.id, -1);
-        center.textContent = String(cartQty(product.id) || 0);
+        adjustCartItemQty(item.key, -1);
+        saveCart();
+        updateProductCardQty(product.id);
+        refreshCartViews();
       });
 
       q.appendChild(pill);
@@ -1298,18 +1617,10 @@
       const right = document.createElement("div");
       right.className = "cart-right";
 
-      const showOld = old > 0 && old > price;
-
-      const oldEl = document.createElement("div");
-      oldEl.className = "cart-old";
-      oldEl.textContent = showOld ? moneyNoSign(old * qty) : "";
-      if (!showOld) oldEl.classList.add("hidden");
-
       const pr = document.createElement("div");
       pr.className = "cart-price";
       pr.textContent = money(price * qty);
 
-      right.appendChild(oldEl);
       right.appendChild(pr);
       row.appendChild(right);
 
@@ -1354,7 +1665,7 @@
   }
 
   function clearCartAll() {
-    state.cart = {};
+    state.cart = [];
     saveCart();
     renderProducts();
     renderCart();
@@ -1408,50 +1719,6 @@
       if (btn.contains(e.target)) return;
       reset();
     });
-  }
-
-  // -----------------------------
-  // Qty change
-  // -----------------------------
-  function changeQty(productId, delta, optionalCartNumEl) {
-    const pid = Number(productId);
-    if (!Number.isFinite(pid)) return;
-
-    const prev = cartQty(pid);
-    const next = Math.max(0, prev + delta);
-
-    if (next <= 0) delete state.cart[String(pid)];
-    else state.cart[String(pid)] = next;
-
-    saveCart();
-
-    const card = elProductsGrid.querySelector(`.sp-card[data-product-id="${pid}"]`);
-    const p = state.productCache.get(pid);
-    if (card && p) applyCardState(card, p, next, delta > 0 ? "inc" : "dec");
-
-    if (optionalCartNumEl) animateNumber(optionalCartNumEl, next || 0, delta > 0 ? "inc" : "dec");
-
-    renderCart();
-    updateCartBadge();
-
-    if (openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
-      const { items, total } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
-      if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
-      if (openCartSheetCtx.checkoutBtn) {
-        openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
-        const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
-        if (tspan) tspan.textContent = money(total);
-      }
-    }
-
-    if (openProductCtx && Number(openProductCtx.productId) === pid) {
-      const prod = state.productCache.get(pid);
-      if (prod && openProductCtx.centerEl) {
-        const q = cartQty(pid);
-        openProductCtx.centerEl.innerHTML = pdCenterHtml(prod, q);
-        if (openProductCtx.minusBtn) openProductCtx.minusBtn.classList.toggle("is-disabled", q <= 0);
-      }
-    }
   }
 
   // -----------------------------
@@ -1521,16 +1788,6 @@
     }
   }
 
-  function pdCenterHtml(product, qty) {
-    const old = Number(product.old_price || 0);
-    const price = Number(product.price || 0);
-    const showOld = old > 0 && old > price;
-
-    if (qty > 0) return `${qty} × ${moneyNoSign(price)} ₽`;
-    if (showOld) return `<span class="old">${moneyNoSign(old)} ₽</span>${moneyNoSign(price)} ₽`;
-    return `${moneyNoSign(price)} ₽`;
-  }
-
   async function ensureProduct(pid) {
     const id = Number(pid);
     if (state.productCache.has(id)) return state.productCache.get(id);
@@ -1542,7 +1799,7 @@
     return p;
   }
 
-  function buildProductDetailsContent(product, qty, { onBack } = {}) {
+  function buildProductDetailsContent(product, optionGroups, { onBack, editingItem } = {}) {
     const wrap = document.createElement("div");
     wrap.className = "shop-pd";
 
@@ -1593,32 +1850,71 @@
 
     head.appendChild(meta);
 
-    const prices = document.createElement("div");
-    prices.className = "shop-pd-prices";
-
-    const old = Number(product.old_price || 0);
-    const showOld = old > 0 && old > Number(product.price || 0);
-
-    const oldEl = document.createElement("div");
-    oldEl.className = "shop-pd-old";
-    oldEl.textContent = showOld ? money(old) : "";
-    if (!showOld) oldEl.classList.add("hidden");
-
-    const pr = document.createElement("div");
-    pr.className = "shop-pd-price";
-    pr.textContent = money(product.price);
-
-    prices.appendChild(oldEl);
-    prices.appendChild(pr);
-    head.appendChild(prices);
-
     scroll.appendChild(head);
 
+    const selectionMap = new Map();
+    if (editingItem?.options?.length) {
+      editingItem.options.forEach((opt) => {
+        selectionMap.set(Number(opt.group_id), Number(opt.item_id));
+      });
+    }
+
+    const optionsWrap = document.createElement("div");
+    optionsWrap.className = "shop-pd-options";
+
+    (optionGroups || []).forEach((group) => {
+      const groupWrap = document.createElement("div");
+      groupWrap.className = "shop-pd-option";
+
+      const label = document.createElement("div");
+      label.className = "shop-pd-option-label";
+      label.textContent = str(group.title || "");
+      groupWrap.appendChild(label);
+
+      const select = document.createElement("select");
+      select.className = "control shop-pd-option-select";
+      const selectedId = selectionMap.get(Number(group.id)) || group.items[0]?.id;
+
+      if (!group.items.length) {
+        const emptyOpt = document.createElement("option");
+        emptyOpt.value = "";
+        emptyOpt.textContent = "Нет опций";
+        select.appendChild(emptyOpt);
+        select.disabled = true;
+      } else {
+        group.items.forEach((item) => {
+          const opt = document.createElement("option");
+          opt.value = String(item.id);
+          opt.textContent = str(item.title || "");
+          if (Number(item.id) === Number(selectedId)) opt.selected = true;
+          select.appendChild(opt);
+        });
+      }
+
+      if (selectedId) selectionMap.set(Number(group.id), Number(selectedId));
+      select.addEventListener("change", () => {
+        selectionMap.set(Number(group.id), Number(select.value));
+      });
+
+      groupWrap.appendChild(select);
+      optionsWrap.appendChild(groupWrap);
+    });
+
+    if (optionGroups?.length) {
+      scroll.appendChild(optionsWrap);
+    }
+
     if (product.description) {
-      const d = document.createElement("div");
-      d.className = "shop-pd-desc";
-      d.textContent = str(product.description);
-      scroll.appendChild(d);
+      const accordion = document.createElement("details");
+      accordion.className = "shop-pd-accordion";
+      const summary = document.createElement("summary");
+      summary.textContent = "Описание";
+      const body = document.createElement("div");
+      body.className = "shop-pd-accordion-body";
+      body.textContent = str(product.description);
+      accordion.appendChild(summary);
+      accordion.appendChild(body);
+      scroll.appendChild(accordion);
     }
 
     wrap.appendChild(scroll);
@@ -1637,32 +1933,58 @@
       favBtn.innerHTML = "<span aria-hidden=\"true\">♥</span>";
     }
 
-    const { pill, btnMinus, btnPlus, center } = createQtyPill({
-      variant: "buy",
-      big: true,
-      centerHtml: pdCenterHtml(product, qty),
-      minusEnabled: qty > 0,
-    });
+    const actionBtn = document.createElement("button");
+    actionBtn.type = "button";
+    actionBtn.className = "btn btn-primary shop-pd-action";
+
+    const actionLabel = document.createElement("span");
+    actionLabel.className = "shop-pd-action-text";
+    actionLabel.textContent = editingItem ? "Сохранить" : "Добавить";
+
+    const actionPrice = document.createElement("span");
+    actionPrice.className = "shop-pd-action-price";
 
     footer.appendChild(favBtn);
-    footer.appendChild(pill);
+    footer.appendChild(actionBtn);
     wrap.appendChild(footer);
 
-    return { wrap, center, btnMinus, btnPlus, favBtn };
+    function updateActionPrice() {
+      const selections = buildSelectedOptions(optionGroups, selectionMap);
+      const total = getCartItemUnitPrice(product, { options: selections });
+      actionPrice.textContent = money(total);
+    }
+
+    actionBtn.appendChild(actionLabel);
+    actionBtn.appendChild(actionPrice);
+    updateActionPrice();
+
+    optionsWrap.addEventListener("change", updateActionPrice);
+
+    return { wrap, actionBtn, favBtn, selectionMap };
   }
 
-  function renderProductDetailsInto(container, product, { onBack } = {}) {
+  async function renderProductDetailsInto(container, product, { onBack, editingItem } = {}) {
     if (!container) return;
-    const qty = cartQty(product.id);
     container.innerHTML = "";
 
-    const { wrap, center, btnMinus, btnPlus, favBtn } = buildProductDetailsContent(product, qty, { onBack });
+    const optionGroups = await loadProductOptionGroups(product.id);
+    const { wrap, actionBtn, favBtn, selectionMap } = buildProductDetailsContent(product, optionGroups, { onBack, editingItem });
     container.appendChild(wrap);
 
-    openProductCtx = { productId: product.id, centerEl: center, minusBtn: btnMinus };
+    openProductCtx = { productId: product.id };
 
-    btnPlus.addEventListener("click", () => changeQty(product.id, +1));
-    btnMinus.addEventListener("click", () => changeQty(product.id, -1));
+    actionBtn.addEventListener("click", () => {
+      const options = buildSelectedOptions(optionGroups, selectionMap);
+      if (editingItem?.key) {
+        updateCartItemConfig({ itemKey: editingItem.key, productId: product.id, options });
+      } else {
+        addOrMergeCartItem(product.id, options, 1);
+      }
+
+      saveCart();
+      updateProductCardQty(product.id);
+      refreshCartViews();
+    });
 
     favBtn.addEventListener("click", () => {
       const set = loadFavs();
@@ -1676,20 +1998,21 @@
     });
   }
 
-  async function openProductDetails(productId) {
+  async function openProductDetails(productId, { editingItem } = {}) {
     const p = await ensureProduct(productId);
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    state._lastProductId = p?.id || null;
 
     if (isMobile) {
       if (!openCartSheetCtx) openCartSheet();
       if (openCartSheetCtx?.showSheetProduct) {
-        openCartSheetCtx.showSheetProduct(p);
+        openCartSheetCtx.showSheetProduct(p, { editingItem });
       }
       return;
     }
 
     showProductView(p.name);
-    renderProductDetailsInto(elProductContent, p);
+    await renderProductDetailsInto(elProductContent, p, { editingItem });
   }
 
   // -----------------------------
@@ -1958,14 +2281,14 @@
       setTimeout(() => { try { get("street")?.focus?.(); } catch {} }, 0);
     }
 
-    function showSheetProduct(product) {
+    async function showSheetProduct(product, { editingItem } = {}) {
       checkoutWrap.classList.add("hidden");
       list.classList.add("hidden");
       addressWrap.classList.add("hidden");
       productWrap.classList.remove("hidden");
       setCartSheetFooterMode(openCartSheetCtx, "hidden");
       if (window.AppModal?.setTitle) window.AppModal.setTitle(str(product?.name || "Товар"));
-      renderProductDetailsInto(productWrap, product, { onBack: showSheetCart });
+      await renderProductDetailsInto(productWrap, product, { onBack: showSheetCart, editingItem });
     }
 
     function renderSheetAddressList() {
@@ -2190,11 +2513,11 @@
   }
 
   function formatBirthdayValue(raw) {
-    const d = str(raw).replace(/[^\d]/g, "").slice(0, 8); // ddmmyyyy
+    const digits = str(raw).replace(/[^\d]/g, "").slice(0, 8); // ddmmyyyy
     const parts = [];
-    if (d.length >= 2) parts.push(d.slice(0, 2));
-    if (d.length >= 4) parts.push(d.slice(2, 4));
-    if (d.length > 4) parts.push(d.slice(4));
+    if (digits.length >= 2) parts.push(digits.slice(0, 2));
+    if (digits.length >= 4) parts.push(digits.slice(2, 4));
+    if (digits.length > 4) parts.push(digits.slice(4));
     return parts.join(".");
   }
 
@@ -2208,7 +2531,7 @@
     return value.length;
   }
 
-  function maskBirthday(inp) {
+  function normalizeBirthdayInput(inp) {
     const start = inp.selectionStart;
     const digitsBefore = Number.isFinite(start)
       ? str(inp.value).slice(0, start).replace(/[^\d]/g, "").length
@@ -2219,6 +2542,24 @@
       const pos = calcBirthdayCaret(next, digitsBefore ?? next.replace(/[^\d]/g, "").length);
       inp.setSelectionRange(pos, pos);
     }
+  }
+
+  function isValidBirthday(value) {
+    const v = str(value || "").trim();
+    const m = v.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+    if (!m) return false;
+    const day = Number(m[1]);
+    const month = Number(m[2]);
+    const year = Number(m[3]);
+    if (!Number.isFinite(day) || !Number.isFinite(month) || !Number.isFinite(year)) return false;
+    const date = new Date(year, month - 1, day);
+    return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
+  }
+
+  function setBirthdayError(el, message) {
+    if (!el) return;
+    el.textContent = message || "";
+    el.classList.toggle("hidden", !message);
   }
 
   async function fetchMeSafe() {
@@ -2288,6 +2629,10 @@
     bWrap.appendChild(bLabel);
     bWrap.appendChild(bday);
 
+    const bError = document.createElement("div");
+    bError.className = "shop-auth-error hidden";
+    bWrap.appendChild(bError);
+
     const loginBtn = document.createElement("button");
     loginBtn.type = "button";
     loginBtn.className = "btn btn-primary";
@@ -2301,7 +2646,16 @@
     phone.addEventListener("input", () => enforcePhonePrefix(phone));
     phone.addEventListener("focus", () => enforcePhonePrefix(phone));
 
-    bday.addEventListener("input", () => maskBirthday(bday));
+    bday.addEventListener("input", () => {
+      normalizeBirthdayInput(bday);
+      setBirthdayError(bError, "");
+    });
+    bday.addEventListener("blur", () => {
+      if (!str(bday.value).trim()) return;
+      if (!isValidBirthday(bday.value)) {
+        setBirthdayError(bError, "Введите корректную дату в формате дд.мм.гггг");
+      }
+    });
 
     nextBtn.addEventListener("click", () => {
       enforcePhonePrefix(phone);
@@ -2313,6 +2667,7 @@
       nextBtn.disabled = true;
       nextBtn.style.display = "none";
       bWrap.style.display = "grid";
+      setBirthdayError(bError, "");
       bday.focus();
     });
 
@@ -2323,8 +2678,9 @@
         alert("Введите телефон (РФ): +7XXXXXXXXXX");
         return;
       }
-      if (!/^\d{2}\.\d{2}\.\d{4}$/.test(str(bday.value).trim())) {
-        alert("Введите дату рождения в формате дд.мм.гггг");
+      if (!isValidBirthday(bday.value)) {
+        setBirthdayError(bError, "Введите корректную дату в формате дд.мм.гггг");
+        bday.focus();
         return;
       }
 
@@ -3051,7 +3407,7 @@
 
     if (elProfileCloseBtn) {
       elProfileCloseBtn.onclick = () => {
-        showCartView();
+        restorePanelState(previousPanelState);
       };
     }
 
@@ -3134,6 +3490,11 @@
   async function openProfileSheet() {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (!isMobile) {
+      if (cartViewMode === "profile") {
+        await restorePanelState(previousPanelState);
+        return;
+      }
+      previousPanelState = capturePanelState();
       await openProfilePanel();
       return;
     }
