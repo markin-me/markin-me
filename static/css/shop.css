@@ -918,6 +918,47 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   font-weight: 500;
   line-height: 1.35;
 }
+.shop-pd-options{
+  display: grid;
+  gap: 12px;
+}
+.shop-pd-option{
+  display: grid;
+  gap: 6px;
+}
+.shop-pd-option-title{
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+}
+.shop-pd-select{
+  width: 100%;
+}
+.shop-pd-accordion{
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: var(--color-surface);
+}
+.shop-pd-accordion-summary{
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+.shop-pd-accordion-summary::-webkit-details-marker{
+  display: none;
+}
+.shop-pd-action{
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.shop-pd-action-price{
+  font-weight: 900;
+}
 
 /* ==========================================================================
    Auth sheet placeholder
@@ -936,6 +977,14 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 .shop-auth-form{
   display: grid;
   gap: 10px;
+}
+.shop-auth-error{
+  color: var(--color-danger, #ef4444);
+  font-size: 12px;
+}
+.shop-auth .control.is-invalid{
+  border-color: var(--color-danger, #ef4444);
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.15);
 }
 /* ================= Address in cart ================= */
 .shop-cart-header-right{
