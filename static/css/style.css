@@ -982,10 +982,7 @@ input[type=number]{ -moz-appearance:textfield; }
 .option-group-select-field{
   flex:0 0 220px;
 }
-.option-header-switch{
-  margin-right:4px;
-}
-.option-header-switch .switch-text{
+.options-row-active .switch-text{
   font-size:12px;
 }
 .option-group-section+.option-group-section{margin-top:16px;}
@@ -1014,8 +1011,8 @@ input[type=number]{ -moz-appearance:textfield; }
   overflow:hidden;
 }
 .option-item-row{
-  display:flex;
-  flex-wrap:nowrap;
+  display:grid;
+  grid-template-columns:minmax(0, 1fr) auto auto;
 }
 .option-assignment-row{
   display:flex;
@@ -1024,9 +1021,7 @@ input[type=number]{ -moz-appearance:textfield; }
   min-width:0;
 }
 .option-item-title{
-  flex:1 1 50%;
   min-width:0;
-  max-width:50%;
 }
 .option-item-title .options-row-title{
   white-space:nowrap;
@@ -1073,11 +1068,11 @@ input[type=number]{ -moz-appearance:textfield; }
   display:flex;
   align-items:center;
   gap:8px;
-  margin-left:auto;
   flex:0 0 auto;
   min-width:0;
   justify-content:flex-end;
   white-space:nowrap;
+  justify-self:end;
 }
 .option-item-price-value{
   display:inline-block;
