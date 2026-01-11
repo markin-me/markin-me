@@ -22,19 +22,14 @@
       </div>
 
       <div class="product-header-actions hidden" id="optionHeaderActions">
-        <label class="switch switch-compact option-header-switch" id="optionHeaderActiveSwitch">
-          <input class="switch-input" type="checkbox" id="optionHeaderActiveInput" aria-label="Активна" />
-          <span class="switch-ui" aria-hidden="true"></span>
-          <span class="switch-text">Активна</span>
-        </label>
-        <button class="btn btn-icon hidden" id="optionHeaderBackBtn" type="button" title="Назад" aria-label="Назад">
-          <i class="fas fa-arrow-left"></i>
-        </button>
         <button class="btn btn-icon btn-primary" id="optionHeaderPrimaryBtn" type="button" title="Редактировать" aria-label="Редактировать">
           <i class="fas fa-pen"></i>
         </button>
         <button class="btn btn-icon btn-danger hidden" id="optionHeaderDeleteBtn" type="button" title="Удалить опцию" aria-label="Удалить опцию">
           <i class="fas fa-trash"></i>
+        </button>
+        <button class="btn btn-icon hidden" id="optionHeaderBackBtn" type="button" title="Назад" aria-label="Назад">
+          <i class="fas fa-arrow-left"></i>
         </button>
         <button class="btn btn-icon" id="optionHeaderCloseBtn" type="button" title="Закрыть" aria-label="Закрыть">
           <i class="fas fa-times"></i>
@@ -182,11 +177,6 @@
               <input class="control" id="optionGroupSortOrder" name="sort_order" type="number" min="0" value="0" />
             </div>
 
-            <label class="switch">
-              <input class="switch-input" type="checkbox" name="is_active" id="optionGroupActive" checked />
-              <span class="switch-ui" aria-hidden="true"></span>
-              <span class="switch-text">Активна</span>
-            </label>
           </div>
         </form>
 
