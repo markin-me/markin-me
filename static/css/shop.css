@@ -30,7 +30,7 @@
   /* ===== Геометрия / размеры ===== */
   --shop-radius: 18px;
   --shop-gap: 14px;
-  --shop-bottomnav-h: 74px;
+  --shop-bottomnav-h: 60px;
 
   /* ===== Масштабирование UI карточек (container queries) ===== */
   --sp-pad: 12px;
@@ -689,70 +689,109 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 /* ==========================================================================
-   Bottom nav (mobile)
+   Bottom nav (mobile) — pill style (50px / padding 8px / tab 34px)
    ========================================================================== */
 
 .shop-nav,
 .shop-bottom-nav{
   position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: var(--shop-bottomnav-h);
-  background: var(--color-surface);
-  border-top: 1px solid var(--color-border);
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom) + 10px);
+
+  width: min(520px, calc(100% - 24px));
+  height: 50px;
+
   display: none;
-  z-index: 120;
-  padding: 8px 10px;
+  grid-template-columns: repeat(5, 1fr);
+  align-items: center;
   gap: 8px;
-  grid-template-columns: repeat(4, 1fr);
+
+  padding: 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  box-shadow: 0 10px 22px rgba(0,0,0,.10);
+
+  z-index: 120;
 }
 
+/* показываем только на мобилке */
 @media (max-width: 768px){
   .shop-nav,
   .shop-bottom-nav{ display: grid; }
 }
 
 .shop-nav-btn{
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  border-radius: 14px;
-  height: 58px;
+  height: 34px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  border-radius: 12px;
   display: grid;
   place-items: center;
-  gap: 4px;
   cursor: pointer;
   position: relative;
+  color: var(--color-text-muted);
 }
 
 .shop-nav-btn span{
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  color: var(--color-text);
+  color: inherit;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .shop-nav-btn i{
-  color: var(--color-text);
-  font-size: 16px;
+  font-size: 20px;
+  line-height: 1;
+  color: inherit;
 }
 
+/* active: фон-плашка + оранжевая иконка, текст остаётся серым */
+.shop-nav-btn.is-active{
+  background: rgba(249,115,22,.14);
+}
+.shop-nav-btn.is-active i{
+  color: var(--shop-buy);
+}
+
+/* badge */
 .shop-nav-badge{
   position: absolute;
-  top: 6px;
-  right: 8px;
+  top: -7px;
+  right: -8px;
   min-width: 18px;
   height: 18px;
   border-radius: 999px;
   background: var(--shop-buy);
-  color: var(--shop-white);
+  color: var(--shop-buy-text) !important;
   font-weight: 900;
   font-size: 11px;
   display: grid;
   place-items: center;
   padding: 0 6px;
+  border: 2px solid var(--shop-buy);
 }
 
 .shop-nav-badge.hidden{ display: none; }
+
+/* корзина: подпрыгивание + flash при добавлении */
+@keyframes shopNavBounce{
+  0%   { transform: translateY(0); }
+  30%  { transform: translateY(-4px); }
+  60%  { transform: translateY(1px); }
+  100% { transform: translateY(0); }
+}
+
+.shop-nav-btn.is-bounce{
+  animation: shopNavBounce .35s ease;
+}
+
+.shop-nav-btn.is-flash{
+  background: rgba(249,115,22,.22);
+}
 
 /* ==========================================================================
    Sheets content

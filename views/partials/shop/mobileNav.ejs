@@ -1,22 +1,22 @@
 <nav class="shop-nav" aria-label="Навигация">
-  <button class="shop-nav-btn" id="shopNavCategories" type="button">
+  <button class="shop-nav-btn is-active" id="shopNavMenu" type="button" data-tab="menu" aria-label="Главная">
+    <i class="fas fa-house"></i>
+  </button>
+
+  <button class="shop-nav-btn" id="shopNavCategories" type="button" data-tab="categories" aria-label="Категории">
     <i class="fas fa-list"></i>
-    <span>Категории</span>
   </button>
 
-  <button class="shop-nav-btn is-active" id="shopNavMenu" type="button">
-    <i class="fas fa-utensils"></i>
-    <span>Меню</span>
-  </button>
-
-  <button class="shop-nav-btn" id="shopNavCart" type="button">
+  <button class="shop-nav-btn" id="shopNavCart" type="button" data-tab="cart" aria-label="Корзина">
     <i class="fas fa-shopping-cart"></i>
-    <span>Корзина</span>
     <span class="shop-nav-badge hidden" id="shopNavCartBadge">0</span>
   </button>
 
-  <button class="shop-nav-btn" id="shopNavProfile" type="button">
+  <button class="shop-nav-btn" id="shopNavFav" type="button" data-tab="fav" aria-label="Избранное">
+    <i class="far fa-heart"></i>
+  </button>
+
+  <button class="shop-nav-btn" id="shopNavProfile" type="button" data-tab="profile" aria-label="Профиль">
     <i class="fas fa-user"></i>
-    <span>Профиль</span>
   </button>
 </nav>
