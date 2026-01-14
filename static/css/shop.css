@@ -653,8 +653,8 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 .shop-checkout-back{
-  width: 44px;
-  height: 44px;
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
   border: 1px solid var(--shop-buy);
   background: var(--shop-buy);
@@ -827,6 +827,14 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.shop-sheet-content{
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 12px;
+  box-sizing: border-box;
 }
 
 /* ==========================================================================

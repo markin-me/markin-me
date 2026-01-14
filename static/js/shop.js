@@ -2603,47 +2603,52 @@ optionGroups.forEach((group) => {
     header.querySelectorAll(".shop-profile-modal-settings, .shop-profile-menu").forEach((el) => el.remove());
   }
 
-  function openCategoriesSheet() {
-    if (!window.AppModal) return;
-    clearProfileModalMenu();
+function openCategoriesSheet() {
+  if (!window.AppModal) return;
+  clearProfileModalMenu();
 
-    // на время открытого шита подсвечиваем "Категории"
-    setActiveNav("categories");
+  // на время открытого шита подсвечиваем "Категории"
+  setActiveNav("categories");
 
-    const list = document.createElement("div");
-    list.className = "shop-sheet-list";
+  const wrap = document.createElement("div");
+  wrap.className = "shop-sheet-content";
 
-    state.categories.forEach((c) => {
-      const row = document.createElement("button");
-      row.type = "button";
-      row.className = "shop-sheet-row";
-      if (Number(state.activeCategoryId) === Number(c.id)) row.classList.add("is-active");
+  const list = document.createElement("div");
+  list.className = "shop-sheet-list";
 
-      row.appendChild(createCatIcon(c.icon));
+  state.categories.forEach((c) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "shop-sheet-row";
+    if (Number(state.activeCategoryId) === Number(c.id)) row.classList.add("is-active");
 
-      const t = document.createElement("div");
-      t.className = "shop-sheet-row-title";
-      t.textContent = str(c.title);
-      row.appendChild(t);
+    row.appendChild(createCatIcon(c.icon));
 
-      row.addEventListener("click", () => {
-        selectCategory(c.id, c.title);
-        closeShopSheetIfOpen();
-      });
+    const t = document.createElement("div");
+    t.className = "shop-sheet-row-title";
+    t.textContent = str(c.title);
+    row.appendChild(t);
 
-      list.appendChild(row);
+    row.addEventListener("click", () => {
+      selectCategory(c.id, c.title);
+      closeShopSheetIfOpen();
     });
 
-    setAppModalMode("shop");
-    window.AppModal.open({
-      title: "Категории",
-      content: list,
-      onClose: () => {
-        // после закрытия шита возвращаемся в "Главная" (каталог)
-        setActiveNav("menu");
-      },
-    });
-  }
+    list.appendChild(row);
+  });
+
+  wrap.appendChild(list);
+
+  setAppModalMode("shop");
+  window.AppModal.open({
+    title: "Категории",
+    content: wrap, // <-- важно: передаём wrap, чтобы был padding/scroll
+    onClose: () => {
+      // после закрытия шита возвращаемся в "Главная" (каталог)
+      setActiveNav("menu");
+    },
+  });
+}
 
   function setCartSheetFooterMode(ctx, mode) {
     if (!ctx?.footerEl) return;
@@ -4135,6 +4140,7 @@ function openCartSheet() {
     if (!window.AppModal) return;
 
     const wrap = document.createElement("div");
+    wrap.className = "shop-profile-content";
     const ctx = buildProfileContent({
       host: wrap,
       me,
@@ -4644,68 +4650,95 @@ function setBottomNavActive(tab) {
   // -----------------------------
   // Init
   // -----------------------------
-  async function init() {
-    try {
-      await loadCategories();
-      renderCategories();
+async function init() {
+  try {
+    await loadCategories();
+    renderCategories();
 
-      const all = state.categories.find((c) => c.code === "all") || state.categories[0];
-      state.activeCategoryId = all ? Number(all.id) : 0;
-      state.activeCategoryTitle = all ? str(all.title) : "Все товары";
-      if (elCategoryTitle) elCategoryTitle.textContent = state.activeCategoryTitle;
+    const all = state.categories.find((c) => c.code === "all") || state.categories[0];
+    state.activeCategoryId = all ? Number(all.id) : 0;
+    state.activeCategoryTitle = all ? str(all.title) : "Все товары";
+    if (elCategoryTitle) elCategoryTitle.textContent = state.activeCategoryTitle;
 
-      await loadProducts();
-      renderProducts();
-      await warmupCartProducts();
-      renderCart();
-      updateCartBadge();
-      await initAddresses();
+    await loadProducts();
+    renderProducts();
+    await warmupCartProducts();
+    renderCart();
+    updateCartBadge();
+    await initAddresses();
 
-      if (elCartClearBtn) {
-        attachTwoStepClear(elCartClearBtn, () => clearCartAll());
-      }
-      if (elCheckoutBtn) {
-        elCheckoutBtn.addEventListener("click", async () => {
-          if (!elCheckoutContent) return;
-          showCheckoutView();
-          await openCheckoutView({
-            container: elCheckoutContent,
-            onBack: showCartView,
-            hasAddressEditor: true,
-            isSheet: false,
-            actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-          });
-        });
-      }
-
-      if (elCartBackBtn) {
-        elCartBackBtn.addEventListener("click", () => {
-          openProductCtx = null;
-          showCartView();
-        });
-      }
-
-      // Nav
-      if (elNavCategories) elNavCategories.addEventListener("click", openCategoriesSheet);
-      if (elNavCart) elNavCart.addEventListener("click", openCartSheet);
-      if (elNavProfile) elNavProfile.addEventListener("click", openProfileSheet);
-      if (elNavMenu) elNavMenu.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
-
-      if (elCartOpenDesktop) elCartOpenDesktop.addEventListener("click", openCartSheet);
-
-      // Header profile: не уходим на /auth, открываем модалку
-      if (elHeaderProfileBtn) {
-        elHeaderProfileBtn.addEventListener("click", (e) => {
-          // только на витрине
-          if (String(window.location.pathname || "").startsWith("/shop")) {
-            e.preventDefault();
-            openProfileSheet();
-          }
-        });
-      }
-    } catch (e) {
-      console.error(e);
+    if (elCartClearBtn) {
+      attachTwoStepClear(elCartClearBtn, () => clearCartAll());
     }
+    if (elCheckoutBtn) {
+      elCheckoutBtn.addEventListener("click", async () => {
+        if (!elCheckoutContent) return;
+        showCheckoutView();
+        await openCheckoutView({
+          container: elCheckoutContent,
+          onBack: showCartView,
+          hasAddressEditor: true,
+          isSheet: false,
+          actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
+        });
+      });
+    }
+
+    if (elCartBackBtn) {
+      elCartBackBtn.addEventListener("click", () => {
+        openProductCtx = null;
+        showCartView();
+      });
+    }
+
+    // Nav
+    if (elNavCategories) elNavCategories.addEventListener("click", openCategoriesSheet);
+    if (elNavCart) elNavCart.addEventListener("click", openCartSheet);
+    if (elNavProfile) elNavProfile.addEventListener("click", openProfileSheet);
+
+    // "Главная" (домик):
+    // 1) если открыт любой шит/модалка — закрываем и возвращаемся в каталог
+    // 2) если ничего не открыто — скроллим каталог наверх (внутренний скролл-контейнер на мобилке)
+    if (elNavMenu) {
+      elNavMenu.addEventListener("click", () => {
+        const isAnySheetOpen =
+          window.AppModal &&
+          typeof window.AppModal.isOpen === "function" &&
+          window.AppModal.isOpen();
+
+        if (isAnySheetOpen) {
+          closeShopSheetIfOpen(); // закрыть то, что открыто (категории/корзина/профиль/детали)
+          setActiveNav("menu");
+          return;
+        }
+
+        setActiveNav("menu");
+
+        // на мобилке скролл обычно внутри панели каталога, а не window
+        const scroller = document.querySelector(".shop-products-panel .panel-body");
+        if (scroller && typeof scroller.scrollTo === "function") {
+          scroller.scrollTo({ top: 0, behavior: "smooth" });
+        } else {
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+      });
+    }
+
+    if (elCartOpenDesktop) elCartOpenDesktop.addEventListener("click", openCartSheet);
+
+    // Header profile: не уходим на /auth, открываем модалку
+    if (elHeaderProfileBtn) {
+      elHeaderProfileBtn.addEventListener("click", (e) => {
+        // только на витрине
+        if (String(window.location.pathname || "").startsWith("/shop")) {
+          e.preventDefault();
+          openProfileSheet();
+        }
+      });
+    }
+  } catch (e) {
+    console.error(e);
   }
+}
   init();
 })();
