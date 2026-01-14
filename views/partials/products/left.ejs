@@ -1,0 +1,65 @@
+<div class="panel">
+  <div class="panel-header">
+    <div class="panel-title">Управление товарами</div>
+  </div>
+
+  <div class="panel-body no-scrollbar">
+    <div class="products-accordion" id="productsAccordion">
+
+      <div class="acc-item">
+        <button class="stage-item acc-trigger is-open" type="button" data-acc-trigger>
+          <span class="stage-icon"><i class="fas fa-th-large"></i></span>
+          <span class="stage-meta stage-text"><b>Категории</b><small>фильтр товаров</small></span>
+          <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+        </button>
+
+        <div class="acc-panel is-open" data-acc-panel>
+          <div class="acc-panel-inner" id="categoriesNav"></div>
+
+          <div class="acc-panel-inner">
+            <button class="stage-item is-dashed" type="button" id="addCategoryBtn">
+              <span class="stage-icon"><i class="fas fa-plus"></i></span>
+              <span class="stage-meta stage-text"><b>Добавить категорию</b><small>управление</small></span>
+              <span class="acc-spacer"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="acc-item">
+        <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+          <span class="stage-icon"><i class="fas fa-puzzle-piece"></i></span>
+          <span class="stage-meta stage-text"><b>Модификации</b><small>справочники</small></span>
+          <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+        </button>
+
+        <div class="acc-panel" data-acc-panel>
+          <div class="acc-panel-inner">
+            <button class="stage-item" type="button" data-view="variants"><span class="stage-icon"><i class="fas fa-cubes"></i></span><span class="stage-meta stage-text"><b>Варианты товара</b><small>управление</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="options"><span class="stage-icon"><i class="fas fa-sliders-h"></i></span><span class="stage-meta stage-text"><b>Опции товара</b><small>управление</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="units"><span class="stage-icon"><i class="fas fa-ruler"></i></span><span class="stage-meta stage-text"><b>Единицы измерения</b><small>справочник</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="allergens"><span class="stage-icon"><i class="fas fa-exclamation-triangle"></i></span><span class="stage-meta stage-text"><b>Аллергены</b><small>справочник</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="diets"><span class="stage-icon"><i class="fas fa-heartbeat"></i></span><span class="stage-meta stage-text"><b>Типы диет</b><small>справочник</small></span><span class="acc-spacer"></span></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="acc-item">
+        <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+          <span class="stage-icon"><i class="fas fa-warehouse"></i></span>
+          <span class="stage-meta stage-text"><b>Склад</b><small>движения</small></span>
+          <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+        </button>
+
+        <div class="acc-panel" data-acc-panel>
+          <div class="acc-panel-inner">
+            <button class="stage-item" type="button" data-view="stock-in"><span class="stage-icon"><i class="fas fa-plus-square"></i></span><span class="stage-meta stage-text"><b>Приход товара</b><small>документы</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="stock-out"><span class="stage-icon"><i class="fas fa-minus-square"></i></span><span class="stage-meta stage-text"><b>Списание товара</b><small>документы</small></span><span class="acc-spacer"></span></button>
+            <button class="stage-item" type="button" data-view="stock-movements"><span class="stage-icon"><i class="fas fa-history"></i></span><span class="stage-meta stage-text"><b>История движений</b><small>лог</small></span><span class="acc-spacer"></span></button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>

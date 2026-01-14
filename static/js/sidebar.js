@@ -1,0 +1,95 @@
+(function () {
+  const sidebar = document.getElementById('app-sidebar');
+  const toggleBtn = document.getElementById('sidebar-toggle');
+
+  if (!sidebar || !toggleBtn) return;
+
+  // overlay (из layout)
+  let overlay = document.getElementById('sidebarOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'sidebarOverlay';
+    overlay.className = 'sidebar-overlay';
+    overlay.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(overlay);
+  }
+
+  const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+
+  function applyCollapsedFromStorage() {
+    const saved = localStorage.getItem('sidebar:collapsed');
+    const collapsed = saved === '1';
+
+    document.documentElement.setAttribute('data-sidebar-collapsed', collapsed ? '1' : '0');
+    // класс не обязателен для сетки, но полезен для внутренних анимаций
+    requestAnimationFrame(() => {
+      sidebar.classList.toggle('is-collapsed', collapsed);
+    });
+  }
+
+  applyCollapsedFromStorage();
+
+  function openMobileSidebar() {
+    requestAnimationFrame(() => {
+      sidebar.classList.add('is-open');
+      overlay.classList.add('is-active');
+      document.body.classList.add('sidebar-open');
+    });
+  }
+
+  function closeMobileSidebar() {
+    requestAnimationFrame(() => {
+      sidebar.classList.remove('is-open');
+      overlay.classList.remove('is-active');
+      document.body.classList.remove('sidebar-open');
+    });
+  }
+
+  toggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+
+    if (isMobile()) {
+      sidebar.classList.contains('is-open') ? closeMobileSidebar() : openMobileSidebar();
+      return;
+    }
+
+    const willCollapse = !document.documentElement.getAttribute('data-sidebar-collapsed') ||
+      document.documentElement.getAttribute('data-sidebar-collapsed') !== '1';
+
+    requestAnimationFrame(() => {
+      document.documentElement.setAttribute('data-sidebar-collapsed', willCollapse ? '1' : '0');
+      localStorage.setItem('sidebar:collapsed', willCollapse ? '1' : '0');
+      sidebar.classList.toggle('is-collapsed', willCollapse);
+    });
+  });
+
+  overlay.addEventListener('click', () => {
+    if (isMobile()) closeMobileSidebar();
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!isMobile()) return;
+    if (!sidebar.classList.contains('is-open')) return;
+
+    const target = e.target;
+    const clickedInsideSidebar = sidebar.contains(target);
+    const clickedToggle = toggleBtn.contains(target);
+
+    if (!clickedInsideSidebar && !clickedToggle) {
+      closeMobileSidebar();
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isMobile() && sidebar.classList.contains('is-open')) {
+      closeMobileSidebar();
+    }
+  });
+
+  window.addEventListener('resize', () => {
+    if (!isMobile()) {
+      closeMobileSidebar();
+      applyCollapsedFromStorage();
+    }
+  });
+})();

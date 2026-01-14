@@ -1,0 +1,10 @@
+<%- include('../layouts/app', {
+  pageTitle: 'Заказы',
+  activePage: 'orders',
+  pageClass: 'page-orders',
+  leftPartial: '../partials/orders/stages',
+  centerPartial: '../partials/orders/center',
+  rightPartial: '../partials/orders/info',
+  extraPartial: '../partials/orders/bottomsheet',
+  pageScripts: ['/static/js/orders.js']
+}) %>

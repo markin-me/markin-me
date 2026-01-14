@@ -1,0 +1,21 @@
+SetEnv GHOST_NODE_VERSION_CHECK false
+PassengerStartupFile server.js
+PassengerResolveSymlinksInDocumentRoot on
+Require all granted
+PassengerAppType node
+PassengerNodejs /usr/local/bin/node22
+
+# ВАЖНО: Тут нужно указать твой ЛОГИН и ДОМЕН
+# Обычно это выглядит так:
+# /home/a1186497/domains/markin-me.ru/public_html
+PassengerAppRoot /home/a1186497/domains/markin-me.ru/public_html
+Options -MultiViews
+# Блокируем доступ к файлам базы данных
+<Files "db.js">
+    Require all denied
+</Files>
+
+# Также блокируем доступ к .htaccess
+<Files ".htaccess">
+    Require all denied
+</Files>

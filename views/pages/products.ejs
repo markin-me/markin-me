@@ -1,0 +1,10 @@
+<%- include('../layouts/app', {
+  pageTitle: 'Товары',
+  activePage: 'products',
+  pageClass: 'page-products',
+  leftPartial: '../partials/products/left',
+  centerPartial: '../partials/products/center',
+  rightPartial: '../partials/products/info',
+  extraPartial: '../partials/products/bottomsheet',
+  pageScripts: ['/static/js/products.js']
+}) %>

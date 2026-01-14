@@ -1,0 +1,261 @@
+<div class="panel" id="productInfoPanel">
+  <!-- Header скрыт по умолчанию. Показываем только когда выбран товар -->
+  <div class="panel-header product-info-header hidden" id="productInfoHeader">
+    <div class="product-info-header-left">
+      <div class="panel-title product-header-title" id="productTitle">Информация</div>
+      <div class="muted product-header-sku" id="productSku">Артикул: —</div>
+    </div>
+
+    <div class="product-info-header-actions">
+      <div class="product-header-actions" id="productHeaderActions">
+        <button class="btn btn-icon" id="productMoreBtn" type="button" title="Действия" aria-label="Действия">
+          <i class="fas fa-ellipsis-h"></i>
+        </button>
+
+        <button class="btn btn-icon" id="editProductBtn" type="button" title="Редактировать" aria-label="Редактировать">
+          <i class="fas fa-pen"></i>
+        </button>
+
+        <button class="btn btn-icon" id="closeProductInfoBtn" type="button" title="Закрыть" aria-label="Закрыть">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+
+      <div class="product-header-actions hidden" id="optionHeaderActions">
+        <button class="btn btn-icon btn-primary" id="optionHeaderPrimaryBtn" type="button" title="Редактировать" aria-label="Редактировать">
+          <i class="fas fa-pen"></i>
+        </button>
+        <button class="btn btn-icon btn-danger hidden" id="optionHeaderDeleteBtn" type="button" title="Удалить опцию" aria-label="Удалить опцию">
+          <i class="fas fa-trash"></i>
+        </button>
+        <button class="btn btn-icon hidden" id="optionHeaderBackBtn" type="button" title="Назад" aria-label="Назад">
+          <i class="fas fa-arrow-left"></i>
+        </button>
+        <button class="btn btn-icon" id="optionHeaderCloseBtn" type="button" title="Закрыть" aria-label="Закрыть">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-body no-scrollbar" id="productInfoBody">
+    <!-- Empty state -->
+    <div id="productEmpty" class="empty-state">
+      <div class="empty-icon"><i class="fas fa-mouse-pointer"></i></div>
+      <div class="empty-title">Выберите товар</div>
+      <div class="empty-text">Нажмите на любой товар для просмотра подробной информации</div>
+    </div>
+
+    <div id="categoryEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-mouse-pointer"></i></div>
+      <div class="empty-title">Выберите категорию</div>
+      <div class="empty-text">Нажмите на категорию слева, чтобы увидеть детали</div>
+    </div>
+
+    <div id="optionEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-mouse-pointer"></i></div>
+      <div class="empty-title">Выберите опцию</div>
+      <div class="empty-text">Нажмите на опцию слева, чтобы увидеть детали</div>
+    </div>
+
+    <!-- Product info -->
+    <div id="productInfo" class="hidden">
+      <!-- TOP: фото слева, справа info-card -->
+      <div class="product-info-top">
+        <div class="product-info-photoCol">
+          <div class="product-photo-main">
+            <img id="infoMainPhoto" class="product-photo-img hidden" alt="">
+            <div id="infoPhotoPlaceholder" class="product-photo-placeholder">Нет фото</div>
+          </div>
+
+          <div class="product-photo-thumbs" id="infoPhotoThumbs"></div>
+        </div>
+
+        <div class="info-card">
+          <div class="info-row">
+            <div class="info-text">Цена</div>
+            <div class="info-title" id="productPrice">—</div>
+          </div>
+
+          <div class="info-row">
+            <div class="info-text">Старая цена</div>
+            <div class="info-title" id="productOldPrice">—</div>
+          </div>
+
+          <div class="info-row">
+            <div class="info-text">Себестоимость</div>
+            <div class="info-title" id="productCostPrice">—</div>
+          </div>
+
+          <div class="info-row">
+            <div class="info-text">Статус</div>
+            <div class="info-title" id="productStatus">—</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Категории (chips) -->
+      <div class="info-card" style="margin-top:12px;">
+        <div class="kv-label">Категории</div>
+        <div class="chips" id="infoCategoryChips"></div>
+      </div>
+
+      <div class="info-card">
+        <div class="kv-label">Короткое описание</div>
+        <div class="kv-value" style="font-weight:500;" id="productDescShort">—</div>
+      </div>
+
+      <div class="info-card">
+        <div class="kv-label">Описание</div>
+        <div class="kv-value" style="font-weight:500;" id="productDesc">—</div>
+      </div>
+
+      <div class="info-card">
+        <div class="kv-label">Опции</div>
+        <div class="info-accordion" id="productOptionsAccordion"></div>
+      </div>
+    </div>
+
+    <!-- Category info -->
+    <div id="categoryInfo" class="hidden">
+      <div class="product-info-top">
+        <div class="product-info-photoCol">
+          <div class="product-photo-main">
+            <img id="categoryIconImg" class="product-photo-img hidden" alt="">
+            <div id="categoryIconPlaceholder" class="product-photo-placeholder">Нет изображения</div>
+          </div>
+        </div>
+
+        <div class="info-card">
+          <div class="info-row">
+            <div class="info-text">Статус</div>
+            <div class="info-title" id="categoryStatus">—</div>
+          </div>
+          <div class="info-row">
+            <div class="info-text">На сайте</div>
+            <div class="info-title" id="categoryVisibility">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="optionGroupInfo" class="hidden">
+      <div id="optionLevelGroup">
+        <form id="optionGroupForm" class="form-grid" autocomplete="off">
+          <div class="option-group-section">
+            <div class="section-title">Группа</div>
+
+            <div class="option-group-row">
+              <div class="option-group-title-field">
+                <label class="field-label" for="optionGroupTitle">Название *</label>
+                <input class="control" id="optionGroupTitle" name="title" type="text" required />
+              </div>
+
+              <div class="option-group-select-field">
+                <label class="field-label" for="optionGroupSelectionType">Тип выбора</label>
+                <select class="control" id="optionGroupSelectionType" name="selection_type">
+                  <option value="single">Один</option>
+                  <option value="multiple_group">Несколько (лимит группы)</option>
+                  <option value="multiple_item">Несколько (лимит на товар)</option>
+                </select>
+              </div>
+
+              <div class="form-row-2 option-group-limits hidden" id="optionGroupLimitsRow">
+                <div>
+                  <label class="field-label" for="optionGroupMinSelect">Минимум (шт.)</label>
+                  <input class="control" id="optionGroupMinSelect" name="min_select" type="number" min="0" value="0" />
+                </div>
+
+                <div>
+                  <label class="field-label" for="optionGroupMaxSelect">Максимум (шт., пусто = ∞)</label>
+                  <input class="control" id="optionGroupMaxSelect" name="max_select" type="number" min="0" placeholder="∞" />
+                </div>
+              </div>
+
+              <div class="hidden">
+                <label class="field-label" for="optionGroupSortOrder">Порядок сортировки</label>
+                <input class="control" id="optionGroupSortOrder" name="sort_order" type="number" min="0" value="0" />
+              </div>
+            </div>
+
+            <!-- ✅ Свитчи как отдельная "нижняя строка" секции -->
+            <div class="form-row-2 option-group-switches">
+              <label class="switch">
+                <input class="switch-input" type="checkbox" id="optionGroupIsActive" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">Активна</span>
+              </label>
+
+              <label class="switch" id="optionGroupIsRequiredWrap">
+                <input class="switch-input" type="checkbox" id="optionGroupIsRequired" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">Обязательная</span>
+              </label>
+            </div>
+          </div>
+        </form>
+
+        <div class="info-card info-accordion">
+          <div class="acc-item">
+            <div class="acc-header">
+              <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+                <span class="stage-meta stage-text">
+                  <b>Пункты</b>
+                </span>
+                <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+              </button>
+              <button class="btn btn-icon acc-add" type="button" id="optionItemsAddBtn" title="Добавить пункт" aria-label="Добавить пункт">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
+            <div class="acc-panel" data-acc-panel>
+              <div class="acc-panel-inner">
+                <div class="option-items-table" id="optionItemsList"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="info-card info-accordion">
+          <div class="acc-item">
+            <div class="acc-header">
+              <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+                <span class="stage-meta stage-text">
+                  <b>Назначения</b>
+                  <small class="muted">привязки к товарам</small>
+                </span>
+                <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+              </button>
+              <button class="btn btn-icon acc-add" type="button" id="optionAssignmentsAddBtn" title="Добавить назначение" aria-label="Добавить назначение">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
+            <div class="acc-panel" data-acc-panel>
+              <div class="acc-panel-inner">
+                <div class="option-assignments-table" id="optionAssignmentsList"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="optionLevelPicker" class="hidden">
+        <div class="info-card">
+          <div class="option-group-section option-picker-panel">
+            <div class="option-picker-tabs" id="optionPickerTabs"></div>
+            <div class="option-picker-controls">
+              <div class="option-picker-search">
+                <input class="control" id="optionPickerSearch" type="search" placeholder="Поиск по названию" />
+              </div>
+              <label class="option-picker-select-all" for="optionPickerSelectAll">
+                <input id="optionPickerSelectAll" type="checkbox" aria-label="Выделить все в категории" />
+                <span id="optionPickerSelectAllLabel">Выделить все</span>
+              </label>
+            </div>
+            <div class="option-picker-list" id="optionPickerList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
