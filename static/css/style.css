@@ -327,6 +327,14 @@ html[data-sidebar-collapsed="1"] .app-grid{
   will-change:transform,width;
 }
 
+.app-sidebar-header{
+  padding:8px 12px;
+  border-bottom:1px solid var(--color-border);
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
+}
+
 @media (max-width:768px){
   .app-sidebar{
     position:fixed;
@@ -353,12 +361,27 @@ html[data-sidebar-collapsed="1"] .app-grid{
   border-radius:10px;
   width:100%;
   box-sizing:border-box;
+  border:1px solid transparent;
   text-decoration:none;
   color:var(--color-text);
-  transition:background var(--dur-fast) var(--ease-smooth);
+  transition:background var(--dur-fast) var(--ease-smooth), border-color var(--dur-fast) var(--ease-smooth);
 }
-.nav-item:hover{background:var(--color-surface-2)}
-.nav-icon{width:22px;min-width:22px;text-align:center;color:var(--color-text-muted)}
+.nav-item:hover,
+.nav-item:focus-visible,
+.active-nav{
+  background:var(--primary-14);
+  border-color:var(--primary-25);
+}
+.nav-icon{
+  width:22px;
+  min-width:22px;
+  text-align:center;
+  color:var(--color-text-muted);
+  box-sizing:border-box;
+}
+.nav-item:hover .nav-icon,
+.nav-item:focus-visible .nav-icon,
+.active-nav .nav-icon{color:var(--color-text)}
 .nav-text{
   overflow:hidden;
   white-space:nowrap;
@@ -366,8 +389,7 @@ html[data-sidebar-collapsed="1"] .app-grid{
   max-width:220px;
   transition:max-width var(--dur-med) var(--ease-smooth), opacity var(--dur-fast) var(--ease-smooth);
 }
-.active-nav{background:var(--color-surface-2);font-weight:600}
-.active-nav .nav-icon{color:var(--color-text)}
+.active-nav{font-weight:600}
 
 /* collapsed desktop (ровные иконки) */
 @media (min-width:769px){
@@ -379,27 +401,34 @@ html[data-sidebar-collapsed="1"] .app-grid{
     box-sizing:border-box;
     justify-content:center;
     gap:0;
-    padding:8px 0;
-    border-radius:12px;
+    padding:2px 0;
+    border-radius:8px;
+  }
+
+  html[data-sidebar-collapsed="1"] .app-sidebar-header{
+    padding:8px 6px;
   }
 
   html[data-sidebar-collapsed="1"] .nav-icon{
-    width:40px;
-    min-width:40px;
-    height:40px;
+    width:30px;
+    min-width:30px;
+    height:30px;
     display:flex;
     align-items:center;
     justify-content:center;
     border-radius:12px;
+    box-sizing:border-box;
   }
 
-  html[data-sidebar-collapsed="1"] .nav-item:hover .nav-icon{
-    background:var(--color-surface-2);
-  }
-
+  html[data-sidebar-collapsed="1"] .nav-item:hover,
+  html[data-sidebar-collapsed="1"] .nav-item:focus-visible,
   html[data-sidebar-collapsed="1"] .active-nav{
     background:transparent;
+    border-color:transparent;
   }
+
+  html[data-sidebar-collapsed="1"] .nav-item:hover .nav-icon,
+  html[data-sidebar-collapsed="1"] .nav-item:focus-visible .nav-icon,
   html[data-sidebar-collapsed="1"] .active-nav .nav-icon{
     background:var(--primary-14);
     border:1px solid var(--primary-25);
