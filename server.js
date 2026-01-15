@@ -4,6 +4,7 @@ const path = require('path');
 
 const db = require('./db');
 const helpers = require('./api/helpers');
+const { createOrdersEventsHub } = require('./api/ordersEvents');
 
 // routers
 const makeAdminClientsRouter = require('./api/admin/clients');
@@ -13,6 +14,7 @@ const makePublicShopRouter = require('./api/public/shop');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const ordersEvents = createOrdersEventsHub();
 
 app.use(cors());
 app.use(express.json());
@@ -43,7 +45,7 @@ app.get('/shop', (req, res) => res.render('pages/shop'));
 // API: Admin
 // ------------------------------
 app.use('/api/admin/clients', makeAdminClientsRouter({ db, helpers }));
-app.use('/api/admin/orders', makeAdminOrdersRouter({ db, helpers }));
+app.use('/api/admin/orders', makeAdminOrdersRouter({ db, helpers, ordersEvents }));
 
 // товары/категории/сортировка/загрузка — оставляем старые пути /api/prod_* и /api/sort/*
 app.use('/api', makeAdminProductsRouter({ db, helpers }));
@@ -51,7 +53,7 @@ app.use('/api', makeAdminProductsRouter({ db, helpers }));
 // ------------------------------
 // API: Public
 // ------------------------------
-app.use('/api/public', makePublicShopRouter({ db, helpers }));
+app.use('/api/public', makePublicShopRouter({ db, helpers, ordersEvents }));
 
 // ------------------------------
 // Global errors (в т.ч. multer)

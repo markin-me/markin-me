@@ -1,31 +1,13 @@
+
 (function () {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
 
-  // -----------------------------
-  // Tenant
-  // -----------------------------
-  function getTenantId() {
-    const meta = document.querySelector('meta[name="tenant_id"]');
-    if (meta && meta.content) {
-      const n = Number(meta.content);
-      if (Number.isFinite(n) && n > 0) return n;
-    }
-    try {
-      const u = new URL(window.location.href);
-      const q = Number(u.searchParams.get("tenant_id"));
-      if (Number.isFinite(q) && q > 0) return q;
-    } catch {}
-    return 1;
-  }
-  const tenantId = getTenantId();
-
   async function apiJson(url, opts = {}) {
     const res = await fetch(url, {
       method: opts.method || "GET",
       headers: {
-        "x-tenant-id": String(tenantId),
         ...(opts.body ? { "Content-Type": "application/json" } : {}),
         ...(opts.headers || {}),
       },
@@ -46,35 +28,68 @@
   const elOrdersList = $("#ordersList");
   const elEmptyHint = $("#ordersEmptyHint");
 
-  const els = {
-    title: $("#infoOrderTitle"),
-    meta: $("#infoOrderMeta"),
-    name: $("#infoClientName"),
-    phone: $("#infoClientPhone"),
-    pay: $("#infoPayMethod"),
-    total: $("#infoTotal"),
-    items: $("#infoItems"),
+  const infoEls = {
+    empty: $$('[data-info="empty"]'),
+    content: $$('[data-info="content"]'),
+    title: $$('[data-info="order-title"]'),
+    meta: $$('[data-info="order-meta"]'),
+    status: $$('[data-info="order-status"]'),
+    courierSelect: $$('[data-role="courier-select"]'),
+
+    clientAvatar: $$('[data-info="client-avatar"]'),
+    clientName: $$('[data-info="client-name"]'),
+    clientPhone: $$('[data-info="client-phone"]'),
+    clientExtra: $$('[data-info="client-extra"]'),
+
+    payMethod: $$('[data-info="payment-method"]'),
+    payIcon: $$('[data-info="payment-icon"]'),
+    total: $$('[data-info="order-total"]'),
+
+    deliveryType: $$('[data-info="delivery-type"]'),
+    deliveryQty: $$('[data-info="delivery-qty"]'),
+    deliveryUrgent: $$('[data-info="delivery-urgent"]'),
+    deliveryInterval: $$('[data-info="delivery-interval"]'),
+    deliveryAddress: $$('[data-info="delivery-address"]'),
+    deliveryComment: $$('[data-info="delivery-comment"]'),
+
+    itemsList: $$('[data-info="items-list"]'),
   };
+
+  const closeButtons = $$('[data-action="order-close"]');
 
   const sheet = $("#orderSheet");
   const backdrop = $("#sheetBackdrop");
   const closeBtn = $("#sheetClose");
+
+  const dateBtn = $("#ordersDateBtn");
+  const dateLabel = $("#ordersDateLabel");
+  const datePopover = $("#ordersDatePopover");
+  const dateGrid = $("#ordersDateGrid");
+  const dateTitle = $("#ordersDateTitle");
+  const datePrev = $("#ordersDatePrev");
+  const dateNext = $("#ordersDateNext");
+  const dateReset = $("#ordersDateReset");
 
   // -----------------------------
   // State
   // -----------------------------
   const state = {
     statuses: [],
-    activeStatusId: "all", // "all" | number
+    activeStatusId: "all",
     orders: [],
     activeOrderId: null,
-
-    // drag внутри списка
     draggingOrderId: null,
+    lastEventId: null,
+    date: {
+      start: null,
+      end: null,
+      viewYear: null,
+      viewMonth: null,
+    },
   };
 
   // -----------------------------
-  // Helpers (format)
+  // Helpers
   // -----------------------------
   const moneyFmt = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 });
   function money(v) {
@@ -110,50 +125,195 @@
       .replaceAll('"', "&quot;");
   }
 
+  function initials(name) {
+    const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return "?";
+    const first = parts[0][0] || "";
+    const second = parts[1] ? parts[1][0] : "";
+    return (first + second).toUpperCase();
+  }
+
+  function toDateKey(d) {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function parseDateKey(s) {
+    if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+    const [y, m, d] = s.split("-").map(Number);
+    const date = new Date(y, m - 1, d);
+    if (Number.isNaN(date.getTime())) return null;
+    return date;
+  }
+
+  function totalQty(items) {
+    if (!Array.isArray(items)) return 0;
+    return items.reduce((acc, it) => acc + Math.max(0, Number(it.qty || it.quantity || 0)), 0);
+  }
+
   function itemsToHtml(items) {
-    if (!Array.isArray(items) || !items.length) return "—";
+    if (!Array.isArray(items) || !items.length) return '<div class="muted">?</div>';
+
     return items
       .map((it) => {
         const name = escapeHtml(it.name || "Товар");
-        const qty = Number(it.qty || 0);
+        const qty = Math.max(0, Number(it.qty || it.quantity || 0));
         const price = Number(it.price || 0);
-        return `${name} × ${qty} — ${money(price * qty)}`;
+        const lineTotal = Number(it.line_total || price * qty || 0);
+
+        const base = `
+          <div class="order-item-line">
+            <div class="order-item-name">${name} × ${qty}</div>
+            <div class="order-item-sum">${money(lineTotal)}</div>
+          </div>
+        `;
+
+        const sub = Array.isArray(it.components)
+          ? it.components
+          : Array.isArray(it.items)
+            ? it.items
+            : Array.isArray(it.options)
+              ? it.options
+              : [];
+
+        const subHtml = sub.length
+          ? `<div class="order-item-sublist">${sub
+              .map((s) => `<div>${escapeHtml(s.name || s.title || s)}</div>`)
+              .join("")}</div>`
+          : "";
+
+        return `<div class="order-item">${base}${subHtml}</div>`;
       })
-      .join("<br/>");
+      .join("");
   }
 
-  function setInfoFromDataset(ds) {
-    if (!els.title) return;
-    els.title.textContent = ds.orderTitle || 'Заказ';
-    els.meta.textContent = ds.orderMeta || '';
-    els.name.textContent = ds.clientName || '—';
-    els.phone.textContent = ds.clientPhone || '—';
-    els.pay.textContent = ds.payMethod || '—';
-    els.total.textContent = ds.total || '—';
-    els.items.innerHTML = ds.items || '—';
+  function paymentIcon(code) {
+    if (!code) return "fa-credit-card";
+    const c = String(code).toLowerCase();
+    if (c.includes("cash")) return "fa-money-bill-wave";
+    if (c.includes("card")) return "fa-credit-card";
+    if (c.includes("online")) return "fa-globe";
+    return "fa-credit-card";
+  }
+
+  function setTextAll(list, value) {
+    list.forEach((el) => {
+      if (!el) return;
+      el.textContent = value;
+    });
+  }
+
+  function setHtmlAll(list, value) {
+    list.forEach((el) => {
+      if (!el) return;
+      el.innerHTML = value;
+    });
+  }
+
+  function setHiddenAll(list, hidden) {
+    list.forEach((el) => {
+      if (!el) return;
+      el.classList.toggle("hidden", hidden);
+    });
+  }
+
+  function setAttrAll(list, name, value) {
+    list.forEach((el) => {
+      if (!el) return;
+      if (value === null || value === undefined) {
+        el.removeAttribute(name);
+      } else {
+        el.setAttribute(name, value);
+      }
+    });
+  }
+
+  function showEmptyInfo() {
+    setHiddenAll(infoEls.empty, false);
+    setHiddenAll(infoEls.content, true);
+  }
+
+  function showOrderInfo() {
+    setHiddenAll(infoEls.empty, true);
+    setHiddenAll(infoEls.content, false);
   }
 
   function setInfo(order) {
-    if (!els.title) return;
-
     if (!order) {
-      els.title.textContent = "Заказ не выбран";
-      els.meta.textContent = "Выбери заказ в центре.";
-      els.name.textContent = "—";
-      els.phone.textContent = "—";
-      els.pay.textContent = "—";
-      els.total.textContent = "—";
-      els.items.innerHTML = "—";
+      showEmptyInfo();
+      setTextAll(infoEls.title, "Заказ не выбран");
+      setTextAll(infoEls.meta, "Выберите заказ слева.");
+      setTextAll(infoEls.status, "?");
+      setTextAll(infoEls.clientName, "?");
+      setTextAll(infoEls.clientPhone, "?");
+      setTextAll(infoEls.clientAvatar, "?");
+      setTextAll(infoEls.payMethod, "?");
+      setTextAll(infoEls.total, "?");
+      setTextAll(infoEls.deliveryType, "?");
+      setTextAll(infoEls.deliveryQty, "0 шт.");
+      setTextAll(infoEls.deliveryAddress, "?");
+      setHtmlAll(infoEls.itemsList, '<div class="muted">?</div>');
+      setHiddenAll(infoEls.deliveryUrgent, true);
+      setHiddenAll(infoEls.deliveryInterval, true);
+      setHiddenAll(infoEls.deliveryComment, true);
+      setHiddenAll(infoEls.clientExtra, true);
       return;
     }
 
-    els.title.textContent = `Заказ #${order.id}`;
-    els.meta.textContent = formatDateTime(order.created_at);
-    els.name.textContent = order.customer_name || "—";
-    els.phone.textContent = order.customer_phone || "—";
-    els.pay.textContent = order.payment_title || "—";
-    els.total.textContent = money(order.total_price || 0);
-    els.items.innerHTML = itemsToHtml(order.items || []);
+    showOrderInfo();
+
+    setTextAll(infoEls.title, `Заказ #${order.id}`);
+    setTextAll(infoEls.meta, formatDateTime(order.created_at));
+    setTextAll(infoEls.status, order.status_title || "?");
+
+    const courierName = order.courier_name || "Не назначен";
+    infoEls.courierSelect.forEach((el) => {
+      if (!el) return;
+      el.innerHTML = `<option>${escapeHtml(courierName)}</option>`;
+    });
+
+    const clientName = order.customer_name || "?";
+    const clientPhone = order.customer_phone || "?";
+    setTextAll(infoEls.clientName, clientName);
+    setTextAll(infoEls.clientPhone, clientPhone);
+    setTextAll(infoEls.clientAvatar, initials(clientName));
+    setAttrAll(infoEls.clientPhone, "href", clientPhone && clientPhone !== "?" ? `tel:${clientPhone}` : null);
+
+    const clientExtra = order.customer_comment || order.customer_source || "";
+    setTextAll(infoEls.clientExtra, clientExtra);
+    setHiddenAll(infoEls.clientExtra, !clientExtra);
+
+    const payTitle = order.payment_title || "?";
+    setTextAll(infoEls.payMethod, payTitle);
+    setTextAll(infoEls.total, money(order.total_price || 0));
+    infoEls.payIcon.forEach((el) => {
+      if (!el) return;
+      el.innerHTML = `<i class="fas ${paymentIcon(order.payment_code)}"></i>`;
+    });
+
+    const qty = totalQty(order.items || []);
+    setTextAll(infoEls.deliveryQty, `${qty} шт.`);
+
+    const methodTitle = order.method_title || (order.method_code === "pickup" ? "Самовывоз" : "Доставка");
+    setTextAll(infoEls.deliveryType, methodTitle || "?");
+
+    const intervalText = order.time_option_title || (order.scheduled_at ? formatTime(order.scheduled_at) : "");
+    setTextAll(infoEls.deliveryInterval, intervalText);
+    setHiddenAll(infoEls.deliveryInterval, !intervalText);
+
+    const urgent = Boolean(order.is_urgent || order.urgent || order.time_option_code === "urgent");
+    setHiddenAll(infoEls.deliveryUrgent, !urgent);
+
+    const address = order.address || "?";
+    setTextAll(infoEls.deliveryAddress, address);
+
+    const comment = order.comment || "";
+    setTextAll(infoEls.deliveryComment, comment);
+    setHiddenAll(infoEls.deliveryComment, !comment);
+
+    setHtmlAll(infoEls.itemsList, itemsToHtml(order.items || []));
   }
 
   // -----------------------------
@@ -161,20 +321,20 @@
   // -----------------------------
   function openSheet() {
     if (!sheet || !backdrop) return;
-    sheet.classList.add('is-open');
-    backdrop.classList.add('is-active');
-    sheet.setAttribute('aria-hidden', 'false');
-    backdrop.setAttribute('aria-hidden', 'false');
-    document.body.classList.add('sheet-open');
+    sheet.classList.add("is-open");
+    backdrop.classList.add("is-active");
+    sheet.setAttribute("aria-hidden", "false");
+    backdrop.setAttribute("aria-hidden", "false");
+    document.body.classList.add("sheet-open");
   }
 
   function closeSheet() {
     if (!sheet || !backdrop) return;
-    sheet.classList.remove('is-open');
-    backdrop.classList.remove('is-active');
-    sheet.setAttribute('aria-hidden', 'true');
-    backdrop.setAttribute('aria-hidden', 'true');
-    document.body.classList.remove('sheet-open');
+    sheet.classList.remove("is-open");
+    backdrop.classList.remove("is-active");
+    sheet.setAttribute("aria-hidden", "true");
+    backdrop.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("sheet-open");
   }
 
   // -----------------------------
@@ -231,7 +391,6 @@
         const statusIdRaw = stageBtn.getAttribute("data-status-id");
         const statusId = Number(statusIdRaw);
 
-        // "all" — не статус
         if (!Number.isFinite(statusId) || statusId <= 0) return;
 
         let orderId = null;
@@ -246,8 +405,6 @@
 
           await loadStatuses();
           renderStages();
-
-          // перезагрузим список, сохраняя выделение если возможно
           await loadAndRenderOrders(true);
         } catch (err) {
           console.error(err);
@@ -265,7 +422,7 @@
     elStagesList.appendChild(stageButton({
       id: "all",
       title: "Все заказы",
-      subtitle: "все статусы",
+      subtitle: "Все статусы",
       icon: "fa-layer-group",
       count: allCount,
     }));
@@ -288,140 +445,219 @@
   }
 
   // -----------------------------
-  // Render: orders
+  // Orders list
   // -----------------------------
+  function orderMatchesFilters(order) {
+    if (!order) return false;
+
+    if (state.activeStatusId !== "all" && Number(order.status_id) !== Number(state.activeStatusId)) {
+      return false;
+    }
+
+    if (state.date.start && state.date.end) {
+      const d = new Date(order.created_at);
+      if (Number.isNaN(d.getTime())) return false;
+      const key = toDateKey(d);
+      const startKey = toDateKey(state.date.start);
+      const endKey = toDateKey(state.date.end);
+      if (key < startKey || key > endKey) return false;
+    }
+
+    return true;
+  }
+
+  function buildOrderRow(order) {
+    const row = document.createElement("div");
+    row.className = "order-row js-order";
+    row.setAttribute("role", "button");
+    row.setAttribute("tabindex", "0");
+    row.setAttribute("draggable", "true");
+    row.setAttribute("data-order-id", String(order.id));
+
+    updateOrderRow(row, order);
+
+    row.addEventListener("dragstart", (e) => {
+      state.draggingOrderId = Number(order.id) || null;
+      try {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", String(order.id));
+      } catch {}
+      row.classList.add("is-dragging");
+    });
+
+    row.addEventListener("dragend", () => {
+      row.classList.remove("is-dragging");
+      state.draggingOrderId = null;
+    });
+
+    row.addEventListener("dragover", (e) => {
+      if (state.activeStatusId === "all") return;
+      e.preventDefault();
+      row.classList.add("is-dropover");
+    });
+
+    row.addEventListener("dragleave", () => row.classList.remove("is-dropover"));
+
+    row.addEventListener("drop", async (e) => {
+      if (state.activeStatusId === "all") return;
+      e.preventDefault();
+      row.classList.remove("is-dropover");
+
+      const draggedId = state.draggingOrderId;
+      const targetId = Number(row.getAttribute("data-order-id"));
+      if (!draggedId || !targetId || draggedId === targetId) return;
+
+      const idxFrom = state.orders.findIndex((x) => Number(x.id) === Number(draggedId));
+      const idxTo = state.orders.findIndex((x) => Number(x.id) === Number(targetId));
+      if (idxFrom < 0 || idxTo < 0) return;
+
+      const moved = state.orders.splice(idxFrom, 1)[0];
+      state.orders.splice(idxTo, 0, moved);
+
+      try {
+        await apiJson(`/api/admin/orders/reorder`, {
+          method: "PUT",
+          body: {
+            status_id: Number(state.activeStatusId),
+            orderedIds: state.orders.map((x) => Number(x.id)),
+          },
+        });
+
+        renderOrders();
+      } catch (err) {
+        console.error(err);
+      }
+    });
+
+    return row;
+  }
+
+  function updateOrderRow(row, order) {
+    row.setAttribute("data-order-id", String(order.id));
+
+    const urgent = Boolean(order.is_urgent || order.urgent || order.time_option_code === "urgent");
+    const intervalText = order.time_option_title || (order.scheduled_at ? formatTime(order.scheduled_at) : "");
+    const comment = order.comment || "Нет комментария";
+    const courier = order.courier_name || "Не указан";
+
+    const payment = order.payment_title || "";
+    const totalText = money(order.total_price || 0);
+
+    row.innerHTML = `
+      <div class="order-col order-id">
+        <div class="order-id-num">${escapeHtml(order.id)}</div>
+        <div class="order-id-time">${escapeHtml(formatTime(order.created_at))}</div>
+      </div>
+
+      <div class="order-col order-indicators">
+        <span class="order-indicator ${urgent ? "urgent" : "hidden"}">⚡</span>
+        <span class="order-indicator ${intervalText ? "" : "hidden"}">
+          <i class="fas fa-clock"></i>
+          ${escapeHtml(intervalText)}
+        </span>
+      </div>
+
+      <div class="order-col order-client">
+        <div class="order-client-name">${escapeHtml(order.customer_name || "?")}</div>
+        <div class="order-client-phone muted"><i class="fas fa-phone"></i> ${escapeHtml(order.customer_phone || "?")}</div>
+        <div class="order-client-courier muted">Курьер: ${escapeHtml(courier)}</div>
+      </div>
+
+      <div class="order-col order-address">
+        <div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(order.address || "?")}</div>
+        <div class="order-address-comment muted"><i class="far fa-comment"></i> ${escapeHtml(comment)}</div>
+      </div>
+
+      <div class="order-col order-actions">
+        <button class="btn btn-ghost btn-xs" type="button" data-action="assign-courier">Назначить курьера</button>
+        <button class="icon-btn btn-xs" type="button" data-action="order-extra" aria-label="Доп. действия">
+          <i class="fas fa-ellipsis-h"></i>
+        </button>
+      </div>
+
+      <div class="order-col order-total">
+        <span class="order-total-badge"><i class="fas ${paymentIcon(order.payment_code)}"></i> ${escapeHtml(totalText)}</span>
+      </div>
+    `;
+
+    if (state.activeOrderId && Number(state.activeOrderId) === Number(order.id)) {
+      row.classList.add("is-active");
+    } else {
+      row.classList.remove("is-active");
+    }
+  }
+
   function renderOrders() {
     if (!elOrdersList) return;
     elOrdersList.innerHTML = "";
 
     const list = state.orders || [];
-    if (!list.length) {
+    const filtered = list.filter(orderMatchesFilters);
+    if (!filtered.length) {
       if (elEmptyHint) elEmptyHint.classList.remove("hidden");
       setInfo(null);
       return;
     }
     if (elEmptyHint) elEmptyHint.classList.add("hidden");
 
-    list.forEach((o) => {
-      const row = document.createElement("div");
-      row.className = "order-row js-order";
-      row.setAttribute("role", "button");
-      row.setAttribute("tabindex", "0");
-      row.setAttribute("draggable", "true");
-      row.setAttribute("data-order-id", String(o.id));
-
-      row.dataset.orderId = String(o.id);
-      row.dataset.orderTitle = `Заказ #${o.id}`;
-      row.dataset.orderMeta = formatDateTime(o.created_at);
-      row.dataset.clientName = o.customer_name || "—";
-      row.dataset.clientPhone = o.customer_phone || "—";
-      row.dataset.payMethod = o.payment_title || "—";
-      row.dataset.total = money(o.total_price || 0);
-      row.dataset.items = itemsToHtml(o.items || []);
-
-      row.innerHTML = `
-        <div class="order-main">
-          <div class="order-num">${escapeHtml(o.id)}</div>
-          <div class="order-time">${escapeHtml(formatTime(o.created_at))}</div>
-        </div>
-
-        <div class="order-mid">
-          <div class="order-line"><strong>${escapeHtml(o.customer_name || "—")}</strong></div>
-          <div class="order-line muted"><i class="fas fa-phone"></i> ${escapeHtml(o.customer_phone || "—")}</div>
-        </div>
-
-        <div class="order-actions">
-          <div class="pill pill-strong">${escapeHtml(money(o.total_price || 0))}</div>
-        </div>
-      `;
-
-      if (state.activeOrderId && Number(state.activeOrderId) === Number(o.id)) {
-        row.classList.add("is-active");
-      }
-
-      // drag start/end
-      row.addEventListener("dragstart", (e) => {
-        state.draggingOrderId = Number(o.id) || null;
-        try {
-          e.dataTransfer.effectAllowed = "move";
-          e.dataTransfer.setData("text/plain", String(o.id));
-        } catch {}
-        row.classList.add("is-dragging");
-      });
-
-      row.addEventListener("dragend", () => {
-        row.classList.remove("is-dragging");
-        state.draggingOrderId = null;
-      });
-
-      // drop внутри списка (сортировка внутри статуса)
-      row.addEventListener("dragover", (e) => {
-        // сортировку разрешаем только когда выбран конкретный статус
-        if (state.activeStatusId === "all") return;
-        e.preventDefault();
-        row.classList.add("is-dropover");
-      });
-
-      row.addEventListener("dragleave", () => row.classList.remove("is-dropover"));
-
-      row.addEventListener("drop", async (e) => {
-        if (state.activeStatusId === "all") return;
-        e.preventDefault();
-        row.classList.remove("is-dropover");
-
-        const draggedId = state.draggingOrderId;
-        const targetId = Number(row.getAttribute("data-order-id"));
-        if (!draggedId || !targetId || draggedId === targetId) return;
-
-        // переставим в state.orders
-        const idxFrom = state.orders.findIndex(x => Number(x.id) === Number(draggedId));
-        const idxTo = state.orders.findIndex(x => Number(x.id) === Number(targetId));
-        if (idxFrom < 0 || idxTo < 0) return;
-
-        const moved = state.orders.splice(idxFrom, 1)[0];
-        state.orders.splice(idxTo, 0, moved);
-
-        // отправим порядок на сервер
-        try {
-          await apiJson(`/api/admin/orders/reorder`, {
-            method: "PUT",
-            body: {
-              status_id: Number(state.activeStatusId),
-              orderedIds: state.orders.map(x => Number(x.id)),
-            },
-          });
-
-          // перерендерим список
-          renderOrders();
-
-          // бейджи не меняются — но можно оставить как есть
-        } catch (err) {
-          console.error(err);
-        }
-      });
-
+    filtered.forEach((o) => {
+      const row = buildOrderRow(o);
       elOrdersList.appendChild(row);
     });
 
-    if (!state.activeOrderId && list.length) {
-      state.activeOrderId = list[0].id;
-      setInfo(list[0]);
-      const firstRow = $(`.order-row[data-order-id="${list[0].id}"]`, elOrdersList);
+    if (!state.activeOrderId && filtered.length) {
+      state.activeOrderId = filtered[0].id;
+      setInfo(filtered[0]);
+      const firstRow = $(`.order-row[data-order-id="${filtered[0].id}"]`, elOrdersList);
       if (firstRow) firstRow.classList.add("is-active");
     }
+  }
+
+  function upsertOrderRow(order) {
+    if (!elOrdersList) return;
+    const existingRow = $(`.order-row[data-order-id="${order.id}"]`, elOrdersList);
+    const shouldRender = orderMatchesFilters(order);
+
+    if (!shouldRender) {
+      if (existingRow) existingRow.remove();
+      return;
+    }
+
+    if (existingRow) {
+      updateOrderRow(existingRow, order);
+      return;
+    }
+
+    const row = buildOrderRow(order);
+    elOrdersList.prepend(row);
+  }
+
+  function clearSelection() {
+    state.activeOrderId = null;
+    $$(".order-row.is-active").forEach((el) => el.classList.remove("is-active"));
+    setInfo(null);
   }
 
   // -----------------------------
   // Data loading
   // -----------------------------
   async function loadStatuses() {
-    const json = await apiJson("/api/admin/orders/statuses");
+    const qs = new URLSearchParams();
+    if (state.date.start && state.date.end) {
+      qs.set("start_date", toDateKey(state.date.start));
+      qs.set("end_date", toDateKey(state.date.end));
+    }
+    const json = await apiJson(`/api/admin/orders/statuses?${qs.toString()}`);
     state.statuses = Array.isArray(json.data) ? json.data : [];
   }
 
   async function loadOrders() {
     const qs = new URLSearchParams();
     if (state.activeStatusId !== "all") qs.set("status_id", String(state.activeStatusId));
+    if (state.date.start && state.date.end) {
+      qs.set("start_date", toDateKey(state.date.start));
+      qs.set("end_date", toDateKey(state.date.end));
+    }
     qs.set("limit", "500");
     qs.set("offset", "0");
 
@@ -436,54 +672,332 @@
     renderOrders();
 
     if (keepSelection && prevActive) {
-      const found = state.orders.find(o => Number(o.id) === Number(prevActive));
+      const found = state.orders.find((o) => Number(o.id) === Number(prevActive));
       if (found) {
         state.activeOrderId = found.id;
         setInfo(found);
-        $$(".order-row.is-active", document).forEach(el => el.classList.remove("is-active"));
+        $$(".order-row.is-active", document).forEach((el) => el.classList.remove("is-active"));
         const row = $(`.order-row[data-order-id="${found.id}"]`, elOrdersList);
         if (row) row.classList.add("is-active");
       } else {
         state.activeOrderId = null;
+        setInfo(null);
       }
     }
   }
 
   // -----------------------------
-  // Click orders (delegation)
+  // Date filter
   // -----------------------------
-  document.addEventListener('click', (e) => {
-    const row = e.target.closest('.js-order');
+  function formatDateLabel(start, end) {
+    if (!start || !end) return "Сегодня";
+    const s = start.toLocaleDateString("ru-RU", { day: "2-digit", month: "short" });
+    const e = end.toLocaleDateString("ru-RU", { day: "2-digit", month: "short" });
+    return s === e ? s : `${s} — ${e}`;
+  }
+
+  function updateDateLabel() {
+    if (dateLabel) dateLabel.textContent = formatDateLabel(state.date.start, state.date.end);
+  }
+
+  function applyDateFilter(closePopover = true) {
+    updateDateLabel();
+    loadStatuses()
+      .then(renderStages)
+      .then(() => loadAndRenderOrders(false))
+      .catch(console.error);
+
+    if (closePopover) closeDatePopover();
+  }
+
+  function openDatePopover() {
+    if (!datePopover) return;
+    datePopover.classList.remove("hidden");
+    dateBtn?.setAttribute("aria-expanded", "true");
+  }
+
+  function closeDatePopover() {
+    if (!datePopover) return;
+    datePopover.classList.add("hidden");
+    dateBtn?.setAttribute("aria-expanded", "false");
+  }
+
+  function renderCalendar() {
+    if (!dateGrid || !dateTitle) return;
+
+    const year = state.date.viewYear;
+    const month = state.date.viewMonth;
+    const first = new Date(year, month, 1);
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const offset = (first.getDay() + 6) % 7;
+    const todayKey = toDateKey(new Date());
+
+    const monthTitle = first.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
+    dateTitle.textContent = monthTitle.charAt(0).toUpperCase() + monthTitle.slice(1);
+
+    const cells = [];
+    for (let i = 0; i < offset; i += 1) {
+      cells.push('<span class="date-empty"></span>');
+    }
+
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      const d = new Date(year, month, day);
+      const key = toDateKey(d);
+      const startKey = state.date.start ? toDateKey(state.date.start) : null;
+      const endKey = state.date.end ? toDateKey(state.date.end) : null;
+
+      const isStart = startKey && key === startKey;
+      const isEnd = endKey && key === endKey;
+      const isRange = startKey && endKey && key > startKey && key < endKey;
+      const isToday = key === todayKey;
+
+      const classes = [
+        "date-cell",
+        isStart ? "is-start" : "",
+        isEnd ? "is-end" : "",
+        isRange ? "is-in-range" : "",
+        isToday ? "is-today" : "",
+      ].filter(Boolean).join(" ");
+
+      cells.push(`<button class="${classes}" type="button" data-date="${key}">${day}</button>`);
+    }
+
+    dateGrid.innerHTML = cells.join("");
+  }
+
+
+  function onDateClick(dateKey) {
+    const clicked = parseDateKey(dateKey);
+    if (!clicked) return;
+
+    if (!state.date.start || state.date.end) {
+      state.date.start = clicked;
+      state.date.end = null;
+      renderCalendar();
+      return;
+    }
+
+    if (state.date.start && !state.date.end) {
+      state.date.end = clicked;
+      if (state.date.end < state.date.start) {
+        const tmp = state.date.start;
+        state.date.start = state.date.end;
+        state.date.end = tmp;
+      }
+      renderCalendar();
+      applyDateFilter(true);
+    }
+  }
+
+  function resetDateFilter() {
+    const today = new Date();
+    state.date.start = today;
+    state.date.end = today;
+    state.date.viewYear = today.getFullYear();
+    state.date.viewMonth = today.getMonth();
+    renderCalendar();
+    applyDateFilter(true);
+  }
+
+  // -----------------------------
+  // SSE
+  // -----------------------------
+  let stageRefreshTimer = null;
+  function scheduleStageRefresh() {
+    if (stageRefreshTimer) return;
+    stageRefreshTimer = setTimeout(async () => {
+      stageRefreshTimer = null;
+      try {
+        await loadStatuses();
+        renderStages();
+      } catch (e) {
+        console.error(e);
+      }
+    }, 200);
+  }
+
+  function handleOrderEvent(order) {
+    if (!order || !order.id) return;
+
+    const idx = state.orders.findIndex((o) => Number(o.id) === Number(order.id));
+    if (idx >= 0) {
+      state.orders[idx] = { ...state.orders[idx], ...order };
+    } else {
+      state.orders.unshift(order);
+    }
+
+    upsertOrderRow(order);
+
+    if (state.activeOrderId && Number(state.activeOrderId) === Number(order.id)) {
+      setInfo(order);
+    }
+
+    scheduleStageRefresh();
+  }
+
+  async function fetchChanges() {
+    if (!state.lastEventId) {
+      await loadAndRenderOrders(true);
+      return;
+    }
+
+    try {
+      const json = await apiJson(`/api/admin/orders/changes?since=${state.lastEventId}`);
+      const changes = Array.isArray(json.data) ? json.data : [];
+      if (!changes.length) return;
+      changes.forEach((evt) => {
+        state.lastEventId = evt.id || state.lastEventId;
+        handleOrderEvent(evt.data);
+      });
+    } catch (e) {
+      console.error(e);
+      await loadAndRenderOrders(true);
+    }
+  }
+
+  function initSse() {
+    if (typeof EventSource === "undefined") return;
+
+    const es = new EventSource("/api/admin/orders/events");
+
+    es.addEventListener("order.created", (e) => {
+      if (e.lastEventId) state.lastEventId = e.lastEventId;
+      try {
+        const data = JSON.parse(e.data || "{}");
+        handleOrderEvent(data);
+      } catch (err) {
+        console.error(err);
+      }
+    });
+
+    es.addEventListener("order.updated", (e) => {
+      if (e.lastEventId) state.lastEventId = e.lastEventId;
+      try {
+        const data = JSON.parse(e.data || "{}");
+        handleOrderEvent(data);
+      } catch (err) {
+        console.error(err);
+      }
+    });
+
+    es.addEventListener("error", () => {
+      fetchChanges().catch(console.error);
+    });
+  }
+
+  // -----------------------------
+  // Click handlers
+  // -----------------------------
+  document.addEventListener("click", (e) => {
+    const action = e.target.closest("[data-action]");
+    if (action && action.getAttribute("data-action") === "assign-courier") {
+      e.stopPropagation();
+      return;
+    }
+    if (action && action.getAttribute("data-action") === "order-extra") {
+      e.stopPropagation();
+      return;
+    }
+
+    const row = e.target.closest(".js-order");
     if (!row) return;
 
-    $$('.order-row.is-active').forEach(el => el.classList.remove('is-active'));
-    row.classList.add('is-active');
+    $$(".order-row.is-active").forEach((el) => el.classList.remove("is-active"));
+    row.classList.add("is-active");
 
-    state.activeOrderId = Number(row.dataset.orderId) || null;
-    setInfoFromDataset(row.dataset);
+    state.activeOrderId = Number(row.getAttribute("data-order-id")) || null;
+    const order = state.orders.find((o) => Number(o.id) === Number(state.activeOrderId));
+    setInfo(order || null);
 
     if (isMobile()) openSheet();
   });
 
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeSheet();
+  closeButtons.forEach((btn) => btn.addEventListener("click", clearSelection));
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeSheet();
   });
 
-  if (closeBtn) closeBtn.addEventListener('click', closeSheet);
-  if (backdrop) backdrop.addEventListener('click', closeSheet);
+  if (closeBtn) closeBtn.addEventListener("click", closeSheet);
+  if (backdrop) backdrop.addEventListener("click", closeSheet);
 
-  window.addEventListener('resize', () => {
+  window.addEventListener("resize", () => {
     if (!isMobile()) closeSheet();
   });
+
+  if (dateBtn && datePopover) {
+    dateBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (datePopover.classList.contains("hidden")) {
+        openDatePopover();
+      } else {
+        closeDatePopover();
+      }
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!datePopover || datePopover.classList.contains("hidden")) return;
+      if (e.target.closest("#ordersDatePopover") || e.target.closest("#ordersDateBtn")) return;
+      closeDatePopover();
+      if (state.date.start && !state.date.end) {
+        state.date.end = state.date.start;
+        applyDateFilter(true);
+      }
+    });
+  }
+
+  if (dateGrid) {
+    dateGrid.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-date]");
+      if (!btn) return;
+      onDateClick(btn.getAttribute("data-date"));
+    });
+  }
+
+  if (datePrev) {
+    datePrev.addEventListener("click", () => {
+      state.date.viewMonth -= 1;
+      if (state.date.viewMonth < 0) {
+        state.date.viewMonth = 11;
+        state.date.viewYear -= 1;
+      }
+      renderCalendar();
+    });
+  }
+
+  if (dateNext) {
+    dateNext.addEventListener("click", () => {
+      state.date.viewMonth += 1;
+      if (state.date.viewMonth > 11) {
+        state.date.viewMonth = 0;
+        state.date.viewYear += 1;
+      }
+      renderCalendar();
+    });
+  }
+
+  if (dateReset) {
+    dateReset.addEventListener("click", () => resetDateFilter());
+  }
 
   // -----------------------------
   // Init
   // -----------------------------
   async function init() {
     try {
+      const today = new Date();
+      state.date.start = today;
+      state.date.end = today;
+      state.date.viewYear = today.getFullYear();
+      state.date.viewMonth = today.getMonth();
+
+      renderCalendar();
+      updateDateLabel();
+
       await loadStatuses();
       renderStages();
       await loadAndRenderOrders(false);
+      initSse();
     } catch (e) {
       console.error(e);
     }

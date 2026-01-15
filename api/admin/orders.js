@@ -1,7 +1,114 @@
+
 const express = require("express");
 
-module.exports = function makeAdminOrdersRouter({ db, helpers }) {
+module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
+
+  function parseDateParam(v) {
+    if (!v) return null;
+    const s = String(v).trim();
+    if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(s)) return null;
+    return s;
+  }
+
+  function normalizeDateRange(startRaw, endRaw) {
+    const start = parseDateParam(startRaw);
+    const end = parseDateParam(endRaw);
+    if (!start && !end) return null;
+    if (start && !end) return { start, end: start };
+    if (!start && end) return { start: end, end };
+    return start <= end ? { start, end } : { start: end, end: start };
+  }
+
+  async function fetchOrderPayload(tenantId, storeId, id) {
+    const [rows] = await db.query(
+      `
+      SELECT
+        o.id,
+        o.public_id,
+        o.created_at,
+        o.customer_id,
+        o.customer_name,
+        o.customer_phone,
+        o.address,
+        o.comment,
+        o.cutlery_qty,
+        o.change_from,
+        o.total_price,
+        o.items,
+        o.scheduled_at,
+        o.delivery_type_id,
+        o.payment_id,
+        o.time_option_id,
+        o.status_id,
+
+        s.code AS statusCode,
+        s.title AS statusTitle,
+
+        p.code AS paymentCode,
+        p.title AS paymentTitle,
+
+        m.code AS methodCode,
+        m.title AS methodTitle,
+
+        t.code AS timeOptionCode,
+        t.title AS timeOptionTitle
+      FROM order_orders o
+      LEFT JOIN order_statuses s
+        ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+      LEFT JOIN order_payments p
+        ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
+      LEFT JOIN order_delivery_types m
+        ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
+      LEFT JOIN order_time_options t
+        ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
+      WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1
+      LIMIT 1
+      `,
+      [tenantId, storeId, id]
+    );
+
+    if (!rows.length) return null;
+    const r = rows[0];
+
+    let items = [];
+    try {
+      const parsed = r.items ? JSON.parse(r.items) : [];
+      if (Array.isArray(parsed)) items = parsed;
+    } catch {}
+
+    return {
+      id: r.id,
+      public_id: r.public_id || null,
+      created_at: r.created_at,
+      customer_id: r.customer_id,
+      customer_name: r.customer_name,
+      customer_phone: r.customer_phone,
+      address: r.address,
+      comment: r.comment,
+      cutlery_qty: r.cutlery_qty,
+      change_from: r.change_from,
+      total_price: Number(r.total_price || 0),
+      items,
+      scheduled_at: r.scheduled_at,
+      delivery_type_id: r.delivery_type_id,
+      payment_id: r.payment_id,
+      time_option_id: r.time_option_id,
+      status_id: r.status_id,
+
+      status_code: r.statusCode ?? null,
+      status_title: r.statusTitle ?? null,
+
+      payment_code: r.paymentCode ?? null,
+      payment_title: r.paymentTitle ?? null,
+
+      method_code: r.methodCode ?? null,
+      method_title: r.methodTitle ?? null,
+
+      time_option_code: r.timeOptionCode ?? null,
+      time_option_title: r.timeOptionTitle ?? null,
+    };
+  }
 
   // ---------------------------
   // statuses summary (counts)
@@ -10,6 +117,14 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
   router.get("/statuses", async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const range = normalizeDateRange(req.query.start_date, req.query.end_date);
+
+      const joinDate = range ? "AND DATE(o.created_at) BETWEEN ? AND ?" : "";
+
+      const params = [];
+      if (range) params.push(range.start, range.end);
+      params.push(tenantId, storeId);
 
       const [rows] = await db.query(
         `
@@ -25,18 +140,19 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
         FROM order_statuses s
         LEFT JOIN order_orders o
           ON o.tenant_id = s.tenant_id
+          AND o.store_id = s.store_id
           AND o.status_id = s.id
           AND o.is_active = 1
-        WHERE s.tenant_id = ? AND s.is_active = 1
+          ${joinDate}
+        WHERE s.tenant_id = ? AND s.store_id = ? AND s.is_active = 1
         GROUP BY s.id
         ORDER BY s.sort ASC, s.id ASC
         `,
-        [tenantId]
+        params
       );
 
       const data = rows.map((r) => ({
         ...r,
-        // совместимость с фронтом
         count: Number(r.cnt || 0),
         cnt: Number(r.cnt || 0),
       }));
@@ -55,17 +171,24 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
   router.get("/", async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
 
       const statusId = Number(req.query.status_id || 0);
       const limit = Math.min(200, Math.max(10, Number(req.query.limit || 50)));
       const offset = Math.max(0, Number(req.query.offset || 0));
+      const range = normalizeDateRange(req.query.start_date, req.query.end_date);
 
-      let where = `o.tenant_id=? AND o.is_active=1`;
-      const params = [tenantId];
+      let where = `o.tenant_id=? AND o.store_id=? AND o.is_active=1`;
+      const params = [tenantId, storeId];
 
       if (Number.isFinite(statusId) && statusId > 0) {
         where += ` AND o.status_id=?`;
         params.push(statusId);
+      }
+
+      if (range) {
+        where += ` AND DATE(o.created_at) BETWEEN ? AND ?`;
+        params.push(range.start, range.end);
       }
 
       const orderBy = (Number.isFinite(statusId) && statusId > 0)
@@ -101,7 +224,6 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
           p.code AS paymentCode,
           p.title AS paymentTitle,
 
-          -- ПЕРЕИМЕНОВАНО: order_methods -> order_delivery_types
           m.code AS methodCode,
           m.title AS methodTitle,
 
@@ -109,13 +231,13 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
           t.title AS timeOptionTitle
         FROM order_orders o
         LEFT JOIN order_statuses s
-          ON s.tenant_id=o.tenant_id AND s.id=o.status_id
+          ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
         LEFT JOIN order_payments p
-          ON p.tenant_id=o.tenant_id AND p.id=o.payment_id
+          ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
         LEFT JOIN order_delivery_types m
-          ON m.tenant_id=o.tenant_id AND m.id=o.delivery_type_id
+          ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
         LEFT JOIN order_time_options t
-          ON t.tenant_id=o.tenant_id AND t.id=o.time_option_id
+          ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
         WHERE ${where}
         ORDER BY ${orderBy}
         LIMIT ? OFFSET ?
@@ -123,7 +245,6 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
         [...params, limit, offset]
       );
 
-      // parse items JSON
       const data = rows.map((r) => {
         let items = [];
         try {
@@ -136,7 +257,6 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
           items,
           total_price: Number(r.total_price || 0),
 
-          // совместимость с фронтом (snake_case)
           status_code: r.statusCode ?? null,
           status_title: r.statusTitle ?? null,
           status_color: r.statusColor ?? null,
@@ -159,6 +279,30 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
     }
   });
 
+
+  // ---------------------------
+  // SSE
+  // ---------------------------
+  // GET /api/admin/orders/events
+  router.get("/events", (req, res) => {
+    const tenantId = helpers.getTenantId(req);
+    const storeId = helpers.getStoreId(req);
+    ordersEvents.attach(req, res, tenantId, storeId);
+  });
+
+  // GET /api/admin/orders/changes?since=cursor
+  router.get("/changes", (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const since = req.query.since;
+      const data = ordersEvents.getChanges(tenantId, storeId, since);
+      res.json({ ok: true, data });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
   // ---------------------------
   // order details
   // ---------------------------
@@ -166,75 +310,18 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
   router.get("/:id", async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) {
         return res.status(400).json({ ok: false, error: "BAD_ID" });
       }
 
-      const [rows] = await db.query(
-        `
-        SELECT
-          o.*,
-          s.code AS statusCode,
-          s.title AS statusTitle,
-          s.color AS statusColor,
-
-          p.code AS paymentCode,
-          p.title AS paymentTitle,
-
-          m.code AS methodCode,
-          m.title AS methodTitle,
-
-          t.code AS timeOptionCode,
-          t.title AS timeOptionTitle
-        FROM order_orders o
-        LEFT JOIN order_statuses s
-          ON s.tenant_id=o.tenant_id AND s.id=o.status_id
-        LEFT JOIN order_payments p
-          ON p.tenant_id=o.tenant_id AND p.id=o.payment_id
-        LEFT JOIN order_delivery_types m
-          ON m.tenant_id=o.tenant_id AND m.id=o.delivery_type_id
-        LEFT JOIN order_time_options t
-          ON t.tenant_id=o.tenant_id AND t.id=o.time_option_id
-        WHERE o.tenant_id=? AND o.id=? AND o.is_active=1
-        LIMIT 1
-        `,
-        [tenantId, id]
-      );
-
-      if (!rows.length) {
+      const payload = await fetchOrderPayload(tenantId, storeId, id);
+      if (!payload) {
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
 
-      const r = rows[0];
-      let items = [];
-      try {
-        const parsed = r.items ? JSON.parse(r.items) : [];
-        if (Array.isArray(parsed)) items = parsed;
-      } catch {}
-
-      res.json({
-        ok: true,
-        data: {
-          ...r,
-          items,
-          total_price: Number(r.total_price || 0),
-
-          // совместимость с фронтом (snake_case)
-          status_code: r.statusCode ?? null,
-          status_title: r.statusTitle ?? null,
-          status_color: r.statusColor ?? null,
-
-          payment_code: r.paymentCode ?? null,
-          payment_title: r.paymentTitle ?? null,
-
-          method_code: r.methodCode ?? null,
-          method_title: r.methodTitle ?? null,
-
-          time_option_code: r.timeOptionCode ?? null,
-          time_option_title: r.timeOptionTitle ?? null,
-        },
-      });
+      res.json({ ok: true, data: payload });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: "DB_ERROR" });
@@ -248,6 +335,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
   router.put("/:id/status", async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       const statusId = Number(req.body.status_id);
 
@@ -261,9 +349,14 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
       await db.query(
         `UPDATE order_orders
          SET status_id=?
-         WHERE tenant_id=? AND id=?`,
-        [statusId, tenantId, id]
+         WHERE tenant_id=? AND store_id=? AND id=?`,
+        [statusId, tenantId, storeId, id]
       );
+
+      const payload = await fetchOrderPayload(tenantId, storeId, id);
+      if (payload) {
+        ordersEvents.publish(tenantId, storeId, "order.updated", payload);
+      }
 
       res.json({ ok: true });
     } catch (e) {
@@ -273,12 +366,13 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
   });
 
   // ---------------------------
-  // reorder внутри статуса
+  // reorder orders in status
   // ---------------------------
   // PUT /api/admin/orders/reorder
   router.put("/reorder", async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const statusId = Number(req.body.status_id);
       const orderedIdsRaw = Array.isArray(req.body.orderedIds) ? req.body.orderedIds : [];
 
@@ -286,22 +380,18 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
         return res.status(400).json({ ok: false, error: "BAD_STATUS_ID" });
       }
 
-      // нормализуем ids
       const orderedIds = orderedIdsRaw
         .map((x) => Number(x))
         .filter((x) => Number.isFinite(x) && x > 0);
 
-      // ограничение на всякий случай
       if (orderedIds.length > 1000) {
         return res.status(400).json({ ok: false, error: "TOO_MANY_IDS" });
       }
 
-      // пустой список — ок
       if (!orderedIds.length) {
         return res.json({ ok: true });
       }
 
-      // убираем дубликаты, сохраняя порядок
       const seen = new Set();
       const uniqIds = [];
       for (const id of orderedIds) {
@@ -311,13 +401,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
       }
 
       const n = uniqIds.length;
-
-      // CASE WHEN ? THEN ? ...
       const caseSql = uniqIds.map(() => "WHEN ? THEN ?").join(" ");
       const inSql = uniqIds.map(() => "?").join(",");
       const params = [];
 
-      // делаем так, чтобы верхний элемент имел больший status_sort
       uniqIds.forEach((id, idx) => {
         params.push(id, (n - idx) * 10);
       });
@@ -326,9 +413,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
         `
         UPDATE order_orders
         SET status_sort = CASE id ${caseSql} ELSE status_sort END
-        WHERE tenant_id=? AND status_id=? AND is_active=1 AND id IN (${inSql})
+        WHERE tenant_id=? AND store_id=? AND status_id=? AND is_active=1 AND id IN (${inSql})
         `,
-        [...params, tenantId, statusId, ...uniqIds]
+        [...params, tenantId, storeId, statusId, ...uniqIds]
       );
 
       res.json({ ok: true });
@@ -345,14 +432,15 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
   router.delete("/:id", async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) {
         return res.status(400).json({ ok: false, error: "BAD_ID" });
       }
 
       await db.query(
-        `UPDATE order_orders SET is_active=0 WHERE tenant_id=? AND id=?`,
-        [tenantId, id]
+        `UPDATE order_orders SET is_active=0 WHERE tenant_id=? AND store_id=? AND id=?`,
+        [tenantId, storeId, id]
       );
 
       res.json({ ok: true });
@@ -361,6 +449,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers }) {
       res.status(500).json({ ok: false, error: "DB_ERROR" });
     }
   });
+
 
   return router;
 };

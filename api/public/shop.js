@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const path = require('path');
 const multer = require('multer');
 
-module.exports = function makePublicShopRouter({ db, helpers }) {
+module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
 
   // ------------------------------
@@ -91,17 +91,17 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   }
 
-  async function getActiveStatusIdDefault(tenantId) {
+  async function getActiveStatusIdDefault(tenantId, storeId) {
     // пробуем "new", если нет — первый активный по sort
     const [r1] = await db.query(
-      `SELECT id FROM order_statuses WHERE tenant_id=? AND code='new' AND is_active=1 LIMIT 1`,
-      [tenantId]
+      `SELECT id FROM order_statuses WHERE tenant_id=? AND store_id=? AND code='new' AND is_active=1 LIMIT 1`,
+      [tenantId, storeId]
     );
     if (r1.length) return Number(r1[0].id);
 
     const [r2] = await db.query(
-      `SELECT id FROM order_statuses WHERE tenant_id=? AND is_active=1 ORDER BY sort ASC, id ASC LIMIT 1`,
-      [tenantId]
+      `SELECT id FROM order_statuses WHERE tenant_id=? AND store_id=? AND is_active=1 ORDER BY sort ASC, id ASC LIMIT 1`,
+      [tenantId, storeId]
     );
     return r2.length ? Number(r2[0].id) : null;
   }
@@ -148,24 +148,115 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
     };
   }
 
-  async function pickIdByCodeOrFirstActive({ tenantId, table, code }) {
+
+  async function pickIdByCodeOrFirstActive({ tenantId, storeId, table, code }) {
     const c = str(code).trim();
     if (c) {
       const [r] = await db.query(
-        `SELECT id FROM ${table} WHERE tenant_id=? AND code=? AND is_active=1 LIMIT 1`,
-        [tenantId, c]
+        `SELECT id FROM ${table} WHERE tenant_id=? AND store_id=? AND code=? AND is_active=1 LIMIT 1`,
+        [tenantId, storeId, c]
       );
       if (r.length) return Number(r[0].id);
     }
 
     const [r2] = await db.query(
-      `SELECT id FROM ${table} WHERE tenant_id=? AND is_active=1 ORDER BY sort ASC, id ASC LIMIT 1`,
-      [tenantId]
+      `SELECT id FROM ${table} WHERE tenant_id=? AND store_id=? AND is_active=1 ORDER BY sort ASC, id ASC LIMIT 1`,
+      [tenantId, storeId]
     );
     return r2.length ? Number(r2[0].id) : null;
   }
 
-  // ------------------------------
+  async function fetchOrderPayload(tenantId, storeId, id) {
+    const [rows] = await db.query(
+      `
+      SELECT
+        o.id,
+        o.public_id,
+        o.created_at,
+        o.customer_id,
+        o.customer_name,
+        o.customer_phone,
+        o.address,
+        o.comment,
+        o.cutlery_qty,
+        o.change_from,
+        o.total_price,
+        o.items,
+        o.scheduled_at,
+        o.delivery_type_id,
+        o.payment_id,
+        o.time_option_id,
+        o.status_id,
+
+        s.code AS statusCode,
+        s.title AS statusTitle,
+
+        p.code AS paymentCode,
+        p.title AS paymentTitle,
+
+        m.code AS methodCode,
+        m.title AS methodTitle,
+
+        t.code AS timeOptionCode,
+        t.title AS timeOptionTitle
+      FROM order_orders o
+      LEFT JOIN order_statuses s
+        ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+      LEFT JOIN order_payments p
+        ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
+      LEFT JOIN order_delivery_types m
+        ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
+      LEFT JOIN order_time_options t
+        ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
+      WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1
+      LIMIT 1
+      `,
+      [tenantId, storeId, id]
+    );
+
+    if (!rows.length) return null;
+    const r = rows[0];
+
+    let items = [];
+    try {
+      const parsed = r.items ? JSON.parse(r.items) : [];
+      if (Array.isArray(parsed)) items = parsed;
+    } catch {}
+
+    return {
+      id: r.id,
+      public_id: r.public_id || null,
+      created_at: r.created_at,
+      customer_id: r.customer_id,
+      customer_name: r.customer_name,
+      customer_phone: r.customer_phone,
+      address: r.address,
+      comment: r.comment,
+      cutlery_qty: r.cutlery_qty,
+      change_from: r.change_from,
+      total_price: Number(r.total_price || 0),
+      items,
+      scheduled_at: r.scheduled_at,
+      delivery_type_id: r.delivery_type_id,
+      payment_id: r.payment_id,
+      time_option_id: r.time_option_id,
+      status_id: r.status_id,
+
+      status_code: r.statusCode ?? null,
+      status_title: r.statusTitle ?? null,
+
+      payment_code: r.paymentCode ?? null,
+      payment_title: r.paymentTitle ?? null,
+
+      method_code: r.methodCode ?? null,
+      method_title: r.methodTitle ?? null,
+
+      time_option_code: r.timeOptionCode ?? null,
+      time_option_title: r.timeOptionTitle ?? null,
+    };
+  }
+
+// ------------------------------
   // AUTH
   // ------------------------------
 
@@ -656,6 +747,7 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
   router.get('/me/orders', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const token = str(req.headers['x-customer-token']);
       const customer = await getCustomerByToken(tenantId, token);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
@@ -671,13 +763,13 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
            p.title AS payment_title, p.code AS payment_code
          FROM order_orders o
          LEFT JOIN order_statuses s
-           ON s.tenant_id=o.tenant_id AND s.id=o.status_id
+           ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
          LEFT JOIN order_payments p
-           ON p.tenant_id=o.tenant_id AND p.id=o.payment_id
-         WHERE o.tenant_id=? AND o.customer_id=? AND o.is_active=1
+           ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
+         WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
          ORDER BY o.created_at DESC, o.id DESC
          LIMIT ?`,
-        [tenantId, customer.id, limit]
+        [tenantId, storeId, customer.id, limit]
       );
 
       const data = rows.map(r => {
@@ -713,13 +805,14 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
   router.get('/categories', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
 
       const [rows] = await db.query(
         `SELECT id, tenant_id, code, title, icon, site_visibility, is_active, sort_order
          FROM prod_categories
-         WHERE tenant_id=? AND is_active=1 AND site_visibility=1
+         WHERE tenant_id=? AND store_id=? AND is_active=1 AND site_visibility=1
          ORDER BY sort_order ASC, id ASC`,
-        [tenantId]
+        [tenantId, storeId]
       );
 
       res.json({ ok: true, data: rows });
@@ -729,12 +822,12 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
     }
   });
 
-  async function resolveCategoryIdFromQuery(tenantId, req) {
+  async function resolveCategoryIdFromQuery(tenantId, storeId, req) {
     const code = helpers.strOrNull(req.query.category_code);
     if (code) {
       const [r] = await db.query(
-        'SELECT id FROM prod_categories WHERE tenant_id=? AND code=? LIMIT 1',
-        [tenantId, code]
+        'SELECT id FROM prod_categories WHERE tenant_id=? AND store_id=? AND code=? LIMIT 1',
+        [tenantId, storeId, code]
       );
       if (r.length) return Number(r[0].id);
     }
@@ -744,8 +837,8 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
 
     // fallback: "all"
     const [all] = await db.query(
-      `SELECT id FROM prod_categories WHERE tenant_id=? AND code='all' LIMIT 1`,
-      [tenantId]
+      `SELECT id FROM prod_categories WHERE tenant_id=? AND store_id=? AND code='all' LIMIT 1`,
+      [tenantId, storeId]
     );
     return all.length ? Number(all[0].id) : null;
   }
@@ -753,16 +846,17 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
   router.get('/products', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
 
-      const categoryId = await resolveCategoryIdFromQuery(tenantId, req);
+      const categoryId = await resolveCategoryIdFromQuery(tenantId, storeId, req);
       if (!Number.isFinite(categoryId)) {
         return res.status(400).json({ ok: false, error: 'BAD_CATEGORY_ID' });
       }
 
       // "all"
       const [all] = await db.query(
-        `SELECT id FROM prod_categories WHERE tenant_id=? AND code='all' LIMIT 1`,
-        [tenantId]
+        `SELECT id FROM prod_categories WHERE tenant_id=? AND store_id=? AND code='all' LIMIT 1`,
+        [tenantId, storeId]
       );
       const allCategoryId = all.length ? Number(all[0].id) : null;
 
@@ -771,10 +865,10 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
           `SELECT p.*, pc.sort_order AS link_sort_order
            FROM prod_products p
            LEFT JOIN prod_product_categories pc
-             ON pc.tenant_id = p.tenant_id AND pc.product_id = p.id AND pc.category_id = ?
-           WHERE p.tenant_id=? AND p.is_active=1 AND p.site_visibility=1
+             ON pc.tenant_id = p.tenant_id AND pc.store_id = p.store_id AND pc.product_id = p.id AND pc.category_id = ?
+           WHERE p.tenant_id=? AND p.store_id=? AND p.is_active=1 AND p.site_visibility=1
            ORDER BY COALESCE(pc.sort_order, 999999) ASC, p.id ASC`,
-          [categoryId, tenantId]
+          [categoryId, tenantId, storeId]
         );
 
         for (const r of rows) r.photos = safeJsonArray(r.photos_json);
@@ -785,11 +879,11 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
         `SELECT p.*, pc.sort_order AS link_sort_order
          FROM prod_product_categories pc
          JOIN prod_products p
-           ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
-         WHERE pc.tenant_id=? AND pc.category_id=?
+           ON p.tenant_id = pc.tenant_id AND p.store_id = pc.store_id AND p.id = pc.product_id
+         WHERE pc.tenant_id=? AND pc.store_id=? AND pc.category_id=?
            AND p.is_active=1 AND p.site_visibility=1
          ORDER BY pc.sort_order ASC, pc.id ASC`,
-        [tenantId, categoryId]
+        [tenantId, storeId, categoryId]
       );
 
       for (const r of rows) r.photos = safeJsonArray(r.photos_json);
@@ -803,15 +897,16 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
   router.get('/products/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
       const [rows] = await db.query(
         `SELECT *
          FROM prod_products
-         WHERE tenant_id=? AND id=? AND is_active=1 AND site_visibility=1
+         WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1 AND site_visibility=1
          LIMIT 1`,
-        [tenantId, id]
+        [tenantId, storeId, id]
       );
       if (!rows.length) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
 
@@ -832,38 +927,39 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
   router.get('/order-config', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
 
       const [statuses] = await db.query(
         `SELECT id, code, title, subtitle, icon, color, sort
          FROM order_statuses
-         WHERE tenant_id=? AND is_active=1
+         WHERE tenant_id=? AND store_id=? AND is_active=1
          ORDER BY sort ASC, id ASC`,
-        [tenantId]
+        [tenantId, storeId]
       );
 
       const [payments] = await db.query(
         `SELECT id, code, title, icon, sort
          FROM order_payments
-         WHERE tenant_id=? AND is_active=1
+         WHERE tenant_id=? AND store_id=? AND is_active=1
          ORDER BY sort ASC, id ASC`,
-        [tenantId]
+        [tenantId, storeId]
       );
 
       // ПЕРЕИМЕНОВАНО: order_delivery_types (бывшая order_methods)
       const [methods] = await db.query(
         `SELECT id, code, title, icon, sort
          FROM order_delivery_types
-         WHERE tenant_id=? AND is_active=1
+         WHERE tenant_id=? AND store_id=? AND is_active=1
          ORDER BY sort ASC, id ASC`,
-        [tenantId]
+        [tenantId, storeId]
       );
 
       const [timeOptions] = await db.query(
         `SELECT id, code, title, sort
          FROM order_time_options
-         WHERE tenant_id=? AND is_active=1
+         WHERE tenant_id=? AND store_id=? AND is_active=1
          ORDER BY sort ASC, id ASC`,
-        [tenantId]
+        [tenantId, storeId]
       );
 
       res.json({ ok: true, data: { statuses, payments, methods, timeOptions } });
@@ -879,6 +975,7 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
   router.post('/orders', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
 
       // auth customer (optional)
       const token = str(req.headers['x-customer-token']);
@@ -894,18 +991,21 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
       // map code -> id
       const paymentId = await pickIdByCodeOrFirstActive({
         tenantId,
+        storeId,
         table: 'order_payments',
         code: paymentCode,
       });
 
       const deliveryTypeId = await pickIdByCodeOrFirstActive({
         tenantId,
+        storeId,
         table: 'order_delivery_types',
         code: methodCode,
       });
 
       const timeOptionId = await pickIdByCodeOrFirstActive({
         tenantId,
+        storeId,
         table: 'order_time_options',
         code: timeOptionCode,
       });
@@ -993,7 +1093,7 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
 
       if (!normItems.length) return res.status(400).json({ ok: false, error: 'NO_PRODUCTS' });
 
-      const statusId = await getActiveStatusIdDefault(tenantId);
+      const statusId = await getActiveStatusIdDefault(tenantId, storeId);
       if (!statusId) return res.status(500).json({ ok: false, error: 'NO_STATUSES' });
 
       // ПЕРЕИМЕНОВАНО: delivery_address -> address (в таблице order_orders)
@@ -1013,15 +1113,16 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
       // ВАЖНО: никаких updated_at тут нет (в твоей таблице order_orders его нет)
       const [r] = await db.query(
         `INSERT INTO order_orders
-         (tenant_id, customer_id, customer_name, customer_phone, promo_code,
+         (tenant_id, store_id, customer_id, customer_name, customer_phone, promo_code,
           address, delivery_address_id, comment, cutlery_qty, change_from,
           items, total_price,
           delivery_type_id, payment_id, time_option_id,
           status_id, status_sort, scheduled_at,
           created_via, is_active, public_id)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
         [
           tenantId,
+          storeId,
           customerId,
           customerName,
           customerPhone,
@@ -1042,6 +1143,12 @@ module.exports = function makePublicShopRouter({ db, helpers }) {
           publicId,
         ]
       );
+
+      const payload = await fetchOrderPayload(tenantId, storeId, r.insertId);
+
+      if (payload) {
+        ordersEvents.publish(tenantId, storeId, 'order.created', payload);
+      }
 
       res.json({ ok: true, data: { id: r.insertId, public_id: publicId } });
     } catch (e) {

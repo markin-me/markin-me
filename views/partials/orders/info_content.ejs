@@ -1,21 +1,84 @@
-<div class="info-card">
-  <div class="info-title" id="infoOrderTitle">Заказ не выбран</div>
-  <div class="info-text muted" id="infoOrderMeta">Выбери заказ в центре.</div>
+
+<div class="order-info-empty empty-state" data-info="empty">
+  <div class="empty-icon"><i class="fas fa-receipt"></i></div>
+  <div class="empty-title">Выберите заказ слева</div>
+  <div class="empty-text">Чтобы увидеть детали заказа, выберите его в списке.</div>
 </div>
 
-<div class="info-card">
-  <div class="info-title">Клиент</div>
-  <div class="info-row"><span>Имя</span><strong id="infoClientName">—</strong></div>
-  <div class="info-row"><span>Телефон</span><strong id="infoClientPhone">—</strong></div>
-</div>
+<div class="order-info-cards hidden" data-info="content">
+  <div class="info-card order-info-head">
+    <div class="order-head-top">
+      <div>
+        <div class="order-head-title" data-info="order-title">Заказ #—</div>
+        <div class="order-head-meta muted" data-info="order-meta">—</div>
+      </div>
+      <button class="icon-btn info-close" type="button" data-action="order-close" aria-label="Сбросить выбор">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
 
-<div class="info-card">
-  <div class="info-title">Оплата</div>
-  <div class="info-row"><span>Способ</span><strong id="infoPayMethod">—</strong></div>
-  <div class="info-row"><span>Итого</span><strong id="infoTotal">—</strong></div>
-</div>
+    <div class="order-head-row">
+      <label class="order-head-field">
+        <span class="muted">Курьер</span>
+        <select class="order-head-select" data-role="courier-select">
+          <option>Не назначен</option>
+        </select>
+      </label>
 
-<div class="info-card">
-  <div class="info-title">Состав заказа</div>
-  <div class="info-text" id="infoItems">—</div>
+      <div class="order-head-field">
+        <span class="muted">Статус</span>
+        <span class="status-chip" data-info="order-status">—</span>
+      </div>
+
+      <div class="order-head-actions">
+        <button class="icon-btn btn-xs" type="button" data-action="order-edit" aria-label="Редактировать">
+          <i class="fas fa-pen"></i>
+        </button>
+        <button class="icon-btn btn-xs" type="button" data-action="order-print" aria-label="Печать">
+          <i class="fas fa-print"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="info-card order-info-client">
+    <div class="info-title">Клиент</div>
+    <div class="client-row">
+      <div class="client-avatar" data-info="client-avatar">—</div>
+      <div class="client-main">
+        <div class="client-name" data-info="client-name">—</div>
+        <a class="client-phone" data-info="client-phone" href="#">—</a>
+        <div class="client-extra muted hidden" data-info="client-extra"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="info-card order-info-pay">
+    <div class="pay-left">
+      <span class="pay-icon" data-info="payment-icon"><i class="fas fa-credit-card"></i></span>
+      <div class="pay-method" data-info="payment-method">—</div>
+    </div>
+    <div class="pay-right">
+      <div class="muted">Итого</div>
+      <div class="pay-total" data-info="order-total">—</div>
+    </div>
+  </div>
+
+  <div class="info-card order-info-delivery">
+    <div class="delivery-top">
+      <div class="delivery-chips">
+        <span class="chip" data-info="delivery-type">—</span>
+        <span class="chip" data-info="delivery-qty">0 шт.</span>
+        <span class="chip chip-warn hidden" data-info="delivery-urgent">⚡ Срочно</span>
+        <span class="chip hidden" data-info="delivery-interval"></span>
+      </div>
+    </div>
+    <div class="delivery-address" data-info="delivery-address">—</div>
+    <div class="delivery-comment muted hidden" data-info="delivery-comment"></div>
+  </div>
+
+  <div class="info-card order-info-items">
+    <div class="info-title">Состав заказа</div>
+    <div class="order-items" data-info="items-list"></div>
+  </div>
 </div>
