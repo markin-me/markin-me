@@ -224,13 +224,6 @@ body.page-shop .shop-toolbar-cart{
 /* базовые значения будут меняться плавно, чтобы при 5 в ряд всё было компактнее,
    при 2-3 в ряд — чуть крупнее. */
 /* container query: ширина панели товаров */
-@container (max-width: 520px){
-  }
-@container (min-width: 760px){
-  }
-@container (min-width: 980px){
-  }
-
 /* карточка */
 .sp-card{
   border: 1px solid var(--color-border);
@@ -930,6 +923,21 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   white-space: nowrap;
 }
 
+/* базовая цена товара под названием (не зависит от опций) */
+.shop-pd-baseprice{
+  font-weight: 900;
+  font-size: 22px;
+  line-height: 1.1;
+  color: var(--color-text);
+}
+
+/* короткое описание под ценой */
+.shop-pd-short{
+  font-size: 12px;
+  line-height: 1.25;
+  color: var(--color-text-muted);
+}
+
 .shop-pd-prices{
   text-align: right;
   display: grid;
@@ -1102,9 +1110,6 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   position: static;
   transform: none;
   display: inline;
-}
-.shop-pd-action .shop-pd-action-price{
-  font-weight: 900;
 }
 
 
@@ -1921,3 +1926,79 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 
 .shop-cart-back i,
 .shop-cart-fav i{ line-height:1; }
+
+/* ==========================================================================
+/* ================= Cart header: address as title (desktop + shared) ================= */
+
+.shop-cart-header.is-address-title #shopCartHeaderTitle{
+  flex: 0 1 auto;
+  text-align: left;
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 1.2;
+  max-width: 350px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* пустое состояние — можно чуть приглушить, если хочешь */
+.shop-cart-header.is-address-title #shopCartHeaderTitle.is-empty-address{
+  opacity: .9;
+}
+
+/* в этом режиме chip справа не показываем вообще */
+.shop-cart-header.is-address-title .shop-address-chip{
+  display: none !important;
+}
+/* ================= Cart sheet (AppModal): address in title ================= */
+
+.app-modal-header .app-modal-title.is-cart-address-title,
+.app-modal-header .modal-title.is-cart-address-title,
+.app-modal-header [data-modal-title].is-cart-address-title{
+  text-align: left;
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 1.2;
+  max-width: 350px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* пустой адрес */
+.app-modal-header .app-modal-title.is-empty-address,
+.app-modal-header .modal-title.is-empty-address,
+.app-modal-header [data-modal-title].is-empty-address{
+  opacity: .9;
+}
+/* Cart header: address as title (desktop only) */
+.shop-cart-header.is-address-title #shopCartHeaderTitle{
+  flex: 0 1 auto;
+  text-align: left;
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 1.2;
+  max-width: 350px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* empty state */
+.shop-cart-header.is-address-title #shopCartHeaderTitle.is-empty-address{
+  opacity: .9;
+}
+
+/* hide chip in this mode */
+.shop-cart-header.is-address-title .shop-address-chip{
+  display: none !important;
+}
+.shop-cart-header #shopCartHeaderTitle{
+  cursor: pointer;
+  pointer-events: auto;
+  position: relative;
+  z-index: 2;
+}

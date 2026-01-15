@@ -545,13 +545,35 @@
     } catch {}
   }
 
-  function updateAddressChip() {
-    if (!elAddressChip) return;
-    const line = getSelectedAddressLine();
+function updateAddressChip() {
+  const line = getSelectedAddressLine();
+
+  // chip живёт для экрана адресов, но в корзине/оформлении он скрыт
+  if (elAddressChip) {
     elAddressChip.textContent = line || "Введите адрес";
     elAddressChip.classList.toggle("chip-plus", !line);
     elAddressChip.title = line || "";
   }
+
+  // если сейчас открыт режим корзины/оформления — обновим заголовок адресом
+  const headerEl = document.querySelector(".shop-cart-header");
+  const isAddrTitle = !!headerEl && headerEl.classList.contains("is-address-title");
+  const isCartLike = cartViewMode === "cart" || cartViewMode === "checkout";
+
+  if (isCartLike && isAddrTitle && elCartHeaderTitle) {
+    // важно: не просто textContent, а “адрес + стрелка”
+    const t = line || "Введите адрес";
+    elCartHeaderTitle.innerHTML = `
+      <span class="shop-cart-header-title-text"></span>
+      <i class="fas fa-chevron-right shop-cart-header-title-arrow" aria-hidden="true"></i>
+    `;
+    const textEl = elCartHeaderTitle.querySelector(".shop-cart-header-title-text");
+    if (textEl) textEl.textContent = t;
+
+    elCartHeaderTitle.classList.toggle("is-empty-address", !line);
+    elCartHeaderTitle.classList.add("is-clickable-address-title");
+  }
+}
 
 function setCartHeader({
   title,
@@ -560,9 +582,53 @@ function setCartHeader({
   showBack = false,
   showFav = false,
   hideTitle = false,
+
+  // адрес вместо заголовка (корзина/оформление)
+  addressAsTitle = false,
+
+  // NEW: крестик закрытия (для экрана адресов)
+  showClose = false,
+  onClose = null,
 } = {}) {
+  const headerEl = document.querySelector(".shop-cart-header");
+
+  // --- ensure close button (creates once) ---
+  let closeBtn = document.querySelector("#shopCartCloseBtn");
+  if (!closeBtn && headerEl) {
+    const right = headerEl.querySelector(".shop-cart-header-right");
+    if (right) {
+      closeBtn = document.createElement("button");
+      closeBtn.id = "shopCartCloseBtn";
+      closeBtn.type = "button";
+      closeBtn.className = "btn btn-icon shop-cart-close hidden";
+      closeBtn.setAttribute("aria-label", "Закрыть");
+      closeBtn.innerHTML = `<i class="fas fa-times"></i>`;
+      right.appendChild(closeBtn);
+    }
+  }
+
+  if (closeBtn) {
+    closeBtn.classList.toggle("hidden", !showClose);
+    closeBtn.onclick = typeof onClose === "function" ? onClose : null;
+  }
+
+  // --- title render ---
   if (elCartHeaderTitle && typeof title === "string") {
-    elCartHeaderTitle.textContent = title;
+    if (addressAsTitle) {
+      // “адрес + стрелка”
+      elCartHeaderTitle.innerHTML = `
+        <span class="shop-cart-header-title-text"></span>
+        <i class="fas fa-chevron-right shop-cart-header-title-arrow" aria-hidden="true"></i>
+      `;
+      const textEl = elCartHeaderTitle.querySelector(".shop-cart-header-title-text");
+      if (textEl) textEl.textContent = title;
+
+      elCartHeaderTitle.classList.add("is-clickable-address-title");
+    } else {
+      // обычный текст
+      elCartHeaderTitle.textContent = title;
+      elCartHeaderTitle.classList.remove("is-clickable-address-title");
+    }
   }
 
   // title show/hide
@@ -578,6 +644,10 @@ function setCartHeader({
   if (elCartFavBtn) elCartFavBtn.classList.toggle("hidden", !showFav);
 
   if (!showProfileActions && elProfileMenu) elProfileMenu.classList.add("hidden");
+
+  // режим “адрес как заголовок”
+  if (headerEl) headerEl.classList.toggle("is-address-title", !!addressAsTitle);
+  if (elCartHeaderTitle) elCartHeaderTitle.classList.toggle("is-address-title", !!addressAsTitle);
 }
 
 function setSheetHeaderMode(mode, { onBack } = {}) {
@@ -690,79 +760,144 @@ function showCartView() {
   if (elCartContent) elCartContent.classList.remove("hidden");
   if (elProfileContent) elProfileContent.classList.add("hidden");
 
-  // Cart mode (desktop header): title+chip показать, ←/♡ скрыть
+  const line = getSelectedAddressLine();
+  const t = line || "Введите адрес";
+
   setCartHeader({
-    title: "Корзина",
+    title: t,
     hideTitle: false,
-    showAddressChip: true,
+    showAddressChip: false,
     showProfileActions: false,
     showBack: false,
     showFav: false,
+    addressAsTitle: true,
+    showClose: false,
   });
+
+  if (elCartHeaderTitle) {
+    elCartHeaderTitle.classList.toggle("is-empty-address", !line);
+  }
 
   setCartFooterMode("cart");
   renderCart();
 }
 
-  function showCheckoutView() {
-    cartViewMode = "checkout";
-    openProductCtx = null;
-    if (elCartContent) elCartContent.classList.add("hidden");
-    if (elAddressContent) elAddressContent.classList.add("hidden");
-    if (elProductContent) elProductContent.classList.add("hidden");
-    if (elCheckoutContent) elCheckoutContent.classList.remove("hidden");
-    if (elProfileContent) elProfileContent.classList.add("hidden");
-    setCartHeader({ title: "Корзина", showAddressChip: true, showProfileActions: false, showBack: false });
-    setCartFooterMode("checkout");
+function showCheckoutView() {
+  cartViewMode = "checkout";
+  openProductCtx = null;
+
+  if (elCartContent) elCartContent.classList.add("hidden");
+  if (elAddressContent) elAddressContent.classList.add("hidden");
+  if (elProductContent) elProductContent.classList.add("hidden");
+  if (elCheckoutContent) elCheckoutContent.classList.remove("hidden");
+  if (elProfileContent) elProfileContent.classList.add("hidden");
+
+  const line = getSelectedAddressLine();
+  const t = line || "Введите адрес";
+
+  setCartHeader({
+    title: t,
+    hideTitle: false,
+    showAddressChip: false,
+    showProfileActions: false,
+    showBack: false,
+    showFav: false,
+    addressAsTitle: true,
+    showClose: false,
+  });
+
+  if (elCartHeaderTitle) {
+    elCartHeaderTitle.classList.toggle("is-empty-address", !line);
   }
 
-  function showAddressListView(backMode = "cart") {
-    if (!elAddressContent || !elAddressListView || !elAddressFormView) return;
-    cartViewMode = "address";
-    openProductCtx = null;
-    state._addressListBackMode = backMode;
-    if (elCartContent) elCartContent.classList.add("hidden");
-    if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
-    if (elProductContent) elProductContent.classList.add("hidden");
-    if (elProfileContent) elProfileContent.classList.add("hidden");
+  setCartFooterMode("checkout");
+}
 
-    elAddressContent.classList.remove("hidden");
-    elAddressListView.classList.remove("hidden");
-    elAddressFormView.classList.add("hidden");
+function showAddressListView(backMode = "cart") {
+  if (!elAddressContent || !elAddressListView || !elAddressFormView) return;
 
-    setCartHeader({ title: "Введите адрес", showAddressChip: true, showProfileActions: false, showBack: false });
-    setCartFooterMode("hidden");
-    renderAddressList();
+  cartViewMode = "address";
+  openProductCtx = null;
+  state._addressListBackMode = backMode;
+
+  if (elCartContent) elCartContent.classList.add("hidden");
+  if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
+  if (elProductContent) elProductContent.classList.add("hidden");
+  if (elProfileContent) elProfileContent.classList.add("hidden");
+
+  elAddressContent.classList.remove("hidden");
+  elAddressListView.classList.remove("hidden");
+  elAddressFormView.classList.add("hidden");
+
+  const line = getSelectedAddressLine();
+  const t = line || "Введите адрес";
+
+  setCartHeader({
+    title: t,
+    showAddressChip: false,     // IMPORTANT: чип убираем
+    showProfileActions: false,
+    showBack: false,
+    showFav: false,
+    hideTitle: false,
+    addressAsTitle: false,      // IMPORTANT: без стрелки тут
+    showClose: true,            // крестик справа
+    onClose: () => backAfterAddressSelection(),
+  });
+
+  if (elCartHeaderTitle) {
+    elCartHeaderTitle.classList.toggle("is-empty-address", !line);
   }
 
-  function showAddressFormView(prefill, editingId, backMode) {
-    if (!elAddressContent || !elAddressFormView || !elAddressListView) return;
+  setCartFooterMode("hidden");
+  renderAddressList();
+}
 
-    state.addressEditingId = editingId ? Number(editingId) : null;
-    state._addressFormBackMode = backMode || (state.selectedAddress ? "list" : "cart");
-    cartViewMode = "address";
-    openProductCtx = null;
+function showAddressFormView(prefill, editingId, backMode) {
+  if (!elAddressContent || !elAddressFormView || !elAddressListView) return;
 
-    if (elAddrStreet) elAddrStreet.value = str(prefill?.street || "");
-    if (elAddrHouse) elAddrHouse.value = str(prefill?.house || "");
-    if (elAddrEntrance) elAddrEntrance.value = str(prefill?.entrance || "");
-    if (elAddrFloor) elAddrFloor.value = str(prefill?.floor || "");
-    if (elAddrApartment) elAddrApartment.value = str(prefill?.apartment || "");
-    if (elAddrComment) elAddrComment.value = str(prefill?.comment || "");
+  state.addressEditingId = editingId ? Number(editingId) : null;
+  state._addressFormBackMode = backMode || (state.selectedAddress ? "list" : "cart");
+  cartViewMode = "address";
+  openProductCtx = null;
 
-    if (elCartContent) elCartContent.classList.add("hidden");
-    if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
-    if (elProductContent) elProductContent.classList.add("hidden");
-    if (elProfileContent) elProfileContent.classList.add("hidden");
+  if (elAddrStreet) elAddrStreet.value = str(prefill?.street || "");
+  if (elAddrHouse) elAddrHouse.value = str(prefill?.house || "");
+  if (elAddrEntrance) elAddrEntrance.value = str(prefill?.entrance || "");
+  if (elAddrFloor) elAddrFloor.value = str(prefill?.floor || "");
+  if (elAddrApartment) elAddrApartment.value = str(prefill?.apartment || "");
+  if (elAddrComment) elAddrComment.value = str(prefill?.comment || "");
 
-    elAddressContent.classList.remove("hidden");
-    elAddressFormView.classList.remove("hidden");
-    elAddressListView.classList.add("hidden");
+  if (elCartContent) elCartContent.classList.add("hidden");
+  if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
+  if (elProductContent) elProductContent.classList.add("hidden");
+  if (elProfileContent) elProfileContent.classList.add("hidden");
 
-    setCartHeader({ title: "Введите адрес", showAddressChip: true, showProfileActions: false, showBack: false });
-    setCartFooterMode("hidden");
-    setTimeout(() => { try { elAddrStreet?.focus?.(); } catch {} }, 0);
+  elAddressContent.classList.remove("hidden");
+  elAddressFormView.classList.remove("hidden");
+  elAddressListView.classList.add("hidden");
+
+  const line = getSelectedAddressLine();
+  const t = line || "Введите адрес";
+
+  setCartHeader({
+    title: t,
+    showAddressChip: false,
+    showProfileActions: false,
+    showBack: false,
+    showFav: false,
+    hideTitle: false,
+    addressAsTitle: false,
+    showClose: true,
+    onClose: () => backAfterAddressSelection(),
+  });
+
+  if (elCartHeaderTitle) {
+    elCartHeaderTitle.classList.toggle("is-empty-address", !line);
   }
+
+  setCartFooterMode("hidden");
+  setTimeout(() => { try { elAddrStreet?.focus?.(); } catch {} }, 0);
+}
 
   function showProfileView() {
     cartViewMode = "profile";
@@ -1053,25 +1188,119 @@ function showProductView() {
     try { document.querySelector("#shopCartPanel")?.scrollIntoView({ behavior: "smooth", block: "start" }); } catch {}
   }
 
-  async function initAddresses() {
-    if (!elAddressChip || !elAddressContent) return;
+async function initAddresses() {
+  if (!elAddressContent) return;
 
+  async function openAddressFlow(fromMode = "cart") {
+    await refreshAddressState();
+    if (getSelectedAddressLine()) showAddressListView(fromMode);
+    else showAddressFormView(loadAddressDraft(), null, fromMode);
+  }
+
+  // chip (если он есть) — пусть работает как fallback
+  if (elAddressChip) {
     elAddressChip.addEventListener("click", async () => {
-      await refreshAddressState();
-      if (getSelectedAddressLine()) showAddressListView();
-      else showAddressFormView(loadAddressDraft(), null, "cart");
+      await openAddressFlow("cart");
     });
+  }
 
-    if (elAddressNewBtn) {
-      elAddressNewBtn.addEventListener("click", () => showAddressFormView(null, null, "list"));
-    }
+  // Главное: клик по заголовку корзины (адресу)
+  if (elCartHeaderTitle) {
+    elCartHeaderTitle.addEventListener("click", async (e) => {
+      // только корзина/оформление
+      if (!(cartViewMode === "cart" || cartViewMode === "checkout")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      await openAddressFlow("cart");
+    });
+  }
 
-    if (elAddressCancelBtn) {
-      elAddressCancelBtn.addEventListener("click", () => {
-        const back = state._addressFormBackMode || "cart";
-        if (back === "list" && getSelectedAddressLine()) showAddressListView();
-        else if (back === "checkout") {
-          if (elCheckoutContent) {
+  // Страховка: если заголовок перекрывается — ловим клик по всему хедеру корзины
+  const cartHeader = document.querySelector(".shop-cart-header");
+  if (cartHeader) {
+    cartHeader.addEventListener("click", async (e) => {
+      // только корзина/оформление
+      if (!(cartViewMode === "cart" || cartViewMode === "checkout")) return;
+
+      // открываем только если клик был в зоне заголовка
+      const t = e.target;
+      const clickedTitle =
+        (elCartHeaderTitle && (t === elCartHeaderTitle || elCartHeaderTitle.contains(t))) ||
+        (t && t.closest && t.closest("#shopCartHeaderTitle"));
+
+      if (!clickedTitle) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      await openAddressFlow("cart");
+    });
+  }
+
+  // + Новый адрес
+  if (elAddressNewBtn) {
+    elAddressNewBtn.addEventListener("click", () => showAddressFormView(null, null, "list"));
+  }
+
+  // Отмена
+  if (elAddressCancelBtn) {
+    elAddressCancelBtn.addEventListener("click", () => {
+      const back = state._addressFormBackMode || "cart";
+      if (back === "list" && getSelectedAddressLine()) showAddressListView();
+      else if (back === "checkout") {
+        if (elCheckoutContent) {
+          showCheckoutView();
+          openCheckoutView({
+            container: elCheckoutContent,
+            onBack: showCartView,
+            hasAddressEditor: true,
+            isSheet: false,
+            actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
+          });
+        } else {
+          showCartView();
+        }
+      } else showCartView();
+    });
+  }
+
+  // Сохранить
+  if (elAddressSaveBtn) {
+    elAddressSaveBtn.addEventListener("click", async () => {
+      const payload = normalizeAddressPayload({
+        street: elAddrStreet?.value,
+        house: elAddrHouse?.value,
+        entrance: elAddrEntrance?.value,
+        floor: elAddrFloor?.value,
+        apartment: elAddrApartment?.value,
+        comment: elAddrComment?.value,
+      });
+
+      if (!payload.street) return alert("Укажите улицу");
+      if (!payload.house) return alert("Укажите дом");
+
+      elAddressSaveBtn.disabled = true;
+      elAddressSaveBtn.textContent = "Сохраняем…";
+
+      try {
+        const me = await fetchMeSafe();
+        const token = getCustomerToken();
+
+        if (me && token) {
+          if (state.addressEditingId) {
+            await apiJson(`/api/public/me/addresses/${state.addressEditingId}`, {
+              method: "PUT",
+              body: payload,
+            });
+          } else {
+            await apiJson("/api/public/me/addresses", {
+              method: "POST",
+              body: { ...payload, is_default: 1 },
+            });
+          }
+          await refreshAddressState();
+
+          // после сохранения — вернёмся назад
+          if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
             showCheckoutView();
             openCheckoutView({
               container: elCheckoutContent,
@@ -1083,80 +1312,37 @@ function showProductView() {
           } else {
             showCartView();
           }
-        } else showCartView();
-      });
-    }
+        } else {
+          // guest
+          saveAddressDraft(payload);
+          setSelectedAddress({ ...payload, _local: true });
 
-    if (elAddressSaveBtn) {
-      elAddressSaveBtn.addEventListener("click", async () => {
-        const payload = normalizeAddressPayload({
-          street: elAddrStreet?.value,
-          house: elAddrHouse?.value,
-          entrance: elAddrEntrance?.value,
-          floor: elAddrFloor?.value,
-          apartment: elAddrApartment?.value,
-          comment: elAddrComment?.value,
-        });
-
-        if (!payload.street) return alert("Укажите улицу");
-        if (!payload.house) return alert("Укажите дом");
-
-        elAddressSaveBtn.disabled = true;
-        elAddressSaveBtn.textContent = "Сохраняем…";
-
-        try {
-          const me = await fetchMeSafe();
-          const token = getCustomerToken();
-
-          if (me && token) {
-            if (state.addressEditingId) {
-              await apiJson(`/api/public/me/addresses/${state.addressEditingId}`, { method: "PUT", body: payload });
-            } else {
-              await apiJson("/api/public/me/addresses", { method: "POST", body: { ...payload, is_default: 1 } });
-            }
-            await refreshAddressState();
-            if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
-              showCheckoutView();
-              openCheckoutView({
-                container: elCheckoutContent,
-                onBack: showCartView,
-                hasAddressEditor: true,
-                isSheet: false,
-                actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-              });
-            } else {
-              showCartView();
-            }
+          if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
+            showCheckoutView();
+            openCheckoutView({
+              container: elCheckoutContent,
+              onBack: showCartView,
+              hasAddressEditor: true,
+              isSheet: false,
+              actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
+            });
           } else {
-            // guest
-            saveAddressDraft(payload);
-            setSelectedAddress({ ...payload, _local: true });
-            if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
-              showCheckoutView();
-              openCheckoutView({
-                container: elCheckoutContent,
-                onBack: showCartView,
-                hasAddressEditor: true,
-                isSheet: false,
-                actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
-              });
-            } else {
-              showCartView();
-            }
+            showCartView();
           }
-        } catch (e) {
-          console.error(e);
-          alert("Не удалось сохранить адрес");
-        } finally {
-          elAddressSaveBtn.disabled = false;
-          elAddressSaveBtn.textContent = "Сохранить";
         }
-      });
-    }
-
-    await refreshAddressState();
-    updateAddressChip();
+      } catch (e) {
+        console.error(e);
+        alert("Не удалось сохранить адрес");
+      } finally {
+        elAddressSaveBtn.disabled = false;
+        elAddressSaveBtn.textContent = "Сохранить";
+      }
+    });
   }
+
+  await refreshAddressState();
+  updateAddressChip();
+}
 
   // -----------------------------
   // UI: qty animation (photo overlay)
@@ -2074,12 +2260,25 @@ function buildProductDetailsContent(
   title.className = "shop-pd-title";
   title.textContent = str(product.name);
 
+  // === ДОБАВИЛИ: базовая цена товара (без опций) ===
+  const basePrice = document.createElement("div");
+  basePrice.className = "shop-pd-baseprice";
+  basePrice.textContent = money(product.price || 0);
+
+  // === ДОБАВИЛИ: короткое описание под ценой (если есть) ===
+  const shortDescText = str(product.description_short || "").trim();
+  const shortDesc = document.createElement("div");
+  shortDesc.className = "shop-pd-short";
+  if (shortDescText) shortDesc.textContent = shortDescText;
+
   const weight = document.createElement("div");
   weight.className = "shop-pd-weight";
   weight.textContent = product.weight ? product.weight : "Вес —";
 
   meta.appendChild(rating);
   meta.appendChild(title);
+  meta.appendChild(basePrice);
+  if (shortDescText) meta.appendChild(shortDesc);
   meta.appendChild(weight);
 
   scroll.appendChild(meta);
@@ -2692,7 +2891,7 @@ function openCartSheet() {
   const addressNewBtn = document.createElement("button");
   addressNewBtn.type = "button";
   addressNewBtn.className = "chip chip-plus";
-  addressNewBtn.innerHTML = `<i class="fas fa-plus"></i> Новый адрес`;
+  addressNewBtn.textContent = "Новый адрес";
   addressListTop.appendChild(addressNewBtn);
 
   const addressList = document.createElement("div");
@@ -2767,7 +2966,7 @@ function openCartSheet() {
   const backBtn = document.createElement("button");
   backBtn.type = "button";
   backBtn.className = "shop-checkout-back";
-  backBtn.innerHTML = `<i class="fas fa-arrow-left"></i>`;
+  backBtn.textContent = "Назад";
 
   const submitBtn = document.createElement("button");
   submitBtn.type = "button";
@@ -2787,23 +2986,60 @@ function openCartSheet() {
   btn.disabled = items.length === 0;
   totalSpan.textContent = money(total);
 
+  // ===== helpers title =====
+  function applySheetAddressTitle() {
+    const line = getSelectedAddressLine();
+    const t = line || "Введите адрес";
+    if (window.AppModal?.setTitle) window.AppModal.setTitle(t);
+
+    const titleEl =
+      document.querySelector(".app-modal-header .app-modal-title") ||
+      document.querySelector(".app-modal-header .modal-title") ||
+      document.querySelector(".app-modal-header [data-modal-title]");
+
+    if (titleEl) {
+      titleEl.classList.add("is-cart-address-title");
+      titleEl.classList.toggle("is-empty-address", !line);
+
+      // делаем кликабельным (открыть адреса)
+      titleEl.style.cursor = "pointer";
+      titleEl.onclick = async () => {
+        await refreshAddressState();
+        showSheetAddressList();
+      };
+    }
+  }
+
+  function clearSheetAddressTitleMode() {
+    const titleEl =
+      document.querySelector(".app-modal-header .app-modal-title") ||
+      document.querySelector(".app-modal-header .modal-title") ||
+      document.querySelector(".app-modal-header [data-modal-title]");
+    if (titleEl) {
+      titleEl.classList.remove("is-cart-address-title");
+      titleEl.classList.remove("is-empty-address");
+      titleEl.style.cursor = "";
+      titleEl.onclick = null;
+    }
+  }
+
   setAppModalMode("shop");
   window.AppModal.open({
-    title: "Корзина",
+    title: "Введите адрес",
     content: wrap,
     onClose: () => {
       openCartSheetCtx = null;
-      if (window.AppModal?.body)
-        window.AppModal.body.classList.remove("shop-cart-sheet-body");
+      if (window.AppModal?.body) window.AppModal.body.classList.remove("shop-cart-sheet-body");
       openProductCtx = null;
+
+      clearSheetAddressTitleMode();
 
       // bottom nav: после закрытия возвращаем "Главная"
       if (typeof setActiveNav === "function") setActiveNav("menu");
     },
   });
 
-  if (window.AppModal?.body)
-    window.AppModal.body.classList.add("shop-cart-sheet-body");
+  if (window.AppModal?.body) window.AppModal.body.classList.add("shop-cart-sheet-body");
 
   openCartSheetCtx = {
     listEl: list,
@@ -2828,8 +3064,15 @@ function openCartSheet() {
     list.classList.add("hidden");
     addressWrap.classList.add("hidden");
     productWrap.classList.add("hidden");
+
     setCartSheetFooterMode(openCartSheetCtx, "checkout");
-    if (window.AppModal?.setTitle) window.AppModal.setTitle("Корзина");
+
+    // title = адрес, без стрелок/иконок
+    clearSheetAddressTitleMode();
+    applySheetAddressTitle();
+
+    // обычный режим шапки (крестик есть)
+    setSheetHeaderMode("cart");
   }
 
   function showSheetCart() {
@@ -2840,8 +3083,10 @@ function openCartSheet() {
 
     setCartSheetFooterMode(openCartSheetCtx, "cart");
 
-    // cart mode header: вернуть × и title "Корзина", убрать ←/♡
-    if (window.AppModal?.setTitle) window.AppModal.setTitle("Корзина");
+    clearSheetAddressTitleMode();
+    applySheetAddressTitle();
+
+    // cart mode header: вернуть ×, убрать ←/♡
     setSheetHeaderMode("cart");
 
     openProductCtx = null;
@@ -2854,36 +3099,45 @@ function openCartSheet() {
     addressListView.classList.remove("hidden");
     addressFormView.classList.add("hidden");
     productWrap.classList.add("hidden");
+
     setCartSheetFooterMode(openCartSheetCtx, "hidden");
+
+    clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("Введите адрес");
+
     renderSheetAddressList();
   }
 
   function showSheetAddressForm(prefill, editingId) {
     sheetEditingId = editingId ? Number(editingId) : null;
+
     const get = (k) => addressFormView.querySelector(`[data-a="${k}"]`);
     const setVal = (k, v) => {
       const el = get(k);
       if (el) el.value = str(v || "");
     };
+
     setVal("street", prefill?.street);
     setVal("house", prefill?.house);
     setVal("entrance", prefill?.entrance);
     setVal("floor", prefill?.floor);
     setVal("apartment", prefill?.apartment);
     setVal("comment", prefill?.comment);
+
     checkoutWrap.classList.add("hidden");
     list.classList.add("hidden");
     addressWrap.classList.remove("hidden");
     addressListView.classList.add("hidden");
     addressFormView.classList.remove("hidden");
     productWrap.classList.add("hidden");
+
     setCartSheetFooterMode(openCartSheetCtx, "hidden");
+
+    clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("Введите адрес");
+
     setTimeout(() => {
-      try {
-        get("street")?.focus?.();
-      } catch {}
+      try { get("street")?.focus?.(); } catch {}
     }, 0);
   }
 
@@ -2895,229 +3149,226 @@ function openCartSheet() {
 
     setCartSheetFooterMode(openCartSheetCtx, "hidden");
 
-    // product mode header: ← слева, ♡ справа, × скрыть, title скрыть
+    // product mode header: ←/♡, × скрыть, title скрыть
+    clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("");
     setSheetHeaderMode("product", { onBack: showSheetCart });
 
     renderProductDetailsInto(productWrap, product, { onBack: showSheetCart, cartKey });
   }
 
-  function renderSheetAddressList() {
-    addressList.innerHTML = "";
-    const token = getCustomerToken();
-    const listData = (token ? state.addresses : []) || [];
-    const local = !token && loadAddressDraft() ? [{ ...loadAddressDraft(), id: null, _local: true }] : [];
-    const effectiveList = token ? listData : local;
+function renderSheetAddressList() {
+  addressList.innerHTML = "";
+  const token = getCustomerToken();
+  const listData = (token ? state.addresses : []) || [];
+  const local = !token && loadAddressDraft() ? [{ ...loadAddressDraft(), id: null, _local: true }] : [];
+  const effectiveList = token ? listData : local;
 
-    if (!effectiveList.length) {
-      addressList.innerHTML = `<div class="muted">Адресов пока нет.</div>`;
-      return;
+  if (!effectiveList.length) {
+    addressList.innerHTML = `<div class="muted">Адресов пока нет.</div>`;
+    return;
+  }
+
+  effectiveList.forEach((a) => {
+    const row = document.createElement("div");
+    row.className = "shop-address-row";
+    if (Number(a.is_default) === 1) row.classList.add("is-default");
+
+    const isSelected = state.selectedAddress
+      ? a.id && state.selectedAddress.id
+        ? Number(a.id) === Number(state.selectedAddress.id)
+        : !!a._local && !!state.selectedAddress._local
+      : false;
+
+    if (isSelected) row.classList.add("is-selected");
+
+    const title = formatAddressLine(a);
+    const sub = a.comment ? str(a.comment) : "";
+
+    const card = document.createElement("div");
+    card.className = "shop-address-card";
+
+    const main = document.createElement("div");
+    main.className = "shop-address-card-main";
+
+    const titleEl = document.createElement("div");
+    titleEl.className = "shop-address-card-title";
+    titleEl.appendChild(document.createTextNode(title || ""));
+    main.appendChild(titleEl);
+
+    if (sub) {
+      const subEl = document.createElement("div");
+      subEl.className = "shop-address-card-sub";
+      subEl.textContent = sub;
+      main.appendChild(subEl);
     }
 
-    effectiveList.forEach((a) => {
-      const row = document.createElement("div");
-      row.className = "shop-address-row";
-      if (Number(a.is_default) === 1) row.classList.add("is-default");
+    const actions = document.createElement("div");
+    actions.className = "shop-address-actions shop-address-actions--compact";
 
-      const isSelected = state.selectedAddress
-        ? a.id && state.selectedAddress.id
-          ? Number(a.id) === Number(state.selectedAddress.id)
-          : !!a._local && !!state.selectedAddress._local
-        : false;
-      if (isSelected) row.classList.add("is-selected");
-
-      const title = formatAddressLine(a);
-      const sub = a.comment ? str(a.comment) : "";
-
-      const card = document.createElement("div");
-      card.className = "shop-address-card";
-
-      const main = document.createElement("div");
-      main.className = "shop-address-card-main";
-
-      const titleEl = document.createElement("div");
-      titleEl.className = "shop-address-card-title";
-      titleEl.appendChild(document.createTextNode(title || ""));
-      main.appendChild(titleEl);
-
-      if (sub) {
-        const subEl = document.createElement("div");
-        subEl.className = "shop-address-card-sub";
-        subEl.textContent = sub;
-        main.appendChild(subEl);
-      }
-
-      const actions = document.createElement("div");
-      actions.className = "shop-address-actions shop-address-actions--compact";
-
-      if (token) {
-        const btnDef = document.createElement("button");
-        btnDef.type = "button";
-        btnDef.className = "shop-address-action-icon is-default";
-        btnDef.title = Number(a.is_default) === 1 ? "Основной адрес" : "Сделать основным";
-        btnDef.innerHTML = `<i class="fas fa-star"></i>`;
-        if (Number(a.is_default) === 1) {
-          btnDef.classList.add("is-active");
-        } else {
-          btnDef.addEventListener("click", async (e) => {
-            e.stopPropagation();
-            try {
-              await apiJson(`/api/public/me/addresses/${a.id}/default`, { method: "PUT" });
-              await refreshAddressState();
-              renderSheetAddressList();
-            } catch (e) {
-              alert("Не удалось изменить основной адрес");
-            }
-          });
-        }
-        actions.appendChild(btnDef);
-      }
-
-      const btnEdit = document.createElement("button");
-      btnEdit.type = "button";
-      btnEdit.className = "shop-address-action-icon";
-      btnEdit.innerHTML = `<i class="fas fa-pen"></i>`;
-      btnEdit.addEventListener("click", (e) => {
-        e.stopPropagation();
-        showSheetAddressForm(a, token ? a.id : null);
-      });
-      actions.appendChild(btnEdit);
-
-      const btnDel = document.createElement("button");
-      btnDel.type = "button";
-      btnDel.className = "shop-address-action-icon is-danger";
-      btnDel.innerHTML = `<i class="fas fa-times"></i>`;
-      btnDel.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        if (!window.confirm("Удалить адрес?")) return;
-
-        if (token && a.id) {
-          try {
-            await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
-            await refreshAddressState();
-            renderSheetAddressList();
-          } catch (err) {
-            alert("Не удалось удалить адрес");
-          }
-          return;
-        }
-
-        clearAddressDraft();
-        setSelectedAddress(null);
-        renderSheetAddressList();
-      });
-      actions.appendChild(btnDel);
-
-      card.appendChild(main);
-      card.appendChild(actions);
-      row.appendChild(card);
-
-      row.addEventListener("click", async () => {
-        if (token && a.id) {
+    // ⭐ default (только если залогинен)
+    if (token) {
+      const btnDef = document.createElement("button");
+      btnDef.type = "button";
+      btnDef.className = "shop-address-action-icon is-default";
+      btnDef.title = Number(a.is_default) === 1 ? "Основной адрес" : "Сделать основным";
+      btnDef.innerHTML = `<i class="fas fa-star"></i>`;
+      if (Number(a.is_default) === 1) {
+        btnDef.classList.add("is-active");
+      } else {
+        btnDef.addEventListener("click", async (e) => {
+          e.stopPropagation();
           try {
             await apiJson(`/api/public/me/addresses/${a.id}/default`, { method: "PUT" });
             await refreshAddressState();
-            showSheetCheckout();
+            renderSheetAddressList();
           } catch (e) {
-            alert("Не удалось выбрать адрес");
+            alert("Не удалось изменить основной адрес");
           }
+        });
+      }
+      actions.appendChild(btnDef);
+    }
+
+    // ✏️ edit
+    const btnEdit = document.createElement("button");
+    btnEdit.type = "button";
+    btnEdit.className = "shop-address-action-icon";
+    btnEdit.innerHTML = `<i class="fas fa-pen"></i>`;
+    btnEdit.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showSheetAddressForm(a, token ? a.id : null);
+    });
+    actions.appendChild(btnEdit);
+
+    // ✖ delete
+    const btnDel = document.createElement("button");
+    btnDel.type = "button";
+    btnDel.className = "shop-address-action-icon is-danger";
+    btnDel.innerHTML = `<i class="fas fa-times"></i>`;
+    btnDel.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!window.confirm("Удалить адрес?")) return;
+
+      if (token && a.id) {
+        try {
+          await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
+          await refreshAddressState();
+          renderSheetAddressList();
+          if (!getSelectedAddressLine()) showSheetCart();
+        } catch (err) {
+          alert("Не удалось удалить адрес");
+        }
+        return;
+      }
+
+      // guest
+      clearAddressDraft();
+      setSelectedAddress(null);
+      renderSheetAddressList();
+      showSheetCart();
+    });
+    actions.appendChild(btnDel);
+
+    card.appendChild(main);
+    card.appendChild(actions);
+    row.appendChild(card);
+
+    // select by click
+    row.addEventListener("click", async () => {
+      if (token && a.id) {
+        // если уже выбран — просто закрываем
+        if (state.selectedAddress && state.selectedAddress.id && Number(state.selectedAddress.id) === Number(a.id)) {
+          showSheetCart();
           return;
         }
+        try {
+          await apiJson(`/api/public/me/addresses/${a.id}/default`, { method: "PUT" });
+          await refreshAddressState();
+          updateAddressChip();
+          showSheetCart();
+        } catch (e) {
+          alert("Не удалось выбрать адрес");
+        }
+        return;
+      }
 
-        setSelectedAddress({ ...a, _local: true });
-        showSheetCheckout();
-      });
-
-      addressList.appendChild(row);
+      // guest
+      setSelectedAddress({ ...a, _local: true });
+      syncSelectedAddressToCheckoutDraft();
+      updateAddressChip();
+      showSheetCart();
     });
-  }
+
+    addressList.appendChild(row);
+  });
+}
+
+  // events
+  btn.addEventListener("click", async () => {
+    await refreshAddressState();
+    // если адрес есть — checkout, если нет — адреса
+    if (getSelectedAddressLine()) showSheetCheckout();
+    else showSheetAddressList();
+  });
+
+  backBtn.addEventListener("click", () => showSheetCart());
 
   addressNewBtn.addEventListener("click", () => showSheetAddressForm(null, null));
 
-  const sheetSaveBtn = addressFormView.querySelector('[data-a="save"]');
-  const sheetCancelBtn = addressFormView.querySelector('[data-a="cancel"]');
+  const formGet = (k) => addressFormView.querySelector(`[data-a="${k}"]`);
+  const saveBtn = formGet("save");
+  const cancelBtn = formGet("cancel");
 
-  if (sheetCancelBtn) {
-    sheetCancelBtn.addEventListener("click", () => showSheetAddressList());
-  }
+  cancelBtn?.addEventListener("click", () => showSheetAddressList());
 
-  if (sheetSaveBtn) {
-    sheetSaveBtn.addEventListener("click", async () => {
-      const get = (k) =>
-        str(addressFormView.querySelector(`[data-a="${k}"]`)?.value || "").trim();
-      const payload = normalizeAddressPayload({
-        street: get("street"),
-        house: get("house"),
-        entrance: get("entrance"),
-        floor: get("floor"),
-        apartment: get("apartment"),
-        comment: get("comment"),
-      });
+  saveBtn?.addEventListener("click", async () => {
+    const payload = normalizeAddressPayload({
+      street: formGet("street")?.value,
+      house: formGet("house")?.value,
+      entrance: formGet("entrance")?.value,
+      floor: formGet("floor")?.value,
+      apartment: formGet("apartment")?.value,
+      comment: formGet("comment")?.value,
+    });
 
-      if (!payload.street) return alert("Укажите улицу");
-      if (!payload.house) return alert("Укажите дом");
+    if (!payload.street) return alert("Укажите улицу");
+    if (!payload.house) return alert("Укажите дом");
 
-      sheetSaveBtn.disabled = true;
-      sheetSaveBtn.textContent = "Сохраняем…";
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Сохраняем…";
 
-      try {
-        const me = await fetchMeSafe();
-        const token = getCustomerToken();
+    try {
+      const me = await fetchMeSafe();
+      const token = getCustomerToken();
 
-        if (me && token) {
-          if (sheetEditingId) {
-            await apiJson(`/api/public/me/addresses/${sheetEditingId}`, {
-              method: "PUT",
-              body: payload,
-            });
-          } else {
-            await apiJson("/api/public/me/addresses", {
-              method: "POST",
-              body: { ...payload, is_default: 1 },
-            });
-          }
-          await refreshAddressState();
-          showSheetCheckout();
+      if (me && token) {
+        if (sheetEditingId) {
+          await apiJson(`/api/public/me/addresses/${sheetEditingId}`, { method: "PUT", body: payload });
         } else {
-          saveAddressDraft(payload);
-          setSelectedAddress({ ...payload, _local: true });
-          showSheetCheckout();
+          await apiJson("/api/public/me/addresses", { method: "POST", body: { ...payload, is_default: 1 } });
         }
-      } catch (e) {
-        console.error(e);
-        alert("Не удалось сохранить адрес");
-      } finally {
-        sheetSaveBtn.disabled = false;
-        sheetSaveBtn.textContent = "Сохранить";
+        await refreshAddressState();
+      } else {
+        // guest
+        saveAddressDraft(payload);
+        setSelectedAddress({ ...payload, _local: true });
       }
-    });
-  }
 
-  async function openSheetAddressEditor() {
-    await refreshAddressState();
-    const token = getCustomerToken();
-    const effectiveList = token
-      ? state.addresses
-      : loadAddressDraft()
-      ? [{ ...loadAddressDraft(), _local: true }]
-      : [];
-    if (effectiveList.length) showSheetAddressList();
-    else showSheetAddressForm(loadAddressDraft(), null);
-  }
-
-  btn.addEventListener("click", () => {
-    if (!checkoutWrap) return;
-    showSheetCheckout();
-
-    openCheckoutView({
-      container: checkoutWrap,
-      onBack: () => showSheetCart(),
-      hasAddressEditor: true,
-      isSheet: true,
-      actions: { submitBtn, backBtn },
-      onEditAddress: () => openSheetAddressEditor(),
-    });
+      syncSelectedAddressToCheckoutDraft();
+      updateAddressChip();
+      showSheetCart();
+    } catch (e) {
+      console.error(e);
+      alert("Не удалось сохранить адрес");
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Сохранить";
+    }
   });
+
+  // стартовое состояние шита
+  showSheetCart();
 }
 
   // -----------------------------
@@ -4667,6 +4918,9 @@ async function init() {
     updateCartBadge();
     await initAddresses();
 
+    if (elCartContent && !elCartContent.classList.contains("hidden")) {
+      showCartView();
+    }
     if (elCartClearBtn) {
       attachTwoStepClear(elCartClearBtn, () => clearCartAll());
     }
