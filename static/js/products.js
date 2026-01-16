@@ -2481,69 +2481,99 @@ function updateOptionGroupSelectionUi() {
       savedTitle: savedTitle,
       savedSku: savedSku,
       onSave: async () => {
-        const form = $("#productEditorForm", body);
-        if (!form) return false;
+        try {
+          // Find form in the wrapper (which is now in DOM) or in document
+          const form = $("#productEditorForm", wrapper) || document.querySelector("#productEditorForm");
+          if (!form) {
+            console.error('Product editor form not found');
+            alert('Ошибка: форма редактирования не найдена');
+            return false;
+          }
 
-        // сначала грузим новые фото (если есть)
-        const newFiles = draft.photos.filter((x) => x.kind === "file").map((x) => x.file);
-        let newUrls = [];
-        if (newFiles.length) {
-          newUrls = await apiUploadImages(newFiles);
-        }
-
-        // финальный список URL (сохраняем порядок)
-        let urlIdx = 0;
-        const finalUrls = draft.photos
-          .map((x) => (x.kind === "url" ? x.url : newUrls[urlIdx++]))
-          .filter(Boolean)
-          .slice(0, 10);
-
-        const payload = {
-          tenant_id: TENANT_ID,
-          name: String(form.name.value || "").trim(),
-          sku: String(form.sku.value || "").trim(),
-          description_short: String(form.description_short.value || "").trim(),
-          description: String(form.description.value || "").trim(),
-          price: form.price.value === "" ? 0 : Number(form.price.value),
-          old_price: form.old_price.value === "" ? null : Number(form.old_price.value),
-          cost_price: form.cost_price.value === "" ? null : Number(form.cost_price.value),
-          unit_id: form.unit_id.value === "" ? null : Number(form.unit_id.value),
-          is_active: form.is_active.checked ? 1 : 0,
-          site_visibility: form.site_visibility.checked ? 1 : 0,
-
-          // ✅ категории из chips
-          category_ids: Array.from(draft.categories).filter((id) => Number.isFinite(id)),
-
-          // ✅ фото JSON
-          photos_json: finalUrls
-        };
-
-        if (!payload.name) {
-          form.name.focus();
-          return false;
-        }
-
-        let productId = product && product.id;
-        if (isEdit && product) {
-          await api(`/api/prod_products/${product.id}`, { method: "PUT", body: JSON.stringify(payload) });
-        } else {
-          const created = await api("/api/prod_products", { method: "POST", body: JSON.stringify(payload) });
-          productId = created && created.id;
-        }
-
-        if (productId) {
-          const selected = new Set(Array.from(draft.optionGroups).filter((x) => Number.isFinite(x)));
-          if (isEdit) {
-            const toAdd = Array.from(selected).filter((id) => !draft.initialOptionGroups.has(id));
-            const toRemove = Array.from(draft.initialOptionGroups).filter((id) => !selected.has(id));
-            if (toAdd.length) {
-              await apiAddProductOptionAssignments(productId, toAdd);
+          // сначала грузим новые фото (если есть)
+          const newFiles = draft.photos.filter((x) => x.kind === "file").map((x) => x.file);
+          let newUrls = [];
+          if (newFiles.length) {
+            try {
+              newUrls = await apiUploadImages(newFiles);
+            } catch (e) {
+              console.error('Failed to upload images', e);
+              alert('Ошибка при загрузке фотографий');
+              return false;
             }
-            for (const gid of toRemove) {
-              await apiDisableProductOptionAssignment(productId, gid);
+          }
+
+          // финальный список URL (сохраняем порядок)
+          let urlIdx = 0;
+          const finalUrls = draft.photos
+            .map((x) => (x.kind === "url" ? x.url : newUrls[urlIdx++]))
+            .filter(Boolean)
+            .slice(0, 10);
+
+          const payload = {
+            tenant_id: TENANT_ID,
+            name: String(form.name.value || "").trim(),
+            sku: String(form.sku.value || "").trim(),
+            description_short: String(form.description_short.value || "").trim(),
+            description: String(form.description.value || "").trim(),
+            price: form.price.value === "" ? 0 : Number(form.price.value),
+            old_price: form.old_price.value === "" ? null : Number(form.old_price.value),
+            cost_price: form.cost_price.value === "" ? null : Number(form.cost_price.value),
+            unit_id: form.unit_id.value === "" ? null : Number(form.unit_id.value),
+            is_active: form.is_active.checked ? 1 : 0,
+            site_visibility: form.site_visibility.checked ? 1 : 0,
+
+            // ✅ категории из chips
+            category_ids: Array.from(draft.categories).filter((id) => Number.isFinite(id)),
+
+            // ✅ фото JSON
+            photos_json: finalUrls
+          };
+
+          if (!payload.name) {
+            form.name.focus();
+            return false;
+          }
+
+          let productId = product && product.id;
+          
+          // Сохранение товара
+          try {
+            if (isEdit && product) {
+              await api(`/api/prod_products/${product.id}`, { method: "PUT", body: JSON.stringify(payload) });
+            } else {
+              const created = await api("/api/prod_products", { method: "POST", body: JSON.stringify(payload) });
+              productId = created && created.id;
             }
-          } else if (selected.size) {
-            await apiAddProductOptionAssignments(productId, Array.from(selected));
+          } catch (e) {
+            console.error('Failed to save product', e);
+            alert('Ошибка при сохранении товара: ' + (e.message || 'Неизвестная ошибка'));
+            return false;
+          }
+
+          if (!productId) {
+            alert('Не удалось получить ID товара после сохранения');
+            return false;
+          }
+
+          // Сохранение опций
+          try {
+            const selected = new Set(Array.from(draft.optionGroups).filter((x) => Number.isFinite(x)));
+            if (isEdit) {
+              const toAdd = Array.from(selected).filter((id) => !draft.initialOptionGroups.has(id));
+              const toRemove = Array.from(draft.initialOptionGroups).filter((id) => !selected.has(id));
+              if (toAdd.length) {
+                await apiAddProductOptionAssignments(productId, toAdd);
+              }
+              for (const gid of toRemove) {
+                await apiDisableProductOptionAssignment(productId, gid);
+              }
+            } else if (selected.size) {
+              await apiAddProductOptionAssignments(productId, Array.from(selected));
+            }
+          } catch (e) {
+            console.error('Failed to save options', e);
+            // Не критично, продолжаем
           }
 
           // Save ingredients from draft (for new products)
@@ -2562,32 +2592,103 @@ function updateOptionGroupSelectionUi() {
                 });
               } catch (e) {
                 console.error('Failed to save ingredient', e);
+                // Не критично для отдельных ингредиентов
               }
             }
           }
-        }
 
-        await refreshAll();
-        // Remove from editing state after successful save
-        if (productId && editingProducts.has(productId)) {
-          editingProducts.delete(productId);
-        }
-        
-        // Return to product details if editing
-        if (isEdit && product) {
-          const updatedProduct = state.products.find(p => p.id === productId);
-          if (updatedProduct) {
-            // Clear navigation and show product details (this will update header buttons)
+          // Обновление данных
+          try {
+            await refreshAll();
+          } catch (e) {
+            console.error('Failed to refresh', e);
+            // Не критично, продолжаем
+          }
+          
+          // Return to product details if editing
+          if (isEdit && product) {
+            // Remove from editing state BEFORE showing details (important!)
+            if (productId && editingProducts.has(productId)) {
+              editingProducts.delete(productId);
+            }
+            
+            // Clear navigation FIRST to ensure clean state
             clearNavigationStack();
-            showProductDetails(updatedProduct);
+            currentNavigationState = null;
+            
+            // Find updated product in state
+            let updatedProduct = state.products.find(p => p.id === productId);
+            
+            // If product not found (e.g., it's in a different category), try to reload it
+            if (!updatedProduct && productId) {
+              try {
+                // First try: reload products from current category
+                await refreshProductsOnly();
+                updatedProduct = state.products.find(p => p.id === productId);
+                
+                // Second try: if still not found, load from "all" category
+                if (!updatedProduct && state.allCategoryId) {
+                  const allRes = await api(`/api/prod_products?tenant_id=${TENANT_ID}&category_id=${state.allCategoryId}`);
+                  const allProducts = Array.isArray(allRes.data) ? allRes.data : [];
+                  updatedProduct = allProducts.find(p => p.id === productId);
+                  // If found in "all", add it to current state
+                  if (updatedProduct) {
+                    state.products.push(updatedProduct);
+                  }
+                }
+              } catch (e) {
+                console.error('Failed to reload product', e);
+              }
+            }
+            
+            if (updatedProduct) {
+              // Show product details (this will update header buttons)
+              // Ensure product is NOT in editingProducts when showing details
+              if (editingProducts.has(productId)) {
+                editingProducts.delete(productId);
+              }
+              // Double check that navigation is cleared
+              if (currentNavigationState) {
+                currentNavigationState = null;
+              }
+              showProductDetails(updatedProduct);
+            } else {
+              // Product not found - show empty state
+              showDetailsEmpty();
+            }
+          } else if (productId) {
+            // New product - remove from editing state if it was there
+            if (editingProducts.has(productId)) {
+              editingProducts.delete(productId);
+            }
+            
+            // Clear navigation
+            clearNavigationStack();
+            currentNavigationState = null;
+            // New product - find it and show details
+            try {
+              await refreshProductsOnly();
+            } catch (e) {
+              console.error('Failed to refresh products', e);
+            }
+            const newProduct = state.products.find(p => p.id === productId);
+            if (newProduct) {
+              clearNavigationStack();
+              showProductDetails(newProduct);
+            } else {
+              clearNavigationStack();
+            }
           } else {
+            // No product ID - clear navigation
             clearNavigationStack();
           }
-        } else {
-          // New product - clear navigation
-          clearNavigationStack();
+          
+          return true;
+        } catch (e) {
+          console.error('Unexpected error in onSave', e);
+          alert('Неожиданная ошибка при сохранении: ' + (e.message || 'Неизвестная ошибка'));
+          return false;
         }
-        return true;
       },
       onClose: () => {
         // Remove from editing state when canceling
@@ -2850,8 +2951,35 @@ function updateOptionGroupSelectionUi() {
         
         if (saveBtn) {
           saveBtn.textContent = `Сохранить (${optionPickerSelection.size})`;
-          saveBtn.onclick = () => {
-            draft.optionGroups = new Set(optionPickerSelection || []);
+          saveBtn.onclick = async () => {
+            const oldSelection = new Set(draft.optionGroups);
+            const newSelection = new Set(optionPickerSelection || []);
+            
+            // Find options to add and remove
+            const toAdd = Array.from(newSelection).filter(id => !oldSelection.has(id));
+            const toRemove = Array.from(oldSelection).filter(id => !newSelection.has(id));
+            
+            if (isEdit && product) {
+              // For existing products: save to database immediately
+              try {
+                // Add new options
+                if (toAdd.length > 0) {
+                  await apiAddProductOptionAssignments(product.id, toAdd);
+                }
+                
+                // Remove options
+                for (const groupId of toRemove) {
+                  await apiDisableProductOptionAssignment(product.id, groupId);
+                }
+              } catch (e) {
+                console.error('Failed to save options', e);
+                alert('Ошибка при сохранении опций');
+                return;
+              }
+            }
+            
+            // Update draft
+            draft.optionGroups = newSelection;
             renderOptionAccordion();
             popNavigationState();
           };
@@ -3505,6 +3633,9 @@ function updateOptionGroupSelectionUi() {
     }
 
     function openIngredientPicker() {
+      // Initialize selection from current ingredients
+      const ingredientPickerSelection = new Set(Array.from(draftIngredients.keys()));
+      
       // Create ingredient picker overlay for right panel
       const pickerOverlay = document.createElement("div");
       pickerOverlay.className = "picker-overlay";
@@ -3528,8 +3659,6 @@ function updateOptionGroupSelectionUi() {
       
       pickerOverlay.appendChild(pickerContent);
       
-      // Footer will be added to productInfoPanel
-
       const searchInput = pickerContent.querySelector("#ingredientPickerSearchInput");
       const listContent = pickerContent.querySelector("#ingredientPickerListContent");
 
@@ -3540,92 +3669,37 @@ function updateOptionGroupSelectionUi() {
         try {
           const res = await apiGetCatalogProducts({ query });
           const products = Array.isArray(res.data) ? res.data : [];
-          const existingIds = new Set(Array.from(draftIngredients.keys()));
 
           listContent.innerHTML = products
-            .filter(p => !existingIds.has(Number(p.id)))
             .filter(p => !query || String(p.name || "").toLowerCase().includes(query))
             .map(p => {
               const id = Number(p.id);
+              const checked = ingredientPickerSelection.has(id);
               return `
-                <div class="option-picker-row" data-product-id="${id}">
+                <div class="option-picker-row ${checked ? "is-selected" : ""}" data-product-id="${id}">
                   <div class="option-picker-meta">
                     <div class="options-row-title">${escapeHtml(p.name || "")}</div>
                     <div class="options-row-meta">${formatMoney(p.price || 0)}</div>
                   </div>
-                  <button class="btn btn-sm" type="button" data-add-ingredient="${id}">Добавить</button>
+                  <input class="option-picker-checkbox" type="checkbox" data-product-id="${id}" ${checked ? "checked" : ""} />
                 </div>
               `;
             }).join('');
 
-          listContent.querySelectorAll("[data-add-ingredient]").forEach(btn => {
-            btn.addEventListener("click", async () => {
-              const productId = Number(btn.dataset.addIngredient);
-              if (!Number.isFinite(productId)) return;
-              
-              // Find the product to get its unit_id
-              const res = await apiGetCatalogProducts({});
-              const catalogProducts = Array.isArray(res.data) ? res.data : [];
-              const selectedProduct = catalogProducts.find(p => Number(p.id) === productId);
-              let unitId = null;
-              
-              if (selectedProduct && selectedProduct.unit_id) {
-                unitId = Number(selectedProduct.unit_id);
-              } else if (unitsList.length > 0) {
-                unitId = unitsList[0].id;
-              }
-              
-              if (!unitId) {
-                alert('Нет доступных единиц измерения');
-                return;
-              }
-
-              const productName = selectedProduct?.name || '';
-              const productPrice = Number(selectedProduct?.price || 0);
-              const productPhotos = Array.isArray(selectedProduct?.photos_json) ? selectedProduct.photos_json : [];
-
-              // Add to draft (works for both new and existing products)
-              if (isEdit && product) {
-                try {
-                  await apiAddProductIngredient(product.id, {
-                    ingredient_id: productId,
-                    quantity: 1,
-                    unit_id: unitId,
-                    quantity_min: null,
-                    quantity_max: null,
-                    quantity_step: null,
-                    price_override: null,
-                    is_variable: 1,
-                  });
-                  await loadIngredients();
-                } catch (e) {
-                  console.error('Failed to add ingredient', e);
-                  alert('Ошибка при добавлении ингредиента');
-                }
+          listContent.querySelectorAll(".option-picker-row[data-product-id]").forEach((row) => {
+            row.addEventListener("click", () => {
+              const id = Number(row.dataset.productId);
+              if (!Number.isFinite(id)) return;
+              if (ingredientPickerSelection.has(id)) {
+                ingredientPickerSelection.delete(id);
               } else {
-                draftIngredients.set(productId, {
-                  id: 0,
-                  ingredient_id: productId,
-                  ingredient_name: productName,
-                  ingredient_price: productPrice,
-                  ingredient_photos: productPhotos,
-                  ingredient_unit_id: unitId,
-                  quantity: 1,
-                  unit_id: unitId,
-                  unit_code: unitsList.find(u => u.id === unitId)?.code || '',
-                  unit_title: unitsList.find(u => u.id === unitId)?.title || '',
-                  unit_short_title: unitsList.find(u => u.id === unitId)?.short_title || '',
-                  quantity_min: null,
-                  quantity_max: null,
-                  quantity_step: null,
-                  price_override: null,
-                  is_variable: true,
-                  sort_order: draftIngredients.size * 10,
-                });
-                renderIngredientAccordion();
+                ingredientPickerSelection.add(id);
               }
-              
-              popNavigationState();
+              renderList();
+              const saveBtn = $("#productEditorSaveBtn");
+              if (saveBtn) {
+                saveBtn.textContent = `Сохранить (${ingredientPickerSelection.size})`;
+              }
             });
           });
         } catch (e) {
@@ -3655,10 +3729,113 @@ function updateOptionGroupSelectionUi() {
         }
         
         if (saveBtn) {
-          saveBtn.textContent = "Сохранить";
-          saveBtn.onclick = () => {
-            // Ingredients are added immediately when clicking "Добавить" button
-            // So we just close the picker
+          saveBtn.textContent = `Сохранить (${ingredientPickerSelection.size})`;
+          saveBtn.onclick = async () => {
+            const oldSelection = new Set(Array.from(draftIngredients.keys()));
+            const newSelection = ingredientPickerSelection;
+            
+            // Find items to add and remove
+            const toAdd = Array.from(newSelection).filter(id => !oldSelection.has(id));
+            const toRemove = Array.from(oldSelection).filter(id => !newSelection.has(id));
+            
+            if (isEdit && product) {
+              // For existing products: save to database
+              try {
+                // Add new ingredients
+                for (const productId of toAdd) {
+                  const res = await apiGetCatalogProducts({});
+                  const catalogProducts = Array.isArray(res.data) ? res.data : [];
+                  const selectedProduct = catalogProducts.find(p => Number(p.id) === productId);
+                  let unitId = null;
+                  
+                  if (selectedProduct && selectedProduct.unit_id) {
+                    unitId = Number(selectedProduct.unit_id);
+                  } else if (unitsList.length > 0) {
+                    unitId = unitsList[0].id;
+                  }
+                  
+                  if (!unitId) {
+                    console.warn('No unit_id for product', productId);
+                    continue;
+                  }
+                  
+                  await apiAddProductIngredient(product.id, {
+                    ingredient_id: productId,
+                    quantity: 1,
+                    unit_id: unitId,
+                    quantity_min: null,
+                    quantity_max: null,
+                    quantity_step: null,
+                    price_override: null,
+                    is_variable: 1,
+                  });
+                }
+                
+                // Remove ingredients
+                for (const productId of toRemove) {
+                  await apiDeleteProductIngredient(product.id, productId);
+                }
+                
+                // Reload ingredients to update draftIngredients
+                await loadIngredients();
+              } catch (e) {
+                console.error('Failed to save ingredients', e);
+                alert('Ошибка при сохранении состава');
+                return;
+              }
+            } else {
+              // For new products: update draft only
+              // Remove from draft
+              for (const productId of toRemove) {
+                draftIngredients.delete(productId);
+              }
+              
+              // Add to draft
+              for (const productId of toAdd) {
+                const res = await apiGetCatalogProducts({});
+                const catalogProducts = Array.isArray(res.data) ? res.data : [];
+                const selectedProduct = catalogProducts.find(p => Number(p.id) === productId);
+                let unitId = null;
+                
+                if (selectedProduct && selectedProduct.unit_id) {
+                  unitId = Number(selectedProduct.unit_id);
+                } else if (unitsList.length > 0) {
+                  unitId = unitsList[0].id;
+                }
+                
+                if (!unitId) {
+                  console.warn('No unit_id for product', productId);
+                  continue;
+                }
+                
+                const productName = selectedProduct?.name || '';
+                const productPrice = Number(selectedProduct?.price || 0);
+                const productPhotos = Array.isArray(selectedProduct?.photos_json) ? selectedProduct.photos_json : [];
+                
+                draftIngredients.set(productId, {
+                  id: 0,
+                  ingredient_id: productId,
+                  ingredient_name: productName,
+                  ingredient_price: productPrice,
+                  ingredient_photos: productPhotos,
+                  ingredient_unit_id: unitId,
+                  quantity: 1,
+                  unit_id: unitId,
+                  unit_code: unitsList.find(u => u.id === unitId)?.code || '',
+                  unit_title: unitsList.find(u => u.id === unitId)?.title || '',
+                  unit_short_title: unitsList.find(u => u.id === unitId)?.short_title || '',
+                  quantity_min: null,
+                  quantity_max: null,
+                  quantity_step: null,
+                  price_override: null,
+                  is_variable: true,
+                  sort_order: draftIngredients.size * 10,
+                });
+              }
+              
+              renderIngredientAccordion();
+            }
+            
             popNavigationState();
           };
         }
@@ -4171,15 +4348,38 @@ function updateOptionGroupSelectionUi() {
         if (currentNavigationState?.type === "product-edit") {
           // Save changes
           if (currentNavigationState?.onSave) {
-            const result = await currentNavigationState.onSave();
-            if (result) {
-              // Save successful - onSave handles navigation
-              // Remove from editing state if it was stored
-              const productId = currentNavigationState?.product?.id;
-              if (productId && editingProducts.has(productId)) {
-                editingProducts.delete(productId);
+            // Get productId before clearing state
+            const productId = currentNavigationState?.product?.id;
+            
+            try {
+              const result = await currentNavigationState.onSave();
+              if (result === true) {
+                // Save successful - onSave handles navigation and clears navigation stack
+                // Clear currentNavigationState since onSave calls clearNavigationStack()
+                currentNavigationState = null;
+                
+                // Remove from editing state if it was stored
+                if (productId && editingProducts.has(productId)) {
+                  editingProducts.delete(productId);
+                }
+                
+                // Ensure button icon is updated to edit mode (pencil)
+                if (editProductBtn) {
+                  editProductBtn.innerHTML = '<i class="fas fa-pen"></i>';
+                  editProductBtn.title = "Редактировать";
+                  editProductBtn.setAttribute("aria-label", "Редактировать");
+                }
+              } else {
+                // Save failed - result is false
+                console.warn('Save returned false, check form validation or errors');
               }
+            } catch (e) {
+              console.error('Error saving product', e);
+              alert('Ошибка при сохранении товара: ' + (e.message || 'Неизвестная ошибка'));
             }
+          } else {
+            console.error('onSave function not found in navigationState');
+            alert('Ошибка: функция сохранения не найдена');
           }
         } else {
           // Open editor

@@ -2496,20 +2496,21 @@ body.page-shop #sidebar-toggle{display:none}
 
 #productInfoFooter {
   position: absolute;
-  bottom: 0;
+  bottom: 70px;
   left: 0;
   right: 0;
   background: var(--color-surface);
   border-top: 1px solid var(--color-border);
   padding: 16px;
-  z-index: 25;
+  z-index: 35;
   box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
 }
 
 /* Adjust footer position when in picker mode */
 #productInfoPanel:has(.picker-overlay) #productInfoFooter {
   position: absolute;
-  bottom: 0;
+  bottom: 70px;
   left: 0;
   right: 0;
+  z-index: 35;
 }
