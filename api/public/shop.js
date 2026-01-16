@@ -920,6 +920,52 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  router.get('/products/:id/ingredients', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const productId = Number(req.params.id);
+      if (!Number.isFinite(productId) || productId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      const [rows] = await db.query(
+        `SELECT 
+           i.id,
+           i.ingredient_id,
+           i.quantity,
+           i.unit_id,
+           i.quantity_min,
+           i.quantity_max,
+           i.quantity_step,
+           i.price_override,
+           i.is_variable,
+           i.sort_order,
+           p.name AS ingredient_name,
+           p.price AS ingredient_price,
+           p.photos_json AS ingredient_photos,
+           u.code AS unit_code,
+           u.title AS unit_title,
+           u.short_title AS unit_short_title
+         FROM prod_product_ingredients i
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+         JOIN prod_units u ON u.id=i.unit_id
+         WHERE i.tenant_id=? AND i.store_id=? AND i.product_id=?
+         ORDER BY i.sort_order ASC, i.id ASC`,
+        [tenantId, storeId, productId]
+      );
+
+      for (const r of rows) {
+        r.ingredient_photos = safeJsonArray(r.ingredient_photos);
+      }
+
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   // ------------------------------
   // order-config (для оформления)
   // ВАЖНО: твой фронт ждёт methods / payments / timeOptions
@@ -1069,15 +1115,160 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const normItems = [];
       let total = 0;
 
+      // Собираем все option_item_ids для получения информации из БД
+      const allOptionItemIds = [];
+      for (const it of items) {
+        const optionIds = Array.isArray(it.option_item_ids) ? it.option_item_ids : [];
+        optionIds.forEach(id => {
+          const numId = Number(id);
+          if (Number.isFinite(numId) && numId > 0 && !allOptionItemIds.includes(numId)) {
+            allOptionItemIds.push(numId);
+          }
+        });
+      }
+
+      // Получаем информацию об опциях из БД
+      const optionItemsMap = new Map();
+      if (allOptionItemIds.length) {
+        const placeholders = allOptionItemIds.map(() => '?').join(',');
+        const [optionRows] = await db.query(
+          `SELECT 
+            i.id,
+            i.price_mode,
+            i.price_value,
+            p.id AS product_id,
+            p.name AS product_name,
+            p.price AS product_price
+          FROM prod_option_items i
+          LEFT JOIN prod_products p 
+            ON p.tenant_id=i.tenant_id AND p.store_id=i.store_id AND p.id=i.target_product_id
+          WHERE i.tenant_id=? AND i.store_id=? AND i.id IN (${placeholders}) AND i.is_active=1`,
+          [tenantId, storeId, ...allOptionItemIds]
+        );
+
+        optionRows.forEach(row => {
+          let optionPrice = 0;
+          if (row.price_mode === 'fixed') {
+            optionPrice = Number(row.price_value || 0);
+          } else if (row.price_mode === 'from_target' || row.price_mode === 'delta') {
+            optionPrice = Number(row.product_price || 0);
+            if (row.price_mode === 'delta') {
+              optionPrice += Number(row.price_value || 0);
+            }
+          }
+
+          optionItemsMap.set(Number(row.id), {
+            id: Number(row.id),
+            title: row.product_name || '',
+            price: optionPrice,
+          });
+        });
+      }
+
       for (const it of items) {
         const pid = Number(it.product_id);
         const qty = Math.max(1, Number(it.qty || it.quantity || 1));
         const p = byId.get(pid);
         if (!p) continue;
 
-        const price = Number(p.price || 0);
+        const basePrice = Number(p.price || 0);
         const oldPrice = Number(p.old_price || 0);
-        const lineTotal = price * qty;
+
+        // Обрабатываем опции
+        const options = [];
+        let optionsTotal = 0;
+        
+        // Собираем опции: используем option_items из запроса (с qty), если есть, иначе option_item_ids
+        const optionItemsFromRequest = Array.isArray(it.option_items) && it.option_items.length > 0
+          ? it.option_items
+          : [];
+        const optionIdsFromRequest = Array.isArray(it.option_item_ids) ? it.option_item_ids : [];
+        
+        // Создаем map для быстрого поиска qty из запроса
+        const qtyMap = new Map();
+        optionItemsFromRequest.forEach(opt => {
+          const id = Number(opt.id);
+          if (Number.isFinite(id) && id > 0) {
+            qtyMap.set(id, Math.max(1, Number(opt.qty || opt.quantity || 1)));
+          }
+        });
+
+        // Обрабатываем опции: используем option_item_ids как основной список
+        const allOptionIds = new Set();
+        optionItemsFromRequest.forEach(opt => {
+          const id = Number(opt.id);
+          if (Number.isFinite(id) && id > 0) allOptionIds.add(id);
+        });
+        optionIdsFromRequest.forEach(id => {
+          const numId = Number(id);
+          if (Number.isFinite(numId) && numId > 0) allOptionIds.add(numId);
+        });
+
+        for (const optId of allOptionIds) {
+          const optInfo = optionItemsMap.get(optId);
+          if (!optInfo) continue; // Пропускаем опции, которых нет в БД
+
+          const optQty = qtyMap.get(optId) || 1; // Количество из запроса или 1 по умолчанию
+          const optPrice = optInfo.price; // Цена всегда из БД
+          optionsTotal += optPrice * optQty;
+
+          options.push({
+            id: optId,
+            title: optInfo.title,
+            price: optPrice,
+            qty: optQty,
+          });
+        }
+
+        // Обрабатываем ингредиенты
+        const ingredients = [];
+        let ingredientsTotal = 0;
+        
+        const cartIngredients = Array.isArray(it.ingredients) ? it.ingredients : [];
+        if (cartIngredients.length) {
+          // Получаем информацию об ингредиентах из БД
+          const ingIds = cartIngredients.map(ci => Number(ci.ingredient_id)).filter(n => Number.isFinite(n) && n > 0);
+          if (ingIds.length) {
+            const [ingRows] = await db.query(
+              `SELECT 
+                i.id,
+                i.ingredient_id,
+                i.price_override,
+                p.price AS ingredient_price,
+                p.name AS ingredient_name
+              FROM prod_product_ingredients i
+              JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+              WHERE i.tenant_id=? AND i.product_id=? AND i.ingredient_id IN (${ingIds.map(() => '?').join(',')})`,
+              [tenantId, pid, ...ingIds]
+            );
+
+            const ingMap = new Map(ingRows.map(r => [Number(r.ingredient_id), r]));
+            
+            cartIngredients.forEach(cartIng => {
+              const ingId = Number(cartIng.ingredient_id);
+              const ingQty = Number(cartIng.quantity || 1);
+              const ingInfo = ingMap.get(ingId);
+              if (!ingInfo) return;
+
+              const ingPricePerUnit = ingInfo.price_override != null 
+                ? Number(ingInfo.price_override) 
+                : Number(ingInfo.ingredient_price || 0);
+              const ingTotal = ingPricePerUnit * ingQty;
+              ingredientsTotal += ingTotal;
+
+              ingredients.push({
+                ingredient_id: ingId,
+                name: ingInfo.ingredient_name || '',
+                quantity: ingQty,
+                price: ingPricePerUnit,
+                total: ingTotal,
+              });
+            });
+          }
+        }
+
+        // Итоговая цена строки: (цена товара + сумма опций + сумма ингредиентов) * количество товара
+        const lineTotal = (basePrice + optionsTotal + ingredientsTotal) * qty;
 
         total += lineTotal;
 
@@ -1094,10 +1285,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           product_id: pid,
           name: p.name,
           qty,
-          price,
+          price: basePrice,
           old_price: oldPrice,
           line_total: lineTotal,
           photos, // Сохраняем фото для отчетов
+          options: options.length > 0 ? options : undefined, // Сохраняем опции только если они есть
+          ingredients: ingredients.length > 0 ? ingredients : undefined, // Сохраняем ингредиенты только если они есть
         });
       }
 

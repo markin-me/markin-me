@@ -133,7 +133,12 @@
         <label class="field-label" for="pe_cost_price">Себестоимость</label>
         <input class="control" id="pe_cost_price" name="cost_price" type="number" step="0.01" min="0" placeholder="0" />
       </div>
-      <div></div>
+      <div>
+        <label class="field-label" for="pe_unit_id">Единица измерения</label>
+        <select class="control" id="pe_unit_id" name="unit_id">
+          <option value="">—</option>
+        </select>
+      </div>
     </div>
 
     <div>
@@ -187,6 +192,37 @@
       <div class="inline-modal-footer">
         <button class="btn" type="button" id="peOptionCancel">Отмена</button>
         <button class="btn btn-primary" type="button" id="peOptionApply">Добавить (0)</button>
+      </div>
+    </div>
+
+    <div class="info-card product-ingredients-card">
+      <div class="option-section-header">
+        <div class="kv-label">Состав</div>
+        <div class="option-actions">
+          <input class="control control-sm" id="peIngredientSearch" type="search" placeholder="🔍 Поиск товара..." style="width: 200px; margin-right: 8px;" />
+          <button class="btn btn-sm" type="button" id="peIngredientAddBtn">
+            <i class="fas fa-plus"></i> Добавить
+          </button>
+        </div>
+      </div>
+      <div class="info-accordion" id="peIngredientAccordion"></div>
+    </div>
+
+    <div class="inline-backdrop hidden" id="peIngredientBackdrop"></div>
+    <div class="inline-modal hidden" id="peIngredientModal" role="dialog" aria-modal="true">
+      <div class="inline-modal-header">
+        <div class="inline-modal-title">Добавить ингредиент</div>
+        <button class="btn btn-icon" type="button" id="peIngredientModalClose"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="inline-modal-body no-scrollbar">
+        <div class="option-picker-search">
+          <input class="control" id="peIngredientModalSearch" type="search" placeholder="Поиск товара..." />
+        </div>
+        <div class="option-picker-list" id="peIngredientModalList"></div>
+      </div>
+      <div class="inline-modal-footer">
+        <button class="btn" type="button" id="peIngredientModalCancel">Отмена</button>
+        <button class="btn btn-primary" type="button" id="peIngredientModalCreate">Создать новый товар</button>
       </div>
     </div>
   </form>

@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Хост: 127.0.0.1
--- Время создания: Янв 16 2026 г., 09:05
+-- Время создания: Янв 16 2026 г., 12:29
 -- Версия сервера: 10.4.32-MariaDB
 -- Версия PHP: 8.2.12
 
@@ -350,7 +350,8 @@ INSERT INTO `order_orders` (`id`, `public_id`, `tenant_id`, `store_id`, `custome
 (9, '55405ff0-fdce-47c2-977c-ee83ffb5accc', 1, 1, 1, 'Максим', '79021461966', NULL, NULL, NULL, NULL, 0, 0.00, '[{\"product_id\":5,\"name\":\"Кола\",\"qty\":1,\"price\":120,\"old_price\":0,\"line_total\":120},{\"product_id\":5,\"name\":\"Кола\",\"qty\":1,\"price\":120,\"old_price\":0,\"line_total\":120}]', 240.00, '2026-01-15 15:36:25', 1, 1, 1, 1, 30, NULL, 'web', 1),
 (10, 'e599d3f7-8211-43c3-af6b-8e11602ed99c', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, 'Комментарий проверка', 0, 0.00, '[{\"product_id\":5,\"name\":\"Кола\",\"qty\":1,\"price\":120,\"old_price\":0,\"line_total\":120},{\"product_id\":3,\"name\":\"Пюре с сосисками\",\"qty\":1,\"price\":678,\"old_price\":999,\"line_total\":678}]', 798.00, '2026-01-15 15:40:43', 4, 1, 1, 1, 10, NULL, 'web', 1),
 (11, '0837d4d3-64b3-4df6-996f-c67deb9ee358', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, NULL, 0, 0.00, '[{\"product_id\":1,\"name\":\"Картошка фриКартошка фриКартошка фри\",\"qty\":1,\"price\":0,\"old_price\":0,\"line_total\":0}]', 0.00, '2026-01-15 15:47:27', 4, 1, 1, 1, 20, NULL, 'web', 1),
-(12, 'b9311ecc-6e27-444a-9511-be4b38a1f44e', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, NULL, 0, 0.00, '[{\"product_id\":1,\"name\":\"Картошка фриКартошка фриКартошка фри\",\"qty\":1,\"price\":1,\"old_price\":0,\"line_total\":1}]', 1.00, '2026-01-15 15:48:58', 4, 1, 1, 2, 0, NULL, 'web', 1);
+(12, 'b9311ecc-6e27-444a-9511-be4b38a1f44e', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, NULL, 0, 0.00, '[{\"product_id\":1,\"name\":\"Картошка фриКартошка фриКартошка фри\",\"qty\":1,\"price\":1,\"old_price\":0,\"line_total\":1}]', 1.00, '2026-01-15 15:48:58', 4, 1, 1, 2, 0, NULL, 'web', 1),
+(13, '5d7c1f77-e370-4beb-885e-c8351929b1c0', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, NULL, 0, 0.00, '[{\"product_id\":5,\"name\":\"Кола\",\"qty\":1,\"price\":120,\"old_price\":0,\"line_total\":120,\"photos\":[\"/static/uploads/products/1/854b87feeafab3c82453dcaa5ff8c9e0.jpg\"]},{\"product_id\":2,\"name\":\"Запеканка\",\"qty\":1,\"price\":299,\"old_price\":0,\"line_total\":599,\"photos\":[\"/static/uploads/products/1/cfd04eb2551edc8c4bf4b26f587171bd.jpg\"],\"options\":[{\"id\":28,\"title\":\"Картошка фриКартошка фриКартошка фри\",\"price\":1,\"qty\":1},{\"id\":19,\"title\":\"Запеканка\",\"price\":299,\"qty\":1}]},{\"product_id\":2,\"name\":\"Запеканка\",\"qty\":1,\"price\":299,\"old_price\":0,\"line_total\":898,\"photos\":[\"/static/uploads/products/1/cfd04eb2551edc8c4bf4b26f587171bd.jpg\"],\"options\":[{\"id\":28,\"title\":\"Картошка фриКартошка фриКартошка фри\",\"price\":1,\"qty\":1},{\"id\":19,\"title\":\"Запеканка\",\"price\":299,\"qty\":1},{\"id\":51,\"title\":\"Котлета с пюрешкой\",\"price\":299,\"qty\":1}]}]', 1617.00, '2026-01-16 10:25:04', 4, 1, 3, 1, 0, '2026-01-16 13:00:00', 'web', 1);
 
 -- --------------------------------------------------------
 
@@ -692,6 +693,7 @@ CREATE TABLE `prod_products` (
   `price` decimal(12,2) NOT NULL DEFAULT 0.00,
   `old_price` decimal(12,2) DEFAULT NULL,
   `cost_price` decimal(12,2) DEFAULT NULL,
+  `unit_id` bigint(20) UNSIGNED DEFAULT NULL COMMENT 'Единица измерения товара',
   `photos_json` text DEFAULT NULL,
   `is_active` tinyint(1) NOT NULL DEFAULT 1,
   `site_visibility` tinyint(1) NOT NULL DEFAULT 1,
@@ -703,18 +705,21 @@ CREATE TABLE `prod_products` (
 -- Дамп данных таблицы `prod_products`
 --
 
-INSERT INTO `prod_products` (`id`, `tenant_id`, `store_id`, `name`, `sku`, `description_short`, `description`, `price`, `old_price`, `cost_price`, `photos_json`, `is_active`, `site_visibility`, `created_at`, `updated_at`) VALUES
-(1, 1, 1, 'Картошка фриКартошка фриКартошка фри', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 1.00, NULL, NULL, '[\"/static/uploads/products/1/a98c7ce5d7b10ac0735a059730a0d3d7.png\",\"/static/uploads/products/1/7498e3f335146d848fb50b125417f8c3.jpg\",\"/static/uploads/products/1/2cb5dcd586e080ffc086f42d357c5229.jpg\",\"/static/uploads/products/1/21ff17c8ce65941320569cdca418189d.jpg\"]', 1, 1, '2026-01-03 10:03:50', '2026-01-15 15:48:41'),
-(2, 1, 1, 'Запеканка', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 299.00, NULL, NULL, '[\"/static/uploads/products/1/cfd04eb2551edc8c4bf4b26f587171bd.jpg\"]', 1, 1, '2026-01-03 12:54:21', '2026-01-11 08:14:45'),
-(3, 1, 1, 'Пюре с сосисками', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 678.00, 999.00, NULL, '[\"/static/uploads/products/1/cbffc8a00b3f750e1cef0127ddda7aff.png\"]', 1, 1, '2026-01-05 15:54:34', '2026-01-11 08:15:12'),
-(4, 1, 1, 'Рыбная котлета', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 149.00, 179.00, NULL, '[\"/static/uploads/products/1/446502b1bce3809a4303e8c7f4345d51.jpg\"]', 1, 1, '2026-01-06 04:28:49', '2026-01-11 08:15:21'),
-(5, 1, 1, 'Кола', NULL, '. «Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 120.00, NULL, NULL, '[\"/static/uploads/products/1/854b87feeafab3c82453dcaa5ff8c9e0.jpg\"]', 1, 1, '2026-01-06 04:35:32', '2026-01-11 08:15:31'),
-(6, 1, 1, 'Рис с овощами', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 149.00, 179.00, NULL, '[\"/static/uploads/products/1/b7d5215763b1e8b3a3a05564c83352f0.jpg\"]', 1, 1, '2026-01-06 07:37:17', '2026-01-11 08:15:38'),
-(7, 1, 1, 'Тефтели', NULL, '. «Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 149.00, 999.00, NULL, '[\"/static/uploads/products/1/09c238e8cea082a8ce2a57359b649b7d.jpg\"]', 1, 1, '2026-01-06 13:56:46', '2026-01-11 08:15:51'),
-(8, 1, 1, 'Мкароны с тефтелями', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 299.00, 347.00, NULL, '[\"/static/uploads/products/1/d47962e1e258c2369161a1c86ccf0e3b.jpg\"]', 1, 1, '2026-01-08 03:44:37', '2026-01-11 08:15:58'),
-(9, 1, 1, 'Макароны с печенью', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 456.00, 678.00, NULL, '[\"/static/uploads/products/1/59e45a1798151b95d447fad186c77ff0.jpg\"]', 1, 1, '2026-01-08 03:45:00', '2026-01-11 08:16:07'),
-(10, 1, 1, 'Котлета с пюрешкой', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 299.00, 319.00, NULL, '[\"/static/uploads/products/1/48df187f637a1df0f3e763d1191989d8.jpg\"]', 1, 1, '2026-01-08 08:58:27', '2026-01-11 08:16:15'),
-(11, 1, 1, 'Фрикадельки с пюрешкой', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 599.00, 768.00, NULL, '[\"/static/uploads/products/1/c7ee582d4fddf82778bdf23b8ab25754.jpg\"]', 1, 1, '2026-01-08 08:58:54', '2026-01-11 08:16:22');
+INSERT INTO `prod_products` (`id`, `tenant_id`, `store_id`, `name`, `sku`, `description_short`, `description`, `price`, `old_price`, `cost_price`, `unit_id`, `photos_json`, `is_active`, `site_visibility`, `created_at`, `updated_at`) VALUES
+(1, 1, 1, 'Картошка фриКартошка фриКартошка фри', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 1.00, NULL, NULL, NULL, '[\"/static/uploads/products/1/a98c7ce5d7b10ac0735a059730a0d3d7.png\",\"/static/uploads/products/1/7498e3f335146d848fb50b125417f8c3.jpg\",\"/static/uploads/products/1/2cb5dcd586e080ffc086f42d357c5229.jpg\",\"/static/uploads/products/1/21ff17c8ce65941320569cdca418189d.jpg\"]', 1, 1, '2026-01-03 10:03:50', '2026-01-15 15:48:41'),
+(2, 1, 1, 'Запеканка', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 299.00, NULL, NULL, NULL, '[\"/static/uploads/products/1/cfd04eb2551edc8c4bf4b26f587171bd.jpg\"]', 1, 1, '2026-01-03 12:54:21', '2026-01-11 08:14:45'),
+(3, 1, 1, 'Пюре с сосисками', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 678.00, 999.00, NULL, NULL, '[\"/static/uploads/products/1/cbffc8a00b3f750e1cef0127ddda7aff.png\"]', 1, 1, '2026-01-05 15:54:34', '2026-01-11 08:15:12'),
+(4, 1, 1, 'Рыбная котлета', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 149.00, 179.00, NULL, NULL, '[\"/static/uploads/products/1/446502b1bce3809a4303e8c7f4345d51.jpg\"]', 1, 1, '2026-01-06 04:28:49', '2026-01-11 08:15:21'),
+(5, 1, 1, 'Кола', NULL, '. «Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 120.00, NULL, NULL, NULL, '[\"/static/uploads/products/1/854b87feeafab3c82453dcaa5ff8c9e0.jpg\"]', 1, 1, '2026-01-06 04:35:32', '2026-01-11 08:15:31'),
+(6, 1, 1, 'Рис с овощами', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 149.00, 179.00, NULL, NULL, '[\"/static/uploads/products/1/b7d5215763b1e8b3a3a05564c83352f0.jpg\"]', 1, 1, '2026-01-06 07:37:17', '2026-01-11 08:15:38'),
+(7, 1, 1, 'Тефтели', NULL, '. «Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 149.00, 999.00, NULL, NULL, '[\"/static/uploads/products/1/09c238e8cea082a8ce2a57359b649b7d.jpg\"]', 1, 1, '2026-01-06 13:56:46', '2026-01-11 08:15:51'),
+(8, 1, 1, 'Мкароны с тефтелями', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 299.00, 347.00, NULL, NULL, '[\"/static/uploads/products/1/d47962e1e258c2369161a1c86ccf0e3b.jpg\"]', 1, 1, '2026-01-08 03:44:37', '2026-01-11 08:15:58'),
+(9, 1, 1, 'Макароны с печенью', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 456.00, 678.00, NULL, NULL, '[\"/static/uploads/products/1/59e45a1798151b95d447fad186c77ff0.jpg\"]', 1, 1, '2026-01-08 03:45:00', '2026-01-11 08:16:07'),
+(10, 1, 1, 'Котлета с пюрешкой', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 299.00, 319.00, NULL, NULL, '[\"/static/uploads/products/1/48df187f637a1df0f3e763d1191989d8.jpg\"]', 1, 1, '2026-01-08 08:58:27', '2026-01-11 08:16:15'),
+(11, 1, 1, 'Фрикадельки с пюрешкой', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 599.00, 768.00, NULL, NULL, '[\"/static/uploads/products/1/c7ee582d4fddf82778bdf23b8ab25754.jpg\"]', 1, 1, '2026-01-08 08:58:54', '2026-01-11 08:16:22'),
+(12, 1, 1, 'Картофельное пюре 250г', NULL, NULL, NULL, 199.00, NULL, NULL, NULL, '[\"/static/uploads/products/1/9fdc3cffd1457f84af2705bfc55c33a2.webp\"]', 1, 1, '2026-01-16 10:32:24', '2026-01-16 10:33:41'),
+(13, 1, 1, 'Куринная котлета 1 шт', NULL, NULL, NULL, 149.00, NULL, NULL, NULL, '[\"/static/uploads/products/1/fe6e72ac1ce743c145b235225287a820.webp\"]', 1, 1, '2026-01-16 10:33:13', '2026-01-16 10:33:13'),
+(14, 1, 1, 'Пюре с куриной котлетой', NULL, NULL, NULL, 0.00, NULL, NULL, NULL, '[\"/static/uploads/products/1/8d7527fdbc8e7476d39e29192a4d70d0.webp\"]', 1, 1, '2026-01-16 10:34:30', '2026-01-16 10:34:30');
 
 -- --------------------------------------------------------
 
@@ -760,7 +765,65 @@ INSERT INTO `prod_product_categories` (`id`, `tenant_id`, `store_id`, `product_i
 (44, 1, 1, 3, 7, 20, '2026-01-08 08:59:50', '2026-01-10 06:49:08'),
 (48, 1, 1, 1, 7, 30, '2026-01-10 06:59:14', '2026-01-10 06:59:14'),
 (51, 1, 1, 9, 7, 40, '2026-01-11 05:12:04', '2026-01-11 05:12:04'),
-(53, 1, 1, 6, 5, 10, '2026-01-11 05:16:44', '2026-01-11 05:16:44');
+(53, 1, 1, 6, 5, 10, '2026-01-11 05:16:44', '2026-01-11 05:16:44'),
+(54, 1, 1, 12, 1, 110, '2026-01-16 10:32:24', '2026-01-16 10:32:24'),
+(55, 1, 1, 13, 1, 120, '2026-01-16 10:33:13', '2026-01-16 10:33:13'),
+(56, 1, 1, 14, 1, 130, '2026-01-16 10:34:30', '2026-01-16 10:34:30');
+
+-- --------------------------------------------------------
+
+--
+-- Структура таблицы `prod_product_ingredients`
+--
+
+CREATE TABLE `prod_product_ingredients` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
+  `store_id` int(11) NOT NULL DEFAULT 1,
+  `product_id` bigint(20) UNSIGNED NOT NULL COMMENT 'Товар, который состоит из ингредиентов',
+  `ingredient_id` bigint(20) UNSIGNED NOT NULL COMMENT 'Товар-ингредиент',
+  `quantity` decimal(10,3) NOT NULL DEFAULT 1.000 COMMENT 'Базовое/начальное количество',
+  `unit_id` bigint(20) UNSIGNED NOT NULL COMMENT 'Единица измерения',
+  `quantity_min` decimal(10,3) DEFAULT NULL COMMENT 'Минимальное количество (NULL = фиксированное)',
+  `quantity_max` decimal(10,3) DEFAULT NULL COMMENT 'Максимальное количество',
+  `quantity_step` decimal(10,3) DEFAULT NULL COMMENT 'Шаг изменения количества',
+  `price_override` decimal(12,2) DEFAULT NULL COMMENT 'Переопределение цены (NULL = из каталога)',
+  `is_variable` tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Изменяемый состав для клиента (1=да, 0=нет)',
+  `sort_order` int(11) NOT NULL DEFAULT 0,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Структура таблицы `prod_units`
+--
+
+CREATE TABLE `prod_units` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
+  `store_id` int(11) NOT NULL DEFAULT 1,
+  `code` varchar(50) NOT NULL COMMENT 'Системный код единицы (шт, кг, г, л, мл, порц)',
+  `title` varchar(100) NOT NULL COMMENT 'Название единицы (Штука, Килограмм, Грамм)',
+  `short_title` varchar(20) DEFAULT NULL COMMENT 'Краткое название (шт, кг, г)',
+  `sort_order` int(11) NOT NULL DEFAULT 0,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Дамп данных таблицы `prod_units`
+--
+
+INSERT INTO `prod_units` (`id`, `tenant_id`, `store_id`, `code`, `title`, `short_title`, `sort_order`, `is_active`, `created_at`, `updated_at`) VALUES
+(1, 1, 1, 'pcs', 'Штука', 'шт', 1, 1, '2026-01-16 11:23:09', '2026-01-16 11:23:09'),
+(2, 1, 1, 'kg', 'Килограмм', 'кг', 2, 1, '2026-01-16 11:23:09', '2026-01-16 11:23:09'),
+(3, 1, 1, 'g', 'Грамм', 'г', 3, 1, '2026-01-16 11:23:09', '2026-01-16 11:23:09'),
+(4, 1, 1, 'l', 'Литр', 'л', 4, 1, '2026-01-16 11:23:09', '2026-01-16 11:23:09'),
+(5, 1, 1, 'ml', 'Миллилитр', 'мл', 5, 1, '2026-01-16 11:23:09', '2026-01-16 11:23:09'),
+(6, 1, 1, 'portion', 'Порция', 'порц', 6, 1, '2026-01-16 11:23:09', '2026-01-16 11:23:09');
 
 -- --------------------------------------------------------
 
@@ -937,9 +1000,11 @@ ALTER TABLE `prod_option_overrides`
 --
 ALTER TABLE `prod_products`
   ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_prod_products_tenant_id` (`tenant_id`,`id`),
   ADD UNIQUE KEY `uq_prod_products_tenant_sku` (`tenant_id`,`sku`),
   ADD KEY `idx_prod_products_tenant_active` (`tenant_id`,`is_active`,`site_visibility`),
-  ADD KEY `idx_prod_products_tenant_name` (`tenant_id`,`name`);
+  ADD KEY `idx_prod_products_tenant_name` (`tenant_id`,`name`),
+  ADD KEY `fk_prod_products_unit` (`unit_id`);
 
 --
 -- Индексы таблицы `prod_product_categories`
@@ -949,6 +1014,24 @@ ALTER TABLE `prod_product_categories`
   ADD UNIQUE KEY `uq_prod_prodcat_tenant_product_category` (`tenant_id`,`product_id`,`category_id`),
   ADD KEY `idx_prod_prodcat_tenant_category_sort` (`tenant_id`,`category_id`,`sort_order`,`product_id`),
   ADD KEY `idx_prod_prodcat_tenant_product` (`tenant_id`,`product_id`,`category_id`);
+
+--
+-- Индексы таблицы `prod_product_ingredients`
+--
+ALTER TABLE `prod_product_ingredients`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_prod_ingr_product_ingredient` (`tenant_id`,`product_id`,`ingredient_id`),
+  ADD KEY `idx_prod_ingr_product` (`tenant_id`,`product_id`),
+  ADD KEY `idx_prod_ingr_ingredient` (`tenant_id`,`ingredient_id`),
+  ADD KEY `fk_prod_ingr_unit` (`unit_id`);
+
+--
+-- Индексы таблицы `prod_units`
+--
+ALTER TABLE `prod_units`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_prod_units_tenant_code` (`tenant_id`,`code`),
+  ADD KEY `idx_prod_units_tenant_active` (`tenant_id`,`is_active`,`sort_order`);
 
 --
 -- Индексы таблицы `ten_tenants`
@@ -994,7 +1077,7 @@ ALTER TABLE `order_delivery_types`
 -- AUTO_INCREMENT для таблицы `order_orders`
 --
 ALTER TABLE `order_orders`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
 
 --
 -- AUTO_INCREMENT для таблицы `order_payments`
@@ -1054,13 +1137,25 @@ ALTER TABLE `prod_option_overrides`
 -- AUTO_INCREMENT для таблицы `prod_products`
 --
 ALTER TABLE `prod_products`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=12;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=15;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_product_categories`
 --
 ALTER TABLE `prod_product_categories`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=54;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=57;
+
+--
+-- AUTO_INCREMENT для таблицы `prod_product_ingredients`
+--
+ALTER TABLE `prod_product_ingredients`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT для таблицы `prod_units`
+--
+ALTER TABLE `prod_units`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
 
 --
 -- AUTO_INCREMENT для таблицы `ten_tenants`
@@ -1124,6 +1219,27 @@ ALTER TABLE `prod_option_overrides`
 --
 ALTER TABLE `prod_product_categories`
   ADD CONSTRAINT `fk_prod_prodcat_category` FOREIGN KEY (`tenant_id`,`category_id`) REFERENCES `prod_categories` (`tenant_id`, `id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+--
+-- Ограничения внешнего ключа таблицы `prod_product_ingredients`
+--
+ALTER TABLE `prod_product_ingredients`
+  ADD CONSTRAINT `fk_prod_ingr_product` FOREIGN KEY (`tenant_id`,`product_id`) REFERENCES `prod_products` (`tenant_id`, `id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  ADD CONSTRAINT `fk_prod_ingr_ingredient` FOREIGN KEY (`tenant_id`,`ingredient_id`) REFERENCES `prod_products` (`tenant_id`, `id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  ADD CONSTRAINT `fk_prod_ingr_unit` FOREIGN KEY (`unit_id`) REFERENCES `prod_units` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
+
+--
+-- Ограничения внешнего ключа таблицы `prod_products` (unit_id)
+--
+ALTER TABLE `prod_products`
+  ADD CONSTRAINT `fk_prod_products_unit` FOREIGN KEY (`unit_id`) REFERENCES `prod_units` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+
+--
+-- Добавление поля is_variable в таблицу prod_product_ingredients
+-- Выполните этот запрос, если таблица уже существует:
+-- ALTER TABLE `prod_product_ingredients`
+--   ADD COLUMN `is_variable` tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Изменяемый состав для клиента (1=да, 0=нет)' AFTER `price_override`;
+
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;

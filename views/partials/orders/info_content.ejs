@@ -8,9 +8,9 @@
 <div class="order-info-cards hidden" data-info="content">
   <div class="info-card order-info-head">
     <div class="order-head-top">
-      <div>
-        <div class="order-head-title" data-info="order-title">Заказ #—</div>
-        <div class="order-head-meta muted" data-info="order-meta">—</div>
+      <div class="order-head-title-row">
+        <span class="order-head-title" data-info="order-title">Заказ #—</span>
+        <span class="order-head-meta muted" data-info="order-meta">—</span>
       </div>
       <button class="icon-btn info-close" type="button" data-action="order-close" aria-label="Сбросить выбор">
         <i class="fas fa-times"></i>
@@ -19,16 +19,10 @@
 
     <div class="order-head-row">
       <label class="order-head-field">
-        <span class="muted">Курьер</span>
-        <select class="order-head-select" data-role="courier-select">
-          <option>Не назначен</option>
+        <select class="order-head-select" data-role="status-select">
+          <option>—</option>
         </select>
       </label>
-
-      <div class="order-head-field">
-        <span class="muted">Статус</span>
-        <span class="status-chip" data-info="order-status">—</span>
-      </div>
 
       <div class="order-head-actions">
         <button class="icon-btn btn-xs" type="button" data-action="order-edit" aria-label="Редактировать">

@@ -52,7 +52,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         m.title AS methodTitle,
 
         t.code AS timeOptionCode,
-        t.title AS timeOptionTitle
+        t.title AS timeOptionTitle,
+
+        c.telegram_user_id AS customerTelegramId
       FROM order_orders o
       LEFT JOIN order_statuses s
         ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
@@ -62,6 +64,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
       LEFT JOIN order_time_options t
         ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
+      LEFT JOIN cust_customers c
+        ON c.tenant_id=o.tenant_id AND c.store_id=o.store_id AND c.id=o.customer_id
       WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1
       LIMIT 1
       `,
@@ -107,6 +111,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
       time_option_code: r.timeOptionCode ?? null,
       time_option_title: r.timeOptionTitle ?? null,
+
+      telegram_user_id: r.customerTelegramId ?? null,
     };
   }
 
@@ -228,7 +234,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           m.title AS methodTitle,
 
           t.code AS timeOptionCode,
-          t.title AS timeOptionTitle
+          t.title AS timeOptionTitle,
+
+          c.telegram_user_id AS customerTelegramId
         FROM order_orders o
         LEFT JOIN order_statuses s
           ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
@@ -238,6 +246,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
         LEFT JOIN order_time_options t
           ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
+        LEFT JOIN cust_customers c
+          ON c.tenant_id=o.tenant_id AND c.store_id=o.store_id AND c.id=o.customer_id
         WHERE ${where}
         ORDER BY ${orderBy}
         LIMIT ? OFFSET ?
@@ -269,6 +279,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
           time_option_code: r.timeOptionCode ?? null,
           time_option_title: r.timeOptionTitle ?? null,
+
+          telegram_user_id: r.customerTelegramId ?? null,
         };
       });
 

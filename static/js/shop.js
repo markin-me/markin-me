@@ -2040,6 +2040,18 @@ function updateCartBadge() {
     return selectedItems;
   }
 
+async function resolveProductIngredients(productId) {
+  try {
+    const res = await fetch(`/api/public/products/${productId}/ingredients`);
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.ok === false) return [];
+    return Array.isArray(data.data) ? data.data : [];
+  } catch (e) {
+    console.error("Failed to load ingredients", e);
+    return [];
+  }
+}
+
 async function resolveProductOptionGroups(productId) {
   const assignments = await loadProductOptionAssignments(productId);
   const activeAssignments = assignments.filter((a) => Number(a.is_active || 0) === 1);
@@ -2098,10 +2110,13 @@ function buildProductDetailsContent(
   product,
   optionGroups,
   selectionState,
+  ingredients,
+  ingredientState,
   {
     onBack,
     mode,
     onSelectionChange,
+    onIngredientChange,
     qtyPill,
     onQtyMinus,
     onQtyPlus,
@@ -2432,6 +2447,133 @@ function buildProductDetailsContent(
     scroll.appendChild(optionsWrap);
   }
 
+  /* ================= INGREDIENTS ================= */
+  if (ingredients && ingredients.length > 0) {
+    const ingredientsWrap = document.createElement("div");
+    ingredientsWrap.className = "shop-pd-ingredients";
+
+    const title = document.createElement("div");
+    title.className = "shop-pd-section-title";
+    title.textContent = "Состав (можно настроить):";
+    ingredientsWrap.appendChild(title);
+
+    ingredients.forEach((ing) => {
+      const ingId = Number(ing.ingredient_id);
+      const isVariable = Number(ing.is_variable || 1) === 1;
+      const state = ingredientState?.get(ingId) || {
+        quantity: Number(ing.quantity || 1),
+      };
+
+      const min = ing.quantity_min != null ? Number(ing.quantity_min) : state.quantity;
+      const max = ing.quantity_max != null ? Number(ing.quantity_max) : state.quantity;
+      const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
+      const currentQty = isVariable ? Math.max(min, Math.min(max, state.quantity)) : Number(ing.quantity || 1);
+      const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
+      const pricePerUnit = ing.price_override != null ? Number(ing.price_override) : Number(ing.ingredient_price || 0);
+      const totalPrice = pricePerUnit * currentQty;
+
+      const block = document.createElement("div");
+      block.className = "shop-pd-ingredient-block";
+      block.setAttribute("data-ingredient-id", ingId);
+
+      const photo = document.createElement("div");
+      photo.className = "shop-pd-ingredient-photo";
+      if (ing.ingredient_photos && ing.ingredient_photos.length > 0) {
+        const img = document.createElement("img");
+        img.src = ing.ingredient_photos[0];
+        img.alt = "";
+        photo.appendChild(img);
+      } else {
+        photo.textContent = "📷";
+      }
+
+      const info = document.createElement("div");
+      info.className = "shop-pd-ingredient-info";
+
+      const name = document.createElement("div");
+      name.className = "shop-pd-ingredient-name";
+      name.textContent = ing.ingredient_name || "";
+
+      if (isVariable) {
+        // Variable ingredient - show controls
+        const controls = document.createElement("div");
+        controls.className = "shop-pd-ingredient-controls";
+
+        const btnMinus = document.createElement("button");
+        btnMinus.type = "button";
+        btnMinus.className = "btn btn-sm qty-btn qty-minus";
+        btnMinus.textContent = "−";
+        btnMinus.disabled = currentQty <= min;
+
+        const qtyDisplay = document.createElement("div");
+        qtyDisplay.className = "qty-display";
+        qtyDisplay.textContent = `${currentQty} ${unitLabel}`;
+
+        const btnPlus = document.createElement("button");
+        btnPlus.type = "button";
+        btnPlus.className = "btn btn-sm qty-btn qty-plus";
+        btnPlus.textContent = "+";
+        btnPlus.disabled = currentQty >= max;
+
+        controls.appendChild(btnMinus);
+        controls.appendChild(qtyDisplay);
+        controls.appendChild(btnPlus);
+
+        const priceInfo = document.createElement("div");
+        priceInfo.className = "shop-pd-ingredient-price";
+        priceInfo.innerHTML = `
+          <div>+${money(pricePerUnit)} за каждую</div>
+          <div class="ingredient-total">Итого: +${money(totalPrice)}</div>
+        `;
+
+        info.appendChild(name);
+        info.appendChild(controls);
+        info.appendChild(priceInfo);
+
+        // Handlers
+        btnMinus.addEventListener("click", () => {
+          const newQty = Math.max(min, currentQty - step);
+          if (newQty !== currentQty && typeof onIngredientChange === "function") {
+            state.quantity = newQty;
+            ingredientState?.set(ingId, state);
+            onIngredientChange();
+          }
+        });
+
+        btnPlus.addEventListener("click", () => {
+          const newQty = Math.min(max, currentQty + step);
+          if (newQty !== currentQty && typeof onIngredientChange === "function") {
+            state.quantity = newQty;
+            ingredientState?.set(ingId, state);
+            onIngredientChange();
+          }
+        });
+      } else {
+        // Fixed ingredient - show only info
+        const qtyInfo = document.createElement("div");
+        qtyInfo.className = "shop-pd-ingredient-qty-fixed";
+        qtyInfo.textContent = `${currentQty} ${unitLabel}`;
+
+        const priceInfo = document.createElement("div");
+        priceInfo.className = "shop-pd-ingredient-price";
+        priceInfo.innerHTML = `
+          <div class="ingredient-total">+${money(totalPrice)}</div>
+        `;
+
+        info.appendChild(name);
+        info.appendChild(qtyInfo);
+        info.appendChild(priceInfo);
+      }
+
+      block.appendChild(photo);
+      block.appendChild(info);
+
+      ingredientsWrap.appendChild(block);
+    });
+
+    scroll.appendChild(ingredientsWrap);
+  }
+
   if (product.description) {
     const acc = document.createElement("details");
     acc.className = "shop-pd-accordion";
@@ -2595,10 +2737,31 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
   container.innerHTML = "";
 
   const optionGroups = await resolveProductOptionGroups(product.id);
+  const ingredients = await resolveProductIngredients(product.id);
   const selectionState = new Map();
+  const ingredientState = new Map();
+
+  // Initialize ingredient state
+  ingredients.forEach(ing => {
+    ingredientState.set(Number(ing.ingredient_id), {
+      quantity: Number(ing.quantity || 1),
+    });
+  });
 
   const editingItem = cartKey ? getCartItemByKey(cartKey) : null;
   const editMode = !!editingItem;
+
+  // Restore ingredient quantities from cart if editing
+  if (editMode && editingItem && Array.isArray(editingItem.ingredients)) {
+    editingItem.ingredients.forEach(cartIng => {
+      const ingId = Number(cartIng.ingredient_id);
+      if (ingredientState.has(ingId)) {
+        ingredientState.set(ingId, {
+          quantity: Number(cartIng.quantity || 1),
+        });
+      }
+    });
+  }
 
   // qty: default 1, в edit — из корзины
   let qty = editMode ? Math.max(1, Number(editingItem?.qty || 1)) : 1;
@@ -2666,21 +2829,78 @@ optionGroups.forEach((group) => {
 
   let actionBtnRef = null;
 
+  const calculateIngredientPrice = () => {
+    let total = 0;
+    ingredients.forEach(ing => {
+      const state = ingredientState.get(Number(ing.ingredient_id));
+      if (!state) return;
+      const qty = state.quantity || Number(ing.quantity || 1);
+      const pricePerUnit = ing.price_override != null ? Number(ing.price_override) : Number(ing.ingredient_price || 0);
+      total += pricePerUnit * qty;
+    });
+    return total;
+  };
+
   const updateActionText = () => {
     if (!actionBtnRef) return;
 
     const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
 
-    // unit price = base + options
-    const unitPrice = cartLinePrice(product, selectedItems);
+    // unit price = base + options + ingredients
+    const basePrice = cartLinePrice(product, selectedItems);
+    const ingredientsPrice = calculateIngredientPrice();
+    const unitPrice = Number(basePrice || 0) + ingredientsPrice;
 
     // total = unit * qty
-    const totalPrice = Number(unitPrice || 0) * Number(qty || 1);
+    const totalPrice = unitPrice * Number(qty || 1);
 
     const label = editMode ? "Сохранить" : "Добавить";
 
     // разметка как у “Оформить”: текст + span суммы
     actionBtnRef.innerHTML = `${label} <span class="shop-checkout-total shop-pd-action-price">${money(totalPrice)}</span>`;
+  };
+
+  let ingredientsWrapRef = null;
+  
+  const onIngredientChange = () => {
+    updateActionText();
+    // Update ingredient prices in UI
+    if (!ingredientsWrapRef) return;
+    
+    ingredients.forEach(ing => {
+      const ingId = Number(ing.ingredient_id);
+      const state = ingredientState.get(ingId);
+      if (!state) return;
+      
+      const block = ingredientsWrapRef.querySelector(`[data-ingredient-id="${ingId}"]`);
+      if (!block) return;
+      
+      const min = ing.quantity_min != null ? Number(ing.quantity_min) : Number(ing.quantity || 1);
+      const max = ing.quantity_max != null ? Number(ing.quantity_max) : Number(ing.quantity || 1);
+      const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
+      let currentQty = state.quantity || Number(ing.quantity || 1);
+      // Round to step
+      if (step > 0) {
+        currentQty = Math.round(currentQty / step) * step;
+      }
+      currentQty = Math.max(min, Math.min(max, currentQty));
+      state.quantity = currentQty;
+      
+      const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
+      const pricePerUnit = ing.price_override != null ? Number(ing.price_override) : Number(ing.ingredient_price || 0);
+      const totalPrice = pricePerUnit * currentQty;
+      
+      const qtyDisplay = block.querySelector(".qty-display");
+      if (qtyDisplay) qtyDisplay.textContent = `${currentQty} ${unitLabel}`;
+      
+      const totalEl = block.querySelector(".ingredient-total");
+      if (totalEl) totalEl.textContent = `Итого: +${money(totalPrice)}`;
+      
+      const btnMinus = block.querySelector(".qty-minus");
+      const btnPlus = block.querySelector(".qty-plus");
+      if (btnMinus) btnMinus.disabled = currentQty <= min;
+      if (btnPlus) btnPlus.disabled = currentQty >= max;
+    });
   };
 
   const onQtyMinus = () => {
@@ -2696,16 +2916,18 @@ optionGroups.forEach((group) => {
     updateActionText();
   };
 
-  const { wrap, actionBtn } = buildProductDetailsContent(product, optionGroups, selectionState, {
+  const { wrap, actionBtn } = buildProductDetailsContent(product, optionGroups, selectionState, ingredients, ingredientState, {
     onBack,
     mode: editMode ? "edit" : "add",
     onSelectionChange: updateActionText,
+    onIngredientChange,
     qtyPill,
     onQtyMinus,
     onQtyPlus,
   });
 
   actionBtnRef = actionBtn;
+  ingredientsWrapRef = wrap.querySelector(".shop-pd-ingredients");
 
   updateQtyUi();
   updateActionText();
@@ -2718,6 +2940,18 @@ optionGroups.forEach((group) => {
     const nextKey = makeCartKey(product.id, selectedItems);
 
     const safeQty = Math.max(1, Number(qty || 1));
+
+    // Collect ingredient quantities
+    const ingredientQuantities = [];
+    ingredients.forEach(ing => {
+      const state = ingredientState.get(Number(ing.ingredient_id));
+      if (state && state.quantity) {
+        ingredientQuantities.push({
+          ingredient_id: Number(ing.ingredient_id),
+          quantity: state.quantity,
+        });
+      }
+    });
 
     if (editMode && editingItem) {
       // режим редактирования: обновляем qty и конфигурацию, с merge если совпало
@@ -2734,6 +2968,7 @@ optionGroups.forEach((group) => {
         editingItem.key = nextKey;
         editingItem.option_item_ids = optionItemIds;
         editingItem.option_items = selectedItems;
+        editingItem.ingredients = ingredientQuantities;
         editingItem.qty = safeQty;
       }
     } else {
@@ -2741,6 +2976,7 @@ optionGroups.forEach((group) => {
       const existing = getCartItemByKey(nextKey);
       if (existing) {
         existing.qty = Number(existing.qty || 0) + safeQty;
+        existing.ingredients = ingredientQuantities;
       } else {
         state.cart.push({
           key: nextKey,
@@ -2748,6 +2984,7 @@ optionGroups.forEach((group) => {
           qty: safeQty,
           option_item_ids: optionItemIds,
           option_items: selectedItems,
+          ingredients: ingredientQuantities,
         });
       }
     }
@@ -4825,6 +5062,7 @@ function setBottomNavActive(tab) {
           product_id: x.product.id,
           qty: x.qty,
           option_item_ids: x.option_item_ids || [],
+          option_items: x.option_items || [],
         })),
       };
 

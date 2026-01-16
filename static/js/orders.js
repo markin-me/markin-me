@@ -34,6 +34,7 @@
     title: $$('[data-info="order-title"]'),
     meta: $$('[data-info="order-meta"]'),
     status: $$('[data-info="order-status"]'),
+    statusSelect: $$('[data-role="status-select"]'),
     courierSelect: $$('[data-role="courier-select"]'),
 
     clientAvatar: $$('[data-info="client-avatar"]'),
@@ -215,18 +216,20 @@
           </div>
         `;
 
-        const sub = Array.isArray(it.components)
-          ? it.components
-          : Array.isArray(it.items)
-            ? it.items
-            : Array.isArray(it.options)
-              ? it.options
-              : [];
-
-        const subHtml = sub.length
-          ? `<div class="order-item-sublist">${sub
-              .map((s) => `<div>${escapeHtml(s.name || s.title || s)}</div>`)
-              .join("")}</div>`
+        // Отображаем опции товара
+        const options = Array.isArray(it.options) ? it.options : [];
+        const subHtml = options.length
+          ? `<div class="order-item-options">
+              ${options.map((opt) => {
+                const optName = escapeHtml(opt.title || "Опция");
+                const optQty = Math.max(1, Number(opt.qty || 1));
+                const optPrice = Number(opt.price || 0);
+                const optTotal = optPrice * optQty;
+                const qtyText = optQty > 1 ? ` × ${optQty}` : "";
+                const priceText = optTotal > 0 ? ` (+${money(optTotal)})` : "";
+                return `<div class="order-item-option">${optName}${qtyText}${priceText}</div>`;
+              }).join("")}
+            </div>`
           : "";
 
         return `<div class="order-item" data-item-idx="${itemIdx}">${base}${subHtml}</div>`;
@@ -407,10 +410,30 @@
     setTextAll(infoEls.meta, formatDateTime(order.created_at));
     setTextAll(infoEls.status, order.status_title || "?");
 
-    const courierName = order.courier_name || "Не назначен";
-    infoEls.courierSelect.forEach((el) => {
-      if (!el) return;
-      el.innerHTML = `<option>${escapeHtml(courierName)}</option>`;
+    // Заполняем выпадающий список статусов
+    infoEls.statusSelect.forEach((select) => {
+      if (!select) return;
+      select.innerHTML = "";
+      
+      // Добавляем текущий статус как первый вариант
+      const currentStatus = state.statuses.find((s) => Number(s.id) === Number(order.status_id));
+      if (currentStatus) {
+        const option = document.createElement("option");
+        option.value = String(currentStatus.id);
+        option.textContent = currentStatus.title || "?";
+        option.selected = true;
+        select.appendChild(option);
+      }
+      
+      // Добавляем остальные статусы
+      state.statuses.forEach((status) => {
+        if (Number(status.id) !== Number(order.status_id)) {
+          const option = document.createElement("option");
+          option.value = String(status.id);
+          option.textContent = status.title || "?";
+          select.appendChild(option);
+        }
+      });
     });
 
     const clientName = order.customer_name || "?";
@@ -679,13 +702,22 @@
   function updateOrderRow(row, order) {
     row.setAttribute("data-order-id", String(order.id));
 
-    const urgent = Boolean(order.is_urgent || order.urgent || order.time_option_code === "urgent");
+    const urgent = Boolean(order.is_urgent || order.urgent || order.time_option_code === "urgent" || order.time_option_code === "asap");
     const intervalText = order.time_option_title || (order.scheduled_at ? formatTime(order.scheduled_at) : "");
+    const hasScheduledTime = Boolean(
+      (order.scheduled_at || order.time_option_code === "at_time" || order.time_option_code === "on_date") && !urgent
+    );
     const comment = order.comment || "Нет комментария";
-    const courier = order.courier_name || "Не указан";
+    const courier = order.courier_name || null;
+    const hasCourier = courier && courier !== "Не указан" && courier !== "Не назначен";
+    const telegramId = order.telegram_user_id || null;
+    const telegramDisplay = telegramId ? String(telegramId) : "Не указан";
 
     const payment = order.payment_title || "";
     const totalText = money(order.total_price || 0);
+    const paymentCode = (order.payment_code || "").toLowerCase();
+    const isCash = paymentCode.includes("cash");
+    const isCard = paymentCode.includes("card") || (!isCash && paymentCode);
 
     row.innerHTML = `
       <div class="order-col order-id">
@@ -694,33 +726,35 @@
       </div>
 
       <div class="order-col order-indicators">
-        <span class="order-indicator ${urgent ? "urgent" : "hidden"}">⚡</span>
-        <span class="order-indicator ${intervalText ? "" : "hidden"}">
-          <i class="fas fa-clock"></i>
-          ${escapeHtml(intervalText)}
-        </span>
+        ${urgent ? `
+          <span class="order-indicator urgent">⚡</span>
+        ` : hasScheduledTime ? `
+          <div class="order-indicator-time">
+            <i class="fas fa-clock"></i>
+            <span class="order-indicator-time-text">${escapeHtml(intervalText)}</span>
+          </div>
+        ` : ''}
       </div>
 
       <div class="order-col order-client">
-        <div class="order-client-name">${escapeHtml(order.customer_name || "?")}</div>
+        <div class="order-client-name"><i class="fas fa-user"></i> ${escapeHtml(order.customer_name || "?")}</div>
         <div class="order-client-phone muted"><i class="fas fa-phone"></i> ${escapeHtml(order.customer_phone || "?")}</div>
-        <div class="order-client-courier muted">Курьер: ${escapeHtml(courier)}</div>
+        <div class="order-client-telegram muted"><i class="fab fa-telegram-plane"></i> ${escapeHtml(telegramDisplay)}</div>
       </div>
 
       <div class="order-col order-address">
         <div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(order.address || "?")}</div>
         <div class="order-address-comment muted"><i class="far fa-comment"></i> ${escapeHtml(comment)}</div>
-      </div>
-
-      <div class="order-col order-actions">
-        <button class="btn btn-ghost btn-xs" type="button" data-action="assign-courier">Назначить курьера</button>
-        <button class="icon-btn btn-xs" type="button" data-action="order-extra" aria-label="Доп. действия">
-          <i class="fas fa-ellipsis-h"></i>
-        </button>
+        <div class="order-address-courier ${hasCourier ? "" : "order-courier-assign"}">
+          <i class="fas fa-user"></i> 
+          ${hasCourier ? escapeHtml(courier) : '<span data-action="assign-courier">Назначить курьера</span>'}
+        </div>
       </div>
 
       <div class="order-col order-total">
-        <span class="order-total-badge"><i class="fas ${paymentIcon(order.payment_code)}"></i> ${escapeHtml(totalText)}</span>
+        <button class="order-payment-btn ${isCash ? "order-payment-cash" : "order-payment-card"}" type="button">
+          <i class="fas ${paymentIcon(order.payment_code)}"></i> ${escapeHtml(totalText)}
+        </button>
       </div>
     `;
 
@@ -910,17 +944,29 @@
   }
 
 
+  let clickTimer = null;
+
   function onDateClick(dateKey) {
     const clicked = parseDateKey(dateKey);
     if (!clicked) return;
 
-    if (!state.date.start || state.date.end) {
+    // Если уже есть и start и end, сбрасываем и начинаем заново
+    if (state.date.start && state.date.end) {
       state.date.start = clicked;
       state.date.end = null;
       renderCalendar();
       return;
     }
 
+    // Первый клик - устанавливаем start
+    if (!state.date.start) {
+      state.date.start = clicked;
+      state.date.end = null;
+      renderCalendar();
+      return;
+    }
+
+    // Второй клик - устанавливаем end и закрываем календарь
     if (state.date.start && !state.date.end) {
       state.date.end = clicked;
       if (state.date.end < state.date.start) {
@@ -931,6 +977,23 @@
       renderCalendar();
       applyDateFilter(true);
     }
+  }
+
+  function onDateDoubleClick(dateKey) {
+    // Отменяем одиночный клик, если он был запланирован
+    if (clickTimer) {
+      clearTimeout(clickTimer);
+      clickTimer = null;
+    }
+
+    const clicked = parseDateKey(dateKey);
+    if (!clicked) return;
+
+    // Двойной клик - выбираем один день (создаем новый объект Date для end)
+    state.date.start = new Date(clicked);
+    state.date.end = new Date(clicked);
+    renderCalendar();
+    applyDateFilter(true);
   }
 
   function resetDateFilter() {
@@ -1043,6 +1106,12 @@
       return;
     }
 
+    // Не выбирать заказ при клике на кнопку оплаты
+    if (e.target.closest(".order-payment-btn")) {
+      e.stopPropagation();
+      return;
+    }
+
     const row = e.target.closest(".js-order");
     if (!row) return;
 
@@ -1094,7 +1163,21 @@
     dateGrid.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-date]");
       if (!btn) return;
-      onDateClick(btn.getAttribute("data-date"));
+      
+      // Используем таймер, чтобы отличить одиночный клик от двойного
+      if (clickTimer) {
+        clearTimeout(clickTimer);
+      }
+      clickTimer = setTimeout(() => {
+        clickTimer = null;
+        onDateClick(btn.getAttribute("data-date"));
+      }, 250);
+    });
+
+    dateGrid.addEventListener("dblclick", (e) => {
+      const btn = e.target.closest("[data-date]");
+      if (!btn) return;
+      onDateDoubleClick(btn.getAttribute("data-date"));
     });
   }
 
@@ -1123,6 +1206,37 @@
   if (dateReset) {
     dateReset.addEventListener("click", () => resetDateFilter());
   }
+
+  // Обработчик изменения статуса через выпадающий список
+  infoEls.statusSelect.forEach((select) => {
+    if (!select) return;
+    select.addEventListener("change", async (e) => {
+      const statusId = Number(e.target.value);
+      if (!Number.isFinite(statusId) || statusId <= 0) return;
+
+      const orderId = state.activeOrderId;
+      if (!orderId) return;
+
+      try {
+        await apiJson(`/api/admin/orders/${orderId}/status`, {
+          method: "PUT",
+          body: { status_id: statusId },
+        });
+
+        // Обновляем данные заказа
+        await loadStatuses();
+        renderStages();
+        await loadAndRenderOrders(true);
+      } catch (err) {
+        console.error(err);
+        // Восстанавливаем предыдущее значение при ошибке
+        const order = state.orders.find((o) => Number(o.id) === Number(orderId));
+        if (order) {
+          e.target.value = String(order.status_id || "");
+        }
+      }
+    });
+  });
 
   // -----------------------------
   // Init

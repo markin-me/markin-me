@@ -267,6 +267,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const price = helpers.numOrNull(req.body.price) ?? 0;
       const old_price = helpers.numOrNull(req.body.old_price);
       const cost_price = helpers.numOrNull(req.body.cost_price);
+      const unit_id = helpers.numOrNull(req.body.unit_id);
 
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
@@ -276,11 +277,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const [result] = await db.query(
         `INSERT INTO prod_products
-          (tenant_id, name, sku, description_short, description, price, old_price, cost_price, photos_json, is_active, site_visibility)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+          (tenant_id, name, sku, description_short, description, price, old_price, cost_price, unit_id, photos_json, is_active, site_visibility)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           tenantId, name, sku, description_short, description,
-          price, old_price, cost_price, photos_json,
+          price, old_price, cost_price, unit_id, photos_json,
           is_active, site_visibility
         ]
       );
@@ -312,6 +313,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const price = helpers.numOrNull(req.body.price) ?? 0;
       const old_price = helpers.numOrNull(req.body.old_price);
       const cost_price = helpers.numOrNull(req.body.cost_price);
+      const unit_id = helpers.numOrNull(req.body.unit_id);
 
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
@@ -321,11 +323,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       await db.query(
         `UPDATE prod_products
-         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, cost_price=?, photos_json=?, is_active=?, site_visibility=?
+         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, cost_price=?, unit_id=?, photos_json=?, is_active=?, site_visibility=?
          WHERE tenant_id=? AND id=?`,
         [
           name, sku, description_short, description,
-          price, old_price, cost_price, photos_json,
+          price, old_price, cost_price, unit_id, photos_json,
           is_active, site_visibility,
           tenantId, id
         ]
@@ -1174,6 +1176,199 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
   router.patch('/admin/products/:id/option-assignments/:groupId', disableProductAssignment);
   router.delete('/admin/products/:id/option-assignments/:groupId', disableProductAssignment);
+
+  // ------------------------------
+  // Units: /api/admin/units
+  // ------------------------------
+  router.get('/admin/units', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const [rows] = await db.query(
+        `SELECT id, code, title, short_title, sort_order, is_active
+         FROM prod_units
+         WHERE tenant_id=? AND is_active=1
+         ORDER BY sort_order ASC, id ASC`,
+        [tenantId]
+      );
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // ------------------------------
+  // Product Ingredients: /api/admin/products/:id/ingredients
+  // ------------------------------
+  router.get('/admin/products/:id/ingredients', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const productId = Number(req.params.id);
+      if (!Number.isFinite(productId) || productId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      const [rows] = await db.query(
+        `SELECT 
+           i.id,
+           i.ingredient_id,
+           i.quantity,
+           i.unit_id,
+           i.quantity_min,
+           i.quantity_max,
+           i.quantity_step,
+           i.price_override,
+           i.is_variable,
+           i.sort_order,
+           p.name AS ingredient_name,
+           p.price AS ingredient_price,
+           p.photos_json AS ingredient_photos,
+           p.unit_id AS ingredient_unit_id,
+           u.code AS unit_code,
+           u.title AS unit_title,
+           u.short_title AS unit_short_title
+         FROM prod_product_ingredients i
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+         JOIN prod_units u ON u.id=i.unit_id
+         WHERE i.tenant_id=? AND i.product_id=?
+         ORDER BY i.sort_order ASC, i.id ASC`,
+        [tenantId, productId]
+      );
+
+      for (const r of rows) {
+        r.ingredient_photos = helpers.safeJsonArray(r.ingredient_photos);
+      }
+
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/products/:id/ingredients', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const productId = Number(req.params.id);
+      if (!Number.isFinite(productId) || productId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      const ingredientId = Number(req.body.ingredient_id);
+      if (!Number.isFinite(ingredientId) || ingredientId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_INGREDIENT_ID' });
+      }
+
+      // Get unit_id from ingredient product if not provided
+      let unitId = Number(req.body.unit_id);
+      if (!Number.isFinite(unitId) || unitId <= 0) {
+        const [ingredientRows] = await db.query(
+          `SELECT unit_id FROM prod_products WHERE tenant_id=? AND id=?`,
+          [tenantId, ingredientId]
+        );
+        if (ingredientRows.length && ingredientRows[0].unit_id) {
+          unitId = Number(ingredientRows[0].unit_id);
+        } else {
+          return res.status(400).json({ ok: false, error: 'BAD_UNIT_ID' });
+        }
+      }
+
+      const quantity = helpers.numOrNull(req.body.quantity) ?? 1;
+      const quantityMin = helpers.numOrNull(req.body.quantity_min);
+      const quantityMax = helpers.numOrNull(req.body.quantity_max);
+      const quantityStep = helpers.numOrNull(req.body.quantity_step);
+      const priceOverride = helpers.numOrNull(req.body.price_override);
+      const isVariable = Number(req.body.is_variable) === 1 ? 1 : 0;
+      const sortOrder = Number(req.body.sort_order) || 0;
+
+      // Check if already exists
+      const [existing] = await db.query(
+        `SELECT id FROM prod_product_ingredients
+         WHERE tenant_id=? AND product_id=? AND ingredient_id=?`,
+        [tenantId, productId, ingredientId]
+      );
+
+      if (existing.length) {
+        return res.status(400).json({ ok: false, error: 'ALREADY_EXISTS' });
+      }
+
+      const [result] = await db.query(
+        `INSERT INTO prod_product_ingredients
+         (tenant_id, store_id, product_id, ingredient_id, quantity, unit_id, quantity_min, quantity_max, quantity_step, price_override, is_variable, sort_order)
+         VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [tenantId, productId, ingredientId, quantity, unitId, quantityMin, quantityMax, quantityStep, priceOverride, isVariable, sortOrder]
+      );
+
+      res.json({ ok: true, id: result.insertId });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/admin/products/:id/ingredients/:ingredientId', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const productId = Number(req.params.id);
+      const ingredientId = Number(req.params.ingredientId);
+      if (!Number.isFinite(productId) || productId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+      if (!Number.isFinite(ingredientId) || ingredientId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_INGREDIENT_ID' });
+      }
+
+      const unitId = Number(req.body.unit_id);
+      if (!Number.isFinite(unitId) || unitId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_UNIT_ID' });
+      }
+
+      const quantity = helpers.numOrNull(req.body.quantity) ?? 1;
+      const quantityMin = helpers.numOrNull(req.body.quantity_min);
+      const quantityMax = helpers.numOrNull(req.body.quantity_max);
+      const quantityStep = helpers.numOrNull(req.body.quantity_step);
+      const priceOverride = helpers.numOrNull(req.body.price_override);
+      const isVariable = Number(req.body.is_variable) === 1 ? 1 : 0;
+      const sortOrder = Number(req.body.sort_order) || 0;
+
+      await db.query(
+        `UPDATE prod_product_ingredients
+         SET quantity=?, unit_id=?, quantity_min=?, quantity_max=?, quantity_step=?, price_override=?, is_variable=?, sort_order=?
+         WHERE tenant_id=? AND product_id=? AND ingredient_id=?`,
+        [quantity, unitId, quantityMin, quantityMax, quantityStep, priceOverride, isVariable, sortOrder, tenantId, productId, ingredientId]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/admin/products/:id/ingredients/:ingredientId', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const productId = Number(req.params.id);
+      const ingredientId = Number(req.params.ingredientId);
+      if (!Number.isFinite(productId) || productId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+      if (!Number.isFinite(ingredientId) || ingredientId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_INGREDIENT_ID' });
+      }
+
+      await db.query(
+        `DELETE FROM prod_product_ingredients
+         WHERE tenant_id=? AND product_id=? AND ingredient_id=?`,
+        [tenantId, productId, ingredientId]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
 
   return router;
 };

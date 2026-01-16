@@ -85,6 +85,169 @@
   const sheetHost = $("#productSheetHost");
   const sheetCloseBtn = $("#productSheetCloseBtn");
   const detailsDesktopHost = $("#productInfoPanel .panel-body");
+  const productInfoBody = $("#productInfoBody");
+
+  // Navigation stack for right panel
+  const navigationStack = [];
+  let currentNavigationState = null;
+
+  // Navigation functions
+  function pushNavigationState(state) {
+    if (currentNavigationState) {
+      navigationStack.push(currentNavigationState);
+    }
+    currentNavigationState = state;
+    showNavigationState(state);
+  }
+
+  function popNavigationState() {
+    // Call onClose for current state if exists
+    if (currentNavigationState?.onClose) {
+      currentNavigationState.onClose();
+    }
+    
+    // Return to previous state (pop from stack)
+    if (navigationStack.length > 0) {
+      currentNavigationState = navigationStack.pop();
+      showNavigationState(currentNavigationState);
+    } else {
+      // No more states in stack - return to empty
+      currentNavigationState = null;
+      showDetailsEmpty();
+    }
+  }
+  
+  function clearNavigationStack() {
+    // Completely clear navigation stack and return to empty state
+    navigationStack.length = 0;
+    currentNavigationState = null;
+    if (productInfoBody) {
+      productInfoBody.innerHTML = "";
+    }
+    const footer = $("#productInfoFooter");
+    if (footer) {
+      footer.classList.add("hidden");
+    }
+    showDetailsEmpty();
+  }
+
+  function showNavigationState(state) {
+    if (!state) {
+      showDetailsEmpty();
+      return;
+    }
+
+    // Hide all default content
+    if (productInfo) productInfo.classList.add("hidden");
+    if (categoryInfo) categoryInfo.classList.add("hidden");
+    if (optionGroupInfo) optionGroupInfo.classList.add("hidden");
+    if (productEmpty) productEmpty.classList.add("hidden");
+    if (categoryEmpty) categoryEmpty.classList.add("hidden");
+    if (optionEmpty) optionEmpty.classList.add("hidden");
+    
+    // Clear productInfoBody to avoid duplicate content
+    if (productInfoBody && (state.type === "product-edit" || state.type === "option-picker" || state.type === "ingredient-picker")) {
+      productInfoBody.innerHTML = "";
+    }
+
+    // Show/hide header based on state
+    if (productInfoHeader) {
+      // Hide main header when picker is open
+      if (state.type === "option-picker" || state.type === "ingredient-picker") {
+        productInfoHeader.classList.add("hidden");
+      } else {
+        productInfoHeader.classList.remove("hidden");
+        const headerLeft = productInfoHeader.querySelector(".product-info-header-left");
+        const actions = productInfoHeader.querySelector(".product-info-header-actions");
+        
+        // Always show title and SKU
+        if (headerLeft) headerLeft.classList.remove("hidden");
+      
+        // Always show fixed buttons (three dots, edit/save, close)
+        if (actions) {
+          const defaultEditBtn = actions.querySelector("#editProductBtn");
+          const defaultCloseBtn = actions.querySelector("#closeProductInfoBtn");
+          const moreBtn = actions.querySelector("#productMoreBtn");
+          
+          // Always show all buttons
+          if (defaultEditBtn) defaultEditBtn.classList.remove("hidden");
+          if (defaultCloseBtn) defaultCloseBtn.classList.remove("hidden");
+          if (moreBtn) moreBtn.classList.remove("hidden");
+          
+          // Update edit button icon based on state
+          if (defaultEditBtn) {
+            if (state.type === "product-edit") {
+              // In edit mode - show checkmark (save)
+              defaultEditBtn.innerHTML = '<i class="fas fa-check"></i>';
+              defaultEditBtn.title = "Сохранить";
+              defaultEditBtn.setAttribute("aria-label", "Сохранить");
+            } else {
+              // In view mode - show pencil (edit)
+              defaultEditBtn.innerHTML = '<i class="fas fa-pen"></i>';
+              defaultEditBtn.title = "Редактировать";
+              defaultEditBtn.setAttribute("aria-label", "Редактировать");
+            }
+          }
+          
+          // Update close button behavior based on state
+          if (defaultCloseBtn) {
+            if (state.type === "product-edit") {
+              // In edit mode - cancel changes
+              defaultCloseBtn.title = "Отменить";
+              defaultCloseBtn.setAttribute("aria-label", "Отменить");
+            } else {
+              // In view mode - close panel
+              defaultCloseBtn.title = "Закрыть";
+              defaultCloseBtn.setAttribute("aria-label", "Закрыть");
+            }
+          }
+          
+          // Restore title and SKU if returning to product-edit
+          if (state.type === "product-edit" && state.savedTitle && state.savedSku) {
+            if (productTitle) productTitle.textContent = state.savedTitle;
+            if (productSku) productSku.textContent = state.savedSku;
+          }
+        }
+      }
+    }
+
+    // Show appropriate content based on state type
+    if (state.type === "product-edit") {
+      if (state.content) {
+        // Ensure productInfoBody exists
+        const body = productInfoBody || document.querySelector("#productInfoBody");
+        if (body) {
+          // Clear first to avoid duplicates
+          body.innerHTML = "";
+          body.appendChild(state.content);
+          // Make sure body is visible
+          if (body.parentElement) {
+            body.parentElement.classList.remove("hidden");
+          }
+          // Buttons are now in header, no need to setup footer handlers
+        } else {
+          console.error("productInfoBody not found");
+        }
+      } else {
+        console.error("state.content is missing for product-edit");
+      }
+    } else if (state.type === "option-picker") {
+      if (state.content) {
+        productInfoBody.innerHTML = "";
+        productInfoBody.appendChild(state.content);
+      }
+    } else if (state.type === "ingredient-picker") {
+      if (state.content) {
+        productInfoBody.innerHTML = "";
+        productInfoBody.appendChild(state.content);
+      }
+    } else {
+      showDetailsEmpty();
+    }
+  }
+
+  // Store editing states for multiple products
+  const editingProducts = new Map(); // Map<productId, { navigationState, draft, ... }>
 
   const state = {
     mode: "products", // products | categories | ...
@@ -240,6 +403,32 @@
 
   async function apiDeleteProduct(id) {
     return api(`/api/prod_products/${id}`, { method: "DELETE" });
+  }
+
+  async function apiGetUnits() {
+    return api("/api/admin/units");
+  }
+
+  async function apiGetProductIngredients(productId) {
+    return api(`/api/admin/products/${productId}/ingredients`);
+  }
+
+  async function apiAddProductIngredient(productId, payload) {
+    return api(`/api/admin/products/${productId}/ingredients`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async function apiUpdateProductIngredient(productId, ingredientId, payload) {
+    return api(`/api/admin/products/${productId}/ingredients/${ingredientId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async function apiDeleteProductIngredient(productId, ingredientId) {
+    return api(`/api/admin/products/${productId}/ingredients/${ingredientId}`, { method: "DELETE" });
   }
 
   // ---------------- Accordion (height fix) ----------------
@@ -1025,13 +1214,44 @@ function buildOptionGroupPayload(formValues) {
   function showProductDetails(p) {
     if (!p) return;
 
+    // Save current editing state if switching to another product
+    if (currentNavigationState?.type === "product-edit" && currentNavigationState?.product?.id) {
+      const currentProductId = currentNavigationState.product.id;
+      if (currentProductId !== p.id && editingProducts.has(currentProductId)) {
+        // Update existing editing state with current navigation state
+        const currentEditingState = editingProducts.get(currentProductId);
+        editingProducts.set(currentProductId, {
+          navigationState: currentNavigationState,
+          draft: currentEditingState.draft,
+          draftIngredients: currentEditingState.draftIngredients
+        });
+      }
+    }
+
+    // Check if this product is being edited
+    if (editingProducts.has(p.id)) {
+      // Restore editing state instead of showing details
+      const editingState = editingProducts.get(p.id);
+      pushNavigationState(editingState.navigationState);
+      return;
+    }
+
+    // Clear navigation stack when selecting a new product (not being edited)
+    clearNavigationStack();
+
     state.optionPanel.returnTo = null;
     productTitle.textContent = p.name || "—";
     productSku.textContent = `Артикул: ${p.sku || "—"}`;
+    
+    // Update header buttons to view mode
     if (editProductBtn) {
-      editProductBtn.classList.remove("hidden");
-      editProductBtn.title = "Редактировать товар";
-      editProductBtn.setAttribute("aria-label", "Редактировать товар");
+      editProductBtn.innerHTML = '<i class="fas fa-pen"></i>';
+      editProductBtn.title = "Редактировать";
+      editProductBtn.setAttribute("aria-label", "Редактировать");
+    }
+    if (closeProductInfoBtn) {
+      closeProductInfoBtn.title = "Закрыть";
+      closeProductInfoBtn.setAttribute("aria-label", "Закрыть");
     }
 
     productPrice.textContent = formatMoney(p.price);
@@ -2173,6 +2393,10 @@ function updateOptionGroupSelectionUi() {
     state.optionPanel.returnTo = null;
     state.optionPanel.snapshotData = null;
     state.optionDraft = null;
+    
+    // Clear navigation stack
+    clearNavigationStack();
+    
     showDetailsEmpty();
     if (productsList) $$(".order-row", productsList).forEach((x) => x.classList.remove("is-active"));
     if (categoriesMainList) $$(".order-row", categoriesMainList).forEach((x) => x.classList.remove("is-active"));
@@ -2200,6 +2424,9 @@ function updateOptionGroupSelectionUi() {
       initialOptionGroups: new Set(),
     };
 
+    // Initialize draftIngredients early (used in editing state)
+    const draftIngredients = new Map();
+
     // если edit — подгружаем категории товара
     const loadCatsPromise = (async () => {
       if (!isEdit || !product) return;
@@ -2222,17 +2449,38 @@ function updateOptionGroupSelectionUi() {
     // Обработчик клавиатуры для навигации фото
     let keyboardHandler = null;
 
-    window.AppModal.open({
-      title: isEdit ? "Редактировать товар" : "Новый товар",
-      content: "#tplProductEditor",
-      onClose: () => {
-        // Удаляем обработчик клавиатуры при закрытии
-        if (keyboardHandler) {
-          document.removeEventListener("keydown", keyboardHandler);
-          keyboardHandler = null;
-        }
-      },
-      onSave: async ({ body }) => {
+    // Clone template content
+    const template = document.querySelector("#tplProductEditor");
+    if (!template) return;
+    const content = template.content.cloneNode(true);
+    const body = content.querySelector("#productEditorForm")?.parentElement || content;
+    
+    // Create wrapper for right panel
+    const wrapper = document.createElement("div");
+    wrapper.className = "product-editor-wrapper";
+    wrapper.appendChild(body);
+
+    // Save title and SKU for restoration
+    const savedTitle = productTitle ? productTitle.textContent : "";
+    const savedSku = productSku ? productSku.textContent : "";
+
+    // Update title and SKU in header for editor
+    if (productTitle) {
+      productTitle.textContent = isEdit && product ? (product.name || "Редактировать товар") : "Новый товар";
+    }
+    if (productSku) {
+      productSku.textContent = isEdit && product ? `Артикул: ${product.sku || "—"}` : "Артикул: —";
+    }
+
+    // Create navigation state
+    const navigationState = {
+      type: "product-edit",
+      content: wrapper,
+      isEdit: isEdit,
+      product: product,
+      savedTitle: savedTitle,
+      savedSku: savedSku,
+      onSave: async () => {
         const form = $("#productEditorForm", body);
         if (!form) return false;
 
@@ -2259,6 +2507,7 @@ function updateOptionGroupSelectionUi() {
           price: form.price.value === "" ? 0 : Number(form.price.value),
           old_price: form.old_price.value === "" ? null : Number(form.old_price.value),
           cost_price: form.cost_price.value === "" ? null : Number(form.cost_price.value),
+          unit_id: form.unit_id.value === "" ? null : Number(form.unit_id.value),
           is_active: form.is_active.checked ? 1 : 0,
           site_visibility: form.site_visibility.checked ? 1 : 0,
 
@@ -2296,15 +2545,76 @@ function updateOptionGroupSelectionUi() {
           } else if (selected.size) {
             await apiAddProductOptionAssignments(productId, Array.from(selected));
           }
+
+          // Save ingredients from draft (for new products)
+          if (!isEdit && draftIngredients.size > 0) {
+            for (const ing of draftIngredients.values()) {
+              try {
+                await apiAddProductIngredient(productId, {
+                  ingredient_id: ing.ingredient_id,
+                  quantity: ing.quantity,
+                  unit_id: ing.unit_id,
+                  quantity_min: ing.quantity_min,
+                  quantity_max: ing.quantity_max,
+                  quantity_step: ing.quantity_step,
+                  price_override: ing.price_override,
+                  is_variable: ing.is_variable ? 1 : 0,
+                });
+              } catch (e) {
+                console.error('Failed to save ingredient', e);
+              }
+            }
+          }
         }
 
         await refreshAll();
+        // Remove from editing state after successful save
+        if (productId && editingProducts.has(productId)) {
+          editingProducts.delete(productId);
+        }
+        
+        // Return to product details if editing
+        if (isEdit && product) {
+          const updatedProduct = state.products.find(p => p.id === productId);
+          if (updatedProduct) {
+            // Clear navigation and show product details (this will update header buttons)
+            clearNavigationStack();
+            showProductDetails(updatedProduct);
+          } else {
+            clearNavigationStack();
+          }
+        } else {
+          // New product - clear navigation
+          clearNavigationStack();
+        }
         return true;
       },
-    });
+      onClose: () => {
+        // Remove from editing state when canceling
+        if (product && product.id && editingProducts.has(product.id)) {
+          editingProducts.delete(product.id);
+        }
+        // Удаляем обработчик клавиатуры при закрытии
+        if (keyboardHandler) {
+          document.removeEventListener("keydown", keyboardHandler);
+          keyboardHandler = null;
+        }
+      }
+    };
+    
+    // Store editing state for this product (only for existing products)
+    if (isEdit && product && product.id) {
+      editingProducts.set(product.id, {
+        navigationState: navigationState,
+        draft: draft,
+        draftIngredients: draftIngredients
+      });
+    }
+    
+    // Push to navigation stack
+    pushNavigationState(navigationState);
 
-    const body = window.AppModal.body;
-    const form = $("#productEditorForm", body);
+    const form = $("#productEditorForm", wrapper);
     if (!form) return;
 
     // prefill
@@ -2316,38 +2626,50 @@ function updateOptionGroupSelectionUi() {
       form.price.value = product.price != null ? String(product.price) : "";
       form.old_price.value = product.old_price != null ? String(product.old_price) : "";
       form.cost_price.value = product.cost_price != null ? String(product.cost_price) : "";
+      form.unit_id.value = product.unit_id || "";
       form.is_active.checked = Boolean(product.is_active);
       form.site_visibility.checked = Boolean(product.site_visibility);
     }
 
     const ui = {
-      chips: $("#peCategoryChips", body),
-      catBackdrop: $("#peCatBackdrop", body),
-      catModal: $("#peCatModal", body),
-      catClose: $("#peCatClose", body),
-      catList: $("#peCatList", body),
-      optionAccordion: $("#peOptionAccordion", body),
-      optionManageBtn: $("#peOptionManageBtn", body),
-      optionBackdrop: $("#peOptionBackdrop", body),
-      optionModal: $("#peOptionModal", body),
-      optionClose: $("#peOptionClose", body),
-      optionList: $("#peOptionList", body),
-      optionSearch: $("#peOptionSearch", body),
-      optionCancel: $("#peOptionCancel", body),
-      optionApply: $("#peOptionApply", body),
+      chips: $("#peCategoryChips", wrapper),
+      catBackdrop: $("#peCatBackdrop", wrapper),
+      catModal: $("#peCatModal", wrapper),
+      catClose: $("#peCatClose", wrapper),
+      catList: $("#peCatList", wrapper),
+      optionAccordion: $("#peOptionAccordion", wrapper),
+      optionManageBtn: $("#peOptionManageBtn", wrapper),
+      optionBackdrop: $("#peOptionBackdrop", wrapper),
+      optionModal: $("#peOptionModal", wrapper),
+      optionClose: $("#peOptionClose", wrapper),
+      optionList: $("#peOptionList", wrapper),
+      optionSearch: $("#peOptionSearch", wrapper),
+      optionCancel: $("#peOptionCancel", wrapper),
+      optionApply: $("#peOptionApply", wrapper),
 
-      photosInput: $("#pePhotosInput", body),
-      addPhotosBtn: $("#peAddPhotosBtn", body),
-      photoMain: $("#pePhotoMain", body),
-      photoMainContainer: $("#pePhotoMainContainer", body),
-      photoPlaceholder: $("#pePhotoPlaceholder", body),
-      thumbs: $("#pePhotoThumbs", body),
-      thumbsPrev: $("#peThumbsPrev", body),
-      thumbsNext: $("#peThumbsNext", body),
-      counter: $("#pePhotosCounter", body),
-      photoPrev: $("#pePhotoPrev", body),
-      photoNext: $("#pePhotoNext", body),
-      photoDots: $("#pePhotoDots", body),
+      photosInput: $("#pePhotosInput", wrapper),
+      addPhotosBtn: $("#peAddPhotosBtn", wrapper),
+      photoMain: $("#pePhotoMain", wrapper),
+      photoMainContainer: $("#pePhotoMainContainer", wrapper),
+      photoPlaceholder: $("#pePhotoPlaceholder", wrapper),
+      thumbs: $("#pePhotoThumbs", wrapper),
+      thumbsPrev: $("#peThumbsPrev", wrapper),
+      thumbsNext: $("#peThumbsNext", wrapper),
+      counter: $("#pePhotosCounter", wrapper),
+      photoPrev: $("#pePhotoPrev", wrapper),
+      photoNext: $("#pePhotoNext", wrapper),
+      photoDots: $("#pePhotoDots", wrapper),
+      unitSelect: $("#pe_unit_id", wrapper),
+      ingredientAccordion: $("#peIngredientAccordion", wrapper),
+      ingredientAddBtn: $("#peIngredientAddBtn", wrapper),
+      ingredientSearch: $("#peIngredientSearch", wrapper),
+      ingredientBackdrop: $("#peIngredientBackdrop", wrapper),
+      ingredientModal: $("#peIngredientModal", wrapper),
+      ingredientModalClose: $("#peIngredientModalClose", wrapper),
+      ingredientModalCancel: $("#peIngredientModalCancel", wrapper),
+      ingredientModalCreate: $("#peIngredientModalCreate", wrapper),
+      ingredientModalSearch: $("#peIngredientModalSearch", wrapper),
+      ingredientModalList: $("#peIngredientModalList", wrapper),
     };
 
     function openCatPicker() {
@@ -2442,16 +2764,113 @@ function updateOptionGroupSelectionUi() {
     }
 
     function openOptionPicker() {
-      if (!ui.optionBackdrop || !ui.optionModal) return;
-      ui.optionBackdrop.classList.remove("hidden");
-      ui.optionModal.classList.remove("hidden");
+      // Initialize selection if not set
+      if (!optionPickerSelection) {
+        optionPickerSelection = new Set(draft.optionGroups);
+      }
+      
+      // Create option picker overlay for right panel
+      const pickerOverlay = document.createElement("div");
+      pickerOverlay.className = "picker-overlay";
+      
+      const pickerContent = document.createElement("div");
+      pickerContent.className = "picker-overlay-content";
+      
+      pickerContent.innerHTML = `
+        <div class="picker-overlay-header">
+          <div class="panel-title">Опции</div>
+        </div>
+        <div class="picker-overlay-body">
+          <div class="info-card">
+            <div class="option-picker-search" style="margin-bottom: 16px;">
+              <input class="control" id="optionPickerSearchInput" type="search" placeholder="Поиск по названию" />
+            </div>
+            <div class="option-picker-list" id="optionPickerListContent"></div>
+          </div>
+        </div>
+      `;
+      
+      pickerOverlay.appendChild(pickerContent);
+
+      const searchInput = pickerContent.querySelector("#optionPickerSearchInput");
+      const listContent = pickerContent.querySelector("#optionPickerListContent");
+
+      function renderList() {
+        const query = String(searchInput?.value || "").trim().toLowerCase();
+        const groups = state.optionGroups
+          .filter((g) => g.is_active)
+          .filter((g) => !query || String(g.title || "").toLowerCase().includes(query))
+          .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+
+        if (!listContent) return;
+        listContent.innerHTML = groups.map((g) => {
+          const checked = optionPickerSelection.has(g.id);
+          return `
+            <div class="option-picker-row ${checked ? "is-selected" : ""}" data-option-id="${g.id}">
+              <div class="option-picker-meta">
+                <div class="options-row-title">${escapeHtml(g.title || "")}</div>
+                <div class="options-row-meta">${escapeHtml(getSelectionLabel(g.selection_type))}</div>
+              </div>
+              <input class="option-picker-checkbox" type="checkbox" data-option-id="${g.id}" ${checked ? "checked" : ""} />
+            </div>
+          `;
+        }).join("");
+
+        listContent.querySelectorAll(".option-picker-row[data-option-id]").forEach((row) => {
+          row.addEventListener("click", () => {
+            const id = Number(row.dataset.optionId);
+            if (!Number.isFinite(id)) return;
+            if (optionPickerSelection.has(id)) optionPickerSelection.delete(id);
+            else optionPickerSelection.add(id);
+            renderList();
+            if (applyBtn) applyBtn.textContent = `Добавить (${optionPickerSelection.size})`;
+          });
+        });
+      }
+
+      if (searchInput) {
+        searchInput.addEventListener("input", renderList);
+      }
+
+      renderList();
+
+      // Show footer with buttons
+      const footer = $("#productInfoFooter");
+      if (footer) {
+        footer.classList.remove("hidden");
+        const cancelBtn = $("#productEditorCancelBtn");
+        const saveBtn = $("#productEditorSaveBtn");
+        
+        if (cancelBtn) {
+          cancelBtn.textContent = "Отменить";
+          cancelBtn.onclick = () => {
+            popNavigationState();
+          };
+        }
+        
+        if (saveBtn) {
+          saveBtn.textContent = `Сохранить (${optionPickerSelection.size})`;
+          saveBtn.onclick = () => {
+            draft.optionGroups = new Set(optionPickerSelection || []);
+            renderOptionAccordion();
+            popNavigationState();
+          };
+        }
+      }
+
+      pushNavigationState({
+        type: "option-picker",
+        content: pickerOverlay,
+        onClose: () => {
+          // Hide footer when closing
+          const footer = $("#productInfoFooter");
+          if (footer) footer.classList.add("hidden");
+        }
+      });
     }
 
     function closeOptionPicker() {
-      if (!ui.optionBackdrop || !ui.optionModal) return;
-      ui.optionBackdrop.classList.add("hidden");
-      ui.optionModal.classList.add("hidden");
-      if (ui.optionSearch) ui.optionSearch.value = "";
+      // No longer needed - handled by navigation
       optionPickerSelection = null;
     }
 
@@ -2461,17 +2880,7 @@ function updateOptionGroupSelectionUi() {
     if (ui.optionManageBtn) {
       ui.optionManageBtn.addEventListener("click", () => {
         optionPickerSelection = new Set(draft.optionGroups);
-        renderOptionPickerList(optionPickerSelection);
-        if (ui.optionApply) ui.optionApply.textContent = `Добавить (${optionPickerSelection.size})`;
         openOptionPicker();
-
-        if (ui.optionApply) {
-          ui.optionApply.onclick = () => {
-            draft.optionGroups = new Set(optionPickerSelection || []);
-            renderOptionAccordion();
-            closeOptionPicker();
-          };
-        }
       });
     }
 
@@ -2889,13 +3298,531 @@ function updateOptionGroupSelectionUi() {
       });
     }
 
+    // ========== INGREDIENTS ==========
+    let unitsList = [];
+    let ingredientsList = [];
+    // draftIngredients already defined above
+
+    async function loadUnits() {
+      try {
+        const res = await apiGetUnits();
+        unitsList = Array.isArray(res.data) ? res.data : [];
+        if (ui.unitSelect) {
+          ui.unitSelect.innerHTML = '<option value="">—</option>' + unitsList.map(u => 
+            `<option value="${u.id}">${escapeHtml(u.title || u.short_title || u.code)}</option>`
+          ).join('');
+          if (isEdit && product && product.unit_id) {
+            ui.unitSelect.value = product.unit_id;
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load units', e);
+      }
+    }
+
+    async function loadIngredients() {
+      if (!isEdit || !product) return;
+      try {
+        const res = await apiGetProductIngredients(product.id);
+        ingredientsList = Array.isArray(res.data) ? res.data : [];
+        draftIngredients.clear();
+        ingredientsList.forEach(ing => {
+          draftIngredients.set(Number(ing.ingredient_id), {
+            id: Number(ing.id),
+            ingredient_id: Number(ing.ingredient_id),
+            ingredient_name: ing.ingredient_name,
+            ingredient_price: Number(ing.ingredient_price || 0),
+            ingredient_photos: Array.isArray(ing.ingredient_photos) ? ing.ingredient_photos : [],
+            ingredient_unit_id: Number(ing.ingredient_unit_id || 0),
+            quantity: Number(ing.quantity || 1),
+            unit_id: Number(ing.unit_id),
+            unit_code: ing.unit_code,
+            unit_title: ing.unit_title,
+            unit_short_title: ing.unit_short_title,
+            quantity_min: ing.quantity_min != null ? Number(ing.quantity_min) : null,
+            quantity_max: ing.quantity_max != null ? Number(ing.quantity_max) : null,
+            quantity_step: ing.quantity_step != null ? Number(ing.quantity_step) : null,
+            price_override: ing.price_override != null ? Number(ing.price_override) : null,
+            is_variable: Number(ing.is_variable || 1) === 1,
+            sort_order: Number(ing.sort_order || 0),
+          });
+        });
+        renderIngredientAccordion();
+      } catch (e) {
+        console.error('Failed to load ingredients', e);
+      }
+    }
+
+    function renderIngredientAccordion() {
+      if (!ui.ingredientAccordion) return;
+      if (draftIngredients.size === 0) {
+        ui.ingredientAccordion.innerHTML = '<div class="empty-hint">Состав не задан...</div>';
+        return;
+      }
+
+      const sorted = Array.from(draftIngredients.values())
+        .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.id - b.id);
+
+      ui.ingredientAccordion.innerHTML = sorted.map(ing => {
+        const isVariable = ing.is_variable !== false;
+        const hasVariable = ing.quantity_min != null || ing.quantity_max != null;
+        const rangeLabel = hasVariable 
+          ? `${ing.quantity_min != null ? ing.quantity_min : ing.quantity} - ${ing.quantity_max != null ? ing.quantity_max : '∞'}${ing.quantity_step != null ? `, шаг ${ing.quantity_step}` : ''}`
+          : `${ing.quantity}`;
+        const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || '';
+        const price = ing.price_override != null ? ing.price_override : ing.ingredient_price;
+        const totalPrice = price * ing.quantity;
+
+        return `
+          <div class="acc-item" data-ingredient-id="${ing.ingredient_id}">
+            <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+              <span class="stage-meta stage-text">
+                <b>${escapeHtml(ing.ingredient_name || '')}</b>
+                <small>${rangeLabel} ${unitLabel} × ${formatMoney(price)} = ${formatMoney(totalPrice)}</small>
+              </span>
+              <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+            </button>
+            <div class="acc-panel" data-acc-panel>
+              <div class="acc-panel-inner">
+                <div class="form-grid" style="padding: 10px;">
+                  <div>
+                    <label class="field-label">Количество</label>
+                    <input class="control" type="number" step="0.001" min="0" 
+                      data-ing-qty="${ing.ingredient_id}" value="${ing.quantity}" />
+                  </div>
+                  <div>
+                    <label class="field-label">Единица измерения</label>
+                    <select class="control" data-ing-unit="${ing.ingredient_id}">
+                      ${unitsList.map(u => 
+                        `<option value="${u.id}" ${u.id === ing.unit_id ? 'selected' : ''}>${escapeHtml(u.title || u.short_title || u.code)}</option>`
+                      ).join('')}
+                    </select>
+                  </div>
+                  <div>
+                    <label class="field-label">
+                      <input type="checkbox" data-ing-variable="${ing.ingredient_id}" ${isVariable ? 'checked' : ''} style="margin-right: 5px;" />
+                      Изменяемый состав для клиента
+                    </label>
+                  </div>
+                  <div class="ingredient-variable-fields" style="${isVariable ? '' : 'display: none;'}">
+                    <label class="field-label">Мин. количество</label>
+                    <input class="control" type="number" step="0.001" min="0" 
+                      data-ing-min="${ing.ingredient_id}" value="${ing.quantity_min != null ? ing.quantity_min : ''}" placeholder="—" />
+                  </div>
+                  <div class="ingredient-variable-fields" style="${isVariable ? '' : 'display: none;'}">
+                    <label class="field-label">Макс. количество</label>
+                    <input class="control" type="number" step="0.001" min="0" 
+                      data-ing-max="${ing.ingredient_id}" value="${ing.quantity_max != null ? ing.quantity_max : ''}" placeholder="—" />
+                  </div>
+                  <div class="ingredient-variable-fields" style="${isVariable ? '' : 'display: none;'}">
+                    <label class="field-label">Шаг</label>
+                    <input class="control" type="number" step="0.001" min="0" 
+                      data-ing-step="${ing.ingredient_id}" value="${ing.quantity_step != null ? ing.quantity_step : ''}" placeholder="—" />
+                  </div>
+                  <div>
+                    <label class="field-label">Цена (переопределение)</label>
+                    <input class="control" type="number" step="0.01" min="0" 
+                      data-ing-price="${ing.ingredient_id}" value="${ing.price_override != null ? ing.price_override : ''}" placeholder="Из каталога" />
+                  </div>
+                </div>
+                <div class="option-actions" style="margin-top:10px;">
+                  <button class="btn btn-sm" type="button" data-ing-save="${ing.ingredient_id}">Сохранить</button>
+                  <button class="btn btn-sm" type="button" data-ing-remove="${ing.ingredient_id}">Удалить</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      bindAccordionContainer(ui.ingredientAccordion);
+
+      // Toggle variable fields on checkbox change
+      ui.ingredientAccordion.querySelectorAll("[data-ing-variable]").forEach(cb => {
+        cb.addEventListener("change", () => {
+          const ingredientId = Number(cb.dataset.ingVariable);
+          const isVariable = cb.checked;
+          const item = ui.ingredientAccordion.querySelector(`[data-ingredient-id="${ingredientId}"]`);
+          if (item) {
+            const variableFields = item.querySelectorAll(".ingredient-variable-fields");
+            variableFields.forEach(field => {
+              field.style.display = isVariable ? "" : "none";
+            });
+          }
+        });
+      });
+
+      // Save handlers
+      ui.ingredientAccordion.querySelectorAll("[data-ing-save]").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const ingredientId = Number(btn.dataset.ingSave);
+          const ing = draftIngredients.get(ingredientId);
+          if (!ing || !isEdit || !product) return;
+
+          const qty = Number(ui.ingredientAccordion.querySelector(`[data-ing-qty="${ingredientId}"]`)?.value || 1);
+          const unitId = Number(ui.ingredientAccordion.querySelector(`[data-ing-unit="${ingredientId}"]`)?.value);
+          const isVariable = ui.ingredientAccordion.querySelector(`[data-ing-variable="${ingredientId}"]`)?.checked || false;
+          const min = ui.ingredientAccordion.querySelector(`[data-ing-min="${ingredientId}"]`)?.value;
+          const max = ui.ingredientAccordion.querySelector(`[data-ing-max="${ingredientId}"]`)?.value;
+          const step = ui.ingredientAccordion.querySelector(`[data-ing-step="${ingredientId}"]`)?.value;
+          const price = ui.ingredientAccordion.querySelector(`[data-ing-price="${ingredientId}"]`)?.value;
+
+          try {
+            await apiUpdateProductIngredient(product.id, ingredientId, {
+              quantity: qty,
+              unit_id: unitId,
+              is_variable: isVariable ? 1 : 0,
+              quantity_min: isVariable && min ? Number(min) : null,
+              quantity_max: isVariable && max ? Number(max) : null,
+              quantity_step: isVariable && step ? Number(step) : null,
+              price_override: price ? Number(price) : null,
+            });
+            await loadIngredients();
+          } catch (e) {
+            console.error('Failed to update ingredient', e);
+            alert('Ошибка при сохранении ингредиента');
+          }
+        });
+      });
+
+      // Remove handlers
+      ui.ingredientAccordion.querySelectorAll("[data-ing-remove]").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const ingredientId = Number(btn.dataset.ingRemove);
+          if (!confirm('Удалить ингредиент из состава?')) return;
+          if (!isEdit || !product) return;
+
+          try {
+            await apiDeleteProductIngredient(product.id, ingredientId);
+            draftIngredients.delete(ingredientId);
+            renderIngredientAccordion();
+          } catch (e) {
+            console.error('Failed to delete ingredient', e);
+            alert('Ошибка при удалении ингредиента');
+          }
+        });
+      });
+    }
+
+    function openIngredientPicker() {
+      // Create ingredient picker overlay for right panel
+      const pickerOverlay = document.createElement("div");
+      pickerOverlay.className = "picker-overlay";
+      
+      const pickerContent = document.createElement("div");
+      pickerContent.className = "picker-overlay-content";
+      
+      pickerContent.innerHTML = `
+        <div class="picker-overlay-header">
+          <div class="panel-title">Состав</div>
+        </div>
+        <div class="picker-overlay-body">
+          <div class="info-card">
+            <div class="option-picker-search" style="margin-bottom: 16px;">
+              <input class="control" id="ingredientPickerSearchInput" type="search" placeholder="Поиск товара..." />
+            </div>
+            <div class="option-picker-list" id="ingredientPickerListContent"></div>
+          </div>
+        </div>
+      `;
+      
+      pickerOverlay.appendChild(pickerContent);
+      
+      // Footer will be added to productInfoPanel
+
+      const searchInput = pickerContent.querySelector("#ingredientPickerSearchInput");
+      const listContent = pickerContent.querySelector("#ingredientPickerListContent");
+
+      async function renderList() {
+        if (!listContent) return;
+        const query = String(searchInput?.value || "").trim().toLowerCase();
+        
+        try {
+          const res = await apiGetCatalogProducts({ query });
+          const products = Array.isArray(res.data) ? res.data : [];
+          const existingIds = new Set(Array.from(draftIngredients.keys()));
+
+          listContent.innerHTML = products
+            .filter(p => !existingIds.has(Number(p.id)))
+            .filter(p => !query || String(p.name || "").toLowerCase().includes(query))
+            .map(p => {
+              const id = Number(p.id);
+              return `
+                <div class="option-picker-row" data-product-id="${id}">
+                  <div class="option-picker-meta">
+                    <div class="options-row-title">${escapeHtml(p.name || "")}</div>
+                    <div class="options-row-meta">${formatMoney(p.price || 0)}</div>
+                  </div>
+                  <button class="btn btn-sm" type="button" data-add-ingredient="${id}">Добавить</button>
+                </div>
+              `;
+            }).join('');
+
+          listContent.querySelectorAll("[data-add-ingredient]").forEach(btn => {
+            btn.addEventListener("click", async () => {
+              const productId = Number(btn.dataset.addIngredient);
+              if (!Number.isFinite(productId)) return;
+              
+              // Find the product to get its unit_id
+              const res = await apiGetCatalogProducts({});
+              const catalogProducts = Array.isArray(res.data) ? res.data : [];
+              const selectedProduct = catalogProducts.find(p => Number(p.id) === productId);
+              let unitId = null;
+              
+              if (selectedProduct && selectedProduct.unit_id) {
+                unitId = Number(selectedProduct.unit_id);
+              } else if (unitsList.length > 0) {
+                unitId = unitsList[0].id;
+              }
+              
+              if (!unitId) {
+                alert('Нет доступных единиц измерения');
+                return;
+              }
+
+              const productName = selectedProduct?.name || '';
+              const productPrice = Number(selectedProduct?.price || 0);
+              const productPhotos = Array.isArray(selectedProduct?.photos_json) ? selectedProduct.photos_json : [];
+
+              // Add to draft (works for both new and existing products)
+              if (isEdit && product) {
+                try {
+                  await apiAddProductIngredient(product.id, {
+                    ingredient_id: productId,
+                    quantity: 1,
+                    unit_id: unitId,
+                    quantity_min: null,
+                    quantity_max: null,
+                    quantity_step: null,
+                    price_override: null,
+                    is_variable: 1,
+                  });
+                  await loadIngredients();
+                } catch (e) {
+                  console.error('Failed to add ingredient', e);
+                  alert('Ошибка при добавлении ингредиента');
+                }
+              } else {
+                draftIngredients.set(productId, {
+                  id: 0,
+                  ingredient_id: productId,
+                  ingredient_name: productName,
+                  ingredient_price: productPrice,
+                  ingredient_photos: productPhotos,
+                  ingredient_unit_id: unitId,
+                  quantity: 1,
+                  unit_id: unitId,
+                  unit_code: unitsList.find(u => u.id === unitId)?.code || '',
+                  unit_title: unitsList.find(u => u.id === unitId)?.title || '',
+                  unit_short_title: unitsList.find(u => u.id === unitId)?.short_title || '',
+                  quantity_min: null,
+                  quantity_max: null,
+                  quantity_step: null,
+                  price_override: null,
+                  is_variable: true,
+                  sort_order: draftIngredients.size * 10,
+                });
+                renderIngredientAccordion();
+              }
+              
+              popNavigationState();
+            });
+          });
+        } catch (e) {
+          console.error('Failed to load products', e);
+          listContent.innerHTML = '<div class="empty-hint">Ошибка загрузки товаров</div>';
+        }
+      }
+
+      if (searchInput) {
+        searchInput.addEventListener("input", renderList);
+      }
+
+      renderList();
+      
+      // Show footer with buttons
+      const footer = $("#productInfoFooter");
+      if (footer) {
+        footer.classList.remove("hidden");
+        const cancelBtn = $("#productEditorCancelBtn");
+        const saveBtn = $("#productEditorSaveBtn");
+        
+        if (cancelBtn) {
+          cancelBtn.textContent = "Отменить";
+          cancelBtn.onclick = () => {
+            popNavigationState();
+          };
+        }
+        
+        if (saveBtn) {
+          saveBtn.textContent = "Сохранить";
+          saveBtn.onclick = () => {
+            // Ingredients are added immediately when clicking "Добавить" button
+            // So we just close the picker
+            popNavigationState();
+          };
+        }
+      }
+
+      pushNavigationState({
+        type: "ingredient-picker",
+        content: pickerOverlay,
+        onClose: () => {
+          // Hide footer when closing
+          const footer = $("#productInfoFooter");
+          if (footer) footer.classList.add("hidden");
+        }
+      });
+    }
+
+    function closeIngredientPicker() {
+      // No longer needed - handled by navigation
+    }
+
+    async function renderIngredientPickerList() {
+      if (!ui.ingredientModalList) return;
+      const query = String(ui.ingredientModalSearch?.value || "").trim().toLowerCase();
+      
+      try {
+        const res = await apiGetCatalogProducts({ query });
+        const products = Array.isArray(res.data) ? res.data : [];
+        const existingIds = new Set(Array.from(draftIngredients.keys()));
+
+        ui.ingredientModalList.innerHTML = products
+          .filter(p => !existingIds.has(Number(p.id)))
+          .filter(p => !query || String(p.name || "").toLowerCase().includes(query))
+          .map(p => {
+            const id = Number(p.id);
+            return `
+              <div class="option-picker-row" data-product-id="${id}">
+                <div class="option-picker-meta">
+                  <div class="options-row-title">${escapeHtml(p.name || "")}</div>
+                  <div class="options-row-meta">${formatMoney(p.price || 0)}</div>
+                </div>
+                <button class="btn btn-sm" type="button" data-add-ingredient="${id}">Добавить</button>
+              </div>
+            `;
+          }).join('');
+
+        ui.ingredientModalList.querySelectorAll("[data-add-ingredient]").forEach(btn => {
+          btn.addEventListener("click", async () => {
+            const productId = Number(btn.dataset.addIngredient);
+            if (!Number.isFinite(productId)) return;
+            closeIngredientPicker();
+            
+            // Find the product to get its unit_id from the catalog
+            const res = await apiGetCatalogProducts({});
+            const catalogProducts = Array.isArray(res.data) ? res.data : [];
+            const selectedProduct = catalogProducts.find(p => Number(p.id) === productId);
+            let unitId = null;
+            
+            if (selectedProduct && selectedProduct.unit_id) {
+              unitId = Number(selectedProduct.unit_id);
+            } else if (unitsList.length > 0) {
+              unitId = unitsList[0].id;
+            }
+            
+            if (!unitId) {
+              alert('Нет доступных единиц измерения');
+              return;
+            }
+
+            // Get product name and price from catalog
+            const productName = selectedProduct?.name || '';
+            const productPrice = Number(selectedProduct?.price || 0);
+            const productPhotos = Array.isArray(selectedProduct?.photos_json) ? selectedProduct.photos_json : [];
+
+            // Add to draft (works for both new and existing products)
+            if (isEdit && product) {
+              // Existing product - save to database
+              try {
+                await apiAddProductIngredient(product.id, {
+                  ingredient_id: productId,
+                  quantity: 1,
+                  unit_id: unitId,
+                  quantity_min: null,
+                  quantity_max: null,
+                  quantity_step: null,
+                  price_override: null,
+                  is_variable: 1,
+                });
+                await loadIngredients();
+              } catch (e) {
+                console.error('Failed to add ingredient', e);
+                alert('Ошибка при добавлении ингредиента');
+              }
+            } else {
+              // New product - add to draft
+              draftIngredients.set(productId, {
+                id: 0,
+                ingredient_id: productId,
+                ingredient_name: productName,
+                ingredient_price: productPrice,
+                ingredient_photos: productPhotos,
+                ingredient_unit_id: unitId,
+                quantity: 1,
+                unit_id: unitId,
+                unit_code: unitsList.find(u => u.id === unitId)?.code || '',
+                unit_title: unitsList.find(u => u.id === unitId)?.title || '',
+                unit_short_title: unitsList.find(u => u.id === unitId)?.short_title || '',
+                quantity_min: null,
+                quantity_max: null,
+                quantity_step: null,
+                price_override: null,
+                is_variable: true,
+                sort_order: draftIngredients.size * 10,
+              });
+              renderIngredientAccordion();
+            }
+          });
+        });
+      } catch (e) {
+        console.error('Failed to load products', e);
+        ui.ingredientModalList.innerHTML = '<div class="empty-hint">Ошибка загрузки товаров</div>';
+      }
+    }
+
+    if (ui.ingredientAddBtn) {
+      ui.ingredientAddBtn.addEventListener("click", () => {
+        openIngredientPicker();
+      });
+    }
+
+    if (ui.ingredientSearch) {
+      ui.ingredientSearch.addEventListener("input", () => {
+        const query = String(ui.ingredientSearch.value || "").trim();
+        if (query.length < 2) return;
+        // Можно добавить быстрый поиск здесь
+      });
+    }
+
+    if (ui.ingredientModalClose) ui.ingredientModalClose.addEventListener("click", closeIngredientPicker);
+    if (ui.ingredientModalCancel) ui.ingredientModalCancel.addEventListener("click", closeIngredientPicker);
+    if (ui.ingredientBackdrop) ui.ingredientBackdrop.addEventListener("click", closeIngredientPicker);
+    if (ui.ingredientModalSearch) {
+      ui.ingredientModalSearch.addEventListener("input", renderIngredientPickerList);
+    }
+    if (ui.ingredientModalCreate) {
+      ui.ingredientModalCreate.addEventListener("click", () => {
+        closeIngredientPicker();
+        // Можно открыть модальное окно создания товара
+        alert('Функция создания товара из состава будет добавлена позже');
+      });
+    }
+
+    // ========== END INGREDIENTS ==========
+
     // init UI after categories loaded (for edit)
     (async () => {
       await loadCatsPromise;
       await loadOptionsPromise;
+      await loadUnits();
       renderCategoryChips();
       renderOptionAccordion();
       renderPhotos();
+      if (isEdit && product) {
+        await loadIngredients();
+      }
       requestAnimationFrame(refreshOpenAccordions);
     })();
   }
@@ -3177,7 +4104,33 @@ function updateOptionGroupSelectionUi() {
       });
     }
 
-    if (closeProductInfoBtn) closeProductInfoBtn.addEventListener("click", clearProductSelection);
+    if (closeProductInfoBtn) {
+      closeProductInfoBtn.addEventListener("click", () => {
+        // Check if we're in edit mode
+        if (currentNavigationState?.type === "product-edit") {
+          // Cancel editing
+          const navState = currentNavigationState;
+          if (navState?.onClose) {
+            navState.onClose();
+          }
+          // Remove from editing state
+          if (navState?.product?.id && editingProducts.has(navState.product.id)) {
+            editingProducts.delete(navState.product.id);
+          }
+          clearNavigationStack();
+          // If editing existing product, show its details
+          if (navState?.isEdit && navState?.product) {
+            const p = state.products.find(pr => pr.id === navState.product.id);
+            if (p) {
+              showProductDetails(p);
+            }
+          }
+        } else {
+          // Close panel
+          clearProductSelection();
+        }
+      });
+    }
     if (sheetCloseBtn) sheetCloseBtn.addEventListener("click", clearProductSelection);
     if (sheetBackdrop) sheetBackdrop.addEventListener("click", clearProductSelection);
 
@@ -3213,14 +4166,45 @@ function updateOptionGroupSelectionUi() {
     }
 
     if (editProductBtn) {
-      editProductBtn.addEventListener("click", () => {
-        if (state.mode === "categories") {
-          const cat = state.categories.find((x) => x.id === state.selectedCategoryId);
-          if (cat) openCategoryModal({ mode: "edit", category: cat });
-          return;
+      editProductBtn.addEventListener("click", async () => {
+        // Check if we're in edit mode
+        if (currentNavigationState?.type === "product-edit") {
+          // Save changes
+          if (currentNavigationState?.onSave) {
+            const result = await currentNavigationState.onSave();
+            if (result) {
+              // Save successful - onSave handles navigation
+              // Remove from editing state if it was stored
+              const productId = currentNavigationState?.product?.id;
+              if (productId && editingProducts.has(productId)) {
+                editingProducts.delete(productId);
+              }
+            }
+          }
+        } else {
+          // Open editor
+          if (state.mode === "categories") {
+            const cat = state.categories.find((x) => x.id === state.selectedCategoryId);
+            if (cat) openCategoryModal({ mode: "edit", category: cat });
+            return;
+          }
+          const p = state.products.find((x) => x.id === state.selectedProductId);
+          if (p) {
+            // Check if this product is already being edited
+            if (editingProducts.has(p.id)) {
+              // Restore editing state
+              const editingState = editingProducts.get(p.id);
+              pushNavigationState(editingState.navigationState);
+              // Restore draft if needed
+              if (editingState.draft) {
+                // Draft will be restored by openProductModal if needed
+              }
+            } else {
+              // Open new editor
+              openProductModal({ mode: "edit", product: p });
+            }
+          }
         }
-        const p = state.products.find((x) => x.id === state.selectedProductId);
-        if (p) openProductModal({ mode: "edit", product: p });
       });
     }
 
