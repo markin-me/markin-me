@@ -157,16 +157,61 @@
     if (!Array.isArray(items) || !items.length) return '<div class="muted">?</div>';
 
     return items
-      .map((it) => {
+      .map((it, itemIdx) => {
         const name = escapeHtml(it.name || "Товар");
         const qty = Math.max(0, Number(it.qty || it.quantity || 0));
         const price = Number(it.price || 0);
         const lineTotal = Number(it.line_total || price * qty || 0);
 
+        // Фото товара (массив из items или пустой)
+        const photos = Array.isArray(it.photos) ? it.photos.filter(Boolean) : [];
+        const hasPhotos = photos.length > 0;
+        const uniqueId = `order-item-${itemIdx}-${Date.now()}`;
+
+        // HTML для фото с листанием
+        let photosHtml = "";
+        if (hasPhotos) {
+          photosHtml = `
+            <div class="order-item-photos" data-item-photos="${uniqueId}">
+              <div class="order-item-photo-main">
+                <img class="order-item-photo-img" src="${escapeHtml(photos[0])}" alt="${escapeHtml(name)}" data-photo-idx="0" />
+                ${photos.length > 1 ? `
+                  <button class="order-item-photo-nav order-item-photo-prev" type="button" aria-label="Предыдущее фото">
+                    <i class="fas fa-chevron-left"></i>
+                  </button>
+                  <button class="order-item-photo-nav order-item-photo-next" type="button" aria-label="Следующее фото">
+                    <i class="fas fa-chevron-right"></i>
+                  </button>
+                ` : ""}
+              </div>
+              ${photos.length > 1 ? `
+                <div class="order-item-photo-thumbs-wrapper">
+                  <button class="order-item-thumbs-nav order-item-thumbs-prev" type="button" aria-label="Листать миниатюры влево">
+                    <i class="fas fa-chevron-left"></i>
+                  </button>
+                  <div class="order-item-photo-thumbs" data-thumbs="${uniqueId}">
+                    ${photos.map((photo, idx) => `
+                      <button class="order-item-photo-thumb ${idx === 0 ? "is-active" : ""}" type="button" data-thumb-idx="${idx}">
+                        <img src="${escapeHtml(photo)}" alt="" />
+                      </button>
+                    `).join("")}
+                  </div>
+                  <button class="order-item-thumbs-nav order-item-thumbs-next" type="button" aria-label="Листать миниатюры вправо">
+                    <i class="fas fa-chevron-right"></i>
+                  </button>
+                </div>
+              ` : ""}
+            </div>
+          `;
+        }
+
         const base = `
           <div class="order-item-line">
-            <div class="order-item-name">${name} × ${qty}</div>
-            <div class="order-item-sum">${money(lineTotal)}</div>
+            ${hasPhotos ? `<div class="order-item-photo-col">${photosHtml}</div>` : ""}
+            <div class="order-item-content">
+              <div class="order-item-name">${name} × ${qty}</div>
+              <div class="order-item-sum">${money(lineTotal)}</div>
+            </div>
           </div>
         `;
 
@@ -184,9 +229,103 @@
               .join("")}</div>`
           : "";
 
-        return `<div class="order-item">${base}${subHtml}</div>`;
+        return `<div class="order-item" data-item-idx="${itemIdx}">${base}${subHtml}</div>`;
       })
       .join("");
+  }
+
+  // Инициализация листания фото для товаров в заказе
+  function initOrderItemPhotos() {
+    if (!infoEls.itemsList || !infoEls.itemsList.length) return;
+    
+    infoEls.itemsList.forEach((container) => {
+      if (!container) return;
+      
+      // Обработчики для каждого товара (проверяем, что еще не инициализирован)
+      container.querySelectorAll('[data-item-photos]:not([data-photos-initialized])').forEach((photoContainer) => {
+        const uniqueId = photoContainer.getAttribute('data-item-photos');
+        const mainImg = photoContainer.querySelector('.order-item-photo-img');
+        const thumbsContainer = photoContainer.querySelector(`[data-thumbs="${uniqueId}"]`);
+        const prevBtn = photoContainer.querySelector('.order-item-photo-prev');
+        const nextBtn = photoContainer.querySelector('.order-item-photo-next');
+        const thumbsPrevBtn = photoContainer.querySelector('.order-item-thumbs-prev');
+        const thumbsNextBtn = photoContainer.querySelector('.order-item-thumbs-next');
+        
+        if (!mainImg) return;
+        
+        // Помечаем как инициализированный
+        photoContainer.setAttribute('data-photos-initialized', 'true');
+        
+        // Получаем все фото из миниатюр
+        const thumbs = thumbsContainer ? Array.from(thumbsContainer.querySelectorAll('.order-item-photo-thumb')) : [];
+        const photos = thumbs.map(thumb => {
+          const img = thumb.querySelector('img');
+          return img ? img.src : null;
+        }).filter(Boolean);
+        
+        if (photos.length <= 1) return;
+        
+        let currentIdx = 0;
+        
+        function setActivePhoto(idx) {
+          if (idx < 0 || idx >= photos.length) return;
+          currentIdx = idx;
+          mainImg.src = photos[idx];
+          mainImg.setAttribute('data-photo-idx', String(idx));
+          
+          // Обновляем активную миниатюру
+          thumbs.forEach((thumb, i) => {
+            thumb.classList.toggle('is-active', i === idx);
+          });
+          
+          // Прокручиваем миниатюры к активной
+          if (thumbsContainer && thumbs[idx]) {
+            const thumb = thumbs[idx];
+            const containerRect = thumbsContainer.getBoundingClientRect();
+            const thumbRect = thumb.getBoundingClientRect();
+            
+            if (thumbRect.left < containerRect.left) {
+              thumbsContainer.scrollLeft -= (containerRect.left - thumbRect.left + 10);
+            } else if (thumbRect.right > containerRect.right) {
+              thumbsContainer.scrollLeft += (thumbRect.right - containerRect.right + 10);
+            }
+          }
+        }
+        
+        // Навигация стрелками на главном фото
+        if (prevBtn) {
+          prevBtn.addEventListener('click', () => {
+            setActivePhoto((currentIdx - 1 + photos.length) % photos.length);
+          });
+        }
+        
+        if (nextBtn) {
+          nextBtn.addEventListener('click', () => {
+            setActivePhoto((currentIdx + 1) % photos.length);
+          });
+        }
+        
+        // Клик на миниатюру
+        thumbs.forEach((thumb, idx) => {
+          thumb.addEventListener('click', () => {
+            setActivePhoto(idx);
+          });
+        });
+        
+        // Листание миниатюр стрелками
+        if (thumbsPrevBtn && thumbsContainer) {
+          thumbsPrevBtn.addEventListener('click', () => {
+            thumbsContainer.scrollBy({ left: -80, behavior: 'smooth' });
+          });
+        }
+        
+        if (thumbsNextBtn && thumbsContainer) {
+          thumbsNextBtn.addEventListener('click', () => {
+            thumbsContainer.scrollBy({ left: 80, behavior: 'smooth' });
+          });
+        }
+      });
+    });
   }
 
   function paymentIcon(code) {
@@ -314,6 +453,11 @@
     setHiddenAll(infoEls.deliveryComment, !comment);
 
     setHtmlAll(infoEls.itemsList, itemsToHtml(order.items || []));
+    
+    // Инициализируем листание фото после рендеринга
+    setTimeout(() => {
+      initOrderItemPhotos();
+    }, 0);
   }
 
   // -----------------------------

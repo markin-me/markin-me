@@ -342,6 +342,43 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   });
 
   // ------------------------------
+  // DELETE product (soft delete)
+  // DELETE /api/prod_products/:id
+  // ------------------------------
+  router.delete('/prod_products/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      // Проверяем существование товара
+      const [rows] = await db.query(
+        'SELECT id FROM prod_products WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, id]
+      );
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      // Soft delete: устанавливаем is_active=0 и site_visibility=0
+      // Данные товара в заказах сохраняются в JSON поле items
+      await db.query(
+        `UPDATE prod_products
+         SET is_active=0, site_visibility=0
+         WHERE tenant_id=? AND id=?`,
+        [tenantId, id]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // ------------------------------
   // Sorting
   // POST /api/sort/prod_categories
   // POST /api/sort/prod_products
@@ -705,42 +742,36 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
 
-      const [[itemsRow]] = await conn.query(
-        'SELECT COUNT(*) AS cnt FROM prod_option_items WHERE tenant_id=? AND group_id=?',
-        [tenantId, id]
-      );
-      const [[assignmentsRow]] = await conn.query(
-        'SELECT COUNT(*) AS cnt FROM prod_option_assignments WHERE tenant_id=? AND group_id=?',
+      // Каскадное удаление всех связей опции
+      // Удаляем items
+      await conn.query(
+        'DELETE FROM prod_option_items WHERE tenant_id=? AND group_id=?',
         [tenantId, id]
       );
 
-      let overridesCount = 0;
-      let exclusionsCount = 0;
+      // Удаляем assignments
+      await conn.query(
+        'DELETE FROM prod_option_assignments WHERE tenant_id=? AND group_id=?',
+        [tenantId, id]
+      );
+
+      // Удаляем overrides (если таблица существует)
       if (await tableExists(conn, 'prod_option_overrides')) {
-        const [[overridesRow]] = await conn.query(
-          'SELECT COUNT(*) AS cnt FROM prod_option_overrides WHERE tenant_id=? AND group_id=?',
+        await conn.query(
+          'DELETE FROM prod_option_overrides WHERE tenant_id=? AND group_id=?',
           [tenantId, id]
         );
-        overridesCount = overridesRow?.cnt || 0;
       }
+
+      // Удаляем exclusions (если таблица существует)
       if (await tableExists(conn, 'prod_option_exclusions')) {
-        const [[exclusionsRow]] = await conn.query(
-          'SELECT COUNT(*) AS cnt FROM prod_option_exclusions WHERE tenant_id=? AND group_id=?',
+        await conn.query(
+          'DELETE FROM prod_option_exclusions WHERE tenant_id=? AND group_id=?',
           [tenantId, id]
         );
-        exclusionsCount = exclusionsRow?.cnt || 0;
       }
 
-      const hasRelations = (itemsRow?.cnt || 0) > 0
-        || (assignmentsRow?.cnt || 0) > 0
-        || overridesCount > 0
-        || exclusionsCount > 0;
-
-      if (hasRelations) {
-        await conn.rollback();
-        return res.status(409).json({ ok: false, error: 'Нельзя удалить опцию — есть связанные данные' });
-      }
-
+      // Удаляем саму группу опций
       await conn.query(
         'DELETE FROM prod_option_groups WHERE tenant_id=? AND id=?',
         [tenantId, id]

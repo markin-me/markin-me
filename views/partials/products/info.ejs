@@ -8,9 +8,17 @@
 
     <div class="product-info-header-actions">
       <div class="product-header-actions" id="productHeaderActions">
-        <button class="btn btn-icon" id="productMoreBtn" type="button" title="Действия" aria-label="Действия">
-          <i class="fas fa-ellipsis-h"></i>
-        </button>
+        <div class="dropdown" style="position: relative;">
+          <button class="btn btn-icon" id="productMoreBtn" type="button" title="Действия" aria-label="Действия" aria-expanded="false">
+            <i class="fas fa-ellipsis-h"></i>
+          </button>
+          <div class="dropdown-menu hidden" id="productDropdown" style="position: absolute; top: 100%; right: 0; margin-top: 4px; z-index: 1000; background: white; border: 1px solid #ddd; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); min-width: 160px;">
+            <button class="dropdown-item" type="button" id="productDeleteBtn" style="width: 100%; padding: 8px 16px; text-align: left; border: none; background: none; cursor: pointer; color: #dc3545;">
+              <i class="fas fa-trash" style="margin-right: 8px;"></i>
+              Удалить
+            </button>
+          </div>
+        </div>
 
         <button class="btn btn-icon" id="editProductBtn" type="button" title="Редактировать" aria-label="Редактировать">
           <i class="fas fa-pen"></i>
@@ -63,12 +71,34 @@
       <!-- TOP: фото слева, справа info-card -->
       <div class="product-info-top">
         <div class="product-info-photoCol">
-          <div class="product-photo-main">
-            <img id="infoMainPhoto" class="product-photo-img hidden" alt="">
-            <div id="infoPhotoPlaceholder" class="product-photo-placeholder">Нет фото</div>
+          <div class="product-photo-main" id="infoPhotoMainContainer">
+            <div class="photo-main-wrapper">
+              <img id="infoMainPhoto" class="product-photo-img hidden" alt="">
+              <div id="infoPhotoPlaceholder" class="product-photo-placeholder">Нет фото</div>
+              
+              <!-- Стрелки навигации -->
+              <button class="photo-nav-btn photo-nav-prev hidden" type="button" id="infoPhotoPrev" aria-label="Предыдущее фото">
+                <i class="fas fa-chevron-left"></i>
+              </button>
+              <button class="photo-nav-btn photo-nav-next hidden" type="button" id="infoPhotoNext" aria-label="Следующее фото">
+                <i class="fas fa-chevron-right"></i>
+              </button>
+              
+              <!-- Точки-индикаторы -->
+              <div class="photo-dots hidden" id="infoPhotoDots"></div>
+            </div>
           </div>
 
-          <div class="product-photo-thumbs" id="infoPhotoThumbs"></div>
+          <!-- Миниатюры с прокруткой -->
+          <div class="product-photo-thumbs-wrapper" id="infoPhotoThumbsWrapper">
+            <button class="product-thumbs-nav product-thumbs-prev hidden" type="button" id="infoThumbsPrev" aria-label="Листать миниатюры влево">
+              <i class="fas fa-chevron-left"></i>
+            </button>
+            <div class="product-photo-thumbs" id="infoPhotoThumbs"></div>
+            <button class="product-thumbs-nav product-thumbs-next hidden" type="button" id="infoThumbsNext" aria-label="Листать миниатюры вправо">
+              <i class="fas fa-chevron-right"></i>
+            </button>
+          </div>
         </div>
 
         <div class="info-card">

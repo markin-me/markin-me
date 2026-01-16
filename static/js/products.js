@@ -28,6 +28,8 @@
   const optionGroupInfo = $("#optionGroupInfo");
   const productInfoHeader = $("#productInfoHeader");
   const productHeaderActions = $("#productHeaderActions");
+  const productMoreBtn = $("#productMoreBtn");
+  const productDropdown = $("#productDropdown");
   const optionHeaderActions = $("#optionHeaderActions");
   const optionHeaderBackBtn = $("#optionHeaderBackBtn");
   const optionHeaderPrimaryBtn = $("#optionHeaderPrimaryBtn");
@@ -234,6 +236,10 @@
 
   async function apiDisableProductOptionAssignment(productId, groupId) {
     return api(`/api/admin/products/${productId}/option-assignments/${groupId}`, { method: "PATCH" });
+  }
+
+  async function apiDeleteProduct(id) {
+    return api(`/api/prod_products/${id}`, { method: "DELETE" });
   }
 
   // ---------------- Accordion (height fix) ----------------
@@ -814,12 +820,23 @@ function buildOptionGroupPayload(formValues) {
     const arr = Array.isArray(photos) ? photos : [];
     if (!infoMainPhoto || !infoPhotoPlaceholder || !infoPhotoThumbs) return;
 
+    const infoPhotoPrev = $("#infoPhotoPrev");
+    const infoPhotoNext = $("#infoPhotoNext");
+    const infoPhotoDots = $("#infoPhotoDots");
+    const infoThumbsPrev = $("#infoThumbsPrev");
+    const infoThumbsNext = $("#infoThumbsNext");
+
     infoPhotoThumbs.innerHTML = "";
 
     if (!arr.length) {
       infoMainPhoto.src = "";
       infoMainPhoto.classList.add("hidden");
       infoPhotoPlaceholder.classList.remove("hidden");
+      if (infoPhotoPrev) infoPhotoPrev.classList.add("hidden");
+      if (infoPhotoNext) infoPhotoNext.classList.add("hidden");
+      if (infoPhotoDots) infoPhotoDots.classList.add("hidden");
+      if (infoThumbsPrev) infoThumbsPrev.classList.add("hidden");
+      if (infoThumbsNext) infoThumbsNext.classList.add("hidden");
       return;
     }
 
@@ -827,20 +844,105 @@ function buildOptionGroupPayload(formValues) {
     infoMainPhoto.classList.remove("hidden");
     infoMainPhoto.src = arr[0];
 
+    // Показываем стрелки если фото больше 1
+    const showNav = arr.length > 1;
+    if (infoPhotoPrev) infoPhotoPrev.classList.toggle("hidden", !showNav);
+    if (infoPhotoNext) infoPhotoNext.classList.toggle("hidden", !showNav);
+    if (infoPhotoDots) infoPhotoDots.classList.toggle("hidden", !showNav);
+    if (infoThumbsPrev) infoThumbsPrev.classList.toggle("hidden", !showNav);
+    if (infoThumbsNext) infoThumbsNext.classList.toggle("hidden", !showNav);
+
+    // Точки-индикаторы
+    if (infoPhotoDots && showNav) {
+      infoPhotoDots.innerHTML = arr.map((_, idx) => 
+        `<span class="photo-dot ${idx === 0 ? "is-active" : ""}" data-dot-idx="${idx}"></span>`
+      ).join("");
+    }
+
+    // Миниатюры
     infoPhotoThumbs.innerHTML = arr.map((url, idx) => {
       return `<button type="button" class="img-thumb ${idx === 0 ? "is-active" : ""}" data-idx="${idx}">
         <img src="${escapeHtml(url)}" alt="" />
       </button>`;
     }).join("");
 
+    let currentIdx = 0;
+
+    function setActivePhoto(idx) {
+      if (idx < 0 || idx >= arr.length) return;
+      currentIdx = idx;
+      infoMainPhoto.src = arr[idx];
+      
+      // Обновляем активную миниатюру
+      $$(".img-thumb", infoPhotoThumbs).forEach((thumb, i) => {
+        thumb.classList.toggle("is-active", i === idx);
+      });
+
+      // Обновляем точки
+      if (infoPhotoDots) {
+        $$(".photo-dot", infoPhotoDots).forEach((dot, i) => {
+          dot.classList.toggle("is-active", i === idx);
+        });
+      }
+
+      // Прокручиваем миниатюры к активной
+      const activeThumb = infoPhotoThumbs.querySelector(`[data-idx="${idx}"]`);
+      if (activeThumb && infoPhotoThumbs) {
+        const containerRect = infoPhotoThumbs.getBoundingClientRect();
+        const thumbRect = activeThumb.getBoundingClientRect();
+        
+        if (thumbRect.left < containerRect.left) {
+          infoPhotoThumbs.scrollLeft -= (containerRect.left - thumbRect.left + 10);
+        } else if (thumbRect.right > containerRect.right) {
+          infoPhotoThumbs.scrollLeft += (thumbRect.right - containerRect.right + 10);
+        }
+      }
+    }
+
+    // Клик на миниатюру
     $$(".img-thumb", infoPhotoThumbs).forEach((b) => {
       b.addEventListener("click", () => {
         const idx = Number(b.dataset.idx);
-        if (!Number.isFinite(idx)) return;
-        infoMainPhoto.src = arr[idx];
-        $$(".img-thumb", infoPhotoThumbs).forEach((x) => x.classList.toggle("is-active", x === b));
+        if (Number.isFinite(idx)) setActivePhoto(idx);
       });
     });
+
+    // Навигация стрелками на главном фото
+    if (infoPhotoPrev) {
+      infoPhotoPrev.addEventListener("click", () => {
+        setActivePhoto((currentIdx - 1 + arr.length) % arr.length);
+      });
+    }
+
+    if (infoPhotoNext) {
+      infoPhotoNext.addEventListener("click", () => {
+        setActivePhoto((currentIdx + 1) % arr.length);
+      });
+    }
+
+    // Клик на точки
+    if (infoPhotoDots) {
+      infoPhotoDots.addEventListener("click", (e) => {
+        const dot = e.target.closest(".photo-dot[data-dot-idx]");
+        if (dot) {
+          const idx = Number(dot.dataset.dotIdx);
+          if (Number.isFinite(idx)) setActivePhoto(idx);
+        }
+      });
+    }
+
+    // Листание миниатюр стрелками
+    if (infoThumbsPrev) {
+      infoThumbsPrev.addEventListener("click", () => {
+        infoPhotoThumbs.scrollBy({ left: -80, behavior: "smooth" });
+      });
+    }
+
+    if (infoThumbsNext) {
+      infoThumbsNext.addEventListener("click", () => {
+        infoPhotoThumbs.scrollBy({ left: 80, behavior: "smooth" });
+      });
+    }
   }
 
   function renderProductOptionsAccordion() {
@@ -1983,6 +2085,37 @@ function updateOptionGroupSelectionUi() {
     });
   }
 
+  function confirmProductDelete() {
+    if (!state.selectedProductId || !window.AppModal) return;
+    const productId = state.selectedProductId;
+    const product = state.products.find((p) => p.id === productId);
+    const productName = product ? product.name : "товар";
+    
+    window.AppModal.open({
+      title: "Удалить товар?",
+      content: `<div class="modal-text">Товар "<strong>${escapeHtml(productName)}</strong>" будет удален. Данные о товаре в заказах сохранятся для отчетов.</div>`,
+      saveText: "Удалить",
+      cancelText: "Отмена",
+      onSave: async () => {
+        try {
+          await apiDeleteProduct(productId);
+          // Удаляем из списка
+          state.products = state.products.filter((p) => p.id !== productId);
+          state.selectedProductId = null;
+          clearProductSelection();
+          // Перезагружаем товары для текущей категории
+          await loadProducts(state.currentCategoryId);
+          renderProductsList();
+          return true;
+        } catch (e) {
+          const message = e && e.message ? e.message : "Не удалось удалить товар.";
+          alert(message);
+          return false;
+        }
+      },
+    });
+  }
+
   function closeOptionPicker() {
     state.optionPanel.level = "group";
     state.optionPanel.pickerSelection = new Set();
@@ -2062,7 +2195,7 @@ function updateOptionGroupSelectionUi() {
     const draft = {
       categories: defaultSelected,   // Set<number>
       photos: initialPhotos.map((url) => ({ kind: "url", url })), // {kind:'url'|'file', url|file, preview}
-      activePhotoIdx: 0,
+      activePhotoIdx: initialPhotos.length > 0 ? 0 : -1,
       optionGroups: new Set(),
       initialOptionGroups: new Set(),
     };
@@ -2086,9 +2219,19 @@ function updateOptionGroupSelectionUi() {
       });
     })();
 
+    // Обработчик клавиатуры для навигации фото
+    let keyboardHandler = null;
+
     window.AppModal.open({
       title: isEdit ? "Редактировать товар" : "Новый товар",
       content: "#tplProductEditor",
+      onClose: () => {
+        // Удаляем обработчик клавиатуры при закрытии
+        if (keyboardHandler) {
+          document.removeEventListener("keydown", keyboardHandler);
+          keyboardHandler = null;
+        }
+      },
       onSave: async ({ body }) => {
         const form = $("#productEditorForm", body);
         if (!form) return false;
@@ -2196,9 +2339,15 @@ function updateOptionGroupSelectionUi() {
       photosInput: $("#pePhotosInput", body),
       addPhotosBtn: $("#peAddPhotosBtn", body),
       photoMain: $("#pePhotoMain", body),
+      photoMainContainer: $("#pePhotoMainContainer", body),
       photoPlaceholder: $("#pePhotoPlaceholder", body),
       thumbs: $("#pePhotoThumbs", body),
+      thumbsPrev: $("#peThumbsPrev", body),
+      thumbsNext: $("#peThumbsNext", body),
       counter: $("#pePhotosCounter", body),
+      photoPrev: $("#pePhotoPrev", body),
+      photoNext: $("#pePhotoNext", body),
+      photoDots: $("#pePhotoDots", body),
     };
 
     function openCatPicker() {
@@ -2464,31 +2613,59 @@ function updateOptionGroupSelectionUi() {
       const total = draft.photos.length;
       if (ui.counter) ui.counter.textContent = `${total}/10`;
 
+      // Нормализуем activePhotoIdx
+      if (draft.activePhotoIdx < 0 || draft.activePhotoIdx >= total) {
+        draft.activePhotoIdx = total > 0 ? 0 : -1;
+      }
+
+      // Рендерим миниатюры с drag handles
       ui.thumbs.innerHTML = draft.photos.map((ph, idx) => {
         const src = ph.kind === "url" ? ph.url : ph.preview;
         return `
-          <button type="button" class="img-thumb ${idx === draft.activePhotoIdx ? "is-active" : ""}" data-idx="${idx}">
-            <img src="${escapeHtml(src)}" alt="" />
-            <span class="img-del" data-del="${idx}"><i class="fas fa-times"></i></span>
-          </button>
+          <div class="img-thumb-wrapper" draggable="true" data-idx="${idx}">
+            <button type="button" class="img-thumb ${idx === draft.activePhotoIdx ? "is-active" : ""}" data-idx="${idx}">
+              <img src="${escapeHtml(src)}" alt="" />
+              <span class="img-del" data-del="${idx}" title="Удалить"><i class="fas fa-times"></i></span>
+              <span class="img-drag-handle" title="Перетащите для изменения порядка"><i class="fas fa-grip-vertical"></i></span>
+            </button>
+          </div>
         `;
       }).join("");
 
+      // Главное фото
       if (!total) {
         ui.photoMain.src = "";
         ui.photoMain.classList.add("hidden");
         ui.photoPlaceholder.classList.remove("hidden");
+        if (ui.photoPrev) ui.photoPrev.classList.add("hidden");
+        if (ui.photoNext) ui.photoNext.classList.add("hidden");
+        if (ui.photoDots) ui.photoDots.classList.add("hidden");
       } else {
         const active = draft.photos[draft.activePhotoIdx] || draft.photos[0];
         const src = active.kind === "url" ? active.url : active.preview;
         ui.photoPlaceholder.classList.add("hidden");
         ui.photoMain.classList.remove("hidden");
         ui.photoMain.src = src;
+        
+        // Показываем стрелки если фото больше 1
+        const showNav = total > 1;
+        if (ui.photoPrev) ui.photoPrev.classList.toggle("hidden", !showNav);
+        if (ui.photoNext) ui.photoNext.classList.toggle("hidden", !showNav);
+        if (ui.photoDots) ui.photoDots.classList.toggle("hidden", !showNav);
       }
 
+      // Точки-индикаторы
+      if (ui.photoDots && total > 1) {
+        ui.photoDots.innerHTML = draft.photos.map((_, idx) => 
+          `<span class="photo-dot ${idx === draft.activePhotoIdx ? "is-active" : ""}" data-dot-idx="${idx}"></span>`
+        ).join("");
+      }
+
+      // Обработчики миниатюр
       ui.thumbs.onclick = (e) => {
         const del = e.target.closest("[data-del]");
         if (del) {
+          e.stopPropagation();
           const idx = Number(del.dataset.del);
           if (!Number.isFinite(idx)) return;
           const removed = draft.photos.splice(idx, 1);
@@ -2507,6 +2684,124 @@ function updateOptionGroupSelectionUi() {
         draft.activePhotoIdx = idx;
         renderPhotos();
       };
+
+      // Обработчики точек
+      if (ui.photoDots) {
+        ui.photoDots.onclick = (e) => {
+          const dot = e.target.closest(".photo-dot[data-dot-idx]");
+          if (!dot) return;
+          const idx = Number(dot.dataset.dotIdx);
+          if (Number.isFinite(idx) && idx >= 0 && idx < total) {
+            draft.activePhotoIdx = idx;
+            renderPhotos();
+          }
+        };
+      }
+
+      // Листание миниатюр стрелками
+      if (ui.thumbsPrev && ui.thumbs) {
+        ui.thumbsPrev.addEventListener("click", () => {
+          ui.thumbs.scrollBy({ left: -80, behavior: "smooth" });
+        });
+      }
+
+      if (ui.thumbsNext && ui.thumbs) {
+        ui.thumbsNext.addEventListener("click", () => {
+          ui.thumbs.scrollBy({ left: 80, behavior: "smooth" });
+        });
+      }
+
+      // Прокручиваем к активной миниатюре при изменении
+      if (ui.thumbs && total > 0) {
+        const activeThumb = ui.thumbs.querySelector(`[data-idx="${draft.activePhotoIdx}"]`);
+        if (activeThumb) {
+          const containerRect = ui.thumbs.getBoundingClientRect();
+          const thumbRect = activeThumb.getBoundingClientRect();
+          
+          if (thumbRect.left < containerRect.left) {
+            ui.thumbs.scrollLeft -= (containerRect.left - thumbRect.left + 10);
+          } else if (thumbRect.right > containerRect.right) {
+            ui.thumbs.scrollLeft += (thumbRect.right - containerRect.right + 10);
+          }
+        }
+      }
+
+      // Инициализация drag & drop для изменения порядка
+      initPhotoDragAndDrop();
+    }
+
+    function initPhotoDragAndDrop() {
+      if (!ui.thumbs) return;
+      
+      const wrappers = ui.thumbs.querySelectorAll(".img-thumb-wrapper");
+      wrappers.forEach((wrapper) => {
+        wrapper.addEventListener("dragstart", (e) => {
+          const idx = Number(wrapper.dataset.idx);
+          if (Number.isFinite(idx)) {
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", String(idx));
+            wrapper.classList.add("is-dragging");
+          }
+        });
+
+        wrapper.addEventListener("dragend", () => {
+          wrapper.classList.remove("is-dragging");
+          wrappers.forEach((w) => w.classList.remove("drag-over"));
+        });
+
+        wrapper.addEventListener("dragover", (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          const idx = Number(wrapper.dataset.idx);
+          const dragIdx = Number(e.dataTransfer.getData("text/plain"));
+          if (Number.isFinite(idx) && Number.isFinite(dragIdx) && idx !== dragIdx) {
+            wrapper.classList.add("drag-over");
+          }
+        });
+
+        wrapper.addEventListener("dragleave", () => {
+          wrapper.classList.remove("drag-over");
+        });
+
+        wrapper.addEventListener("drop", (e) => {
+          e.preventDefault();
+          wrapper.classList.remove("drag-over");
+          
+          const dragIdx = Number(e.dataTransfer.getData("text/plain"));
+          const dropIdx = Number(wrapper.dataset.idx);
+          
+          if (!Number.isFinite(dragIdx) || !Number.isFinite(dropIdx) || dragIdx === dropIdx) return;
+          
+          // Перемещаем фото
+          const [moved] = draft.photos.splice(dragIdx, 1);
+          draft.photos.splice(dropIdx, 0, moved);
+          
+          // Обновляем activePhotoIdx
+          if (draft.activePhotoIdx === dragIdx) {
+            draft.activePhotoIdx = dropIdx;
+          } else if (draft.activePhotoIdx === dropIdx) {
+            draft.activePhotoIdx = dragIdx;
+          } else if (dragIdx < draft.activePhotoIdx && dropIdx >= draft.activePhotoIdx) {
+            draft.activePhotoIdx--;
+          } else if (dragIdx > draft.activePhotoIdx && dropIdx <= draft.activePhotoIdx) {
+            draft.activePhotoIdx++;
+          }
+          
+          renderPhotos();
+        });
+      });
+    }
+
+    function navigatePhoto(direction) {
+      const total = draft.photos.length;
+      if (total <= 1) return;
+      
+      if (direction === "prev") {
+        draft.activePhotoIdx = (draft.activePhotoIdx - 1 + total) % total;
+      } else if (direction === "next") {
+        draft.activePhotoIdx = (draft.activePhotoIdx + 1) % total;
+      }
+      renderPhotos();
     }
 
     function addFiles(files) {
@@ -2518,15 +2813,70 @@ function updateOptionGroupSelectionUi() {
         const preview = URL.createObjectURL(f);
         draft.photos.push({ kind: "file", file: f, preview });
       }
-      if (draft.photos.length && draft.activePhotoIdx === 0) draft.activePhotoIdx = 0;
+      // Устанавливаем активное фото на первое, если его не было
+      if (draft.photos.length && draft.activePhotoIdx < 0) {
+        draft.activePhotoIdx = 0;
+      }
       renderPhotos();
     }
 
+    // Загрузка фото через кнопку
     ui.addPhotosBtn.addEventListener("click", () => ui.photosInput.click());
     ui.photosInput.addEventListener("change", () => {
       if (ui.photosInput.files && ui.photosInput.files.length) addFiles(ui.photosInput.files);
       ui.photosInput.value = "";
     });
+
+    // Drag & Drop загрузка на область главного фото
+    if (ui.photoMainContainer) {
+      ui.photoMainContainer.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        ui.photoMainContainer.classList.add("drag-over");
+      });
+
+      ui.photoMainContainer.addEventListener("dragleave", () => {
+        ui.photoMainContainer.classList.remove("drag-over");
+      });
+
+      ui.photoMainContainer.addEventListener("drop", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        ui.photoMainContainer.classList.remove("drag-over");
+        
+        const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
+        if (files.length) {
+          addFiles(files);
+        }
+      });
+    }
+
+    // Навигация стрелками
+    if (ui.photoPrev) {
+      ui.photoPrev.addEventListener("click", () => navigatePhoto("prev"));
+    }
+    if (ui.photoNext) {
+      ui.photoNext.addEventListener("click", () => navigatePhoto("next"));
+    }
+
+    // Навигация клавиатурой
+    const handleKeydown = (e) => {
+      // Проверяем, что модалка открыта и мы не в поле ввода
+      const modal = document.getElementById("appModal");
+      if (!modal || !modal.classList.contains("is-open")) return;
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable) return;
+      
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        navigatePhoto("prev");
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        navigatePhoto("next");
+      }
+    };
+    
+    keyboardHandler = handleKeydown;
+    document.addEventListener("keydown", keyboardHandler);
 
     ui.catClose.addEventListener("click", closeCatPicker);
     ui.catBackdrop.addEventListener("click", closeCatPicker);
@@ -2830,6 +3180,37 @@ function updateOptionGroupSelectionUi() {
     if (closeProductInfoBtn) closeProductInfoBtn.addEventListener("click", clearProductSelection);
     if (sheetCloseBtn) sheetCloseBtn.addEventListener("click", clearProductSelection);
     if (sheetBackdrop) sheetBackdrop.addEventListener("click", clearProductSelection);
+
+    // Выпадающее меню для товара
+    if (productMoreBtn && productDropdown) {
+      const productDeleteBtn = $("#productDeleteBtn");
+      
+      // Закрытие меню при клике вне его
+      document.addEventListener("click", (e) => {
+        if (productDropdown && !productDropdown.contains(e.target) && !productMoreBtn.contains(e.target)) {
+          productDropdown.classList.add("hidden");
+          productMoreBtn.setAttribute("aria-expanded", "false");
+        }
+      });
+
+      // Открытие/закрытие меню
+      productMoreBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const isOpen = !productDropdown.classList.contains("hidden");
+        productDropdown.classList.toggle("hidden", isOpen);
+        productMoreBtn.setAttribute("aria-expanded", String(!isOpen));
+      });
+
+      // Удаление товара
+      if (productDeleteBtn) {
+        productDeleteBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          productDropdown.classList.add("hidden");
+          productMoreBtn.setAttribute("aria-expanded", "false");
+          confirmProductDelete();
+        });
+      }
+    }
 
     if (editProductBtn) {
       editProductBtn.addEventListener("click", () => {

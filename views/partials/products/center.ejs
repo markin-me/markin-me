@@ -50,13 +50,34 @@
     <!-- TOP: Фото 150x150 слева, справа основные поля -->
     <div class="product-editor-top">
       <div>
-        <div class="product-photo-main">
-          <img id="pePhotoMain" class="img-main hidden" alt="" />
-          <div class="product-photo-placeholder" id="pePhotoPlaceholder">Нет фото</div>
+        <div class="product-photo-main" id="pePhotoMainContainer">
+          <div class="photo-main-wrapper">
+            <img id="pePhotoMain" class="img-main hidden" alt="" />
+            <div class="product-photo-placeholder" id="pePhotoPlaceholder">Нет фото<br><small>Перетащите файлы сюда</small></div>
+            
+            <!-- Стрелки навигации -->
+            <button class="photo-nav-btn photo-nav-prev hidden" type="button" id="pePhotoPrev" aria-label="Предыдущее фото">
+              <i class="fas fa-chevron-left"></i>
+            </button>
+            <button class="photo-nav-btn photo-nav-next hidden" type="button" id="pePhotoNext" aria-label="Следующее фото">
+              <i class="fas fa-chevron-right"></i>
+            </button>
+            
+            <!-- Точки-индикаторы -->
+            <div class="photo-dots hidden" id="pePhotoDots"></div>
+          </div>
         </div>
 
-        <!-- миниатюры (JS рисует .img-thumb внутри) -->
-        <div class="product-photo-thumbs img-thumbs" id="pePhotoThumbs"></div>
+        <!-- миниатюры с прокруткой (JS рисует .img-thumb внутри) -->
+        <div class="product-photo-thumbs-wrapper">
+          <button class="product-thumbs-nav product-thumbs-prev hidden" type="button" id="peThumbsPrev" aria-label="Листать миниатюры влево">
+            <i class="fas fa-chevron-left"></i>
+          </button>
+          <div class="product-photo-thumbs img-thumbs" id="pePhotoThumbs"></div>
+          <button class="product-thumbs-nav product-thumbs-next hidden" type="button" id="peThumbsNext" aria-label="Листать миниатюры вправо">
+            <i class="fas fa-chevron-right"></i>
+          </button>
+        </div>
 
         <div class="product-photo-tools">
           <input id="pePhotosInput" type="file" accept="image/*" multiple class="hidden" />

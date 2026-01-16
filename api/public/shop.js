@@ -1059,7 +1059,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       if (!ids.length) return res.status(400).json({ ok: false, error: 'BAD_ITEMS' });
 
       const [products] = await db.query(
-        `SELECT id, name, price, old_price
+        `SELECT id, name, price, old_price, photos_json
          FROM prod_products
          WHERE tenant_id=? AND id IN (${ids.map(() => '?').join(',')})`,
         [tenantId, ...ids]
@@ -1081,6 +1081,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
         total += lineTotal;
 
+        // Получаем фото товара для сохранения в заказе
+        let photos = [];
+        try {
+          if (p.photos_json) {
+            const parsed = JSON.parse(p.photos_json);
+            if (Array.isArray(parsed)) photos = parsed;
+          }
+        } catch {}
+
         normItems.push({
           product_id: pid,
           name: p.name,
@@ -1088,6 +1097,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           price,
           old_price: oldPrice,
           line_total: lineTotal,
+          photos, // Сохраняем фото для отчетов
         });
       }
 
