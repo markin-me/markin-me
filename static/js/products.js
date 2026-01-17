@@ -167,7 +167,7 @@
     if (optionEmpty) optionEmpty.classList.add("hidden");
     
     // Clear productInfoBody to avoid duplicate content
-    if (productInfoBody && (state.type === "product-edit" || state.type === "option-picker" || state.type === "ingredient-picker" || state.type === "option-edit")) {
+    if (productInfoBody && (state.type === "product-edit" || state.type === "category-edit" || state.type === "option-picker" || state.type === "ingredient-picker" || state.type === "option-edit")) {
       productInfoBody.innerHTML = "";
     }
 
@@ -197,7 +197,7 @@
           
           // Update edit button icon based on state
           if (defaultEditBtn) {
-            if (state.type === "product-edit") {
+            if (state.type === "product-edit" || state.type === "category-edit") {
               // In edit mode - show checkmark (save)
               defaultEditBtn.innerHTML = '<i class="fas fa-check"></i>';
               defaultEditBtn.title = "Сохранить";
@@ -212,7 +212,7 @@
           
           // Update close button behavior based on state
           if (defaultCloseBtn) {
-            if (state.type === "product-edit") {
+            if (state.type === "product-edit" || state.type === "category-edit") {
               // In edit mode - cancel changes
               defaultCloseBtn.title = "Отменить";
               defaultCloseBtn.setAttribute("aria-label", "Отменить");
@@ -223,8 +223,12 @@
             }
           }
           
-          // Restore title and SKU if returning to product-edit
+          // Restore title and SKU if returning to product-edit or category-edit
           if (state.type === "product-edit" && state.savedTitle && state.savedSku) {
+            if (productTitle) productTitle.textContent = state.savedTitle;
+            if (productSku) productSku.textContent = state.savedSku;
+          }
+          if (state.type === "category-edit" && state.savedTitle && state.savedSku) {
             if (productTitle) productTitle.textContent = state.savedTitle;
             if (productSku) productSku.textContent = state.savedSku;
           }
@@ -233,7 +237,7 @@
     }
 
     // Show appropriate content based on state type
-    if (state.type === "product-edit") {
+    if (state.type === "product-edit" || state.type === "category-edit") {
       if (state.content) {
         // Ensure productInfoBody exists
         const body = productInfoBody || document.querySelector("#productInfoBody");
@@ -250,7 +254,7 @@
           console.error("productInfoBody not found");
         }
       } else {
-        console.error("state.content is missing for product-edit");
+        console.error("state.content is missing for " + state.type);
       }
       // Show footer in edit mode
       showProductFooterEdit();
@@ -1298,7 +1302,7 @@ function buildOptionGroupPayload(formValues) {
       row.addEventListener("dblclick", () => {
         const id = Number(row.dataset.id);
         const cat = state.categories.find((x) => x.id === id);
-        if (cat) openCategoryModal({ mode: "edit", category: cat });
+        if (cat) openCategoryEditor({ mode: "edit", category: cat });
       });
     });
   }
@@ -1714,7 +1718,11 @@ function buildOptionGroupPayload(formValues) {
       editProductBtn.setAttribute("aria-label", "Редактировать категорию");
     }
 
-    hideProductFooter();
+    // Open tab for category
+    openCategoryTab(cat, { activate: false });
+    
+    // Show footer in view mode
+    showProductFooterView();
 
     if (categoryStatus) categoryStatus.textContent = cat.is_active ? "Активна" : "Выключена";
     if (categoryVisibility) categoryVisibility.textContent = cat.site_visibility ? "Показывается" : "Скрыта";
@@ -2461,7 +2469,13 @@ function updateOptionGroupSelectionUi() {
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
     setHeaderMode("option");
     if (editProductBtn) editProductBtn.classList.add("hidden");
+    
+    // Show footer in view mode, hide in edit/create mode (edit/create mode uses navigation state)
+    if (mode === "view") {
+      showProductFooterView();
+    } else {
     hideProductFooter();
+    }
 
     productEmpty && productEmpty.classList.add("hidden");
     categoryEmpty && categoryEmpty.classList.add("hidden");
@@ -2503,6 +2517,23 @@ function updateOptionGroupSelectionUi() {
     };
     state.optionPanel.itemsDirty = false;
     renderAllOptionGroupsLists();
+    
+    // Create tab with temporary ID for new option
+    const tabId = `new-option-${Date.now()}`;
+    ensureTab({
+      type: "option",
+      id: tabId,
+      title: "Новая опция",
+      onActivate: () => {
+        showOptionGroupDetails({ group: state.optionDraft.group }, { mode: "create" });
+        showProductFooterEdit();
+      },
+      activate: true,
+    });
+    
+    // Store tab key in state for later replacement
+    state.optionPanel.tabKey = buildTabKey("option", tabId);
+    
     showOptionGroupDetails({ group: state.optionDraft.group }, { mode: "create" });
   }
 
@@ -2519,6 +2550,8 @@ function updateOptionGroupSelectionUi() {
       assignments: state.optionGroupDetails.assignments || [],
     });
     state.optionPanel.mode = "edit";
+    // Update footer to edit mode
+    showProductFooterEdit();
     renderOptionGroupLevel();
   }
 
@@ -2533,6 +2566,8 @@ function updateOptionGroupSelectionUi() {
       state.optionPanel.itemsDirty = false;
       state.optionDraft = null;
       state.optionPanel.snapshotData = null;
+      // Update footer to view mode
+      showProductFooterView();
       renderOptionGroupLevel();
       return;
     }
@@ -2580,6 +2615,23 @@ function updateOptionGroupSelectionUi() {
       await loadOptionGroups();
       await loadOptionGroupDetails(res.id);
       renderAllOptionGroupsLists();
+      
+      // Replace temporary tab with real one
+      if (state.optionPanel.tabKey) {
+        replaceTabKey(state.optionPanel.tabKey, {
+          type: "option",
+          id: res.id,
+          title: res.title || "Опция",
+          onActivate: async () => {
+            state.selectedOptionGroupId = res.id;
+            await loadOptionGroupDetails(res.id);
+            renderAllOptionGroupsLists();
+            showOptionGroupDetails(state.optionGroupDetails, { mode: state.optionPanel.mode || "view" });
+          },
+        });
+        state.optionPanel.tabKey = null;
+      }
+      
       state.optionDraft = null;
       state.optionPanel.itemsDirty = false;
       showOptionGroupDetails(state.optionGroupDetails, { mode: "view" });
@@ -2592,6 +2644,8 @@ function updateOptionGroupSelectionUi() {
         state.optionPanel.itemsDirty = false;
         state.optionDraft = null;
         state.optionPanel.snapshotData = null;
+      // Update footer to view mode
+      showProductFooterView();
         renderOptionGroupLevel();
         return;
       }
@@ -2688,6 +2742,8 @@ function updateOptionGroupSelectionUi() {
         state.optionPanel.itemsDirty = false;
         state.optionDraft = null;
         state.optionPanel.snapshotData = null;
+        // Update footer to view mode after save
+        showProductFooterView();
         renderOptionGroupLevel();
         if (state.optionPanel.returnTo?.type === "product-edit") {
           closeOptionDetails();
@@ -2716,6 +2772,39 @@ function updateOptionGroupSelectionUi() {
           return true;
         } catch (e) {
           const message = e && e.message ? e.message : "Не удалось удалить опцию.";
+          alert(message);
+          return false;
+        }
+      },
+    });
+  }
+
+  function confirmCategoryDelete() {
+    if (!state.selectedCategoryId || !window.AppModal) return;
+    const categoryId = state.selectedCategoryId;
+    const category = state.categories.find((c) => c.id === categoryId);
+    const categoryName = category ? category.title : "категорию";
+    
+    window.AppModal.open({
+      title: "Удалить категорию?",
+      content: `<div class="modal-text">Категория "<strong>${escapeHtml(categoryName)}</strong>" будет отключена. Товары в этой категории сохранятся.</div>`,
+      saveText: "Отключить",
+      cancelText: "Отмена",
+      onSave: async () => {
+        try {
+          // Soft delete: устанавливаем is_active=0
+          await api(`/api/prod_categories/${categoryId}`, {
+            method: "PUT",
+            body: JSON.stringify({ is_active: 0 }),
+          });
+          // Удаляем из списка
+          state.categories = state.categories.filter((c) => c.id !== categoryId);
+          state.selectedCategoryId = null;
+          await refreshAll();
+          showDetailsEmpty();
+          return true;
+        } catch (e) {
+          const message = e && e.message ? e.message : "Не удалось отключить категорию.";
           alert(message);
           return false;
         }
@@ -2986,6 +3075,20 @@ function updateOptionGroupSelectionUi() {
         await loadOptionGroupDetails(groupId);
         renderAllOptionGroupsLists();
         showOptionGroupDetails(state.optionGroupDetails, { mode: state.optionPanel.mode || "view" });
+      },
+      activate,
+    });
+  }
+
+  function openCategoryTab(category, { activate = true } = {}) {
+    if (!category || !category.id) return;
+    ensureTab({
+      type: "category",
+      id: category.id,
+      title: category.title || "Категория",
+      onActivate: () => {
+        state.selectedCategoryId = category.id;
+        showCategoryDetails(category);
       },
       activate,
     });
@@ -3761,7 +3864,7 @@ function updateOptionGroupSelectionUi() {
         productInfoPanel.appendChild(pickerOverlay);
 
         // Switch footer to edit mode for picker
-        const footer = $("#productInfoFooter");
+      const footer = $("#productInfoFooter");
         const footerView = $("#productFooterView");
         const footerEditMode = $("#productFooterEditMode");
         const cancelBtn = $("#productFooterCancelBtn");
@@ -3872,7 +3975,7 @@ function updateOptionGroupSelectionUi() {
       delete window._saveOptionPickerFn;
       
       // Restore footer to original state
-      const footer = $("#productInfoFooter");
+          const footer = $("#productInfoFooter");
       const footerView = $("#productFooterView");
       const footerEditMode = $("#productFooterEditMode");
       
@@ -4899,7 +5002,7 @@ function updateOptionGroupSelectionUi() {
         productInfoPanel.appendChild(pickerOverlay);
 
         // Switch footer to edit mode for picker
-        const footer = $("#productInfoFooter");
+      const footer = $("#productInfoFooter");
         const footerView = $("#productFooterView");
         const footerEditMode = $("#productFooterEditMode");
         const cancelBtn = $("#productFooterCancelBtn");
@@ -5059,7 +5162,7 @@ function updateOptionGroupSelectionUi() {
       delete window._saveIngredientPickerFn;
       
       // Restore footer to original state
-      const footer = $("#productInfoFooter");
+          const footer = $("#productInfoFooter");
       const footerView = $("#productFooterView");
       const footerEditMode = $("#productFooterEditMode");
       
@@ -5267,7 +5370,252 @@ function updateOptionGroupSelectionUi() {
     })();
   }
 
-  // ---------------- Modal: category ----------------
+  // ---------------- Category editor (right panel) ----------------
+
+  function openCategoryEditor({ mode, category }) {
+    const isEdit = mode === "edit";
+    const cat = isEdit ? category : null;
+    const tabId = isEdit && cat && cat.id ? cat.id : `new-category-${Date.now()}`;
+    const tabKey = buildTabKey("category", tabId);
+
+    const draft = {
+      iconFile: null,
+      iconPreview: "",
+    };
+
+    // Clone template content
+    const template = document.querySelector("#tplCategoryEditor");
+    if (!template) return;
+    const content = template.content.cloneNode(true);
+    const wrapper = document.createElement("div");
+    wrapper.appendChild(content);
+
+    // Get form and UI elements
+    const form = wrapper.querySelector("#categoryEditorForm");
+    if (!form) return;
+
+    const ui = {
+      iconPreview: wrapper.querySelector("#ceIconPreview"),
+      iconPlaceholder: wrapper.querySelector("#ceIconPlaceholder"),
+      iconFileInput: wrapper.querySelector("#ceIconFile"),
+      iconUploadBtn: wrapper.querySelector("#ceIconUploadBtn"),
+      iconDeleteBtn: wrapper.querySelector("#ceIconDeleteBtn"),
+    };
+
+    // Fill form if editing
+    if (isEdit && cat) {
+      const titleInput = form.querySelector("#ce_title");
+      const codeInput = form.querySelector("#ce_code");
+      const iconInput = form.querySelector("#ce_icon");
+      const sortInput = form.querySelector("#ce_sort");
+      const activeInput = form.querySelector("input[name='is_active']");
+      const visibilityInput = form.querySelector("input[name='site_visibility']");
+      
+      if (titleInput) titleInput.value = cat.title || "";
+      if (codeInput) codeInput.value = cat.code || "";
+      if (iconInput) iconInput.value = cat.icon || "";
+      if (sortInput) sortInput.value = cat.sort_order != null ? String(cat.sort_order) : "";
+      if (activeInput) activeInput.checked = Boolean(cat.is_active);
+      if (visibilityInput) visibilityInput.checked = Boolean(cat.site_visibility);
+    }
+
+    function renderIconPreview(value) {
+      if (!ui.iconPreview || !ui.iconPlaceholder) return;
+      const v = String(value || "").trim();
+      if (looksLikeUrl(v)) {
+        ui.iconPreview.src = v;
+        ui.iconPreview.classList.remove("hidden");
+        ui.iconPlaceholder.classList.add("hidden");
+        ui.iconPlaceholder.textContent = "Нет изображения";
+        if (ui.iconDeleteBtn) ui.iconDeleteBtn.classList.remove("hidden");
+        return;
+      }
+      ui.iconPreview.src = "";
+      ui.iconPreview.classList.add("hidden");
+      ui.iconPlaceholder.classList.remove("hidden");
+      ui.iconPlaceholder.innerHTML = v ? `<i class="${escapeHtml(v)}"></i>` : "Нет изображения";
+      if (ui.iconDeleteBtn) ui.iconDeleteBtn.classList.add("hidden");
+    }
+
+    const initialIcon = isEdit && cat ? (cat.icon || "") : "";
+    renderIconPreview(initialIcon);
+
+    // Setup icon upload
+    if (ui.iconUploadBtn && ui.iconFileInput) {
+      ui.iconUploadBtn.addEventListener("click", () => ui.iconFileInput.click());
+      ui.iconFileInput.addEventListener("change", () => {
+        const file = ui.iconFileInput.files && ui.iconFileInput.files[0];
+        ui.iconFileInput.value = "";
+        if (!file) return;
+        const allowed = ["image/jpeg", "image/png", "image/webp"];
+        if (!allowed.includes(file.type)) {
+          alert("Можно загрузить только JPG, PNG или WEBP");
+          return;
+        }
+        if (file.size > 5 * 1024 * 1024) {
+          alert("Размер файла не должен превышать 5MB");
+          return;
+        }
+        if (draft.iconPreview) {
+          try { URL.revokeObjectURL(draft.iconPreview); } catch {}
+        }
+        draft.iconFile = file;
+        draft.iconPreview = URL.createObjectURL(file);
+        renderIconPreview(draft.iconPreview);
+      });
+    }
+
+    // Setup icon delete
+    if (ui.iconDeleteBtn) {
+      ui.iconDeleteBtn.addEventListener("click", () => {
+        if (draft.iconPreview) {
+          try { URL.revokeObjectURL(draft.iconPreview); } catch {}
+        }
+        draft.iconPreview = "";
+        draft.iconFile = null;
+        const iconInput = form.querySelector("#ce_icon");
+        if (iconInput) iconInput.value = "";
+        renderIconPreview("");
+      });
+    }
+
+    // Setup navigation state
+    const navigationState = {
+      type: "category-edit",
+      category: cat,
+      content: wrapper,
+      savedTitle: isEdit && cat ? cat.title : null,
+      savedSku: "Категория",
+      tabKey: tabKey,
+      onSave: async () => {
+        if (!form) return false;
+        
+        const titleInput = form.querySelector("#ce_title");
+        const codeInput = form.querySelector("#ce_code");
+        const sortInput = form.querySelector("#ce_sort");
+        const activeInput = form.querySelector("input[name='is_active']");
+        const visibilityInput = form.querySelector("input[name='site_visibility']");
+        
+        let iconValue = String(form.querySelector("#ce_icon")?.value || "").trim();
+        if (draft.iconFile) {
+          iconValue = await apiUploadCategoryIcon(draft.iconFile);
+        }
+
+        const payload = {
+          tenant_id: TENANT_ID,
+          title: String(titleInput?.value || "").trim(),
+          code: String(codeInput?.value || "").trim(),
+          icon: iconValue,
+          sort_order: sortInput?.value === "" ? null : Number(sortInput?.value),
+          is_active: activeInput?.checked ? 1 : 0,
+          site_visibility: visibilityInput?.checked ? 1 : 0,
+        };
+
+        if (!payload.title) {
+          if (titleInput) titleInput.focus();
+          return false;
+        }
+
+        try {
+          let savedCategory = null;
+          if (isEdit && cat) {
+            await api(`/api/prod_categories/${cat.id}`, { method: "PUT", body: JSON.stringify(payload) });
+            savedCategory = cat; // Keep reference to updated category
+          } else {
+            const res = await api("/api/prod_categories", { method: "POST", body: JSON.stringify(payload) });
+            savedCategory = res; // New category from API response
+          }
+          await refreshAll();
+          // Update navigation state with saved category reference
+          navigationState.category = savedCategory;
+          
+          // For new categories, replace temporary tab with real one
+          if (!isEdit && savedCategory && savedCategory.id) {
+            replaceTabKey(tabKey, {
+              type: "category",
+              id: savedCategory.id,
+              title: savedCategory.title || "Категория",
+              onActivate: () => {
+                state.selectedCategoryId = savedCategory.id;
+                const updatedCat = state.categories.find(c => c.id === savedCategory.id);
+                if (updatedCat) {
+                  showCategoryDetails(updatedCat);
+                }
+              },
+            });
+          }
+          
+          return true;
+        } catch (e) {
+          console.error('Error saving category', e);
+          alert('Ошибка при сохранении категории: ' + (e.message || 'Неизвестная ошибка'));
+          return false;
+        }
+      },
+      onClose: () => {
+        // Cleanup icon preview URL
+        if (draft.iconPreview) {
+          try { URL.revokeObjectURL(draft.iconPreview); } catch {}
+        }
+        // Return to category details view if editing
+        if (isEdit && cat) {
+          const updatedCat = state.categories.find(c => c.id === cat.id);
+          if (updatedCat) {
+            showCategoryDetails(updatedCat);
+          } else {
+            showDetailsEmpty();
+          }
+        } else {
+          showDetailsEmpty();
+        }
+      }
+    };
+
+    // Create tab for category (existing or new)
+    if (isEdit && cat) {
+      ensureTab({
+        type: "category",
+        id: cat.id,
+        title: cat.title || "Категория",
+        onActivate: () => {
+          state.selectedCategoryId = cat.id;
+          const updatedCat = state.categories.find(c => c.id === cat.id);
+          if (updatedCat) {
+            showCategoryDetails(updatedCat);
+          }
+        },
+        activate: true,
+      });
+    } else {
+      // New category - create tab with temporary ID
+      ensureTab({
+        type: "category",
+        id: tabId,
+        title: "Новая категория",
+        onActivate: () => {
+          currentNavigationState = navigationState;
+          showNavigationState(navigationState);
+          showProductFooterEdit();
+        },
+        activate: true,
+      });
+    }
+
+    pushNavigationState(navigationState, false);
+    
+    // Update header title
+    if (productTitle) {
+      productTitle.textContent = isEdit && cat ? cat.title : "Новая категория";
+    }
+    if (productSku) {
+      productSku.textContent = "Категория";
+    }
+    
+    // Show footer in edit mode
+    showProductFooterEdit();
+  }
+
+  // ---------------- Modal: category (legacy, kept for compatibility) ----------------
 
   function openCategoryModal({ mode, category }) {
     const isEdit = mode === "edit";
@@ -5550,7 +5898,7 @@ function updateOptionGroupSelectionUi() {
 
     if (addMainBtn) {
       addMainBtn.addEventListener("click", () => {
-        if (state.mode === "categories") return openCategoryModal({ mode: "create" });
+        if (state.mode === "categories") return openCategoryEditor({ mode: "create" });
         if (state.mode === "products") return openProductModal({ mode: "create" });
         if (state.mode === "options") return startOptionCreate();
         if (state.mode === "variants") return startOptionCreate();
@@ -5764,7 +6112,7 @@ function updateOptionGroupSelectionUi() {
           // Open editor
           if (state.mode === "categories") {
             const cat = state.categories.find((x) => x.id === state.selectedCategoryId);
-            if (cat) openCategoryModal({ mode: "edit", category: cat });
+            if (cat) openCategoryEditor({ mode: "edit", category: cat });
             return;
           }
           const p = state.products.find((x) => x.id === state.selectedProductId);
@@ -5799,7 +6147,24 @@ function updateOptionGroupSelectionUi() {
     // View mode buttons
     if (footerDeleteBtn) {
       attachTwoStepButton(footerDeleteBtn, () => {
-        if (state.selectedProductId) {
+        // Check current mode and delete accordingly
+        if (state.mode === "categories" && state.selectedCategoryId) {
+          confirmCategoryDelete();
+        } else if (state.mode === "options" && state.selectedOptionGroupId) {
+          // Delete option immediately without modal (two-step already confirmed)
+          const groupId = state.selectedOptionGroupId;
+          (async () => {
+            try {
+              await apiDeleteOptionGroup(groupId);
+              state.optionGroupCache.delete(groupId);
+              await loadOptionGroups();
+              closeOptionDetails();
+            } catch (e) {
+              const message = e && e.message ? e.message : "Не удалось удалить опцию.";
+              alert(message);
+            }
+          })();
+        } else if (state.selectedProductId) {
           confirmProductDelete();
         }
       }, "Удалить");
@@ -5807,6 +6172,18 @@ function updateOptionGroupSelectionUi() {
 
     if (footerEditBtn) {
       footerEditBtn.addEventListener("click", () => {
+        // Check current mode and edit accordingly
+        if (state.mode === "categories" && state.selectedCategoryId) {
+          const cat = state.categories.find((x) => x.id === state.selectedCategoryId);
+          if (cat) {
+            openCategoryEditor({ mode: "edit", category: cat });
+          }
+        } else if (state.mode === "options" && state.selectedOptionGroupId) {
+          if (state.optionPanel.mode === "view" && state.optionGroupDetails) {
+            startOptionEdit();
+          }
+        } else {
+          // Products mode - existing logic
         const p = state.products.find((x) => x.id === state.selectedProductId);
         if (p) {
           if (editingProducts.has(p.id)) {
@@ -5814,6 +6191,7 @@ function updateOptionGroupSelectionUi() {
             pushNavigationState(editingState.navigationState);
           } else {
             openProductModal({ mode: "edit", product: p });
+            }
           }
         }
       });
@@ -5846,6 +6224,19 @@ function updateOptionGroupSelectionUi() {
         if (footerCancelBtn.dataset.pickerType === "ingredient") {
           const closeFn = window._closeIngredientPickerFn;
           if (closeFn) closeFn();
+          return;
+        }
+        // Option edit cancel
+        if (state.mode === "options" && state.optionPanel.mode === "edit" && state.selectedOptionGroupId) {
+          cancelOptionEdit();
+          return;
+        }
+        // Category edit cancel
+        if (currentNavigationState?.type === "category-edit") {
+          if (currentNavigationState?.onClose) {
+            currentNavigationState.onClose();
+          }
+          clearNavigationStack();
           return;
         }
         // Normal product edit cancel
@@ -5882,6 +6273,39 @@ function updateOptionGroupSelectionUi() {
           const saveFn = window._saveIngredientPickerFn;
           if (saveFn) {
             await saveFn();
+          }
+          return;
+        }
+        // Option edit save
+        if (state.mode === "options" && state.optionPanel.mode === "edit" && state.selectedOptionGroupId) {
+          try {
+            await saveOptionGroup();
+          } catch (e) {
+            console.error('Error saving option', e);
+            alert('Ошибка при сохранении опции: ' + (e.message || 'Неизвестная ошибка'));
+          }
+          return;
+        }
+        // Category edit save
+        if (currentNavigationState?.type === "category-edit" && currentNavigationState?.onSave) {
+          try {
+            const navState = currentNavigationState;
+            const wasEdit = navState.category && navState.category.id;
+            const result = await currentNavigationState.onSave();
+            if (result === true) {
+              clearNavigationStack();
+              // After saving, show category details (tab replacement is handled in onSave)
+              const savedCategory = navState.category;
+              if (savedCategory && savedCategory.id) {
+                const updatedCat = state.categories.find(c => c.id === savedCategory.id);
+                if (updatedCat) {
+                  showCategoryDetails(updatedCat);
+                }
+              }
+            }
+          } catch (e) {
+            console.error('Error saving category', e);
+            alert('Ошибка при сохранении категории: ' + (e.message || 'Неизвестная ошибка'));
           }
           return;
         }
