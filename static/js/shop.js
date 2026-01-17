@@ -2459,7 +2459,7 @@ function buildProductDetailsContent(
 
     ingredients.forEach((ing) => {
       const ingId = Number(ing.ingredient_id);
-      const isVariable = Number(ing.is_variable || 1) === 1;
+      const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
       const state = ingredientState?.get(ingId) || {
         quantity: Number(ing.quantity || 1),
       };

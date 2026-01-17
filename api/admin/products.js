@@ -268,6 +268,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const old_price = helpers.numOrNull(req.body.old_price);
       const cost_price = helpers.numOrNull(req.body.cost_price);
       const unit_id = helpers.numOrNull(req.body.unit_id);
+      const base_unit_id = helpers.numOrNull(req.body.base_unit_id);
+      const base_qty = helpers.numOrNull(req.body.base_qty);
 
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
@@ -277,11 +279,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const [result] = await db.query(
         `INSERT INTO prod_products
-          (tenant_id, name, sku, description_short, description, price, old_price, cost_price, unit_id, photos_json, is_active, site_visibility)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          (tenant_id, name, sku, description_short, description, price, old_price, cost_price, unit_id, base_unit_id, base_qty, photos_json, is_active, site_visibility)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           tenantId, name, sku, description_short, description,
-          price, old_price, cost_price, unit_id, photos_json,
+          price, old_price, cost_price, unit_id, base_unit_id, base_qty, photos_json,
           is_active, site_visibility
         ]
       );
@@ -314,6 +316,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const old_price = helpers.numOrNull(req.body.old_price);
       const cost_price = helpers.numOrNull(req.body.cost_price);
       const unit_id = helpers.numOrNull(req.body.unit_id);
+      const base_unit_id = helpers.numOrNull(req.body.base_unit_id);
+      const base_qty = helpers.numOrNull(req.body.base_qty);
 
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
@@ -323,11 +327,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       await db.query(
         `UPDATE prod_products
-         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, cost_price=?, unit_id=?, photos_json=?, is_active=?, site_visibility=?
+         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, cost_price=?, unit_id=?, base_unit_id=?, base_qty=?, photos_json=?, is_active=?, site_visibility=?
          WHERE tenant_id=? AND id=?`,
         [
           name, sku, description_short, description,
-          price, old_price, cost_price, unit_id, photos_json,
+          price, old_price, cost_price, unit_id, base_unit_id, base_qty, photos_json,
           is_active, site_visibility,
           tenantId, id
         ]
@@ -1043,7 +1047,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       const params = [];
       let sql =
-        `SELECT p.id, p.name, p.price
+        `SELECT p.id, p.name, p.price, p.cost_price, p.unit_id, p.base_unit_id, p.base_qty
          FROM prod_products p`;
 
       if (categoryId) {
@@ -1183,14 +1187,274 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   router.get('/admin/units', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const showAll = String(req.query.all || "") === "1";
+      const whereActive = showAll ? "" : "AND is_active=1";
       const [rows] = await db.query(
         `SELECT id, code, title, short_title, sort_order, is_active
          FROM prod_units
-         WHERE tenant_id=? AND is_active=1
+         WHERE tenant_id=? ${whereActive}
          ORDER BY sort_order ASC, id ASC`,
         [tenantId]
       );
       res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/units', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const title = helpers.strOrNull(req.body.title);
+      if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+
+      const code = helpers.strOrNull(req.body.code) || helpers.makeCodeFromTitle(title);
+      const shortTitle = helpers.strOrNull(req.body.short_title);
+      const sortOrder = helpers.numOrNull(req.body.sort_order) ?? 0;
+      const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+
+      const [result] = await db.query(
+        `INSERT INTO prod_units
+         (tenant_id, store_id, code, title, short_title, sort_order, is_active)
+         VALUES (?, 1, ?, ?, ?, ?, ?)`,
+        [tenantId, code, title, shortTitle, sortOrder, isActive]
+      );
+
+      res.json({ ok: true, id: result.insertId });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/admin/units/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const title = helpers.strOrNull(req.body.title);
+      if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+
+      const code = helpers.strOrNull(req.body.code) || helpers.makeCodeFromTitle(title);
+      const shortTitle = helpers.strOrNull(req.body.short_title);
+      const sortOrder = helpers.numOrNull(req.body.sort_order) ?? 0;
+      const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+
+      await db.query(
+        `UPDATE prod_units
+         SET code=?, title=?, short_title=?, sort_order=?, is_active=?
+         WHERE tenant_id=? AND id=?`,
+        [code, title, shortTitle, sortOrder, isActive, tenantId, id]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/admin/units/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      await db.query(
+        `UPDATE prod_units
+         SET is_active=0
+         WHERE tenant_id=? AND id=?`,
+        [tenantId, id]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // ------------------------------
+  // Unit conversions: /api/admin/unit-conversions
+  // ------------------------------
+  router.get('/admin/unit-conversions', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const showAll = String(req.query.all || "") === "1";
+      const whereActive = showAll ? "" : "AND is_active=1";
+      const [rows] = await db.query(
+        `SELECT id, from_unit_id, to_unit_id, factor, is_active
+         FROM prod_unit_conversions
+         WHERE tenant_id=? ${whereActive}
+         ORDER BY id ASC`,
+        [tenantId]
+      );
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/unit-conversions', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const fromUnitId = helpers.numOrNull(req.body.from_unit_id);
+      const toUnitId = helpers.numOrNull(req.body.to_unit_id);
+      const factor = helpers.numOrNull(req.body.factor);
+      if (!fromUnitId || !toUnitId || !factor) {
+        return res.status(400).json({ ok: false, error: 'BAD_PARAMS' });
+      }
+
+      const [result] = await db.query(
+        `INSERT INTO prod_unit_conversions
+         (tenant_id, store_id, from_unit_id, to_unit_id, factor, is_active)
+         VALUES (?, 1, ?, ?, ?, 1)`,
+        [tenantId, fromUnitId, toUnitId, factor]
+      );
+      res.json({ ok: true, id: result.insertId });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/admin/unit-conversions/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+      const fromUnitId = helpers.numOrNull(req.body.from_unit_id);
+      const toUnitId = helpers.numOrNull(req.body.to_unit_id);
+      const factor = helpers.numOrNull(req.body.factor);
+      const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+      if (!fromUnitId || !toUnitId || !factor) {
+        return res.status(400).json({ ok: false, error: 'BAD_PARAMS' });
+      }
+
+      await db.query(
+        `UPDATE prod_unit_conversions
+         SET from_unit_id=?, to_unit_id=?, factor=?, is_active=?
+         WHERE tenant_id=? AND id=?`,
+        [fromUnitId, toUnitId, factor, isActive, tenantId, id]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/admin/unit-conversions/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+      await db.query(
+        `UPDATE prod_unit_conversions
+         SET is_active=0
+         WHERE tenant_id=? AND id=?`,
+        [tenantId, id]
+      );
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // ------------------------------
+  // Product unit links: /api/admin/products/:id/unit-links
+  // ------------------------------
+  router.get('/admin/products/:id/unit-links', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const productId = Number(req.params.id);
+      if (!Number.isFinite(productId) || productId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+      const [rows] = await db.query(
+        `SELECT id, unit_id, base_unit_id, factor
+         FROM prod_product_unit_links
+         WHERE tenant_id=? AND product_id=?
+         ORDER BY id ASC`,
+        [tenantId, productId]
+      );
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/products/:id/unit-links', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const productId = Number(req.params.id);
+      if (!Number.isFinite(productId) || productId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+      const unitId = helpers.numOrNull(req.body.unit_id);
+      const baseUnitId = helpers.numOrNull(req.body.base_unit_id);
+      const factor = helpers.numOrNull(req.body.factor);
+      if (!unitId || !baseUnitId || !factor) {
+        return res.status(400).json({ ok: false, error: 'BAD_PARAMS' });
+      }
+
+      const [existing] = await db.query(
+        `SELECT id FROM prod_product_unit_links
+         WHERE tenant_id=? AND product_id=? AND unit_id=? AND base_unit_id=?`,
+        [tenantId, productId, unitId, baseUnitId]
+      );
+
+      if (existing.length) {
+        await db.query(
+          `UPDATE prod_product_unit_links
+           SET factor=?
+           WHERE tenant_id=? AND id=?`,
+          [factor, tenantId, existing[0].id]
+        );
+        return res.json({ ok: true, id: existing[0].id });
+      }
+
+      const [result] = await db.query(
+        `INSERT INTO prod_product_unit_links
+         (tenant_id, store_id, product_id, unit_id, base_unit_id, factor)
+         VALUES (?, 1, ?, ?, ?, ?)`,
+        [tenantId, productId, unitId, baseUnitId, factor]
+      );
+      res.json({ ok: true, id: result.insertId });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/admin/products/:id/unit-links/:unitId', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const productId = Number(req.params.id);
+      const unitId = Number(req.params.unitId);
+      if (!Number.isFinite(productId) || productId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+      if (!Number.isFinite(unitId) || unitId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_UNIT_ID' });
+      }
+
+      await db.query(
+        `DELETE FROM prod_product_unit_links
+         WHERE tenant_id=? AND product_id=? AND unit_id=?`,
+        [tenantId, productId, unitId]
+      );
+      res.json({ ok: true });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -1208,6 +1472,12 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
+      const [pcsRows] = await db.query(
+        `SELECT id FROM prod_units WHERE tenant_id=? AND code='pcs' LIMIT 1`,
+        [tenantId]
+      );
+      const pcsUnitId = pcsRows.length ? Number(pcsRows[0].id) : null;
+
       const [rows] = await db.query(
         `SELECT 
            i.id,
@@ -1222,17 +1492,26 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
            i.sort_order,
            p.name AS ingredient_name,
            p.price AS ingredient_price,
+           p.cost_price AS ingredient_cost_price,
+           p.base_unit_id AS ingredient_base_unit_id,
+           p.base_qty AS ingredient_base_qty,
            p.photos_json AS ingredient_photos,
            p.unit_id AS ingredient_unit_id,
            u.code AS unit_code,
            u.title AS unit_title,
-           u.short_title AS unit_short_title
+           u.short_title AS unit_short_title,
+           pul.factor AS ingredient_pcs_factor
          FROM prod_product_ingredients i
          JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
          JOIN prod_units u ON u.id=i.unit_id
+         LEFT JOIN prod_product_unit_links pul
+           ON pul.tenant_id=i.tenant_id
+          AND pul.product_id=i.ingredient_id
+          AND pul.base_unit_id=p.base_unit_id
+          AND pul.unit_id=?
          WHERE i.tenant_id=? AND i.product_id=?
          ORDER BY i.sort_order ASC, i.id ASC`,
-        [tenantId, productId]
+        [pcsUnitId || 0, tenantId, productId]
       );
 
       for (const r of rows) {

@@ -38,6 +38,7 @@
   --dur-med:340ms;
 
   --column-scroll-pad:200px;
+  --column-bottom-gap:32px;
 
   /* ✅ Switch vars */
   --switch-w:46px;
@@ -169,6 +170,7 @@ header{
 .main-container{
   height:calc(100vh - var(--header-height));
   padding:1rem;
+  padding-bottom:calc(2rem + var(--column-bottom-gap));
 }
 
 .app-grid{
@@ -231,6 +233,127 @@ html[data-sidebar-collapsed="1"] .app-grid{
   min-height:0;
 }
 .panel-body::after{content:"";display:block;height:var(--column-scroll-pad)}
+
+.panel-footer{
+  padding:12px;
+  border-top:1px solid var(--color-border);
+  background:var(--color-surface);
+  flex:0 0 auto;
+}
+
+/* ================= Product Footer ================= */
+
+.product-footer-actions{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  width:100%;
+  flex-wrap:nowrap;
+}
+
+.product-footer-view,
+.product-footer-edit-mode{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  width:100%;
+  flex-wrap:nowrap;
+}
+
+.product-footer-btn{
+  height:52px;
+  border:none;
+  cursor:pointer;
+  font-weight:800;
+  transition:all var(--dur-fast) var(--ease-smooth);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:14px;
+}
+
+/* Round buttons (delete, cancel, more) */
+.product-footer-delete,
+.product-footer-cancel,
+.product-footer-more{
+  width:52px;
+  border-radius:50%;
+  flex:0 0 auto;
+  font-size:18px;
+  line-height:1;
+}
+
+.product-footer-delete{
+  background:var(--color-primary);
+  color:var(--on-primary);
+  border:1px solid var(--color-primary);
+}
+
+.product-footer-delete:hover{
+  background:var(--color-primary-hover);
+  border-color:var(--color-primary-hover);
+}
+
+.product-footer-cancel,
+.product-footer-more{
+  background:var(--color-surface-2);
+  color:var(--color-text);
+  border:1px solid var(--color-border);
+}
+
+.product-footer-cancel:hover,
+.product-footer-more:hover{
+  background:var(--color-border);
+}
+
+/* Expandable buttons (two-step confirmation) */
+.product-footer-delete.is-confirm,
+.product-footer-cancel.is-confirm{
+  width:auto;
+  border-radius:999px;
+  padding:0 16px;
+  font-size:14px;
+}
+
+.product-footer-delete.is-confirm{
+  background:var(--color-primary);
+  color:var(--on-primary);
+}
+
+.product-footer-cancel.is-confirm{
+  background:var(--color-surface-2);
+  color:var(--color-text);
+}
+
+/* Full-width buttons (edit, save) */
+.product-footer-edit,
+.product-footer-save{
+  flex:1 1 auto;
+  border-radius:999px;
+  padding:0 18px;
+  background:var(--color-primary);
+  color:var(--on-primary);
+  border:1px solid var(--color-primary);
+}
+
+/* Cancel button in full-width mode (for picker) */
+.product-footer-cancel.is-fullwidth{
+  flex:1 1 auto;
+  width:auto;
+  border-radius:999px;
+  padding:0 18px;
+  font-size:14px;
+  line-height:1;
+  background:var(--color-surface-2);
+  color:var(--color-text);
+  border:1px solid var(--color-border);
+}
+
+.product-footer-edit:hover,
+.product-footer-save:hover{
+  background:var(--color-primary-hover);
+  border-color:var(--color-primary-hover);
+}
 
 /* center stack island toolbar + content */
 .center-stack{
@@ -1507,6 +1630,128 @@ input[type=number]{ -moz-appearance:textfield; }
 .product-ingredients-card .option-section-header{
   margin-bottom: 12px;
 }
+.ingredient-acc-trigger{
+  display:grid;
+  grid-template-columns:1fr auto;
+  align-items:center;
+  gap:12px;
+}
+.ingredient-acc-controls{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:nowrap;
+  white-space:nowrap;
+}
+.ingredient-acc-controls .switch{margin:0}
+.ingredient-fields-row{
+  display:grid;
+  grid-template-columns:repeat(3, minmax(0, 1fr));
+  gap:12px;
+}
+.ingredient-fields-compact{
+  padding:8px 10px;
+}
+.ingredient-inline-row{
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(60px, 1fr));
+  align-items:center;
+  gap:8px;
+}
+.ingredient-field{
+  display:flex;
+  align-items:center;
+  min-width:0;
+}
+.ingredient-control-wrap{
+  position:relative;
+  width:100%;
+}
+.ingredient-control-label{
+  position:absolute;
+  top:-7px;
+  left:8px;
+  padding:0 4px;
+  font-size:10px;
+  color:#6b7280;
+  background:var(--color-surface);
+  line-height:1;
+  pointer-events:none;
+}
+.ingredient-field-qty,
+.ingredient-field-price,
+.ingredient-field-cost,
+.ingredient-field-min,
+.ingredient-field-max,
+.ingredient-field-step{
+  width:100%;
+}
+.ingredient-control-wrap .control{
+  width:100%;
+  padding:6px 8px;
+}
+.ingredient-remove-btn{
+  border:none;
+  background:transparent;
+  box-shadow:none;
+  padding:4px;
+  line-height:1;
+  cursor:pointer;
+}
+.ingredient-remove-btn:hover{
+  background:var(--color-surface-2);
+}
+
+.units-card .units-form{
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap:8px;
+  align-items:center;
+}
+.unit-row{
+  display:grid;
+  grid-template-columns: 2fr 1fr 1fr 0.7fr auto auto auto;
+  gap:8px;
+  align-items:center;
+  padding:8px 10px;
+  border:1px solid var(--color-border);
+  border-radius:10px;
+  background:var(--color-surface);
+  margin-bottom:8px;
+}
+.unit-input{
+  min-width:0;
+}
+.unit-delete{
+  border:none;
+  background:transparent;
+  box-shadow:none;
+}
+.conversion-row{
+  display:grid;
+  grid-template-columns: 1fr 1fr 1fr auto auto;
+  gap:8px;
+  align-items:center;
+  padding:8px 10px;
+  border:1px solid var(--color-border);
+  border-radius:10px;
+  background:var(--color-surface);
+  margin-bottom:8px;
+}
+
+.input-with-suffix{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.input-with-suffix .control{
+  flex:1 1 auto;
+}
+.input-suffix{
+  white-space:nowrap;
+  color:#6b7280;
+  font-size:12px;
+}
 .option-row-remove{
   position:absolute;
   right:8px;
@@ -1696,6 +1941,83 @@ input[type=number]{ -moz-appearance:textfield; }
   align-items:center;
   gap:8px;
 }
+
+/* ================= Product tabs header ================= */
+
+.product-tabs-header{
+  padding:8px 12px;
+  border-bottom:1px solid var(--color-border);
+}
+
+.product-tabs{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  overflow-x:auto;
+  padding-bottom:2px;
+}
+
+.product-tab{
+  width:100px;
+  flex:0 0 100px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:6px;
+  padding:6px 8px;
+  border-radius:10px;
+  border:1px solid var(--color-border);
+  background:var(--color-surface-2);
+  cursor:pointer;
+  user-select:none;
+}
+
+.product-tab.is-active{
+  background:var(--primary-14);
+  border-color:var(--primary-25);
+}
+
+.product-tab-title{
+  font-size:12px;
+  font-weight:600;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  flex:1 1 auto;
+}
+
+.product-tab-close{
+  border:none;
+  background:transparent;
+  color:var(--color-text-muted);
+  width:16px;
+  height:16px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  padding:0;
+}
+
+.product-tab-close:hover{
+  color:var(--color-text);
+}
+
+/* ================= Product info title ================= */
+
+.product-info-title{
+  margin-bottom:12px;
+}
+
+.product-title-text{
+  font-weight:800;
+  font-size:16px;
+  line-height:1.2;
+}
+
+.product-title-sku{
+  font-size:12px;
+}
 .info-accordion .stage-item{
   padding:10px 12px;
   border-radius:12px;
@@ -1713,6 +2035,73 @@ input[type=number]{ -moz-appearance:textfield; }
   gap:2px;
 }
 .info-accordion .acc-panel-inner{margin-top:10px;}
+
+/* Option accordion in product editor - title + description left, actions right */
+#peOptionAccordion .stage-item.acc-trigger {
+  justify-content: space-between;
+  flex-wrap: nowrap;
+  cursor: pointer;
+  align-items: center;
+  gap: 12px;
+}
+
+#peOptionAccordion .stage-item.acc-trigger .stage-meta {
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+#peOptionAccordion .stage-item.acc-trigger .stage-meta b {
+  display: block;
+  font-weight: 600;
+}
+
+#peOptionAccordion .stage-item.acc-trigger .stage-meta small {
+  display: block;
+  margin-left: 0;
+  font-weight: normal;
+}
+
+#peOptionAccordion .stage-item.acc-trigger .option-actions-inline {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  flex-grow: 0;
+  margin-left: auto;
+}
+
+#peOptionAccordion .stage-item.acc-trigger .option-actions-inline button.btn {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+#peOptionAccordion .stage-item.acc-trigger .option-actions-inline button.btn:hover {
+  background: var(--color-surface-2);
+  border: none;
+  box-shadow: none;
+}
+
+#peOptionAccordion .stage-item.acc-trigger .option-actions-inline button.btn:focus {
+  border: none;
+  box-shadow: none;
+  outline: none;
+}
+
+#peOptionAccordion .stage-item.acc-trigger .option-actions-inline .acc-chevron {
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
 .inline-modal-header{
   padding:10px 12px;
   border-bottom:1px solid var(--color-border);
@@ -2483,34 +2872,27 @@ body.page-shop #sidebar-toggle{display:none}
 
 /* Footer закреплен внизу */
 #productInfoPanel {
-  position: relative;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  position: relative; /* Для позиционирования .picker-overlay внутри панели */
 }
 
 #productInfoPanel .panel-body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  position: relative;
 }
 
 #productInfoFooter {
-  position: absolute;
-  bottom: 70px;
-  left: 0;
-  right: 0;
-  background: var(--color-surface);
-  border-top: 1px solid var(--color-border);
-  padding: 16px;
-  z-index: 35;
-  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
+  margin-top: auto;
+  flex: 0 0 auto;
 }
 
 /* Adjust footer position when in picker mode */
 #productInfoPanel:has(.picker-overlay) #productInfoFooter {
-  position: absolute;
-  bottom: 70px;
-  left: 0;
-  right: 0;
+  position: sticky;
+  bottom: 0;
   z-index: 35;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
 }

@@ -27,12 +27,41 @@
         <div class="empty-hint" id="categoriesEmptyHint">Пока нет категорий...</div>
       </div>
 
-      <div class="content-view hidden" data-view-content="variants"><div class="info-card">Содержимое для вариантов...</div></div>
+      <div class="content-view hidden" data-view-content="variants">
+        <div class="options-list" id="variantsGroupsList"></div>
+        <div class="empty-hint" id="variantsGroupsEmpty">Пока нет модификаций...</div>
+      </div>
       <div class="content-view hidden" data-view-content="options">
         <div class="options-list" id="optionsGroupsList"></div>
         <div class="empty-hint" id="optionsGroupsEmpty">Пока нет опций...</div>
       </div>
-      <div class="content-view hidden" data-view-content="units"><div class="info-card">Единицы измерения...</div></div>
+      <div class="content-view hidden" data-view-content="units">
+        <div class="info-card units-card">
+          <div class="units-form">
+            <input class="control" id="unitsTitleInput" type="text" placeholder="Название" />
+            <input class="control" id="unitsShortInput" type="text" placeholder="Коротко" />
+            <input class="control" id="unitsCodeInput" type="text" placeholder="Код" />
+            <input class="control" id="unitsSortInput" type="number" placeholder="Сорт." />
+            <button class="btn" id="unitsAddBtn" type="button">Добавить</button>
+          </div>
+        </div>
+        <div class="info-card units-card" style="margin-top:10px;">
+          <div class="units-form">
+            <select class="control" id="convFromUnit">
+              <option value="">Из единицы</option>
+            </select>
+            <select class="control" id="convToUnit">
+              <option value="">В единицу</option>
+            </select>
+            <input class="control" id="convFactor" type="number" step="0.000001" placeholder="Коэф." />
+            <button class="btn" id="convAddBtn" type="button">Добавить конверсию</button>
+          </div>
+        </div>
+        <div class="orders-list" id="conversionsList"></div>
+        <div class="empty-hint" id="conversionsEmptyHint">Пока нет конверсий...</div>
+        <div class="orders-list" id="unitsList"></div>
+        <div class="empty-hint" id="unitsEmptyHint">Пока нет единиц измерения...</div>
+      </div>
       <div class="content-view hidden" data-view-content="allergens"><div class="info-card">Аллергены...</div></div>
       <div class="content-view hidden" data-view-content="diets"><div class="info-card">Диеты...</div></div>
       <div class="content-view hidden" data-view-content="stock-in"><div class="info-card">Приход...</div></div>
@@ -134,21 +163,49 @@
         <input class="control" id="pe_cost_price" name="cost_price" type="number" step="0.01" min="0" placeholder="0" />
       </div>
       <div>
-        <label class="field-label" for="pe_unit_id">Единица измерения</label>
-        <select class="control" id="pe_unit_id" name="unit_id">
-          <option value="">—</option>
-        </select>
+        <label class="field-label" for="pe_base_qty">Базовое количество (за цену)</label>
+        <input class="control" id="pe_base_qty" name="base_qty" type="number" step="0.001" min="0" placeholder="1" />
       </div>
     </div>
 
-    <div>
-      <label class="field-label" for="pe_desc_short">Короткое описание</label>
-      <textarea class="textarea" id="pe_desc_short" name="description_short" rows="3"></textarea>
+    <div class="form-row-2">
+      <div>
+        <label class="field-label" for="pe_base_unit_id">Базовая единица</label>
+        <select class="control" id="pe_base_unit_id" name="base_unit_id">
+          <option value="">—</option>
+        </select>
+      </div>
+      <div id="pePcsLinkWrap" class="hidden">
+        <label class="field-label" for="pe_pcs_factor">1 шт =</label>
+        <div class="input-with-suffix">
+          <input class="control" id="pe_pcs_factor" type="number" step="0.001" min="0" placeholder="Например 25" />
+          <span class="input-suffix" id="pePcsBaseLabel">—</span>
+        </div>
+      </div>
     </div>
 
-    <div>
-      <label class="field-label" for="pe_desc">Описание</label>
-      <textarea class="textarea" id="pe_desc" name="description" rows="5"></textarea>
+    <div class="info-card info-accordion" id="peDescriptionAccordion">
+      <div class="acc-item">
+        <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+          <span class="stage-meta stage-text">
+            <b>Описание</b>
+          </span>
+          <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+        </button>
+        <div class="acc-panel" data-acc-panel>
+          <div class="acc-panel-inner">
+            <div>
+              <label class="field-label" for="pe_desc_short">Короткое описание</label>
+              <textarea class="textarea" id="pe_desc_short" name="description_short" rows="3"></textarea>
+            </div>
+
+            <div style="margin-top:12px;">
+              <label class="field-label" for="pe_desc">Описание</label>
+              <textarea class="textarea" id="pe_desc" name="description" rows="5"></textarea>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="form-row-2">
@@ -191,7 +248,7 @@
       </div>
       <div class="inline-modal-footer">
         <button class="btn" type="button" id="peOptionCancel">Отмена</button>
-        <button class="btn btn-primary" type="button" id="peOptionApply">Добавить (0)</button>
+        <button class="btn btn-primary" type="button" id="peOptionApply">Добавить</button>
       </div>
     </div>
 
@@ -199,7 +256,6 @@
       <div class="option-section-header">
         <div class="kv-label">Состав</div>
         <div class="option-actions">
-          <input class="control control-sm" id="peIngredientSearch" type="search" placeholder="🔍 Поиск товара..." style="width: 200px; margin-right: 8px;" />
           <button class="btn btn-sm" type="button" id="peIngredientAddBtn">
             <i class="fas fa-plus"></i> Добавить
           </button>

@@ -1,49 +1,7 @@
 <div class="panel" id="productInfoPanel">
-  <!-- Header скрыт по умолчанию. Показываем только когда выбран товар -->
-  <div class="panel-header product-info-header hidden" id="productInfoHeader">
-    <div class="product-info-header-left">
-      <div class="panel-title product-header-title" id="productTitle">Информация</div>
-      <div class="muted product-header-sku" id="productSku">Артикул: —</div>
-    </div>
-
-    <div class="product-info-header-actions">
-      <div class="product-header-actions" id="productHeaderActions">
-        <div class="dropdown" style="position: relative;">
-          <button class="btn btn-icon" id="productMoreBtn" type="button" title="Действия" aria-label="Действия" aria-expanded="false">
-            <i class="fas fa-ellipsis-h"></i>
-          </button>
-          <div class="dropdown-menu hidden" id="productDropdown" style="position: absolute; top: 100%; right: 0; margin-top: 4px; z-index: 1000; background: white; border: 1px solid #ddd; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); min-width: 160px;">
-            <button class="dropdown-item" type="button" id="productDeleteBtn" style="width: 100%; padding: 8px 16px; text-align: left; border: none; background: none; cursor: pointer; color: #dc3545;">
-              <i class="fas fa-trash" style="margin-right: 8px;"></i>
-              Удалить
-            </button>
-          </div>
-        </div>
-
-        <button class="btn btn-icon" id="editProductBtn" type="button" title="Редактировать" aria-label="Редактировать">
-          <i class="fas fa-pen"></i>
-        </button>
-
-        <button class="btn btn-icon" id="closeProductInfoBtn" type="button" title="Закрыть" aria-label="Закрыть">
-          <i class="fas fa-times"></i>
-        </button>
-      </div>
-
-      <div class="product-header-actions hidden" id="optionHeaderActions">
-        <button class="btn btn-icon btn-primary" id="optionHeaderPrimaryBtn" type="button" title="Редактировать" aria-label="Редактировать">
-          <i class="fas fa-pen"></i>
-        </button>
-        <button class="btn btn-icon btn-danger hidden" id="optionHeaderDeleteBtn" type="button" title="Удалить опцию" aria-label="Удалить опцию">
-          <i class="fas fa-trash"></i>
-        </button>
-        <button class="btn btn-icon hidden" id="optionHeaderBackBtn" type="button" title="Назад" aria-label="Назад">
-          <i class="fas fa-arrow-left"></i>
-        </button>
-        <button class="btn btn-icon" id="optionHeaderCloseBtn" type="button" title="Закрыть" aria-label="Закрыть">
-          <i class="fas fa-times"></i>
-        </button>
-      </div>
-    </div>
+  <!-- Tabs header -->
+  <div class="panel-header product-tabs-header hidden" id="productTabsHeader">
+    <div class="product-tabs" id="productTabs"></div>
   </div>
 
   <div class="panel-body no-scrollbar" id="productInfoBody">
@@ -68,6 +26,10 @@
 
     <!-- Product info -->
     <div id="productInfo" class="hidden">
+      <div class="product-info-title">
+        <div class="product-title-text" id="productTitle">Информация</div>
+        <div class="muted product-title-sku" id="productSku">Артикул: —</div>
+      </div>
       <!-- TOP: фото слева, справа info-card -->
       <div class="product-info-top">
         <div class="product-info-photoCol">
@@ -116,6 +78,14 @@
             <div class="info-text">Себестоимость</div>
             <div class="info-title" id="productCostPrice">—</div>
           </div>
+        <div class="info-row">
+          <div class="info-text">Базовая единица</div>
+          <div class="info-title" id="productBaseUnit">—</div>
+        </div>
+        <div class="info-row">
+          <div class="info-text">Базовое кол-во</div>
+          <div class="info-title" id="productBaseQty">—</div>
+        </div>
 
           <div class="info-row">
             <div class="info-text">Статус</div>
@@ -143,6 +113,11 @@
       <div class="info-card">
         <div class="kv-label">Опции</div>
         <div class="info-accordion" id="productOptionsAccordion"></div>
+      </div>
+
+      <div class="info-card">
+        <div class="kv-label">Состав</div>
+        <div class="info-accordion" id="productIngredientsAccordion"></div>
       </div>
     </div>
 
@@ -289,11 +264,33 @@
     </div>
   </div>
 
-  <!-- Footer for editor -->
+  <!-- Footer -->
   <div class="panel-footer hidden" id="productInfoFooter">
-    <div class="form-actions" style="display: flex; gap: 10px; justify-content: flex-end;">
-      <button class="btn" type="button" id="productEditorCancelBtn">Отменить</button>
-      <button class="btn btn-primary" type="button" id="productEditorSaveBtn">Сохранить</button>
+    <div class="product-footer-actions">
+      <!-- View mode buttons -->
+      <div class="product-footer-view hidden" id="productFooterView">
+        <button class="product-footer-btn product-footer-delete" id="productFooterDeleteBtn" type="button" title="Удалить" aria-label="Удалить">
+          <i class="fas fa-trash"></i>
+        </button>
+        <button class="product-footer-btn product-footer-edit" id="productFooterEditBtn" type="button">Редактировать</button>
+        <button class="product-footer-btn product-footer-more" id="productFooterMoreBtn" type="button" title="Действия" aria-label="Действия">
+          <i class="fas fa-ellipsis-h"></i>
+        </button>
+      </div>
+      
+      <!-- Edit mode buttons -->
+      <div class="product-footer-edit-mode hidden" id="productFooterEditMode">
+        <button class="product-footer-btn product-footer-delete" id="productFooterDeleteEditBtn" type="button" title="Удалить" aria-label="Удалить">
+          <i class="fas fa-trash"></i>
+        </button>
+        <button class="product-footer-btn product-footer-cancel" id="productFooterCancelBtn" type="button" title="Отменить" aria-label="Отменить">
+          <i class="fas fa-times"></i>
+        </button>
+        <button class="product-footer-btn product-footer-save" id="productFooterSaveBtn" type="button">Сохранить</button>
+        <button class="product-footer-btn product-footer-more" id="productFooterMoreEditBtn" type="button" title="Действия" aria-label="Действия">
+          <i class="fas fa-ellipsis-h"></i>
+        </button>
+      </div>
     </div>
   </div>
 </div>
