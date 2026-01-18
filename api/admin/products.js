@@ -1022,6 +1022,381 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     }
   });
 
+  // ------------------------------
+  // Variants: groups/discount_tiers/assignments
+  // ------------------------------
+  router.get('/admin/variants/groups', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const [rows] = await db.query(
+        `SELECT g.*,
+                (SELECT COUNT(*) FROM prod_variant_assignments a WHERE a.tenant_id=g.tenant_id AND a.variant_group_id=g.id) AS assignments_count
+         FROM prod_variant_groups g
+         WHERE g.tenant_id=?
+         ORDER BY g.sort_order ASC, g.id ASC`,
+        [tenantId]
+      );
+      for (const r of rows) {
+        r.values = helpers.safeJsonArray(r.values);
+      }
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/admin/variants/groups/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const [[group]] = await db.query(
+        'SELECT * FROM prod_variant_groups WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, id]
+      );
+      if (!group) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+
+      group.values = helpers.safeJsonArray(group.values);
+
+      const [tiers] = await db.query(
+        `SELECT * FROM prod_variant_discount_tiers
+         WHERE tenant_id=? AND variant_group_id=?
+         ORDER BY sort_order ASC, min_quantity ASC`,
+        [tenantId, id]
+      );
+
+      const [assignments] = await db.query(
+        `SELECT a.*, p.name AS product_name
+         FROM prod_variant_assignments a
+         JOIN prod_products p ON p.tenant_id=a.tenant_id AND p.id=a.product_id
+         WHERE a.tenant_id=? AND a.variant_group_id=?
+         ORDER BY a.sort_order ASC, a.id ASC`,
+        [tenantId, id]
+      );
+
+      res.json({ ok: true, data: { group, tiers, assignments } });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/variants/group-bundle', async (req, res) => {
+    const tenantId = helpers.getTenantId(req);
+    const group = req.body.group || req.body || {};
+    const tiers = Array.isArray(req.body.tiers) ? req.body.tiers : [];
+    const assignments = Array.isArray(req.body.assignments) ? req.body.assignments : [];
+
+    const title = helpers.strOrNull(group.title);
+    if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+
+    const unitId = helpers.numOrNull(group.unit_id);
+    const values = Array.isArray(group.values) ? JSON.stringify(group.values) : null;
+    const isActive = helpers.toBool(group.is_active, true) ? 1 : 0;
+    const sortOrder = helpers.numOrNull(group.sort_order) ?? 0;
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [result] = await conn.query(
+        `INSERT INTO prod_variant_groups
+         (tenant_id, title, unit_id, \`values\`, selection_type, is_active, sort_order)
+         VALUES (?,?,?,?,'single',?,?)`,
+        [tenantId, title, unitId, values, isActive, sortOrder]
+      );
+      const groupId = result.insertId;
+
+      for (let idx = 0; idx < tiers.length; idx++) {
+        const tier = tiers[idx];
+        const minQuantity = helpers.numOrNull(tier.min_quantity) ?? 1;
+        const discountPercent = helpers.numOrNull(tier.discount_percent) ?? 0;
+        const tierSortOrder = helpers.numOrNull(tier.sort_order) ?? (idx * 10);
+
+        await conn.query(
+          `INSERT INTO prod_variant_discount_tiers
+           (tenant_id, store_id, variant_group_id, min_quantity, discount_percent, sort_order)
+           VALUES (?,1,?,?,?,?)`,
+          [tenantId, groupId, minQuantity, discountPercent, tierSortOrder]
+        );
+      }
+
+      for (const assignId of assignments) {
+        const id = Number(assignId);
+        if (!Number.isFinite(id) || id <= 0) continue;
+
+        const [existing] = await conn.query(
+          `SELECT id FROM prod_variant_assignments
+           WHERE tenant_id=? AND product_id=? AND variant_group_id=?`,
+          [tenantId, id, groupId]
+        );
+        if (existing.length) continue;
+
+        await conn.query(
+          `INSERT INTO prod_variant_assignments
+           (tenant_id, product_id, variant_group_id, sort_order, is_active)
+           VALUES (?,?,?,0,1)`,
+          [tenantId, id, groupId]
+        );
+      }
+
+      await conn.commit();
+      res.json({ ok: true, id: groupId });
+    } catch (e) {
+      await conn.rollback();
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  router.patch('/admin/variants/groups/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const fields = [];
+      const values = [];
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'title')) {
+        const title = helpers.strOrNull(req.body.title);
+        if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+        fields.push('title=?');
+        values.push(title);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'unit_id')) {
+        fields.push('unit_id=?');
+        values.push(helpers.numOrNull(req.body.unit_id));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'values')) {
+        const vals = Array.isArray(req.body.values) ? JSON.stringify(req.body.values) : null;
+        fields.push('`values`=?');
+        values.push(vals);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'is_active')) {
+        fields.push('is_active=?');
+        values.push(helpers.toBool(req.body.is_active, true) ? 1 : 0);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'sort_order')) {
+        fields.push('sort_order=?');
+        values.push(helpers.numOrNull(req.body.sort_order) ?? 0);
+      }
+
+      if (!fields.length) return res.json({ ok: true });
+
+      values.push(tenantId, id);
+      await db.query(
+        `UPDATE prod_variant_groups
+         SET ${fields.join(', ')}
+         WHERE tenant_id=? AND id=?`,
+        values
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/admin/variants/groups/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      await db.query(
+        `DELETE FROM prod_variant_groups
+         WHERE tenant_id=? AND id=?`,
+        [tenantId, id]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/variants/groups/:id/tiers', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const groupId = Number(req.params.id);
+      if (!Number.isFinite(groupId) || groupId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const tiers = Array.isArray(req.body.tiers) ? req.body.tiers : [];
+      const conn = await db.getConnection();
+      try {
+        await conn.beginTransaction();
+
+        for (let idx = 0; idx < tiers.length; idx++) {
+          const tier = tiers[idx];
+          const tierId = Number(tier.id);
+          const minQuantity = helpers.numOrNull(tier.min_quantity) ?? 1;
+          const discountPercent = helpers.numOrNull(tier.discount_percent) ?? 0;
+          const tierSortOrder = helpers.numOrNull(tier.sort_order) ?? (idx * 10);
+
+          if (Number.isFinite(tierId) && tierId > 0) {
+            await conn.query(
+              `UPDATE prod_variant_discount_tiers
+               SET min_quantity=?, discount_percent=?, sort_order=?
+               WHERE tenant_id=? AND id=?`,
+              [minQuantity, discountPercent, tierSortOrder, tenantId, tierId]
+            );
+          } else {
+            await conn.query(
+              `INSERT INTO prod_variant_discount_tiers
+               (tenant_id, store_id, variant_group_id, min_quantity, discount_percent, sort_order)
+               VALUES (?,1,?,?,?,?)`,
+              [tenantId, groupId, minQuantity, discountPercent, tierSortOrder]
+            );
+          }
+        }
+
+        const deleteIds = Array.isArray(req.body.delete_ids) ? req.body.delete_ids : [];
+        for (const delId of deleteIds) {
+          const id = Number(delId);
+          if (!Number.isFinite(id) || id <= 0) continue;
+          await conn.query(
+            `DELETE FROM prod_variant_discount_tiers WHERE tenant_id=? AND id=?`,
+            [tenantId, id]
+          );
+        }
+
+        await conn.commit();
+        res.json({ ok: true });
+      } catch (e) {
+        await conn.rollback();
+        console.error(e);
+        res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      } finally {
+        conn.release();
+      }
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/variants/groups/:id/assignments', async (req, res) => {
+    const tenantId = helpers.getTenantId(req);
+    const groupId = Number(req.params.id);
+    if (!Number.isFinite(groupId) || groupId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+    const assignIds = Array.isArray(req.body.assign_ids) ? req.body.assign_ids : [];
+    const norm = Array.from(new Set(assignIds.map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0)));
+    if (!norm.length) return res.status(400).json({ ok: false, error: 'EMPTY' });
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [existing] = await conn.query(
+        `SELECT id, product_id
+         FROM prod_variant_assignments
+         WHERE tenant_id=? AND variant_group_id=?
+           AND product_id IN (${norm.map(() => '?').join(',')})`,
+        [tenantId, groupId, ...norm]
+      );
+      const map = new Map(existing.map((row) => [Number(row.product_id), row]));
+
+      const added = [];
+      const skipped = [];
+
+      for (const id of norm) {
+        const row = map.get(id);
+        if (!row) {
+          await conn.query(
+            `INSERT INTO prod_variant_assignments
+             (tenant_id, product_id, variant_group_id, sort_order, is_active)
+             VALUES (?,?,?,0,1)`,
+            [tenantId, id, groupId]
+          );
+          added.push(id);
+          continue;
+        }
+        skipped.push(id);
+      }
+
+      await conn.commit();
+      res.json({ ok: true, added, skipped });
+    } catch (e) {
+      await conn.rollback();
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  router.delete('/admin/variants/assignments/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      await db.query(
+        `DELETE FROM prod_variant_assignments
+         WHERE tenant_id=? AND id=?`,
+        [tenantId, id]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/admin/products/:id/variants', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const productId = Number(req.params.id);
+      if (!Number.isFinite(productId) || productId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      const [variants] = await db.query(
+        `SELECT 
+           vg.id,
+           vg.title,
+           vg.unit_id,
+           vg.values,
+           vg.is_active,
+           vg.sort_order,
+           va.sort_order AS assignment_sort_order
+         FROM prod_variant_assignments va
+         JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
+         WHERE va.tenant_id=? AND va.product_id=? AND va.is_active=1 AND vg.is_active=1
+         ORDER BY va.sort_order ASC, vg.sort_order ASC`,
+        [tenantId, productId]
+      );
+
+      for (const v of variants) {
+        v.values = helpers.safeJsonArray(v.values);
+        const [tiers] = await db.query(
+          `SELECT min_quantity, discount_percent, sort_order
+           FROM prod_variant_discount_tiers
+           WHERE tenant_id=? AND variant_group_id=?
+           ORDER BY sort_order ASC, min_quantity ASC`,
+          [tenantId, v.id]
+        );
+        v.discount_tiers = tiers;
+      }
+
+      res.json({ ok: true, data: variants });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/admin/catalog/categories', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -1047,7 +1422,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       const params = [];
       let sql =
-        `SELECT p.id, p.name, p.price, p.cost_price, p.unit_id, p.base_unit_id, p.base_qty
+        `SELECT p.id, p.name, p.price, p.cost_price, p.unit_id, p.base_unit_id, p.base_qty, p.photos_json
          FROM prod_products p`;
 
       if (categoryId) {
@@ -1067,6 +1442,12 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       sql += ` ORDER BY p.name ASC, p.id ASC LIMIT 200`;
 
       const [rows] = await db.query(sql, params);
+      
+      for (const r of rows) {
+        r.photos = helpers.safeJsonArray(r.photos_json);
+        r.photos_json = r.photos;
+      }
+      
       res.json({ ok: true, data: rows });
     } catch (e) {
       console.error(e);

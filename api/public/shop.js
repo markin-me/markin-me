@@ -929,6 +929,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
+      const [pcsRows] = await db.query(
+        `SELECT id FROM prod_units WHERE tenant_id=? AND store_id=? AND code='pcs' LIMIT 1`,
+        [tenantId, storeId]
+      );
+      const pcsUnitId = pcsRows.length ? Number(pcsRows[0].id) : null;
+
       const [rows] = await db.query(
         `SELECT 
            i.id,
@@ -943,16 +949,27 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
            i.sort_order,
            p.name AS ingredient_name,
            p.price AS ingredient_price,
+           p.base_unit_id AS ingredient_base_unit_id,
+           p.base_qty AS ingredient_base_qty,
+           p.unit_id AS ingredient_unit_id,
            p.photos_json AS ingredient_photos,
            u.code AS unit_code,
            u.title AS unit_title,
-           u.short_title AS unit_short_title
+           u.short_title AS unit_short_title,
+           pul.factor AS ingredient_pcs_factor
          FROM prod_product_ingredients i
-         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.store_id=i.store_id AND p.id=i.ingredient_id
          JOIN prod_units u ON u.id=i.unit_id
+         LEFT JOIN prod_product_unit_links pul
+           ON pul.tenant_id=i.tenant_id
+          AND pul.store_id=i.store_id
+          AND pul.product_id=i.ingredient_id
+          AND pul.base_unit_id=p.base_unit_id
+          AND pul.unit_id=?
          WHERE i.tenant_id=? AND i.store_id=? AND i.product_id=?
+           AND (i.is_variable = 1 OR i.is_variable IS NULL)
          ORDER BY i.sort_order ASC, i.id ASC`,
-        [tenantId, storeId, productId]
+        [pcsUnitId || 0, tenantId, storeId, productId]
       );
 
       for (const r of rows) {
@@ -960,6 +977,55 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
 
       res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/products/:id/variants', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const productId = Number(req.params.id);
+      if (!Number.isFinite(productId) || productId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      const [variants] = await db.query(
+        `SELECT 
+           vg.id,
+           vg.title,
+           vg.unit_id,
+           vg.values,
+           vg.is_active,
+           vg.sort_order,
+           u.code AS unit_code,
+           u.title AS unit_title,
+           u.short_title AS unit_short_title,
+           va.sort_order AS assignment_sort_order
+         FROM prod_variant_assignments va
+         JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
+         LEFT JOIN prod_units u ON u.id=vg.unit_id
+         WHERE va.tenant_id=? AND va.store_id=? AND va.product_id=?
+           AND va.is_active=1 AND vg.is_active=1
+         ORDER BY va.sort_order ASC, vg.sort_order ASC`,
+        [tenantId, storeId, productId]
+      );
+
+      for (const v of variants) {
+        v.values = safeJsonArray(v.values);
+        const [tiers] = await db.query(
+          `SELECT min_quantity, discount_percent, sort_order
+           FROM prod_variant_discount_tiers
+           WHERE tenant_id=? AND store_id=? AND variant_group_id=?
+           ORDER BY sort_order ASC, min_quantity ASC`,
+          [tenantId, storeId, v.id]
+        );
+        v.discount_tiers = tiers;
+      }
+
+      res.json({ ok: true, data: variants });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });

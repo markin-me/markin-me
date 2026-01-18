@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Хост: 127.0.0.1
--- Время создания: Янв 16 2026 г., 12:29
+-- Время создания: Янв 18 2026 г., 11:40
 -- Версия сервера: 10.4.32-MariaDB
 -- Версия PHP: 8.2.12
 
@@ -469,12 +469,13 @@ CREATE TABLE `prod_categories` (
 
 INSERT INTO `prod_categories` (`id`, `tenant_id`, `store_id`, `code`, `title`, `icon`, `site_visibility`, `is_active`, `sort_order`, `created_at`, `updated_at`) VALUES
 (1, 1, 1, 'all', 'Все товары', '/static/uploads/categories/6875982c13bfc85c5f048b152e9e610f.jpg', 1, 1, 0, '2026-01-03 07:37:51', '2026-01-09 12:27:23'),
-(2, 1, 1, 'burgers', 'Бургеры', NULL, 1, 1, 20, '2026-01-03 07:37:51', '2026-01-08 08:57:59'),
-(3, 1, 1, 'drinks', 'Напитки', NULL, 1, 1, 30, '2026-01-03 07:37:51', '2026-01-08 08:57:59'),
-(4, 1, 1, 'cat-mk239ojm', 'Горячее', NULL, 1, 1, 40, '2026-01-06 04:27:59', '2026-01-08 08:57:59'),
-(5, 1, 1, 'cat-mk2a0iyv', 'Гарнир', NULL, 1, 1, 50, '2026-01-06 07:36:49', '2026-01-08 08:57:59'),
-(6, 1, 1, 'cat-mk2nkp4p', 'Булочки', NULL, 1, 1, 60, '2026-01-06 13:56:26', '2026-01-08 08:57:59'),
-(7, 1, 1, 'cat-mk57sj5q', 'Вторые блюда', NULL, 1, 1, 10, '2026-01-08 08:57:56', '2026-01-08 08:57:59');
+(2, 1, 1, 'burgers', 'Бургеры', NULL, 1, 1, 40, '2026-01-03 07:37:51', '2026-01-16 12:02:23'),
+(3, 1, 1, 'drinks', 'Напитки', NULL, 1, 1, 50, '2026-01-03 07:37:51', '2026-01-16 12:02:23'),
+(4, 1, 1, 'cat-mk239ojm', 'Горячее', NULL, 1, 1, 60, '2026-01-06 04:27:59', '2026-01-16 12:02:23'),
+(5, 1, 1, 'cat-mk2a0iyv', 'Гарнир', NULL, 1, 1, 20, '2026-01-06 07:36:49', '2026-01-16 12:02:23'),
+(6, 1, 1, 'cat-mk2nkp4p', 'Булочки', NULL, 1, 1, 70, '2026-01-06 13:56:26', '2026-01-16 11:58:48'),
+(7, 1, 1, 'cat-mk57sj5q', 'Вторые блюда', NULL, 1, 1, 30, '2026-01-08 08:57:56', '2026-01-16 12:02:23'),
+(8, 1, 1, 'cat-mkgtrfi2', 'Продукты', NULL, 0, 1, 10, '2026-01-16 11:58:24', '2026-01-16 11:58:48');
 
 -- --------------------------------------------------------
 
@@ -502,13 +503,11 @@ CREATE TABLE `prod_option_assignments` (
 
 INSERT INTO `prod_option_assignments` (`id`, `tenant_id`, `store_id`, `group_id`, `assign_type`, `assign_id`, `priority`, `sort_order`, `is_active`, `created_at`, `updated_at`) VALUES
 (23, 1, 1, 4, 'product', 2, 0, 0, 1, '2026-01-10 09:04:26', '2026-01-10 09:04:26'),
-(24, 1, 1, 4, 'product', 1, 0, 0, 1, '2026-01-10 09:04:26', '2026-01-10 09:04:26'),
+(24, 1, 1, 4, 'product', 1, 0, 0, 0, '2026-01-10 09:04:26', '2026-01-16 17:38:36'),
 (25, 1, 1, 4, 'product', 5, 0, 0, 1, '2026-01-10 09:04:26', '2026-01-10 09:04:26'),
 (26, 1, 1, 6, 'product', 5, 0, 0, 1, '2026-01-10 10:50:17', '2026-01-10 10:50:17'),
-(29, 1, 1, 7, 'product', 2, 0, 0, 1, '2026-01-11 04:59:49', '2026-01-11 04:59:49'),
-(30, 1, 1, 7, 'product', 1, 0, 0, 1, '2026-01-11 04:59:49', '2026-01-11 04:59:49'),
 (37, 1, 1, 9, 'product', 2, 0, 0, 1, '2026-01-11 11:29:52', '2026-01-11 11:29:52'),
-(38, 1, 1, 9, 'product', 1, 0, 0, 1, '2026-01-11 11:29:52', '2026-01-11 11:29:52'),
+(38, 1, 1, 9, 'product', 1, 0, 0, 0, '2026-01-11 11:29:52', '2026-01-16 15:57:08'),
 (39, 1, 1, 9, 'product', 5, 0, 0, 1, '2026-01-11 11:29:52', '2026-01-11 11:29:52'),
 (40, 1, 1, 9, 'product', 10, 0, 0, 1, '2026-01-11 11:29:52', '2026-01-11 11:29:52'),
 (41, 1, 1, 9, 'product', 9, 0, 0, 1, '2026-01-11 11:29:52', '2026-01-11 11:29:52'),
@@ -519,7 +518,7 @@ INSERT INTO `prod_option_assignments` (`id`, `tenant_id`, `store_id`, `group_id`
 (46, 1, 1, 9, 'product', 7, 0, 0, 1, '2026-01-11 11:29:52', '2026-01-11 11:29:52'),
 (47, 1, 1, 9, 'product', 11, 0, 0, 1, '2026-01-11 11:29:52', '2026-01-11 11:29:52'),
 (48, 1, 1, 10, 'product', 2, 0, 0, 1, '2026-01-11 11:30:37', '2026-01-11 11:30:37'),
-(49, 1, 1, 10, 'product', 1, 0, 0, 1, '2026-01-11 11:30:37', '2026-01-11 11:30:37'),
+(49, 1, 1, 10, 'product', 1, 0, 0, 0, '2026-01-11 11:30:37', '2026-01-16 15:55:04'),
 (50, 1, 1, 10, 'product', 5, 0, 0, 1, '2026-01-11 11:30:37', '2026-01-11 11:30:37'),
 (51, 1, 1, 10, 'product', 10, 0, 0, 1, '2026-01-11 11:30:37', '2026-01-11 11:30:37'),
 (52, 1, 1, 10, 'product', 9, 0, 0, 1, '2026-01-11 11:30:37', '2026-01-11 11:30:37'),
@@ -530,11 +529,20 @@ INSERT INTO `prod_option_assignments` (`id`, `tenant_id`, `store_id`, `group_id`
 (57, 1, 1, 10, 'product', 7, 0, 0, 1, '2026-01-11 11:30:37', '2026-01-11 11:30:37'),
 (58, 1, 1, 10, 'product', 11, 0, 0, 1, '2026-01-11 11:30:37', '2026-01-11 11:30:37'),
 (59, 1, 1, 12, 'product', 2, 0, 0, 1, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
-(60, 1, 1, 12, 'product', 1, 0, 0, 1, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
+(60, 1, 1, 12, 'product', 1, 0, 0, 0, '2026-01-12 18:07:16', '2026-01-16 15:55:04'),
 (61, 1, 1, 12, 'product', 5, 0, 0, 1, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
 (62, 1, 1, 12, 'product', 10, 0, 0, 1, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
 (63, 1, 1, 12, 'product', 9, 0, 0, 1, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
-(64, 1, 1, 12, 'product', 8, 0, 0, 1, '2026-01-12 18:07:16', '2026-01-12 18:07:16');
+(64, 1, 1, 12, 'product', 8, 0, 0, 1, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
+(67, 1, 1, 6, 'product', 1, 0, 0, 1, '2026-01-16 15:55:04', '2026-01-16 15:55:04'),
+(68, 1, 1, 5, 'product', 1, 0, 0, 0, '2026-01-16 15:55:04', '2026-01-16 18:36:25'),
+(69, 1, 1, 4, 'product', 15, 0, 0, 0, '2026-01-16 18:32:20', '2026-01-18 06:36:13'),
+(70, 1, 1, 5, 'product', 15, 0, 0, 0, '2026-01-16 18:32:20', '2026-01-18 06:36:14'),
+(71, 1, 1, 6, 'product', 15, 0, 0, 0, '2026-01-16 18:32:20', '2026-01-18 06:36:14'),
+(72, 1, 1, 5, 'product', 14, 0, 0, 0, '2026-01-17 11:17:29', '2026-01-18 05:49:38'),
+(73, 1, 1, 6, 'product', 14, 0, 0, 0, '2026-01-17 17:09:43', '2026-01-18 06:56:33'),
+(74, 1, 1, 12, 'product', 14, 0, 0, 0, '2026-01-17 17:33:52', '2026-01-18 06:56:33'),
+(75, 1, 1, 11, 'product', 14, 0, 0, 0, '2026-01-17 17:34:03', '2026-01-17 17:34:08');
 
 -- --------------------------------------------------------
 
@@ -580,7 +588,6 @@ INSERT INTO `prod_option_groups` (`id`, `tenant_id`, `store_id`, `title`, `selec
 (4, 1, 1, 'По щам', 'single', 0, NULL, 1, 0, '2026-01-10 09:03:50', '2026-01-10 09:03:50', 1),
 (5, 1, 1, 'Соус', 'single', 0, NULL, 1, 0, '2026-01-10 10:22:35', '2026-01-10 10:22:35', 1),
 (6, 1, 1, 'Горячее', 'single', 0, NULL, 1, 0, '2026-01-10 10:49:58', '2026-01-10 10:49:58', 1),
-(7, 1, 1, 'Парпа', 'single', 0, NULL, 1, 0, '2026-01-11 04:05:15', '2026-01-11 04:05:15', 1),
 (8, 1, 1, 'Суп', 'single', 0, NULL, 1, 0, '2026-01-11 05:28:56', '2026-01-11 05:28:56', 1),
 (9, 1, 1, 'Соусы', 'multiple', 0, 10, 1, 0, '2026-01-11 11:29:52', '2026-01-11 11:34:29', 1),
 (10, 1, 1, 'Комбо', 'multiple', 0, NULL, 1, 0, '2026-01-11 11:30:37', '2026-01-11 11:30:37', 1),
@@ -624,13 +631,6 @@ INSERT INTO `prod_option_items` (`id`, `tenant_id`, `store_id`, `group_id`, `tit
 (16, 1, 1, 6, NULL, NULL, 'product', 10, NULL, 'from_target', 0.00, 1, 1, 1, 10, '2026-01-10 10:49:58', '2026-01-10 10:49:58'),
 (17, 1, 1, 6, NULL, NULL, 'product', 3, NULL, 'from_target', 0.00, 1, 1, 1, 20, '2026-01-10 10:49:58', '2026-01-10 10:49:58'),
 (18, 1, 1, 6, NULL, NULL, 'product', 11, NULL, 'from_target', 0.00, 1, 1, 1, 30, '2026-01-10 10:49:58', '2026-01-10 10:49:58'),
-(19, 1, 1, 7, NULL, NULL, 'product', 2, NULL, 'from_target', 0.00, 1, 1, 1, 0, '2026-01-11 04:05:15', '2026-01-11 04:05:15'),
-(20, 1, 1, 7, NULL, NULL, 'product', 1, NULL, 'from_target', 0.00, 1, 1, 1, 10, '2026-01-11 04:05:15', '2026-01-11 04:05:15'),
-(21, 1, 1, 7, NULL, NULL, 'product', 10, NULL, 'from_target', 0.00, 1, 1, 1, 20, '2026-01-11 04:05:15', '2026-01-11 04:05:15'),
-(22, 1, 1, 7, NULL, NULL, 'product', 5, NULL, 'from_target', 0.00, 1, 1, 1, 30, '2026-01-11 04:05:15', '2026-01-11 04:05:15'),
-(23, 1, 1, 7, NULL, NULL, 'product', 9, NULL, 'from_target', 0.00, 1, 1, 1, 40, '2026-01-11 04:05:15', '2026-01-11 04:05:15'),
-(24, 1, 1, 7, NULL, NULL, 'product', 8, NULL, 'from_target', 0.00, 1, 1, 1, 50, '2026-01-11 04:05:15', '2026-01-11 04:05:15'),
-(25, 1, 1, 7, NULL, NULL, 'product', 3, NULL, 'from_target', 0.00, 1, 1, 1, 60, '2026-01-11 04:05:15', '2026-01-11 04:05:15'),
 (27, 1, 1, 4, NULL, NULL, 'product', 2, NULL, 'fixed', 99.00, 1, 1, 1, 0, '2026-01-11 04:58:48', '2026-01-11 08:18:22'),
 (28, 1, 1, 4, NULL, NULL, 'product', 1, NULL, 'from_target', NULL, 1, 1, 1, 10, '2026-01-11 04:59:02', '2026-01-11 04:59:02'),
 (30, 1, 1, 8, NULL, NULL, 'product', 5, NULL, 'fixed', 99.00, 1, 1, 1, 0, '2026-01-11 05:28:56', '2026-01-11 05:29:22'),
@@ -679,6 +679,62 @@ CREATE TABLE `prod_option_overrides` (
 -- --------------------------------------------------------
 
 --
+-- Структура таблицы `prod_variant_groups`
+--
+
+CREATE TABLE `prod_variant_groups` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
+  `store_id` int(11) NOT NULL DEFAULT 1,
+  `title` varchar(255) NOT NULL,
+  `unit_id` bigint(20) UNSIGNED DEFAULT NULL COMMENT 'Единица измерения для вариантов',
+  `values` text DEFAULT NULL COMMENT 'JSON массив значений вариантов (например: ["1","2","3","4"] или ["150г","250г","350г"])',
+  `selection_type` enum('single') NOT NULL DEFAULT 'single',
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `sort_order` int(11) NOT NULL DEFAULT 0,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Структура таблицы `prod_variant_discount_tiers`
+--
+
+CREATE TABLE `prod_variant_discount_tiers` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
+  `store_id` int(11) NOT NULL DEFAULT 1,
+  `variant_group_id` bigint(20) UNSIGNED NOT NULL,
+  `min_quantity` decimal(10,3) NOT NULL COMMENT 'Минимальное количество для применения скидки',
+  `discount_percent` decimal(5,2) NOT NULL DEFAULT 0.00 COMMENT 'Процент скидки (0.00 - 100.00)',
+  `sort_order` int(11) NOT NULL DEFAULT 0,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Структура таблицы `prod_variant_assignments`
+--
+
+CREATE TABLE `prod_variant_assignments` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
+  `store_id` int(11) NOT NULL DEFAULT 1,
+  `product_id` bigint(20) UNSIGNED NOT NULL,
+  `variant_group_id` bigint(20) UNSIGNED NOT NULL,
+  `sort_order` int(11) NOT NULL DEFAULT 0,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Структура таблицы `prod_products`
 --
 
@@ -694,34 +750,40 @@ CREATE TABLE `prod_products` (
   `old_price` decimal(12,2) DEFAULT NULL,
   `cost_price` decimal(12,2) DEFAULT NULL,
   `unit_id` bigint(20) UNSIGNED DEFAULT NULL COMMENT 'Единица измерения товара',
-  `base_unit_id` bigint(20) UNSIGNED DEFAULT NULL COMMENT 'Базовая единица измерения',
-  `base_qty` decimal(12,3) DEFAULT NULL COMMENT 'Количество базовой единицы для цены',
   `photos_json` text DEFAULT NULL,
   `is_active` tinyint(1) NOT NULL DEFAULT 1,
   `site_visibility` tinyint(1) NOT NULL DEFAULT 1,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `base_unit_id` bigint(20) UNSIGNED DEFAULT NULL COMMENT 'Базовая единица измерения',
+  `base_qty` decimal(12,3) DEFAULT NULL COMMENT 'Количество базовой единицы для цены'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
 -- Дамп данных таблицы `prod_products`
 --
 
-INSERT INTO `prod_products` (`id`, `tenant_id`, `store_id`, `name`, `sku`, `description_short`, `description`, `price`, `old_price`, `cost_price`, `unit_id`, `base_unit_id`, `base_qty`, `photos_json`, `is_active`, `site_visibility`, `created_at`, `updated_at`) VALUES
-(1, 1, 1, 'Картошка фриКартошка фриКартошка фри', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 1.00, NULL, NULL, NULL, NULL, NULL, '[\"/static/uploads/products/1/a98c7ce5d7b10ac0735a059730a0d3d7.png\",\"/static/uploads/products/1/7498e3f335146d848fb50b125417f8c3.jpg\",\"/static/uploads/products/1/2cb5dcd586e080ffc086f42d357c5229.jpg\",\"/static/uploads/products/1/21ff17c8ce65941320569cdca418189d.jpg\"]', 1, 1, '2026-01-03 10:03:50', '2026-01-15 15:48:41'),
-(2, 1, 1, 'Запеканка', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 299.00, NULL, NULL, NULL, NULL, NULL, '[\"/static/uploads/products/1/cfd04eb2551edc8c4bf4b26f587171bd.jpg\"]', 1, 1, '2026-01-03 12:54:21', '2026-01-11 08:14:45'),
-(3, 1, 1, 'Пюре с сосисками', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 678.00, 999.00, NULL, NULL, NULL, NULL, '[\"/static/uploads/products/1/cbffc8a00b3f750e1cef0127ddda7aff.png\"]', 1, 1, '2026-01-05 15:54:34', '2026-01-11 08:15:12'),
-(4, 1, 1, 'Рыбная котлета', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 149.00, 179.00, NULL, NULL, NULL, NULL, '[\"/static/uploads/products/1/446502b1bce3809a4303e8c7f4345d51.jpg\"]', 1, 1, '2026-01-06 04:28:49', '2026-01-11 08:15:21'),
-(5, 1, 1, 'Кола', NULL, '. «Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 120.00, NULL, NULL, NULL, NULL, NULL, '[\"/static/uploads/products/1/854b87feeafab3c82453dcaa5ff8c9e0.jpg\"]', 1, 1, '2026-01-06 04:35:32', '2026-01-11 08:15:31'),
-(6, 1, 1, 'Рис с овощами', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 149.00, 179.00, NULL, NULL, NULL, NULL, '[\"/static/uploads/products/1/b7d5215763b1e8b3a3a05564c83352f0.jpg\"]', 1, 1, '2026-01-06 07:37:17', '2026-01-11 08:15:38'),
-(7, 1, 1, 'Тефтели', NULL, '. «Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 149.00, 999.00, NULL, NULL, NULL, NULL, '[\"/static/uploads/products/1/09c238e8cea082a8ce2a57359b649b7d.jpg\"]', 1, 1, '2026-01-06 13:56:46', '2026-01-11 08:15:51'),
-(8, 1, 1, 'Мкароны с тефтелями', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 299.00, 347.00, NULL, NULL, NULL, NULL, '[\"/static/uploads/products/1/d47962e1e258c2369161a1c86ccf0e3b.jpg\"]', 1, 1, '2026-01-08 03:44:37', '2026-01-11 08:15:58'),
-(9, 1, 1, 'Макароны с печенью', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 456.00, 678.00, NULL, NULL, NULL, NULL, '[\"/static/uploads/products/1/59e45a1798151b95d447fad186c77ff0.jpg\"]', 1, 1, '2026-01-08 03:45:00', '2026-01-11 08:16:07'),
-(10, 1, 1, 'Котлета с пюрешкой', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 299.00, 319.00, NULL, NULL, NULL, NULL, '[\"/static/uploads/products/1/48df187f637a1df0f3e763d1191989d8.jpg\"]', 1, 1, '2026-01-08 08:58:27', '2026-01-11 08:16:15'),
-(11, 1, 1, 'Фрикадельки с пюрешкой', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 599.00, 768.00, NULL, NULL, NULL, NULL, '[\"/static/uploads/products/1/c7ee582d4fddf82778bdf23b8ab25754.jpg\"]', 1, 1, '2026-01-08 08:58:54', '2026-01-11 08:16:22'),
-(12, 1, 1, 'Картофельное пюре 250г', NULL, NULL, NULL, 199.00, NULL, NULL, NULL, NULL, NULL, '[\"/static/uploads/products/1/9fdc3cffd1457f84af2705bfc55c33a2.webp\"]', 1, 1, '2026-01-16 10:32:24', '2026-01-16 10:33:41'),
-(13, 1, 1, 'Куринная котлета 1 шт', NULL, NULL, NULL, 149.00, NULL, NULL, NULL, NULL, NULL, '[\"/static/uploads/products/1/fe6e72ac1ce743c145b235225287a820.webp\"]', 1, 1, '2026-01-16 10:33:13', '2026-01-16 10:33:13'),
-(14, 1, 1, 'Пюре с куриной котлетой', NULL, NULL, NULL, 0.00, NULL, NULL, NULL, NULL, NULL, '[\"/static/uploads/products/1/8d7527fdbc8e7476d39e29192a4d70d0.webp\"]', 1, 1, '2026-01-16 10:34:30', '2026-01-16 10:34:30');
+INSERT INTO `prod_products` (`id`, `tenant_id`, `store_id`, `name`, `sku`, `description_short`, `description`, `price`, `old_price`, `cost_price`, `unit_id`, `photos_json`, `is_active`, `site_visibility`, `created_at`, `updated_at`, `base_unit_id`, `base_qty`) VALUES
+(1, 1, 1, 'Картошка фриКартошка фриКартошка фри', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 1.00, NULL, 40.00, 6, '[\"/static/uploads/products/1/a98c7ce5d7b10ac0735a059730a0d3d7.png\",\"/static/uploads/products/1/7498e3f335146d848fb50b125417f8c3.jpg\",\"/static/uploads/products/1/2cb5dcd586e080ffc086f42d357c5229.jpg\",\"/static/uploads/products/1/21ff17c8ce65941320569cdca418189d.jpg\"]', 1, 1, '2026-01-03 10:03:50', '2026-01-18 06:42:53', 6, NULL),
+(2, 1, 1, 'Запеканка', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 299.00, NULL, 0.00, 6, '[\"/static/uploads/products/1/cfd04eb2551edc8c4bf4b26f587171bd.jpg\"]', 1, 1, '2026-01-03 12:54:21', '2026-01-18 06:44:28', 6, NULL),
+(3, 1, 1, 'Пюре с сосисками', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 678.00, 999.00, NULL, 6, '[\"/static/uploads/products/1/cbffc8a00b3f750e1cef0127ddda7aff.png\"]', 1, 1, '2026-01-05 15:54:34', '2026-01-17 10:23:23', NULL, NULL),
+(4, 1, 1, 'Рыбная котлета', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 149.00, 179.00, NULL, NULL, '[\"/static/uploads/products/1/446502b1bce3809a4303e8c7f4345d51.jpg\"]', 1, 1, '2026-01-06 04:28:49', '2026-01-11 08:15:21', NULL, NULL),
+(5, 1, 1, 'Кола', NULL, '. «Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 120.00, NULL, NULL, NULL, '[\"/static/uploads/products/1/854b87feeafab3c82453dcaa5ff8c9e0.jpg\"]', 1, 1, '2026-01-06 04:35:32', '2026-01-11 08:15:31', NULL, NULL),
+(6, 1, 1, 'Рис с овощами', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 149.00, 179.00, NULL, NULL, '[\"/static/uploads/products/1/b7d5215763b1e8b3a3a05564c83352f0.jpg\"]', 1, 1, '2026-01-06 07:37:17', '2026-01-11 08:15:38', NULL, NULL),
+(7, 1, 1, 'Тефтели', NULL, '. «Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 149.00, 999.00, NULL, NULL, '[\"/static/uploads/products/1/09c238e8cea082a8ce2a57359b649b7d.jpg\"]', 1, 1, '2026-01-06 13:56:46', '2026-01-11 08:15:51', NULL, NULL),
+(8, 1, 1, 'Мкароны с тефтелями', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 299.00, 347.00, NULL, NULL, '[\"/static/uploads/products/1/d47962e1e258c2369161a1c86ccf0e3b.jpg\"]', 1, 1, '2026-01-08 03:44:37', '2026-01-11 08:15:58', NULL, NULL),
+(9, 1, 1, 'Макароны с печенью', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 456.00, 678.00, NULL, NULL, '[\"/static/uploads/products/1/59e45a1798151b95d447fad186c77ff0.jpg\"]', 1, 1, '2026-01-08 03:45:00', '2026-01-11 08:16:07', NULL, NULL),
+(10, 1, 1, 'Котлета с пюрешкой', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 299.00, 319.00, NULL, NULL, '[\"/static/uploads/products/1/48df187f637a1df0f3e763d1191989d8.jpg\"]', 1, 1, '2026-01-08 08:58:27', '2026-01-11 08:16:15', NULL, NULL),
+(11, 1, 1, 'Фрикадельки с пюрешкой', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 599.00, 768.00, 100.00, 6, '[\"/static/uploads/products/1/c7ee582d4fddf82778bdf23b8ab25754.jpg\"]', 0, 0, '2026-01-08 08:58:54', '2026-01-17 13:15:33', 6, NULL),
+(12, 1, 1, 'Картофельное пюре', NULL, NULL, NULL, 800.00, NULL, 95.00, 2, '[\"/static/uploads/products/1/9fdc3cffd1457f84af2705bfc55c33a2.webp\"]', 1, 1, '2026-01-16 10:32:24', '2026-01-18 06:56:09', 2, 1.000),
+(13, 1, 1, 'Куринная котлета', NULL, NULL, NULL, 150.00, NULL, 48.00, 1, '[\"/static/uploads/products/1/fe6e72ac1ce743c145b235225287a820.webp\"]', 1, 1, '2026-01-16 10:33:13', '2026-01-18 07:16:07', 1, NULL),
+(14, 1, 1, 'Пюре с куриной котлетой', NULL, NULL, NULL, 270.00, NULL, 62.25, 6, '[\"/static/uploads/products/1/8d7527fdbc8e7476d39e29192a4d70d0.webp\"]', 1, 1, '2026-01-16 10:34:30', '2026-01-18 08:51:25', 6, NULL),
+(15, 1, 1, 'Картофель', NULL, NULL, NULL, 0.00, NULL, 40.00, 2, '[\"/static/uploads/products/1/6ec0482c5b64bc892b95d4d799d278b3.webp\"]', 1, 0, '2026-01-16 11:58:13', '2026-01-18 06:31:16', 2, NULL),
+(16, 1, 1, 'Масло сливочное', NULL, NULL, NULL, 0.00, NULL, 200.00, 2, '[\"/static/uploads/products/1/fd170c1d0a9402b11b304e7090e1ee7c.webp\"]', 1, 0, '2026-01-16 12:01:19', '2026-01-18 06:32:43', 2, NULL),
+(17, 1, 1, 'Молоко', NULL, NULL, NULL, 0.00, NULL, 100.00, 2, '[\"/static/uploads/products/1/6e18cdc9e15ef0c2622e9a619b1c3725.webp\"]', 1, 0, '2026-01-16 12:02:03', '2026-01-18 06:32:52', 2, NULL),
+(18, 1, 1, 'карт', NULL, NULL, NULL, 78.00, NULL, NULL, NULL, NULL, 0, 0, '2026-01-16 16:26:17', '2026-01-17 13:07:55', NULL, NULL),
+(19, 1, 1, 'Соль', NULL, NULL, NULL, 0.00, NULL, 100.00, 2, NULL, 1, 1, '2026-01-18 06:44:53', '2026-01-18 06:44:53', 2, 1.000),
+(20, 1, 1, 'Фарш куринный', NULL, NULL, NULL, 0.00, NULL, 400.00, 2, NULL, 1, 1, '2026-01-18 06:57:10', '2026-01-18 06:57:10', 2, NULL);
 
 -- --------------------------------------------------------
 
@@ -745,32 +807,42 @@ CREATE TABLE `prod_product_categories` (
 --
 
 INSERT INTO `prod_product_categories` (`id`, `tenant_id`, `store_id`, `product_id`, `category_id`, `sort_order`, `created_at`, `updated_at`) VALUES
-(1, 1, 1, 1, 1, 0, '2026-01-03 10:03:50', '2026-01-03 13:10:14'),
+(1, 1, 1, 1, 1, 30, '2026-01-03 10:03:50', '2026-01-17 11:06:00'),
 (3, 1, 1, 1, 2, 10, '2026-01-03 11:03:56', '2026-01-03 11:03:56'),
-(5, 1, 1, 2, 1, 10, '2026-01-03 12:54:21', '2026-01-03 13:10:14'),
+(5, 1, 1, 2, 1, 40, '2026-01-03 12:54:21', '2026-01-17 11:06:00'),
 (10, 1, 1, 2, 2, 0, '2026-01-03 13:10:31', '2026-01-03 13:10:34'),
-(17, 1, 1, 3, 1, 20, '2026-01-05 15:54:34', '2026-01-05 15:54:34'),
-(19, 1, 1, 4, 1, 30, '2026-01-06 04:28:49', '2026-01-06 04:28:49'),
-(20, 1, 1, 4, 4, 10, '2026-01-06 04:28:49', '2026-01-06 04:28:49'),
-(21, 1, 1, 5, 1, 40, '2026-01-06 04:35:32', '2026-01-06 04:35:32'),
+(17, 1, 1, 3, 1, 50, '2026-01-05 15:54:34', '2026-01-17 11:05:57'),
+(19, 1, 1, 4, 1, 60, '2026-01-06 04:28:49', '2026-01-17 11:05:57'),
+(20, 1, 1, 4, 4, 0, '2026-01-06 04:28:49', '2026-01-17 13:30:29'),
+(21, 1, 1, 5, 1, 70, '2026-01-06 04:35:32', '2026-01-17 11:05:57'),
 (22, 1, 1, 5, 3, 20, '2026-01-06 04:35:32', '2026-01-06 04:35:32'),
-(23, 1, 1, 6, 1, 50, '2026-01-06 07:37:17', '2026-01-06 07:37:17'),
-(25, 1, 1, 7, 1, 60, '2026-01-06 13:56:46', '2026-01-06 13:56:46'),
+(23, 1, 1, 6, 1, 80, '2026-01-06 07:37:17', '2026-01-17 11:05:57'),
+(25, 1, 1, 7, 1, 90, '2026-01-06 13:56:46', '2026-01-17 11:05:57'),
 (26, 1, 1, 7, 6, 10, '2026-01-06 13:56:46', '2026-01-06 13:56:46'),
-(27, 1, 1, 8, 1, 70, '2026-01-08 03:44:37', '2026-01-08 03:44:37'),
+(27, 1, 1, 8, 1, 100, '2026-01-08 03:44:37', '2026-01-17 11:05:57'),
 (28, 1, 1, 8, 6, 20, '2026-01-08 03:44:37', '2026-01-08 03:44:37'),
-(29, 1, 1, 9, 1, 80, '2026-01-08 03:45:00', '2026-01-08 03:45:00'),
-(40, 1, 1, 10, 1, 90, '2026-01-08 08:58:27', '2026-01-08 08:58:27'),
+(29, 1, 1, 9, 1, 110, '2026-01-08 03:45:00', '2026-01-17 11:05:53'),
+(40, 1, 1, 10, 1, 120, '2026-01-08 08:58:27', '2026-01-17 11:05:53'),
 (41, 1, 1, 10, 7, 0, '2026-01-08 08:58:27', '2026-01-10 06:49:08'),
-(42, 1, 1, 11, 1, 100, '2026-01-08 08:58:54', '2026-01-08 08:58:54'),
+(42, 1, 1, 11, 1, 130, '2026-01-08 08:58:54', '2026-01-17 11:05:53'),
 (43, 1, 1, 11, 7, 10, '2026-01-08 08:58:54', '2026-01-10 06:49:08'),
 (44, 1, 1, 3, 7, 20, '2026-01-08 08:59:50', '2026-01-10 06:49:08'),
 (48, 1, 1, 1, 7, 30, '2026-01-10 06:59:14', '2026-01-10 06:59:14'),
 (51, 1, 1, 9, 7, 40, '2026-01-11 05:12:04', '2026-01-11 05:12:04'),
-(53, 1, 1, 6, 5, 10, '2026-01-11 05:16:44', '2026-01-11 05:16:44'),
-(54, 1, 1, 12, 1, 110, '2026-01-16 10:32:24', '2026-01-16 10:32:24'),
-(55, 1, 1, 13, 1, 120, '2026-01-16 10:33:13', '2026-01-16 10:33:13'),
-(56, 1, 1, 14, 1, 130, '2026-01-16 10:34:30', '2026-01-16 10:34:30');
+(53, 1, 1, 6, 5, 0, '2026-01-11 05:16:44', '2026-01-17 13:31:19'),
+(54, 1, 1, 12, 1, 20, '2026-01-16 10:32:24', '2026-01-17 11:06:00'),
+(55, 1, 1, 13, 1, 10, '2026-01-16 10:33:13', '2026-01-17 11:05:59'),
+(56, 1, 1, 14, 1, 0, '2026-01-16 10:34:30', '2026-01-17 11:05:48'),
+(57, 1, 1, 15, 1, 130, '2026-01-16 11:58:13', '2026-01-17 15:15:02'),
+(58, 1, 1, 15, 8, 0, '2026-01-16 11:59:07', '2026-01-17 13:34:01'),
+(59, 1, 1, 16, 1, 140, '2026-01-16 12:01:19', '2026-01-17 15:15:02'),
+(60, 1, 1, 16, 8, 10, '2026-01-16 12:01:19', '2026-01-17 13:34:01'),
+(61, 1, 1, 17, 1, 150, '2026-01-16 12:02:03', '2026-01-17 15:15:02'),
+(62, 1, 1, 17, 8, 20, '2026-01-16 12:02:03', '2026-01-17 13:34:01'),
+(63, 1, 1, 12, 5, 10, '2026-01-16 12:02:38', '2026-01-17 13:31:19'),
+(166, 1, 1, 18, 1, 170, '2026-01-16 16:26:17', '2026-01-16 16:26:17'),
+(579, 1, 1, 19, 1, 160, '2026-01-18 06:44:53', '2026-01-18 07:25:22'),
+(580, 1, 1, 20, 1, 170, '2026-01-18 06:57:10', '2026-01-18 07:25:22');
 
 -- --------------------------------------------------------
 
@@ -795,6 +867,45 @@ CREATE TABLE `prod_product_ingredients` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Дамп данных таблицы `prod_product_ingredients`
+--
+
+INSERT INTO `prod_product_ingredients` (`id`, `tenant_id`, `store_id`, `product_id`, `ingredient_id`, `quantity`, `unit_id`, `quantity_min`, `quantity_max`, `quantity_step`, `price_override`, `is_variable`, `sort_order`, `created_at`, `updated_at`) VALUES
+(5, 1, 1, 12, 15, 1.000, 2, NULL, NULL, NULL, NULL, 0, 10, '2026-01-16 12:57:50', '2026-01-18 06:33:31'),
+(11, 1, 1, 1, 13, 1.000, 1, NULL, NULL, NULL, NULL, 0, 30, '2026-01-17 11:05:21', '2026-01-17 11:05:21'),
+(12, 1, 1, 14, 12, 150.000, 3, 150.000, 350.000, 100.000, NULL, 1, 10, '2026-01-17 11:08:20', '2026-01-17 11:13:58'),
+(13, 1, 1, 14, 13, 1.000, 1, 1.000, 4.000, 1.000, NULL, 1, 20, '2026-01-17 11:08:20', '2026-01-17 11:09:30'),
+(16, 1, 1, 12, 17, 300.000, 3, NULL, NULL, NULL, NULL, 0, 20, '2026-01-18 06:33:31', '2026-01-18 06:45:41'),
+(17, 1, 1, 12, 16, 100.000, 3, NULL, NULL, NULL, NULL, 0, 30, '2026-01-18 06:33:31', '2026-01-18 06:45:41'),
+(18, 1, 1, 12, 19, 50.000, 3, NULL, NULL, NULL, NULL, 0, 40, '2026-01-18 06:45:16', '2026-01-18 06:45:16'),
+(19, 1, 1, 13, 20, 120.000, 3, NULL, NULL, NULL, NULL, 0, 10, '2026-01-18 06:57:37', '2026-01-18 06:57:37');
+
+-- --------------------------------------------------------
+
+--
+-- Структура таблицы `prod_product_unit_links`
+--
+
+CREATE TABLE `prod_product_unit_links` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
+  `store_id` int(11) NOT NULL DEFAULT 1,
+  `product_id` bigint(20) UNSIGNED NOT NULL,
+  `unit_id` bigint(20) UNSIGNED NOT NULL COMMENT 'Связанная единица (например шт)',
+  `base_unit_id` bigint(20) UNSIGNED NOT NULL COMMENT 'Базовая единица товара',
+  `factor` decimal(18,6) NOT NULL COMMENT 'Сколько base_unit в 1 unit',
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Дамп данных таблицы `prod_product_unit_links`
+--
+
+INSERT INTO `prod_product_unit_links` (`id`, `tenant_id`, `store_id`, `product_id`, `unit_id`, `base_unit_id`, `factor`, `created_at`, `updated_at`) VALUES
+(1, 1, 1, 12, 1, 2, 1.000000, '2026-01-18 06:12:17', '2026-01-18 06:12:17');
 
 -- --------------------------------------------------------
 
@@ -828,6 +939,7 @@ INSERT INTO `prod_units` (`id`, `tenant_id`, `store_id`, `code`, `title`, `short
 (6, 1, 1, 'portion', 'Порция', 'порц', 6, 1, '2026-01-16 11:23:09', '2026-01-16 11:23:09');
 
 -- --------------------------------------------------------
+
 --
 -- Структура таблицы `prod_unit_conversions`
 --
@@ -849,27 +961,10 @@ CREATE TABLE `prod_unit_conversions` (
 --
 
 INSERT INTO `prod_unit_conversions` (`id`, `tenant_id`, `store_id`, `from_unit_id`, `to_unit_id`, `factor`, `is_active`, `created_at`, `updated_at`) VALUES
-(1, 1, 1, 2, 3, 1000.000000, 1, '2026-01-16 11:23:09', '2026-01-16 11:23:09'), -- кг -> г
-(2, 1, 1, 3, 2, 0.001000, 1, '2026-01-16 11:23:09', '2026-01-16 11:23:09'), -- г -> кг
-(3, 1, 1, 4, 5, 1000.000000, 1, '2026-01-16 11:23:09', '2026-01-16 11:23:09'), -- л -> мл
-(4, 1, 1, 5, 4, 0.001000, 1, '2026-01-16 11:23:09', '2026-01-16 11:23:09'); -- мл -> л
-
--- --------------------------------------------------------
---
--- Структура таблицы `prod_product_unit_links`
---
-
-CREATE TABLE `prod_product_unit_links` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `product_id` bigint(20) UNSIGNED NOT NULL,
-  `unit_id` bigint(20) UNSIGNED NOT NULL COMMENT 'Связанная единица (например шт)',
-  `base_unit_id` bigint(20) UNSIGNED NOT NULL COMMENT 'Базовая единица товара',
-  `factor` decimal(18,6) NOT NULL COMMENT 'Сколько base_unit в 1 unit',
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+(1, 1, 1, 2, 3, 1000.000000, 1, '2026-01-17 13:04:58', '2026-01-17 13:04:58'),
+(2, 1, 1, 3, 2, 0.001000, 1, '2026-01-17 13:04:58', '2026-01-17 13:04:58'),
+(3, 1, 1, 4, 5, 1000.000000, 1, '2026-01-17 13:04:58', '2026-01-17 13:04:58'),
+(4, 1, 1, 5, 4, 0.001000, 1, '2026-01-17 13:04:58', '2026-01-17 13:04:58');
 
 -- --------------------------------------------------------
 
@@ -1042,6 +1137,32 @@ ALTER TABLE `prod_option_overrides`
   ADD KEY `fk_optover_group` (`group_id`);
 
 --
+-- Индексы таблицы `prod_variant_groups`
+--
+ALTER TABLE `prod_variant_groups`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_varntgrp_tenant_active_sort` (`tenant_id`,`is_active`,`sort_order`),
+  ADD KEY `idx_varntgrp_tenant_title` (`tenant_id`,`title`),
+  ADD KEY `fk_varntgrp_unit` (`unit_id`);
+
+--
+-- Индексы таблицы `prod_variant_discount_tiers`
+--
+ALTER TABLE `prod_variant_discount_tiers`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_varnttier_group_sort` (`variant_group_id`,`sort_order`),
+  ADD KEY `idx_varnttier_tenant` (`tenant_id`);
+
+--
+-- Индексы таблицы `prod_variant_assignments`
+--
+ALTER TABLE `prod_variant_assignments`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_varntassign_unique` (`tenant_id`,`product_id`,`variant_group_id`),
+  ADD KEY `idx_varntassign_product` (`tenant_id`,`product_id`),
+  ADD KEY `idx_varntassign_group` (`variant_group_id`);
+
+--
 -- Индексы таблицы `prod_products`
 --
 ALTER TABLE `prod_products`
@@ -1072,12 +1193,28 @@ ALTER TABLE `prod_product_ingredients`
   ADD KEY `fk_prod_ingr_unit` (`unit_id`);
 
 --
+-- Индексы таблицы `prod_product_unit_links`
+--
+ALTER TABLE `prod_product_unit_links`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_link_product` (`product_id`),
+  ADD KEY `idx_link_units` (`unit_id`,`base_unit_id`);
+
+--
 -- Индексы таблицы `prod_units`
 --
 ALTER TABLE `prod_units`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `uq_prod_units_tenant_code` (`tenant_id`,`code`),
   ADD KEY `idx_prod_units_tenant_active` (`tenant_id`,`is_active`,`sort_order`);
+
+--
+-- Индексы таблицы `prod_unit_conversions`
+--
+ALTER TABLE `prod_unit_conversions`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_conv_tenant` (`tenant_id`),
+  ADD KEY `idx_conv_units` (`from_unit_id`,`to_unit_id`);
 
 --
 -- Индексы таблицы `ten_tenants`
@@ -1147,13 +1284,13 @@ ALTER TABLE `order_time_options`
 -- AUTO_INCREMENT для таблицы `prod_categories`
 --
 ALTER TABLE `prod_categories`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_option_assignments`
 --
 ALTER TABLE `prod_option_assignments`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=67;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=76;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_option_exclusions`
@@ -1180,28 +1317,58 @@ ALTER TABLE `prod_option_overrides`
   MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
+-- AUTO_INCREMENT для таблицы `prod_variant_groups`
+--
+ALTER TABLE `prod_variant_groups`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT для таблицы `prod_variant_discount_tiers`
+--
+ALTER TABLE `prod_variant_discount_tiers`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT для таблицы `prod_variant_assignments`
+--
+ALTER TABLE `prod_variant_assignments`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
 -- AUTO_INCREMENT для таблицы `prod_products`
 --
 ALTER TABLE `prod_products`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=15;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=21;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_product_categories`
 --
 ALTER TABLE `prod_product_categories`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=57;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=599;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_product_ingredients`
 --
 ALTER TABLE `prod_product_ingredients`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=20;
+
+--
+-- AUTO_INCREMENT для таблицы `prod_product_unit_links`
+--
+ALTER TABLE `prod_product_unit_links`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_units`
 --
 ALTER TABLE `prod_units`
   MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+
+--
+-- AUTO_INCREMENT для таблицы `prod_unit_conversions`
+--
+ALTER TABLE `prod_unit_conversions`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT для таблицы `ten_tenants`
@@ -1261,6 +1428,31 @@ ALTER TABLE `prod_option_overrides`
   ADD CONSTRAINT `fk_optover_group` FOREIGN KEY (`group_id`) REFERENCES `prod_option_groups` (`id`) ON DELETE CASCADE;
 
 --
+-- Ограничения внешнего ключа таблицы `prod_variant_groups`
+--
+ALTER TABLE `prod_variant_groups`
+  ADD CONSTRAINT `fk_varntgrp_unit` FOREIGN KEY (`unit_id`) REFERENCES `prod_units` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+
+--
+-- Ограничения внешнего ключа таблицы `prod_variant_discount_tiers`
+--
+ALTER TABLE `prod_variant_discount_tiers`
+  ADD CONSTRAINT `fk_varnttier_group` FOREIGN KEY (`variant_group_id`) REFERENCES `prod_variant_groups` (`id`) ON DELETE CASCADE;
+
+--
+-- Ограничения внешнего ключа таблицы `prod_variant_assignments`
+--
+ALTER TABLE `prod_variant_assignments`
+  ADD CONSTRAINT `fk_varntassign_product` FOREIGN KEY (`tenant_id`,`product_id`) REFERENCES `prod_products` (`tenant_id`, `id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  ADD CONSTRAINT `fk_varntassign_group` FOREIGN KEY (`variant_group_id`) REFERENCES `prod_variant_groups` (`id`) ON DELETE CASCADE;
+
+--
+-- Ограничения внешнего ключа таблицы `prod_products`
+--
+ALTER TABLE `prod_products`
+  ADD CONSTRAINT `fk_prod_products_unit` FOREIGN KEY (`unit_id`) REFERENCES `prod_units` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+
+--
 -- Ограничения внешнего ключа таблицы `prod_product_categories`
 --
 ALTER TABLE `prod_product_categories`
@@ -1270,22 +1462,9 @@ ALTER TABLE `prod_product_categories`
 -- Ограничения внешнего ключа таблицы `prod_product_ingredients`
 --
 ALTER TABLE `prod_product_ingredients`
+  ADD CONSTRAINT `fk_prod_ingr_ingredient` FOREIGN KEY (`tenant_id`,`ingredient_id`) REFERENCES `prod_products` (`tenant_id`, `id`) ON UPDATE CASCADE,
   ADD CONSTRAINT `fk_prod_ingr_product` FOREIGN KEY (`tenant_id`,`product_id`) REFERENCES `prod_products` (`tenant_id`, `id`) ON DELETE CASCADE ON UPDATE CASCADE,
-  ADD CONSTRAINT `fk_prod_ingr_ingredient` FOREIGN KEY (`tenant_id`,`ingredient_id`) REFERENCES `prod_products` (`tenant_id`, `id`) ON DELETE RESTRICT ON UPDATE CASCADE,
-  ADD CONSTRAINT `fk_prod_ingr_unit` FOREIGN KEY (`unit_id`) REFERENCES `prod_units` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
-
---
--- Ограничения внешнего ключа таблицы `prod_products` (unit_id)
---
-ALTER TABLE `prod_products`
-  ADD CONSTRAINT `fk_prod_products_unit` FOREIGN KEY (`unit_id`) REFERENCES `prod_units` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
-
---
--- Добавление поля is_variable в таблицу prod_product_ingredients
--- Выполните этот запрос, если таблица уже существует:
--- ALTER TABLE `prod_product_ingredients`
---   ADD COLUMN `is_variable` tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Изменяемый состав для клиента (1=да, 0=нет)' AFTER `price_override`;
-
+  ADD CONSTRAINT `fk_prod_ingr_unit` FOREIGN KEY (`unit_id`) REFERENCES `prod_units` (`id`) ON UPDATE CASCADE;
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;

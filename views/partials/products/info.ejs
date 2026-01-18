@@ -264,6 +264,86 @@
     </div>
   </div>
 
+  <div id="variantGroupInfo" class="hidden">
+    <div id="variantLevelGroup">
+      <form id="variantGroupForm" class="form-grid" autocomplete="off">
+        <div class="option-group-section">
+          <div class="section-title">Группа</div>
+
+          <div class="option-group-row">
+            <div class="option-group-title-field">
+              <label class="field-label" for="variantGroupTitle">Название *</label>
+              <input class="control" id="variantGroupTitle" name="title" type="text" required />
+            </div>
+
+            <div class="option-group-select-field">
+              <label class="field-label" for="variantGroupUnitId">Единица измерения</label>
+              <select class="control" id="variantGroupUnitId" name="unit_id">
+                <option value="">Не выбрано</option>
+              </select>
+            </div>
+
+            <div class="hidden">
+              <label class="field-label" for="variantGroupSortOrder">Порядок сортировки</label>
+              <input class="control" id="variantGroupSortOrder" name="sort_order" type="number" min="0" value="0" />
+            </div>
+          </div>
+
+          <div class="form-row-2 option-group-switches">
+            <label class="switch">
+              <input class="switch-input" type="checkbox" id="variantGroupIsActive" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Активна</span>
+            </label>
+          </div>
+        </div>
+      </form>
+
+      <div class="info-card info-accordion">
+        <div class="acc-item">
+          <div class="acc-header">
+            <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+              <span class="stage-meta stage-text">
+                <b>Варианты</b>
+              </span>
+              <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+            </button>
+            <button class="btn btn-icon acc-add" type="button" id="variantItemsAddBtn" title="Добавить вариант" aria-label="Добавить вариант">
+              <i class="fas fa-plus"></i>
+            </button>
+          </div>
+          <div class="acc-panel" data-acc-panel>
+            <div class="acc-panel-inner">
+              <div class="option-items-table" id="variantItemsList"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card info-accordion">
+        <div class="acc-item">
+          <div class="acc-header">
+            <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+              <span class="stage-meta stage-text">
+                <b>Назначения</b>
+                <small class="muted">привязки к товарам</small>
+              </span>
+              <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+            </button>
+            <button class="btn btn-icon acc-add" type="button" id="variantAssignmentsAddBtn" title="Добавить назначение" aria-label="Добавить назначение">
+              <i class="fas fa-plus"></i>
+            </button>
+          </div>
+          <div class="acc-panel" data-acc-panel>
+            <div class="acc-panel-inner">
+              <div class="option-assignments-table" id="variantAssignmentsList"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Footer -->
   <div class="panel-footer hidden" id="productInfoFooter">
     <div class="product-footer-actions">

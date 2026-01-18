@@ -262,6 +262,7 @@
     cart: loadCart(),
     optionGroupCache: new Map(),
     productOptionsCache: new Map(),
+    unitConversions: [],
 
     // addresses (cart header chip)
     addresses: [],
@@ -346,7 +347,7 @@
     } catch {}
   }
 
-  function makeCartKey(productId, optionItemsOrIds) {
+  function makeCartKey(productId, optionItemsOrIds, ingredients = []) {
     const entries = (Array.isArray(optionItemsOrIds) ? optionItemsOrIds : [])
       .map((opt) => {
         if (typeof opt === "number") return { id: opt, qty: 1 };
@@ -358,8 +359,22 @@
       })
       .filter(Boolean)
       .sort((a, b) => a.id - b.id);
-    const keyPart = entries.map((entry) => `${entry.id}${entry.qty !== 1 ? `x${entry.qty}` : ""}`).join(",");
-    return `${Number(productId)}:${keyPart}`;
+    const optionPart = entries.map((entry) => `${entry.id}${entry.qty !== 1 ? `x${entry.qty}` : ""}`).join(",");
+    
+    // Добавляем ингредиенты в ключ для различения составов
+    const ingEntries = (Array.isArray(ingredients) ? ingredients : [])
+      .map((ing) => {
+        const id = Number(ing.ingredient_id || ing.id);
+        const qty = Number(ing.quantity || ing.qty || 1);
+        if (!Number.isFinite(id)) return null;
+        return { id, qty };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.id - b.id);
+    const ingPart = ingEntries.map((entry) => `${entry.id}x${entry.qty}`).join(",");
+    
+    const keyParts = [Number(productId), optionPart || "", ingPart || ""].filter(Boolean).join(":");
+    return keyParts;
   }
 
   function cartQty(productId) {
@@ -393,6 +408,8 @@
         qty,
         option_item_ids: Array.isArray(item.option_item_ids) ? item.option_item_ids : [],
         option_items: Array.isArray(item.option_items) ? item.option_items : [],
+        ingredients: Array.isArray(item.ingredients) ? item.ingredients : [],
+        ingredient_price_diff: Number(item.ingredient_price_diff || 0),
       });
     }
     return items;
@@ -800,7 +817,7 @@ function showCheckoutView() {
     hideTitle: false,
     showAddressChip: false,
     showProfileActions: false,
-    showBack: false,
+    showBack: true,
     showFav: false,
     addressAsTitle: true,
     showClose: false,
@@ -1574,9 +1591,31 @@ async function initAddresses() {
       info.appendChild(bottom);
       card.appendChild(info);
 
-      btnPlus.addEventListener("click", (e) => {
+      btnPlus.addEventListener("click", async (e) => {
         e.stopPropagation();
-        changeQty(id, +1);
+        
+        // Проверяем, есть ли у товара настраиваемые ингредиенты или опции
+        const [ingredients, optionGroups] = await Promise.all([
+          resolveProductIngredients(id),
+          resolveProductOptionGroups(id),
+        ]);
+        
+        // Проверяем наличие настраиваемых ингредиентов (is_variable = 1)
+        const hasVariableIngredients = ingredients.some(ing => {
+          const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
+          return isVariable;
+        });
+        
+        // Проверяем наличие опций (resolveProductOptionGroups уже возвращает только активные группы с элементами)
+        const hasOptions = optionGroups.length > 0;
+        
+        // Если есть настраиваемые ингредиенты или опции - открываем карточку
+        if (hasVariableIngredients || hasOptions) {
+          await openProductDetails(id);
+        } else {
+          // Если нет - добавляем сразу в корзину
+          changeQty(id, +1);
+        }
       });
 
       btnMinus.addEventListener("click", (e) => {
@@ -1651,11 +1690,12 @@ async function initAddresses() {
 
     let total = 0;
 
-    items.forEach(({ product, qty, key, option_items: optionItems }) => {
+    items.forEach(({ product, qty, key, option_items: optionItems, ingredients: cartIngredients, ingredient_price_diff = 0 }) => {
       const old = Number(product.old_price || 0);
       const basePrice = Number(product.price || 0);
       const optionTotal = optionItemsTotal(optionItems);
-      const price = basePrice + optionTotal;
+      const ingredientPriceDiff = Number(ingredient_price_diff || 0);
+      const price = basePrice + optionTotal + ingredientPriceDiff;
       total += price * qty;
 
       const row = document.createElement("div");
@@ -1683,7 +1723,29 @@ async function initAddresses() {
 
       const sub = document.createElement("div");
       sub.className = "cart-sub";
-      sub.textContent = formatOptionTitles(optionItems);
+      
+      // Формируем строку: ингредиенты + опции через запятую
+      const parts = [];
+      
+      // Добавляем ингредиенты с названиями
+      if (Array.isArray(cartIngredients) && cartIngredients.length > 0) {
+        cartIngredients.forEach(ing => {
+          const name = str(ing.ingredient_name || "");
+          const qty = Number(ing.quantity || 1);
+          const unit = str(ing.unit_label || "");
+          if (name) {
+            parts.push(`${name}: ${qty}${unit ? ` ${unit}` : ""}`);
+          }
+        });
+      }
+      
+      // Добавляем опции
+      const optionText = formatOptionTitles(optionItems);
+      if (optionText) {
+        parts.push(optionText);
+      }
+      
+      sub.textContent = parts.join(", ");
       mid.appendChild(sub);
 
       const q = document.createElement("div");
@@ -1916,6 +1978,44 @@ function updateCartBadge() {
     }
   }
 
+  async function loadUnitConversions() {
+    try {
+      const json = await apiJson("/api/admin/unit-conversions?all=1");
+      state.unitConversions = Array.isArray(json.data) ? json.data : [];
+    } catch (e) {
+      console.error("Failed to load unit conversions", e);
+      state.unitConversions = [];
+    }
+  }
+
+  function getConversionFactor(fromUnitId, toUnitId) {
+    if (!fromUnitId || !toUnitId) return null;
+    if (Number(fromUnitId) === Number(toUnitId)) return 1;
+    const direct = state.unitConversions.find(
+      (c) => Number(c.from_unit_id) === Number(fromUnitId) && Number(c.to_unit_id) === Number(toUnitId) && Number(c.is_active) === 1
+    );
+    if (direct && Number(direct.factor)) return Number(direct.factor);
+    const inverse = state.unitConversions.find(
+      (c) => Number(c.from_unit_id) === Number(toUnitId) && Number(c.to_unit_id) === Number(fromUnitId) && Number(c.is_active) === 1
+    );
+    if (inverse && Number(inverse.factor)) return 1 / Number(inverse.factor);
+    return null;
+  }
+
+  function getQtyInBase(ing, qty) {
+    const baseUnitId = ing.ingredient_base_unit_id || ing.ingredient_unit_id;
+    const fromUnitId = Number(ing.unit_id || 0);
+    if (!baseUnitId || !fromUnitId) return null;
+    if (Number(fromUnitId) === Number(baseUnitId)) return Number(qty || 0);
+    
+    // Для конверсии через pcs используем ingredient_pcs_factor если есть
+    // Проверяем через код единицы, так как нет доступа к списку единиц с кодами
+    // Вместо этого используем общую конверсию через getConversionFactor
+    
+    const factor = getConversionFactor(fromUnitId, baseUnitId);
+    return factor != null ? Number(qty || 0) * factor : null;
+  }
+
   async function loadProducts() {
     const cid = state.activeCategoryId ?? 0;
     const url =
@@ -2106,6 +2206,25 @@ async function resolveProductOptionGroups(productId) {
   return groups;
 }
 
+async function resolveProductVariants(productId) {
+  try {
+    const res = await apiJson(`/api/public/products/${productId}/variants`);
+    const variants = Array.isArray(res.data) ? res.data : [];
+    return variants.map((v) => ({
+      id: Number(v.id),
+      title: str(v.title || ""),
+      unit_id: v.unit_id ? Number(v.unit_id) : null,
+      unit_code: str(v.unit_code || ""),
+      unit_title: str(v.unit_title || ""),
+      values: Array.isArray(v.values) ? v.values : [],
+      discount_tiers: Array.isArray(v.discount_tiers) ? v.discount_tiers : [],
+    }));
+  } catch (e) {
+    console.error("Failed to load product variants:", e);
+    return [];
+  }
+}
+
 function buildProductDetailsContent(
   product,
   optionGroups,
@@ -2267,10 +2386,6 @@ function buildProductDetailsContent(
   const meta = document.createElement("div");
   meta.className = "shop-pd-meta";
 
-  const rating = document.createElement("div");
-  rating.className = "shop-pd-rating";
-  rating.textContent = "★ 4.8 (заглушка)";
-
   const title = document.createElement("div");
   title.className = "shop-pd-title";
   title.textContent = str(product.name);
@@ -2286,15 +2401,9 @@ function buildProductDetailsContent(
   shortDesc.className = "shop-pd-short";
   if (shortDescText) shortDesc.textContent = shortDescText;
 
-  const weight = document.createElement("div");
-  weight.className = "shop-pd-weight";
-  weight.textContent = product.weight ? product.weight : "Вес —";
-
-  meta.appendChild(rating);
   meta.appendChild(title);
   meta.appendChild(basePrice);
   if (shortDescText) meta.appendChild(shortDesc);
-  meta.appendChild(weight);
 
   scroll.appendChild(meta);
 
@@ -2464,13 +2573,47 @@ function buildProductDetailsContent(
         quantity: Number(ing.quantity || 1),
       };
 
-      const min = ing.quantity_min != null ? Number(ing.quantity_min) : state.quantity;
-      const max = ing.quantity_max != null ? Number(ing.quantity_max) : state.quantity;
+      // Получаем min/max/step из данных ингредиента
+      const defaultQty = Number(ing.quantity || 1);
+      const min = ing.quantity_min != null ? Number(ing.quantity_min) : defaultQty;
+      const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
       const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
-      const currentQty = isVariable ? Math.max(min, Math.min(max, state.quantity)) : Number(ing.quantity || 1);
+      
+      // Начальное количество: берем из state или из ing.quantity, затем ограничиваем и округляем до шага
+      let initialQty = isVariable ? (state.quantity || defaultQty) : defaultQty;
+      initialQty = Math.max(min, Math.min(max, initialQty));
+      
+      // Округляем до шага при инициализации (относительно min)
+      let currentQty = initialQty;
+      if (step > 0) {
+        // Формула: min + round((value - min) / step) * step
+        const stepsFromMin = Math.round((initialQty - min) / step);
+        currentQty = min + (stepsFromMin * step);
+        // Убеждаемся, что после округления значение все еще в пределах min/max
+        currentQty = Math.max(min, Math.min(max, currentQty));
+      }
+      
+      // Сохраняем округленное значение в state
+      state.quantity = currentQty;
       const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
-      const pricePerUnit = ing.price_override != null ? Number(ing.price_override) : Number(ing.ingredient_price || 0);
-      const totalPrice = pricePerUnit * currentQty;
+      
+      // Рассчитываем цену за единицу с учетом base_qty (как в админке)
+      const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
+      const ingredientPrice = Number(ing.ingredient_price || 0);
+      const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0 ? ingredientPrice / ingredientBaseQty : (ingredientPrice > 0 ? ingredientPrice : 0);
+      const pricePerUnit = ing.price_override != null && Number(ing.price_override) >= 0 ? Number(ing.price_override) : catalogBasePrice;
+      
+      // Цена текущего количества
+      const currentQtyInBase = getQtyInBase(ing, currentQty);
+      const currentTotalPrice = currentQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * currentQtyInBase : 0;
+      
+      // Цена базового количества (из БД)
+      const baseQty = Number(ing.quantity || 1);
+      const baseQtyInBase = getQtyInBase(ing, baseQty);
+      const baseTotalPrice = baseQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * baseQtyInBase : 0;
+      
+      // Разница от базового состава
+      const totalPrice = currentTotalPrice - baseTotalPrice;
 
       const block = document.createElement("div");
       block.className = "shop-pd-ingredient-block";
@@ -2521,19 +2664,32 @@ function buildProductDetailsContent(
 
         const priceInfo = document.createElement("div");
         priceInfo.className = "shop-pd-ingredient-price";
+        // Всегда создаем элемент ingredient-total, скрываем если 0
+        const priceSign = totalPrice >= 0 ? "+" : "";
         priceInfo.innerHTML = `
-          <div>+${money(pricePerUnit)} за каждую</div>
-          <div class="ingredient-total">Итого: +${money(totalPrice)}</div>
+          <div class="ingredient-total">${Math.abs(totalPrice) > 0.01 ? `${priceSign}${money(totalPrice)}` : ""}</div>
         `;
+        if (Math.abs(totalPrice) <= 0.01) {
+          priceInfo.style.display = "none";
+        }
 
         info.appendChild(name);
-        info.appendChild(controls);
         info.appendChild(priceInfo);
+        info.appendChild(controls);
 
         // Handlers
         btnMinus.addEventListener("click", () => {
-          const newQty = Math.max(min, currentQty - step);
-          if (newQty !== currentQty && typeof onIngredientChange === "function") {
+          // Берем актуальное значение из state, а не из замыкания
+          const currentStateQty = state.quantity || currentQty;
+          let newQty = currentStateQty - step;
+          // Округляем до шага (относительно min)
+          if (step > 0) {
+            const stepsFromMin = Math.round((newQty - min) / step);
+            newQty = min + (stepsFromMin * step);
+          }
+          // Ограничиваем min/max
+          newQty = Math.max(min, Math.min(max, newQty));
+          if (newQty !== currentStateQty && typeof onIngredientChange === "function") {
             state.quantity = newQty;
             ingredientState?.set(ingId, state);
             onIngredientChange();
@@ -2541,8 +2697,17 @@ function buildProductDetailsContent(
         });
 
         btnPlus.addEventListener("click", () => {
-          const newQty = Math.min(max, currentQty + step);
-          if (newQty !== currentQty && typeof onIngredientChange === "function") {
+          // Берем актуальное значение из state, а не из замыкания
+          const currentStateQty = state.quantity || currentQty;
+          let newQty = currentStateQty + step;
+          // Округляем до шага (относительно min)
+          if (step > 0) {
+            const stepsFromMin = Math.round((newQty - min) / step);
+            newQty = min + (stepsFromMin * step);
+          }
+          // Ограничиваем min/max
+          newQty = Math.max(min, Math.min(max, newQty));
+          if (newQty !== currentStateQty && typeof onIngredientChange === "function") {
             state.quantity = newQty;
             ingredientState?.set(ingId, state);
             onIngredientChange();
@@ -2710,21 +2875,11 @@ function buildShopProductHero(product, { onBack } = {}) {
   const meta = document.createElement("div");
   meta.className = "shop-product-hero-meta";
 
-  const rating = document.createElement("div");
-  rating.className = "shop-product-hero-rating";
-  rating.textContent = "★ 4.8 (заглушка)";
-
   const title = document.createElement("h1");
   title.className = "shop-product-hero-title";
   title.textContent = product.title || "";
 
-  const weight = document.createElement("div");
-  weight.className = "shop-product-hero-weight";
-  weight.textContent = product.weight ? `${product.weight}` : "Вес: —";
-
-  meta.appendChild(rating);
   meta.appendChild(title);
-  meta.appendChild(weight);
 
   hero.appendChild(meta);
 
@@ -2738,13 +2893,34 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
 
   const optionGroups = await resolveProductOptionGroups(product.id);
   const ingredients = await resolveProductIngredients(product.id);
+  const variants = await resolveProductVariants(product.id);
   const selectionState = new Map();
   const ingredientState = new Map();
+  
+  // TODO: Интегрировать варианты в UI (отображение выбора варианта, расчет цены с учетом варианта и скидок)
+  // Варианты доступны в переменной variants, но пока не отображаются в UI
 
-  // Initialize ingredient state
+  // Initialize ingredient state with proper min/max/step handling
   ingredients.forEach(ing => {
+    const defaultQty = Number(ing.quantity || 1);
+    const min = ing.quantity_min != null ? Number(ing.quantity_min) : defaultQty;
+    const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
+    const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
+    const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
+    
+    // Начальное количество: ограничиваем min/max и округляем до шага (относительно min)
+    let initialQty = isVariable ? defaultQty : defaultQty;
+    initialQty = Math.max(min, Math.min(max, initialQty));
+    
+    // Округляем до шага (относительно min)
+    if (step > 0) {
+      const stepsFromMin = Math.round((initialQty - min) / step);
+      initialQty = min + (stepsFromMin * step);
+      initialQty = Math.max(min, Math.min(max, initialQty));
+    }
+    
     ingredientState.set(Number(ing.ingredient_id), {
-      quantity: Number(ing.quantity || 1),
+      quantity: initialQty,
     });
   });
 
@@ -2756,8 +2932,27 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
     editingItem.ingredients.forEach(cartIng => {
       const ingId = Number(cartIng.ingredient_id);
       if (ingredientState.has(ingId)) {
+        const ing = ingredients.find(i => Number(i.ingredient_id) === ingId);
+        if (!ing) return;
+        
+        const defaultQty = Number(ing.quantity || 1);
+        const min = ing.quantity_min != null ? Number(ing.quantity_min) : defaultQty;
+        const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
+        const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
+        
+        // Берем количество из корзины, нормализуем до допустимого (кратное шагу от min)
+        let qty = Number(cartIng.quantity || 1);
+        qty = Math.max(min, Math.min(max, qty));
+        
+        // Округляем до шага (относительно min)
+        if (step > 0) {
+          const stepsFromMin = Math.round((qty - min) / step);
+          qty = min + (stepsFromMin * step);
+          qty = Math.max(min, Math.min(max, qty));
+        }
+        
         ingredientState.set(ingId, {
-          quantity: Number(cartIng.quantity || 1),
+          quantity: qty,
         });
       }
     });
@@ -2829,16 +3024,55 @@ optionGroups.forEach((group) => {
 
   let actionBtnRef = null;
 
-  const calculateIngredientPrice = () => {
+  // Рассчитывает цену базовых ингредиентов (по ing.quantity из БД)
+  const calculateBaseIngredientPrice = () => {
     let total = 0;
     ingredients.forEach(ing => {
-      const state = ingredientState.get(Number(ing.ingredient_id));
-      if (!state) return;
-      const qty = state.quantity || Number(ing.quantity || 1);
-      const pricePerUnit = ing.price_override != null ? Number(ing.price_override) : Number(ing.ingredient_price || 0);
-      total += pricePerUnit * qty;
+      const baseQty = ing.quantity || 1; // Базовое количество из БД
+      
+      // Рассчитываем цену за единицу с учетом base_qty
+      const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
+      const ingredientPrice = Number(ing.ingredient_price || 0);
+      const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0 ? ingredientPrice / ingredientBaseQty : (ingredientPrice > 0 ? ingredientPrice : 0);
+      const pricePerUnit = ing.price_override != null && Number(ing.price_override) >= 0 ? Number(ing.price_override) : catalogBasePrice;
+      
+      // Конверсия базового количества в базовые единицы
+      const qtyInBase = getQtyInBase(ing, baseQty);
+      const ingredientTotal = qtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * qtyInBase : 0;
+      total += ingredientTotal;
     });
     return total;
+  };
+
+  // Рассчитывает разницу цены ингредиентов от базового состава
+  const calculateIngredientPrice = () => {
+    let currentTotal = 0;
+    let baseTotal = 0;
+    
+    ingredients.forEach(ing => {
+      const state = ingredientState.get(Number(ing.ingredient_id));
+      const currentQty = state ? (state.quantity || Number(ing.quantity || 1)) : Number(ing.quantity || 1);
+      const baseQty = Number(ing.quantity || 1); // Базовое количество из БД
+      
+      // Рассчитываем цену за единицу с учетом base_qty
+      const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
+      const ingredientPrice = Number(ing.ingredient_price || 0);
+      const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0 ? ingredientPrice / ingredientBaseQty : (ingredientPrice > 0 ? ingredientPrice : 0);
+      const pricePerUnit = ing.price_override != null && Number(ing.price_override) >= 0 ? Number(ing.price_override) : catalogBasePrice;
+      
+      // Цена текущего количества
+      const currentQtyInBase = getQtyInBase(ing, currentQty);
+      const currentIngredientTotal = currentQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * currentQtyInBase : 0;
+      currentTotal += currentIngredientTotal;
+      
+      // Цена базового количества
+      const baseQtyInBase = getQtyInBase(ing, baseQty);
+      const baseIngredientTotal = baseQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * baseQtyInBase : 0;
+      baseTotal += baseIngredientTotal;
+    });
+    
+    // Возвращаем разницу: текущие - базовые
+    return currentTotal - baseTotal;
   };
 
   const updateActionText = () => {
@@ -2846,17 +3080,17 @@ optionGroups.forEach((group) => {
 
     const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
 
-    // unit price = base + options + ingredients
+    // unit price = base + options + разница ингредиентов
     const basePrice = cartLinePrice(product, selectedItems);
-    const ingredientsPrice = calculateIngredientPrice();
-    const unitPrice = Number(basePrice || 0) + ingredientsPrice;
+    const ingredientsPriceDiff = calculateIngredientPrice(); // Разница от базового состава
+    const unitPrice = Number(basePrice || 0) + ingredientsPriceDiff;
 
     // total = unit * qty
     const totalPrice = unitPrice * Number(qty || 1);
 
     const label = editMode ? "Сохранить" : "Добавить";
 
-    // разметка как у “Оформить”: текст + span суммы
+    // разметка как у "Оформить": текст + span суммы
     actionBtnRef.innerHTML = `${label} <span class="shop-checkout-total shop-pd-action-price">${money(totalPrice)}</span>`;
   };
 
@@ -2879,22 +3113,56 @@ optionGroups.forEach((group) => {
       const max = ing.quantity_max != null ? Number(ing.quantity_max) : Number(ing.quantity || 1);
       const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
       let currentQty = state.quantity || Number(ing.quantity || 1);
-      // Round to step
+      // Round to step (относительно min)
       if (step > 0) {
-        currentQty = Math.round(currentQty / step) * step;
+        const stepsFromMin = Math.round((currentQty - min) / step);
+        currentQty = min + (stepsFromMin * step);
       }
       currentQty = Math.max(min, Math.min(max, currentQty));
       state.quantity = currentQty;
       
       const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
-      const pricePerUnit = ing.price_override != null ? Number(ing.price_override) : Number(ing.ingredient_price || 0);
-      const totalPrice = pricePerUnit * currentQty;
+      
+      // Рассчитываем цену за единицу с учетом base_qty (как в админке)
+      const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
+      const ingredientPrice = Number(ing.ingredient_price || 0);
+      const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0 ? ingredientPrice / ingredientBaseQty : (ingredientPrice > 0 ? ingredientPrice : 0);
+      const pricePerUnit = ing.price_override != null && Number(ing.price_override) >= 0 ? Number(ing.price_override) : catalogBasePrice;
+      
+      // Цена текущего количества
+      const currentQtyInBase = getQtyInBase(ing, currentQty);
+      const currentTotalPrice = currentQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * currentQtyInBase : 0;
+      
+      // Цена базового количества (из БД)
+      const baseQty = Number(ing.quantity || 1);
+      const baseQtyInBase = getQtyInBase(ing, baseQty);
+      const baseTotalPrice = baseQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * baseQtyInBase : 0;
+      
+      // Разница от базового состава
+      const totalPrice = currentTotalPrice - baseTotalPrice;
       
       const qtyDisplay = block.querySelector(".qty-display");
       if (qtyDisplay) qtyDisplay.textContent = `${currentQty} ${unitLabel}`;
       
-      const totalEl = block.querySelector(".ingredient-total");
-      if (totalEl) totalEl.textContent = `Итого: +${money(totalPrice)}`;
+      const priceInfoEl = block.querySelector(".shop-pd-ingredient-price");
+      let totalEl = block.querySelector(".ingredient-total");
+      
+      // Если элемента нет, создаем его
+      if (!totalEl && priceInfoEl) {
+        totalEl = document.createElement("div");
+        totalEl.className = "ingredient-total";
+        priceInfoEl.appendChild(totalEl);
+      }
+      
+      // Показываем разницу от базового состава, скрываем если 0
+      if (Math.abs(totalPrice) > 0.01) {
+        const priceSign = totalPrice >= 0 ? "+" : "";
+        if (totalEl) totalEl.textContent = `${priceSign}${money(totalPrice)}`;
+        if (priceInfoEl) priceInfoEl.style.display = "";
+      } else {
+        if (totalEl) totalEl.textContent = "";
+        if (priceInfoEl) priceInfoEl.style.display = "none";
+      }
       
       const btnMinus = block.querySelector(".qty-minus");
       const btnPlus = block.querySelector(".qty-plus");
@@ -2937,21 +3205,28 @@ optionGroups.forEach((group) => {
   actionBtn.addEventListener("click", () => {
     const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
     const optionItemIds = selectedItems.map((item) => item.id);
-    const nextKey = makeCartKey(product.id, selectedItems);
 
     const safeQty = Math.max(1, Number(qty || 1));
 
-    // Collect ingredient quantities
+    // Collect ingredient quantities with names and units for display
     const ingredientQuantities = [];
     ingredients.forEach(ing => {
       const state = ingredientState.get(Number(ing.ingredient_id));
-      if (state && state.quantity) {
+      if (state && state.quantity !== undefined) {
+        const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
         ingredientQuantities.push({
           ingredient_id: Number(ing.ingredient_id),
           quantity: state.quantity,
+          ingredient_name: ing.ingredient_name || "",
+          unit_label: unitLabel,
         });
       }
     });
+
+    const nextKey = makeCartKey(product.id, selectedItems, ingredientQuantities);
+    
+    // Рассчитываем разницу цены ингредиентов для сохранения в корзину
+    const ingredientsPriceDiff = calculateIngredientPrice();
 
     if (editMode && editingItem) {
       // режим редактирования: обновляем qty и конфигурацию, с merge если совпало
@@ -2960,15 +3235,18 @@ optionGroups.forEach((group) => {
       if (sameItem && sameItem.key !== editingItem.key) {
         // merge: прибавляем qty текущей редактируемой строки в найденную
         sameItem.qty = Number(sameItem.qty || 0) + safeQty;
+        sameItem.ingredients = ingredientQuantities; // Обновляем ингредиенты с названиями
+        sameItem.ingredient_price_diff = ingredientsPriceDiff || 0;
 
         // удаляем старую строку
         state.cart = state.cart.filter((it) => it.key !== editingItem.key);
       } else {
-        // обновляем текущую строку
+        // обновляем текущую строку (сохраняем ингредиенты с названиями)
         editingItem.key = nextKey;
         editingItem.option_item_ids = optionItemIds;
         editingItem.option_items = selectedItems;
-        editingItem.ingredients = ingredientQuantities;
+        editingItem.ingredients = ingredientQuantities; // Уже содержит названия и единицы
+        editingItem.ingredient_price_diff = ingredientsPriceDiff || 0;
         editingItem.qty = safeQty;
       }
     } else {
@@ -2976,7 +3254,8 @@ optionGroups.forEach((group) => {
       const existing = getCartItemByKey(nextKey);
       if (existing) {
         existing.qty = Number(existing.qty || 0) + safeQty;
-        existing.ingredients = ingredientQuantities;
+        existing.ingredients = ingredientQuantities; // Уже содержит названия и единицы
+        existing.ingredient_price_diff = ingredientsPriceDiff || 0;
       } else {
         state.cart.push({
           key: nextKey,
@@ -2985,6 +3264,7 @@ optionGroups.forEach((group) => {
           option_item_ids: optionItemIds,
           option_items: selectedItems,
           ingredients: ingredientQuantities,
+          ingredient_price_diff: ingredientsPriceDiff || 0,
         });
       }
     }
@@ -3003,6 +3283,13 @@ optionGroups.forEach((group) => {
         const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
         if (tspan) tspan.textContent = money(total);
       }
+    }
+
+    // Закрываем карточку и показываем корзину
+    if (onBack && typeof onBack === "function") {
+      onBack();
+    } else {
+      showCartView();
     }
   });
 
@@ -3203,7 +3490,7 @@ function openCartSheet() {
   const backBtn = document.createElement("button");
   backBtn.type = "button";
   backBtn.className = "shop-checkout-back";
-  backBtn.textContent = "Назад";
+  backBtn.innerHTML = '<i class="fas fa-arrow-left"></i>';
 
   const submitBtn = document.createElement("button");
   submitBtn.type = "button";
@@ -3296,7 +3583,7 @@ function openCartSheet() {
 
   let sheetEditingId = null;
 
-  function showSheetCheckout() {
+  async function showSheetCheckout() {
     checkoutWrap.classList.remove("hidden");
     list.classList.add("hidden");
     addressWrap.classList.add("hidden");
@@ -3310,6 +3597,15 @@ function openCartSheet() {
 
     // обычный режим шапки (крестик есть)
     setSheetHeaderMode("cart");
+
+    // Создаем контент оформления заказа
+    await openCheckoutView({
+      container: checkoutWrap,
+      onBack: showSheetCart,
+      hasAddressEditor: true,
+      isSheet: true,
+      actions: { submitBtn: submitBtn, backBtn: backBtn },
+    });
   }
 
   function showSheetCart() {
@@ -5142,6 +5438,7 @@ function setBottomNavActive(tab) {
 async function init() {
   try {
     await loadCategories();
+    await loadUnitConversions();
     renderCategories();
 
     const all = state.categories.find((c) => c.code === "all") || state.categories[0];

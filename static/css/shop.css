@@ -1125,24 +1125,24 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 
 .shop-pd-ingredient-block{
   display: flex;
-  gap: 12px;
-  padding: 12px;
+  gap: 10px;
+  padding: 10px 12px;
   background: var(--color-bg-secondary);
   border-radius: var(--shop-radius);
-  align-items: flex-start;
+  align-items: center;
 }
 
 .shop-pd-ingredient-photo{
-  width: 48px;
-  height: 48px;
-  border-radius: 8px;
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
   overflow: hidden;
   background: var(--color-bg-tertiary);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  font-size: 20px;
+  font-size: 16px;
 }
 
 .shop-pd-ingredient-photo img{
@@ -1154,19 +1154,24 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 .shop-pd-ingredient-info{
   flex: 1;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 
 .shop-pd-ingredient-name{
   font-weight: 600;
   font-size: 14px;
+  flex: 1;
+  min-width: 0;
 }
 
 .shop-pd-ingredient-controls{
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .shop-pd-ingredient-controls .qty-btn{
@@ -1198,27 +1203,29 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 .shop-pd-ingredient-controls .qty-display{
-  min-width: 80px;
+  min-width: 70px;
   text-align: center;
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .shop-pd-ingredient-price{
-  font-size: 12px;
-  color: var(--color-text-muted);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex-shrink: 0;
+  text-align: right;
 }
 
-.shop-pd-ingredient-price .ingredient-total{
+.shop-pd-ingredient-price .ingredient-total {
   font-weight: 600;
   color: var(--color-text);
-  font-size: 13px;
+  font-size: 14px;
+  white-space: nowrap;
 }
-  transform: none;
-  display: inline;
+
+.shop-pd-ingredient-qty-fixed{
+  font-size: 13px;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 

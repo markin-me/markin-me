@@ -255,7 +255,15 @@
     <div class="info-card product-ingredients-card">
       <div class="option-section-header">
         <div class="kv-label">Состав</div>
-        <div class="option-actions">
+        <div class="option-actions" style="display: flex; align-items: center; gap: 12px;">
+          <div style="position: relative;">
+            <span class="ingredient-control-label">Себест.</span>
+            <span class="chip" id="peIngredientCostTotal" style="width: 80px; height: 34px; padding: 0 10px; border-radius: 8px; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; margin-top: 0;">0 ₽</span>
+          </div>
+          <div style="position: relative;">
+            <span class="ingredient-control-label">Цена</span>
+            <span class="chip" id="peIngredientPriceTotal" style="width: 80px; height: 34px; padding: 0 10px; border-radius: 8px; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; margin-top: 0;">0 ₽</span>
+          </div>
           <button class="btn btn-sm" type="button" id="peIngredientAddBtn">
             <i class="fas fa-plus"></i> Добавить
           </button>
