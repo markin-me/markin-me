@@ -668,6 +668,28 @@ html[data-sidebar-collapsed="1"] .app-grid{
   display:block;
 }
 
+.category-picker-icon{
+  width:40px;
+  height:40px;
+  min-width:40px;
+  border-radius:10px;
+  background:var(--color-surface-2);
+  color:var(--color-text);
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+}
+.category-picker-icon img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
+}
+.category-picker-icon i{
+  font-size:18px;
+  color:inherit;
+}
+
 .stage-text strong{display:block;font-weight:900;color:var(--color-text)}
 .stage-text small{display:block;margin-top:2px;color:var(--color-text-muted);font-size:12px}
 

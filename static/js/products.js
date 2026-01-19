@@ -5240,10 +5240,6 @@ function updateOptionGroupSelectionUi() {
 
     const ui = {
       chips: $("#peCategoryChips", wrapper),
-      catBackdrop: $("#peCatBackdrop", wrapper),
-      catModal: $("#peCatModal", wrapper),
-      catClose: $("#peCatClose", wrapper),
-      catList: $("#peCatList", wrapper),
       variantAccordion: $("#peVariantAccordion", wrapper),
       variantManageBtn: $("#peVariantManageBtn", wrapper),
       optionAccordion: $("#peOptionAccordion", wrapper),
@@ -5296,54 +5292,223 @@ function updateOptionGroupSelectionUi() {
 
     function openCatPicker() {
       if (isView) return;
-      ui.catBackdrop.classList.remove("hidden");
-      ui.catModal.classList.remove("hidden");
+      
+      // Initialize selection from current draft
+      categoryPickerSelection = new Set(draft.categories);
+      
+      // Create category picker overlay for right panel
+      const pickerOverlay = document.createElement("div");
+      pickerOverlay.className = "picker-overlay";
+      pickerOverlay.id = "categoryPickerOverlay";
+      
+      const pickerContent = document.createElement("div");
+      pickerContent.className = "picker-overlay-content";
+      
+      pickerContent.innerHTML = `
+        <div class="picker-overlay-header">
+          <div class="panel-title">Категории</div>
+        </div>
+        <div class="picker-overlay-body">
+          <div class="info-card">
+            <div class="option-picker-search" style="margin-bottom: 16px;">
+              <input class="control" id="categoryPickerSearchInput" type="search" placeholder="Поиск по названию" />
+            </div>
+            <div class="option-picker-list" id="categoryPickerListContent"></div>
+          </div>
+        </div>
+      `;
+      
+      pickerOverlay.appendChild(pickerContent);
+
+      const searchInput = pickerContent.querySelector("#categoryPickerSearchInput");
+      const listContent = pickerContent.querySelector("#categoryPickerListContent");
+
+      function renderList() {
+        const query = String(searchInput?.value || "").trim().toLowerCase();
+        const list = state.categories
+          .slice()
+          .filter((c) => !query || String(c.title || "").toLowerCase().includes(query))
+          .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+
+        if (!listContent) return;
+        listContent.innerHTML = list.map((c) => {
+          const id = Number(c.id);
+          const isAll = c.code === "all";
+          const checked = categoryPickerSelection.has(id);
+          const iconHtml = renderCategoryIcon(c.icon, "category-picker-icon");
+          return `
+            <div class="option-picker-row ${checked ? "is-selected" : ""} ${isAll ? "is-disabled" : ""}" data-cat-id="${id}" ${isAll ? 'data-disabled="true"' : ''}>
+              ${iconHtml}
+              <div class="option-picker-meta">
+                <div class="options-row-title">${escapeHtml(c.title || "")}</div>
+              </div>
+            </div>
+          `;
+        }).join("");
+
+        listContent.querySelectorAll(".option-picker-row[data-cat-id]").forEach((row) => {
+          row.addEventListener("click", () => {
+            if (row.dataset.disabled === "true") return;
+            const id = Number(row.dataset.catId);
+            if (!Number.isFinite(id)) return;
+            if (categoryPickerSelection.has(id)) categoryPickerSelection.delete(id);
+            else categoryPickerSelection.add(id);
+            renderList();
+          });
+        });
+      }
+
+      if (searchInput) {
+        searchInput.addEventListener("input", renderList);
+      }
+
+      renderList();
+
+      // Insert overlay into #productInfoPanel
+      const productInfoPanel = $("#productInfoPanel");
+      if (productInfoPanel) {
+        const existingPicker = productInfoPanel.querySelector("#categoryPickerOverlay");
+        if (existingPicker) {
+          existingPicker.remove();
+        }
+        productInfoPanel.appendChild(pickerOverlay);
+
+        // Switch footer to edit mode for picker
+        const footer = $("#productInfoFooter");
+        const footerView = $("#productFooterView");
+        const footerEditMode = $("#productFooterEditMode");
+        const cancelBtn = $("#productFooterCancelBtn");
+        const saveBtn = $("#productFooterSaveBtn");
+        const deleteBtn = $("#productFooterDeleteEditBtn");
+        const moreBtn = $("#productFooterMoreEditBtn");
+        
+        if (footer && footerView && footerEditMode && cancelBtn && saveBtn) {
+          // Save current footer state
+          if (!categoryPickerSavedFooterState) {
+            categoryPickerSavedFooterState = {
+              footerHidden: footer.classList.contains("hidden"),
+              viewHidden: footerView.classList.contains("hidden"),
+              editHidden: footerEditMode.classList.contains("hidden"),
+              deleteBtnHidden: deleteBtn ? deleteBtn.classList.contains("hidden") : false,
+              moreBtnHidden: moreBtn ? moreBtn.classList.contains("hidden") : false,
+              cancelBtnClasses: cancelBtn.className,
+              cancelBtnIsFullwidth: cancelBtn.classList.contains("is-fullwidth"),
+              cancelBtnIsConfirm: cancelBtn.classList.contains("is-confirm")
+            };
+            categoryPickerSavedHandlers = {
+              cancel: cancelBtn.onclick,
+              save: saveBtn.onclick
+            };
+          }
+          
+          // Switch to edit mode footer
+          footer.classList.remove("hidden");
+          footerView.classList.add("hidden");
+          footerEditMode.classList.remove("hidden");
+          
+          // Hide delete and more buttons
+          if (deleteBtn) deleteBtn.classList.add("hidden");
+          if (moreBtn) moreBtn.classList.add("hidden");
+          
+          // Make cancel button full-width
+          cancelBtn.classList.remove("is-confirm");
+          cancelBtn.classList.add("is-fullwidth");
+          if (!cancelBtn.dataset.pickerOriginalHtml) {
+            cancelBtn.dataset.pickerOriginalHtml = cancelBtn.innerHTML;
+          }
+          cancelBtn.textContent = "Отменить";
+          cancelBtn.title = "Отменить";
+          cancelBtn.setAttribute("aria-label", "Отменить");
+          
+          // Set data attributes for picker handlers
+          cancelBtn.dataset.pickerType = "category";
+          saveBtn.dataset.pickerType = "category";
+          window._closeCategoryPickerFn = () => {
+            closeCatPicker();
+          };
+          window._saveCategoryPickerFn = async () => {
+            // Update draft with new selection
+            draft.categories = new Set(categoryPickerSelection || []);
+            renderCategoryChips();
+            closeCatPicker();
+          };
+        }
+      }
     }
 
     function closeCatPicker() {
-      ui.catBackdrop.classList.add("hidden");
-      ui.catModal.classList.add("hidden");
-    }
-
-    function renderCatPicker() {
-      if (isView) return;
-      const list = state.categories
-        .slice()
-        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
-
-      ui.catList.innerHTML = list.map((c) => {
-        const id = Number(c.id);
-        const isAll = c.code === "all";
-        const checked = draft.categories.has(id);
-        const disabled = isAll ? "disabled" : "";
-        const rowCls = checked ? "picker-row is-selected" : "picker-row";
-        return `
-          <div class="${rowCls}">
-            <div class="picker-meta">
-              <div class="picker-title">${escapeHtml(c.title)}</div>
-              <div class="muted" style="font-size:12px;">${escapeHtml(c.code || "")}</div>
-            </div>
-
-            <label class="switch">
-              <input class="switch-input" type="checkbox" data-cat-id="${id}" ${checked ? "checked" : ""} ${disabled} />
-              <span class="switch-ui"></span>
-            </label>
-          </div>
-        `;
-      }).join("");
-
-      ui.catList.addEventListener("change", (e) => {
-        const input = e.target && e.target.closest("input[data-cat-id]");
-        if (!input) return;
-        const id = Number(input.dataset.catId);
-        if (!Number.isFinite(id)) return;
-
-        if (input.checked) draft.categories.add(id);
-        else draft.categories.delete(id);
-
-        renderCategoryChips();
-        renderCatPicker();
-      }, { once: true });
+      categoryPickerSelection = null;
+      
+      // Remove picker overlay
+      const productInfoPanel = $("#productInfoPanel");
+      if (productInfoPanel) {
+        const existingPicker = productInfoPanel.querySelector("#categoryPickerOverlay");
+        if (existingPicker) {
+          existingPicker.remove();
+        }
+      }
+      
+      // Clear picker data attributes
+      const cancelBtn = $("#productFooterCancelBtn");
+      const saveBtn = $("#productFooterSaveBtn");
+      if (cancelBtn) delete cancelBtn.dataset.pickerType;
+      if (saveBtn) delete saveBtn.dataset.pickerType;
+      delete window._closeCategoryPickerFn;
+      delete window._saveCategoryPickerFn;
+      
+      // Restore footer to original state
+      const footer = $("#productInfoFooter");
+      const footerView = $("#productFooterView");
+      const footerEditMode = $("#productFooterEditMode");
+      const deleteBtn = $("#productFooterDeleteEditBtn");
+      const moreBtn = $("#productFooterMoreEditBtn");
+      
+      if (footer && footerView && footerEditMode && cancelBtn && saveBtn && categoryPickerSavedFooterState) {
+        if (categoryPickerSavedFooterState.footerHidden) {
+          footer.classList.add("hidden");
+        } else {
+          footer.classList.remove("hidden");
+        }
+        if (categoryPickerSavedFooterState.viewHidden) {
+          footerView.classList.add("hidden");
+        } else {
+          footerView.classList.remove("hidden");
+        }
+        if (categoryPickerSavedFooterState.editHidden) {
+          footerEditMode.classList.add("hidden");
+        } else {
+          footerEditMode.classList.remove("hidden");
+        }
+        
+        if (deleteBtn) {
+          if (categoryPickerSavedFooterState.deleteBtnHidden) {
+            deleteBtn.classList.add("hidden");
+          } else {
+            deleteBtn.classList.remove("hidden");
+          }
+        }
+        if (moreBtn) {
+          if (categoryPickerSavedFooterState.moreBtnHidden) {
+            moreBtn.classList.add("hidden");
+          } else {
+            moreBtn.classList.remove("hidden");
+          }
+        }
+        
+        cancelBtn.classList.remove("is-fullwidth");
+        if (categoryPickerSavedFooterState.cancelBtnIsConfirm) {
+          cancelBtn.classList.add("is-confirm");
+        }
+        if (cancelBtn.dataset.pickerOriginalHtml) {
+          cancelBtn.innerHTML = cancelBtn.dataset.pickerOriginalHtml;
+          delete cancelBtn.dataset.pickerOriginalHtml;
+        }
+        cancelBtn.title = "";
+        cancelBtn.setAttribute("aria-label", "");
+      }
+      
+      categoryPickerSavedFooterState = null;
+      categoryPickerSavedHandlers = null;
     }
 
     function renderCategoryChips() {
@@ -5380,7 +5545,6 @@ function updateOptionGroupSelectionUi() {
 
       const plus = $("#peChipPlus", ui.chips);
       if (plus) plus.addEventListener("click", () => {
-        renderCatPicker();
         openCatPicker();
       });
 
@@ -5391,7 +5555,6 @@ function updateOptionGroupSelectionUi() {
           if (!Number.isFinite(id)) return;
           draft.categories.delete(id);
           renderCategoryChips();
-          renderCatPicker();
         });
       });
     }
@@ -5659,6 +5822,10 @@ function updateOptionGroupSelectionUi() {
     let optionPickerSavedFooterState = null;
     let optionPickerSavedHandlers = null;
     const optionDetailsCache = new Map();
+
+    let categoryPickerSelection = null;
+    let categoryPickerSavedFooterState = null;
+    let categoryPickerSavedHandlers = null;
 
     let productVariantPickerSelection = null;
     let productVariantPickerSavedFooterState = null;
@@ -6495,8 +6662,7 @@ function updateOptionGroupSelectionUi() {
       document.addEventListener("keydown", keyboardHandler);
     }
 
-    ui.catClose.addEventListener("click", closeCatPicker);
-    ui.catBackdrop.addEventListener("click", closeCatPicker);
+    // Category picker uses overlay now, old handlers removed
     if (!isView) {
       if (ui.optionClose) ui.optionClose.addEventListener("click", closeOptionPicker);
       if (ui.optionCancel) ui.optionCancel.addEventListener("click", closeOptionPicker);
@@ -8471,6 +8637,11 @@ function updateOptionGroupSelectionUi() {
           if (closeFn) closeFn();
           return;
         }
+        if (footerCancelBtn.dataset.pickerType === "category") {
+          const closeFn = window._closeCategoryPickerFn;
+          if (closeFn) closeFn();
+          return;
+        }
         // Variant edit/create cancel
         if (state.mode === "variants" && (state.variantPanel.mode === "edit" || state.variantPanel.mode === "create")) {
           cancelVariantEdit();
@@ -8528,6 +8699,13 @@ function updateOptionGroupSelectionUi() {
         }
         if (footerSaveBtn.dataset.pickerType === "variant") {
           const saveFn = window._saveVariantPickerFn;
+          if (saveFn) {
+            await saveFn();
+          }
+          return;
+        }
+        if (footerSaveBtn.dataset.pickerType === "category") {
+          const saveFn = window._saveCategoryPickerFn;
           if (saveFn) {
             await saveFn();
           }
