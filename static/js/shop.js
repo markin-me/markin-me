@@ -3819,7 +3819,11 @@ function openCartSheet() {
     addressWrap.classList.add("hidden");
     productWrap.classList.add("hidden");
 
-    setCartSheetFooterMode(openCartSheetCtx, "cart");
+    const hasItems = cartItemsResolved().length > 0;
+    setCartSheetFooterMode(openCartSheetCtx, hasItems ? "cart" : "hidden");
+    if (openCartSheetCtx?.checkoutBtn) {
+      openCartSheetCtx.checkoutBtn.disabled = !hasItems;
+    }
 
     clearSheetAddressTitleMode();
     applySheetAddressTitle();

@@ -30,7 +30,7 @@
   /* ===== Геометрия / размеры ===== */
   --shop-radius: 18px;
   --shop-gap: 14px;
-  --shop-bottomnav-h: 60px;
+  --shop-bottomnav-h: 52px;
 
   /* ===== Масштабирование UI карточек (container queries) ===== */
   --sp-pad: 12px;
@@ -557,6 +557,34 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   padding: 12px;
 }
 
+.shop-cart-sheet .shop-product-content{
+  flex: 1;
+  min-height: 0;
+  padding: 12px 12px calc(var(--shop-bottomnav-h) + 8px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.shop-cart-sheet .shop-product-content .shop-pd{
+  flex: 1;
+  min-height: 0;
+  min-height: 100%;
+}
+
+.shop-cart-sheet .shop-product-content .shop-pd-scroll{
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.shop-cart-sheet .shop-product-content .shop-pd-footer{
+  margin-top: auto;
+  position: static;
+  bottom: auto;
+}
+
 /* футер корзины в шите/панели — липкий снизу */
 .shop-cart-footer,
 .shop-cart-sheet-footer{
@@ -575,7 +603,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 @media (max-width: 768px){
   .shop-cart-sheet-footer,
   .shop-cart-footer{
-    padding-bottom: calc(8px + var(--shop-bottomnav-h) + env(safe-area-inset-bottom));
+    bottom: calc(var(--shop-bottomnav-h) + 8px + env(safe-area-inset-bottom));
   }
 }
 
@@ -690,7 +718,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  bottom: calc(env(safe-area-inset-bottom) + 10px);
+  bottom: env(safe-area-inset-bottom);
 
   width: min(520px, calc(100% - 24px));
   height: 50px;
@@ -863,6 +891,12 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+@media (max-width: 768px){
+  .shop-pd-footer{
+    bottom: calc(var(--shop-bottomnav-h) + 8px + env(safe-area-inset-bottom));
+  }
 }
 
 .shop-pd-fav{
@@ -1897,6 +1931,23 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   display: flex;
   gap: 8px;
   border-bottom: 1px solid var(--color-border);
+}
+
+/* Hide universal modal footer in shop */
+body.page-shop .app-modal-footer{
+  display:none;
+}
+body.page-shop .app-modal-body::after{
+  height:0;
+}
+
+@media (max-width: 768px){
+  body.page-shop .app-modal{
+    top: 12px;
+    bottom: 0;
+    height: calc(100vh - 12px);
+    max-height: calc(100vh - 12px);
+  }
 }
 
 .shop-profile-tab{
