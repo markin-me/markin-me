@@ -255,6 +255,7 @@
           // Clear first to avoid duplicates
           body.innerHTML = "";
           body.appendChild(state.content);
+          body.classList.remove("hidden");
           // Make sure body is visible
           if (body.parentElement) {
             body.parentElement.classList.remove("hidden");
@@ -1903,6 +1904,7 @@ function buildOptionGroupPayload(formValues) {
     categoryEmpty && categoryEmpty.classList.add("hidden");
     categoryInfo && categoryInfo.classList.add("hidden");
     productInfo && productInfo.classList.remove("hidden");
+    if (productInfoBody) productInfoBody.classList.remove("hidden");
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
     setHeaderMode("product");
     
@@ -3123,13 +3125,13 @@ function updateOptionGroupSelectionUi() {
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
     setHeaderMode("option");
     if (editProductBtn) editProductBtn.classList.add("hidden");
-    
-    // Show footer in view mode, hide in edit/create mode (edit/create mode uses navigation state)
-    if (mode === "view") {
-      showProductFooterView();
-    } else {
-    hideProductFooter();
+    if (currentNavigationState?.type === "product-edit" && productInfoBody && currentNavigationState.content) {
+      if (productInfoBody.contains(currentNavigationState.content)) {
+        productInfoBody.removeChild(currentNavigationState.content);
+      }
     }
+    
+    hideProductFooter();
 
     productEmpty && productEmpty.classList.add("hidden");
     categoryEmpty && categoryEmpty.classList.add("hidden");
@@ -3169,13 +3171,13 @@ function updateOptionGroupSelectionUi() {
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
     setHeaderMode("option");
     if (editProductBtn) editProductBtn.classList.add("hidden");
-    
-    // Show footer based on mode
-    if (mode === "view") {
-      showProductFooterView();
-    } else {
-      showProductFooterEdit();
+    if (currentNavigationState?.type === "product-edit" && productInfoBody && currentNavigationState.content) {
+      if (productInfoBody.contains(currentNavigationState.content)) {
+        productInfoBody.removeChild(currentNavigationState.content);
+      }
     }
+    
+    hideProductFooter();
 
     productEmpty && productEmpty.classList.add("hidden");
     categoryEmpty && categoryEmpty.classList.add("hidden");
@@ -3664,7 +3666,7 @@ function updateOptionGroupSelectionUi() {
     showProductFooterEdit();
   }
 
-  function startOptionEdit() {
+  function startOptionEdit({ silent = false } = {}) {
     if (!state.optionGroupDetails?.group) return;
     state.optionPanel.snapshotData = deepClone({
       group: state.optionGroupDetails.group,
@@ -3687,9 +3689,62 @@ function updateOptionGroupSelectionUi() {
       });
     }
     
+    if (silent) return;
+    
     // Update footer to edit mode
-    showProductFooterEdit();
     renderOptionGroupLevel();
+  }
+
+  function startVariantEdit({ silent = false } = {}) {
+    if (!state.variantGroupDetails?.group) return;
+    state.variantPanel.snapshotData = deepClone({
+      group: state.variantGroupDetails.group,
+      tiers: state.variantGroupDetails.tiers || [],
+      assignments: state.variantGroupDetails.assignments || [],
+    });
+    state.variantDraft = deepClone({
+      group: state.variantGroupDetails.group,
+      tiers: state.variantGroupDetails.tiers || [],
+      assignments: state.variantGroupDetails.assignments || [],
+    });
+    state.variantPanel.mode = "edit";
+    
+    // Store editing state for this variant
+    if (state.selectedVariantGroupId) {
+      editingVariants.set(state.selectedVariantGroupId, {
+        mode: "edit",
+        variantDraft: deepClone(state.variantDraft),
+        snapshotData: deepClone(state.variantPanel.snapshotData)
+      });
+    }
+    
+    if (silent) return;
+    
+    // Update footer to edit mode
+    renderVariantGroupLevel();
+  }
+
+  function cancelVariantEdit() {
+    if (state.variantPanel.mode === "create") {
+      if (state.variantPanel.tabKey) {
+        closeTab(state.variantPanel.tabKey);
+      }
+      state.variantDraft = null;
+      state.variantPanel.mode = null;
+      state.variantPanel.tabKey = null;
+      state.selectedVariantGroupId = null;
+      hideProductFooter();
+      return;
+    }
+    if (state.variantPanel.mode === "edit" && state.selectedVariantGroupId) {
+      (async () => {
+        state.variantPanel.mode = "view";
+        state.variantDraft = null;
+        state.variantPanel.itemsDirty = false;
+        await loadVariantGroupDetails(state.selectedVariantGroupId);
+        showVariantGroupDetails(state.variantGroupDetails, { mode: "view" });
+      })();
+    }
   }
 
   function cancelOptionEdit() {
@@ -3707,8 +3762,7 @@ function updateOptionGroupSelectionUi() {
       state.optionPanel.itemsDirty = false;
       state.optionDraft = null;
       state.optionPanel.snapshotData = null;
-      // Update footer to view mode
-      showProductFooterView();
+      hideProductFooter();
       renderOptionGroupLevel();
       return;
     }
@@ -3795,8 +3849,7 @@ function updateOptionGroupSelectionUi() {
         state.optionPanel.itemsDirty = false;
         state.optionDraft = null;
         state.optionPanel.snapshotData = null;
-      // Update footer to view mode
-      showProductFooterView();
+      hideProductFooter();
         renderOptionGroupLevel();
         return;
       }
@@ -3899,8 +3952,7 @@ function updateOptionGroupSelectionUi() {
         state.optionPanel.itemsDirty = false;
         state.optionDraft = null;
         state.optionPanel.snapshotData = null;
-        // Update footer to view mode after save
-        showProductFooterView();
+        hideProductFooter();
         renderOptionGroupLevel();
         if (state.optionPanel.returnTo?.type === "product-edit") {
           closeOptionDetails();
@@ -4349,10 +4401,6 @@ function updateOptionGroupSelectionUi() {
           state.optionDraft = deepClone(editingState.optionDraft);
           state.optionPanel.snapshotData = deepClone(editingState.snapshotData);
           showOptionGroupDetails(state.optionGroupDetails, { mode: editingState.mode });
-          // Restore footer in edit mode if editing
-          if (editingState.mode === "edit") {
-            showProductFooterEdit();
-          }
         } else {
           showOptionGroupDetails(state.optionGroupDetails, { mode: state.optionPanel.mode || "view" });
         }
@@ -4379,10 +4427,6 @@ function updateOptionGroupSelectionUi() {
           state.variantDraft = deepClone(editingState.variantDraft);
           state.variantPanel.snapshotData = deepClone(editingState.snapshotData);
           showVariantGroupDetails(state.variantGroupDetails, { mode: editingState.mode });
-          // Restore footer in edit mode if editing
-          if (editingState.mode === "edit") {
-            showProductFooterEdit();
-          }
         } else {
           showVariantGroupDetails(state.variantGroupDetails, { mode: state.variantPanel.mode || "view" });
         }
@@ -5956,6 +6000,10 @@ function updateOptionGroupSelectionUi() {
             const id = Number(btn.dataset.variantEdit);
             if (!Number.isFinite(id)) return;
             const groupItem = state.variantGroups.find((g) => Number(g.id) === id);
+            await loadVariantGroupDetails(id);
+            if (!state.variantGroupDetails?.group) return;
+            state.selectedVariantGroupId = id;
+            startVariantEdit({ silent: true });
             openVariantGroupTab(id, groupItem?.title || "Вариант", { activate: true });
           });
         });
@@ -6108,7 +6156,12 @@ function updateOptionGroupSelectionUi() {
             if (isEdit && product && product.id && !state.selectedProductId) {
               state.selectedProductId = product.id;
             }
-            await openOptionGroupFromProduct(id, { closeModal: true });
+            const groupItem = state.optionGroups.find((g) => Number(g.id) === id);
+            await loadOptionGroupDetails(id);
+            if (!state.optionGroupDetails?.group) return;
+            state.selectedOptionGroupId = id;
+            startOptionEdit({ silent: true });
+            openOptionGroupTab(id, groupItem?.title || "Опция", { activate: true });
           });
         });
 
@@ -8367,14 +8420,7 @@ function updateOptionGroupSelectionUi() {
           }
         } else if (state.mode === "variants" && state.selectedVariantGroupId) {
           if (state.variantPanel.mode === "view" && state.variantGroupDetails) {
-            // Start variant edit mode
-            state.variantPanel.mode = "edit";
-            state.variantDraft = {
-              group: { ...state.variantGroupDetails.group },
-              tiers: [...(state.variantGroupDetails.tiers || [])],
-              assignments: [...(state.variantGroupDetails.assignments || [])],
-            };
-            showVariantGroupDetails(state.variantGroupDetails, { mode: "edit" });
+            startVariantEdit();
           }
         } else {
           // Products mode - existing logic
@@ -8427,29 +8473,7 @@ function updateOptionGroupSelectionUi() {
         }
         // Variant edit/create cancel
         if (state.mode === "variants" && (state.variantPanel.mode === "edit" || state.variantPanel.mode === "create")) {
-          if (state.variantPanel.mode === "create") {
-            // Close create tab
-            if (state.variantPanel.tabKey) {
-              const tab = state.tabsState.tabs.find(t => t.key === state.variantPanel.tabKey);
-              if (tab && tab.onClose) {
-                tab.onClose();
-              }
-            }
-            state.variantDraft = null;
-            state.variantPanel.mode = null;
-            state.variantPanel.tabKey = null;
-            state.selectedVariantGroupId = null;
-            showProductFooterView();
-          } else if (state.variantPanel.mode === "edit" && state.selectedVariantGroupId) {
-            // Cancel edit mode - restore view
-            (async () => {
-              state.variantPanel.mode = "view";
-              state.variantDraft = null;
-              state.variantPanel.itemsDirty = false;
-              await loadVariantGroupDetails(state.selectedVariantGroupId);
-              showVariantGroupDetails(state.variantGroupDetails, { mode: "view" });
-            })();
-          }
+          cancelVariantEdit();
           return;
         }
         // Option edit cancel
@@ -8716,7 +8740,7 @@ function updateOptionGroupSelectionUi() {
           return;
         }
         if (state.variantPanel.mode === "view") {
-          // TODO: startVariantEdit - implement later
+          startVariantEdit();
           return;
         }
         if (state.variantPanel.mode === "create" || state.variantPanel.mode === "edit") {
@@ -8775,7 +8799,7 @@ function updateOptionGroupSelectionUi() {
           return;
         }
         if (state.variantPanel.mode !== "view") {
-          // TODO: cancelVariantEdit - implement later
+          cancelVariantEdit();
           return;
         }
         // Options mode

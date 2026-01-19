@@ -145,8 +145,12 @@
       </div>
     </div>
 
-    <!-- дальше поля как и были -->
-    <div class="form-row-2">
+    <!-- Цены в один ряд: Себестоимость / Цена / Старая цена -->
+    <div class="form-row-3">
+      <div>
+        <label class="field-label" for="pe_cost_price">Себестоимость</label>
+        <input class="control" id="pe_cost_price" name="cost_price" type="number" step="0.01" min="0" placeholder="0" />
+      </div>
       <div>
         <label class="field-label" for="pe_price">Цена</label>
         <input class="control" id="pe_price" name="price" type="number" step="0.01" min="0" placeholder="0" />
@@ -157,31 +161,36 @@
       </div>
     </div>
 
-    <div class="form-row-2">
+    <!-- Единицы в один ряд: Норма / Ед. изм / Остаток -->
+    <div class="form-row-3">
       <div>
-        <label class="field-label" for="pe_cost_price">Себестоимость</label>
-        <input class="control" id="pe_cost_price" name="cost_price" type="number" step="0.01" min="0" placeholder="0" />
-      </div>
-      <div>
-        <label class="field-label" for="pe_base_qty">Базовое количество (за цену)</label>
+        <label class="field-label" for="pe_base_qty">Норма</label>
         <input class="control" id="pe_base_qty" name="base_qty" type="number" step="0.001" min="0" placeholder="1" />
       </div>
-    </div>
-
-    <div class="form-row-2">
       <div>
-        <label class="field-label" for="pe_base_unit_id">Базовая единица</label>
+        <label class="field-label" for="pe_base_unit_id">Ед. изм</label>
         <select class="control" id="pe_base_unit_id" name="base_unit_id">
           <option value="">—</option>
         </select>
       </div>
-      <div id="pePcsLinkWrap" class="hidden">
-        <label class="field-label" for="pe_pcs_factor">1 шт =</label>
-        <div class="input-with-suffix">
-          <input class="control" id="pe_pcs_factor" type="number" step="0.001" min="0" placeholder="Например 25" />
-          <span class="input-suffix" id="pePcsBaseLabel">—</span>
-        </div>
+      <div>
+        <label class="field-label" for="pe_stock">Остаток</label>
+        <input class="control" id="pe_stock" name="stock" type="number" step="0.001" min="0" />
       </div>
+    </div>
+
+    <div class="form-row-2">
+      <label class="switch">
+        <input class="switch-input" type="checkbox" name="is_active" checked />
+        <span class="switch-ui" aria-hidden="true"></span>
+        <span class="switch-text">Активен</span>
+      </label>
+
+      <label class="switch">
+        <input class="switch-input" type="checkbox" name="site_visibility" checked />
+        <span class="switch-ui" aria-hidden="true"></span>
+        <span class="switch-text">Показывать на сайте</span>
+      </label>
     </div>
 
     <div class="info-card info-accordion" id="peDescriptionAccordion">
@@ -206,20 +215,6 @@
           </div>
         </div>
       </div>
-    </div>
-
-    <div class="form-row-2">
-      <label class="switch">
-        <input class="switch-input" type="checkbox" name="is_active" checked />
-        <span class="switch-ui" aria-hidden="true"></span>
-        <span class="switch-text">Активен</span>
-      </label>
-
-      <label class="switch">
-        <input class="switch-input" type="checkbox" name="site_visibility" checked />
-        <span class="switch-ui" aria-hidden="true"></span>
-        <span class="switch-text">Показывать на сайте</span>
-      </label>
     </div>
 
     <div class="info-card product-options-card">
