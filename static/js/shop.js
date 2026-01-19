@@ -3945,9 +3945,14 @@ function openCartSheet() {
     // product mode header: ←/♡, × скрыть, title скрыть
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("");
-    setSheetHeaderMode("product", { onBack: showSheetCart });
-
-    renderProductDetailsInto(productWrap, product, { onBack: showSheetCart, cartKey });
+    
+    // Определяем куда возвращаться при закрытии карточки:
+    // - Если cartKey есть (из корзины) - вернуться в корзину
+    // - Если cartKey нет (из каталога) - закрыть sheet и вернуться в каталог
+    const onBack = cartKey ? showSheetCart : closeShopSheetIfOpen;
+    
+    setSheetHeaderMode("product", { onBack });
+    renderProductDetailsInto(productWrap, product, { onBack, cartKey });
   }
 
 function renderSheetAddressList() {
