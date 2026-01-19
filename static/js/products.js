@@ -2465,6 +2465,13 @@ function updateOptionGroupSelectionUi() {
     renderOptionItems(getOptionItemsSource());
     renderOptionAssignments(getOptionAssignmentsSource());
     renderOptionHeader();
+
+    // Show footer based on mode
+    if (state.optionPanel.mode === "view") {
+      showProductFooterView();
+    } else {
+      showProductFooterEdit();
+    }
   }
 
   function renderVariantGroupLevel() {
@@ -2499,6 +2506,13 @@ function updateOptionGroupSelectionUi() {
     renderVariantItems(getVariantItemsSource());
     renderVariantAssignments(getVariantAssignmentsSource());
     renderVariantHeader();
+
+    // Show footer based on mode
+    if (state.variantPanel.mode === "view") {
+      showProductFooterView();
+    } else {
+      showProductFooterEdit();
+    }
   }
 
   function isVariantEditable() {
