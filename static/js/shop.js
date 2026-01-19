@@ -1529,14 +1529,79 @@ async function initAddresses() {
     return { pill, btnMinus, btnPlus, center };
   }
 
-  function catalogCenterHtml(product, qty) {
+  function catalogCenterHtml(product, qty, calculatedPrice = null) {
     const old = Number(product.old_price || 0);
-    const price = Number(product.price || 0);
+    const price = calculatedPrice != null ? calculatedPrice : Number(product.price || 0);
     const showOld = old > 0 && old > price;
 
     if (qty > 0) return `${moneyNoSign(price)} ₽`;
     if (showOld) return `<span class="old">${moneyNoSign(old)} ₽</span>${moneyNoSign(price)} ₽`;
     return `${moneyNoSign(price)} ₽`;
+  }
+
+  // Кэш для рассчитанных цен по умолчанию
+  const defaultPriceCache = new Map();
+
+  /**
+   * Рассчитывает цену товара с учётом варианта и опций по умолчанию
+   */
+  async function calculateDefaultPrice(product) {
+    const productId = product.id;
+    
+    // Проверяем кэш
+    if (defaultPriceCache.has(productId)) {
+      return defaultPriceCache.get(productId);
+    }
+
+    let price = Number(product.price || 0);
+
+    try {
+      // Загружаем варианты
+      const variants = await resolveProductVariants(productId);
+      
+      // Если есть варианты, берём цену первого варианта по умолчанию
+      if (variants.length > 0 && variants[0].values?.length > 0) {
+        const variantState = {
+          selectedIndex: 0,
+          value: variants[0].values[0],
+          label: String(variants[0].values[0]),
+        };
+        price = getVariantUnitPrice(product, variants, variantState);
+      }
+
+      // Загружаем опции
+      const optionGroups = await resolveProductOptionGroups(productId);
+      
+      // Добавляем стоимость обязательных опций по умолчанию
+      for (const group of optionGroups) {
+        if (group.is_required && group.items?.length > 0) {
+          // Берём первый элемент как дефолтный для обязательной опции
+          const defaultItem = group.items[0];
+          if (defaultItem?.price) {
+            price += Number(defaultItem.price || 0);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Error calculating default price:", e);
+    }
+
+    // Сохраняем в кэш
+    defaultPriceCache.set(productId, price);
+    return price;
+  }
+
+  /**
+   * Асинхронно обновляет цену на карточке товара
+   */
+  async function updateCardPrice(card, product) {
+    const qty = cartQty(product.id);
+    const calculatedPrice = await calculateDefaultPrice(product);
+    
+    const center = card.querySelector(".qty-pill__center");
+    if (center) {
+      center.innerHTML = catalogCenterHtml(product, qty, calculatedPrice);
+    }
   }
 
   // -----------------------------
@@ -1618,29 +1683,8 @@ async function initAddresses() {
 
       btnPlus.addEventListener("click", async (e) => {
         e.stopPropagation();
-        
-        // Проверяем, есть ли у товара настраиваемые ингредиенты или опции
-        const [ingredients, optionGroups] = await Promise.all([
-          resolveProductIngredients(id),
-          resolveProductOptionGroups(id),
-        ]);
-        
-        // Проверяем наличие настраиваемых ингредиентов (is_variable = 1)
-        const hasVariableIngredients = ingredients.some(ing => {
-          const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
-          return isVariable;
-        });
-        
-        // Проверяем наличие опций (resolveProductOptionGroups уже возвращает только активные группы с элементами)
-        const hasOptions = optionGroups.length > 0;
-        
-        // Если есть настраиваемые ингредиенты или опции - открываем карточку
-        if (hasVariableIngredients || hasOptions) {
-          await openProductDetails(id);
-        } else {
-          // Если нет - добавляем сразу в корзину
-          changeQty(id, +1);
-        }
+        // Всегда открываем карточку товара при нажатии +
+        await openProductDetails(id);
       });
 
       btnMinus.addEventListener("click", (e) => {
@@ -1652,6 +1696,9 @@ async function initAddresses() {
 
       elProductsGrid.appendChild(card);
       applyCardState(card, p, qty, null);
+      
+      // Асинхронно обновляем цену с учётом вариантов и опций по умолчанию
+      updateCardPrice(card, p);
     });
 
     updateCartBadge();
@@ -1694,7 +1741,11 @@ async function initAddresses() {
       pill.classList.toggle("has-qty", qty > 0);
     }
     if (btnMinus) btnMinus.classList.toggle("is-disabled", qty <= 0);
-    if (center) center.innerHTML = catalogCenterHtml(product, qty);
+    if (center) {
+      // Используем кэшированную цену если есть
+      const cachedPrice = defaultPriceCache.get(product.id);
+      center.innerHTML = catalogCenterHtml(product, qty, cachedPrice);
+    }
   }
 
   // -----------------------------
