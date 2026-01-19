@@ -3573,7 +3573,12 @@ optionGroups.forEach((group) => {
   // -----------------------------
   function closeShopSheetIfOpen() {
     if (!window.AppModal) return;
-    if (window.AppModal.isOpen()) window.AppModal.close("sheet");
+    if (window.AppModal.isOpen()) {
+      window.AppModal.close("sheet");
+      // Принудительно обнуляем контекст, чтобы следующее открытие создало новый sheet
+      openCartSheetCtx = null;
+      openProductCtx = null;
+    }
   }
 
   function clearProfileModalMenu() {

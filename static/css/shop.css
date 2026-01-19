@@ -320,6 +320,7 @@ body.page-shop .shop-toolbar-cart{
 
   display: -webkit-box;
   -webkit-line-clamp: 2;             /* 2 строки */
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -945,6 +946,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
