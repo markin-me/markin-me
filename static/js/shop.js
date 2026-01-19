@@ -315,6 +315,7 @@
               ? Number(item.variant_value_index)
               : null,
             variant_label: str(item.variant_label || ""),
+            variant_unit_price: Number(item.variant_unit_price || 0),
           };
         })
         .filter(Boolean);
@@ -335,6 +336,7 @@
             variant_group_id: null,
             variant_value_index: null,
             variant_label: "",
+            variant_unit_price: 0,
           };
         })
         .filter(Boolean);
@@ -432,6 +434,7 @@
           ? Number(item.variant_value_index)
           : null,
         variant_label: str(item.variant_label || ""),
+        variant_unit_price: Number(item.variant_unit_price || 0),
       });
     }
     return items;
@@ -1712,9 +1715,9 @@ async function initAddresses() {
 
     let total = 0;
 
-    items.forEach(({ product, qty, key, option_items: optionItems, ingredients: cartIngredients, ingredient_price_diff = 0, variant_label: variantLabel }) => {
+    items.forEach(({ product, qty, key, option_items: optionItems, ingredients: cartIngredients, ingredient_price_diff = 0, variant_label: variantLabel, variant_unit_price: variantUnitPrice }) => {
       const old = Number(product.old_price || 0);
-      const basePrice = Number(product.price || 0);
+      const basePrice = Number(variantUnitPrice || product.price || 0);
       const optionTotal = optionItemsTotal(optionItems);
       const ingredientPriceDiff = Number(ingredient_price_diff || 0);
       const price = basePrice + optionTotal + ingredientPriceDiff;
@@ -2026,6 +2029,45 @@ function updateCartBadge() {
     );
     if (inverse && Number(inverse.factor)) return 1 / Number(inverse.factor);
     return null;
+  }
+
+  function parseVariantValueNumber(value) {
+    const s = String(value ?? "").replace(",", ".");
+    const match = s.match(/-?\d+(?:\.\d+)?/);
+    return match ? Number(match[0]) : NaN;
+  }
+
+  function getVariantUnitPrice(product, variants, variantState) {
+    if (!product) return 0;
+    const basePrice = Number(product.price || 0);
+    if (!Array.isArray(variants) || !variants.length) return basePrice;
+    const selectedIndex = Number(variantState?.selectedIndex);
+    if (!Number.isFinite(selectedIndex)) return basePrice;
+
+    const group = variants[0];
+    const baseUnitId = Number(product.base_unit_id || product.unit_id || group.unit_id || 0);
+    const baseQty = Number(product.base_qty || 1) || 1;
+    const variantUnitId = Number(group.unit_id || 0);
+    if (!Number.isFinite(baseUnitId) || !Number.isFinite(variantUnitId)) return basePrice;
+
+    const value = Array.isArray(group.values) ? group.values[selectedIndex] : null;
+    const numericValue = parseVariantValueNumber(value);
+    if (!Number.isFinite(numericValue)) return basePrice;
+
+    const factor = getConversionFactor(variantUnitId, baseUnitId);
+    if (factor == null) return basePrice;
+    const qtyInBase = numericValue * Number(factor || 0);
+    if (!Number.isFinite(qtyInBase) || qtyInBase <= 0) return basePrice;
+
+    let unitPrice = basePrice * (qtyInBase / baseQty);
+
+    const tiers = Array.isArray(group.discount_tiers) ? group.discount_tiers : [];
+    const tier = tiers.find((t) => Number(t.sort_order) === selectedIndex);
+    const discountPercent = Number(tier?.discount_percent || 0) || 0;
+    if (discountPercent > 0) {
+      unitPrice = unitPrice * (1 - discountPercent / 100);
+    }
+    return unitPrice;
   }
 
   function getQtyInBase(ing, qty) {
@@ -2896,7 +2938,7 @@ function buildProductDetailsContent(
   footer.appendChild(actionBtn);
   wrap.appendChild(footer);
 
-  return { wrap, actionBtn, qtyWrap };
+  return { wrap, actionBtn, qtyWrap, basePriceEl: basePrice };
 }
 
 
@@ -3137,6 +3179,7 @@ optionGroups.forEach((group) => {
   };
 
   let actionBtnRef = null;
+  let basePriceElRef = null;
 
   // Рассчитывает цену базовых ингредиентов (по ing.quantity из БД)
   const calculateBaseIngredientPrice = () => {
@@ -3193,11 +3236,11 @@ optionGroups.forEach((group) => {
     if (!actionBtnRef) return;
 
     const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
-
-    // unit price = base + options + разница ингредиентов
-    const basePrice = cartLinePrice(product, selectedItems);
+    const optionTotal = optionItemsTotal(selectedItems);
+    const variantUnitPrice = getVariantUnitPrice(product, variants, variantState);
+    const basePrice = Number(variantUnitPrice || 0) + optionTotal;
     const ingredientsPriceDiff = calculateIngredientPrice(); // Разница от базового состава
-    const unitPrice = Number(basePrice || 0) + ingredientsPriceDiff;
+    const unitPrice = basePrice + ingredientsPriceDiff;
 
     // total = unit * qty
     const totalPrice = unitPrice * Number(qty || 1);
@@ -3206,6 +3249,15 @@ optionGroups.forEach((group) => {
 
     // разметка как у "Оформить": текст + span суммы
     actionBtnRef.innerHTML = `${label} <span class="shop-checkout-total shop-pd-action-price">${money(totalPrice)}</span>`;
+
+    if (basePriceElRef) {
+      const variantLabel = str(variantState?.label || "").trim();
+      if (variantLabel) {
+        basePriceElRef.textContent = `${variantLabel} — ${money(variantUnitPrice)}`;
+      } else {
+        basePriceElRef.textContent = money(product.price || 0);
+      }
+    }
   };
 
   let ingredientsWrapRef = null;
@@ -3298,7 +3350,7 @@ optionGroups.forEach((group) => {
     updateActionText();
   };
 
-  const { wrap, actionBtn } = buildProductDetailsContent(
+  const { wrap, actionBtn, basePriceEl } = buildProductDetailsContent(
     product,
     optionGroups,
     selectionState,
@@ -3319,6 +3371,7 @@ optionGroups.forEach((group) => {
   );
 
   actionBtnRef = actionBtn;
+  basePriceElRef = basePriceEl;
   ingredientsWrapRef = wrap.querySelector(".shop-pd-ingredients");
 
   updateQtyUi();
@@ -3338,6 +3391,9 @@ optionGroups.forEach((group) => {
     const variantLabel = hasVariantSelection
       ? `${str(variants?.[0]?.title || "Вариант")}: ${str(variantState.label || "")}`.trim()
       : "";
+    const variantUnitPrice = hasVariantSelection
+      ? getVariantUnitPrice(product, variants, variantState)
+      : Number(product.price || 0);
 
     const safeQty = Math.max(1, Number(qty || 1));
 
@@ -3373,6 +3429,7 @@ optionGroups.forEach((group) => {
         sameItem.variant_group_id = hasVariantSelection ? selectedVariantGroupId : null;
         sameItem.variant_value_index = hasVariantSelection ? selectedVariantIndex : null;
         sameItem.variant_label = variantLabel;
+        sameItem.variant_unit_price = Number(variantUnitPrice || 0);
 
         // удаляем старую строку
         state.cart = state.cart.filter((it) => it.key !== editingItem.key);
@@ -3386,6 +3443,7 @@ optionGroups.forEach((group) => {
         editingItem.variant_group_id = hasVariantSelection ? selectedVariantGroupId : null;
         editingItem.variant_value_index = hasVariantSelection ? selectedVariantIndex : null;
         editingItem.variant_label = variantLabel;
+        editingItem.variant_unit_price = Number(variantUnitPrice || 0);
         editingItem.qty = safeQty;
       }
     } else {
@@ -3398,6 +3456,7 @@ optionGroups.forEach((group) => {
         existing.variant_group_id = hasVariantSelection ? selectedVariantGroupId : null;
         existing.variant_value_index = hasVariantSelection ? selectedVariantIndex : null;
         existing.variant_label = variantLabel;
+        existing.variant_unit_price = Number(variantUnitPrice || 0);
       } else {
         state.cart.push({
           key: nextKey,
@@ -3410,6 +3469,7 @@ optionGroups.forEach((group) => {
           variant_group_id: hasVariantSelection ? selectedVariantGroupId : null,
           variant_value_index: hasVariantSelection ? selectedVariantIndex : null,
           variant_label: variantLabel,
+          variant_unit_price: Number(variantUnitPrice || 0),
         });
       }
     }
