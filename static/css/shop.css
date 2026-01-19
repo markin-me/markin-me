@@ -2076,6 +2076,10 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 #shopCartHeaderTitle{
   flex:1;
   text-align:center;
+  cursor: pointer;
+  pointer-events: auto;
+  position: relative;
+  z-index: 2;
 }
 
 .shop-cart-back,
@@ -2095,7 +2099,8 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 .shop-cart-fav i{ line-height:1; }
 
 /* ==========================================================================
-/* ================= Cart header: address as title (desktop + shared) ================= */
+   Cart header: address as title (desktop + sheet)
+   ========================================================================== */
 
 .shop-cart-header.is-address-title #shopCartHeaderTitle{
   flex: 0 1 auto;
@@ -2119,7 +2124,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 .shop-cart-header.is-address-title .shop-address-chip{
   display: none !important;
 }
-/* ================= Cart sheet (AppModal): address in title ================= */
+/* Cart sheet (AppModal): address in title */
 
 .app-modal-header .app-modal-title.is-cart-address-title,
 .app-modal-header .modal-title.is-cart-address-title,
@@ -2139,33 +2144,4 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 .app-modal-header .modal-title.is-empty-address,
 .app-modal-header [data-modal-title].is-empty-address{
   opacity: .9;
-}
-/* Cart header: address as title (desktop only) */
-.shop-cart-header.is-address-title #shopCartHeaderTitle{
-  flex: 0 1 auto;
-  text-align: left;
-  font-weight: 700;
-  font-size: 16px;
-  line-height: 1.2;
-  max-width: 350px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-/* empty state */
-.shop-cart-header.is-address-title #shopCartHeaderTitle.is-empty-address{
-  opacity: .9;
-}
-
-/* hide chip in this mode */
-.shop-cart-header.is-address-title .shop-address-chip{
-  display: none !important;
-}
-.shop-cart-header #shopCartHeaderTitle{
-  cursor: pointer;
-  pointer-events: auto;
-  position: relative;
-  z-index: 2;
 }

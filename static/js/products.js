@@ -177,7 +177,7 @@
     if (optionEmpty) optionEmpty.classList.add("hidden");
     
     // Clear productInfoBody to avoid duplicate content
-    if (productInfoBody && (state.type === "product-edit" || state.type === "category-edit" || state.type === "option-picker" || state.type === "ingredient-picker" || state.type === "option-edit")) {
+    if (productInfoBody && (state.type === "product-edit" || state.type === "product-view" || state.type === "category-edit" || state.type === "option-picker" || state.type === "ingredient-picker" || state.type === "option-edit")) {
       productInfoBody.innerHTML = "";
     }
 
@@ -247,7 +247,7 @@
     }
 
     // Show appropriate content based on state type
-    if (state.type === "product-edit" || state.type === "category-edit") {
+    if (state.type === "product-edit" || state.type === "product-view" || state.type === "category-edit") {
       if (state.content) {
         // Ensure productInfoBody exists
         const body = productInfoBody || document.querySelector("#productInfoBody");
@@ -267,7 +267,11 @@
         console.error("state.content is missing for " + state.type);
       }
       // Show footer in edit mode
-      showProductFooterEdit();
+      if (state.type === "product-edit") {
+        showProductFooterEdit();
+      } else {
+        showProductFooterView();
+      }
     } else if (state.type === "option-edit") {
       showOptionGroupDetails(state.optionGroupDetails, { mode: state.optionPanel.mode || "view" });
     } else if (state.type === "option-picker") {
@@ -1882,8 +1886,7 @@ function buildOptionGroupPayload(formValues) {
     clearNavigationStack();
 
     state.optionPanel.returnTo = null;
-    productTitle.textContent = p.name || "—";
-    productSku.textContent = `Артикул: ${p.sku || "—"}`;
+    openProductModal({ mode: "view", product: p, host: productInfo || null });
     
     // Update header buttons to view mode
     if (editProductBtn) {
@@ -1895,27 +1898,6 @@ function buildOptionGroupPayload(formValues) {
       closeProductInfoBtn.title = "Закрыть";
       closeProductInfoBtn.setAttribute("aria-label", "Закрыть");
     }
-
-    productPrice.textContent = formatMoney(p.price);
-    productOldPrice.textContent = p.old_price != null ? formatMoney(p.old_price) : "—";
-    productCostPrice.textContent = p.cost_price != null ? formatMoney(p.cost_price) : "—";
-    if (productBaseUnit) {
-      const baseUnit = state.units.find((u) => Number(u.id) === Number(p.base_unit_id || p.unit_id));
-      productBaseUnit.textContent = baseUnit
-        ? (baseUnit.short_title || baseUnit.code || baseUnit.title)
-        : "—";
-    }
-    if (productBaseQty) {
-      productBaseQty.textContent = p.base_qty != null ? formatQuantity(p.base_qty) : "—";
-    }
-    productStatus.textContent = `${p.is_active ? "Активен" : "Выключен"} · ${p.site_visibility ? "на сайте" : "скрыт"}`;
-    productDescShort.textContent = p.description_short || "—";
-    productDesc.textContent = p.description || "—";
-
-    renderInfoChips();
-    renderInfoPhotos(p.photos);
-    renderProductOptionsAccordion();
-    renderProductIngredientsAccordion(p.id);
 
     productEmpty && productEmpty.classList.add("hidden");
     categoryEmpty && categoryEmpty.classList.add("hidden");
@@ -4525,18 +4507,22 @@ function updateOptionGroupSelectionUi() {
 
   // ---------------- Modal: product (chips + photos) ----------------
 
-  function openProductModal({ mode, product }) {
+  function openProductModal({ mode, product, host } = {}) {
     const isEdit = mode === "edit";
-    const tabId = isEdit && product && product.id ? product.id : `new-${Date.now()}`;
+    const isCreate = mode === "create";
+    const isView = mode === "view";
+    const isEditable = isEdit || isCreate;
+    const useHost = Boolean(host);
+    const tabId = product && product.id ? product.id : `new-${Date.now()}`;
     const tabKey = buildTabKey("product", tabId);
 
     const defaultSelected = new Set();
     if (state.allCategoryId) defaultSelected.add(state.allCategoryId);
-    if (!isEdit) {
+    if (isCreate) {
       if (state.currentCategoryId && state.currentCategoryId !== state.allCategoryId) defaultSelected.add(state.currentCategoryId);
     }
 
-    const initialPhotos = isEdit && product ? (Array.isArray(product.photos) ? product.photos.slice(0, 10) : []) : [];
+    const initialPhotos = product && Array.isArray(product.photos) ? product.photos.slice(0, 10) : [];
 
     const draft = {
       categories: defaultSelected,   // Set<number>
@@ -4560,9 +4546,9 @@ function updateOptionGroupSelectionUi() {
       });
     }
 
-    // если edit — подгружаем категории товара
+    // если edit/view — подгружаем категории товара
     const loadCatsPromise = (async () => {
-      if (!isEdit || !product) return;
+      if ((!isEdit && !isView) || !product) return;
       const res = await api(`/api/prod_products/${product.id}/categories?tenant_id=${TENANT_ID}`);
       const arr = Array.isArray(res.data) ? res.data : [];
       arr.forEach((c) => draft.categories.add(Number(c.id)));
@@ -4570,7 +4556,7 @@ function updateOptionGroupSelectionUi() {
 
     const loadOptionsPromise = (async () => {
       await loadOptionGroups();
-      if (!isEdit || !product) return;
+      if ((!isEdit && !isView) || !product) return;
       const res = await apiGetProductOptionAssignments(product.id);
       const arr = Array.isArray(res.data) ? res.data : [];
       arr.filter((a) => a.is_active).forEach((a) => {
@@ -4581,7 +4567,7 @@ function updateOptionGroupSelectionUi() {
 
     const loadVariantsPromise = (async () => {
       await loadVariantGroups();
-      if (!isEdit || !product) return;
+      if ((!isEdit && !isView) || !product) return;
       const res = await apiGetProductVariants(product.id);
       const arr = Array.isArray(res.data) ? res.data : [];
       draft.initialVariantAssignments = arr
@@ -4613,7 +4599,12 @@ function updateOptionGroupSelectionUi() {
     // Create wrapper for right panel
     const wrapper = document.createElement("div");
     wrapper.className = "product-editor-wrapper";
+    if (isView) wrapper.classList.add("product-editor-view");
     wrapper.appendChild(body);
+
+    if (isEditable && productInfo && !useHost) {
+      productInfo.innerHTML = "";
+    }
 
     // Save title and SKU for restoration
     const savedTitle = productTitle ? productTitle.textContent : "";
@@ -4621,22 +4612,37 @@ function updateOptionGroupSelectionUi() {
 
     // Update title and SKU in header for editor
     if (productTitle) {
-      productTitle.textContent = isEdit && product ? (product.name || "Редактировать товар") : "Новый товар";
+      if (isView && product) {
+        productTitle.textContent = product.name || "—";
+      } else if (isEdit && product) {
+        productTitle.textContent = product.name || "Редактировать товар";
+      } else {
+        productTitle.textContent = "Новый товар";
+      }
     }
     if (productSku) {
-      productSku.textContent = isEdit && product ? `Артикул: ${product.sku || "—"}` : "Артикул: —";
+      if ((isEdit || isView) && product) {
+        productSku.textContent = `Артикул: ${product.sku || "—"}`;
+      } else {
+        productSku.textContent = "Артикул: —";
+      }
+    }
+
+    if (useHost && host) {
+      host.innerHTML = "";
+      host.appendChild(wrapper);
     }
 
     // Create navigation state
-    const navigationState = {
-      type: "product-edit",
+    const navigationState = useHost ? null : {
+      type: isEditable ? "product-edit" : "product-view",
       content: wrapper,
       isEdit: isEdit,
       product: product,
       savedTitle: savedTitle,
       savedSku: savedSku,
       tabKey: tabKey,
-      onSave: async () => {
+      onSave: isEditable ? async () => {
         try {
           // Find form in the wrapper (which is now in DOM) or in document
           const form = $("#productEditorForm", wrapper) || document.querySelector("#productEditorForm");
@@ -5091,7 +5097,7 @@ function updateOptionGroupSelectionUi() {
           alert('Неожиданная ошибка при сохранении: ' + (e.message || 'Неизвестная ошибка'));
           return false;
         }
-      },
+      } : null,
       onClose: () => {
         // Remove from editing state when canceling
         if (product && product.id && editingProducts.has(product.id)) {
@@ -5105,51 +5111,57 @@ function updateOptionGroupSelectionUi() {
       }
     };
     
-    // Store editing state for this product (only for existing products)
-    if (isEdit && product && product.id) {
-      editingProducts.set(product.id, {
-        navigationState: navigationState,
-        draft: draft,
-        draftIngredients: draftIngredients
-      });
-    }
+    if (!useHost) {
+      // Store editing state for this product (only for existing products)
+      if (isEdit && product && product.id) {
+        editingProducts.set(product.id, {
+          navigationState: navigationState,
+          draft: draft,
+          draftIngredients: draftIngredients
+        });
+      }
 
-    // Ensure tab exists for editor
-    if (isEdit && product && product.id) {
-      ensureTab({
-        type: "product",
-        id: product.id,
-        title: product.name || "Товар",
-        onActivate: () => {
-          openProductById(product.id);
-        },
-        activate: false,
-      });
-    } else {
-      ensureTab({
-        type: "product",
-        id: tabId,
-        title: "Новый товар",
-        onActivate: () => {
-          currentNavigationState = navigationState;
-          showNavigationState(navigationState);
-          showProductFooterEdit();
-        },
-        activate: false,
-      });
+      // Ensure tab exists for editor
+      if (isEdit && product && product.id) {
+        ensureTab({
+          type: "product",
+          id: product.id,
+          title: product.name || "Товар",
+          onActivate: () => {
+            openProductById(product.id);
+          },
+          activate: false,
+        });
+      } else {
+        ensureTab({
+          type: "product",
+          id: tabId,
+          title: "Новый товар",
+          onActivate: () => {
+            currentNavigationState = navigationState;
+            showNavigationState(navigationState);
+            showProductFooterEdit();
+          },
+          activate: false,
+        });
+      }
+      
+      // Push to navigation stack
+      pushNavigationState(navigationState);
+      
+      // Show footer in edit mode
+      if (isEditable) {
+        showProductFooterEdit();
+      } else {
+        showProductFooterView();
+      }
     }
-    
-    // Push to navigation stack
-    pushNavigationState(navigationState);
-    
-    // Show footer in edit mode
-    showProductFooterEdit();
 
     const form = $("#productEditorForm", wrapper);
     if (!form) return;
 
     // prefill
-    if (isEdit && product) {
+    if ((isEdit || isView) && product) {
       form.name.value = product.name || "";
       form.sku.value = product.sku || "";
       form.description_short.value = product.description_short || "";
@@ -5170,6 +5182,16 @@ function updateOptionGroupSelectionUi() {
       if (form.cost_price) {
         form.cost_price.value = "0";
       }
+    }
+
+    if (isView) {
+      $$("input, select, textarea", form).forEach((el) => {
+        if (el.tagName === "SELECT" || el.type === "checkbox" || el.type === "file") {
+          el.disabled = true;
+        } else {
+          el.readOnly = true;
+        }
+      });
     }
 
     const ui = {
@@ -5229,6 +5251,7 @@ function updateOptionGroupSelectionUi() {
     }
 
     function openCatPicker() {
+      if (isView) return;
       ui.catBackdrop.classList.remove("hidden");
       ui.catModal.classList.remove("hidden");
     }
@@ -5239,6 +5262,7 @@ function updateOptionGroupSelectionUi() {
     }
 
     function renderCatPicker() {
+      if (isView) return;
       const list = state.categories
         .slice()
         .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
@@ -5286,20 +5310,29 @@ function updateOptionGroupSelectionUi() {
 
       const chips = selected
         .filter((c) => c.code !== "all")
-        .map((c) => `
-          <span class="chip">
-            ${escapeHtml(c.title)}
-            <button class="chip-remove" type="button" data-cat-remove="${c.id}">
-              <i class="fas fa-times"></i>
-            </button>
-          </span>
-        `)
+        .map((c) => {
+          if (isView) {
+            return `<span class="chip">${escapeHtml(c.title)}</span>`;
+          }
+          return `
+            <span class="chip">
+              ${escapeHtml(c.title)}
+              <button class="chip-remove" type="button" data-cat-remove="${c.id}">
+                <i class="fas fa-times"></i>
+              </button>
+            </span>
+          `;
+        })
         .join("");
 
-      ui.chips.innerHTML = `
-        ${chips}
-        <button type="button" class="chip chip-plus" id="peChipPlus"><i class="fas fa-plus"></i></button>
-      `;
+      ui.chips.innerHTML = isView
+        ? chips
+        : `
+          ${chips}
+          <button type="button" class="chip chip-plus" id="peChipPlus"><i class="fas fa-plus"></i></button>
+        `;
+
+      if (isView) return;
 
       const plus = $("#peChipPlus", ui.chips);
       if (plus) plus.addEventListener("click", () => {
@@ -5883,6 +5916,18 @@ function updateOptionGroupSelectionUi() {
       const tiers = details?.tiers || details?.discount_tiers || [];
       const itemsHtml = details ? renderVariantValuesSummary(values, tiers) : `<div class="muted">Раскройте, чтобы загрузить значения.</div>`;
 
+      const actionsHtml = isView
+        ? `<span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>`
+        : `
+          <button class="btn btn-icon btn-sm btn-ghost" type="button" data-variant-edit="${groupId}" title="Изменить" onclick="event.stopPropagation();">
+            <i class="fas fa-pen"></i>
+          </button>
+          <button class="btn btn-icon btn-sm btn-ghost" type="button" data-variant-delete="${groupId}" title="Удалить" onclick="event.stopPropagation();">
+            <i class="fas fa-trash"></i>
+          </button>
+          <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+        `;
+
       ui.variantAccordion.innerHTML = `
         <div class="acc-item" data-variant-group="${groupId}">
           <div class="stage-item acc-trigger" role="button" tabindex="0" data-acc-trigger>
@@ -5891,13 +5936,7 @@ function updateOptionGroupSelectionUi() {
               <small>${escapeHtml(unitMeta)}</small>
             </span>
             <div class="option-actions-inline">
-              <button class="btn btn-icon btn-sm btn-ghost" type="button" data-variant-edit="${groupId}" title="Изменить" onclick="event.stopPropagation();">
-                <i class="fas fa-pen"></i>
-              </button>
-              <button class="btn btn-icon btn-sm btn-ghost" type="button" data-variant-delete="${groupId}" title="Удалить" onclick="event.stopPropagation();">
-                <i class="fas fa-trash"></i>
-              </button>
-              <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+              ${actionsHtml}
             </div>
           </div>
           <div class="acc-panel" data-acc-panel>
@@ -5910,35 +5949,37 @@ function updateOptionGroupSelectionUi() {
 
       bindAccordionContainer(ui.variantAccordion);
 
-      ui.variantAccordion.querySelectorAll("[data-variant-edit]").forEach((btn) => {
-        btn.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          const id = Number(btn.dataset.variantEdit);
-          if (!Number.isFinite(id)) return;
-          const groupItem = state.variantGroups.find((g) => Number(g.id) === id);
-          openVariantGroupTab(id, groupItem?.title || "Вариант", { activate: true });
+      if (!isView) {
+        ui.variantAccordion.querySelectorAll("[data-variant-edit]").forEach((btn) => {
+          btn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const id = Number(btn.dataset.variantEdit);
+            if (!Number.isFinite(id)) return;
+            const groupItem = state.variantGroups.find((g) => Number(g.id) === id);
+            openVariantGroupTab(id, groupItem?.title || "Вариант", { activate: true });
+          });
         });
-      });
 
-      ui.variantAccordion.querySelectorAll("[data-variant-delete]").forEach((btn) => {
-        btn.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          if (isEdit && product && product.id) {
-            for (const assignment of draft.initialVariantAssignments) {
-              if (Number.isFinite(assignment.assignment_id)) {
-                await apiDeleteVariantAssignment(assignment.assignment_id);
+        ui.variantAccordion.querySelectorAll("[data-variant-delete]").forEach((btn) => {
+          btn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            if (isEdit && product && product.id) {
+              for (const assignment of draft.initialVariantAssignments) {
+                if (Number.isFinite(assignment.assignment_id)) {
+                  await apiDeleteVariantAssignment(assignment.assignment_id);
+                }
               }
+              await refreshProductVariants(product.id);
+            } else {
+              draft.variantGroupId = null;
+              draft.initialVariantGroupId = null;
+              draft.initialVariantAssignments = [];
             }
-            await refreshProductVariants(product.id);
-          } else {
-            draft.variantGroupId = null;
-            draft.initialVariantGroupId = null;
-            draft.initialVariantAssignments = [];
-          }
-          variantDetailsCache.delete(groupId);
-          renderVariantAccordion();
+            variantDetailsCache.delete(groupId);
+            renderVariantAccordion();
+          });
         });
-      });
+      }
 
       ui.variantAccordion.querySelectorAll(".acc-item").forEach((item) => {
         const id = Number(item.dataset.variantGroup);
@@ -5961,13 +6002,13 @@ function updateOptionGroupSelectionUi() {
       refreshOpenAccordions();
     }
 
-    if (ui.variantManageBtn) {
+    if (ui.variantManageBtn && !isView) {
       ui.variantManageBtn.addEventListener("click", () => {
         openProductVariantPicker();
       });
     }
 
-    if (ui.optionManageBtn) {
+    if (ui.optionManageBtn && !isView) {
       ui.optionManageBtn.addEventListener("click", () => {
         optionPickerSelection = new Set(draft.optionGroups);
         openOptionPicker();
@@ -6023,6 +6064,17 @@ function updateOptionGroupSelectionUi() {
         const details = optionDetailsCache.get(g.id);
         const limitsLabel = formatOptionLimits(g.min_select, g.max_select);
         const itemsHtml = details ? renderOptionItemsSummary(details.items || []) : `<div class="muted">Раскройте, чтобы загрузить пункты.</div>`;
+        const actionsHtml = isView
+          ? `<span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>`
+          : `
+            <button class="btn btn-icon btn-sm" type="button" data-option-edit="${g.id}" title="Изменить" onclick="event.stopPropagation();">
+              <i class="fas fa-pen"></i>
+            </button>
+            <button class="btn btn-icon btn-sm" type="button" data-option-delete="${g.id}" title="Удалить" onclick="event.stopPropagation();">
+              <i class="fas fa-trash"></i>
+            </button>
+            <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+          `;
         return `
           <div class="acc-item" data-option-group="${g.id}">
             <div class="stage-item acc-trigger" role="button" tabindex="0" data-acc-trigger>
@@ -6031,13 +6083,7 @@ function updateOptionGroupSelectionUi() {
                 <small>${escapeHtml(getSelectionLabel(g.selection_type))} · ${escapeHtml(limitsLabel)}</small>
               </span>
               <div class="option-actions-inline">
-                <button class="btn btn-icon btn-sm" type="button" data-option-edit="${g.id}" title="Изменить" onclick="event.stopPropagation();">
-                  <i class="fas fa-pen"></i>
-                </button>
-                <button class="btn btn-icon btn-sm" type="button" data-option-delete="${g.id}" title="Удалить" onclick="event.stopPropagation();">
-                  <i class="fas fa-trash"></i>
-                </button>
-                <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+                ${actionsHtml}
               </div>
             </div>
             <div class="acc-panel" data-acc-panel>
@@ -6051,47 +6097,49 @@ function updateOptionGroupSelectionUi() {
 
       bindAccordionContainer(ui.optionAccordion);
 
-      // Handle Edit button
-      ui.optionAccordion.querySelectorAll("[data-option-edit]").forEach((btn) => {
-        btn.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          const id = Number(btn.dataset.optionEdit);
-          if (!Number.isFinite(id)) return;
-          // Ensure selectedProductId is set for return navigation
-          if (isEdit && product && product.id && !state.selectedProductId) {
-            state.selectedProductId = product.id;
-          }
-          await openOptionGroupFromProduct(id, { closeModal: true });
+      if (!isView) {
+        // Handle Edit button
+        ui.optionAccordion.querySelectorAll("[data-option-edit]").forEach((btn) => {
+          btn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const id = Number(btn.dataset.optionEdit);
+            if (!Number.isFinite(id)) return;
+            // Ensure selectedProductId is set for return navigation
+            if (isEdit && product && product.id && !state.selectedProductId) {
+              state.selectedProductId = product.id;
+            }
+            await openOptionGroupFromProduct(id, { closeModal: true });
+          });
         });
-      });
 
-      // Handle Delete button
-      ui.optionAccordion.querySelectorAll("[data-option-delete]").forEach((btn) => {
-        btn.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          const id = Number(btn.dataset.optionDelete);
-          if (!Number.isFinite(id)) return;
-          
-          if (isEdit && product && product.id) {
-            // For existing products: delete via API
-            try {
-              await apiDisableProductOptionAssignment(product.id, id);
+        // Handle Delete button
+        ui.optionAccordion.querySelectorAll("[data-option-delete]").forEach((btn) => {
+          btn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const id = Number(btn.dataset.optionDelete);
+            if (!Number.isFinite(id)) return;
+            
+            if (isEdit && product && product.id) {
+              // For existing products: delete via API
+              try {
+                await apiDisableProductOptionAssignment(product.id, id);
+                draft.optionGroups.delete(id);
+                draft.initialOptionGroups.delete(id);
+                optionDetailsCache.delete(id);
+                renderOptionAccordion();
+              } catch (e) {
+                console.error('Failed to delete option', e);
+                alert('Ошибка при удалении опции');
+              }
+            } else {
+              // For new products: just remove from draft
               draft.optionGroups.delete(id);
-              draft.initialOptionGroups.delete(id);
               optionDetailsCache.delete(id);
               renderOptionAccordion();
-            } catch (e) {
-              console.error('Failed to delete option', e);
-              alert('Ошибка при удалении опции');
             }
-          } else {
-            // For new products: just remove from draft
-            draft.optionGroups.delete(id);
-            optionDetailsCache.delete(id);
-            renderOptionAccordion();
-          }
+          });
         });
-      });
+      }
 
       ui.optionAccordion.querySelectorAll(".acc-item").forEach((item) => {
         const groupId = Number(item.dataset.optionGroup);
@@ -6128,12 +6176,15 @@ function updateOptionGroupSelectionUi() {
       // Рендерим миниатюры с drag handles
       ui.thumbs.innerHTML = draft.photos.map((ph, idx) => {
         const src = ph.kind === "url" ? ph.url : ph.preview;
+        const dragAttr = isView ? "" : 'draggable="true"';
+        const removeHtml = isView ? "" : `<span class="img-del" data-del="${idx}" title="Удалить"><i class="fas fa-times"></i></span>`;
+        const dragHtml = isView ? "" : `<span class="img-drag-handle" title="Перетащите для изменения порядка"><i class="fas fa-grip-vertical"></i></span>`;
         return `
-          <div class="img-thumb-wrapper" draggable="true" data-idx="${idx}">
+          <div class="img-thumb-wrapper" ${dragAttr} data-idx="${idx}">
             <button type="button" class="img-thumb ${idx === draft.activePhotoIdx ? "is-active" : ""}" data-idx="${idx}">
               <img src="${escapeHtml(src)}" alt="" />
-              <span class="img-del" data-del="${idx}" title="Удалить"><i class="fas fa-times"></i></span>
-              <span class="img-drag-handle" title="Перетащите для изменения порядка"><i class="fas fa-grip-vertical"></i></span>
+              ${removeHtml}
+              ${dragHtml}
             </button>
           </div>
         `;
@@ -6234,7 +6285,7 @@ function updateOptionGroupSelectionUi() {
       }
 
       // Инициализация drag & drop для изменения порядка
-      initPhotoDragAndDrop();
+      if (!isView) initPhotoDragAndDrop();
     }
 
     function initPhotoDragAndDrop() {
@@ -6328,34 +6379,38 @@ function updateOptionGroupSelectionUi() {
     }
 
     // Загрузка фото через кнопку
-    ui.addPhotosBtn.addEventListener("click", () => ui.photosInput.click());
-    ui.photosInput.addEventListener("change", () => {
-      if (ui.photosInput.files && ui.photosInput.files.length) addFiles(ui.photosInput.files);
-      ui.photosInput.value = "";
-    });
+    if (!isView) {
+      if (ui.addPhotosBtn) ui.addPhotosBtn.addEventListener("click", () => ui.photosInput.click());
+      if (ui.photosInput) {
+        ui.photosInput.addEventListener("change", () => {
+          if (ui.photosInput.files && ui.photosInput.files.length) addFiles(ui.photosInput.files);
+          ui.photosInput.value = "";
+        });
+      }
 
-    // Drag & Drop загрузка на область главного фото
-    if (ui.photoMainContainer) {
-      ui.photoMainContainer.addEventListener("dragover", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        ui.photoMainContainer.classList.add("drag-over");
-      });
+      // Drag & Drop загрузка на область главного фото
+      if (ui.photoMainContainer) {
+        ui.photoMainContainer.addEventListener("dragover", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          ui.photoMainContainer.classList.add("drag-over");
+        });
 
-      ui.photoMainContainer.addEventListener("dragleave", () => {
-        ui.photoMainContainer.classList.remove("drag-over");
-      });
+        ui.photoMainContainer.addEventListener("dragleave", () => {
+          ui.photoMainContainer.classList.remove("drag-over");
+        });
 
-      ui.photoMainContainer.addEventListener("drop", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        ui.photoMainContainer.classList.remove("drag-over");
-        
-        const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
-        if (files.length) {
-          addFiles(files);
-        }
-      });
+        ui.photoMainContainer.addEventListener("drop", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          ui.photoMainContainer.classList.remove("drag-over");
+          
+          const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
+          if (files.length) {
+            addFiles(files);
+          }
+        });
+      }
     }
 
     // Навигация стрелками
@@ -6382,18 +6437,22 @@ function updateOptionGroupSelectionUi() {
       }
     };
     
-    keyboardHandler = handleKeydown;
-    document.addEventListener("keydown", keyboardHandler);
+    if (!isView) {
+      keyboardHandler = handleKeydown;
+      document.addEventListener("keydown", keyboardHandler);
+    }
 
     ui.catClose.addEventListener("click", closeCatPicker);
     ui.catBackdrop.addEventListener("click", closeCatPicker);
-    if (ui.optionClose) ui.optionClose.addEventListener("click", closeOptionPicker);
-    if (ui.optionCancel) ui.optionCancel.addEventListener("click", closeOptionPicker);
-    if (ui.optionBackdrop) ui.optionBackdrop.addEventListener("click", closeOptionPicker);
-    if (ui.optionSearch) {
-      ui.optionSearch.addEventListener("input", () => {
-        renderOptionPickerList(optionPickerSelection || new Set(draft.optionGroups));
-      });
+    if (!isView) {
+      if (ui.optionClose) ui.optionClose.addEventListener("click", closeOptionPicker);
+      if (ui.optionCancel) ui.optionCancel.addEventListener("click", closeOptionPicker);
+      if (ui.optionBackdrop) ui.optionBackdrop.addEventListener("click", closeOptionPicker);
+      if (ui.optionSearch) {
+        ui.optionSearch.addEventListener("input", () => {
+          renderOptionPickerList(optionPickerSelection || new Set(draft.optionGroups));
+        });
+      }
     }
 
     // ========== INGREDIENTS ==========
@@ -6428,7 +6487,7 @@ function updateOptionGroupSelectionUi() {
     }
 
     async function loadProductUnitLinks() {
-      if (!isEdit || !product || !product.id) return;
+      if ((!isEdit && !isView) || !product || !product.id) return;
       try {
         const res = await apiGetProductUnitLinks(product.id);
         productUnitLinks = Array.isArray(res.data) ? res.data : [];
@@ -6470,7 +6529,7 @@ function updateOptionGroupSelectionUi() {
           ui.baseUnitSelect.innerHTML = '<option value="">—</option>' + unitsList.map(u => 
             `<option value="${u.id}">${escapeHtml(u.title || u.short_title || u.code)}</option>`
           ).join('');
-          if (isEdit && product) {
+          if ((isEdit || isView) && product) {
             ui.baseUnitSelect.value = product.base_unit_id || product.unit_id || "";
           } else if (pcsUnitId) {
             ui.baseUnitSelect.value = pcsUnitId;
@@ -6607,7 +6666,7 @@ function updateOptionGroupSelectionUi() {
     }
 
     async function loadIngredients() {
-      if (!isEdit || !product) return;
+      if ((!isEdit && !isView) || !product) return;
       try {
         const res = await apiGetProductIngredients(product.id);
         ingredientsList = Array.isArray(res.data) ? res.data : [];
@@ -6736,6 +6795,19 @@ function updateOptionGroupSelectionUi() {
         const allowedUnits = getAllowedUnits(ing);
 
         const ingredientPhoto = ing.ingredient_photos && ing.ingredient_photos.length > 0 ? ing.ingredient_photos[0] : null;
+        const disabledAttr = isView ? "disabled" : "";
+        const controlsHtml = isView
+          ? `<span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>`
+          : `
+              <label class="switch switch-compact ingredient-variable-switch">
+                <input class="switch-input" type="checkbox" data-ing-variable="${ing.ingredient_id}" ${isVariable ? 'checked' : ''} />
+                <span class="switch-ui" aria-hidden="true"></span>
+              </label>
+              <span class="btn btn-sm ingredient-remove-btn" data-ing-remove="${ing.ingredient_id}" title="Удалить" aria-label="Удалить">
+                <i class="fas fa-trash"></i>
+              </span>
+              <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+            `;
         return `
           <div class="acc-item" data-ingredient-id="${ing.ingredient_id}">
             <button class="stage-item acc-trigger ingredient-acc-trigger" type="button" data-acc-trigger>
@@ -6745,14 +6817,7 @@ function updateOptionGroupSelectionUi() {
                 <small data-ing-summary="${ing.ingredient_id}">${buildIngredientSummary(ing)}</small>
               </span>
               <span class="ingredient-acc-controls">
-                <label class="switch switch-compact ingredient-variable-switch">
-                  <input class="switch-input" type="checkbox" data-ing-variable="${ing.ingredient_id}" ${isVariable ? 'checked' : ''} />
-                  <span class="switch-ui" aria-hidden="true"></span>
-                </label>
-                <span class="btn btn-sm ingredient-remove-btn" data-ing-remove="${ing.ingredient_id}" title="Удалить" aria-label="Удалить">
-                  <i class="fas fa-trash"></i>
-                </span>
-                <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+                ${controlsHtml}
               </span>
             </button>
             <div class="acc-panel" data-acc-panel>
@@ -6763,13 +6828,13 @@ function updateOptionGroupSelectionUi() {
                       <div class="ingredient-control-wrap">
                         <span class="ingredient-control-label">Кол-во</span>
                         <input class="control" type="number" step="0.001" min="0"
-                          data-ing-qty="${ing.ingredient_id}" value="${ing.quantity}" />
+                          data-ing-qty="${ing.ingredient_id}" value="${ing.quantity}" ${disabledAttr} />
                       </div>
                     </div>
                     <div class="ingredient-field ingredient-field-unit">
                       <div class="ingredient-control-wrap">
                         <span class="ingredient-control-label">Ед.</span>
-                        <select class="control" data-ing-unit="${ing.ingredient_id}">
+                        <select class="control" data-ing-unit="${ing.ingredient_id}" ${disabledAttr}>
                           ${allowedUnits.map(u => 
                             `<option value="${u.id}" ${u.id === ing.unit_id ? 'selected' : ''}>${escapeHtml(u.short_title || u.code || u.title || '')}</option>`
                           ).join('')}
@@ -6780,34 +6845,34 @@ function updateOptionGroupSelectionUi() {
                       <div class="ingredient-control-wrap">
                         <span class="ingredient-control-label">Цена</span>
                         <input class="control" type="number" step="0.01" min="0"
-                          data-ing-price="${ing.ingredient_id}" value="${ing.price_override != null ? ing.price_override : ''}" placeholder="${formatMoney((getIngredientBaseQty(ing) > 0 ? Number(ing.ingredient_price || 0) / getIngredientBaseQty(ing) : Number(ing.ingredient_price || 0)))}" />
+                          data-ing-price="${ing.ingredient_id}" value="${ing.price_override != null ? ing.price_override : ''}" placeholder="${formatMoney((getIngredientBaseQty(ing) > 0 ? Number(ing.ingredient_price || 0) / getIngredientBaseQty(ing) : Number(ing.ingredient_price || 0)))}" ${disabledAttr} />
                       </div>
                     </div>
                     <div class="ingredient-field ingredient-field-cost">
                       <div class="ingredient-control-wrap">
                         <span class="ingredient-control-label">Себест.</span>
-                        <input class="control" type="text" data-ing-cost="${ing.ingredient_id}" value="${costTotal == null ? "—" : formatMoney(costTotal)}" readonly />
+                        <input class="control" type="text" data-ing-cost="${ing.ingredient_id}" value="${costTotal == null ? "—" : formatMoney(costTotal)}" readonly ${disabledAttr} />
                       </div>
                     </div>
                     <div class="ingredient-field ingredient-field-min ingredient-variable-field" style="${isVariable ? '' : 'display: none;'}">
                       <div class="ingredient-control-wrap">
                         <span class="ingredient-control-label">Мин</span>
                         <input class="control" type="number" step="0.001" min="0"
-                          data-ing-min="${ing.ingredient_id}" value="${ing.quantity_min != null ? ing.quantity_min : ''}" />
+                          data-ing-min="${ing.ingredient_id}" value="${ing.quantity_min != null ? ing.quantity_min : ''}" ${disabledAttr} />
                       </div>
                     </div>
                     <div class="ingredient-field ingredient-field-max ingredient-variable-field" style="${isVariable ? '' : 'display: none;'}">
                       <div class="ingredient-control-wrap">
                         <span class="ingredient-control-label">Макс</span>
                         <input class="control" type="number" step="0.001" min="0"
-                          data-ing-max="${ing.ingredient_id}" value="${ing.quantity_max != null ? ing.quantity_max : ''}" />
+                          data-ing-max="${ing.ingredient_id}" value="${ing.quantity_max != null ? ing.quantity_max : ''}" ${disabledAttr} />
                       </div>
                     </div>
                     <div class="ingredient-field ingredient-field-step ingredient-variable-field" style="${isVariable ? '' : 'display: none;'}">
                       <div class="ingredient-control-wrap">
                         <span class="ingredient-control-label">Шаг</span>
                         <input class="control" type="number" step="0.001" min="0"
-                          data-ing-step="${ing.ingredient_id}" value="${ing.quantity_step != null ? ing.quantity_step : ''}" />
+                          data-ing-step="${ing.ingredient_id}" value="${ing.quantity_step != null ? ing.quantity_step : ''}" ${disabledAttr} />
                       </div>
                     </div>
                   </div>
@@ -6821,6 +6886,8 @@ function updateOptionGroupSelectionUi() {
       bindAccordionContainer(ui.ingredientAccordion);
       updateCostPricePlaceholderGlobal();
       updatePricePlaceholderGlobal();
+
+      if (isView) return;
 
       const parseNumOrNull = (value) => {
         if (value == null || value === "") return null;
@@ -7400,28 +7467,29 @@ function updateOptionGroupSelectionUi() {
       }
     }
 
-    if (ui.ingredientAddBtn) {
+    if (ui.ingredientAddBtn && !isView) {
       ui.ingredientAddBtn.addEventListener("click", () => {
         openIngredientPicker();
       });
     }
 
-
-    if (ui.ingredientModalClose) ui.ingredientModalClose.addEventListener("click", closeIngredientPicker);
-    if (ui.ingredientModalCancel) ui.ingredientModalCancel.addEventListener("click", closeIngredientPicker);
-    if (ui.ingredientBackdrop) ui.ingredientBackdrop.addEventListener("click", closeIngredientPicker);
-    if (ui.ingredientModalSearch) {
-      ui.ingredientModalSearch.addEventListener("input", renderIngredientPickerList);
+    if (!isView) {
+      if (ui.ingredientModalClose) ui.ingredientModalClose.addEventListener("click", closeIngredientPicker);
+      if (ui.ingredientModalCancel) ui.ingredientModalCancel.addEventListener("click", closeIngredientPicker);
+      if (ui.ingredientBackdrop) ui.ingredientBackdrop.addEventListener("click", closeIngredientPicker);
+      if (ui.ingredientModalSearch) {
+        ui.ingredientModalSearch.addEventListener("input", renderIngredientPickerList);
+      }
+      if (ui.ingredientModalCreate) {
+        ui.ingredientModalCreate.addEventListener("click", () => {
+          closeIngredientPicker();
+          // Можно открыть модальное окно создания товара
+          alert('Функция создания товара из состава будет добавлена позже');
+        });
+      }
     }
-    if (ui.ingredientModalCreate) {
-      ui.ingredientModalCreate.addEventListener("click", () => {
-        closeIngredientPicker();
-        // Можно открыть модальное окно создания товара
-        alert('Функция создания товара из состава будет добавлена позже');
-      });
-    }
 
-    if (ui.baseUnitSelect) {
+    if (ui.baseUnitSelect && !isView) {
       ui.baseUnitSelect.addEventListener("change", () => {
         updatePcsLinkVisibility();
       });
@@ -7429,7 +7497,7 @@ function updateOptionGroupSelectionUi() {
 
     // ========== END INGREDIENTS ==========
 
-    // init UI after categories loaded (for edit)
+    // init UI after categories loaded (for edit/view)
     (async () => {
       await loadCatsPromise;
       await loadOptionsPromise;
@@ -7441,7 +7509,7 @@ function updateOptionGroupSelectionUi() {
       renderVariantAccordion();
       renderOptionAccordion();
       renderPhotos();
-      if (isEdit && product) {
+      if ((isEdit || isView) && product) {
         await loadIngredients();
       } else {
         // При создании нового товара инициализируем поле себестоимости состава

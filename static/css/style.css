@@ -2550,6 +2550,22 @@ input[type=number]{ -moz-appearance:textfield; }
   margin-top:8px;
 }
 
+.product-editor-view .product-photo-tools,
+.product-editor-view .chip-remove,
+.product-editor-view .chip-plus,
+.product-editor-view .img-del,
+.product-editor-view .img-drag-handle,
+.product-editor-view .option-actions,
+.product-editor-view .option-actions-inline button,
+.product-editor-view .ingredient-acc-controls .ingredient-variable-switch,
+.product-editor-view .ingredient-acc-controls .ingredient-remove-btn{
+  display:none !important;
+}
+
+.product-editor-view .img-thumb-wrapper{
+  cursor:default;
+}
+
 /* правая часть в топе */
 .product-editor-meta{
   min-width:0;
