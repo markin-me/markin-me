@@ -1774,11 +1774,60 @@ async function initAddresses() {
       const price = basePrice + optionTotal + ingredientPriceDiff;
       total += price * qty;
 
+      // Свайп-контейнер
+      const swipeContainer = document.createElement("div");
+      swipeContainer.className = "cart-swipe-container";
+      swipeContainer.setAttribute("data-cart-key", String(key || ""));
+
+      // Кнопки действий (за карточкой)
+      const swipeActions = document.createElement("div");
+      swipeActions.className = "cart-swipe-actions";
+
+      const favBtn = document.createElement("button");
+      favBtn.type = "button";
+      favBtn.className = "cart-swipe-btn cart-swipe-fav";
+      favBtn.innerHTML = '<i class="fas fa-heart"></i>';
+      favBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        // Заглушка для избранного
+        showToast("Добавлено в избранное");
+        favBtn.classList.toggle("is-active");
+        // Haptic feedback
+        if (navigator.vibrate) navigator.vibrate(10);
+        // Сбросить свайп
+        resetSwipe(swipeContainer);
+      });
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "cart-swipe-btn cart-swipe-delete";
+      deleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
+      deleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        // Haptic feedback
+        if (navigator.vibrate) navigator.vibrate(20);
+        // Удалить с анимацией
+        deleteCartItemWithAnimation(swipeContainer, product.id, key);
+      });
+
+      swipeActions.appendChild(favBtn);
+      swipeActions.appendChild(deleteBtn);
+      swipeContainer.appendChild(swipeActions);
+
+      // Основное содержимое карточки
       const row = document.createElement("div");
-      row.className = "cart-row";
+      row.className = "cart-row cart-swipe-content";
       row.setAttribute("data-product-id", String(product.id));
       row.setAttribute("data-cart-key", String(key || ""));
-      row.addEventListener("click", () => openProductDetails(product.id, { cartKey: key }));
+      row.addEventListener("click", (e) => {
+        // Не открывать если свайп активен
+        if (swipeContainer.classList.contains("is-swiped")) {
+          e.stopPropagation();
+          resetSwipe(swipeContainer);
+          return;
+        }
+        openProductDetails(product.id, { cartKey: key });
+      });
 
       const photos = safePhotos(product);
       const mainPhoto = photos[0] || "";
@@ -1868,14 +1917,292 @@ async function initAddresses() {
 
       right.appendChild(oldEl);
       right.appendChild(pr);
+
+      // Десктопные кнопки действий
+      const desktopActions = document.createElement("div");
+      desktopActions.className = "cart-desktop-actions";
+
+      const desktopFavBtn = document.createElement("button");
+      desktopFavBtn.type = "button";
+      desktopFavBtn.className = "cart-desktop-btn cart-desktop-fav";
+      desktopFavBtn.innerHTML = '<i class="fas fa-heart"></i>';
+      desktopFavBtn.title = "В избранное";
+      desktopFavBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        showToast("Добавлено в избранное");
+        desktopFavBtn.classList.toggle("is-active");
+      });
+
+      const desktopDeleteBtn = document.createElement("button");
+      desktopDeleteBtn.type = "button";
+      desktopDeleteBtn.className = "cart-desktop-btn cart-desktop-delete";
+      desktopDeleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
+      desktopDeleteBtn.title = "Удалить";
+      desktopDeleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        deleteCartItemWithAnimation(swipeContainer, product.id, key);
+      });
+
+      desktopActions.appendChild(desktopFavBtn);
+      desktopActions.appendChild(desktopDeleteBtn);
+      right.appendChild(desktopActions);
+
       row.appendChild(right);
 
-      listEl.appendChild(row);
+      swipeContainer.appendChild(row);
+
+      // Инициализация свайп-жестов
+      initSwipeGesture(swipeContainer, row, product.id, key);
+
+      listEl.appendChild(swipeContainer);
     });
 
     if (totalEl) totalEl.textContent = money(total);
     return { items, total };
   }
+
+  // ========== Свайп-функционал для корзины ==========
+  let currentSwipedContainer = null;
+  const SWIPE_THRESHOLD = 10; // px для начала свайпа
+  const SWIPE_ACTIONS_WIDTH = 120; // ширина зоны кнопок
+  const DELETE_THRESHOLD = 0.6; // 60% ширины для удаления
+
+  function showToast(message) {
+    // Удаляем предыдущий toast если есть
+    const existing = document.querySelector(".shop-toast");
+    if (existing) existing.remove();
+
+    const toast = document.createElement("div");
+    toast.className = "shop-toast";
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    // Показываем
+    requestAnimationFrame(() => {
+      toast.classList.add("is-visible");
+    });
+
+    // Скрываем через 2 сек
+    setTimeout(() => {
+      toast.classList.remove("is-visible");
+      setTimeout(() => toast.remove(), 300);
+    }, 2000);
+  }
+
+  function resetSwipe(container, animate = true) {
+    if (!container) return;
+    const content = container.querySelector(".cart-swipe-content");
+    if (!content) return;
+
+    if (animate) {
+      content.style.transition = "transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)";
+    }
+    content.style.transform = "translateX(0)";
+    container.classList.remove("is-swiped");
+
+    if (currentSwipedContainer === container) {
+      currentSwipedContainer = null;
+    }
+
+    if (animate) {
+      setTimeout(() => {
+        content.style.transition = "";
+      }, 300);
+    }
+  }
+
+  function resetAllSwipes() {
+    document.querySelectorAll(".cart-swipe-container.is-swiped").forEach(c => resetSwipe(c));
+  }
+
+  function deleteCartItemWithAnimation(container, productId, cartKey) {
+    if (!container) return;
+
+    const content = container.querySelector(".cart-swipe-content");
+    if (content) {
+      content.style.transition = "transform 0.3s ease-out";
+      content.style.transform = "translateX(-100%)";
+    }
+
+    container.style.transition = "height 0.3s ease-out, opacity 0.3s ease-out, margin 0.3s ease-out, padding 0.3s ease-out";
+    container.style.overflow = "hidden";
+
+    setTimeout(() => {
+      const height = container.offsetHeight;
+      container.style.height = height + "px";
+
+      requestAnimationFrame(() => {
+        container.style.height = "0";
+        container.style.opacity = "0";
+        container.style.marginTop = "0";
+        container.style.marginBottom = "0";
+        container.style.paddingTop = "0";
+        container.style.paddingBottom = "0";
+      });
+    }, 50);
+
+    setTimeout(() => {
+      // Удаляем из корзины
+      removeFromCartByKey(cartKey, productId);
+      container.remove();
+    }, 350);
+  }
+
+  function removeFromCartByKey(cartKey, productId) {
+    const idx = state.cart.findIndex(item => {
+      if (cartKey && item.key === cartKey) return true;
+      if (!cartKey && item.id === productId && !item.key) return true;
+      return false;
+    });
+    if (idx !== -1) {
+      state.cart.splice(idx, 1);
+      saveCart();
+      renderProducts();
+      updateCartBadge();
+
+      // Обновляем footer и кнопку оформления
+      const items = cartItemsResolved();
+      if (openCartSheetCtx) {
+        if (openCartSheetCtx.footerEl) {
+          openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
+        }
+        if (openCartSheetCtx.checkoutBtn) {
+          openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
+          const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
+          if (tspan) tspan.textContent = money(items.reduce((sum, i) => {
+            const base = Number(i.variant_unit_price || i.product?.price || 0);
+            const opt = optionItemsTotal(i.option_items);
+            const ing = Number(i.ingredient_price_diff || 0);
+            return sum + (base + opt + ing) * i.qty;
+          }, 0));
+        }
+        if (openCartSheetCtx.totalEl) {
+          openCartSheetCtx.totalEl.textContent = money(items.reduce((sum, i) => {
+            const base = Number(i.variant_unit_price || i.product?.price || 0);
+            const opt = optionItemsTotal(i.option_items);
+            const ing = Number(i.ingredient_price_diff || 0);
+            return sum + (base + opt + ing) * i.qty;
+          }, 0));
+        }
+        // Если корзина пуста - показать сообщение
+        if (items.length === 0 && openCartSheetCtx.listEl) {
+          openCartSheetCtx.listEl.innerHTML = '<div class="shop-cart-empty-sheet">В корзине пусто</div>';
+        }
+      }
+
+      // Обновляем десктоп корзину
+      renderCart();
+    }
+  }
+
+  function initSwipeGesture(container, content, productId, cartKey) {
+    let startX = 0;
+    let startY = 0;
+    let currentX = 0;
+    let isDragging = false;
+    let isHorizontal = null;
+    const containerWidth = () => container.offsetWidth || 300;
+
+    function onTouchStart(e) {
+      if (e.touches.length !== 1) return;
+      
+      // Сбросить другие свайпы
+      if (currentSwipedContainer && currentSwipedContainer !== container) {
+        resetSwipe(currentSwipedContainer);
+      }
+
+      const touch = e.touches[0];
+      startX = touch.clientX;
+      startY = touch.clientY;
+      currentX = container.classList.contains("is-swiped") ? -SWIPE_ACTIONS_WIDTH : 0;
+      isDragging = false;
+      isHorizontal = null;
+      content.style.transition = "";
+    }
+
+    function onTouchMove(e) {
+      if (e.touches.length !== 1) return;
+
+      const touch = e.touches[0];
+      const deltaX = touch.clientX - startX;
+      const deltaY = touch.clientY - startY;
+
+      // Определяем направление при первом движении
+      if (isHorizontal === null && (Math.abs(deltaX) > SWIPE_THRESHOLD || Math.abs(deltaY) > SWIPE_THRESHOLD)) {
+        isHorizontal = Math.abs(deltaX) > Math.abs(deltaY);
+      }
+
+      // Если вертикальное движение - не перехватываем
+      if (isHorizontal === false) return;
+
+      // Если горизонтальное - свайпаем
+      if (isHorizontal === true) {
+        isDragging = true;
+        
+        let newX = currentX + deltaX;
+        
+        // Ограничения: не больше вправо чем 0, не больше влево чем 60% ширины
+        const maxLeft = -containerWidth() * DELETE_THRESHOLD;
+        newX = Math.max(maxLeft, Math.min(20, newX)); // небольшой bounce вправо
+        
+        content.style.transform = `translateX(${newX}px)`;
+
+        // Haptic при достижении порога удаления
+        if (newX <= maxLeft + 5 && newX > maxLeft - 5) {
+          if (navigator.vibrate) navigator.vibrate(10);
+        }
+      }
+    }
+
+    function onTouchEnd(e) {
+      if (!isDragging) return;
+
+      const touch = e.changedTouches[0];
+      const deltaX = touch.clientX - startX;
+      let finalX = currentX + deltaX;
+
+      const width = containerWidth();
+      const deleteThreshold = -width * DELETE_THRESHOLD;
+
+      content.style.transition = "transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)";
+
+      if (finalX <= deleteThreshold) {
+        // Удаляем
+        if (navigator.vibrate) navigator.vibrate(20);
+        deleteCartItemWithAnimation(container, productId, cartKey);
+      } else if (finalX < -SWIPE_ACTIONS_WIDTH / 2) {
+        // Фиксируем на кнопках
+        content.style.transform = `translateX(-${SWIPE_ACTIONS_WIDTH}px)`;
+        container.classList.add("is-swiped");
+        currentSwipedContainer = container;
+      } else {
+        // Возвращаем назад
+        content.style.transform = "translateX(0)";
+        container.classList.remove("is-swiped");
+        if (currentSwipedContainer === container) {
+          currentSwipedContainer = null;
+        }
+      }
+
+      setTimeout(() => {
+        content.style.transition = "";
+      }, 300);
+
+      isDragging = false;
+      isHorizontal = null;
+    }
+
+    content.addEventListener("touchstart", onTouchStart, { passive: true });
+    content.addEventListener("touchmove", onTouchMove, { passive: true });
+    content.addEventListener("touchend", onTouchEnd, { passive: true });
+  }
+
+  // Сброс свайпа при клике вне карточки
+  document.addEventListener("click", (e) => {
+    if (currentSwipedContainer && !currentSwipedContainer.contains(e.target)) {
+      resetSwipe(currentSwipedContainer);
+    }
+  });
 
   function renderCart() {
     if (!elCartList) return;
