@@ -1364,17 +1364,20 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       const [variants] = await db.query(
         `SELECT 
-           vg.id,
-           vg.title,
-           vg.unit_id,
-           vg.values,
-           vg.is_active,
-           vg.sort_order,
-           va.sort_order AS assignment_sort_order
-         FROM prod_variant_assignments va
-         JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
-         WHERE va.tenant_id=? AND va.product_id=? AND va.is_active=1 AND vg.is_active=1
-         ORDER BY va.sort_order ASC, vg.sort_order ASC`,
+          vg.id,
+          vg.title,
+          vg.unit_id,
+          vg.values,
+          vg.is_active,
+          vg.sort_order,
+          va.id AS assignment_id,
+          va.variant_group_id,
+          va.product_id,
+          va.sort_order AS assignment_sort_order
+        FROM prod_variant_assignments va
+        JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
+        WHERE va.tenant_id=? AND va.product_id=? AND va.is_active=1 AND vg.is_active=1
+        ORDER BY va.sort_order ASC, vg.sort_order ASC`,
         [tenantId, productId]
       );
 

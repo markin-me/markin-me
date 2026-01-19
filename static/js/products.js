@@ -397,6 +397,11 @@
     variantDraft: null,
   };
 
+  let variantPickerSavedFooterState = null;
+  let variantPickerSavedHandlers = null;
+  let optionPanelPickerSavedFooterState = null;
+  let optionPanelPickerSavedHandlers = null;
+
   // ---------------- API ----------------
 
   async function api(url, opts) {
@@ -540,6 +545,10 @@
 
   async function apiGetProductOptionAssignments(productId) {
     return api(`/api/admin/products/${productId}/option-assignments`);
+  }
+
+  async function apiGetProductVariants(productId) {
+    return api(`/api/admin/products/${productId}/variants`);
   }
 
   async function apiAddProductOptionAssignments(productId, groupIds) {
@@ -1399,6 +1408,39 @@ function buildOptionGroupPayload(formValues) {
               <div class="option-summary-price">
                 ${hasOverride ? `<s>${basePrice}</s>` : `<span>${basePrice}</span>`}
                 ${hasOverride ? `<span>${overridePrice}</span>` : ""}
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    `;
+  }
+
+  function renderVariantValuesSummary(values, tiers) {
+    const list = Array.isArray(values) ? values : [];
+    if (!list.length) {
+      return `<div class="empty-hint">Пока нет значений...</div>`;
+    }
+    const tierMap = new Map();
+    (Array.isArray(tiers) ? tiers : []).forEach((tier) => {
+      const idx = Number(tier.sort_order);
+      if (Number.isFinite(idx)) tierMap.set(idx, tier);
+    });
+    return `
+      <div class="option-summary-list">
+        ${list.map((value, idx) => {
+          const tier = tierMap.get(idx) || {};
+          const discountRaw = tier.discount_percent != null ? tier.discount_percent : (tier.discount_value || 0);
+          const discount = Number(discountRaw) || 0;
+          const metaLabel = discount > 0 ? `Скидка: ${discount}%` : "Без скидки";
+          return `
+            <div class="option-summary-row">
+              <div>
+                <div class="option-summary-title">${escapeHtml(value)}</div>
+                <div class="option-summary-meta">${metaLabel}</div>
+              </div>
+              <div class="option-summary-price">
+                <span>${discount > 0 ? `${discount}%` : ""}</span>
               </div>
             </div>
           `;
@@ -2547,24 +2589,20 @@ function updateOptionGroupSelectionUi() {
         : (tier.discount_value != null ? tier.discount_value : (tier.discount_percent || 0));
       
       return `
-        <div class="option-item-row" data-variant-item-index="${idx}">
+        <div class="option-item-row variant-item-row" data-variant-item-index="${idx}">
           <div class="option-item-col">
             <input class="control" type="text" data-variant-value="${idx}" value="${escapeHtml(value)}" placeholder="Значение" ${isVariantEditable() ? "" : "disabled"} />
           </div>
           <div class="option-item-col">
-            <label class="switch-inline">
-              <input type="radio" name="discount_type_${idx}" value="percent" ${discountType === "percent" ? "checked" : ""} ${isVariantEditable() ? "" : "disabled"} />
-              <span>Процент</span>
-            </label>
-            <label class="switch-inline">
-              <input type="radio" name="discount_type_${idx}" value="fixed" ${discountType === "fixed" ? "checked" : ""} ${isVariantEditable() ? "" : "disabled"} />
-              <span>Фикс</span>
-            </label>
+            <select class="control" data-variant-discount-type="${idx}" ${isVariantEditable() ? "" : "disabled"}>
+              <option value="percent" ${discountType === "percent" ? "selected" : ""}>Процент</option>
+              <option value="fixed" ${discountType === "fixed" ? "selected" : ""}>Фикс</option>
+            </select>
           </div>
           <div class="option-item-col">
             <input class="control" type="number" data-variant-discount="${idx}" value="${discountValue}" placeholder="0" step="0.01" min="0" ${isVariantEditable() ? "" : "disabled"} />
           </div>
-          ${isVariantEditable() ? `<button class="btn btn-icon" type="button" data-variant-remove="${idx}" title="Удалить"><i class="fas fa-times"></i></button>` : ""}
+          ${isVariantEditable() ? `<button class="option-row-remove" type="button" data-variant-remove="${idx}" title="Удалить" aria-label="Удалить вариант"><i class="fas fa-times"></i></button>` : ""}
         </div>
       `;
     }).join("");
@@ -2579,16 +2617,15 @@ function updateOptionGroupSelectionUi() {
       });
     });
     
-    variantItemsList.querySelectorAll(`input[name^="discount_type_"]`).forEach((radio) => {
-      radio.addEventListener("change", (e) => {
-        const name = radio.name;
-        const idx = Number(name.replace("discount_type_", ""));
+    variantItemsList.querySelectorAll("[data-variant-discount-type]").forEach((select) => {
+      select.addEventListener("change", () => {
+        const idx = Number(select.dataset.variantDiscountType);
         if (!state.variantDraft || !state.variantDraft.tiers) return;
         if (!state.variantDraft.tiers[idx]) {
           state.variantDraft.tiers[idx] = { sort_order: idx, discount_type: "percent", discount_value: 0 };
         }
-        state.variantDraft.tiers[idx].discount_type = radio.value;
-        // Update discount_value field based on type
+        state.variantDraft.tiers[idx].discount_type = select.value;
+        // Update discount input based on type
         const discountInput = variantItemsList.querySelector(`[data-variant-discount="${idx}"]`);
         if (discountInput && state.variantDraft.tiers[idx]) {
           const discountValue = state.variantDraft.tiers[idx].discount_type === "percent" 
@@ -2625,6 +2662,7 @@ function updateOptionGroupSelectionUi() {
         renderVariantItems(getVariantItemsSource());
       });
     });
+    refreshOpenAccordions();
   }
 
   function renderVariantAssignments(assignments) {
@@ -2638,10 +2676,141 @@ function updateOptionGroupSelectionUi() {
         </div>
       `;
     }).join("");
+    refreshOpenAccordions();
   }
 
   function renderVariantHeader() {
     // TODO: Implement variant header with tabs if needed
+  }
+
+  function restoreOptionPanelPickerFooter() {
+    const footer = $("#productInfoFooter");
+    const footerView = $("#productFooterView");
+    const footerEditMode = $("#productFooterEditMode");
+    const cancelBtn = $("#productFooterCancelBtn");
+    const saveBtn = $("#productFooterSaveBtn");
+    const deleteBtn = $("#productFooterDeleteEditBtn");
+    const moreBtn = $("#productFooterMoreEditBtn");
+    if (!footer || !footerView || !footerEditMode || !cancelBtn || !saveBtn || !optionPanelPickerSavedFooterState) return;
+
+    if (optionPanelPickerSavedFooterState.footerHidden) {
+      footer.classList.add("hidden");
+    } else {
+      footer.classList.remove("hidden");
+    }
+    if (optionPanelPickerSavedFooterState.viewHidden) {
+      footerView.classList.add("hidden");
+    } else {
+      footerView.classList.remove("hidden");
+    }
+    if (optionPanelPickerSavedFooterState.editHidden) {
+      footerEditMode.classList.add("hidden");
+    } else {
+      footerEditMode.classList.remove("hidden");
+    }
+
+    if (deleteBtn) {
+      if (optionPanelPickerSavedFooterState.deleteBtnHidden) {
+        deleteBtn.classList.add("hidden");
+      } else {
+        deleteBtn.classList.remove("hidden");
+      }
+    }
+    if (moreBtn) {
+      if (optionPanelPickerSavedFooterState.moreBtnHidden) {
+        moreBtn.classList.add("hidden");
+      } else {
+        moreBtn.classList.remove("hidden");
+      }
+    }
+
+    if (optionPanelPickerSavedFooterState.cancelBtnIsFullwidth) {
+      cancelBtn.classList.add("is-fullwidth");
+    } else {
+      cancelBtn.classList.remove("is-fullwidth");
+    }
+    if (optionPanelPickerSavedFooterState.cancelBtnIsConfirm) {
+      cancelBtn.classList.add("is-confirm");
+    } else {
+      cancelBtn.classList.remove("is-confirm");
+    }
+    if (cancelBtn.dataset.pickerOriginalHtml) {
+      cancelBtn.innerHTML = cancelBtn.dataset.pickerOriginalHtml;
+      delete cancelBtn.dataset.pickerOriginalHtml;
+    }
+
+    if (optionPanelPickerSavedHandlers) {
+      cancelBtn.onclick = optionPanelPickerSavedHandlers.cancel;
+      saveBtn.onclick = optionPanelPickerSavedHandlers.save;
+    }
+
+    optionPanelPickerSavedFooterState = null;
+    optionPanelPickerSavedHandlers = null;
+  }
+
+  function restoreVariantPickerFooter() {
+    const footer = $("#productInfoFooter");
+    const footerView = $("#productFooterView");
+    const footerEditMode = $("#productFooterEditMode");
+    const cancelBtn = $("#productFooterCancelBtn");
+    const saveBtn = $("#productFooterSaveBtn");
+    const deleteBtn = $("#productFooterDeleteEditBtn");
+    const moreBtn = $("#productFooterMoreEditBtn");
+    if (!footer || !footerView || !footerEditMode || !cancelBtn || !saveBtn || !variantPickerSavedFooterState) return;
+
+    if (variantPickerSavedFooterState.footerHidden) {
+      footer.classList.add("hidden");
+    } else {
+      footer.classList.remove("hidden");
+    }
+    if (variantPickerSavedFooterState.viewHidden) {
+      footerView.classList.add("hidden");
+    } else {
+      footerView.classList.remove("hidden");
+    }
+    if (variantPickerSavedFooterState.editHidden) {
+      footerEditMode.classList.add("hidden");
+    } else {
+      footerEditMode.classList.remove("hidden");
+    }
+
+    if (deleteBtn) {
+      if (variantPickerSavedFooterState.deleteBtnHidden) {
+        deleteBtn.classList.add("hidden");
+      } else {
+        deleteBtn.classList.remove("hidden");
+      }
+    }
+    if (moreBtn) {
+      if (variantPickerSavedFooterState.moreBtnHidden) {
+        moreBtn.classList.add("hidden");
+      } else {
+        moreBtn.classList.remove("hidden");
+      }
+    }
+
+    if (variantPickerSavedFooterState.cancelBtnIsFullwidth) {
+      cancelBtn.classList.add("is-fullwidth");
+    } else {
+      cancelBtn.classList.remove("is-fullwidth");
+    }
+    if (variantPickerSavedFooterState.cancelBtnIsConfirm) {
+      cancelBtn.classList.add("is-confirm");
+    } else {
+      cancelBtn.classList.remove("is-confirm");
+    }
+    if (cancelBtn.dataset.pickerOriginalHtml) {
+      cancelBtn.innerHTML = cancelBtn.dataset.pickerOriginalHtml;
+      delete cancelBtn.dataset.pickerOriginalHtml;
+    }
+
+    if (variantPickerSavedHandlers) {
+      cancelBtn.onclick = variantPickerSavedHandlers.cancel;
+      saveBtn.onclick = variantPickerSavedHandlers.save;
+    }
+
+    variantPickerSavedFooterState = null;
+    variantPickerSavedHandlers = null;
   }
 
   async function openOptionGroupFromProduct(groupId, { closeModal } = {}) {
@@ -2790,6 +2959,7 @@ function updateOptionGroupSelectionUi() {
     if (footerSaveBtn) delete footerSaveBtn.dataset.pickerType;
     delete window._closeOptionPickerFn;
     delete window._saveOptionPickerFn;
+    restoreOptionPanelPickerFooter();
     
     if (isSameSelection(state.optionPanel.pickerSelection, state.optionPanel.pickerInitialSelection)) {
       // close picker silently if nothing changed
@@ -2892,10 +3062,48 @@ function updateOptionGroupSelectionUi() {
     renderOptionPickerTabs();
     renderOptionPickerList();
     renderOptionHeader();
+    showProductFooterEdit();
     
     // Switch footer to picker mode
+    const footer = $("#productInfoFooter");
+    const footerView = $("#productFooterView");
+    const footerEditMode = $("#productFooterEditMode");
     const footerCancelBtn = $("#productFooterCancelBtn");
     const footerSaveBtn = $("#productFooterSaveBtn");
+    const footerDeleteBtn = $("#productFooterDeleteEditBtn");
+    const footerMoreBtn = $("#productFooterMoreEditBtn");
+    if (footer && footerView && footerEditMode && footerCancelBtn && footerSaveBtn) {
+      if (!optionPanelPickerSavedFooterState) {
+        optionPanelPickerSavedFooterState = {
+          footerHidden: footer.classList.contains("hidden"),
+          viewHidden: footerView.classList.contains("hidden"),
+          editHidden: footerEditMode.classList.contains("hidden"),
+          deleteBtnHidden: footerDeleteBtn ? footerDeleteBtn.classList.contains("hidden") : false,
+          moreBtnHidden: footerMoreBtn ? footerMoreBtn.classList.contains("hidden") : false,
+          cancelBtnIsConfirm: footerCancelBtn.classList.contains("is-confirm"),
+          cancelBtnIsFullwidth: footerCancelBtn.classList.contains("is-fullwidth"),
+        };
+        optionPanelPickerSavedHandlers = {
+          cancel: footerCancelBtn.onclick,
+          save: footerSaveBtn.onclick,
+        };
+      }
+
+      footer.classList.remove("hidden");
+      footerView.classList.add("hidden");
+      footerEditMode.classList.remove("hidden");
+      if (footerDeleteBtn) footerDeleteBtn.classList.add("hidden");
+      if (footerMoreBtn) footerMoreBtn.classList.add("hidden");
+
+      footerCancelBtn.classList.remove("is-confirm");
+      footerCancelBtn.classList.add("is-fullwidth");
+      if (!footerCancelBtn.dataset.pickerOriginalHtml) {
+        footerCancelBtn.dataset.pickerOriginalHtml = footerCancelBtn.innerHTML;
+      }
+      footerCancelBtn.textContent = "Отменить";
+      footerCancelBtn.title = "Отменить";
+      footerCancelBtn.setAttribute("aria-label", "Отменить");
+    }
     if (footerCancelBtn) {
       footerCancelBtn.dataset.pickerType = "option";
     }
@@ -2904,12 +3112,11 @@ function updateOptionGroupSelectionUi() {
     }
     window._closeOptionPickerFn = () => {
       // Clear picker footer data attributes
-      const footerCancelBtn = $("#productFooterCancelBtn");
-      const footerSaveBtn = $("#productFooterSaveBtn");
       if (footerCancelBtn) delete footerCancelBtn.dataset.pickerType;
       if (footerSaveBtn) delete footerSaveBtn.dataset.pickerType;
       delete window._closeOptionPickerFn;
       delete window._saveOptionPickerFn;
+      restoreOptionPanelPickerFooter();
       
       state.optionPanel.level = "group";
       renderOptionGroupLevel();
@@ -2917,7 +3124,6 @@ function updateOptionGroupSelectionUi() {
     window._saveOptionPickerFn = async () => {
       await applyOptionPickerSelection();
     };
-    showProductFooterEdit();
   }
 
   function showOptionGroupDetails(details, { mode }) {
@@ -3105,24 +3311,57 @@ function updateOptionGroupSelectionUi() {
     renderVariantPickerTabs();
     renderVariantPickerList();
     renderVariantHeader();
+    showProductFooterEdit();
     
     // Switch footer to picker mode
+    const footer = $("#productInfoFooter");
+    const footerView = $("#productFooterView");
+    const footerEditMode = $("#productFooterEditMode");
     const footerCancelBtn = $("#productFooterCancelBtn");
     const footerSaveBtn = $("#productFooterSaveBtn");
-    if (footerCancelBtn) {
-      footerCancelBtn.dataset.pickerType = "variant";
+    const footerDeleteBtn = $("#productFooterDeleteEditBtn");
+    const footerMoreBtn = $("#productFooterMoreEditBtn");
+    if (footer && footerView && footerEditMode && footerCancelBtn && footerSaveBtn) {
+      if (!variantPickerSavedFooterState) {
+        variantPickerSavedFooterState = {
+          footerHidden: footer.classList.contains("hidden"),
+          viewHidden: footerView.classList.contains("hidden"),
+          editHidden: footerEditMode.classList.contains("hidden"),
+          deleteBtnHidden: footerDeleteBtn ? footerDeleteBtn.classList.contains("hidden") : false,
+          moreBtnHidden: footerMoreBtn ? footerMoreBtn.classList.contains("hidden") : false,
+          cancelBtnIsConfirm: footerCancelBtn.classList.contains("is-confirm"),
+          cancelBtnIsFullwidth: footerCancelBtn.classList.contains("is-fullwidth"),
+        };
+        variantPickerSavedHandlers = {
+          cancel: footerCancelBtn.onclick,
+          save: footerSaveBtn.onclick,
+        };
+      }
+
+      footer.classList.remove("hidden");
+      footerView.classList.add("hidden");
+      footerEditMode.classList.remove("hidden");
+      if (footerDeleteBtn) footerDeleteBtn.classList.add("hidden");
+      if (footerMoreBtn) footerMoreBtn.classList.add("hidden");
+
+      footerCancelBtn.classList.remove("is-confirm");
+      footerCancelBtn.classList.add("is-fullwidth");
+      if (!footerCancelBtn.dataset.pickerOriginalHtml) {
+        footerCancelBtn.dataset.pickerOriginalHtml = footerCancelBtn.innerHTML;
+      }
+      footerCancelBtn.textContent = "Отменить";
+      footerCancelBtn.title = "Отменить";
+      footerCancelBtn.setAttribute("aria-label", "Отменить");
     }
-    if (footerSaveBtn) {
-      footerSaveBtn.dataset.pickerType = "variant";
-    }
+    if (footerCancelBtn) footerCancelBtn.dataset.pickerType = "variant";
+    if (footerSaveBtn) footerSaveBtn.dataset.pickerType = "variant";
     window._closeVariantPickerFn = () => {
       // Clear picker footer data attributes
-      const footerCancelBtn = $("#productFooterCancelBtn");
-      const footerSaveBtn = $("#productFooterSaveBtn");
       if (footerCancelBtn) delete footerCancelBtn.dataset.pickerType;
       if (footerSaveBtn) delete footerSaveBtn.dataset.pickerType;
       delete window._closeVariantPickerFn;
       delete window._saveVariantPickerFn;
+      restoreVariantPickerFooter();
       
       state.variantPanel.level = "group";
       renderVariantGroupLevel();
@@ -3130,7 +3369,6 @@ function updateOptionGroupSelectionUi() {
     window._saveVariantPickerFn = async () => {
       await applyVariantPickerSelection();
     };
-    showProductFooterEdit();
   }
 
   function renderVariantPickerTabs() {
@@ -3169,6 +3407,7 @@ function updateOptionGroupSelectionUi() {
     if (footerSaveBtn) delete footerSaveBtn.dataset.pickerType;
     delete window._closeVariantPickerFn;
     delete window._saveVariantPickerFn;
+    restoreVariantPickerFooter();
     
     if (isSameSelection(state.variantPanel.pickerSelection, state.variantPanel.pickerInitialSelection)) {
       // close picker silently if nothing changed
@@ -3302,14 +3541,70 @@ function updateOptionGroupSelectionUi() {
     }
 
     if (state.selectedVariantGroupId) {
-      // TODO: Implement edit mode save for variants
-      state.variantPanel.mode = "view";
-      state.variantPanel.itemsDirty = false;
-      state.variantDraft = null;
-      state.variantPanel.snapshotData = null;
-      showProductFooterView();
-      renderVariantGroupLevel();
-      return;
+      if (state.variantPanel.mode !== "edit") return;
+      const groupId = state.selectedVariantGroupId;
+      const values = state.variantDraft?.group?.values || [];
+      const tiers = state.variantDraft?.tiers || [];
+      const tiersPayload = values.map((value, idx) => {
+        const tier = tiers.find(t => Number(t.sort_order) === idx) || { discount_type: "percent", discount_percent: 0 };
+        const discountType = tier.discount_type || "percent";
+        const discountValue = discountType === "percent" 
+          ? (tier.discount_percent != null ? tier.discount_percent : (tier.discount_value || 0))
+          : (tier.discount_value != null ? tier.discount_value : (tier.discount_percent || 0));
+        return {
+          id: tier.id,
+          sort_order: idx,
+          min_quantity: tier.min_quantity ?? 1,
+          discount_percent: discountType === "percent" ? discountValue : 0,
+        };
+      });
+      const existingTierIds = new Set((state.variantGroupDetails?.tiers || [])
+        .map((t) => Number(t.id))
+        .filter(Number.isFinite));
+      const payloadTierIds = new Set(tiersPayload.map((t) => Number(t.id)).filter(Number.isFinite));
+      const deleteTierIds = Array.from(existingTierIds).filter((id) => !payloadTierIds.has(id));
+
+      const existingAssignments = state.variantGroupDetails?.assignments || [];
+      const currentProductIds = new Set(
+        (state.variantDraft?.assignments || [])
+          .map((a) => Number(a.assign_id ?? a.product_id ?? a.id))
+          .filter(Number.isFinite)
+      );
+      const existingProductIds = new Set(
+        existingAssignments.map((a) => Number(a.product_id ?? a.assign_id ?? a.id)).filter(Number.isFinite)
+      );
+      const toAdd = Array.from(currentProductIds).filter((id) => !existingProductIds.has(id));
+      const toRemove = existingAssignments.filter((a) => {
+        const productId = Number(a.product_id ?? a.assign_id ?? a.id);
+        return Number.isFinite(productId) && !currentProductIds.has(productId);
+      });
+
+      try {
+        await apiPatchVariantGroup(groupId, { ...payload, values });
+        await apiSaveVariantGroupTiers(groupId, { tiers: tiersPayload, delete_ids: deleteTierIds });
+        if (toAdd.length) {
+          await apiAddVariantGroupAssignments(groupId, toAdd);
+        }
+        for (const assignment of toRemove) {
+          if (assignment.id) {
+            await apiDeleteVariantAssignment(assignment.id);
+          }
+        }
+
+        await loadVariantGroups();
+        await loadVariantGroupDetails(groupId);
+        renderVariantGroupsList();
+        state.variantDraft = null;
+        state.variantPanel.itemsDirty = false;
+        state.variantPanel.snapshotData = null;
+        showVariantGroupDetails(state.variantGroupDetails, { mode: "view" });
+        return;
+      } catch (e) {
+        const message = e && e.message ? e.message : "Не удалось сохранить вариант.";
+        showToast(message);
+        console.error("Error saving variant group:", e);
+        return;
+      }
     }
   }
 
@@ -3762,6 +4057,7 @@ function updateOptionGroupSelectionUi() {
     productInfo && productInfo.classList.add("hidden");
     categoryInfo && categoryInfo.classList.add("hidden");
     optionGroupInfo && optionGroupInfo.classList.add("hidden");
+    variantGroupInfo && variantGroupInfo.classList.add("hidden");
     if (productInfoHeader) productInfoHeader.classList.add("hidden");
     setHeaderMode("product");
     if (productEmpty) productEmpty.classList.toggle("hidden", showCategory || showOption);
@@ -4248,6 +4544,9 @@ function updateOptionGroupSelectionUi() {
       activePhotoIdx: initialPhotos.length > 0 ? 0 : -1,
       optionGroups: new Set(),
       initialOptionGroups: new Set(),
+      variantGroupId: null,
+      initialVariantGroupId: null,
+      initialVariantAssignments: [],
     };
 
     // Initialize draftIngredients early (used in editing state)
@@ -4278,6 +4577,28 @@ function updateOptionGroupSelectionUi() {
         draft.optionGroups.add(Number(a.group_id));
         draft.initialOptionGroups.add(Number(a.group_id));
       });
+    })();
+
+    const loadVariantsPromise = (async () => {
+      await loadVariantGroups();
+      if (!isEdit || !product) return;
+      const res = await apiGetProductVariants(product.id);
+      const arr = Array.isArray(res.data) ? res.data : [];
+      draft.initialVariantAssignments = arr
+        .map((v) => ({
+          assignment_id: Number(v.assignment_id),
+          group_id: Number(v.id),
+        }))
+        .filter((v) => Number.isFinite(v.assignment_id) && Number.isFinite(v.group_id));
+      const first = arr[0];
+      const firstId = first ? Number(first.id) : null;
+      if (Number.isFinite(firstId)) {
+        draft.variantGroupId = firstId;
+        draft.initialVariantGroupId = firstId;
+      } else {
+        draft.variantGroupId = null;
+        draft.initialVariantGroupId = null;
+      }
     })();
 
     // Обработчик клавиатуры для навигации фото
@@ -4378,6 +4699,7 @@ function updateOptionGroupSelectionUi() {
               } else {
                 // Используем модальное окно - создаём Promise для ожидания ответа пользователя
                 const modalPromise = new Promise((resolve) => {
+                  let resolved = false;
                   window.AppModal.open({
                     title: "Пересчитать себестоимость?",
                     content: `
@@ -4391,12 +4713,14 @@ function updateOptionGroupSelectionUi() {
                     saveText: "Пересчитать",
                     cancelText: "Оставить текущую",
                     onSave: async () => {
+                      resolved = true;
                       resolve(true);
                       return true;
                     },
-                    onCancel: () => {
-                      resolve(false);
-                      return true;
+                    onClose: () => {
+                      if (!resolved) {
+                        resolve(false);
+                      }
                     },
                   });
                 });
@@ -4444,6 +4768,7 @@ function updateOptionGroupSelectionUi() {
               } else {
                 // Используем модальное окно - создаём Promise для ожидания ответа пользователя
                 const modalPromise = new Promise((resolve) => {
+                  let resolved = false;
                   window.AppModal.open({
                     title: "Пересчитать цену?",
                     content: `
@@ -4457,12 +4782,14 @@ function updateOptionGroupSelectionUi() {
                     saveText: "Пересчитать",
                     cancelText: "Оставить текущую",
                     onSave: async () => {
+                      resolved = true;
                       resolve(true);
                       return true;
                     },
-                    onCancel: () => {
-                      resolve(false);
-                      return true;
+                    onClose: () => {
+                      if (!resolved) {
+                        resolve(false);
+                      }
                     },
                   });
                 });
@@ -4550,6 +4877,34 @@ function updateOptionGroupSelectionUi() {
             }
           } catch (e) {
             console.error('Failed to save options', e);
+            // Не критично, продолжаем
+          }
+
+          // Сохранение варианта (одна группа на товар)
+          try {
+            const selectedVariantId = Number(draft.variantGroupId);
+            const hasSelectedVariant = Number.isFinite(selectedVariantId) && selectedVariantId > 0;
+            const initialAssignments = Array.isArray(draft.initialVariantAssignments) ? draft.initialVariantAssignments : [];
+            const initialId = Number(draft.initialVariantGroupId);
+            const hasInitial = Number.isFinite(initialId) && initialId > 0;
+            const needsSync = isEdit && ((hasSelectedVariant ? selectedVariantId !== initialId : hasInitial) || initialAssignments.length > 1);
+
+            if (isEdit) {
+              if (needsSync) {
+                for (const assignment of initialAssignments) {
+                  if (Number.isFinite(assignment.assignment_id)) {
+                    await apiDeleteVariantAssignment(assignment.assignment_id);
+                  }
+                }
+                if (hasSelectedVariant) {
+                  await apiAddVariantGroupAssignments(selectedVariantId, [productId]);
+                }
+              }
+            } else if (hasSelectedVariant) {
+              await apiAddVariantGroupAssignments(selectedVariantId, [productId]);
+            }
+          } catch (e) {
+            console.error('Failed to save variants', e);
             // Не критично, продолжаем
           }
 
@@ -4823,6 +5178,8 @@ function updateOptionGroupSelectionUi() {
       catModal: $("#peCatModal", wrapper),
       catClose: $("#peCatClose", wrapper),
       catList: $("#peCatList", wrapper),
+      variantAccordion: $("#peVariantAccordion", wrapper),
+      variantManageBtn: $("#peVariantManageBtn", wrapper),
       optionAccordion: $("#peOptionAccordion", wrapper),
       optionManageBtn: $("#peOptionManageBtn", wrapper),
       optionBackdrop: $("#peOptionBackdrop", wrapper),
@@ -5225,6 +5582,390 @@ function updateOptionGroupSelectionUi() {
     let optionPickerSavedFooterState = null;
     let optionPickerSavedHandlers = null;
     const optionDetailsCache = new Map();
+
+    let productVariantPickerSelection = null;
+    let productVariantPickerSavedFooterState = null;
+    let productVariantPickerSavedHandlers = null;
+    const variantDetailsCache = new Map();
+
+    async function refreshProductVariants(productId) {
+      if (!productId) return;
+      const res = await apiGetProductVariants(productId);
+      const arr = Array.isArray(res.data) ? res.data : [];
+      draft.initialVariantAssignments = arr
+        .map((v) => ({
+          assignment_id: Number(v.assignment_id),
+          group_id: Number(v.id),
+        }))
+        .filter((v) => Number.isFinite(v.assignment_id) && Number.isFinite(v.group_id));
+      const first = arr[0];
+      const firstId = first ? Number(first.id) : null;
+      if (Number.isFinite(firstId)) {
+        draft.variantGroupId = firstId;
+        draft.initialVariantGroupId = firstId;
+      } else {
+        draft.variantGroupId = null;
+        draft.initialVariantGroupId = null;
+      }
+    }
+
+    function restoreProductVariantPickerFooter() {
+      const footer = $("#productInfoFooter");
+      const footerView = $("#productFooterView");
+      const footerEditMode = $("#productFooterEditMode");
+      const cancelBtn = $("#productFooterCancelBtn");
+      const saveBtn = $("#productFooterSaveBtn");
+      const deleteBtn = $("#productFooterDeleteEditBtn");
+      const moreBtn = $("#productFooterMoreEditBtn");
+      if (!footer || !footerView || !footerEditMode || !cancelBtn || !saveBtn || !productVariantPickerSavedFooterState) return;
+
+      if (productVariantPickerSavedFooterState.footerHidden) {
+        footer.classList.add("hidden");
+      } else {
+        footer.classList.remove("hidden");
+      }
+      if (productVariantPickerSavedFooterState.viewHidden) {
+        footerView.classList.add("hidden");
+      } else {
+        footerView.classList.remove("hidden");
+      }
+      if (productVariantPickerSavedFooterState.editHidden) {
+        footerEditMode.classList.add("hidden");
+      } else {
+        footerEditMode.classList.remove("hidden");
+      }
+
+      if (deleteBtn) {
+        if (productVariantPickerSavedFooterState.deleteBtnHidden) {
+          deleteBtn.classList.add("hidden");
+        } else {
+          deleteBtn.classList.remove("hidden");
+        }
+      }
+      if (moreBtn) {
+        if (productVariantPickerSavedFooterState.moreBtnHidden) {
+          moreBtn.classList.add("hidden");
+        } else {
+          moreBtn.classList.remove("hidden");
+        }
+      }
+
+      if (productVariantPickerSavedFooterState.cancelBtnIsFullwidth) {
+        cancelBtn.classList.add("is-fullwidth");
+      } else {
+        cancelBtn.classList.remove("is-fullwidth");
+      }
+      if (productVariantPickerSavedFooterState.cancelBtnIsConfirm) {
+        cancelBtn.classList.add("is-confirm");
+      } else {
+        cancelBtn.classList.remove("is-confirm");
+      }
+      if (cancelBtn.dataset.pickerOriginalHtml) {
+        cancelBtn.innerHTML = cancelBtn.dataset.pickerOriginalHtml;
+        delete cancelBtn.dataset.pickerOriginalHtml;
+      }
+
+      if (productVariantPickerSavedHandlers) {
+        cancelBtn.onclick = productVariantPickerSavedHandlers.cancel;
+        saveBtn.onclick = productVariantPickerSavedHandlers.save;
+      }
+
+      productVariantPickerSavedFooterState = null;
+      productVariantPickerSavedHandlers = null;
+    }
+
+    function closeProductVariantPicker() {
+      productVariantPickerSelection = null;
+      const productInfoPanel = $("#productInfoPanel");
+      if (productInfoPanel) {
+        const existingPicker = productInfoPanel.querySelector(".picker-overlay");
+        if (existingPicker) {
+          existingPicker.remove();
+        }
+      }
+
+      const cancelBtn = $("#productFooterCancelBtn");
+      const saveBtn = $("#productFooterSaveBtn");
+      if (cancelBtn) delete cancelBtn.dataset.pickerType;
+      if (saveBtn) delete saveBtn.dataset.pickerType;
+      delete window._closeVariantPickerFn;
+      delete window._saveVariantPickerFn;
+      restoreProductVariantPickerFooter();
+    }
+
+    async function openProductVariantPicker() {
+      if (!state.variantGroups.length) {
+        await loadVariantGroups();
+      }
+      if (productVariantPickerSelection == null) {
+        productVariantPickerSelection = draft.variantGroupId;
+      }
+
+      const pickerOverlay = document.createElement("div");
+      pickerOverlay.className = "picker-overlay";
+
+      const pickerContent = document.createElement("div");
+      pickerContent.className = "picker-overlay-content";
+
+      pickerContent.innerHTML = `
+        <div class="picker-overlay-header">
+          <div class="panel-title">Варианты</div>
+        </div>
+        <div class="picker-overlay-body">
+          <div class="info-card">
+            <div class="option-picker-search" style="margin-bottom: 16px;">
+              <input class="control" id="variantPickerSearchInput" type="search" placeholder="Поиск по названию" />
+            </div>
+            <div class="option-picker-list" id="variantPickerListContent"></div>
+          </div>
+        </div>
+      `;
+
+      pickerOverlay.appendChild(pickerContent);
+
+      const searchInput = pickerContent.querySelector("#variantPickerSearchInput");
+      const listContent = pickerContent.querySelector("#variantPickerListContent");
+
+      function renderList() {
+        const query = String(searchInput?.value || "").trim().toLowerCase();
+        const baseUnitId = Number(ui.baseUnitSelect?.value || 0);
+        if (!Number.isFinite(baseUnitId) || baseUnitId <= 0) {
+          if (listContent) {
+            listContent.innerHTML = `<div class="empty-hint">Выберите базовую единицу измерения</div>`;
+          }
+          return;
+        }
+        const groups = state.variantGroups
+          .filter((g) => g.is_active)
+          .filter((g) => !query || String(g.title || "").toLowerCase().includes(query))
+          .filter((g) => {
+            const unitId = Number(g.unit_id);
+            if (!Number.isFinite(unitId) || unitId <= 0) return false;
+            return getConversionFactor(baseUnitId, unitId) != null;
+          })
+          .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+
+        if (!listContent) return;
+        if (!groups.length) {
+          listContent.innerHTML = `<div class="empty-hint">Нет вариантов с подходящей единицей измерения</div>`;
+          return;
+        }
+        listContent.innerHTML = groups.map((g) => {
+          const selected = Number(productVariantPickerSelection) === Number(g.id);
+          const values = Array.isArray(g.values) ? g.values : [];
+          const valuesText = values.length ? values.join(", ") : "нет значений";
+          return `
+            <div class="option-picker-row ${selected ? "is-selected" : ""}" data-variant-id="${g.id}">
+              <div class="option-picker-meta">
+                <div class="options-row-title">${escapeHtml(g.title || "")}</div>
+                <div class="options-row-meta">Значения: ${escapeHtml(valuesText)}</div>
+              </div>
+              <input class="option-picker-checkbox" type="radio" name="variant-picker" ${selected ? "checked" : ""} />
+            </div>
+          `;
+        }).join("");
+
+        listContent.querySelectorAll(".option-picker-row[data-variant-id]").forEach((row) => {
+          row.addEventListener("click", () => {
+            const id = Number(row.dataset.variantId);
+            if (!Number.isFinite(id)) return;
+            productVariantPickerSelection = id;
+            renderList();
+          });
+        });
+      }
+
+      if (searchInput) {
+        searchInput.addEventListener("input", renderList);
+      }
+
+      renderList();
+
+      const productInfoPanel = $("#productInfoPanel");
+      if (productInfoPanel) {
+        const existingPicker = productInfoPanel.querySelector(".picker-overlay");
+        if (existingPicker) {
+          existingPicker.remove();
+        }
+        productInfoPanel.appendChild(pickerOverlay);
+
+        const footer = $("#productInfoFooter");
+        const footerView = $("#productFooterView");
+        const footerEditMode = $("#productFooterEditMode");
+        const cancelBtn = $("#productFooterCancelBtn");
+        const saveBtn = $("#productFooterSaveBtn");
+        const deleteBtn = $("#productFooterDeleteEditBtn");
+        const moreBtn = $("#productFooterMoreEditBtn");
+
+        if (footer && footerView && footerEditMode && cancelBtn && saveBtn) {
+          if (!productVariantPickerSavedFooterState) {
+            productVariantPickerSavedFooterState = {
+              footerHidden: footer.classList.contains("hidden"),
+              viewHidden: footerView.classList.contains("hidden"),
+              editHidden: footerEditMode.classList.contains("hidden"),
+              deleteBtnHidden: deleteBtn ? deleteBtn.classList.contains("hidden") : false,
+              moreBtnHidden: moreBtn ? moreBtn.classList.contains("hidden") : false,
+              cancelBtnIsConfirm: cancelBtn.classList.contains("is-confirm"),
+              cancelBtnIsFullwidth: cancelBtn.classList.contains("is-fullwidth"),
+            };
+            productVariantPickerSavedHandlers = {
+              cancel: cancelBtn.onclick,
+              save: saveBtn.onclick,
+            };
+          }
+
+          footer.classList.remove("hidden");
+          footerView.classList.add("hidden");
+          footerEditMode.classList.remove("hidden");
+          if (deleteBtn) deleteBtn.classList.add("hidden");
+          if (moreBtn) moreBtn.classList.add("hidden");
+
+          cancelBtn.classList.remove("is-confirm");
+          cancelBtn.classList.add("is-fullwidth");
+          if (!cancelBtn.dataset.pickerOriginalHtml) {
+            cancelBtn.dataset.pickerOriginalHtml = cancelBtn.innerHTML;
+          }
+          cancelBtn.textContent = "Отменить";
+          cancelBtn.title = "Отменить";
+          cancelBtn.setAttribute("aria-label", "Отменить");
+        }
+
+        if (cancelBtn) cancelBtn.dataset.pickerType = "variant";
+        if (saveBtn) saveBtn.dataset.pickerType = "variant";
+
+        window._closeVariantPickerFn = () => {
+          closeProductVariantPicker();
+        };
+
+        window._saveVariantPickerFn = async () => {
+          const selectedId = Number(productVariantPickerSelection);
+          const hasSelected = Number.isFinite(selectedId) && selectedId > 0;
+          if (isEdit && product && product.id) {
+            const shouldChange = hasSelected && selectedId !== Number(draft.initialVariantGroupId);
+            const shouldClear = !hasSelected && draft.initialVariantAssignments.length > 0;
+            if (shouldChange || shouldClear) {
+              for (const assignment of draft.initialVariantAssignments) {
+                if (Number.isFinite(assignment.assignment_id)) {
+                  await apiDeleteVariantAssignment(assignment.assignment_id);
+                }
+              }
+              if (hasSelected) {
+                await apiAddVariantGroupAssignments(selectedId, [product.id]);
+              }
+              await refreshProductVariants(product.id);
+            }
+          } else {
+            draft.variantGroupId = hasSelected ? selectedId : null;
+            draft.initialVariantGroupId = null;
+          }
+          renderVariantAccordion();
+          closeProductVariantPicker();
+        };
+      }
+    }
+
+    async function renderVariantAccordion() {
+      if (!ui.variantAccordion) return;
+      const groupId = Number(draft.variantGroupId);
+      if (!Number.isFinite(groupId) || groupId <= 0) {
+        ui.variantAccordion.innerHTML = `<div class="empty-hint">Вариант не выбран...</div>`;
+        return;
+      }
+      const group = state.variantGroups.find((g) => Number(g.id) === groupId);
+      if (!group) {
+        ui.variantAccordion.innerHTML = `<div class="empty-hint">Вариант не найден...</div>`;
+        return;
+      }
+      const unitLabel = getUnitLabel(group.unit_id);
+      const unitMeta = unitLabel ? `Ед.: ${unitLabel}` : "Ед.: —";
+      const details = variantDetailsCache.get(groupId);
+      const values = details?.group?.values || group.values || [];
+      const tiers = details?.tiers || details?.discount_tiers || [];
+      const itemsHtml = details ? renderVariantValuesSummary(values, tiers) : `<div class="muted">Раскройте, чтобы загрузить значения.</div>`;
+
+      ui.variantAccordion.innerHTML = `
+        <div class="acc-item" data-variant-group="${groupId}">
+          <div class="stage-item acc-trigger" role="button" tabindex="0" data-acc-trigger>
+            <span class="stage-meta stage-text">
+              <b>${escapeHtml(group.title || "")}</b>
+              <small>${escapeHtml(unitMeta)}</small>
+            </span>
+            <div class="option-actions-inline">
+              <button class="btn btn-icon btn-sm btn-ghost" type="button" data-variant-edit="${groupId}" title="Изменить" onclick="event.stopPropagation();">
+                <i class="fas fa-pen"></i>
+              </button>
+              <button class="btn btn-icon btn-sm btn-ghost" type="button" data-variant-delete="${groupId}" title="Удалить" onclick="event.stopPropagation();">
+                <i class="fas fa-trash"></i>
+              </button>
+              <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+            </div>
+          </div>
+          <div class="acc-panel" data-acc-panel>
+            <div class="acc-panel-inner">
+              ${itemsHtml}
+            </div>
+          </div>
+        </div>
+      `;
+
+      bindAccordionContainer(ui.variantAccordion);
+
+      ui.variantAccordion.querySelectorAll("[data-variant-edit]").forEach((btn) => {
+        btn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const id = Number(btn.dataset.variantEdit);
+          if (!Number.isFinite(id)) return;
+          const groupItem = state.variantGroups.find((g) => Number(g.id) === id);
+          openVariantGroupTab(id, groupItem?.title || "Вариант", { activate: true });
+        });
+      });
+
+      ui.variantAccordion.querySelectorAll("[data-variant-delete]").forEach((btn) => {
+        btn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          if (isEdit && product && product.id) {
+            for (const assignment of draft.initialVariantAssignments) {
+              if (Number.isFinite(assignment.assignment_id)) {
+                await apiDeleteVariantAssignment(assignment.assignment_id);
+              }
+            }
+            await refreshProductVariants(product.id);
+          } else {
+            draft.variantGroupId = null;
+            draft.initialVariantGroupId = null;
+            draft.initialVariantAssignments = [];
+          }
+          variantDetailsCache.delete(groupId);
+          renderVariantAccordion();
+        });
+      });
+
+      ui.variantAccordion.querySelectorAll(".acc-item").forEach((item) => {
+        const id = Number(item.dataset.variantGroup);
+        if (!Number.isFinite(id)) return;
+        const trigger = item.querySelector("[data-acc-trigger]");
+        const panel = item.querySelector("[data-acc-panel]");
+        if (!trigger || !panel) return;
+        trigger.addEventListener("click", async () => {
+          if (variantDetailsCache.has(id)) return;
+          const details = await ensureVariantGroupDetails(id);
+          if (details) variantDetailsCache.set(id, details);
+          const inner = panel.querySelector(".acc-panel-inner");
+          if (inner) {
+            inner.innerHTML = renderVariantValuesSummary(details?.group?.values || [], details?.tiers || []);
+          }
+          refreshOpenAccordions();
+        }, { once: true });
+      });
+
+      refreshOpenAccordions();
+    }
+
+    if (ui.variantManageBtn) {
+      ui.variantManageBtn.addEventListener("click", () => {
+        openProductVariantPicker();
+      });
+    }
 
     if (ui.optionManageBtn) {
       ui.optionManageBtn.addEventListener("click", () => {
@@ -6692,10 +7433,12 @@ function updateOptionGroupSelectionUi() {
     (async () => {
       await loadCatsPromise;
       await loadOptionsPromise;
+      await loadVariantsPromise;
       await loadUnits();
       await loadUnitConversions();
       await loadProductUnitLinks();
       renderCategoryChips();
+      renderVariantAccordion();
       renderOptionAccordion();
       renderPhotos();
       if (isEdit && product) {
@@ -7821,11 +8564,13 @@ function updateOptionGroupSelectionUi() {
     if (variantGroupForm) {
       variantGroupForm.addEventListener("input", () => {
         if (!state.variantDraft) state.variantDraft = { group: {}, tiers: [], assignments: [] };
-        state.variantDraft.group = getVariantGroupFormValues();
+        const values = Array.isArray(state.variantDraft.group?.values) ? state.variantDraft.group.values : [];
+        state.variantDraft.group = { ...getVariantGroupFormValues(), values };
       });
       variantGroupForm.addEventListener("change", () => {
         if (!state.variantDraft) state.variantDraft = { group: {}, tiers: [], assignments: [] };
-        state.variantDraft.group = getVariantGroupFormValues();
+        const values = Array.isArray(state.variantDraft.group?.values) ? state.variantDraft.group.values : [];
+        state.variantDraft.group = { ...getVariantGroupFormValues(), values };
       });
     }
 
@@ -8001,6 +8746,7 @@ function updateOptionGroupSelectionUi() {
   document.addEventListener("DOMContentLoaded", async () => {
     bindAccordionContainer(productsAccordion);
     bindAccordionContainer(optionGroupInfo);
+    bindAccordionContainer(variantGroupInfo);
     bindEvents();
 
     await loadUnitsManagement();

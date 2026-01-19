@@ -1558,6 +1558,13 @@ input[type=number]{ -moz-appearance:textfield; }
   display:grid;
   grid-template-columns:minmax(0, 1fr) auto auto;
 }
+.variant-item-row{
+  grid-template-columns:minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  width:100%;
+}
+.variant-item-row .option-item-col{
+  min-width:0;
+}
 .option-assignment-row{
   display:flex;
   justify-content:space-between;
@@ -1831,6 +1838,11 @@ input[type=number]{ -moz-appearance:textfield; }
 .option-row-remove:focus-visible{
   outline:2px solid #c7d2fe;
   outline-offset:2px;
+}
+.btn-ghost{
+  border:none;
+  background:transparent;
+  box-shadow:none;
 }
 .option-item-row .control.is-invalid{
   border-color:#fca5a5;

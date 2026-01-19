@@ -302,11 +302,19 @@
               qty: 1,
             }));
           return {
-            key: makeCartKey(productId, normalizedOptionItems),
+            key: makeCartKey(productId, normalizedOptionItems, [], {
+              group_id: item.variant_group_id,
+              value_index: item.variant_value_index,
+            }),
             product_id: productId,
             qty,
             option_item_ids: normalizedOptionItems.map((opt) => opt.id),
             option_items: normalizedOptionItems,
+            variant_group_id: Number(item.variant_group_id ?? null),
+            variant_value_index: Number.isFinite(Number(item.variant_value_index))
+              ? Number(item.variant_value_index)
+              : null,
+            variant_label: str(item.variant_label || ""),
           };
         })
         .filter(Boolean);
@@ -324,6 +332,9 @@
             qty,
             option_item_ids: [],
             option_items: [],
+            variant_group_id: null,
+            variant_value_index: null,
+            variant_label: "",
           };
         })
         .filter(Boolean);
@@ -347,7 +358,7 @@
     } catch {}
   }
 
-  function makeCartKey(productId, optionItemsOrIds, ingredients = []) {
+  function makeCartKey(productId, optionItemsOrIds, ingredients = [], variantSelection = null) {
     const entries = (Array.isArray(optionItemsOrIds) ? optionItemsOrIds : [])
       .map((opt) => {
         if (typeof opt === "number") return { id: opt, qty: 1 };
@@ -373,7 +384,13 @@
       .sort((a, b) => a.id - b.id);
     const ingPart = ingEntries.map((entry) => `${entry.id}x${entry.qty}`).join(",");
     
-    const keyParts = [Number(productId), optionPart || "", ingPart || ""].filter(Boolean).join(":");
+    const variantGroupId = Number(variantSelection?.group_id);
+    const variantIndex = Number(variantSelection?.value_index);
+    const variantPart = Number.isFinite(variantGroupId) && Number.isFinite(variantIndex)
+      ? `v${variantGroupId}-${variantIndex}`
+      : "";
+
+    const keyParts = [Number(productId), optionPart || "", ingPart || "", variantPart || ""].filter(Boolean).join(":");
     return keyParts;
   }
 
@@ -410,6 +427,11 @@
         option_items: Array.isArray(item.option_items) ? item.option_items : [],
         ingredients: Array.isArray(item.ingredients) ? item.ingredients : [],
         ingredient_price_diff: Number(item.ingredient_price_diff || 0),
+        variant_group_id: Number(item.variant_group_id ?? null),
+        variant_value_index: Number.isFinite(Number(item.variant_value_index))
+          ? Number(item.variant_value_index)
+          : null,
+        variant_label: str(item.variant_label || ""),
       });
     }
     return items;
@@ -1690,7 +1712,7 @@ async function initAddresses() {
 
     let total = 0;
 
-    items.forEach(({ product, qty, key, option_items: optionItems, ingredients: cartIngredients, ingredient_price_diff = 0 }) => {
+    items.forEach(({ product, qty, key, option_items: optionItems, ingredients: cartIngredients, ingredient_price_diff = 0, variant_label: variantLabel }) => {
       const old = Number(product.old_price || 0);
       const basePrice = Number(product.price || 0);
       const optionTotal = optionItemsTotal(optionItems);
@@ -1743,6 +1765,10 @@ async function initAddresses() {
       const optionText = formatOptionTitles(optionItems);
       if (optionText) {
         parts.push(optionText);
+      }
+
+      if (variantLabel) {
+        parts.push(variantLabel);
       }
       
       sub.textContent = parts.join(", ");
@@ -2216,6 +2242,7 @@ async function resolveProductVariants(productId) {
       unit_id: v.unit_id ? Number(v.unit_id) : null,
       unit_code: str(v.unit_code || ""),
       unit_title: str(v.unit_title || ""),
+      unit_short_title: str(v.unit_short_title || ""),
       values: Array.isArray(v.values) ? v.values : [],
       discount_tiers: Array.isArray(v.discount_tiers) ? v.discount_tiers : [],
     }));
@@ -2231,11 +2258,14 @@ function buildProductDetailsContent(
   selectionState,
   ingredients,
   ingredientState,
+  variants,
+  variantState,
   {
     onBack,
     mode,
     onSelectionChange,
     onIngredientChange,
+    onVariantChange,
     qtyPill,
     onQtyMinus,
     onQtyPlus,
@@ -2406,6 +2436,75 @@ function buildProductDetailsContent(
   if (shortDescText) meta.appendChild(shortDesc);
 
   scroll.appendChild(meta);
+
+  /* ================= VARIANTS (SHOP) ================= */
+  if (Array.isArray(variants) && variants.length) {
+    const variantGroup = variants[0];
+    const values = Array.isArray(variantGroup.values) ? variantGroup.values : [];
+    const unitLabel =
+      str(variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title || "").trim();
+
+    const variantWrap = document.createElement("div");
+    variantWrap.className = "shop-pd-options";
+
+    const variantTitle = document.createElement("div");
+    variantTitle.className = "shop-pd-section-title";
+    variantTitle.textContent = variantGroup.title || "Варианты";
+    variantWrap.appendChild(variantTitle);
+
+    const valuesWrap = document.createElement("div");
+    valuesWrap.className = "shop-pd-option-cards";
+    valuesWrap.style.display = "flex";
+    valuesWrap.style.gap = "8px";
+    valuesWrap.style.overflowX = "auto";
+    valuesWrap.style.flexWrap = "nowrap";
+    valuesWrap.style.paddingBottom = "4px";
+
+    const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
+    const formatValueLabel = (val) => {
+      const valueText = str(val);
+      if (!valueText) return "";
+      if (!unitLabel || hasLetters(valueText)) return valueText;
+      return `${valueText} ${unitLabel}`;
+    };
+
+    const setSelectedIndex = (idx) => {
+      variantState.selectedIndex = idx;
+      variantState.value = values[idx];
+      variantState.label = formatValueLabel(values[idx]);
+      valuesWrap.querySelectorAll("[data-variant-index]").forEach((btn) => {
+        const buttonIndex = Number(btn.dataset.variantIndex);
+        btn.classList.toggle("is-selected", buttonIndex === idx);
+      });
+      if (typeof onVariantChange === "function") {
+        onVariantChange();
+      }
+    };
+
+    values.forEach((value, idx) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shop-pd-option-card is-clickable";
+      btn.style.width = "auto";
+      btn.style.flex = "0 0 auto";
+      btn.dataset.variantIndex = String(idx);
+      btn.textContent = formatValueLabel(value);
+      if (variantState.selectedIndex === idx) {
+        btn.classList.add("is-selected");
+      }
+      btn.addEventListener("click", () => setSelectedIndex(idx));
+      valuesWrap.appendChild(btn);
+    });
+
+    variantWrap.appendChild(valuesWrap);
+    scroll.appendChild(variantWrap);
+
+    if (Number.isFinite(variantState.selectedIndex) && !variantState.label) {
+      setSelectedIndex(variantState.selectedIndex);
+    } else if (!Number.isFinite(variantState.selectedIndex) && values.length) {
+      setSelectedIndex(0);
+    }
+  }
 
   /* ================= OPTIONS (БЕЗ ИЗМЕНЕНИЙ) ================= */
 
@@ -2896,6 +2995,12 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
   const variants = await resolveProductVariants(product.id);
   const selectionState = new Map();
   const ingredientState = new Map();
+  const variantState = {
+    groupId: variants[0]?.id ?? null,
+    selectedIndex: null,
+    value: null,
+    label: "",
+  };
   
   // TODO: Интегрировать варианты в UI (отображение выбора варианта, расчет цены с учетом варианта и скидок)
   // Варианты доступны в переменной variants, но пока не отображаются в UI
@@ -2926,6 +3031,15 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
 
   const editingItem = cartKey ? getCartItemByKey(cartKey) : null;
   const editMode = !!editingItem;
+
+  if (editMode && editingItem && Number.isFinite(Number(editingItem.variant_value_index))) {
+    const targetGroupId = Number(editingItem.variant_group_id);
+    if (Number.isFinite(targetGroupId)) {
+      variantState.groupId = targetGroupId;
+    }
+    variantState.selectedIndex = Number(editingItem.variant_value_index);
+    variantState.label = str(editingItem.variant_label || "");
+  }
 
   // Restore ingredient quantities from cart if editing
   if (editMode && editingItem && Array.isArray(editingItem.ingredients)) {
@@ -3184,15 +3298,25 @@ optionGroups.forEach((group) => {
     updateActionText();
   };
 
-  const { wrap, actionBtn } = buildProductDetailsContent(product, optionGroups, selectionState, ingredients, ingredientState, {
-    onBack,
-    mode: editMode ? "edit" : "add",
-    onSelectionChange: updateActionText,
-    onIngredientChange,
-    qtyPill,
-    onQtyMinus,
-    onQtyPlus,
-  });
+  const { wrap, actionBtn } = buildProductDetailsContent(
+    product,
+    optionGroups,
+    selectionState,
+    ingredients,
+    ingredientState,
+    variants,
+    variantState,
+    {
+      onBack,
+      mode: editMode ? "edit" : "add",
+      onSelectionChange: updateActionText,
+      onIngredientChange,
+      onVariantChange: updateActionText,
+      qtyPill,
+      onQtyMinus,
+      onQtyPlus,
+    }
+  );
 
   actionBtnRef = actionBtn;
   ingredientsWrapRef = wrap.querySelector(".shop-pd-ingredients");
@@ -3205,6 +3329,15 @@ optionGroups.forEach((group) => {
   actionBtn.addEventListener("click", () => {
     const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
     const optionItemIds = selectedItems.map((item) => item.id);
+    const selectedVariantGroupId = Number(variantState.groupId);
+    const selectedVariantIndex = Number(variantState.selectedIndex);
+    const hasVariantSelection = Number.isFinite(selectedVariantGroupId) && Number.isFinite(selectedVariantIndex);
+    const variantSelection = hasVariantSelection
+      ? { group_id: selectedVariantGroupId, value_index: selectedVariantIndex }
+      : null;
+    const variantLabel = hasVariantSelection
+      ? `${str(variants?.[0]?.title || "Вариант")}: ${str(variantState.label || "")}`.trim()
+      : "";
 
     const safeQty = Math.max(1, Number(qty || 1));
 
@@ -3223,7 +3356,7 @@ optionGroups.forEach((group) => {
       }
     });
 
-    const nextKey = makeCartKey(product.id, selectedItems, ingredientQuantities);
+    const nextKey = makeCartKey(product.id, selectedItems, ingredientQuantities, variantSelection);
     
     // Рассчитываем разницу цены ингредиентов для сохранения в корзину
     const ingredientsPriceDiff = calculateIngredientPrice();
@@ -3237,6 +3370,9 @@ optionGroups.forEach((group) => {
         sameItem.qty = Number(sameItem.qty || 0) + safeQty;
         sameItem.ingredients = ingredientQuantities; // Обновляем ингредиенты с названиями
         sameItem.ingredient_price_diff = ingredientsPriceDiff || 0;
+        sameItem.variant_group_id = hasVariantSelection ? selectedVariantGroupId : null;
+        sameItem.variant_value_index = hasVariantSelection ? selectedVariantIndex : null;
+        sameItem.variant_label = variantLabel;
 
         // удаляем старую строку
         state.cart = state.cart.filter((it) => it.key !== editingItem.key);
@@ -3247,6 +3383,9 @@ optionGroups.forEach((group) => {
         editingItem.option_items = selectedItems;
         editingItem.ingredients = ingredientQuantities; // Уже содержит названия и единицы
         editingItem.ingredient_price_diff = ingredientsPriceDiff || 0;
+        editingItem.variant_group_id = hasVariantSelection ? selectedVariantGroupId : null;
+        editingItem.variant_value_index = hasVariantSelection ? selectedVariantIndex : null;
+        editingItem.variant_label = variantLabel;
         editingItem.qty = safeQty;
       }
     } else {
@@ -3256,6 +3395,9 @@ optionGroups.forEach((group) => {
         existing.qty = Number(existing.qty || 0) + safeQty;
         existing.ingredients = ingredientQuantities; // Уже содержит названия и единицы
         existing.ingredient_price_diff = ingredientsPriceDiff || 0;
+        existing.variant_group_id = hasVariantSelection ? selectedVariantGroupId : null;
+        existing.variant_value_index = hasVariantSelection ? selectedVariantIndex : null;
+        existing.variant_label = variantLabel;
       } else {
         state.cart.push({
           key: nextKey,
@@ -3265,6 +3407,9 @@ optionGroups.forEach((group) => {
           option_items: selectedItems,
           ingredients: ingredientQuantities,
           ingredient_price_diff: ingredientsPriceDiff || 0,
+          variant_group_id: hasVariantSelection ? selectedVariantGroupId : null,
+          variant_value_index: hasVariantSelection ? selectedVariantIndex : null,
+          variant_label: variantLabel,
         });
       }
     }
