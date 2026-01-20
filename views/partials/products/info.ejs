@@ -196,6 +196,12 @@
                 <span class="switch-ui" aria-hidden="true"></span>
                 <span class="switch-text">Обязательная</span>
               </label>
+
+              <label class="switch" id="optionGroupAllowVariantsWrap">
+                <input class="switch-input" type="checkbox" id="optionGroupAllowVariants" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">Варианты у пунктов</span>
+              </label>
             </div>
           </div>
         </form>
@@ -280,6 +286,13 @@
               <label class="field-label" for="variantGroupUnitId">Единица измерения</label>
               <select class="control" id="variantGroupUnitId" name="unit_id">
                 <option value="">Не выбрано</option>
+              </select>
+            </div>
+
+            <div class="option-group-select-field hidden">
+              <label class="field-label" for="variantGroupDefaultValueIndex">Вариант по умолчанию</label>
+              <select class="control" id="variantGroupDefaultValueIndex" name="default_value_index">
+                <option value="">Не выбран</option>
               </select>
             </div>
 

@@ -294,12 +294,21 @@
               title: str(opt.title || opt.name || ""),
               price: Number(opt.price || 0),
               qty: Math.max(0, Number(opt.qty || opt.quantity || 1)) || 1,
+              // Варианты опций
+              variant_group_id: opt.variant_group_id != null ? Number(opt.variant_group_id) : null,
+              variant_value_index: opt.variant_value_index != null ? Number(opt.variant_value_index) : null,
+              variant_label: str(opt.variant_label || ""),
+              variant_price_diff: Number(opt.variant_price_diff || 0),
             }))
             : normalizedOptionIds.map((id) => ({
               id,
               title: "",
               price: 0,
               qty: 1,
+              variant_group_id: null,
+              variant_value_index: null,
+              variant_label: "",
+              variant_price_diff: 0,
             }));
           // Восстанавливаем ингредиенты из сохранённых данных
           const ingredients = Array.isArray(item?.ingredients) ? item.ingredients : [];
@@ -2597,22 +2606,65 @@ function updateCartBadge() {
       const state = selectionState.get(group.id);
       if (!state) return;
       const itemsById = new Map((group.items || []).map((item) => [Number(item.id), item]));
+      
+      // Функция для получения цены с учётом варианта
+      const getPriceWithVariant = (item, itemId) => {
+        const basePrice = Number(item.price || 0);
+        const variantData = state.variantByItemId?.get(itemId);
+        if (variantData && Number.isFinite(variantData.variant_price_diff)) {
+          return basePrice + variantData.variant_price_diff;
+        }
+        return basePrice;
+      };
+      
+      // Функция для добавления данных о варианте
+      const getVariantData = (itemId) => {
+        const variantData = state.variantByItemId?.get(itemId);
+        if (variantData) {
+          return {
+            variant_group_id: variantData.variant_group_id,
+            variant_value_index: variantData.variant_value_index,
+            variant_label: variantData.variant_label || "",
+            variant_price_diff: variantData.variant_price_diff || 0,
+          };
+        }
+        return null;
+      };
+      
       if (state.type === "single") {
-        const item = itemsById.get(Number(state.selectedId));
-        if (item) selectedItems.push({ id: item.id, title: item.title, price: item.price, qty: 1 });
+        const itemId = Number(state.selectedId);
+        const item = itemsById.get(itemId);
+        if (item) {
+          const entry = { id: item.id, title: item.title, price: getPriceWithVariant(item, itemId), qty: 1 };
+          const variant = getVariantData(itemId);
+          if (variant) Object.assign(entry, variant);
+          selectedItems.push(entry);
+        }
         return;
       }
       if (state.type === "multiple_group") {
         state.selectedIds.forEach((id) => {
-          const item = itemsById.get(Number(id));
-          if (item) selectedItems.push({ id: item.id, title: item.title, price: item.price, qty: 1 });
+          const itemId = Number(id);
+          const item = itemsById.get(itemId);
+          if (item) {
+            const entry = { id: item.id, title: item.title, price: getPriceWithVariant(item, itemId), qty: 1 };
+            const variant = getVariantData(itemId);
+            if (variant) Object.assign(entry, variant);
+            selectedItems.push(entry);
+          }
         });
         return;
       }
       if (state.type === "multiple_item") {
         state.qtyById.forEach((qty, id) => {
-          const item = itemsById.get(Number(id));
-          if (item && qty > 0) selectedItems.push({ id: item.id, title: item.title, price: item.price, qty });
+          const itemId = Number(id);
+          const item = itemsById.get(itemId);
+          if (item && qty > 0) {
+            const entry = { id: item.id, title: item.title, price: getPriceWithVariant(item, itemId), qty };
+            const variant = getVariantData(itemId);
+            if (variant) Object.assign(entry, variant);
+            selectedItems.push(entry);
+          }
         });
       }
     });
@@ -2654,6 +2706,7 @@ async function resolveProductOptionGroups(productId) {
       selection_type: groupSelectionType,
       min_select: groupMinSelect,
       max_select: groupMaxSelect,
+      allow_variants: Boolean(details?.group?.allow_variants),
 
       // NEW: is_required (только для single, но храним всегда)
       is_required:
@@ -2674,13 +2727,20 @@ async function resolveProductOptionGroups(productId) {
           if (Array.isArray(arr) && arr[0]) photo = arr[0];
         } catch {}
 
+        // Варианты товара-опции (если есть)
+        const variants = Array.isArray(item.variants) ? item.variants : [];
+
         return {
           id: Number(item.id),
+          target_product_id: Number(item.target_product_id || 0),
           title: str(item.product_name || item.name || ""),
           price: getOptionItemPrice(item),
+          product_price: Number(item.product_price || 0),
           qty_min: item.qty_min ?? 1,
           qty_max: item.qty_max ?? 1,
           photo,
+          // Варианты для этого товара-опции
+          variants: variants,
         };
       }),
     });
@@ -3016,9 +3076,38 @@ function buildProductDetailsContent(
         function renderSlot() {
           slotWrap.innerHTML = "";
           const selected = findSelected();
+          const selectedId = selected ? Number(selected.id) : null;
+          
+          // Варианты выбранной опции
+          const itemVariants = selected && Array.isArray(selected.variants) ? selected.variants : [];
+          const hasVariants = itemVariants.length > 0 && itemVariants[0]?.values?.length > 0;
+          
+          // Функция для расчёта цены с учётом варианта
+          const getPriceWithVariant = () => {
+            const basePrice = Number(selected?.price || 0);
+            if (!selectedId) return basePrice;
+            const variantData = groupState.variantByItemId.get(selectedId);
+            if (variantData && Number.isFinite(variantData.variant_price_diff)) {
+              return basePrice + variantData.variant_price_diff;
+            }
+            return basePrice;
+          };
 
           const card = document.createElement("div");
           card.className = "shop-pd-option-card is-clickable";
+          if (hasVariants) {
+            card.classList.add("has-variants");
+            card.style.flexDirection = "column";
+            card.style.alignItems = "stretch";
+          }
+
+          // Основной контент карточки
+          const cardContent = document.createElement("div");
+          cardContent.className = "shop-pd-option-card-content";
+          cardContent.style.display = "flex";
+          cardContent.style.alignItems = "center";
+          cardContent.style.width = "100%";
+          cardContent.style.gap = "8px";
 
           const thumb = document.createElement(
             selected?.photo ? "img" : "div"
@@ -3026,23 +3115,47 @@ function buildProductDetailsContent(
           thumb.className = "shop-pd-option-thumb";
           if (selected?.photo) thumb.src = selected.photo;
           else thumb.textContent = "—";
-          card.appendChild(thumb);
+          cardContent.appendChild(thumb);
 
           const info = document.createElement("div");
           info.className = "shop-pd-option-info";
-          info.innerHTML = `
-            <div class="shop-pd-option-name">
-              ${selected ? str(selected.title) : "Выбрать"}
-            </div>
-            ${
-              selected
-                ? `<div class="shop-pd-option-price">${money(
-                    selected.price || 0
-                  )}</div>`
-                : ""
+          info.style.flex = "1";
+          info.style.minWidth = "0";
+          
+          const nameEl = document.createElement("div");
+          nameEl.className = "shop-pd-option-name";
+          nameEl.textContent = selected ? str(selected.title) : "Выбрать";
+          info.appendChild(nameEl);
+          
+          // Лейбл выбранного варианта
+          let variantLabelEl = null;
+          if (selected && hasVariants) {
+            variantLabelEl = document.createElement("div");
+            variantLabelEl.className = "shop-pd-option-variant-label";
+            variantLabelEl.style.fontSize = "11px";
+            variantLabelEl.style.color = "var(--text-muted, #888)";
+            variantLabelEl.style.marginTop = "2px";
+            const savedVariant = groupState.variantByItemId.get(selectedId);
+            if (savedVariant && savedVariant.variant_label) {
+              variantLabelEl.textContent = savedVariant.variant_label;
+              variantLabelEl.style.display = "block";
+            } else {
+              variantLabelEl.style.display = "none";
             }
-          `;
-          card.appendChild(info);
+            info.appendChild(variantLabelEl);
+          }
+          
+          const priceEl = document.createElement("div");
+          priceEl.className = "shop-pd-option-price";
+          if (selected) {
+            priceEl.textContent = money(getPriceWithVariant());
+          }
+          info.appendChild(priceEl);
+          
+          cardContent.appendChild(info);
+
+          // ВАЖНО: для single шестерёнка НЕ должна быть на выбранной карточке.
+          // Её показываем только внутри списка после "Изменить".
 
           const edit = document.createElement("button");
           edit.type = "button";
@@ -3053,7 +3166,8 @@ function buildProductDetailsContent(
             openList();
           });
 
-          card.appendChild(edit);
+          cardContent.appendChild(edit);
+          card.appendChild(cardContent);
           card.addEventListener("click", openList);
           slotWrap.appendChild(card);
         }
@@ -3080,16 +3194,20 @@ function buildProductDetailsContent(
         // =================================================================
 
         (group.items || []).forEach((item) => {
+          const itemId = Number(item.id);
+          const allowVariants = Boolean(group.allow_variants);
+          const itemVariants = Array.isArray(item.variants) ? item.variants : [];
+          const hasVariants = allowVariants && itemVariants.length > 0 && itemVariants[0]?.values?.length > 0;
+
           const card = document.createElement("div");
           card.className = "shop-pd-option-card is-clickable";
-          card.addEventListener("click", () => {
-            groupState.selectedId = Number(item.id);
-            renderSlot();
-            closeList();
-            if (onSelectionChange) onSelectionChange();
-          });
+          if (hasVariants) card.classList.add("has-variants");
 
-          card.innerHTML = `
+          // content row
+          const row = document.createElement("div");
+          row.className = "shop-pd-option-card-content";
+
+          row.innerHTML = `
             ${
               item.photo
                 ? `<img class="shop-pd-option-thumb" src="${item.photo}">`
@@ -3097,9 +3215,211 @@ function buildProductDetailsContent(
             }
             <div class="shop-pd-option-info">
               <div class="shop-pd-option-name">${str(item.title)}</div>
+              ${hasVariants ? `<div class="shop-pd-option-variant-label" style="display:none;"></div>` : ``}
               <div class="shop-pd-option-price">${money(item.price || 0)}</div>
             </div>
           `;
+
+          let variantLabelEl = hasVariants ? row.querySelector(".shop-pd-option-variant-label") : null;
+          const savedVariant = groupState.variantByItemId.get(itemId);
+          if (variantLabelEl && savedVariant?.variant_label) {
+            variantLabelEl.textContent = savedVariant.variant_label;
+            variantLabelEl.style.display = "block";
+          }
+
+          // gear + accordion (only inside list for single)
+          let gearBtn = null;
+          let variantAccordion = null;
+          let accordionOpen = false;
+
+          const gearIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
+          const checkIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>`;
+
+          const setGearState = (open) => {
+            accordionOpen = !!open;
+            if (!gearBtn || !variantAccordion) return;
+            variantAccordion.style.display = accordionOpen ? "block" : "none";
+            gearBtn.innerHTML = accordionOpen ? checkIcon : gearIcon;
+            gearBtn.classList.toggle("is-open", accordionOpen);
+            gearBtn.style.color = accordionOpen ? "var(--accent-color, #ff7a00)" : "var(--text-muted, #888)";
+          };
+
+          if (hasVariants) {
+            gearBtn = document.createElement("button");
+            gearBtn.type = "button";
+            gearBtn.className = "shop-pd-option-gear-btn";
+            gearBtn.innerHTML = gearIcon;
+            gearBtn.style.cssText = `
+              background: none;
+              border: none;
+              padding: 4px;
+              cursor: pointer;
+              color: var(--text-muted, #888);
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              flex-shrink: 0;
+              transition: color 0.2s, transform 0.2s;
+            `;
+            gearBtn.addEventListener("click", (e) => {
+              e.stopPropagation();
+              if (accordionOpen) {
+                // Галочка: подтверждаем выбор варианта, выбираем товар и закрываем оба аккордеона
+                const currentVariant = groupState.variantByItemId.get(itemId);
+                if (currentVariant) {
+                  // Выбираем товар с выбранным вариантом
+                  groupState.selectedId = itemId;
+                  // Закрываем аккордеон с вариантами
+                  setGearState(false);
+                  // Закрываем список товаров
+                  closeList();
+                  // Обновляем отображение
+                  renderSlot();
+                  // Уведомляем об изменении
+                  if (typeof onSelectionChange === "function") onSelectionChange();
+                } else {
+                  // Если вариант не выбран, просто закрываем аккордеон
+                  setGearState(false);
+                }
+              } else {
+                // Шестерёнка: открываем аккордеон с вариантами
+                setGearState(true);
+              }
+            });
+
+            variantAccordion = document.createElement("div");
+            variantAccordion.className = "shop-pd-option-variant-accordion";
+            variantAccordion.style.cssText = `
+              display: none;
+              width: 100%;
+              padding: 8px 0 0 0;
+              margin-top: 8px;
+              border-top: 1px solid var(--border-color, #eee);
+            `;
+
+            const variantScroll = document.createElement("div");
+            variantScroll.className = "shop-pd-option-variant-scroll";
+
+            // Drag-to-scroll
+            let isDown = false;
+            let startX;
+            let scrollLeft;
+            variantScroll.addEventListener("mousedown", (e) => {
+              isDown = true;
+              variantScroll.style.cursor = "grabbing";
+              startX = e.pageX - variantScroll.offsetLeft;
+              scrollLeft = variantScroll.scrollLeft;
+            });
+            variantScroll.addEventListener("mouseleave", () => {
+              isDown = false;
+              variantScroll.style.cursor = "grab";
+            });
+            variantScroll.addEventListener("mouseup", () => {
+              isDown = false;
+              variantScroll.style.cursor = "grab";
+            });
+            variantScroll.addEventListener("mousemove", (e) => {
+              if (!isDown) return;
+              e.preventDefault();
+              const x = e.pageX - variantScroll.offsetLeft;
+              const walk = (x - startX) * 1.5;
+              variantScroll.scrollLeft = scrollLeft - walk;
+            });
+
+            const variantGroup = itemVariants[0];
+            const values = variantGroup.values || [];
+            const unitLabel = str(
+              variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title || ""
+            ).trim();
+            const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
+            const formatValueLabel = (val) => {
+              const valueText = str(val);
+              if (!valueText) return "";
+              if (!unitLabel || hasLetters(valueText)) return valueText;
+              return `${valueText} ${unitLabel}`;
+            };
+
+            const currentVariant = groupState.variantByItemId.get(itemId);
+            // Определяем дефолтный индекс: сначала из привязки, потом из группы, потом первый (0)
+            const defaultIdx = variantGroup.default_value_index != null ? Number(variantGroup.default_value_index) : 
+                              (values.length > 0 ? 0 : null);
+            let selectedIdx = currentVariant?.variant_value_index ?? defaultIdx;
+            
+            // Если вариант еще не выбран, но есть дефолт - автоматически выбираем его
+            if (selectedIdx != null && !currentVariant && defaultIdx != null && values[defaultIdx] != null) {
+              groupState.variantByItemId.set(itemId, {
+                variant_group_id: Number(variantGroup.variant_group_id),
+                variant_value_index: defaultIdx,
+                variant_label: formatValueLabel(values[defaultIdx]),
+                variant_price_diff: 0,
+              });
+            }
+
+            values.forEach((value, idx) => {
+              const variantBtn = document.createElement("button");
+              variantBtn.type = "button";
+              variantBtn.className = `shop-pd-option-variant-btn ${selectedIdx === idx ? "is-selected" : ""}`;
+              variantBtn.textContent = formatValueLabel(value);
+              variantBtn.dataset.variantIndex = String(idx);
+              if (selectedIdx === idx) {
+                variantBtn.style.background = "var(--accent-color, #ff7a00)";
+                variantBtn.style.color = "#fff";
+                variantBtn.style.borderColor = "var(--accent-color, #ff7a00)";
+              }
+
+              variantBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const priceDiff = 0;
+                groupState.variantByItemId.set(itemId, {
+                  variant_group_id: Number(variantGroup.variant_group_id),
+                  variant_value_index: idx,
+                  variant_label: formatValueLabel(value),
+                  variant_price_diff: priceDiff,
+                });
+
+                variantScroll.querySelectorAll(".shop-pd-option-variant-btn").forEach((btn) => {
+                  const btnIdx = Number(btn.dataset.variantIndex);
+                  const isSel = btnIdx === idx;
+                  btn.classList.toggle("is-selected", isSel);
+                  if (isSel) {
+                    btn.style.background = "var(--accent-color, #ff7a00)";
+                    btn.style.color = "#fff";
+                    btn.style.borderColor = "var(--accent-color, #ff7a00)";
+                  } else {
+                    btn.style.background = "var(--bg-secondary, #f5f5f5)";
+                    btn.style.color = "var(--text-primary, #333)";
+                    btn.style.borderColor = "var(--border-color, #ddd)";
+                  }
+                });
+
+                if (variantLabelEl) {
+                  variantLabelEl.textContent = formatValueLabel(value);
+                  variantLabelEl.style.display = "block";
+                }
+                if (typeof onSelectionChange === "function") onSelectionChange();
+              });
+
+              variantScroll.appendChild(variantBtn);
+            });
+
+            variantAccordion.appendChild(variantScroll);
+            row.appendChild(gearBtn);
+          }
+
+          card.appendChild(row);
+          if (variantAccordion) card.appendChild(variantAccordion);
+
+          // Выбор товара (клик по карточке) — но не по шестерёнке/вариантам
+          card.addEventListener("click", (e) => {
+            if (e.target.closest(".shop-pd-option-gear-btn") || e.target.closest(".shop-pd-option-variant-accordion")) {
+              return;
+            }
+            groupState.selectedId = itemId;
+            renderSlot();
+            closeList();
+            if (typeof onSelectionChange === "function") onSelectionChange();
+          });
+
           list.appendChild(card);
         });
 
@@ -3110,6 +3430,7 @@ function buildProductDetailsContent(
 
       // Обработка типа "multiple_group" - несколько товаров с общим лимитом группы
       if (groupType === "multiple_group") {
+        const allowVariants = Boolean(group.allow_variants);
         const block = document.createElement("div");
         block.className = "shop-pd-option-block";
 
@@ -3140,13 +3461,56 @@ function buildProductDetailsContent(
           const itemId = Number(item.id);
           const isSelected = groupState.selectedIds.has(itemId);
           
+          // Варианты товара-опции
+          const itemVariants = Array.isArray(item.variants) ? item.variants : [];
+          const hasVariants = allowVariants && itemVariants.length > 0 && itemVariants[0]?.values?.length > 0;
+          
           const card = document.createElement("div");
           card.className = `shop-pd-option-card is-clickable ${isSelected ? "is-selected" : ""}`;
+          if (hasVariants) {
+            card.classList.add("has-variants");
+            card.style.flexDirection = "column";
+            card.style.alignItems = "stretch";
+          }
+          
+          // Функция для расчёта цены с учётом варианта
+          const getPriceWithVariant = () => {
+            const basePrice = Number(item.price || 0);
+            const variantData = groupState.variantByItemId.get(itemId);
+            if (variantData && Number.isFinite(variantData.variant_price_diff)) {
+              return basePrice + variantData.variant_price_diff;
+            }
+            return basePrice;
+          };
           
           const checkbox = document.createElement("input");
           checkbox.type = "checkbox";
           checkbox.checked = isSelected;
           checkbox.style.marginRight = "8px";
+          checkbox.style.flexShrink = "0";
+          
+          // Элементы для обновления
+          let priceEl = null;
+          let variantLabelEl = null;
+          
+          const updateCard = () => {
+            const newIsSelected = groupState.selectedIds.has(itemId);
+            card.classList.toggle("is-selected", newIsSelected);
+            checkbox.checked = newIsSelected;
+            if (priceEl) {
+              priceEl.textContent = money(getPriceWithVariant());
+            }
+            if (variantLabelEl) {
+              const variantData = groupState.variantByItemId.get(itemId);
+              if (variantData && variantData.variant_label) {
+                variantLabelEl.textContent = variantData.variant_label;
+                variantLabelEl.style.display = "block";
+              } else {
+                variantLabelEl.style.display = "none";
+              }
+            }
+          };
+          
           checkbox.addEventListener("click", (e) => {
             e.stopPropagation();
             const { count } = updateSelectedCount();
@@ -3163,41 +3527,274 @@ function buildProductDetailsContent(
               groupState.selectedIds.delete(itemId);
             }
             
-            card.classList.toggle("is-selected", checkbox.checked);
+            updateCard();
             if (onSelectionChange) onSelectionChange();
           });
 
-          card.addEventListener("click", () => {
+          // Основной контент карточки
+          const cardContent = document.createElement("div");
+          cardContent.className = "shop-pd-option-card-content";
+          cardContent.style.display = "flex";
+          cardContent.style.alignItems = "center";
+          cardContent.style.width = "100%";
+          cardContent.style.gap = "8px";
+
+          cardContent.appendChild(checkbox);
+
+          // Фото
+          if (item.photo) {
+            const img = document.createElement("img");
+            img.className = "shop-pd-option-thumb";
+            img.src = item.photo;
+            cardContent.appendChild(img);
+          } else {
+            const placeholder = document.createElement("div");
+            placeholder.className = "shop-pd-option-thumb";
+            placeholder.textContent = "—";
+            cardContent.appendChild(placeholder);
+          }
+
+          // Информация
+          const infoWrap = document.createElement("div");
+          infoWrap.className = "shop-pd-option-info";
+          infoWrap.style.flex = "1";
+          infoWrap.style.minWidth = "0";
+
+          const nameEl = document.createElement("div");
+          nameEl.className = "shop-pd-option-name";
+          nameEl.textContent = str(item.title);
+          infoWrap.appendChild(nameEl);
+
+          // Лейбл варианта
+          if (hasVariants) {
+            variantLabelEl = document.createElement("div");
+            variantLabelEl.className = "shop-pd-option-variant-label";
+            variantLabelEl.style.fontSize = "11px";
+            variantLabelEl.style.color = "var(--text-muted, #888)";
+            variantLabelEl.style.marginTop = "2px";
+            const savedVariant = groupState.variantByItemId.get(itemId);
+            if (savedVariant && savedVariant.variant_label) {
+              variantLabelEl.textContent = savedVariant.variant_label;
+              variantLabelEl.style.display = "block";
+            } else {
+              variantLabelEl.style.display = "none";
+            }
+            infoWrap.appendChild(variantLabelEl);
+          }
+
+          priceEl = document.createElement("div");
+          priceEl.className = "shop-pd-option-price";
+          priceEl.textContent = money(getPriceWithVariant());
+          infoWrap.appendChild(priceEl);
+
+          cardContent.appendChild(infoWrap);
+
+          // Шестерёнка для вариантов
+          let gearBtn = null;
+          let variantAccordion = null;
+          
+          if (hasVariants) {
+            gearBtn = document.createElement("button");
+            gearBtn.type = "button";
+            gearBtn.className = "shop-pd-option-gear-btn";
+            gearBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
+            gearBtn.style.cssText = `
+              background: none;
+              border: none;
+              padding: 4px;
+              cursor: pointer;
+              color: var(--text-muted, #888);
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              flex-shrink: 0;
+              transition: color 0.2s, transform 0.2s;
+            `;
+            cardContent.appendChild(gearBtn);
+
+            // Аккордеон с вариантами
+            variantAccordion = document.createElement("div");
+            variantAccordion.className = "shop-pd-option-variant-accordion";
+            variantAccordion.style.cssText = `
+              display: none;
+              width: 100%;
+              padding: 8px 0 0 0;
+              margin-top: 8px;
+              border-top: 1px solid var(--border-color, #eee);
+            `;
+
+            const variantScroll = document.createElement("div");
+            variantScroll.className = "shop-pd-option-variant-scroll";
+            variantScroll.style.cssText = `
+              display: flex;
+              gap: 8px;
+              overflow-x: auto;
+              overflow-y: hidden;
+              padding-bottom: 4px;
+              -webkit-overflow-scrolling: touch;
+              scrollbar-width: none;
+              cursor: grab;
+            `;
+
+            // Drag-to-scroll
+            let isDown = false;
+            let startX;
+            let scrollLeft;
+            variantScroll.addEventListener("mousedown", (e) => {
+              isDown = true;
+              variantScroll.style.cursor = "grabbing";
+              startX = e.pageX - variantScroll.offsetLeft;
+              scrollLeft = variantScroll.scrollLeft;
+            });
+            variantScroll.addEventListener("mouseleave", () => {
+              isDown = false;
+              variantScroll.style.cursor = "grab";
+            });
+            variantScroll.addEventListener("mouseup", () => {
+              isDown = false;
+              variantScroll.style.cursor = "grab";
+            });
+            variantScroll.addEventListener("mousemove", (e) => {
+              if (!isDown) return;
+              e.preventDefault();
+              const x = e.pageX - variantScroll.offsetLeft;
+              const walk = (x - startX) * 1.5;
+              variantScroll.scrollLeft = scrollLeft - walk;
+            });
+
+            const variantGroup = itemVariants[0];
+            const values = variantGroup.values || [];
+            const unitLabel = str(variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title || "").trim();
+            
+            const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
+            const formatValueLabel = (val) => {
+              const valueText = str(val);
+              if (!valueText) return "";
+              if (!unitLabel || hasLetters(valueText)) return valueText;
+              return `${valueText} ${unitLabel}`;
+            };
+
+            const currentVariant = groupState.variantByItemId.get(itemId);
+            // Определяем дефолтный индекс: сначала из привязки, потом из группы, потом первый (0)
+            const defaultIdx = variantGroup.default_value_index != null ? Number(variantGroup.default_value_index) : 
+                              (values.length > 0 ? 0 : null);
+            let selectedIdx = currentVariant?.variant_value_index ?? defaultIdx;
+            
+            // Если вариант еще не выбран, но есть дефолт - автоматически выбираем его
+            if (selectedIdx != null && !currentVariant && defaultIdx != null && values[defaultIdx] != null) {
+              groupState.variantByItemId.set(itemId, {
+                variant_group_id: Number(variantGroup.variant_group_id),
+                variant_value_index: defaultIdx,
+                variant_label: formatValueLabel(values[defaultIdx]),
+                variant_price_diff: 0,
+              });
+            }
+
+            values.forEach((value, idx) => {
+              const variantBtn = document.createElement("button");
+              variantBtn.type = "button";
+              variantBtn.className = `shop-pd-option-variant-btn ${selectedIdx === idx ? "is-selected" : ""}`;
+              variantBtn.textContent = formatValueLabel(value);
+              variantBtn.dataset.variantIndex = String(idx);
+              variantBtn.style.cssText = `
+                flex-shrink: 0;
+                padding: 6px 12px;
+                border: 1px solid var(--border-color, #ddd);
+                border-radius: 16px;
+                background: var(--bg-secondary, #f5f5f5);
+                color: var(--text-primary, #333);
+                font-size: 13px;
+                cursor: pointer;
+                transition: all 0.2s;
+                white-space: nowrap;
+              `;
+              
+              if (selectedIdx === idx) {
+                variantBtn.style.background = "var(--accent-color, #ff7a00)";
+                variantBtn.style.color = "#fff";
+                variantBtn.style.borderColor = "var(--accent-color, #ff7a00)";
+              }
+
+              variantBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                
+                const priceDiff = 0;
+                
+                groupState.variantByItemId.set(itemId, {
+                  variant_group_id: Number(variantGroup.variant_group_id),
+                  variant_value_index: idx,
+                  variant_label: formatValueLabel(value),
+                  variant_price_diff: priceDiff,
+                });
+
+                variantScroll.querySelectorAll(".shop-pd-option-variant-btn").forEach((btn) => {
+                  const btnIdx = Number(btn.dataset.variantIndex);
+                  const isSelected = btnIdx === idx;
+                  btn.classList.toggle("is-selected", isSelected);
+                  if (isSelected) {
+                    btn.style.background = "var(--accent-color, #ff7a00)";
+                    btn.style.color = "#fff";
+                    btn.style.borderColor = "var(--accent-color, #ff7a00)";
+                  } else {
+                    btn.style.background = "var(--bg-secondary, #f5f5f5)";
+                    btn.style.color = "var(--text-primary, #333)";
+                    btn.style.borderColor = "var(--border-color, #ddd)";
+                  }
+                });
+
+                updateCard();
+                if (onSelectionChange) onSelectionChange();
+              });
+
+              variantScroll.appendChild(variantBtn);
+            });
+
+            variantAccordion.appendChild(variantScroll);
+
+            const gearIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
+            const checkIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>`;
+            let accordionOpen = false;
+            gearBtn.innerHTML = gearIcon;
+            gearBtn.addEventListener("click", (e) => {
+              e.stopPropagation();
+              accordionOpen = !accordionOpen;
+              variantAccordion.style.display = accordionOpen ? "block" : "none";
+              gearBtn.innerHTML = accordionOpen ? checkIcon : gearIcon;
+              gearBtn.classList.toggle("is-open", accordionOpen);
+              gearBtn.style.color = accordionOpen ? "var(--accent-color, #ff7a00)" : "var(--text-muted, #888)";
+            });
+          }
+
+          card.appendChild(cardContent);
+          
+          if (variantAccordion) {
+            card.appendChild(variantAccordion);
+          }
+
+          card.addEventListener("click", (e) => {
+            // Не переключаем если кликнули на шестерёнку или вариант
+            if (e.target.closest(".shop-pd-option-gear-btn") || e.target.closest(".shop-pd-option-variant-accordion")) {
+              return;
+            }
+            
             const { count } = updateSelectedCount();
-            const maxReached = maxSelect != null && count >= maxSelect && !isSelected;
+            const currentlySelected = groupState.selectedIds.has(itemId);
+            const maxReached = maxSelect != null && count >= maxSelect && !currentlySelected;
             
             if (maxReached) {
               return;
             }
 
-            checkbox.checked = !checkbox.checked;
-            if (checkbox.checked) {
-              groupState.selectedIds.add(itemId);
-            } else {
+            if (currentlySelected) {
               groupState.selectedIds.delete(itemId);
+            } else {
+              groupState.selectedIds.add(itemId);
             }
             
-            card.classList.toggle("is-selected", checkbox.checked);
+            updateCard();
             if (onSelectionChange) onSelectionChange();
           });
-
-          card.innerHTML = `
-            ${item.photo
-              ? `<img class="shop-pd-option-thumb" src="${item.photo}">`
-              : `<div class="shop-pd-option-thumb">—</div>`
-            }
-            <div class="shop-pd-option-info">
-              <div class="shop-pd-option-name">${str(item.title)}</div>
-              <div class="shop-pd-option-price">${money(item.price || 0)}</div>
-            </div>
-          `;
           
-          card.insertBefore(checkbox, card.firstChild);
           itemsWrap.appendChild(card);
         });
 
@@ -3207,6 +3804,7 @@ function buildProductDetailsContent(
 
       // Обработка типа "multiple_item" - несколько товаров с индивидуальными лимитами
       if (groupType === "multiple_item") {
+        const allowVariants = Boolean(group.allow_variants);
         const block = document.createElement("div");
         block.className = "shop-pd-option-block";
 
@@ -3226,6 +3824,10 @@ function buildProductDetailsContent(
           // Текущее количество из state
           const currentQty = groupState.qtyById.get(itemId) || 0;
           const isSelected = currentQty > 0;
+          
+          // Варианты товара-опции
+          const itemVariants = Array.isArray(item.variants) ? item.variants : [];
+          const hasVariants = allowVariants && itemVariants.length > 0 && itemVariants[0]?.values?.length > 0;
 
           const card = document.createElement("div");
           card.className = `shop-pd-option-card ${isSelected ? "is-selected" : ""}`;
@@ -3286,6 +3888,20 @@ function buildProductDetailsContent(
           qtyControls.appendChild(qtyDisplay);
           qtyControls.appendChild(btnPlus);
 
+          // Функция для расчёта цены опции с учётом варианта
+          const getItemPriceWithVariant = () => {
+            const basePrice = Number(item.price || 0);
+            const variantData = groupState.variantByItemId.get(itemId);
+            if (variantData && Number.isFinite(variantData.variant_price_diff)) {
+              return basePrice + variantData.variant_price_diff;
+            }
+            return basePrice;
+          };
+
+          // Элемент для отображения выбранного варианта
+          let variantLabelEl = null;
+          let priceEl = null;
+
           const updateItemCard = () => {
             const newQty = groupState.qtyById.get(itemId) || 0;
             const newIsSelected = newQty > 0;
@@ -3294,20 +3910,278 @@ function buildProductDetailsContent(
             // Кнопка "-" отключена если qty <= itemMin (обязательные опции нельзя убрать)
             btnMinus.disabled = newQty <= itemMin;
             btnPlus.disabled = newQty >= itemMax;
+            
+            // Обновляем цену с учётом варианта
+            if (priceEl) {
+              priceEl.textContent = money(getItemPriceWithVariant());
+            }
+            
+            // Обновляем отображение выбранного варианта
+            if (variantLabelEl) {
+              const variantData = groupState.variantByItemId.get(itemId);
+              if (variantData && variantData.variant_label) {
+                variantLabelEl.textContent = variantData.variant_label;
+                variantLabelEl.style.display = "block";
+              } else {
+                variantLabelEl.style.display = "none";
+              }
+            }
           };
 
-          card.innerHTML = `
-            ${item.photo
-              ? `<img class="shop-pd-option-thumb" src="${item.photo}">`
-              : `<div class="shop-pd-option-thumb">—</div>`
-            }
-            <div class="shop-pd-option-info">
-              <div class="shop-pd-option-name">${str(item.title)}</div>
-              <div class="shop-pd-option-price">${money(item.price || 0)}</div>
-            </div>
-          `;
+          // Создаём основной контент карточки
+          const cardContent = document.createElement("div");
+          cardContent.className = "shop-pd-option-card-content";
+          cardContent.style.display = "flex";
+          cardContent.style.alignItems = "center";
+          cardContent.style.width = "100%";
+          cardContent.style.gap = "8px";
 
-          card.appendChild(qtyControls);
+          // Фото
+          if (item.photo) {
+            const img = document.createElement("img");
+            img.className = "shop-pd-option-thumb";
+            img.src = item.photo;
+            cardContent.appendChild(img);
+          } else {
+            const placeholder = document.createElement("div");
+            placeholder.className = "shop-pd-option-thumb";
+            placeholder.textContent = "—";
+            cardContent.appendChild(placeholder);
+          }
+
+          // Информация (название, вариант, цена)
+          const infoWrap = document.createElement("div");
+          infoWrap.className = "shop-pd-option-info";
+          infoWrap.style.flex = "1";
+          infoWrap.style.minWidth = "0";
+
+          const nameEl = document.createElement("div");
+          nameEl.className = "shop-pd-option-name";
+          nameEl.textContent = str(item.title);
+          infoWrap.appendChild(nameEl);
+
+          // Выбранный вариант (мелкий текст под названием)
+          variantLabelEl = document.createElement("div");
+          variantLabelEl.className = "shop-pd-option-variant-label";
+          variantLabelEl.style.fontSize = "11px";
+          variantLabelEl.style.color = "var(--text-muted, #888)";
+          variantLabelEl.style.marginTop = "2px";
+          const savedVariant = groupState.variantByItemId.get(itemId);
+          if (savedVariant && savedVariant.variant_label) {
+            variantLabelEl.textContent = savedVariant.variant_label;
+            variantLabelEl.style.display = "block";
+          } else {
+            variantLabelEl.style.display = "none";
+          }
+          infoWrap.appendChild(variantLabelEl);
+
+          priceEl = document.createElement("div");
+          priceEl.className = "shop-pd-option-price";
+          priceEl.textContent = money(getItemPriceWithVariant());
+          infoWrap.appendChild(priceEl);
+
+          cardContent.appendChild(infoWrap);
+
+          // Шестерёнка для вариантов (если есть варианты)
+          let gearBtn = null;
+          let variantAccordion = null;
+          
+          if (hasVariants) {
+            gearBtn = document.createElement("button");
+            gearBtn.type = "button";
+            gearBtn.className = "shop-pd-option-gear-btn";
+            gearBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
+            gearBtn.style.cssText = `
+              background: none;
+              border: none;
+              padding: 4px;
+              cursor: pointer;
+              color: var(--text-muted, #888);
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              flex-shrink: 0;
+              transition: color 0.2s, transform 0.2s;
+            `;
+            
+            // Аккордеон с вариантами
+            variantAccordion = document.createElement("div");
+            variantAccordion.className = "shop-pd-option-variant-accordion";
+            variantAccordion.style.cssText = `
+              display: none;
+              width: 100%;
+              padding: 8px 0 0 0;
+              margin-top: 8px;
+              border-top: 1px solid var(--border-color, #eee);
+            `;
+
+            // Горизонтальный скролл с вариантами
+            const variantScroll = document.createElement("div");
+            variantScroll.className = "shop-pd-option-variant-scroll";
+            variantScroll.style.cssText = `
+              display: flex;
+              gap: 8px;
+              overflow-x: auto;
+              overflow-y: hidden;
+              padding-bottom: 4px;
+              -webkit-overflow-scrolling: touch;
+              scrollbar-width: none;
+              cursor: grab;
+            `;
+            variantScroll.style.setProperty("-ms-overflow-style", "none");
+
+            // Drag-to-scroll для мыши
+            let isDown = false;
+            let startX;
+            let scrollLeft;
+            variantScroll.addEventListener("mousedown", (e) => {
+              isDown = true;
+              variantScroll.style.cursor = "grabbing";
+              startX = e.pageX - variantScroll.offsetLeft;
+              scrollLeft = variantScroll.scrollLeft;
+            });
+            variantScroll.addEventListener("mouseleave", () => {
+              isDown = false;
+              variantScroll.style.cursor = "grab";
+            });
+            variantScroll.addEventListener("mouseup", () => {
+              isDown = false;
+              variantScroll.style.cursor = "grab";
+            });
+            variantScroll.addEventListener("mousemove", (e) => {
+              if (!isDown) return;
+              e.preventDefault();
+              const x = e.pageX - variantScroll.offsetLeft;
+              const walk = (x - startX) * 1.5;
+              variantScroll.scrollLeft = scrollLeft - walk;
+            });
+
+            // Рендерим варианты (берём первую группу)
+            const variantGroup = itemVariants[0];
+            const values = variantGroup.values || [];
+            const unitLabel = str(variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title || "").trim();
+            
+            const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
+            const formatValueLabel = (val) => {
+              const valueText = str(val);
+              if (!valueText) return "";
+              if (!unitLabel || hasLetters(valueText)) return valueText;
+              return `${valueText} ${unitLabel}`;
+            };
+
+            // Текущий выбранный индекс
+            const currentVariant = groupState.variantByItemId.get(itemId);
+            // Определяем дефолтный индекс: сначала из привязки, потом из группы, потом первый (0)
+            const defaultIdx = variantGroup.default_value_index != null ? Number(variantGroup.default_value_index) : 
+                              (values.length > 0 ? 0 : null);
+            let selectedIdx = currentVariant?.variant_value_index ?? defaultIdx;
+            
+            // Если вариант еще не выбран, но есть дефолт - автоматически выбираем его
+            if (selectedIdx != null && !currentVariant && defaultIdx != null && values[defaultIdx] != null) {
+              groupState.variantByItemId.set(itemId, {
+                variant_group_id: Number(variantGroup.variant_group_id),
+                variant_value_index: defaultIdx,
+                variant_label: formatValueLabel(values[defaultIdx]),
+                variant_price_diff: 0,
+              });
+            }
+
+            values.forEach((value, idx) => {
+              const variantBtn = document.createElement("button");
+              variantBtn.type = "button";
+              variantBtn.className = `shop-pd-option-variant-btn ${selectedIdx === idx ? "is-selected" : ""}`;
+              variantBtn.textContent = formatValueLabel(value);
+              variantBtn.dataset.variantIndex = String(idx);
+              variantBtn.style.cssText = `
+                flex-shrink: 0;
+                padding: 6px 12px;
+                border: 1px solid var(--border-color, #ddd);
+                border-radius: 16px;
+                background: var(--bg-secondary, #f5f5f5);
+                color: var(--text-primary, #333);
+                font-size: 13px;
+                cursor: pointer;
+                transition: all 0.2s;
+                white-space: nowrap;
+              `;
+              
+              if (selectedIdx === idx) {
+                variantBtn.style.background = "var(--accent-color, #ff7a00)";
+                variantBtn.style.color = "#fff";
+                variantBtn.style.borderColor = "var(--accent-color, #ff7a00)";
+              }
+
+              variantBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                
+                // Обновляем выбранный вариант в state
+                // Рассчитываем price_diff (пока 0, можно расширить)
+                const priceDiff = 0; // TODO: если нужен расчёт price_diff по тиерам
+                
+                groupState.variantByItemId.set(itemId, {
+                  variant_group_id: Number(variantGroup.variant_group_id),
+                  variant_value_index: idx,
+                  variant_label: formatValueLabel(value),
+                  variant_price_diff: priceDiff,
+                });
+
+                // Обновляем UI всех кнопок вариантов
+                variantScroll.querySelectorAll(".shop-pd-option-variant-btn").forEach((btn) => {
+                  const btnIdx = Number(btn.dataset.variantIndex);
+                  const isSelected = btnIdx === idx;
+                  btn.classList.toggle("is-selected", isSelected);
+                  if (isSelected) {
+                    btn.style.background = "var(--accent-color, #ff7a00)";
+                    btn.style.color = "#fff";
+                    btn.style.borderColor = "var(--accent-color, #ff7a00)";
+                  } else {
+                    btn.style.background = "var(--bg-secondary, #f5f5f5)";
+                    btn.style.color = "var(--text-primary, #333)";
+                    btn.style.borderColor = "var(--border-color, #ddd)";
+                  }
+                });
+
+                // Обновляем карточку (цена, лейбл варианта)
+                updateItemCard();
+                if (onSelectionChange) onSelectionChange();
+              });
+
+              variantScroll.appendChild(variantBtn);
+            });
+
+            variantAccordion.appendChild(variantScroll);
+
+            // Обработчик клика на шестерёнку (⚙️ ↔ ✓)
+            const gearIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
+            const checkIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>`;
+            let accordionOpen = false;
+            gearBtn.innerHTML = gearIcon;
+            gearBtn.addEventListener("click", (e) => {
+              e.stopPropagation();
+              accordionOpen = !accordionOpen;
+              variantAccordion.style.display = accordionOpen ? "block" : "none";
+              gearBtn.innerHTML = accordionOpen ? checkIcon : gearIcon;
+              gearBtn.classList.toggle("is-open", accordionOpen);
+              gearBtn.style.color = accordionOpen ? "var(--accent-color, #ff7a00)" : "var(--text-muted, #888)";
+            });
+
+            cardContent.appendChild(gearBtn);
+          }
+
+          cardContent.appendChild(qtyControls);
+          card.appendChild(cardContent);
+          
+          // Добавляем аккордеон после основного контента
+          if (variantAccordion) {
+            card.appendChild(variantAccordion);
+          }
+
+          // Стиль карточки для flex-direction: column когда есть аккордеон
+          if (hasVariants) {
+            card.style.flexDirection = "column";
+            card.style.alignItems = "stretch";
+          }
+
           itemsWrap.appendChild(card);
         });
 
@@ -3749,6 +4623,21 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
     editOptionQty.set(id, q);
   });
 
+  // Варианты опций из корзины (для восстановления при редактировании)
+  const editOptionVariants = new Map();
+  (editingItem?.option_items || []).forEach((opt) => {
+    const id = Number(opt?.id);
+    if (!Number.isFinite(id)) return;
+    if (opt.variant_group_id != null && opt.variant_value_index != null) {
+      editOptionVariants.set(id, {
+        variant_group_id: Number(opt.variant_group_id),
+        variant_value_index: Number(opt.variant_value_index),
+        variant_label: str(opt.variant_label || ""),
+        variant_price_diff: Number(opt.variant_price_diff || 0),
+      });
+    }
+  });
+
 optionGroups.forEach((group) => {
   const type = getOptionGroupUiType(group);
 
@@ -3757,6 +4646,8 @@ optionGroups.forEach((group) => {
     selectedId: null,
     selectedIds: new Set(),
     qtyById: new Map(),
+    // NEW: Варианты для каждого item (itemId -> { variant_group_id, variant_value_index, label, price_diff })
+    variantByItemId: new Map(),
     minSelect: group.min_select ?? 0,
     maxSelect: group.max_select ?? null,
   };
@@ -3785,6 +4676,15 @@ optionGroups.forEach((group) => {
       if (q > 0) stateEntry.qtyById.set(id, q);
     });
   }
+
+  // Восстанавливаем варианты из корзины для всех items
+  group.items.forEach((item) => {
+    const itemId = Number(item.id);
+    const savedVariant = editOptionVariants.get(itemId);
+    if (savedVariant) {
+      stateEntry.variantByItemId.set(itemId, savedVariant);
+    }
+  });
 
   selectionState.set(group.id, stateEntry);
 });

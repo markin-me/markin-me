@@ -2308,3 +2308,111 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 .app-modal-header [data-modal-title].is-empty-address{
   opacity: .9;
 }
+
+/* ===== OPTION ITEM VARIANTS ===== */
+
+/* Шестерёнка для вариантов опции */
+.shop-pd-option-gear-btn {
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--text-muted, #888);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  line-height: 0;
+  transition: color 0.2s;
+}
+
+.shop-pd-option-gear-btn:hover {
+  color: var(--accent-color, #ff7a00);
+}
+
+.shop-pd-option-gear-btn.is-open {
+  color: var(--accent-color, #ff7a00);
+}
+
+.shop-pd-option-gear-btn svg {
+  display: block;
+}
+
+/* Аккордеон с вариантами */
+.shop-pd-option-variant-accordion {
+  display: none;
+  width: 100%;
+  padding: 8px 0 0 0;
+  margin-top: 8px;
+  border-top: 1px solid var(--border-color, #eee);
+}
+
+.shop-pd-option-variant-accordion.is-open {
+  display: block;
+}
+
+/* Горизонтальный скролл с вариантами */
+.shop-pd-option-variant-scroll {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  cursor: grab;
+}
+
+.shop-pd-option-variant-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.shop-pd-option-variant-scroll:active {
+  cursor: grabbing;
+}
+
+/* Кнопка варианта */
+.shop-pd-option-variant-btn {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 16px;
+  background: var(--bg-secondary, #f5f5f5);
+  color: var(--text-primary, #333);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.shop-pd-option-variant-btn:hover {
+  border-color: var(--accent-color, #ff7a00);
+}
+
+.shop-pd-option-variant-btn.is-selected {
+  background: var(--accent-color, #ff7a00);
+  color: #fff;
+  border-color: var(--accent-color, #ff7a00);
+}
+
+/* Лейбл выбранного варианта под названием опции */
+.shop-pd-option-variant-label {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  margin-top: 2px;
+}
+
+/* Карточка опции с вариантами - flex-direction: column */
+.shop-pd-option-card.has-variants {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.shop-pd-option-card-content {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 8px;
+}

@@ -46,6 +46,7 @@
   const variantGroupForm = $("#variantGroupForm");
   const variantGroupTitleInput = $("#variantGroupTitle");
   const variantGroupUnitIdInput = $("#variantGroupUnitId");
+  const variantGroupDefaultValueIndexInput = $("#variantGroupDefaultValueIndex");
   const variantGroupSortInput = $("#variantGroupSortOrder");
   const variantItemsList = $("#variantItemsList");
   const variantItemsAddBtn = $("#variantItemsAddBtn");
@@ -510,8 +511,64 @@
     return api("/api/admin/variants/group-bundle", { method: "POST", body: JSON.stringify(payload) });
   }
 
+  // Отдельный endpoint для сохранения только default_value_index
+  async function apiSetVariantGroupDefaultIndex(groupId, index) {
+    console.log('apiSetVariantGroupDefaultIndex - groupId:', groupId, 'index:', index);
+    const url = `/api/admin/variants/groups/${groupId}/defaultIndex`;
+    try {
+      const res = await fetch(url, {
+        headers: { 
+          "Content-Type": "application/json", 
+          "x-tenant-id": String(TENANT_ID) 
+        },
+        method: "PATCH",
+        body: JSON.stringify({ default_value_index: index }),
+      });
+      
+      console.log('apiSetVariantGroupDefaultIndex - response status:', res.status);
+      const data = await res.json();
+      console.log('apiSetVariantGroupDefaultIndex - response data:', data);
+      
+      if (!res.ok || !data || data.ok === false) {
+        const error = new Error(data?.error || `HTTP_${res.status}`);
+        console.error('apiSetVariantGroupDefaultIndex - error:', error);
+        throw error;
+      }
+      return data;
+    } catch (error) {
+      console.error('apiSetVariantGroupDefaultIndex - fetch error:', error);
+      throw error;
+    }
+  }
+
   async function apiPatchVariantGroup(id, payload) {
-    return api(`/api/admin/variants/groups/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+    console.log('apiPatchVariantGroup - id:', id);
+    console.log('apiPatchVariantGroup - payload:', payload);
+    console.log('apiPatchVariantGroup - payload.default_value_index:', payload.default_value_index);
+    const url = `/api/admin/variants/groups/${id}`;
+    console.log('apiPatchVariantGroup - URL:', url);
+    const body = JSON.stringify(payload);
+    console.log('apiPatchVariantGroup - body string:', body);
+    try {
+      const res = await fetch(url, {
+        headers: { "Content-Type": "application/json", "x-tenant-id": String(TENANT_ID) },
+        method: "PATCH",
+        body: body,
+      });
+      console.log('apiPatchVariantGroup - response status:', res.status);
+      console.log('apiPatchVariantGroup - response ok:', res.ok);
+      const data = await res.json().catch(() => null);
+      console.log('apiPatchVariantGroup - response data:', data);
+      if (!res.ok || !data || data.ok === false) {
+        const error = new Error((data && data.error) || `HTTP_${res.status}`);
+        console.error('apiPatchVariantGroup - error:', error);
+        throw error;
+      }
+      return data;
+    } catch (error) {
+      console.error('apiPatchVariantGroup - fetch error:', error);
+      throw error;
+    }
   }
 
   async function apiDeleteVariantGroup(id) {
@@ -529,6 +586,13 @@
     return api(`/api/admin/variants/groups/${groupId}/assignments`, {
       method: "POST",
       body: JSON.stringify({ assign_ids: assignIds }),
+    });
+  }
+
+  async function apiPatchVariantAssignment(id, payload) {
+    return api(`/api/admin/variants/assignments/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
     });
   }
 
@@ -870,8 +934,20 @@
   }
 
   async function loadVariantGroupDetails(id) {
+    console.log('loadVariantGroupDetails - loading group:', id);
     const res = await apiGetVariantGroup(id);
     const data = res.data || null;
+    console.log('loadVariantGroupDetails - loaded data:', {
+      id,
+      hasData: !!data,
+      hasGroup: !!data?.group,
+      groupId: data?.group?.id,
+      default_value_index: data?.group?.default_value_index,
+      default_value_index_type: typeof data?.group?.default_value_index,
+      values: data?.group?.values,
+      valuesLength: data?.group?.values?.length
+    });
+    
     if (data && data.tiers) {
       // Ensure tiers have discount_type for rendering (API returns only discount_percent)
       data.tiers = data.tiers.map(tier => ({
@@ -882,6 +958,10 @@
       }));
     }
     state.variantGroupDetails = data;
+    console.log('loadVariantGroupDetails - stored in state.variantGroupDetails:', {
+      groupId: state.variantGroupDetails?.group?.id,
+      default_value_index: state.variantGroupDetails?.group?.default_value_index
+    });
   }
 
   async function ensureVariantGroupDetails(groupId) {
@@ -1164,6 +1244,7 @@ function getOptionGroupUiValues(group, items = []) {
     max_select: group.max_select == null ? null : Number(group.max_select),
     is_active: group.is_active ? 1 : 0,
     is_required: (group.selection_type === "single" ? (group.is_required ? 1 : 0) : 0),
+    allow_variants: group.allow_variants ? 1 : 0,
     sort_order: group.sort_order ?? 0,
   };
 }
@@ -1421,7 +1502,7 @@ function buildOptionGroupPayload(formValues) {
     `;
   }
 
-  function renderVariantValuesSummary(values, tiers) {
+  function renderVariantValuesSummary(values, tiers, defaultValueIndex = null) {
     const list = Array.isArray(values) ? values : [];
     if (!list.length) {
       return `<div class="empty-hint">Пока нет значений...</div>`;
@@ -1431,6 +1512,7 @@ function buildOptionGroupPayload(formValues) {
       const idx = Number(tier.sort_order);
       if (Number.isFinite(idx)) tierMap.set(idx, tier);
     });
+    const defaultIdx = defaultValueIndex != null ? Number(defaultValueIndex) : null;
     return `
       <div class="option-summary-list">
         ${list.map((value, idx) => {
@@ -1438,11 +1520,18 @@ function buildOptionGroupPayload(formValues) {
           const discountRaw = tier.discount_percent != null ? tier.discount_percent : (tier.discount_value || 0);
           const discount = Number(discountRaw) || 0;
           const metaLabel = discount > 0 ? `Скидка: ${discount}%` : "Без скидки";
+          const isDefault = defaultIdx !== null && idx === defaultIdx;
+          const starIcon = isDefault 
+            ? '<i class="fas fa-star" style="color: #ff7a00; margin-right: 8px;"></i>'
+            : '<i class="far fa-star" style="color: #888; margin-right: 8px;"></i>';
           return `
             <div class="option-summary-row">
-              <div>
-                <div class="option-summary-title">${escapeHtml(value)}</div>
-                <div class="option-summary-meta">${metaLabel}</div>
+              <div style="display: flex; align-items: center;">
+                ${starIcon}
+                <div>
+                  <div class="option-summary-title">${escapeHtml(value)}</div>
+                  <div class="option-summary-meta">${metaLabel}</div>
+                </div>
               </div>
               <div class="option-summary-price">
                 <span>${discount > 0 ? `${discount}%` : ""}</span>
@@ -2034,9 +2123,11 @@ function getOptionGroupFormValues() {
   // берём текущее (на случай если свича нет)
   const fallbackActive = state.optionDraft?.group?.is_active ?? state.optionGroupDetails?.group?.is_active ?? 1;
   const fallbackRequired = state.optionDraft?.group?.is_required ?? state.optionGroupDetails?.group?.is_required ?? 1;
+  const fallbackAllowVariants = state.optionDraft?.group?.allow_variants ?? state.optionGroupDetails?.group?.allow_variants ?? 0;
 
   const activeEl = document.getElementById("optionGroupIsActive");
   const requiredEl = document.getElementById("optionGroupIsRequired");
+  const allowVariantsEl = document.getElementById("optionGroupAllowVariants");
 
   const isActive =
     activeEl && activeEl.type === "checkbox"
@@ -2053,6 +2144,11 @@ function getOptionGroupFormValues() {
         )
       : 0;
 
+  const allowVariants =
+    allowVariantsEl && allowVariantsEl.type === "checkbox"
+      ? (allowVariantsEl.checked ? 1 : 0)
+      : (fallbackAllowVariants ? 1 : 0);
+
   return {
     title: String(optionGroupTitleInput?.value || "").trim(),
     selection_type: selectionUi,
@@ -2060,6 +2156,7 @@ function getOptionGroupFormValues() {
     max_select: optionGroupMaxInput?.value === "" ? null : Number(optionGroupMaxInput?.value),
     is_active: isActive,
     is_required: isRequired,
+    allow_variants: allowVariants,
     sort_order: optionGroupSortInput?.value === "" ? 0 : Number(optionGroupSortInput?.value),
   };
 }
@@ -2128,6 +2225,12 @@ function fillOptionGroupForm(group, items = []) {
   if (requiredEl && requiredEl.type === "checkbox") {
     const isSingle = group.selection_type === "single";
     requiredEl.checked = isSingle ? Boolean(group.is_required ?? 1) : false;
+  }
+
+  // ✅ свич "Варианты у пунктов"
+  const allowVariantsEl = document.getElementById("optionGroupAllowVariants");
+  if (allowVariantsEl && allowVariantsEl.type === "checkbox") {
+    allowVariantsEl.checked = Boolean(group.allow_variants ?? 0);
   }
 }
 
@@ -2561,15 +2664,91 @@ function updateOptionGroupSelectionUi() {
     
     // Store values array for rendering - always update from group
     state.variantDraft.group.values = Array.isArray(group.values) ? group.values : [];
+    
+    // Store default value index
+    // В режиме редактирования сохраняем значение пользователя, не перезаписываем из group
+    // В режиме просмотра или при первой инициализации - берем из group
+    // Важно: используем флаг для отслеживания, было ли значение установлено пользователем
+    const isEditMode = state.variantPanel.mode === "edit" || state.variantPanel.mode === "create";
+    
+    // Проверяем, было ли значение уже установлено пользователем (включая 0)
+    // Используем специальный флаг или проверяем, что значение было явно установлено
+    if (!isEditMode) {
+      // В режиме просмотра всегда берем из group
+      state.variantDraft.group.default_value_index = group.default_value_index != null ? Number(group.default_value_index) : null;
+    } else {
+      // В режиме редактирования: устанавливаем только если еще не установлено
+      // Проверяем наличие свойства, а не его значение (0 - валидное значение)
+      if (!('default_value_index' in state.variantDraft.group)) {
+        state.variantDraft.group.default_value_index = group.default_value_index != null ? Number(group.default_value_index) : null;
+      }
+      // Если свойство уже есть (даже если это 0 или null), не перезаписываем
+    }
+    
+    // Синхронизируем скрытый input для совместимости (dropdown скрыт, выбор через звездочки)
+    if (variantGroupDefaultValueIndexInput) {
+      const defaultIdx = state.variantDraft.group.default_value_index != null 
+        ? String(state.variantDraft.group.default_value_index) 
+        : "";
+      variantGroupDefaultValueIndexInput.value = defaultIdx;
+    }
+  }
+  
+  function handleDefaultValueIndexChange() {
+    if (!variantGroupDefaultValueIndexInput) return;
+    const defaultIdxValue = variantGroupDefaultValueIndexInput.value || "";
+    const defaultIdx = defaultIdxValue === "" ? null : Number(defaultIdxValue);
+    
+    // Update draft
+    if (state.variantDraft) {
+      state.variantDraft.group.default_value_index = defaultIdx;
+    }
+    
+    // Re-render variant items to update stars
+    const tiers = getVariantItemsSource();
+    renderVariantItems(tiers);
+  }
+  
+  function updateVariantGroupDefaultValueIndexDropdown() {
+    if (!variantGroupDefaultValueIndexInput) return;
+    const values = (state.variantDraft?.group?.values || state.variantGroupDetails?.group?.values || []);
+    const currentValue = variantGroupDefaultValueIndexInput.value;
+    const currentDefaultIdx = state.variantDraft?.group?.default_value_index != null 
+      ? Number(state.variantDraft.group.default_value_index) 
+      : (state.variantGroupDetails?.group?.default_value_index != null 
+        ? Number(state.variantGroupDetails.group.default_value_index) 
+        : null);
+    
+    variantGroupDefaultValueIndexInput.innerHTML = '<option value="">Не выбран</option>' + 
+      values.map((val, idx) => `<option value="${idx}">${escapeHtml(String(val) || `Вариант ${idx + 1}`)}</option>`).join("");
+    
+    // Устанавливаем значение из draft или details, если оно валидно
+    if (currentDefaultIdx != null && currentDefaultIdx >= 0 && currentDefaultIdx < values.length) {
+      variantGroupDefaultValueIndexInput.value = String(currentDefaultIdx);
+    } else if (currentValue && Number(currentValue) >= 0 && Number(currentValue) < values.length) {
+      variantGroupDefaultValueIndexInput.value = currentValue;
+    } else {
+      variantGroupDefaultValueIndexInput.value = "";
+    }
   }
 
   function getVariantGroupFormValues() {
     if (!variantGroupForm) return {};
+    // Берем значение из draft, а не из скрытого dropdown
+    const defaultIdx = state.variantDraft?.group?.default_value_index != null 
+      ? Number(state.variantDraft.group.default_value_index)
+      : null;
+    
+    // Отладочный вывод
+    console.log('getVariantGroupFormValues - draft.default_value_index:', state.variantDraft?.group?.default_value_index);
+    console.log('getVariantGroupFormValues - defaultIdx:', defaultIdx);
+    
     return {
       title: variantGroupTitleInput?.value || "",
       unit_id: variantGroupUnitIdInput?.value || null,
       sort_order: Number(variantGroupSortInput?.value || 0),
       is_active: variantGroupIsActive?.checked ? 1 : 0,
+      default_value_index: defaultIdx,
     };
   }
 
@@ -2581,9 +2760,29 @@ function updateOptionGroupSelectionUi() {
     if (variantGroupIsActive) variantGroupIsActive.disabled = disabled;
   }
 
+  // Храним флаг сохранения для предотвращения множественных запросов
+  let isSavingDefaultIndex = false;
+  
   function renderVariantItems(tiers) {
     if (!variantItemsList) return;
     const values = (state.variantDraft?.group?.values || state.variantGroupDetails?.group?.values || []);
+    
+    // Get current default value index (from draft or details, not from dropdown)
+    let defaultIdx = null;
+    defaultIdx = (state.variantDraft?.group?.default_value_index != null) 
+      ? Number(state.variantDraft.group.default_value_index)
+      : ((state.variantGroupDetails?.group?.default_value_index != null)
+        ? Number(state.variantGroupDetails.group.default_value_index)
+        : null);
+    
+    // Синхронизируем скрытый input для совместимости (dropdown скрыт, выбор через звездочки)
+    if (variantGroupDefaultValueIndexInput) {
+      if (defaultIdx != null && defaultIdx >= 0 && defaultIdx < values.length) {
+        variantGroupDefaultValueIndexInput.value = String(defaultIdx);
+      } else {
+        variantGroupDefaultValueIndexInput.value = "";
+      }
+    }
     
     variantItemsList.innerHTML = values.map((value, idx) => {
       const tier = tiers.find(t => Number(t.sort_order) === idx) || { discount_type: "percent", discount_percent: 0, discount_value: 0 };
@@ -2592,8 +2791,16 @@ function updateOptionGroupSelectionUi() {
         ? (tier.discount_percent != null ? tier.discount_percent : (tier.discount_value || 0))
         : (tier.discount_value != null ? tier.discount_value : (tier.discount_percent || 0));
       
+      const isDefault = defaultIdx !== null && idx === defaultIdx;
+      const starIcon = isDefault 
+        ? '<i class="fas fa-star" style="color: #ff7a00; font-size: 16px;"></i>'
+        : '<i class="far fa-star" style="color: #888; font-size: 16px;"></i>';
+      
       return `
         <div class="option-item-row variant-item-row" data-variant-item-index="${idx}">
+          <div class="option-item-col" style="display: flex; align-items: center; justify-content: center; padding-right: 8px; min-width: 32px;">
+            ${isVariantEditable() ? `<button type="button" class="variant-star-btn" data-variant-star="${idx}" style="background: none; border: none; padding: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center;" title="${isDefault ? 'Вариант по умолчанию' : 'Установить как вариант по умолчанию'}" aria-label="${isDefault ? 'Вариант по умолчанию' : 'Установить как вариант по умолчанию'}">${starIcon}</button>` : starIcon}
+          </div>
           <div class="option-item-col">
             <input class="control" type="text" data-variant-value="${idx}" value="${escapeHtml(value)}" placeholder="Значение" ${isVariantEditable() ? "" : "disabled"} />
           </div>
@@ -2657,12 +2864,293 @@ function updateOptionGroupSelectionUi() {
       });
     });
     
+    // Bind star click events for setting default variant
+    // Используем делегирование событий на родительском элементе для предотвращения дублирования обработчиков
+    // Сначала удаляем старый обработчик, если он был
+    if (variantItemsList._defaultStarHandler) {
+      variantItemsList.removeEventListener("click", variantItemsList._defaultStarHandler);
+    }
+    
+    // Создаем новый обработчик с делегированием
+    variantItemsList._defaultStarHandler = async (e) => {
+      const btn = e.target.closest("[data-variant-star]");
+      if (!btn) {
+        console.log('Star clicked - button not found (clicked outside star button)');
+        return;
+      }
+      
+      e.stopPropagation();
+      e.preventDefault();
+      
+      console.log('Star clicked - BUTTON FOUND:', {
+        buttonElement: btn,
+        dataset: btn.dataset,
+        dataVariantStar: btn.dataset.variantStar,
+        buttonText: btn.textContent || btn.innerHTML,
+        buttonClasses: btn.className
+      });
+      
+      // Защита от множественных кликов
+      if (isSavingDefaultIndex) {
+        console.log('Star clicked - already saving, ignoring duplicate click');
+        return;
+      }
+      
+      const variantIdxRaw = btn.dataset.variantStar;
+      const variantIdx = Number(variantIdxRaw);
+      console.log('Star clicked - INDEX EXTRACTION:', {
+        raw: variantIdxRaw,
+        parsed: variantIdx,
+        isFinite: Number.isFinite(variantIdx),
+        type: typeof variantIdxRaw
+      });
+      
+      if (!Number.isFinite(variantIdx)) {
+        console.error('Star clicked - INVALID INDEX:', {
+          raw: variantIdxRaw,
+          parsed: variantIdx,
+          type: typeof variantIdxRaw
+        });
+        return;
+      }
+      
+      // Инициализируем draft, если его нет
+      if (!state.variantDraft) {
+        console.log('Star clicked - variantDraft is null, attempting to initialize from variantGroupDetails');
+        if (state.variantGroupDetails?.group) {
+          state.variantDraft = {
+            group: { ...state.variantGroupDetails.group },
+            tiers: [...(state.variantGroupDetails.tiers || [])],
+            assignments: [...(state.variantGroupDetails.assignments || [])]
+          };
+          console.log('Star clicked - initialized variantDraft from variantGroupDetails:', {
+            groupId: state.variantDraft.group.id,
+            default_value_index: state.variantDraft.group.default_value_index,
+            valuesCount: state.variantDraft.group.values?.length
+          });
+        } else {
+          console.error('Star clicked - no variantDraft and no variantGroupDetails, cannot proceed', {
+            hasVariantGroupDetails: !!state.variantGroupDetails,
+            hasGroup: !!state.variantGroupDetails?.group
+          });
+          return; // Нет данных для работы
+        }
+      } else {
+        console.log('Star clicked - variantDraft exists:', {
+          groupId: state.variantDraft.group?.id,
+          default_value_index: state.variantDraft.group?.default_value_index,
+          valuesCount: state.variantDraft.group?.values?.length
+        });
+      }
+      
+      // Защита от множественных кликов
+      isSavingDefaultIndex = true;
+      btn.style.opacity = "0.5";
+      btn.style.pointerEvents = "none";
+      
+      // Убеждаемся, что draft.group существует
+      if (!state.variantDraft.group) {
+        state.variantDraft.group = {};
+      }
+      
+      // Проверяем валидность индекса
+      const values = state.variantDraft.group.values || [];
+      console.log('Star clicked - validating index:', {
+        variantIdx,
+        valuesLength: values.length,
+        values: values
+      });
+      if (variantIdx < 0 || variantIdx >= values.length) {
+        console.error('Star clicked - invalid index:', {
+          variantIdx,
+          valuesLength: values.length,
+          validRange: `0-${values.length - 1}`
+        });
+        isSavingDefaultIndex = false;
+        btn.style.opacity = "1";
+        btn.style.pointerEvents = "auto";
+        showToast("Неверный индекс варианта", "error");
+        return;
+      }
+        
+      // Проверяем, не устанавливаем ли мы то же значение
+      const currentDefaultIdx = state.variantDraft.group.default_value_index;
+      if (currentDefaultIdx === variantIdx) {
+        console.log('Star clicked - same value, skipping save:', variantIdx);
+        isSavingDefaultIndex = false;
+        btn.style.opacity = "1";
+        btn.style.pointerEvents = "auto";
+        return;
+      }
+      
+      // Устанавливаем выбранный вариант как дефолтный
+      state.variantDraft.group.default_value_index = variantIdx;
+      
+      console.log('Star clicked - setting default_value_index to:', variantIdx);
+      console.log('Star clicked - draft after update:', state.variantDraft.group);
+      
+      // Обновляем скрытый input для совместимости
+      if (variantGroupDefaultValueIndexInput) {
+        variantGroupDefaultValueIndexInput.value = String(variantIdx);
+      }
+      
+      // Автосохранение в БД, если редактируем существующую группу
+      let groupId = state.selectedVariantGroupId;
+      // Fallback: если groupId не установлен, берем из details
+      if (!groupId && state.variantGroupDetails?.group?.id) {
+        groupId = Number(state.variantGroupDetails.group.id);
+        state.selectedVariantGroupId = groupId; // Сохраняем для будущих кликов
+        console.log('Star clicked - groupId obtained from variantGroupDetails:', groupId);
+      }
+      const mode = state.variantPanel?.mode;
+      const isEditMode = (mode === "edit" || mode === "view") && groupId && Number.isFinite(groupId);
+      
+      console.log('Star clicked - isEditMode check:', {
+        groupId,
+        mode,
+        isEditMode,
+        hasSelectedId: !!groupId,
+        panelMode: mode
+      });
+      
+      if (isEditMode) {
+        try {
+          console.log('Star clicked - attempting to save default_value_index:', variantIdx, 'for group:', groupId);
+          console.log('Star clicked - FULL DIAGNOSTIC BEFORE SAVE:', {
+            variantIdx,
+            groupId,
+            mode,
+            payload: { default_value_index: variantIdx },
+            currentDraftValue: state.variantDraft.group.default_value_index,
+            currentDetailsValue: state.variantGroupDetails?.group?.default_value_index,
+            valuesArray: state.variantDraft.group.values,
+            valuesLength: state.variantDraft.group.values?.length
+          });
+          
+          // Используем отдельный endpoint для сохранения default_value_index
+          const result = await apiSetVariantGroupDefaultIndex(groupId, variantIdx);
+          
+          console.log('Star clicked - FULL DIAGNOSTIC AFTER SAVE:', {
+            variantIdx,
+            groupId,
+            result,
+            draftValueAfterSave: state.variantDraft.group.default_value_index,
+            detailsValueAfterSave: state.variantGroupDetails?.group?.default_value_index
+          });
+          
+          console.log('Star clicked - default_value_index saved to DB successfully:', variantIdx, 'result:', result);
+          
+          // Проверяем, что значение действительно сохранилось - перезагружаем данные
+          console.log('Star clicked - reloading group details to verify save...');
+          await loadVariantGroupDetails(groupId);
+          console.log('Star clicked - VERIFICATION AFTER RELOAD:', {
+            reloadedValue: state.variantGroupDetails?.group?.default_value_index,
+            expectedValue: variantIdx,
+            match: state.variantGroupDetails?.group?.default_value_index === variantIdx
+          });
+          
+          // Обновляем значение в загруженных деталях группы
+          if (state.variantGroupDetails?.group) {
+            state.variantGroupDetails.group.default_value_index = variantIdx;
+            console.log('Star clicked - updated variantGroupDetails.group.default_value_index to:', variantIdx);
+          }
+          
+          // Также обновляем в списке групп для синхронизации
+          const groupInList = state.variantGroups?.find(g => Number(g.id) === groupId);
+          if (groupInList) {
+            groupInList.default_value_index = variantIdx;
+            console.log('Star clicked - updated group in list default_value_index to:', variantIdx);
+          }
+          
+          // Обновляем draft для синхронизации
+          if (state.variantDraft?.group) {
+            state.variantDraft.group.default_value_index = variantIdx;
+            console.log('Star clicked - updated variantDraft.group.default_value_index to:', variantIdx);
+          }
+        } catch (error) {
+          console.error('Star clicked - failed to save default_value_index:', error);
+          console.error('Star clicked - error details:', {
+            message: error.message,
+            stack: error.stack,
+            groupId,
+            variantIdx
+          });
+          showToast("Не удалось сохранить вариант по умолчанию", "error");
+          // Откатываем изменения в draft при ошибке
+          state.variantDraft.group.default_value_index = currentDefaultIdx;
+          // Перерисовываем для восстановления состояния
+          renderVariantItems(getVariantItemsSource());
+          isSavingDefaultIndex = false;
+          btn.style.opacity = "1";
+          btn.style.pointerEvents = "auto";
+          return;
+        }
+      } else {
+        // В режиме создания новой группы - только помечаем как измененное
+        const reason = !groupId 
+          ? 'no groupId' 
+          : mode !== "edit" && mode !== "view" 
+            ? `mode is "${mode}", not "edit" or "view"` 
+            : !Number.isFinite(groupId)
+              ? 'groupId is not a valid number'
+              : 'unknown';
+        console.log('Star clicked - NOT saving to DB (not in edit mode):', {
+          groupId,
+          mode,
+          reason,
+          hasSelectedVariantGroupId: !!state.selectedVariantGroupId,
+          hasVariantGroupDetails: !!state.variantGroupDetails,
+          variantGroupDetailsGroupId: state.variantGroupDetails?.group?.id
+        });
+        if (state.variantPanel) {
+          state.variantPanel.itemsDirty = true;
+        }
+      }
+      
+      // Перерисовываем варианты для обновления звездочек
+      renderVariantItems(getVariantItemsSource());
+      
+      // Сбрасываем флаг сохранения
+      isSavingDefaultIndex = false;
+      btn.style.opacity = "1";
+      btn.style.pointerEvents = "auto";
+    };
+    
+    // Добавляем обработчик с делегированием событий
+    variantItemsList.addEventListener("click", variantItemsList._defaultStarHandler);
+    
     variantItemsList.querySelectorAll("[data-variant-remove]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const idx = Number(btn.dataset.variantRemove);
         if (!state.variantDraft || !state.variantDraft.group.values) return;
+        
+        const currentDefaultIdx = state.variantDraft.group.default_value_index != null 
+          ? Number(state.variantDraft.group.default_value_index) 
+          : null;
+        
         state.variantDraft.group.values.splice(idx, 1);
         state.variantDraft.tiers = state.variantDraft.tiers.filter((t, i) => i !== idx).map((t, i) => ({ ...t, sort_order: i }));
+        
+        // Если удалили дефолтный вариант, устанавливаем первый оставшийся как дефолтный
+        if (currentDefaultIdx === idx && state.variantDraft.group.values.length > 0) {
+          state.variantDraft.group.default_value_index = 0;
+          if (variantGroupDefaultValueIndexInput) {
+            variantGroupDefaultValueIndexInput.value = "0";
+          }
+        } else if (currentDefaultIdx === idx && state.variantDraft.group.values.length === 0) {
+          // Если удалили последний вариант - сбрасываем дефолт
+          state.variantDraft.group.default_value_index = null;
+          if (variantGroupDefaultValueIndexInput) {
+            variantGroupDefaultValueIndexInput.value = "";
+          }
+        } else if (currentDefaultIdx != null && currentDefaultIdx > idx) {
+          // Если удалили вариант перед дефолтным - сдвигаем индекс дефолтного
+          state.variantDraft.group.default_value_index = currentDefaultIdx - 1;
+          if (variantGroupDefaultValueIndexInput) {
+            variantGroupDefaultValueIndexInput.value = String(currentDefaultIdx - 1);
+          }
+        }
+        
         renderVariantItems(getVariantItemsSource());
       });
     });
@@ -2671,15 +3159,60 @@ function updateOptionGroupSelectionUi() {
 
   function renderVariantAssignments(assignments) {
     if (!variantAssignmentsList) return;
+    const values = (state.variantDraft?.group?.values || state.variantGroupDetails?.group?.values || []);
+    const groupDefaultIdx = (state.variantDraft?.group?.default_value_index != null ? state.variantDraft.group.default_value_index : 
+                            (state.variantGroupDetails?.group?.default_value_index != null ? state.variantGroupDetails.group.default_value_index : null));
+    
     variantAssignmentsList.innerHTML = assignments.map((assignment) => {
       const productName = assignment.product_name || "Товар";
+      const assignmentDefaultIdx = assignment.default_value_index != null ? Number(assignment.default_value_index) : null;
+      const currentDefaultIdx = assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx;
       return `
         <div class="option-assignment-row" data-variant-assignment-id="${assignment.id}">
           <div class="option-assignment-col">${escapeHtml(productName)}</div>
+          ${isVariantEditable() ? `
+            <div class="option-assignment-col">
+              <select class="control control-sm" data-variant-assignment-default="${assignment.id}" style="min-width: 120px;">
+                <option value="" ${currentDefaultIdx == null ? "selected" : ""}>Как у группы</option>
+                ${values.map((val, idx) => `<option value="${idx}" ${currentDefaultIdx === idx ? "selected" : ""}>${escapeHtml(String(val))}</option>`).join("")}
+              </select>
+            </div>
+          ` : ""}
           ${isVariantEditable() ? `<button class="btn btn-icon" type="button" data-variant-assignment-remove="${assignment.id}" title="Удалить"><i class="fas fa-times"></i></button>` : ""}
         </div>
       `;
     }).join("");
+    
+    // Bind events for default value index changes
+    if (isVariantEditable()) {
+      variantAssignmentsList.querySelectorAll("[data-variant-assignment-default]").forEach((select) => {
+        select.addEventListener("change", async () => {
+          const assignmentId = Number(select.dataset.variantAssignmentDefault);
+          const defaultIdxValue = select.value || "";
+          const defaultIdx = defaultIdxValue === "" ? null : Number(defaultIdxValue);
+          try {
+            await apiPatchVariantAssignment(assignmentId, { default_value_index: defaultIdx });
+            // Find assignment to get variant_group_id
+            const assignment = state.variantGroupDetails?.assignments?.find(a => Number(a.id) === assignmentId);
+            if (assignment) {
+              // Update assignment in state
+              assignment.default_value_index = defaultIdx;
+            }
+            // Reload variant group details to get updated assignments
+            if (state.selectedVariantGroupId) {
+              await loadVariantGroupDetails(state.selectedVariantGroupId);
+              renderVariantAssignments(state.variantGroupDetails?.assignments || []);
+            }
+            // Note: Stars in product variants list will be updated when product is opened/refreshed
+            // or when variant accordion is expanded (it reads from draft.productVariants)
+          } catch (e) {
+            console.error("Failed to update variant assignment default", e);
+            showToast("Не удалось обновить вариант по умолчанию");
+          }
+        });
+      });
+    }
+    
     refreshOpenAccordions();
   }
 
@@ -3183,7 +3716,16 @@ function updateOptionGroupSelectionUi() {
     state.variantPanel.itemsDirty = false;
     state.variantPanel.pickerSelection = new Set();
     if (state.variantPanel.mode === "view") {
-      state.variantDraft = null;
+      // Инициализируем draft из details вместо null, чтобы можно было сохранять default_value_index
+      if (details?.group) {
+        state.variantDraft = {
+          group: { ...details.group },
+          tiers: [...(details.tiers || [])],
+          assignments: [...(details.assignments || [])]
+        };
+      } else {
+        state.variantDraft = null;
+      }
       state.variantPanel.snapshotData = null;
     }
     if (productTitle) productTitle.textContent = details?.group?.title || "—";
@@ -3468,12 +4010,27 @@ function updateOptionGroupSelectionUi() {
   async function saveVariantGroup() {
     if (!variantGroupForm) return;
     const formValues = getVariantGroupFormValues();
+    
+    // Отладочный вывод для проверки значения
+    console.log('saveVariantGroup - formValues:', formValues);
+    console.log('saveVariantGroup - draft.default_value_index:', state.variantDraft?.group?.default_value_index);
+    
+    // Важно: default_value_index может быть 0 (первый вариант), поэтому проверяем !== undefined и !== null
+    const defaultIdx = formValues.default_value_index !== undefined && formValues.default_value_index !== null
+      ? Number(formValues.default_value_index)
+      : null;
+    
     const payload = {
       title: formValues.title,
       unit_id: formValues.unit_id || null,
       sort_order: formValues.sort_order || 0,
       is_active: formValues.is_active || 0,
+      default_value_index: defaultIdx,
     };
+    
+    console.log('saveVariantGroup - formValues.default_value_index:', formValues.default_value_index);
+    console.log('saveVariantGroup - defaultIdx:', defaultIdx);
+    console.log('saveVariantGroup - payload:', payload);
 
     if (!payload.title) {
       variantGroupTitleInput?.focus();
@@ -3544,10 +4101,25 @@ function updateOptionGroupSelectionUi() {
       }
     }
 
+    // Отладочный вывод для проверки условий
+    console.log('saveVariantGroup - state.selectedVariantGroupId:', state.selectedVariantGroupId);
+    console.log('saveVariantGroup - state.variantPanel.mode:', state.variantPanel.mode);
+    console.log('saveVariantGroup - payload before merge:', payload);
+    
     if (state.selectedVariantGroupId) {
-      if (state.variantPanel.mode !== "edit") return;
+      if (state.variantPanel.mode !== "edit") {
+        console.log('saveVariantGroup - EXIT: mode is not "edit"');
+        return;
+      }
       const groupId = state.selectedVariantGroupId;
       const values = state.variantDraft?.group?.values || [];
+      
+      console.log('saveVariantGroup - groupId:', groupId);
+      console.log('saveVariantGroup - values:', values);
+      
+      // Логируем финальный объект перед отправкой
+      const finalPayload = { ...payload, values };
+      console.log('saveVariantGroup - final payload for PATCH:', finalPayload);
       const tiers = state.variantDraft?.tiers || [];
       const tiersPayload = values.map((value, idx) => {
         const tier = tiers.find(t => Number(t.sort_order) === idx) || { discount_type: "percent", discount_percent: 0 };
@@ -3584,7 +4156,15 @@ function updateOptionGroupSelectionUi() {
       });
 
       try {
-        await apiPatchVariantGroup(groupId, { ...payload, values });
+        const patchPayload = { ...payload, values };
+        console.log('saveVariantGroup - calling apiPatchVariantGroup with:', patchPayload);
+        try {
+          const patchResult = await apiPatchVariantGroup(groupId, patchPayload);
+          console.log('saveVariantGroup - apiPatchVariantGroup result:', patchResult);
+        } catch (patchError) {
+          console.error('saveVariantGroup - apiPatchVariantGroup ERROR:', patchError);
+          throw patchError;
+        }
         await apiSaveVariantGroupTiers(groupId, { tiers: tiersPayload, delete_ids: deleteTierIds });
         if (toAdd.length) {
           await apiAddVariantGroupAssignments(groupId, toAdd);
@@ -3598,9 +4178,19 @@ function updateOptionGroupSelectionUi() {
         await loadVariantGroups();
         await loadVariantGroupDetails(groupId);
         renderVariantGroupsList();
+        
+        // Сохраняем значение default_value_index перед очисткой draft
+        const savedDefaultIdx = state.variantDraft?.group?.default_value_index;
+        
         state.variantDraft = null;
         state.variantPanel.itemsDirty = false;
         state.variantPanel.snapshotData = null;
+        
+        // Восстанавливаем значение в загруженных данных, если оно было сохранено
+        if (savedDefaultIdx != null && state.variantGroupDetails?.group) {
+          state.variantGroupDetails.group.default_value_index = savedDefaultIdx;
+        }
+        
         showVariantGroupDetails(state.variantGroupDetails, { mode: "view" });
         return;
       } catch (e) {
@@ -3609,6 +4199,14 @@ function updateOptionGroupSelectionUi() {
         console.error("Error saving variant group:", e);
         return;
       }
+    } else {
+      console.log('saveVariantGroup - EXIT: state.selectedVariantGroupId is not set');
+      console.log('saveVariantGroup - Cannot save: no group ID available');
+      console.log('saveVariantGroup - Current state:', {
+        selectedVariantGroupId: state.selectedVariantGroupId,
+        mode: state.variantPanel.mode,
+        draft: state.variantDraft
+      });
     }
   }
 
@@ -5861,6 +6459,12 @@ function updateOptionGroupSelectionUi() {
       if (!productId) return;
       const res = await apiGetProductVariants(productId);
       const arr = Array.isArray(res.data) ? res.data : [];
+      // Store variant data with default_value_index for later use
+      if (!draft.productVariants) draft.productVariants = [];
+      draft.productVariants = arr.map(v => ({
+        id: Number(v.id),
+        default_value_index: v.default_value_index != null ? Number(v.default_value_index) : null,
+      }));
       draft.initialVariantAssignments = arr
         .map((v) => ({
           assignment_id: Number(v.assignment_id),
@@ -6150,7 +6754,11 @@ function updateOptionGroupSelectionUi() {
       const details = variantDetailsCache.get(groupId);
       const values = details?.group?.values || group.values || [];
       const tiers = details?.tiers || details?.discount_tiers || [];
-      const itemsHtml = details ? renderVariantValuesSummary(values, tiers) : `<div class="muted">Раскройте, чтобы загрузить значения.</div>`;
+      // Get default value index from variant data (per-product override or group default)
+      const variantData = draft.productVariants?.find(v => Number(v.id) === groupId);
+      const defaultIdx = variantData?.default_value_index != null ? Number(variantData.default_value_index) : 
+                        (details?.group?.default_value_index != null ? Number(details.group.default_value_index) : null);
+      const itemsHtml = details ? renderVariantValuesSummary(values, tiers, defaultIdx) : `<div class="muted">Раскройте, чтобы загрузить значения.</div>`;
 
       const actionsHtml = isView
         ? `<span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>`
@@ -6233,7 +6841,11 @@ function updateOptionGroupSelectionUi() {
           if (details) variantDetailsCache.set(id, details);
           const inner = panel.querySelector(".acc-panel-inner");
           if (inner) {
-            inner.innerHTML = renderVariantValuesSummary(details?.group?.values || [], details?.tiers || []);
+            // Get default value index from variant data (per-product override or group default)
+            const variantData = draft.productVariants?.find(v => Number(v.id) === id);
+            const defaultIdx = variantData?.default_value_index != null ? Number(variantData.default_value_index) : 
+                              (details?.group?.default_value_index != null ? Number(details.group.default_value_index) : null);
+            inner.innerHTML = renderVariantValuesSummary(details?.group?.values || [], details?.tiers || [], defaultIdx);
           }
           refreshOpenAccordions();
         }, { once: true });
@@ -8835,6 +9447,7 @@ function updateOptionGroupSelectionUi() {
           if (!state.variantDraft.group.values) state.variantDraft.group.values = [];
           if (!state.variantDraft.tiers) state.variantDraft.tiers = [];
           
+          const wasEmpty = state.variantDraft.group.values.length === 0;
           const newIndex = state.variantDraft.group.values.length;
           state.variantDraft.group.values.push("");
           state.variantDraft.tiers.push({
@@ -8842,6 +9455,14 @@ function updateOptionGroupSelectionUi() {
             discount_type: "percent",
             discount_value: 0,
           });
+          
+          // Если это первый вариант - автоматически устанавливаем его как дефолтный
+          if (wasEmpty) {
+            state.variantDraft.group.default_value_index = 0;
+            if (variantGroupDefaultValueIndexInput) {
+              variantGroupDefaultValueIndexInput.value = "0";
+            }
+          }
           
           renderVariantItems(getVariantItemsSource());
         }

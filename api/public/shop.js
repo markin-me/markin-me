@@ -1099,11 +1099,67 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         [tenantId, storeId, id]
       );
 
+      // Собираем все product_id для загрузки вариантов
+      const productIds = items.map(item => Number(item.target_product_id)).filter(Number.isFinite);
+      
+      // Загружаем варианты для всех товаров-опций одним запросом
+      let variantsByProductId = new Map();
+      if (productIds.length > 0) {
+        const [variantAssignments] = await db.query(
+          `SELECT 
+             va.product_id,
+             vg.id AS variant_group_id,
+             vg.title AS variant_title,
+             vg.unit_id,
+             vg.values AS variant_values,
+             vg.default_value_index AS group_default_value_index,
+             va.default_value_index AS assignment_default_value_index,
+             u.code AS unit_code,
+             u.title AS unit_title,
+             u.short_title AS unit_short_title,
+             va.sort_order
+           FROM prod_variant_assignments va
+           JOIN prod_variant_groups vg ON vg.id = va.variant_group_id
+           LEFT JOIN prod_units u ON u.id = vg.unit_id
+           WHERE va.tenant_id = ? AND va.store_id = ? 
+             AND va.product_id IN (${productIds.map(() => '?').join(',')})
+             AND va.is_active = 1 AND vg.is_active = 1
+           ORDER BY va.product_id, va.sort_order ASC`,
+          [tenantId, storeId, ...productIds]
+        );
+        
+        // Группируем варианты по product_id
+        for (const va of variantAssignments) {
+          const pid = Number(va.product_id);
+          if (!variantsByProductId.has(pid)) {
+            variantsByProductId.set(pid, []);
+          }
+          const groupDefaultIdx = va.group_default_value_index != null ? Number(va.group_default_value_index) : null;
+          const assignmentDefaultIdx = va.assignment_default_value_index != null ? Number(va.assignment_default_value_index) : null;
+          // Определяем дефолтный индекс: сначала из привязки, потом из группы
+          const defaultIdx = assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx;
+          variantsByProductId.get(pid).push({
+            variant_group_id: Number(va.variant_group_id),
+            title: str(va.variant_title || ""),
+            unit_id: va.unit_id ? Number(va.unit_id) : null,
+            unit_code: str(va.unit_code || ""),
+            unit_title: str(va.unit_title || ""),
+            unit_short_title: str(va.unit_short_title || ""),
+            values: safeJsonArray(va.variant_values),
+            default_value_index: defaultIdx,
+          });
+        }
+      }
+
       // Нормализуем элементы
       const normalizedItems = items.map((item) => {
         const photos = safeJsonArray(item.product_photos_json);
+        const productId = Number(item.target_product_id);
+        const variants = variantsByProductId.get(productId) || [];
+        
         return {
           id: Number(item.id),
+          target_product_id: productId,
           name: str(item.product_name || ""),
           product_name: str(item.product_name || ""),
           product_price: Number(item.product_price || 0),
@@ -1114,6 +1170,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           qty_max: Number(item.qty_max ?? 1),
           is_active: Number(item.is_active || 0) === 1,
           sort_order: Number(item.sort_order || 0),
+          // Варианты товара-опции
+          variants: variants,
         };
       });
 
@@ -1127,6 +1185,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             min_select: group.min_select ?? 0,
             max_select: group.max_select ?? null,
             is_required: Number(group.is_required ?? 0) === 1,
+            allow_variants: Number(group.allow_variants ?? 0) === 1,
             is_active: Number(group.is_active || 0) === 1,
           },
           items: normalizedItems,
@@ -1155,6 +1214,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
            vg.values,
            vg.is_active,
            vg.sort_order,
+           vg.default_value_index AS group_default_value_index,
+           va.default_value_index AS assignment_default_value_index,
            u.code AS unit_code,
            u.title AS unit_title,
            u.short_title AS unit_short_title,
@@ -1170,6 +1231,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       for (const v of variants) {
         v.values = safeJsonArray(v.values);
+        const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
+        const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
+        v.default_value_index = assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx;
         const [tiers] = await db.query(
           `SELECT min_quantity, discount_percent, sort_order
            FROM prod_variant_discount_tiers
@@ -1409,12 +1473,22 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           : [];
         const optionIdsFromRequest = Array.isArray(it.option_item_ids) ? it.option_item_ids : [];
         
-        // Создаем map для быстрого поиска qty из запроса
+        // Создаем map для быстрого поиска qty и вариантов из запроса
         const qtyMap = new Map();
+        const optionVariantsMap = new Map(); // Варианты для каждой опции
         optionItemsFromRequest.forEach(opt => {
           const id = Number(opt.id);
           if (Number.isFinite(id) && id > 0) {
             qtyMap.set(id, Math.max(1, Number(opt.qty || opt.quantity || 1)));
+            // Сохраняем данные о варианте опции, если есть
+            if (opt.variant_group_id != null && opt.variant_value_index != null) {
+              optionVariantsMap.set(id, {
+                variant_group_id: Number(opt.variant_group_id),
+                variant_value_index: Number(opt.variant_value_index),
+                variant_label: str(opt.variant_label || ""),
+                variant_price_diff: Number(opt.variant_price_diff || 0),
+              });
+            }
           }
         });
 
@@ -1437,12 +1511,23 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           const optPrice = optInfo.price; // Цена всегда из БД
           // НЕ добавляем к optionsTotal - цена уже учтена в line_total
 
-          options.push({
+          const optionEntry = {
             id: optId,
             title: optInfo.title,
             price: optPrice,
             qty: optQty,
-          });
+          };
+          
+          // Добавляем данные о варианте опции, если есть
+          const optVariant = optionVariantsMap.get(optId);
+          if (optVariant) {
+            optionEntry.variant_group_id = optVariant.variant_group_id;
+            optionEntry.variant_value_index = optVariant.variant_value_index;
+            optionEntry.variant_label = optVariant.variant_label;
+            optionEntry.variant_price_diff = optVariant.variant_price_diff;
+          }
+
+          options.push(optionEntry);
         }
 
         // Обрабатываем ингредиенты (только для сохранения состава, не для пересчета цены)

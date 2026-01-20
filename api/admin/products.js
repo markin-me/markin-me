@@ -534,6 +534,9 @@ router.post('/admin/options/group-bundle', async (req, res) => {
       ? (helpers.toBool(group.is_required, true) ? 1 : 0)
       : 0;
 
+  // ✅ allow_variants (переключатель вариантов у пунктов опции)
+  const allowVariants = helpers.toBool(group.allow_variants, false) ? 1 : 0;
+
   const sortOrder = helpers.numOrNull(group.sort_order) ?? 0;
 
   const conn = await db.getConnection();
@@ -542,9 +545,9 @@ router.post('/admin/options/group-bundle', async (req, res) => {
 
     const [result] = await conn.query(
       `INSERT INTO prod_option_groups
-       (tenant_id, store_id, title, selection_type, min_select, max_select, is_active, is_required, sort_order)
-       VALUES (?,?,?,?,?,?,?,?,?)`,
-      [tenantId, storeId, title, selectionType, minSelect, maxSelect, isActive, isRequired, sortOrder]
+       (tenant_id, store_id, title, selection_type, min_select, max_select, is_active, is_required, allow_variants, sort_order)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [tenantId, storeId, title, selectionType, minSelect, maxSelect, isActive, isRequired, allowVariants, sortOrder]
     );
     const groupId = result.insertId;
 
@@ -667,6 +670,11 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     if (Object.prototype.hasOwnProperty.call(req.body, 'is_active')) {
       fields.push('is_active=?');
       values.push(helpers.toBool(req.body.is_active, true) ? 1 : 0);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body, 'allow_variants')) {
+      fields.push('allow_variants=?');
+      values.push(helpers.toBool(req.body.allow_variants, false) ? 1 : 0);
     }
 
     // ✅ is_required только для single
@@ -1065,6 +1073,19 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       if (!group) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
 
       group.values = helpers.safeJsonArray(group.values);
+      group.default_value_index = group.default_value_index != null ? Number(group.default_value_index) : null;
+      
+      console.log('[API] GET /admin/variants/groups/:id - LOADED DATA:', {
+        id,
+        tenantId,
+        default_value_index_raw: group.default_value_index,
+        default_value_index_processed: group.default_value_index != null ? Number(group.default_value_index) : null,
+        default_value_index_type: typeof group.default_value_index,
+        values: group.values,
+        valuesLength: group.values?.length,
+        hasDefaultValue: group.default_value_index != null,
+        defaultValueValid: group.default_value_index != null && group.default_value_index >= 0 && group.default_value_index < (group.values?.length || 0)
+      });
 
       const [tiers] = await db.query(
         `SELECT * FROM prod_variant_discount_tiers
@@ -1081,6 +1102,10 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
          ORDER BY a.sort_order ASC, a.id ASC`,
         [tenantId, id]
       );
+      // Преобразуем default_value_index в число или null
+      assignments.forEach(a => {
+        a.default_value_index = a.default_value_index != null ? Number(a.default_value_index) : null;
+      });
 
       res.json({ ok: true, data: { group, tiers, assignments } });
     } catch (e) {
@@ -1107,11 +1132,18 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     try {
       await conn.beginTransaction();
 
+      const defaultValueIndexRaw = group.default_value_index;
+      console.log('[API] POST /admin/variants/group-bundle - default_value_index received:', defaultValueIndexRaw, 'type:', typeof defaultValueIndexRaw);
+      // Важно: 0 - это валидное значение (первый вариант), поэтому обрабатываем его отдельно
+      const defaultValueIndex = defaultValueIndexRaw === null || defaultValueIndexRaw === undefined 
+        ? null 
+        : (Number.isFinite(Number(defaultValueIndexRaw)) ? Number(defaultValueIndexRaw) : null);
+      console.log('[API] POST /admin/variants/group-bundle - processed value:', defaultValueIndex);
       const [result] = await conn.query(
         `INSERT INTO prod_variant_groups
-         (tenant_id, title, unit_id, \`values\`, selection_type, is_active, sort_order)
-         VALUES (?,?,?,?,'single',?,?)`,
-        [tenantId, title, unitId, values, isActive, sortOrder]
+         (tenant_id, title, unit_id, \`values\`, selection_type, is_active, sort_order, default_value_index)
+         VALUES (?,?,?,?,'single',?,?,?)`,
+        [tenantId, title, unitId, values, isActive, sortOrder, defaultValueIndex]
       );
       const groupId = result.insertId;
 
@@ -1159,10 +1191,44 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     }
   });
 
-  router.patch('/admin/variants/groups/:id', async (req, res) => {
+  // ВАЖНО: этот маршрут должен быть объявлен ПЕРЕД общим маршрутом /:id
+  router.patch('/admin/variants/groups/:id/defaultIndex', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
       const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      let default_value_index = req.body.default_value_index;
+      if (default_value_index !== null && default_value_index !== undefined) {
+        default_value_index = Number(default_value_index);
+        if (!Number.isFinite(default_value_index) || default_value_index < 0) {
+          return res.status(400).json({ ok: false, error: 'INVALID_INDEX' });
+        }
+      } else {
+        default_value_index = null;
+      }
+
+      await db.query(
+        'UPDATE prod_variant_groups SET default_value_index=? WHERE tenant_id=? AND id=?',
+        [default_value_index, tenantId, id]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.patch('/admin/variants/groups/:id', async (req, res) => {
+    console.log('[API] PATCH /admin/variants/groups/:id - REQUEST RECEIVED');
+    console.log('[API] PATCH /admin/variants/groups/:id - params:', req.params);
+    console.log('[API] PATCH /admin/variants/groups/:id - body:', req.body);
+    console.log('[API] PATCH /admin/variants/groups/:id - body keys:', Object.keys(req.body || {}));
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      console.log('[API] PATCH /admin/variants/groups/:id - tenantId:', tenantId, 'id:', id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
       const fields = [];
@@ -1196,16 +1262,112 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         values.push(helpers.numOrNull(req.body.sort_order) ?? 0);
       }
 
+      if (Object.prototype.hasOwnProperty.call(req.body, 'default_value_index')) {
+        const defaultValueIndex = req.body.default_value_index;
+        console.log('[API] PATCH /admin/variants/groups/:id - default_value_index received:', defaultValueIndex, 'type:', typeof defaultValueIndex);
+        // Важно: 0 - это валидное значение (первый вариант), поэтому обрабатываем его отдельно
+        let processedValue;
+        if (defaultValueIndex === null || defaultValueIndex === undefined) {
+          processedValue = null;
+        } else if (Number.isFinite(Number(defaultValueIndex))) {
+          processedValue = Number(defaultValueIndex);
+        } else {
+          processedValue = null;
+        }
+        console.log('[API] PATCH /admin/variants/groups/:id - processed value:', processedValue, 'type:', typeof processedValue);
+        fields.push('default_value_index=?');
+        values.push(processedValue);
+        
+        // Сохраняем для использования в проверке после UPDATE
+        req.body._processedDefaultValueIndex = processedValue;
+      }
+
       if (!fields.length) return res.json({ ok: true });
 
       values.push(tenantId, id);
+      
+      // Логируем детали перед UPDATE
+      const sqlQuery = `UPDATE prod_variant_groups SET ${fields.join(', ')} WHERE tenant_id=? AND id=?`;
+      console.log('[API] PATCH /admin/variants/groups/:id - SQL query:', sqlQuery);
+      console.log('[API] PATCH /admin/variants/groups/:id - values:', values);
+      console.log('[API] PATCH /admin/variants/groups/:id - values types:', values.map(v => typeof v));
+      console.log('[API] PATCH /admin/variants/groups/:id - fields:', fields);
+      
+      // Проверяем значение ДО UPDATE
+      const [beforeUpdate] = await db.query(
+        `SELECT default_value_index FROM prod_variant_groups WHERE tenant_id=? AND id=? LIMIT 1`,
+        [tenantId, id]
+      );
+      console.log('[API] PATCH /admin/variants/groups/:id - BEFORE UPDATE:', {
+        default_value_index: beforeUpdate[0]?.default_value_index,
+        type: typeof beforeUpdate[0]?.default_value_index
+      });
+      
       await db.query(
         `UPDATE prod_variant_groups
          SET ${fields.join(', ')}
          WHERE tenant_id=? AND id=?`,
         values
       );
-
+      
+      // Проверяем, что значение сохранилось
+      const [check] = await db.query(
+        `SELECT default_value_index, updated_at, title, \`values\` FROM prod_variant_groups WHERE tenant_id=? AND id=? LIMIT 1`,
+        [tenantId, id]
+      );
+      
+      const savedValue = check[0]?.default_value_index;
+      const requestedValue = req.body.default_value_index;
+      
+      console.log('[API] PATCH /admin/variants/groups/:id - FULL VERIFICATION:', {
+        id,
+        tenantId,
+        requestedValue: requestedValue,
+        requestedValueType: typeof requestedValue,
+        savedValue: savedValue,
+        savedValueType: typeof savedValue,
+        valuesMatch: savedValue == requestedValue, // Use == for loose comparison
+        valuesStrictMatch: savedValue === Number(requestedValue), // Use === for strict comparison
+        updatedAt: check[0]?.updated_at,
+        title: check[0]?.title,
+        values: check[0]?.values,
+        valuesParsed: check[0]?.values ? JSON.parse(check[0].values || '[]') : null
+      });
+      
+      // Проверяем, что значение действительно сохранилось
+      if (Object.prototype.hasOwnProperty.call(req.body, 'default_value_index')) {
+        const processedValue = req.body._processedDefaultValueIndex;
+        const actualSavedValue = savedValue != null ? Number(savedValue) : null;
+        
+        if (processedValue !== actualSavedValue) {
+          console.error('[API] PATCH /admin/variants/groups/:id - ⚠️ VALUE MISMATCH!', {
+            processedValue,
+            actualSavedValue,
+            requestedValue,
+            savedValueRaw: savedValue,
+            warning: 'The value was not saved correctly!'
+          });
+        } else {
+          console.log('[API] PATCH /admin/variants/groups/:id - ✅ Value saved correctly:', {
+            processedValue,
+            actualSavedValue
+          });
+        }
+      }
+      
+      console.log('[API] PATCH /admin/variants/groups/:id - saved value in DB:', savedValue);
+      console.log('[API] PATCH /admin/variants/groups/:id - UPDATE completed successfully');
+      
+      // Дополнительная проверка: запрос всех полей для полной диагностики
+      const [fullCheck] = await db.query(
+        `SELECT * FROM prod_variant_groups WHERE tenant_id=? AND id=? LIMIT 1`,
+        [tenantId, id]
+      );
+      console.log('[API] PATCH /admin/variants/groups/:id - FULL ROW DATA:', fullCheck[0]);
+      
+      // Проверяем, что default_value_index действительно в данных
+      console.log('[API] PATCH /admin/variants/groups/:id - default_value_index in full row:', fullCheck[0]?.default_value_index);
+      
       res.json({ ok: true });
     } catch (e) {
       console.error(e);
@@ -1341,6 +1503,47 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     }
   });
 
+  router.patch('/admin/variants/assignments/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const fields = [];
+      const values = [];
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'default_value_index')) {
+        fields.push('default_value_index=?');
+        values.push(helpers.numOrNull(req.body.default_value_index));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'is_active')) {
+        fields.push('is_active=?');
+        values.push(helpers.toBool(req.body.is_active, true) ? 1 : 0);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'sort_order')) {
+        fields.push('sort_order=?');
+        values.push(helpers.numOrNull(req.body.sort_order) ?? 0);
+      }
+
+      if (!fields.length) return res.json({ ok: true });
+
+      values.push(tenantId, id);
+      await db.query(
+        `UPDATE prod_variant_assignments
+         SET ${fields.join(', ')}
+         WHERE tenant_id=? AND id=?`,
+        values
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.delete('/admin/variants/assignments/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -1376,10 +1579,12 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
           vg.values,
           vg.is_active,
           vg.sort_order,
+          vg.default_value_index AS group_default_value_index,
           va.id AS assignment_id,
           va.variant_group_id,
           va.product_id,
-          va.sort_order AS assignment_sort_order
+          va.sort_order AS assignment_sort_order,
+          va.default_value_index AS assignment_default_value_index
         FROM prod_variant_assignments va
         JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
         WHERE va.tenant_id=? AND va.product_id=? AND va.is_active=1 AND vg.is_active=1
@@ -1389,6 +1594,10 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       for (const v of variants) {
         v.values = helpers.safeJsonArray(v.values);
+        v.group_default_value_index = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
+        v.assignment_default_value_index = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
+        // Определяем дефолтный индекс: сначала из привязки, потом из группы
+        v.default_value_index = v.assignment_default_value_index != null ? v.assignment_default_value_index : v.group_default_value_index;
         const [tiers] = await db.query(
           `SELECT min_quantity, discount_percent, sort_order
            FROM prod_variant_discount_tiers
