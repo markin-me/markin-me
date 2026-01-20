@@ -2099,10 +2099,14 @@ function fillOptionGroupForm(group, items = []) {
   if (optionGroupTitleInput) optionGroupTitleInput.value = group.title || "";
 
   if (optionGroupSelectionInput) {
-    if (group.selection_type === "multiple") {
+    const selType = group.selection_type || "single";
+    // Поддерживаем как БД-типы (single/multiple), так и UI-типы (single/multiple_group/multiple_item)
+    if (selType === "multiple") {
+      // БД-тип "multiple" — определяем UI-тип по items
       optionGroupSelectionInput.value = getSelectionUiTypeFromGroup(group, items);
-    } else if (group.selection_type === "multiple_group" || group.selection_type === "multiple_item") {
-      optionGroupSelectionInput.value = group.selection_type;
+    } else if (selType === "multiple_group" || selType === "multiple_item") {
+      // Уже UI-тип
+      optionGroupSelectionInput.value = selType;
     } else {
       optionGroupSelectionInput.value = "single";
     }
@@ -2119,9 +2123,11 @@ function fillOptionGroupForm(group, items = []) {
   }
 
   // ✅ свич "Обязательная" (только single)
+  // Проверяем оба формата: БД-тип "single" и UI-тип "single"
   const requiredEl = document.getElementById("optionGroupIsRequired");
   if (requiredEl && requiredEl.type === "checkbox") {
-    requiredEl.checked = group.selection_type === "single" ? Boolean(group.is_required ?? 1) : false;
+    const isSingle = group.selection_type === "single";
+    requiredEl.checked = isSingle ? Boolean(group.is_required ?? 1) : false;
   }
 }
 
@@ -3871,6 +3877,10 @@ function updateOptionGroupSelectionUi() {
       const snapshot = state.optionPanel.snapshotData;
       const snapshotGroup = getOptionGroupUiValues(snapshot?.group, snapshot?.items || []);
       const groupChanged = JSON.stringify(formValues) !== JSON.stringify(snapshotGroup);
+      
+      // Проверяем, изменился ли тип выбора (для обновления qty_min/qty_max всех items)
+      const snapshotSelectionUi = snapshotGroup?.selection_type || "single";
+      const selectionTypeChanged = selectionUi !== snapshotSelectionUi;
 
       const draftItems = state.optionDraft?.items || [];
       const draftAssignments = state.optionDraft?.assignments || [];
@@ -3893,7 +3903,8 @@ function updateOptionGroupSelectionUi() {
       draftItemMap.forEach((item, key) => {
         const prev = snapshotItemMap.get(key);
         if (!prev) return;
-        if (JSON.stringify(normalizeItem(item)) !== JSON.stringify(normalizeItem(prev))) {
+        // Если тип изменился — все items нужно обновить (для корректных qty_min/qty_max)
+        if (selectionTypeChanged || JSON.stringify(normalizeItem(item)) !== JSON.stringify(normalizeItem(prev))) {
           updatedItems.push(item);
         }
       });
@@ -8871,6 +8882,7 @@ function updateOptionGroupSelectionUi() {
 
     if (optionGroupSelectionInput) {
       optionGroupSelectionInput.addEventListener("change", () => {
+        syncOptionDraftGroupFromForm();
         updateOptionGroupSelectionUi();
         // show qty controls immediately for selection type switch
         renderOptionItems(getOptionItemsSource());

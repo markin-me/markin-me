@@ -514,6 +514,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
 router.post('/admin/options/group-bundle', async (req, res) => {
   const tenantId = helpers.getTenantId(req);
+  const storeId = helpers.getStoreId(req);
   const group = req.body.group || req.body || {};
   const items = Array.isArray(req.body.items) ? req.body.items : [];
   const assignments = Array.isArray(req.body.assignments) ? req.body.assignments : [];
@@ -541,9 +542,9 @@ router.post('/admin/options/group-bundle', async (req, res) => {
 
     const [result] = await conn.query(
       `INSERT INTO prod_option_groups
-       (tenant_id, title, selection_type, min_select, max_select, is_active, is_required, sort_order)
-       VALUES (?,?,?,?,?,?,?,?)`,
-      [tenantId, title, selectionType, minSelect, maxSelect, isActive, isRequired, sortOrder]
+       (tenant_id, store_id, title, selection_type, min_select, max_select, is_active, is_required, sort_order)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [tenantId, storeId, title, selectionType, minSelect, maxSelect, isActive, isRequired, sortOrder]
     );
     const groupId = result.insertId;
 
@@ -563,6 +564,7 @@ router.post('/admin/options/group-bundle', async (req, res) => {
 
         return [
           tenantId,
+          storeId,
           groupId,
           'product',
           Number(item.target_product_id),
@@ -577,7 +579,7 @@ router.post('/admin/options/group-bundle', async (req, res) => {
 
       await conn.query(
         `INSERT INTO prod_option_items
-         (tenant_id, group_id, target_type, target_product_id, price_mode, price_value, qty_min, qty_max, is_active, sort_order)
+         (tenant_id, store_id, group_id, target_type, target_product_id, price_mode, price_value, qty_min, qty_max, is_active, sort_order)
          VALUES ?`,
         [values]
       );
@@ -586,6 +588,7 @@ router.post('/admin/options/group-bundle', async (req, res) => {
     if (assignments.length) {
       const values = assignments.map((assignment, idx) => ([
         tenantId,
+        storeId,
         groupId,
         'product',
         Number(assignment.assign_id),
@@ -595,7 +598,7 @@ router.post('/admin/options/group-bundle', async (req, res) => {
       ]));
       await conn.query(
         `INSERT INTO prod_option_assignments
-         (tenant_id, group_id, assign_type, assign_id, priority, sort_order, is_active)
+         (tenant_id, store_id, group_id, assign_type, assign_id, priority, sort_order, is_active)
          VALUES ?
          ON DUPLICATE KEY UPDATE
            priority=VALUES(priority),
@@ -823,17 +826,19 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         if (!Number.isFinite(targetId) || targetId <= 0) continue;
         const row = map.get(targetId);
         const priceMode = item.price_mode === 'fixed' ? 'fixed' : 'from_target';
-        const priceValue = priceMode === 'fixed' ? helpers.numOrNull(item.price_value) : null;
+        // Унифицировано: для from_target используем 0 (как в bundle-endpoint)
+        const priceValue = priceMode === 'fixed' ? (helpers.numOrNull(item.price_value) ?? 0) : 0;
         const qtyMin = helpers.numOrNull(item.qty_min) ?? 1;
         const qtyMax = helpers.numOrNull(item.qty_max) ?? 1;
         const sortOrder = helpers.numOrNull(item.sort_order) ?? 0;
 
         if (!row) {
+          const storeId = helpers.getStoreId(req);
           await conn.query(
             `INSERT INTO prod_option_items
-             (tenant_id, group_id, target_type, target_product_id, price_mode, price_value, qty_min, qty_max, is_active, sort_order)
-             VALUES (?,?,?,?,?,?,?,?,?,?)`,
-            [tenantId, groupId, 'product', targetId, priceMode, priceValue, qtyMin, qtyMax, 1, sortOrder]
+             (tenant_id, store_id, group_id, target_type, target_product_id, price_mode, price_value, qty_min, qty_max, is_active, sort_order)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+            [tenantId, storeId, groupId, 'product', targetId, priceMode, priceValue, qtyMin, qtyMax, 1, sortOrder]
           );
           added.push(targetId);
           continue;
@@ -873,12 +878,13 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         fields.push('price_mode=?');
         values.push(priceMode);
         if (Object.prototype.hasOwnProperty.call(req.body, 'price_value')) {
-          values.push(priceMode === 'fixed' ? helpers.numOrNull(req.body.price_value) : null);
+          // Унифицировано: для from_target используем 0
+          values.push(priceMode === 'fixed' ? (helpers.numOrNull(req.body.price_value) ?? 0) : 0);
           fields.push('price_value=?');
         }
       } else if (Object.prototype.hasOwnProperty.call(req.body, 'price_value')) {
         fields.push('price_value=?');
-        values.push(helpers.numOrNull(req.body.price_value));
+        values.push(helpers.numOrNull(req.body.price_value) ?? 0);
       }
 
       if (Object.prototype.hasOwnProperty.call(req.body, 'qty_min')) {

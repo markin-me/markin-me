@@ -206,31 +206,65 @@
           `;
         }
 
+        // Упрощенное фото 40×40 (только первое фото)
+        const photoHtml = hasPhotos 
+          ? `<div class="order-item-photo-small"><img src="${escapeHtml(photos[0])}" alt="${escapeHtml(name)}" /></div>`
+          : "";
+
         const base = `
           <div class="order-item-line">
-            ${hasPhotos ? `<div class="order-item-photo-col">${photosHtml}</div>` : ""}
+            ${photoHtml}
             <div class="order-item-content">
-              <div class="order-item-name">${name} × ${qty}</div>
-              <div class="order-item-sum">${money(lineTotal)}</div>
+              <div class="order-item-name">${name} × ${qty} — ${money(lineTotal)}</div>
             </div>
           </div>
         `;
 
-        // Отображаем опции товара
-        const options = Array.isArray(it.options) ? it.options : [];
-        const subHtml = options.length
-          ? `<div class="order-item-options">
-              ${options.map((opt) => {
-                const optName = escapeHtml(opt.title || "Опция");
-                const optQty = Math.max(1, Number(opt.qty || 1));
-                const optPrice = Number(opt.price || 0);
-                const optTotal = optPrice * optQty;
-                const qtyText = optQty > 1 ? ` × ${optQty}` : "";
-                const priceText = optTotal > 0 ? ` (+${money(optTotal)})` : "";
-                return `<div class="order-item-option">${optName}${qtyText}${priceText}</div>`;
+        // Отображаем варианты товара (первыми)
+        const variants = Array.isArray(it.variants) ? it.variants : [];
+        const variantsHtml = variants.length
+          ? `<div class="order-item-composition">
+              ${variants.map((v) => {
+                const groupTitle = escapeHtml(v.group_title || "Вариант");
+                const variantValue = escapeHtml(v.label || v.value || "");
+                // Формат: количество × название (без цены)
+                // variantValue уже содержит количество и единицу (например "200 г")
+                return `<div class="order-item-composition-item">${variantValue} × ${groupTitle}</div>`;
               }).join("")}
             </div>`
           : "";
+
+        // Отображаем ингредиенты товара (вторыми)
+        const ingredients = Array.isArray(it.ingredients) ? it.ingredients : [];
+        const ingredientsHtml = ingredients.length
+          ? `<div class="order-item-composition">
+              ${ingredients.map((ing) => {
+                const ingName = escapeHtml(ing.name || "Ингредиент");
+                const ingQty = Math.max(1, Number(ing.quantity || ing.qty || 1));
+                // Формат: количество × название (без цены)
+                // Если quantity - это число, просто показываем его, иначе показываем как есть (может быть "200 г")
+                const qtyText = ingQty > 1 ? `${ingQty} × ` : "1 × ";
+                return `<div class="order-item-composition-item">${qtyText}${ingName}</div>`;
+              }).join("")}
+            </div>`
+          : "";
+
+        // Отображаем опции товара (третьими)
+        const options = Array.isArray(it.options) ? it.options : [];
+        const optionsHtml = options.length
+          ? `<div class="order-item-composition">
+              ${options.map((opt) => {
+                const optName = escapeHtml(opt.title || "Опция");
+                const optQty = Math.max(1, Number(opt.qty || 1));
+                // Формат: количество × название (без цены)
+                const qtyText = optQty > 1 ? `${optQty} × ` : "1 × ";
+                return `<div class="order-item-composition-item">${qtyText}${optName}</div>`;
+              }).join("")}
+            </div>`
+          : "";
+
+        // Порядок: варианты → ингредиенты → опции
+        const subHtml = variantsHtml + ingredientsHtml + optionsHtml;
 
         return `<div class="order-item" data-item-idx="${itemIdx}">${base}${subHtml}</div>`;
       })

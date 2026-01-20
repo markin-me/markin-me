@@ -301,8 +301,11 @@
               price: 0,
               qty: 1,
             }));
+          // Восстанавливаем ингредиенты из сохранённых данных
+          const ingredients = Array.isArray(item?.ingredients) ? item.ingredients : [];
+          
           return {
-            key: makeCartKey(productId, normalizedOptionItems, [], {
+            key: makeCartKey(productId, normalizedOptionItems, ingredients, {
               group_id: item.variant_group_id,
               value_index: item.variant_value_index,
             }),
@@ -310,6 +313,8 @@
             qty,
             option_item_ids: normalizedOptionItems.map((opt) => opt.id),
             option_items: normalizedOptionItems,
+            ingredients: ingredients,
+            ingredient_price_diff: Number(item?.ingredient_price_diff || 0),
             variant_group_id: Number(item.variant_group_id ?? null),
             variant_value_index: Number.isFinite(Number(item.variant_value_index))
               ? Number(item.variant_value_index)
@@ -1574,11 +1579,21 @@ async function initAddresses() {
       
       // Добавляем стоимость обязательных опций по умолчанию
       for (const group of optionGroups) {
-        if (group.is_required && group.items?.length > 0) {
-          // Берём первый элемент как дефолтный для обязательной опции
+        const groupType = getOptionGroupUiType(group);
+        
+        if (groupType === "single" && group.is_required && group.items?.length > 0) {
+          // Для single с is_required — берём первый элемент как дефолтный
           const defaultItem = group.items[0];
           if (defaultItem?.price) {
             price += Number(defaultItem.price || 0);
+          }
+        } else if (groupType === "multiple_item" || groupType === "multiple_group") {
+          // Для multiple — добавляем все элементы с qty_min > 0
+          for (const item of (group.items || [])) {
+            const qtyMin = item.qty_min ?? 1;
+            if (qtyMin > 0 && item.price) {
+              price += Number(item.price || 0) * qtyMin;
+            }
           }
         }
       }
@@ -1870,7 +1885,8 @@ async function initAddresses() {
         parts.push(optionText);
       }
 
-      if (variantLabel) {
+      // Добавляем вариант только если он реально выбран (не пустая строка и не "Вариант: ")
+      if (variantLabel && variantLabel.trim() && !variantLabel.match(/^Вариант:\s*$/)) {
         parts.push(variantLabel);
       }
       
@@ -2516,8 +2532,13 @@ function updateCartBadge() {
     if (!Number.isFinite(pid)) return [];
     if (state.productOptionsCache.has(pid)) return state.productOptionsCache.get(pid);
     try {
-      const json = await apiJson(`/api/admin/products/${pid}/option-assignments`);
-      const list = Array.isArray(json.data) ? json.data : [];
+      const res = await fetch(`/api/public/products/${pid}/option-assignments`);
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data || data.ok === false) {
+        state.productOptionsCache.set(pid, []);
+        return [];
+      }
+      const list = Array.isArray(data.data) ? data.data : [];
       state.productOptionsCache.set(pid, list);
       return list;
     } catch {
@@ -2531,8 +2552,13 @@ function updateCartBadge() {
     if (!Number.isFinite(gid)) return null;
     if (state.optionGroupCache.has(gid)) return state.optionGroupCache.get(gid);
     try {
-      const json = await apiJson(`/api/admin/options/groups/${gid}`);
-      const details = json.data || null;
+      const res = await fetch(`/api/public/options/groups/${gid}`);
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data || data.ok === false) {
+        state.optionGroupCache.set(gid, null);
+        return null;
+      }
+      const details = data.data || null;
       state.optionGroupCache.set(gid, details);
       return details;
     } catch {
@@ -2548,14 +2574,21 @@ function updateCartBadge() {
   }
 
   function getOptionGroupUiType(group) {
-    if (!group || group.selection_type !== "multiple") return "single";
+    if (!group) return "single";
+    
+    // Проверяем selection_type: если "multiple", определяем подтип по лимитам товаров
+    const selectionType = group.selection_type || "single";
+    if (selectionType !== "multiple") return "single";
+    
     const items = Array.isArray(group.items) ? group.items : [];
-    const hasItemLimits = items.some((item) => {
-      const min = item.qty_min ?? 1;
+    // Проверяем, есть ли у товаров возможность выбора количества > 1
+    // Если max > 1 у любого товара — это multiple_item (с контролами количества)
+    // Иначе — multiple_group (просто чекбоксы, каждый товар = 1 шт)
+    const hasQtyControls = items.some((item) => {
       const max = item.qty_max ?? 1;
-      return min !== 1 || max !== 1;
+      return max > 1;
     });
-    return hasItemLimits ? "multiple_item" : "multiple_group";
+    return hasQtyControls ? "multiple_item" : "multiple_group";
   }
 
   function collectSelectedOptionItems(optionGroups, selectionState) {
@@ -2609,14 +2642,18 @@ async function resolveProductOptionGroups(productId) {
     const activeItems = items.filter((item) => Number(item.is_active || 0) === 1);
     if (!activeItems.length) continue;
 
-    const groupSelectionType = assignment.selection_type || details?.group?.selection_type || "single";
+    // Используем значения из группы опций (assignment может переопределять, но по умолчанию берём из группы)
+    // Если в назначении selection_type = 'single' (дефолт), проверяем группу
+    const groupSelectionType = details?.group?.selection_type || assignment.selection_type || "single";
+    const groupMinSelect = details?.group?.min_select ?? assignment.min_select ?? 0;
+    const groupMaxSelect = details?.group?.max_select ?? assignment.max_select ?? null;
 
     groups.push({
       id: Number(assignment.group_id),
       title: str(assignment.title || details?.group?.title || ""),
       selection_type: groupSelectionType,
-      min_select: assignment.min_select ?? details?.group?.min_select ?? 0,
-      max_select: assignment.max_select ?? details?.group?.max_select ?? null,
+      min_select: groupMinSelect,
+      max_select: groupMaxSelect,
 
       // NEW: is_required (только для single, но храним всегда)
       is_required:
@@ -3067,6 +3104,213 @@ function buildProductDetailsContent(
         });
 
         renderSlot();
+        optionsWrap.appendChild(block);
+        return;
+      }
+
+      // Обработка типа "multiple_group" - несколько товаров с общим лимитом группы
+      if (groupType === "multiple_group") {
+        const block = document.createElement("div");
+        block.className = "shop-pd-option-block";
+
+        const titleRow = document.createElement("div");
+        titleRow.className = "shop-pd-section-title";
+        const minSelect = groupState.minSelect ?? group.min_select ?? 0;
+        const maxSelect = groupState.maxSelect ?? group.max_select ?? null;
+        const limitText = minSelect > 0 || maxSelect != null 
+          ? ` (${minSelect > 0 ? `мин: ${minSelect}` : ""}${minSelect > 0 && maxSelect != null ? ", " : ""}${maxSelect != null ? `макс: ${maxSelect}` : ""})`
+          : "";
+        titleRow.textContent = `${titleText}${limitText}`;
+        block.appendChild(titleRow);
+
+        const itemsWrap = document.createElement("div");
+        itemsWrap.className = "shop-pd-option-cards";
+        block.appendChild(itemsWrap);
+
+        const updateSelectedCount = () => {
+          const selectedCount = groupState.selectedIds.size;
+          const isValid = (minSelect === 0 || selectedCount >= minSelect) && 
+                         (maxSelect == null || selectedCount <= maxSelect);
+          
+          // Обновляем состояние валидности (можно добавить визуальную индикацию)
+          return { count: selectedCount, isValid };
+        };
+
+        (group.items || []).forEach((item) => {
+          const itemId = Number(item.id);
+          const isSelected = groupState.selectedIds.has(itemId);
+          
+          const card = document.createElement("div");
+          card.className = `shop-pd-option-card is-clickable ${isSelected ? "is-selected" : ""}`;
+          
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = isSelected;
+          checkbox.style.marginRight = "8px";
+          checkbox.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const { count } = updateSelectedCount();
+            const maxReached = maxSelect != null && count >= maxSelect && !checkbox.checked;
+            
+            if (maxReached) {
+              checkbox.checked = false;
+              return;
+            }
+
+            if (checkbox.checked) {
+              groupState.selectedIds.add(itemId);
+            } else {
+              groupState.selectedIds.delete(itemId);
+            }
+            
+            card.classList.toggle("is-selected", checkbox.checked);
+            if (onSelectionChange) onSelectionChange();
+          });
+
+          card.addEventListener("click", () => {
+            const { count } = updateSelectedCount();
+            const maxReached = maxSelect != null && count >= maxSelect && !isSelected;
+            
+            if (maxReached) {
+              return;
+            }
+
+            checkbox.checked = !checkbox.checked;
+            if (checkbox.checked) {
+              groupState.selectedIds.add(itemId);
+            } else {
+              groupState.selectedIds.delete(itemId);
+            }
+            
+            card.classList.toggle("is-selected", checkbox.checked);
+            if (onSelectionChange) onSelectionChange();
+          });
+
+          card.innerHTML = `
+            ${item.photo
+              ? `<img class="shop-pd-option-thumb" src="${item.photo}">`
+              : `<div class="shop-pd-option-thumb">—</div>`
+            }
+            <div class="shop-pd-option-info">
+              <div class="shop-pd-option-name">${str(item.title)}</div>
+              <div class="shop-pd-option-price">${money(item.price || 0)}</div>
+            </div>
+          `;
+          
+          card.insertBefore(checkbox, card.firstChild);
+          itemsWrap.appendChild(card);
+        });
+
+        optionsWrap.appendChild(block);
+        return;
+      }
+
+      // Обработка типа "multiple_item" - несколько товаров с индивидуальными лимитами
+      if (groupType === "multiple_item") {
+        const block = document.createElement("div");
+        block.className = "shop-pd-option-block";
+
+        const titleRow = document.createElement("div");
+        titleRow.className = "shop-pd-section-title";
+        titleRow.textContent = titleText;
+        block.appendChild(titleRow);
+
+        const itemsWrap = document.createElement("div");
+        itemsWrap.className = "shop-pd-option-cards";
+        block.appendChild(itemsWrap);
+
+        (group.items || []).forEach((item) => {
+          const itemId = Number(item.id);
+          const itemMin = item.qty_min ?? 1;
+          const itemMax = item.qty_max ?? 1;
+          // Текущее количество из state
+          const currentQty = groupState.qtyById.get(itemId) || 0;
+          const isSelected = currentQty > 0;
+
+          const card = document.createElement("div");
+          card.className = `shop-pd-option-card ${isSelected ? "is-selected" : ""}`;
+
+          const qtyControls = document.createElement("div");
+          qtyControls.className = "shop-pd-option-qty-controls";
+          qtyControls.style.display = "flex";
+          qtyControls.style.gap = "8px";
+          qtyControls.style.alignItems = "center";
+          qtyControls.style.marginLeft = "auto";
+
+          const btnMinus = document.createElement("button");
+          btnMinus.type = "button";
+          btnMinus.className = "btn btn-sm";
+          btnMinus.textContent = "−";
+          // Кнопка "-" отключена если qty <= itemMin (обязательные опции нельзя убрать)
+          btnMinus.disabled = currentQty <= itemMin;
+          btnMinus.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const current = groupState.qtyById.get(itemId) || 0;
+            // Уменьшаем, но не ниже itemMin
+            const newQty = Math.max(itemMin, current - 1);
+            if (newQty > 0) {
+              groupState.qtyById.set(itemId, newQty);
+            } else {
+              groupState.qtyById.delete(itemId);
+            }
+            updateItemCard();
+            if (onSelectionChange) onSelectionChange();
+          });
+
+          const qtyDisplay = document.createElement("span");
+          qtyDisplay.style.minWidth = "24px";
+          qtyDisplay.style.textAlign = "center";
+          qtyDisplay.textContent = String(currentQty);
+
+          const btnPlus = document.createElement("button");
+          btnPlus.type = "button";
+          btnPlus.className = "btn btn-sm";
+          btnPlus.textContent = "+";
+          btnPlus.disabled = currentQty >= itemMax;
+          btnPlus.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const current = groupState.qtyById.get(itemId) || 0;
+            let newQty;
+            if (current === 0) {
+              // Если сейчас 0, ставим минимум (но не меньше 1)
+              newQty = Math.max(itemMin, 1);
+            } else {
+              newQty = Math.min(itemMax, current + 1);
+            }
+            groupState.qtyById.set(itemId, newQty);
+            updateItemCard();
+            if (onSelectionChange) onSelectionChange();
+          });
+
+          qtyControls.appendChild(btnMinus);
+          qtyControls.appendChild(qtyDisplay);
+          qtyControls.appendChild(btnPlus);
+
+          const updateItemCard = () => {
+            const newQty = groupState.qtyById.get(itemId) || 0;
+            const newIsSelected = newQty > 0;
+            card.classList.toggle("is-selected", newIsSelected);
+            qtyDisplay.textContent = String(newQty);
+            // Кнопка "-" отключена если qty <= itemMin (обязательные опции нельзя убрать)
+            btnMinus.disabled = newQty <= itemMin;
+            btnPlus.disabled = newQty >= itemMax;
+          };
+
+          card.innerHTML = `
+            ${item.photo
+              ? `<img class="shop-pd-option-thumb" src="${item.photo}">`
+              : `<div class="shop-pd-option-thumb">—</div>`
+            }
+            <div class="shop-pd-option-info">
+              <div class="shop-pd-option-name">${str(item.title)}</div>
+              <div class="shop-pd-option-price">${money(item.price || 0)}</div>
+            </div>
+          `;
+
+          card.appendChild(qtyControls);
+          itemsWrap.appendChild(card);
+        });
+
         optionsWrap.appendChild(block);
         return;
       }
@@ -3533,7 +3777,11 @@ optionGroups.forEach((group) => {
   } else if (type === "multiple_item") {
     group.items.forEach((item) => {
       const id = Number(item.id);
-      const q = editOptionQty.get(id) || (editOptionIds.has(id) ? 1 : 0);
+      const itemMin = item.qty_min ?? 1;
+      // В режиме редактирования берём сохранённое значение
+      const savedQty = editOptionQty.get(id) || (editOptionIds.has(id) ? itemMin : 0);
+      // Если qty_min > 0 — товар выбран по умолчанию с этим количеством
+      const q = savedQty > 0 ? savedQty : (itemMin > 0 ? itemMin : 0);
       if (q > 0) stateEntry.qtyById.set(id, q);
     });
   }
@@ -3776,18 +4024,22 @@ optionGroups.forEach((group) => {
     const safeQty = Math.max(1, Number(qty || 1));
 
     // Collect ingredient quantities with names and units for display
+    // ВАЖНО: сохраняем ВСЕ ингредиенты, даже если они не изменены (для отображения в админке)
     const ingredientQuantities = [];
     ingredients.forEach(ing => {
-      const state = ingredientState.get(Number(ing.ingredient_id));
-      if (state && state.quantity !== undefined) {
-        const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
-        ingredientQuantities.push({
-          ingredient_id: Number(ing.ingredient_id),
-          quantity: state.quantity,
-          ingredient_name: ing.ingredient_name || "",
-          unit_label: unitLabel,
-        });
-      }
+      const ingId = Number(ing.ingredient_id);
+      const state = ingredientState.get(ingId);
+      // Используем quantity из state если есть, иначе базовое значение из ing
+      const quantity = (state && state.quantity !== undefined) 
+        ? state.quantity 
+        : Number(ing.quantity || 1);
+      const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
+      ingredientQuantities.push({
+        ingredient_id: ingId,
+        quantity: quantity,
+        ingredient_name: ing.ingredient_name || "",
+        unit_label: unitLabel,
+      });
     });
 
     const nextKey = makeCartKey(product.id, selectedItems, ingredientQuantities, variantSelection);
@@ -5951,12 +6203,44 @@ function setBottomNavActive(tab) {
         payment_code: paySelect.getValue() || payDefault || "cash",
         cutlery_qty: 0,
         change_from: changeSelect.getValue() ? Number(changeSelect.getValue()) : null,
-        items: cartItemsResolved().map(x => ({
-          product_id: x.product.id,
-          qty: x.qty,
-          option_item_ids: x.option_item_ids || [],
-          option_items: x.option_items || [],
-        })),
+        items: cartItemsResolved().map(x => {
+          // Рассчитываем итоговую цену товара (базовая + опции + разница ингредиентов + варианты)
+          const old = Number(x.product.old_price || 0);
+          const baseProductPrice = Number(x.product.price || 0);
+          const variantUnitPrice = Number(x.variant_unit_price || 0);
+          const basePrice = variantUnitPrice || baseProductPrice;
+          const optionTotal = optionItemsTotal(x.option_items || []);
+          const ingredientPriceDiff = Number(x.ingredient_price_diff || 0);
+          
+          // Варианты не добавляют доплату - они пересчитывают цену пропорционально количеству
+          // Поэтому price_diff для вариантов всегда 0
+          const variantPriceDiff = 0;
+          
+          const lineTotal = (basePrice + optionTotal + ingredientPriceDiff) * x.qty;
+
+          // Формируем информацию о варианте для сохранения
+          const variant = (x.variant_group_id && x.variant_label) ? {
+            variant_group_id: x.variant_group_id,
+            variant_value_index: x.variant_value_index,
+            group_title: "", // Будет заполнено на сервере
+            value: x.variant_label || "",
+            label: x.variant_label || "",
+            price_diff: 0, // Варианты не имеют доплаты, цена уже учтена в variant_unit_price
+          } : null;
+
+          return {
+            product_id: x.product.id,
+            qty: x.qty,
+            option_item_ids: x.option_item_ids || [],
+            option_items: x.option_items || [],
+            ingredients: x.ingredients || [],
+            variant_group_id: x.variant_group_id || null,
+            variant_value_index: x.variant_value_index || null,
+            variant_label: x.variant_label || null,
+            variant: variant,
+            line_total: lineTotal, // Отправляем уже посчитанную итоговую цену
+          };
+        }),
       };
 
       const isAuthed = !!(getCustomerToken() && me);

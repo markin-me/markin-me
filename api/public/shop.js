@@ -983,6 +983,161 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  router.get('/products/:id/option-assignments', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const productId = Number(req.params.id);
+      if (!Number.isFinite(productId) || productId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      // Проверяем, что товар активен и виден на сайте
+      const [productCheck] = await db.query(
+        `SELECT id FROM prod_products 
+         WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1 AND site_visibility=1 
+         LIMIT 1`,
+        [tenantId, storeId, productId]
+      );
+      if (!productCheck.length) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      // Получаем активные назначения опций для товара
+      const [rows] = await db.query(
+        `SELECT 
+           a.id AS assignment_id, 
+           a.group_id, 
+           a.priority, 
+           a.sort_order, 
+           a.is_active,
+           a.selection_type AS assignment_selection_type,
+           a.min_select AS assignment_min_select,
+           a.max_select AS assignment_max_select,
+           g.title, 
+           g.selection_type AS group_selection_type, 
+           g.min_select AS group_min_select, 
+           g.max_select AS group_max_select,
+           g.is_required
+         FROM prod_option_assignments a
+         JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.store_id=a.store_id AND g.id=a.group_id
+         WHERE a.tenant_id=? AND a.store_id=? 
+           AND a.assign_type='product' 
+           AND a.assign_id=?
+           AND a.is_active=1
+           AND g.is_active=1
+         ORDER BY a.sort_order ASC, a.id ASC`,
+        [tenantId, storeId, productId]
+      );
+
+      // Нормализуем данные: используем значения из назначения, если заданы, иначе из группы
+      const assignments = rows.map((r) => ({
+        assignment_id: Number(r.assignment_id),
+        group_id: Number(r.group_id),
+        title: str(r.title || ""),
+        selection_type: r.assignment_selection_type || r.group_selection_type || "single",
+        min_select: r.assignment_min_select ?? r.group_min_select ?? 0,
+        max_select: r.assignment_max_select ?? r.group_max_select ?? null,
+        is_required: Number(r.is_required ?? 0) === 1,
+        is_active: Number(r.is_active || 0) === 1,
+        priority: Number(r.priority || 0),
+        sort_order: Number(r.sort_order || 0),
+      }));
+
+      res.json({ ok: true, data: assignments });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/options/groups/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      // Получаем группу опций
+      const [[group]] = await db.query(
+        `SELECT * FROM prod_option_groups 
+         WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1 
+         LIMIT 1`,
+        [tenantId, storeId, id]
+      );
+      if (!group) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      // Получаем элементы опции (только активные товары)
+      const [items] = await db.query(
+        `SELECT 
+           i.id,
+           i.group_id,
+           i.target_product_id,
+           i.target_type,
+           i.price_mode,
+           i.price_value,
+           i.qty_min,
+           i.qty_max,
+           i.is_active,
+           i.sort_order,
+           p.name AS product_name,
+           p.price AS product_price,
+           p.photos_json AS product_photos_json
+         FROM prod_option_items i
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.store_id=i.store_id AND p.id=i.target_product_id
+         WHERE i.tenant_id=? AND i.store_id=? 
+           AND i.group_id=? 
+           AND i.target_type='product'
+           AND i.is_active=1
+           AND p.is_active=1
+           AND p.site_visibility=1
+         ORDER BY i.sort_order ASC, i.id ASC`,
+        [tenantId, storeId, id]
+      );
+
+      // Нормализуем элементы
+      const normalizedItems = items.map((item) => {
+        const photos = safeJsonArray(item.product_photos_json);
+        return {
+          id: Number(item.id),
+          name: str(item.product_name || ""),
+          product_name: str(item.product_name || ""),
+          product_price: Number(item.product_price || 0),
+          product_photos_json: photos,
+          price_mode: item.price_mode || "from_target",
+          price_value: Number(item.price_value || 0),
+          qty_min: Number(item.qty_min ?? 1),
+          qty_max: Number(item.qty_max ?? 1),
+          is_active: Number(item.is_active || 0) === 1,
+          sort_order: Number(item.sort_order || 0),
+        };
+      });
+
+      res.json({
+        ok: true,
+        data: {
+          group: {
+            id: Number(group.id),
+            title: str(group.title || ""),
+            selection_type: group.selection_type || "single",
+            min_select: group.min_select ?? 0,
+            max_select: group.max_select ?? null,
+            is_required: Number(group.is_required ?? 0) === 1,
+            is_active: Number(group.is_active || 0) === 1,
+          },
+          items: normalizedItems,
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/products/:id/variants', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -1240,9 +1395,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         const basePrice = Number(p.price || 0);
         const oldPrice = Number(p.old_price || 0);
 
-        // Обрабатываем опции
+        // ВАЖНО: используем line_total из запроса (уже посчитан на фронте)
+        // Не пересчитываем цену заново, чтобы избежать двойного подсчета базовой цены
+        const lineTotalFromRequest = Number(it.line_total);
+        const useLineTotalFromRequest = Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0;
+
+        // Обрабатываем опции (только для сохранения состава, не для пересчета цены)
         const options = [];
-        let optionsTotal = 0;
         
         // Собираем опции: используем option_items из запроса (с qty), если есть, иначе option_item_ids
         const optionItemsFromRequest = Array.isArray(it.option_items) && it.option_items.length > 0
@@ -1276,7 +1435,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
           const optQty = qtyMap.get(optId) || 1; // Количество из запроса или 1 по умолчанию
           const optPrice = optInfo.price; // Цена всегда из БД
-          optionsTotal += optPrice * optQty;
+          // НЕ добавляем к optionsTotal - цена уже учтена в line_total
 
           options.push({
             id: optId,
@@ -1286,9 +1445,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           });
         }
 
-        // Обрабатываем ингредиенты
+        // Обрабатываем ингредиенты (только для сохранения состава, не для пересчета цены)
         const ingredients = [];
-        let ingredientsTotal = 0;
         
         const cartIngredients = Array.isArray(it.ingredients) ? it.ingredients : [];
         if (cartIngredients.length) {
@@ -1299,42 +1457,198 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
               `SELECT 
                 i.id,
                 i.ingredient_id,
+                i.unit_id,
                 i.price_override,
                 p.price AS ingredient_price,
-                p.name AS ingredient_name
+                p.name AS ingredient_name,
+                p.base_unit_id AS ingredient_base_unit_id,
+                p.base_qty AS ingredient_base_qty
               FROM prod_product_ingredients i
-              JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
-              WHERE i.tenant_id=? AND i.product_id=? AND i.ingredient_id IN (${ingIds.map(() => '?').join(',')})`,
-              [tenantId, pid, ...ingIds]
+              JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.store_id=i.store_id AND p.id=i.ingredient_id
+              WHERE i.tenant_id=? AND i.store_id=? AND i.product_id=? AND i.ingredient_id IN (${ingIds.map(() => '?').join(',')})`,
+              [tenantId, storeId, pid, ...ingIds]
             );
 
             const ingMap = new Map(ingRows.map(r => [Number(r.ingredient_id), r]));
             
-            cartIngredients.forEach(cartIng => {
+            // Функция для получения фактора конвертации между единицами
+            async function getConversionFactor(fromUnitId, toUnitId, productIdForPul = null) {
+              if (!fromUnitId || !toUnitId || Number(fromUnitId) === Number(toUnitId)) return 1;
+              
+              // Прямая конвертация из prod_unit_conversions
+              const [direct] = await db.query(
+                `SELECT factor FROM prod_unit_conversions 
+                 WHERE tenant_id=? AND store_id=? AND from_unit_id=? AND to_unit_id=? AND is_active=1 LIMIT 1`,
+                [tenantId, storeId, fromUnitId, toUnitId]
+              );
+              if (direct.length && direct[0].factor) return Number(direct[0].factor);
+              
+              // Обратная конвертация
+              const [inverse] = await db.query(
+                `SELECT factor FROM prod_unit_conversions 
+                 WHERE tenant_id=? AND store_id=? AND from_unit_id=? AND to_unit_id=? AND is_active=1 LIMIT 1`,
+                [tenantId, storeId, toUnitId, fromUnitId]
+              );
+              if (inverse.length && inverse[0].factor) return 1 / Number(inverse[0].factor);
+              
+              // Конвертация через prod_product_unit_links (если указан product_id)
+              if (productIdForPul) {
+                const [pul] = await db.query(
+                  `SELECT factor FROM prod_product_unit_links
+                   WHERE tenant_id=? AND store_id=? AND product_id=? AND base_unit_id=? AND unit_id=? LIMIT 1`,
+                  [tenantId, storeId, productIdForPul, toUnitId, fromUnitId]
+                );
+                if (pul.length && pul[0].factor) return Number(pul[0].factor);
+              }
+              
+              return null;
+            }
+            
+            for (const cartIng of cartIngredients) {
               const ingId = Number(cartIng.ingredient_id);
               const ingQty = Number(cartIng.quantity || 1);
               const ingInfo = ingMap.get(ingId);
-              if (!ingInfo) return;
+              if (!ingInfo) continue;
 
-              const ingPricePerUnit = ingInfo.price_override != null 
-                ? Number(ingInfo.price_override) 
-                : Number(ingInfo.ingredient_price || 0);
-              const ingTotal = ingPricePerUnit * ingQty;
-              ingredientsTotal += ingTotal;
+              // Переводим quantity в базовую единицу измерения
+              let qtyInBase = ingQty;
+              const ingredientBaseQty = ingInfo.ingredient_base_qty != null && Number(ingInfo.ingredient_base_qty) > 0 
+                ? Number(ingInfo.ingredient_base_qty) 
+                : 1;
+              const ingredientUnitId = Number(ingInfo.unit_id || 0);
+              const ingredientBaseUnitId = Number(ingInfo.ingredient_base_unit_id || 0);
+              
+              // Если единица измерения ингредиента отличается от базовой, конвертируем
+              if (ingredientUnitId && ingredientBaseUnitId && ingredientUnitId !== ingredientBaseUnitId) {
+                const factor = await getConversionFactor(ingredientUnitId, ingredientBaseUnitId, ingId);
+                if (factor != null && factor > 0) {
+                  qtyInBase = ingQty * factor;
+                }
+              }
+
+              // Рассчитываем цену с учетом base_qty
+              let ingPricePerUnit = 0;
+              
+              if (ingInfo.price_override != null) {
+                // Если есть price_override - используем его как цену за единицу в базовой единице измерения
+                ingPricePerUnit = Number(ingInfo.price_override);
+              } else {
+                // Рассчитываем цену за единицу из base_qty
+                const ingredientPrice = Number(ingInfo.ingredient_price || 0);
+                
+                if (ingredientBaseQty > 0 && ingredientPrice > 0) {
+                  // Цена за единицу (в базовой единице) = цена товара / base_qty
+                  ingPricePerUnit = ingredientPrice / ingredientBaseQty;
+                } else if (ingredientPrice > 0) {
+                  ingPricePerUnit = ingredientPrice;
+                }
+              }
+              
+              // Итоговая цена ингредиента = цена за единицу * количество (в базовой единице)
+              // НЕ добавляем к ingredientsTotal - цена уже учтена в line_total
+              const ingTotal = ingPricePerUnit * qtyInBase;
+
+              // Для сохранения: price должна быть ценой за единицу в той единице измерения, в которой указано quantity
+              // ingPricePerUnit - это цена за единицу в базовой единице (base_unit_id)
+              // quantity (ingQty) указано в unit_id
+              // Нужно пересчитать цену за единицу для unit_id
+              let priceForDisplay = ingPricePerUnit;
+              
+              // Если quantity в той же единице, что и базовая, price уже правильный
+              if (ingredientUnitId && ingredientBaseUnitId && ingredientUnitId !== ingredientBaseUnitId && ingQty > 0) {
+                // Если единицы разные, пересчитываем цену за единицу в unit_id
+                const factor = await getConversionFactor(ingredientUnitId, ingredientBaseUnitId, ingId);
+                if (factor != null && factor > 0) {
+                  // priceForDisplay = цена за единицу в unit_id
+                  // Если quantity в unit_id, а цена за единицу в base_unit_id = ingPricePerUnit,
+                  // то цена за unit_id = ingPricePerUnit * factor
+                  // (потому что 1 unit_id = factor * base_unit_id)
+                  priceForDisplay = ingPricePerUnit * factor;
+                }
+              }
+
+              // Альтернативный расчет: если total уже посчитан, можно использовать его
+              // priceForDisplay = ingTotal / ingQty (если ingQty > 0)
+              if (ingQty > 0 && ingTotal > 0) {
+                priceForDisplay = ingTotal / ingQty;
+              }
 
               ingredients.push({
                 ingredient_id: ingId,
                 name: ingInfo.ingredient_name || '',
-                quantity: ingQty,
-                price: ingPricePerUnit,
+                quantity: ingQty, // Сохраняем оригинальное quantity для отображения
+                price: priceForDisplay, // Цена за единицу в той единице, в которой указано quantity
                 total: ingTotal,
               });
-            });
+            }
           }
         }
 
-        // Итоговая цена строки: (цена товара + сумма опций + сумма ингредиентов) * количество товара
-        const lineTotal = (basePrice + optionsTotal + ingredientsTotal) * qty;
+        // Обрабатываем варианты (только для сохранения состава, не для пересчета цены)
+        let variantData = null;
+        const variantGroupId = Number(it.variant_group_id);
+        const variantValueIndex = Number(it.variant_value_index);
+        const variantLabel = str(it.variant_label || "");
+        
+        if (variantGroupId && Number.isFinite(variantValueIndex)) {
+          // Получаем информацию о группе вариантов из БД
+          const [variantGroupRows] = await db.query(
+            `SELECT id, title, unit_id
+             FROM prod_variant_groups
+             WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1
+             LIMIT 1`,
+            [tenantId, storeId, variantGroupId]
+          );
+          
+          if (variantGroupRows.length) {
+            const vg = variantGroupRows[0];
+            const groupTitle = str(vg.title || "");
+            
+            // Получаем значение варианта
+            const [variantValuesRows] = await db.query(
+              `SELECT \`values\`
+               FROM prod_variant_groups
+               WHERE tenant_id=? AND store_id=? AND id=?
+               LIMIT 1`,
+              [tenantId, storeId, variantGroupId]
+            );
+            
+            let variantValue = variantLabel;
+            if (variantValuesRows.length && variantValuesRows[0].values) {
+              try {
+                const values = JSON.parse(variantValuesRows[0].values);
+                if (Array.isArray(values) && values[variantValueIndex] != null) {
+                  variantValue = String(values[variantValueIndex]);
+                }
+              } catch {}
+            }
+            
+            // Если variant_label содержит "Название: значение", извлекаем значение
+            if (variantLabel.includes(":")) {
+              const parts = variantLabel.split(":");
+              if (parts.length > 1) {
+                variantValue = parts.slice(1).join(":").trim();
+              }
+            }
+            
+            // Варианты не добавляют доплату - они пересчитывают цену пропорционально количеству
+            // variant_unit_price уже учтена в line_total, поэтому price_diff всегда 0
+            variantData = {
+              variant_group_id: variantGroupId,
+              variant_value_index: variantValueIndex,
+              group_title: groupTitle,
+              value: variantValue,
+              label: variantValue, // Для отображения
+              price_diff: 0, // Варианты не имеют доплаты, цена уже учтена в variant_unit_price
+            };
+          }
+        }
+
+        // Используем line_total из запроса (уже посчитан на фронте)
+        // Если line_total не передан, используем базовую цену товара (для товаров без опций/вариантов/состава)
+        const lineTotal = useLineTotalFromRequest 
+          ? lineTotalFromRequest 
+          : basePrice * qty;
 
         total += lineTotal;
 
@@ -1357,6 +1671,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           photos, // Сохраняем фото для отчетов
           options: options.length > 0 ? options : undefined, // Сохраняем опции только если они есть
           ingredients: ingredients.length > 0 ? ingredients : undefined, // Сохраняем ингредиенты только если они есть
+          variants: variantData ? [variantData] : undefined, // Сохраняем варианты только если они есть
         });
       }
 
