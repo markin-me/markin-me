@@ -83,6 +83,11 @@ app.get('/shop', (req, res) => res.render('pages/shop'));
 app.get('/auth', (req, res) => res.redirect('/login'));
 
 // ------------------------------
+// API: Public (публичные роуты должны быть ПЕРЕД админскими)
+// ------------------------------
+app.use('/api/public', makePublicShopRouter({ db, helpers, ordersEvents }));
+
+// ------------------------------
 // API: Admin (требуют авторизации)
 // ------------------------------
 app.use('/api/admin/clients', authMiddleware, makeAdminClientsRouter({ db, helpers }));
@@ -93,11 +98,6 @@ app.use('/api/admin/orders', authMiddleware, makeAdminOrdersRouter({ db, helpers
 const adminProductsRouter = makeAdminProductsRouter({ db, helpers });
 adminProductsRouter.use(authMiddleware);
 app.use('/api', adminProductsRouter);
-
-// ------------------------------
-// API: Public
-// ------------------------------
-app.use('/api/public', makePublicShopRouter({ db, helpers, ordersEvents }));
 
 // ------------------------------
 // Global errors (в т.ч. multer)
