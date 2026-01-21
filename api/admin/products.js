@@ -1075,17 +1075,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       group.values = helpers.safeJsonArray(group.values);
       group.default_value_index = group.default_value_index != null ? Number(group.default_value_index) : null;
       
-      console.log('[API] GET /admin/variants/groups/:id - LOADED DATA:', {
-        id,
-        tenantId,
-        default_value_index_raw: group.default_value_index,
-        default_value_index_processed: group.default_value_index != null ? Number(group.default_value_index) : null,
-        default_value_index_type: typeof group.default_value_index,
-        values: group.values,
-        valuesLength: group.values?.length,
-        hasDefaultValue: group.default_value_index != null,
-        defaultValueValid: group.default_value_index != null && group.default_value_index >= 0 && group.default_value_index < (group.values?.length || 0)
-      });
+      // debug log removed
 
       const [tiers] = await db.query(
         `SELECT * FROM prod_variant_discount_tiers
@@ -1133,12 +1123,12 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       await conn.beginTransaction();
 
       const defaultValueIndexRaw = group.default_value_index;
-      console.log('[API] POST /admin/variants/group-bundle - default_value_index received:', defaultValueIndexRaw, 'type:', typeof defaultValueIndexRaw);
+      // debug log removed
       // Важно: 0 - это валидное значение (первый вариант), поэтому обрабатываем его отдельно
       const defaultValueIndex = defaultValueIndexRaw === null || defaultValueIndexRaw === undefined 
         ? null 
         : (Number.isFinite(Number(defaultValueIndexRaw)) ? Number(defaultValueIndexRaw) : null);
-      console.log('[API] POST /admin/variants/group-bundle - processed value:', defaultValueIndex);
+      // debug log removed
       const [result] = await conn.query(
         `INSERT INTO prod_variant_groups
          (tenant_id, title, unit_id, \`values\`, selection_type, is_active, sort_order, default_value_index)
@@ -1221,14 +1211,11 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   });
 
   router.patch('/admin/variants/groups/:id', async (req, res) => {
-    console.log('[API] PATCH /admin/variants/groups/:id - REQUEST RECEIVED');
-    console.log('[API] PATCH /admin/variants/groups/:id - params:', req.params);
-    console.log('[API] PATCH /admin/variants/groups/:id - body:', req.body);
-    console.log('[API] PATCH /admin/variants/groups/:id - body keys:', Object.keys(req.body || {}));
+    // debug logs removed
     try {
       const tenantId = helpers.getTenantId(req);
       const id = Number(req.params.id);
-      console.log('[API] PATCH /admin/variants/groups/:id - tenantId:', tenantId, 'id:', id);
+      // debug log removed
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
       const fields = [];
@@ -1264,7 +1251,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       if (Object.prototype.hasOwnProperty.call(req.body, 'default_value_index')) {
         const defaultValueIndex = req.body.default_value_index;
-        console.log('[API] PATCH /admin/variants/groups/:id - default_value_index received:', defaultValueIndex, 'type:', typeof defaultValueIndex);
+        // debug log removed
         // Важно: 0 - это валидное значение (первый вариант), поэтому обрабатываем его отдельно
         let processedValue;
         if (defaultValueIndex === null || defaultValueIndex === undefined) {
@@ -1274,7 +1261,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         } else {
           processedValue = null;
         }
-        console.log('[API] PATCH /admin/variants/groups/:id - processed value:', processedValue, 'type:', typeof processedValue);
+        // debug log removed
         fields.push('default_value_index=?');
         values.push(processedValue);
         
@@ -1286,22 +1273,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       values.push(tenantId, id);
       
-      // Логируем детали перед UPDATE
-      const sqlQuery = `UPDATE prod_variant_groups SET ${fields.join(', ')} WHERE tenant_id=? AND id=?`;
-      console.log('[API] PATCH /admin/variants/groups/:id - SQL query:', sqlQuery);
-      console.log('[API] PATCH /admin/variants/groups/:id - values:', values);
-      console.log('[API] PATCH /admin/variants/groups/:id - values types:', values.map(v => typeof v));
-      console.log('[API] PATCH /admin/variants/groups/:id - fields:', fields);
-      
-      // Проверяем значение ДО UPDATE
-      const [beforeUpdate] = await db.query(
-        `SELECT default_value_index FROM prod_variant_groups WHERE tenant_id=? AND id=? LIMIT 1`,
-        [tenantId, id]
-      );
-      console.log('[API] PATCH /admin/variants/groups/:id - BEFORE UPDATE:', {
-        default_value_index: beforeUpdate[0]?.default_value_index,
-        type: typeof beforeUpdate[0]?.default_value_index
-      });
+      // debug logs removed
       
       await db.query(
         `UPDATE prod_variant_groups
@@ -1319,20 +1291,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const savedValue = check[0]?.default_value_index;
       const requestedValue = req.body.default_value_index;
       
-      console.log('[API] PATCH /admin/variants/groups/:id - FULL VERIFICATION:', {
-        id,
-        tenantId,
-        requestedValue: requestedValue,
-        requestedValueType: typeof requestedValue,
-        savedValue: savedValue,
-        savedValueType: typeof savedValue,
-        valuesMatch: savedValue == requestedValue, // Use == for loose comparison
-        valuesStrictMatch: savedValue === Number(requestedValue), // Use === for strict comparison
-        updatedAt: check[0]?.updated_at,
-        title: check[0]?.title,
-        values: check[0]?.values,
-        valuesParsed: check[0]?.values ? JSON.parse(check[0].values || '[]') : null
-      });
+      // debug log removed
       
       // Проверяем, что значение действительно сохранилось
       if (Object.prototype.hasOwnProperty.call(req.body, 'default_value_index')) {
@@ -1340,33 +1299,17 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         const actualSavedValue = savedValue != null ? Number(savedValue) : null;
         
         if (processedValue !== actualSavedValue) {
-          console.error('[API] PATCH /admin/variants/groups/:id - ⚠️ VALUE MISMATCH!', {
+          console.error('[API] PATCH /admin/variants/groups/:id - VALUE MISMATCH', {
             processedValue,
             actualSavedValue,
             requestedValue,
-            savedValueRaw: savedValue,
-            warning: 'The value was not saved correctly!'
+            savedValueRaw: savedValue
           });
         } else {
-          console.log('[API] PATCH /admin/variants/groups/:id - ✅ Value saved correctly:', {
-            processedValue,
-            actualSavedValue
-          });
+          // debug log removed
         }
       }
-      
-      console.log('[API] PATCH /admin/variants/groups/:id - saved value in DB:', savedValue);
-      console.log('[API] PATCH /admin/variants/groups/:id - UPDATE completed successfully');
-      
-      // Дополнительная проверка: запрос всех полей для полной диагностики
-      const [fullCheck] = await db.query(
-        `SELECT * FROM prod_variant_groups WHERE tenant_id=? AND id=? LIMIT 1`,
-        [tenantId, id]
-      );
-      console.log('[API] PATCH /admin/variants/groups/:id - FULL ROW DATA:', fullCheck[0]);
-      
-      // Проверяем, что default_value_index действительно в данных
-      console.log('[API] PATCH /admin/variants/groups/:id - default_value_index in full row:', fullCheck[0]?.default_value_index);
+      // debug logs removed
       
       res.json({ ok: true });
     } catch (e) {

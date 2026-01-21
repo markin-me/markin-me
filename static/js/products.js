@@ -1502,7 +1502,7 @@ function buildOptionGroupPayload(formValues) {
     `;
   }
 
-  function renderVariantValuesSummary(values, tiers, defaultValueIndex = null) {
+  function renderVariantValuesSummary(values, tiers, defaultValueIndex = null, { isEditable = false, groupId = null } = {}) {
     const list = Array.isArray(values) ? values : [];
     if (!list.length) {
       return `<div class="empty-hint">Пока нет значений...</div>`;
@@ -1524,10 +1524,16 @@ function buildOptionGroupPayload(formValues) {
           const starIcon = isDefault 
             ? '<i class="fas fa-star" style="color: #ff7a00; margin-right: 8px;"></i>'
             : '<i class="far fa-star" style="color: #888; margin-right: 8px;"></i>';
+          
+          // Если редактируем и есть groupId, делаем звёздочку кликабельной
+          const starElement = isEditable && groupId != null
+            ? `<button type="button" class="variant-star-btn-inline" data-variant-star-group="${groupId}" data-variant-star-index="${idx}" style="background: none; border: none; padding: 0; cursor: pointer; display: inline-flex; align-items: center; margin-right: 8px;" title="${isDefault ? 'Вариант по умолчанию' : 'Установить как вариант по умолчанию'}" aria-label="${isDefault ? 'Вариант по умолчанию' : 'Установить как вариант по умолчанию'}">${starIcon}</button>`
+            : `<span style="margin-right: 8px;">${starIcon}</span>`;
+          
           return `
             <div class="option-summary-row">
               <div style="display: flex; align-items: center;">
-                ${starIcon}
+                ${starElement}
                 <div>
                   <div class="option-summary-title">${escapeHtml(value)}</div>
                   <div class="option-summary-meta">${metaLabel}</div>
@@ -2666,24 +2672,9 @@ function updateOptionGroupSelectionUi() {
     state.variantDraft.group.values = Array.isArray(group.values) ? group.values : [];
     
     // Store default value index
-    // В режиме редактирования сохраняем значение пользователя, не перезаписываем из group
-    // В режиме просмотра или при первой инициализации - берем из group
-    // Важно: используем флаг для отслеживания, было ли значение установлено пользователем
-    const isEditMode = state.variantPanel.mode === "edit" || state.variantPanel.mode === "create";
-    
-    // Проверяем, было ли значение уже установлено пользователем (включая 0)
-    // Используем специальный флаг или проверяем, что значение было явно установлено
-    if (!isEditMode) {
-      // В режиме просмотра всегда берем из group
-      state.variantDraft.group.default_value_index = group.default_value_index != null ? Number(group.default_value_index) : null;
-    } else {
-      // В режиме редактирования: устанавливаем только если еще не установлено
-      // Проверяем наличие свойства, а не его значение (0 - валидное значение)
-      if (!('default_value_index' in state.variantDraft.group)) {
-        state.variantDraft.group.default_value_index = group.default_value_index != null ? Number(group.default_value_index) : null;
-      }
-      // Если свойство уже есть (даже если это 0 или null), не перезаписываем
-    }
+    // Всегда берем свежее значение из group при заполнении формы
+    // Это гарантирует, что при повторном редактировании будет использоваться актуальное значение с сервера
+    state.variantDraft.group.default_value_index = group.default_value_index != null ? Number(group.default_value_index) : null;
     
     // Синхронизируем скрытый input для совместимости (dropdown скрыт, выбор через звездочки)
     if (variantGroupDefaultValueIndexInput) {
@@ -4179,17 +4170,14 @@ function updateOptionGroupSelectionUi() {
         await loadVariantGroupDetails(groupId);
         renderVariantGroupsList();
         
-        // Сохраняем значение default_value_index перед очисткой draft
-        const savedDefaultIdx = state.variantDraft?.group?.default_value_index;
+        // Очищаем кеш редактирования после успешного сохранения
+        if (state.selectedVariantGroupId) {
+          editingVariants.delete(state.selectedVariantGroupId);
+        }
         
         state.variantDraft = null;
         state.variantPanel.itemsDirty = false;
         state.variantPanel.snapshotData = null;
-        
-        // Восстанавливаем значение в загруженных данных, если оно было сохранено
-        if (savedDefaultIdx != null && state.variantGroupDetails?.group) {
-          state.variantGroupDetails.group.default_value_index = savedDefaultIdx;
-        }
         
         showVariantGroupDetails(state.variantGroupDetails, { mode: "view" });
         return;
@@ -4315,6 +4303,14 @@ function updateOptionGroupSelectionUi() {
 
   function startVariantEdit({ silent = false } = {}) {
     if (!state.variantGroupDetails?.group) return;
+    
+    // Всегда создаем новый draft из свежих данных, игнорируя кеш
+    // Сначала очищаем старый кеш для этого варианта
+    if (state.selectedVariantGroupId) {
+      editingVariants.delete(state.selectedVariantGroupId);
+    }
+    
+    // Создаем snapshot и draft из свежих данных
     state.variantPanel.snapshotData = deepClone({
       group: state.variantGroupDetails.group,
       tiers: state.variantGroupDetails.tiers || [],
@@ -4327,7 +4323,7 @@ function updateOptionGroupSelectionUi() {
     });
     state.variantPanel.mode = "edit";
     
-    // Store editing state for this variant
+    // Store editing state for this variant (для отслеживания, что редактирование активно)
     if (state.selectedVariantGroupId) {
       editingVariants.set(state.selectedVariantGroupId, {
         mode: "edit",
@@ -4355,6 +4351,8 @@ function updateOptionGroupSelectionUi() {
       return;
     }
     if (state.variantPanel.mode === "edit" && state.selectedVariantGroupId) {
+      // Очищаем кеш редактирования при отмене
+      editingVariants.delete(state.selectedVariantGroupId);
       (async () => {
         state.variantPanel.mode = "view";
         state.variantDraft = null;
@@ -4727,6 +4725,52 @@ function updateOptionGroupSelectionUi() {
 
   // ---------------- Product Footer ----------------
 
+  function saveTabFooterState(tab) {
+    if (!tab) return;
+    const footer = $("#productInfoFooter");
+    const viewMode = $("#productFooterView");
+    const editMode = $("#productFooterEditMode");
+    
+    if (!footer || !viewMode || !editMode) return;
+    
+    // Определяем текущий режим футера
+    let mode = "hidden";
+    if (!footer.classList.contains("hidden")) {
+      if (!viewMode.classList.contains("hidden")) {
+        mode = "view";
+      } else if (!editMode.classList.contains("hidden")) {
+        mode = "edit";
+      }
+    }
+    
+    // Сохраняем состояние футера в таб
+    if (!tab.footerState) {
+      tab.footerState = {};
+    }
+    tab.footerState.mode = mode;
+  }
+
+  function restoreTabFooterState(tab) {
+    if (!tab || !tab.footerState) return;
+    
+    const mode = tab.footerState.mode;
+    if (mode === "view") {
+      showProductFooterView();
+    } else if (mode === "edit") {
+      showProductFooterEdit();
+    } else {
+      hideProductFooter();
+    }
+  }
+
+  function updateActiveTabFooterState() {
+    if (!tabsState.activeKey) return;
+    const activeTab = tabsState.tabs.find((t) => t.key === tabsState.activeKey);
+    if (activeTab) {
+      saveTabFooterState(activeTab);
+    }
+  }
+
   function showProductFooterView() {
     const footer = $("#productInfoFooter");
     const viewMode = $("#productFooterView");
@@ -4737,6 +4781,9 @@ function updateOptionGroupSelectionUi() {
     footer.classList.remove("hidden");
     viewMode.classList.remove("hidden");
     editMode.classList.add("hidden");
+    
+    // Обновляем состояние футера активного таба
+    updateActiveTabFooterState();
   }
 
   function showProductFooterEdit() {
@@ -4749,12 +4796,18 @@ function updateOptionGroupSelectionUi() {
     footer.classList.remove("hidden");
     viewMode.classList.add("hidden");
     editMode.classList.remove("hidden");
+    
+    // Обновляем состояние футера активного таба
+    updateActiveTabFooterState();
   }
 
   function hideProductFooter() {
     const footer = $("#productInfoFooter");
     resetFooterConfirmButtons();
     if (footer) footer.classList.add("hidden");
+    
+    // Обновляем состояние футера активного таба
+    updateActiveTabFooterState();
   }
 
   function resetTwoStepButton(btn) {
@@ -4811,10 +4864,28 @@ function updateOptionGroupSelectionUi() {
   function setActiveTabKey(key, { activate = true } = {}) {
     const tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) return;
+    
+    // Сохраняем состояние футера текущего активного таба перед переключением
+    if (tabsState.activeKey && tabsState.activeKey !== key) {
+      const currentTab = tabsState.tabs.find((t) => t.key === tabsState.activeKey);
+      if (currentTab) {
+        saveTabFooterState(currentTab);
+      }
+    }
+    
     tabsState.activeKey = key;
     renderTabs();
+    
+    // Восстанавливаем состояние футера нового активного таба ДО вызова onActivate
+    // Это позволяет onActivate переопределить состояние, если нужно
+    if (tab.footerState && tab.footerState.mode !== "hidden") {
+      restoreTabFooterState(tab);
+    }
+    
     if (activate && typeof tab.onActivate === "function") {
       tab.onActivate();
+      // После onActivate обновляем состояние футера в табе (на случай если onActivate изменил его)
+      updateActiveTabFooterState();
     }
   }
 
@@ -4822,11 +4893,22 @@ function updateOptionGroupSelectionUi() {
     const key = buildTabKey(type, id);
     let tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) {
-      tab = { key, type, id, title, onActivate };
+      tab = { 
+        key, 
+        type, 
+        id, 
+        title, 
+        onActivate,
+        footerState: { mode: "hidden" } // Инициализируем состояние футера
+      };
       tabsState.tabs.push(tab);
     } else {
       tab.title = title;
       tab.onActivate = onActivate || tab.onActivate;
+      // Если footerState еще не инициализирован, инициализируем
+      if (!tab.footerState) {
+        tab.footerState = { mode: "hidden" };
+      }
     }
     setActiveTabKey(key, { activate });
     return tab;
@@ -4837,6 +4919,11 @@ function updateOptionGroupSelectionUi() {
     if (idx === -1) return;
     const tab = tabsState.tabs[idx];
     const wasActive = tabsState.activeKey === key;
+    
+    // Сохраняем состояние футера перед закрытием активного таба
+    if (wasActive) {
+      saveTabFooterState(tab);
+    }
     
     // Cleanup editing state if closing active tab in edit mode
     if (wasActive) {
@@ -5043,16 +5130,9 @@ function updateOptionGroupSelectionUi() {
         await loadVariantGroupDetails(groupId);
         renderVariantGroupsList();
         
-        // Check if this variant is being edited
-        if (editingVariants.has(groupId)) {
-          const editingState = editingVariants.get(groupId);
-          state.variantPanel.mode = editingState.mode;
-          state.variantDraft = deepClone(editingState.variantDraft);
-          state.variantPanel.snapshotData = deepClone(editingState.snapshotData);
-          showVariantGroupDetails(state.variantGroupDetails, { mode: editingState.mode });
-        } else {
-          showVariantGroupDetails(state.variantGroupDetails, { mode: state.variantPanel.mode || "view" });
-        }
+        // Всегда показываем свежие данные с сервера, игнорируя кеш
+        // При нажатии "Редактировать" будет создан новый draft из свежих данных
+        showVariantGroupDetails(state.variantGroupDetails, { mode: state.variantPanel.mode || "view" });
       },
       activate,
     });
@@ -5237,6 +5317,11 @@ function updateOptionGroupSelectionUi() {
       if ((!isEdit && !isView) || !product) return;
       const res = await apiGetProductVariants(product.id);
       const arr = Array.isArray(res.data) ? res.data : [];
+      // Store variant data with default_value_index for later use (per-product override aware)
+      draft.productVariants = arr.map((v) => ({
+        id: Number(v.id),
+        default_value_index: v.default_value_index != null ? Number(v.default_value_index) : null,
+      }));
       draft.initialVariantAssignments = arr
         .map((v) => ({
           assignment_id: Number(v.assignment_id),
@@ -6482,6 +6567,69 @@ function updateOptionGroupSelectionUi() {
       }
     }
 
+    async function bindVariantStarHandlers(container, groupId) {
+      if (!container || !isEdit || !product || !product.id) return;
+      
+      container.querySelectorAll("[data-variant-star-group]").forEach((btn) => {
+        const btnGroupId = Number(btn.dataset.variantStarGroup);
+        const variantIndex = Number(btn.dataset.variantStarIndex);
+        
+        if (!Number.isFinite(btnGroupId) || !Number.isFinite(variantIndex) || btnGroupId !== groupId) return;
+        
+        // Remove existing handler to avoid duplicates
+        const newBtn = btn.cloneNode(true);
+        btn.parentNode.replaceChild(newBtn, btn);
+        
+        newBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          
+          // Find assignment_id for this variant group
+          const assignment = draft.initialVariantAssignments.find(a => Number(a.group_id) === groupId);
+          if (!assignment || !Number.isFinite(assignment.assignment_id)) {
+            console.error("Assignment not found for variant group", groupId);
+            return;
+          }
+          
+          try {
+            // Update assignment with new default_value_index
+            await apiPatchVariantAssignment(assignment.assignment_id, { default_value_index: variantIndex });
+            
+            // Update draft.productVariants
+            if (!draft.productVariants) draft.productVariants = [];
+            let variantData = draft.productVariants.find(v => Number(v.id) === groupId);
+            if (variantData) {
+              variantData.default_value_index = variantIndex;
+            } else {
+              draft.productVariants.push({
+                id: groupId,
+                default_value_index: variantIndex
+              });
+            }
+            
+            // Reload variant data to ensure consistency
+            await refreshProductVariants(product.id);
+            
+            // Re-render the accordion content
+            const details = variantDetailsCache.get(groupId);
+            if (details) {
+              const variantData = draft.productVariants?.find(v => Number(v.id) === groupId);
+              const defaultIdx = variantData?.default_value_index != null ? Number(variantData.default_value_index) : 
+                                (details?.group?.default_value_index != null ? Number(details.group.default_value_index) : null);
+              container.innerHTML = renderVariantValuesSummary(details?.group?.values || [], details?.tiers || [], defaultIdx, { isEditable: isEdit, groupId: groupId });
+              
+              // Re-bind handlers
+              bindVariantStarHandlers(container, groupId);
+            }
+            
+            // toast removed: too noisy in UI
+          } catch (e) {
+            console.error("Failed to update variant default value", e);
+            showToast("Не удалось обновить вариант по умолчанию");
+          }
+        });
+      });
+    }
+
     function restoreProductVariantPickerFooter() {
       const footer = $("#productInfoFooter");
       const footerView = $("#productFooterView");
@@ -6758,7 +6906,7 @@ function updateOptionGroupSelectionUi() {
       const variantData = draft.productVariants?.find(v => Number(v.id) === groupId);
       const defaultIdx = variantData?.default_value_index != null ? Number(variantData.default_value_index) : 
                         (details?.group?.default_value_index != null ? Number(details.group.default_value_index) : null);
-      const itemsHtml = details ? renderVariantValuesSummary(values, tiers, defaultIdx) : `<div class="muted">Раскройте, чтобы загрузить значения.</div>`;
+      const itemsHtml = details ? renderVariantValuesSummary(values, tiers, defaultIdx, { isEditable: isEdit, groupId: groupId }) : `<div class="muted">Раскройте, чтобы загрузить значения.</div>`;
 
       const actionsHtml = isView
         ? `<span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>`
@@ -6845,11 +6993,24 @@ function updateOptionGroupSelectionUi() {
             const variantData = draft.productVariants?.find(v => Number(v.id) === id);
             const defaultIdx = variantData?.default_value_index != null ? Number(variantData.default_value_index) : 
                               (details?.group?.default_value_index != null ? Number(details.group.default_value_index) : null);
-            inner.innerHTML = renderVariantValuesSummary(details?.group?.values || [], details?.tiers || [], defaultIdx);
+            inner.innerHTML = renderVariantValuesSummary(details?.group?.values || [], details?.tiers || [], defaultIdx, { isEditable: isEdit, groupId: id });
+            
+            // Bind star click handlers if in edit mode
+            if (isEdit) {
+              bindVariantStarHandlers(inner, id);
+            }
           }
           refreshOpenAccordions();
         }, { once: true });
       });
+
+      // Bind star click handlers for initially rendered content if in edit mode
+      if (isEdit && details) {
+        const inner = ui.variantAccordion.querySelector(".acc-panel-inner");
+        if (inner) {
+          bindVariantStarHandlers(inner, groupId);
+        }
+      }
 
       refreshOpenAccordions();
     }
@@ -9132,6 +9293,16 @@ function updateOptionGroupSelectionUi() {
           }
         } else {
           // Open editor
+          // Если сейчас открыт экран опций/вариантов (и кнопка по какой-то причине видима),
+          // редактируем именно активную сущность, а не товар из другого таба.
+          if (state.mode === "options" && state.selectedOptionGroupId && state.optionPanel.mode === "view" && state.optionGroupDetails) {
+            startOptionEdit();
+            return;
+          }
+          if (state.mode === "variants" && state.selectedVariantGroupId && state.variantPanel.mode === "view" && state.variantGroupDetails) {
+            startVariantEdit();
+            return;
+          }
           if (state.mode === "categories") {
             const cat = state.categories.find((x) => x.id === state.selectedCategoryId);
             if (cat) openCategoryEditor({ mode: "edit", category: cat });

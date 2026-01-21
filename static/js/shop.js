@@ -1573,12 +1573,19 @@ async function initAddresses() {
       // Загружаем варианты
       const variants = await resolveProductVariants(productId);
       
-      // Если есть варианты, берём цену первого варианта по умолчанию
+      // Если есть варианты, берём цену варианта по умолчанию (индивидуальный или групповой)
       if (variants.length > 0 && variants[0].values?.length > 0) {
+        const variant = variants[0];
+        // Используем default_value_index (индивидуальный или групповой), если задан, иначе 0
+        const defaultIndex = variant.default_value_index != null 
+          ? Number(variant.default_value_index) 
+          : 0;
+        // Проверяем что индекс валидный
+        const validIndex = defaultIndex >= 0 && defaultIndex < variant.values.length ? defaultIndex : 0;
         const variantState = {
-          selectedIndex: 0,
-          value: variants[0].values[0],
-          label: String(variants[0].values[0]),
+          selectedIndex: validIndex,
+          value: variant.values[validIndex],
+          label: String(variant.values[validIndex]),
         };
         price = getVariantUnitPrice(product, variants, variantState);
       }
@@ -2440,6 +2447,58 @@ function updateCartBadge() {
     return match ? Number(match[0]) : NaN;
   }
 
+  /**
+   * Цена товара-опции с учётом выбранного варианта (внутри опции).
+   * Универсально для любых единиц (кг/г, м/см и т.п.): используем конвертацию как для основного варианта товара.
+   */
+  function getOptionItemVariantUnitPrice(optionItem, variantGroup, selectedIndex) {
+    const fallbackPrice = Number(optionItem?.price || 0);
+    const idx = Number(selectedIndex);
+    if (!Number.isFinite(idx) || idx < 0) return fallbackPrice;
+    const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
+    if (!values.length) return fallbackPrice;
+
+    const numericValue = parseVariantValueNumber(values[idx]);
+    if (!Number.isFinite(numericValue) || numericValue <= 0) return fallbackPrice;
+
+    const productId = Number(optionItem?.target_product_id || 0);
+    const product = productId > 0 ? state.productCache.get(productId) : null;
+
+    let unitPrice = null;
+
+    if (product) {
+      const basePrice = Number(product.price || 0);
+      const baseUnitId = Number(product.base_unit_id || product.unit_id || variantGroup?.unit_id || 0);
+      const baseQty = Number(product.base_qty || 1) || 1;
+      const variantUnitId = Number(variantGroup?.unit_id || baseUnitId);
+
+      if (basePrice > 0 && baseUnitId && variantUnitId) {
+        const factor = getConversionFactor(variantUnitId, baseUnitId);
+        if (factor != null) {
+          const qtyInBase = numericValue * Number(factor || 0);
+          if (Number.isFinite(qtyInBase) && qtyInBase > 0) {
+            unitPrice = basePrice * (qtyInBase / baseQty);
+          }
+        }
+      }
+    }
+
+    // Если не удалось посчитать через товар/конвертацию — используем простую пропорцию от цены опции
+    if (unitPrice == null) {
+      const baseValue = parseVariantValueNumber(values[0]);
+      if (!Number.isFinite(baseValue) || baseValue <= 0) return fallbackPrice;
+      unitPrice = fallbackPrice * (numericValue / baseValue);
+    }
+
+    const tiers = Array.isArray(variantGroup?.discount_tiers) ? variantGroup.discount_tiers : [];
+    const tier = tiers.find((t) => Number(t.sort_order) === idx);
+    const discountPercent = Number(tier?.discount_percent || 0) || 0;
+    if (discountPercent > 0) {
+      unitPrice = unitPrice * (1 - discountPercent / 100);
+    }
+    return unitPrice;
+  }
+
   function getVariantUnitPrice(product, variants, variantState) {
     if (!product) return 0;
     const basePrice = Number(product.price || 0);
@@ -2694,6 +2753,14 @@ async function resolveProductOptionGroups(productId) {
     const activeItems = items.filter((item) => Number(item.is_active || 0) === 1);
     if (!activeItems.length) continue;
 
+    // Загружаем товары-опции в кэш для конвертации единиц измерения
+    const productIds = activeItems
+      .map((item) => Number(item.target_product_id || 0))
+      .filter((id) => id > 0 && !state.productCache.has(id));
+    if (productIds.length > 0) {
+      await Promise.all(productIds.map((pid) => ensureProduct(pid).catch(() => null)));
+    }
+
     // Используем значения из группы опций (assignment может переопределять, но по умолчанию берём из группы)
     // Если в назначении selection_type = 'single' (дефолт), проверяем группу
     const groupSelectionType = details?.group?.selection_type || assignment.selection_type || "single";
@@ -2762,6 +2829,7 @@ async function resolveProductVariants(productId) {
       unit_short_title: str(v.unit_short_title || ""),
       values: Array.isArray(v.values) ? v.values : [],
       discount_tiers: Array.isArray(v.discount_tiers) ? v.discount_tiers : [],
+      default_value_index: v.default_value_index != null ? Number(v.default_value_index) : null,
     }));
   } catch (e) {
     console.error("Failed to load product variants:", e);
@@ -3016,10 +3084,17 @@ function buildProductDetailsContent(
     variantWrap.appendChild(valuesWrap);
     scroll.appendChild(variantWrap);
 
+    // Инициализируем выбранный вариант: используем default_value_index из API (индивидуальный или групповой)
     if (Number.isFinite(variantState.selectedIndex) && !variantState.label) {
       setSelectedIndex(variantState.selectedIndex);
     } else if (!Number.isFinite(variantState.selectedIndex) && values.length) {
-      setSelectedIndex(0);
+      // Используем default_value_index (индивидуальный или групповой), если задан, иначе 0
+      const defaultIndex = variantGroup.default_value_index != null 
+        ? Number(variantGroup.default_value_index) 
+        : 0;
+      // Проверяем что индекс валидный
+      const validIndex = defaultIndex >= 0 && defaultIndex < values.length ? defaultIndex : 0;
+      setSelectedIndex(validIndex);
     }
   }
 
@@ -3095,6 +3170,7 @@ function buildProductDetailsContent(
 
           const card = document.createElement("div");
           card.className = "shop-pd-option-card is-clickable";
+          card.style.position = "relative";
           if (hasVariants) {
             card.classList.add("has-variants");
             card.style.flexDirection = "column";
@@ -3122,29 +3198,35 @@ function buildProductDetailsContent(
           info.style.flex = "1";
           info.style.minWidth = "0";
           
-          const nameEl = document.createElement("div");
-          nameEl.className = "shop-pd-option-name";
-          nameEl.textContent = selected ? str(selected.title) : "Выбрать";
-          info.appendChild(nameEl);
+          // Первая строка: вариант + название
+          const firstLine = document.createElement("div");
+          firstLine.className = "shop-pd-option-name";
+          firstLine.style.display = "flex";
+          firstLine.style.alignItems = "center";
+          firstLine.style.gap = "4px";
           
-          // Лейбл выбранного варианта
           let variantLabelEl = null;
           if (selected && hasVariants) {
-            variantLabelEl = document.createElement("div");
-            variantLabelEl.className = "shop-pd-option-variant-label";
-            variantLabelEl.style.fontSize = "11px";
-            variantLabelEl.style.color = "var(--text-muted, #888)";
-            variantLabelEl.style.marginTop = "2px";
+            variantLabelEl = document.createElement("span");
+            variantLabelEl.style.fontSize = "inherit";
+            variantLabelEl.style.fontWeight = "inherit";
+            variantLabelEl.style.color = "inherit";
             const savedVariant = groupState.variantByItemId.get(selectedId);
             if (savedVariant && savedVariant.variant_label) {
-              variantLabelEl.textContent = savedVariant.variant_label;
-              variantLabelEl.style.display = "block";
-            } else {
-              variantLabelEl.style.display = "none";
+              variantLabelEl.textContent = savedVariant.variant_label + " ";
             }
-            info.appendChild(variantLabelEl);
           }
           
+          const nameEl = document.createElement("span");
+          nameEl.textContent = selected ? str(selected.title) : "Выбрать";
+          
+          if (variantLabelEl && variantLabelEl.textContent) {
+            firstLine.appendChild(variantLabelEl);
+          }
+          firstLine.appendChild(nameEl);
+          info.appendChild(firstLine);
+          
+          // Вторая строка: цена
           const priceEl = document.createElement("div");
           priceEl.className = "shop-pd-option-price";
           if (selected) {
@@ -3157,17 +3239,30 @@ function buildProductDetailsContent(
           // ВАЖНО: для single шестерёнка НЕ должна быть на выбранной карточке.
           // Её показываем только внутри списка после "Изменить".
 
+          card.appendChild(cardContent);
+
+          // Кнопка "Изменить" в правом верхнем углу
           const edit = document.createElement("button");
           edit.type = "button";
-          edit.className = "btn btn-link shop-pd-option-edit";
+          edit.className = "shop-pd-option-edit";
           edit.textContent = "Изменить >";
+          edit.style.cssText = `
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: none;
+            border: none;
+            padding: 4px 8px;
+            color: var(--text-muted, #888);
+            font-size: 13px;
+            cursor: pointer;
+            z-index: 10;
+          `;
           edit.addEventListener("click", (e) => {
             e.stopPropagation();
             openList();
           });
-
-          cardContent.appendChild(edit);
-          card.appendChild(cardContent);
+          card.appendChild(edit);
           card.addEventListener("click", openList);
           slotWrap.appendChild(card);
         }
@@ -3221,10 +3316,62 @@ function buildProductDetailsContent(
           `;
 
           let variantLabelEl = hasVariants ? row.querySelector(".shop-pd-option-variant-label") : null;
+          const priceEl = row.querySelector(".shop-pd-option-price");
           const savedVariant = groupState.variantByItemId.get(itemId);
-          if (variantLabelEl && savedVariant?.variant_label) {
+          
+          // Автоматически выбираем дефолтный вариант при рендере, если он ещё не выбран
+          if (hasVariants && !savedVariant) {
+            const variantGroup = itemVariants[0];
+            const values = variantGroup.values || [];
+            if (values.length > 0) {
+              const unitLabel = str(
+                variantGroup.unit_short_title || variantGroup.unit_code || variantGroup.unit_title || ""
+              ).trim();
+              const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
+              const formatValueLabel = (val) => {
+                const valueText = str(val);
+                if (!valueText) return "";
+                if (!unitLabel || hasLetters(valueText)) return valueText;
+                return `${valueText} ${unitLabel}`;
+              };
+              
+              // Определяем дефолтный индекс: сначала из группы, потом первый (0)
+              const defaultIdx = variantGroup.default_value_index != null 
+                ? Number(variantGroup.default_value_index) 
+                : (values.length > 0 ? 0 : null);
+              
+              if (defaultIdx != null && defaultIdx >= 0 && defaultIdx < values.length) {
+                // Рассчитываем цену дефолтного варианта
+                const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, defaultIdx);
+                const priceDiff = unitPrice - Number(item.price || 0);
+                
+                // Сохраняем дефолтный вариант в state
+                groupState.variantByItemId.set(itemId, {
+                  variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
+                  variant_value_index: defaultIdx,
+                  variant_label: formatValueLabel(values[defaultIdx]),
+                  variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
+                });
+                
+                // Обновляем отображение цены и лейбла варианта
+                if (priceEl) {
+                  priceEl.textContent = money(unitPrice);
+                }
+                if (variantLabelEl) {
+                  variantLabelEl.textContent = formatValueLabel(values[defaultIdx]);
+                  variantLabelEl.style.display = "block";
+                }
+              }
+            }
+          } else if (variantLabelEl && savedVariant?.variant_label) {
+            // Если вариант уже выбран, обновляем отображение
             variantLabelEl.textContent = savedVariant.variant_label;
             variantLabelEl.style.display = "block";
+            if (priceEl) {
+              const basePrice = Number(item.price || 0);
+              const priceDiff = savedVariant.variant_price_diff || 0;
+              priceEl.textContent = money(basePrice + priceDiff);
+            }
           }
 
           // gear + accordion (only inside list for single)
@@ -3232,8 +3379,8 @@ function buildProductDetailsContent(
           let variantAccordion = null;
           let accordionOpen = false;
 
-          const gearIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
-          const checkIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>`;
+          const gearIcon = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
+          const checkIcon = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>`;
 
           const setGearState = (open) => {
             accordionOpen = !!open;
@@ -3347,11 +3494,13 @@ function buildProductDetailsContent(
             
             // Если вариант еще не выбран, но есть дефолт - автоматически выбираем его
             if (selectedIdx != null && !currentVariant && defaultIdx != null && values[defaultIdx] != null) {
+              const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, defaultIdx);
+              const priceDiff = unitPrice - Number(item.price || 0);
               groupState.variantByItemId.set(itemId, {
                 variant_group_id: Number(variantGroup.variant_group_id),
                 variant_value_index: defaultIdx,
                 variant_label: formatValueLabel(values[defaultIdx]),
-                variant_price_diff: 0,
+                variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
               });
             }
 
@@ -3369,13 +3518,21 @@ function buildProductDetailsContent(
 
               variantBtn.addEventListener("click", (e) => {
                 e.stopPropagation();
-                const priceDiff = 0;
+                const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
+                const priceDiff = unitPrice - Number(item.price || 0);
                 groupState.variantByItemId.set(itemId, {
                   variant_group_id: Number(variantGroup.variant_group_id),
                   variant_value_index: idx,
                   variant_label: formatValueLabel(value),
-                  variant_price_diff: priceDiff,
+                  variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
                 });
+
+                // Мгновенно обновляем цену и вариант в карточке
+                if (priceEl) {
+                  const base = Number(item.price || 0);
+                  const diff = Number.isFinite(priceDiff) ? priceDiff : 0;
+                  priceEl.textContent = money(base + diff);
+                }
 
                 variantScroll.querySelectorAll(".shop-pd-option-variant-btn").forEach((btn) => {
                   const btnIdx = Number(btn.dataset.variantIndex);
@@ -3392,9 +3549,14 @@ function buildProductDetailsContent(
                   }
                 });
 
+                // Обновляем вариант в первой строке (вариант + название)
                 if (variantLabelEl) {
-                  variantLabelEl.textContent = formatValueLabel(value);
-                  variantLabelEl.style.display = "block";
+                  variantLabelEl.textContent = formatValueLabel(value) + " ";
+                }
+
+                // Если это текущая выбранная опция — обновим summary-карточку тоже
+                if (Number(groupState.selectedId) === itemId) {
+                  renderSlot();
                 }
                 if (typeof onSelectionChange === "function") onSelectionChange();
               });
@@ -3503,10 +3665,9 @@ function buildProductDetailsContent(
             if (variantLabelEl) {
               const variantData = groupState.variantByItemId.get(itemId);
               if (variantData && variantData.variant_label) {
-                variantLabelEl.textContent = variantData.variant_label;
-                variantLabelEl.style.display = "block";
+                variantLabelEl.textContent = variantData.variant_label + " ";
               } else {
-                variantLabelEl.style.display = "none";
+                variantLabelEl.textContent = "";
               }
             }
           };
@@ -3560,28 +3721,34 @@ function buildProductDetailsContent(
           infoWrap.style.flex = "1";
           infoWrap.style.minWidth = "0";
 
-          const nameEl = document.createElement("div");
-          nameEl.className = "shop-pd-option-name";
-          nameEl.textContent = str(item.title);
-          infoWrap.appendChild(nameEl);
-
-          // Лейбл варианта
+          // Первая строка: вариант + название
+          const firstLine = document.createElement("div");
+          firstLine.className = "shop-pd-option-name";
+          firstLine.style.display = "flex";
+          firstLine.style.alignItems = "center";
+          firstLine.style.gap = "4px";
+          
           if (hasVariants) {
-            variantLabelEl = document.createElement("div");
-            variantLabelEl.className = "shop-pd-option-variant-label";
-            variantLabelEl.style.fontSize = "11px";
-            variantLabelEl.style.color = "var(--text-muted, #888)";
-            variantLabelEl.style.marginTop = "2px";
+            variantLabelEl = document.createElement("span");
+            variantLabelEl.style.fontSize = "inherit";
+            variantLabelEl.style.fontWeight = "inherit";
+            variantLabelEl.style.color = "inherit";
             const savedVariant = groupState.variantByItemId.get(itemId);
             if (savedVariant && savedVariant.variant_label) {
-              variantLabelEl.textContent = savedVariant.variant_label;
-              variantLabelEl.style.display = "block";
-            } else {
-              variantLabelEl.style.display = "none";
+              variantLabelEl.textContent = savedVariant.variant_label + " ";
             }
-            infoWrap.appendChild(variantLabelEl);
           }
+          
+          const nameEl = document.createElement("span");
+          nameEl.textContent = str(item.title);
+          
+          if (variantLabelEl && variantLabelEl.textContent) {
+            firstLine.appendChild(variantLabelEl);
+          }
+          firstLine.appendChild(nameEl);
+          infoWrap.appendChild(firstLine);
 
+          // Вторая строка: цена
           priceEl = document.createElement("div");
           priceEl.className = "shop-pd-option-price";
           priceEl.textContent = money(getPriceWithVariant());
@@ -3597,7 +3764,7 @@ function buildProductDetailsContent(
             gearBtn = document.createElement("button");
             gearBtn.type = "button";
             gearBtn.className = "shop-pd-option-gear-btn";
-            gearBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
+            gearBtn.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
             gearBtn.style.cssText = `
               background: none;
               border: none;
@@ -3682,11 +3849,13 @@ function buildProductDetailsContent(
             
             // Если вариант еще не выбран, но есть дефолт - автоматически выбираем его
             if (selectedIdx != null && !currentVariant && defaultIdx != null && values[defaultIdx] != null) {
+              const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, defaultIdx);
+              const priceDiff = unitPrice - Number(item.price || 0);
               groupState.variantByItemId.set(itemId, {
                 variant_group_id: Number(variantGroup.variant_group_id),
                 variant_value_index: defaultIdx,
                 variant_label: formatValueLabel(values[defaultIdx]),
-                variant_price_diff: 0,
+                variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
               });
             }
 
@@ -3718,13 +3887,14 @@ function buildProductDetailsContent(
               variantBtn.addEventListener("click", (e) => {
                 e.stopPropagation();
                 
-                const priceDiff = 0;
+                const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
+                const priceDiff = unitPrice - Number(item.price || 0);
                 
                 groupState.variantByItemId.set(itemId, {
                   variant_group_id: Number(variantGroup.variant_group_id),
                   variant_value_index: idx,
                   variant_label: formatValueLabel(value),
-                  variant_price_diff: priceDiff,
+                  variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
                 });
 
                 variantScroll.querySelectorAll(".shop-pd-option-variant-btn").forEach((btn) => {
@@ -3920,10 +4090,9 @@ function buildProductDetailsContent(
             if (variantLabelEl) {
               const variantData = groupState.variantByItemId.get(itemId);
               if (variantData && variantData.variant_label) {
-                variantLabelEl.textContent = variantData.variant_label;
-                variantLabelEl.style.display = "block";
+                variantLabelEl.textContent = variantData.variant_label + " ";
               } else {
-                variantLabelEl.style.display = "none";
+                variantLabelEl.textContent = "";
               }
             }
           };
@@ -3955,26 +4124,32 @@ function buildProductDetailsContent(
           infoWrap.style.flex = "1";
           infoWrap.style.minWidth = "0";
 
-          const nameEl = document.createElement("div");
-          nameEl.className = "shop-pd-option-name";
-          nameEl.textContent = str(item.title);
-          infoWrap.appendChild(nameEl);
-
-          // Выбранный вариант (мелкий текст под названием)
-          variantLabelEl = document.createElement("div");
-          variantLabelEl.className = "shop-pd-option-variant-label";
-          variantLabelEl.style.fontSize = "11px";
-          variantLabelEl.style.color = "var(--text-muted, #888)";
-          variantLabelEl.style.marginTop = "2px";
+          // Первая строка: вариант + название
+          const firstLine = document.createElement("div");
+          firstLine.className = "shop-pd-option-name";
+          firstLine.style.display = "flex";
+          firstLine.style.alignItems = "center";
+          firstLine.style.gap = "4px";
+          
+          variantLabelEl = document.createElement("span");
+          variantLabelEl.style.fontSize = "inherit";
+          variantLabelEl.style.fontWeight = "inherit";
+          variantLabelEl.style.color = "inherit";
           const savedVariant = groupState.variantByItemId.get(itemId);
           if (savedVariant && savedVariant.variant_label) {
-            variantLabelEl.textContent = savedVariant.variant_label;
-            variantLabelEl.style.display = "block";
-          } else {
-            variantLabelEl.style.display = "none";
+            variantLabelEl.textContent = savedVariant.variant_label + " ";
           }
-          infoWrap.appendChild(variantLabelEl);
+          
+          const nameEl = document.createElement("span");
+          nameEl.textContent = str(item.title);
+          
+          if (variantLabelEl.textContent) {
+            firstLine.appendChild(variantLabelEl);
+          }
+          firstLine.appendChild(nameEl);
+          infoWrap.appendChild(firstLine);
 
+          // Вторая строка: цена
           priceEl = document.createElement("div");
           priceEl.className = "shop-pd-option-price";
           priceEl.textContent = money(getItemPriceWithVariant());
@@ -3990,7 +4165,7 @@ function buildProductDetailsContent(
             gearBtn = document.createElement("button");
             gearBtn.type = "button";
             gearBtn.className = "shop-pd-option-gear-btn";
-            gearBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
+            gearBtn.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
             gearBtn.style.cssText = `
               background: none;
               border: none;
@@ -4078,11 +4253,13 @@ function buildProductDetailsContent(
             
             // Если вариант еще не выбран, но есть дефолт - автоматически выбираем его
             if (selectedIdx != null && !currentVariant && defaultIdx != null && values[defaultIdx] != null) {
+              const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, defaultIdx);
+              const priceDiff = unitPrice - Number(item.price || 0);
               groupState.variantByItemId.set(itemId, {
                 variant_group_id: Number(variantGroup.variant_group_id),
                 variant_value_index: defaultIdx,
                 variant_label: formatValueLabel(values[defaultIdx]),
-                variant_price_diff: 0,
+                variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
               });
             }
 
@@ -4115,14 +4292,14 @@ function buildProductDetailsContent(
                 e.stopPropagation();
                 
                 // Обновляем выбранный вариант в state
-                // Рассчитываем price_diff (пока 0, можно расширить)
-                const priceDiff = 0; // TODO: если нужен расчёт price_diff по тиерам
+                const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
+                const priceDiff = unitPrice - Number(item.price || 0);
                 
                 groupState.variantByItemId.set(itemId, {
                   variant_group_id: Number(variantGroup.variant_group_id),
                   variant_value_index: idx,
                   variant_label: formatValueLabel(value),
-                  variant_price_diff: priceDiff,
+                  variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
                 });
 
                 // Обновляем UI всех кнопок вариантов
@@ -4203,6 +4380,10 @@ function buildProductDetailsContent(
     title.textContent = "Состав (можно настроить):";
     ingredientsWrap.appendChild(title);
 
+    const ingredientsCards = document.createElement("div");
+    ingredientsCards.className = "shop-pd-option-cards";
+    ingredientsWrap.appendChild(ingredientsCards);
+
     ingredients.forEach((ing) => {
       const ingId = Number(ing.ingredient_id);
       const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
@@ -4253,31 +4434,46 @@ function buildProductDetailsContent(
       const totalPrice = currentTotalPrice - baseTotalPrice;
 
       const block = document.createElement("div");
-      block.className = "shop-pd-ingredient-block";
+      block.className = "shop-pd-option-card";
       block.setAttribute("data-ingredient-id", ingId);
 
+      const cardContent = document.createElement("div");
+      cardContent.className = "shop-pd-option-card-content";
+      cardContent.style.display = "flex";
+      cardContent.style.alignItems = "center";
+      cardContent.style.width = "100%";
+      cardContent.style.gap = "8px";
+
       const photo = document.createElement("div");
-      photo.className = "shop-pd-ingredient-photo";
+      photo.className = "shop-pd-option-thumb";
       if (ing.ingredient_photos && ing.ingredient_photos.length > 0) {
         const img = document.createElement("img");
         img.src = ing.ingredient_photos[0];
         img.alt = "";
+        img.style.width = "100%";
+        img.style.height = "100%";
+        img.style.objectFit = "cover";
         photo.appendChild(img);
       } else {
-        photo.textContent = "📷";
+        photo.textContent = "—";
       }
 
       const info = document.createElement("div");
-      info.className = "shop-pd-ingredient-info";
+      info.className = "shop-pd-option-info";
+      info.style.flex = "1";
+      info.style.minWidth = "0";
 
       const name = document.createElement("div");
-      name.className = "shop-pd-ingredient-name";
+      name.className = "shop-pd-option-name";
       name.textContent = ing.ingredient_name || "";
 
       if (isVariable) {
         // Variable ingredient - show controls
         const controls = document.createElement("div");
         controls.className = "shop-pd-ingredient-controls";
+        controls.style.display = "flex";
+        controls.style.alignItems = "center";
+        controls.style.gap = "8px";
 
         const btnMinus = document.createElement("button");
         btnMinus.type = "button";
@@ -4300,7 +4496,7 @@ function buildProductDetailsContent(
         controls.appendChild(btnPlus);
 
         const priceInfo = document.createElement("div");
-        priceInfo.className = "shop-pd-ingredient-price";
+        priceInfo.className = "shop-pd-option-price";
         // Всегда создаем элемент ingredient-total, скрываем если 0
         const priceSign = totalPrice >= 0 ? "+" : "";
         priceInfo.innerHTML = `
@@ -4312,7 +4508,10 @@ function buildProductDetailsContent(
 
         info.appendChild(name);
         info.appendChild(priceInfo);
-        info.appendChild(controls);
+        
+        cardContent.appendChild(photo);
+        cardContent.appendChild(info);
+        cardContent.appendChild(controls);
 
         // Handlers
         btnMinus.addEventListener("click", () => {
@@ -4353,11 +4552,13 @@ function buildProductDetailsContent(
       } else {
         // Fixed ingredient - show only info
         const qtyInfo = document.createElement("div");
-        qtyInfo.className = "shop-pd-ingredient-qty-fixed";
+        qtyInfo.className = "shop-pd-option-price";
+        qtyInfo.style.fontSize = "13px";
+        qtyInfo.style.color = "var(--text-muted, #888)";
         qtyInfo.textContent = `${currentQty} ${unitLabel}`;
 
         const priceInfo = document.createElement("div");
-        priceInfo.className = "shop-pd-ingredient-price";
+        priceInfo.className = "shop-pd-option-price";
         priceInfo.innerHTML = `
           <div class="ingredient-total">+${money(totalPrice)}</div>
         `;
@@ -4365,12 +4566,14 @@ function buildProductDetailsContent(
         info.appendChild(name);
         info.appendChild(qtyInfo);
         info.appendChild(priceInfo);
+        
+        cardContent.appendChild(photo);
+        cardContent.appendChild(info);
       }
 
-      block.appendChild(photo);
-      block.appendChild(info);
+      block.appendChild(cardContent);
 
-      ingredientsWrap.appendChild(block);
+      ingredientsCards.appendChild(block);
     });
 
     scroll.appendChild(ingredientsWrap);
