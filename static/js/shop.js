@@ -470,6 +470,41 @@
     return items.map((opt) => str(opt.title || opt.name || "")).filter(Boolean).join(", ");
   }
 
+  // Форматирование варианта: извлекаем значение и название группы из variant_label
+  function formatVariant(variantLabel) {
+    if (!variantLabel || !variantLabel.trim()) return null;
+    // variant_label имеет формат "Название группы: значение" (например "Вариант: 1 шт" или "порц: 200г")
+    const parts = variantLabel.split(":");
+    if (parts.length >= 2) {
+      const groupTitle = parts[0].trim();
+      const value = parts.slice(1).join(":").trim();
+      // Формат: значение название_группы (например "1шт порц" или "200г порц")
+      return `${value} ${groupTitle}`;
+    }
+    // Если формат неожиданный, возвращаем как есть
+    return variantLabel.trim();
+  }
+
+  // Форматирование ингредиента: количествоединица название
+  function formatIngredient(ing) {
+    const name = str(ing.ingredient_name || "");
+    if (!name) return null;
+    const qty = Number(ing.quantity || 1);
+    const unit = str(ing.unit_label || "");
+    // Формат: количествоединица название (например "150г картофельное пюре")
+    return `${qty}${unit} ${name}`.trim();
+  }
+
+  // Форматирование опции: количествоединица название
+  function formatOption(opt) {
+    const name = str(opt.title || opt.name || "");
+    if (!name) return null;
+    const optQty = Math.max(1, Number(opt.qty || 1));
+    // Для опций единица обычно "шт", но может быть в названии
+    // Формат: количествоединица название (например "1шт картофельное пюре")
+    return `${optQty}шт ${name}`;
+  }
+
   // -----------------------------
   // Cart warmup: ensure products for all cart items are in cache
   // (чтобы корзина не зависела от текущей выбранной категории)
@@ -1877,37 +1912,118 @@ async function initAddresses() {
       t.textContent = str(product.name);
       mid.appendChild(t);
 
-      const sub = document.createElement("div");
-      sub.className = "cart-sub";
+      // Формируем элементы в правильном порядке: варианты → ингредиенты → опции
+      const variantParts = [];
+      const ingredientParts = [];
+      const optionParts = [];
       
-      // Формируем строку: ингредиенты + опции через запятую
-      const parts = [];
+      // 1. Варианты (первыми)
+      if (variantLabel && variantLabel.trim() && !variantLabel.match(/^Вариант:\s*$/)) {
+        const formatted = formatVariant(variantLabel);
+        if (formatted) variantParts.push(formatted);
+      }
       
-      // Добавляем ингредиенты с названиями
+      // 2. Ингредиенты (вторыми)
       if (Array.isArray(cartIngredients) && cartIngredients.length > 0) {
         cartIngredients.forEach(ing => {
-          const name = str(ing.ingredient_name || "");
-          const qty = Number(ing.quantity || 1);
-          const unit = str(ing.unit_label || "");
-          if (name) {
-            parts.push(`${name}: ${qty}${unit ? ` ${unit}` : ""}`);
-          }
+          const formatted = formatIngredient(ing);
+          if (formatted) ingredientParts.push(formatted);
         });
       }
       
-      // Добавляем опции
-      const optionText = formatOptionTitles(optionItems);
-      if (optionText) {
-        parts.push(optionText);
-      }
-
-      // Добавляем вариант только если он реально выбран (не пустая строка и не "Вариант: ")
-      if (variantLabel && variantLabel.trim() && !variantLabel.match(/^Вариант:\s*$/)) {
-        parts.push(variantLabel);
+      // 3. Опции (третьими)
+      if (Array.isArray(optionItems) && optionItems.length > 0) {
+        optionItems.forEach(opt => {
+          const formatted = formatOption(opt);
+          if (formatted) optionParts.push(formatted);
+        });
       }
       
-      sub.textContent = parts.join(", ");
-      mid.appendChild(sub);
+      // Объединяем все элементы
+      const allParts = [...variantParts, ...ingredientParts, ...optionParts];
+      
+      // Создаем контейнер для описания с раскрывающимся списком
+      const subContainer = document.createElement("div");
+      subContainer.className = "cart-sub-container";
+      
+      if (allParts.length > 0) {
+        // Сокращенный текст для отображения (первые элементы)
+        const shortText = allParts.length > 2 
+          ? allParts.slice(0, 2).join(", ") + "..."
+          : allParts.join(", ");
+        
+        // Строка с текстом и стрелкой
+        const subSummary = document.createElement("div");
+        subSummary.className = "cart-sub-summary";
+        subSummary.style.cursor = "pointer";
+        
+        const subText = document.createElement("span");
+        subText.className = "cart-sub-text";
+        subText.textContent = shortText;
+        
+        const subArrow = document.createElement("span");
+        subArrow.className = "cart-sub-arrow";
+        subArrow.innerHTML = " ▼";
+        subArrow.style.marginLeft = "4px";
+        subArrow.style.fontSize = "0.85em";
+        subArrow.style.color = "var(--color-text-muted, #666)";
+        
+        subSummary.appendChild(subText);
+        subSummary.appendChild(subArrow);
+        
+        // Раскрывающийся список
+        const subDetails = document.createElement("div");
+        subDetails.className = "cart-sub-details";
+        subDetails.style.display = "none";
+        subDetails.style.marginTop = "4px";
+        subDetails.style.paddingLeft = "8px";
+        
+        allParts.forEach(part => {
+          const detailItem = document.createElement("div");
+          detailItem.className = "cart-sub-detail-item";
+          detailItem.textContent = `• ${part}`;
+          detailItem.style.fontSize = "0.9em";
+          detailItem.style.color = "var(--color-text-muted, #666)";
+          detailItem.style.marginTop = "2px";
+          subDetails.appendChild(detailItem);
+        });
+        
+        // Кнопка "свернуть" внизу списка
+        const collapseBtn = document.createElement("div");
+        collapseBtn.className = "cart-sub-collapse";
+        collapseBtn.textContent = "свернуть ▲";
+        collapseBtn.style.cursor = "pointer";
+        collapseBtn.style.fontSize = "0.85em";
+        collapseBtn.style.color = "var(--color-text-muted, #666)";
+        collapseBtn.style.marginTop = "4px";
+        collapseBtn.style.paddingLeft = "8px";
+        collapseBtn.style.userSelect = "none";
+        collapseBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          isExpanded = false;
+          subSummary.style.display = "flex";
+          subDetails.style.display = "none";
+          subArrow.textContent = " ▼";
+        });
+        subDetails.appendChild(collapseBtn);
+        
+        // Обработчик клика для раскрытия/сворачивания
+        let isExpanded = false;
+        subSummary.addEventListener("click", (e) => {
+          e.stopPropagation();
+          isExpanded = true;
+          subSummary.style.display = "none";
+          subDetails.style.display = "block";
+        });
+        
+        subContainer.appendChild(subSummary);
+        subContainer.appendChild(subDetails);
+      } else {
+        // Если нет элементов, просто пустая строка
+        subContainer.style.display = "none";
+      }
+      
+      mid.appendChild(subContainer);
 
       const q = document.createElement("div");
       q.className = "cart-qty";
