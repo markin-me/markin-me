@@ -52,11 +52,104 @@
     <%- include(extraPartial) %>
   <% } %>
 
+  <!-- Скрипты -->
+  <script src="/static/js/auth.js"></script>
   <script src="/static/js/theme.js"></script>
   <script src="/static/js/sidebar.js"></script>
 
   <!-- ✅ Модалка -->
   <script src="/static/js/appModal.js"></script>
+
+  <!-- Кнопка профиля / выхода -->
+  <script>
+    (function () {
+      try {
+        var btn = document.getElementById('shopProfileBtn');
+        var menuWrapper = btn ? btn.closest('.user-menu-wrapper') : null;
+        var dropdown = document.getElementById('userMenuDropdown');
+        var logoutBtn = document.getElementById('userMenuLogout');
+        
+        if (!btn || !menuWrapper || !dropdown) return;
+
+        // Функция для обновления информации о пользователе
+        function updateUserInfo() {
+          try {
+            var userStr = localStorage.getItem('user');
+            var tenantStr = localStorage.getItem('tenant');
+            
+            var nameEl = document.getElementById('userMenuName');
+            var emailEl = document.getElementById('userMenuEmail');
+            var tenantEl = document.getElementById('userMenuTenant');
+            
+            if (userStr && tenantStr) {
+              var user = JSON.parse(userStr);
+              var tenant = JSON.parse(tenantStr);
+              
+              if (nameEl) nameEl.textContent = user.name || 'Пользователь';
+              if (emailEl) emailEl.textContent = user.email || '';
+              if (tenantEl) tenantEl.textContent = tenant.name || 'Магазин';
+            } else {
+              if (nameEl) nameEl.textContent = 'Не авторизован';
+              if (emailEl) emailEl.textContent = '';
+              if (tenantEl) tenantEl.textContent = '';
+            }
+          } catch (e) {
+            console.error('Error updating user info:', e);
+          }
+        }
+
+        // Открытие/закрытие меню
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          
+          // Если не авторизован — идём на логин
+          if (typeof isAuthenticated === 'function' && !isAuthenticated()) {
+            window.location.href = '/login';
+            return;
+          }
+          
+          // Переключаем меню
+          menuWrapper.classList.toggle('active');
+          updateUserInfo();
+        });
+
+        // Кнопка выхода
+        if (logoutBtn) {
+          logoutBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (typeof logout === 'function') {
+              logout();
+            } else {
+              localStorage.removeItem('authToken');
+              localStorage.removeItem('user');
+              localStorage.removeItem('tenant');
+              window.location.href = '/login';
+            }
+          });
+        }
+
+        // Закрытие меню при клике вне его
+        document.addEventListener('click', function (e) {
+          if (menuWrapper && !menuWrapper.contains(e.target)) {
+            menuWrapper.classList.remove('active');
+          }
+        });
+
+        // Обновляем информацию при загрузке
+        updateUserInfo();
+
+        // Проверка авторизации для страниц dashboard
+        if (window.location.pathname.startsWith('/dashboard/')) {
+          var token = localStorage.getItem('authToken');
+          if (!token) {
+            window.location.href = '/login';
+          }
+        }
+      } catch (e) {
+        console.error('Header user menu init error:', e);
+      }
+    })();
+  </script>
 
   <% if (Array.isArray(pageScripts)) { %>
     <% pageScripts.forEach(function (src) { %>

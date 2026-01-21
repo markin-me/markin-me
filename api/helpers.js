@@ -5,9 +5,14 @@ const crypto = require('crypto');
 // Basic helpers
 // ------------------------------
 function getTenantId(req) {
-  const fromUser = req.user?.tenant_id ?? req.user?.tenantId ?? req.session?.tenant_id ?? req.session?.tenantId;
+  // Приоритет: авторизованный пользователь > заголовок > query > body > дефолт
+  if (req.user && req.user.tenantId) {
+    return Number(req.user.tenantId);
+  }
   const fromHeader = req.headers['x-tenant-id'];
-  const v = fromUser ?? fromHeader ?? 1;
+  const fromQuery = req.query.tenant_id;
+  const fromBody = req.body && req.body.tenant_id;
+  const v = fromHeader ?? fromQuery ?? fromBody ?? 1;
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : 1;
 }

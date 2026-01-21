@@ -12,10 +12,31 @@
         <i class="fas fa-moon"></i>
       </button>
 
-      <!-- важно: id для перехвата на витрине -->
-      <a href="/auth" class="header-btn" id="shopProfileBtn" aria-label="Профиль / Вход">
-        <i class="fas fa-user"></i>
-      </a>
+      <!-- Важно: id для перехвата на витрине -->
+      <div class="user-menu-wrapper">
+        <button class="header-btn" id="shopProfileBtn" type="button" aria-label="Профиль">
+          <i class="fas fa-user"></i>
+        </button>
+        <div class="user-menu-dropdown" id="userMenuDropdown">
+          <div class="user-menu-header">
+            <div class="user-menu-avatar">
+              <i class="fas fa-user-circle"></i>
+            </div>
+            <div class="user-menu-info">
+              <div class="user-menu-name" id="userMenuName">Загрузка...</div>
+              <div class="user-menu-email" id="userMenuEmail"></div>
+              <div class="user-menu-tenant" id="userMenuTenant"></div>
+            </div>
+          </div>
+          <div class="user-menu-divider"></div>
+          <div class="user-menu-actions">
+            <button class="user-menu-btn" id="userMenuLogout">
+              <i class="fas fa-sign-out-alt"></i>
+              <span>Выйти</span>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </header>

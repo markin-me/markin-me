@@ -7,3 +7,13 @@ yarn-error.log*
 uploads/
 static/uploads/
 db-tools/
+
+# Временные скрипты для настройки
+setup-tenant-1-login.js
+setup-tenant-1-quick.js
+git-helper.ps1
+db-explorer.js
+db-edit.js
+migrations/001-add-multitenancy.sql
+.gitignore
+migrations/002-add-tenant-password.sql
