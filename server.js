@@ -19,7 +19,15 @@ const { authMiddleware } = require('./api/middleware/auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const ordersEvents = createOrdersEventsHub();
+
+// Инициализация с обработкой ошибок
+let ordersEvents;
+try {
+  ordersEvents = createOrdersEventsHub();
+} catch (err) {
+  console.error('Ошибка инициализации ordersEvents:', err);
+  process.exit(1);
+}
 
 app.use(cors());
 app.use(express.json());
@@ -29,7 +37,7 @@ app.use(cookieParser());
 app.use('/static', express.static('static'));
 
 app.set('view engine', 'ejs');
-app.set('views', 'views');
+app.set('views', path.join(__dirname, 'views'));
 
 // ------------------------------
 // API: Auth (публичные роуты)
@@ -41,8 +49,23 @@ app.use('/api/auth', makeAuthRouter({ db, helpers }));
 // ------------------------------
 app.get('/', (req, res) => res.redirect('/login'));
 
-app.get('/login', (req, res) => res.render('pages/auth', { mode: 'login' }));
-app.get('/register', (req, res) => res.render('pages/auth', { mode: 'register' }));
+app.get('/login', (req, res) => {
+  try {
+    res.render('pages/auth', { mode: 'login' });
+  } catch (err) {
+    console.error('Ошибка рендеринга страницы логина:', err);
+    res.status(500).send('Ошибка загрузки страницы');
+  }
+});
+
+app.get('/register', (req, res) => {
+  try {
+    res.render('pages/auth', { mode: 'register' });
+  } catch (err) {
+    console.error('Ошибка рендеринга страницы регистрации:', err);
+    res.status(500).send('Ошибка загрузки страницы');
+  }
+});
 
 // Защищённые страницы (проверка авторизации на клиенте через JS)
 app.get('/dashboard/products', (req, res) => res.render('pages/products'));
@@ -101,4 +124,11 @@ app.use((err, req, res, next) => {
 // ------------------------------
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на ${PORT}`);
+  console.log(`📝 Откройте http://localhost:${PORT}/login в браузере`);
+}).on('error', (err) => {
+  console.error('Ошибка запуска сервера:', err);
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Порт ${PORT} уже занят. Остановите другой процесс или измените PORT.`);
+  }
+  process.exit(1);
 });

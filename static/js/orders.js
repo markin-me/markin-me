@@ -5,14 +5,33 @@
   const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
 
   async function apiJson(url, opts = {}) {
+    // Получаем токен из localStorage
+    const token = localStorage.getItem('authToken');
+    const headers = {
+      ...(opts.body ? { "Content-Type": "application/json" } : {}),
+      ...(opts.headers || {}),
+    };
+    
+    // Добавляем токен авторизации, если он есть
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
     const res = await fetch(url, {
       method: opts.method || "GET",
-      headers: {
-        ...(opts.body ? { "Content-Type": "application/json" } : {}),
-        ...(opts.headers || {}),
-      },
+      headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
+    
+    // Если 401 - перенаправляем на логин
+    if (res.status === 401) {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+      localStorage.removeItem('tenant');
+      window.location.href = '/login';
+      throw new Error('UNAUTHORIZED');
+    }
+    
     const json = await res.json().catch(() => null);
     if (!json || json.ok !== true) {
       const err = json?.error || `API_ERROR (${res.status})`;
@@ -1099,7 +1118,13 @@
   function initSse() {
     if (typeof EventSource === "undefined") return;
 
-    const es = new EventSource("/api/admin/orders/events");
+    // EventSource не поддерживает кастомные заголовки, передаем токен через query
+    const token = localStorage.getItem('authToken');
+    const url = token 
+      ? `/api/admin/orders/events?token=${encodeURIComponent(token)}`
+      : "/api/admin/orders/events";
+    
+    const es = new EventSource(url);
 
     es.addEventListener("order.created", (e) => {
       if (e.lastEventId) state.lastEventId = e.lastEventId;

@@ -411,10 +411,33 @@
   // ---------------- API ----------------
 
   async function api(url, opts) {
+    // Получаем токен из localStorage
+    const token = localStorage.getItem('authToken');
+    const headers = { 
+      "Content-Type": "application/json", 
+      "x-tenant-id": String(TENANT_ID),
+      ...(opts?.headers || {}),
+    };
+    
+    // Добавляем токен авторизации, если он есть
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
     const res = await fetch(url, {
-      headers: { "Content-Type": "application/json", "x-tenant-id": String(TENANT_ID) },
+      headers,
       ...opts,
     });
+    
+    // Если 401 - перенаправляем на логин
+    if (res.status === 401) {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+      localStorage.removeItem('tenant');
+      window.location.href = '/login';
+      throw new Error('UNAUTHORIZED');
+    }
+    
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) {
       throw new Error((data && data.error) || `HTTP_${res.status}`);
@@ -423,26 +446,50 @@
   }
 
   async function apiUploadImages(files) {
+    const token = localStorage.getItem('authToken');
     const fd = new FormData();
     files.forEach((f) => fd.append("images", f));
+    const headers = { "x-tenant-id": String(TENANT_ID) };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     const res = await fetch("/api/upload/product-images", {
       method: "POST",
-      headers: { "x-tenant-id": String(TENANT_ID) },
+      headers,
       body: fd
     });
+    if (res.status === 401) {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+      localStorage.removeItem('tenant');
+      window.location.href = '/login';
+      throw new Error('UNAUTHORIZED');
+    }
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) throw new Error((data && data.error) || `HTTP_${res.status}`);
     return data.urls || [];
   }
 
   async function apiUploadCategoryIcon(file) {
+    const token = localStorage.getItem('authToken');
     const fd = new FormData();
     fd.append("icon", file);
+    const headers = { "x-tenant-id": String(TENANT_ID) };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     const res = await fetch("/api/upload/category-icon", {
       method: "POST",
-      headers: { "x-tenant-id": String(TENANT_ID) },
+      headers,
       body: fd,
     });
+    if (res.status === 401) {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+      localStorage.removeItem('tenant');
+      window.location.href = '/login';
+      throw new Error('UNAUTHORIZED');
+    }
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) throw new Error((data && data.error) || `HTTP_${res.status}`);
     return data.url || "";

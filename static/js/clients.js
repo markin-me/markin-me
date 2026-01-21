@@ -19,14 +19,34 @@
   const tenantId = getTenantId();
 
   async function apiJson(url, opts = {}) {
+    // Получаем токен из localStorage
+    const token = localStorage.getItem('authToken');
+    const headers = {
+      "x-tenant-id": String(tenantId),
+      ...(opts.body ? { "Content-Type": "application/json" } : {}),
+      ...(opts.headers || {}),
+    };
+    
+    // Добавляем токен авторизации, если он есть
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
     const res = await fetch(url, {
       method: opts.method || "GET",
-      headers: {
-        "x-tenant-id": String(tenantId),
-        ...(opts.body ? { "Content-Type": "application/json" } : {}),
-      },
+      headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
+    
+    // Если 401 - перенаправляем на логин
+    if (res.status === 401) {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+      localStorage.removeItem('tenant');
+      window.location.href = '/login';
+      throw new Error('UNAUTHORIZED');
+    }
+    
     const json = await res.json().catch(() => null);
     if (!json || json.ok !== true) {
       const err = json?.error || `API_ERROR (${res.status})`;
