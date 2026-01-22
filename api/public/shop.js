@@ -1092,12 +1092,23 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
 
       // Получаем группу опций
-      const [[group]] = await db.query(
-        `SELECT * FROM prod_option_groups 
-         WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1 
-         LIMIT 1`,
-        [tenantId, storeId, id]
-      );
+      let group;
+      try {
+        const [rows] = await db.query(
+          `SELECT * FROM prod_option_groups 
+           WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1 
+           LIMIT 1`,
+          [tenantId, storeId, id]
+        );
+        group = rows[0] || null;
+      } catch (dbError) {
+        console.error('DB query error in /options/groups/:id:', dbError);
+        if (dbError.code === 'ETIMEDOUT' || dbError.code === 'ECONNREFUSED') {
+          return res.status(503).json({ ok: false, error: 'DB_CONNECTION_ERROR', message: 'Не удалось подключиться к базе данных' });
+        }
+        throw dbError;
+      }
+      
       if (!group) {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }

@@ -223,16 +223,65 @@ header{
     position: fixed;
     left: 50%;
     transform: translateX(-50%);
-    bottom: calc(50px + 8px + env(safe-area-inset-bottom));
+    bottom: calc(40px + env(safe-area-inset-bottom));
     width: min(520px, calc(100% - 24px));
     z-index: 119;
     pointer-events: none;
   }
   
-  .shop-active-orders-badge-mobile {
+  .shop-active-orders-sheet-collapsed {
     pointer-events: auto;
     width: 100%;
     max-width: 100%;
+    background: var(--color-surface, #ffffff);
+    color: var(--color-text, #1a1a1a);
+    border-radius: 20px 20px 0 0;
+    border: 1px solid var(--color-border, #e5e5e5);
+    border-bottom: none;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.1);
+    padding: 20px 16px 16px;
+    position: relative;
+    min-height: 60px;
+    cursor: pointer;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+  }
+  
+  .shop-active-orders-sheet-collapsed:active {
+    transform: translateY(-2px);
+    box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.15);
+  }
+  
+  .shop-active-orders-handle {
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 40px;
+    height: 4px;
+    background: var(--color-border, #d1d5db);
+    border-radius: 2px;
+  }
+  
+  .shop-active-orders-collapsed-content {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  
+  .shop-active-orders-sheet-collapsed .shop-active-orders-text,
+  .shop-active-orders-sheet-collapsed .shop-active-orders-count {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--color-text, #1a1a1a);
+  }
+  
+  .shop-active-orders-sheet-collapsed .shop-active-orders-count {
+    font-weight: 700;
+    color: var(--shop-buy, #f97316);
   }
 }
 
@@ -1576,6 +1625,9 @@ html[data-sidebar-collapsed="1"] .app-grid{
 }
 
 .app-modal-header{
+  display: flex;
+  align-items: center;
+  gap: 12px;
   padding:12px;
   border-bottom:1px solid var(--color-border);
   display:flex;
@@ -1583,7 +1635,15 @@ html[data-sidebar-collapsed="1"] .app-grid{
   justify-content:space-between;
   gap:12px;
 }
-.app-modal-title{font-weight:900}
+.app-modal-title{
+  font-weight: 900;
+  flex: 1;
+  text-align: center;
+}
+.app-modal-back-btn{
+  flex-shrink: 0;
+  margin-right: auto;
+}
 .app-modal-actions{
   display:flex;
   align-items:center;

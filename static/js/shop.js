@@ -71,6 +71,7 @@
   const elHeaderProfileBtn = $("#shopProfileBtn");
   const elActiveOrdersBadge = $("#shopActiveOrdersBadge");
   const elActiveOrdersBadgeMobile = $("#shopActiveOrdersBadgeMobile");
+  const elActiveOrdersSheetCollapsed = $("#shopActiveOrdersSheetCollapsed");
 
   // desktop cart footer
   const elCartFooter = $("#shopCartFooter");
@@ -549,6 +550,114 @@
     // Формат: количествоединица название (например "1шт картофельное пюре")
     return `${optQty}шт ${name}`;
   }
+
+  // Форматирование товара заказа - вынесено в глобальную область для использования в bottom sheet
+  window.formatOrderItem = function formatOrderItem(item) {
+    // Используем формат как в корзине, но сразу раскрытый
+    const photos = Array.isArray(item.photos) ? item.photos.filter(Boolean) : [];
+    const mainPhoto = photos[0] || "/static/img/placeholder.png";
+    
+    // Формируем элементы в правильном порядке: варианты → опции → варианты опций → ингредиенты
+    const variantParts = [];
+    const optionParts = [];
+    const ingredientParts = [];
+    
+    // 1. Варианты товара (первыми)
+    if (item.variants && Array.isArray(item.variants) && item.variants.length > 0) {
+      item.variants.forEach(v => {
+        if (v.label || v.value) {
+          const groupTitle = str(v.group_title || "Вариант");
+          const variantValue = str(v.label || v.value || "");
+          // Формат: значение название_группы (например "200г порц")
+          const formatted = `${variantValue} ${groupTitle}`.trim();
+          if (formatted) variantParts.push(formatted);
+        }
+      });
+    }
+    
+    // 2. Опции (вторыми)
+    if (item.options && Array.isArray(item.options) && item.options.length > 0) {
+      item.options.forEach(opt => {
+        const formatted = formatOption({
+          title: opt.title || opt.name,
+          qty: opt.qty || opt.quantity,
+          variant_label: opt.variant_label || opt.variantLabel
+        });
+        if (formatted) optionParts.push(formatted);
+      });
+    }
+    
+    // 3. Ингредиенты (третьими)
+    if (item.ingredients && Array.isArray(item.ingredients) && item.ingredients.length > 0) {
+      item.ingredients.forEach(ing => {
+        // Поддерживаем оба формата: ing.name и ing.ingredient_name
+        // В JSON из БД используется ing.name
+        const ingredientName = ing.ingredient_name || ing.name || ing.ingredientName;
+        if (!ingredientName) return; // Пропускаем если нет названия
+        
+        const quantity = ing.quantity || ing.qty || 1;
+        // Единицы измерения могут быть в разных полях
+        // В JSON из БД единицы могут отсутствовать, используем "г" по умолчанию для весовых ингредиентов
+        let unitLabel = ing.unit_label || ing.unit || ing.unitLabel || ing.unit_short_title || ing.unit_title || "";
+        
+        // Если единица не указана, пытаемся определить по количеству
+        // Если quantity > 10, вероятно это граммы
+        if (!unitLabel && quantity > 10) {
+          unitLabel = "г";
+        } else if (!unitLabel) {
+          unitLabel = "шт";
+        }
+        
+        const formatted = formatIngredient({
+          ingredient_name: ingredientName,
+          quantity: quantity,
+          unit_label: unitLabel
+        });
+        if (formatted) ingredientParts.push(formatted);
+      });
+    }
+    
+    // Объединяем все элементы
+    const allParts = [...variantParts, ...optionParts, ...ingredientParts];
+    
+    // Создаем HTML как в корзине
+    let html = `<div class="cart-row">`;
+    
+    // Фото
+    html += `<img class="cart-thumb" src="${escapeHtml(mainPhoto)}" alt="" />`;
+    
+    // Средняя часть с названием и деталями
+    html += `<div class="cart-mid">`;
+    
+    // Название товара с количеством (в конце, как в корзине)
+    const itemQty = Number(item.qty || item.quantity || 1);
+    const itemName = itemQty > 1 
+      ? `${escapeHtml(item.name || "—")} × ${itemQty}`
+      : escapeHtml(item.name || "—");
+    html += `<div class="cart-title">${itemName}</div>`;
+    
+    // Детали (раскрытые сразу)
+    if (allParts.length > 0) {
+      html += `<div class="cart-sub-container">`;
+      html += `<div class="cart-sub-details" style="display: block; margin-top: 4px; padding-left: 8px;">`;
+      allParts.forEach(part => {
+        html += `<div class="cart-sub-detail-item" style="font-size: 0.9em; color: var(--color-text-muted, #666); margin-top: 2px;">• ${escapeHtml(part)}</div>`;
+      });
+      html += `</div>`;
+      html += `</div>`;
+    }
+    
+    html += `</div>`;
+    
+    // Правая часть с количеством и ценой
+    html += `<div class="cart-right">`;
+    html += `<div class="cart-price">${money(item.line_total || item.price || 0)}</div>`;
+    html += `</div>`;
+    
+    html += `</div>`;
+    
+    return html;
+  };
 
   // -----------------------------
   // Cart warmup: ensure products for all cart items are in cache
@@ -5475,8 +5584,19 @@ function openCategoriesSheet() {
     onClose: () => {
       // после закрытия шита возвращаемся в "Главная" (каталог)
       setActiveNav("menu");
+      // Обновляем бейдж после закрытия модального окна
+      if (typeof window.updateActiveOrdersBadge === "function") {
+        window.updateActiveOrdersBadge();
+      }
     },
   });
+  
+  // Обновляем бейдж сразу после открытия модального окна
+  if (typeof window.updateActiveOrdersBadge === "function") {
+    setTimeout(() => {
+      window.updateActiveOrdersBadge();
+    }, 100);
+  }
 }
 
   function setCartSheetFooterMode(ctx, mode) {
@@ -5661,6 +5781,10 @@ function openCartSheet() {
       openCartSheetCtx = null;
       if (window.AppModal?.body) window.AppModal.body.classList.remove("shop-cart-sheet-body");
       openProductCtx = null;
+      // Обновляем бейдж после закрытия модального окна
+      if (typeof window.updateActiveOrdersBadge === "function") {
+        window.updateActiveOrdersBadge();
+      }
 
       clearSheetAddressTitleMode();
 
@@ -5668,6 +5792,13 @@ function openCartSheet() {
       if (typeof setActiveNav === "function") setActiveNav("menu");
     },
   });
+  
+  // Обновляем бейдж сразу после открытия модального окна корзины
+  if (typeof window.updateActiveOrdersBadge === "function") {
+    setTimeout(() => {
+      window.updateActiveOrdersBadge();
+    }, 100);
+  }
 
   if (window.AppModal?.body) window.AppModal.body.classList.add("shop-cart-sheet-body");
 
@@ -6658,90 +6789,8 @@ function renderSheetAddressList() {
       }
     }
 
-    function formatOrderItem(item) {
-      // Используем формат как в корзине, но сразу раскрытый
-      const photos = Array.isArray(item.photos) ? item.photos.filter(Boolean) : [];
-      const mainPhoto = photos[0] || "/static/img/placeholder.png";
-      
-      // Формируем элементы в правильном порядке: варианты → опции → варианты опций → ингредиенты
-      const variantParts = [];
-      const optionParts = [];
-      const ingredientParts = [];
-      
-      // 1. Варианты товара (первыми)
-      if (item.variants && Array.isArray(item.variants) && item.variants.length > 0) {
-        item.variants.forEach(v => {
-          if (v.label || v.value) {
-            const groupTitle = str(v.group_title || "Вариант");
-            const variantValue = str(v.label || v.value || "");
-            // Формат: значение название_группы (например "200г порц")
-            const formatted = `${variantValue} ${groupTitle}`.trim();
-            if (formatted) variantParts.push(formatted);
-          }
-        });
-      }
-      
-      // 2. Опции (вторыми)
-      if (item.options && Array.isArray(item.options) && item.options.length > 0) {
-        item.options.forEach(opt => {
-          const formatted = formatOption({
-            title: opt.title,
-            qty: opt.qty,
-            variant_label: opt.variant_label
-          });
-          if (formatted) optionParts.push(formatted);
-        });
-      }
-      
-      // 3. Ингредиенты (третьими)
-      if (item.ingredients && Array.isArray(item.ingredients) && item.ingredients.length > 0) {
-        item.ingredients.forEach(ing => {
-          const formatted = formatIngredient({
-            ingredient_name: ing.name,
-            quantity: ing.quantity,
-            unit_label: ing.unit || ""
-          });
-          if (formatted) ingredientParts.push(formatted);
-        });
-      }
-      
-      // Объединяем все элементы
-      const allParts = [...variantParts, ...optionParts, ...ingredientParts];
-      
-      // Создаем HTML как в корзине
-      let html = `<div class="cart-row">`;
-      
-      // Фото
-      html += `<img class="cart-thumb" src="${escapeHtml(mainPhoto)}" alt="" />`;
-      
-      // Средняя часть с названием и деталями
-      html += `<div class="cart-mid">`;
-      
-      // Название товара (в конце, как в корзине)
-      html += `<div class="cart-title">${escapeHtml(item.name || "—")}</div>`;
-      
-      // Детали (раскрытые сразу)
-      if (allParts.length > 0) {
-        html += `<div class="cart-sub-container">`;
-        html += `<div class="cart-sub-details" style="display: block; margin-top: 4px; padding-left: 8px;">`;
-        allParts.forEach(part => {
-          html += `<div class="cart-sub-detail-item" style="font-size: 0.9em; color: var(--color-text-muted, #666); margin-top: 2px;">• ${escapeHtml(part)}</div>`;
-        });
-        html += `</div>`;
-        html += `</div>`;
-      }
-      
-      html += `</div>`;
-      
-      // Правая часть с количеством и ценой
-      html += `<div class="cart-right">`;
-      html += `<div class="cart-price">${money(item.line_total || item.price || 0)}</div>`;
-      html += `</div>`;
-      
-      html += `</div>`;
-      
-      return html;
-    }
+    // formatOrderItem уже определена в глобальной области выше (строка 555)
+    // Не переопределяем её здесь, чтобы избежать конфликтов
 
     async function showOrderDetails(orderId) {
       currentOrdersView = "details";
@@ -7397,8 +7446,19 @@ function renderSheetAddressList() {
       onClose: () => {
         cleanupMenu();
         setActiveNav("menu");
+        // Обновляем бейдж после закрытия модального окна
+        if (typeof window.updateActiveOrdersBadge === "function") {
+          window.updateActiveOrdersBadge();
+        }
       },
     });
+    
+    // Обновляем бейдж сразу после открытия модального окна
+    if (typeof window.updateActiveOrdersBadge === "function") {
+      setTimeout(() => {
+        window.updateActiveOrdersBadge();
+      }, 100);
+    }
   }
   // -----------------------------
   // Bottom nav (mobile) helpers
@@ -8026,9 +8086,12 @@ async function init() {
       });
     }
 
+    // Глобальная переменная для хранения активных заказов
+    window._activeOrders = [];
+    
     // Активные заказы: обновление бейджа и обработчик клика
     window.updateActiveOrdersBadge = async function updateActiveOrdersBadge() {
-      const badges = [elActiveOrdersBadge, elActiveOrdersBadgeMobile].filter(Boolean);
+      const badges = [elActiveOrdersBadge, elActiveOrdersBadgeMobile, elActiveOrdersSheetCollapsed].filter(Boolean);
       if (badges.length === 0) return;
       
       // Проверяем, находимся ли мы на главной странице витрины
@@ -8038,15 +8101,31 @@ async function init() {
       
       // Проверяем активную вкладку в мобильной навигации
       let isMainTabActive = true;
-      if (isMobile && elNavMenu) {
+      let isAnyModalOpen = false;
+      
+      if (isMobile) {
+        // Проверяем, открыто ли модальное окно (профиль, корзина, категории и т.д.)
+        if (window.AppModal && typeof window.AppModal.isOpen === "function") {
+          isAnyModalOpen = window.AppModal.isOpen();
+        }
+        
         // Проверяем, активна ли главная вкладка (menu)
-        isMainTabActive = elNavMenu.classList.contains("is-active");
+        // Ищем элемент с классом is-active среди навигационных кнопок
+        const activeNavBtn = document.querySelector(".shop-nav-btn.is-active");
+        if (activeNavBtn) {
+          const activeTab = activeNavBtn.getAttribute("data-tab") || activeNavBtn.id;
+          isMainTabActive = activeTab === "menu" || activeTab === "shopNavMenu";
+        } else if (elNavMenu) {
+          // Fallback: проверяем elNavMenu напрямую
+          isMainTabActive = elNavMenu.classList.contains("is-active");
+        }
       }
       
       try {
         const token = getCustomerToken();
         if (!token) {
           badges.forEach(badge => badge.classList.add("hidden"));
+          window._activeOrders = [];
           return;
         }
 
@@ -8061,23 +8140,57 @@ async function init() {
           return activeStatusCodes.includes(statusCode) || (!statusCode && order.status_title);
         });
 
+        // Сохраняем активные заказы в глобальную переменную
+        window._activeOrders = activeOrders;
+
         const count = activeOrders.length;
         
         if (count > 0) {
           badges.forEach(badge => {
             const countEl = badge.querySelector(".shop-active-orders-count");
-            if (countEl) {
-              countEl.textContent = count > 1 ? ` +${count}` : "";
+            const textEl = badge.querySelector(".shop-active-orders-text");
+            
+            // Для мобильного приоткрытого bottom sheet: если заказ один, показываем статус
+            if (elActiveOrdersSheetCollapsed && badge === elActiveOrdersSheetCollapsed && count === 1) {
+              const order = activeOrders[0];
+              const statusTitle = order.status_title || "";
+              if (textEl) {
+                textEl.textContent = statusTitle ? `Активный заказ • ${statusTitle}` : "Активный заказ";
+              }
+              if (countEl) {
+                countEl.textContent = "";
+              }
+            } else if (elActiveOrdersBadgeMobile && badge === elActiveOrdersBadgeMobile && count === 1) {
+              // Для старого мобильного бейджа: если заказ один, показываем статус
+              const order = activeOrders[0];
+              const statusTitle = order.status_title || "";
+              if (textEl) {
+                textEl.textContent = statusTitle ? `Активный заказ • ${statusTitle}` : "Активный заказ";
+              }
+              if (countEl) {
+                countEl.textContent = "";
+              }
+            } else {
+              // Для нескольких заказов или десктопного бейджа
+              if (textEl) {
+                textEl.textContent = "Активный заказ";
+              }
+              if (countEl) {
+                countEl.textContent = count > 1 ? ` +${count}` : "";
+              }
             }
             
-            // Мобильный бейдж показываем только на главной странице и на главной вкладке
-            if (elActiveOrdersBadgeMobile && badge === elActiveOrdersBadgeMobile) {
-              // Это мобильный бейдж - показываем только на главной странице и главной вкладке
-              if (isMobile && isShopMainPage && isMainTabActive) {
+            // Мобильный приоткрытый bottom sheet показываем только на главной странице и на главной вкладке, и когда нет открытых модалок
+            if (elActiveOrdersSheetCollapsed && badge === elActiveOrdersSheetCollapsed) {
+              // Это мобильный приоткрытый bottom sheet - показываем только на главной странице, главной вкладке и когда нет открытых модалок
+              if (isMobile && isShopMainPage && isMainTabActive && !isAnyModalOpen) {
                 badge.classList.remove("hidden");
               } else {
                 badge.classList.add("hidden");
               }
+            } else if (elActiveOrdersBadgeMobile && badge === elActiveOrdersBadgeMobile) {
+              // Старый мобильный бейдж - скрываем (оставляем для обратной совместимости)
+              badge.classList.add("hidden");
             } else {
               // Десктопный бейдж показываем всегда (если есть активные заказы)
               badge.classList.remove("hidden");
@@ -8085,10 +8198,12 @@ async function init() {
           });
         } else {
           badges.forEach(badge => badge.classList.add("hidden"));
+          window._activeOrders = [];
         }
       } catch (e) {
         // Если ошибка (не авторизован и т.д.), скрываем бейджи
         badges.forEach(badge => badge.classList.add("hidden"));
+        window._activeOrders = [];
       }
     }
 
@@ -8130,25 +8245,505 @@ async function init() {
           }
         }, 300);
       } else {
-        // Мобильная версия: открываем профиль и переключаем на вкладку "История заказов"
-        const me = await fetchMeSafe();
-        if (!me) {
-          openProfileSheet();
+        // Мобильная версия: открываем bottom sheet с активными заказами
+        openActiveOrdersSheet();
+      }
+    };
+    
+    // Функция открытия bottom sheet с активными заказами
+    async function openActiveOrdersSheet() {
+      if (!window.AppModal) return;
+      
+      // Скрываем приоткрытый bottom sheet при открытии полноценного
+      if (elActiveOrdersSheetCollapsed) {
+        elActiveOrdersSheetCollapsed.classList.add("hidden");
+      }
+      
+      const activeOrders = window._activeOrders || [];
+      if (activeOrders.length === 0) {
+        // Если нет активных заказов, обновляем и пробуем снова
+        await window.updateActiveOrdersBadge();
+        const updatedOrders = window._activeOrders || [];
+        if (updatedOrders.length === 0) return;
+        activeOrders.push(...updatedOrders);
+      }
+      
+      // Если заказ один - сразу показываем детали
+      if (activeOrders.length === 1) {
+        const orderId = activeOrders[0].id;
+        await showActiveOrderDetails(orderId);
+        return;
+      }
+      
+      // Если заказов несколько - показываем список
+      showActiveOrdersList(activeOrders);
+    }
+    
+    // Показать список активных заказов
+    function showActiveOrdersList(orders) {
+      if (!window.AppModal) return;
+      
+      // Проверяем, что orders не пустой
+      if (!orders || !Array.isArray(orders) || orders.length === 0) {
+        // Пытаемся загрузить заказы заново
+        if (typeof window.updateActiveOrdersBadge === "function") {
+          window.updateActiveOrdersBadge().then(() => {
+            const updatedOrders = window._activeOrders || [];
+            if (updatedOrders.length > 0) {
+              showActiveOrdersList(updatedOrders);
+            } else {
+              // Если все еще пусто, показываем сообщение
+              if (window.AppModal.isOpen && window.AppModal.isOpen()) {
+                const wrap = document.createElement("div");
+                wrap.className = "shop-active-orders-sheet";
+                wrap.innerHTML = `<div class="muted" style="padding: 20px; text-align: center;">Нет активных заказов</div>`;
+                window.AppModal.setContent(wrap);
+              }
+            }
+          });
+        }
+        return;
+      }
+      
+      // Если модальное окно уже открыто, обновляем контент
+      if (window.AppModal.isOpen && window.AppModal.isOpen()) {
+        const wrap = document.createElement("div");
+        wrap.className = "shop-active-orders-sheet";
+        
+        const list = document.createElement("div");
+        list.className = "shop-active-orders-list";
+        
+        if (orders.length === 0) {
+          list.innerHTML = `<div class="muted" style="padding: 20px; text-align: center;">Нет активных заказов</div>`;
+        } else {
+          orders.forEach(order => {
+          const card = document.createElement("div");
+          card.className = "shop-active-order-card";
+          card.style.cursor = "pointer";
+          card.style.padding = "16px";
+          card.style.borderBottom = "1px solid var(--color-border, #e5e5e5)";
+          
+          const header = document.createElement("div");
+          header.style.display = "flex";
+          header.style.justifyContent = "space-between";
+          header.style.alignItems = "center";
+          header.style.marginBottom = "8px";
+          
+          const orderNum = document.createElement("div");
+          orderNum.style.fontWeight = "600";
+          orderNum.textContent = `Заказ #${order.id}`;
+          
+          const status = document.createElement("div");
+          status.style.color = "var(--shop-buy, #f97316)";
+          status.style.fontSize = "14px";
+          status.textContent = order.status_title || "";
+          
+          header.appendChild(orderNum);
+          header.appendChild(status);
+          
+          const meta = document.createElement("div");
+          meta.style.fontSize = "13px";
+          meta.style.color = "var(--color-text-muted, #666)";
+          meta.style.marginBottom = "8px";
+          meta.textContent = new Date(order.created_at).toLocaleString("ru-RU");
+          
+          const footer = document.createElement("div");
+          footer.style.display = "flex";
+          footer.style.justifyContent = "space-between";
+          footer.style.alignItems = "center";
+          
+          const total = document.createElement("div");
+          total.style.fontWeight = "600";
+          total.textContent = money(order.total_price || 0);
+          
+          const itemsCount = document.createElement("div");
+          itemsCount.style.fontSize = "13px";
+          itemsCount.style.color = "var(--color-text-muted, #666)";
+          const itemsNum = order.items_count || (order.items && order.items.length) || 0;
+          itemsCount.textContent = `${itemsNum} ${itemsNum === 1 ? "позиция" : itemsNum < 5 ? "позиции" : "позиций"}`;
+          
+          footer.appendChild(total);
+          footer.appendChild(itemsCount);
+          
+          card.appendChild(header);
+          card.appendChild(meta);
+          card.appendChild(footer);
+          
+          card.addEventListener("click", async () => {
+            await showActiveOrderDetails(order.id);
+          });
+          
+          list.appendChild(card);
+          });
+        }
+        
+        wrap.appendChild(list);
+        
+        // Обновляем контент и заголовок
+        window.AppModal.setTitle("Активные заказы");
+        window.AppModal.setContent(wrap);
+        
+        // Убираем кнопку назад из хедера, если она была
+        const modalHeader = document.querySelector(".app-modal-header");
+        if (modalHeader) {
+          const backBtn = modalHeader.querySelector(".app-modal-back-btn");
+          if (backBtn) {
+            backBtn.remove();
+          }
+          const modalTitle = document.querySelector("#appModalTitle");
+          if (modalTitle) {
+            modalTitle.style.textAlign = "";
+            modalTitle.style.flex = "";
+          }
+        }
+        
+        return;
+      }
+      
+      // Если модальное окно закрыто, открываем его
+      const wrap = document.createElement("div");
+      wrap.className = "shop-active-orders-sheet";
+      
+      const list = document.createElement("div");
+      list.className = "shop-active-orders-list";
+      
+      orders.forEach(order => {
+        const card = document.createElement("div");
+        card.className = "shop-active-order-card";
+        card.style.cursor = "pointer";
+        card.style.padding = "16px";
+        card.style.borderBottom = "1px solid var(--color-border, #e5e5e5)";
+        
+        const header = document.createElement("div");
+        header.style.display = "flex";
+        header.style.justifyContent = "space-between";
+        header.style.alignItems = "center";
+        header.style.marginBottom = "8px";
+        
+        const orderNum = document.createElement("div");
+        orderNum.style.fontWeight = "600";
+        orderNum.textContent = `Заказ #${order.id}`;
+        
+        const status = document.createElement("div");
+        status.style.color = "var(--shop-buy, #f97316)";
+        status.style.fontSize = "14px";
+        status.textContent = order.status_title || "";
+        
+        header.appendChild(orderNum);
+        header.appendChild(status);
+        
+        const meta = document.createElement("div");
+        meta.style.fontSize = "13px";
+        meta.style.color = "var(--color-text-muted, #666)";
+        meta.style.marginBottom = "8px";
+        meta.textContent = new Date(order.created_at).toLocaleString("ru-RU");
+        
+        const footer = document.createElement("div");
+        footer.style.display = "flex";
+        footer.style.justifyContent = "space-between";
+        footer.style.alignItems = "center";
+        
+        const total = document.createElement("div");
+        total.style.fontWeight = "600";
+        total.textContent = money(order.total_price || 0);
+        
+        const itemsCount = document.createElement("div");
+        itemsCount.style.fontSize = "13px";
+        itemsCount.style.color = "var(--color-text-muted, #666)";
+        const itemsNum = order.items_count || (order.items && order.items.length) || 0;
+        itemsCount.textContent = `${itemsNum} ${itemsNum === 1 ? "позиция" : itemsNum < 5 ? "позиции" : "позиций"}`;
+        
+        footer.appendChild(total);
+        footer.appendChild(itemsCount);
+        
+        card.appendChild(header);
+        card.appendChild(meta);
+        card.appendChild(footer);
+        
+        card.addEventListener("click", async () => {
+          await showActiveOrderDetails(order.id);
+        });
+        
+        list.appendChild(card);
+      });
+      
+      wrap.appendChild(list);
+      
+      setAppModalMode("shop");
+      window.AppModal.open({
+        title: "Активные заказы",
+        content: wrap,
+        onClose: () => {
+          // Показываем приоткрытый bottom sheet обратно после закрытия
+          if (elActiveOrdersSheetCollapsed && typeof window.updateActiveOrdersBadge === "function") {
+            window.updateActiveOrdersBadge();
+          }
+        },
+      });
+    }
+    
+    // Показать детали активного заказа
+    async function showActiveOrderDetails(orderId) {
+      if (!window.AppModal) return;
+      
+      const wrap = document.createElement("div");
+      wrap.className = "shop-active-order-details";
+      wrap.innerHTML = `<div class="muted" style="padding: 20px; text-align: center;">Загрузка…</div>`;
+      
+      // Сохраняем список активных заказов в глобальную переменную для использования при возврате
+      const activeOrders = window._activeOrders || [];
+      window._savedActiveOrdersForBack = [...activeOrders]; // Сохраняем копию
+      const hasMultipleOrders = activeOrders.length > 1;
+      
+      setAppModalMode("shop");
+      window.AppModal.open({
+        title: "Детали заказа",
+        content: wrap,
+        onClose: () => {
+          // Показываем приоткрытый bottom sheet обратно после закрытия
+          if (elActiveOrdersSheetCollapsed && typeof window.updateActiveOrdersBadge === "function") {
+            window.updateActiveOrdersBadge();
+          }
+        },
+      });
+      
+      // Настраиваем кастомный хедер: стрелка слева, "Детали заказа" по центру, крестик справа
+      const modalHeader = document.querySelector(".app-modal-header");
+      const modalTitle = document.querySelector("#appModalTitle");
+      const modalActions = document.querySelector("#appModalActions");
+      
+      if (modalHeader && modalTitle && modalActions) {
+        // Создаем кнопку назад слева
+        let backBtn = modalHeader.querySelector(".app-modal-back-btn");
+        if (!backBtn && hasMultipleOrders) {
+          backBtn = document.createElement("button");
+          backBtn.className = "btn btn-icon app-modal-back-btn";
+          backBtn.type = "button";
+          backBtn.setAttribute("aria-label", "Назад");
+          backBtn.innerHTML = `<i class="fas fa-arrow-left"></i>`;
+          backBtn.style.marginRight = "auto";
+          modalHeader.insertBefore(backBtn, modalTitle);
+          
+          // Обработчик кнопки "Назад"
+          backBtn.addEventListener("click", () => {
+            // Используем сохраненный список заказов из глобальной переменной
+            const savedOrders = window._savedActiveOrdersForBack || [];
+            
+            // Не закрываем модальное окно, а обновляем контент напрямую
+            if (savedOrders && savedOrders.length > 0) {
+              showActiveOrdersList(savedOrders);
+            } else {
+              // Если список пуст, загружаем заново
+              if (typeof window.updateActiveOrdersBadge === "function") {
+                window.updateActiveOrdersBadge().then(() => {
+                  const updatedOrders = window._activeOrders || [];
+                  if (updatedOrders.length > 0) {
+                    showActiveOrdersList(updatedOrders);
+                  } else {
+                    // Если все еще пусто, показываем сообщение
+                    const wrap = document.createElement("div");
+                    wrap.className = "shop-active-orders-sheet";
+                    wrap.innerHTML = `<div class="muted" style="padding: 20px; text-align: center;">Нет активных заказов</div>`;
+                    window.AppModal.setTitle("Активные заказы");
+                    window.AppModal.setContent(wrap);
+                    
+                    // Убираем кнопку назад из хедера
+                    const modalHeader = document.querySelector(".app-modal-header");
+                    if (modalHeader) {
+                      const backBtn = modalHeader.querySelector(".app-modal-back-btn");
+                      if (backBtn) {
+                        backBtn.remove();
+                      }
+                      const modalTitle = document.querySelector("#appModalTitle");
+                      if (modalTitle) {
+                        modalTitle.style.textAlign = "";
+                        modalTitle.style.flex = "";
+                      }
+                    }
+                  }
+                });
+              }
+            }
+          });
+        } else if (backBtn && !hasMultipleOrders) {
+          // Удаляем кнопку назад, если заказ один
+          backBtn.remove();
+        }
+        
+        // Центрируем заголовок
+        modalTitle.style.textAlign = "center";
+        modalTitle.style.flex = "1";
+      }
+      
+      // Загружаем детали заказа
+      try {
+        const json = await apiJson(`/api/public/me/orders/${orderId}`);
+        const order = json.data || null;
+        
+        if (!order) {
+          wrap.innerHTML = `<div class="muted" style="padding: 20px; text-align: center;">Не удалось загрузить детали заказа</div>`;
           return;
         }
         
-        await openProfileModal(me, { initialTab: "orders" });
+        let html = `<div class="shop-order-details">`;
+        
+        // Заголовок с номером и статусом (кнопка "Назад" теперь в хедере)
+        html += `<div class="shop-order-details-header">`;
+        html += `<div class="shop-order-details-title">Заказ #${order.id}</div>`;
+        if (order.status_title) {
+          html += `<div class="shop-order-details-status">${escapeHtml(order.status_title)}</div>`;
+        }
+        html += `</div>`;
+        
+        // Информация о заказе
+        html += `<div class="shop-order-details-info">`;
+        html += `<div class="shop-order-info-row">`;
+        html += `<div class="shop-order-info-label">Дата и время</div>`;
+        html += `<div class="shop-order-info-value">${new Date(order.created_at).toLocaleString("ru-RU")}</div>`;
+        html += `</div>`;
+        
+        if (order.payment_title) {
+          html += `<div class="shop-order-info-row">`;
+          html += `<div class="shop-order-info-label">Способ оплаты</div>`;
+          html += `<div class="shop-order-info-value">${escapeHtml(order.payment_title)}</div>`;
+          html += `</div>`;
+        }
+        
+        if (order.method_title) {
+          html += `<div class="shop-order-info-row">`;
+          html += `<div class="shop-order-info-label">Способ доставки</div>`;
+          html += `<div class="shop-order-info-value">${escapeHtml(order.method_title)}</div>`;
+          html += `</div>`;
+        }
+        
+        if (order.time_option_title) {
+          html += `<div class="shop-order-info-row">`;
+          html += `<div class="shop-order-info-label">Время доставки</div>`;
+          html += `<div class="shop-order-info-value">${escapeHtml(order.time_option_title)}</div>`;
+          html += `</div>`;
+        }
+        
+        if (order.scheduled_at) {
+          html += `<div class="shop-order-info-row">`;
+          html += `<div class="shop-order-info-label">Запланировано на</div>`;
+          html += `<div class="shop-order-info-value">${new Date(order.scheduled_at).toLocaleString("ru-RU")}</div>`;
+          html += `</div>`;
+        }
+        html += `</div>`;
+        
+        // Адрес доставки
+        if (order.address) {
+          html += `<div class="shop-order-details-section">`;
+          html += `<div class="shop-order-section-title">Адрес доставки</div>`;
+          html += `<div class="shop-order-address">${escapeHtml(order.address)}</div>`;
+          html += `</div>`;
+        }
+        
+        // Товары
+        if (order.items && Array.isArray(order.items) && order.items.length > 0) {
+          html += `<div class="shop-order-details-section">`;
+          html += `<div class="shop-order-section-title">Товары</div>`;
+          html += `<div class="shop-cart-items">`;
+          order.items.forEach(item => {
+            // Используем window.formatOrderItem, которая уже правильно обрабатывает варианты, опции и ингредиенты
+            if (window.formatOrderItem && typeof window.formatOrderItem === "function") {
+              try {
+                html += window.formatOrderItem(item);
+              } catch (e) {
+                console.error("Error formatting order item:", e, item);
+                // Fallback при ошибке
+                const photos = Array.isArray(item.photos) ? item.photos.filter(Boolean) : [];
+                const mainPhoto = photos[0] || "/static/img/placeholder.png";
+                html += `<div class="cart-row">`;
+                html += `<img class="cart-thumb" src="${escapeHtml(mainPhoto)}" alt="" />`;
+                html += `<div class="cart-mid">`;
+                html += `<div class="cart-title">${escapeHtml(item.name || "—")}</div>`;
+                html += `</div>`;
+                html += `<div class="cart-right">`;
+                html += `<div class="cart-price">${money(item.line_total || item.price || 0)}</div>`;
+                html += `</div>`;
+                html += `</div>`;
+              }
+            } else {
+              console.error("window.formatOrderItem is not available");
+              // Fallback: простая версия если formatOrderItem недоступна
+              const photos = Array.isArray(item.photos) ? item.photos.filter(Boolean) : [];
+              const mainPhoto = photos[0] || "/static/img/placeholder.png";
+              html += `<div class="cart-row">`;
+              html += `<img class="cart-thumb" src="${escapeHtml(mainPhoto)}" alt="" />`;
+              html += `<div class="cart-mid">`;
+              html += `<div class="cart-title">${escapeHtml(item.name || "—")}</div>`;
+              html += `</div>`;
+              html += `<div class="cart-right">`;
+              html += `<div class="cart-price">${money(item.line_total || item.price || 0)}</div>`;
+              html += `</div>`;
+              html += `</div>`;
+            }
+          });
+          html += `</div>`;
+          html += `</div>`;
+        }
+        
+        // Дополнительная информация
+        if (order.cutlery_qty && Number(order.cutlery_qty) > 0) {
+          html += `<div class="shop-order-details-section">`;
+          html += `<div class="shop-order-info-row">`;
+          html += `<div class="shop-order-info-label">Приборы</div>`;
+          html += `<div class="shop-order-info-value">${order.cutlery_qty} шт.</div>`;
+          html += `</div>`;
+          html += `</div>`;
+        }
+        
+        if (order.change_from && Number(order.change_from) > 0) {
+          html += `<div class="shop-order-details-section">`;
+          html += `<div class="shop-order-info-row">`;
+          html += `<div class="shop-order-info-label">Сдача с</div>`;
+          html += `<div class="shop-order-info-value">${money(order.change_from)}</div>`;
+          html += `</div>`;
+          html += `</div>`;
+        }
+        
+        // Комментарий
+        if (order.comment) {
+          html += `<div class="shop-order-details-section">`;
+          html += `<div class="shop-order-section-title">Комментарий</div>`;
+          html += `<div class="shop-order-comment">${escapeHtml(order.comment)}</div>`;
+          html += `</div>`;
+        }
+        
+        // Итоговая сумма
+        html += `<div class="shop-order-details-total">`;
+        html += `<div class="shop-order-total-label">Итого</div>`;
+        html += `<div class="shop-order-total-value"><strong>${money(order.total_price || 0)}</strong></div>`;
+        html += `</div>`;
+        
+        // Пустое поле 200px внизу для скролла
+        html += `<div style="height: 200px;"></div>`;
+        
+        html += `</div>`;
+        
+        wrap.innerHTML = html;
+        
+        // Кнопка "Назад" уже настроена в хедере выше
+      } catch (e) {
+        console.error("Failed to load order details:", e);
+        wrap.innerHTML = `<div class="muted" style="padding: 20px; text-align: center;">Не удалось загрузить детали заказа</div>`;
       }
-    };
+    }
 
     // Обработчик клика на десктоп бейдж
     if (elActiveOrdersBadge) {
       elActiveOrdersBadge.addEventListener("click", handleActiveOrdersBadgeClick);
     }
 
-    // Обработчик клика на мобильный бейдж
+    // Обработчик клика на мобильный бейдж (старый)
     if (elActiveOrdersBadgeMobile) {
       elActiveOrdersBadgeMobile.addEventListener("click", handleActiveOrdersBadgeClick);
+    }
+    
+    // Обработчик клика на приоткрытый bottom sheet
+    if (elActiveOrdersSheetCollapsed) {
+      elActiveOrdersSheetCollapsed.addEventListener("click", handleActiveOrdersBadgeClick);
     }
 
     // Обновляем бейдж при загрузке и периодически
