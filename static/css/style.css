@@ -170,6 +170,81 @@ header{
   position: relative;
 }
 
+.header-profile-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.shop-active-orders-badge {
+  background: var(--shop-buy, #f97316);
+  color: white;
+  border-radius: 10px;
+  padding: 0 16px;
+  height: 45px;
+  min-width: 245px;
+  font-size: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: background var(--dur-fast) var(--ease-smooth), transform var(--dur-fast) var(--ease-smooth), box-shadow var(--dur-fast) var(--ease-smooth);
+  border: 1px solid transparent;
+}
+
+.shop-active-orders-badge:hover {
+  background: var(--shop-buy-hover, #ea580c);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.shop-active-orders-badge.hidden {
+  display: none !important;
+}
+
+/* Мобильный бейдж активных заказов - скрыт на десктопе */
+.shop-mobile-active-orders-wrapper {
+  display: none;
+}
+
+/* На мобильных: скрываем header бейдж, показываем мобильный */
+@media (max-width: 768px) {
+  .header-profile-wrapper .shop-active-orders-badge {
+    display: none !important;
+  }
+  
+  .shop-mobile-active-orders-wrapper {
+    display: flex;
+    justify-content: center;
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: calc(50px + 8px + env(safe-area-inset-bottom));
+    width: min(520px, calc(100% - 24px));
+    z-index: 119;
+    pointer-events: none;
+  }
+  
+  .shop-active-orders-badge-mobile {
+    pointer-events: auto;
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
+.shop-active-orders-text {
+  font-size: 20px;
+}
+
+.shop-active-orders-count {
+  font-size: 20px;
+  font-weight: 700;
+}
+
 .user-menu-dropdown {
   position: absolute;
   top: calc(100% + 0.5rem);

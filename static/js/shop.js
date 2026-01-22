@@ -69,6 +69,8 @@
 
   // header profile (у тебя в header.ejs есть id)
   const elHeaderProfileBtn = $("#shopProfileBtn");
+  const elActiveOrdersBadge = $("#shopActiveOrdersBadge");
+  const elActiveOrdersBadgeMobile = $("#shopActiveOrdersBadgeMobile");
 
   // desktop cart footer
   const elCartFooter = $("#shopCartFooter");
@@ -6248,7 +6250,7 @@ function renderSheetAddressList() {
     });
   }
 
-  function buildProfileContent({ host, me, onLogout }) {
+  function buildProfileContent({ host, me, onLogout, initialTab }) {
     host.innerHTML = "";
 
     const wrap = document.createElement("div");
@@ -7170,11 +7172,17 @@ function renderSheetAddressList() {
     reloadAddresses();
     reloadOrders();
 
+    // Устанавливаем начальную вкладку, если указана
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+
     return {
       showEdit: () => setEditingMode(true),
       hideEdit: () => setEditingMode(false),
       showOrderDetails: (orderId) => showOrderDetails(orderId),
       showOrdersList: () => showOrdersList(),
+      setActiveTab: (tab) => setActiveTab(tab),
     };
   }
 
@@ -7204,7 +7212,7 @@ function renderSheetAddressList() {
     if (closeModal && window.AppModal) window.AppModal.close("sheet");
   }
 
-  async function openProfilePanel(meOverride, { forceOpen = false } = {}) {
+  async function openProfilePanel(meOverride, { forceOpen = false, initialTab } = {}) {
     if (!forceOpen && cartViewMode === "profile") {
       await restorePreviousPanel();
       return;
@@ -7231,7 +7239,11 @@ function renderSheetAddressList() {
       host: elProfileContent,
       me,
       onLogout: () => handleProfileLogout(),
+      initialTab,
     });
+
+    // Сохраняем контекст для доступа извне
+    window._profileContext = ctx;
 
     setCartHeader({ title: "Профиль", showAddressChip: false, showProfileActions: true });
 
@@ -7359,7 +7371,7 @@ function renderSheetAddressList() {
     openProfileModal(me);
   }
 
-  function openProfileModal(me) {
+  function openProfileModal(me, { initialTab } = {}) {
     if (!window.AppModal) return;
 
     const wrap = document.createElement("div");
@@ -7368,6 +7380,7 @@ function renderSheetAddressList() {
       host: wrap,
       me,
       onLogout: () => handleProfileLogout({ closeModal: true }),
+      initialTab,
     });
 
     setAppModalMode("shop");
@@ -7406,6 +7419,11 @@ function setActiveNav(key) {
     if (k === key) el.setAttribute("aria-current", "page");
     else el.removeAttribute("aria-current");
   });
+  
+  // Обновляем бейдж активных заказов при смене вкладки
+  if (typeof window.updateActiveOrdersBadge === "function") {
+    window.updateActiveOrdersBadge();
+  }
 }
 
 function bounceCartNav() {
@@ -7889,6 +7907,12 @@ function setBottomNavActive(tab) {
 
         clearCartAll();
         saveCheckoutDraft({});
+        
+        // Обновляем бейдж активных заказов перед редиректом
+        if (typeof window.updateActiveOrdersBadge === "function") {
+          await window.updateActiveOrdersBadge();
+        }
+        
         if (isSheet && window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen()) {
           window.AppModal.close("sheet");
         }
@@ -7999,6 +8023,163 @@ async function init() {
           e.preventDefault();
           openProfileSheet();
         }
+      });
+    }
+
+    // Активные заказы: обновление бейджа и обработчик клика
+    window.updateActiveOrdersBadge = async function updateActiveOrdersBadge() {
+      const badges = [elActiveOrdersBadge, elActiveOrdersBadgeMobile].filter(Boolean);
+      if (badges.length === 0) return;
+      
+      // Проверяем, находимся ли мы на главной странице витрины
+      const pathname = String(window.location.pathname || "");
+      const isShopMainPage = pathname === "/shop" || pathname === "/shop/";
+      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      
+      // Проверяем активную вкладку в мобильной навигации
+      let isMainTabActive = true;
+      if (isMobile && elNavMenu) {
+        // Проверяем, активна ли главная вкладка (menu)
+        isMainTabActive = elNavMenu.classList.contains("is-active");
+      }
+      
+      try {
+        const token = getCustomerToken();
+        if (!token) {
+          badges.forEach(badge => badge.classList.add("hidden"));
+          return;
+        }
+
+        const json = await apiJson("/api/public/me/orders");
+        const orders = Array.isArray(json.data) ? json.data : [];
+        
+        // Считаем активные заказы (статусы: "new" или другие не завершенные)
+        // Активными считаем заказы со статусом "new" или без статуса "completed"/"cancelled"
+        const activeStatusCodes = ["new", "processing", "preparing", "ready", "delivering"];
+        const activeOrders = orders.filter(order => {
+          const statusCode = (order.status_code || "").toLowerCase();
+          return activeStatusCodes.includes(statusCode) || (!statusCode && order.status_title);
+        });
+
+        const count = activeOrders.length;
+        
+        if (count > 0) {
+          badges.forEach(badge => {
+            const countEl = badge.querySelector(".shop-active-orders-count");
+            if (countEl) {
+              countEl.textContent = count > 1 ? ` +${count}` : "";
+            }
+            
+            // Мобильный бейдж показываем только на главной странице и на главной вкладке
+            if (elActiveOrdersBadgeMobile && badge === elActiveOrdersBadgeMobile) {
+              // Это мобильный бейдж - показываем только на главной странице и главной вкладке
+              if (isMobile && isShopMainPage && isMainTabActive) {
+                badge.classList.remove("hidden");
+              } else {
+                badge.classList.add("hidden");
+              }
+            } else {
+              // Десктопный бейдж показываем всегда (если есть активные заказы)
+              badge.classList.remove("hidden");
+            }
+          });
+        } else {
+          badges.forEach(badge => badge.classList.add("hidden"));
+        }
+      } catch (e) {
+        // Если ошибка (не авторизован и т.д.), скрываем бейджи
+        badges.forEach(badge => badge.classList.add("hidden"));
+      }
+    }
+
+    // Функция обработки клика на бейдж активных заказов
+    const handleActiveOrdersBadgeClick = async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      // Только на витрине
+      if (!String(window.location.pathname || "").startsWith("/shop")) return;
+      
+      // Проверяем, мобильная версия или десктоп
+      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      
+      if (!isMobile) {
+        // Десктоп: открываем профиль и переключаем на вкладку "История заказов"
+        const me = await fetchMeSafe();
+        if (!me) {
+          openProfileSheet();
+          return;
+        }
+        
+        await openProfilePanel(me, { forceOpen: true, initialTab: "orders" });
+        
+        // Ждем немного, чтобы профиль успел загрузиться, затем переключаем на вкладку
+        setTimeout(() => {
+          // Пробуем использовать контекст профиля для переключения
+          if (window._profileContext && typeof window._profileContext.setActiveTab === "function") {
+            window._profileContext.setActiveTab("orders");
+          } else {
+            // Fallback: находим вкладку и кликаем на неё
+            const profileContent = document.querySelector(".shop-profile");
+            if (profileContent) {
+              const ordersTab = profileContent.querySelector('[data-tab="orders"]');
+              if (ordersTab) {
+                ordersTab.click();
+              }
+            }
+          }
+        }, 300);
+      } else {
+        // Мобильная версия: открываем профиль и переключаем на вкладку "История заказов"
+        const me = await fetchMeSafe();
+        if (!me) {
+          openProfileSheet();
+          return;
+        }
+        
+        await openProfileModal(me, { initialTab: "orders" });
+      }
+    };
+
+    // Обработчик клика на десктоп бейдж
+    if (elActiveOrdersBadge) {
+      elActiveOrdersBadge.addEventListener("click", handleActiveOrdersBadgeClick);
+    }
+
+    // Обработчик клика на мобильный бейдж
+    if (elActiveOrdersBadgeMobile) {
+      elActiveOrdersBadgeMobile.addEventListener("click", handleActiveOrdersBadgeClick);
+    }
+
+    // Обновляем бейдж при загрузке и периодически
+    if (elActiveOrdersBadge || elActiveOrdersBadgeMobile) {
+      updateActiveOrdersBadge();
+      // Обновляем каждые 30 секунд
+      setInterval(updateActiveOrdersBadge, 30000);
+      
+      // Обновляем при возврате на страницу
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+          updateActiveOrdersBadge();
+        }
+      });
+      
+      // Обновляем при изменении URL (для SPA навигации)
+      let lastPathname = window.location.pathname;
+      const checkPathnameChange = () => {
+        const currentPathname = window.location.pathname;
+        if (currentPathname !== lastPathname) {
+          lastPathname = currentPathname;
+          updateActiveOrdersBadge();
+        }
+      };
+      
+      // Проверяем изменение URL периодически (для SPA)
+      setInterval(checkPathnameChange, 500);
+      
+      // Также слушаем события popstate (кнопка назад/вперед)
+      window.addEventListener("popstate", () => {
+        updateActiveOrdersBadge();
       });
     }
   } catch (e) {

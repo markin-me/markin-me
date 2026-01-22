@@ -14,9 +14,15 @@
 
       <!-- Важно: id для перехвата на витрине -->
       <div class="user-menu-wrapper">
-        <button class="header-btn" id="shopProfileBtn" type="button" aria-label="Профиль">
-          <i class="fas fa-user"></i>
-        </button>
+        <div class="header-profile-wrapper">
+          <div class="shop-active-orders-badge hidden" id="shopActiveOrdersBadge">
+            <span class="shop-active-orders-text">Активный заказ</span>
+            <span class="shop-active-orders-count"></span>
+          </div>
+          <button class="header-btn" id="shopProfileBtn" type="button" aria-label="Профиль">
+            <i class="fas fa-user"></i>
+          </button>
+        </div>
         <div class="user-menu-dropdown" id="userMenuDropdown">
           <div class="user-menu-header">
             <div class="user-menu-avatar">
