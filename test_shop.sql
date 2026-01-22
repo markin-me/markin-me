@@ -25,7 +25,7 @@ DELIMITER $$
 --
 -- Процедуры
 --
-CREATE DEFINER=CURRENT_USER PROCEDURE `migrate_order_methods_to_delivery_types` ()   BEGIN
+CREATE DEFINER=`root`@`localhost` PROCEDURE `migrate_order_methods_to_delivery_types` ()   BEGIN
   DECLARE done INT DEFAULT 0;
   DECLARE fkname VARCHAR(64);
 

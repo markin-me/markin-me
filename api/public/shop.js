@@ -798,6 +798,37 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  // GET /api/public/me/orders/:id
+  router.get('/me/orders/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const orderId = Number(req.params.id);
+      if (!Number.isFinite(orderId) || orderId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      const payload = await fetchOrderPayload(tenantId, storeId, orderId);
+      if (!payload) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      // Проверяем, что заказ принадлежит клиенту
+      if (Number(payload.customer_id) !== Number(customer.id)) {
+        return res.status(403).json({ ok: false, error: 'FORBIDDEN' });
+      }
+
+      res.json({ ok: true, data: payload });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   // ------------------------------
   // PUBLIC SHOP: categories/products
   // ------------------------------
