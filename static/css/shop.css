@@ -30,7 +30,7 @@
   /* ===== Геометрия / размеры ===== */
   --shop-radius: 18px;
   --shop-gap: 14px;
-  --shop-bottomnav-h: 52px;
+  --shop-bottomnav-h: 50px;
 
   /* ===== Масштабирование UI карточек (container queries) ===== */
   --sp-pad: 12px;
@@ -1124,6 +1124,12 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   overflow: auto;
   display: grid;
   gap: 12px;
+}
+
+@media (max-width: 768px){
+  .shop-pd-scroll{
+    padding-bottom: calc(var(--shop-bottomnav-h) + 16px + env(safe-area-inset-bottom));
+  }
 }
 
 .shop-pd-footer{
