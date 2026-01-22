@@ -270,9 +270,9 @@
     </div>
   </div>
 
-  <div id="variantGroupInfo" class="hidden">
-    <div id="variantLevelGroup">
-      <form id="variantGroupForm" class="form-grid" autocomplete="off">
+    <div id="variantGroupInfo" class="hidden">
+      <div id="variantLevelGroup">
+        <form id="variantGroupForm" class="form-grid" autocomplete="off">
         <div class="option-group-section">
           <div class="section-title">Группа</div>
 
@@ -352,6 +352,70 @@
               <div class="option-assignments-table" id="variantAssignmentsList"></div>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="unitInfo" class="hidden">
+    <div id="unitLevelGroup">
+      <form id="unitForm" class="form-grid" autocomplete="off">
+        <div class="option-group-section">
+          <div class="section-title">Единица измерения</div>
+
+          <div class="option-group-row">
+            <div class="option-group-title-field">
+              <label class="field-label" for="unitTitle">Название *</label>
+              <input class="control" id="unitTitle" name="title" type="text" required />
+            </div>
+
+            <div class="option-group-title-field">
+              <label class="field-label" for="unitShortTitle">Коротко</label>
+              <input class="control" id="unitShortTitle" name="short_title" type="text" />
+            </div>
+          </div>
+
+          <div class="form-row-2 option-group-switches">
+            <label class="switch">
+              <input class="switch-input" type="checkbox" id="unitIsActive" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Активна</span>
+            </label>
+          </div>
+        </div>
+      </form>
+
+      <div class="info-card info-accordion">
+        <div class="acc-item">
+          <div class="acc-header">
+            <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+              <span class="stage-meta stage-text">
+                <b>Конверсии</b>
+              </span>
+              <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+            </button>
+            <button class="btn btn-icon acc-add" type="button" id="unitConversionsAddBtn" title="Добавить конверсию" aria-label="Добавить конверсию">
+              <i class="fas fa-plus"></i>
+            </button>
+          </div>
+          <div class="acc-panel" data-acc-panel>
+            <div class="acc-panel-inner">
+              <div class="unit-conversions-list" id="unitConversionsList"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="unitLevelPicker" class="hidden">
+      <div class="info-card">
+        <div class="option-group-section option-picker-panel">
+          <div class="option-picker-controls">
+            <div class="option-picker-search">
+              <input class="control" id="unitPickerSearch" type="search" placeholder="Поиск по названию" />
+            </div>
+          </div>
+          <div class="option-picker-list" id="unitPickerList"></div>
         </div>
       </div>
     </div>

@@ -22,17 +22,19 @@
   const variantsGroupsEmpty = $("#variantsGroupsEmpty");
   const unitsListEl = $("#unitsList");
   const unitsEmptyHint = $("#unitsEmptyHint");
-  const unitsTitleInput = $("#unitsTitleInput");
-  const unitsShortInput = $("#unitsShortInput");
-  const unitsCodeInput = $("#unitsCodeInput");
-  const unitsSortInput = $("#unitsSortInput");
-  const unitsAddBtn = $("#unitsAddBtn");
-  const conversionsList = $("#conversionsList");
-  const conversionsEmptyHint = $("#conversionsEmptyHint");
-  const convFromUnit = $("#convFromUnit");
-  const convToUnit = $("#convToUnit");
-  const convFactor = $("#convFactor");
-  const convAddBtn = $("#convAddBtn");
+  
+  // Unit info panel elements
+  const unitInfo = $("#unitInfo");
+  const unitLevelGroup = $("#unitLevelGroup");
+  const unitLevelPicker = $("#unitLevelPicker");
+  const unitForm = $("#unitForm");
+  const unitTitleInput = $("#unitTitle");
+  const unitShortTitleInput = $("#unitShortTitle");
+  const unitIsActiveInput = $("#unitIsActive");
+  const unitConversionsList = $("#unitConversionsList");
+  const unitConversionsAddBtn = $("#unitConversionsAddBtn");
+  const unitPickerSearch = $("#unitPickerSearch");
+  const unitPickerList = $("#unitPickerList");
 
   // right info
   const productEmpty = $("#productEmpty");
@@ -173,6 +175,8 @@
     if (productInfo) productInfo.classList.add("hidden");
     if (categoryInfo) categoryInfo.classList.add("hidden");
     if (optionGroupInfo) optionGroupInfo.classList.add("hidden");
+    if (variantGroupInfo) variantGroupInfo.classList.add("hidden");
+    if (unitInfo) unitInfo.classList.add("hidden");
     if (productEmpty) productEmpty.classList.add("hidden");
     if (categoryEmpty) categoryEmpty.classList.add("hidden");
     if (optionEmpty) optionEmpty.classList.add("hidden");
@@ -276,6 +280,10 @@
       }
     } else if (state.type === "option-edit") {
       showOptionGroupDetails(state.optionGroupDetails, { mode: state.optionPanel.mode || "view" });
+    } else if (state.type === "unit-edit" || state.type === "unit-view") {
+      if (state.unitDetails) {
+        showUnitDetails(state.unitDetails, { mode: state.unitPanel.mode || "view" });
+      }
     } else if (state.type === "option-picker") {
       if (state.content) {
         productInfoBody.innerHTML = "";
@@ -401,12 +409,30 @@
       tabKey: null,
     },
     variantDraft: null,
+    selectedUnitId: null,
+    unitDetails: null,
+      unitPanel: {
+      level: "empty", // empty | group | picker
+      mode: "view", // view | edit | create
+      pickerMode: "conversion",
+      pickerSelection: null, // selected unit id for conversion
+      pickerQuery: "",
+      returnTo: null,
+      formSnapshot: null,
+      snapshotMode: null,
+      snapshotData: null,
+      itemsDirty: false,
+      tabKey: null,
+    },
+    unitDraft: null,
   };
 
   let variantPickerSavedFooterState = null;
   let variantPickerSavedHandlers = null;
   let optionPanelPickerSavedFooterState = null;
   let optionPanelPickerSavedHandlers = null;
+  let unitPickerSavedFooterState = null;
+  let unitPickerSavedHandlers = null;
 
   // ---------------- API ----------------
 
@@ -930,13 +956,17 @@
     syncActiveMenuItems();
   }
 
-  function enterUnitsMode() {
+  async function enterUnitsMode() {
     state.mode = "units";
+    state.unitPanel.returnTo = null;
     setToolbarTitle("Единицы измерения");
     showView("units");
     clearProductSelection();
     showDetailsEmpty();
     syncActiveMenuItems();
+    await loadUnitsManagement();
+    await loadUnitConversions();
+    renderUnitsList();
   }
 
   // ---------------- Load ----------------
@@ -1051,6 +1081,69 @@
     state.unitConversions = Array.isArray(res.data) ? res.data : [];
   }
 
+  async function loadUnitDetails(id) {
+    const unit = state.units.find((u) => Number(u.id) === Number(id));
+    if (!unit) {
+      state.unitDetails = null;
+      return;
+    }
+    const conversions = loadUnitConversionsForUnit(id);
+    state.unitDetails = {
+      unit,
+      conversions,
+    };
+  }
+
+  function loadUnitConversionsForUnit(unitId) {
+    if (!state.unitConversions || !Array.isArray(state.unitConversions)) return [];
+    const id = Number(unitId);
+    if (!Number.isFinite(id)) return [];
+    
+    const unit = state.units.find((u) => Number(u.id) === id);
+    if (!unit) return [];
+    
+    const conversions = [];
+    
+    // Прямые конверсии (где эта единица - from_unit_id)
+    state.unitConversions
+      .filter((conv) => Number(conv.from_unit_id) === id)
+      .forEach((conv) => {
+        const toUnit = state.units.find((u) => Number(u.id) === Number(conv.to_unit_id));
+        if (toUnit) {
+          conversions.push({
+            id: conv.id,
+            from_unit_id: id,
+            to_unit_id: Number(conv.to_unit_id),
+            from_unit: unit,
+            to_unit: toUnit,
+            factor: Number(conv.factor) || 1,
+            is_direct: true,
+          });
+        }
+      });
+    
+    // Обратные конверсии (где эта единица - to_unit_id)
+    state.unitConversions
+      .filter((conv) => Number(conv.to_unit_id) === id)
+      .forEach((conv) => {
+        const fromUnit = state.units.find((u) => Number(u.id) === Number(conv.from_unit_id));
+        if (fromUnit) {
+          const factor = Number(conv.factor) || 1;
+          conversions.push({
+            id: conv.id,
+            from_unit_id: id,
+            to_unit_id: Number(conv.from_unit_id),
+            from_unit: unit,
+            to_unit: fromUnit,
+            factor: factor !== 0 ? 1 / factor : 0,
+            is_direct: false,
+          });
+        }
+      });
+    
+    return conversions;
+  }
+
   function getUnitRowValues(row) {
     const id = Number(row.dataset.unitId);
     const title = row.querySelector("[data-unit-field='title']")?.value || "";
@@ -1068,6 +1161,15 @@
     };
   }
 
+  function countUnitConversions(unitId) {
+    if (!state.unitConversions || !Array.isArray(state.unitConversions)) return 0;
+    const id = Number(unitId);
+    if (!Number.isFinite(id)) return 0;
+    return state.unitConversions.filter(
+      (conv) => Number(conv.from_unit_id) === id || Number(conv.to_unit_id) === id
+    ).length;
+  }
+
   function renderUnitsList() {
     if (!unitsListEl || !unitsEmptyHint) return;
     const list = state.units
@@ -1081,72 +1183,618 @@
     }
 
     unitsEmptyHint.classList.add("hidden");
+    const isActive = (id) => Number(id) === Number(state.selectedUnitId);
+    const disableSwitch = state.unitPanel.mode !== "view" || state.unitPanel.activeToggleBusy;
+    
     unitsListEl.innerHTML = list.map((unit) => {
+      const conversionsCount = countUnitConversions(unit.id);
+      const unitIsActive = isActive(unit.id);
       return `
-        <div class="unit-row" data-unit-id="${unit.id}">
-          <input class="control unit-input" type="text" data-unit-field="title" value="${escapeHtml(unit.title || "")}" />
-          <input class="control unit-input" type="text" data-unit-field="short_title" value="${escapeHtml(unit.short_title || "")}" placeholder="шт" />
-          <input class="control unit-input" type="text" data-unit-field="code" value="${escapeHtml(unit.code || "")}" placeholder="pcs" />
-          <input class="control unit-input" type="number" data-unit-field="sort_order" value="${unit.sort_order ?? ""}" placeholder="0" />
-          <label class="switch switch-compact unit-active">
-            <input class="switch-input" type="checkbox" data-unit-active ${unit.is_active ? "checked" : ""} />
-            <span class="switch-ui" aria-hidden="true"></span>
-          </label>
-          <button class="btn btn-sm" type="button" data-unit-save>Сохранить</button>
-          <button class="btn btn-sm unit-delete" type="button" data-unit-delete title="Удалить">
-            <i class="fas fa-trash"></i>
-          </button>
+        <div class="options-row ${unitIsActive ? "is-active" : ""}" data-unit-id="${unit.id}">
+          <div>
+            <div class="options-row-title">${escapeHtml(unit.title || "")}</div>
+            <div class="options-row-meta">${escapeHtml(unit.short_title || "")}</div>
+          </div>
+          <div class="options-row-meta">Конверсии: ${conversionsCount}</div>
+          <div class="options-row-meta">
+            <label class="switch switch-compact options-row-active">
+              <input class="switch-input" type="checkbox" data-unit-active-id="${unit.id}" ${unit.is_active ? "checked" : ""} ${disableSwitch ? "disabled" : ""} />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Активна</span>
+            </label>
+          </div>
         </div>
       `;
     }).join("");
 
-    unitsListEl.querySelectorAll("[data-unit-save]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const row = btn.closest(".unit-row");
-        if (!row) return;
-        const values = getUnitRowValues(row);
-        if (!values.title) {
-          row.querySelector("[data-unit-field='title']")?.focus();
-          return;
-        }
-        try {
-          await apiUpdateUnit(values.id, values);
-          await loadUnitsManagement();
-          renderUnitsList();
-        } catch (e) {
-          console.error("Failed to update unit", e);
-          alert("Ошибка при сохранении единицы измерения");
-        }
+    unitsListEl.querySelectorAll("[data-unit-id]").forEach((row) => {
+      row.addEventListener("click", async () => {
+        const id = Number(row.dataset.unitId);
+        if (!Number.isFinite(id)) return;
+        const unit = state.units.find((u) => Number(u.id) === id);
+        openUnitTab(id, unit?.title || "Единица измерения", { activate: true });
       });
     });
 
-    unitsListEl.querySelectorAll("[data-unit-delete]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const row = btn.closest(".unit-row");
-        if (!row) return;
-        const id = Number(row.dataset.unitId);
+    unitsListEl.querySelectorAll("[data-unit-active-id]").forEach((input) => {
+      input.addEventListener("click", (event) => event.stopPropagation());
+      input.addEventListener("change", async (event) => {
+        event.stopPropagation();
+        const id = Number(input.dataset.unitActiveId);
         if (!Number.isFinite(id)) return;
-        if (!confirm("Удалить единицу измерения?")) return;
+        const unit = state.units.find((u) => Number(u.id) === id);
+        if (!unit) return;
         try {
-          await apiDeleteUnit(id);
+          await apiUpdateUnit(id, { ...unit, is_active: input.checked ? 1 : 0 });
           await loadUnitsManagement();
           renderUnitsList();
         } catch (e) {
-          console.error("Failed to delete unit", e);
-          alert("Ошибка при удалении единицы измерения");
+          console.error("Failed to toggle unit active", e);
+          input.checked = !input.checked;
+          alert("Ошибка при изменении статуса единицы измерения");
         }
       });
     });
   }
 
-  function renderConversionUnitOptions() {
-    if (!convFromUnit || !convToUnit) return;
-    const options = ['<option value="">Из единицы</option>']
-      .concat(state.units.map((u) => `<option value="${u.id}">${escapeHtml(u.short_title || u.code || u.title || "")}</option>`));
-    convFromUnit.innerHTML = options.join("");
-    const optionsTo = ['<option value="">В единицу</option>']
-      .concat(state.units.map((u) => `<option value="${u.id}">${escapeHtml(u.short_title || u.code || u.title || "")}</option>`));
-    convToUnit.innerHTML = optionsTo.join("");
+  function showUnitDetails(details, { mode }) {
+    if (!details && mode !== "create") return;
+    state.unitPanel.level = "group";
+    state.unitPanel.mode = mode || "view";
+    state.unitPanel.itemsDirty = false;
+    state.unitPanel.pickerSelection = null;
+    
+    // Сохраняем tabKey для существующей единицы (если не в режиме создания)
+    if (details && details.unit && details.unit.id && mode !== "create") {
+      const unitId = Number(details.unit.id);
+      if (Number.isFinite(unitId)) {
+        // Проверяем, существует ли уже таб для этой единицы
+        const existingTabKey = buildTabKey("unit", unitId);
+        const existingTab = tabsState.tabs.find((t) => t.key === existingTabKey);
+        if (existingTab) {
+          state.unitPanel.tabKey = existingTabKey;
+        } else {
+          // Создаем таб, если его еще нет
+          openUnitTab(unitId, details.unit.title || "Единица измерения", { activate: false });
+        }
+      }
+    }
+    
+    if (state.unitPanel.mode === "view") {
+      state.unitDraft = null;
+      state.unitPanel.snapshotData = null;
+    } else if (state.unitPanel.mode === "edit" && details) {
+      if (!state.unitPanel.snapshotData) {
+        state.unitPanel.snapshotData = JSON.parse(JSON.stringify(details));
+      }
+      if (!state.unitDraft) {
+        state.unitDraft = {
+          unit: { ...details.unit },
+          conversions: details.conversions ? details.conversions.map(c => ({ ...c })) : [],
+        };
+      }
+    } else if (state.unitPanel.mode === "create") {
+      state.unitDraft = {
+        unit: { title: "", short_title: "", is_active: 1 },
+        conversions: [],
+      };
+    }
+    
+    if (optionGroupInfo) optionGroupInfo.classList.add("hidden");
+    if (variantGroupInfo) variantGroupInfo.classList.add("hidden");
+    if (productInfo) productInfo.classList.add("hidden");
+    if (categoryInfo) categoryInfo.classList.add("hidden");
+    if (optionEmpty) optionEmpty.classList.add("hidden");
+    if (unitInfo) unitInfo.classList.remove("hidden");
+    
+    renderUnitGroupLevel();
+    showProductFooter();
+  }
+
+  function renderUnitGroupLevel() {
+    if (!unitLevelGroup || !unitLevelPicker) return;
+    unitLevelPicker.classList.add("hidden");
+    unitLevelGroup.classList.remove("hidden");
+    
+    const isEdit = state.unitPanel.mode === "edit" || state.unitPanel.mode === "create";
+    const data = isEdit && state.unitDraft ? state.unitDraft : state.unitDetails;
+    
+    if (!data) return;
+    
+    // Заполняем форму
+    if (unitTitleInput) {
+      unitTitleInput.value = data.unit?.title || "";
+      unitTitleInput.disabled = !isEdit;
+    }
+    if (unitShortTitleInput) {
+      unitShortTitleInput.value = data.unit?.short_title || "";
+      unitShortTitleInput.disabled = !isEdit;
+    }
+    if (unitIsActiveInput) {
+      unitIsActiveInput.checked = data.unit?.is_active ? true : false;
+      unitIsActiveInput.disabled = !isEdit;
+    }
+    
+    // Рендерим конверсии
+    renderUnitConversionsList();
+    
+    // Показываем/скрываем кнопку добавления конверсии
+    if (unitConversionsAddBtn) {
+      unitConversionsAddBtn.classList.toggle("hidden", !isEdit);
+    }
+  }
+
+  function renderUnitConversionsList() {
+    if (!unitConversionsList) return;
+    
+    const isEdit = state.unitPanel.mode === "edit" || state.unitPanel.mode === "create";
+    const data = isEdit && state.unitDraft ? state.unitDraft : state.unitDetails;
+    
+    if (!data || !data.unit) {
+      unitConversionsList.innerHTML = "";
+      return;
+    }
+    
+    const conversions = data.conversions || [];
+    const currentUnit = data.unit;
+    
+    if (!conversions.length) {
+      unitConversionsList.innerHTML = '<div class="muted" style="padding: 16px; text-align: center;">Нет конверсий</div>';
+      return;
+    }
+    
+    unitConversionsList.innerHTML = conversions.map((conv, idx) => {
+      const fromUnit = conv.from_unit || currentUnit;
+      const toUnit = conv.to_unit;
+      const factor = conv.factor || 1;
+      const conversionId = conv.id || `temp-${idx}`;
+      
+      return `
+        <div class="unit-conversion-row" data-conversion-id="${conversionId}" data-conversion-index="${idx}">
+          <div class="unit-conversion-from">${escapeHtml(fromUnit.short_title || fromUnit.title || "")}</div>
+          <div class="unit-conversion-arrow">→</div>
+          <div class="unit-conversion-to">${escapeHtml(toUnit.short_title || toUnit.title || "")}</div>
+          <input 
+            class="control unit-conversion-factor" 
+            type="number" 
+            step="0.000001" 
+            data-conversion-factor="${idx}" 
+            value="${factor}" 
+            ${isEdit ? "" : "disabled"}
+            placeholder="1" 
+          />
+          ${isEdit ? `<button class="btn btn-icon unit-conversion-delete" type="button" data-conversion-delete="${idx}" title="Удалить" aria-label="Удалить">
+            <i class="fas fa-times"></i>
+          </button>` : ""}
+        </div>
+      `;
+    }).join("");
+    
+    // Обработчики для изменения коэффициента
+    if (isEdit) {
+      unitConversionsList.querySelectorAll("[data-conversion-factor]").forEach((input) => {
+        input.addEventListener("input", () => {
+          const idx = Number(input.dataset.conversionFactor);
+          if (!state.unitDraft || !state.unitDraft.conversions) return;
+          const factor = Number(input.value) || 0;
+          if (state.unitDraft.conversions[idx]) {
+            state.unitDraft.conversions[idx].factor = factor;
+          }
+        });
+      });
+      
+      // Обработчики для удаления конверсии
+      unitConversionsList.querySelectorAll("[data-conversion-delete]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const idx = Number(btn.dataset.conversionDelete);
+          if (!state.unitDraft || !state.unitDraft.conversions) return;
+          state.unitDraft.conversions.splice(idx, 1);
+          renderUnitConversionsList();
+        });
+      });
+    }
+  }
+
+  function showProductFooter() {
+    const footer = $("#productInfoFooter");
+    if (!footer) return;
+    
+    if (state.unitPanel.mode === "view") {
+      showProductFooterView();
+    } else {
+      showProductFooterEdit();
+    }
+  }
+
+  async function openUnitPicker() {
+    if (!state.unitDraft) return;
+    state.unitPanel.level = "picker";
+    state.unitPanel.pickerSelection = null;
+    state.unitPanel.pickerQuery = "";
+    if (unitPickerSearch) unitPickerSearch.value = "";
+    await refreshUnitPickerList();
+    renderUnitPickerLevel();
+  }
+
+  async function refreshUnitPickerList() {
+    if (!unitPickerList) return;
+    const query = (unitPickerSearch?.value || "").trim().toLowerCase();
+    const currentUnitId = state.selectedUnitId;
+    
+    const filtered = state.units
+      .filter((u) => {
+        if (Number(u.id) === Number(currentUnitId)) return false;
+        if (!query) return true;
+        const title = String(u.title || "").toLowerCase();
+        const shortTitle = String(u.short_title || "").toLowerCase();
+        return title.includes(query) || shortTitle.includes(query);
+      })
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+    
+    unitPickerList.innerHTML = filtered.map((unit) => {
+      const isSelected = state.unitPanel.pickerSelection === Number(unit.id);
+      return `
+        <div class="option-picker-row ${isSelected ? "is-selected" : ""}" data-unit-picker-id="${unit.id}">
+          <div class="option-picker-meta">
+            <div class="options-row-title">${escapeHtml(unit.title || "")}</div>
+            <div class="options-row-meta">${escapeHtml(unit.short_title || "")}</div>
+          </div>
+        </div>
+      `;
+    }).join("");
+    
+    unitPickerList.querySelectorAll("[data-unit-picker-id]").forEach((row) => {
+      row.addEventListener("click", () => {
+        const id = Number(row.dataset.unitPickerId);
+        if (!Number.isFinite(id)) return;
+        state.unitPanel.pickerSelection = id;
+        refreshUnitPickerList();
+      });
+    });
+  }
+
+  function renderUnitPickerLevel() {
+    if (!unitLevelPicker || !unitLevelGroup) return;
+    unitLevelGroup.classList.add("hidden");
+    unitLevelPicker.classList.remove("hidden");
+    showProductFooterEdit();
+    
+    const footer = $("#productInfoFooter");
+    const footerView = $("#productFooterView");
+    const footerEditMode = $("#productFooterEditMode");
+    const footerCancelBtn = $("#productFooterCancelBtn");
+    const footerSaveBtn = $("#productFooterSaveBtn");
+    const footerDeleteBtn = $("#productFooterDeleteEditBtn");
+    const footerMoreBtn = $("#productFooterMoreEditBtn");
+    
+    if (footer && footerView && footerEditMode && footerCancelBtn && footerSaveBtn) {
+      if (!unitPickerSavedFooterState) {
+        unitPickerSavedFooterState = {
+          footerHidden: footer.classList.contains("hidden"),
+          viewHidden: footerView.classList.contains("hidden"),
+          editHidden: footerEditMode.classList.contains("hidden"),
+          deleteBtnHidden: footerDeleteBtn ? footerDeleteBtn.classList.contains("hidden") : false,
+          moreBtnHidden: footerMoreBtn ? footerMoreBtn.classList.contains("hidden") : false,
+          cancelBtnIsConfirm: footerCancelBtn.classList.contains("is-confirm"),
+          cancelBtnIsFullwidth: footerCancelBtn.classList.contains("is-fullwidth"),
+        };
+        unitPickerSavedHandlers = {
+          cancel: footerCancelBtn.onclick,
+          save: footerSaveBtn.onclick,
+        };
+      }
+      
+      footer.classList.remove("hidden");
+      footerView.classList.add("hidden");
+      footerEditMode.classList.remove("hidden");
+      if (footerDeleteBtn) footerDeleteBtn.classList.add("hidden");
+      if (footerMoreBtn) footerMoreBtn.classList.add("hidden");
+      
+      footerCancelBtn.classList.remove("is-confirm");
+      footerCancelBtn.classList.add("is-fullwidth");
+      if (!footerCancelBtn.dataset.pickerOriginalHtml) {
+        footerCancelBtn.dataset.pickerOriginalHtml = footerCancelBtn.innerHTML;
+      }
+      footerCancelBtn.textContent = "Отменить";
+      footerCancelBtn.title = "Отменить";
+      footerCancelBtn.setAttribute("aria-label", "Отменить");
+    }
+    
+    if (footerCancelBtn) {
+      footerCancelBtn.dataset.pickerType = "unit";
+    }
+    if (footerSaveBtn) {
+      footerSaveBtn.dataset.pickerType = "unit";
+    }
+    
+    window._closeUnitPickerFn = () => {
+      if (footerCancelBtn) delete footerCancelBtn.dataset.pickerType;
+      if (footerSaveBtn) delete footerSaveBtn.dataset.pickerType;
+      delete window._closeUnitPickerFn;
+      delete window._saveUnitPickerFn;
+      restoreUnitPickerFooter();
+      state.unitPanel.level = "group";
+      renderUnitGroupLevel();
+    };
+    
+    window._saveUnitPickerFn = async () => {
+      await applyUnitPickerSelection();
+    };
+  }
+
+  function restoreUnitPickerFooter() {
+    const footer = $("#productInfoFooter");
+    const footerView = $("#productFooterView");
+    const footerEditMode = $("#productFooterEditMode");
+    const footerCancelBtn = $("#productFooterCancelBtn");
+    const footerSaveBtn = $("#productFooterSaveBtn");
+    const footerDeleteBtn = $("#productFooterDeleteEditBtn");
+    const footerMoreBtn = $("#productFooterMoreEditBtn");
+    
+    if (footer && footerView && footerEditMode && footerCancelBtn && footerSaveBtn && unitPickerSavedFooterState) {
+      if (unitPickerSavedFooterState.footerHidden) {
+        footer.classList.add("hidden");
+      } else {
+        footer.classList.remove("hidden");
+      }
+      if (unitPickerSavedFooterState.viewHidden) {
+        footerView.classList.add("hidden");
+      } else {
+        footerView.classList.remove("hidden");
+      }
+      if (unitPickerSavedFooterState.editHidden) {
+        footerEditMode.classList.add("hidden");
+      } else {
+        footerEditMode.classList.remove("hidden");
+      }
+      if (footerDeleteBtn) {
+        if (unitPickerSavedFooterState.deleteBtnHidden) {
+          footerDeleteBtn.classList.add("hidden");
+        } else {
+          footerDeleteBtn.classList.remove("hidden");
+        }
+      }
+      if (footerMoreBtn) {
+        if (unitPickerSavedFooterState.moreBtnHidden) {
+          footerMoreBtn.classList.add("hidden");
+        } else {
+          footerMoreBtn.classList.remove("hidden");
+        }
+      }
+      
+      if (unitPickerSavedFooterState.cancelBtnIsConfirm) {
+        footerCancelBtn.classList.add("is-confirm");
+      } else {
+        footerCancelBtn.classList.remove("is-confirm");
+      }
+      if (unitPickerSavedFooterState.cancelBtnIsFullwidth) {
+        footerCancelBtn.classList.add("is-fullwidth");
+      } else {
+        footerCancelBtn.classList.remove("is-fullwidth");
+      }
+      
+      if (footerCancelBtn.dataset.pickerOriginalHtml) {
+        footerCancelBtn.innerHTML = footerCancelBtn.dataset.pickerOriginalHtml;
+        delete footerCancelBtn.dataset.pickerOriginalHtml;
+      }
+      
+      if (unitPickerSavedHandlers) {
+        footerCancelBtn.onclick = unitPickerSavedHandlers.cancel;
+        footerSaveBtn.onclick = unitPickerSavedHandlers.save;
+      }
+      
+      unitPickerSavedFooterState = null;
+      unitPickerSavedHandlers = null;
+    }
+  }
+
+  async function applyUnitPickerSelection() {
+    const footerCancelBtn = $("#productFooterCancelBtn");
+    const footerSaveBtn = $("#productFooterSaveBtn");
+    if (footerCancelBtn) delete footerCancelBtn.dataset.pickerType;
+    if (footerSaveBtn) delete footerSaveBtn.dataset.pickerType;
+    delete window._closeUnitPickerFn;
+    delete window._saveUnitPickerFn;
+    restoreUnitPickerFooter();
+    
+    const selectedId = state.unitPanel.pickerSelection;
+    if (!selectedId || !Number.isFinite(selectedId)) {
+      state.unitPanel.level = "group";
+      renderUnitGroupLevel();
+      return;
+    }
+    
+    const selectedUnit = state.units.find((u) => Number(u.id) === Number(selectedId));
+    if (!selectedUnit || !state.unitDraft) {
+      state.unitPanel.level = "group";
+      renderUnitGroupLevel();
+      return;
+    }
+    
+    // Добавляем конверсию в черновик
+    if (!state.unitDraft.conversions) {
+      state.unitDraft.conversions = [];
+    }
+    
+    const currentUnitId = state.selectedUnitId;
+    state.unitDraft.conversions.push({
+      tempId: `temp-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      from_unit_id: Number(currentUnitId),
+      to_unit_id: Number(selectedId),
+      from_unit: state.unitDraft.unit,
+      to_unit: selectedUnit,
+      factor: 1,
+      isNew: true,
+    });
+    
+    state.unitPanel.level = "group";
+    renderUnitGroupLevel();
+  }
+
+  function syncUnitDraftFromForm() {
+    if (!state.unitDraft) return;
+    if (unitTitleInput) {
+      state.unitDraft.unit.title = unitTitleInput.value.trim();
+    }
+    if (unitShortTitleInput) {
+      state.unitDraft.unit.short_title = unitShortTitleInput.value.trim() || null;
+    }
+    if (unitIsActiveInput) {
+      state.unitDraft.unit.is_active = unitIsActiveInput.checked ? 1 : 0;
+    }
+  }
+
+  async function saveUnit() {
+    if (!state.unitDraft) return;
+    
+    syncUnitDraftFromForm();
+    
+    if (!state.unitDraft.unit.title) {
+      if (unitTitleInput) unitTitleInput.focus();
+      alert("Название единицы измерения обязательно");
+      return;
+    }
+    
+    try {
+      let unitId;
+      
+      if (state.unitPanel.mode === "create") {
+        const res = await apiCreateUnit(state.unitDraft.unit);
+        unitId = res.id;
+        state.selectedUnitId = unitId;
+      } else if (state.unitPanel.mode === "edit") {
+        unitId = Number(state.selectedUnitId);
+        await apiUpdateUnit(unitId, state.unitDraft.unit);
+      } else {
+        return;
+      }
+      
+      // Сохраняем конверсии
+      if (state.unitDraft.conversions && Array.isArray(state.unitDraft.conversions)) {
+        // Загружаем текущие конверсии для единицы
+        await loadUnitConversions();
+        const existingConversions = loadUnitConversionsForUnit(unitId);
+        const existingIds = new Set(existingConversions.map(c => c.id).filter(id => id && !String(id).startsWith("temp")));
+        
+        // Удаляем конверсии, которые были удалены
+        for (const existing of existingConversions) {
+          if (existing.id && !existing.id.toString().startsWith("temp")) {
+            const stillExists = state.unitDraft.conversions.some(
+              c => (c.id && c.id === existing.id) || 
+                   (c.from_unit_id === existing.from_unit_id && c.to_unit_id === existing.to_unit_id)
+            );
+            if (!stillExists) {
+              try {
+                await api(`/api/admin/unit-conversions/${existing.id}`, { method: "DELETE" });
+              } catch (e) {
+                console.error("Failed to delete conversion", e);
+              }
+            }
+          }
+        }
+        
+        // Создаем/обновляем конверсии
+        for (const conv of state.unitDraft.conversions) {
+          if (conv.is_direct === false) continue; // Пропускаем обратные конверсии
+          
+          const payload = {
+            from_unit_id: Number(conv.from_unit_id),
+            to_unit_id: Number(conv.to_unit_id),
+            factor: Number(conv.factor) || 1,
+          };
+          
+          if (conv.id && !String(conv.id).startsWith("temp")) {
+            // Обновляем существующую конверсию
+            try {
+              await api(`/api/admin/unit-conversions/${conv.id}`, {
+                method: "PUT",
+                body: JSON.stringify(payload),
+              });
+            } catch (e) {
+              console.error("Failed to update conversion", e);
+            }
+          } else {
+            // Создаем новую конверсию
+            try {
+              await api("/api/admin/unit-conversions", {
+                method: "POST",
+                body: JSON.stringify(payload),
+              });
+            } catch (e) {
+              console.error("Failed to create conversion", e);
+            }
+          }
+        }
+      }
+      
+      // Загружаем актуальные данные с сервера
+      await loadUnitsManagement();
+      await loadUnitConversions();
+      await loadUnitDetails(unitId);
+      renderUnitsList();
+      
+      // Заменяем временный таб на постоянный (если был создан новый)
+      if (state.unitPanel.tabKey && state.unitPanel.mode === "create") {
+        const unit = state.unitDetails?.unit;
+        if (unit && unit.id) {
+          replaceTabKey(state.unitPanel.tabKey, {
+            type: "unit",
+            id: unit.id,
+            title: unit.title || "Единица измерения",
+            onActivate: async () => {
+              state.selectedUnitId = unit.id;
+              await loadUnitDetails(unit.id);
+              renderUnitsList();
+              showUnitDetails(state.unitDetails, { mode: "view" });
+            },
+          });
+          state.unitPanel.tabKey = buildTabKey("unit", unit.id);
+        }
+      }
+      
+      // Очищаем черновик
+      state.unitDraft = null;
+      state.unitPanel.snapshotData = null;
+      
+      // Переключаемся в режим просмотра
+      state.unitPanel.mode = "view";
+      showUnitDetails(state.unitDetails, { mode: "view" });
+    } catch (e) {
+      console.error("Failed to save unit", e);
+      alert("Ошибка при сохранении единицы измерения");
+    }
+  }
+
+  function cancelUnitEdit() {
+    if (state.unitPanel.level === "picker") {
+      if (window._closeUnitPickerFn) {
+        window._closeUnitPickerFn();
+      }
+      return;
+    }
+    
+    if (state.unitPanel.mode === "create") {
+      // Закрываем таб, если он был создан
+      if (state.unitPanel.tabKey) {
+        closeTab(state.unitPanel.tabKey);
+      }
+      state.selectedUnitId = null;
+      state.unitDetails = null;
+      state.unitDraft = null;
+      state.unitPanel.tabKey = null;
+      showDetailsEmpty();
+      return;
+    }
+    
+    // Восстанавливаем из snapshot
+    if (state.unitPanel.snapshotData) {
+      state.unitDetails = JSON.parse(JSON.stringify(state.unitPanel.snapshotData));
+    }
+    
+    state.unitDraft = null;
+    state.unitPanel.snapshotData = null;
+    state.unitPanel.mode = "view";
+    showUnitDetails(state.unitDetails, { mode: "view" });
   }
 
   function renderConversionsList() {
@@ -4756,16 +5404,18 @@ function updateOptionGroupSelectionUi() {
   function showDetailsEmpty() {
     const showCategory = state.mode === "categories";
     const showOption = state.mode === "options";
+    const showUnit = state.mode === "units";
     productInfo && productInfo.classList.add("hidden");
     categoryInfo && categoryInfo.classList.add("hidden");
     optionGroupInfo && optionGroupInfo.classList.add("hidden");
     variantGroupInfo && variantGroupInfo.classList.add("hidden");
+    unitInfo && unitInfo.classList.add("hidden");
     if (productInfoHeader) productInfoHeader.classList.add("hidden");
     setHeaderMode("product");
-    if (productEmpty) productEmpty.classList.toggle("hidden", showCategory || showOption);
+    if (productEmpty) productEmpty.classList.toggle("hidden", showCategory || showOption || showUnit);
     if (categoryEmpty) categoryEmpty.classList.toggle("hidden", !showCategory);
     if (optionEmpty) optionEmpty.classList.toggle("hidden", !showOption);
-    if (editProductBtn && showOption) editProductBtn.classList.add("hidden");
+    if (editProductBtn && (showOption || showUnit)) editProductBtn.classList.add("hidden");
     hideProductFooter();
     closeSheet();
   }
@@ -5020,6 +5670,13 @@ function updateOptionGroupSelectionUi() {
             shouldCleanup = true;
           }
         }
+      } else if (type === "unit") {
+        // Check if unit is being edited
+        if (isTempTab || (state.unitPanel.mode === "edit" || state.unitPanel.mode === "create")) {
+          if (state.selectedUnitId === id || state.unitPanel.tabKey === key) {
+            shouldCleanup = true;
+          }
+        }
       }
       
       if (shouldCleanup) {
@@ -5054,6 +5711,12 @@ function updateOptionGroupSelectionUi() {
             state.variantDraft = null;
             state.variantPanel.tabKey = null;
           }
+        }
+        
+        // For units, cancel edit/create mode
+        if (type === "unit" && (state.unitPanel.mode === "edit" || state.unitPanel.mode === "create")) {
+          cancelUnitEdit();
+          state.unitPanel.tabKey = null;
         }
         
         // Remove from editing Maps
@@ -5180,6 +5843,22 @@ function updateOptionGroupSelectionUi() {
         // Всегда показываем свежие данные с сервера, игнорируя кеш
         // При нажатии "Редактировать" будет создан новый draft из свежих данных
         showVariantGroupDetails(state.variantGroupDetails, { mode: state.variantPanel.mode || "view" });
+      },
+      activate,
+    });
+  }
+
+  function openUnitTab(unitId, title, { activate = true } = {}) {
+    if (!Number.isFinite(unitId)) return;
+    ensureTab({
+      type: "unit",
+      id: unitId,
+      title: title || "Единица измерения",
+      onActivate: async () => {
+        state.selectedUnitId = unitId;
+        await loadUnitDetails(unitId);
+        renderUnitsList();
+        showUnitDetails(state.unitDetails, { mode: state.unitPanel.mode || "view" });
       },
       activate,
     });
@@ -9074,10 +9753,18 @@ function updateOptionGroupSelectionUi() {
     }
     if (state.mode === "units") {
       await loadUnitsManagement();
-      renderUnitsList();
-      renderConversionUnitOptions();
       await loadUnitConversions();
-      renderConversionsList();
+      renderUnitsList();
+      if (state.selectedUnitId && !state.units.some((u) => Number(u.id) === Number(state.selectedUnitId))) {
+        state.selectedUnitId = null;
+        state.unitDetails = null;
+        showDetailsEmpty();
+      } else if (state.selectedUnitId && state.unitPanel.mode !== "create") {
+        await loadUnitDetails(state.selectedUnitId);
+        if (state.unitPanel.level !== "empty") {
+          showUnitDetails(state.unitDetails, { mode: state.unitPanel.mode });
+        }
+      }
       return;
     }
     if (state.mode === "products") {
@@ -9132,62 +9819,14 @@ function updateOptionGroupSelectionUi() {
         if (state.mode === "options") return startOptionCreate();
         if (state.mode === "variants") return startVariantCreate();
         if (state.mode === "units") {
-          unitsTitleInput?.focus();
-        }
-      });
-    }
-
-    if (unitsAddBtn) {
-      unitsAddBtn.addEventListener("click", async () => {
-        const title = String(unitsTitleInput?.value || "").trim();
-        const shortTitle = String(unitsShortInput?.value || "").trim();
-        const code = String(unitsCodeInput?.value || "").trim();
-        const sort = unitsSortInput?.value;
-
-        if (!title) {
-          unitsTitleInput?.focus();
-          return;
-        }
-
-        try {
-          await apiCreateUnit({
-            title,
-            short_title: shortTitle || null,
-            code: code || null,
-            sort_order: sort === "" || sort == null ? null : Number(sort),
-            is_active: 1,
-          });
-          if (unitsTitleInput) unitsTitleInput.value = "";
-          if (unitsShortInput) unitsShortInput.value = "";
-          if (unitsCodeInput) unitsCodeInput.value = "";
-          if (unitsSortInput) unitsSortInput.value = "";
-          await loadUnitsManagement();
-          renderUnitsList();
-        } catch (e) {
-          console.error("Failed to create unit", e);
-          alert("Ошибка при добавлении единицы измерения");
-        }
-      });
-    }
-
-    if (convAddBtn) {
-      convAddBtn.addEventListener("click", async () => {
-        const fromId = Number(convFromUnit?.value);
-        const toId = Number(convToUnit?.value);
-        const factor = Number(convFactor?.value);
-        if (!Number.isFinite(fromId) || !Number.isFinite(toId) || fromId <= 0 || toId <= 0) return;
-        if (!Number.isFinite(factor) || factor <= 0) return;
-        try {
-          await api("/api/admin/unit-conversions", {
-            method: "POST",
-            body: JSON.stringify({ from_unit_id: fromId, to_unit_id: toId, factor }),
-          });
-          if (convFactor) convFactor.value = "";
-          await loadUnitConversions();
-          renderConversionsList();
-        } catch (e) {
-          console.error("Failed to create conversion", e);
-          alert("Ошибка при добавлении конверсии");
+          state.selectedUnitId = null;
+          state.unitDetails = null;
+          state.unitDraft = {
+            unit: { title: "", short_title: "", is_active: 1 },
+            conversions: [],
+          };
+          state.unitPanel.mode = "create";
+          showUnitDetails(null, { mode: "create" });
         }
       });
     }
@@ -9218,8 +9857,7 @@ function updateOptionGroupSelectionUi() {
           enterUnitsMode();
           loadUnitsManagement().then(() => {
             renderUnitsList();
-            renderConversionUnitOptions();
-            loadUnitConversions().then(renderConversionsList);
+            loadUnitConversions();
           });
           return;
         }
@@ -9858,6 +10496,169 @@ function updateOptionGroupSelectionUi() {
       });
     }
 
+    // Unit handlers
+    if (unitConversionsAddBtn) {
+      unitConversionsAddBtn.addEventListener("click", () => {
+        if (state.unitPanel.mode === "create" || state.unitPanel.mode === "edit") {
+          openUnitPicker();
+        }
+      });
+    }
+
+    if (unitPickerSearch) {
+      unitPickerSearch.addEventListener("input", async () => {
+        state.unitPanel.pickerQuery = unitPickerSearch.value;
+        await refreshUnitPickerList();
+      });
+    }
+
+    if (unitForm) {
+      unitForm.addEventListener("input", () => {
+        if (state.unitPanel.mode === "create" || state.unitPanel.mode === "edit") {
+          syncUnitDraftFromForm();
+        }
+      });
+      unitForm.addEventListener("change", () => {
+        if (state.unitPanel.mode === "create" || state.unitPanel.mode === "edit") {
+          syncUnitDraftFromForm();
+        }
+      });
+    }
+
+    // Footer button handlers for units
+    const unitFooterSaveBtn = $("#productFooterSaveBtn");
+    const unitFooterCancelBtn = $("#productFooterCancelBtn");
+    const unitFooterDeleteBtn = $("#productFooterDeleteBtn");
+    const unitFooterEditBtn = $("#productFooterEditBtn");
+    const unitFooterDeleteEditBtn = $("#productFooterDeleteEditBtn");
+
+    if (unitFooterSaveBtn) {
+      const originalSaveHandler = unitFooterSaveBtn.onclick;
+      unitFooterSaveBtn.addEventListener("click", async (e) => {
+        if (unitFooterSaveBtn.dataset.pickerType === "unit") {
+          if (window._saveUnitPickerFn) {
+            await window._saveUnitPickerFn();
+          }
+          return;
+        }
+        if (state.mode === "units" && (state.unitPanel.mode === "create" || state.unitPanel.mode === "edit")) {
+          e.preventDefault();
+          e.stopPropagation();
+          await saveUnit();
+          return;
+        }
+        if (originalSaveHandler) {
+          originalSaveHandler.call(unitFooterSaveBtn, e);
+        }
+      });
+    }
+
+    if (unitFooterCancelBtn) {
+      const originalCancelHandler = unitFooterCancelBtn.onclick;
+      // Attach two-step confirmation for cancel button when in units mode
+      attachTwoStepButton(unitFooterCancelBtn, () => {
+        if (unitFooterCancelBtn.dataset.pickerType === "unit") {
+          if (window._closeUnitPickerFn) {
+            window._closeUnitPickerFn();
+          }
+          return;
+        }
+        if (state.mode === "units" && (state.unitPanel.mode === "create" || state.unitPanel.mode === "edit")) {
+          cancelUnitEdit();
+          return;
+        }
+        if (originalCancelHandler) {
+          originalCancelHandler.call(unitFooterCancelBtn, new Event("click"));
+        }
+      }, "Отменить");
+    }
+
+    if (unitFooterEditBtn) {
+      unitFooterEditBtn.addEventListener("click", () => {
+        if (state.mode === "units" && state.unitPanel.mode === "view" && state.selectedUnitId) {
+          state.unitPanel.mode = "edit";
+          if (!state.unitPanel.snapshotData && state.unitDetails) {
+            state.unitPanel.snapshotData = JSON.parse(JSON.stringify(state.unitDetails));
+          }
+          if (!state.unitDraft && state.unitDetails) {
+            state.unitDraft = {
+              unit: { ...state.unitDetails.unit },
+              conversions: state.unitDetails.conversions ? state.unitDetails.conversions.map(c => ({ ...c })) : [],
+            };
+          }
+          showUnitDetails(state.unitDetails, { mode: "edit" });
+        }
+      });
+    }
+
+    if (unitFooterDeleteBtn || unitFooterDeleteEditBtn) {
+      const deleteHandler = async () => {
+        if (state.mode === "units" && state.selectedUnitId) {
+          try {
+            await apiDeleteUnit(state.selectedUnitId);
+            // Закрываем таб, если он был открыт
+            if (state.unitPanel.tabKey) {
+              closeTab(state.unitPanel.tabKey);
+            }
+            state.selectedUnitId = null;
+            state.unitDetails = null;
+            state.unitPanel.tabKey = null;
+            await loadUnitsManagement();
+            await loadUnitConversions();
+            renderUnitsList();
+            showDetailsEmpty();
+          } catch (e) {
+            console.error("Failed to delete unit", e);
+            alert("Ошибка при удалении единицы измерения");
+          }
+        }
+      };
+      if (unitFooterDeleteBtn) {
+        attachTwoStepButton(unitFooterDeleteBtn, deleteHandler, "Подтвердить удаление");
+      }
+      if (unitFooterDeleteEditBtn) {
+        attachTwoStepButton(unitFooterDeleteEditBtn, deleteHandler, "Подтвердить удаление");
+      }
+    }
+
+    // Add unit button handler
+    if (addMainBtn) {
+      const originalAddHandler = addMainBtn.onclick;
+      addMainBtn.addEventListener("click", () => {
+        if (state.mode === "units") {
+          state.selectedUnitId = null;
+          state.unitDetails = null;
+          state.unitDraft = {
+            unit: { title: "", short_title: "", is_active: 1 },
+            conversions: [],
+          };
+          state.unitPanel.mode = "create";
+          
+          // Create tab with temporary ID for new unit
+          const tabId = `new-unit-${Date.now()}`;
+          ensureTab({
+            type: "unit",
+            id: tabId,
+            title: "Новая единица измерения",
+            onActivate: () => {
+              showUnitDetails(null, { mode: "create" });
+              showProductFooterEdit();
+            },
+            activate: true,
+          });
+          
+          // Store tab key in state for later replacement
+          state.unitPanel.tabKey = buildTabKey("unit", tabId);
+          
+          showUnitDetails(null, { mode: "create" });
+          return;
+        }
+        if (originalAddHandler) {
+          originalAddHandler.call(addMainBtn);
+        }
+      });
+    }
+
     window.addEventListener("resize", () => {
       refreshOpenAccordions();
       const isMobile = window.matchMedia("(max-width: 768px)").matches;
@@ -9882,6 +10683,9 @@ function updateOptionGroupSelectionUi() {
     bindAccordionContainer(productsAccordion);
     bindAccordionContainer(optionGroupInfo);
     bindAccordionContainer(variantGroupInfo);
+    if (unitInfo) {
+      bindAccordionContainer(unitInfo);
+    }
     bindEvents();
 
     await loadUnitsManagement();
