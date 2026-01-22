@@ -788,6 +788,8 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   min-height: 0;
   overflow: auto;
   padding: 12px;
+  /* Добавляем padding-bottom чтобы контент не перекрывался футером */
+  padding-bottom: calc(12px + 70px + env(safe-area-inset-bottom));
 }
 
 .shop-cart-sheet .shop-product-content{
@@ -831,12 +833,21 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  z-index: 10; /* Футер должен быть поверх контента */
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.05); /* Легкая тень для визуального разделения */
 }
 
 @media (max-width: 768px){
   .shop-cart-sheet-footer,
   .shop-cart-footer{
     bottom: calc(var(--shop-bottomnav-h) + 8px + env(safe-area-inset-bottom));
+  }
+  
+  /* На мобильных увеличиваем padding-bottom контента с учетом нижней навигации */
+  .shop-cart-sheet .shop-cart-list,
+  .shop-cart-sheet .shop-checkout-content,
+  .shop-cart-sheet .shop-address-content{
+    padding-bottom: calc(12px + 70px + var(--shop-bottomnav-h) + env(safe-area-inset-bottom));
   }
 }
 

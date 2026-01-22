@@ -377,16 +377,43 @@
   function makeCartKey(productId, optionItemsOrIds, ingredients = [], variantSelection = null) {
     const entries = (Array.isArray(optionItemsOrIds) ? optionItemsOrIds : [])
       .map((opt) => {
-        if (typeof opt === "number") return { id: opt, qty: 1 };
+        if (typeof opt === "number") return { id: opt, qty: 1, variant_group_id: null, variant_value_index: null };
         if (!opt || typeof opt !== "object") return null;
         const id = Number(opt.id);
         if (!Number.isFinite(id)) return null;
         const qty = Math.max(0, Number(opt.qty || opt.quantity || 1)) || 1;
-        return { id, qty };
+        // Учитываем варианты опции в ключе
+        const variantGroupId = Number(opt.variant_group_id);
+        const variantIndex = Number(opt.variant_value_index);
+        const hasVariant = Number.isFinite(variantGroupId) && Number.isFinite(variantIndex);
+        return { 
+          id, 
+          qty, 
+          variant_group_id: hasVariant ? variantGroupId : null, 
+          variant_value_index: hasVariant ? variantIndex : null 
+        };
       })
       .filter(Boolean)
-      .sort((a, b) => a.id - b.id);
-    const optionPart = entries.map((entry) => `${entry.id}${entry.qty !== 1 ? `x${entry.qty}` : ""}`).join(",");
+      .sort((a, b) => {
+        // Сортируем сначала по id, потом по варианту
+        if (a.id !== b.id) return a.id - b.id;
+        if (a.variant_group_id !== b.variant_group_id) {
+          const aVg = a.variant_group_id ?? 0;
+          const bVg = b.variant_group_id ?? 0;
+          return aVg - bVg;
+        }
+        const aVi = a.variant_value_index ?? 0;
+        const bVi = b.variant_value_index ?? 0;
+        return aVi - bVi;
+      });
+    const optionPart = entries.map((entry) => {
+      let part = `${entry.id}${entry.qty !== 1 ? `x${entry.qty}` : ""}`;
+      // Добавляем вариант опции в ключ, если он есть
+      if (entry.variant_group_id != null && entry.variant_value_index != null) {
+        part += `v${entry.variant_group_id}-${entry.variant_value_index}`;
+      }
+      return part;
+    }).join(",");
     
     // Добавляем ингредиенты в ключ для различения составов
     const ingEntries = (Array.isArray(ingredients) ? ingredients : [])
@@ -499,6 +526,15 @@
   function formatOption(opt) {
     const name = str(opt.title || opt.name || "");
     if (!name) return null;
+    
+    // Если у опции есть вариант (variant_label), используем его вместо количества "шт"
+    const variantLabel = str(opt.variant_label || "").trim();
+    if (variantLabel) {
+      // variant_label уже содержит значение с единицей (например "200г")
+      return `${variantLabel} ${name}`;
+    }
+    
+    // Если варианта нет, используем стандартный формат с количеством
     const optQty = Math.max(1, Number(opt.qty || 1));
     // Для опций единица обычно "шт", но может быть в названии
     // Формат: количествоединица название (например "1шт картофельное пюре")
