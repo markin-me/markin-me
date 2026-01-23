@@ -958,9 +958,7 @@
     
     // Название товара с количеством (в конце, как в корзине)
     const itemQty = Number(item.qty || item.quantity || 1);
-    const itemName = itemQty > 1 
-      ? `${escapeHtml(item.name || "—")} × ${itemQty}`
-      : escapeHtml(item.name || "—");
+    const itemName = `${escapeHtml(item.name || "—")} × ${itemQty}`;
     html += `<div class="cart-title">${itemName}</div>`;
     
     // Детали (раскрытые сразу)
@@ -2394,7 +2392,7 @@ async function initAddresses() {
 
       const t = document.createElement("div");
       t.className = "cart-title";
-      t.textContent = str(product.name);
+      t.textContent = `${str(product.name)} × ${qty}`;
       mid.appendChild(t);
 
       // Формируем элементы в правильном порядке: варианты → ингредиенты → опции
@@ -2427,39 +2425,15 @@ async function initAddresses() {
       // Объединяем все элементы
       const allParts = [...variantParts, ...ingredientParts, ...optionParts];
       
-      // Создаем контейнер для описания с раскрывающимся списком
+      // Создаем контейнер для описания (сразу развернутый)
       const subContainer = document.createElement("div");
       subContainer.className = "cart-sub-container";
       
       if (allParts.length > 0) {
-        // Сокращенный текст для отображения (первые элементы)
-        const shortText = allParts.length > 2 
-          ? allParts.slice(0, 2).join(", ") + "..."
-          : allParts.join(", ");
-        
-        // Строка с текстом и стрелкой
-        const subSummary = document.createElement("div");
-        subSummary.className = "cart-sub-summary";
-        subSummary.style.cursor = "pointer";
-        
-        const subText = document.createElement("span");
-        subText.className = "cart-sub-text";
-        subText.textContent = shortText;
-        
-        const subArrow = document.createElement("span");
-        subArrow.className = "cart-sub-arrow";
-        subArrow.innerHTML = " ▼";
-        subArrow.style.marginLeft = "4px";
-        subArrow.style.fontSize = "0.85em";
-        subArrow.style.color = "var(--color-text-muted, #666)";
-        
-        subSummary.appendChild(subText);
-        subSummary.appendChild(subArrow);
-        
-        // Раскрывающийся список
+        // Раскрытый список деталей (как в деталях заказа)
         const subDetails = document.createElement("div");
         subDetails.className = "cart-sub-details";
-        subDetails.style.display = "none";
+        subDetails.style.display = "block";
         subDetails.style.marginTop = "4px";
         subDetails.style.paddingLeft = "8px";
         
@@ -2473,35 +2447,6 @@ async function initAddresses() {
           subDetails.appendChild(detailItem);
         });
         
-        // Кнопка "свернуть" внизу списка
-        const collapseBtn = document.createElement("div");
-        collapseBtn.className = "cart-sub-collapse";
-        collapseBtn.textContent = "свернуть ▲";
-        collapseBtn.style.cursor = "pointer";
-        collapseBtn.style.fontSize = "0.85em";
-        collapseBtn.style.color = "var(--color-text-muted, #666)";
-        collapseBtn.style.marginTop = "4px";
-        collapseBtn.style.paddingLeft = "8px";
-        collapseBtn.style.userSelect = "none";
-        collapseBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          isExpanded = false;
-          subSummary.style.display = "flex";
-          subDetails.style.display = "none";
-          subArrow.textContent = " ▼";
-        });
-        subDetails.appendChild(collapseBtn);
-        
-        // Обработчик клика для раскрытия/сворачивания
-        let isExpanded = false;
-        subSummary.addEventListener("click", (e) => {
-          e.stopPropagation();
-          isExpanded = true;
-          subSummary.style.display = "none";
-          subDetails.style.display = "block";
-        });
-        
-        subContainer.appendChild(subSummary);
         subContainer.appendChild(subDetails);
       } else {
         // Если нет элементов, просто пустая строка
