@@ -455,8 +455,8 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 
 /* крупнее в деталке товара */
 .qty-pill--big{
-  --qty-pill-h: 52px;
-  --qty-pill-side: 56px;
+  --qty-pill-h: 44px;
+  --qty-pill-side: 48px;
 }
 .qty-pill--big .qty-pill__center{ font-size: 16px; }
 
@@ -900,7 +900,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 .shop-checkout-btn{
-  height: 52px;
+  height: 44px;
   border-radius: 999px;
   padding: 0 18px;
   width: 100%;
@@ -910,6 +910,11 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   border: 1px solid var(--shop-buy);
   font-weight: 800;
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
 }
 
 .shop-checkout-btn:hover{
@@ -1136,8 +1141,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   position: sticky;
   bottom: 0;
   background: var(--color-surface);
-  border-top: 1px solid var(--color-border);
-  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  padding: 4px 12px calc(4px + env(safe-area-inset-bottom));
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1377,22 +1381,29 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 .shop-pd-action{
   flex: 1;
-  display: inline-flex;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;  /* центрируем всю строку */
-  gap: 10px;                /* отступ между текстом и суммой */
-  padding-right: 18px;      /* обычные паддинги как у checkout */
+  justify-content: center;
+  gap: 2px;
+  padding-right: 18px;
   padding-left: 18px;
 }
-/* span с ценой уводим вправо абсолютно */
-.shop-pd-action .shop-pd-action-price{
-  position: static;
-  transform: none;
+
+/* Цена сверху */
+.shop-pd-action .shop-pd-action-price,
+.shop-pd-action .shop-checkout-total{
   font-weight: 900;
+  font-size: inherit;
+  line-height: 1.2;
 }
 
-.shop-pd-action .shop-checkout-total{
-  position: static;
+/* Текст "в корзину" снизу */
+.shop-pd-action .shop-pd-action-label{
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  opacity: 0.9;
 }
 
 /* ================= Ingredients ================= */

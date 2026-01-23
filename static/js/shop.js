@@ -5583,10 +5583,11 @@ optionGroups.forEach((group) => {
     // total = unit * qty
     const totalPrice = unitPrice * Number(qty || 1);
 
-    const label = editMode ? "Сохранить" : "Добавить";
-
-    // разметка как у "Оформить": текст + span суммы
-    actionBtnRef.innerHTML = `${label} <span class="shop-checkout-total shop-pd-action-price">${money(totalPrice)}</span>`;
+    // Новая структура: цена сверху, текст "в корзину" снизу
+    actionBtnRef.innerHTML = `
+      <span class="shop-checkout-total shop-pd-action-price">${money(totalPrice)}</span>
+      <span class="shop-pd-action-label">${editMode ? "Сохранить" : "в корзину"}</span>
+    `;
 
     if (basePriceElRef) {
       const variantLabel = str(variantState?.label || "").trim();
