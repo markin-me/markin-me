@@ -146,6 +146,112 @@
     return div.innerHTML;
   }
 
+  // -----------------------------
+  // Adaptive Image Optimization
+  // -----------------------------
+  /**
+   * Генерирует URL для разных форматов изображений (для будущей поддержки WebP/AVIF)
+   * @param {string} imageUrl - Оригинальный URL изображения
+   * @param {string} format - Формат: 'webp' | 'avif' | 'original'
+   * @returns {string}
+   */
+  function getImageUrlForFormat(imageUrl, format = 'original') {
+    if (!imageUrl || imageUrl === '/static/img/placeholder.png') return imageUrl;
+    if (format === 'original') return imageUrl;
+    
+    // В будущем здесь можно добавить логику преобразования URL
+    // Например: /static/uploads/products/1/photo.jpg -> /static/uploads/products/1/photo.webp
+    // Или использовать серверный endpoint для конвертации: /api/image/convert?url=...&format=webp
+    // Пока возвращаем оригинальный URL
+    return imageUrl;
+  }
+
+  /**
+   * Создает оптимизированное изображение с адаптивной загрузкой
+   * @param {string} imageUrl - URL изображения
+   * @param {Object} options - Опции оптимизации
+   * @param {string} options.type - Тип изображения: 'product-grid' | 'product-hero' | 'cart-thumb' | 'thumb' | 'custom'
+   * @param {string} options.sizes - Кастомный sizes атрибут (если type='custom')
+   * @param {string} options.srcset - Кастомный srcset (опционально, для будущей серверной оптимизации)
+   * @param {boolean} options.usePicture - Использовать picture элемент с поддержкой WebP/AVIF (по умолчанию false)
+   * @param {string} options.alt - Alt текст
+   * @param {string} options.className - CSS класс
+   * @returns {HTMLImageElement|HTMLPictureElement}
+   */
+  function createOptimizedImage(imageUrl, options = {}) {
+    const {
+      type = 'product-grid',
+      sizes: customSizes,
+      srcset: customSrcset,
+      usePicture = false,
+      alt = '',
+      className = ''
+    } = options;
+
+    // Настройки sizes для разных типов изображений
+    const sizesMap = {
+      'product-grid': '(max-width: 768px) 50vw, (max-width: 1200px) 33vw, 25vw',
+      'product-hero': '(max-width: 768px) 100vw, 350px',
+      'cart-thumb': '92px',
+      'thumb': '52px',
+      'custom': customSizes || '100vw'
+    };
+
+    const finalUrl = imageUrl || '/static/img/placeholder.png';
+    const finalSizes = sizesMap[type] || sizesMap['custom'];
+
+    // Если нужно использовать picture элемент для поддержки современных форматов
+    if (usePicture) {
+      const picture = document.createElement('picture');
+      
+      // AVIF (самый современный формат)
+      const avifSource = document.createElement('source');
+      avifSource.type = 'image/avif';
+      avifSource.srcset = getImageUrlForFormat(finalUrl, 'avif');
+      picture.appendChild(avifSource);
+      
+      // WebP (хорошая поддержка)
+      const webpSource = document.createElement('source');
+      webpSource.type = 'image/webp';
+      webpSource.srcset = getImageUrlForFormat(finalUrl, 'webp');
+      picture.appendChild(webpSource);
+      
+      // Fallback на оригинальный формат
+      const img = document.createElement('img');
+      if (className) img.className = className;
+      img.alt = alt;
+      img.loading = 'lazy';
+      img.src = finalUrl;
+      
+      if (customSrcset) {
+        img.srcset = customSrcset;
+      }
+      img.sizes = finalSizes;
+      
+      picture.appendChild(img);
+      return picture;
+    }
+
+    // Обычный img элемент с адаптивными атрибутами
+    const img = document.createElement('img');
+    if (className) img.className = className;
+    img.alt = alt;
+    img.loading = 'lazy';
+
+    if (customSrcset) {
+      img.srcset = customSrcset;
+      img.sizes = finalSizes;
+      // src используется как fallback для старых браузеров
+      img.src = finalUrl;
+    } else {
+      // Пока используем один URL, но с правильным sizes для будущей оптимизации
+      img.src = finalUrl;
+      img.sizes = finalSizes;
+    }
+
+    return img;
+  }
+
   function looksLikeUrl(s) {
     if (!s) return false;
     const v = String(s);
@@ -1641,10 +1747,11 @@ async function initAddresses() {
 
     const v = str(icon).trim();
     if (looksLikeUrl(v)) {
-      const img = document.createElement("img");
-      img.className = "shop-cat-icon-img";
-      img.alt = "";
-      img.src = v;
+      const img = createOptimizedImage(v, {
+        type: 'thumb',
+        className: 'shop-cat-icon-img',
+        alt: ''
+      });
       wrap.appendChild(img);
       return wrap;
     }
@@ -1853,11 +1960,11 @@ async function initAddresses() {
       const media = document.createElement("div");
       media.className = "sp-media";
 
-      const img = document.createElement("img");
-      img.className = "sp-img";
-      img.alt = "";
-      img.src = mainPhoto || "/static/img/placeholder.png";
-      img.loading = "lazy";
+      const img = createOptimizedImage(mainPhoto || "/static/img/placeholder.png", {
+        type: 'product-grid',
+        className: 'sp-img',
+        alt: ''
+      });
       media.appendChild(img);
 
       const overlay = document.createElement("div");
@@ -2054,10 +2161,11 @@ async function initAddresses() {
       const photos = safePhotos(product);
       const mainPhoto = photos[0] || "";
 
-      const img = document.createElement("img");
-      img.className = "cart-thumb";
-      img.alt = "";
-      img.src = mainPhoto || "/static/img/placeholder.png";
+      const img = createOptimizedImage(mainPhoto || "/static/img/placeholder.png", {
+        type: 'cart-thumb',
+        className: 'cart-thumb',
+        alt: ''
+      });
       row.appendChild(img);
 
       const mid = document.createElement("div");
@@ -3146,10 +3254,11 @@ function buildProductDetailsContent(
   const media = document.createElement("div");
   media.className = "shop-product-hero-media";
 
-  const img = document.createElement("img");
-  img.className = "shop-product-hero-image";
-  img.src = photos[0] || "/static/img/placeholder.png";
-  img.alt = "";
+  const img = createOptimizedImage(photos[0] || "/static/img/placeholder.png", {
+    type: 'product-hero',
+    className: 'shop-product-hero-image',
+    alt: ''
+  });
   img.style.objectFit = "cover";
   media.appendChild(img);
 
@@ -3976,9 +4085,11 @@ function buildProductDetailsContent(
 
           // Фото
           if (item.photo) {
-            const img = document.createElement("img");
-            img.className = "shop-pd-option-thumb";
-            img.src = item.photo;
+            const img = createOptimizedImage(item.photo, {
+              type: 'thumb',
+              className: 'shop-pd-option-thumb',
+              alt: ''
+            });
             cardContent.appendChild(img);
           } else {
             const placeholder = document.createElement("div");
@@ -4379,9 +4490,11 @@ function buildProductDetailsContent(
 
           // Фото
           if (item.photo) {
-            const img = document.createElement("img");
-            img.className = "shop-pd-option-thumb";
-            img.src = item.photo;
+            const img = createOptimizedImage(item.photo, {
+              type: 'thumb',
+              className: 'shop-pd-option-thumb',
+              alt: ''
+            });
             cardContent.appendChild(img);
           } else {
             const placeholder = document.createElement("div");
@@ -4719,9 +4832,11 @@ function buildProductDetailsContent(
       const photo = document.createElement("div");
       photo.className = "shop-pd-option-thumb";
       if (ing.ingredient_photos && ing.ingredient_photos.length > 0) {
-        const img = document.createElement("img");
-        img.src = ing.ingredient_photos[0];
-        img.alt = "";
+        const img = createOptimizedImage(ing.ingredient_photos[0], {
+          type: 'thumb',
+          className: '',
+          alt: ''
+        });
         img.style.width = "100%";
         img.style.height = "100%";
         img.style.objectFit = "cover";
@@ -4927,10 +5042,11 @@ function buildShopProductHero(product, { onBack } = {}) {
   const media = document.createElement("div");
   media.className = "shop-product-hero-media";
 
-  const img = document.createElement("img");
-  img.className = "shop-product-hero-image";
-  img.src = images[0] || "";
-  img.alt = product.title || "";
+  const img = createOptimizedImage(images[0] || "", {
+    type: 'product-hero',
+    className: 'shop-product-hero-image',
+    alt: product.title || ""
+  });
 
   media.appendChild(img);
 
