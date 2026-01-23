@@ -8933,6 +8933,13 @@ async function init() {
           isMainTabActive = elNavMenu.classList.contains("is-active");
         }
       }
+
+      // Если не главная вкладка/страница или открыт модал — скрываем мгновенно
+      const isProductOpen = elMobileProductActions && !elMobileProductActions.classList.contains("hidden");
+      if (isMobile && (!isShopMainPage || !isMainTabActive || isAnyModalOpen || isProductOpen)) {
+        badges.forEach(badge => badge.classList.add("hidden"));
+        return;
+      }
       
       try {
         const token = getCustomerToken();

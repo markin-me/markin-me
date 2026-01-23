@@ -445,6 +445,11 @@ header{
   .shop-active-orders-sheet-collapsed.hidden {
     display: none;
   }
+
+  /* Скрываем активный заказ, когда открыт любой модал/боттом-щит */
+  body.modal-open .shop-active-orders-sheet-collapsed {
+    display: none;
+  }
   
   .shop-active-orders-sheet-collapsed:active {
     transform: translateY(-2px);
