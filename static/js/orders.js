@@ -238,8 +238,27 @@
               ${variants.map((v) => {
                 const groupTitle = escapeHtml(v.group_title || "Вариант");
                 const variantValue = escapeHtml(v.label || v.value || "");
-                // Формат: значение название_группы (например "200г порц" или "1шт порц")
-                return `<div class="order-item-composition-item">• ${variantValue} ${groupTitle}</div>`;
+                // Проверяем, не заканчивается ли variantValue на groupTitle (чтобы избежать дублирования)
+                // Например, если variantValue = "1 шт", а groupTitle = "шт", то не добавляем groupTitle
+                const variantValueTrimmed = variantValue.trim();
+                const groupTitleTrimmed = groupTitle.trim();
+                let formatted;
+                if (variantValueTrimmed && groupTitleTrimmed) {
+                  const variantLower = variantValueTrimmed.toLowerCase();
+                  const groupLower = groupTitleTrimmed.toLowerCase();
+                  // Проверяем, заканчивается ли variantValue на пробел + groupTitle или просто на groupTitle
+                  if (variantLower.endsWith(" " + groupLower) || variantLower.endsWith(groupLower)) {
+                    // variantValue уже содержит единицу из groupTitle, не дублируем
+                    formatted = variantValue;
+                  } else {
+                    // Формат: значение название_группы (например "200г порц" или "1шт порц")
+                    formatted = `${variantValue} ${groupTitle}`.trim();
+                  }
+                } else {
+                  // Если одно из значений пустое, просто объединяем
+                  formatted = `${variantValue} ${groupTitle}`.trim();
+                }
+                return `<div class="order-item-composition-item">• ${formatted}</div>`;
               }).join("")}
             </div>`
           : "";
@@ -252,25 +271,39 @@
               ${ingredients.map((ing) => {
                 const ingName = escapeHtml(ing.name || "Ингредиент");
                 const ingQty = Math.max(1, Number(ing.quantity || ing.qty || 1));
-                // Получаем единицу из ing.unit_label или ing.unit, если есть
-                const ingUnit = escapeHtml(ing.unit_label || ing.unit || "");
+                // Получаем единицу из разных полей
+                let ingUnit = escapeHtml(ing.unit_label || ing.unit || ing.unitLabel || ing.unit_short_title || ing.unit_title || "");
+                // Если единица не указана, определяем по количеству: если > 10, вероятно граммы
+                if (!ingUnit) {
+                  ingUnit = ingQty > 10 ? "г" : "шт";
+                }
                 // Формат: количествоединица название (например "150г картофельное пюре")
-                const formatted = `${ingQty}${ingUnit || ""} ${ingName}`;
+                const formatted = `${ingQty}${ingUnit} ${ingName}`;
                 return `<div class="order-item-composition-item">• ${formatted}</div>`;
               }).join("")}
             </div>`
           : "";
 
         // Отображаем опции товара (третьими)
-        // Формат: количествоединица название (например "1шт кола")
+        // Формат: количествоединица название (например "1шт кола" или "300г Гречка с овощами")
         const options = Array.isArray(it.options) ? it.options : [];
         const optionsHtml = options.length
           ? `<div class="order-item-composition">
               ${options.map((opt) => {
                 const optName = escapeHtml(opt.title || "Опция");
-                const optQty = Math.max(1, Number(opt.qty || 1));
-                // Формат: количествоединица название (например "1шт кола")
-                return `<div class="order-item-composition-item">• ${optQty}шт ${optName}</div>`;
+                // Если у опции есть вариант (variant_label), используем его вместо количества "шт"
+                const variantLabel = escapeHtml((opt.variant_label || opt.variantLabel || "").trim());
+                let formatted;
+                if (variantLabel) {
+                  // variant_label уже содержит значение с единицей (например "300 г")
+                  formatted = `${variantLabel} ${optName}`;
+                } else {
+                  // Если варианта нет, используем стандартный формат с количеством
+                  const optQty = Math.max(1, Number(opt.qty || 1));
+                  // Формат: количествоединица название (например "1шт кола")
+                  formatted = `${optQty}шт ${optName}`;
+                }
+                return `<div class="order-item-composition-item">• ${formatted}</div>`;
               }).join("")}
             </div>`
           : "";
@@ -1299,6 +1332,320 @@
       }
     });
   });
+
+  // Обработчик кнопки печати
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest('[data-action="order-print"]');
+    if (!btn) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const orderId = state.activeOrderId;
+    if (!orderId) return;
+    
+    const order = state.orders.find((o) => Number(o.id) === Number(orderId));
+    if (!order) return;
+    
+    printOrderReceipt(order);
+  });
+
+  // Функция печати чека через системную печать браузера
+  function printOrderReceipt(order) {
+    // Создаем HTML для чека
+    const receiptHtml = generateReceiptHTML(order);
+    
+    // Вычисляем размеры и позицию для центрирования окна
+    const width = 400;
+    const height = 600;
+    const left = (screen.width / 2) - (width / 2);
+    const top = (screen.height / 2) - (height / 2);
+    
+    // Открываем новое окно с чеком по центру экрана
+    const printWindow = window.open('', '_blank', `width=${width},height=${height},left=${left},top=${top}`);
+    if (!printWindow) {
+      alert('Пожалуйста, разрешите всплывающие окна для печати');
+      return;
+    }
+    
+    printWindow.document.write(receiptHtml);
+    printWindow.document.close();
+    
+    // Ждем загрузки и вызываем печать
+    printWindow.onload = () => {
+      setTimeout(() => {
+        printWindow.print();
+      }, 250);
+    };
+    
+    // Закрываем окно после печати (после закрытия диалога печати)
+    printWindow.addEventListener('afterprint', () => {
+      printWindow.close();
+    });
+    
+    // Также закрываем окно, если пользователь закрыл его вручную
+    // или если диалог печати был отменен (fallback)
+    const checkClosed = setInterval(() => {
+      if (printWindow.closed) {
+        clearInterval(checkClosed);
+      }
+    }, 100);
+  }
+
+  // Функция генерации HTML для чека
+  function generateReceiptHTML(order) {
+    const date = new Date(order.created_at);
+    const dateStr = date.toLocaleString("ru-RU", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    let itemsHtml = '';
+    if (order.items && Array.isArray(order.items)) {
+      order.items.forEach(item => {
+        const name = escapeHtml(item.product_name || item.name || 'Товар');
+        const qty = item.quantity || item.qty || 1;
+        const price = parseFloat(item.price || 0);
+        const total = price * qty;
+        
+        // Варианты товара (первыми)
+        const variants = Array.isArray(item.variants) ? item.variants : [];
+        let variantsHtml = '';
+        if (variants.length) {
+          variantsHtml = '<div class="receipt-composition">';
+          variants.forEach((v) => {
+            const groupTitle = escapeHtml(v.group_title || "Вариант");
+            const variantValue = escapeHtml(v.label || v.value || "");
+            const variantValueTrimmed = variantValue.trim();
+            const groupTitleTrimmed = groupTitle.trim();
+            let formatted;
+            if (variantValueTrimmed && groupTitleTrimmed) {
+              const variantLower = variantValueTrimmed.toLowerCase();
+              const groupLower = groupTitleTrimmed.toLowerCase();
+              if (variantLower.endsWith(" " + groupLower) || variantLower.endsWith(groupLower)) {
+                formatted = variantValue;
+              } else {
+                formatted = `${variantValue} ${groupTitle}`.trim();
+              }
+            } else {
+              formatted = `${variantValue} ${groupTitle}`.trim();
+            }
+            variantsHtml += `<div class="receipt-composition-item">• ${formatted}</div>`;
+          });
+          variantsHtml += '</div>';
+        }
+        
+        // Ингредиенты товара (вторыми)
+        const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+        let ingredientsHtml = '';
+        if (ingredients.length) {
+          ingredientsHtml = '<div class="receipt-composition">';
+          ingredients.forEach((ing) => {
+            const ingName = escapeHtml(ing.name || "Ингредиент");
+            const ingQty = Math.max(1, Number(ing.quantity || ing.qty || 1));
+            let ingUnit = escapeHtml(ing.unit_label || ing.unit || ing.unitLabel || ing.unit_short_title || ing.unit_title || "");
+            if (!ingUnit) {
+              ingUnit = ingQty > 10 ? "г" : "шт";
+            }
+            const formatted = `${ingQty}${ingUnit} ${ingName}`;
+            ingredientsHtml += `<div class="receipt-composition-item">• ${formatted}</div>`;
+          });
+          ingredientsHtml += '</div>';
+        }
+        
+        // Опции товара (третьими)
+        const options = Array.isArray(item.options) ? item.options : [];
+        let optionsHtml = '';
+        if (options.length) {
+          optionsHtml = '<div class="receipt-composition">';
+          options.forEach((opt) => {
+            const optName = escapeHtml(opt.title || "Опция");
+            const variantLabel = escapeHtml((opt.variant_label || opt.variantLabel || "").trim());
+            let formatted;
+            if (variantLabel) {
+              formatted = `${variantLabel} ${optName}`;
+            } else {
+              const optQty = Math.max(1, Number(opt.qty || 1));
+              formatted = `${optQty}шт ${optName}`;
+            }
+            optionsHtml += `<div class="receipt-composition-item">• ${formatted}</div>`;
+          });
+          optionsHtml += '</div>';
+        }
+        
+        itemsHtml += `
+          <div class="receipt-item">
+            <div class="receipt-item-name">${name}</div>
+            <div class="receipt-item-details">${qty} x ${price.toFixed(2)} = ${total.toFixed(2)}</div>
+            ${variantsHtml}
+            ${ingredientsHtml}
+            ${optionsHtml}
+          </div>
+        `;
+      });
+    }
+
+    const total = parseFloat(order.total || order.total_price || 0);
+    const isUrgent = order.is_urgent || order.urgent || order.time_option_code === "urgent";
+
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Чек заказа #${order.id}</title>
+  <style>
+    @media print {
+      @page {
+        size: 80mm auto;
+        margin: 0;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 5mm;
+        font-family: 'Courier New', monospace;
+        font-size: 11pt;
+        line-height: 1.3;
+        width: 70mm;
+        max-width: 70mm;
+      }
+      .no-print {
+        display: none !important;
+      }
+    }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      padding: 5mm;
+      font-family: 'Courier New', monospace;
+      font-size: 11pt;
+      line-height: 1.3;
+      width: 70mm;
+      max-width: 70mm;
+      background: white;
+    }
+    .receipt-header {
+      text-align: center;
+      font-weight: bold;
+      font-size: 16pt;
+      margin-bottom: 10px;
+    }
+    .receipt-date {
+      text-align: center;
+      margin-bottom: 10px;
+      border-bottom: 1px dashed #000;
+      padding-bottom: 10px;
+    }
+    .receipt-section {
+      margin: 10px 0;
+    }
+    .receipt-section-title {
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+    .receipt-item {
+      margin: 5px 0;
+    }
+    .receipt-item-name {
+      font-weight: bold;
+    }
+    .receipt-item-details {
+      margin-left: 10px;
+      font-size: 10pt;
+    }
+    .receipt-composition {
+      margin: 3px 0 3px 15px;
+      font-size: 9pt;
+    }
+    .receipt-composition-item {
+      margin: 2px 0;
+    }
+    .receipt-total {
+      text-align: center;
+      font-weight: bold;
+      font-size: 14pt;
+      margin: 15px 0;
+      border-top: 1px dashed #000;
+      border-bottom: 1px dashed #000;
+      padding: 10px 0;
+    }
+    .receipt-urgent {
+      text-align: center;
+      font-weight: bold;
+      color: #d00;
+      margin: 10px 0;
+    }
+    .receipt-divider {
+      border-top: 1px dashed #000;
+      margin: 10px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="receipt-header">ЗАКАЗ #${order.id}</div>
+  <div class="receipt-date">${dateStr}</div>
+  
+  <div class="receipt-divider"></div>
+  
+  <div class="receipt-section">
+    <div class="receipt-section-title">Клиент:</div>
+    ${order.customer_name ? `<div>${escapeHtml(order.customer_name)}</div>` : ''}
+    ${order.customer_phone ? `<div>${escapeHtml(order.customer_phone)}</div>` : ''}
+  </div>
+  
+  ${(order.address || order.method_title) ? `
+  <div class="receipt-section">
+    <div class="receipt-section-title">Доставка:</div>
+    ${order.method_title ? `<div>${escapeHtml(order.method_title)}</div>` : ''}
+    ${order.address ? `<div>${escapeHtml(order.address)}</div>` : ''}
+    ${order.time_option_title ? `<div>${escapeHtml(order.time_option_title)}</div>` : ''}
+    ${isUrgent ? '<div class="receipt-urgent">⚡ СРОЧНО</div>' : ''}
+  </div>
+  ` : ''}
+  
+  ${order.comment ? `
+  <div class="receipt-section">
+    <div class="receipt-section-title">Комментарий:</div>
+    <div>${escapeHtml(order.comment)}</div>
+  </div>
+  ` : ''}
+  
+  <div class="receipt-divider"></div>
+  
+  <div class="receipt-section">
+    <div class="receipt-section-title">Товары:</div>
+    ${itemsHtml}
+  </div>
+  
+  <div class="receipt-divider"></div>
+  
+  <div class="receipt-total">ИТОГО: ${total.toFixed(2)}</div>
+  
+  ${order.payment_method_title ? `
+  <div class="receipt-section">
+    <div>Оплата: ${escapeHtml(order.payment_method_title)}</div>
+  </div>
+  ` : ''}
+  
+  <div style="margin-top: 20px; text-align: center; font-size: 10pt;">
+    <div>Спасибо за заказ!</div>
+  </div>
+</body>
+</html>
+    `;
+  }
 
   // -----------------------------
   // Init
