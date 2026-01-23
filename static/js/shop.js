@@ -1641,6 +1641,43 @@ function showProductView() {
     showCartView();
   }
 
+  function attachDoubleDelete(btn, onConfirm, { timeout = 2500 } = {}) {
+    const originalHtml = btn.innerHTML;
+    const originalTitle = btn.title || "";
+    let timer = null;
+
+    const reset = () => {
+      btn.classList.remove("is-confirm");
+      btn.dataset.confirming = "";
+      btn.innerHTML = originalHtml;
+      btn.title = originalTitle;
+      btn.setAttribute("aria-label", originalTitle || "Удалить");
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (btn.dataset.confirming === "1") {
+        reset();
+        await onConfirm();
+        return;
+      }
+
+      btn.dataset.confirming = "1";
+      btn.classList.add("is-confirm");
+      btn.innerHTML = "Удалить?";
+      btn.title = "Нажмите ещё раз чтобы удалить";
+      btn.setAttribute("aria-label", "Удалить? Нажмите ещё раз чтобы удалить");
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(reset, timeout);
+    });
+
+    btn.addEventListener("blur", reset);
+  }
+
   function renderAddressList() {
     if (!elAddressList) return;
 
@@ -1727,11 +1764,9 @@ function showProductView() {
       const btnDel = document.createElement("button");
       btnDel.type = "button";
       btnDel.className = "shop-address-action-icon is-danger";
+      btnDel.title = "Удалить";
       btnDel.innerHTML = `<i class="fas fa-times"></i>`;
-      btnDel.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        if (!window.confirm("Удалить адрес?")) return;
-
+      attachDoubleDelete(btnDel, async () => {
         if (token && a.id) {
           try {
             await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
@@ -7439,9 +7474,7 @@ function renderSheetAddressList() {
           bDel.className = "shop-address-action-icon is-danger";
           bDel.title = "Удалить";
           bDel.innerHTML = `<i class="fas fa-times"></i>`;
-          bDel.addEventListener("click", async (e) => {
-            e.stopPropagation();
-            if (!window.confirm("Удалить адрес?")) return;
+          attachDoubleDelete(bDel, async () => {
             try {
               await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
               await reloadAddresses();
@@ -8768,6 +8801,13 @@ function setBottomNavActive(tab) {
   // -----------------------------
 async function init() {
   try {
+    const pathname = String(window.location.pathname || "");
+    if (pathname === "/shop" || pathname === "/shop/") {
+      document.body.classList.add("shop-main");
+    } else {
+      document.body.classList.remove("shop-main");
+    }
+
     await loadCategories();
     await loadUnitConversions();
     renderCategories();
@@ -8876,9 +8916,17 @@ async function init() {
 
         setActiveNav("menu");
 
-        // на мобилке скролл обычно внутри панели каталога, а не window
+        // на мобилке скролл либо внутри панели каталога, либо у body (iOS)
         const scroller = document.querySelector(".shop-products-panel .panel-body");
+        let canScrollPanel = false;
+
         if (scroller && typeof scroller.scrollTo === "function") {
+          const scrollerStyle = window.getComputedStyle(scroller);
+          const overflowY = scrollerStyle ? scrollerStyle.overflowY : "";
+          canScrollPanel = scroller.scrollHeight > scroller.clientHeight && overflowY !== "visible";
+        }
+
+        if (canScrollPanel && scroller) {
           scroller.scrollTo({ top: 0, behavior: "smooth" });
         } else {
           window.scrollTo({ top: 0, behavior: "smooth" });

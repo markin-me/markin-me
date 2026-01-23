@@ -31,6 +31,8 @@
   --shop-radius: 18px;
   --shop-gap: 14px;
   --shop-bottomnav-h: 50px;
+  --shop-sheet-top-gap: 8px;
+  --shop-sheet-scroll-pad: 200px;
 
   /* ===== Масштабирование UI карточек (container queries) ===== */
   --sp-pad: 12px;
@@ -56,6 +58,7 @@ html[data-theme="dark"]{
 
 body.page-shop .main-container{
   height: calc(100vh - var(--header-height));
+  height: calc(100dvh - var(--header-height));
   padding: 14px;
 }
 
@@ -64,6 +67,11 @@ body.page-shop #theme-toggle{
 }
 
 body.page-shop .shop-toolbar-cart{
+  display: none;
+}
+
+/* Подхедер (toolbar) только на главной странице витрины */
+body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   display: none;
 }
 
@@ -96,8 +104,45 @@ body.page-shop .shop-toolbar-cart{
 
 /* мобилка: показываем только товары, категории/корзина через нижнее меню */
 @media (max-width: 768px){
+  body.page-shop{
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  body.page-shop.modal-open,
+  body.page-shop.sheet-open{
+    overflow: hidden;
+  }
+
+  body.page-shop header{
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 140;
+  }
+
+  body.page-shop .center-stack > .panel:first-child{
+    display: none;
+  }
+
+  body.page-shop.shop-main:not(.modal-open):not(.sheet-open) .center-stack > .panel:first-child{
+    display: flex;
+    position: sticky;
+    top: var(--header-height);
+    z-index: 135;
+  }
+
+  body.page-shop .center-stack > .panel:first-child .toolbar{
+    background: var(--color-surface);
+  }
+
   body.page-shop .main-container{
     padding: 12px;
+    padding-top: calc(12px + var(--header-height));
+    height: auto;
+    min-height: calc(100dvh - var(--header-height));
   }
 
   .shop-grid{
@@ -111,7 +156,13 @@ body.page-shop .shop-toolbar-cart{
 
   /* чтобы контент не уезжал под нижний таббар */
   .shop-col-products .panel-body{
-    padding-bottom: calc(var(--shop-bottomnav-h) + 16px);
+    padding-bottom: calc(var(--shop-bottomnav-h) + 24px + env(safe-area-inset-bottom));
+    overflow: visible;
+  }
+
+  body.page-shop .shop-products-panel .panel-body,
+  body.page-shop .center-stack > .panel:last-child > .panel-body{
+    overflow: visible;
   }
 
   body.page-shop #shopProfileBtn{
@@ -851,7 +902,18 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   .shop-cart-sheet .shop-cart-list,
   .shop-cart-sheet .shop-checkout-content,
   .shop-cart-sheet .shop-address-content{
-    padding-bottom: calc(12px + 70px + var(--shop-bottomnav-h) + env(safe-area-inset-bottom));
+    padding-bottom: calc(12px + 70px + var(--shop-bottomnav-h) + var(--shop-sheet-scroll-pad) + env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 768px){
+  .shop-sheet-content,
+  .shop-cart-content,
+  .shop-address-content,
+  .shop-checkout-content,
+  .shop-profile-content,
+  .shop-product-content{
+    padding-bottom: calc(12px + var(--shop-sheet-scroll-pad) + env(safe-area-inset-bottom));
   }
 }
 
@@ -2004,6 +2066,17 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   color: var(--color-danger, var(--shop-danger));
 }
 
+.shop-address-action-icon.is-confirm{
+  width: auto;
+  min-width: 32px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-danger, var(--shop-danger));
+  border-color: var(--color-danger, var(--shop-danger));
+  background: var(--color-surface);
+}
+
 .shop-profile-address-toggle{
   align-self: flex-start;
   width: auto;
@@ -2253,10 +2326,10 @@ body.page-shop .app-modal-body::after{
 
 @media (max-width: 768px){
   body.page-shop .app-modal{
-    top: 12px;
+    top: calc(var(--header-height) + var(--shop-sheet-top-gap));
     bottom: 0;
-    height: calc(100vh - 12px);
-    max-height: calc(100vh - 12px);
+    height: calc(100dvh - var(--header-height) - var(--shop-sheet-top-gap));
+    max-height: calc(100dvh - var(--header-height) - var(--shop-sheet-top-gap));
   }
 }
 
@@ -2359,7 +2432,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 @media (max-width: 768px){
   .shop-profile-content,
   #shopProfileContent{
-    padding: 12px;
+    padding: 12px 12px calc(12px + var(--shop-sheet-scroll-pad) + env(safe-area-inset-bottom));
     box-sizing: border-box;
   }
 }
