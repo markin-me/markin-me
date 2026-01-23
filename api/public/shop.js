@@ -759,7 +759,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const [rows] = await db.query(
         `SELECT
            o.id, o.created_at, o.total_price, o.items, o.public_id,
-           s.title AS status_title, s.code AS status_code,
+           s.title AS status_title, s.code AS status_code, s.is_final AS status_is_final,
            p.title AS payment_title, p.code AS payment_code
          FROM order_orders o
          LEFT JOIN order_statuses s
@@ -785,6 +785,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           total_price: Number(r.total_price || 0),
           status_title: r.status_title || null,
           status_code: r.status_code || null,
+          status_is_final: r.status_is_final ? Number(r.status_is_final) : 0,
           payment_title: r.payment_title || null,
           payment_code: r.payment_code || null,
           items,

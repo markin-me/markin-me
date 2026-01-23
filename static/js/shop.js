@@ -389,6 +389,227 @@
   };
 
   let openCartSheetCtx = null;
+  
+  // Система отслеживания состояния навигации в bottom sheets для обработки кнопки "назад"
+  let sheetNavigationState = {
+    type: null, // 'cart' | 'categories' | 'profile' | 'activeOrders' | 'order' | 'product' | null
+    screen: null, // текущий экран внутри sheet
+    data: null, // дополнительные данные (например, cartKey для product)
+  };
+
+  // Функция обработки кнопки "назад" на Android
+  function handleAndroidBackButton() {
+    // Проверяем, открыт ли bottom sheet через AppModal
+    if (window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen()) {
+      // Обрабатываем навигацию внутри bottom sheet в зависимости от типа
+      if (sheetNavigationState.type === 'cart') {
+        return handleCartSheetBack();
+      } else if (sheetNavigationState.type === 'activeOrders') {
+        return handleActiveOrdersSheetBack();
+      } else if (sheetNavigationState.type === 'categories' || 
+                 sheetNavigationState.type === 'profile') {
+        // Простые bottom sheets без навигации - просто закрываем
+        closeShopSheetIfOpen();
+        return true;
+      }
+    }
+    
+    // Проверяем другие bottom sheets (orders.js, products.js)
+    const orderSheet = document.getElementById('orderSheet');
+    if (orderSheet && orderSheet.classList.contains('is-open')) {
+      // Закрываем bottom sheet из orders.js
+      if (typeof window.closeOrderSheet === 'function') {
+        window.closeOrderSheet();
+      } else {
+        orderSheet.classList.remove('is-open');
+        const backdrop = document.getElementById('sheetBackdrop');
+        if (backdrop) backdrop.classList.remove('is-active');
+        document.body.classList.remove('sheet-open');
+      }
+      return true;
+    }
+    
+    const productSheet = document.getElementById('productSheet');
+    if (productSheet && productSheet.classList.contains('is-open')) {
+      // Закрываем bottom sheet из products.js
+      if (typeof window.closeProductSheet === 'function') {
+        window.closeProductSheet();
+      } else {
+        productSheet.classList.remove('is-open');
+        const backdrop = document.getElementById('productSheetBackdrop');
+        if (backdrop) backdrop.classList.remove('is-active');
+        document.body.classList.remove('sheet-open');
+      }
+      return true;
+    }
+    
+    return false; // Не обработали, пусть браузер делает свое
+  }
+
+  // Обработка кнопки "назад" для корзины
+  function handleCartSheetBack() {
+    if (!openCartSheetCtx) {
+      closeShopSheetIfOpen();
+      return true;
+    }
+    
+    const { checkoutEl, productEl, listEl } = openCartSheetCtx;
+    const addressWrap = checkoutEl?.parentElement?.querySelector('.shop-address-content');
+    const addressListView = addressWrap?.querySelector('.shop-address-list-view');
+    const addressFormView = addressWrap?.querySelector('.shop-address-form-view');
+    
+    // Проверяем текущий экран
+    if (productEl && !productEl.classList.contains('hidden')) {
+      // На экране товара - возвращаемся в корзину или закрываем sheet
+      const cartKey = sheetNavigationState.data?.cartKey;
+      if (cartKey) {
+        showSheetCart();
+        return true;
+      } else {
+        closeShopSheetIfOpen();
+        return true;
+      }
+    } else if (addressFormView && !addressFormView.classList.contains('hidden')) {
+      // На форме адреса - возвращаемся к списку адресов
+      showSheetAddressList();
+      return true;
+    } else if (addressListView && !addressListView.classList.contains('hidden')) {
+      // На списке адресов - возвращаемся к оформлению заказа или корзине
+      if (checkoutEl && !checkoutEl.classList.contains('hidden')) {
+        showSheetCheckout();
+      } else {
+        showSheetCart();
+      }
+      return true;
+    } else if (checkoutEl && !checkoutEl.classList.contains('hidden')) {
+      // На оформлении заказа - возвращаемся в корзину
+      showSheetCart();
+      return true;
+    } else if (listEl && !listEl.classList.contains('hidden')) {
+      // На корзине - закрываем sheet
+      closeShopSheetIfOpen();
+      return true;
+    }
+    
+    // Fallback - закрываем sheet
+    closeShopSheetIfOpen();
+    return true;
+  }
+
+  // Обработка кнопки "назад" для активных заказов
+  function handleActiveOrdersSheetBack() {
+    // Если на деталях заказа - возвращаемся к списку
+    if (sheetNavigationState.screen === 'details') {
+      const savedOrders = window._savedActiveOrdersForBack || [];
+      if (savedOrders && savedOrders.length > 0) {
+        // Находим функцию showActiveOrdersList в области видимости
+        // Она определена внутри функции init, поэтому нужно вызвать её через замыкание
+        // Или используем прямое обращение к функции, если она доступна глобально
+        const activeOrders = window._activeOrders || [];
+        if (activeOrders.length > 1 || savedOrders.length > 1) {
+          // Если заказов несколько, показываем список
+          // Используем прямое обращение к функции через область видимости
+          // Для этого нужно найти функцию в контексте, где она определена
+          // Временно используем обходной путь - обновляем контент напрямую
+          const wrap = document.createElement("div");
+          wrap.className = "shop-active-orders-sheet";
+          
+          const list = document.createElement("div");
+          list.className = "shop-active-orders-list";
+          
+          savedOrders.forEach(order => {
+            const card = document.createElement("div");
+            card.className = "shop-active-order-card";
+            card.style.cursor = "pointer";
+            card.style.padding = "16px";
+            card.style.borderBottom = "1px solid var(--color-border, #e5e5e5)";
+            
+            const header = document.createElement("div");
+            header.style.display = "flex";
+            header.style.justifyContent = "space-between";
+            header.style.alignItems = "center";
+            header.style.marginBottom = "8px";
+            
+            const orderNum = document.createElement("div");
+            orderNum.style.fontWeight = "600";
+            orderNum.textContent = `Заказ #${order.id}`;
+            
+            const status = document.createElement("div");
+            status.style.color = "var(--shop-buy, #f97316)";
+            status.style.fontSize = "14px";
+            status.textContent = order.status_title || "";
+            
+            header.appendChild(orderNum);
+            header.appendChild(status);
+            
+            const meta = document.createElement("div");
+            meta.style.fontSize = "13px";
+            meta.style.color = "var(--color-text-muted, #666)";
+            meta.style.marginBottom = "8px";
+            meta.textContent = new Date(order.created_at).toLocaleString("ru-RU");
+            
+            const footer = document.createElement("div");
+            footer.style.display = "flex";
+            footer.style.justifyContent = "space-between";
+            footer.style.alignItems = "center";
+            
+            const total = document.createElement("div");
+            total.style.fontWeight = "600";
+            total.textContent = money(order.total_price || 0);
+            
+            const itemsCount = document.createElement("div");
+            itemsCount.style.fontSize = "13px";
+            itemsCount.style.color = "var(--color-text-muted, #666)";
+            const itemsNum = order.items_count || (order.items && order.items.length) || 0;
+            itemsCount.textContent = `${itemsNum} ${itemsNum === 1 ? "позиция" : itemsNum < 5 ? "позиции" : "позиций"}`;
+            
+            footer.appendChild(total);
+            footer.appendChild(itemsCount);
+            
+            card.appendChild(header);
+            card.appendChild(meta);
+            card.appendChild(footer);
+            
+            card.addEventListener("click", async () => {
+              await showActiveOrderDetails(order.id);
+            });
+            
+            list.appendChild(card);
+          });
+          
+          wrap.appendChild(list);
+          
+          window.AppModal.setTitle("Активные заказы");
+          window.AppModal.setContent(wrap);
+          
+          // Убираем кнопку назад из хедера
+          const modalHeader = document.querySelector(".app-modal-header");
+          if (modalHeader) {
+            const backBtn = modalHeader.querySelector(".app-modal-back-btn");
+            if (backBtn) {
+              backBtn.remove();
+            }
+          }
+          
+          // Обновляем состояние навигации
+          sheetNavigationState.screen = 'list';
+          return true;
+        } else {
+          // Если заказ один, закрываем sheet
+          closeShopSheetIfOpen();
+          return true;
+        }
+      } else {
+        // Если список пуст, закрываем sheet
+        closeShopSheetIfOpen();
+        return true;
+      }
+    }
+    
+    // На списке или fallback - закрываем sheet
+    closeShopSheetIfOpen();
+    return true;
+  }
   let openProductCtx = null;
   let cartViewMode = "cart";
   let previousPanelMode = "cart";
@@ -5693,6 +5914,11 @@ function openCategoriesSheet() {
 
   wrap.appendChild(list);
 
+  // Обновляем состояние навигации
+  sheetNavigationState.type = 'categories';
+  sheetNavigationState.screen = null;
+  sheetNavigationState.data = null;
+
   setAppModalMode("shop");
   window.AppModal.open({
     title: "Категории",
@@ -5700,6 +5926,10 @@ function openCategoriesSheet() {
     onClose: () => {
       // после закрытия шита возвращаемся в "Главная" (каталог)
       setActiveNav("menu");
+      // Сбрасываем состояние навигации
+      sheetNavigationState.type = null;
+      sheetNavigationState.screen = null;
+      sheetNavigationState.data = null;
       // Обновляем бейдж после закрытия модального окна
       if (typeof window.updateActiveOrdersBadge === "function") {
         window.updateActiveOrdersBadge();
@@ -5889,6 +6119,11 @@ function openCartSheet() {
     }
   }
 
+  // Обновляем состояние навигации при открытии корзины
+  sheetNavigationState.type = 'cart';
+  sheetNavigationState.screen = 'cart';
+  sheetNavigationState.data = null;
+
   setAppModalMode("shop");
   window.AppModal.open({
     title: "Введите адрес",
@@ -5897,6 +6132,10 @@ function openCartSheet() {
       openCartSheetCtx = null;
       if (window.AppModal?.body) window.AppModal.body.classList.remove("shop-cart-sheet-body");
       openProductCtx = null;
+      // Сбрасываем состояние навигации
+      sheetNavigationState.type = null;
+      sheetNavigationState.screen = null;
+      sheetNavigationState.data = null;
       // Обновляем бейдж после закрытия модального окна
       if (typeof window.updateActiveOrdersBadge === "function") {
         window.updateActiveOrdersBadge();
@@ -5951,6 +6190,11 @@ function openCartSheet() {
     // обычный режим шапки (крестик есть)
     setSheetHeaderMode("cart");
 
+    // Обновляем состояние навигации
+    sheetNavigationState.type = 'cart';
+    sheetNavigationState.screen = 'checkout';
+    sheetNavigationState.data = null;
+
     // Создаем контент оформления заказа
     await openCheckoutView({
       container: checkoutWrap,
@@ -5979,6 +6223,11 @@ function openCartSheet() {
     // cart mode header: вернуть ×, убрать ←/♡
     setSheetHeaderMode("cart");
 
+    // Обновляем состояние навигации
+    sheetNavigationState.type = 'cart';
+    sheetNavigationState.screen = 'cart';
+    sheetNavigationState.data = null;
+
     openProductCtx = null;
   }
 
@@ -5994,6 +6243,11 @@ function openCartSheet() {
 
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("Введите адрес");
+
+    // Обновляем состояние навигации
+    sheetNavigationState.type = 'cart';
+    sheetNavigationState.screen = 'addressList';
+    sheetNavigationState.data = null;
 
     renderSheetAddressList();
   }
@@ -6026,6 +6280,11 @@ function openCartSheet() {
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("Введите адрес");
 
+    // Обновляем состояние навигации
+    sheetNavigationState.type = 'cart';
+    sheetNavigationState.screen = 'addressForm';
+    sheetNavigationState.data = null;
+
     setTimeout(() => {
       try { get("street")?.focus?.(); } catch {}
     }, 0);
@@ -6047,6 +6306,11 @@ function openCartSheet() {
     // - Если cartKey есть (из корзины) - вернуться в корзину
     // - Если cartKey нет (из каталога) - закрыть sheet и вернуться в каталог
     const onBack = cartKey ? showSheetCart : closeShopSheetIfOpen;
+    
+    // Обновляем состояние навигации
+    sheetNavigationState.type = 'cart';
+    sheetNavigationState.screen = 'product';
+    sheetNavigationState.data = { cartKey: cartKey || null };
     
     setSheetHeaderMode("product", { onBack });
     renderProductDetailsInto(productWrap, product, { onBack, cartKey });
@@ -7548,6 +7812,11 @@ function renderSheetAddressList() {
       initialTab,
     });
 
+    // Обновляем состояние навигации
+    sheetNavigationState.type = 'profile';
+    sheetNavigationState.screen = null;
+    sheetNavigationState.data = null;
+
     setAppModalMode("shop");
     const cleanupMenu = mountProfileModalMenu({
       onEdit: () => ctx.showEdit(),
@@ -7562,6 +7831,10 @@ function renderSheetAddressList() {
       onClose: () => {
         cleanupMenu();
         setActiveNav("menu");
+        // Сбрасываем состояние навигации
+        sheetNavigationState.type = null;
+        sheetNavigationState.screen = null;
+        sheetNavigationState.data = null;
         // Обновляем бейдж после закрытия модального окна
         if (typeof window.updateActiveOrdersBadge === "function") {
           window.updateActiveOrdersBadge();
@@ -8161,6 +8434,43 @@ async function init() {
     if (elNavCart) elNavCart.addEventListener("click", openCartSheet);
     if (elNavProfile) elNavProfile.addEventListener("click", openProfileSheet);
 
+    // Обработчик кнопки "назад" на Android (popstate)
+    // Добавляем запись в историю при открытии bottom sheet, чтобы можно было обработать "назад"
+    let originalOpen = window.AppModal?.open;
+    let isOpeningSheet = false;
+    if (originalOpen && typeof originalOpen === 'function') {
+      window.AppModal.open = function(opts) {
+        // Добавляем запись в историю перед открытием только если sheet еще не открыт
+        if (!isOpeningSheet && (!window.AppModal.isOpen || !window.AppModal.isOpen())) {
+          isOpeningSheet = true;
+          window.history.pushState({ sheet: true }, '', window.location.href);
+          setTimeout(() => {
+            isOpeningSheet = false;
+          }, 100);
+        }
+        return originalOpen.call(this, opts);
+      };
+    }
+
+    // Глобальный обработчик popstate для всех bottom sheets
+    // Используем флаг, чтобы избежать конфликтов с другими обработчиками
+    let isHandlingBackButton = false;
+    window.addEventListener("popstate", (e) => {
+      if (isHandlingBackButton) return;
+      
+      if (handleAndroidBackButton()) {
+        // Предотвращаем стандартное поведение браузера
+        e.preventDefault();
+        e.stopPropagation();
+        // Добавляем запись обратно в историю, чтобы можно было снова нажать "назад"
+        isHandlingBackButton = true;
+        window.history.pushState({ sheet: true }, '', window.location.href);
+        setTimeout(() => {
+          isHandlingBackButton = false;
+        }, 0);
+      }
+    });
+
     // "Главная" (домик):
     // 1) если открыт любой шит/модалка — закрываем и возвращаемся в каталог
     // 2) если ничего не открыто — скроллим каталог наверх (внутренний скролл-контейнер на мобилке)
@@ -8248,12 +8558,11 @@ async function init() {
         const json = await apiJson("/api/public/me/orders");
         const orders = Array.isArray(json.data) ? json.data : [];
         
-        // Считаем активные заказы (статусы: "new" или другие не завершенные)
-        // Активными считаем заказы со статусом "new" или без статуса "completed"/"cancelled"
-        const activeStatusCodes = ["new", "processing", "preparing", "ready", "delivering"];
+        // Считаем активные заказы: все заказы с нефинальными статусами
+        // Активными считаем заказы, у которых статус не является финальным (is_final !== 1)
         const activeOrders = orders.filter(order => {
-          const statusCode = (order.status_code || "").toLowerCase();
-          return activeStatusCodes.includes(statusCode) || (!statusCode && order.status_title);
+          const isFinal = Number(order.status_is_final || 0) === 1;
+          return !isFinal;
         });
 
         // Сохраняем активные заказы в глобальную переменную
@@ -8398,6 +8707,11 @@ async function init() {
     // Показать список активных заказов
     function showActiveOrdersList(orders) {
       if (!window.AppModal) return;
+      
+      // Обновляем состояние навигации
+      sheetNavigationState.type = 'activeOrders';
+      sheetNavigationState.screen = 'list';
+      sheetNavigationState.data = null;
       
       // Проверяем, что orders не пустой
       if (!orders || !Array.isArray(orders) || orders.length === 0) {
@@ -8585,11 +8899,20 @@ async function init() {
       
       wrap.appendChild(list);
       
+      // Обновляем состояние навигации
+      sheetNavigationState.type = 'activeOrders';
+      sheetNavigationState.screen = 'list';
+      sheetNavigationState.data = null;
+
       setAppModalMode("shop");
       window.AppModal.open({
         title: "Активные заказы",
         content: wrap,
         onClose: () => {
+          // Сбрасываем состояние навигации
+          sheetNavigationState.type = null;
+          sheetNavigationState.screen = null;
+          sheetNavigationState.data = null;
           // Показываем приоткрытый bottom sheet обратно после закрытия
           if (elActiveOrdersSheetCollapsed && typeof window.updateActiveOrdersBadge === "function") {
             window.updateActiveOrdersBadge();
@@ -8611,11 +8934,20 @@ async function init() {
       window._savedActiveOrdersForBack = [...activeOrders]; // Сохраняем копию
       const hasMultipleOrders = activeOrders.length > 1;
       
+      // Обновляем состояние навигации
+      sheetNavigationState.type = 'activeOrders';
+      sheetNavigationState.screen = 'details';
+      sheetNavigationState.data = { orderId };
+      
       setAppModalMode("shop");
       window.AppModal.open({
         title: "Детали заказа",
         content: wrap,
         onClose: () => {
+          // Сбрасываем состояние навигации
+          sheetNavigationState.type = null;
+          sheetNavigationState.screen = null;
+          sheetNavigationState.data = null;
           // Показываем приоткрытый bottom sheet обратно после закрытия
           if (elActiveOrdersSheetCollapsed && typeof window.updateActiveOrdersBadge === "function") {
             window.updateActiveOrdersBadge();
@@ -8889,8 +9221,13 @@ async function init() {
       setInterval(checkPathnameChange, 500);
       
       // Также слушаем события popstate (кнопка назад/вперед)
+      // Примечание: основной обработчик popstate для bottom sheets добавлен в секции Nav выше
+      // Здесь только обновляем бейдж, если не обработали bottom sheet
       window.addEventListener("popstate", () => {
-        updateActiveOrdersBadge();
+        // Если bottom sheet не был обработан, просто обновляем бейдж
+        if (!(window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen())) {
+          updateActiveOrdersBadge();
+        }
       });
     }
   } catch (e) {

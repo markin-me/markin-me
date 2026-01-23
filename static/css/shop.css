@@ -2698,3 +2698,11 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   display: grid;
   gap: 10px;
 }
+
+.shop-cart-items .cart-title {
+  white-space: normal;
+  text-overflow: clip;
+  overflow: visible;
+  word-wrap: break-word;
+  line-height: 1.4;
+}
