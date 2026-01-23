@@ -15,6 +15,7 @@
 
   let currentOnSave = null;
   let currentOnClose = null;
+  let closeSeq = 0;
 
   let lastActiveEl = null;
 
@@ -133,6 +134,7 @@
   function close(reason) {
     if (!isOpen()) return;
 
+    const closeToken = ++closeSeq;
     setBusy(false);
 
     backdrop.classList.remove("is-active");
@@ -144,6 +146,8 @@
 
     // очистка
     setTimeout(() => {
+      if (isOpen()) return;
+      if (closeSeq !== closeToken) return;
       clearBody();
       setTitle("");
       setButtons({});

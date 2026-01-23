@@ -838,8 +838,12 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 @media (max-width: 768px){
-  .shop-cart-sheet-footer,
-  .shop-cart-footer{
+  /* Скрываем footer в sheet на мобильных, используем единый блок внизу */
+  .shop-cart-sheet-footer {
+    display: none !important;
+  }
+  
+  .shop-cart-footer {
     bottom: calc(var(--shop-bottomnav-h) + 8px + env(safe-area-inset-bottom));
   }
   
@@ -964,12 +968,8 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 
 .shop-nav,
 .shop-bottom-nav{
-  position: fixed;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: env(safe-area-inset-bottom);
-
-  width: min(520px, calc(100% - 24px));
+  position: relative;
+  width: 100%;
   height: 50px;
 
   display: none;
@@ -982,8 +982,6 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   border: 1px solid var(--color-border);
   border-radius: 16px;
   box-shadow: 0 10px 22px rgba(0,0,0,.10);
-
-  z-index: 120;
 }
 
 /* показываем только на мобилке */
@@ -1149,7 +1147,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 
 @media (max-width: 768px){
   .shop-pd-footer{
-    bottom: calc(var(--shop-bottomnav-h) + 8px + env(safe-area-inset-bottom));
+    display: none; /* Скрываем на мобильных, используем единый блок внизу */
   }
 }
 
@@ -1821,6 +1819,12 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   z-index: 10;
 }
 
+.shop-profile-photo-menu{
+  left: 0;
+  right: auto;
+  z-index: 20;
+}
+
 .shop-profile-menu.hidden{
   display: none;
 }
@@ -1849,6 +1853,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   grid-template-columns: 160px 1fr;
   gap: 16px;
   align-items: start;
+  overflow: visible;
 }
 
 .shop-profile-top.hidden,
@@ -1879,6 +1884,8 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   display: grid;
   gap: 8px;
   align-content: start;
+  position: relative;
+  overflow: visible;
 }
 
 .shop-profile-photo-actions{
@@ -2155,6 +2162,37 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 .shop-checkout-time-input{
   margin-top: 8px;
 }
+/* Серый qty-pill в карточке товара на мобильных */
+@media (max-width: 768px) {
+  .shop-mobile-product-actions .qty-pill {
+    background: var(--color-surface-2) !important;
+    color: var(--color-text) !important;
+    border: 1px solid var(--color-border) !important;
+  }
+  
+  .shop-mobile-product-actions .qty-pill:hover {
+    background: var(--color-surface-2) !important;
+  }
+  
+  .shop-mobile-product-actions .qty-pill__btn {
+    color: var(--color-text-muted) !important;
+    background: transparent !important;
+  }
+  
+  .shop-mobile-product-actions .qty-pill__btn:not(.is-disabled):hover {
+    color: var(--color-text) !important;
+    background: var(--shop-hover-dark) !important;
+  }
+  
+  .shop-mobile-product-actions .qty-pill__center {
+    color: var(--color-text) !important;
+  }
+  
+  .shop-mobile-product-actions .qty-pill__btn.is-disabled {
+    opacity: 0.4;
+  }
+}
+
 .shop-pd-footer .qty-pill{
   flex: 1;
   justify-content: center;
@@ -2177,9 +2215,14 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   color: var(--color-text);
 }
 
+.shop-profile-name-value{
+  display: grid;
+  gap: 6px;
+}
+
 .shop-profile-name-input{
   width: 100%;
-  margin-top: 6px;
+  margin-top: 0;
 }
 
 .shop-profile-name-actions{

@@ -1,4 +1,34 @@
-<div class="shop-mobile-active-orders-wrapper">
+<div class="shop-mobile-bottom-container">
+  <!-- Кнопки добавления в корзину (показываются только в карточке товара) -->
+  <div class="shop-mobile-product-actions hidden" id="shopMobileProductActions">
+    <div class="qty-pill-wrap" id="shopMobileQtyWrap"></div>
+    <button class="shop-checkout-btn shop-pd-action" id="shopMobileAddToCartBtn" type="button">
+      <span class="shop-checkout-total shop-pd-action-price" id="shopMobileProductPrice">0 ₽</span>
+      <span class="shop-pd-action-label" id="shopMobileProductLabel">в корзину</span>
+    </button>
+  </div>
+
+  <!-- Кнопки корзины (Оформить/Заказать) - показываются в корзине -->
+  <div class="shop-mobile-cart-actions hidden" id="shopMobileCartActions">
+    <div class="shop-mobile-cart-actions-cart hidden" id="shopMobileCartActionsCart">
+      <button class="shop-cart-clear" id="shopMobileCartClearBtn" type="button" title="Очистить корзину" aria-label="Очистить корзину">×</button>
+      <button class="shop-checkout-btn" id="shopMobileCheckoutBtn" type="button">
+        Оформить <span class="shop-checkout-total" id="shopMobileCartTotal">0 ₽</span>
+      </button>
+    </div>
+    <div class="shop-mobile-cart-actions-checkout hidden" id="shopMobileCartActionsCheckout">
+      <button class="shop-checkout-back" id="shopMobileCheckoutBackBtn" type="button" aria-label="Назад в корзину" title="Назад в корзину">
+        <i class="fas fa-arrow-left"></i>
+      </button>
+      <button class="shop-checkout-submit-btn" id="shopMobileCheckoutSubmitBtn" type="button">Заказать</button>
+    </div>
+  </div>
+
+  <!-- Ботомщит активного заказа (показывается когда есть активный заказ) -->
+  <div class="shop-mobile-address-actions hidden" id="shopMobileAddressActions">
+    <button class="shop-checkout-btn shop-mobile-address-save" id="shopMobileAddressSaveBtn" type="button">Сохранить</button>
+    <button class="shop-mobile-address-cancel" id="shopMobileAddressCancelBtn" type="button">Отмена</button>
+  </div>
   <div class="shop-active-orders-sheet-collapsed hidden" id="shopActiveOrdersSheetCollapsed">
     <div class="shop-active-orders-handle"></div>
     <div class="shop-active-orders-collapsed-content">
@@ -6,27 +36,28 @@
       <span class="shop-active-orders-count"></span>
     </div>
   </div>
+
+  <!-- Навигация (всегда видна) -->
+  <nav class="shop-nav" aria-label="Навигация">
+    <button class="shop-nav-btn is-active" id="shopNavMenu" type="button" data-tab="menu" aria-label="Главная">
+      <i class="fas fa-house"></i>
+    </button>
+
+    <button class="shop-nav-btn" id="shopNavCategories" type="button" data-tab="categories" aria-label="Категории">
+      <i class="fas fa-list"></i>
+    </button>
+
+    <button class="shop-nav-btn" id="shopNavCart" type="button" data-tab="cart" aria-label="Корзина">
+      <i class="fas fa-shopping-cart"></i>
+      <span class="shop-nav-badge hidden" id="shopNavCartBadge">0</span>
+    </button>
+
+    <button class="shop-nav-btn" id="shopNavFav" type="button" data-tab="fav" aria-label="Избранное">
+      <i class="far fa-heart"></i>
+    </button>
+
+    <button class="shop-nav-btn" id="shopNavProfile" type="button" data-tab="profile" aria-label="Профиль">
+      <i class="fas fa-user"></i>
+    </button>
+  </nav>
 </div>
-
-<nav class="shop-nav" aria-label="Навигация">
-  <button class="shop-nav-btn is-active" id="shopNavMenu" type="button" data-tab="menu" aria-label="Главная">
-    <i class="fas fa-house"></i>
-  </button>
-
-  <button class="shop-nav-btn" id="shopNavCategories" type="button" data-tab="categories" aria-label="Категории">
-    <i class="fas fa-list"></i>
-  </button>
-
-  <button class="shop-nav-btn" id="shopNavCart" type="button" data-tab="cart" aria-label="Корзина">
-    <i class="fas fa-shopping-cart"></i>
-    <span class="shop-nav-badge hidden" id="shopNavCartBadge">0</span>
-  </button>
-
-  <button class="shop-nav-btn" id="shopNavFav" type="button" data-tab="fav" aria-label="Избранное">
-    <i class="far fa-heart"></i>
-  </button>
-
-  <button class="shop-nav-btn" id="shopNavProfile" type="button" data-tab="profile" aria-label="Профиль">
-    <i class="fas fa-user"></i>
-  </button>
-</nav>

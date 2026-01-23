@@ -72,6 +72,34 @@
   const elActiveOrdersBadge = $("#shopActiveOrdersBadge");
   const elActiveOrdersBadgeMobile = $("#shopActiveOrdersBadgeMobile");
   const elActiveOrdersSheetCollapsed = $("#shopActiveOrdersSheetCollapsed");
+  
+  // Мобильные кнопки добавления в корзину
+  const elMobileProductActions = $("#shopMobileProductActions");
+  const elMobileQtyWrap = $("#shopMobileQtyWrap");
+  const elMobileAddToCartBtn = $("#shopMobileAddToCartBtn");
+  const elMobileProductPrice = $("#shopMobileProductPrice");
+  const elMobileProductLabel = $("#shopMobileProductLabel");
+  
+  // Мобильные кнопки корзины
+  const elMobileCartActions = $("#shopMobileCartActions");
+  const elMobileCartActionsCart = $("#shopMobileCartActionsCart");
+  const elMobileCartActionsCheckout = $("#shopMobileCartActionsCheckout");
+  const elMobileCartClearBtn = $("#shopMobileCartClearBtn");
+  const elMobileCheckoutBtn = $("#shopMobileCheckoutBtn");
+  const elMobileCartTotal = $("#shopMobileCartTotal");
+  const elMobileCheckoutBackBtn = $("#shopMobileCheckoutBackBtn");
+  const elMobileCheckoutSubmitBtn = $("#shopMobileCheckoutSubmitBtn");
+  const elMobileAddressActions = $("#shopMobileAddressActions");
+  const elMobileAddressSaveBtn = $("#shopMobileAddressSaveBtn");
+  const elMobileAddressCancelBtn = $("#shopMobileAddressCancelBtn");
+  
+  // Состояние мобильных кнопок
+  let mobileProductActionsState = {
+    qtyPill: null,
+    onQtyMinus: null,
+    onQtyPlus: null,
+    onAddToCart: null,
+  };
 
   // desktop cart footer
   const elCartFooter = $("#shopCartFooter");
@@ -471,6 +499,10 @@
       }
     } else if (addressFormView && !addressFormView.classList.contains('hidden')) {
       // На форме адреса - возвращаемся к списку адресов
+      if (openCartSheetCtx?.addressBackMode === "profile") {
+        returnToProfileFromSheet();
+        return true;
+      }
       showSheetAddressList();
       return true;
     } else if (addressListView && !addressListView.classList.contains('hidden')) {
@@ -1277,7 +1309,7 @@ function setSheetHeaderMode(mode, { onBack } = {}) {
   favBtn.classList.toggle("hidden", !isProduct);
 
   if (closeBtn) closeBtn.classList.toggle("hidden", isProduct || isOrder);
-  if (titleEl && isProduct) titleEl.classList.toggle("hidden", isProduct);
+  if (titleEl) titleEl.classList.toggle("hidden", isProduct);
 }
 
   function setCartFooterMode(mode) {
@@ -1591,6 +1623,10 @@ function showProductView() {
 
   function backAfterAddressSelection() {
     const back = state._addressListBackMode || state._addressFormBackMode || "cart";
+    if (back === "profile") {
+      openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
+      return;
+    }
     if (back === "checkout" && elCheckoutContent) {
       showCheckoutView();
       openCheckoutView({
@@ -1831,6 +1867,8 @@ async function initAddresses() {
         } else {
           showCartView();
         }
+      } else if (back === "profile") {
+        openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
       } else showCartView();
     });
   }
@@ -1872,7 +1910,9 @@ async function initAddresses() {
           await refreshAddressState();
 
           // после сохранения — вернёмся назад
-          if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
+          if (state._addressFormBackMode === "profile") {
+            await openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
+          } else if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
             showCheckoutView();
             openCheckoutView({
               container: elCheckoutContent,
@@ -1889,7 +1929,9 @@ async function initAddresses() {
           saveAddressDraft(payload);
           setSelectedAddress({ ...payload, _local: true });
 
-          if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
+          if (state._addressFormBackMode === "profile") {
+            await openProfilePanel(null, { forceOpen: true, initialTab: "addresses" });
+          } else if (state._addressFormBackMode === "checkout" && elCheckoutContent) {
             showCheckoutView();
             openCheckoutView({
               container: elCheckoutContent,
@@ -2647,12 +2689,21 @@ async function initAddresses() {
         if (openCartSheetCtx.checkoutBtn) {
           openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
           const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
-          if (tspan) tspan.textContent = money(items.reduce((sum, i) => {
+          const total = items.reduce((sum, i) => {
             const base = Number(i.variant_unit_price || i.product?.price || 0);
             const opt = optionItemsTotal(i.option_items);
             const ing = Number(i.ingredient_price_diff || 0);
             return sum + (base + opt + ing) * i.qty;
-          }, 0));
+          }, 0);
+          if (tspan) tspan.textContent = money(total);
+          // Синхронизируем с мобильными кнопками
+          const isMobile = window.matchMedia("(max-width: 768px)").matches;
+          if (isMobile && elMobileCartTotal) {
+            elMobileCartTotal.textContent = money(total);
+          }
+          if (isMobile && elMobileCheckoutBtn) {
+            elMobileCheckoutBtn.disabled = items.length === 0;
+          }
         }
         if (openCartSheetCtx.totalEl) {
           openCartSheetCtx.totalEl.textContent = money(items.reduce((sum, i) => {
@@ -2835,6 +2886,13 @@ function updateCartBadge() {
       const { items } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
       if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
       if (openCartSheetCtx.checkoutBtn) openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
+    }
+
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile && elMobileCartActions) {
+      elMobileCartActions.classList.add("hidden");
+      if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
+      if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
     }
   }
 
@@ -5453,7 +5511,7 @@ optionGroups.forEach((group) => {
     centerText: String(qty),
   });
 
-  const updateQtyUi = () => {
+  let updateQtyUi = () => {
     if (qtyPill?.center) qtyPill.center.textContent = String(qty);
     // минус блокируем визуально на 1
     if (qtyPill?.btnMinus) {
@@ -5515,7 +5573,7 @@ optionGroups.forEach((group) => {
     return currentTotal - baseTotal;
   };
 
-  const updateActionText = () => {
+  let updateActionText = () => {
     if (!actionBtnRef) return;
 
     const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
@@ -5645,9 +5703,9 @@ optionGroups.forEach((group) => {
     {
       onBack,
       mode: editMode ? "edit" : "add",
-      onSelectionChange: updateActionText,
+      onSelectionChange: () => updateActionText(),
       onIngredientChange,
-      onVariantChange: updateActionText,
+      onVariantChange: () => updateActionText(),
       qtyPill,
       onQtyMinus,
       onQtyPlus,
@@ -5660,6 +5718,88 @@ optionGroups.forEach((group) => {
 
   updateQtyUi();
   updateActionText();
+
+  // На мобильных: синхронизируем кнопки с единым блоком
+  const isMobile = window.matchMedia("(max-width: 768px)").matches;
+  if (isMobile && elMobileProductActions && elMobileQtyWrap && elMobileAddToCartBtn) {
+    // Скрываем footer на мобильных
+    const footer = wrap.querySelector(".shop-pd-footer");
+    if (footer) footer.style.display = "none";
+    
+    // Показываем мобильные кнопки
+    elMobileProductActions.classList.remove("hidden");
+    if (elMobileAddressActions) {
+      elMobileAddressActions.classList.add("hidden");
+    }
+    if (elMobileCartActions) {
+      elMobileCartActions.classList.add("hidden");
+      if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
+      if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
+    }
+    
+    // Клонируем qtyPill в мобильный блок
+    if (elMobileQtyWrap && qtyPill?.pill) {
+      elMobileQtyWrap.innerHTML = "";
+      const clonedPill = qtyPill.pill.cloneNode(true);
+      elMobileQtyWrap.appendChild(clonedPill);
+      
+      // Подключаем обработчики
+      const clonedMinus = clonedPill.querySelector(".qty-pill__btn--minus");
+      const clonedPlus = clonedPill.querySelector(".qty-pill__btn--plus");
+      if (clonedMinus) clonedMinus.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); onQtyMinus(); });
+      if (clonedPlus) clonedPlus.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); onQtyPlus(); });
+    }
+    
+    // Обновляем функцию updateActionText для синхронизации с мобильной кнопкой
+    const originalUpdateActionText = updateActionText;
+    updateActionText = () => {
+      originalUpdateActionText();
+      if (elMobileProductPrice && elMobileProductLabel) {
+        const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
+        const optionTotal = optionItemsTotal(selectedItems);
+        const variantUnitPrice = getVariantUnitPrice(product, variants, variantState);
+        const basePrice = Number(variantUnitPrice || 0) + optionTotal;
+        const ingredientsPriceDiff = calculateIngredientPrice();
+        const unitPrice = basePrice + ingredientsPriceDiff;
+        const totalPrice = unitPrice * Number(qty || 1);
+        elMobileProductPrice.textContent = money(totalPrice);
+        elMobileProductLabel.textContent = editMode ? "Сохранить" : "в корзину";
+      }
+      // Обновляем qty в клонированном pill
+      if (elMobileQtyWrap) {
+        const clonedCenter = elMobileQtyWrap.querySelector(".qty-pill__center");
+        if (clonedCenter) clonedCenter.textContent = String(qty);
+        const clonedMinus = elMobileQtyWrap.querySelector(".qty-pill__btn--minus");
+        if (clonedMinus) clonedMinus.classList.toggle("is-disabled", qty <= 1);
+      }
+    };
+    
+    // Обновляем функцию updateQtyUi для синхронизации
+    const originalUpdateQtyUi = updateQtyUi;
+    updateQtyUi = () => {
+      originalUpdateQtyUi();
+      if (elMobileQtyWrap) {
+        const clonedCenter = elMobileQtyWrap.querySelector(".qty-pill__center");
+        if (clonedCenter) clonedCenter.textContent = String(qty);
+        const clonedMinus = elMobileQtyWrap.querySelector(".qty-pill__btn--minus");
+        if (clonedMinus) clonedMinus.classList.toggle("is-disabled", qty <= 1);
+      }
+    };
+    
+    // Подключаем обработчик к мобильной кнопке
+    elMobileAddToCartBtn.addEventListener("click", () => {
+      actionBtn.click();
+    });
+    
+    // Обновляем сразу
+    updateActionText();
+    updateQtyUi();
+    
+    // Скрываем ботомщит активного заказа при открытии карточки товара
+    if (elActiveOrdersSheetCollapsed) {
+      elActiveOrdersSheetCollapsed.classList.add("hidden");
+    }
+  }
 
   container.appendChild(wrap);
 
@@ -5778,6 +5918,16 @@ optionGroups.forEach((group) => {
       }
     }
 
+    // На мобильных: скрываем мобильные кнопки при закрытии карточки
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile && elMobileProductActions) {
+      elMobileProductActions.classList.add("hidden");
+      // Обновляем ботомщит активного заказа
+      if (typeof window.updateActiveOrdersBadge === "function") {
+        window.updateActiveOrdersBadge();
+      }
+    }
+
     // Закрываем карточку и показываем корзину
     if (onBack && typeof onBack === "function") {
       onBack();
@@ -5815,7 +5965,26 @@ optionGroups.forEach((group) => {
       // Принудительно обнуляем контекст, чтобы следующее открытие создало новый sheet
       openCartSheetCtx = null;
       openProductCtx = null;
+      
+      // На мобильных: скрываем мобильные кнопки при закрытии sheet
+      if (elMobileProductActions) {
+        elMobileProductActions.classList.add("hidden");
+      }
+      if (elMobileAddressActions) {
+        elMobileAddressActions.classList.add("hidden");
+      }
+      // Обновляем ботомщит активного заказа
+      if (typeof window.updateActiveOrdersBadge === "function") {
+        window.updateActiveOrdersBadge();
+      }
     }
+  }
+
+  function returnToProfileFromSheet() {
+    closeShopSheetIfOpen();
+    setTimeout(() => {
+      openProfileSheet({ initialTab: "addresses" });
+    }, 0);
   }
 
   function clearProfileModalMenu() {
@@ -5866,6 +6035,7 @@ function openCategoriesSheet() {
   sheetNavigationState.data = null;
 
   setAppModalMode("shop");
+  setSheetHeaderMode("");
   window.AppModal.open({
     title: "Категории",
     content: wrap, // <-- важно: передаём wrap, чтобы был padding/scroll
@@ -6027,6 +6197,54 @@ function openCartSheet() {
   footer.classList.toggle("hidden", items.length === 0);
   btn.disabled = items.length === 0;
   totalSpan.textContent = money(total);
+  
+  // Синхронизируем с мобильными кнопками
+  const isMobile = window.matchMedia("(max-width: 768px)").matches;
+  if (isMobile && elMobileCartActions && elMobileCartTotal && elMobileCheckoutBtn) {
+    // Подключаем обработчики к мобильным кнопкам
+    if (elMobileCheckoutBtn) {
+      elMobileCheckoutBtn.addEventListener("click", () => btn.click());
+    }
+    if (elMobileCartClearBtn) {
+      if (!elMobileCartClearBtn.dataset.twostepClear) {
+        attachTwoStepClear(elMobileCartClearBtn, () => clearCartAll());
+        elMobileCartClearBtn.dataset.twostepClear = "1";
+      }
+    }
+    if (elMobileCheckoutBackBtn) {
+      elMobileCheckoutBackBtn.addEventListener("click", () => backBtn.click());
+    }
+    if (elMobileCheckoutSubmitBtn) {
+      elMobileCheckoutSubmitBtn.addEventListener("click", () => submitBtn.click());
+    }
+    
+    // Показываем мобильные кнопки
+    elMobileCartActions.classList.remove("hidden");
+    if (elMobileCartActionsCart) elMobileCartActionsCart.classList.remove("hidden");
+    if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
+    
+    // Синхронизируем состояние
+    elMobileCartTotal.textContent = money(total);
+    elMobileCheckoutBtn.disabled = items.length === 0;
+    
+    // Скрываем ботомщит активного заказа при открытии корзины
+    if (elActiveOrdersSheetCollapsed) {
+      elActiveOrdersSheetCollapsed.classList.add("hidden");
+    }
+    
+    // Скрываем кнопки товара если они были показаны
+    if (elMobileProductActions) {
+      elMobileProductActions.classList.add("hidden");
+    }
+  }
+  
+  // Синхронизируем с мобильными кнопками
+  if (isMobile && elMobileCartTotal) {
+    elMobileCartTotal.textContent = money(total);
+  }
+  if (isMobile && elMobileCheckoutBtn) {
+    elMobileCheckoutBtn.disabled = items.length === 0;
+  }
 
   // ===== helpers title =====
   function applySheetAddressTitle() {
@@ -6075,6 +6293,15 @@ function openCartSheet() {
     title: "Введите адрес",
     content: wrap,
     onClose: () => {
+      // Скрываем мобильные кнопки корзины при закрытии
+      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      if (isMobile && elMobileCartActions) {
+        elMobileCartActions.classList.add("hidden");
+      }
+      if (isMobile && elMobileAddressActions) {
+        elMobileAddressActions.classList.add("hidden");
+      }
+      
       openCartSheetCtx = null;
       if (window.AppModal?.body) window.AppModal.body.classList.remove("shop-cart-sheet-body");
       openProductCtx = null;
@@ -6113,6 +6340,8 @@ function openCartSheet() {
     clearBtn,
     checkoutEl: checkoutWrap,
     productEl: productWrap,
+    addressBackMode: null,
+    showSheetAddressForm,
     showSheetProduct,
   };
 
@@ -6128,6 +6357,16 @@ function openCartSheet() {
     productWrap.classList.add("hidden");
 
     setCartSheetFooterMode(openCartSheetCtx, "checkout");
+    
+    // Синхронизируем мобильные кнопки
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile && elMobileCartActionsCart && elMobileCartActionsCheckout) {
+      elMobileCartActionsCart.classList.add("hidden");
+      elMobileCartActionsCheckout.classList.remove("hidden");
+    }
+    if (isMobile && elMobileAddressActions) {
+      elMobileAddressActions.classList.add("hidden");
+    }
 
     // title = адрес, без стрелок/иконок
     clearSheetAddressTitleMode();
@@ -6162,9 +6401,39 @@ function openCartSheet() {
     if (openCartSheetCtx?.checkoutBtn) {
       openCartSheetCtx.checkoutBtn.disabled = !hasItems;
     }
+    if (openCartSheetCtx) {
+      openCartSheetCtx.addressBackMode = null;
+    }
 
     clearSheetAddressTitleMode();
     applySheetAddressTitle();
+    
+    // На мобильных: скрываем мобильные кнопки товара, показываем кнопки корзины
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile) {
+      if (elMobileProductActions) {
+        elMobileProductActions.classList.add("hidden");
+      }
+      if (elMobileCartActions && hasItems) {
+        elMobileCartActions.classList.remove("hidden");
+      } else if (elMobileCartActions && !hasItems) {
+        elMobileCartActions.classList.add("hidden");
+      }
+      if (elMobileAddressActions) {
+        elMobileAddressActions.classList.add("hidden");
+      }
+      if (elMobileCartActionsCart && elMobileCartActionsCheckout) {
+        elMobileCartActionsCart.classList.remove("hidden");
+        elMobileCartActionsCheckout.classList.add("hidden");
+      }
+      if (elMobileCheckoutBtn) {
+        elMobileCheckoutBtn.disabled = !hasItems;
+      }
+    }
+    // Обновляем ботомщит активного заказа
+    if (typeof window.updateActiveOrdersBadge === "function") {
+      window.updateActiveOrdersBadge();
+    }
 
     // cart mode header: вернуть ×, убрать ←/♡
     setSheetHeaderMode("cart");
@@ -6186,6 +6455,22 @@ function openCartSheet() {
     productWrap.classList.add("hidden");
 
     setCartSheetFooterMode(openCartSheetCtx, "hidden");
+    if (openCartSheetCtx) {
+      openCartSheetCtx.addressBackMode = null;
+    }
+
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile && elMobileProductActions) {
+      elMobileProductActions.classList.add("hidden");
+    }
+    if (isMobile && elMobileCartActions) {
+      elMobileCartActions.classList.add("hidden");
+      if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
+      if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
+    }
+    if (isMobile && elMobileAddressActions) {
+      elMobileAddressActions.classList.add("hidden");
+    }
 
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("Введите адрес");
@@ -6198,8 +6483,11 @@ function openCartSheet() {
     renderSheetAddressList();
   }
 
-  function showSheetAddressForm(prefill, editingId) {
+  function showSheetAddressForm(prefill, editingId, backMode) {
     sheetEditingId = editingId ? Number(editingId) : null;
+    if (openCartSheetCtx) {
+      openCartSheetCtx.addressBackMode = backMode || "cart";
+    }
 
     const get = (k) => addressFormView.querySelector(`[data-a="${k}"]`);
     const setVal = (k, v) => {
@@ -6222,6 +6510,32 @@ function openCartSheet() {
     productWrap.classList.add("hidden");
 
     setCartSheetFooterMode(openCartSheetCtx, "hidden");
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile) {
+      if (elMobileProductActions) {
+        elMobileProductActions.classList.add("hidden");
+      }
+      if (elMobileCartActions) {
+        elMobileCartActions.classList.add("hidden");
+        if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
+        if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
+      }
+      if (elMobileAddressActions) {
+        elMobileAddressActions.classList.remove("hidden");
+      }
+      if (elMobileAddressSaveBtn) {
+        elMobileAddressSaveBtn.onclick = () => {
+          const saveBtn = get("save");
+          if (saveBtn) saveBtn.click();
+        };
+      }
+      if (elMobileAddressCancelBtn) {
+        elMobileAddressCancelBtn.onclick = () => {
+          const cancelBtn = get("cancel");
+          if (cancelBtn) cancelBtn.click();
+        };
+      }
+    }
 
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("Введите адрес");
@@ -6260,6 +6574,11 @@ function openCartSheet() {
     
     setSheetHeaderMode("product", { onBack });
     renderProductDetailsInto(productWrap, product, { onBack, cartKey });
+    
+    // На мобильных: скрываем ботомщит активного заказа при открытии карточки товара
+    if (elActiveOrdersSheetCollapsed) {
+      elActiveOrdersSheetCollapsed.classList.add("hidden");
+    }
   }
 
 function renderSheetAddressList() {
@@ -6342,7 +6661,7 @@ function renderSheetAddressList() {
     btnEdit.innerHTML = `<i class="fas fa-pen"></i>`;
     btnEdit.addEventListener("click", (e) => {
       e.stopPropagation();
-      showSheetAddressForm(a, token ? a.id : null);
+      showSheetAddressForm(a, token ? a.id : null, "cart");
     });
     actions.appendChild(btnEdit);
 
@@ -6402,7 +6721,11 @@ function renderSheetAddressList() {
       setSelectedAddress({ ...a, _local: true });
       syncSelectedAddressToCheckoutDraft();
       updateAddressChip();
-      showSheetCart();
+      if (openCartSheetCtx?.addressBackMode === "profile") {
+        returnToProfileFromSheet();
+      } else {
+        showSheetCart();
+      }
     });
 
     addressList.appendChild(row);
@@ -6419,13 +6742,19 @@ function renderSheetAddressList() {
 
   backBtn.addEventListener("click", () => showSheetCart());
 
-  addressNewBtn.addEventListener("click", () => showSheetAddressForm(null, null));
+  addressNewBtn.addEventListener("click", () => showSheetAddressForm(null, null, "cart"));
 
   const formGet = (k) => addressFormView.querySelector(`[data-a="${k}"]`);
   const saveBtn = formGet("save");
   const cancelBtn = formGet("cancel");
 
-  cancelBtn?.addEventListener("click", () => showSheetAddressList());
+  cancelBtn?.addEventListener("click", () => {
+    if (openCartSheetCtx?.addressBackMode === "profile") {
+      returnToProfileFromSheet();
+      return;
+    }
+    showSheetAddressList();
+  });
 
   saveBtn?.addEventListener("click", async () => {
     const payload = normalizeAddressPayload({
@@ -6462,7 +6791,11 @@ function renderSheetAddressList() {
 
       syncSelectedAddressToCheckoutDraft();
       updateAddressChip();
-      showSheetCart();
+      if (openCartSheetCtx?.addressBackMode === "profile") {
+        returnToProfileFromSheet();
+      } else {
+        showSheetCart();
+      }
     } catch (e) {
       console.error(e);
       alert("Не удалось сохранить адрес");
@@ -6755,6 +7088,13 @@ function renderSheetAddressList() {
     photoWrap.className = "shop-profile-photo-wrap";
     photoWrap.appendChild(photo);
     photoWrap.appendChild(photoActions);
+    const photoMenu = document.createElement("div");
+    photoMenu.className = "shop-profile-menu shop-profile-photo-menu hidden";
+    photoMenu.innerHTML = `
+      <button class="shop-profile-menu-item" data-role="photo-upload" type="button">Загрузить фото</button>
+      <button class="shop-profile-menu-item" data-role="photo-remove" type="button">Удалить фото</button>
+    `;
+    photoWrap.appendChild(photoMenu);
     top.appendChild(photoWrap);
 
     const info = document.createElement("div");
@@ -6783,7 +7123,7 @@ function renderSheetAddressList() {
     nameTitle.textContent = "Имя";
 
     const nameValue = document.createElement("div");
-    nameValue.className = "shop-profile-line-value";
+    nameValue.className = "shop-profile-line-value shop-profile-name-value";
 
     const nameText = document.createElement("span");
     nameText.className = "shop-profile-name-text";
@@ -6795,7 +7135,7 @@ function renderSheetAddressList() {
     nameInput.value = str(me?.name || "");
 
     const nameActions = document.createElement("div");
-    nameActions.className = "shop-profile-name-actions hidden";
+    nameActions.className = "shop-profile-name-actions shop-address-form-actions hidden";
 
     const nameSave = document.createElement("button");
     nameSave.type = "button";
@@ -6927,8 +7267,28 @@ function renderSheetAddressList() {
       if (addBtn) addBtn.textContent = "Добавить адрес";
     }
 
+    function openProfileAddressFormFromProfile(address) {
+      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      if (!isMobile) {
+        showAddressFormView(address || null, address?.id || null, "profile");
+        return;
+      }
+      const openForm = () => {
+        openCartSheet();
+        if (openCartSheetCtx?.showSheetAddressForm) {
+          openCartSheetCtx.showSheetAddressForm(address || null, address?.id || null, "profile");
+        }
+      };
+      if (window.AppModal?.isOpen?.()) {
+        window.AppModal.close("sheet");
+        setTimeout(openForm, 0);
+      } else {
+        openForm();
+      }
+    }
+
     addressFormToggle.addEventListener("click", () => {
-      openProfileAddressForm(null);
+      openProfileAddressFormFromProfile();
     });
 
     const ordersPanel = document.createElement("div");
@@ -7070,7 +7430,7 @@ function renderSheetAddressList() {
           bEdit.innerHTML = `<i class="fas fa-pen"></i>`;
           bEdit.addEventListener("click", (e) => {
             e.stopPropagation();
-            openProfileAddressForm(a);
+            openProfileAddressFormFromProfile(a);
           });
           actions.appendChild(bEdit);
 
@@ -7437,8 +7797,27 @@ function renderSheetAddressList() {
       wrap.classList.toggle("is-editing", isEditing);
       nameText.classList.toggle("hidden", isEditing);
       nameInput.classList.toggle("hidden", !isEditing);
-      nameActions.classList.toggle("hidden", !isEditing);
-      photoActions.classList.toggle("hidden", !isEditing);
+      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      nameActions.classList.toggle("hidden", !isEditing || isMobile);
+      if (isMobile && elMobileAddressActions) {
+        if (isEditing) {
+          elMobileAddressActions.classList.remove("hidden");
+          if (elMobileAddressSaveBtn) {
+            elMobileAddressSaveBtn.textContent = "Сохранить";
+            elMobileAddressSaveBtn.disabled = false;
+            elMobileAddressSaveBtn.onclick = () => nameSave.click();
+          }
+          if (elMobileAddressCancelBtn) {
+            elMobileAddressCancelBtn.textContent = "Отмена";
+            elMobileAddressCancelBtn.disabled = false;
+            elMobileAddressCancelBtn.onclick = () => nameCancel.click();
+          }
+        } else {
+          elMobileAddressActions.classList.add("hidden");
+          if (elMobileAddressSaveBtn) elMobileAddressSaveBtn.onclick = null;
+          if (elMobileAddressCancelBtn) elMobileAddressCancelBtn.onclick = null;
+        }
+      }
       if (isEditing) {
         nameInput.value = currentName;
         setTimeout(() => nameInput.focus(), 0);
@@ -7447,13 +7826,11 @@ function renderSheetAddressList() {
 
     setEditingMode(false);
 
-    photoBtn.addEventListener("click", () => {
-      if (!isEditing) return;
+    function startPhotoUpload() {
       photoInput.click();
-    });
+    }
 
-    photoRemoveBtn.addEventListener("click", async () => {
-      if (!isEditing) return;
+    async function removePhoto() {
       if (!window.confirm("Удалить фото профиля?")) return;
       photoRemoveBtn.disabled = true;
       try {
@@ -7465,7 +7842,10 @@ function renderSheetAddressList() {
       } finally {
         photoRemoveBtn.disabled = false;
       }
-    });
+    }
+
+    photoBtn.addEventListener("click", startPhotoUpload);
+    photoRemoveBtn.addEventListener("click", removePhoto);
 
     photoInput.addEventListener("change", async () => {
       const file = photoInput.files && photoInput.files[0];
@@ -7514,14 +7894,59 @@ function renderSheetAddressList() {
       }
     });
 
+    let photoMenuOpen = false;
+    function closePhotoMenu() {
+      photoMenuOpen = false;
+      photoMenu.classList.add("hidden");
+    }
+    function openPhotoMenu() {
+      photoMenuOpen = true;
+      photoMenu.classList.remove("hidden");
+      const onDocClick = (e) => {
+        if (photoWrap.contains(e.target)) return;
+        closePhotoMenu();
+        document.removeEventListener("click", onDocClick);
+      };
+      setTimeout(() => document.addEventListener("click", onDocClick), 0);
+    }
+
+    if (!photoWrap.__photoMenuBound) {
+      photoWrap.__photoMenuBound = true;
+      photoWrap.addEventListener("click", (e) => {
+        const target = e.target;
+        if (target && target.closest && target.closest(".shop-profile-menu")) return;
+        if (photoMenuOpen) closePhotoMenu();
+        else openPhotoMenu();
+      });
+      photoMenu.addEventListener("click", (e) => {
+        e.stopPropagation();
+      });
+    }
+
+    const photoUploadItem = photoMenu.querySelector('[data-role="photo-upload"]');
+    const photoRemoveItem = photoMenu.querySelector('[data-role="photo-remove"]');
+    if (photoUploadItem) photoUploadItem.addEventListener("click", () => {
+      closePhotoMenu();
+      startPhotoUpload();
+    });
+    if (photoRemoveItem) photoRemoveItem.addEventListener("click", async () => {
+      closePhotoMenu();
+      await removePhoto();
+    });
+
     nameSave.addEventListener("click", async () => {
       const v = str(nameInput.value).trim();
       if (!v) {
         alert("Введите имя");
         return;
       }
+      const isMobile = window.matchMedia("(max-width: 768px)").matches;
       nameSave.disabled = true;
       nameSave.textContent = "Сохраняем…";
+      if (isMobile && elMobileAddressSaveBtn) {
+        elMobileAddressSaveBtn.disabled = true;
+        elMobileAddressSaveBtn.textContent = "Сохраняем…";
+      }
       try {
         await apiJson("/api/public/me", { method: "PUT", body: { name: v } });
         const me2 = await fetchMeSafe();
@@ -7536,6 +7961,10 @@ function renderSheetAddressList() {
       } finally {
         nameSave.disabled = false;
         nameSave.textContent = "Сохранить";
+        if (isMobile && elMobileAddressSaveBtn) {
+          elMobileAddressSaveBtn.disabled = false;
+          elMobileAddressSaveBtn.textContent = "Сохранить";
+        }
       }
     });
 
@@ -7726,10 +8155,10 @@ function renderSheetAddressList() {
     };
   }
 
-  async function openProfileSheet() {
+  async function openProfileSheet({ initialTab } = {}) {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (!isMobile) {
-      await openProfilePanel();
+      await openProfilePanel(null, { initialTab });
       return;
     }
 
@@ -7743,7 +8172,7 @@ function renderSheetAddressList() {
       return;
     }
     setActiveNav("profile");
-    openProfileModal(me);
+    openProfileModal(me, { initialTab });
   }
 
   function openProfileModal(me, { initialTab } = {}) {
@@ -7814,6 +8243,18 @@ function setActiveNav(key) {
     if (k === key) el.setAttribute("aria-current", "page");
     else el.removeAttribute("aria-current");
   });
+
+  if (key !== "cart") {
+    if (elMobileAddressActions) elMobileAddressActions.classList.add("hidden");
+    if (elMobileCartActions) {
+      elMobileCartActions.classList.add("hidden");
+      if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
+      if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
+    }
+  }
+  if (key !== "menu" && elMobileProductActions) {
+    elMobileProductActions.classList.add("hidden");
+  }
   
   // Обновляем бейдж активных заказов при смене вкладки
   if (typeof window.updateActiveOrdersBadge === "function") {
@@ -8551,10 +8992,11 @@ async function init() {
               }
             }
             
-            // Мобильный приоткрытый bottom sheet показываем только на главной странице и на главной вкладке, и когда нет открытых модалок
+            // Мобильный приоткрытый bottom sheet показываем только на главной странице и на главной вкладке, и когда нет открытых модалок и не открыта карточка товара
             if (elActiveOrdersSheetCollapsed && badge === elActiveOrdersSheetCollapsed) {
-              // Это мобильный приоткрытый bottom sheet - показываем только на главной странице, главной вкладке и когда нет открытых модалок
-              if (isMobile && isShopMainPage && isMainTabActive && !isAnyModalOpen) {
+              // Это мобильный приоткрытый bottom sheet - показываем только на главной странице, главной вкладке, когда нет открытых модалок и не открыта карточка товара
+              const isProductOpen = elMobileProductActions && !elMobileProductActions.classList.contains("hidden");
+              if (isMobile && isShopMainPage && isMainTabActive && !isAnyModalOpen && !isProductOpen) {
                 badge.classList.remove("hidden");
               } else {
                 badge.classList.add("hidden");
