@@ -1167,6 +1167,12 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   box-sizing: border-box;
 }
 
+@media (max-width: 768px){
+  .shop-sheet-content{
+    padding-bottom: calc(200px + env(safe-area-inset-bottom));
+  }
+}
+
 /* ==========================================================================
    Product Details (modal/sheet)
    ========================================================================== */

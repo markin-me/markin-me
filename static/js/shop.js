@@ -2754,6 +2754,16 @@ async function initAddresses() {
         }
       }
 
+      // Мобилка: скрыть нижние кнопки корзины, если корзина пуста
+      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      if (isMobile && elMobileCartActions) {
+        if (items.length === 0) {
+          elMobileCartActions.classList.add("hidden");
+          if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
+          if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
+        }
+      }
+
       // Обновляем десктоп корзину
       renderCart();
     }
@@ -5821,10 +5831,14 @@ optionGroups.forEach((group) => {
       }
     };
     
-    // Подключаем обработчик к мобильной кнопке
-    elMobileAddToCartBtn.addEventListener("click", () => {
+    // Подключаем обработчик к мобильной кнопке (снимаем предыдущий, чтобы не копились)
+    if (mobileProductActionsState.onAddToCart) {
+      elMobileAddToCartBtn.removeEventListener("click", mobileProductActionsState.onAddToCart);
+    }
+    mobileProductActionsState.onAddToCart = () => {
       actionBtn.click();
-    });
+    };
+    elMobileAddToCartBtn.addEventListener("click", mobileProductActionsState.onAddToCart);
     
     // Обновляем сразу
     updateActionText();
