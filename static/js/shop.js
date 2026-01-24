@@ -6550,7 +6550,7 @@ function openCartSheet() {
   if (isMobile && elMobileCartActions && elMobileCartTotal && elMobileCheckoutBtn) {
     // Подключаем обработчики к мобильным кнопкам
     if (elMobileCheckoutBtn) {
-      elMobileCheckoutBtn.addEventListener("click", () => btn.click());
+      elMobileCheckoutBtn.onclick = () => btn.click();
     }
     if (elMobileCartClearBtn) {
       if (!elMobileCartClearBtn.dataset.twostepClear) {
@@ -6559,10 +6559,10 @@ function openCartSheet() {
       }
     }
     if (elMobileCheckoutBackBtn) {
-      elMobileCheckoutBackBtn.addEventListener("click", () => backBtn.click());
+      elMobileCheckoutBackBtn.onclick = () => backBtn.click();
     }
     if (elMobileCheckoutSubmitBtn) {
-      elMobileCheckoutSubmitBtn.addEventListener("click", () => submitBtn.click());
+      elMobileCheckoutSubmitBtn.onclick = () => submitBtn.click();
     }
     
     // Показываем мобильные кнопки
@@ -10002,3 +10002,4 @@ async function init() {
 }
   init();
 })();
+

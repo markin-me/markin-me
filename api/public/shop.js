@@ -2108,6 +2108,26 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       if (!normItems.length) return res.status(400).json({ ok: false, error: 'NO_PRODUCTS' });
 
+      const itemsJson = JSON.stringify(normItems);
+
+      // Серверная защита от дублей при повторной отправке (например, из-за сетевых ошибок)
+      // Ищем идентичный заказ, созданный недавно тем же клиентом.
+      const [recentDup] = await db.query(
+        `SELECT id, public_id
+         FROM order_orders
+         WHERE tenant_id=? AND store_id=? AND is_active=1
+           AND customer_phone=?
+           AND total_price=?
+           AND items=?
+           AND created_at >= (NOW() - INTERVAL 2 MINUTE)
+         ORDER BY id DESC
+         LIMIT 1`,
+        [tenantId, storeId, customerPhone, total, itemsJson]
+      );
+      if (recentDup.length) {
+        return res.json({ ok: true, data: { id: recentDup[0].id, public_id: recentDup[0].public_id, duplicate: true } });
+      }
+
       const statusId = await getActiveStatusIdDefault(tenantId, storeId);
       if (!statusId) return res.status(500).json({ ok: false, error: 'NO_STATUSES' });
 
@@ -2147,7 +2167,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           comment,
           cutleryQty,
           changeFrom,
-          JSON.stringify(normItems),
+          itemsJson,
           total,
           deliveryTypeId,
           paymentId,

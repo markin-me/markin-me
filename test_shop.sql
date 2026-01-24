@@ -2,10 +2,10 @@
 -- version 5.2.1
 -- https://www.phpmyadmin.net/
 --
--- Хост: 127.0.0.1
--- Время создания: Янв 21 2026 г., 12:50
--- Версия сервера: 10.4.32-MariaDB
--- Версия PHP: 8.2.12
+-- Хост: 10.0.231.119
+-- Время создания: Янв 24 2026 г., 16:52
+-- Версия сервера: 8.0.37-29
+-- Версия PHP: 7.2.34
 
 SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
 START TRANSACTION;
@@ -18,14 +18,14 @@ SET time_zone = "+00:00";
 /*!40101 SET NAMES utf8mb4 */;
 
 --
--- База данных: `test_shop`
+-- База данных: `a1186497_test`
 --
 
 DELIMITER $$
 --
 -- Процедуры
 --
-CREATE DEFINER=`root`@`localhost` PROCEDURE `migrate_order_methods_to_delivery_types` ()   BEGIN
+CREATE DEFINER=`a1186497`@`10.0.1.23` PROCEDURE `migrate_order_methods_to_delivery_types` ()   BEGIN
   DECLARE done INT DEFAULT 0;
   DECLARE fkname VARCHAR(64);
 
@@ -143,35 +143,62 @@ DELIMITER ;
 -- --------------------------------------------------------
 
 --
+-- Структура таблицы `app_users`
+--
+
+CREATE TABLE `app_users` (
+  `id` int NOT NULL,
+  `tenant_id` int NOT NULL,
+  `email` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `phone` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `password_hash` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `name` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `role` enum('owner','manager','courier','admin') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'manager',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `last_login_at` datetime DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Дамп данных таблицы `app_users`
+--
+
+INSERT INTO `app_users` (`id`, `tenant_id`, `email`, `phone`, `password_hash`, `name`, `role`, `is_active`, `last_login_at`, `created_at`, `updated_at`) VALUES
+(1, 1, 'admin@test.ru', NULL, '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', 'Владелец', 'owner', 1, '2026-01-24 10:30:55', '2026-01-21 13:15:27', '2026-01-24 07:30:55');
+
+-- --------------------------------------------------------
+
+--
 -- Структура таблицы `cust_customers`
 --
 
 CREATE TABLE `cust_customers` (
-  `id` int(11) NOT NULL,
-  `tenant_id` int(11) DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `status_id` int(11) DEFAULT NULL,
-  `phone` varchar(20) NOT NULL,
-  `name` varchar(100) DEFAULT NULL,
+  `id` int NOT NULL,
+  `tenant_id` int DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `status_id` int DEFAULT NULL,
+  `phone` varchar(20) COLLATE utf8mb4_general_ci NOT NULL,
+  `name` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `birthday` date DEFAULT NULL,
-  `addresses` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL CHECK (json_valid(`addresses`)),
-  `telegram_user_id` bigint(20) DEFAULT NULL,
+  `addresses` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+  `telegram_user_id` bigint DEFAULT NULL,
   `registration_date` date DEFAULT NULL,
-  `total_orders` int(11) NOT NULL DEFAULT 0,
-  `total_spent` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `total_orders` int NOT NULL DEFAULT '0',
+  `total_spent` decimal(10,2) NOT NULL DEFAULT '0.00',
   `last_order_date` datetime DEFAULT NULL,
-  `photo` varchar(255) DEFAULT NULL,
-  `is_active` tinyint(1) NOT NULL DEFAULT 1,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+  `photo` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ;
 
 --
 -- Дамп данных таблицы `cust_customers`
 --
 
 INSERT INTO `cust_customers` (`id`, `tenant_id`, `store_id`, `status_id`, `phone`, `name`, `birthday`, `addresses`, `telegram_user_id`, `registration_date`, `total_orders`, `total_spent`, `last_order_date`, `photo`, `is_active`, `created_at`, `updated_at`) VALUES
-(1, 1, 1, 1, '79021461966', 'Максим', '1996-03-15', NULL, NULL, '2026-01-06', 3, 1323.00, '2026-01-06 20:57:09', '/static/uploads/avatars/1768109514069-4e5f0313ad18df2d.jpg', 1, '2026-01-06 08:37:19', '2026-01-11 05:31:54'),
+(1, 1, 1, 1, '79021461966', 'Максим', '1996-03-15', NULL, NULL, '2026-01-06', 3, 1323.00, '2026-01-06 20:57:09', '/static/uploads/avatars/1769191372366-649c38532aeed34f.png', 1, '2026-01-06 08:37:19', '2026-01-23 18:02:52'),
 (2, 1, 1, NULL, '79835475559', 'Иван', NULL, NULL, NULL, '2026-01-08', 0, 0.00, NULL, NULL, 1, '2026-01-08 12:31:52', '2026-01-08 12:31:52');
 
 -- --------------------------------------------------------
@@ -181,20 +208,20 @@ INSERT INTO `cust_customers` (`id`, `tenant_id`, `store_id`, `status_id`, `phone
 --
 
 CREATE TABLE `cust_customer_addresses` (
-  `id` int(11) NOT NULL,
-  `tenant_id` int(11) DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `customer_id` int(11) NOT NULL,
-  `street` varchar(160) NOT NULL,
-  `house` varchar(40) NOT NULL,
-  `entrance` varchar(20) DEFAULT NULL,
-  `floor` varchar(20) DEFAULT NULL,
-  `apartment` varchar(20) DEFAULT NULL,
-  `comment` varchar(255) DEFAULT NULL,
-  `is_default` tinyint(1) NOT NULL DEFAULT 0,
-  `is_active` tinyint(1) NOT NULL DEFAULT 1,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `id` int NOT NULL,
+  `tenant_id` int DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `customer_id` int NOT NULL,
+  `street` varchar(160) COLLATE utf8mb4_general_ci NOT NULL,
+  `house` varchar(40) COLLATE utf8mb4_general_ci NOT NULL,
+  `entrance` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `floor` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `apartment` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `comment` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `is_default` tinyint(1) NOT NULL DEFAULT '0',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -202,9 +229,10 @@ CREATE TABLE `cust_customer_addresses` (
 --
 
 INSERT INTO `cust_customer_addresses` (`id`, `tenant_id`, `store_id`, `customer_id`, `street`, `house`, `entrance`, `floor`, `apartment`, `comment`, `is_default`, `is_active`, `created_at`, `updated_at`) VALUES
-(1, 1, 1, 1, 'Деповская', '48', '2', '3', '45', 'Это мой дом', 0, 1, '2026-01-07 07:43:03', '2026-01-20 11:18:44'),
-(2, 1, 1, 1, 'Октябрьская', '25', '1', '4', '45', 'бьюти салон', 1, 1, '2026-01-07 16:48:49', '2026-01-20 11:18:44'),
-(3, 1, 1, 1, 'Октябрьская', '25', '1', '4', '45', 'бьюти салон', 0, 0, '2026-01-07 16:49:26', '2026-01-07 16:49:42');
+(1, 1, 1, 1, 'Деповская', '48', '2', '3', '45', 'Это мой дом', 1, 1, '2026-01-07 07:43:03', '2026-01-23 17:48:30'),
+(2, 1, 1, 1, 'Октябрьская', '25', '1', '4', '45', 'бьюти салон', 0, 1, '2026-01-07 16:48:49', '2026-01-23 15:49:03'),
+(3, 1, 1, 1, 'Октябрьская', '25', '1', '4', '45', 'бьюти салон', 0, 0, '2026-01-07 16:49:26', '2026-01-07 16:49:42'),
+(4, 1, 1, 1, '4444', '3', NULL, NULL, NULL, NULL, 0, 0, '2026-01-23 17:47:27', '2026-01-23 17:52:54');
 
 -- --------------------------------------------------------
 
@@ -213,14 +241,14 @@ INSERT INTO `cust_customer_addresses` (`id`, `tenant_id`, `store_id`, `customer_
 --
 
 CREATE TABLE `cust_customer_sessions` (
-  `id` int(11) NOT NULL,
-  `tenant_id` int(11) NOT NULL,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `customer_id` int(11) NOT NULL,
-  `token` varchar(64) NOT NULL,
-  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `id` int NOT NULL,
+  `tenant_id` int NOT NULL,
+  `store_id` int NOT NULL DEFAULT '1',
+  `customer_id` int NOT NULL,
+  `token` varchar(64) COLLATE utf8mb4_general_ci NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `expires_at` datetime DEFAULT NULL,
-  `is_active` tinyint(1) NOT NULL DEFAULT 1
+  `is_active` tinyint(1) NOT NULL DEFAULT '1'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -240,7 +268,18 @@ INSERT INTO `cust_customer_sessions` (`id`, `tenant_id`, `store_id`, `customer_i
 (10, 1, 1, 1, 'c4d17b85c90a4384a68b22882d505ce5', '2026-01-11 16:01:02', '2026-02-10 16:01:02', 0),
 (11, 1, 1, 1, '08074b70d017441fb9ddce949692571f', '2026-01-11 16:31:05', '2026-02-10 16:31:05', 0),
 (12, 1, 1, 1, 'd3cdfebbb8f34be6abbda13e3819c3aa', '2026-01-11 16:31:37', '2026-02-10 16:31:37', 0),
-(13, 1, 1, 1, '5be1ee4bd6334142973579ee51d87d47', '2026-01-11 18:38:43', '2026-02-10 18:38:43', 1);
+(13, 1, 1, 1, '5be1ee4bd6334142973579ee51d87d47', '2026-01-11 18:38:43', '2026-02-10 18:38:43', 1),
+(14, 1, 1, 1, 'da2712fcbc834e3fb0384ed57b5e3c8a', '2026-01-22 11:14:07', '2026-02-21 11:14:07', 1),
+(15, 1, 1, 1, 'a5a01c5d95834b34bb714bc25c579b4e', '2026-01-22 17:18:04', '2026-02-21 17:18:04', 1),
+(16, 1, 1, 1, 'fd81527de8ef459896f80198ad8c41bd', '2026-01-22 17:19:33', '2026-02-21 17:19:33', 0),
+(17, 1, 1, 1, 'c42c9aec9dde45e8a926d7bc4c420fda', '2026-01-22 17:31:04', '2026-02-21 17:31:04', 1),
+(18, 1, 1, 1, '41a26f238fb84bf986ef05869f4b688a', '2026-01-22 19:57:31', '2026-02-21 19:57:31', 1),
+(19, 1, 1, 1, 'edeb2df3360f4b9d8423492b406cd2a2', '2026-01-22 20:10:08', '2026-02-21 20:10:08', 1),
+(20, 1, 1, 1, 'e454e474e7d84124939ede1364ee7cf2', '2026-01-22 21:13:36', '2026-02-21 21:13:36', 1),
+(21, 1, 1, 1, '3a88427f14424c1b863328b3f7c57f2b', '2026-01-23 21:02:14', '2026-02-22 21:02:14', 1),
+(22, 1, 1, 1, 'ce8c84e7c1154c16a422f3deb89a4243', '2026-01-24 07:02:22', '2026-02-23 07:02:22', 1),
+(23, 1, 1, 1, '157fd23fc9f14876897d6a395c197fba', '2026-01-24 10:32:32', '2026-02-23 10:32:32', 1),
+(24, 1, 1, 1, 'e07f062bc2744a8eb618f620fce65dc7', '2026-01-24 15:48:57', '2026-02-23 15:48:57', 1);
 
 -- --------------------------------------------------------
 
@@ -249,17 +288,17 @@ INSERT INTO `cust_customer_sessions` (`id`, `tenant_id`, `store_id`, `customer_i
 --
 
 CREATE TABLE `cust_statuses` (
-  `id` int(11) NOT NULL,
-  `tenant_id` int(11) DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `code` varchar(50) NOT NULL COMMENT 'new | regular | subscriber | vip',
-  `title` varchar(100) NOT NULL COMMENT 'Новый | Постоянный | Подписчик | VIP',
-  `icon` varchar(50) DEFAULT NULL,
-  `color` varchar(30) DEFAULT NULL,
-  `sort` int(11) DEFAULT 0,
-  `is_active` tinyint(1) DEFAULT 1,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `id` int NOT NULL,
+  `tenant_id` int DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `code` varchar(50) COLLATE utf8mb4_general_ci NOT NULL COMMENT 'new | regular | subscriber | vip',
+  `title` varchar(100) COLLATE utf8mb4_general_ci NOT NULL COMMENT 'Новый | Постоянный | Подписчик | VIP',
+  `icon` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `color` varchar(30) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `sort` int DEFAULT '0',
+  `is_active` tinyint(1) DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -279,16 +318,16 @@ INSERT INTO `cust_statuses` (`id`, `tenant_id`, `store_id`, `code`, `title`, `ic
 --
 
 CREATE TABLE `order_delivery_types` (
-  `id` int(11) UNSIGNED NOT NULL,
-  `tenant_id` int(11) DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `code` varchar(50) NOT NULL COMMENT 'Машинный код (dine_in, takeaway, delivery)',
-  `title` varchar(100) NOT NULL COMMENT 'Название способа (В зале, С собой)',
-  `icon` varchar(50) DEFAULT NULL COMMENT 'Иконка (fa-utensils, fa-box, fa-truck)',
-  `sort` int(11) DEFAULT 0 COMMENT 'Порядок отображения',
-  `is_active` tinyint(1) DEFAULT 1 COMMENT 'Активен ли способ',
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `id` int UNSIGNED NOT NULL,
+  `tenant_id` int DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `code` varchar(50) COLLATE utf8mb4_general_ci NOT NULL COMMENT 'Машинный код (dine_in, takeaway, delivery)',
+  `title` varchar(100) COLLATE utf8mb4_general_ci NOT NULL COMMENT 'Название способа (В зале, С собой)',
+  `icon` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT 'Иконка (fa-utensils, fa-box, fa-truck)',
+  `sort` int DEFAULT '0' COMMENT 'Порядок отображения',
+  `is_active` tinyint(1) DEFAULT '1' COMMENT 'Активен ли способ',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -308,40 +347,31 @@ INSERT INTO `order_delivery_types` (`id`, `tenant_id`, `store_id`, `code`, `titl
 --
 
 CREATE TABLE `order_orders` (
-  `id` int(11) NOT NULL,
-  `public_id` varchar(36) NOT NULL,
-  `tenant_id` int(11) DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `customer_id` int(11) DEFAULT NULL,
-  `customer_name` varchar(120) DEFAULT NULL,
-  `customer_phone` varchar(24) DEFAULT NULL,
-  `promo_code` varchar(50) DEFAULT NULL,
-  `address` varchar(255) DEFAULT NULL,
-  `delivery_address_id` int(11) DEFAULT NULL,
-  `comment` varchar(255) DEFAULT NULL,
-  `cutlery_qty` int(11) NOT NULL DEFAULT 0,
+  `id` int NOT NULL,
+  `public_id` varchar(36) COLLATE utf8mb4_general_ci NOT NULL,
+  `tenant_id` int DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `customer_id` int DEFAULT NULL,
+  `customer_name` varchar(120) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `customer_phone` varchar(24) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `promo_code` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `address` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `delivery_address_id` int DEFAULT NULL,
+  `comment` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `cutlery_qty` int NOT NULL DEFAULT '0',
   `change_from` decimal(10,2) DEFAULT NULL,
-  `items` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL CHECK (json_valid(`items`)),
+  `items` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
   `total_price` decimal(10,2) DEFAULT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `delivery_type_id` int(11) DEFAULT NULL,
-  `payment_id` int(11) DEFAULT NULL,
-  `time_option_id` int(11) DEFAULT NULL,
-  `status_id` int(10) UNSIGNED DEFAULT NULL,
-  `status_sort` int(11) NOT NULL DEFAULT 0,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `delivery_type_id` int DEFAULT NULL,
+  `payment_id` int DEFAULT NULL,
+  `time_option_id` int DEFAULT NULL,
+  `status_id` int UNSIGNED DEFAULT NULL,
+  `status_sort` int NOT NULL DEFAULT '0',
   `scheduled_at` datetime DEFAULT NULL,
-  `created_via` varchar(20) NOT NULL DEFAULT 'web',
-  `is_active` tinyint(4) NOT NULL DEFAULT 1
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
---
--- Дамп данных таблицы `order_orders`
---
-
-INSERT INTO `order_orders` (`id`, `public_id`, `tenant_id`, `store_id`, `customer_id`, `customer_name`, `customer_phone`, `promo_code`, `address`, `delivery_address_id`, `comment`, `cutlery_qty`, `change_from`, `items`, `total_price`, `created_at`, `delivery_type_id`, `payment_id`, `time_option_id`, `status_id`, `status_sort`, `scheduled_at`, `created_via`, `is_active`) VALUES
-(29, '7888fc9e-5bab-40b7-af69-dda5879c5700', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, NULL, 0, 0.00, '[{\"product_id\":14,\"name\":\"Пюре с куриной котлетой\",\"qty\":1,\"price\":270,\"old_price\":0,\"line_total\":270,\"photos\":[\"/static/uploads/products/1/8d7527fdbc8e7476d39e29192a4d70d0.webp\"],\"ingredients\":[{\"ingredient_id\":12,\"name\":\"Картофельное пюре\",\"quantity\":150,\"price\":0.8,\"total\":120},{\"ingredient_id\":13,\"name\":\"Куринная котлета\",\"quantity\":1,\"price\":150,\"total\":150}]},{\"product_id\":14,\"name\":\"Пюре с куриной котлетой\",\"qty\":1,\"price\":270,\"old_price\":0,\"line_total\":460,\"photos\":[\"/static/uploads/products/1/8d7527fdbc8e7476d39e29192a4d70d0.webp\"],\"ingredients\":[{\"ingredient_id\":12,\"name\":\"Картофельное пюре\",\"quantity\":200,\"price\":0.8,\"total\":160},{\"ingredient_id\":13,\"name\":\"Куринная котлета\",\"quantity\":2,\"price\":150,\"total\":300}]},{\"product_id\":12,\"name\":\"Картофельное пюре\",\"qty\":1,\"price\":800,\"old_price\":0,\"line_total\":310,\"photos\":[\"/static/uploads/products/1/9fdc3cffd1457f84af2705bfc55c33a2.webp\"],\"options\":[{\"id\":60,\"title\":\"Куринная котлета\",\"price\":150,\"qty\":1}],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":1,\"group_title\":\"порц\",\"value\":\"200 г\",\"label\":\"200 г\",\"price_diff\":-640}]},{\"product_id\":13,\"name\":\"Куринная котлета\",\"qty\":1,\"price\":150,\"old_price\":0,\"line_total\":549,\"photos\":[\"/static/uploads/products/1/fe6e72ac1ce743c145b235225287a820.webp\"],\"options\":[{\"id\":30,\"title\":\"Кола\",\"price\":99,\"qty\":1},{\"id\":57,\"title\":\"Гречка с овощами\",\"price\":150,\"qty\":1}],\"variants\":[{\"variant_group_id\":1,\"variant_value_index\":1,\"group_title\":\"шт\",\"value\":\"2 шт\",\"label\":\"2 шт\",\"price_diff\":150}]}]', 1589.00, '2026-01-20 03:35:18', 4, 1, 1, 1, 0, NULL, 'web', 1),
-(30, '63efc094-0d2a-4611-8400-79cb4c864fe2', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, NULL, 0, 0.00, '[{\"product_id\":12,\"name\":\"Картофельное пюре\",\"qty\":1,\"price\":800,\"old_price\":0,\"line_total\":310,\"photos\":[\"/static/uploads/products/1/9fdc3cffd1457f84af2705bfc55c33a2.webp\"],\"options\":[{\"id\":60,\"title\":\"Куринная котлета\",\"price\":150,\"qty\":1}],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":1,\"group_title\":\"порц\",\"value\":\"200 г\",\"label\":\"200 г\",\"price_diff\":-640}]}]', 310.00, '2026-01-20 03:37:55', 4, 1, 1, 1, 0, NULL, 'web', 1),
-(31, 'f09fb554-cff5-430f-a7ed-821cbf4fa5b9', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, NULL, 0, 0.00, '[{\"product_id\":12,\"name\":\"Картофельное пюре\",\"qty\":1,\"price\":800,\"old_price\":0,\"line_total\":310,\"photos\":[\"/static/uploads/products/1/9fdc3cffd1457f84af2705bfc55c33a2.webp\"],\"options\":[{\"id\":60,\"title\":\"Куринная котлета\",\"price\":150,\"qty\":1}],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":1,\"group_title\":\"порц\",\"value\":\"200 г\",\"label\":\"200 г\",\"price_diff\":0}]}]', 310.00, '2026-01-20 03:42:44', 4, 1, 1, 1, 0, NULL, 'web', 1);
+  `created_via` varchar(20) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'web',
+  `is_active` tinyint NOT NULL DEFAULT '1'
+) ;
 
 -- --------------------------------------------------------
 
@@ -350,16 +380,16 @@ INSERT INTO `order_orders` (`id`, `public_id`, `tenant_id`, `store_id`, `custome
 --
 
 CREATE TABLE `order_payments` (
-  `id` int(11) NOT NULL,
-  `tenant_id` int(11) DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `code` varchar(50) NOT NULL COMMENT 'Системный код способа оплаты',
-  `title` varchar(100) NOT NULL COMMENT 'Название (Наличные, Картой)',
-  `icon` varchar(50) DEFAULT NULL COMMENT 'Иконка (fa-money-bill, fa-credit-card)',
-  `sort` int(11) DEFAULT 0,
-  `is_active` tinyint(1) DEFAULT 1,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `id` int NOT NULL,
+  `tenant_id` int DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `code` varchar(50) COLLATE utf8mb4_general_ci NOT NULL COMMENT 'Системный код способа оплаты',
+  `title` varchar(100) COLLATE utf8mb4_general_ci NOT NULL COMMENT 'Название (Наличные, Картой)',
+  `icon` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT 'Иконка (fa-money-bill, fa-credit-card)',
+  `sort` int DEFAULT '0',
+  `is_active` tinyint(1) DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -378,19 +408,19 @@ INSERT INTO `order_payments` (`id`, `tenant_id`, `store_id`, `code`, `title`, `i
 --
 
 CREATE TABLE `order_statuses` (
-  `id` int(11) UNSIGNED NOT NULL,
-  `tenant_id` int(11) DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `code` varchar(50) NOT NULL COMMENT 'Системный код статуса',
-  `title` varchar(100) NOT NULL COMMENT 'Название в UI',
-  `subtitle` varchar(150) DEFAULT NULL COMMENT 'Подзаголовок/описание',
-  `icon` varchar(50) DEFAULT NULL COMMENT 'Иконка (FontAwesome key)',
-  `color` varchar(30) DEFAULT NULL COMMENT 'Ключ цвета (orange, yellow, blue...)',
-  `sort` int(11) DEFAULT 0 COMMENT 'Порядок отображения',
-  `is_active` tinyint(1) DEFAULT 1 COMMENT 'Активен',
-  `is_final` tinyint(1) DEFAULT 0 COMMENT 'Финальный статус',
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `id` int UNSIGNED NOT NULL,
+  `tenant_id` int DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `code` varchar(50) COLLATE utf8mb4_general_ci NOT NULL COMMENT 'Системный код статуса',
+  `title` varchar(100) COLLATE utf8mb4_general_ci NOT NULL COMMENT 'Название в UI',
+  `subtitle` varchar(150) COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT 'Подзаголовок/описание',
+  `icon` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT 'Иконка (FontAwesome key)',
+  `color` varchar(30) COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT 'Ключ цвета (orange, yellow, blue...)',
+  `sort` int DEFAULT '0' COMMENT 'Порядок отображения',
+  `is_active` tinyint(1) DEFAULT '1' COMMENT 'Активен',
+  `is_final` tinyint(1) DEFAULT '0' COMMENT 'Финальный статус',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -412,16 +442,16 @@ INSERT INTO `order_statuses` (`id`, `tenant_id`, `store_id`, `code`, `title`, `s
 --
 
 CREATE TABLE `order_time_options` (
-  `id` int(11) NOT NULL,
-  `tenant_id` int(11) DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `code` varchar(50) NOT NULL COMMENT 'asap | at_time | on_date',
-  `title` varchar(100) NOT NULL COMMENT 'Как можно скорее | Ко времени | На дату',
-  `description` varchar(150) DEFAULT NULL COMMENT 'Подсказка для пользователя',
-  `sort` int(11) DEFAULT 0,
-  `is_active` tinyint(1) DEFAULT 1,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `id` int NOT NULL,
+  `tenant_id` int DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `code` varchar(50) COLLATE utf8mb4_general_ci NOT NULL COMMENT 'asap | at_time | on_date',
+  `title` varchar(100) COLLATE utf8mb4_general_ci NOT NULL COMMENT 'Как можно скорее | Ко времени | На дату',
+  `description` varchar(150) COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT 'Подсказка для пользователя',
+  `sort` int DEFAULT '0',
+  `is_active` tinyint(1) DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -440,17 +470,17 @@ INSERT INTO `order_time_options` (`id`, `tenant_id`, `store_id`, `code`, `title`
 --
 
 CREATE TABLE `prod_categories` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `code` varchar(64) NOT NULL,
-  `title` varchar(255) NOT NULL,
-  `icon` varchar(128) DEFAULT NULL,
-  `site_visibility` tinyint(1) NOT NULL DEFAULT 1,
-  `is_active` tinyint(1) NOT NULL DEFAULT 1,
-  `sort_order` int(11) NOT NULL DEFAULT 0,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL,
+  `store_id` int NOT NULL DEFAULT '1',
+  `code` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `icon` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `site_visibility` tinyint(1) NOT NULL DEFAULT '1',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `sort_order` int NOT NULL DEFAULT '0',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
@@ -474,65 +504,66 @@ INSERT INTO `prod_categories` (`id`, `tenant_id`, `store_id`, `code`, `title`, `
 --
 
 CREATE TABLE `prod_option_assignments` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `group_id` bigint(20) UNSIGNED NOT NULL,
-  `assign_type` enum('category','product') NOT NULL,
-  `assign_id` bigint(20) UNSIGNED NOT NULL,
-  `priority` int(11) NOT NULL DEFAULT 0,
-  `sort_order` int(11) NOT NULL DEFAULT 0,
-  `is_active` tinyint(1) NOT NULL DEFAULT 1,
-  `selection_type` enum('single','multiple') NOT NULL DEFAULT 'single',
-  `min_select` int(11) DEFAULT NULL,
-  `max_select` int(11) DEFAULT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `group_id` bigint UNSIGNED NOT NULL,
+  `assign_type` enum('category','product') COLLATE utf8mb4_general_ci NOT NULL,
+  `assign_id` bigint UNSIGNED NOT NULL,
+  `priority` int NOT NULL DEFAULT '0',
+  `sort_order` int NOT NULL DEFAULT '0',
+  `out_of_stock_action` tinyint(1) NOT NULL DEFAULT '1',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `selection_type` enum('single','multiple') COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'single',
+  `min_select` int DEFAULT NULL,
+  `max_select` int DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
 -- Дамп данных таблицы `prod_option_assignments`
 --
 
-INSERT INTO `prod_option_assignments` (`id`, `tenant_id`, `store_id`, `group_id`, `assign_type`, `assign_id`, `priority`, `sort_order`, `is_active`, `selection_type`, `min_select`, `max_select`, `created_at`, `updated_at`) VALUES
-(23, 1, 1, 4, 'product', 2, 0, 0, 1, 'single', NULL, NULL, '2026-01-10 09:04:26', '2026-01-10 09:04:26'),
-(24, 1, 1, 4, 'product', 1, 0, 0, 0, 'single', NULL, NULL, '2026-01-10 09:04:26', '2026-01-16 17:38:36'),
-(25, 1, 1, 4, 'product', 5, 0, 0, 1, 'single', NULL, NULL, '2026-01-10 09:04:26', '2026-01-10 09:04:26'),
-(59, 1, 1, 12, 'product', 2, 0, 0, 1, 'single', NULL, NULL, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
-(60, 1, 1, 12, 'product', 1, 0, 0, 0, 'single', NULL, NULL, '2026-01-12 18:07:16', '2026-01-16 15:55:04'),
-(61, 1, 1, 12, 'product', 5, 0, 0, 1, 'single', NULL, NULL, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
-(62, 1, 1, 12, 'product', 10, 0, 0, 1, 'single', NULL, NULL, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
-(63, 1, 1, 12, 'product', 9, 0, 0, 1, 'single', NULL, NULL, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
-(64, 1, 1, 12, 'product', 8, 0, 0, 1, 'single', NULL, NULL, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
-(69, 1, 1, 4, 'product', 15, 0, 0, 0, 'single', NULL, NULL, '2026-01-16 18:32:20', '2026-01-18 06:36:13'),
-(74, 1, 1, 12, 'product', 14, 0, 0, 0, 'single', NULL, NULL, '2026-01-17 17:33:52', '2026-01-18 06:56:33'),
-(75, 1, 1, 11, 'product', 14, 0, 0, 0, 'single', NULL, NULL, '2026-01-17 17:34:03', '2026-01-17 17:34:08'),
-(76, 1, 1, 8, 'product', 13, 0, 0, 0, 'single', NULL, NULL, '2026-01-19 05:49:32', '2026-01-20 10:02:47'),
-(78, 1, 1, 5, 'product', 13, 0, 0, 1, 'single', NULL, NULL, '2026-01-19 18:08:38', '2026-01-19 18:08:38'),
-(79, 1, 1, 5, 'product', 4, 0, 0, 1, 'single', NULL, NULL, '2026-01-19 18:08:38', '2026-01-19 18:08:38'),
-(80, 1, 1, 5, 'product', 7, 0, 0, 1, 'single', NULL, NULL, '2026-01-19 18:08:38', '2026-01-19 18:08:38'),
-(81, 1, 1, 6, 'product', 12, 0, 0, 1, 'single', NULL, NULL, '2026-01-19 18:09:04', '2026-01-19 18:09:04'),
-(82, 1, 1, 6, 'product', 6, 0, 0, 1, 'single', NULL, NULL, '2026-01-19 18:09:04', '2026-01-19 18:09:04'),
-(83, 1, 1, 9, 'product', 21, 0, 0, 1, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 04:14:19'),
-(84, 1, 1, 9, 'product', 18, 0, 0, 1, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 04:14:19'),
-(85, 1, 1, 9, 'product', 15, 0, 0, 1, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 04:14:19'),
-(86, 1, 1, 9, 'product', 12, 0, 0, 0, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 10:03:11'),
-(87, 1, 1, 9, 'product', 13, 0, 0, 0, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 10:02:48'),
-(88, 1, 1, 9, 'product', 16, 0, 0, 1, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 04:14:19'),
-(89, 1, 1, 9, 'product', 17, 0, 0, 1, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 04:14:19'),
-(90, 1, 1, 9, 'product', 14, 0, 0, 0, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 10:02:36'),
-(91, 1, 1, 9, 'product', 19, 0, 0, 1, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 04:14:19'),
-(92, 1, 1, 9, 'product', 20, 0, 0, 1, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 04:14:19'),
-(93, 1, 1, 10, 'product', 21, 0, 0, 1, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 04:27:28'),
-(94, 1, 1, 10, 'product', 18, 0, 0, 1, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 04:27:28'),
-(95, 1, 1, 10, 'product', 15, 0, 0, 1, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 04:27:28'),
-(96, 1, 1, 10, 'product', 12, 0, 0, 0, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 10:03:12'),
-(97, 1, 1, 10, 'product', 13, 0, 0, 0, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 10:02:49'),
-(98, 1, 1, 10, 'product', 16, 0, 0, 1, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 04:27:28'),
-(99, 1, 1, 10, 'product', 17, 0, 0, 1, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 04:27:28'),
-(100, 1, 1, 10, 'product', 14, 0, 0, 0, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 10:02:37'),
-(101, 1, 1, 10, 'product', 19, 0, 0, 1, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 04:27:28'),
-(102, 1, 1, 10, 'product', 20, 0, 0, 1, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 04:27:28');
+INSERT INTO `prod_option_assignments` (`id`, `tenant_id`, `store_id`, `group_id`, `assign_type`, `assign_id`, `priority`, `sort_order`, `out_of_stock_action`, `is_active`, `selection_type`, `min_select`, `max_select`, `created_at`, `updated_at`) VALUES
+(23, 1, 1, 4, 'product', 2, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-10 09:04:26', '2026-01-10 09:04:26'),
+(24, 1, 1, 4, 'product', 1, 0, 0, 1, 0, 'single', NULL, NULL, '2026-01-10 09:04:26', '2026-01-16 17:38:36'),
+(25, 1, 1, 4, 'product', 5, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-10 09:04:26', '2026-01-10 09:04:26'),
+(59, 1, 1, 12, 'product', 2, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
+(60, 1, 1, 12, 'product', 1, 0, 0, 1, 0, 'single', NULL, NULL, '2026-01-12 18:07:16', '2026-01-16 15:55:04'),
+(61, 1, 1, 12, 'product', 5, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
+(62, 1, 1, 12, 'product', 10, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
+(63, 1, 1, 12, 'product', 9, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
+(64, 1, 1, 12, 'product', 8, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-12 18:07:16', '2026-01-12 18:07:16'),
+(69, 1, 1, 4, 'product', 15, 0, 0, 1, 0, 'single', NULL, NULL, '2026-01-16 18:32:20', '2026-01-18 06:36:13'),
+(74, 1, 1, 12, 'product', 14, 0, 0, 1, 0, 'single', NULL, NULL, '2026-01-17 17:33:52', '2026-01-18 06:56:33'),
+(75, 1, 1, 11, 'product', 14, 0, 0, 1, 0, 'single', NULL, NULL, '2026-01-17 17:34:03', '2026-01-17 17:34:08'),
+(76, 1, 1, 8, 'product', 13, 0, 0, 1, 0, 'single', NULL, NULL, '2026-01-19 05:49:32', '2026-01-20 10:02:47'),
+(78, 1, 1, 5, 'product', 13, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-19 18:08:38', '2026-01-19 18:08:38'),
+(79, 1, 1, 5, 'product', 4, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-19 18:08:38', '2026-01-19 18:08:38'),
+(80, 1, 1, 5, 'product', 7, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-19 18:08:38', '2026-01-19 18:08:38'),
+(81, 1, 1, 6, 'product', 12, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-19 18:09:04', '2026-01-19 18:09:04'),
+(82, 1, 1, 6, 'product', 6, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-19 18:09:04', '2026-01-19 18:09:04'),
+(83, 1, 1, 9, 'product', 21, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 04:14:19'),
+(84, 1, 1, 9, 'product', 18, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 04:14:19'),
+(85, 1, 1, 9, 'product', 15, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 04:14:19'),
+(86, 1, 1, 9, 'product', 12, 0, 0, 1, 0, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 10:03:11'),
+(87, 1, 1, 9, 'product', 13, 0, 0, 1, 0, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 10:02:48'),
+(88, 1, 1, 9, 'product', 16, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 04:14:19'),
+(89, 1, 1, 9, 'product', 17, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 04:14:19'),
+(90, 1, 1, 9, 'product', 14, 0, 0, 1, 0, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 10:02:36'),
+(91, 1, 1, 9, 'product', 19, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 04:14:19'),
+(92, 1, 1, 9, 'product', 20, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-20 04:14:19', '2026-01-20 04:14:19'),
+(93, 1, 1, 10, 'product', 21, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 04:27:28'),
+(94, 1, 1, 10, 'product', 18, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 04:27:28'),
+(95, 1, 1, 10, 'product', 15, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 04:27:28'),
+(96, 1, 1, 10, 'product', 12, 0, 0, 1, 0, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 10:03:12'),
+(97, 1, 1, 10, 'product', 13, 0, 0, 1, 0, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 10:02:49'),
+(98, 1, 1, 10, 'product', 16, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 04:27:28'),
+(99, 1, 1, 10, 'product', 17, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 04:27:28'),
+(100, 1, 1, 10, 'product', 14, 0, 0, 1, 0, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 10:02:37'),
+(101, 1, 1, 10, 'product', 19, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 04:27:28'),
+(102, 1, 1, 10, 'product', 20, 0, 0, 1, 1, 'single', NULL, NULL, '2026-01-20 04:27:28', '2026-01-20 04:27:28');
 
 -- --------------------------------------------------------
 
@@ -541,12 +572,12 @@ INSERT INTO `prod_option_assignments` (`id`, `tenant_id`, `store_id`, `group_id`
 --
 
 CREATE TABLE `prod_option_exclusions` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `product_id` bigint(20) UNSIGNED NOT NULL,
-  `group_id` bigint(20) UNSIGNED NOT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `product_id` bigint UNSIGNED NOT NULL,
+  `group_id` bigint UNSIGNED NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -556,34 +587,35 @@ CREATE TABLE `prod_option_exclusions` (
 --
 
 CREATE TABLE `prod_option_groups` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `title` varchar(255) NOT NULL,
-  `selection_type` enum('single','multiple') NOT NULL DEFAULT 'single',
-  `min_select` int(10) UNSIGNED NOT NULL DEFAULT 0,
-  `max_select` int(10) UNSIGNED DEFAULT NULL,
-  `is_active` tinyint(1) NOT NULL DEFAULT 1,
-  `sort_order` int(11) NOT NULL DEFAULT 0,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
-  `is_required` tinyint(1) NOT NULL DEFAULT 1,
-  `allow_variants` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Разрешить выбор вариантов для товаров-опций (0=нет, 1=да)'
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `title` varchar(255) COLLATE utf8mb4_general_ci NOT NULL,
+  `selection_type` enum('single','multiple') COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'single',
+  `min_select` int UNSIGNED NOT NULL DEFAULT '0',
+  `max_select` int UNSIGNED DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `sort_order` int NOT NULL DEFAULT '0',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `is_required` tinyint(1) NOT NULL DEFAULT '1',
+  `allow_variants` tinyint(1) NOT NULL DEFAULT '0' COMMENT 'Разрешить выбор вариантов для товаров-опций (0=нет, 1=да)',
+  `out_of_stock_action` tinyint(1) NOT NULL DEFAULT '1'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
 -- Дамп данных таблицы `prod_option_groups`
 --
 
-INSERT INTO `prod_option_groups` (`id`, `tenant_id`, `store_id`, `title`, `selection_type`, `min_select`, `max_select`, `is_active`, `sort_order`, `created_at`, `updated_at`, `is_required`, `allow_variants`) VALUES
-(4, 1, 1, 'По щам', 'single', 0, NULL, 1, 0, '2026-01-10 09:03:50', '2026-01-10 09:03:50', 1, 0),
-(5, 1, 1, 'Гарнир', 'single', 0, NULL, 1, 0, '2026-01-10 10:22:35', '2026-01-20 09:49:54', 1, 1),
-(6, 1, 1, 'Горячее', 'single', 0, NULL, 1, 0, '2026-01-10 10:49:58', '2026-01-20 09:49:58', 1, 1),
-(8, 1, 1, 'Суп', 'single', 0, NULL, 1, 0, '2026-01-11 05:28:56', '2026-01-11 05:28:56', 1, 0),
-(9, 1, 1, 'Соусы', 'multiple', 0, NULL, 1, 0, '2026-01-11 11:29:52', '2026-01-20 06:56:14', 0, 0),
-(10, 1, 1, 'Комбо', 'multiple', 0, NULL, 1, 0, '2026-01-11 11:30:37', '2026-01-11 11:30:37', 1, 0),
-(11, 1, 1, 'Обязательна', 'single', 0, NULL, 1, 0, '2026-01-12 18:06:09', '2026-01-12 18:06:09', 1, 0),
-(12, 1, 1, 'Необязательна', 'single', 0, NULL, 1, 0, '2026-01-12 18:06:26', '2026-01-12 18:06:26', 0, 0);
+INSERT INTO `prod_option_groups` (`id`, `tenant_id`, `store_id`, `title`, `selection_type`, `min_select`, `max_select`, `is_active`, `sort_order`, `created_at`, `updated_at`, `is_required`, `allow_variants`, `out_of_stock_action`) VALUES
+(4, 1, 1, 'По щам', 'single', 0, NULL, 1, 0, '2026-01-10 09:03:50', '2026-01-10 09:03:50', 1, 0, 1),
+(5, 1, 1, 'Гарнир', 'single', 0, NULL, 1, 0, '2026-01-10 10:22:35', '2026-01-20 09:49:54', 1, 1, 1),
+(6, 1, 1, 'Горячее', 'single', 0, NULL, 1, 0, '2026-01-10 10:49:58', '2026-01-20 09:49:58', 1, 1, 1),
+(8, 1, 1, 'Суп', 'single', 0, NULL, 1, 0, '2026-01-11 05:28:56', '2026-01-11 05:28:56', 1, 0, 1),
+(9, 1, 1, 'Соусы', 'multiple', 0, NULL, 1, 0, '2026-01-11 11:29:52', '2026-01-20 06:56:14', 0, 0, 1),
+(10, 1, 1, 'Комбо', 'multiple', 0, NULL, 1, 0, '2026-01-11 11:30:37', '2026-01-11 11:30:37', 1, 0, 1),
+(11, 1, 1, 'Обязательна', 'single', 0, NULL, 1, 0, '2026-01-12 18:06:09', '2026-01-12 18:06:09', 1, 0, 1),
+(12, 1, 1, 'Необязательна', 'single', 0, NULL, 1, 0, '2026-01-12 18:06:26', '2026-01-12 18:06:26', 0, 0, 1);
 
 -- --------------------------------------------------------
 
@@ -592,23 +624,23 @@ INSERT INTO `prod_option_groups` (`id`, `tenant_id`, `store_id`, `title`, `selec
 --
 
 CREATE TABLE `prod_option_items` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `group_id` bigint(20) UNSIGNED NOT NULL,
-  `title` varchar(255) DEFAULT NULL,
-  `description` varchar(255) DEFAULT NULL,
-  `target_type` enum('custom','product','category_pick') NOT NULL DEFAULT 'custom',
-  `target_product_id` bigint(20) UNSIGNED DEFAULT NULL,
-  `target_category_id` bigint(20) UNSIGNED DEFAULT NULL,
-  `price_mode` enum('fixed','delta','from_target') NOT NULL DEFAULT 'delta',
-  `price_value` decimal(10,2) DEFAULT 0.00,
-  `qty_min` int(10) UNSIGNED NOT NULL DEFAULT 0,
-  `qty_max` int(10) UNSIGNED NOT NULL DEFAULT 1,
-  `is_active` tinyint(1) NOT NULL DEFAULT 1,
-  `sort_order` int(11) NOT NULL DEFAULT 0,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `group_id` bigint UNSIGNED NOT NULL,
+  `title` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `description` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `target_type` enum('custom','product','category_pick') COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'custom',
+  `target_product_id` bigint UNSIGNED DEFAULT NULL,
+  `target_category_id` bigint UNSIGNED DEFAULT NULL,
+  `price_mode` enum('fixed','delta','from_target') COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'delta',
+  `price_value` decimal(10,2) DEFAULT '0.00',
+  `qty_min` int UNSIGNED NOT NULL DEFAULT '0',
+  `qty_max` int UNSIGNED NOT NULL DEFAULT '1',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `sort_order` int NOT NULL DEFAULT '0',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -640,7 +672,7 @@ INSERT INTO `prod_option_items` (`id`, `tenant_id`, `store_id`, `group_id`, `tit
 (51, 1, 1, 12, NULL, NULL, 'product', 10, NULL, 'from_target', 0.00, 1, 1, 1, 30, '2026-01-12 18:06:26', '2026-01-12 18:06:26'),
 (52, 1, 1, 12, NULL, NULL, 'product', 9, NULL, 'from_target', 0.00, 1, 1, 1, 40, '2026-01-12 18:06:26', '2026-01-12 18:06:26'),
 (53, 1, 1, 12, NULL, NULL, 'product', 8, NULL, 'from_target', 0.00, 1, 1, 1, 50, '2026-01-12 18:06:26', '2026-01-12 18:06:26'),
-(57, 1, 1, 5, NULL, NULL, 'product', 21, NULL, 'from_target', NULL, 1, 1, 1, 0, '2026-01-19 18:08:38', '2026-01-19 18:08:38'),
+(57, 1, 1, 5, NULL, NULL, 'product', 21, NULL, 'from_target', 0.00, 1, 1, 1, 0, '2026-01-19 18:08:38', '2026-01-22 14:12:14'),
 (58, 1, 1, 5, NULL, NULL, 'product', 12, NULL, 'from_target', NULL, 1, 1, 1, 10, '2026-01-19 18:08:38', '2026-01-19 18:08:38'),
 (59, 1, 1, 5, NULL, NULL, 'product', 6, NULL, 'from_target', NULL, 1, 1, 1, 20, '2026-01-19 18:08:38', '2026-01-19 18:08:38'),
 (60, 1, 1, 6, NULL, NULL, 'product', 13, NULL, 'from_target', NULL, 1, 1, 1, 0, '2026-01-19 18:09:04', '2026-01-19 18:09:04'),
@@ -654,17 +686,17 @@ INSERT INTO `prod_option_items` (`id`, `tenant_id`, `store_id`, `group_id`, `tit
 --
 
 CREATE TABLE `prod_option_overrides` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `product_id` bigint(20) UNSIGNED NOT NULL,
-  `group_id` bigint(20) UNSIGNED NOT NULL,
-  `min_select` int(10) UNSIGNED DEFAULT NULL,
-  `max_select` int(10) UNSIGNED DEFAULT NULL,
-  `selection_type` enum('single','multiple') DEFAULT NULL,
-  `sort_order` int(11) DEFAULT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `product_id` bigint UNSIGNED NOT NULL,
+  `group_id` bigint UNSIGNED NOT NULL,
+  `min_select` int UNSIGNED DEFAULT NULL,
+  `max_select` int UNSIGNED DEFAULT NULL,
+  `selection_type` enum('single','multiple') COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `sort_order` int DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -674,23 +706,23 @@ CREATE TABLE `prod_option_overrides` (
 --
 
 CREATE TABLE `prod_products` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `name` varchar(255) NOT NULL,
-  `sku` varchar(64) DEFAULT NULL,
-  `description_short` varchar(500) DEFAULT NULL,
-  `description` text DEFAULT NULL,
-  `price` decimal(12,2) NOT NULL DEFAULT 0.00,
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL,
+  `store_id` int NOT NULL DEFAULT '1',
+  `name` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `sku` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `description_short` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `description` text COLLATE utf8mb4_unicode_ci,
+  `price` decimal(12,2) NOT NULL DEFAULT '0.00',
   `old_price` decimal(12,2) DEFAULT NULL,
   `cost_price` decimal(12,2) DEFAULT NULL,
-  `unit_id` bigint(20) UNSIGNED DEFAULT NULL COMMENT 'Единица измерения товара',
-  `photos_json` text DEFAULT NULL,
-  `is_active` tinyint(1) NOT NULL DEFAULT 1,
-  `site_visibility` tinyint(1) NOT NULL DEFAULT 1,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
-  `base_unit_id` bigint(20) UNSIGNED DEFAULT NULL COMMENT 'Базовая единица измерения',
+  `unit_id` bigint UNSIGNED DEFAULT NULL COMMENT 'Единица измерения товара',
+  `photos_json` text COLLATE utf8mb4_unicode_ci,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `site_visibility` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `base_unit_id` bigint UNSIGNED DEFAULT NULL COMMENT 'Базовая единица измерения',
   `base_qty` decimal(12,3) DEFAULT NULL COMMENT 'Количество базовой единицы для цены'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -704,7 +736,7 @@ INSERT INTO `prod_products` (`id`, `tenant_id`, `store_id`, `name`, `sku`, `desc
 (3, 1, 1, 'Пюре с сосисками', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 678.00, 999.00, NULL, 6, '[\"/static/uploads/products/1/cbffc8a00b3f750e1cef0127ddda7aff.png\"]', 1, 1, '2026-01-05 15:54:34', '2026-01-17 10:23:23', NULL, NULL),
 (4, 1, 1, 'Рыбная котлета', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 149.00, 179.00, NULL, NULL, '[\"/static/uploads/products/1/446502b1bce3809a4303e8c7f4345d51.jpg\"]', 1, 1, '2026-01-06 04:28:49', '2026-01-11 08:15:21', NULL, NULL),
 (5, 1, 1, 'Кола', NULL, '. «Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 120.00, NULL, 0.00, NULL, '[\"/static/uploads/products/1/854b87feeafab3c82453dcaa5ff8c9e0.jpg\"]', 1, 1, '2026-01-06 04:35:32', '2026-01-19 18:02:04', NULL, NULL),
-(6, 1, 1, 'Рис с овощами', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 149.00, 179.00, 0.00, 2, '[\"/static/uploads/products/1/b7d5215763b1e8b3a3a05564c83352f0.jpg\"]', 1, 1, '2026-01-06 07:37:17', '2026-01-21 10:28:45', 2, NULL),
+(6, 1, 1, 'Рис с овощами', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 800.00, 179.00, 0.00, 2, '[\"/static/uploads/products/1/b7d5215763b1e8b3a3a05564c83352f0.jpg\"]', 1, 1, '2026-01-06 07:37:17', '2026-01-21 14:02:36', 2, NULL),
 (7, 1, 1, 'Тефтели', NULL, '. «Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 149.00, 999.00, 0.00, 1, '[\"/static/uploads/products/1/09c238e8cea082a8ce2a57359b649b7d.jpg\"]', 1, 1, '2026-01-06 13:56:46', '2026-01-19 18:08:00', 1, NULL),
 (8, 1, 1, 'Мкароны с тефтелями', NULL, '«Белка — лесной житель', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 299.00, 347.00, NULL, NULL, '[\"/static/uploads/products/1/d47962e1e258c2369161a1c86ccf0e3b.jpg\"]', 1, 1, '2026-01-08 03:44:37', '2026-01-11 08:15:58', NULL, NULL),
 (9, 1, 1, 'Макароны с печенью', NULL, '«Белка — лесной житель.', 'Описание белки. «Белка — лесной житель. У неё маленькая голова и большие красивые глаза. Ушки с кисточками на концах, а хвостик пушистый. Шерсть рыжая и густая. Белка живёт в дупле дерева. Она питается орехами и грибами, а летом запасает корм на зиму».', 456.00, 678.00, NULL, NULL, '[\"/static/uploads/products/1/59e45a1798151b95d447fad186c77ff0.jpg\"]', 1, 1, '2026-01-08 03:45:00', '2026-01-11 08:16:07', NULL, NULL),
@@ -728,14 +760,14 @@ INSERT INTO `prod_products` (`id`, `tenant_id`, `store_id`, `name`, `sku`, `desc
 --
 
 CREATE TABLE `prod_product_categories` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `product_id` bigint(20) UNSIGNED NOT NULL,
-  `category_id` bigint(20) UNSIGNED NOT NULL,
-  `sort_order` int(11) NOT NULL DEFAULT 0,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL,
+  `store_id` int NOT NULL DEFAULT '1',
+  `product_id` bigint UNSIGNED NOT NULL,
+  `category_id` bigint UNSIGNED NOT NULL,
+  `sort_order` int NOT NULL DEFAULT '0',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
@@ -746,7 +778,6 @@ INSERT INTO `prod_product_categories` (`id`, `tenant_id`, `store_id`, `product_i
 (1, 1, 1, 1, 1, 30, '2026-01-03 10:03:50', '2026-01-17 11:06:00'),
 (3, 1, 1, 1, 2, 10, '2026-01-03 11:03:56', '2026-01-03 11:03:56'),
 (5, 1, 1, 2, 1, 40, '2026-01-03 12:54:21', '2026-01-17 11:06:00'),
-(10, 1, 1, 2, 2, 0, '2026-01-03 13:10:31', '2026-01-03 13:10:34'),
 (17, 1, 1, 3, 1, 50, '2026-01-05 15:54:34', '2026-01-17 11:05:57'),
 (19, 1, 1, 4, 1, 60, '2026-01-06 04:28:49', '2026-01-17 11:05:57'),
 (20, 1, 1, 4, 4, 0, '2026-01-06 04:28:49', '2026-01-17 13:30:29'),
@@ -793,21 +824,21 @@ INSERT INTO `prod_product_categories` (`id`, `tenant_id`, `store_id`, `product_i
 --
 
 CREATE TABLE `prod_product_ingredients` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `product_id` bigint(20) UNSIGNED NOT NULL COMMENT 'Товар, который состоит из ингредиентов',
-  `ingredient_id` bigint(20) UNSIGNED NOT NULL COMMENT 'Товар-ингредиент',
-  `quantity` decimal(10,3) NOT NULL DEFAULT 1.000 COMMENT 'Базовое/начальное количество',
-  `unit_id` bigint(20) UNSIGNED NOT NULL COMMENT 'Единица измерения',
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `product_id` bigint UNSIGNED NOT NULL COMMENT 'Товар, который состоит из ингредиентов',
+  `ingredient_id` bigint UNSIGNED NOT NULL COMMENT 'Товар-ингредиент',
+  `quantity` decimal(10,3) NOT NULL DEFAULT '1.000' COMMENT 'Базовое/начальное количество',
+  `unit_id` bigint UNSIGNED NOT NULL COMMENT 'Единица измерения',
   `quantity_min` decimal(10,3) DEFAULT NULL COMMENT 'Минимальное количество (NULL = фиксированное)',
   `quantity_max` decimal(10,3) DEFAULT NULL COMMENT 'Максимальное количество',
   `quantity_step` decimal(10,3) DEFAULT NULL COMMENT 'Шаг изменения количества',
   `price_override` decimal(12,2) DEFAULT NULL COMMENT 'Переопределение цены (NULL = из каталога)',
-  `is_variable` tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Изменяемый состав для клиента (1=да, 0=нет)',
-  `sort_order` int(11) NOT NULL DEFAULT 0,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `is_variable` tinyint(1) NOT NULL DEFAULT '1' COMMENT 'Изменяемый состав для клиента (1=да, 0=нет)',
+  `sort_order` int NOT NULL DEFAULT '0',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -827,19 +858,62 @@ INSERT INTO `prod_product_ingredients` (`id`, `tenant_id`, `store_id`, `product_
 -- --------------------------------------------------------
 
 --
+-- Структура таблицы `prod_product_stocks`
+--
+
+CREATE TABLE `prod_product_stocks` (
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL,
+  `store_id` int NOT NULL DEFAULT '1',
+  `product_id` bigint UNSIGNED NOT NULL,
+  `qty` decimal(12,3) DEFAULT NULL COMMENT 'NULL = бесконечный остаток, 0 = нет в наличии',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Дамп данных таблицы `prod_product_stocks`
+--
+
+INSERT INTO `prod_product_stocks` (`id`, `tenant_id`, `store_id`, `product_id`, `qty`, `created_at`, `updated_at`) VALUES
+(1, 1, 1, 1, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(2, 1, 1, 2, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(3, 1, 1, 3, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(4, 1, 1, 4, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(5, 1, 1, 5, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(6, 1, 1, 6, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(7, 1, 1, 7, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(8, 1, 1, 8, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(9, 1, 1, 9, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(10, 1, 1, 10, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(11, 1, 1, 11, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(12, 1, 1, 12, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(13, 1, 1, 13, NULL, '2026-01-24 11:30:44', '2026-01-24 12:03:35'),
+(14, 1, 1, 14, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(15, 1, 1, 15, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(16, 1, 1, 16, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(17, 1, 1, 17, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(18, 1, 1, 18, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(19, 1, 1, 19, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(20, 1, 1, 20, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44'),
+(21, 1, 1, 21, NULL, '2026-01-24 11:30:44', '2026-01-24 11:30:44');
+
+-- --------------------------------------------------------
+
+--
 -- Структура таблицы `prod_product_unit_links`
 --
 
 CREATE TABLE `prod_product_unit_links` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `product_id` bigint(20) UNSIGNED NOT NULL,
-  `unit_id` bigint(20) UNSIGNED NOT NULL COMMENT 'Связанная единица (например шт)',
-  `base_unit_id` bigint(20) UNSIGNED NOT NULL COMMENT 'Базовая единица товара',
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `product_id` bigint UNSIGNED NOT NULL,
+  `unit_id` bigint UNSIGNED NOT NULL COMMENT 'Связанная единица (например шт)',
+  `base_unit_id` bigint UNSIGNED NOT NULL COMMENT 'Базовая единица товара',
   `factor` decimal(18,6) NOT NULL COMMENT 'Сколько base_unit в 1 unit',
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -849,16 +923,16 @@ CREATE TABLE `prod_product_unit_links` (
 --
 
 CREATE TABLE `prod_units` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `code` varchar(50) NOT NULL COMMENT 'Системный код единицы (шт, кг, г, л, мл, порц)',
-  `title` varchar(100) NOT NULL COMMENT 'Название единицы (Штука, Килограмм, Грамм)',
-  `short_title` varchar(20) DEFAULT NULL COMMENT 'Краткое название (шт, кг, г)',
-  `sort_order` int(11) NOT NULL DEFAULT 0,
-  `is_active` tinyint(1) NOT NULL DEFAULT 1,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `code` varchar(50) COLLATE utf8mb4_general_ci NOT NULL COMMENT 'Системный код единицы (шт, кг, г, л, мл, порц)',
+  `title` varchar(100) COLLATE utf8mb4_general_ci NOT NULL COMMENT 'Название единицы (Штука, Килограмм, Грамм)',
+  `short_title` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT 'Краткое название (шт, кг, г)',
+  `sort_order` int NOT NULL DEFAULT '0',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -880,15 +954,15 @@ INSERT INTO `prod_units` (`id`, `tenant_id`, `store_id`, `code`, `title`, `short
 --
 
 CREATE TABLE `prod_unit_conversions` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `from_unit_id` bigint(20) UNSIGNED NOT NULL,
-  `to_unit_id` bigint(20) UNSIGNED NOT NULL,
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `from_unit_id` bigint UNSIGNED NOT NULL,
+  `to_unit_id` bigint UNSIGNED NOT NULL,
   `factor` decimal(18,6) NOT NULL COMMENT 'Умножить значение в from_unit на factor, чтобы получить to_unit',
-  `is_active` tinyint(1) NOT NULL DEFAULT 1,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -908,16 +982,16 @@ INSERT INTO `prod_unit_conversions` (`id`, `tenant_id`, `store_id`, `from_unit_i
 --
 
 CREATE TABLE `prod_variant_assignments` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `product_id` bigint(20) UNSIGNED NOT NULL,
-  `variant_group_id` bigint(20) UNSIGNED NOT NULL,
-  `sort_order` int(11) NOT NULL DEFAULT 0,
-  `is_active` tinyint(1) NOT NULL DEFAULT 1,
-  `default_value_index` int(11) DEFAULT NULL COMMENT 'Индекс варианта по умолчанию для конкретного товара (NULL = использовать дефолт группы)',
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `product_id` bigint UNSIGNED NOT NULL,
+  `variant_group_id` bigint UNSIGNED NOT NULL,
+  `sort_order` int NOT NULL DEFAULT '0',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `default_value_index` int DEFAULT NULL COMMENT 'Индекс варианта по умолчанию для конкретного товара (NULL = использовать дефолт группы)',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -925,8 +999,8 @@ CREATE TABLE `prod_variant_assignments` (
 --
 
 INSERT INTO `prod_variant_assignments` (`id`, `tenant_id`, `store_id`, `product_id`, `variant_group_id`, `sort_order`, `is_active`, `default_value_index`, `created_at`, `updated_at`) VALUES
-(1, 1, 1, 13, 1, 0, 1, 2, '2026-01-19 05:48:13', '2026-01-21 08:58:35'),
-(2, 1, 1, 12, 2, 0, 1, 2, '2026-01-19 06:17:05', '2026-01-21 10:22:21'),
+(1, 1, 1, 13, 1, 0, 1, 0, '2026-01-19 05:48:13', '2026-01-21 14:01:43'),
+(2, 1, 1, 12, 2, 0, 1, 1, '2026-01-19 06:17:05', '2026-01-21 14:02:13'),
 (3, 1, 1, 1, 2, 0, 1, NULL, '2026-01-19 06:47:51', '2026-01-19 06:47:51'),
 (4, 1, 1, 21, 2, 0, 1, NULL, '2026-01-19 18:06:45', '2026-01-19 18:06:45'),
 (5, 1, 1, 7, 1, 0, 1, NULL, '2026-01-19 18:07:49', '2026-01-19 18:07:49'),
@@ -939,15 +1013,15 @@ INSERT INTO `prod_variant_assignments` (`id`, `tenant_id`, `store_id`, `product_
 --
 
 CREATE TABLE `prod_variant_discount_tiers` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `variant_group_id` bigint(20) UNSIGNED NOT NULL,
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `variant_group_id` bigint UNSIGNED NOT NULL,
   `min_quantity` decimal(10,3) NOT NULL COMMENT 'Минимальное количество для применения скидки',
-  `discount_percent` decimal(5,2) NOT NULL DEFAULT 0.00 COMMENT 'Процент скидки (0.00 - 100.00)',
-  `sort_order` int(11) NOT NULL DEFAULT 0,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `discount_percent` decimal(5,2) NOT NULL DEFAULT '0.00' COMMENT 'Процент скидки (0.00 - 100.00)',
+  `sort_order` int NOT NULL DEFAULT '0',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -974,18 +1048,18 @@ INSERT INTO `prod_variant_discount_tiers` (`id`, `tenant_id`, `store_id`, `varia
 --
 
 CREATE TABLE `prod_variant_groups` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `tenant_id` bigint(20) UNSIGNED NOT NULL DEFAULT 1,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `title` varchar(255) NOT NULL,
-  `unit_id` bigint(20) UNSIGNED DEFAULT NULL COMMENT 'Единица измерения для вариантов',
-  `values` text DEFAULT NULL COMMENT 'JSON массив значений вариантов (например: ["1","2","3","4"] или ["150г","250г","350г"])',
-  `default_value_index` int(11) DEFAULT NULL COMMENT 'Индекс варианта по умолчанию в массиве values (0-based, NULL = нет дефолта)',
-  `selection_type` enum('single') NOT NULL DEFAULT 'single',
-  `is_active` tinyint(1) NOT NULL DEFAULT 1,
-  `sort_order` int(11) NOT NULL DEFAULT 0,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
+  `store_id` int NOT NULL DEFAULT '1',
+  `title` varchar(255) COLLATE utf8mb4_general_ci NOT NULL,
+  `unit_id` bigint UNSIGNED DEFAULT NULL COMMENT 'Единица измерения для вариантов',
+  `values` text COLLATE utf8mb4_general_ci COMMENT 'JSON массив значений вариантов (например: ["1","2","3","4"] или ["150г","250г","350г"])',
+  `default_value_index` int DEFAULT NULL COMMENT 'Индекс варианта по умолчанию в массиве values (0-based, NULL = нет дефолта)',
+  `selection_type` enum('single') COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'single',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `sort_order` int NOT NULL DEFAULT '0',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -1004,21 +1078,39 @@ INSERT INTO `prod_variant_groups` (`id`, `tenant_id`, `store_id`, `title`, `unit
 --
 
 CREATE TABLE `ten_tenants` (
-  `id` int(11) NOT NULL,
-  `store_id` int(11) NOT NULL DEFAULT 1,
-  `name` varchar(100) DEFAULT 'Мой Магазин'
+  `id` int NOT NULL,
+  `store_id` int NOT NULL DEFAULT '1',
+  `name` varchar(100) COLLATE utf8mb4_general_ci DEFAULT 'Мой Магазин',
+  `slug` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `subdomain` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `email` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `password_hash` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `phone` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
 -- Дамп данных таблицы `ten_tenants`
 --
 
-INSERT INTO `ten_tenants` (`id`, `store_id`, `name`) VALUES
-(1, 1, 'Тестовая Точка');
+INSERT INTO `ten_tenants` (`id`, `store_id`, `name`, `slug`, `subdomain`, `email`, `password_hash`, `phone`, `is_active`, `created_at`, `updated_at`) VALUES
+(1, 1, 'Тестовая Точка', NULL, NULL, 'admin@test.ru', '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', NULL, 1, '2026-01-21 13:07:16', '2026-01-21 13:15:27');
 
 --
 -- Индексы сохранённых таблиц
 --
+
+--
+-- Индексы таблицы `app_users`
+--
+ALTER TABLE `app_users`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_app_users_email` (`email`),
+  ADD UNIQUE KEY `uq_app_users_tenant_email` (`tenant_id`,`email`),
+  ADD KEY `idx_app_users_tenant` (`tenant_id`),
+  ADD KEY `idx_app_users_tenant_active` (`tenant_id`,`is_active`);
 
 --
 -- Индексы таблицы `cust_customers`
@@ -1198,6 +1290,16 @@ ALTER TABLE `prod_product_ingredients`
   ADD KEY `fk_prod_ingr_unit` (`unit_id`);
 
 --
+-- Индексы таблицы `prod_product_stocks`
+--
+ALTER TABLE `prod_product_stocks`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_prod_product_stocks_tenant_store_product` (`tenant_id`,`store_id`,`product_id`),
+  ADD KEY `idx_prod_product_stocks_tenant_store` (`tenant_id`,`store_id`),
+  ADD KEY `idx_prod_product_stocks_product` (`product_id`),
+  ADD KEY `fk_prod_product_stocks_product` (`tenant_id`,`product_id`);
+
+--
 -- Индексы таблицы `prod_product_unit_links`
 --
 ALTER TABLE `prod_product_unit_links`
@@ -1258,158 +1360,176 @@ ALTER TABLE `ten_tenants`
 --
 
 --
+-- AUTO_INCREMENT для таблицы `app_users`
+--
+ALTER TABLE `app_users`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+
+--
 -- AUTO_INCREMENT для таблицы `cust_customers`
 --
 ALTER TABLE `cust_customers`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT для таблицы `cust_customer_addresses`
 --
 ALTER TABLE `cust_customer_addresses`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT для таблицы `cust_customer_sessions`
 --
 ALTER TABLE `cust_customer_sessions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=25;
 
 --
 -- AUTO_INCREMENT для таблицы `cust_statuses`
 --
 ALTER TABLE `cust_statuses`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT для таблицы `order_delivery_types`
 --
 ALTER TABLE `order_delivery_types`
-  MODIFY `id` int(11) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+  MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT для таблицы `order_orders`
 --
 ALTER TABLE `order_orders`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=32;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT для таблицы `order_payments`
 --
 ALTER TABLE `order_payments`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT для таблицы `order_statuses`
 --
 ALTER TABLE `order_statuses`
-  MODIFY `id` int(11) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
 
 --
 -- AUTO_INCREMENT для таблицы `order_time_options`
 --
 ALTER TABLE `order_time_options`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_categories`
 --
 ALTER TABLE `prod_categories`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_option_assignments`
 --
 ALTER TABLE `prod_option_assignments`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=103;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=103;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_option_exclusions`
 --
 ALTER TABLE `prod_option_exclusions`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_option_groups`
 --
 ALTER TABLE `prod_option_groups`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_option_items`
 --
 ALTER TABLE `prod_option_items`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=63;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=63;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_option_overrides`
 --
 ALTER TABLE `prod_option_overrides`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_products`
 --
 ALTER TABLE `prod_products`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=22;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=22;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_product_categories`
 --
 ALTER TABLE `prod_product_categories`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=642;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=642;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_product_ingredients`
 --
 ALTER TABLE `prod_product_ingredients`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=20;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=20;
+
+--
+-- AUTO_INCREMENT для таблицы `prod_product_stocks`
+--
+ALTER TABLE `prod_product_stocks`
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=34;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_product_unit_links`
 --
 ALTER TABLE `prod_product_unit_links`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_units`
 --
 ALTER TABLE `prod_units`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_unit_conversions`
 --
 ALTER TABLE `prod_unit_conversions`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_variant_assignments`
 --
 ALTER TABLE `prod_variant_assignments`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_variant_discount_tiers`
 --
 ALTER TABLE `prod_variant_discount_tiers`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_variant_groups`
 --
 ALTER TABLE `prod_variant_groups`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT для таблицы `ten_tenants`
 --
 ALTER TABLE `ten_tenants`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
 
 --
 -- Ограничения внешнего ключа сохраненных таблиц
 --
+
+--
+-- Ограничения внешнего ключа таблицы `app_users`
+--
+ALTER TABLE `app_users`
+  ADD CONSTRAINT `fk_app_users_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `ten_tenants` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 --
 -- Ограничения внешнего ключа таблицы `cust_customers`
@@ -1477,6 +1597,12 @@ ALTER TABLE `prod_product_ingredients`
   ADD CONSTRAINT `fk_prod_ingr_ingredient` FOREIGN KEY (`tenant_id`,`ingredient_id`) REFERENCES `prod_products` (`tenant_id`, `id`) ON UPDATE CASCADE,
   ADD CONSTRAINT `fk_prod_ingr_product` FOREIGN KEY (`tenant_id`,`product_id`) REFERENCES `prod_products` (`tenant_id`, `id`) ON DELETE CASCADE ON UPDATE CASCADE,
   ADD CONSTRAINT `fk_prod_ingr_unit` FOREIGN KEY (`unit_id`) REFERENCES `prod_units` (`id`) ON UPDATE CASCADE;
+
+--
+-- Ограничения внешнего ключа таблицы `prod_product_stocks`
+--
+ALTER TABLE `prod_product_stocks`
+  ADD CONSTRAINT `fk_prod_product_stocks_product` FOREIGN KEY (`tenant_id`,`product_id`) REFERENCES `prod_products` (`tenant_id`, `id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 --
 -- Ограничения внешнего ключа таблицы `prod_variant_assignments`
