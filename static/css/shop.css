@@ -52,6 +52,10 @@ html[data-theme="dark"]{
   --shop-buy-hover: #ea580c;
 }
 
+body.page-shop{
+  --column-scroll-pad: 1000px;
+}
+
 /* ==========================================================================
    Layout
    ========================================================================== */
@@ -68,6 +72,59 @@ body.page-shop #theme-toggle{
 
 body.page-shop .shop-toolbar-cart{
   display: none;
+}
+
+/* Chips under header (mobile categories) */
+.shop-cat-chips-wrap{
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: none;
+}
+.shop-cat-chips{
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 6px;
+  background: transparent;
+  scrollbar-width: none;
+}
+.shop-cat-chips::-webkit-scrollbar{ display: none; }
+.shop-cat-chip{
+  border: 1px solid var(--color-border);
+  background: #eef0f3;
+  color: var(--color-text);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-smooth), border-color var(--dur-fast) var(--ease-smooth);
+}
+.shop-cat-chip.is-active{
+  background: var(--shop-buy);
+  border-color: var(--shop-buy);
+  color: var(--shop-buy-text);
+}
+.shop-cat-chips-wrap{
+  position: relative;
+}
+.shop-cat-chips-wrap::before,
+.shop-cat-chips-wrap::after{
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 18px;
+  pointer-events: none;
+}
+.shop-cat-chips-wrap::before{
+  left: 0;
+  background: linear-gradient(90deg, var(--color-surface) 0%, rgba(255,255,255,0) 100%);
+}
+.shop-cat-chips-wrap::after{
+  right: 0;
+  background: linear-gradient(270deg, var(--color-surface) 0%, rgba(255,255,255,0) 100%);
 }
 
 /* Подхедер (toolbar) только на главной странице витрины */
@@ -100,6 +157,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 /* чтобы в products-panel можно было масштабировать элементы через container queries */
 .shop-col-products .panel-body{
   container-type: inline-size;
+  padding-bottom: 1000px;
 }
 
 /* мобилка: показываем только товары, категории/корзина через нижнее меню */
@@ -132,10 +190,24 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
     position: sticky;
     top: var(--header-height);
     z-index: 135;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0;
   }
 
   body.page-shop .center-stack > .panel:first-child .toolbar{
-    background: var(--color-surface);
+    background: transparent;
+    padding: 0 4px;
+    border: none;
+    box-shadow: none;
+  }
+
+  body.page-shop .center-stack > .panel:first-child .toolbar-title{
+    display: none;
+  }
+  body.page-shop .center-stack > .panel:first-child .shop-cat-chips-wrap{
+    display: block;
   }
 
   body.page-shop .main-container{
@@ -904,6 +976,16 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   .shop-cart-sheet .shop-address-content{
     padding-bottom: calc(12px + 70px + var(--shop-bottomnav-h) + var(--shop-sheet-scroll-pad) + env(safe-area-inset-bottom));
   }
+}
+
+.shop-category-header{
+  grid-column: 1 / -1;
+  font-weight: 900;
+  font-size: 18px;
+  color: var(--color-text);
+  margin-top: 8px;
+  padding: 4px 2px;
+  scroll-margin-top: 12px;
 }
 
 @media (max-width: 768px){

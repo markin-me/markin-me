@@ -14,11 +14,14 @@
     $("#shopProductsGrid") ||
     $("#shopProductsList") ||
     $("[data-shop-products]");
+  const elProductsScroller = document.querySelector(".shop-products-panel .panel-body");
 
   const elCategoryTitle =
     $("#shopCategoryTitle") ||
     $("#shopToolbarTitle") ||
     $("[data-shop-category-title]");
+  const elCatChipsWrap = $("#shopCatChipsWrap");
+  const elCatChips = $("#shopCatChips");
 
   const elCartList =
     $("#shopCartList") ||
@@ -400,8 +403,8 @@
   const state = {
     categories: [],
     activeCategoryId: null,
-    activeCategoryTitle: "Все товары",
-    products: [],
+    activeCategoryTitle: "Каталог",
+    productsByCategory: new Map(),
     productCache: new Map(),
     cart: loadCart(),
     optionGroupCache: new Map(),
@@ -417,6 +420,34 @@
   };
 
   let openCartSheetCtx = null;
+  let categoryHeaders = [];
+  let isProgrammaticCategoryScroll = false;
+  let categoryScrollRaf = null;
+
+  // -----------------------------
+  // Categories helpers
+  // -----------------------------
+  function isAllCategory(cat) {
+    return String(cat?.code || "").toLowerCase() === "all";
+  }
+
+  function getVisibleCategories() {
+    return state.categories.filter((c) => !isAllCategory(c));
+  }
+
+  function updateCategoriesActiveUi() {
+    $$(".shop-cat-item", elCatsList).forEach((x) => {
+      const id = Number(x.getAttribute("data-cat-id"));
+      x.classList.toggle("is-active", Number(state.activeCategoryId) === id);
+    });
+
+    if (elCatChips) {
+      $$(".shop-cat-chip", elCatChips).forEach((x) => {
+        const id = Number(x.getAttribute("data-cat-id"));
+        x.classList.toggle("is-active", Number(state.activeCategoryId) === id);
+      });
+    }
+  }
   
   // Система отслеживания состояния навигации в bottom sheets для обработки кнопки "назад"
   let sheetNavigationState = {
@@ -2065,10 +2096,154 @@ async function initAddresses() {
     return wrap;
   }
 
+  function setActiveCategory(categoryId, title, { scroll = false } = {}) {
+    const id = Number(categoryId);
+    if (!Number.isFinite(id)) return;
+
+    const nextTitle = str(title || "Категория");
+    state.activeCategoryId = id;
+    state.activeCategoryTitle = nextTitle;
+    if (elCategoryTitle) elCategoryTitle.textContent = nextTitle;
+
+    updateCategoriesActiveUi();
+    scrollChipsToCategory(id);
+
+    if (scroll) scrollToCategory(id);
+  }
+
+  function scrollToCategory(categoryId) {
+    const id = Number(categoryId);
+    if (!Number.isFinite(id)) return;
+    const header = elProductsGrid?.querySelector?.(`.shop-category-header[data-cat-id="${id}"]`);
+    if (!header) return;
+
+    isProgrammaticCategoryScroll = true;
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile) {
+      const headerH = Number(getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0;
+      const chipsPanel = document.querySelector(".center-stack > .panel:first-child");
+      const chipsH = chipsPanel?.getBoundingClientRect ? chipsPanel.getBoundingClientRect().height : 0;
+      const offset = headerH + chipsH + 50;
+      const rect = header.getBoundingClientRect();
+      const top = window.scrollY + rect.top - offset;
+      window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    } else {
+      const scroller = elProductsScroller;
+      const padTop = scroller ? Number.parseFloat(getComputedStyle(scroller).paddingTop || "0") : 0;
+      const offset = Math.max(0, padTop || 0) + 120;
+      if (elProductsScroller && typeof elProductsScroller.scrollTo === "function") {
+        const top = header.offsetTop - offset;
+        elProductsScroller.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+      } else if (typeof header.scrollIntoView === "function") {
+        header.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }
+
+    setTimeout(() => {
+      isProgrammaticCategoryScroll = false;
+    }, 450);
+  }
+
+  function refreshCategoryHeaders() {
+    categoryHeaders = Array.from(elProductsGrid?.querySelectorAll?.(".shop-category-header") || []);
+  }
+
+  function scrollChipsToCategory(categoryId) {
+    const id = Number(categoryId);
+    if (!Number.isFinite(id) || !elCatChips) return;
+    const chip = elCatChips.querySelector(`.shop-cat-chip[data-cat-id="${id}"]`);
+    if (!chip) return;
+
+    const scroller = elCatChips;
+    const wrap = elCatChipsWrap || elCatChips;
+    if (!scroller || !wrap) return;
+
+    const wrapRect = wrap.getBoundingClientRect();
+    const chipRect = chip.getBoundingClientRect();
+    const visibleLeft = wrapRect.left;
+    const visibleRight = wrapRect.right;
+    const paddingLeft = 12;
+
+    const target = Math.max(0, chip.offsetLeft - paddingLeft);
+    if (typeof scroller.scrollTo === "function") {
+      scroller.scrollTo({ left: target, behavior: "smooth" });
+    } else {
+      scroller.scrollLeft = target;
+    }
+  }
+
+  function updateActiveCategoryFromScroll() {
+    if (!categoryHeaders.length) return;
+    if (isProgrammaticCategoryScroll) return;
+
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    let containerTop = 0;
+    let offset = 0;
+    if (isMobile) {
+      const headerH = Number(getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0;
+      const chipsPanel = document.querySelector(".center-stack > .panel:first-child");
+      const chipsH = chipsPanel?.getBoundingClientRect ? chipsPanel.getBoundingClientRect().height : 0;
+      offset = headerH + chipsH + 50;
+      containerTop = 0;
+    } else {
+      containerTop = elProductsScroller?.getBoundingClientRect
+        ? elProductsScroller.getBoundingClientRect().top
+        : 0;
+      const scroller = elProductsScroller;
+      const padTop = scroller ? Number.parseFloat(getComputedStyle(scroller).paddingTop || "0") : 0;
+      offset = Math.max(0, padTop || 0) + 120;
+    }
+
+    let activeHeader = categoryHeaders[0];
+    if (!isMobile && elProductsScroller) {
+      const scrollTop = elProductsScroller.scrollTop || 0;
+      for (const h of categoryHeaders) {
+        const top = h.offsetTop - scrollTop;
+        if (top <= offset) activeHeader = h;
+        else break;
+      }
+    } else {
+      for (const h of categoryHeaders) {
+        const top = h.getBoundingClientRect().top - containerTop;
+        if (top <= offset) activeHeader = h;
+        else break;
+      }
+    }
+
+    const nextId = Number(activeHeader?.dataset?.catId);
+    if (!Number.isFinite(nextId) || nextId === Number(state.activeCategoryId)) return;
+    const nextTitle = activeHeader?.dataset?.catTitle || "";
+    setActiveCategory(nextId, nextTitle, { scroll: false });
+  }
+
+  function bindCategoryScrollSpy() {
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    const scroller = isMobile ? window : (elProductsScroller || window);
+    if (!scroller || !scroller.addEventListener) return;
+    scroller.addEventListener("scroll", () => {
+      if (categoryScrollRaf) return;
+      categoryScrollRaf = requestAnimationFrame(() => {
+        categoryScrollRaf = null;
+        updateActiveCategoryFromScroll();
+      });
+    });
+
+    // Desktop fallback: also listen on window in case scroll container changes
+    if (!isMobile && scroller !== window) {
+      window.addEventListener("scroll", () => {
+        if (categoryScrollRaf) return;
+        categoryScrollRaf = requestAnimationFrame(() => {
+          categoryScrollRaf = null;
+          updateActiveCategoryFromScroll();
+        });
+      });
+    }
+  }
+
   function renderCategories() {
     elCatsList.innerHTML = "";
 
-    state.categories.forEach((c) => {
+    getVisibleCategories().forEach((c) => {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "shop-cat-item";
@@ -2095,6 +2270,29 @@ async function initAddresses() {
 
       elCatsList.appendChild(btn);
     });
+  }
+
+  function renderCategoryChips() {
+    if (!elCatChips) return;
+    elCatChips.innerHTML = "";
+
+    getVisibleCategories().forEach((c) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shop-cat-chip";
+      btn.setAttribute("data-cat-id", String(c.id));
+      btn.textContent = str(c.title);
+      if (Number(state.activeCategoryId) === Number(c.id)) btn.classList.add("is-active");
+
+      btn.addEventListener("click", () => {
+        selectCategory(c.id, c.title);
+      });
+
+      elCatChips.appendChild(btn);
+    });
+
+    if (elCatChipsWrap) elCatChipsWrap.classList.remove("hidden");
+    scrollChipsToCategory(state.activeCategoryId);
   }
 
   // -----------------------------
@@ -2235,13 +2433,21 @@ async function initAddresses() {
   function renderProducts() {
     elProductsGrid.innerHTML = "";
 
-    if (!state.products.length) {
-      if (elProductsEmpty) elProductsEmpty.classList.remove("hidden");
-    } else {
-      if (elProductsEmpty) elProductsEmpty.classList.add("hidden");
-    }
+    const categories = getVisibleCategories();
+    let totalProducts = 0;
 
-    state.products.forEach((p) => {
+    categories.forEach((c) => {
+      const header = document.createElement("div");
+      header.className = "shop-category-header";
+      header.setAttribute("data-cat-id", String(c.id));
+      header.setAttribute("data-cat-title", str(c.title));
+      header.textContent = str(c.title);
+      elProductsGrid.appendChild(header);
+
+      const products = state.productsByCategory.get(Number(c.id)) || [];
+      totalProducts += products.length;
+
+      products.forEach((p) => {
       const id = p.id;
       const qty = cartQty(id);
       const photos = safePhotos(p);
@@ -2324,9 +2530,16 @@ async function initAddresses() {
       
       // Асинхронно обновляем цену с учётом вариантов и опций по умолчанию
       updateCardPrice(card, p);
+      });
     });
 
+    if (elProductsEmpty) {
+      if (totalProducts === 0) elProductsEmpty.classList.remove("hidden");
+      else elProductsEmpty.classList.add("hidden");
+    }
+
     updateCartBadge();
+    refreshCategoryHeaders();
   }
 
   function applyCardState(card, product, qty, dir) {
@@ -3017,9 +3230,11 @@ function updateCartBadge() {
 
     saveCart();
 
-    const card = elProductsGrid.querySelector(`.sp-card[data-product-id="${pid}"]`);
+    const cards = elProductsGrid.querySelectorAll(`.sp-card[data-product-id="${pid}"]`);
     const p = state.productCache.get(pid);
-    if (card && p) applyCardState(card, p, cartQty(pid), delta > 0 ? "inc" : "dec");
+    if (cards.length && p) {
+      cards.forEach((card) => applyCardState(card, p, cartQty(pid), delta > 0 ? "inc" : "dec"));
+    }
 
     if (optionalCartNumEl) animateNumber(optionalCartNumEl, nextQty || 0, delta > 0 ? "inc" : "dec");
 
@@ -3041,17 +3256,7 @@ function updateCartBadge() {
   // Category select + load
   // -----------------------------
   async function selectCategory(categoryId, title) {
-    state.activeCategoryId = Number(categoryId);
-    state.activeCategoryTitle = str(title || "Категория");
-    if (elCategoryTitle) elCategoryTitle.textContent = state.activeCategoryTitle;
-
-    $$(".shop-cat-item", elCatsList).forEach((x) => {
-      const id = Number(x.getAttribute("data-cat-id"));
-      x.classList.toggle("is-active", id === state.activeCategoryId);
-    });
-
-    await loadProducts();
-    renderProducts();
+    setActiveCategory(categoryId, title, { scroll: true });
     await warmupCartProducts();
     renderCart();
   }
@@ -3059,11 +3264,6 @@ function updateCartBadge() {
   async function loadCategories() {
     const json = await apiJson("/api/public/categories");
     state.categories = Array.isArray(json.data) ? json.data : [];
-
-    const hasAll = state.categories.some((c) => c.code === "all");
-    if (!hasAll) {
-      state.categories.unshift({ id: 0, title: "Все товары", icon: null, code: "all" });
-    }
   }
 
   async function loadUnitConversions() {
@@ -3195,23 +3395,26 @@ function updateCartBadge() {
     return factor != null ? Number(qty || 0) * factor : null;
   }
 
-  async function loadProducts() {
-    const cid = state.activeCategoryId ?? 0;
-    const url =
-      cid && cid !== 0
-        ? `/api/public/products?category_id=${encodeURIComponent(cid)}`
-        : `/api/public/products?category_code=all`;
+  async function loadProductsByCategory() {
+    const categories = getVisibleCategories();
+    const entries = await Promise.all(
+      categories.map(async (c) => {
+        try {
+          const json = await apiJson(`/api/public/products?category_id=${encodeURIComponent(c.id)}`);
+          const list = Array.isArray(json.data) ? json.data : [];
+          for (const p of list) {
+            if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
+            state.productCache.set(Number(p.id), p);
+          }
+          return [Number(c.id), list];
+        } catch (e) {
+          console.warn("loadProductsByCategory: failed for category", c.id, e);
+          return [Number(c.id), []];
+        }
+      })
+    );
 
-    const json = await apiJson(url);
-    state.products = Array.isArray(json.data) ? json.data : [];
-
-    // ВАЖНО: не очищаем productCache при смене категории.
-    // Корзина рендерится из productCache, поэтому очистка приводила к тому,
-    // что товары вне выбранной категории «пропадали» из корзины.
-    for (const p of state.products) {
-      if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
-      state.productCache.set(Number(p.id), p);
-    }
+    state.productsByCategory = new Map(entries);
   }
 
   // -----------------------------
@@ -6055,7 +6258,7 @@ function openCategoriesSheet() {
   const list = document.createElement("div");
   list.className = "shop-sheet-list";
 
-  state.categories.forEach((c) => {
+  getVisibleCategories().forEach((c) => {
     const row = document.createElement("button");
     row.type = "button";
     row.className = "shop-sheet-row";
@@ -8815,6 +9018,9 @@ function setBottomNavActive(tab) {
   // -----------------------------
 async function init() {
   try {
+    if ("scrollRestoration" in history) {
+      history.scrollRestoration = "manual";
+    }
     const pathname = String(window.location.pathname || "");
     if (pathname === "/shop" || pathname === "/shop/") {
       document.body.classList.add("shop-main");
@@ -8825,18 +9031,26 @@ async function init() {
     await loadCategories();
     await loadUnitConversions();
     renderCategories();
+    renderCategoryChips();
 
-    const all = state.categories.find((c) => c.code === "all") || state.categories[0];
-    state.activeCategoryId = all ? Number(all.id) : 0;
-    state.activeCategoryTitle = all ? str(all.title) : "Все товары";
-    if (elCategoryTitle) elCategoryTitle.textContent = state.activeCategoryTitle;
+    const visibleCategories = getVisibleCategories();
+    const first = visibleCategories[0] || null;
+    if (first) {
+      setActiveCategory(first.id, first.title, { scroll: false });
+    } else {
+      state.activeCategoryId = null;
+      state.activeCategoryTitle = "Каталог";
+      if (elCategoryTitle) elCategoryTitle.textContent = state.activeCategoryTitle;
+    }
 
-    await loadProducts();
+    await loadProductsByCategory();
     renderProducts();
+    bindCategoryScrollSpy();
     await warmupCartProducts();
     renderCart();
     updateCartBadge();
     await initAddresses();
+    try { window.scrollTo(0, 0); } catch {}
 
     if (elCartContent && !elCartContent.classList.contains("hidden")) {
       showCartView();
