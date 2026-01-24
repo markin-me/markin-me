@@ -190,6 +190,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   router.get('/prod_products', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const allCategoryId = await helpers.getAllCategoryId(db, tenantId);
 
       const categoryId = Number(req.query.category_id || allCategoryId);
@@ -197,13 +198,15 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       if (categoryId === allCategoryId) {
         const [rows] = await db.query(
-          `SELECT p.*, pc.sort_order AS link_sort_order
+          `SELECT p.*, pc.sort_order AS link_sort_order, s.qty AS stock_qty
            FROM prod_products p
+           LEFT JOIN prod_product_stocks s
+             ON s.tenant_id = p.tenant_id AND s.store_id = p.store_id AND s.product_id = p.id
            LEFT JOIN prod_product_categories pc
              ON pc.tenant_id = p.tenant_id AND pc.product_id = p.id AND pc.category_id = ?
-           WHERE p.tenant_id=?
+           WHERE p.tenant_id=? AND p.store_id=?
            ORDER BY COALESCE(pc.sort_order, 999999) ASC, p.id ASC`,
-          [categoryId, tenantId]
+          [categoryId, tenantId, storeId]
         );
 
         const missing = [];
@@ -235,13 +238,15 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       }
 
       const [rows] = await db.query(
-        `SELECT p.*, pc.sort_order AS link_sort_order
+        `SELECT p.*, pc.sort_order AS link_sort_order, s.qty AS stock_qty
          FROM prod_product_categories pc
          JOIN prod_products p
            ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
-         WHERE pc.tenant_id=? AND pc.category_id=?
+         LEFT JOIN prod_product_stocks s
+           ON s.tenant_id = p.tenant_id AND s.store_id = p.store_id AND s.product_id = p.id
+         WHERE pc.tenant_id=? AND pc.category_id=? AND p.store_id=?
          ORDER BY pc.sort_order ASC, pc.id ASC`,
-        [tenantId, categoryId]
+        [tenantId, categoryId, storeId]
       );
 
       for (const r of rows) r.photos = helpers.safeJsonArray(r.photos_json);
@@ -256,6 +261,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   router.post('/prod_products', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
 
       const name = helpers.strOrNull(req.body.name);
       if (!name) return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
@@ -270,6 +276,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const unit_id = helpers.numOrNull(req.body.unit_id);
       const base_unit_id = helpers.numOrNull(req.body.base_unit_id);
       const base_qty = helpers.numOrNull(req.body.base_qty);
+      const stock_qty = helpers.numOrNull(req.body.stock);
 
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
@@ -292,6 +299,13 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const categoryIds = Array.isArray(req.body.category_ids) ? req.body.category_ids : [];
       await helpers.setProductCategories(db, tenantId, productId, categoryIds);
 
+      await db.query(
+        `INSERT INTO prod_product_stocks (tenant_id, store_id, product_id, qty)
+         VALUES (?,?,?,?)
+         ON DUPLICATE KEY UPDATE qty=VALUES(qty)`,
+        [tenantId, storeId, productId, stock_qty]
+      );
+
       res.json({ ok: true, id: productId });
     } catch (e) {
       console.error(e);
@@ -302,6 +316,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   router.put('/prod_products/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
@@ -318,6 +333,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const unit_id = helpers.numOrNull(req.body.unit_id);
       const base_unit_id = helpers.numOrNull(req.body.base_unit_id);
       const base_qty = helpers.numOrNull(req.body.base_qty);
+      const stock_qty = helpers.numOrNull(req.body.stock);
 
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
@@ -339,6 +355,13 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const categoryIds = Array.isArray(req.body.category_ids) ? req.body.category_ids : [];
       await helpers.setProductCategories(db, tenantId, id, categoryIds);
+
+      await db.query(
+        `INSERT INTO prod_product_stocks (tenant_id, store_id, product_id, qty)
+         VALUES (?,?,?,?)
+         ON DUPLICATE KEY UPDATE qty=VALUES(qty)`,
+        [tenantId, storeId, id, stock_qty]
+      );
 
       res.json({ ok: true });
     } catch (e) {
@@ -537,6 +560,8 @@ router.post('/admin/options/group-bundle', async (req, res) => {
   // ✅ allow_variants (переключатель вариантов у пунктов опции)
   const allowVariants = helpers.toBool(group.allow_variants, false) ? 1 : 0;
 
+  const outOfStockAction = helpers.numOrNull(group.out_of_stock_action) ?? 1;
+
   const sortOrder = helpers.numOrNull(group.sort_order) ?? 0;
 
   const conn = await db.getConnection();
@@ -545,9 +570,9 @@ router.post('/admin/options/group-bundle', async (req, res) => {
 
     const [result] = await conn.query(
       `INSERT INTO prod_option_groups
-       (tenant_id, store_id, title, selection_type, min_select, max_select, is_active, is_required, allow_variants, sort_order)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      [tenantId, storeId, title, selectionType, minSelect, maxSelect, isActive, isRequired, allowVariants, sortOrder]
+       (tenant_id, store_id, title, selection_type, min_select, max_select, is_active, is_required, allow_variants, out_of_stock_action, sort_order)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [tenantId, storeId, title, selectionType, minSelect, maxSelect, isActive, isRequired, allowVariants, outOfStockAction, sortOrder]
     );
     const groupId = result.insertId;
 
@@ -597,15 +622,17 @@ router.post('/admin/options/group-bundle', async (req, res) => {
         Number(assignment.assign_id),
         helpers.numOrNull(assignment.priority) ?? 0,
         helpers.numOrNull(assignment.sort_order) ?? idx * 10,
+        helpers.numOrNull(assignment.out_of_stock_action) ?? 1,
         1
       ]));
       await conn.query(
         `INSERT INTO prod_option_assignments
-         (tenant_id, store_id, group_id, assign_type, assign_id, priority, sort_order, is_active)
+         (tenant_id, store_id, group_id, assign_type, assign_id, priority, sort_order, out_of_stock_action, is_active)
          VALUES ?
          ON DUPLICATE KEY UPDATE
            priority=VALUES(priority),
-           sort_order=VALUES(sort_order)`,
+           sort_order=VALUES(sort_order),
+           out_of_stock_action=VALUES(out_of_stock_action)`,
         [values]
       );
     }
@@ -675,6 +702,14 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     if (Object.prototype.hasOwnProperty.call(req.body, 'allow_variants')) {
       fields.push('allow_variants=?');
       values.push(helpers.toBool(req.body.allow_variants, false) ? 1 : 0);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body, 'out_of_stock_action')) {
+      const outOfStockAction = helpers.numOrNull(req.body.out_of_stock_action);
+      if (outOfStockAction != null) {
+        fields.push('out_of_stock_action=?');
+        values.push(outOfStockAction);
+      }
     }
 
     // ✅ is_required только для single
@@ -949,7 +984,22 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     const groupId = Number(req.params.id);
     if (!Number.isFinite(groupId) || groupId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
     const assignIds = Array.isArray(req.body.assign_ids) ? req.body.assign_ids : [];
-    const norm = Array.from(new Set(assignIds.map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0)));
+    const assignmentObjects = Array.isArray(req.body.assignments) ? req.body.assignments : [];
+    const normalizedAssignments = assignmentObjects
+      .map((item) => ({
+        assign_id: Number(item.assign_id ?? item.id),
+        out_of_stock_action: helpers.numOrNull(item.out_of_stock_action) ?? 1,
+        priority: helpers.numOrNull(item.priority) ?? 0,
+        sort_order: helpers.numOrNull(item.sort_order) ?? 0,
+      }))
+      .filter((item) => Number.isFinite(item.assign_id) && item.assign_id > 0);
+    const assignmentMap = new Map(normalizedAssignments.map((item) => [item.assign_id, item]));
+    const norm = Array.from(
+      new Set([
+        ...assignIds.map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0),
+        ...normalizedAssignments.map((item) => item.assign_id),
+      ])
+    );
     if (!norm.length) return res.status(400).json({ ok: false, error: 'EMPTY' });
 
       const conn = await db.getConnection();
@@ -970,11 +1020,12 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       for (const id of norm) {
         const row = map.get(id);
         if (!row) {
+          const payload = assignmentMap.get(id) || { out_of_stock_action: 1, priority: 0, sort_order: 0 };
           await conn.query(
             `INSERT INTO prod_option_assignments
-             (tenant_id, group_id, assign_type, assign_id, priority, sort_order, is_active)
-             VALUES (?,?,?,?,?,?,1)`,
-            [tenantId, groupId, 'product', id, 0, 0]
+             (tenant_id, group_id, assign_type, assign_id, priority, sort_order, out_of_stock_action, is_active)
+             VALUES (?,?,?,?,?,?,?,1)`,
+            [tenantId, groupId, 'product', id, payload.priority, payload.sort_order, payload.out_of_stock_action]
           );
           added.push(id);
           continue;
@@ -1001,13 +1052,15 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       const priority = helpers.numOrNull(req.body.priority);
       const sortOrder = helpers.numOrNull(req.body.sort_order);
+      const outOfStockAction = helpers.numOrNull(req.body.out_of_stock_action);
 
       await db.query(
         `UPDATE prod_option_assignments
          SET priority=COALESCE(?, priority),
-             sort_order=COALESCE(?, sort_order)
+             sort_order=COALESCE(?, sort_order),
+             out_of_stock_action=COALESCE(?, out_of_stock_action)
          WHERE tenant_id=? AND id=?`,
-        [priority, sortOrder, tenantId, id]
+        [priority, sortOrder, outOfStockAction, tenantId, id]
       );
 
       res.json({ ok: true });
@@ -1623,7 +1676,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       if (!Number.isFinite(productId) || productId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
       const [rows] = await db.query(
-        `SELECT a.id AS assignment_id, a.group_id, a.priority, a.sort_order, a.is_active,
+        `SELECT a.id AS assignment_id, a.group_id, a.priority, a.sort_order, a.is_active, a.out_of_stock_action,
                 g.title, g.selection_type, g.min_select, g.max_select
          FROM prod_option_assignments a
          JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id
@@ -1667,9 +1720,9 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         if (!row) {
           await conn.query(
             `INSERT INTO prod_option_assignments
-             (tenant_id, group_id, assign_type, assign_id, priority, sort_order, is_active)
-             VALUES (?,?,?,?,?,?,1)`,
-            [tenantId, groupId, 'product', productId, 0, 0]
+             (tenant_id, group_id, assign_type, assign_id, priority, sort_order, out_of_stock_action, is_active)
+             VALUES (?,?,?,?,?,?,?,1)`,
+            [tenantId, groupId, 'product', productId, 0, 0, 1]
           );
           added.push(groupId);
           continue;
@@ -1680,7 +1733,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         }
         await conn.query(
           `UPDATE prod_option_assignments
-           SET is_active=1, priority=0, sort_order=0
+           SET is_active=1, priority=0, sort_order=0, out_of_stock_action=COALESCE(out_of_stock_action, 1)
            WHERE tenant_id=? AND id=?`,
           [tenantId, row.id]
         );

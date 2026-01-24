@@ -774,6 +774,22 @@
     } catch {}
   }
 
+  function pruneUnavailableCartItems() {
+    const before = state.cart.length;
+    state.cart = state.cart.filter((item) => {
+      const pid = Number(item.product_id || item.id);
+      if (!Number.isFinite(pid)) return false;
+      const p = state.productCache.get(pid);
+      if (p && !isProductAvailable(p)) return false;
+      return true;
+    });
+    if (state.cart.length !== before) {
+      saveCart();
+      return true;
+    }
+    return false;
+  }
+
   function makeCartKey(productId, optionItemsOrIds, ingredients = [], variantSelection = null) {
     const entries = (Array.isArray(optionItemsOrIds) ? optionItemsOrIds : [])
       .map((opt) => {
@@ -2340,9 +2356,21 @@ async function initAddresses() {
     const price = calculatedPrice != null ? calculatedPrice : Number(product.price || 0);
     const showOld = old > 0 && old > price;
 
+    if (!isProductAvailable(product)) return "Нет в наличии";
     if (qty > 0) return `${moneyNoSign(price)} ₽`;
     if (showOld) return `<span class="old">${moneyNoSign(old)} ₽</span>${moneyNoSign(price)} ₽`;
     return `${moneyNoSign(price)} ₽`;
+  }
+
+  function isProductAvailable(product) {
+    if (!product) return true;
+    if (product.is_available !== undefined && product.is_available !== null) {
+      return Number(product.is_available) === 1 || product.is_available === true;
+    }
+    if (product.stock_qty !== undefined && product.stock_qty !== null) {
+      return Number(product.stock_qty) !== 0;
+    }
+    return true;
   }
 
   // Кэш для рассчитанных цен по умолчанию
@@ -2450,6 +2478,7 @@ async function initAddresses() {
       products.forEach((p) => {
       const id = p.id;
       const qty = cartQty(id);
+      const available = isProductAvailable(p);
       const photos = safePhotos(p);
       const mainPhoto = photos[0] || "";
 
@@ -2500,13 +2529,15 @@ async function initAddresses() {
       bottom.className = "sp-bottom";
 
       const { pill, btnMinus, btnPlus, center } = createQtyPill({
-        variant: "buy",
+        variant: available ? "buy" : "muted",
         centerHtml: catalogCenterHtml(p, qty),
-        minusEnabled: qty > 0,
+        minusEnabled: qty > 0 && available,
+        plusEnabled: available,
       });
 
       if (qty <= 0) pill.classList.add("is-empty");
       else pill.classList.add("has-qty");
+      if (!available) card.classList.add("is-unavailable");
 
       bottom.appendChild(pill);
       info.appendChild(bottom);
@@ -2514,7 +2545,8 @@ async function initAddresses() {
 
       btnPlus.addEventListener("click", async (e) => {
         e.stopPropagation();
-        // Всегда открываем карточку товара при нажатии +
+        // Всегда открываем карточку товара при нажатии +, если доступен
+        if (!available) return;
         await openProductDetails(id);
       });
 
@@ -2549,7 +2581,9 @@ async function initAddresses() {
 
     const pill = $(".qty-pill", card);
     const btnMinus = $(".qty-pill__btn--minus", card);
+    const btnPlus = $(".qty-pill__btn--plus", card);
     const center = $(".qty-pill__center", card);
+    const available = isProductAvailable(product);
 
     card.setAttribute("data-qty", String(qty));
 
@@ -2577,12 +2611,18 @@ async function initAddresses() {
     if (pill) {
       pill.classList.toggle("is-empty", qty <= 0);
       pill.classList.toggle("has-qty", qty > 0);
+      pill.classList.toggle("qty-pill--muted", !available);
     }
-    if (btnMinus) btnMinus.classList.toggle("is-disabled", qty <= 0);
+    if (btnMinus) btnMinus.classList.toggle("is-disabled", qty <= 0 || !available);
+    if (btnPlus) btnPlus.classList.toggle("is-disabled", !available);
     if (center) {
-      // Используем кэшированную цену если есть
-      const cachedPrice = defaultPriceCache.get(product.id);
-      center.innerHTML = catalogCenterHtml(product, qty, cachedPrice);
+      if (!available) {
+        center.textContent = "Нет в наличии";
+      } else {
+        // Используем кэшированную цену если есть
+        const cachedPrice = defaultPriceCache.get(product.id);
+        center.innerHTML = catalogCenterHtml(product, qty, cachedPrice);
+      }
     }
   }
 
@@ -3204,6 +3244,9 @@ function updateCartBadge() {
     const pid = Number(productId);
     if (!Number.isFinite(pid)) return;
 
+    const p = state.productCache.get(pid);
+    if (delta > 0 && p && !isProductAvailable(p)) return;
+
     const targetKey = cartKey || makeCartKey(pid, []);
     let item = getCartItemByKey(targetKey);
     let nextQty = 0;
@@ -3231,7 +3274,6 @@ function updateCartBadge() {
     saveCart();
 
     const cards = elProductsGrid.querySelectorAll(`.sp-card[data-product-id="${pid}"]`);
-    const p = state.productCache.get(pid);
     if (cards.length && p) {
       cards.forEach((card) => applyCardState(card, p, cartQty(pid), delta > 0 ? "inc" : "dec"));
     }
@@ -3404,6 +3446,7 @@ function updateCartBadge() {
           const list = Array.isArray(json.data) ? json.data : [];
           for (const p of list) {
             if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
+            p.is_available = isProductAvailable(p);
             state.productCache.set(Number(p.id), p);
           }
           return [Number(c.id), list];
@@ -3415,6 +3458,19 @@ function updateCartBadge() {
     );
 
     state.productsByCategory = new Map(entries);
+    if (pruneUnavailableCartItems()) {
+      renderCart();
+      updateCartBadge();
+      if (openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
+        const { items, total } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
+        if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
+        if (openCartSheetCtx.checkoutBtn) {
+          openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
+          const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
+          if (tspan) tspan.textContent = money(total);
+        }
+      }
+    }
   }
 
   // -----------------------------
@@ -3443,7 +3499,21 @@ function updateCartBadge() {
     const json = await apiJson(`/api/public/products/${id}`);
     const p = json.data;
     if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
+    p.is_available = isProductAvailable(p);
     state.productCache.set(id, p);
+    if (!p.is_available && pruneUnavailableCartItems()) {
+      renderCart();
+      updateCartBadge();
+      if (openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
+        const { items, total } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
+        if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
+        if (openCartSheetCtx.checkoutBtn) {
+          openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
+          const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
+          if (tspan) tspan.textContent = money(total);
+        }
+      }
+    }
     return p;
   }
 
@@ -5632,6 +5702,7 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
 
   const editingItem = cartKey ? getCartItemByKey(cartKey) : null;
   const editMode = !!editingItem;
+  const available = isProductAvailable(product);
 
   if (editMode && editingItem && Number.isFinite(Number(editingItem.variant_value_index))) {
     const targetGroupId = Number(editingItem.variant_group_id);
@@ -5754,16 +5825,21 @@ optionGroups.forEach((group) => {
 
   // qty pill UI
   const qtyPill = createQtyPill({
-    variant: "buy",
+    variant: available ? "buy" : "muted",
     big: true,
     centerText: String(qty),
+    minusEnabled: available && qty > 1,
+    plusEnabled: available,
   });
 
   let updateQtyUi = () => {
     if (qtyPill?.center) qtyPill.center.textContent = String(qty);
     // минус блокируем визуально на 1
     if (qtyPill?.btnMinus) {
-      qtyPill.btnMinus.classList.toggle("is-disabled", qty <= 1);
+      qtyPill.btnMinus.classList.toggle("is-disabled", qty <= 1 || !available);
+    }
+    if (qtyPill?.btnPlus) {
+      qtyPill.btnPlus.classList.toggle("is-disabled", !available);
     }
   };
 
@@ -5823,6 +5899,12 @@ optionGroups.forEach((group) => {
 
   let updateActionText = () => {
     if (!actionBtnRef) return;
+    if (!available) {
+      actionBtnRef.innerHTML = `<span class="shop-pd-action-label">Нет в наличии</span>`;
+      actionBtnRef.disabled = true;
+      return;
+    }
+    actionBtnRef.disabled = false;
 
     const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
     const optionTotal = optionItemsTotal(selectedItems);
@@ -5928,6 +6010,7 @@ optionGroups.forEach((group) => {
   };
 
   const onQtyMinus = () => {
+    if (!available) return;
     if (qty <= 1) return;
     qty -= 1;
     updateQtyUi();
@@ -5935,6 +6018,7 @@ optionGroups.forEach((group) => {
   };
 
   const onQtyPlus = () => {
+    if (!available) return;
     qty += 1;
     updateQtyUi();
     updateActionText();
@@ -6003,6 +6087,11 @@ optionGroups.forEach((group) => {
     updateActionText = () => {
       originalUpdateActionText();
       if (elMobileProductPrice && elMobileProductLabel) {
+        if (!available) {
+          elMobileProductLabel.textContent = "Нет в наличии";
+          if (elMobileAddToCartBtn) elMobileAddToCartBtn.disabled = true;
+        } else {
+          if (elMobileAddToCartBtn) elMobileAddToCartBtn.disabled = false;
         const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
         const optionTotal = optionItemsTotal(selectedItems);
         const variantUnitPrice = getVariantUnitPrice(product, variants, variantState);
@@ -6012,13 +6101,16 @@ optionGroups.forEach((group) => {
         const totalPrice = unitPrice * Number(qty || 1);
         elMobileProductPrice.textContent = money(totalPrice);
         elMobileProductLabel.textContent = editMode ? "Сохранить" : "в корзину";
+        }
       }
       // Обновляем qty в клонированном pill
       if (elMobileQtyWrap) {
         const clonedCenter = elMobileQtyWrap.querySelector(".qty-pill__center");
         if (clonedCenter) clonedCenter.textContent = String(qty);
         const clonedMinus = elMobileQtyWrap.querySelector(".qty-pill__btn--minus");
-        if (clonedMinus) clonedMinus.classList.toggle("is-disabled", qty <= 1);
+        if (clonedMinus) clonedMinus.classList.toggle("is-disabled", qty <= 1 || !available);
+        const clonedPlus = elMobileQtyWrap.querySelector(".qty-pill__btn--plus");
+        if (clonedPlus) clonedPlus.classList.toggle("is-disabled", !available);
       }
     };
     
@@ -6030,7 +6122,9 @@ optionGroups.forEach((group) => {
         const clonedCenter = elMobileQtyWrap.querySelector(".qty-pill__center");
         if (clonedCenter) clonedCenter.textContent = String(qty);
         const clonedMinus = elMobileQtyWrap.querySelector(".qty-pill__btn--minus");
-        if (clonedMinus) clonedMinus.classList.toggle("is-disabled", qty <= 1);
+        if (clonedMinus) clonedMinus.classList.toggle("is-disabled", qty <= 1 || !available);
+        const clonedPlus = elMobileQtyWrap.querySelector(".qty-pill__btn--plus");
+        if (clonedPlus) clonedPlus.classList.toggle("is-disabled", !available);
       }
     };
     
@@ -6056,6 +6150,7 @@ optionGroups.forEach((group) => {
   container.appendChild(wrap);
 
   actionBtn.addEventListener("click", () => {
+    if (!available) return;
     const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
     const optionItemIds = selectedItems.map((item) => item.id);
     const selectedVariantGroupId = Number(variantState.groupId);

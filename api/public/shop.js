@@ -894,8 +894,54 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       if (allCategoryId && categoryId === allCategoryId) {
         const [rows] = await db.query(
-          `SELECT p.*, pc.sort_order AS link_sort_order
+          `SELECT p.*, pc.sort_order AS link_sort_order,
+            s.qty AS stock_qty,
+            CASE
+              WHEN (s.qty IS NULL OR s.qty > 0) AND NOT EXISTS (
+                SELECT 1
+                FROM prod_product_ingredients i
+                JOIN prod_product_stocks si
+                  ON si.tenant_id=i.tenant_id AND si.store_id=i.store_id AND si.product_id=i.ingredient_id
+                WHERE i.tenant_id=p.tenant_id AND i.store_id=p.store_id AND i.product_id=p.id
+                  AND si.qty IS NOT NULL AND si.qty <= 0
+              ) AND NOT EXISTS (
+                SELECT 1
+                FROM prod_option_assignments oa
+                JOIN prod_option_groups og
+                  ON og.tenant_id=oa.tenant_id AND og.store_id=oa.store_id AND og.id=oa.group_id
+                WHERE oa.tenant_id=p.tenant_id AND oa.store_id=p.store_id
+                  AND oa.assign_type='product' AND oa.assign_id=p.id
+                  AND oa.is_active=1
+                  AND og.is_active=1
+                  AND COALESCE(og.out_of_stock_action, 1)=0
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM prod_option_items oi
+                    JOIN prod_products op
+                      ON op.tenant_id=oi.tenant_id AND op.store_id=oi.store_id AND op.id=oi.target_product_id
+                    LEFT JOIN prod_product_stocks ops
+                      ON ops.tenant_id=op.tenant_id AND ops.store_id=op.store_id AND ops.product_id=op.id
+                    WHERE oi.tenant_id=oa.tenant_id AND oi.store_id=oa.store_id AND oi.group_id=oa.group_id
+                      AND oi.target_type='product'
+                      AND oi.is_active=1
+                      AND op.is_active=1
+                      AND op.site_visibility=1
+                      AND (ops.qty IS NULL OR ops.qty > 0)
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM prod_product_ingredients ip
+                        JOIN prod_product_stocks ips
+                          ON ips.tenant_id=ip.tenant_id AND ips.store_id=ip.store_id AND ips.product_id=ip.ingredient_id
+                        WHERE ip.tenant_id=op.tenant_id AND ip.store_id=op.store_id AND ip.product_id=op.id
+                          AND ips.qty IS NOT NULL AND ips.qty <= 0
+                      )
+                  )
+              )
+              THEN 1 ELSE 0
+            END AS is_available
            FROM prod_products p
+           LEFT JOIN prod_product_stocks s
+             ON s.tenant_id = p.tenant_id AND s.store_id = p.store_id AND s.product_id = p.id
            LEFT JOIN prod_product_categories pc
              ON pc.tenant_id = p.tenant_id AND pc.store_id = p.store_id AND pc.product_id = p.id AND pc.category_id = ?
            WHERE p.tenant_id=? AND p.store_id=? AND p.is_active=1 AND p.site_visibility=1
@@ -903,22 +949,74 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           [categoryId, tenantId, storeId]
         );
 
-        for (const r of rows) r.photos = safeJsonArray(r.photos_json);
+        for (const r of rows) {
+          r.photos = safeJsonArray(r.photos_json);
+          r.is_available = Number(r.is_available || 0) === 1;
+        }
         return res.json({ ok: true, data: rows, category_id: categoryId });
       }
 
       const [rows] = await db.query(
-        `SELECT p.*, pc.sort_order AS link_sort_order
+        `SELECT p.*, pc.sort_order AS link_sort_order,
+          s.qty AS stock_qty,
+          CASE
+            WHEN (s.qty IS NULL OR s.qty > 0) AND NOT EXISTS (
+              SELECT 1
+              FROM prod_product_ingredients i
+              JOIN prod_product_stocks si
+                ON si.tenant_id=i.tenant_id AND si.store_id=i.store_id AND si.product_id=i.ingredient_id
+              WHERE i.tenant_id=p.tenant_id AND i.store_id=p.store_id AND i.product_id=p.id
+                AND si.qty IS NOT NULL AND si.qty <= 0
+            ) AND NOT EXISTS (
+              SELECT 1
+              FROM prod_option_assignments oa
+              JOIN prod_option_groups og
+                ON og.tenant_id=oa.tenant_id AND og.store_id=oa.store_id AND og.id=oa.group_id
+              WHERE oa.tenant_id=p.tenant_id AND oa.store_id=p.store_id
+                AND oa.assign_type='product' AND oa.assign_id=p.id
+                AND oa.is_active=1
+                AND og.is_active=1
+                AND COALESCE(og.out_of_stock_action, 1)=0
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM prod_option_items oi
+                  JOIN prod_products op
+                    ON op.tenant_id=oi.tenant_id AND op.store_id=oi.store_id AND op.id=oi.target_product_id
+                  LEFT JOIN prod_product_stocks ops
+                    ON ops.tenant_id=op.tenant_id AND ops.store_id=op.store_id AND ops.product_id=op.id
+                  WHERE oi.tenant_id=oa.tenant_id AND oi.store_id=oa.store_id AND oi.group_id=oa.group_id
+                    AND oi.target_type='product'
+                    AND oi.is_active=1
+                    AND op.is_active=1
+                    AND op.site_visibility=1
+                    AND (ops.qty IS NULL OR ops.qty > 0)
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM prod_product_ingredients ip
+                      JOIN prod_product_stocks ips
+                        ON ips.tenant_id=ip.tenant_id AND ips.store_id=ip.store_id AND ips.product_id=ip.ingredient_id
+                      WHERE ip.tenant_id=op.tenant_id AND ip.store_id=op.store_id AND ip.product_id=op.id
+                        AND ips.qty IS NOT NULL AND ips.qty <= 0
+                    )
+                )
+            )
+            THEN 1 ELSE 0
+          END AS is_available
          FROM prod_product_categories pc
          JOIN prod_products p
            ON p.tenant_id = pc.tenant_id AND p.store_id = pc.store_id AND p.id = pc.product_id
+         LEFT JOIN prod_product_stocks s
+           ON s.tenant_id = p.tenant_id AND s.store_id = p.store_id AND s.product_id = p.id
          WHERE pc.tenant_id=? AND pc.store_id=? AND pc.category_id=?
            AND p.is_active=1 AND p.site_visibility=1
          ORDER BY pc.sort_order ASC, pc.id ASC`,
         [tenantId, storeId, categoryId]
       );
 
-      for (const r of rows) r.photos = safeJsonArray(r.photos_json);
+      for (const r of rows) {
+        r.photos = safeJsonArray(r.photos_json);
+        r.is_available = Number(r.is_available || 0) === 1;
+      }
       res.json({ ok: true, data: rows, category_id: categoryId });
     } catch (e) {
       console.error(e);
@@ -934,9 +1032,55 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
       const [rows] = await db.query(
-        `SELECT *
-         FROM prod_products
-         WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1 AND site_visibility=1
+        `SELECT p.*,
+            s.qty AS stock_qty,
+            CASE
+              WHEN (s.qty IS NULL OR s.qty > 0) AND NOT EXISTS (
+                SELECT 1
+                FROM prod_product_ingredients i
+                JOIN prod_product_stocks si
+                  ON si.tenant_id=i.tenant_id AND si.store_id=i.store_id AND si.product_id=i.ingredient_id
+                WHERE i.tenant_id=p.tenant_id AND i.store_id=p.store_id AND i.product_id=p.id
+                  AND si.qty IS NOT NULL AND si.qty <= 0
+              ) AND NOT EXISTS (
+                SELECT 1
+                FROM prod_option_assignments oa
+                JOIN prod_option_groups og
+                  ON og.tenant_id=oa.tenant_id AND og.store_id=oa.store_id AND og.id=oa.group_id
+                WHERE oa.tenant_id=p.tenant_id AND oa.store_id=p.store_id
+                  AND oa.assign_type='product' AND oa.assign_id=p.id
+                  AND oa.is_active=1
+                  AND og.is_active=1
+                  AND COALESCE(og.out_of_stock_action, 1)=0
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM prod_option_items oi
+                    JOIN prod_products op
+                      ON op.tenant_id=oi.tenant_id AND op.store_id=oi.store_id AND op.id=oi.target_product_id
+                    LEFT JOIN prod_product_stocks ops
+                      ON ops.tenant_id=op.tenant_id AND ops.store_id=op.store_id AND ops.product_id=op.id
+                    WHERE oi.tenant_id=oa.tenant_id AND oi.store_id=oa.store_id AND oi.group_id=oa.group_id
+                      AND oi.target_type='product'
+                      AND oi.is_active=1
+                      AND op.is_active=1
+                      AND op.site_visibility=1
+                      AND (ops.qty IS NULL OR ops.qty > 0)
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM prod_product_ingredients ip
+                        JOIN prod_product_stocks ips
+                          ON ips.tenant_id=ip.tenant_id AND ips.store_id=ip.store_id AND ips.product_id=ip.ingredient_id
+                        WHERE ip.tenant_id=op.tenant_id AND ip.store_id=op.store_id AND ip.product_id=op.id
+                          AND ips.qty IS NOT NULL AND ips.qty <= 0
+                      )
+                  )
+              )
+              THEN 1 ELSE 0
+            END AS is_available
+         FROM prod_products p
+         LEFT JOIN prod_product_stocks s
+           ON s.tenant_id = p.tenant_id AND s.store_id = p.store_id AND s.product_id = p.id
+         WHERE p.tenant_id=? AND p.store_id=? AND p.id=? AND p.is_active=1 AND p.site_visibility=1
          LIMIT 1`,
         [tenantId, storeId, id]
       );
@@ -944,6 +1088,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       const p = rows[0];
       p.photos = safeJsonArray(p.photos_json);
+      p.is_available = Number(p.is_available || 0) === 1;
 
       res.json({ ok: true, data: p });
     } catch (e) {
@@ -1050,7 +1195,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
            g.selection_type AS group_selection_type, 
            g.min_select AS group_min_select, 
            g.max_select AS group_max_select,
-           g.is_required
+           g.is_required,
+           g.out_of_stock_action
          FROM prod_option_assignments a
          JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.store_id=a.store_id AND g.id=a.group_id
          WHERE a.tenant_id=? AND a.store_id=? 
@@ -1072,6 +1218,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         max_select: r.assignment_max_select ?? r.group_max_select ?? null,
         is_required: Number(r.is_required ?? 0) === 1,
         is_active: Number(r.is_active || 0) === 1,
+        out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
         priority: Number(r.priority || 0),
         sort_order: Number(r.sort_order || 0),
       }));
@@ -1132,12 +1279,56 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
            p.photos_json AS product_photos_json
          FROM prod_option_items i
          JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.store_id=i.store_id AND p.id=i.target_product_id
+         LEFT JOIN prod_product_stocks ps
+           ON ps.tenant_id = p.tenant_id AND ps.store_id = p.store_id AND ps.product_id = p.id
          WHERE i.tenant_id=? AND i.store_id=? 
            AND i.group_id=? 
            AND i.target_type='product'
            AND i.is_active=1
            AND p.is_active=1
            AND p.site_visibility=1
+           AND (ps.qty IS NULL OR ps.qty > 0)
+           AND NOT EXISTS (
+             SELECT 1
+             FROM prod_product_ingredients pi
+             JOIN prod_product_stocks psi
+               ON psi.tenant_id=pi.tenant_id AND psi.store_id=pi.store_id AND psi.product_id=pi.ingredient_id
+             WHERE pi.tenant_id=p.tenant_id AND pi.store_id=p.store_id AND pi.product_id=p.id
+               AND psi.qty IS NOT NULL AND psi.qty <= 0
+           )
+           AND NOT EXISTS (
+             SELECT 1
+             FROM prod_option_assignments oa
+             JOIN prod_option_groups og
+               ON og.tenant_id=oa.tenant_id AND og.store_id=oa.store_id AND og.id=oa.group_id
+             WHERE oa.tenant_id=p.tenant_id AND oa.store_id=p.store_id
+               AND oa.assign_type='product' AND oa.assign_id=p.id
+               AND oa.is_active=1
+               AND og.is_active=1
+               AND COALESCE(og.out_of_stock_action, 1)=0
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM prod_option_items oi
+                 JOIN prod_products op
+                   ON op.tenant_id=oi.tenant_id AND op.store_id=oi.store_id AND op.id=oi.target_product_id
+                 LEFT JOIN prod_product_stocks ops
+                   ON ops.tenant_id=op.tenant_id AND ops.store_id=op.store_id AND ops.product_id=op.id
+                 WHERE oi.tenant_id=oa.tenant_id AND oi.store_id=oa.store_id AND oi.group_id=oa.group_id
+                   AND oi.target_type='product'
+                   AND oi.is_active=1
+                   AND op.is_active=1
+                   AND op.site_visibility=1
+                   AND (ops.qty IS NULL OR ops.qty > 0)
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM prod_product_ingredients ip
+                     JOIN prod_product_stocks ips
+                       ON ips.tenant_id=ip.tenant_id AND ips.store_id=ip.store_id AND ips.product_id=ip.ingredient_id
+                     WHERE ip.tenant_id=op.tenant_id AND ip.store_id=op.store_id AND ip.product_id=op.id
+                       AND ips.qty IS NOT NULL AND ips.qty <= 0
+                   )
+               )
+           )
          ORDER BY i.sort_order ASC, i.id ASC`,
         [tenantId, storeId, id]
       );
@@ -1432,6 +1623,68 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const ids = items.map(it => Number(it.product_id)).filter(n => Number.isFinite(n) && n > 0);
       if (!ids.length) return res.status(400).json({ ok: false, error: 'BAD_ITEMS' });
 
+      // availability check for products (stock + ingredients)
+      {
+        const [availability] = await db.query(
+          `SELECT p.id,
+              CASE
+                WHEN (s.qty IS NULL OR s.qty > 0) AND NOT EXISTS (
+                  SELECT 1
+                  FROM prod_product_ingredients i
+                  JOIN prod_product_stocks si
+                    ON si.tenant_id=i.tenant_id AND si.store_id=i.store_id AND si.product_id=i.ingredient_id
+                  WHERE i.tenant_id=p.tenant_id AND i.store_id=p.store_id AND i.product_id=p.id
+                    AND si.qty IS NOT NULL AND si.qty <= 0
+                ) AND NOT EXISTS (
+                  SELECT 1
+                  FROM prod_option_assignments oa
+                  JOIN prod_option_groups og
+                    ON og.tenant_id=oa.tenant_id AND og.store_id=oa.store_id AND og.id=oa.group_id
+                  WHERE oa.tenant_id=p.tenant_id AND oa.store_id=p.store_id
+                    AND oa.assign_type='product' AND oa.assign_id=p.id
+                    AND oa.is_active=1
+                    AND og.is_active=1
+                    AND COALESCE(og.out_of_stock_action, 1)=0
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM prod_option_items oi
+                      JOIN prod_products op
+                        ON op.tenant_id=oi.tenant_id AND op.store_id=oi.store_id AND op.id=oi.target_product_id
+                      LEFT JOIN prod_product_stocks ops
+                        ON ops.tenant_id=op.tenant_id AND ops.store_id=op.store_id AND ops.product_id=op.id
+                      WHERE oi.tenant_id=oa.tenant_id AND oi.store_id=oa.store_id AND oi.group_id=oa.group_id
+                        AND oi.target_type='product'
+                        AND oi.is_active=1
+                        AND op.is_active=1
+                        AND op.site_visibility=1
+                        AND (ops.qty IS NULL OR ops.qty > 0)
+                        AND NOT EXISTS (
+                          SELECT 1
+                          FROM prod_product_ingredients ip
+                          JOIN prod_product_stocks ips
+                            ON ips.tenant_id=ip.tenant_id AND ips.store_id=ip.store_id AND ips.product_id=ip.ingredient_id
+                          WHERE ip.tenant_id=op.tenant_id AND ip.store_id=op.store_id AND ip.product_id=op.id
+                            AND ips.qty IS NOT NULL AND ips.qty <= 0
+                        )
+                    )
+                )
+                THEN 1 ELSE 0
+              END AS is_available
+           FROM prod_products p
+           LEFT JOIN prod_product_stocks s
+             ON s.tenant_id = p.tenant_id AND s.store_id = p.store_id AND s.product_id = p.id
+           WHERE p.tenant_id=? AND p.store_id=? AND p.id IN (${ids.map(() => '?').join(',')})`,
+          [tenantId, storeId, ...ids]
+        );
+
+        const foundIds = new Set(availability.map(r => Number(r.id)));
+        const notAvailable = availability.some(r => Number(r.is_available || 0) !== 1);
+        const missing = ids.some((id) => !foundIds.has(Number(id)));
+        if (notAvailable || missing) {
+          return res.status(409).json({ ok: false, error: 'OUT_OF_STOCK' });
+        }
+      }
+
       const [products] = await db.query(
         `SELECT id, name, price, old_price, photos_json
          FROM prod_products
@@ -1466,13 +1719,63 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             i.price_value,
             p.id AS product_id,
             p.name AS product_name,
-            p.price AS product_price
+            p.price AS product_price,
+            CASE
+              WHEN p.id IS NULL THEN 0
+              WHEN (ps.qty IS NULL OR ps.qty > 0) AND NOT EXISTS (
+                SELECT 1
+                FROM prod_product_ingredients pi
+                JOIN prod_product_stocks psi
+                  ON psi.tenant_id=pi.tenant_id AND psi.store_id=pi.store_id AND psi.product_id=pi.ingredient_id
+                WHERE pi.tenant_id=p.tenant_id AND pi.store_id=p.store_id AND pi.product_id=p.id
+                  AND psi.qty IS NOT NULL AND psi.qty <= 0
+              ) AND NOT EXISTS (
+                SELECT 1
+                FROM prod_option_assignments oa
+                JOIN prod_option_groups og
+                  ON og.tenant_id=oa.tenant_id AND og.store_id=oa.store_id AND og.id=oa.group_id
+                WHERE oa.tenant_id=p.tenant_id AND oa.store_id=p.store_id
+                  AND oa.assign_type='product' AND oa.assign_id=p.id
+                  AND oa.is_active=1
+                  AND og.is_active=1
+                  AND COALESCE(og.out_of_stock_action, 1)=0
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM prod_option_items oi
+                    JOIN prod_products op
+                      ON op.tenant_id=oi.tenant_id AND op.store_id=oi.store_id AND op.id=oi.target_product_id
+                    LEFT JOIN prod_product_stocks ops
+                      ON ops.tenant_id=op.tenant_id AND ops.store_id=op.store_id AND ops.product_id=op.id
+                    WHERE oi.tenant_id=oa.tenant_id AND oi.store_id=oa.store_id AND oi.group_id=oa.group_id
+                      AND oi.target_type='product'
+                      AND oi.is_active=1
+                      AND op.is_active=1
+                      AND op.site_visibility=1
+                      AND (ops.qty IS NULL OR ops.qty > 0)
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM prod_product_ingredients ip
+                        JOIN prod_product_stocks ips
+                          ON ips.tenant_id=ip.tenant_id AND ips.store_id=ip.store_id AND ips.product_id=ip.ingredient_id
+                        WHERE ip.tenant_id=op.tenant_id AND ip.store_id=op.store_id AND ip.product_id=op.id
+                          AND ips.qty IS NOT NULL AND ips.qty <= 0
+                      )
+                  )
+              )
+              THEN 1 ELSE 0
+            END AS is_available
           FROM prod_option_items i
           LEFT JOIN prod_products p 
             ON p.tenant_id=i.tenant_id AND p.store_id=i.store_id AND p.id=i.target_product_id
+          LEFT JOIN prod_product_stocks ps
+            ON ps.tenant_id = p.tenant_id AND ps.store_id = p.store_id AND ps.product_id = p.id
           WHERE i.tenant_id=? AND i.store_id=? AND i.id IN (${placeholders}) AND i.is_active=1`,
           [tenantId, storeId, ...allOptionItemIds]
         );
+
+        if (optionRows.some((row) => Number(row.is_available || 0) !== 1)) {
+          return res.status(409).json({ ok: false, error: 'OUT_OF_STOCK' });
+        }
 
         optionRows.forEach(row => {
           let optionPrice = 0;

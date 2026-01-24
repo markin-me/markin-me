@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
@@ -98,6 +98,7 @@
   const optionGroupMinInput = $("#optionGroupMinSelect");
   const optionGroupMaxInput = $("#optionGroupMaxSelect");
   const optionGroupSortInput = $("#optionGroupSortOrder");
+  const optionGroupOutOfStockActionInput = $("#optionGroupOutOfStockAction");
   const optionItemsList = $("#optionItemsList");
   const optionItemsCount = $("#optionItemsCount");
   const optionItemsAddBtn = $("#optionItemsAddBtn");
@@ -548,10 +549,12 @@
     });
   }
 
-  async function apiAddGroupAssignments(groupId, assignIds) {
+  async function apiAddGroupAssignments(groupId, assignments) {
+    const hasObjects = Array.isArray(assignments) && assignments.some((a) => typeof a === "object");
+    const body = hasObjects ? { assignments } : { assign_ids: assignments };
     return api(`/api/admin/options/groups/${groupId}/assignments`, {
       method: "POST",
-      body: JSON.stringify({ assign_ids: assignIds }),
+      body: JSON.stringify(body),
     });
   }
 
@@ -1940,6 +1943,7 @@ function getOptionGroupUiValues(group, items = []) {
     is_active: group.is_active ? 1 : 0,
     is_required: (group.selection_type === "single" ? (group.is_required ? 1 : 0) : 0),
     allow_variants: group.allow_variants ? 1 : 0,
+    out_of_stock_action: group.out_of_stock_action == null ? 1 : Number(group.out_of_stock_action),
     sort_order: group.sort_order ?? 0,
   };
 }
@@ -2825,10 +2829,13 @@ function getOptionGroupFormValues() {
   const fallbackActive = state.optionDraft?.group?.is_active ?? state.optionGroupDetails?.group?.is_active ?? 1;
   const fallbackRequired = state.optionDraft?.group?.is_required ?? state.optionGroupDetails?.group?.is_required ?? 1;
   const fallbackAllowVariants = state.optionDraft?.group?.allow_variants ?? state.optionGroupDetails?.group?.allow_variants ?? 0;
+  const fallbackOutOfStockAction =
+    state.optionDraft?.group?.out_of_stock_action ?? state.optionGroupDetails?.group?.out_of_stock_action ?? 1;
 
   const activeEl = document.getElementById("optionGroupIsActive");
   const requiredEl = document.getElementById("optionGroupIsRequired");
   const allowVariantsEl = document.getElementById("optionGroupAllowVariants");
+  const outOfStockActionEl = document.getElementById("optionGroupOutOfStockAction");
 
   const isActive =
     activeEl && activeEl.type === "checkbox"
@@ -2850,6 +2857,11 @@ function getOptionGroupFormValues() {
       ? (allowVariantsEl.checked ? 1 : 0)
       : (fallbackAllowVariants ? 1 : 0);
 
+  const outOfStockAction =
+    outOfStockActionEl && outOfStockActionEl.type === "checkbox"
+      ? (outOfStockActionEl.checked ? 1 : 0)
+      : (fallbackOutOfStockAction ? 1 : 0);
+
   return {
     title: String(optionGroupTitleInput?.value || "").trim(),
     selection_type: selectionUi,
@@ -2858,6 +2870,7 @@ function getOptionGroupFormValues() {
     is_active: isActive,
     is_required: isRequired,
     allow_variants: allowVariants,
+    out_of_stock_action: outOfStockAction,
     sort_order: optionGroupSortInput?.value === "" ? 0 : Number(optionGroupSortInput?.value),
   };
 }
@@ -2932,6 +2945,11 @@ function fillOptionGroupForm(group, items = []) {
   const allowVariantsEl = document.getElementById("optionGroupAllowVariants");
   if (allowVariantsEl && allowVariantsEl.type === "checkbox") {
     allowVariantsEl.checked = Boolean(group.allow_variants ?? 0);
+  }
+
+  const outOfStockActionEl = document.getElementById("optionGroupOutOfStockAction");
+  if (outOfStockActionEl && outOfStockActionEl.type === "checkbox") {
+    outOfStockActionEl.checked = Number(group.out_of_stock_action ?? 1) === 1;
   }
 }
 
@@ -6302,6 +6320,7 @@ function updateOptionGroupSelectionUi() {
             unit_id: baseUnitId,
             base_unit_id: baseUnitId,
             base_qty: form.base_qty?.value === "" ? null : Number(form.base_qty?.value),
+            stock: form.stock?.value === "" ? null : Number(form.stock?.value),
             is_active: form.is_active.checked ? 1 : 0,
             site_visibility: form.site_visibility.checked ? 1 : 0,
 
@@ -6652,6 +6671,9 @@ function updateOptionGroupSelectionUi() {
       }
       if (form.base_qty) {
         form.base_qty.value = product.base_qty != null ? String(product.base_qty) : "";
+      }
+      if (form.stock) {
+        form.stock.value = product.stock_qty != null ? String(product.stock_qty) : "";
       }
       form.is_active.checked = Boolean(product.is_active);
       form.site_visibility.checked = Boolean(product.site_visibility);
@@ -10698,3 +10720,6 @@ function updateOptionGroupSelectionUi() {
     requestAnimationFrame(refreshOpenAccordions);
   });
 })();
+
+
+

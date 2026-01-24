@@ -368,6 +368,14 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   background: var(--color-surface);
 }
 
+.sp-card.is-unavailable{
+  opacity: 0.7;
+}
+
+.sp-card.is-unavailable:hover{
+  transform: none;
+}
+
 .sp-media{
   width: 100%;
   aspect-ratio: 1 / 1;
