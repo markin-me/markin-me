@@ -1,137 +1,80 @@
+
 <% if (activePage === "settings") { %>
-
   <div class="center-stack">
-
     <div class="panel toolbar-island">
-
       <div class="toolbar">
-
         <div class="toolbar-title">
-
           <i class="fas fa-store"></i>
-
-          <span>Профиль магазина</span>
-
+          <span id="settingsCenterTitle">Профиль магазина</span>
         </div>
-
         <div class="toolbar-right">
-
-          <button class="btn btn-icon btn-primary" id="settingsAddOrderBtn" type="button" title="Новый заказ">
-
+          <button class="btn btn-icon btn-primary" id="settingsAddOrderBtn" type="button" title="Новая точка продаж" aria-label="Новая точка продаж">
             <i class="fas fa-plus"></i>
-
           </button>
-
         </div>
-
       </div>
-
     </div>
 
     <div class="panel orders-center-panel">
-
       <div class="panel-body no-scrollbar">
-
-        <div class="orders-list settings-cards">
-
+        <div class="orders-list settings-cards" id="settingsTenantCards">
           <button class="order-row product-row settings-card" id="settingsLogoCard" type="button">
-
             <div class="product-avatar"><i class="fas fa-icons"></i></div>
-
             <div class="order-col">
-
               <div class="product-title">Логотип и фавикон</div>
-
               <div class="muted">Светлая и тёмная темы</div>
-
             </div>
-
             <div class="order-col">
-
               <span class="badge">Открыть</span>
-
             </div>
-
           </button>
 
           <button class="order-row product-row settings-card" id="settingsSiteCard" type="button">
-
             <div class="product-avatar"><i class="fas fa-globe"></i></div>
-
             <div class="order-col">
-
               <div class="product-title">Данные сайта</div>
-
               <div class="muted">Название, описание, домен</div>
-
             </div>
-
             <div class="order-col">
-
               <span class="badge">Открыть</span>
-
             </div>
-
           </button>
 
           <button class="order-row product-row settings-card" id="settingsBrandCard" type="button">
-
             <div class="product-avatar"><i class="fas fa-id-card"></i></div>
-
             <div class="order-col">
-
               <div class="product-title">Данные бренда</div>
-
               <div class="muted">Название, контакты, доступ</div>
-
             </div>
-
             <div class="order-col">
-
               <span class="badge">Открыть</span>
-
             </div>
-
           </button>
-
         </div>
 
+        <div class="empty-state hidden" id="settingsStoresEmpty">
+          <div class="empty-icon"><i class="fas fa-store"></i></div>
+          <div class="empty-title">Точки продаж</div>
+          <div class="empty-text">Пока нет данных для этого раздела.</div>
         </div>
-
       </div>
-
     </div>
+  </div>
 <% } else { %>
-
   <div class="center-stack">
-
     <div class="panel toolbar-island">
-
       <div class="toolbar">
-
         <div class="toolbar-title">
-
           <i class="fas fa-home"></i>
-
           <span>Меню</span>
-
         </div>
-
       </div>
-
     </div>
 
     <div class="panel orders-center-panel">
-
       <div class="panel-body no-scrollbar">
-
         <p class="muted">Тут будут товары из базы данных...</p>
-
       </div>
-
     </div>
-
   </div>
-
 <% } %>
-

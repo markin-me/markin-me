@@ -224,6 +224,28 @@
   document.addEventListener("DOMContentLoaded", () => {
     loadTenantProfile();
 
+    const settingsSectionButtons = document.querySelectorAll("[data-settings-section]");
+    const settingsCenterTitle = document.getElementById("settingsCenterTitle");
+    const settingsTenantCards = document.getElementById("settingsTenantCards");
+    const settingsStoresEmpty = document.getElementById("settingsStoresEmpty");
+    settingsSectionButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        settingsSectionButtons.forEach((el) => el.classList.remove("is-active"));
+        btn.classList.add("is-active");
+        const section = btn.getAttribute("data-settings-section") || "";
+        document.body.setAttribute("data-settings-section", section);
+        if (section === "stores") {
+          if (settingsCenterTitle) settingsCenterTitle.textContent = "Точки продаж";
+          if (settingsTenantCards) settingsTenantCards.classList.add("hidden");
+          if (settingsStoresEmpty) settingsStoresEmpty.classList.remove("hidden");
+        } else {
+          if (settingsCenterTitle) settingsCenterTitle.textContent = "Профиль магазина";
+          if (settingsTenantCards) settingsTenantCards.classList.remove("hidden");
+          if (settingsStoresEmpty) settingsStoresEmpty.classList.add("hidden");
+        }
+      });
+    });
+
     const logoCard = document.getElementById("settingsLogoCard");
     const siteCard = document.getElementById("settingsSiteCard");
     const brandCard = document.getElementById("settingsBrandCard");

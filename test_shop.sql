@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Хост: 10.0.231.119
--- Время создания: Янв 24 2026 г., 16:52
+-- Время создания: Янв 25 2026 г., 14:55
 -- Версия сервера: 8.0.37-29
 -- Версия PHP: 7.2.34
 
@@ -199,7 +199,8 @@ CREATE TABLE `cust_customers` (
 
 INSERT INTO `cust_customers` (`id`, `tenant_id`, `store_id`, `status_id`, `phone`, `name`, `birthday`, `addresses`, `telegram_user_id`, `registration_date`, `total_orders`, `total_spent`, `last_order_date`, `photo`, `is_active`, `created_at`, `updated_at`) VALUES
 (1, 1, 1, 1, '79021461966', 'Максим', '1996-03-15', NULL, NULL, '2026-01-06', 3, 1323.00, '2026-01-06 20:57:09', '/static/uploads/avatars/1769191372366-649c38532aeed34f.png', 1, '2026-01-06 08:37:19', '2026-01-23 18:02:52'),
-(2, 1, 1, NULL, '79835475559', 'Иван', NULL, NULL, NULL, '2026-01-08', 0, 0.00, NULL, NULL, 1, '2026-01-08 12:31:52', '2026-01-08 12:31:52');
+(2, 1, 1, NULL, '79835475559', 'Иван', NULL, NULL, NULL, '2026-01-08', 0, 0.00, NULL, NULL, 1, '2026-01-08 12:31:52', '2026-01-08 12:31:52'),
+(3, 1, 1, NULL, '79991114242', 'Мак', NULL, NULL, NULL, '2026-01-24', 0, 0.00, NULL, NULL, 1, '2026-01-24 14:40:43', '2026-01-24 14:40:43');
 
 -- --------------------------------------------------------
 
@@ -279,7 +280,8 @@ INSERT INTO `cust_customer_sessions` (`id`, `tenant_id`, `store_id`, `customer_i
 (21, 1, 1, 1, '3a88427f14424c1b863328b3f7c57f2b', '2026-01-23 21:02:14', '2026-02-22 21:02:14', 1),
 (22, 1, 1, 1, 'ce8c84e7c1154c16a422f3deb89a4243', '2026-01-24 07:02:22', '2026-02-23 07:02:22', 1),
 (23, 1, 1, 1, '157fd23fc9f14876897d6a395c197fba', '2026-01-24 10:32:32', '2026-02-23 10:32:32', 1),
-(24, 1, 1, 1, 'e07f062bc2744a8eb618f620fce65dc7', '2026-01-24 15:48:57', '2026-02-23 15:48:57', 1);
+(24, 1, 1, 1, 'e07f062bc2744a8eb618f620fce65dc7', '2026-01-24 15:48:57', '2026-02-23 15:48:57', 1),
+(25, 1, 1, 1, '296a3d8dbaed4572af1b9ddc9655f771', '2026-01-25 14:14:07', '2026-02-24 14:14:07', 1);
 
 -- --------------------------------------------------------
 
@@ -1081,30 +1083,30 @@ CREATE TABLE `ten_tenants` (
   `id` int NOT NULL,
   `store_id` int NOT NULL DEFAULT '1',
   `name` varchar(100) COLLATE utf8mb4_general_ci DEFAULT 'Мой Магазин',
-  `site_name` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `site_description` text COLLATE utf8mb4_general_ci DEFAULT NULL,
   `slug` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `subdomain` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `custom_domain` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `email` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `password_hash` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `phone` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `logo_light_url` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `logo_dark_url` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `favicon_light_url` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `favicon_dark_url` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `timezone` varchar(64) COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `is_active` tinyint(1) NOT NULL DEFAULT '1',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `site_name` varchar(150) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `site_description` text COLLATE utf8mb4_general_ci,
+  `custom_domain` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
 -- Дамп данных таблицы `ten_tenants`
 --
 
-INSERT INTO `ten_tenants` (`id`, `store_id`, `name`, `site_name`, `site_description`, `slug`, `subdomain`, `custom_domain`, `email`, `password_hash`, `phone`, `logo_light_url`, `logo_dark_url`, `favicon_light_url`, `favicon_dark_url`, `timezone`, `is_active`, `created_at`, `updated_at`) VALUES
-(1, 1, 'Тестовая Точка', NULL, NULL, NULL, NULL, NULL, 'admin@test.ru', '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', NULL, NULL, NULL, NULL, NULL, '+3', 1, '2026-01-21 13:07:16', '2026-01-21 13:15:27');
+INSERT INTO `ten_tenants` (`id`, `store_id`, `name`, `slug`, `subdomain`, `email`, `password_hash`, `phone`, `is_active`, `created_at`, `updated_at`, `logo_light_url`, `logo_dark_url`, `favicon_light_url`, `favicon_dark_url`, `timezone`, `site_name`, `site_description`, `custom_domain`) VALUES
+(1, 1, 'По щам - домашняя еда с доставкой', NULL, 'posham', 'admin@test.ru', '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', '79021461966', 1, '2026-01-21 13:07:16', '2026-01-25 10:46:38', '/static/uploads/tenants/1/2bcab539a2056f905b05b2fe1e6175ca.png', '/static/uploads/tenants/1/1c30d7740e24c5295301e5190bb9a8a1.png', '/static/uploads/tenants/1/87a8ced908be6c4daaed371594cfde4c.png', '/static/uploads/tenants/1/ae6927d41ab198580ec4c62af9f32e14.png', NULL, 'По щам', NULL, NULL);
 
 --
 -- Индексы сохранённых таблиц
@@ -1361,9 +1363,7 @@ ALTER TABLE `prod_variant_groups`
 -- Индексы таблицы `ten_tenants`
 --
 ALTER TABLE `ten_tenants`
-  ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `uq_tenants_subdomain` (`subdomain`),
-  ADD UNIQUE KEY `uq_tenants_custom_domain` (`custom_domain`);
+  ADD PRIMARY KEY (`id`);
 
 --
 -- AUTO_INCREMENT для сохранённых таблиц
@@ -1391,7 +1391,7 @@ ALTER TABLE `cust_customer_addresses`
 -- AUTO_INCREMENT для таблицы `cust_customer_sessions`
 --
 ALTER TABLE `cust_customer_sessions`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=25;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=26;
 
 --
 -- AUTO_INCREMENT для таблицы `cust_statuses`
