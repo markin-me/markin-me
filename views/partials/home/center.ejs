@@ -1,16 +1,99 @@
-<div class="center-stack">
-  <div class="panel toolbar-island">
-    <div class="toolbar">
-      <div class="toolbar-title">
-        <i class="fas fa-home"></i>
-        <span>Меню</span>
+<% if (activePage === "settings") { %>
+  <div class="center-stack">
+    <div class="panel toolbar-island">
+      <div class="toolbar">
+        <div class="toolbar-title">
+          <i class="fas fa-store"></i>
+          <span>Профиль магазина</span>
+        </div>
+        <div class="toolbar-right">
+          <button class="btn btn-icon btn-primary" id="settingsAddOrderBtn" type="button" title="Новый заказ">
+            <i class="fas fa-plus"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel orders-center-panel">
+      <div class="panel-body no-scrollbar">
+        <div class="orders-list settings-cards">
+          <button class="order-row product-row settings-card" id="settingsLogoCard" type="button">
+            <div class="product-avatar"><i class="fas fa-icons"></i></div>
+            <div class="order-col">
+              <div class="product-title">Логотип и фавикон</div>
+              <div class="muted">Светлая и тёмная темы</div>
+            </div>
+            <div class="order-col">
+              <span class="badge">Открыть</span>
+            </div>
+          </button>
+
+          <button class="order-row product-row settings-card" id="settingsSiteCard" type="button">
+            <div class="product-avatar"><i class="fas fa-globe"></i></div>
+            <div class="order-col">
+              <div class="product-title">Данные сайта</div>
+              <div class="muted">Название, описание, домен</div>
+            </div>
+            <div class="order-col">
+              <span class="badge">Открыть</span>
+            </div>
+          </button>
+
+          <button class="order-row product-row settings-card" id="settingsBrandCard" type="button">
+            <div class="product-avatar"><i class="fas fa-id-card"></i></div>
+            <div class="order-col">
+              <div class="product-title">Данные бренда</div>
+              <div class="muted">Название, контакты, доступ</div>
+            </div>
+            <div class="order-col">
+              <span class="badge">Открыть</span>
+            </div>
+          </button>
+        </div>
+
+        <div class="info-card tenant-profile-card" id="tenantProfileCard">
+          <div class="info-row"><span class="info-label">ID</span><span class="info-value" data-tenant-field="id">—</span></div>
+          <div class="info-row"><span class="info-label">store_id</span><span class="info-value" data-tenant-field="store_id">—</span></div>
+          <div class="info-row"><span class="info-label">name</span><span class="info-value" data-tenant-field="name">—</span></div>
+          <div class="info-row"><span class="info-label">subdomain</span><span class="info-value" data-tenant-field="subdomain">—</span></div>
+          <div class="info-row"><span class="info-label">email</span><span class="info-value" data-tenant-field="email">—</span></div>
+          <div class="info-row"><span class="info-label">phone</span><span class="info-value" data-tenant-field="phone">—</span></div>
+          <div class="info-row"><span class="info-label">logo_light_url</span><span class="info-value" data-tenant-field="logo_light_url">—</span></div>
+          <div class="info-row"><span class="info-label">logo_dark_url</span><span class="info-value" data-tenant-field="logo_dark_url">—</span></div>
+          <div class="info-row"><span class="info-label">favicon_light_url</span><span class="info-value" data-tenant-field="favicon_light_url">—</span></div>
+          <div class="info-row"><span class="info-label">favicon_dark_url</span><span class="info-value" data-tenant-field="favicon_dark_url">—</span></div>
+          <div class="info-row"><span class="info-label">site_name</span><span class="info-value" data-tenant-field="site_name">—</span></div>
+          <div class="info-row"><span class="info-label">site_description</span><span class="info-value" data-tenant-field="site_description">—</span></div>
+          <div class="info-row"><span class="info-label">custom_domain</span><span class="info-value" data-tenant-field="custom_domain">—</span></div>
+          <div class="info-row">
+            <span class="info-label">timezone</span>
+            <span class="info-value">
+              <select id="tenantTimezoneSelect" class="order-head-select tenant-timezone-select" aria-label="Часовой пояс"></select>
+            </span>
+          </div>
+          <div class="info-row"><span class="info-label">is_active</span><span class="info-value" data-tenant-field="is_active">—</span></div>
+          <div class="info-row"><span class="info-label">created_at</span><span class="info-value" data-tenant-field="created_at">—</span></div>
+          <div class="info-row"><span class="info-label">updated_at</span><span class="info-value" data-tenant-field="updated_at">—</span></div>
+          <div class="info-row"><span class="info-label">password_hash</span><span class="info-value" data-tenant-field="password_hash">—</span></div>
+        </div>
       </div>
     </div>
   </div>
+<% } else { %>
+  <div class="center-stack">
+    <div class="panel toolbar-island">
+      <div class="toolbar">
+        <div class="toolbar-title">
+          <i class="fas fa-home"></i>
+          <span>Меню</span>
+        </div>
+      </div>
+    </div>
 
-  <div class="panel orders-center-panel">
-    <div class="panel-body no-scrollbar">
-      <p class="muted">Тут будут товары из базы данных...</p>
+    <div class="panel orders-center-panel">
+      <div class="panel-body no-scrollbar">
+        <p class="muted">Тут будут товары из базы данных...</p>
+      </div>
     </div>
   </div>
-</div>
+<% } %>

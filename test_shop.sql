@@ -1081,11 +1081,19 @@ CREATE TABLE `ten_tenants` (
   `id` int NOT NULL,
   `store_id` int NOT NULL DEFAULT '1',
   `name` varchar(100) COLLATE utf8mb4_general_ci DEFAULT 'Мой Магазин',
+  `site_name` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `site_description` text COLLATE utf8mb4_general_ci DEFAULT NULL,
   `slug` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `subdomain` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `custom_domain` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `email` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `password_hash` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `phone` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `logo_light_url` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `logo_dark_url` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `favicon_light_url` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `favicon_dark_url` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `timezone` varchar(64) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `is_active` tinyint(1) NOT NULL DEFAULT '1',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -1095,8 +1103,8 @@ CREATE TABLE `ten_tenants` (
 -- Дамп данных таблицы `ten_tenants`
 --
 
-INSERT INTO `ten_tenants` (`id`, `store_id`, `name`, `slug`, `subdomain`, `email`, `password_hash`, `phone`, `is_active`, `created_at`, `updated_at`) VALUES
-(1, 1, 'Тестовая Точка', NULL, NULL, 'admin@test.ru', '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', NULL, 1, '2026-01-21 13:07:16', '2026-01-21 13:15:27');
+INSERT INTO `ten_tenants` (`id`, `store_id`, `name`, `site_name`, `site_description`, `slug`, `subdomain`, `custom_domain`, `email`, `password_hash`, `phone`, `logo_light_url`, `logo_dark_url`, `favicon_light_url`, `favicon_dark_url`, `timezone`, `is_active`, `created_at`, `updated_at`) VALUES
+(1, 1, 'Тестовая Точка', NULL, NULL, NULL, NULL, NULL, 'admin@test.ru', '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', NULL, NULL, NULL, NULL, NULL, '+3', 1, '2026-01-21 13:07:16', '2026-01-21 13:15:27');
 
 --
 -- Индексы сохранённых таблиц
@@ -1353,7 +1361,9 @@ ALTER TABLE `prod_variant_groups`
 -- Индексы таблицы `ten_tenants`
 --
 ALTER TABLE `ten_tenants`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_tenants_subdomain` (`subdomain`),
+  ADD UNIQUE KEY `uq_tenants_custom_domain` (`custom_domain`);
 
 --
 -- AUTO_INCREMENT для сохранённых таблиц

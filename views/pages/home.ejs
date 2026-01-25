@@ -6,5 +6,7 @@
   centerPartial: '../partials/home/center',
   rightPartial: '../partials/home/right',
   extraPartial: null,
-  pageScripts: []
+  pageScripts: activePage === 'settings'
+    ? ['/static/js/settings-tenant.js']
+    : []
 }) %>

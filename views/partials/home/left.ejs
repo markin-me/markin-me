@@ -1,8 +1,26 @@
-<div class="panel">
-  <div class="panel-header">
-    <div class="panel-title">Левая колонка</div>
+<% if (activePage === 'settings') { %>
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title">Настройки</div>
+    </div>
+    <div class="panel-body no-scrollbar">
+      <div class="stage-list">
+        <button class="stage-item is-active" type="button">
+          <span class="stage-icon"><i class="fas fa-store"></i></span>
+          <span class="stage-text">
+            <strong>Профиль магазина</strong>
+          </span>
+        </button>
+      </div>
+    </div>
   </div>
-  <div class="panel-body no-scrollbar">
-    <p class="muted">Заглушка. Здесь потом будет контент.</p>
+<% } else { %>
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title">Левая колонка</div>
+    </div>
+    <div class="panel-body no-scrollbar">
+      <p class="muted">Заглушка. Здесь потом будет контент.</p>
+    </div>
   </div>
-</div>
+<% } %>

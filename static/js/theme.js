@@ -2,6 +2,56 @@
   const STORAGE_KEY = 'theme';
   const root = document.documentElement;
 
+  function getTenantFromStorage() {
+    try {
+      const t = localStorage.getItem('tenant');
+      return t ? JSON.parse(t) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function applyBrand(theme) {
+    const tenant = getTenantFromStorage();
+    const logoImg = document.getElementById('headerLogoImg');
+    const logoFallback = document.getElementById('headerLogoFallback');
+    const brandNameEl = document.getElementById('headerBrandName');
+    const favicon = document.getElementById('appFavicon');
+
+    if (tenant) {
+      const brandName = tenant.name || tenant.site_name || '';
+      if (brandNameEl && brandName) {
+        brandNameEl.textContent = brandName;
+      }
+      if (logoFallback && brandName) {
+        logoFallback.textContent = String(brandName).trim().slice(0, 1).toUpperCase();
+      }
+
+      const logo =
+        theme === 'dark'
+          ? (tenant.logo_dark_url || tenant.logo_light_url)
+          : (tenant.logo_light_url || tenant.logo_dark_url);
+
+      if (logoImg && logo) {
+        logoImg.src = logo;
+        logoImg.classList.remove('hidden');
+        if (logoFallback) logoFallback.classList.add('hidden');
+      } else if (logoImg) {
+        logoImg.classList.add('hidden');
+        if (logoFallback) logoFallback.classList.remove('hidden');
+      }
+
+      const fav =
+        theme === 'dark'
+          ? (tenant.favicon_dark_url || tenant.favicon_light_url)
+          : (tenant.favicon_light_url || tenant.favicon_dark_url);
+
+      if (favicon && fav) {
+        favicon.href = fav;
+      }
+    }
+  }
+
   function applyTheme(theme) {
     root.setAttribute('data-theme', theme);
     const btn = document.getElementById('theme-toggle');
@@ -12,6 +62,7 @@
         icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
       }
     }
+    applyBrand(theme);
   }
 
   // init theme (prefer saved, else system)

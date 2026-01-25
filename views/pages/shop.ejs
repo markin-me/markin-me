@@ -1,5 +1,7 @@
 <%- include('../layouts/shop', {
-  pageTitle: 'Витрина',
+  pageTitle: pageTitle,
+  tenant: tenant,
+  tenantId: tenantId,
   pageClass: 'page-shop',
   leftPartial: '../partials/shop/left',
   centerPartial: '../partials/shop/center',
@@ -7,3 +9,4 @@
   extraPartial: '../partials/shop/mobileNav',
   pageScripts: ['/static/js/shop.js']
 }) %>
+

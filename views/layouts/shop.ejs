@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title><%= pageTitle || 'Витрина' %></title>
+  <meta name="tenant_id" content="<%= tenantId || 1 %>" />
+  <link id="appFavicon" rel="icon" />
 
   <script>
     (function () {
@@ -16,6 +18,18 @@
       } catch (e) {}
     })();
   </script>
+  <% if (typeof tenant !== 'undefined' && tenant) { %>
+    <script>
+      (function () {
+        try {
+          var tenantData = <%- JSON.stringify(tenant) %>;
+          if (tenantData) {
+            localStorage.setItem('tenant', JSON.stringify(tenantData));
+          }
+        } catch (e) {}
+      })();
+    </script>
+  <% } %>
 
   <link rel="stylesheet" href="/static/css/style.css" />
   <link rel="stylesheet" href="/static/css/shop.css" />

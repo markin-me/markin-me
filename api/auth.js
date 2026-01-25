@@ -89,9 +89,15 @@ module.exports = function makeAuthRouter({ db, helpers }) {
       const [tenantResult] = await conn.query(
         `INSERT INTO ten_tenants (name, slug, subdomain, email, password_hash, is_active)
          VALUES (?, ?, ?, ?, ?, 1)`,
-        [shopName, finalSlug, finalSlug, email, passwordHash]
+        [shopName, finalSlug, null, email, passwordHash]
       );
       const tenantId = tenantResult.insertId;
+      const generatedSubdomain = `shop-${tenantId}`;
+
+      await conn.query(
+        'UPDATE ten_tenants SET subdomain=? WHERE id=?',
+        [generatedSubdomain, tenantId]
+      );
 
       // Создаём пользователя-владельца
       const [userResult] = await conn.query(
@@ -126,7 +132,8 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         tenant: {
           id: tenantId,
           name: shopName,
-          slug: finalSlug
+          slug: finalSlug,
+          subdomain: generatedSubdomain
         }
       });
     } catch (e) {

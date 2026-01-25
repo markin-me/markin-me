@@ -1,8 +1,152 @@
-<div class="panel">
-  <div class="panel-header">
-    <div class="panel-title">Информация</div>
+<% if (activePage === "settings") { %>
+  <div class="panel">
+    <div class="panel-header settings-right-header hidden">
+      <div class="product-tabs settings-right-tabs hidden" id="settingsRightTabs"></div>
+    </div>
+    <div class="panel-body no-scrollbar">
+      <div class="info-card" id="settingsRightDefault">
+        <div class="info-title">Выберите пункт для редактирования</div>
+        <div class="info-text">Откройте нужный раздел слева, чтобы увидеть настройки.</div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsLogoPanel">
+        <div class="settings-logo-grid">
+          <div class="settings-logo-tile" data-logo-key="logo_light_url">
+            <div class="settings-logo-title">Логотип (светлая тема)</div>
+            <button class="settings-logo-box" type="button" data-upload-box="logo_light_url">
+              <img class="settings-logo-preview hidden" data-upload-preview="logo_light_url" alt="" />
+              <div class="settings-logo-hint">Рекомендуемый размер: 512x512</div>
+            </button>
+            <input class="hidden" type="file" accept="image/*" data-upload-input="logo_light_url" />
+            <input class="hidden" type="text" data-tenant-input="logo_light_url" />
+            <div class="settings-logo-actions">
+              <button class="btn btn-icon btn-sm settings-logo-upload" type="button" title="Загрузить" data-upload-action="logo_light_url">
+                <i class="fas fa-upload"></i>
+              </button>
+              <button class="btn btn-icon btn-sm settings-logo-delete" type="button" title="Удалить" data-delete-action="logo_light_url">
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-logo-tile" data-logo-key="logo_dark_url">
+            <div class="settings-logo-title">Логотип (тёмная тема)</div>
+            <button class="settings-logo-box" type="button" data-upload-box="logo_dark_url">
+              <img class="settings-logo-preview hidden" data-upload-preview="logo_dark_url" alt="" />
+              <div class="settings-logo-hint">Рекомендуемый размер: 512x512</div>
+            </button>
+            <input class="hidden" type="file" accept="image/*" data-upload-input="logo_dark_url" />
+            <input class="hidden" type="text" data-tenant-input="logo_dark_url" />
+            <div class="settings-logo-actions">
+              <button class="btn btn-icon btn-sm settings-logo-upload" type="button" title="Загрузить" data-upload-action="logo_dark_url">
+                <i class="fas fa-upload"></i>
+              </button>
+              <button class="btn btn-icon btn-sm settings-logo-delete" type="button" title="Удалить" data-delete-action="logo_dark_url">
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-logo-tile" data-logo-key="favicon_light_url">
+            <div class="settings-logo-title">Фавикон (светлая тема)</div>
+            <button class="settings-logo-box" type="button" data-upload-box="favicon_light_url">
+              <img class="settings-logo-preview hidden" data-upload-preview="favicon_light_url" alt="" />
+              <div class="settings-logo-hint">Рекомендуемый размер: 32x32</div>
+            </button>
+            <input class="hidden" type="file" accept="image/*" data-upload-input="favicon_light_url" />
+            <input class="hidden" type="text" data-tenant-input="favicon_light_url" />
+            <div class="settings-logo-actions">
+              <button class="btn btn-icon btn-sm settings-logo-upload" type="button" title="Загрузить" data-upload-action="favicon_light_url">
+                <i class="fas fa-upload"></i>
+              </button>
+              <button class="btn btn-icon btn-sm settings-logo-delete" type="button" title="Удалить" data-delete-action="favicon_light_url">
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-logo-tile" data-logo-key="favicon_dark_url">
+            <div class="settings-logo-title">Фавикон (тёмная тема)</div>
+            <button class="settings-logo-box" type="button" data-upload-box="favicon_dark_url">
+              <img class="settings-logo-preview hidden" data-upload-preview="favicon_dark_url" alt="" />
+              <div class="settings-logo-hint">Рекомендуемый размер: 32x32</div>
+            </button>
+            <input class="hidden" type="file" accept="image/*" data-upload-input="favicon_dark_url" />
+            <input class="hidden" type="text" data-tenant-input="favicon_dark_url" />
+            <div class="settings-logo-actions">
+              <button class="btn btn-icon btn-sm settings-logo-upload" type="button" title="Загрузить" data-upload-action="favicon_dark_url">
+                <i class="fas fa-upload"></i>
+              </button>
+              <button class="btn btn-icon btn-sm settings-logo-delete" type="button" title="Удалить" data-delete-action="favicon_dark_url">
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsSitePanel">
+        <div class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">НАЗВАНИЕ САЙТА</label>
+            <input class="control" type="text" placeholder="Например: По щам" data-tenant-input="site_name" data-site-input="site_name" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ОПИСАНИЕ САЙТА</label>
+            <textarea class="textarea" rows="3" placeholder="Короткое описание" data-tenant-input="site_description" data-site-input="site_description"></textarea>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">СУБДОМЕН</label>
+            <input class="control" type="text" placeholder="myshop" data-tenant-input="subdomain" data-site-input="subdomain" />
+            <div class="settings-site-link">
+              <span class="field-hint">Ссылка на магазин:</span>
+              <a class="settings-site-link-url" id="siteSubdomainLink" href="#" target="_blank" rel="noopener">—</a>
+            </div>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ПОДКЛЮЧИТЬ СВОЙ ДОМЕН</label>
+            <input class="control" type="text" placeholder="example.com" data-tenant-input="custom_domain" data-site-input="custom_domain" />
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsBrandPanel">
+        <div class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">НАЗВАНИЕ БРЕНДА</label>
+            <input class="control" type="text" placeholder="Название бренда" data-tenant-input="name" data-brand-input="name" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">EMAIL</label>
+            <input class="control" type="email" placeholder="email@example.com" data-tenant-input="email" data-brand-input="email" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ТЕЛЕФОН</label>
+            <input class="control" type="text" placeholder="+7..." data-tenant-input="phone" data-brand-input="phone" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ЧАСОВОЙ ПОЯС</label>
+            <select id="brandTimezoneSelect" class="order-head-select tenant-timezone-select" aria-label="ЧАСОВОЙ ПОЯС"></select>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ПАРОЛЬ</label>
+            <div class="settings-password-grid">
+              <input class="control" type="password" placeholder="Новый пароль" id="brandPassword" />
+              <input class="control" type="password" placeholder="Повторите пароль" id="brandPasswordConfirm" />
+              <button class="btn btn-primary" type="button" id="brandPasswordSave">Сменить пароль</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
-  <div class="panel-body no-scrollbar">
-    <p class="muted">Заглушка. Здесь потом будет информация.</p>
+<% } else { %>
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title">Информация</div>
+    </div>
+    <div class="panel-body no-scrollbar">
+      <p class="muted">Заглушка. Здесь потом будет информация.</p>
+    </div>
   </div>
-</div>
+<% } %>

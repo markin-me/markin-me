@@ -12,6 +12,7 @@ const makeAuthRouter = require('./api/auth');
 const makeAdminClientsRouter = require('./api/admin/clients');
 const makeAdminOrdersRouter = require('./api/admin/orders');
 const makeAdminProductsRouter = require('./api/admin/products');
+const makeAdminTenantRouter = require('./api/admin/tenant');
 const makePublicShopRouter = require('./api/public/shop');
 
 // middleware
@@ -39,6 +40,57 @@ app.use('/static', express.static('static'));
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
+function getSubdomain(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  if (!host) return null;
+  if (host === 'localhost') return null;
+  const parts = host.split('.');
+  if (parts.length === 2 && parts[1] === 'localhost') return parts[0];
+  if (parts.length >= 2 && host !== 'localhost') return parts[0];
+  return null;
+}
+
+async function renderShop(req, res) {
+  try {
+    const host = String(req.hostname || '').toLowerCase();
+    const queryTenantId = Number(req.query.tenant_id);
+    const querySubdomain = helpers.strOrNull(req.query.subdomain);
+    let tenant = null;
+
+    if (Number.isFinite(queryTenantId) && queryTenantId > 0) {
+      const [rows] = await db.query('SELECT * FROM ten_tenants WHERE id=? LIMIT 1', [queryTenantId]);
+      tenant = rows[0] || null;
+    } else if (querySubdomain) {
+      const [rows] = await db.query('SELECT * FROM ten_tenants WHERE subdomain=? LIMIT 1', [querySubdomain.toLowerCase()]);
+      tenant = rows[0] || null;
+    } else if (host) {
+      const [custom] = await db.query('SELECT * FROM ten_tenants WHERE custom_domain=? LIMIT 1', [host]);
+      if (custom.length) {
+        tenant = custom[0];
+      } else {
+        const sub = getSubdomain(host);
+        if (sub) {
+          const [rows] = await db.query('SELECT * FROM ten_tenants WHERE subdomain=? LIMIT 1', [sub]);
+          tenant = rows[0] || null;
+        }
+      }
+    }
+
+    if (!tenant) {
+      const [rows] = await db.query('SELECT * FROM ten_tenants WHERE id=1 LIMIT 1');
+      tenant = rows[0] || null;
+    }
+
+    const pageTitle = (tenant && (tenant.site_name || tenant.name)) ? (tenant.site_name || tenant.name) : '???????';
+    const tenantId = tenant && tenant.id ? tenant.id : 1;
+    res.render('pages/shop', { pageTitle, tenant, tenantId });
+  } catch (err) {
+    console.error('?????? ???????? ???????:', err);
+    res.status(500).send('?????? ???????? ???????');
+  }
+}
+
+
 // ------------------------------
 // API: Auth (публичные роуты)
 // ------------------------------
@@ -47,6 +99,13 @@ app.use('/api/auth', makeAuthRouter({ db, helpers }));
 // ------------------------------
 // Pages
 // ------------------------------
+app.use((req, res, next) => {
+  const sub = getSubdomain(req.hostname);
+  if (!sub) return next();
+  if (req.path.startsWith('/api') || req.path.startsWith('/static')) return next();
+  return renderShop(req, res);
+});
+
 app.get('/', (req, res) => res.redirect('/login'));
 
 app.get('/login', (req, res) => {
@@ -77,9 +136,8 @@ app.get('/dashboard/settings', (req, res) => res.render('pages/home', { activePa
 // ------------------------------
 // Shop (витрина)
 // ------------------------------
-app.get('/shop', (req, res) => res.render('pages/shop'));
+app.get('/shop', renderShop);
 
-// Редирект /auth на /login
 app.get('/auth', (req, res) => res.redirect('/login'));
 
 // ------------------------------
@@ -92,6 +150,7 @@ app.use('/api/public', makePublicShopRouter({ db, helpers, ordersEvents }));
 // ------------------------------
 app.use('/api/admin/clients', authMiddleware, makeAdminClientsRouter({ db, helpers }));
 app.use('/api/admin/orders', authMiddleware, makeAdminOrdersRouter({ db, helpers, ordersEvents }));
+app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers }));
 
 // товары/категории/сортировка/загрузка — оставляем старые пути /api/prod_* и /api/sort/*
 // Применяем middleware ко всем роутам products роутера
