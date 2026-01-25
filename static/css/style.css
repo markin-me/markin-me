@@ -1264,6 +1264,48 @@ body.page-home .page-col-right .panel{
 .order-row[draggable="true"]{cursor:grab}
 .order-row.is-dragging{opacity:.55;cursor:grabbing}
 
+.settings-list{display:grid;gap:12px;margin-top:10px}
+.settings-list-header{display:grid;gap:4px}
+.settings-list-title{font-weight:800}
+.settings-list-subtitle{font-size:12px;color:var(--color-text-muted)}
+
+.settings-row{
+  cursor:grab;
+  grid-template-columns:54px minmax(160px,1fr) minmax(140px,220px);
+  align-items:center;
+  gap:12px;
+}
+.settings-row.is-dragging{cursor:grabbing}
+.settings-row:hover{transform:none;box-shadow:none}
+.settings-row-icon{display:grid;place-items:center}
+.settings-icon-btn{
+  width:48px;
+  height:48px;
+  border-radius:12px;
+  border:1px dashed var(--color-border);
+  background:var(--color-surface-2);
+  color:var(--color-text-muted);
+  overflow:hidden;
+}
+.settings-icon-btn.is-filled{
+  border-style:solid;
+  color:var(--color-text);
+}
+.settings-icon-img{
+  width:100%;
+  height:100%;
+  object-fit:contain;
+  background:var(--color-surface);
+}
+.settings-row-title .control{width:100%}
+.settings-row-switches{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  justify-content:flex-end;
+}
+.settings-row-switches .switch{margin:0}
+
 .order-col{min-width:0}
 .order-id{display:grid;justify-items:center;gap:2px;font-weight:700}
 .order-id-num{font-weight:900;font-size:20px;line-height:1.2}
@@ -2927,6 +2969,17 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 }
 
 .switch-text{color:var(--color-text);font-weight:600}
+
+.settings-row-switches .switch{
+  flex-direction:column;
+  align-items:center;
+  gap:6px;
+}
+.settings-row-switches .switch-text{
+  font-size:12px;
+  color:var(--color-text-muted);
+  font-weight:600;
+}
 
 /* ================= Product editor header (150x150) ================= */
 .product-editor-top{

@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Хост: 10.0.231.119
--- Время создания: Янв 25 2026 г., 14:55
+-- Время создания: Янв 25 2026 г., 17:22
 -- Версия сервера: 8.0.37-29
 -- Версия PHP: 7.2.34
 
@@ -1076,6 +1076,25 @@ INSERT INTO `prod_variant_groups` (`id`, `tenant_id`, `store_id`, `title`, `unit
 -- --------------------------------------------------------
 
 --
+-- Структура таблицы `ten_stores`
+--
+
+CREATE TABLE `ten_stores` (
+  `tenant_id` int NOT NULL,
+  `id` int NOT NULL,
+  `name` varchar(150) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
+  `code` varchar(150) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `address` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `phone` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `timezone` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Структура таблицы `ten_tenants`
 --
 
@@ -1358,6 +1377,14 @@ ALTER TABLE `prod_variant_groups`
   ADD KEY `idx_varntgrp_tenant_active_sort` (`tenant_id`,`is_active`,`sort_order`),
   ADD KEY `idx_varntgrp_tenant_title` (`tenant_id`,`title`),
   ADD KEY `fk_varntgrp_unit` (`unit_id`);
+
+--
+-- Индексы таблицы `ten_stores`
+--
+ALTER TABLE `ten_stores`
+  ADD PRIMARY KEY (`tenant_id`,`id`),
+  ADD UNIQUE KEY `uq_ten_stores_tenant_code` (`tenant_id`,`code`),
+  ADD KEY `idx_ten_stores_tenant_active` (`tenant_id`,`is_active`);
 
 --
 -- Индексы таблицы `ten_tenants`

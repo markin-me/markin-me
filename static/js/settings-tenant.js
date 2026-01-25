@@ -249,10 +249,16 @@
     const logoCard = document.getElementById("settingsLogoCard");
     const siteCard = document.getElementById("settingsSiteCard");
     const brandCard = document.getElementById("settingsBrandCard");
+    const orderStatusesCard = document.getElementById("settingsOrderStatusesCard");
+    const orderPaymentsCard = document.getElementById("settingsOrderPaymentsCard");
+    const orderDeliveryCard = document.getElementById("settingsOrderDeliveryCard");
     const rightDefault = document.getElementById("settingsRightDefault");
     const logoPanel = document.getElementById("settingsLogoPanel");
     const sitePanel = document.getElementById("settingsSitePanel");
     const brandPanel = document.getElementById("settingsBrandPanel");
+    const orderStatusesPanel = document.getElementById("settingsOrderStatusesPanel");
+    const orderPaymentsPanel = document.getElementById("settingsOrderPaymentsPanel");
+    const orderDeliveryPanel = document.getElementById("settingsOrderDeliveryPanel");
     const rightTabs = document.getElementById("settingsRightTabs");
     const rightHeader = rightTabs ? rightTabs.closest(".settings-right-header") : null;
 
@@ -267,6 +273,13 @@
       if (logoPanel) logoPanel.classList.toggle("hidden", tabId !== "logo");
       if (sitePanel) sitePanel.classList.toggle("hidden", tabId !== "site");
       if (brandPanel) brandPanel.classList.toggle("hidden", tabId !== "brand");
+      if (orderStatusesPanel) orderStatusesPanel.classList.toggle("hidden", tabId !== "order-statuses");
+      if (orderPaymentsPanel) orderPaymentsPanel.classList.toggle("hidden", tabId !== "order-payments");
+      if (orderDeliveryPanel) orderDeliveryPanel.classList.toggle("hidden", tabId !== "order-delivery");
+
+      if (tabId === "order-statuses" || tabId === "order-payments" || tabId === "order-delivery") {
+        ensureListLoaded(tabId);
+      }
     }
 
     function ensureTab(tabId, titleText) {
@@ -308,6 +321,9 @@
           if (tabId === "logo" && logoCard) logoCard.classList.remove("is-active");
           if (tabId === "site" && siteCard) siteCard.classList.remove("is-active");
           if (tabId === "brand" && brandCard) brandCard.classList.remove("is-active");
+          if (tabId === "order-statuses" && orderStatusesCard) orderStatusesCard.classList.remove("is-active");
+          if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.remove("is-active");
+          if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.remove("is-active");
         });
 
         rightTabs.appendChild(tab);
@@ -319,6 +335,9 @@
       if (tabId === "logo" && logoCard) logoCard.classList.add("is-active");
       if (tabId === "site" && siteCard) siteCard.classList.add("is-active");
       if (tabId === "brand" && brandCard) brandCard.classList.add("is-active");
+      if (tabId === "order-statuses" && orderStatusesCard) orderStatusesCard.classList.add("is-active");
+      if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.add("is-active");
+      if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.add("is-active");
     }
 
     if (logoCard) {
@@ -338,6 +357,355 @@
         ensureTab("brand", "Данные бренда");
       });
     }
+
+    if (orderStatusesCard) {
+      orderStatusesCard.addEventListener("click", () => {
+        ensureTab("order-statuses", "Этапы заказов");
+      });
+    }
+
+    if (orderPaymentsCard) {
+      orderPaymentsCard.addEventListener("click", () => {
+        ensureTab("order-payments", "Способы оплаты");
+      });
+    }
+
+    if (orderDeliveryCard) {
+      orderDeliveryCard.addEventListener("click", () => {
+        ensureTab("order-delivery", "Способы получения");
+      });
+    }
+
+
+    const settingsListsState = {
+      "order-statuses": { loaded: false, items: [] },
+      "order-payments": { loaded: false, items: [] },
+      "order-delivery": { loaded: false, items: [] }
+    };
+
+    const settingsListsConfig = {
+      "order-statuses": {
+        endpoint: "/api/admin/tenant/order-statuses",
+        reorderEndpoint: "/api/admin/tenant/order-statuses/reorder",
+        updateEndpoint: "/api/admin/tenant/order-statuses/",
+        hasFinal: true,
+        iconLabel: "Иконка статуса"
+      },
+      "order-payments": {
+        endpoint: "/api/admin/tenant/order-payments",
+        reorderEndpoint: "/api/admin/tenant/order-payments/reorder",
+        updateEndpoint: "/api/admin/tenant/order-payments/",
+        hasFinal: false,
+        iconLabel: "Иконка оплаты"
+      },
+      "order-delivery": {
+        endpoint: "/api/admin/tenant/order-delivery-types",
+        reorderEndpoint: "/api/admin/tenant/order-delivery-types/reorder",
+        updateEndpoint: "/api/admin/tenant/order-delivery-types/",
+        hasFinal: false,
+        iconLabel: "Иконка получения"
+      }
+    };
+
+    function getSettingsListConfig(type) {
+      return settingsListsConfig[type] || null;
+    }
+
+    function ensureListLoaded(type) {
+      const state = settingsListsState[type];
+      if (!state || state.loaded) return;
+      loadSettingsList(type);
+    }
+
+    async function loadSettingsList(type) {
+      const cfg = getSettingsListConfig(type);
+      if (!cfg) return;
+      try {
+        const res = await authFetch(cfg.endpoint);
+        const data = await res.json();
+        if (!data || !data.ok) return;
+        const items = Array.isArray(data.items) ? data.items : [];
+        settingsListsState[type] = { loaded: true, items };
+        renderSettingsList(type, items);
+      } catch (err) {
+        console.error("Не удалось загрузить список:", type, err);
+      }
+    }
+
+    async function updateSettingsItem(type, id, payload) {
+      const cfg = getSettingsListConfig(type);
+      if (!cfg) return null;
+      try {
+        const res = await authFetch(cfg.updateEndpoint + encodeURIComponent(id), {
+          method: "PATCH",
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        return data || null;
+      } catch (err) {
+        console.error("Не удалось обновить запись:", err);
+        return null;
+      }
+    }
+
+    async function reorderSettingsList(type, ids) {
+      const cfg = getSettingsListConfig(type);
+      if (!cfg) return null;
+      try {
+        const res = await authFetch(cfg.reorderEndpoint, {
+          method: "POST",
+          body: JSON.stringify({ ids })
+        });
+        const data = await res.json();
+        return data || null;
+      } catch (err) {
+        console.error("Не удалось сохранить сортировку:", err);
+        return null;
+      }
+    }
+
+    async function uploadSettingsIcon(type, id, file) {
+      const token = typeof getAuthToken === "function" ? getAuthToken() : null;
+      const form = new FormData();
+      form.append("file", file);
+      form.append("type", type);
+      form.append("id", String(id));
+
+      const res = await fetch("/api/admin/tenant/list-icon", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: form
+      });
+      const data = await res.json();
+      return data || null;
+    }
+
+    function updateIconButton(btn, iconValue) {
+      if (!btn) return;
+      btn.innerHTML = "";
+      if (iconValue) {
+        const isUrl = iconValue.includes("/") || iconValue.startsWith("http");
+        if (isUrl) {
+          const img = document.createElement("img");
+          img.className = "settings-icon-img";
+          img.src = iconValue;
+          img.alt = "";
+          btn.appendChild(img);
+        } else {
+          const icon = document.createElement("i");
+          const base = String(iconValue).trim();
+          if (base.includes(" ")) {
+            icon.className = base;
+          } else if (base.startsWith("fa-")) {
+            icon.className = `fas ${base}`;
+          } else {
+            icon.className = `fas fa-${base}`;
+          }
+          btn.appendChild(icon);
+        }
+        btn.classList.add("is-filled");
+      } else {
+        btn.classList.remove("is-filled");
+        btn.innerHTML = '<i class="fas fa-plus"></i>';
+      }
+    }
+
+    function createSwitch(labelText, checked, onChange) {
+      const label = document.createElement("label");
+      label.className = "switch";
+
+      const input = document.createElement("input");
+      input.className = "switch-input";
+      input.type = "checkbox";
+      input.checked = Boolean(checked);
+
+      const ui = document.createElement("span");
+      ui.className = "switch-ui";
+      ui.setAttribute("aria-hidden", "true");
+
+      const textEl = document.createElement("span");
+      textEl.className = "switch-text";
+      textEl.textContent = labelText;
+
+      input.addEventListener("change", () => onChange(input.checked));
+
+      label.appendChild(input);
+      label.appendChild(ui);
+      label.appendChild(textEl);
+      return label;
+    }
+
+    function createSettingsRow(type, item) {
+      const cfg = getSettingsListConfig(type);
+      const row = document.createElement("div");
+      row.className = "order-row settings-row";
+      row.setAttribute("draggable", "true");
+      row.dataset.id = String(item.id);
+
+      const iconWrap = document.createElement("div");
+      iconWrap.className = "settings-row-icon";
+
+      const iconBtn = document.createElement("button");
+      iconBtn.type = "button";
+      iconBtn.className = "btn btn-icon btn-sm settings-icon-btn";
+      iconBtn.title = cfg.iconLabel;
+      updateIconButton(iconBtn, item.icon);
+      iconWrap.appendChild(iconBtn);
+
+      const titleWrap = document.createElement("div");
+      titleWrap.className = "settings-row-title";
+      const titleInput = document.createElement("input");
+      titleInput.className = "control";
+      titleInput.type = "text";
+      titleInput.value = item.title || "";
+      titleInput.dataset.value = item.title || "";
+      titleWrap.appendChild(titleInput);
+
+      const switches = document.createElement("div");
+      switches.className = "settings-row-switches";
+
+      if (cfg.hasFinal) {
+        switches.appendChild(createSwitch("Финальный", Number(item.is_final) === 1, async (checked) => {
+          const data = await updateSettingsItem(type, item.id, { is_final: checked ? 1 : 0 });
+          if (!data || !data.ok) {
+            alert("Не удалось сохранить финальный статус.");
+          }
+        }));
+      }
+
+      switches.appendChild(createSwitch("Активен", Number(item.is_active) === 1, async (checked) => {
+        const data = await updateSettingsItem(type, item.id, { is_active: checked ? 1 : 0 });
+        if (!data || !data.ok) {
+          alert("Не удалось сохранить активность.");
+        }
+      }));
+
+      titleInput.addEventListener("blur", async () => {
+        const next = titleInput.value.trim();
+        const prev = titleInput.dataset.value || "";
+        if (next === prev) return;
+        const data = await updateSettingsItem(type, item.id, { title: next || null });
+        if (!data || !data.ok) {
+          titleInput.value = prev;
+          alert("Не удалось сохранить название.");
+          return;
+        }
+        titleInput.dataset.value = next;
+      });
+
+      iconBtn.addEventListener("click", () => {
+        iconUploadTarget = { type, id: item.id, button: iconBtn };
+        iconUploadInput.click();
+      });
+
+      row.appendChild(iconWrap);
+      row.appendChild(titleWrap);
+      row.appendChild(switches);
+      return row;
+    }
+
+    function renderSettingsList(type, items) {
+      const listEl = document.querySelector(`[data-settings-list="${type}"]`);
+      if (!listEl) return;
+      listEl.innerHTML = "";
+
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "muted";
+        empty.textContent = "Нет данных.";
+        listEl.appendChild(empty);
+        return;
+      }
+
+      items.forEach((item) => {
+        listEl.appendChild(createSettingsRow(type, item));
+      });
+
+      attachDragHandlers(listEl, type);
+    }
+
+    function getDragAfterElement(container, y) {
+      const draggableElements = [...container.querySelectorAll(".settings-row:not(.is-dragging)")];
+      return draggableElements.reduce((closest, child) => {
+        const box = child.getBoundingClientRect();
+        const offset = y - box.top - box.height / 2;
+        if (offset < 0 && offset > closest.offset) {
+          return { offset, element: child };
+        }
+        return closest;
+      }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
+    }
+
+    function attachDragHandlers(listEl, type) {
+      if (listEl.dataset.dragReady === "1") return;
+      listEl.dataset.dragReady = "1";
+      let dragEl = null;
+      let orderBefore = "";
+
+      listEl.addEventListener("dragstart", (e) => {
+        const row = e.target.closest(".settings-row");
+        if (!row) return;
+        dragEl = row;
+        dragEl.classList.add("is-dragging");
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = "move";
+          try {
+            e.dataTransfer.setData("text/plain", "");
+          } catch {}
+        }
+        orderBefore = [...listEl.querySelectorAll(".settings-row")]
+          .map((el) => el.dataset.id)
+          .join(",");
+      });
+
+      listEl.addEventListener("dragend", async () => {
+        if (!dragEl) return;
+        dragEl.classList.remove("is-dragging");
+        dragEl = null;
+        const orderAfter = [...listEl.querySelectorAll(".settings-row")]
+          .map((el) => el.dataset.id)
+          .join(",");
+        if (orderBefore === orderAfter) return;
+        const ids = orderAfter.split(",").map((v) => Number(v)).filter((v) => Number.isFinite(v));
+        const data = await reorderSettingsList(type, ids);
+        if (!data || !data.ok) {
+          alert("Не удалось сохранить активность.");
+        }
+      });
+
+      listEl.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        if (!dragEl) return;
+        const afterElement = getDragAfterElement(listEl, e.clientY);
+        if (afterElement == null) {
+          listEl.appendChild(dragEl);
+        } else {
+          listEl.insertBefore(dragEl, afterElement);
+        }
+      });
+    }
+
+    const iconUploadInput = document.createElement("input");
+    iconUploadInput.type = "file";
+    iconUploadInput.accept = "image/*";
+    iconUploadInput.className = "hidden";
+    document.body.appendChild(iconUploadInput);
+
+    let iconUploadTarget = null;
+    iconUploadInput.addEventListener("change", async () => {
+      if (!iconUploadTarget) return;
+      const file = iconUploadInput.files && iconUploadInput.files[0];
+      if (!file) return;
+      const { type, id, button } = iconUploadTarget;
+      const data = await uploadSettingsIcon(type, id, file);
+      if (!data || !data.ok || !data.url) {
+        alert("Не удалось загрузить иконку.");
+        return;
+      }
+      updateIconButton(button, data.url);
+      iconUploadInput.value = "";
+      iconUploadTarget = null;
+    });
 
     function triggerUpload(key) {
       const input = document.querySelector(`[data-upload-input=\"${key}\"]`);

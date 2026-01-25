@@ -14,6 +14,25 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     return s === '' ? null : s;
   }
 
+  const listConfigs = {
+    'order-statuses': {
+      table: 'order_statuses',
+      hasFinal: true
+    },
+    'order-payments': {
+      table: 'order_payments',
+      hasFinal: false
+    },
+    'order-delivery': {
+      table: 'order_delivery_types',
+      hasFinal: false
+    }
+  };
+
+  function getListConfig(type) {
+    return listConfigs[type] || null;
+  }
+
   // ------------------------------
   // Upload: tenant assets (logo/favicon)
   // POST /api/admin/tenant/upload
@@ -196,6 +215,218 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     } catch (err) {
       console.error('Ошибка обновления tenant профиля:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+
+  // ------------------------------
+  // Order settings lists (tenant-level)
+  // ------------------------------
+  router.get('/order-statuses', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+
+      const [rows] = await db.query(
+        `SELECT id, code, title, icon, sort, is_active, is_final
+         FROM order_statuses
+         WHERE tenant_id=? AND store_id=1
+         ORDER BY sort ASC, id ASC`,
+        [tenantId]
+      );
+      res.json({ ok: true, items: rows || [] });
+    } catch (err) {
+      console.error('Ошибка получения списка статусов:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/order-payments', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+
+      const [rows] = await db.query(
+        `SELECT id, code, title, icon, sort, is_active
+         FROM order_payments
+         WHERE tenant_id=? AND store_id=1
+         ORDER BY sort ASC, id ASC`,
+        [tenantId]
+      );
+      res.json({ ok: true, items: rows || [] });
+    } catch (err) {
+      console.error('Ошибка получения способов оплаты:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/order-delivery-types', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+
+      const [rows] = await db.query(
+        `SELECT id, code, title, icon, sort, is_active
+         FROM order_delivery_types
+         WHERE tenant_id=? AND store_id=1
+         ORDER BY sort ASC, id ASC`,
+        [tenantId]
+      );
+      res.json({ ok: true, items: rows || [] });
+    } catch (err) {
+      console.error('Ошибка получения способов получения:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  async function patchListItem(req, res, type) {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const id = helpers.numOrNull(req.params.id);
+      const cfg = getListConfig(type);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!id) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
+      if (!cfg) return res.status(400).json({ ok: false, error: 'TYPE_INVALID' });
+
+      const title = req.body.title !== undefined ? helpers.strOrNull(req.body.title) : undefined;
+      const icon = req.body.icon !== undefined ? helpers.strOrNull(req.body.icon) : undefined;
+      const isActive = req.body.is_active !== undefined ? (helpers.toBool(req.body.is_active, true) ? 1 : 0) : undefined;
+      const isFinal = cfg.hasFinal && req.body.is_final !== undefined ? (helpers.toBool(req.body.is_final, false) ? 1 : 0) : undefined;
+
+      const updates = [];
+      const params = [];
+      if (title !== undefined) {
+        updates.push('title=?');
+        params.push(title);
+      }
+      if (icon !== undefined) {
+        updates.push('icon=?');
+        params.push(icon);
+      }
+      if (isActive !== undefined) {
+        updates.push('is_active=?');
+        params.push(isActive);
+      }
+      if (isFinal !== undefined) {
+        updates.push('is_final=?');
+        params.push(isFinal);
+      }
+
+      if (!updates.length) {
+        return res.json({ ok: true });
+      }
+
+      params.push(tenantId, id);
+      await db.query(
+        `UPDATE ${cfg.table} SET ${updates.join(', ')} WHERE tenant_id=? AND store_id=1 AND id=?`,
+        params
+      );
+
+      const fields = cfg.hasFinal ? 'id, code, title, icon, sort, is_active, is_final' : 'id, code, title, icon, sort, is_active';
+      const [rows] = await db.query(
+        `SELECT ${fields} FROM ${cfg.table} WHERE tenant_id=? AND store_id=1 AND id=? LIMIT 1`,
+        [tenantId, id]
+      );
+
+      res.json({ ok: true, item: rows[0] || null });
+    } catch (err) {
+      console.error('Ошибка обновления списка:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  }
+
+  router.patch('/order-statuses/:id', (req, res) => patchListItem(req, res, 'order-statuses'));
+  router.patch('/order-payments/:id', (req, res) => patchListItem(req, res, 'order-payments'));
+  router.patch('/order-delivery-types/:id', (req, res) => patchListItem(req, res, 'order-delivery'));
+
+  async function reorderList(req, res, type) {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const cfg = getListConfig(type);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!cfg) return res.status(400).json({ ok: false, error: 'TYPE_INVALID' });
+
+      const ids = Array.isArray(req.body.ids) ? req.body.ids.map(Number).filter((v) => Number.isFinite(v) && v > 0) : [];
+      if (!ids.length) return res.status(400).json({ ok: false, error: 'IDS_REQUIRED' });
+
+      const caseParts = [];
+      const params = [];
+      ids.forEach((id, idx) => {
+        caseParts.push('WHEN ? THEN ?');
+        params.push(id, (idx + 1) * 10);
+      });
+      const inSql = ids.map(() => '?').join(',');
+      params.push(tenantId, ...ids);
+
+      await db.query(
+        `UPDATE ${cfg.table} SET sort = CASE id ${caseParts.join(' ')} ELSE sort END
+         WHERE tenant_id=? AND store_id=1 AND id IN (${inSql})`,
+        params
+      );
+
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Ошибка сохранения сортировки:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  }
+
+  router.post('/order-statuses/reorder', (req, res) => reorderList(req, res, 'order-statuses'));
+  router.post('/order-payments/reorder', (req, res) => reorderList(req, res, 'order-payments'));
+  router.post('/order-delivery-types/reorder', (req, res) => reorderList(req, res, 'order-delivery'));
+
+  const listIconStorage = multer.diskStorage({
+    destination(req, file, cb) {
+      const tenantId = helpers.getTenantId(req);
+      const folder = path.join(__dirname, '..', '..', 'static', 'uploads', 'tenants', String(tenantId), 'lists');
+      helpers.ensureDir(folder);
+      cb(null, folder);
+    },
+    filename(req, file, cb) {
+      const ext = path.extname(file.originalname || '').toLowerCase() || '.png';
+      const name = crypto.randomBytes(16).toString('hex') + ext;
+      cb(null, name);
+    }
+  });
+
+  const listIconUpload = multer({
+    storage: listIconStorage,
+    limits: { files: 1, fileSize: 5 * 1024 * 1024 },
+    fileFilter(req, file, cb) {
+      const ok = /^image\/(jpeg|png|webp|gif)$/.test(file.mimetype);
+      cb(ok ? null : new Error('ONLY_IMAGES'), ok);
+    }
+  });
+
+  router.post('/list-icon', listIconUpload.single('file'), async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const type = helpers.strOrNull(req.body.type);
+      const id = helpers.numOrNull(req.body.id);
+      const file = req.file;
+      const cfg = getListConfig(type);
+
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!cfg) return res.status(400).json({ ok: false, error: 'TYPE_INVALID' });
+      if (!id) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
+      if (!file) return res.status(400).json({ ok: false, error: 'FILE_REQUIRED' });
+
+      const url = `/static/uploads/tenants/${tenantId}/lists/${file.filename}`;
+      await db.query(
+        `UPDATE ${cfg.table} SET icon=? WHERE tenant_id=? AND store_id=1 AND id=?`,
+        [url, tenantId, id]
+      );
+
+      const fields = cfg.hasFinal ? 'id, code, title, icon, sort, is_active, is_final' : 'id, code, title, icon, sort, is_active';
+      const [rows] = await db.query(
+        `SELECT ${fields} FROM ${cfg.table} WHERE tenant_id=? AND store_id=1 AND id=? LIMIT 1`,
+        [tenantId, id]
+      );
+
+      res.json({ ok: true, url, item: rows[0] || null });
+    } catch (err) {
+      console.error('Ошибка загрузки иконки:', err);
+      res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
     }
   });
 
