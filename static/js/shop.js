@@ -1,6 +1,11 @@
 (function () {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const isShopPage = () => document.body && document.body.classList.contains("page-shop");
+  const getShopBasePath = () => {
+    const pathname = String(window.location.pathname || "");
+    return pathname.startsWith("/shop") ? "/shop" : "/";
+  };
 
   // -----------------------------
   // DOM
@@ -9097,7 +9102,7 @@ function setBottomNavActive(tab) {
         if (isSheet && window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen()) {
           window.AppModal.close("sheet");
         }
-        window.location.href = "/shop";
+        window.location.href = getShopBasePath();
       } catch (e) {
         console.error(e);
         alert("Ошибка оформления заказа: " + (e.message || "UNKNOWN"));
@@ -9116,8 +9121,7 @@ async function init() {
     if ("scrollRestoration" in history) {
       history.scrollRestoration = "manual";
     }
-    const pathname = String(window.location.pathname || "");
-    if (pathname === "/shop" || pathname === "/shop/") {
+    if (isShopPage()) {
       document.body.classList.add("shop-main");
     } else {
       document.body.classList.remove("shop-main");
@@ -9263,7 +9267,7 @@ async function init() {
     if (elHeaderProfileBtn) {
       elHeaderProfileBtn.addEventListener("click", (e) => {
         // только на витрине
-        if (String(window.location.pathname || "").startsWith("/shop")) {
+        if (isShopPage()) {
           e.preventDefault();
           openProfileSheet();
         }
@@ -9279,8 +9283,7 @@ async function init() {
       if (badges.length === 0) return;
       
       // Проверяем, находимся ли мы на главной странице витрины
-      const pathname = String(window.location.pathname || "");
-      const isShopMainPage = pathname === "/shop" || pathname === "/shop/";
+      const isShopMainPage = isShopPage();
       const isMobile = window.matchMedia("(max-width: 768px)").matches;
       
       // Проверяем активную вкладку в мобильной навигации
@@ -9404,7 +9407,7 @@ async function init() {
       e.stopPropagation();
       
       // Только на витрине
-      if (!String(window.location.pathname || "").startsWith("/shop")) return;
+      if (!isShopPage()) return;
       
       // Проверяем, мобильная версия или десктоп
       const isMobile = window.matchMedia("(max-width: 768px)").matches;
