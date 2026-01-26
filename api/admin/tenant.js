@@ -218,8 +218,178 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     }
   });
 
+  async function getNextStoreId(tenantId) {
+    const [rows] = await db.query(
+      'SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM ten_stores WHERE tenant_id=?',
+      [tenantId]
+    );
+    return Number(rows?.[0]?.next_id || 1);
+  }
 
-  // ------------------------------
+  router.get('/stores', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+
+      const [rows] = await db.query(
+        `SELECT tenant_id, id, code, name, address, city, phone, timezone, is_active, created_at, updated_at
+         FROM ten_stores
+         WHERE tenant_id=?
+         ORDER BY id ASC`,
+        [tenantId]
+      );
+      res.json({ ok: true, stores: rows || [] });
+    } catch (err) {
+      console.error('Ошибка получения списка точек продаж:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+    router.post('/stores', async (req, res) => {
+      try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const name = helpers.strOrNull(req.body.name);
+      const codeInput = helpers.strOrNull(req.body.code);
+      const address = helpers.strOrNull(req.body.address);
+      const city = helpers.strOrNull(req.body.city);
+      const phone = helpers.strOrNull(req.body.phone);
+      let timezone = helpers.strOrNull(req.body.timezone);
+      const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+      if (!name) {
+        return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
+      }
+
+      if (!timezone) {
+        const [tenantRows] = await db.query(
+          'SELECT timezone FROM ten_tenants WHERE id=? LIMIT 1',
+          [tenantId]
+        );
+        timezone = tenantRows?.[0]?.timezone || null;
+      }
+
+      const nextId = await getNextStoreId(tenantId);
+      const code = codeInput || `store-${nextId}`;
+      const [exists] = await db.query(
+        'SELECT id FROM ten_stores WHERE tenant_id=? AND code=? LIMIT 1',
+        [tenantId, code]
+      );
+      if (exists.length) {
+        return res.status(409).json({ ok: false, error: 'CODE_TAKEN' });
+      }
+
+      await db.query(
+        'INSERT INTO ten_stores (tenant_id, id, code, name, address, city, phone, timezone, is_active) VALUES (?,?,?,?,?,?,?,?,?)',
+        [tenantId, nextId, code, name, address, city, phone, timezone, isActive]
+      );
+
+      const [rows] = await db.query(
+        'SELECT tenant_id, id, code, name, address, city, phone, timezone, is_active, created_at, updated_at FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, nextId]
+      );
+
+      res.json({ ok: true, store: rows[0] || null });
+      } catch (err) {
+        console.error('Ошибка создания точки продаж:', err);
+        res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      }
+    });
+
+    router.patch('/stores/:id', async (req, res) => {
+      try {
+        const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+        const id = helpers.numOrNull(req.params.id);
+        if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+        if (!id) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
+
+        const [existingRows] = await db.query(
+          'SELECT tenant_id, id, code, name, address, city, phone, timezone, is_active FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+          [tenantId, id]
+        );
+        if (!existingRows.length) {
+          return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+        }
+        const existing = existingRows[0];
+
+        const name = req.body.name !== undefined ? helpers.strOrNull(req.body.name) : undefined;
+        const code = req.body.code !== undefined ? helpers.strOrNull(req.body.code) : undefined;
+        const address = req.body.address !== undefined ? helpers.strOrNull(req.body.address) : undefined;
+        const city = req.body.city !== undefined ? helpers.strOrNull(req.body.city) : undefined;
+        const phone = req.body.phone !== undefined ? helpers.strOrNull(req.body.phone) : undefined;
+        const timezone = req.body.timezone !== undefined ? helpers.strOrNull(req.body.timezone) : undefined;
+        const isActive = req.body.is_active !== undefined ? (helpers.toBool(req.body.is_active, true) ? 1 : 0) : undefined;
+
+        if (name !== undefined && !name) {
+          return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
+        }
+
+        if (code !== undefined && code !== existing.code) {
+          if (code) {
+            const [exists] = await db.query(
+              'SELECT id FROM ten_stores WHERE tenant_id=? AND code=? AND id<>? LIMIT 1',
+              [tenantId, code, id]
+            );
+            if (exists.length) {
+              return res.status(409).json({ ok: false, error: 'CODE_TAKEN' });
+            }
+          }
+        }
+
+        const updates = [];
+        const params = [];
+        if (name !== undefined) {
+          updates.push('name=?');
+          params.push(name);
+        }
+        if (code !== undefined) {
+          updates.push('code=?');
+          params.push(code);
+        }
+        if (address !== undefined) {
+          updates.push('address=?');
+          params.push(address);
+        }
+        if (city !== undefined) {
+          updates.push('city=?');
+          params.push(city);
+        }
+        if (phone !== undefined) {
+          updates.push('phone=?');
+          params.push(phone);
+        }
+        if (timezone !== undefined) {
+          updates.push('timezone=?');
+          params.push(timezone);
+        }
+        if (isActive !== undefined) {
+          updates.push('is_active=?');
+          params.push(isActive);
+        }
+
+        if (updates.length) {
+          params.push(tenantId, id);
+          await db.query(
+            `UPDATE ten_stores SET ${updates.join(', ')} WHERE tenant_id=? AND id=?`,
+            params
+          );
+        }
+
+        const [rows] = await db.query(
+          'SELECT tenant_id, id, code, name, address, city, phone, timezone, is_active, created_at, updated_at FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+          [tenantId, id]
+        );
+        res.json({ ok: true, store: rows[0] || null });
+      } catch (err) {
+        console.error('Ошибка обновления точки продаж:', err);
+        res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      }
+    });
+
+
+    // ------------------------------
   // Order settings lists (tenant-level)
   // ------------------------------
   router.get('/order-statuses', async (req, res) => {

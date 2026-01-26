@@ -7,6 +7,28 @@
           <span id="headerLogoFallback">П</span>
         </div>
         <div class="logo-text" id="headerBrandName">По щам</div>
+        <% const hasCitySelector = (typeof showCitySelector !== 'undefined' && showCitySelector === true); %>
+        <% if (hasCitySelector) { %>
+          <div class="logo-city-wrapper" id="headerCitySelector">
+            <button
+              type="button"
+              class="header-city-button"
+              id="headerCityButton"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              disabled
+            >
+              <span class="header-city-name" id="headerCityName">—</span>
+              <i class="fas fa-chevron-down" aria-hidden="true"></i>
+            </button>
+            <div
+              class="header-city-dropdown hidden"
+              id="headerCityDropdown"
+              role="menu"
+              aria-label="Выбор города доставки"
+            ></div>
+          </div>
+        <% } %>
       </div>
     </div>
 

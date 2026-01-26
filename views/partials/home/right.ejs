@@ -9,6 +9,58 @@
         <div class="info-text">Откройте нужный раздел слева, чтобы увидеть настройки.</div>
       </div>
 
+      <div class="info-card hidden" id="settingsStoreEmpty">
+        <div class="info-title">Точки продаж</div>
+        <div class="info-text">Выберите точку слева, чтобы посмотреть и изменить её данные.</div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsStorePanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">Точка продаж</div>
+          <div class="settings-list-subtitle" id="settingsStoreSubtitle">—</div>
+        </div>
+        <form class="settings-site-form" id="settingsStoreForm">
+          <div class="settings-site-field">
+            <label class="field-label">НАЗВАНИЕ</label>
+            <input class="control" type="text" id="settingsStoreName" required />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">КОД</label>
+            <input class="control" type="text" id="settingsStoreCode" placeholder="store-2" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">АДРЕС</label>
+            <input class="control" type="text" id="settingsStoreAddress" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ГОРОД</label>
+            <input class="control" type="text" id="settingsStoreCity" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ТЕЛЕФОН</label>
+            <input class="control" type="text" id="settingsStorePhone" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ЧАСОВОЙ ПОЯС</label>
+            <select id="settingsStoreTimezoneSelect" class="order-head-select tenant-timezone-select" aria-label="Часовой пояс точки"></select>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">СТАТУС</label>
+            <label class="switch">
+              <input class="switch-input" type="checkbox" id="settingsStoreActive" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Активна</span>
+            </label>
+          </div>
+        </form>
+        <div class="stores-form-actions">
+          <button class="btn btn-primary btn-sm" type="button" id="settingsStoreSaveBtn">
+            <span id="settingsStoreSaveText">Сохранить</span>
+          </button>
+          <button class="btn btn-link btn-sm" type="button" id="settingsStoreResetBtn">Сбросить</button>
+        </div>
+      </div>
+
       <div class="info-card settings-right-panel hidden" id="settingsLogoPanel">
         <div class="settings-logo-grid">
           <div class="settings-logo-tile" data-logo-key="logo_light_url">

@@ -5,7 +5,10 @@
       <div class="toolbar">
         <div class="toolbar-title">
           <i class="fas fa-store"></i>
-          <span id="settingsCenterTitle">Профиль магазина</span>
+          <div class="toolbar-title-text">
+            <span id="settingsCenterTitle">Профиль магазина</span>
+            <span class="muted" id="settingsCenterSubtitle"></span>
+          </div>
         </div>
         <div class="toolbar-right">
           <button class="btn btn-icon btn-primary" id="settingsAddOrderBtn" type="button" title="Новая точка продаж" aria-label="Новая точка продаж">
@@ -15,8 +18,8 @@
       </div>
     </div>
 
-    <div class="panel orders-center-panel">
-      <div class="panel-body no-scrollbar">
+      <div class="panel orders-center-panel" id="settingsCardsPanel">
+        <div class="panel-body no-scrollbar">
         <div class="orders-list settings-cards" id="settingsTenantCards">
           <button class="order-row product-row settings-card" id="settingsLogoCard" type="button">
             <div class="product-avatar"><i class="fas fa-icons"></i></div>
@@ -89,6 +92,17 @@
           <div class="empty-icon"><i class="fas fa-store"></i></div>
           <div class="empty-title">Точки продаж</div>
           <div class="empty-text">Пока нет данных для этого раздела.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel stores-panel hidden" id="storesPanel">
+      <div class="panel-body no-scrollbar">
+        <div class="stores-list orders-list settings-cards" id="storesList"></div>
+        <div class="empty-state hidden" id="storesEmpty">
+          <div class="empty-icon"><i class="fas fa-store"></i></div>
+          <div class="empty-title">Нет точек продаж</div>
+          <div class="empty-text">Создайте первую точку, чтобы начать работу в новом районе.</div>
         </div>
       </div>
     </div>

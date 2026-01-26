@@ -35,6 +35,13 @@ function getAuthTenant() {
   }
 }
 
+function getActiveStoreId() {
+  if (typeof window === 'undefined') return 1;
+  const stored = localStorage.getItem('activeStoreId');
+  const n = Number(stored);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
 /**
  * Проверить, авторизован ли пользователь
  */
@@ -59,6 +66,7 @@ function getAuthHeaders(additionalHeaders = {}) {
   const token = getAuthToken();
   const headers = {
     'Content-Type': 'application/json',
+    'x-store-id': String(getActiveStoreId()),
     ...additionalHeaders
   };
   

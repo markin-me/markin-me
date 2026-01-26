@@ -81,6 +81,20 @@
     } catch {}
   }
 
+  function getActiveStoreIdFromStorage() {
+    if (typeof window === "undefined") return 1;
+    const stored = localStorage.getItem("activeStoreId");
+    const n = Number(stored);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  }
+
+  function setActiveStoreIdToStorage(id) {
+    if (typeof window === "undefined") return;
+    localStorage.setItem("activeStoreId", String(id));
+  }
+
+  let activeStoreId = getActiveStoreIdFromStorage();
+
   function applyBrandFromTenant(tenant) {
     if (!tenant) return;
     const theme = document.documentElement.getAttribute("data-theme") || "light";
@@ -221,27 +235,95 @@
     }
   }
 
+  async function fetchStores() {
+    try {
+      const res = await authFetch("/api/admin/tenant/stores");
+      const data = await res.json();
+      return data || null;
+    } catch (err) {
+      console.error("Не удалось загрузить точки продаж:", err);
+      return null;
+    }
+  }
+
+  async function createStore(payload) {
+    try {
+      const res = await authFetch("/api/admin/tenant/stores", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      return data || null;
+    } catch (err) {
+      console.error("Не удалось создать точку продаж:", err);
+      return null;
+    }
+  }
+
+  async function updateStore(id, payload) {
+    try {
+      const res = await authFetch(`/api/admin/tenant/stores/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      return data || null;
+    } catch (err) {
+      console.error("Не удалось обновить точку продаж:", err);
+      return null;
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     loadTenantProfile();
 
     const settingsSectionButtons = document.querySelectorAll("[data-settings-section]");
     const settingsCenterTitle = document.getElementById("settingsCenterTitle");
+    const settingsCenterSubtitle = document.getElementById("settingsCenterSubtitle");
     const settingsTenantCards = document.getElementById("settingsTenantCards");
     const settingsStoresEmpty = document.getElementById("settingsStoresEmpty");
+    const settingsCardsPanel = document.getElementById("settingsCardsPanel");
+    const storesPanel = document.getElementById("storesPanel");
+    const storesList = document.getElementById("storesList");
+    const storesEmpty = document.getElementById("storesEmpty");
+    const settingsAddOrderBtn = document.getElementById("settingsAddOrderBtn");
     settingsSectionButtons.forEach((btn) => {
       btn.addEventListener("click", () => {
         settingsSectionButtons.forEach((el) => el.classList.remove("is-active"));
         btn.classList.add("is-active");
         const section = btn.getAttribute("data-settings-section") || "";
         document.body.setAttribute("data-settings-section", section);
-        if (section === "stores") {
-          if (settingsCenterTitle) settingsCenterTitle.textContent = "Точки продаж";
-          if (settingsTenantCards) settingsTenantCards.classList.add("hidden");
-          if (settingsStoresEmpty) settingsStoresEmpty.classList.remove("hidden");
+        const isStores = section === "stores";
+        if (settingsCenterTitle) {
+          settingsCenterTitle.textContent = isStores ? "Точки продаж" : "Профиль магазина";
+        }
+        if (settingsCenterSubtitle) {
+          settingsCenterSubtitle.textContent = isStores ? "Загрузка..." : "";
+        }
+        if (settingsTenantCards) settingsTenantCards.classList.toggle("hidden", isStores);
+        if (settingsStoresEmpty) settingsStoresEmpty.classList.add("hidden");
+        if (settingsCardsPanel) settingsCardsPanel.classList.toggle("hidden", isStores);
+        if (storesPanel) storesPanel.classList.toggle("hidden", !isStores);
+        if (settingsAddOrderBtn) settingsAddOrderBtn.classList.remove("hidden");
+
+        if (isStores) {
+          const hasStoreTab = rightTabs && rightTabs.querySelector("[data-right-tab^=\"store-\"]");
+          if (rightDefault) rightDefault.classList.add("hidden");
+          if (hasStoreTab) {
+            if (rightHeader) rightHeader.classList.remove("hidden");
+            if (rightTabs) rightTabs.classList.remove("hidden");
+            setActiveRightTab(hasStoreTab.getAttribute("data-right-tab"));
+          } else {
+            if (rightHeader) rightHeader.classList.add("hidden");
+            if (rightTabs) rightTabs.classList.add("hidden");
+            if (settingsStoreEmpty) settingsStoreEmpty.classList.remove("hidden");
+            showStorePanel(false);
+          }
+          loadStores();
         } else {
-          if (settingsCenterTitle) settingsCenterTitle.textContent = "Профиль магазина";
-          if (settingsTenantCards) settingsTenantCards.classList.remove("hidden");
-          if (settingsStoresEmpty) settingsStoresEmpty.classList.add("hidden");
+          if (settingsStoreEmpty) settingsStoreEmpty.classList.add("hidden");
+          if (settingsStorePanel) settingsStorePanel.classList.add("hidden");
+          if (rightDefault) rightDefault.classList.remove("hidden");
         }
       });
     });
@@ -261,8 +343,31 @@
     const orderDeliveryPanel = document.getElementById("settingsOrderDeliveryPanel");
     const rightTabs = document.getElementById("settingsRightTabs");
     const rightHeader = rightTabs ? rightTabs.closest(".settings-right-header") : null;
+    const settingsStoreEmpty = document.getElementById("settingsStoreEmpty");
+    const settingsStorePanel = document.getElementById("settingsStorePanel");
+    const settingsStoreSubtitle = document.getElementById("settingsStoreSubtitle");
+    const settingsStoreName = document.getElementById("settingsStoreName");
+    const settingsStoreCode = document.getElementById("settingsStoreCode");
+    const settingsStoreAddress = document.getElementById("settingsStoreAddress");
+    const settingsStoreCity = document.getElementById("settingsStoreCity");
+    const settingsStorePhone = document.getElementById("settingsStorePhone");
+    const settingsStoreTimezoneSelect = document.getElementById("settingsStoreTimezoneSelect");
+    const settingsStoreActive = document.getElementById("settingsStoreActive");
+    const settingsStoreSaveBtn = document.getElementById("settingsStoreSaveBtn");
+    const settingsStoreSaveText = document.getElementById("settingsStoreSaveText");
+    const settingsStoreResetBtn = document.getElementById("settingsStoreResetBtn");
 
+    const storesState = {
+      loaded: false,
+      items: [],
+      selectedId: null,
+      snapshot: null,
+      mode: "view"
+    };
+    const storeTabs = new Map();
+    let activeRightTabId = "";
     function setActiveRightTab(tabId) {
+      activeRightTabId = tabId;
       if (rightTabs) {
         rightTabs.querySelectorAll(".product-tab").forEach((tab) => {
           tab.classList.toggle("is-active", tab.getAttribute("data-right-tab") === tabId);
@@ -276,9 +381,18 @@
       if (orderStatusesPanel) orderStatusesPanel.classList.toggle("hidden", tabId !== "order-statuses");
       if (orderPaymentsPanel) orderPaymentsPanel.classList.toggle("hidden", tabId !== "order-payments");
       if (orderDeliveryPanel) orderDeliveryPanel.classList.toggle("hidden", tabId !== "order-delivery");
+      if (settingsStorePanel) settingsStorePanel.classList.toggle("hidden", !tabId.startsWith("store-"));
+      if (settingsStoreEmpty) {
+        const section = document.body.getAttribute("data-settings-section");
+        const shouldShow = section === "stores" && tabId === "";
+        settingsStoreEmpty.classList.toggle("hidden", !shouldShow);
+      }
 
       if (tabId === "order-statuses" || tabId === "order-payments" || tabId === "order-delivery") {
         ensureListLoaded(tabId);
+      }
+      if (tabId.startsWith("store-")) {
+        applyStoreTabState(tabId);
       }
     }
 
@@ -324,9 +438,28 @@
           if (tabId === "order-statuses" && orderStatusesCard) orderStatusesCard.classList.remove("is-active");
           if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.remove("is-active");
           if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.remove("is-active");
+          if (tabId.startsWith("store-")) {
+            storeTabs.delete(tabId);
+            if (activeRightTabId === tabId) {
+              activeRightTabId = "";
+              const nextTab = rightTabs.querySelector(".product-tab");
+              if (nextTab) {
+                setActiveRightTab(nextTab.getAttribute("data-right-tab"));
+                return;
+              }
+            }
+            storesState.selectedId = null;
+            storesState.snapshot = null;
+            storesState.mode = "view";
+            renderStoresList(storesState.items);
+            showStorePanel(false);
+          }
         });
 
         rightTabs.appendChild(tab);
+      } else if (titleText) {
+        const titleEl = tab.querySelector(".product-tab-title");
+        if (titleEl) titleEl.textContent = titleText;
       }
 
       if (rightHeader) rightHeader.classList.remove("hidden");
@@ -376,6 +509,103 @@
       });
     }
 
+    function startCreateStore() {
+      const tabId = `store-new-${Date.now()}`;
+      storeTabs.set(tabId, { mode: "create", storeId: null, snapshot: null });
+      openStoreTab(tabId, "Новая точка");
+      showStorePanel(true);
+      if (settingsStoreName) settingsStoreName.focus();
+    }
+
+    if (settingsAddOrderBtn) {
+      settingsAddOrderBtn.addEventListener("click", () => {
+        const section = document.body.getAttribute("data-settings-section");
+        if (section !== "stores") {
+          const storesBtn = document.querySelector("[data-settings-section=\"stores\"]");
+          if (storesBtn) storesBtn.click();
+        }
+        startCreateStore();
+      });
+    }
+
+    if (settingsStoreSaveBtn) {
+      settingsStoreSaveBtn.addEventListener("click", async () => {
+        const payload = {
+          name: trimOrNull(settingsStoreName?.value),
+          code: trimOrNull(settingsStoreCode?.value),
+          address: trimOrNull(settingsStoreAddress?.value),
+          city: trimOrNull(settingsStoreCity?.value),
+          phone: trimOrNull(settingsStorePhone?.value),
+          timezone: settingsStoreTimezoneSelect ? settingsStoreTimezoneSelect.value : null,
+          is_active: settingsStoreActive && settingsStoreActive.checked ? 1 : 0
+        };
+
+        if (!payload.name) {
+          alert("Введите название точки продаж.");
+          return;
+        }
+
+        let data = null;
+        const tabData = storeTabs.get(activeRightTabId);
+        if (tabData && tabData.mode === "create") {
+          data = await createStore(payload);
+          if (!data || !data.ok || !data.store) {
+            if (data && data.error === "CODE_TAKEN") {
+              alert("??? ??? ????????????. ??????? ??????.");
+            } else {
+              alert("?? ??????? ??????? ????? ??????.");
+            }
+            return;
+          }
+        } else {
+          const id = tabData ? tabData.storeId : storesState.selectedId;
+          if (!id) return;
+          data = await updateStore(id, payload);
+          if (!data || !data.ok || !data.store) {
+            if (data && data.error === "CODE_TAKEN") {
+              alert("??? ??? ????????????. ??????? ??????.");
+            } else if (data && data.error === "NAME_REQUIRED") {
+              alert("???????? ???????????.");
+            } else {
+              alert("?? ??????? ????????? ?????????.");
+            }
+            return;
+          }
+        }
+
+        mergeStoreInState(data.store);
+        if (tabData && tabData.mode === "create") {
+          tabData.mode = "edit";
+          tabData.storeId = data.store.id;
+          tabData.snapshot = { ...data.store };
+          storeTabs.set(activeRightTabId, tabData);
+          ensureTab(activeRightTabId, data.store.name || "????? ??????");
+        } else if (tabData) {
+          tabData.snapshot = { ...data.store };
+          storeTabs.set(activeRightTabId, tabData);
+          ensureTab(activeRightTabId, data.store.name || "????? ??????");
+        }
+        selectStore(data.store);
+      });
+    }
+
+    if (settingsStoreResetBtn) {
+      settingsStoreResetBtn.addEventListener("click", () => {
+        const tabData = storeTabs.get(activeRightTabId);
+        if (tabData && tabData.mode === "create") {
+          setStoreMode("create");
+          return;
+        }
+        if (!storesState.snapshot) return;
+        fillStoreForm(storesState.snapshot);
+      });
+    }
+
+    const initialSectionBtn = document.querySelector("[data-settings-section].is-active");
+    if (initialSectionBtn) {
+      initialSectionBtn.click();
+    }
+
 
     const settingsListsState = {
       "order-statuses": { loaded: false, items: [] },
@@ -406,6 +636,208 @@
         iconLabel: "Иконка получения"
       }
     };
+
+
+    function normalizeValue(value) {
+      if (value === null || value === undefined) return "";
+      return String(value);
+    }
+
+    function renderStoresList(items) {
+      if (!storesList) return;
+      storesList.innerHTML = "";
+      if (!items.length) {
+        if (storesEmpty) storesEmpty.classList.remove("hidden");
+        return;
+      }
+      if (storesEmpty) storesEmpty.classList.add("hidden");
+
+      items.forEach((store) => {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "order-row product-row settings-card";
+        row.dataset.id = String(store.id);
+
+        const avatar = document.createElement("div");
+        avatar.className = "product-avatar";
+        avatar.innerHTML = '<i class="fas fa-shop"></i>';
+
+        const info = document.createElement("div");
+        info.className = "order-col";
+
+        const title = document.createElement("div");
+        title.className = "product-title";
+        title.textContent = store.name || `Точка #${store.id}`;
+
+        info.appendChild(title);
+        const status = Number(store.is_active) === 1 ? "активна" : "выключена";
+        const statusEl = document.createElement("div");
+        statusEl.className = "muted store-status";
+        statusEl.textContent = status;
+        info.appendChild(statusEl);
+
+        const action = document.createElement("div");
+        action.className = "order-col";
+
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = "Открыть";
+        action.appendChild(badge);
+
+        row.appendChild(avatar);
+        row.appendChild(info);
+        row.appendChild(action);
+
+        row.addEventListener("click", () => selectStore(store));
+        storesList.appendChild(row);
+      });
+    }
+
+    function fillStoreForm(store) {
+      if (!store) return;
+      if (settingsStoreSubtitle) {
+        const codePart = store.code ? ` • ${store.code}` : "";
+        settingsStoreSubtitle.textContent = `ID ${store.id}${codePart}`;
+      }
+      if (settingsStoreName) settingsStoreName.value = normalizeValue(store.name);
+      if (settingsStoreCode) settingsStoreCode.value = normalizeValue(store.code);
+      if (settingsStoreAddress) settingsStoreAddress.value = normalizeValue(store.address);
+      if (settingsStoreCity) settingsStoreCity.value = normalizeValue(store.city);
+      if (settingsStorePhone) settingsStorePhone.value = normalizeValue(store.phone);
+
+      const tenant = typeof getAuthTenant === "function" ? getAuthTenant() : null;
+      const fallbackTz = tenant?.timezone || "+0";
+      const storeTz = store.timezone || fallbackTz;
+      if (settingsStoreTimezoneSelect) {
+        fillTimezoneSelect(storeTz, settingsStoreTimezoneSelect);
+      }
+      if (settingsStoreActive) settingsStoreActive.checked = Number(store.is_active) === 1;
+    }
+
+    function showStorePanel(show) {
+      if (settingsStorePanel) settingsStorePanel.classList.toggle("hidden", !show);
+    }
+
+    function setStoreMode(mode, store) {
+      storesState.mode = mode;
+      if (settingsStoreSaveText) {
+        settingsStoreSaveText.textContent = mode === "create" ? "Создать" : "Сохранить";
+      }
+      if (mode === "create") {
+        if (settingsStoreSubtitle) settingsStoreSubtitle.textContent = "Новая точка";
+        if (settingsStoreName) settingsStoreName.value = "";
+        if (settingsStoreCode) settingsStoreCode.value = "";
+        if (settingsStoreAddress) settingsStoreAddress.value = "";
+        if (settingsStoreCity) settingsStoreCity.value = "";
+        if (settingsStorePhone) settingsStorePhone.value = "";
+        const tenant = typeof getAuthTenant === "function" ? getAuthTenant() : null;
+        const fallbackTz = tenant?.timezone || "+0";
+        if (settingsStoreTimezoneSelect) {
+          fillTimezoneSelect(fallbackTz, settingsStoreTimezoneSelect);
+        }
+        if (settingsStoreActive) settingsStoreActive.checked = true;
+      } else if (store) {
+        fillStoreForm(store);
+      }
+    }
+
+    function applyStoreTabState(tabId) {
+      const data = storeTabs.get(tabId);
+      if (!data) return;
+      if (data.mode === "create") {
+        storesState.selectedId = null;
+        storesState.snapshot = null;
+        setStoreMode("create");
+        renderStoresList(storesState.items);
+        showStorePanel(true);
+        return;
+      }
+
+      const storeId = data.storeId;
+      const store = storesState.items.find((s) => s.id === storeId) || data.snapshot;
+      if (store) {
+        storesState.selectedId = store.id;
+        storesState.snapshot = { ...store };
+        setStoreMode("edit", store);
+      }
+      renderStoresList(storesState.items);
+      showStorePanel(true);
+    }
+
+    function openStoreTab(tabId, title) {
+      ensureTab(tabId, title || "Точка продаж");
+      if (rightHeader) rightHeader.classList.remove("hidden");
+      if (rightTabs) rightTabs.classList.remove("hidden");
+      setActiveRightTab(tabId);
+    }
+
+    function selectStore(store) {
+      if (!store) return;
+      const existingTabId = getStoreTabIdByStoreId(store.id);
+      const tabId = existingTabId || `store-${store.id}`;
+      if (!existingTabId) {
+        storeTabs.set(tabId, { mode: "edit", storeId: store.id, snapshot: { ...store } });
+      } else {
+        storeTabs.set(tabId, { mode: "edit", storeId: store.id, snapshot: { ...store } });
+      }
+      openStoreTab(tabId, store.name || "Точка продаж");
+      if (rightDefault) rightDefault.classList.add("hidden");
+    }
+
+    async function loadStores() {
+      const data = await fetchStores();
+      if (!data || !data.ok) return;
+      const items = Array.isArray(data.stores) ? data.stores : [];
+      storesState.loaded = true;
+      storesState.items = items;
+      if (settingsCenterSubtitle) {
+        const section = document.body.getAttribute("data-settings-section");
+        if (section === "stores") {
+          const count = items.length;
+          settingsCenterSubtitle.textContent = count ? `Всего точек: ${count}` : "Точек пока нет";
+        }
+      }
+      renderStoresList(items);
+      if (activeRightTabId && activeRightTabId.startsWith("store-")) {
+        applyStoreTabState(activeRightTabId);
+      } else if (!storesState.selectedId) {
+        showStorePanel(false);
+      } else {
+        const current = items.find((s) => s.id === storesState.selectedId);
+        if (current) {
+          selectStore(current);
+        } else {
+          storesState.selectedId = null;
+          showStorePanel(false);
+        }
+      }
+    }
+
+    function trimOrNull(value) {
+      const s = String(value ?? "").trim();
+      return s ? s : null;
+    }
+
+    function mergeStoreInState(store) {
+      if (!store) return;
+      const next = storesState.items.slice();
+      const idx = next.findIndex((s) => s.id === store.id);
+      if (idx >= 0) {
+        next[idx] = store;
+      } else {
+        next.push(store);
+      }
+      next.sort((a, b) => a.id - b.id);
+      storesState.items = next;
+      renderStoresList(next);
+    }
+
+    function getStoreTabIdByStoreId(storeId) {
+      for (const [tabId, data] of storeTabs.entries()) {
+        if (data && data.storeId === storeId) return tabId;
+      }
+      return null;
+    }
 
     function getSettingsListConfig(type) {
       return settingsListsConfig[type] || null;

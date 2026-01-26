@@ -146,6 +146,12 @@
     return 1;
   }
 
+  function getActiveStoreId() {
+    const stored = localStorage.getItem("activeStoreId");
+    const n = Number(stored);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  }
+
   const tenantId = getTenantId();
   const CART_KEY = `shop_cart_t${tenantId}`;
   const FAV_KEY = `shop_fav_t${tenantId}`;
@@ -381,6 +387,7 @@
     const token = getCustomerToken();
     const headers = {
       "x-tenant-id": String(tenantId),
+      "x-store-id": String(getActiveStoreId()),
       ...(opts.body ? { "Content-Type": "application/json" } : {}),
       ...(token ? { "x-customer-token": token } : {}),
       ...(opts.headers || {}),

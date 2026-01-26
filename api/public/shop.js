@@ -384,6 +384,23 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  router.get('/tenant/stores', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const [rows] = await db.query(
+        `SELECT tenant_id, id, code, name, city, address, phone, timezone, is_active
+         FROM ten_stores
+         WHERE tenant_id=?
+         ORDER BY id ASC`,
+        [tenantId]
+      );
+      res.json({ ok: true, stores: rows || [] });
+    } catch (err) {
+      console.error('Ошибка получения точек продаж:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   // PUT /api/public/me  body: { name }
   router.put('/me', async (req, res) => {
     try {

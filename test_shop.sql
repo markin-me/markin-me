@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Хост: 10.0.231.119
--- Время создания: Янв 25 2026 г., 17:22
+-- Время создания: Янв 25 2026 г., 18:48
 -- Версия сервера: 8.0.37-29
 -- Версия PHP: 7.2.34
 
@@ -337,8 +337,8 @@ CREATE TABLE `order_delivery_types` (
 --
 
 INSERT INTO `order_delivery_types` (`id`, `tenant_id`, `store_id`, `code`, `title`, `icon`, `sort`, `is_active`, `created_at`, `updated_at`) VALUES
-(1, 1, 1, 'dine_in', 'В зале', 'fa-utensils', 1, 1, '2026-01-02 18:18:07', '2026-01-02 18:18:07'),
-(2, 1, 1, 'takeaway', 'С собой', 'fa-bag-shopping', 2, 1, '2026-01-02 18:18:07', '2026-01-02 18:18:07'),
+(1, 1, 1, 'dine_in', 'В зале', 'fa-utensils', 1, 0, '2026-01-02 18:18:07', '2026-01-25 15:30:10'),
+(2, 1, 1, 'takeaway', 'С собой', 'fa-bag-shopping', 2, 0, '2026-01-02 18:18:07', '2026-01-25 15:30:11'),
 (3, 1, 1, 'pickup', 'Самовывоз', 'fa-store', 3, 1, '2026-01-02 18:18:07', '2026-01-02 18:18:07'),
 (4, 1, 1, 'delivery', 'Доставка', 'fa-truck', 4, 1, '2026-01-02 18:18:07', '2026-01-02 18:18:07');
 
@@ -401,7 +401,7 @@ CREATE TABLE `order_payments` (
 INSERT INTO `order_payments` (`id`, `tenant_id`, `store_id`, `code`, `title`, `icon`, `sort`, `is_active`, `created_at`, `updated_at`) VALUES
 (1, 1, 1, 'cash', 'Наличные', 'fa-money-bill-wave', 1, 1, '2026-01-02 19:03:40', '2026-01-02 19:03:40'),
 (2, 1, 1, 'card', 'Картой', 'fa-credit-card', 2, 1, '2026-01-02 19:03:40', '2026-01-02 19:03:40'),
-(3, 1, 1, 'online', 'Онлайн', 'fa-globe', 3, 1, '2026-01-02 19:03:40', '2026-01-02 19:03:40');
+(3, 1, 1, 'online', 'Онлайн', 'fa-globe', 3, 0, '2026-01-02 19:03:40', '2026-01-25 15:29:39');
 
 -- --------------------------------------------------------
 
@@ -1085,12 +1085,20 @@ CREATE TABLE `ten_stores` (
   `name` varchar(150) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
   `code` varchar(150) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
   `address` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `city` varchar(150) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
   `phone` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
   `timezone` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
   `is_active` tinyint(1) NOT NULL DEFAULT '1',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Дамп данных таблицы `ten_stores`
+--
+
+INSERT INTO `ten_stores` (`tenant_id`, `id`, `name`, `code`, `address`, `city`, `phone`, `timezone`, `is_active`, `created_at`, `updated_at`) VALUES
+(1, 1, 'По щам - основной магазин', 'main', 'ул. Неизвестная, 12', 'Москва', '79021461966', 'Europe/Moscow', 1, '2026-01-25 15:25:51', '2026-01-25 15:25:51');
 
 -- --------------------------------------------------------
 
@@ -1125,7 +1133,7 @@ CREATE TABLE `ten_tenants` (
 --
 
 INSERT INTO `ten_tenants` (`id`, `store_id`, `name`, `slug`, `subdomain`, `email`, `password_hash`, `phone`, `is_active`, `created_at`, `updated_at`, `logo_light_url`, `logo_dark_url`, `favicon_light_url`, `favicon_dark_url`, `timezone`, `site_name`, `site_description`, `custom_domain`) VALUES
-(1, 1, 'По щам - домашняя еда с доставкой', NULL, 'posham', 'admin@test.ru', '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', '79021461966', 1, '2026-01-21 13:07:16', '2026-01-25 10:46:38', '/static/uploads/tenants/1/2bcab539a2056f905b05b2fe1e6175ca.png', '/static/uploads/tenants/1/1c30d7740e24c5295301e5190bb9a8a1.png', '/static/uploads/tenants/1/87a8ced908be6c4daaed371594cfde4c.png', '/static/uploads/tenants/1/ae6927d41ab198580ec4c62af9f32e14.png', NULL, 'По щам', NULL, NULL);
+(1, 1, 'По щам - домашняя еда с доставкой', NULL, 'posham', 'admin@test.ru', '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', '79021461966', 1, '2026-01-21 13:07:16', '2026-01-25 15:22:49', '/static/uploads/tenants/1/2bcab539a2056f905b05b2fe1e6175ca.png', '/static/uploads/tenants/1/1c30d7740e24c5295301e5190bb9a8a1.png', '/static/uploads/tenants/1/87a8ced908be6c4daaed371594cfde4c.png', '/static/uploads/tenants/1/ae6927d41ab198580ec4c62af9f32e14.png', NULL, 'По щам', NULL, NULL);
 
 --
 -- Индексы сохранённых таблиц
