@@ -251,7 +251,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
 
   /**
    * GET /api/admin/tenant
-   * Возвращает профиль магазина (tenant) для текущего пользователя
+   * Возвращает Профиль компании (tenant) для текущего пользователя
    */
   router.get('/', async (req, res) => {
     try {

@@ -1502,6 +1502,37 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  function parseDeliveryTimeMinutes(value) {
+    if (!value) return null;
+    const [hours, mins] = String(value).split(":");
+    const h = Number(hours);
+    const m = Number(mins);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+    return Math.max(0, Math.min(24 * 60, h * 60 + m));
+  }
+
+  function getStoreLocalTimestamp(offsetValue) {
+    const offsetHours = Number.isNaN(Number(offsetValue)) ? 0 : Number(offsetValue);
+    const offsetMinutes = Math.round(offsetHours * 60);
+    return Date.now() + offsetMinutes * 60 * 1000;
+  }
+
+  function isStoreDeliveryOpenNow(hours, timezoneOffset) {
+    if (!Array.isArray(hours) || !hours.length) return false;
+    if (!timezoneOffset && timezoneOffset !== 0) timezoneOffset = "+0";
+    const ts = getStoreLocalTimestamp(timezoneOffset);
+    const local = new Date(ts);
+    const day = local.getUTCDay();
+    const minutes = local.getUTCHours() * 60 + local.getUTCMinutes();
+    const entry = hours.find((row) => Number(row.day_of_week) === day);
+    if (!entry) return false;
+    if (Number(entry.is_closed) === 1) return false;
+    const opens = parseDeliveryTimeMinutes(entry.opens_at);
+    const closes = parseDeliveryTimeMinutes(entry.closes_at);
+    if (opens === null || closes === null) return false;
+    return minutes >= opens && minutes < closes;
+  }
+
   // ------------------------------
   // order-config (для оформления)
   // ВАЖНО: твой фронт ждёт methods / payments / timeOptions
@@ -1545,7 +1576,34 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         [tenantId, storeId]
       );
 
-      res.json({ ok: true, data: { statuses, payments, methods, timeOptions } });
+      const [storeRows] = await db.query(
+        'SELECT id, timezone FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, storeId]
+      );
+      const store = storeRows[0] || null;
+      const storeTimezone = store?.timezone || "+0";
+
+      const [deliveryHours] = await db.query(
+        `SELECT day_of_week, opens_at, closes_at, is_closed
+         FROM ten_store_delivery_hours
+         WHERE tenant_id=? AND store_id=?
+         ORDER BY day_of_week ASC`,
+        [tenantId, storeId]
+      );
+      const deliveryIsOpen = isStoreDeliveryOpenNow(deliveryHours, storeTimezone);
+
+      res.json({
+        ok: true,
+        data: {
+          statuses,
+          payments,
+          methods,
+          timeOptions,
+          storeDeliveryHours: deliveryHours,
+          storeTimezone,
+          deliveryIsOpen
+        }
+      });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
