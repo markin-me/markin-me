@@ -8978,14 +8978,21 @@ function setBottomNavActive(tab) {
     const list = document.createElement("div");
     list.className = "shop-checkout-dropdown";
 
-    let current = value || (options[0] ? options[0].code : "");
+    let opts = Array.isArray(options) ? options.slice() : [];
+    let current = value || (opts[0] ? opts[0].code : "");
 
     function render() {
-      const active = options.find(o => o.code === current) || options[0];
-      btn.textContent = active ? active.title : "Выбрать";
+      const active = opts.find(o => o.code === current) || opts[0];
+      if (active) {
+        btn.textContent = active.title;
+      } else if (opts.length) {
+        btn.textContent = "Выбрать";
+      } else {
+        btn.textContent = "Нет данных";
+      }
       list.innerHTML = "";
 
-      options.filter(o => o.code !== current).forEach(o => {
+      opts.filter(o => o.code !== current).forEach(o => {
         const opt = document.createElement("button");
         opt.type = "button";
         opt.className = "shop-checkout-option";
@@ -8998,6 +9005,21 @@ function setBottomNavActive(tab) {
         });
         list.appendChild(opt);
       });
+    }
+
+    function setOptions(nextOptions = [], nextValue) {
+      opts = Array.isArray(nextOptions) ? nextOptions.slice() : [];
+      if (nextValue !== undefined) {
+        current = nextValue;
+      } else if (!opts.find(o => o.code === current)) {
+        current = opts[0]?.code || "";
+      }
+      render();
+    }
+
+    function setValue(val) {
+      current = val;
+      render();
     }
 
     btn.addEventListener("click", (e) => {
@@ -9017,10 +9039,8 @@ function setBottomNavActive(tab) {
     return {
       root: wrap,
       getValue: () => current,
-      setValue: (val) => {
-        current = val;
-        render();
-      },
+      setValue,
+      setOptions,
     };
   }
 
@@ -9046,6 +9066,52 @@ function setBottomNavActive(tab) {
     if (v.includes(" ")) return v.split(" ")[1]?.slice(0, 5) || "";
     if (/^\d{1,2}:\d{2}/.test(v)) return v.slice(0, 5);
     return "";
+  }
+
+  function parseTimeToMinutes(value) {
+    if (!value) return null;
+    const parts = String(value).split(":");
+    if (!parts.length) return null;
+    const hours = Number(parts[0]);
+    const rawMinutes = parts[1] ? parts[1].slice(0, 2) : "0";
+    const minutes = Number(rawMinutes);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+    return hours * 60 + minutes;
+  }
+
+  function formatMinutesToTime(total) {
+    if (!Number.isFinite(total)) return "";
+    const normalized = ((total % (24 * 60)) + 24 * 60) % (24 * 60);
+    const hours = Math.floor(normalized / 60);
+    const minutes = normalized % 60;
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  }
+
+  function buildTimeSlots(option) {
+    if (!option) return [];
+    const start = parseTimeToMinutes(option.starts_at);
+    const end = parseTimeToMinutes(option.ends_at);
+    if (start === null || end === null || end <= start) return [];
+    const stepMinutes = Math.max(1, Number(option.step_minutes) || 30);
+    const leadMinutes = Math.max(0, Number(option.lead_minutes) || 0);
+    const now = new Date();
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const minAllowed = nowMinutes + leadMinutes;
+
+    let slot = start;
+    if (slot < minAllowed) {
+      const diff = minAllowed - slot;
+      const stepsAhead = Math.ceil(diff / stepMinutes);
+      slot += stepsAhead * stepMinutes;
+    }
+
+    const slots = [];
+    const limit = Math.min(end, 24 * 60 - 1);
+    while (slot <= limit) {
+      slots.push(formatMinutesToTime(slot));
+      slot += stepMinutes;
+    }
+    return slots;
   }
 
   async function openCheckoutView({ container, onBack, hasAddressEditor, isSheet, actions, onEditAddress, onEditPickup }) {
@@ -9295,26 +9361,73 @@ function setBottomNavActive(tab) {
     const timeOptions = (cfg.timeOptions || []).map(x => ({ code: x.code, title: x.title }));
     const timeDefault = pickDefaultCode(timeOptions, draft.time_option_code, "asap");
     const timeSelect = buildDropdown(timeOptions, timeDefault);
-    wrap.appendChild(timeSelect.root);
+
+    const timeRow = document.createElement("div");
+    timeRow.className = "shop-checkout-time-row";
+    timeRow.appendChild(timeSelect.root);
 
     const timeInputWrap = document.createElement("div");
-    timeInputWrap.className = "shop-checkout-time-input";
+    timeInputWrap.className = "shop-checkout-time-input shop-checkout-time-input--manual";
 
     const timeInput = document.createElement("input");
     timeInput.className = "control";
     timeInput.type = "time";
     timeInput.value = extractTimeValue(draft.scheduled_at);
-
     timeInputWrap.appendChild(timeInput);
+
+    const timeSlotsWrap = document.createElement("div");
+    timeSlotsWrap.className = "shop-checkout-time-input shop-checkout-time-input--slots";
+    timeSlotsWrap.style.display = "none";
+
+    const timeSlotsDropdown = buildDropdown([], "");
+    timeSlotsWrap.appendChild(timeSlotsDropdown.root);
+
+    timeRow.appendChild(timeSlotsWrap);
+    wrap.appendChild(timeRow);
     wrap.appendChild(timeInputWrap);
 
+    const timeOptionByCode = (cfg.timeOptions || []).reduce((acc, option) => {
+      if (option && option.code) acc[option.code] = option;
+      return acc;
+    }, {});
+    const storedDraftTime = extractTimeValue(draft.scheduled_at);
+
     function refreshTimeInputVisibility() {
-      const v = timeSelect.getValue();
-      const show = v === "at_time" || v === "on_date";
-      timeInputWrap.style.display = show ? "" : "none";
+      const selectedCode = timeSelect.getValue();
+      const config = timeOptionByCode[selectedCode];
+      const hasWindow = config && Number(config.has_time_window) === 1;
+      timeInputWrap.style.display = selectedCode === "on_date" ? "" : "none";
+      timeSlotsWrap.style.display = hasWindow ? "" : "none";
     }
-    timeSelect.root.addEventListener("change", refreshTimeInputVisibility);
+
+    function updateTimeSlotsOptions() {
+      const selectedCode = timeSelect.getValue();
+      const config = timeOptionByCode[selectedCode];
+      if (!config || Number(config.has_time_window) !== 1) {
+        timeSlotsDropdown.setOptions([]);
+        return;
+      }
+
+      const slots = buildTimeSlots(config);
+      const slotOptions = slots.map(value => ({ code: value, title: value }));
+      const preferred = timeInput.value || storedDraftTime || "";
+      const defaultSlot = slotOptions.find(slot => slot.code === preferred)
+        ? preferred
+        : (slotOptions[0]?.code || "");
+      timeSlotsDropdown.setOptions(slotOptions, defaultSlot);
+      timeInput.value = defaultSlot;
+    }
+
+    timeSlotsDropdown.root.addEventListener("change", () => {
+      timeInput.value = timeSlotsDropdown.getValue() || "";
+    });
+
+    timeSelect.root.addEventListener("change", () => {
+      refreshTimeInputVisibility();
+      updateTimeSlotsOptions();
+    });
     refreshTimeInputVisibility();
+    updateTimeSlotsOptions();
 
     const payments = (cfg.payments || []).map(x => ({ code: x.code, title: x.title }));
     const payDefault = pickDefaultCode(payments, draft.payment_code, "cash");

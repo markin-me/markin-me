@@ -2338,6 +2338,22 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 .shop-checkout-time-input{
   margin-top: 8px;
 }
+.shop-checkout-time-row{
+  display:flex;
+  gap:12px;
+  align-items:center;
+  margin-top:6px;
+}
+.shop-checkout-time-row .shop-checkout-dropdown-wrap{
+  flex:1;
+}
+.shop-checkout-time-input--manual,
+.shop-checkout-time-input--slots{
+  flex:1;
+}
+.shop-checkout-time-input--slots{
+  margin-top:0;
+}
 /* Серый qty-pill в карточке товара на мобильных */
 @media (max-width: 768px) {
   .shop-mobile-product-actions .qty-pill {
@@ -2991,7 +3007,6 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 }
 
 
-  .store-hours-switch-control {
-    margin-left: 0;
-  }
+.store-hours-switch-control {
+  margin-left: 0;
 }

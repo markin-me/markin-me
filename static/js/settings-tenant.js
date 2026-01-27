@@ -360,6 +360,8 @@
     const settingsStoreResetBtn = document.getElementById("settingsStoreResetBtn");
     const settingsStoreHoursSwitch = document.getElementById("settingsStoreHoursSameSwitch");
     const settingsStoreHoursContainer = document.getElementById("settingsStoreHoursContainer");
+    const settingsStoreDeliveryHoursSwitch = document.getElementById("settingsStoreDeliveryHoursSameSwitch");
+    const settingsStoreDeliveryHoursContainer = document.getElementById("settingsStoreDeliveryHoursContainer");
 
     const storesState = {
       loaded: false,
@@ -382,6 +384,10 @@
     };
     const STORE_HOURS_GLOBAL_KEY = "global";
     const storeHoursState = {
+      useGlobal: false,
+      values: {}
+    };
+    const deliveryHoursState = {
       useGlobal: false,
       values: {}
     };
@@ -482,7 +488,97 @@
         }
         settingsStoreHoursContainer.appendChild(row);
     });
-  }
+    }
+
+    function getDeliveryHoursEntry(key) {
+      return deliveryHoursState.values[key] || getDefaultHoursEntry();
+    }
+
+    function updateDeliveryHoursEntry(key, updates) {
+      const next = { ...getDeliveryHoursEntry(key), ...updates };
+      deliveryHoursState.values[key] = next;
+    }
+
+    function ensureDeliveryGlobalEntry() {
+      const key = STORE_HOURS_GLOBAL_KEY;
+      if (!deliveryHoursState.values[key]) {
+        const fallbackKey = getDayKey(STORE_HOUR_DAY_ORDER[0]);
+        deliveryHoursState.values[key] = { ...getDeliveryHoursEntry(fallbackKey) };
+      }
+      return deliveryHoursState.values[key];
+    }
+
+    function renderDeliveryHoursRows() {
+      if (!settingsStoreDeliveryHoursContainer) return;
+      settingsStoreDeliveryHoursContainer.innerHTML = "";
+      const rows = deliveryHoursState.useGlobal
+        ? [{ day: null, label: "Ежедневно" }]
+        : STORE_HOUR_DAY_ORDER.map((day) => ({
+            day,
+            label: STORE_DAY_LABELS[day] || String(day)
+          }));
+      rows.forEach((config) => {
+        const key = getDayKey(config.day);
+        const entry = getDeliveryHoursEntry(key);
+        const row = document.createElement("div");
+        row.className = "store-hours-row";
+        if (config.day === null) {
+          row.classList.add("store-hours-row--global");
+        }
+        row.dataset.day = config.day === null ? "global" : String(config.day);
+
+        const dayLabel = document.createElement("div");
+        dayLabel.className = "store-hours-day";
+        dayLabel.textContent = config.label;
+
+        const inputsWrap = document.createElement("div");
+        inputsWrap.className = "store-hours-inputs";
+
+        const openInput = document.createElement("input");
+        openInput.type = "time";
+        openInput.className = "control store-hours-input";
+        openInput.value = entry.opens_at || "";
+        openInput.disabled = entry.is_closed;
+        openInput.addEventListener("input", () => {
+          updateDeliveryHoursEntry(key, { opens_at: openInput.value });
+        });
+
+        const closeInput = document.createElement("input");
+        closeInput.type = "time";
+        closeInput.className = "control store-hours-input";
+        closeInput.value = entry.closes_at || "";
+        closeInput.disabled = entry.is_closed;
+        closeInput.addEventListener("input", () => {
+          updateDeliveryHoursEntry(key, { closes_at: closeInput.value });
+        });
+
+        inputsWrap.appendChild(openInput);
+        inputsWrap.appendChild(closeInput);
+
+        const closedSwitch = createSwitch("", entry.is_closed, (checked) => {
+          updateDeliveryHoursEntry(key, { is_closed: checked });
+          openInput.disabled = checked;
+          closeInput.disabled = checked;
+        });
+        closedSwitch.classList.add("store-hours-switch-control");
+        const switchWrap = document.createElement("div");
+        switchWrap.className = "store-hours-switch-wrap";
+        const switchLabel = document.createElement("div");
+        switchLabel.className = "store-hours-switch-text";
+        switchLabel.textContent = "Выходной";
+        switchWrap.appendChild(closedSwitch);
+        switchWrap.appendChild(switchLabel);
+
+        row.appendChild(dayLabel);
+        row.appendChild(inputsWrap);
+        if (config.day !== null) {
+          row.appendChild(switchWrap);
+        } else {
+          row.dataset.noSwitch = "1";
+        }
+        settingsStoreDeliveryHoursContainer.appendChild(row);
+      });
+    }
 
     function setStoreHoursUseGlobal(flag) {
       storeHoursState.useGlobal = Boolean(flag);
@@ -493,6 +589,17 @@
         settingsStoreHoursSwitch.checked = storeHoursState.useGlobal;
       }
       renderStoreHoursRows();
+    }
+
+    function setDeliveryHoursUseGlobal(flag) {
+      deliveryHoursState.useGlobal = Boolean(flag);
+      if (deliveryHoursState.useGlobal) {
+        ensureDeliveryGlobalEntry();
+      }
+      if (settingsStoreDeliveryHoursSwitch) {
+        settingsStoreDeliveryHoursSwitch.checked = deliveryHoursState.useGlobal;
+      }
+      renderDeliveryHoursRows();
     }
 
     function applyStoreHours(store) {
@@ -518,6 +625,29 @@
       renderStoreHoursRows();
     }
 
+    function applyDeliveryHours(store) {
+      deliveryHoursState.values = {};
+      if (Array.isArray(store?.delivery_hours)) {
+        store.delivery_hours.forEach((hour) => {
+          const day = Number(hour.day_of_week);
+          if (!Number.isFinite(day)) return;
+          deliveryHoursState.values[getDayKey(day)] = {
+            opens_at: hour.opens_at || "",
+            closes_at: hour.closes_at || "",
+            is_closed: Number(hour.is_closed) === 1
+          };
+        });
+      }
+      deliveryHoursState.useGlobal = Number(store?.use_delivery_hours) === 1;
+      if (deliveryHoursState.useGlobal) {
+        ensureDeliveryGlobalEntry();
+      }
+      if (settingsStoreDeliveryHoursSwitch) {
+        settingsStoreDeliveryHoursSwitch.checked = deliveryHoursState.useGlobal;
+      }
+      renderDeliveryHoursRows();
+    }
+
     function resetStoreHoursState() {
       storeHoursState.useGlobal = false;
       storeHoursState.values = {};
@@ -527,6 +657,15 @@
       renderStoreHoursRows();
     }
 
+    function resetDeliveryHoursState() {
+      deliveryHoursState.useGlobal = false;
+      deliveryHoursState.values = {};
+      if (settingsStoreDeliveryHoursSwitch) {
+        settingsStoreDeliveryHoursSwitch.checked = false;
+      }
+      renderDeliveryHoursRows();
+    }
+
     function buildStoreHoursPayload() {
       const entries = [];
       const baseOrder = STORE_HOUR_DAY_ORDER;
@@ -534,6 +673,23 @@
       baseOrder.forEach((day) => {
         const key = storeHoursState.useGlobal ? STORE_HOURS_GLOBAL_KEY : getDayKey(day);
         const entry = storeHoursState.useGlobal ? globalEntry : getHoursEntry(key);
+        entries.push({
+          day_of_week: day,
+          opens_at: entry.opens_at || null,
+          closes_at: entry.closes_at || null,
+          is_closed: entry.is_closed ? 1 : 0
+        });
+      });
+      return entries;
+    }
+
+    function buildDeliveryHoursPayload() {
+      const entries = [];
+      const baseOrder = STORE_HOUR_DAY_ORDER;
+      const globalEntry = deliveryHoursState.values[STORE_HOURS_GLOBAL_KEY] || getDefaultHoursEntry();
+      baseOrder.forEach((day) => {
+        const key = deliveryHoursState.useGlobal ? STORE_HOURS_GLOBAL_KEY : getDayKey(day);
+        const entry = deliveryHoursState.useGlobal ? globalEntry : getDeliveryHoursEntry(key);
         entries.push({
           day_of_week: day,
           opens_at: entry.opens_at || null,
@@ -727,6 +883,8 @@
         };
         payload.use_global_hours = storeHoursState.useGlobal ? 1 : 0;
         payload.hours = buildStoreHoursPayload();
+        payload.use_delivery_hours = deliveryHoursState.useGlobal ? 1 : 0;
+        payload.delivery_hours = buildDeliveryHoursPayload();
 
         if (!payload.name) {
           alert("Введите название точки продаж.");
@@ -794,8 +952,14 @@
         setStoreHoursUseGlobal(settingsStoreHoursSwitch.checked);
       });
     }
+    if (settingsStoreDeliveryHoursSwitch) {
+      settingsStoreDeliveryHoursSwitch.addEventListener("change", () => {
+        setDeliveryHoursUseGlobal(settingsStoreDeliveryHoursSwitch.checked);
+      });
+    }
 
     resetStoreHoursState();
+    resetDeliveryHoursState();
     const initialSectionBtn = document.querySelector("[data-settings-section].is-active");
     if (initialSectionBtn) {
       initialSectionBtn.click();
@@ -824,22 +988,23 @@
         hasFinal: false,
         iconLabel: "Иконка оплаты"
       },
-      "order-delivery": {
-        endpoint: "/api/admin/tenant/order-delivery-types",
-        reorderEndpoint: "/api/admin/tenant/order-delivery-types/reorder",
-        updateEndpoint: "/api/admin/tenant/order-delivery-types/",
-        hasFinal: false,
-        iconLabel: "Иконка получения",
-        defaultField: "is_default"
-      },
-      "order-time-options": {
-        endpoint: "/api/admin/tenant/order-time-options",
-        reorderEndpoint: "/api/admin/tenant/order-time-options/reorder",
-        updateEndpoint: "/api/admin/tenant/order-time-options/",
-        hasFinal: false,
-        hasIcon: false
-      }
-    };
+    "order-delivery": {
+      endpoint: "/api/admin/tenant/order-delivery-types",
+      reorderEndpoint: "/api/admin/tenant/order-delivery-types/reorder",
+      updateEndpoint: "/api/admin/tenant/order-delivery-types/",
+      hasFinal: false,
+      iconLabel: "Иконка получения",
+      defaultField: "is_default"
+    },
+    "order-time-options": {
+      endpoint: "/api/admin/tenant/order-time-options",
+      reorderEndpoint: "/api/admin/tenant/order-time-options/reorder",
+      updateEndpoint: "/api/admin/tenant/order-time-options/",
+      hasFinal: false,
+      hasIcon: false,
+      hasTimeWindowSettings: true
+    }
+  };
 
 
     function normalizeValue(value) {
@@ -917,6 +1082,7 @@
       }
       if (settingsStoreActive) settingsStoreActive.checked = Number(store.is_active) === 1;
       applyStoreHours(store);
+      applyDeliveryHours(store);
     }
 
     function showStorePanel(show) {
@@ -942,6 +1108,7 @@
         }
         if (settingsStoreActive) settingsStoreActive.checked = true;
         resetStoreHoursState();
+        resetDeliveryHoursState();
       } else if (store) {
         fillStoreForm(store);
       }
@@ -1230,12 +1397,92 @@
         }));
       }
 
-      switches.appendChild(createSwitch("Активен", Number(item.is_active) === 1, async (checked) => {
+      const activeSwitch = createSwitch("Активен", Number(item.is_active) === 1, async (checked) => {
         const data = await updateSettingsItem(type, item.id, { is_active: checked ? 1 : 0 });
         if (!data || !data.ok) {
           alert("Не удалось сохранить активность.");
         }
-      }));
+      });
+      switches.appendChild(activeSwitch);
+
+      let timeDetails = null;
+      if (cfg.hasTimeWindowSettings) {
+        const localItem = { ...item };
+        const detailFields = [
+          { key: "starts_at", label: "Начало", type: "time" },
+          { key: "ends_at", label: "Конец", type: "time" },
+          { key: "step_minutes", label: "Шаг (мин)", type: "number", attrs: { min: 1 } },
+          { key: "lead_minutes", label: "Запас (мин)", type: "number", attrs: { min: 0 } }
+        ];
+        const timeInputs = {};
+
+        const fillTimeInputs = (values) => {
+          detailFields.forEach(({ key }) => {
+            const input = timeInputs[key];
+            if (!input) return;
+            input.value = values[key] ?? "";
+          });
+        };
+
+        const toggleTimeDetails = (visible) => {
+          if (!timeDetails) return;
+          timeDetails.style.display = visible ? "grid" : "none";
+        };
+
+        const patchTimeField = async (field, value) => {
+          const data = await updateSettingsItem(type, item.id, { [field]: value });
+          if (!data || !data.ok || !data.item) {
+            fillTimeInputs(localItem);
+            return;
+          }
+          Object.assign(localItem, data.item);
+          fillTimeInputs(data.item);
+          toggleTimeDetails(Number(data.item.has_time_window) === 1);
+        };
+
+        const timeSwitch = createSwitch("Настроить время", Number(localItem.has_time_window) === 1, async (checked) => {
+          const data = await updateSettingsItem(type, item.id, { has_time_window: checked ? 1 : 0 });
+          if (!data || !data.ok || !data.item) {
+            toggleTimeDetails(Number(localItem.has_time_window) === 1);
+            return;
+          }
+          Object.assign(localItem, data.item);
+          fillTimeInputs(data.item);
+          toggleTimeDetails(Number(data.item.has_time_window) === 1);
+        });
+        switches.insertBefore(timeSwitch, activeSwitch);
+
+        timeDetails = document.createElement("div");
+        timeDetails.className = "settings-row-time-details";
+        timeDetails.style.display = Number(localItem.has_time_window) === 1 ? "grid" : "none";
+
+        detailFields.forEach((fieldConfig) => {
+          const fieldWrap = document.createElement("div");
+          fieldWrap.className = "settings-row-time-field";
+
+          const labelEl = document.createElement("span");
+          labelEl.textContent = fieldConfig.label;
+          labelEl.className = "settings-row-time-field-label";
+
+          const inputEl = document.createElement("input");
+          inputEl.type = fieldConfig.type;
+          inputEl.className = "control";
+          if (fieldConfig.attrs) {
+            Object.entries(fieldConfig.attrs).forEach(([attr, val]) => {
+              inputEl.setAttribute(attr, val);
+            });
+          }
+          inputEl.value = localItem[fieldConfig.key] ?? "";
+          inputEl.addEventListener("change", () => {
+            patchTimeField(fieldConfig.key, inputEl.value || null);
+          });
+
+          fieldWrap.appendChild(labelEl);
+          fieldWrap.appendChild(inputEl);
+          timeDetails.appendChild(fieldWrap);
+          timeInputs[fieldConfig.key] = inputEl;
+        });
+      }
 
       titleInput.addEventListener("blur", async () => {
         const next = titleInput.value.trim();
@@ -1264,6 +1511,13 @@
         row.classList.toggle("is-default", Number(item[cfg.defaultField]) === 1);
       } else {
         row.classList.remove("is-default");
+      }
+      if (timeDetails) {
+        const wrapper = document.createElement("div");
+        wrapper.className = "settings-row-wrapper";
+        wrapper.appendChild(row);
+        wrapper.appendChild(timeDetails);
+        return wrapper;
       }
       return row;
     }

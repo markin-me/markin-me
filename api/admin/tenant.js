@@ -31,7 +31,23 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     'order-time-options': {
       table: 'order_time_options',
       hasFinal: false,
-      hasIcon: false
+      hasIcon: false,
+      hasTimeWindowSettings: true,
+      detailFields: ['description', 'has_time_window', 'starts_at', 'ends_at', 'step_minutes', 'lead_minutes'],
+      patchFields: {
+        description: (value) => helpers.strOrNull(value),
+        has_time_window: (value) => (helpers.toBool(value, false) ? 1 : 0),
+        starts_at: (value) => helpers.strOrNull(value),
+        ends_at: (value) => helpers.strOrNull(value),
+        step_minutes: (value) => {
+          const n = helpers.numOrNull(value);
+          return Number.isFinite(n) ? n : 30;
+        },
+        lead_minutes: (value) => {
+          const n = helpers.numOrNull(value);
+          return Number.isFinite(n) ? n : 0;
+        }
+      }
     }
   };
 
@@ -80,45 +96,90 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     return rows;
   }
 
-  async function saveStoreHours(tenantId, storeId, hours) {
-    if (!Number.isFinite(Number(storeId))) return;
-    const entries = Array.isArray(hours) ? hours : [];
-    const normalized = [];
-    for (const entry of entries) {
-      const day = helpers.numOrNull(entry.day_of_week);
-      if (day === null || day < 0 || day > 6) continue;
-      normalized.push([
-        tenantId,
-        storeId,
-        day,
-        helpers.strOrNull(entry.opens_at),
-        helpers.strOrNull(entry.closes_at),
-        helpers.toBool(entry.is_closed, false) ? 1 : 0
-      ]);
-    }
-    await db.query('DELETE FROM ten_store_hours WHERE tenant_id=? AND store_id=?', [tenantId, storeId]);
-    if (!normalized.length) return;
-    const placeholders = normalized.map(() => '(?,?,?,?,?,?)').join(',');
-    await db.query(
-      `INSERT INTO ten_store_hours (tenant_id, store_id, day_of_week, opens_at, closes_at, is_closed)
-       VALUES ${placeholders}`,
-      normalized.flat()
-    );
+async function saveStoreHours(tenantId, storeId, hours) {
+  if (!Number.isFinite(Number(storeId))) return;
+  const entries = Array.isArray(hours) ? hours : [];
+  const normalized = [];
+  for (const entry of entries) {
+    const day = helpers.numOrNull(entry.day_of_week);
+    if (day === null || day < 0 || day > 6) continue;
+    normalized.push([
+      tenantId,
+      storeId,
+      day,
+      helpers.strOrNull(entry.opens_at),
+      helpers.strOrNull(entry.closes_at),
+      helpers.toBool(entry.is_closed, false) ? 1 : 0
+    ]);
   }
+  await db.query('DELETE FROM ten_store_hours WHERE tenant_id=? AND store_id=?', [tenantId, storeId]);
+  if (!normalized.length) return;
+  const placeholders = normalized.map(() => '(?,?,?,?,?,?)').join(',');
+  await db.query(
+    `INSERT INTO ten_store_hours (tenant_id, store_id, day_of_week, opens_at, closes_at, is_closed)
+     VALUES ${placeholders}`,
+    normalized.flat()
+  );
+}
+
+async function loadStoreDeliveryHoursForStores(tenantId, storeIds) {
+  if (!Array.isArray(storeIds)) return [];
+  const ids = Array.from(new Set(storeIds.map((id) => Number(id)).filter((v) => Number.isFinite(v) && v > 0)));
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const [rows] = await db.query(
+    `SELECT tenant_id, store_id, day_of_week, opens_at, closes_at, is_closed
+     FROM ten_store_delivery_hours
+     WHERE tenant_id=? AND store_id IN (${placeholders})
+     ORDER BY store_id ASC, day_of_week ASC`,
+    [tenantId, ...ids]
+  );
+  return rows;
+}
+
+async function saveStoreDeliveryHours(tenantId, storeId, hours) {
+  if (!Number.isFinite(Number(storeId))) return;
+  const entries = Array.isArray(hours) ? hours : [];
+  const normalized = [];
+  for (const entry of entries) {
+    const day = helpers.numOrNull(entry.day_of_week);
+    if (day === null || day < 0 || day > 6) continue;
+    normalized.push([
+      tenantId,
+      storeId,
+      day,
+      helpers.strOrNull(entry.opens_at),
+      helpers.strOrNull(entry.closes_at),
+      helpers.toBool(entry.is_closed, false) ? 1 : 0
+    ]);
+  }
+  await db.query('DELETE FROM ten_store_delivery_hours WHERE tenant_id=? AND store_id=?', [tenantId, storeId]);
+  if (!normalized.length) return;
+  const placeholders = normalized.map(() => '(?,?,?,?,?,?)').join(',');
+  await db.query(
+    `INSERT INTO ten_store_delivery_hours (tenant_id, store_id, day_of_week, opens_at, closes_at, is_closed)
+     VALUES ${placeholders}`,
+    normalized.flat()
+  );
+}
 
   async function fetchStoreWithHours(tenantId, storeId) {
     const [rows] = await db.query(
-      `SELECT tenant_id, id, code, name, address, city, phone, timezone, is_active, use_global_hours, created_at, updated_at
+    `SELECT tenant_id, id, code, name, address, city, phone, timezone, is_active, use_global_hours, use_delivery_hours, created_at, updated_at
        FROM ten_stores
        WHERE tenant_id=? AND id=? LIMIT 1`,
-      [tenantId, storeId]
-    );
+    [tenantId, storeId]
+  );
     if (!rows.length) return null;
     const store = rows[0];
     const hoursRows = await loadStoreHoursForStores(tenantId, [storeId]);
     const hoursMap = organizeStoreHours(hoursRows);
     store.hours = hoursMap.get(storeId) || [];
+    const deliveryRows = await loadStoreDeliveryHoursForStores(tenantId, [storeId]);
+    const deliveryMap = organizeStoreHours(deliveryRows);
+    store.delivery_hours = deliveryMap.get(storeId) || [];
     store.use_global_hours = Number(store.use_global_hours) === 1 ? 1 : 0;
+    store.use_delivery_hours = Number(store.use_delivery_hours) === 1 ? 1 : 0;
     return store;
   }
 
@@ -321,7 +382,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
 
       const [rows] = await db.query(
-        `SELECT tenant_id, id, code, name, address, city, phone, timezone, is_active, use_global_hours, created_at, updated_at
+        `SELECT tenant_id, id, code, name, address, city, phone, timezone, is_active, use_global_hours, use_delivery_hours, created_at, updated_at
          FROM ten_stores
          WHERE tenant_id=?
          ORDER BY id ASC`,
@@ -330,11 +391,16 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       const stores = Array.isArray(rows) ? rows : [];
       const storeIds = stores.map((item) => item.id);
       const hoursRows = await loadStoreHoursForStores(tenantId, storeIds);
+      const deliveryRows = await loadStoreDeliveryHoursForStores(tenantId, storeIds);
       const hoursMap = organizeStoreHours(hoursRows);
+      const deliveryMap = organizeStoreHours(deliveryRows);
       const enriched = stores.map((store) => ({
         ...store,
         use_global_hours: Number(store.use_global_hours) === 1 ? 1 : 0,
+        use_delivery_hours: Number(store.use_delivery_hours) === 1 ? 1 : 0,
         hours: hoursMap.get(Number(store.id)) || []
+        ,
+        delivery_hours: deliveryMap.get(Number(store.id)) || []
       }));
       res.json({ ok: true, stores: enriched });
     } catch (err) {
@@ -354,7 +420,9 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       let timezone = helpers.strOrNull(req.body.timezone);
       const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const useGlobalHours = helpers.toBool(req.body.use_global_hours, false) ? 1 : 0;
+      const useDeliveryHours = helpers.toBool(req.body.use_delivery_hours, false) ? 1 : 0;
       const hoursPayload = Array.isArray(req.body.hours) ? req.body.hours : null;
+      const deliveryHoursPayload = Array.isArray(req.body.delivery_hours) ? req.body.delivery_hours : null;
 
       if (!tenantId) {
         return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
@@ -382,12 +450,15 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       }
 
       await db.query(
-        'INSERT INTO ten_stores (tenant_id, id, code, name, address, city, phone, timezone, is_active, use_global_hours) VALUES (?,?,?,?,?,?,?,?,?,?)',
-        [tenantId, nextId, code, name, address, city, phone, timezone, isActive, useGlobalHours]
+        'INSERT INTO ten_stores (tenant_id, id, code, name, address, city, phone, timezone, is_active, use_global_hours, use_delivery_hours) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        [tenantId, nextId, code, name, address, city, phone, timezone, isActive, useGlobalHours, useDeliveryHours]
       );
 
       if (hoursPayload !== null) {
         await saveStoreHours(tenantId, nextId, hoursPayload);
+      }
+      if (deliveryHoursPayload !== null) {
+        await saveStoreDeliveryHours(tenantId, nextId, deliveryHoursPayload);
       }
 
       const store = await fetchStoreWithHours(tenantId, nextId);
@@ -421,7 +492,9 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
         const phone = req.body.phone !== undefined ? helpers.strOrNull(req.body.phone) : undefined;
         const timezone = req.body.timezone !== undefined ? helpers.strOrNull(req.body.timezone) : undefined;
         const useGlobalHours = req.body.use_global_hours !== undefined ? (helpers.toBool(req.body.use_global_hours, false) ? 1 : 0) : undefined;
+        const useDeliveryHours = req.body.use_delivery_hours !== undefined ? (helpers.toBool(req.body.use_delivery_hours, false) ? 1 : 0) : undefined;
         const hoursPayload = Array.isArray(req.body.hours) ? req.body.hours : null;
+        const deliveryHoursPayload = Array.isArray(req.body.delivery_hours) ? req.body.delivery_hours : null;
         const isActive = req.body.is_active !== undefined ? (helpers.toBool(req.body.is_active, true) ? 1 : 0) : undefined;
 
         if (name !== undefined && !name) {
@@ -474,6 +547,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
           updates.push('use_global_hours=?');
           params.push(useGlobalHours);
         }
+        if (useDeliveryHours !== undefined) {
+          updates.push('use_delivery_hours=?');
+          params.push(useDeliveryHours);
+        }
 
         if (updates.length) {
           params.push(tenantId, id);
@@ -485,6 +562,9 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
 
         if (hoursPayload !== null) {
           await saveStoreHours(tenantId, id, hoursPayload);
+        }
+        if (deliveryHoursPayload !== null) {
+          await saveStoreDeliveryHours(tenantId, id, deliveryHoursPayload);
         }
 
         const store = await fetchStoreWithHours(tenantId, id);
@@ -562,7 +642,8 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
 
       const [rows] = await db.query(
-        `SELECT id, code, title, description, sort, is_active
+        `SELECT id, code, title, description, sort, is_active,
+                has_time_window, starts_at, ends_at, step_minutes, lead_minutes
          FROM order_time_options
          WHERE tenant_id=? AND store_id=1
          ORDER BY sort ASC, id ASC`,
@@ -592,6 +673,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       const isDefault = defaultField && req.body[defaultField] !== undefined
         ? (helpers.toBool(req.body[defaultField], false) ? 1 : 0)
         : undefined;
+      const patchFields = cfg.patchFields || {};
 
       const updates = [];
       const params = [];
@@ -614,6 +696,13 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       if (isDefault !== undefined) {
         updates.push(`${defaultField}=?`);
         params.push(isDefault);
+      }
+
+      for (const [field, parser] of Object.entries(patchFields)) {
+        if (req.body[field] !== undefined) {
+          updates.push(`${field}=?`);
+          params.push(parser(req.body[field]));
+        }
       }
 
       if (!updates.length) {
@@ -639,6 +728,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       baseFields.push('sort', 'is_active');
       if (cfg.hasFinal) baseFields.push('is_final');
       if (cfg.defaultField) baseFields.push(cfg.defaultField);
+      if (cfg.detailFields) baseFields.push(...cfg.detailFields);
       const fields = baseFields.join(', ');
       const [rows] = await db.query(
         `SELECT ${fields} FROM ${cfg.table} WHERE tenant_id=? AND store_id=1 AND id=? LIMIT 1`,

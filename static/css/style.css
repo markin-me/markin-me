@@ -1554,6 +1554,63 @@ body.page-home .page-col-right .panel{
 }
 .settings-row-switches .switch{margin:0}
 
+.settings-row-wrapper {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  padding: 12px;
+  background: var(--color-surface);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.settings-row-wrapper .settings-row {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+  cursor: default;
+}
+
+.settings-row-wrapper .settings-row-switches {
+  flex-wrap: nowrap;
+  gap: 10px;
+}
+
+.settings-row-wrapper .settings-row-time-details {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(80px, 1fr));
+  gap: 10px;
+}
+
+.settings-row-time-details {
+  padding-left: 0;
+}
+
+.settings-row-time-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-row-time-field-label {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.settings-row-time-field input[type="time"]::-webkit-calendar-picker-indicator,
+.settings-row-time-field input[type="time"]::-webkit-inner-spin-button,
+.settings-row-time-field input[type="time"]::-webkit-clear-button {
+  display: none;
+  -webkit-appearance: none;
+}
+.settings-row-time-field input[type="time"]::-moz-focus-inner {
+  border: 0;
+}
+
 .order-col{min-width:0}
 .order-id{display:grid;justify-items:center;gap:2px;font-weight:700}
 .order-id-num{font-weight:900;font-size:20px;line-height:1.2}

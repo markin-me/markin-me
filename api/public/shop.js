@@ -1537,7 +1537,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       );
 
       const [timeOptions] = await db.query(
-        `SELECT id, code, title, sort
+        `SELECT id, code, title, description,
+                has_time_window, starts_at, ends_at, step_minutes, lead_minutes, sort
          FROM order_time_options
          WHERE tenant_id=? AND store_id=? AND is_active=1
          ORDER BY sort ASC, id ASC`,
