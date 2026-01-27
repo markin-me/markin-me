@@ -45,6 +45,17 @@
             <select id="settingsStoreTimezoneSelect" class="order-head-select tenant-timezone-select" aria-label="Часовой пояс точки"></select>
           </div>
           <div class="settings-site-field">
+            <label class="field-label">График работы</label>
+            <div class="store-hours-card">
+              <label class="switch store-hours-switch-control">
+                <input class="switch-input" type="checkbox" id="settingsStoreHoursSameSwitch" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">Одинаковое расписание для всех дней</span>
+              </label>
+              <div class="store-hours-grid" id="settingsStoreHoursContainer"></div>
+            </div>
+          </div>
+          <div class="settings-site-field">
             <label class="field-label">СТАТУС</label>
             <label class="switch">
               <input class="switch-input" type="checkbox" id="settingsStoreActive" />

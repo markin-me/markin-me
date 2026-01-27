@@ -358,6 +358,8 @@
     const settingsStoreSaveBtn = document.getElementById("settingsStoreSaveBtn");
     const settingsStoreSaveText = document.getElementById("settingsStoreSaveText");
     const settingsStoreResetBtn = document.getElementById("settingsStoreResetBtn");
+    const settingsStoreHoursSwitch = document.getElementById("settingsStoreHoursSameSwitch");
+    const settingsStoreHoursContainer = document.getElementById("settingsStoreHoursContainer");
 
     const storesState = {
       loaded: false,
@@ -368,6 +370,179 @@
     };
     const storeTabs = new Map();
     let activeRightTabId = "";
+    const STORE_HOUR_DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
+    const STORE_DAY_LABELS = {
+      0: "Вс",
+      1: "Пн",
+      2: "Вт",
+      3: "Ср",
+      4: "Чт",
+      5: "Пт",
+      6: "Сб"
+    };
+    const STORE_HOURS_GLOBAL_KEY = "global";
+    const storeHoursState = {
+      useGlobal: false,
+      values: {}
+    };
+
+    function getDayKey(day) {
+      return day === null ? STORE_HOURS_GLOBAL_KEY : `day-${day}`;
+    }
+
+    function getDefaultHoursEntry() {
+      return { opens_at: "", closes_at: "", is_closed: false };
+    }
+
+    function getHoursEntry(key) {
+      return storeHoursState.values[key] || getDefaultHoursEntry();
+    }
+
+    function updateHoursEntry(key, updates) {
+      const next = { ...getHoursEntry(key), ...updates };
+      storeHoursState.values[key] = next;
+    }
+
+    function ensureGlobalHoursEntry() {
+      const key = STORE_HOURS_GLOBAL_KEY;
+      if (!storeHoursState.values[key]) {
+        const fallbackKey = getDayKey(STORE_HOUR_DAY_ORDER[0]);
+        storeHoursState.values[key] = { ...getHoursEntry(fallbackKey) };
+      }
+      return storeHoursState.values[key];
+    }
+
+    function renderStoreHoursRows() {
+      if (!settingsStoreHoursContainer) return;
+      settingsStoreHoursContainer.innerHTML = "";
+      const rows = storeHoursState.useGlobal
+        ? [{ day: null, label: "Ежедневно" }]
+        : STORE_HOUR_DAY_ORDER.map((day) => ({
+            day,
+            label: STORE_DAY_LABELS[day] || String(day)
+          }));
+      rows.forEach((config) => {
+        const key = getDayKey(config.day);
+        const entry = getHoursEntry(key);
+        const row = document.createElement("div");
+        row.className = "store-hours-row";
+        if (config.day === null) {
+          row.classList.add("store-hours-row--global");
+        }
+        row.dataset.day = config.day === null ? "global" : String(config.day);
+
+        const dayLabel = document.createElement("div");
+        dayLabel.className = "store-hours-day";
+        dayLabel.textContent = config.label;
+
+        const inputsWrap = document.createElement("div");
+        inputsWrap.className = "store-hours-inputs";
+
+        const openInput = document.createElement("input");
+        openInput.type = "time";
+        openInput.className = "control store-hours-input";
+        openInput.value = entry.opens_at || "";
+        openInput.disabled = entry.is_closed;
+        openInput.addEventListener("input", () => {
+          updateHoursEntry(key, { opens_at: openInput.value });
+        });
+
+        const closeInput = document.createElement("input");
+        closeInput.type = "time";
+        closeInput.className = "control store-hours-input";
+        closeInput.value = entry.closes_at || "";
+        closeInput.disabled = entry.is_closed;
+        closeInput.addEventListener("input", () => {
+          updateHoursEntry(key, { closes_at: closeInput.value });
+        });
+
+        inputsWrap.appendChild(openInput);
+        inputsWrap.appendChild(closeInput);
+
+        const closedSwitch = createSwitch("", entry.is_closed, (checked) => {
+          updateHoursEntry(key, { is_closed: checked });
+          openInput.disabled = checked;
+          closeInput.disabled = checked;
+        });
+        closedSwitch.classList.add("store-hours-switch-control");
+        const switchWrap = document.createElement("div");
+        switchWrap.className = "store-hours-switch-wrap";
+        const switchLabel = document.createElement("div");
+        switchLabel.className = "store-hours-switch-text";
+        switchLabel.textContent = "Выходной";
+        switchWrap.appendChild(closedSwitch);
+        switchWrap.appendChild(switchLabel);
+
+        row.appendChild(dayLabel);
+        row.appendChild(inputsWrap);
+        if (config.day !== null) {
+          row.appendChild(switchWrap);
+        } else {
+          row.dataset.noSwitch = "1";
+        }
+        settingsStoreHoursContainer.appendChild(row);
+    });
+  }
+
+    function setStoreHoursUseGlobal(flag) {
+      storeHoursState.useGlobal = Boolean(flag);
+      if (storeHoursState.useGlobal) {
+        ensureGlobalHoursEntry();
+      }
+      if (settingsStoreHoursSwitch) {
+        settingsStoreHoursSwitch.checked = storeHoursState.useGlobal;
+      }
+      renderStoreHoursRows();
+    }
+
+    function applyStoreHours(store) {
+      storeHoursState.values = {};
+      if (Array.isArray(store?.hours)) {
+        store.hours.forEach((hour) => {
+          const day = Number(hour.day_of_week);
+          if (!Number.isFinite(day)) return;
+          storeHoursState.values[getDayKey(day)] = {
+            opens_at: hour.opens_at || "",
+            closes_at: hour.closes_at || "",
+            is_closed: Number(hour.is_closed) === 1
+          };
+        });
+      }
+      storeHoursState.useGlobal = Number(store?.use_global_hours) === 1;
+      if (storeHoursState.useGlobal) {
+        ensureGlobalHoursEntry();
+      }
+      if (settingsStoreHoursSwitch) {
+        settingsStoreHoursSwitch.checked = storeHoursState.useGlobal;
+      }
+      renderStoreHoursRows();
+    }
+
+    function resetStoreHoursState() {
+      storeHoursState.useGlobal = false;
+      storeHoursState.values = {};
+      if (settingsStoreHoursSwitch) {
+        settingsStoreHoursSwitch.checked = false;
+      }
+      renderStoreHoursRows();
+    }
+
+    function buildStoreHoursPayload() {
+      const entries = [];
+      const baseOrder = STORE_HOUR_DAY_ORDER;
+      const globalEntry = storeHoursState.values[STORE_HOURS_GLOBAL_KEY] || getDefaultHoursEntry();
+      baseOrder.forEach((day) => {
+        const key = storeHoursState.useGlobal ? STORE_HOURS_GLOBAL_KEY : getDayKey(day);
+        const entry = storeHoursState.useGlobal ? globalEntry : getHoursEntry(key);
+        entries.push({
+          day_of_week: day,
+          opens_at: entry.opens_at || null,
+          closes_at: entry.closes_at || null,
+          is_closed: entry.is_closed ? 1 : 0
+        });
+      });
+      return entries;
+    }
     function setActiveRightTab(tabId) {
       activeRightTabId = tabId;
       if (rightTabs) {
@@ -550,6 +725,8 @@
           timezone: settingsStoreTimezoneSelect ? settingsStoreTimezoneSelect.value : null,
           is_active: settingsStoreActive && settingsStoreActive.checked ? 1 : 0
         };
+        payload.use_global_hours = storeHoursState.useGlobal ? 1 : 0;
+        payload.hours = buildStoreHoursPayload();
 
         if (!payload.name) {
           alert("Введите название точки продаж.");
@@ -612,6 +789,13 @@
       });
     }
 
+    if (settingsStoreHoursSwitch) {
+      settingsStoreHoursSwitch.addEventListener("change", () => {
+        setStoreHoursUseGlobal(settingsStoreHoursSwitch.checked);
+      });
+    }
+
+    resetStoreHoursState();
     const initialSectionBtn = document.querySelector("[data-settings-section].is-active");
     if (initialSectionBtn) {
       initialSectionBtn.click();
@@ -732,6 +916,7 @@
         fillTimezoneSelect(storeTz, settingsStoreTimezoneSelect);
       }
       if (settingsStoreActive) settingsStoreActive.checked = Number(store.is_active) === 1;
+      applyStoreHours(store);
     }
 
     function showStorePanel(show) {
@@ -756,6 +941,7 @@
           fillTimezoneSelect(fallbackTz, settingsStoreTimezoneSelect);
         }
         if (settingsStoreActive) settingsStoreActive.checked = true;
+        resetStoreHoursState();
       } else if (store) {
         fillStoreForm(store);
       }
