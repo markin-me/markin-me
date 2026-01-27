@@ -1510,6 +1510,9 @@ body.page-home .page-col-right .panel{
   gap:12px;
   position:relative;
 }
+.settings-row--no-icon{
+  grid-template-columns:minmax(160px,1fr) minmax(140px,220px);
+}
 .settings-row.is-default::before{
   content:"";
   position:absolute;

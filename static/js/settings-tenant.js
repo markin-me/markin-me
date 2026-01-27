@@ -334,6 +334,7 @@
     const orderStatusesCard = document.getElementById("settingsOrderStatusesCard");
     const orderPaymentsCard = document.getElementById("settingsOrderPaymentsCard");
     const orderDeliveryCard = document.getElementById("settingsOrderDeliveryCard");
+    const orderTimeOptionsCard = document.getElementById("settingsOrderTimeOptionsCard");
     const rightDefault = document.getElementById("settingsRightDefault");
     const logoPanel = document.getElementById("settingsLogoPanel");
     const sitePanel = document.getElementById("settingsSitePanel");
@@ -341,6 +342,7 @@
     const orderStatusesPanel = document.getElementById("settingsOrderStatusesPanel");
     const orderPaymentsPanel = document.getElementById("settingsOrderPaymentsPanel");
     const orderDeliveryPanel = document.getElementById("settingsOrderDeliveryPanel");
+    const orderTimeOptionsPanel = document.getElementById("settingsOrderTimeOptionsPanel");
     const rightTabs = document.getElementById("settingsRightTabs");
     const rightHeader = rightTabs ? rightTabs.closest(".settings-right-header") : null;
     const settingsStoreEmpty = document.getElementById("settingsStoreEmpty");
@@ -381,6 +383,7 @@
       if (orderStatusesPanel) orderStatusesPanel.classList.toggle("hidden", tabId !== "order-statuses");
       if (orderPaymentsPanel) orderPaymentsPanel.classList.toggle("hidden", tabId !== "order-payments");
       if (orderDeliveryPanel) orderDeliveryPanel.classList.toggle("hidden", tabId !== "order-delivery");
+      if (orderTimeOptionsPanel) orderTimeOptionsPanel.classList.toggle("hidden", tabId !== "order-time-options");
       if (settingsStorePanel) settingsStorePanel.classList.toggle("hidden", !tabId.startsWith("store-"));
       if (settingsStoreEmpty) {
         const section = document.body.getAttribute("data-settings-section");
@@ -388,7 +391,7 @@
         settingsStoreEmpty.classList.toggle("hidden", !shouldShow);
       }
 
-      if (tabId === "order-statuses" || tabId === "order-payments" || tabId === "order-delivery") {
+      if (tabId === "order-statuses" || tabId === "order-payments" || tabId === "order-delivery" || tabId === "order-time-options") {
         ensureListLoaded(tabId);
       }
       if (tabId.startsWith("store-")) {
@@ -438,6 +441,7 @@
           if (tabId === "order-statuses" && orderStatusesCard) orderStatusesCard.classList.remove("is-active");
           if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.remove("is-active");
           if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.remove("is-active");
+          if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.remove("is-active");
           if (tabId.startsWith("store-")) {
             storeTabs.delete(tabId);
             if (activeRightTabId === tabId) {
@@ -471,6 +475,7 @@
       if (tabId === "order-statuses" && orderStatusesCard) orderStatusesCard.classList.add("is-active");
       if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.add("is-active");
       if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.add("is-active");
+      if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.add("is-active");
     }
 
     if (logoCard) {
@@ -506,6 +511,12 @@
     if (orderDeliveryCard) {
       orderDeliveryCard.addEventListener("click", () => {
         ensureTab("order-delivery", "Способы получения");
+      });
+    }
+
+    if (orderTimeOptionsCard) {
+      orderTimeOptionsCard.addEventListener("click", () => {
+        ensureTab("order-time-options", "Интервалы времени");
       });
     }
 
@@ -610,7 +621,8 @@
     const settingsListsState = {
       "order-statuses": { loaded: false, items: [] },
       "order-payments": { loaded: false, items: [] },
-      "order-delivery": { loaded: false, items: [] }
+      "order-delivery": { loaded: false, items: [] },
+      "order-time-options": { loaded: false, items: [] }
     };
 
     const settingsListsConfig = {
@@ -635,6 +647,13 @@
         hasFinal: false,
         iconLabel: "Иконка получения",
         defaultField: "is_default"
+      },
+      "order-time-options": {
+        endpoint: "/api/admin/tenant/order-time-options",
+        reorderEndpoint: "/api/admin/tenant/order-time-options/reorder",
+        updateEndpoint: "/api/admin/tenant/order-time-options/",
+        hasFinal: false,
+        hasIcon: false
       }
     };
 
@@ -975,15 +994,22 @@
       row.setAttribute("draggable", "true");
       row.dataset.id = String(item.id);
 
-      const iconWrap = document.createElement("div");
-      iconWrap.className = "settings-row-icon";
+      if (cfg.hasIcon === false) {
+        row.classList.add("settings-row--no-icon");
+      }
 
-      const iconBtn = document.createElement("button");
-      iconBtn.type = "button";
-      iconBtn.className = "btn btn-icon btn-sm settings-icon-btn";
-      iconBtn.title = cfg.iconLabel;
-      updateIconButton(iconBtn, item.icon);
-      iconWrap.appendChild(iconBtn);
+      let iconWrap = null;
+      if (cfg.hasIcon !== false) {
+        iconWrap = document.createElement("div");
+        iconWrap.className = "settings-row-icon";
+
+        const iconBtn = document.createElement("button");
+        iconBtn.type = "button";
+        iconBtn.className = "btn btn-icon btn-sm settings-icon-btn";
+        iconBtn.title = cfg.iconLabel;
+        updateIconButton(iconBtn, item.icon);
+        iconWrap.appendChild(iconBtn);
+      }
 
       const titleWrap = document.createElement("div");
       titleWrap.className = "settings-row-title";
@@ -1038,12 +1064,14 @@
         titleInput.dataset.value = next;
       });
 
-      iconBtn.addEventListener("click", () => {
-        iconUploadTarget = { type, id: item.id, button: iconBtn };
-        iconUploadInput.click();
-      });
-
-      row.appendChild(iconWrap);
+      if (iconWrap) {
+        const iconBtn = iconWrap.querySelector(".settings-icon-btn");
+        iconBtn.addEventListener("click", () => {
+          iconUploadTarget = { type, id: item.id, button: iconBtn };
+          iconUploadInput.click();
+        });
+        row.appendChild(iconWrap);
+      }
       row.appendChild(titleWrap);
       row.appendChild(switches);
       if (cfg.defaultField) {

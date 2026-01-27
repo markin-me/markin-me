@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Хост: 10.0.231.119
--- Время создания: Янв 26 2026 г., 18:26
+-- Время создания: Янв 27 2026 г., 08:53
 -- Версия сервера: 8.0.37-29
 -- Версия PHP: 7.2.34
 
@@ -230,8 +230,8 @@ CREATE TABLE `cust_customer_addresses` (
 --
 
 INSERT INTO `cust_customer_addresses` (`id`, `tenant_id`, `store_id`, `customer_id`, `street`, `house`, `entrance`, `floor`, `apartment`, `comment`, `is_default`, `is_active`, `created_at`, `updated_at`) VALUES
-(1, 1, 1, 1, 'Деповская', '48', '2', '3', '45', 'Это мой дом', 0, 1, '2026-01-07 07:43:03', '2026-01-26 11:47:15'),
-(2, 1, 1, 1, 'Октябрьская', '25', '1', '4', '45', 'бьюти салон', 1, 1, '2026-01-07 16:48:49', '2026-01-26 11:47:15'),
+(1, 1, 1, 1, 'Деповская', '48', '2', '3', '45', 'Это мой дом', 1, 1, '2026-01-07 07:43:03', '2026-01-27 03:18:53'),
+(2, 1, 1, 1, 'Октябрьская', '25', '1', '4', '45', 'бьюти салон', 0, 1, '2026-01-07 16:48:49', '2026-01-27 03:18:53'),
 (3, 1, 1, 1, 'Октябрьская', '25', '1', '4', '45', 'бьюти салон', 0, 0, '2026-01-07 16:49:26', '2026-01-07 16:49:42'),
 (4, 1, 1, 1, '4444', '3', NULL, NULL, NULL, NULL, 0, 0, '2026-01-23 17:47:27', '2026-01-23 17:52:54');
 
@@ -329,7 +329,7 @@ CREATE TABLE `order_delivery_types` (
   `icon` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT 'Иконка (fa-utensils, fa-box, fa-truck)',
   `sort` int DEFAULT '0' COMMENT 'Порядок отображения',
   `is_active` tinyint(1) DEFAULT '1' COMMENT 'Активен ли способ',
-  `is_default` tinyint(1) DEFAULT '0' COMMENT 'Отмечен как способ по умолчанию',
+  `is_default` tinyint(1) NOT NULL DEFAULT '0',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -341,8 +341,8 @@ CREATE TABLE `order_delivery_types` (
 INSERT INTO `order_delivery_types` (`id`, `tenant_id`, `store_id`, `code`, `title`, `icon`, `sort`, `is_active`, `is_default`, `created_at`, `updated_at`) VALUES
 (1, 1, 1, 'dine_in', 'В зале', 'fa-utensils', 1, 0, 0, '2026-01-02 18:18:07', '2026-01-25 15:30:10'),
 (2, 1, 1, 'takeaway', 'С собой', 'fa-bag-shopping', 2, 0, 0, '2026-01-02 18:18:07', '2026-01-25 15:30:11'),
-(3, 1, 1, 'pickup', 'Самовывоз', 'fa-store', 3, 1, 0, '2026-01-02 18:18:07', '2026-01-02 18:18:07'),
-(4, 1, 1, 'delivery', 'Доставка', 'fa-truck', 4, 1, 1, '2026-01-02 18:18:07', '2026-01-02 18:18:07');
+(3, 1, 1, 'pickup', 'Самовывоз', 'fa-store', 3, 1, 0, '2026-01-02 18:18:07', '2026-01-26 17:15:15'),
+(4, 1, 1, 'delivery', 'Доставка', 'fa-truck', 4, 1, 1, '2026-01-02 18:18:07', '2026-01-26 17:15:15');
 
 -- --------------------------------------------------------
 
@@ -361,6 +361,7 @@ CREATE TABLE `order_orders` (
   `promo_code` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `address` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `delivery_address_id` int DEFAULT NULL,
+  `pickup_store_id` int DEFAULT NULL COMMENT 'ID точки самовывоза (для takeaway/pickup)',
   `comment` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `cutlery_qty` int NOT NULL DEFAULT '0',
   `change_from` decimal(10,2) DEFAULT NULL,
@@ -381,10 +382,10 @@ CREATE TABLE `order_orders` (
 -- Дамп данных таблицы `order_orders`
 --
 
-INSERT INTO `order_orders` (`id`, `public_id`, `tenant_id`, `store_id`, `customer_id`, `customer_name`, `customer_phone`, `promo_code`, `address`, `delivery_address_id`, `comment`, `cutlery_qty`, `change_from`, `items`, `total_price`, `created_at`, `delivery_type_id`, `payment_id`, `time_option_id`, `status_id`, `status_sort`, `scheduled_at`, `created_via`, `is_active`) VALUES
-(54, '6272ffe3-9624-453a-b18b-390e0ea1cbf7', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, NULL, 0, 0.00, '[{\"product_id\":21,\"name\":\"Гречка с овощами\",\"qty\":1,\"price\":150,\"old_price\":0,\"line_total\":1008,\"photos\":[\"/static/uploads/products/1/ccbfd8c94a01992063130008a89452ca.webp\"],\"options\":[{\"id\":33,\"title\":\"Запеканка\",\"price\":299,\"qty\":2},{\"id\":34,\"title\":\"Картошка фриКартошка фриКартошка фри\",\"price\":10,\"qty\":2},{\"id\":35,\"title\":\"Кола\",\"price\":120,\"qty\":2}],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":0,\"group_title\":\"порц\",\"value\":\"100 г\",\"label\":\"100 г\",\"price_diff\":0}]}]', 1008.00, '2026-01-25 17:59:18', 4, 1, 1, 6, 0, NULL, 'web', 1),
-(55, '1a786971-27c2-422d-9e02-13b33a35fa17', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, NULL, 0, 0.00, '[{\"product_id\":6,\"name\":\"Рис с овощами\",\"qty\":1,\"price\":800,\"old_price\":179,\"line_total\":230,\"photos\":[\"/static/uploads/products/1/b7d5215763b1e8b3a3a05564c83352f0.jpg\"],\"options\":[{\"id\":60,\"title\":\"Куринная котлета\",\"price\":150,\"qty\":1,\"variant_group_id\":1,\"variant_value_index\":0,\"variant_label\":\"1 шт\",\"variant_price_diff\":0}],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":0,\"group_title\":\"порц\",\"value\":\"100 г\",\"label\":\"100 г\",\"price_diff\":0}]}]', 230.00, '2026-01-25 18:44:31', 4, 1, 1, 6, 0, NULL, 'web', 1),
-(56, '15145600-cd5f-430a-aa8d-b08c66f806a7', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, NULL, 0, 0.00, '[{\"product_id\":6,\"name\":\"Рис с овощами\",\"qty\":1,\"price\":800,\"old_price\":179,\"line_total\":230,\"photos\":[\"/static/uploads/products/1/b7d5215763b1e8b3a3a05564c83352f0.jpg\"],\"options\":[{\"id\":60,\"title\":\"Куринная котлета\",\"price\":150,\"qty\":1,\"variant_group_id\":1,\"variant_value_index\":0,\"variant_label\":\"1 шт\",\"variant_price_diff\":0}],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":0,\"group_title\":\"порц\",\"value\":\"100 г\",\"label\":\"100 г\",\"price_diff\":0}]}]', 230.00, '2026-01-26 05:52:56', 4, 1, 1, 1, 0, NULL, 'web', 1);
+INSERT INTO `order_orders` (`id`, `public_id`, `tenant_id`, `store_id`, `customer_id`, `customer_name`, `customer_phone`, `promo_code`, `address`, `delivery_address_id`, `pickup_store_id`, `comment`, `cutlery_qty`, `change_from`, `items`, `total_price`, `created_at`, `delivery_type_id`, `payment_id`, `time_option_id`, `status_id`, `status_sort`, `scheduled_at`, `created_via`, `is_active`) VALUES
+(54, '6272ffe3-9624-453a-b18b-390e0ea1cbf7', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, NULL, NULL, 0, 0.00, '[{\"product_id\":21,\"name\":\"Гречка с овощами\",\"qty\":1,\"price\":150,\"old_price\":0,\"line_total\":1008,\"photos\":[\"/static/uploads/products/1/ccbfd8c94a01992063130008a89452ca.webp\"],\"options\":[{\"id\":33,\"title\":\"Запеканка\",\"price\":299,\"qty\":2},{\"id\":34,\"title\":\"Картошка фриКартошка фриКартошка фри\",\"price\":10,\"qty\":2},{\"id\":35,\"title\":\"Кола\",\"price\":120,\"qty\":2}],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":0,\"group_title\":\"порц\",\"value\":\"100 г\",\"label\":\"100 г\",\"price_diff\":0}]}]', 1008.00, '2026-01-25 17:59:18', 4, 1, 1, 6, 0, NULL, 'web', 1),
+(55, '1a786971-27c2-422d-9e02-13b33a35fa17', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, NULL, NULL, 0, 0.00, '[{\"product_id\":6,\"name\":\"Рис с овощами\",\"qty\":1,\"price\":800,\"old_price\":179,\"line_total\":230,\"photos\":[\"/static/uploads/products/1/b7d5215763b1e8b3a3a05564c83352f0.jpg\"],\"options\":[{\"id\":60,\"title\":\"Куринная котлета\",\"price\":150,\"qty\":1,\"variant_group_id\":1,\"variant_value_index\":0,\"variant_label\":\"1 шт\",\"variant_price_diff\":0}],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":0,\"group_title\":\"порц\",\"value\":\"100 г\",\"label\":\"100 г\",\"price_diff\":0}]}]', 230.00, '2026-01-25 18:44:31', 4, 1, 1, 6, 0, NULL, 'web', 1),
+(56, '15145600-cd5f-430a-aa8d-b08c66f806a7', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, NULL, NULL, 0, 0.00, '[{\"product_id\":6,\"name\":\"Рис с овощами\",\"qty\":1,\"price\":800,\"old_price\":179,\"line_total\":230,\"photos\":[\"/static/uploads/products/1/b7d5215763b1e8b3a3a05564c83352f0.jpg\"],\"options\":[{\"id\":60,\"title\":\"Куринная котлета\",\"price\":150,\"qty\":1,\"variant_group_id\":1,\"variant_value_index\":0,\"variant_label\":\"1 шт\",\"variant_price_diff\":0}],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":0,\"group_title\":\"порц\",\"value\":\"100 г\",\"label\":\"100 г\",\"price_diff\":0}]}]', 230.00, '2026-01-26 05:52:56', 4, 1, 1, 1, 0, NULL, 'web', 1);
 
 -- --------------------------------------------------------
 
@@ -472,9 +473,9 @@ CREATE TABLE `order_time_options` (
 --
 
 INSERT INTO `order_time_options` (`id`, `tenant_id`, `store_id`, `code`, `title`, `description`, `sort`, `is_active`, `created_at`, `updated_at`) VALUES
-(1, 1, 1, 'asap', 'Как можно скорее', 'Начать выполнение сразу', 1, 1, '2026-01-02 19:07:20', '2026-01-02 19:07:20'),
+(1, 1, 1, 'asap', 'Быстрее', 'Начать выполнение сразу', 1, 1, '2026-01-02 19:07:20', '2026-01-27 05:18:30'),
 (2, 1, 1, 'at_time', 'Ко времени', 'Приготовить к выбранному времени', 2, 1, '2026-01-02 19:07:20', '2026-01-02 19:07:20'),
-(3, 1, 1, 'on_date', 'На дату', 'Приготовить на выбранную дату', 3, 1, '2026-01-02 19:07:20', '2026-01-02 19:07:20');
+(3, 1, 1, 'on_date', 'На дату', 'Приготовить на выбранную дату', 3, 0, '2026-01-02 19:07:20', '2026-01-27 05:17:27');
 
 -- --------------------------------------------------------
 
@@ -1109,7 +1110,8 @@ CREATE TABLE `ten_stores` (
 --
 
 INSERT INTO `ten_stores` (`tenant_id`, `id`, `name`, `code`, `address`, `phone`, `timezone`, `is_active`, `created_at`, `updated_at`, `city`) VALUES
-(1, 1, 'По щам - на Партсъезда', 'main', 'ул. Неизвестная, 12', '79021461966', '+3', 1, '2026-01-25 15:25:51', '2026-01-25 18:51:36', 'Новоалтайск');
+(1, 1, 'По щам - на Партсъезда', 'main', 'ул. 22-го Партсъезда 4', '79021461966', '+3', 1, '2026-01-25 15:25:51', '2026-01-26 15:54:45', 'Новоалтайск'),
+(1, 2, 'Точка 2', 'store-2', 'ул. Неизвестная', NULL, '+0', 1, '2026-01-26 15:53:11', '2026-01-26 15:54:59', 'Новоалтайск');
 
 -- --------------------------------------------------------
 

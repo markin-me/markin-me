@@ -27,6 +27,11 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       table: 'order_delivery_types',
       hasFinal: false,
       defaultField: 'is_default'
+    },
+    'order-time-options': {
+      table: 'order_time_options',
+      hasFinal: false,
+      hasIcon: false
     }
   };
 
@@ -450,6 +455,25 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     }
   });
 
+  router.get('/order-time-options', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+
+      const [rows] = await db.query(
+        `SELECT id, code, title, description, sort, is_active
+         FROM order_time_options
+         WHERE tenant_id=? AND store_id=1
+         ORDER BY sort ASC, id ASC`,
+        [tenantId]
+      );
+      res.json({ ok: true, items: rows || [] });
+    } catch (err) {
+      console.error('Ошибка получения интервалов времени:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   async function patchListItem(req, res, type) {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
@@ -460,7 +484,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       if (!cfg) return res.status(400).json({ ok: false, error: 'TYPE_INVALID' });
 
       const title = req.body.title !== undefined ? helpers.strOrNull(req.body.title) : undefined;
-      const icon = req.body.icon !== undefined ? helpers.strOrNull(req.body.icon) : undefined;
+      const icon = cfg.hasIcon !== false && req.body.icon !== undefined ? helpers.strOrNull(req.body.icon) : undefined;
       const isActive = req.body.is_active !== undefined ? (helpers.toBool(req.body.is_active, true) ? 1 : 0) : undefined;
       const isFinal = cfg.hasFinal && req.body.is_final !== undefined ? (helpers.toBool(req.body.is_final, false) ? 1 : 0) : undefined;
       const defaultField = cfg.defaultField;
@@ -509,7 +533,9 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
         params
       );
 
-      const baseFields = ['id', 'code', 'title', 'icon', 'sort', 'is_active'];
+      const baseFields = ['id', 'code', 'title'];
+      if (cfg.hasIcon !== false) baseFields.push('icon');
+      baseFields.push('sort', 'is_active');
       if (cfg.hasFinal) baseFields.push('is_final');
       if (cfg.defaultField) baseFields.push(cfg.defaultField);
       const fields = baseFields.join(', ');
@@ -528,6 +554,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
   router.patch('/order-statuses/:id', (req, res) => patchListItem(req, res, 'order-statuses'));
   router.patch('/order-payments/:id', (req, res) => patchListItem(req, res, 'order-payments'));
   router.patch('/order-delivery-types/:id', (req, res) => patchListItem(req, res, 'order-delivery'));
+  router.patch('/order-time-options/:id', (req, res) => patchListItem(req, res, 'order-time-options'));
 
   async function reorderList(req, res, type) {
     try {
@@ -564,6 +591,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
   router.post('/order-statuses/reorder', (req, res) => reorderList(req, res, 'order-statuses'));
   router.post('/order-payments/reorder', (req, res) => reorderList(req, res, 'order-payments'));
   router.post('/order-delivery-types/reorder', (req, res) => reorderList(req, res, 'order-delivery'));
+  router.post('/order-time-options/reorder', (req, res) => reorderList(req, res, 'order-time-options'));
 
   const listIconStorage = multer.diskStorage({
     destination(req, file, cb) {
@@ -600,6 +628,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       if (!cfg) return res.status(400).json({ ok: false, error: 'TYPE_INVALID' });
       if (!id) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
       if (!file) return res.status(400).json({ ok: false, error: 'FILE_REQUIRED' });
+      if (cfg.hasIcon === false) return res.status(400).json({ ok: false, error: 'ICON_NOT_SUPPORTED' });
 
       const url = `/static/uploads/tenants/${tenantId}/lists/${file.filename}`;
       await db.query(
@@ -607,7 +636,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
         [url, tenantId, id]
       );
 
-      const fields = cfg.hasFinal ? 'id, code, title, icon, sort, is_active, is_final' : 'id, code, title, icon, sort, is_active';
+      const baseIconFields = ['id', 'code', 'title', 'icon', 'sort', 'is_active'];
+      if (cfg.hasFinal) baseIconFields.push('is_final');
+      if (cfg.defaultField) baseIconFields.push(cfg.defaultField);
+      const fields = baseIconFields.join(', ');
       const [rows] = await db.query(
         `SELECT ${fields} FROM ${cfg.table} WHERE tenant_id=? AND store_id=1 AND id=? LIMIT 1`,
         [tenantId, id]
