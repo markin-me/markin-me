@@ -1164,6 +1164,7 @@ body.page-home .page-col-right .panel{
 .date-cell.is-in-range{background:var(--primary-14);border-color:var(--primary-25)}
 .date-cell.is-start,.date-cell.is-end{background:var(--color-primary);border-color:transparent;color:var(--on-primary)}
 .date-cell.is-today{border-color:var(--primary-25)}
+.date-cell.is-past{opacity:0.35;cursor:default;pointer-events:none}
 .date-empty{height:32px}
 .date-popover-actions{display:flex;justify-content:flex-end}
 /* ================= Buttons ================= */

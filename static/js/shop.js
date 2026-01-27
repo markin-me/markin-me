@@ -9059,6 +9059,25 @@ function setBottomNavActive(tab) {
     return `${yyyy}-${mm}-${dd}`;
   }
 
+  function getDateString(d) {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function toShopDateKey(d) {
+    return getDateString(d);
+  }
+
+  function parseShopDateKey(s) {
+    if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+    const [y, m, d] = s.split("-").map(Number);
+    const date = new Date(y, m - 1, d);
+    if (Number.isNaN(date.getTime())) return null;
+    return date;
+  }
+
   function extractTimeValue(raw) {
     const v = str(raw || "").trim();
     if (!v) return "";
@@ -9087,22 +9106,28 @@ function setBottomNavActive(tab) {
     return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
   }
 
-  function buildTimeSlots(option) {
+  function buildTimeSlots(option, targetDate) {
     if (!option) return [];
     const start = parseTimeToMinutes(option.starts_at);
     const end = parseTimeToMinutes(option.ends_at);
     if (start === null || end === null || end <= start) return [];
     const stepMinutes = Math.max(1, Number(option.step_minutes) || 30);
     const leadMinutes = Math.max(0, Number(option.lead_minutes) || 0);
+
     const now = new Date();
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    const minAllowed = nowMinutes + leadMinutes;
+    const todayKey = getDateString(now);
+    const targetKey = targetDate ? getDateString(targetDate) : todayKey;
+    const isToday = (targetKey === todayKey);
 
     let slot = start;
-    if (slot < minAllowed) {
-      const diff = minAllowed - slot;
-      const stepsAhead = Math.ceil(diff / stepMinutes);
-      slot += stepsAhead * stepMinutes;
+    if (isToday) {
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      const minAllowed = nowMinutes + leadMinutes;
+      if (slot < minAllowed) {
+        const diff = minAllowed - slot;
+        const stepsAhead = Math.ceil(diff / stepMinutes);
+        slot += stepsAhead * stepMinutes;
+      }
     }
 
     const slots = [];
@@ -9320,7 +9345,7 @@ function setBottomNavActive(tab) {
     pickupWrap.appendChild(pickupField);
 
     const methodRow = document.createElement("div");
-    methodRow.className = "shop-checkout-grid-row shop-checkout-grid-row--two";
+    methodRow.className = "shop-checkout-method-block";
     methodRow.appendChild(methodWrap);
     methodRow.appendChild(addressWrap);
     methodRow.appendChild(pickupWrap);
@@ -9359,33 +9384,241 @@ function setBottomNavActive(tab) {
     wrap.appendChild(timeLabel);
 
     const timeOptions = (cfg.timeOptions || []).map(x => ({ code: x.code, title: x.title }));
-    const timeDefault = pickDefaultCode(timeOptions, draft.time_option_code, "asap");
-    const timeSelect = buildDropdown(timeOptions, timeDefault);
+    const deliveryIsOpen = Boolean(cfg.deliveryIsOpen);
+    const filteredTimeOptions = deliveryIsOpen ? timeOptions : timeOptions.filter((opt) => opt.code === "on_date");
+    const availableTimeOptions = filteredTimeOptions.length ? filteredTimeOptions : timeOptions;
+    const timeDefault = pickDefaultCode(availableTimeOptions, draft.time_option_code, deliveryIsOpen ? "asap" : "on_date");
+    const timeSelect = buildDropdown(availableTimeOptions, timeDefault);
 
+    // --- Hidden input для итогового значения времени ---
+    const timeInput = document.createElement("input");
+    timeInput.type = "hidden";
+    timeInput.value = extractTimeValue(draft.scheduled_at);
+
+    // --- Состояние выбора даты ---
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    let selectedDate;
+    if (draft.scheduled_date) {
+      const parsed = parseShopDateKey(draft.scheduled_date);
+      if (parsed && toShopDateKey(parsed) > toShopDateKey(new Date())) {
+        selectedDate = parsed;
+      } else {
+        selectedDate = new Date(tomorrow);
+      }
+    } else {
+      selectedDate = new Date(tomorrow);
+    }
+    let calendarViewYear = selectedDate.getFullYear();
+    let calendarViewMonth = selectedDate.getMonth();
+    let calendarOpen = false;
+
+    // Row 1: [На дату ▾] + [Другой день]  (timeSelect всегда видим, btnOtherDay только при on_date)
     const timeRow = document.createElement("div");
-    timeRow.className = "shop-checkout-time-row";
+    timeRow.className = "shop-checkout-date-row1";
     timeRow.appendChild(timeSelect.root);
 
-    const timeInputWrap = document.createElement("div");
-    timeInputWrap.className = "shop-checkout-time-input shop-checkout-time-input--manual";
+    const btnOtherDay = document.createElement("button");
+    btnOtherDay.type = "button";
+    btnOtherDay.className = "shop-checkout-date-toggle";
+    btnOtherDay.textContent = "Выбрать день";
+    timeRow.appendChild(btnOtherDay);
 
-    const timeInput = document.createElement("input");
-    timeInput.className = "control";
-    timeInput.type = "time";
-    timeInput.value = extractTimeValue(draft.scheduled_at);
-    timeInputWrap.appendChild(timeInput);
+    // --- Секция "На дату" (Row 2 + календарь) ---
+    const dateSection = document.createElement("div");
+    dateSection.className = "shop-checkout-time-input--ondate";
 
-    const timeSlotsWrap = document.createElement("div");
-    timeSlotsWrap.className = "shop-checkout-time-input shop-checkout-time-input--slots";
-    timeSlotsWrap.style.display = "none";
+    // Календарь-попover
+    const calendarWrap = document.createElement("div");
+    calendarWrap.className = "shop-checkout-date-calendar";
+
+    const calPopover = document.createElement("div");
+    calPopover.className = "date-popover hidden";
+
+    const calHeader = document.createElement("div");
+    calHeader.className = "date-popover-header";
+
+    const calPrev = document.createElement("button");
+    calPrev.type = "button";
+    calPrev.className = "icon-btn btn-xs";
+    calPrev.innerHTML = '<i class="fas fa-chevron-left"></i>';
+
+    const calTitle = document.createElement("div");
+    calTitle.className = "date-popover-title";
+
+    const calNext = document.createElement("button");
+    calNext.type = "button";
+    calNext.className = "icon-btn btn-xs";
+    calNext.innerHTML = '<i class="fas fa-chevron-right"></i>';
+
+    calHeader.appendChild(calPrev);
+    calHeader.appendChild(calTitle);
+    calHeader.appendChild(calNext);
+    calPopover.appendChild(calHeader);
+
+    const weekdaysRow = document.createElement("div");
+    weekdaysRow.className = "date-weekdays";
+    ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].forEach(d => {
+      const s = document.createElement("span");
+      s.textContent = d;
+      weekdaysRow.appendChild(s);
+    });
+    calPopover.appendChild(weekdaysRow);
+
+    const calGrid = document.createElement("div");
+    calGrid.className = "date-grid";
+    calPopover.appendChild(calGrid);
+
+    calendarWrap.appendChild(calPopover);
+    dateSection.appendChild(calendarWrap);
+
+    // Row 2: [На завтра / дд.мм] + [селектор времени]
+    const dateRow2 = document.createElement("div");
+    dateRow2.className = "shop-checkout-date-row2";
+
+    const dateDisplayWrap = document.createElement("div");
+    dateDisplayWrap.className = "shop-checkout-dropdown-wrap";
+    const dateDisplay = document.createElement("button");
+    dateDisplay.type = "button";
+    dateDisplay.className = "shop-checkout-select shop-checkout-date-display";
+    dateDisplayWrap.appendChild(dateDisplay);
 
     const timeSlotsDropdown = buildDropdown([], "");
-    timeSlotsWrap.appendChild(timeSlotsDropdown.root);
+    const dateSlotsWrap = document.createElement("div");
+    dateSlotsWrap.className = "shop-checkout-time-input--slots";
+    dateSlotsWrap.appendChild(timeSlotsDropdown.root);
 
-    timeRow.appendChild(timeSlotsWrap);
+    dateRow2.appendChild(dateDisplayWrap);
+    dateRow2.appendChild(dateSlotsWrap);
+    dateSection.appendChild(dateRow2);
+
+    // Слоты для "Ко времени" — в том же ряду что и timeSelect
+    const timeSlotsWrapAtTime = document.createElement("div");
+    timeSlotsWrapAtTime.className = "shop-checkout-time-input--slots";
+    timeSlotsWrapAtTime.style.display = "none";
+    const timeSlotsDropdownAtTime = buildDropdown([], "");
+    timeSlotsWrapAtTime.appendChild(timeSlotsDropdownAtTime.root);
+    timeRow.appendChild(timeSlotsWrapAtTime);
+
     wrap.appendChild(timeRow);
-    wrap.appendChild(timeInputWrap);
+    wrap.appendChild(dateSection);
+    wrap.appendChild(timeInput);
 
+    // --- Рендер календаря ---
+    function renderShopCalendar() {
+      const year = calendarViewYear;
+      const month = calendarViewMonth;
+      const first = new Date(year, month, 1);
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      const offset = (first.getDay() + 6) % 7;
+      const todayKey = toShopDateKey(new Date());
+      const selectedKey = toShopDateKey(selectedDate);
+
+      const monthTitle = first.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
+      calTitle.textContent = monthTitle.charAt(0).toUpperCase() + monthTitle.slice(1);
+
+      const cells = [];
+      for (let i = 0; i < offset; i++) {
+        cells.push('<span class="date-empty"></span>');
+      }
+
+      for (let day = 1; day <= daysInMonth; day++) {
+        const d = new Date(year, month, day);
+        const key = toShopDateKey(d);
+        const isSelected = key === selectedKey;
+        const isToday = key === todayKey;
+        const isPast = key <= todayKey;
+
+        const classes = [
+          "date-cell",
+          isSelected ? "is-start" : "",
+          isToday ? "is-today" : "",
+          isPast ? "is-past" : "",
+        ].filter(Boolean).join(" ");
+
+        if (isPast) {
+          cells.push(`<span class="${classes}">${day}</span>`);
+        } else {
+          cells.push(`<button class="${classes}" type="button" data-date="${key}">${day}</button>`);
+        }
+      }
+
+      calGrid.innerHTML = cells.join("");
+    }
+
+    // --- Формат отображения даты ---
+    function formatDateDisplay(d) {
+      const tmrw = new Date();
+      tmrw.setDate(tmrw.getDate() + 1);
+      if (toShopDateKey(d) === toShopDateKey(tmrw)) return "Завтра";
+      const dd = String(d.getDate()).padStart(2, "0");
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      return `${dd}.${mm}`;
+    }
+
+    function setSelectedDate(d) {
+      selectedDate = d;
+      dateDisplay.textContent = formatDateDisplay(d);
+      updateTimeSlotsOptions();
+    }
+
+    // Инициализируем отображение даты
+    dateDisplay.textContent = formatDateDisplay(selectedDate);
+
+    // --- Обработчики ---
+    // Клик по dateDisplay сбрасывает на "завтра"
+    dateDisplay.addEventListener("click", () => {
+      const tmrw = new Date();
+      tmrw.setDate(tmrw.getDate() + 1);
+      setSelectedDate(tmrw);
+      calPopover.classList.add("hidden");
+      calendarOpen = false;
+    });
+
+    btnOtherDay.addEventListener("click", () => {
+      if (calendarOpen) {
+        calPopover.classList.add("hidden");
+        calendarOpen = false;
+      } else {
+        calendarViewYear = selectedDate.getFullYear();
+        calendarViewMonth = selectedDate.getMonth();
+        renderShopCalendar();
+        calPopover.classList.remove("hidden");
+        calendarOpen = true;
+      }
+    });
+
+    calPrev.addEventListener("click", () => {
+      calendarViewMonth -= 1;
+      if (calendarViewMonth < 0) { calendarViewMonth = 11; calendarViewYear -= 1; }
+      renderShopCalendar();
+    });
+
+    calNext.addEventListener("click", () => {
+      calendarViewMonth += 1;
+      if (calendarViewMonth > 11) { calendarViewMonth = 0; calendarViewYear += 1; }
+      renderShopCalendar();
+    });
+
+    calGrid.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-date]");
+      if (!btn) return;
+      const clicked = parseShopDateKey(btn.getAttribute("data-date"));
+      if (!clicked) return;
+      setSelectedDate(clicked);
+      renderShopCalendar();
+      calPopover.classList.add("hidden");
+      calendarOpen = false;
+    });
+
+    document.addEventListener("click", (e) => {
+      if (calendarOpen && !calendarWrap.contains(e.target) && !btnOtherDay.contains(e.target)) {
+        calPopover.classList.add("hidden");
+        calendarOpen = false;
+      }
+    });
+
+    // --- Логика видимости и слотов ---
     const timeOptionByCode = (cfg.timeOptions || []).reduce((acc, option) => {
       if (option && option.code) acc[option.code] = option;
       return acc;
@@ -9396,30 +9629,56 @@ function setBottomNavActive(tab) {
       const selectedCode = timeSelect.getValue();
       const config = timeOptionByCode[selectedCode];
       const hasWindow = config && Number(config.has_time_window) === 1;
-      timeInputWrap.style.display = selectedCode === "on_date" ? "" : "none";
-      timeSlotsWrap.style.display = hasWindow ? "" : "none";
+      const isOnDate = selectedCode === "on_date";
+      btnOtherDay.style.display = isOnDate ? "" : "none";
+      dateSection.style.display = isOnDate ? "" : "none";
+      timeSlotsWrapAtTime.style.display = (hasWindow && !isOnDate) ? "" : "none";
+      // Когда нет соседних элементов — timeSelect на всю ширину
+      const hasNeighbor = isOnDate || (hasWindow && !isOnDate);
+      timeSelect.root.style.gridColumn = hasNeighbor ? "" : "1 / -1";
     }
 
     function updateTimeSlotsOptions() {
       const selectedCode = timeSelect.getValue();
       const config = timeOptionByCode[selectedCode];
-      if (!config || Number(config.has_time_window) !== 1) {
-        timeSlotsDropdown.setOptions([]);
+
+      if (selectedCode === "on_date") {
+        if (!config || Number(config.has_time_window) !== 1) {
+          dateSlotsWrap.style.display = "none";
+          return;
+        }
+        dateSlotsWrap.style.display = "";
+        const slots = buildTimeSlots(config, selectedDate);
+        const slotOptions = slots.map(value => ({ code: value, title: value }));
+        const preferred = timeInput.value || storedDraftTime || "";
+        const defaultSlot = slotOptions.find(slot => slot.code === preferred)
+          ? preferred
+          : (slotOptions[0]?.code || "");
+        timeSlotsDropdown.setOptions(slotOptions, defaultSlot);
+        timeInput.value = defaultSlot;
         return;
       }
 
+      if (!config || Number(config.has_time_window) !== 1) {
+        timeSlotsDropdownAtTime.setOptions([]);
+        return;
+      }
       const slots = buildTimeSlots(config);
       const slotOptions = slots.map(value => ({ code: value, title: value }));
       const preferred = timeInput.value || storedDraftTime || "";
       const defaultSlot = slotOptions.find(slot => slot.code === preferred)
         ? preferred
         : (slotOptions[0]?.code || "");
-      timeSlotsDropdown.setOptions(slotOptions, defaultSlot);
+      timeSlotsDropdownAtTime.setOptions(slotOptions, defaultSlot);
       timeInput.value = defaultSlot;
     }
 
     timeSlotsDropdown.root.addEventListener("change", () => {
       timeInput.value = timeSlotsDropdown.getValue() || "";
+    });
+
+    timeSlotsDropdownAtTime.root.addEventListener("change", () => {
+      timeInput.value = timeSlotsDropdownAtTime.getValue() || "";
     });
 
     timeSelect.root.addEventListener("change", () => {
@@ -9492,6 +9751,7 @@ function setBottomNavActive(tab) {
             comment: str(comment.value).trim() || null,
             time_option_code: timeSelect.getValue() || timeDefault || "asap",
             scheduled_at: timeInput.value || "",
+            scheduled_date: getDateString(selectedDate),
             payment_code: paySelect.getValue() || payDefault || "cash",
             change_from: changeSelect.getValue() ? Number(changeSelect.getValue()) : null,
           });
@@ -9521,6 +9781,7 @@ function setBottomNavActive(tab) {
           comment: str(comment.value).trim() || null,
           time_option_code: timeSelect.getValue() || timeDefault || "asap",
           scheduled_at: timeInput.value || "",
+          scheduled_date: getDateString(selectedDate),
           payment_code: paySelect.getValue() || payDefault || "cash",
           change_from: changeSelect.getValue() ? Number(changeSelect.getValue()) : null,
         });
@@ -9624,7 +9885,11 @@ function setBottomNavActive(tab) {
           alert("Укажите время");
           return;
         }
-        payload.scheduled_at = `${getTodayDateString()} ${timeInput.value}:00`;
+        if (payload.time_option_code === "on_date") {
+          payload.scheduled_at = `${getDateString(selectedDate)} ${timeInput.value}:00`;
+        } else {
+          payload.scheduled_at = `${getTodayDateString()} ${timeInput.value}:00`;
+        }
       }
 
       saveCheckoutDraft({
@@ -9637,6 +9902,7 @@ function setBottomNavActive(tab) {
         comment: payload.comment,
         time_option_code: payload.time_option_code,
         scheduled_at: timeInput.value || "",
+        scheduled_date: getDateString(selectedDate),
         payment_code: payload.payment_code,
         change_from: payload.change_from,
       });

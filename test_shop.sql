@@ -475,7 +475,7 @@ CREATE TABLE `order_time_options` (
 INSERT INTO `order_time_options` (`id`, `tenant_id`, `store_id`, `code`, `title`, `description`, `sort`, `is_active`, `created_at`, `updated_at`) VALUES
 (1, 1, 1, 'asap', 'Быстрее', 'Начать выполнение сразу', 1, 1, '2026-01-02 19:07:20', '2026-01-27 05:18:30'),
 (2, 1, 1, 'at_time', 'Ко времени', 'Приготовить к выбранному времени', 2, 1, '2026-01-02 19:07:20', '2026-01-02 19:07:20'),
-(3, 1, 1, 'on_date', 'На дату', 'Приготовить на выбранную дату', 3, 0, '2026-01-02 19:07:20', '2026-01-27 05:17:27');
+(3, 1, 1, 'on_date', 'На дату', 'Приготовить на выбранную дату', 3, 1, '2026-01-02 19:07:20', '2026-01-27 05:17:27');
 
 -- --------------------------------------------------------
 
@@ -1101,6 +1101,7 @@ CREATE TABLE `ten_stores` (
   `timezone` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
   `is_active` tinyint(1) NOT NULL DEFAULT '1',
   `use_global_hours` tinyint(1) NOT NULL DEFAULT '0',
+  `use_delivery_hours` tinyint(1) NOT NULL DEFAULT '0',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `city` varchar(255) COLLATE utf8mb4_general_ci NOT NULL DEFAULT ''
@@ -1110,9 +1111,9 @@ CREATE TABLE `ten_stores` (
 -- Дамп данных таблицы `ten_stores`
 --
 
-INSERT INTO `ten_stores` (`tenant_id`, `id`, `name`, `code`, `address`, `phone`, `timezone`, `is_active`, `use_global_hours`, `created_at`, `updated_at`, `city`) VALUES
-(1, 1, 'По щам - на Партсъезда', 'main', 'ул. 22-го Партсъезда 4', '79021461966', '+3', 1, 0, '2026-01-25 15:25:51', '2026-01-26 15:54:45', 'Новоалтайск'),
-(1, 2, 'Точка 2', 'store-2', 'ул. Неизвестная', NULL, '+0', 1, 0, '2026-01-26 15:53:11', '2026-01-26 15:54:59', 'Новоалтайск');
+INSERT INTO `ten_stores` (`tenant_id`, `id`, `name`, `code`, `address`, `phone`, `timezone`, `is_active`, `use_global_hours`, `use_delivery_hours`, `created_at`, `updated_at`, `city`) VALUES
+(1, 1, 'По щам - на Партсъезда', 'main', 'ул. 22-го Партсъезда 4', '79021461966', '+3', 1, 0, 0, '2026-01-25 15:25:51', '2026-01-26 15:54:45', 'Новоалтайск'),
+(1, 2, 'Точка 2', 'store-2', 'ул. Неизвестная', NULL, '+0', 1, 0, 0, '2026-01-26 15:53:11', '2026-01-26 15:54:59', 'Новоалтайск');
 
 -- --------------------------------------------------------
 
@@ -1152,6 +1153,36 @@ INSERT INTO `ten_store_hours` (`tenant_id`, `store_id`, `day_of_week`, `opens_at
 (1, 2, 4, '09:00:00', '21:00:00', 0, '2026-01-26 00:00:00', '2026-01-26 00:00:00'),
 (1, 2, 5, '09:00:00', '21:00:00', 0, '2026-01-26 00:00:00', '2026-01-26 00:00:00'),
 (1, 2, 6, '09:00:00', '21:00:00', 0, '2026-01-26 00:00:00', '2026-01-26 00:00:00');
+
+--
+-- Структура таблицы `ten_store_delivery_hours`
+--
+
+CREATE TABLE `ten_store_delivery_hours` (
+  `tenant_id` int NOT NULL,
+  `store_id` int NOT NULL,
+  `day_of_week` tinyint NOT NULL COMMENT '0=вс … 6=сб',
+  `opens_at` time DEFAULT NULL,
+  `closes_at` time DEFAULT NULL,
+  `is_closed` tinyint(1) NOT NULL DEFAULT '0',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`tenant_id`, `store_id`, `day_of_week`),
+  KEY `idx_ten_store_delivery_hours_store` (`tenant_id`, `store_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Дамп данных таблицы `ten_store_delivery_hours`
+--
+
+INSERT INTO `ten_store_delivery_hours` (`tenant_id`, `store_id`, `day_of_week`, `opens_at`, `closes_at`, `is_closed`, `created_at`, `updated_at`) VALUES
+(1, 1, 1, '10:00:00', '22:00:00', 0, '2026-01-27 10:01:10', '2026-01-27 10:01:10'),
+(1, 1, 2, '10:00:00', '22:00:00', 0, '2026-01-27 10:01:10', '2026-01-27 10:01:10'),
+(1, 1, 3, '10:00:00', '22:00:00', 0, '2026-01-27 10:01:10', '2026-01-27 10:01:10'),
+(1, 1, 4, '10:00:00', '22:00:00', 0, '2026-01-27 10:01:10', '2026-01-27 10:01:10'),
+(1, 1, 5, '10:00:00', '22:00:00', 0, '2026-01-27 10:01:10', '2026-01-27 10:01:10'),
+(1, 1, 6, '10:00:00', '22:00:00', 0, '2026-01-27 10:01:10', '2026-01-27 10:01:10'),
+(1, 1, 0, '10:00:00', '20:00:00', 0, '2026-01-27 10:01:10', '2026-01-27 10:01:10');
 
 -- --------------------------------------------------------
 

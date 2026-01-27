@@ -295,7 +295,7 @@
         document.body.setAttribute("data-settings-section", section);
         const isStores = section === "stores";
         if (settingsCenterTitle) {
-          settingsCenterTitle.textContent = isStores ? "Точки продаж" : "Профиль магазина";
+          settingsCenterTitle.textContent = isStores ? "Точки продаж" : "Профиль компании";
         }
         if (settingsCenterSubtitle) {
           settingsCenterSubtitle.textContent = isStores ? "Загрузка..." : "";
