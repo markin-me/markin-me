@@ -64,6 +64,7 @@
   const elList = $("#clientsList");
   const elEmpty = $("#clientsEmptyHint");
   const elSearch = $("#clientsSearch");
+  const elSort = $("#clientsSort");
   const elSearchClear = $("#clientsSearchClear");
 
   // desktop info
@@ -113,12 +114,43 @@
   const state = {
     activeFilter: "all", // all | active | inactive
     q: "",
+    sort: "last_desc",
     clients: [],
     activeClientId: null,
     activeClient: null,
     addresses: [],
     totals: { all: 0, active: 0, inactive: 0 },
   };
+
+  // Apply client-side sorting to `state.clients` according to `state.sort`.
+  function applyClientsSort() {
+    if (!Array.isArray(state.clients)) return;
+    const arr = state.clients;
+
+    switch (state.sort) {
+      case 'name_asc':
+        arr.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ru'));
+        break;
+      case 'orders_desc':
+        arr.sort((a, b) => (Number(b.total_orders || 0) - Number(a.total_orders || 0)) || (Number(b.id||0)-Number(a.id||0)));
+        break;
+      case 'created_desc':
+        arr.sort((a, b) => {
+          const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+          const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+          return tb - ta || (Number(b.id||0)-Number(a.id||0));
+        });
+        break;
+      case 'last_desc':
+      default:
+        arr.sort((a, b) => {
+          const ta = a.last_order_date ? new Date(a.last_order_date).getTime() : (a.created_at ? new Date(a.created_at).getTime() : 0);
+          const tb = b.last_order_date ? new Date(b.last_order_date).getTime() : (b.created_at ? new Date(b.created_at).getTime() : 0);
+          return tb - ta || (Number(b.id||0)-Number(a.id||0));
+        });
+        break;
+    }
+  }
 
   // -----------------------------
   // Helpers
@@ -248,6 +280,8 @@
       if (state.activeClientId && Number(state.activeClientId) === Number(c.id)) {
         row.classList.add("is-active");
       }
+      // apply inline grid template to force layout (avoids CSS cascade/cache issues)
+      row.style.gridTemplateColumns = '64px minmax(200px, 1fr) 80px';
 
       row.innerHTML = `
         <div class="order-main">
@@ -257,11 +291,11 @@
 
         <div class="order-mid">
           <div class="order-line"><strong>${escapeHtml(c.name || "—")}</strong></div>
-          <div class="order-line muted"><i class="fas fa-phone"></i> ${escapeHtml(formatPhoneDigitsToRU(c.phone))}</div>
+          <div class="order-line muted"><i class="fas fa-phone"></i> <span class="client-phone" style="white-space:nowrap;display:inline-block;overflow:hidden;text-overflow:ellipsis;max-width:220px;">${escapeHtml(formatPhoneDigitsToRU(c.phone))}</span></div>
         </div>
 
         <div class="order-actions">
-          <div class="pill pill-strong">${escapeHtml(Number(c.total_orders || 0))}</div>
+          <div class="pill pill-strong" style="padding:6px 10px;font-size:13px;height:32px;min-width:40px;max-width:80px;box-sizing:border-box;overflow:hidden;text-align:center;">${escapeHtml(Number(c.total_orders || 0))}</div>
         </div>
       `;
 
@@ -411,6 +445,9 @@
     await loadTotals();
     renderFilters();
 
+    // применим клиентскую сортировку (в UI)
+    applyClientsSort();
+
     // если активный клиент исчез после фильтра — сбросим
     if (state.activeClientId) {
       const exists = state.clients.some((x) => Number(x.id) === Number(state.activeClientId));
@@ -529,6 +566,16 @@
     state.q = "";
     loadClients().catch(console.error);
   });
+
+  if (elSort) {
+    // set default value if present
+    elSort.value = state.sort || 'last_desc';
+    elSort.addEventListener('change', () => {
+      state.sort = String(elSort.value || 'last_desc');
+      applyClientsSort();
+      renderClients();
+    });
+  }
 
   if (addrAddBtn) addrAddBtn.addEventListener("click", () => addAddress().catch(console.error));
   if (reloadAddrsBtn) reloadAddrsBtn.addEventListener("click", () => loadAddresses().catch(console.error));
