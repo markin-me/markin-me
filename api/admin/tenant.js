@@ -25,7 +25,8 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     },
     'order-delivery': {
       table: 'order_delivery_types',
-      hasFinal: false
+      hasFinal: false,
+      defaultField: 'is_default'
     }
   };
 
@@ -436,7 +437,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
 
       const [rows] = await db.query(
-        `SELECT id, code, title, icon, sort, is_active
+        `SELECT id, code, title, icon, sort, is_active, is_default
          FROM order_delivery_types
          WHERE tenant_id=? AND store_id=1
          ORDER BY sort ASC, id ASC`,
@@ -462,6 +463,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       const icon = req.body.icon !== undefined ? helpers.strOrNull(req.body.icon) : undefined;
       const isActive = req.body.is_active !== undefined ? (helpers.toBool(req.body.is_active, true) ? 1 : 0) : undefined;
       const isFinal = cfg.hasFinal && req.body.is_final !== undefined ? (helpers.toBool(req.body.is_final, false) ? 1 : 0) : undefined;
+      const defaultField = cfg.defaultField;
+      const isDefault = defaultField && req.body[defaultField] !== undefined
+        ? (helpers.toBool(req.body[defaultField], false) ? 1 : 0)
+        : undefined;
 
       const updates = [];
       const params = [];
@@ -481,9 +486,21 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
         updates.push('is_final=?');
         params.push(isFinal);
       }
+      if (isDefault !== undefined) {
+        updates.push(`${defaultField}=?`);
+        params.push(isDefault);
+      }
 
       if (!updates.length) {
         return res.json({ ok: true });
+      }
+
+      if (isDefault === 1) {
+        await db.query(
+          `UPDATE ${cfg.table} SET ${defaultField}=0
+           WHERE tenant_id=? AND store_id=1 AND id!=?`,
+          [tenantId, id]
+        );
       }
 
       params.push(tenantId, id);
@@ -492,7 +509,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
         params
       );
 
-      const fields = cfg.hasFinal ? 'id, code, title, icon, sort, is_active, is_final' : 'id, code, title, icon, sort, is_active';
+      const baseFields = ['id', 'code', 'title', 'icon', 'sort', 'is_active'];
+      if (cfg.hasFinal) baseFields.push('is_final');
+      if (cfg.defaultField) baseFields.push(cfg.defaultField);
+      const fields = baseFields.join(', ');
       const [rows] = await db.query(
         `SELECT ${fields} FROM ${cfg.table} WHERE tenant_id=? AND store_id=1 AND id=? LIMIT 1`,
         [tenantId, id]

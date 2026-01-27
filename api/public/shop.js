@@ -1529,10 +1529,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       // ПЕРЕИМЕНОВАНО: order_delivery_types (бывшая order_methods)
       const [methods] = await db.query(
-        `SELECT id, code, title, icon, sort
+        `SELECT id, code, title, icon, sort, is_default
          FROM order_delivery_types
          WHERE tenant_id=? AND store_id=? AND is_active=1
-         ORDER BY sort ASC, id ASC`,
+         ORDER BY is_default DESC, sort ASC, id ASC`,
         [tenantId, storeId]
       );
 
@@ -2150,6 +2150,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       // ПЕРЕИМЕНОВАНО: delivery_address -> address (в таблице order_orders)
       const deliveryAddress = helpers.strOrNull(req.body.delivery_address);
+      const pickupStoreId = Number(req.body.pickup_store_id) || null;
       const addrLine = (str(methodCode).trim() === 'delivery') ? deliveryAddress : null;
 
       const comment = helpers.strOrNull(req.body.comment);
@@ -2166,12 +2167,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const [r] = await db.query(
         `INSERT INTO order_orders
          (tenant_id, store_id, customer_id, customer_name, customer_phone, promo_code,
-          address, delivery_address_id, comment, cutlery_qty, change_from,
+          address, delivery_address_id, pickup_store_id, comment, cutlery_qty, change_from,
           items, total_price,
           delivery_type_id, payment_id, time_option_id,
           status_id, status_sort, scheduled_at,
           created_via, is_active, public_id)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
         [
           tenantId,
           storeId,
@@ -2181,6 +2182,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           promoCode,
           addrLine,
           null, // delivery_address_id (пока не используем)
+          pickupStoreId,
           comment,
           cutleryQty,
           changeFrom,

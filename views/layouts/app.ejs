@@ -139,6 +139,127 @@
         // Обновляем информацию при загрузке
         updateUserInfo();
 
+        // ===== Селектор точек продаж =====
+        var storeButton = document.getElementById('userMenuStoreButton');
+        var storeDropdown = document.getElementById('userMenuStoreDropdown');
+        var storeName = document.getElementById('userMenuStoreName');
+        var storeSection = document.getElementById('userMenuStoreSection');
+
+        var stores = [];
+        var currentStoreId = localStorage.getItem('activeStoreId') || '1';
+
+        // Загрузить список точек продаж
+        async function loadStores() {
+          try {
+            var tenantStr = localStorage.getItem('tenant');
+            if (!tenantStr) return;
+
+            var tenant = JSON.parse(tenantStr);
+            var tenantId = tenant.id;
+
+            var response = await fetch('/api/public/tenant/stores?tenant_id=' + tenantId);
+            var data = await response.json();
+
+            if (!data || !data.ok || !Array.isArray(data.stores)) {
+              console.error('Failed to load stores');
+              return;
+            }
+
+            stores = data.stores;
+
+            // Если точек нет, скрыть секцию
+            if (stores.length === 0) {
+              if (storeSection) storeSection.style.display = 'none';
+              return;
+            }
+
+            // Если только одна точка, тоже скрыть
+            if (stores.length === 1) {
+              currentStoreId = String(stores[0].id);
+              localStorage.setItem('activeStoreId', currentStoreId);
+              if (storeSection) storeSection.style.display = 'none';
+              return;
+            }
+
+            // Найти текущую точку
+            var currentStore = stores.find(function(s) { return String(s.id) === currentStoreId; });
+            if (!currentStore) {
+              currentStore = stores[0];
+              currentStoreId = String(currentStore.id);
+              localStorage.setItem('activeStoreId', currentStoreId);
+            }
+
+            updateStoreName(currentStore);
+            renderStoreOptions();
+          } catch (err) {
+            console.error('Error loading stores:', err);
+          }
+        }
+
+        function updateStoreName(store) {
+          if (storeName && store) {
+            storeName.textContent = store.name || store.city || 'Точка продаж';
+          }
+        }
+
+        function renderStoreOptions() {
+          if (!storeDropdown) return;
+
+          storeDropdown.innerHTML = '';
+
+          stores.forEach(function(store) {
+            var option = document.createElement('button');
+            option.type = 'button';
+            option.className = 'user-menu-store-option';
+            option.textContent = store.name || store.city || 'Точка #' + store.id;
+
+            if (String(store.id) === currentStoreId) {
+              option.classList.add('is-active');
+            }
+
+            option.addEventListener('click', function(e) {
+              e.stopPropagation();
+
+              if (String(store.id) === currentStoreId) {
+                storeDropdown.classList.add('hidden');
+                return;
+              }
+
+              currentStoreId = String(store.id);
+              localStorage.setItem('activeStoreId', currentStoreId);
+
+              updateStoreName(store);
+              renderStoreOptions();
+
+              // Диспатчить событие для перезагрузки данных
+              var event = new CustomEvent('tenantStoreChanged', { detail: { store: store } });
+              document.dispatchEvent(event);
+
+              storeDropdown.classList.add('hidden');
+            });
+
+            storeDropdown.appendChild(option);
+          });
+        }
+
+        // Открытие/закрытие dropdown точек
+        if (storeButton) {
+          storeButton.addEventListener('click', function(e) {
+            e.stopPropagation();
+            storeDropdown.classList.toggle('hidden');
+          });
+        }
+
+        // Закрытие dropdown при клике вне
+        document.addEventListener('click', function(e) {
+          if (storeDropdown && !storeDropdown.contains(e.target) && e.target !== storeButton) {
+            storeDropdown.classList.add('hidden');
+          }
+        });
+
+        // Загрузить точки при открытии страницы
+        loadStores();
+
         // Проверка авторизации для страниц dashboard
         if (window.location.pathname.startsWith('/dashboard/')) {
           var token = localStorage.getItem('authToken');

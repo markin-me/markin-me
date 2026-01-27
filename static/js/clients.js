@@ -19,14 +19,16 @@
   const tenantId = getTenantId();
 
   async function apiJson(url, opts = {}) {
-    // Получаем токен из localStorage
+    // Получаем токен и store_id из localStorage
     const token = localStorage.getItem('authToken');
+    const storeId = localStorage.getItem('activeStoreId') || '1';
     const headers = {
       "x-tenant-id": String(tenantId),
+      "x-store-id": storeId,
       ...(opts.body ? { "Content-Type": "application/json" } : {}),
       ...(opts.headers || {}),
     };
-    
+
     // Добавляем токен авторизации, если он есть
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
@@ -535,4 +537,11 @@
   // Init
   // -----------------------------
   loadClients().catch(console.error);
+
+  // Слушать изменение точки продаж
+  document.addEventListener('tenantStoreChanged', (event) => {
+    console.log('Точка продаж изменена (clients):', event.detail.store);
+    // Перезагрузить клиентов для новой точки
+    loadClients().catch(console.error);
+  });
 })();

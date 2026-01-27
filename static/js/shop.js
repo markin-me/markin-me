@@ -48,6 +48,11 @@
   const elAddressSaveBtn = $("#shopAddressSaveBtn");
   const elAddressCancelBtn = $("#shopAddressCancelBtn");
 
+  // pickup store (right cart panel)
+  const elPickupContent = $("#shopPickupContent");
+  const elPickupListView = $("#shopPickupListView");
+  const elPickupList = $("#shopPickupList");
+
   const elAddrStreet = $("#shopAddrStreet");
   const elAddrHouse = $("#shopAddrHouse");
   const elAddrEntrance = $("#shopAddrEntrance");
@@ -71,6 +76,7 @@
   const elNavMenu = $("#shopNavMenu");
   const elNavCart = $("#shopNavCart");
   const elNavProfile = $("#shopNavProfile");
+  const elNavFav = $("#shopNavFav");
 
   const elNavCartBadge = $("#shopNavCartBadge") || $("#shopCartBadge");
   const elCartOpenDesktop = $("#shopCartOpenDesktopBtn");
@@ -528,9 +534,14 @@
     const addressWrap = checkoutEl?.parentElement?.querySelector('.shop-address-content');
     const addressListView = addressWrap?.querySelector('.shop-address-list-view');
     const addressFormView = addressWrap?.querySelector('.shop-address-form-view');
-    
+    const pickupWrapEl = checkoutEl?.parentElement?.querySelector('.shop-pickup-content');
+
     // Проверяем текущий экран
-    if (productEl && !productEl.classList.contains('hidden')) {
+    if (pickupWrapEl && !pickupWrapEl.classList.contains('hidden')) {
+      // На списке точек самовывоза - возвращаемся к оформлению
+      showSheetCheckout();
+      return true;
+    } else if (productEl && !productEl.classList.contains('hidden')) {
       // На экране товара - возвращаемся в корзину или закрываем sheet
       const cartKey = sheetNavigationState.data?.cartKey;
       if (cartKey) {
@@ -549,12 +560,8 @@
       showSheetAddressList();
       return true;
     } else if (addressListView && !addressListView.classList.contains('hidden')) {
-      // На списке адресов - возвращаемся к оформлению заказа или корзине
-      if (checkoutEl && !checkoutEl.classList.contains('hidden')) {
-        showSheetCheckout();
-      } else {
-        showSheetCart();
-      }
+      // На списке адресов - возвращаемся к оформлению заказа
+      showSheetCheckout();
       return true;
     } else if (checkoutEl && !checkoutEl.classList.contains('hidden')) {
       // На оформлении заказа - возвращаемся в корзину
@@ -1451,6 +1458,7 @@ function showCheckoutView() {
 
   if (elCartContent) elCartContent.classList.add("hidden");
   if (elAddressContent) elAddressContent.classList.add("hidden");
+  if (elPickupContent) elPickupContent.classList.add("hidden");
   if (elProductContent) elProductContent.classList.add("hidden");
   if (elCheckoutContent) elCheckoutContent.classList.remove("hidden");
   if (elProfileContent) elProfileContent.classList.add("hidden");
@@ -1560,6 +1568,52 @@ function showAddressFormView(prefill, editingId, backMode) {
 
   setCartFooterMode("hidden");
   setTimeout(() => { try { elAddrStreet?.focus?.(); } catch {} }, 0);
+}
+
+function showPickupListView(backMode = "checkout") {
+  if (!elPickupContent || !elPickupListView) return;
+
+  cartViewMode = "pickup";
+  openProductCtx = null;
+  state._pickupListBackMode = backMode;
+
+  if (elCartContent) elCartContent.classList.add("hidden");
+  if (elAddressContent) elAddressContent.classList.add("hidden");
+  if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
+  if (elProductContent) elProductContent.classList.add("hidden");
+  if (elProfileContent) elProfileContent.classList.add("hidden");
+
+  elPickupContent.classList.remove("hidden");
+  elPickupListView.classList.remove("hidden");
+
+  setCartHeader({
+    title: "Точка самовывоза",
+    showAddressChip: false,
+    showProfileActions: false,
+    showBack: false,
+    showFav: false,
+    hideTitle: false,
+    addressAsTitle: false,
+    showClose: true,
+    onClose: async () => {
+      const back = state._pickupListBackMode || "checkout";
+      if (back === "checkout" && elCheckoutContent) {
+        showCheckoutView();
+        await openCheckoutView({
+          container: elCheckoutContent,
+          onBack: showCartView,
+          hasAddressEditor: true,
+          isSheet: false,
+          actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
+        });
+      } else {
+        showCartView();
+      }
+    },
+  });
+
+  setCartFooterMode("hidden");
+  renderPickupList();
 }
 
   function showProfileView() {
@@ -1873,6 +1927,86 @@ function showProductView() {
       });
 
       elAddressList.appendChild(row);
+    });
+  }
+
+  function renderPickupList() {
+    if (!elPickupList) return;
+
+    elPickupList.innerHTML = "";
+
+    // Получаем список точек из глобальной переменной pickupStores (заполняется в buildCheckoutForm)
+    const stores = window._pickupStores || [];
+
+    if (!stores.length) {
+      elPickupList.innerHTML = `<div class="muted">Нет доступных точек самовывоза.</div>`;
+      return;
+    }
+
+    const currentStoreId = window._selectedPickupStoreId || null;
+
+    stores.forEach((store) => {
+      const row = document.createElement("div");
+      row.className = "shop-address-row";
+
+      const isSelected = currentStoreId && Number(store.id) === Number(currentStoreId);
+      if (isSelected) row.classList.add("is-selected");
+
+      const parts = [store.city, store.address].filter(Boolean);
+      const fullAddress = parts.join(', ') || store.name || 'Точка #' + store.id;
+
+      const card = document.createElement("div");
+      card.className = "shop-address-card";
+
+      const main = document.createElement("div");
+      main.className = "shop-address-card-main";
+
+      const titleEl = document.createElement("div");
+      titleEl.className = "shop-address-card-title";
+      titleEl.textContent = store.name || 'Точка ' + store.id;
+      main.appendChild(titleEl);
+
+      const subEl = document.createElement("div");
+      subEl.className = "shop-address-card-sub";
+      subEl.textContent = fullAddress;
+      main.appendChild(subEl);
+
+      card.appendChild(main);
+
+      if (isSelected) {
+        const checkIcon = document.createElement("div");
+        checkIcon.className = "shop-address-check-icon";
+        checkIcon.innerHTML = `<i class="fas fa-check"></i>`;
+        card.appendChild(checkIcon);
+      }
+
+      row.appendChild(card);
+
+      row.addEventListener("click", async () => {
+        window._selectedPickupStoreId = Number(store.id);
+
+        // Обновляем поле в форме чекаута
+        if (window._updatePickupAddressCallback) {
+          window._updatePickupAddressCallback();
+        }
+
+        // Возвращаемся в чекаут
+        const back = state._pickupListBackMode || "checkout";
+        if (back === "checkout" && elCheckoutContent) {
+          showCheckoutView();
+          await openCheckoutView({
+            container: elCheckoutContent,
+            onBack: showCartView,
+            hasAddressEditor: true,
+            isSheet: false,
+            actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
+          });
+        } else {
+          showCartView();
+        }
+      });
+
+      elPickupList.appendChild(row);
     });
   }
 
@@ -6336,6 +6470,7 @@ optionGroups.forEach((group) => {
       if (typeof window.updateActiveOrdersBadge === "function") {
         window.updateActiveOrdersBadge();
       }
+      setSheetHeaderMode("");
     }
   }
 
@@ -6420,6 +6555,45 @@ function openCategoriesSheet() {
   }
 }
 
+function showFavoritesPlaceholder() {
+  if (!window.AppModal) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "shop-sheet-content";
+  const note = document.createElement("div");
+  note.className = "muted";
+  note.style.padding = "32px 16px";
+  note.style.textAlign = "center";
+  note.textContent = "Избранное пока в разработке. Скоро появится.";
+  wrap.appendChild(note);
+
+  sheetNavigationState.type = 'favorites';
+  sheetNavigationState.screen = null;
+  sheetNavigationState.data = null;
+
+  setAppModalMode("shop");
+  setActiveNav("fav");
+  window.AppModal.open({
+    title: "Избранное",
+    content: wrap,
+    onClose: () => {
+      setActiveNav("menu");
+      sheetNavigationState.type = null;
+      sheetNavigationState.screen = null;
+      sheetNavigationState.data = null;
+      if (typeof window.updateActiveOrdersBadge === "function") {
+        window.updateActiveOrdersBadge();
+      }
+    },
+  });
+
+  if (typeof window.updateActiveOrdersBadge === "function") {
+    setTimeout(() => {
+      window.updateActiveOrdersBadge();
+    }, 100);
+  }
+}
+
   function setCartSheetFooterMode(ctx, mode) {
     if (!ctx?.footerEl) return;
     ctx.footerEl.classList.toggle("hidden", mode === "hidden");
@@ -6452,6 +6626,19 @@ function openCartSheet() {
   const productWrap = document.createElement("div");
   productWrap.className = "shop-product-content hidden";
   wrap.appendChild(productWrap);
+
+  const pickupSheetWrap = document.createElement("div");
+  pickupSheetWrap.className = "shop-pickup-content hidden";
+  wrap.appendChild(pickupSheetWrap);
+
+  const pickupSheetListView = document.createElement("div");
+  pickupSheetListView.className = "shop-pickup-list-view";
+
+  const pickupSheetList = document.createElement("div");
+  pickupSheetList.className = "shop-pickup-list";
+
+  pickupSheetListView.appendChild(pickupSheetList);
+  pickupSheetWrap.appendChild(pickupSheetListView);
 
   const addressListView = document.createElement("div");
   addressListView.className = "shop-address-list-view hidden";
@@ -6606,10 +6793,10 @@ function openCartSheet() {
   }
 
   // ===== helpers title =====
-  function applySheetAddressTitle() {
-    const line = getSelectedAddressLine();
-    const t = line || "Введите адрес";
-    if (window.AppModal?.setTitle) window.AppModal.setTitle(t);
+function applySheetAddressTitle(backMode = "cart") {
+  const line = getSelectedAddressLine();
+  const t = line || "Введите адрес";
+  if (window.AppModal?.setTitle) window.AppModal.setTitle(t);
 
     const titleEl =
       document.querySelector(".app-modal-header .app-modal-title") ||
@@ -6624,7 +6811,7 @@ function openCartSheet() {
       titleEl.style.cursor = "pointer";
       titleEl.onclick = async () => {
         await refreshAddressState();
-        showSheetAddressList();
+        showSheetAddressList(backMode);
       };
     }
   }
@@ -6714,6 +6901,7 @@ function openCartSheet() {
     list.classList.add("hidden");
     addressWrap.classList.add("hidden");
     productWrap.classList.add("hidden");
+    pickupSheetWrap.classList.add("hidden");
 
     setCartSheetFooterMode(openCartSheetCtx, "checkout");
     
@@ -6729,7 +6917,7 @@ function openCartSheet() {
 
     // title = адрес, без стрелок/иконок
     clearSheetAddressTitleMode();
-    applySheetAddressTitle();
+    applySheetAddressTitle("checkout");
 
     // обычный режим шапки (крестик есть)
     setSheetHeaderMode("cart");
@@ -6746,6 +6934,8 @@ function openCartSheet() {
       hasAddressEditor: true,
       isSheet: true,
       actions: { submitBtn: submitBtn, backBtn: backBtn },
+      onEditAddress: () => showSheetAddressList("checkout"),
+      onEditPickup: () => showSheetPickupList(),
     });
   }
 
@@ -6754,6 +6944,7 @@ function openCartSheet() {
     list.classList.remove("hidden");
     addressWrap.classList.add("hidden");
     productWrap.classList.add("hidden");
+    pickupSheetWrap.classList.add("hidden");
 
     const hasItems = cartItemsResolved().length > 0;
     setCartSheetFooterMode(openCartSheetCtx, hasItems ? "cart" : "hidden");
@@ -6805,17 +6996,22 @@ function openCartSheet() {
     openProductCtx = null;
   }
 
-  function showSheetAddressList() {
+function showSheetAddressList(backMode) {
     checkoutWrap.classList.add("hidden");
     list.classList.add("hidden");
     addressWrap.classList.remove("hidden");
     addressListView.classList.remove("hidden");
     addressFormView.classList.add("hidden");
     productWrap.classList.add("hidden");
+    pickupSheetWrap.classList.add("hidden");
 
     setCartSheetFooterMode(openCartSheetCtx, "hidden");
     if (openCartSheetCtx) {
-      openCartSheetCtx.addressBackMode = null;
+      const resolvedBackMode =
+        backMode !== undefined
+          ? backMode || "cart"
+          : openCartSheetCtx.addressBackMode || "cart";
+      openCartSheetCtx.addressBackMode = resolvedBackMode;
     }
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
@@ -6840,6 +7036,100 @@ function openCartSheet() {
     sheetNavigationState.data = null;
 
     renderSheetAddressList();
+  }
+
+  function showSheetPickupList() {
+    checkoutWrap.classList.add("hidden");
+    list.classList.add("hidden");
+    addressWrap.classList.add("hidden");
+    productWrap.classList.add("hidden");
+    pickupSheetWrap.classList.remove("hidden");
+
+    setCartSheetFooterMode(openCartSheetCtx, "hidden");
+
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile && elMobileProductActions) {
+      elMobileProductActions.classList.add("hidden");
+    }
+    if (isMobile && elMobileCartActions) {
+      elMobileCartActions.classList.add("hidden");
+      if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
+      if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
+    }
+    if (isMobile && elMobileAddressActions) {
+      elMobileAddressActions.classList.add("hidden");
+    }
+
+    clearSheetAddressTitleMode();
+    if (window.AppModal?.setTitle) window.AppModal.setTitle("Точка самовывоза");
+
+    sheetNavigationState.type = 'cart';
+    sheetNavigationState.screen = 'pickupList';
+    sheetNavigationState.data = null;
+
+    renderSheetPickupList();
+  }
+
+  function renderSheetPickupList() {
+    pickupSheetList.innerHTML = "";
+
+    const stores = window._pickupStores || [];
+    if (!stores.length) {
+      pickupSheetList.innerHTML = `<div class="muted" style="padding:16px">Нет доступных точек самовывоза.</div>`;
+      return;
+    }
+
+    const currentStoreId = window._selectedPickupStoreId || null;
+
+    stores.forEach((store) => {
+      const row = document.createElement("div");
+      row.className = "shop-address-row";
+
+      const isSelected = currentStoreId && Number(store.id) === Number(currentStoreId);
+      if (isSelected) row.classList.add("is-selected");
+
+      const parts = [store.city, store.address].filter(Boolean);
+      const fullAddress = parts.join(', ') || store.name || 'Точка #' + store.id;
+
+      const card = document.createElement("div");
+      card.className = "shop-address-card";
+
+      const main = document.createElement("div");
+      main.className = "shop-address-card-main";
+
+      const titleEl = document.createElement("div");
+      titleEl.className = "shop-address-card-title";
+      titleEl.textContent = store.name || 'Точка ' + store.id;
+      main.appendChild(titleEl);
+
+      const subEl = document.createElement("div");
+      subEl.className = "shop-address-card-sub";
+      subEl.textContent = fullAddress;
+      main.appendChild(subEl);
+
+      card.appendChild(main);
+
+      if (isSelected) {
+        const checkIcon = document.createElement("div");
+        checkIcon.className = "shop-address-check-icon";
+        checkIcon.innerHTML = `<i class="fas fa-check"></i>`;
+        card.appendChild(checkIcon);
+      }
+
+      row.appendChild(card);
+
+      row.addEventListener("click", async () => {
+        window._selectedPickupStoreId = Number(store.id);
+
+        if (window._updatePickupAddressCallback) {
+          window._updatePickupAddressCallback();
+        }
+
+        await showSheetCheckout();
+      });
+
+      pickupSheetList.appendChild(row);
+    });
   }
 
   function showSheetAddressForm(prefill, editingId, backMode) {
@@ -6867,6 +7157,7 @@ function openCartSheet() {
     addressListView.classList.add("hidden");
     addressFormView.classList.remove("hidden");
     productWrap.classList.add("hidden");
+    pickupSheetWrap.classList.add("hidden");
 
     setCartSheetFooterMode(openCartSheetCtx, "hidden");
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
@@ -6946,6 +7237,17 @@ function renderSheetAddressList() {
   const listData = (token ? state.addresses : []) || [];
   const local = !token && loadAddressDraft() ? [{ ...loadAddressDraft(), id: null, _local: true }] : [];
   const effectiveList = token ? listData : local;
+
+  const navigateAfterAddressSelection = () => {
+    const mode = openCartSheetCtx?.addressBackMode;
+    if (mode === "profile") {
+      return returnToProfileFromSheet();
+    }
+    if (mode === "checkout") {
+      return showSheetCheckout();
+    }
+    return showSheetCart();
+  };
 
   if (!effectiveList.length) {
     addressList.innerHTML = `<div class="muted">Адресов пока нет.</div>`;
@@ -7038,7 +7340,7 @@ function renderSheetAddressList() {
           await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
           await refreshAddressState();
           renderSheetAddressList();
-          if (!getSelectedAddressLine()) showSheetCart();
+          if (!getSelectedAddressLine()) navigateAfterAddressSelection();
         } catch (err) {
           alert("Не удалось удалить адрес");
         }
@@ -7049,7 +7351,7 @@ function renderSheetAddressList() {
       clearAddressDraft();
       setSelectedAddress(null);
       renderSheetAddressList();
-      showSheetCart();
+      navigateAfterAddressSelection();
     });
     actions.appendChild(btnDel);
 
@@ -7062,14 +7364,14 @@ function renderSheetAddressList() {
       if (token && a.id) {
         // если уже выбран — просто закрываем
         if (state.selectedAddress && state.selectedAddress.id && Number(state.selectedAddress.id) === Number(a.id)) {
-          showSheetCart();
+          navigateAfterAddressSelection();
           return;
         }
         try {
           await apiJson(`/api/public/me/addresses/${a.id}/default`, { method: "PUT" });
           await refreshAddressState();
           updateAddressChip();
-          showSheetCart();
+          navigateAfterAddressSelection();
         } catch (e) {
           alert("Не удалось выбрать адрес");
         }
@@ -7080,11 +7382,7 @@ function renderSheetAddressList() {
       setSelectedAddress({ ...a, _local: true });
       syncSelectedAddressToCheckoutDraft();
       updateAddressChip();
-      if (openCartSheetCtx?.addressBackMode === "profile") {
-        returnToProfileFromSheet();
-      } else {
-        showSheetCart();
-      }
+      return navigateAfterAddressSelection();
     });
 
     addressList.appendChild(row);
@@ -8750,7 +9048,7 @@ function setBottomNavActive(tab) {
     return "";
   }
 
-  async function openCheckoutView({ container, onBack, hasAddressEditor, isSheet, actions, onEditAddress }) {
+  async function openCheckoutView({ container, onBack, hasAddressEditor, isSheet, actions, onEditAddress, onEditPickup }) {
     if (!container) return;
 
     const items = cartItemsResolved();
@@ -8821,8 +9119,20 @@ function setBottomNavActive(tab) {
     wrap.appendChild(nameRow);
 
     const methods = (cfg.methods || []).map(x => ({ code: x.code, title: x.title }));
-    const methodDefault = pickDefaultCode(methods, draft.method_code, "takeaway");
+    const methodUserSelected = Boolean(draft.method_user_selected);
+    const preferredMethodCode = methodUserSelected ? draft.method_code : null;
+    const methodDefault = pickDefaultCode(methods, preferredMethodCode, "takeaway");
     const methodSelect = buildDropdown(methods, methodDefault);
+    if (!methodUserSelected || !draft.method_code) {
+      draft.method_user_selected = false;
+      draft.method_code = methodSelect.getValue();
+      saveCheckoutDraft(draft);
+    }
+    methodSelect.root.addEventListener("change", () => {
+      draft.method_code = methodSelect.getValue();
+      draft.method_user_selected = true;
+      saveCheckoutDraft(draft);
+    });
 
     const methodWrap = document.createElement("div");
     const methodLabel = document.createElement("label");
@@ -8858,16 +9168,106 @@ function setBottomNavActive(tab) {
     addressWrap.appendChild(addrLabel);
     addressWrap.appendChild(addressField);
 
+    // Новое: поле выбора точки самовывоза
+    const pickupWrap = document.createElement("div");
+    const pickupLabel = document.createElement("label");
+    pickupLabel.className = "field-label";
+    pickupLabel.textContent = "Точка самовывоза";
+
+    const pickupField = document.createElement("div");
+    pickupField.className = "shop-checkout-address-field";
+
+    const changePickupBtn = document.createElement("button");
+    changePickupBtn.type = "button";
+    changePickupBtn.className = "btn shop-checkout-change-address";
+    changePickupBtn.innerHTML = `<i class="fas fa-pen"></i>`;
+    changePickupBtn.setAttribute("aria-label", "Изменить точку");
+    changePickupBtn.title = "Изменить точку самовывоза";
+
+    const pickupAddress = document.createElement("input");
+    pickupAddress.className = "control";
+    pickupAddress.type = "text";
+    pickupAddress.placeholder = "Выберите точку самовывоза";
+    pickupAddress.readOnly = true;
+    pickupAddress.setAttribute("data-role", "pickup-address");
+
+    // Загрузить точки продаж и установить текущую
+    let pickupStores = [];
+    let selectedPickupStoreId = null;
+
+    async function loadPickupStores() {
+      try {
+        const metaTenant = document.querySelector('meta[name="tenant_id"]');
+        const tenantId = metaTenant ? Number(metaTenant.content) : null;
+        if (!tenantId) return;
+
+        const response = await fetch(`/api/public/tenant/stores?tenant_id=${tenantId}`);
+        const data = await response.json();
+
+        if (data && data.ok && Array.isArray(data.stores)) {
+          pickupStores = data.stores;
+
+          // Сохраняем в глобальные переменные для использования в renderPickupList
+          window._pickupStores = pickupStores;
+
+          // Если есть сохраненный store_id в draft
+          if (draft.pickup_store_id) {
+            selectedPickupStoreId = draft.pickup_store_id;
+          } else {
+            // Иначе берем activeStoreId из localStorage
+            const activeStoreId = localStorage.getItem('activeStoreId');
+            selectedPickupStoreId = activeStoreId ? Number(activeStoreId) : (pickupStores[0]?.id || null);
+          }
+
+          window._selectedPickupStoreId = selectedPickupStoreId;
+          updatePickupAddress();
+        }
+      } catch (err) {
+        console.error('Ошибка загрузки точек самовывоза:', err);
+      }
+    }
+
+    function updatePickupAddress() {
+      if (!selectedPickupStoreId || !pickupStores.length) {
+        pickupAddress.value = '—';
+        return;
+      }
+
+      const store = pickupStores.find(s => Number(s.id) === Number(selectedPickupStoreId));
+      if (store) {
+        const parts = [store.city, store.address].filter(Boolean);
+        pickupAddress.value = parts.join(', ') || store.name || '—';
+      }
+    }
+
+    // Callback для обновления поля после выбора в renderPickupList
+    window._updatePickupAddressCallback = () => {
+      selectedPickupStoreId = window._selectedPickupStoreId;
+      updatePickupAddress();
+    };
+
+    loadPickupStores();
+
+    pickupField.appendChild(pickupAddress);
+    pickupField.appendChild(changePickupBtn);
+    pickupWrap.appendChild(pickupLabel);
+    pickupWrap.appendChild(pickupField);
+
     const methodRow = document.createElement("div");
     methodRow.className = "shop-checkout-grid-row shop-checkout-grid-row--two";
     methodRow.appendChild(methodWrap);
     methodRow.appendChild(addressWrap);
+    methodRow.appendChild(pickupWrap);
     wrap.appendChild(methodRow);
 
     function refreshAddressVisibility() {
       const v = methodSelect.getValue();
       const isDelivery = v === "delivery";
+      const isTakeaway = v === "takeaway" || v === "pickup";
+
       addressWrap.style.display = isDelivery ? "" : "none";
+      pickupWrap.style.display = isTakeaway ? "" : "none";
+
       changeAddrBtn.style.display = (isDelivery && hasAddressEditor) ? "" : "none";
       if (isDelivery && hasAddressEditor) {
         address.value = getSelectedAddressLine() || address.value || "";
@@ -8965,24 +9365,57 @@ function setBottomNavActive(tab) {
     wrap.appendChild(promoLabel);
     wrap.appendChild(promo);
 
-    if (hasAddressEditor) {
-      changeAddrBtn.addEventListener("click", () => {
+      if (hasAddressEditor) {
+        changeAddrBtn.addEventListener("click", async () => {
+          const methodCode = methodSelect.getValue() || methodDefault || "takeaway";
+          saveCheckoutDraft({
+            promo_code: str(promo.value).trim() || null,
+            customer_name: str(name.value).trim(),
+            customer_phone: str(phone.value).trim(),
+            method_code: methodCode,
+            method_user_selected: Boolean(draft.method_user_selected),
+            delivery_address: str(address.value).trim() || null,
+            pickup_store_id: selectedPickupStoreId || null,
+            comment: str(comment.value).trim() || null,
+            time_option_code: timeSelect.getValue() || timeDefault || "asap",
+            scheduled_at: timeInput.value || "",
+            payment_code: paySelect.getValue() || payDefault || "cash",
+            change_from: changeSelect.getValue() ? Number(changeSelect.getValue()) : null,
+          });
+          if (typeof onEditAddress === "function") onEditAddress();
+          else await openAddressEditorFromCheckout();
+        });
+      }
+
+    // Обработчик кнопки изменения точки самовывоза
+      changePickupBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (!pickupStores.length) {
+          alert('Нет доступных точек самовывоза');
+          return;
+        }
+
+        // Сохраняем черновик перед переходом
+        const methodCode = methodSelect.getValue() || methodDefault || "takeaway";
         saveCheckoutDraft({
           promo_code: str(promo.value).trim() || null,
           customer_name: str(name.value).trim(),
           customer_phone: str(phone.value).trim(),
-          method_code: methodSelect.getValue() || methodDefault || "takeaway",
+          method_code: methodCode,
+          method_user_selected: Boolean(draft.method_user_selected),
           delivery_address: str(address.value).trim() || null,
+          pickup_store_id: selectedPickupStoreId || null,
           comment: str(comment.value).trim() || null,
           time_option_code: timeSelect.getValue() || timeDefault || "asap",
           scheduled_at: timeInput.value || "",
           payment_code: paySelect.getValue() || payDefault || "cash",
           change_from: changeSelect.getValue() ? Number(changeSelect.getValue()) : null,
         });
-        if (typeof onEditAddress === "function") onEditAddress();
-        else openAddressEditorFromCheckout();
+
+        // Переключаем на pickup view (sheet или panel)
+        if (typeof onEditPickup === "function") onEditPickup();
+        else showPickupListView('checkout');
       });
-    }
 
     container.appendChild(wrap);
 
@@ -8998,6 +9431,7 @@ function setBottomNavActive(tab) {
         promo_code: str(promo.value).trim() || null,
         method_code: methodSelect.getValue() || methodDefault || "takeaway",
         delivery_address: str(address.value).trim() || null,
+        pickup_store_id: selectedPickupStoreId || null,
         comment: str(comment.value).trim() || null,
         time_option_code: timeSelect.getValue() || timeDefault || "asap",
         scheduled_at: null,
@@ -9067,6 +9501,11 @@ function setBottomNavActive(tab) {
         return;
       }
 
+      if ((payload.method_code === "takeaway" || payload.method_code === "pickup") && !payload.pickup_store_id) {
+        alert("Выберите точку самовывоза");
+        return;
+      }
+
       if ((payload.time_option_code === "at_time" || payload.time_option_code === "on_date")) {
         if (!timeInput.value) {
           alert("Укажите время");
@@ -9081,6 +9520,7 @@ function setBottomNavActive(tab) {
         customer_phone: payload.customer_phone,
         method_code: payload.method_code,
         delivery_address: payload.delivery_address,
+        pickup_store_id: payload.pickup_store_id,
         comment: payload.comment,
         time_option_code: payload.time_option_code,
         scheduled_at: timeInput.value || "",
@@ -9191,9 +9631,29 @@ async function init() {
     }
 
     // Nav
-    if (elNavCategories) elNavCategories.addEventListener("click", openCategoriesSheet);
-    if (elNavCart) elNavCart.addEventListener("click", openCartSheet);
-    if (elNavProfile) elNavProfile.addEventListener("click", openProfileSheet);
+    const isSheetOpenOfType = (type) => {
+      if (!window.AppModal || typeof window.AppModal.isOpen !== "function") return false;
+      if (!window.AppModal.isOpen()) return false;
+      return sheetNavigationState.type === type;
+    };
+
+    const bindNavToggle = (el, type, opener) => {
+      if (!el) return;
+      el.addEventListener("click", () => {
+        if (isSheetOpenOfType(type)) {
+          closeShopSheetIfOpen();
+          setActiveNav("menu");
+          return;
+        }
+        closeShopSheetIfOpen();
+        opener();
+      });
+    };
+
+    bindNavToggle(elNavCategories, "categories", openCategoriesSheet);
+    bindNavToggle(elNavCart, "cart", openCartSheet);
+    bindNavToggle(elNavProfile, "profile", () => openProfileSheet());
+    bindNavToggle(elNavFav, "favorites", showFavoritesPlaceholder);
 
     // Обработчик кнопки "назад" на Android (popstate)
     // Добавляем запись в историю при открытии bottom sheet, чтобы можно было обработать "назад"
@@ -10012,4 +10472,3 @@ async function init() {
 }
   init();
 })();
-

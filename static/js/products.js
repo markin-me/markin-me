@@ -438,14 +438,16 @@
   // ---------------- API ----------------
 
   async function api(url, opts) {
-    // Получаем токен из localStorage
+    // Получаем токен и store_id из localStorage
     const token = localStorage.getItem('authToken');
-    const headers = { 
-      "Content-Type": "application/json", 
+    const storeId = localStorage.getItem('activeStoreId') || '1';
+    const headers = {
+      "Content-Type": "application/json",
       "x-tenant-id": String(TENANT_ID),
+      "x-store-id": storeId,
       ...(opts?.headers || {}),
     };
-    
+
     // Добавляем токен авторизации, если он есть
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
@@ -10716,8 +10718,15 @@ function updateOptionGroupSelectionUi() {
     enterProductsMode(state.currentCategoryId);
     await refreshProductsOnly();
 
-    // ✅ гарантированно “до конца”
+    // ✅ гарантированно "до конца"
     requestAnimationFrame(refreshOpenAccordions);
+  });
+
+  // Слушать изменение точки продаж
+  document.addEventListener('tenantStoreChanged', async (event) => {
+    console.log('Точка продаж изменена (products):', event.detail.store);
+    // Перезагрузить товары и категории для новой точки
+    await refreshAll();
   });
 })();
 

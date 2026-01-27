@@ -633,7 +633,8 @@
         reorderEndpoint: "/api/admin/tenant/order-delivery-types/reorder",
         updateEndpoint: "/api/admin/tenant/order-delivery-types/",
         hasFinal: false,
-        iconLabel: "Иконка получения"
+        iconLabel: "Иконка получения",
+        defaultField: "is_default"
       }
     };
 
@@ -996,6 +997,18 @@
       const switches = document.createElement("div");
       switches.className = "settings-row-switches";
 
+      if (cfg.defaultField) {
+        switches.appendChild(createSwitch("По умолчанию", Number(item[cfg.defaultField]) === 1, async (checked) => {
+          const payload = { [cfg.defaultField]: checked ? 1 : 0 };
+          const data = await updateSettingsItem(type, item.id, payload);
+          if (!data || !data.ok) {
+            alert("Не удалось сохранить значение по умолчанию.");
+            return;
+          }
+          await loadSettingsList(type);
+        }));
+      }
+
       if (cfg.hasFinal) {
         switches.appendChild(createSwitch("Финальный", Number(item.is_final) === 1, async (checked) => {
           const data = await updateSettingsItem(type, item.id, { is_final: checked ? 1 : 0 });
@@ -1033,6 +1046,11 @@
       row.appendChild(iconWrap);
       row.appendChild(titleWrap);
       row.appendChild(switches);
+      if (cfg.defaultField) {
+        row.classList.toggle("is-default", Number(item[cfg.defaultField]) === 1);
+      } else {
+        row.classList.remove("is-default");
+      }
       return row;
     }
 

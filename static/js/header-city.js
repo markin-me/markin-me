@@ -84,39 +84,54 @@
 
     function updateCityLabel(store) {
       if (!store) return;
-      const label = store.city || store.name || '—';
+      const label = store.city || '—';
       nameEl.textContent = label;
     }
 
     function renderOptions() {
       dropdown.innerHTML = '';
+
+      // Группировка точек по городам
+      const citiesMap = new Map();
       stores.forEach((store) => {
+        const city = store.city || '—';
+        if (!citiesMap.has(city)) {
+          citiesMap.set(city, []);
+        }
+        citiesMap.get(city).push(store);
+      });
+
+      // Для каждого города показываем одну опцию
+      citiesMap.forEach((cityStores, cityName) => {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'header-city-option';
-        btn.dataset.storeId = String(store.id);
-        if (Number(store.id) === currentStoreId) {
+
+        // Проверяем, активен ли какой-то из магазинов этого города
+        const isActive = cityStores.some((s) => Number(s.id) === currentStoreId);
+        if (isActive) {
           btn.classList.add('is-active');
         }
 
-        const cityText = escapeHtml(store.city || store.name || '—');
-        const nameText = escapeHtml(store.name || '');
+        const cityText = escapeHtml(cityName);
         btn.innerHTML = `<span class="header-city-option-city">${cityText}</span>`;
-        if (store.name && store.name !== store.city) {
-          btn.innerHTML += `<span class="header-city-option-store">${nameText}</span>`;
-        }
 
         btn.addEventListener('click', (event) => {
           event.stopPropagation();
-          if (Number(store.id) === currentStoreId) {
+
+          // Если уже выбран этот город, просто закрываем
+          if (isActive) {
             collapseDropdown();
             return;
           }
-          currentStoreId = Number(store.id);
-          updateCityLabel(store);
+
+          // Выбираем первую точку из этого города
+          const selectedStore = cityStores[0];
+          currentStoreId = Number(selectedStore.id);
+          updateCityLabel(selectedStore);
           setActiveStoreIdToStorage(currentStoreId);
           renderOptions();
-          dispatchStoreChanged(store);
+          dispatchStoreChanged(selectedStore);
           collapseDropdown();
         });
 

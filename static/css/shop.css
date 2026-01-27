@@ -160,6 +160,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   padding-bottom: 400px;
 }
 
+
 /* мобилка: показываем только товары, категории/корзина через нижнее меню */
 @media (max-width: 768px){
   body.page-shop{
@@ -1056,7 +1057,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 .shop-checkout-btn{
-  height: 44px;
+  height: 52px;
   border-radius: 999px;
   padding: 0 18px;
   width: 100%;
@@ -2934,4 +2935,50 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   overflow: visible;
   word-wrap: break-word;
   line-height: 1.4;
+}
+
+/* ==========================================================================
+   Выбор точки самовывоза (новый view в правой панели)
+   ========================================================================== */
+
+.shop-pickup-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.shop-pickup-list-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.shop-pickup-list {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+/* Используем те же классы что и для адресов для единообразия */
+.shop-pickup-list .shop-address-row {
+  cursor: pointer;
+}
+
+.shop-pickup-list .shop-address-card {
+  position: relative;
+  padding-right: 40px; /* место для галочки */
+}
+
+.shop-pickup-list .shop-address-row.is-selected .shop-address-card {
+  border-color: var(--shop-buy);
+  background: transparent;
+}
+
+.shop-pickup-list .shop-address-check-icon {
+  position: absolute;
+  top: 50%;
+  right: 16px;
+  transform: translateY(-50%);
+  color: var(--shop-buy);
+  font-size: 20px;
 }

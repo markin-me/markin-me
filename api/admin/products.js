@@ -197,17 +197,17 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       if (!Number.isFinite(categoryId)) return res.status(400).json({ ok: false, error: 'BAD_CATEGORY_ID' });
 
       if (categoryId === allCategoryId) {
-        const [rows] = await db.query(
-          `SELECT p.*, pc.sort_order AS link_sort_order, s.qty AS stock_qty
-           FROM prod_products p
-           LEFT JOIN prod_product_stocks s
-             ON s.tenant_id = p.tenant_id AND s.store_id = p.store_id AND s.product_id = p.id
-           LEFT JOIN prod_product_categories pc
-             ON pc.tenant_id = p.tenant_id AND pc.product_id = p.id AND pc.category_id = ?
-           WHERE p.tenant_id=? AND p.store_id=?
-           ORDER BY COALESCE(pc.sort_order, 999999) ASC, p.id ASC`,
-          [categoryId, tenantId, storeId]
-        );
+    const [rows] = await db.query(
+        `SELECT p.*, pc.sort_order AS link_sort_order, s.qty AS stock_qty
+         FROM prod_products p
+         LEFT JOIN prod_product_stocks s
+           ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+         LEFT JOIN prod_product_categories pc
+           ON pc.tenant_id = p.tenant_id AND pc.product_id = p.id AND pc.category_id = ?
+         WHERE p.tenant_id=?
+         ORDER BY COALESCE(pc.sort_order, 999999) ASC, p.id ASC`,
+        [storeId, categoryId, tenantId]
+      );
 
         const missing = [];
         for (const r of rows) {
@@ -243,10 +243,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
          JOIN prod_products p
            ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
          LEFT JOIN prod_product_stocks s
-           ON s.tenant_id = p.tenant_id AND s.store_id = p.store_id AND s.product_id = p.id
-         WHERE pc.tenant_id=? AND pc.category_id=? AND p.store_id=?
+           ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+         WHERE pc.tenant_id=? AND pc.category_id=?
          ORDER BY pc.sort_order ASC, pc.id ASC`,
-        [tenantId, categoryId, storeId]
+        [storeId, tenantId, categoryId]
       );
 
       for (const r of rows) r.photos = helpers.safeJsonArray(r.photos_json);

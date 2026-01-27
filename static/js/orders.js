@@ -5,17 +5,21 @@
   const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
 
   async function apiJson(url, opts = {}) {
-    // Получаем токен из localStorage
+    // Получаем токен и store_id из localStorage
     const token = localStorage.getItem('authToken');
+    const storeId = localStorage.getItem('activeStoreId') || '1';
     const headers = {
       ...(opts.body ? { "Content-Type": "application/json" } : {}),
       ...(opts.headers || {}),
     };
-    
+
     // Добавляем токен авторизации, если он есть
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
+
+    // Добавляем ID выбранной точки продаж
+    headers['x-store-id'] = storeId;
     
     const res = await fetch(url, {
       method: opts.method || "GET",
@@ -1671,4 +1675,11 @@
   }
 
   init();
+
+  // Слушать изменение точки продаж
+  document.addEventListener('tenantStoreChanged', (event) => {
+    console.log('Точка продаж изменена:', event.detail.store);
+    // Перезагрузить заказы для новой точки
+    loadAndRenderOrders(false);
+  });
 })();
