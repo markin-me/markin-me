@@ -10722,9 +10722,9 @@ function updateOptionGroupSelectionUi() {
     requestAnimationFrame(refreshOpenAccordions);
   });
 
-  // Слушать изменение точки продаж
+  // Слушать изменение Филиалы
   document.addEventListener('tenantStoreChanged', async (event) => {
-    console.log('Точка продаж изменена (products):', event.detail.store);
+    console.log('Филиал изменен (products):', event.detail.store);
     // Перезагрузить товары и категории для новой точки
     await refreshAll();
   });

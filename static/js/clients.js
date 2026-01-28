@@ -538,9 +538,9 @@
   // -----------------------------
   loadClients().catch(console.error);
 
-  // Слушать изменение точки продаж
+  // Слушать изменение Филиалы
   document.addEventListener('tenantStoreChanged', (event) => {
-    console.log('Точка продаж изменена (clients):', event.detail.store);
+    console.log('Филиал изменен (clients):', event.detail.store);
     // Перезагрузить клиентов для новой точки
     loadClients().catch(console.error);
   });

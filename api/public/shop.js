@@ -401,6 +401,72 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  /**
+   * GET /stores-availability
+   * Returns all stores with their current open/closed status
+   * Used when customer selects a city to show which stores can accept orders
+   */
+  router.get('/stores-availability', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const city = req.query.city;
+
+      if (!city) {
+        return res.status(400).json({ ok: false, error: 'CITY_REQUIRED' });
+      }
+
+      // Get all stores in this city
+      const [stores] = await db.query(
+        `SELECT id, name, city, address, phone, timezone, is_active
+         FROM ten_stores
+         WHERE tenant_id=? AND city=? AND is_active=1
+         ORDER BY sort ASC, id ASC`,
+        [tenantId, city]
+      );
+
+      // For each store, check if it's currently open
+      const storesWithStatus = await Promise.all(stores.map(async (store) => {
+        // Get store hours
+        const [storeHours] = await db.query(
+          `SELECT day_of_week, opens_at, closes_at, is_closed
+           FROM ten_store_hours
+           WHERE tenant_id=? AND store_id=?
+           ORDER BY day_of_week ASC`,
+          [tenantId, store.id]
+        );
+
+        // Get delivery hours
+        const [deliveryHours] = await db.query(
+          `SELECT day_of_week, opens_at, closes_at, is_closed
+           FROM ten_store_delivery_hours
+           WHERE tenant_id=? AND store_id=?
+           ORDER BY day_of_week ASC`,
+          [tenantId, store.id]
+        );
+
+        const storeTimezone = store.timezone || "+0";
+        const isOpen = isStoreOpenNow(storeHours, storeTimezone);
+        const deliveryIsOpen = isStoreDeliveryOpenNow(deliveryHours, storeTimezone);
+
+        return {
+          ...store,
+          isOpen,
+          deliveryIsOpen,
+          storeHours,
+          deliveryHours
+        };
+      }));
+
+      res.json({
+        ok: true,
+        stores: storesWithStatus
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   // PUT /api/public/me  body: { name }
   router.put('/me', async (req, res) => {
     try {
@@ -1533,6 +1599,25 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return minutes >= opens && minutes < closes;
   }
 
+  /**
+   * Check if store is currently open (based on regular hours, not delivery hours)
+   */
+  function isStoreOpenNow(hours, timezoneOffset) {
+    if (!Array.isArray(hours) || !hours.length) return false;
+    if (!timezoneOffset && timezoneOffset !== 0) timezoneOffset = "+0";
+    const ts = getStoreLocalTimestamp(timezoneOffset);
+    const local = new Date(ts);
+    const day = local.getUTCDay();
+    const minutes = local.getUTCHours() * 60 + local.getUTCMinutes();
+    const entry = hours.find((row) => Number(row.day_of_week) === day);
+    if (!entry) return false;
+    if (Number(entry.is_closed) === 1) return false;
+    const opens = parseDeliveryTimeMinutes(entry.opens_at);
+    const closes = parseDeliveryTimeMinutes(entry.closes_at);
+    if (opens === null || closes === null) return false;
+    return minutes >= opens && minutes < closes;
+  }
+
   // ------------------------------
   // order-config (для оформления)
   // ВАЖНО: твой фронт ждёт methods / payments / timeOptions
@@ -1583,6 +1668,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const store = storeRows[0] || null;
       const storeTimezone = store?.timezone || "+0";
 
+      const [storeHours] = await db.query(
+        `SELECT day_of_week, opens_at, closes_at, is_closed
+         FROM ten_store_hours
+         WHERE tenant_id=? AND store_id=?
+         ORDER BY day_of_week ASC`,
+        [tenantId, storeId]
+      );
+
       const [deliveryHours] = await db.query(
         `SELECT day_of_week, opens_at, closes_at, is_closed
          FROM ten_store_delivery_hours
@@ -1590,6 +1683,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          ORDER BY day_of_week ASC`,
         [tenantId, storeId]
       );
+
+      const storeIsOpen = isStoreOpenNow(storeHours, storeTimezone);
       const deliveryIsOpen = isStoreDeliveryOpenNow(deliveryHours, storeTimezone);
 
       res.json({
@@ -1599,8 +1694,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           payments,
           methods,
           timeOptions,
+          storeHours,
           storeDeliveryHours: deliveryHours,
           storeTimezone,
+          storeIsOpen,
           deliveryIsOpen
         }
       });

@@ -18,7 +18,7 @@
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    // Добавляем ID выбранной точки продаж
+    // Добавляем ID выбранной Филиалы
     headers['x-store-id'] = storeId;
     
     const res = await fetch(url, {
@@ -1676,9 +1676,9 @@
 
   init();
 
-  // Слушать изменение точки продаж
+  // Слушать изменение Филиалы
   document.addEventListener('tenantStoreChanged', (event) => {
-    console.log('Точка продаж изменена:', event.detail.store);
+    console.log('Филиал изменен:', event.detail.store);
     // Перезагрузить заказы для новой точки
     loadAndRenderOrders(false);
   });

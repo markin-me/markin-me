@@ -41,8 +41,8 @@
   --column-bottom-gap:32px;
 
   /* ✅ Switch vars */
-  --switch-w:46px;
-  --switch-h:28px;
+  --switch-w:40px;
+  --switch-h:25px;
   --switch-pad:3px;
   --switch-on:var(--color-primary);
   --switch-off-bg:var(--color-surface-2);
@@ -702,6 +702,14 @@ header{
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.user-menu-time {
+  font-size: 0.813rem;
+  color: var(--color-text-secondary);
+  font-family: 'Courier New', monospace;
+  margin-top: 4px;
+  text-align: left;
 }
 
 .user-menu-divider {
@@ -3218,7 +3226,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   display:inline-flex;
   align-items:center;
   justify-content:flex-start;
-  gap:10px;
+  gap:8px;
   line-height:1;
   vertical-align:middle;
   min-height:var(--switch-h);
@@ -3235,7 +3243,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 .switch-ui{
   width:var(--switch-w);
   height:var(--switch-h);
-  border-radius:999px;
+  border-radius:12px;
   background:var(--switch-off-bg);
   border:1px solid var(--switch-off-border);
   box-sizing:border-box;
@@ -3246,6 +3254,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   transition:
     background var(--dur-fast) var(--ease-smooth),
     border-color var(--dur-fast) var(--ease-smooth);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
 }
 
 .switch-ui::after{
@@ -3253,14 +3262,15 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   position:absolute;
   top:var(--switch-pad);
   left:var(--switch-pad);
-  width:calc(var(--switch-h) - (var(--switch-pad) * 2));
-  height:calc(var(--switch-h) - (var(--switch-pad) * 2));
-  border-radius:999px;
+  width:calc(var(--switch-h) - (var(--switch-pad) * 2) - 2px);
+  height:calc(var(--switch-h) - (var(--switch-pad) * 2) - 2px);
+  border-radius:10px;
   background:var(--switch-knob);
-  box-shadow:var(--switch-shadow);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
   transform:translateX(0);
   transition:transform var(--dur-fast) var(--ease-smooth);
   will-change:transform;
+  box-sizing:border-box;
 }
 
 .switch-input:checked + .switch-ui{
@@ -3268,7 +3278,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   border-color:transparent;
 }
 .switch-input:checked + .switch-ui::after{
-  transform:translateX(calc(var(--switch-w) - var(--switch-h)));
+  transform:translateX(calc(var(--switch-w) - var(--switch-h) + 2px));
 }
 
 .switch-input:focus-visible + .switch-ui{

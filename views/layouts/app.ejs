@@ -55,6 +55,7 @@
 
   <!-- Скрипты -->
   <script src="/static/js/auth.js"></script>
+  <script src="/static/js/current-time.js"></script>
   <script src="/static/js/theme.js"></script>
   <script src="/static/js/sidebar.js"></script>
 
@@ -139,6 +140,14 @@
         // Обновляем информацию при загрузке
         updateUserInfo();
 
+        // ===== Часы текущего времени филиала =====
+        var timeEl = document.getElementById('userMenuTime');
+        var clockStop = null;
+
+        if (timeEl && typeof CurrentTime !== 'undefined') {
+          clockStop = CurrentTime.startClock(timeEl);
+        }
+
         // ===== Селектор точек продаж =====
         var storeButton = document.getElementById('userMenuStoreButton');
         var storeDropdown = document.getElementById('userMenuStoreDropdown');
@@ -198,7 +207,7 @@
 
         function updateStoreName(store) {
           if (storeName && store) {
-            storeName.textContent = store.name || store.city || 'Точка продаж';
+            storeName.textContent = store.name || store.city || 'Филиал #' + store.id;
           }
         }
 
@@ -225,15 +234,14 @@
                 return;
               }
 
-              currentStoreId = String(store.id);
-              localStorage.setItem('activeStoreId', currentStoreId);
+              // Stop clock before reload
+              if (clockStop) clockStop();
 
-              updateStoreName(store);
-              renderStoreOptions();
+              // Save new store ID
+              localStorage.setItem('activeStoreId', String(store.id));
 
-              // Диспатчить событие для перезагрузки данных
-              var event = new CustomEvent('tenantStoreChanged', { detail: { store: store } });
-              document.dispatchEvent(event);
+              // Reload page to update all data with new timezone
+              window.location.reload();
 
               storeDropdown.classList.add('hidden');
             });

@@ -2265,6 +2265,9 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   position: relative;
   width: 100%;
 }
+.shop-checkout-dropdown-wrap:has(.shop-checkout-dropdown.is-open){
+  z-index: 1000;
+}
 
 .shop-checkout-select{
   position: relative;
@@ -2297,11 +2300,18 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   border-radius: 12px;
   box-shadow: var(--shadow-sm);
   display: none;
-  z-index: 5;
+  z-index: 1000;
 }
 
 .shop-checkout-dropdown.is-open{
   display: grid;
+}
+
+/* Убираем overflow у родителей когда dropdown открыт — иначе список обрезается */
+.shop-checkout-content:has(.shop-checkout-dropdown.is-open),
+.app-modal-body:has(.shop-checkout-dropdown.is-open),
+.panel-body:has(.shop-checkout-dropdown.is-open){
+  overflow: visible !important;
 }
 
 .shop-checkout-option{
@@ -3069,4 +3079,26 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 
 .store-hours-switch-control {
   margin-left: 0;
+}
+
+/* Store status notice in toolbar */
+.toolbar-status {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  font-weight: 400;
+  margin-left: 12px;
+  padding-left: 12px;
+  border-left: 1px solid var(--color-border);
+}
+
+.toolbar-status:empty,
+.toolbar-status.hidden {
+  display: none;
+}
+
+/* Hide on mobile to save space */
+@media (max-width: 768px) {
+  .toolbar-status {
+    display: none;
+  }
 }

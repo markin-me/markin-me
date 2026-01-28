@@ -368,6 +368,73 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
     }
   });
 
+  /**
+   * GET /api/admin/tenant/current-time
+   * Returns current server time converted to the timezone of the active store
+   */
+  router.get('/current-time', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const storeId = req.headers['x-store-id'];
+
+      if (!tenantId) {
+        return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      }
+
+      // Get store timezone, fallback to tenant timezone, then UTC
+      let timezone = '+0';
+
+      if (storeId) {
+        const [storeRows] = await db.query(
+          'SELECT timezone FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+          [tenantId, storeId]
+        );
+        if (storeRows[0]?.timezone) {
+          timezone = storeRows[0].timezone;
+        }
+      }
+
+      // If no store timezone, get tenant timezone
+      if (timezone === '+0' || !timezone) {
+        const [tenantRows] = await db.query(
+          'SELECT timezone FROM ten_tenants WHERE id=? LIMIT 1',
+          [tenantId]
+        );
+        if (tenantRows[0]?.timezone) {
+          timezone = tenantRows[0].timezone;
+        }
+      }
+
+      // Calculate current time in the store's timezone
+      const offsetHours = Number.isNaN(Number(timezone)) ? 0 : Number(timezone);
+      const offsetMs = offsetHours * 60 * 60 * 1000;
+      const utcNow = Date.now();
+      const localTimestamp = utcNow + offsetMs;
+      const localDate = new Date(localTimestamp);
+
+      res.json({
+        ok: true,
+        data: {
+          utcTimestamp: utcNow,
+          localTimestamp: localTimestamp,
+          timezone: timezone,
+          localTime: {
+            hours: localDate.getUTCHours(),
+            minutes: localDate.getUTCMinutes(),
+            seconds: localDate.getUTCSeconds(),
+            day: localDate.getUTCDay(),
+            date: localDate.getUTCDate(),
+            month: localDate.getUTCMonth(),
+            year: localDate.getUTCFullYear()
+          }
+        }
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
+    }
+  });
+
   async function getNextStoreId(tenantId) {
     const [rows] = await db.query(
       'SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM ten_stores WHERE tenant_id=?',
@@ -464,7 +531,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const store = await fetchStoreWithHours(tenantId, nextId);
       res.json({ ok: true, store });
       } catch (err) {
-        console.error('Ошибка создания точки продаж:', err);
+        console.error('Ошибка создания Филиалы:', err);
         res.status(500).json({ ok: false, error: 'DB_ERROR' });
       }
     });
@@ -570,7 +637,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         const store = await fetchStoreWithHours(tenantId, id);
         res.json({ ok: true, store });
       } catch (err) {
-        console.error('Ошибка обновления точки продаж:', err);
+        console.error('Ошибка обновления Филиалы:', err);
         res.status(500).json({ ok: false, error: 'DB_ERROR' });
       }
     });

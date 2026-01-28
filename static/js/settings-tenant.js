@@ -241,7 +241,7 @@
       const data = await res.json();
       return data || null;
     } catch (err) {
-      console.error("Не удалось загрузить точки продаж:", err);
+      console.error("Не удалось загрузить Филиалы:", err);
       return null;
     }
   }
@@ -295,7 +295,7 @@
         document.body.setAttribute("data-settings-section", section);
         const isStores = section === "stores";
         if (settingsCenterTitle) {
-          settingsCenterTitle.textContent = isStores ? "Точки продаж" : "Профиль компании";
+          settingsCenterTitle.textContent = isStores ? "Филиалы" : "Профиль компании";
         }
         if (settingsCenterSubtitle) {
           settingsCenterSubtitle.textContent = isStores ? "Загрузка..." : "";
@@ -887,7 +887,7 @@
         payload.delivery_hours = buildDeliveryHoursPayload();
 
         if (!payload.name) {
-          alert("Введите название точки продаж.");
+          alert("Введите название Филиалы.");
           return;
         }
 
@@ -1138,7 +1138,7 @@
     }
 
     function openStoreTab(tabId, title) {
-      ensureTab(tabId, title || "Точка продаж");
+      ensureTab(tabId, title || "Филиал");
       if (rightHeader) rightHeader.classList.remove("hidden");
       if (rightTabs) rightTabs.classList.remove("hidden");
       setActiveRightTab(tabId);
@@ -1153,7 +1153,7 @@
       } else {
         storeTabs.set(tabId, { mode: "edit", storeId: store.id, snapshot: { ...store } });
       }
-      openStoreTab(tabId, store.name || "Точка продаж");
+      openStoreTab(tabId, store.name || "Филиал");
       if (rightDefault) rightDefault.classList.add("hidden");
     }
 

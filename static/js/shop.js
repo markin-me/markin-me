@@ -8967,6 +8967,106 @@ function setBottomNavActive(tab) {
     return orderConfigCache;
   }
 
+  /**
+   * Calculate the next opening time for the store
+   * @param {Array} hours - Store hours array from API
+   * @param {string} timezone - Store timezone offset (e.g., "+3")
+   * @returns {Object|null} - { dayName: 'Пн', time: '10:00', isToday: false } or null if always closed
+   */
+  function getNextOpeningTime(hours, timezone) {
+    if (!Array.isArray(hours) || !hours.length) return null;
+
+    const dayNames = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+
+    // Get current store local time
+    const offsetHours = Number.isNaN(Number(timezone)) ? 0 : Number(timezone);
+    const offsetMs = offsetHours * 60 * 60 * 1000;
+    const localNow = Date.now() + offsetMs;
+    const localDate = new Date(localNow);
+
+    const currentDay = localDate.getUTCDay();
+    const currentMinutes = localDate.getUTCHours() * 60 + localDate.getUTCMinutes();
+
+    // Helper to parse time string to minutes
+    function parseTimeToMinutes(timeStr) {
+      if (!timeStr) return null;
+      const match = timeStr.match(/(\d{1,2}):(\d{2})/);
+      if (!match) return null;
+      return parseInt(match[1]) * 60 + parseInt(match[2]);
+    }
+
+    // Check next 7 days
+    for (let offset = 0; offset < 7; offset++) {
+      const checkDay = (currentDay + offset) % 7;
+      const entry = hours.find(h => Number(h.day_of_week) === checkDay);
+
+      if (!entry || Number(entry.is_closed) === 1) continue;
+
+      const opensAt = parseTimeToMinutes(entry.opens_at);
+      if (opensAt === null) continue;
+
+      // If checking today, only consider if opening time is in the future
+      if (offset === 0 && currentMinutes >= opensAt) continue;
+
+      // Found next opening
+      const hoursVal = Math.floor(opensAt / 60);
+      const mins = opensAt % 60;
+      const timeStr = `${String(hoursVal).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+
+      return {
+        dayName: dayNames[checkDay],
+        time: timeStr,
+        isToday: offset === 0
+      };
+    }
+
+    return null; // No opening time found in next 7 days
+  }
+
+  /**
+   * Update the store status notice in the toolbar
+   */
+  async function updateStoreStatus() {
+    const statusEl = $("#shopToolbarStatus");
+    if (!statusEl) return;
+
+    try {
+      const config = await getOrderConfig();
+      if (!config) return;
+
+      const { storeIsOpen, storeHours, storeTimezone } = config;
+
+      // If store is open, hide status
+      if (storeIsOpen) {
+        statusEl.classList.add("hidden");
+        return;
+      }
+
+      // Store is closed - calculate next opening
+      const nextOpening = getNextOpeningTime(storeHours, storeTimezone);
+
+      if (!nextOpening) {
+        // No opening time found
+        statusEl.textContent = "Мы закрыты";
+        statusEl.classList.remove("hidden");
+        return;
+      }
+
+      // Format message
+      let message = "Мы закрыты. ";
+      if (nextOpening.isToday) {
+        message += `Откроемся сегодня в ${nextOpening.time}`;
+      } else {
+        message += `Откроемся ${nextOpening.dayName} в ${nextOpening.time}`;
+      }
+
+      statusEl.textContent = message;
+      statusEl.classList.remove("hidden");
+    } catch (err) {
+      console.error("Failed to update store status:", err);
+    }
+  }
+
   function buildDropdown(options, value) {
     const wrap = document.createElement("div");
     wrap.className = "shop-checkout-dropdown-wrap";
@@ -9282,7 +9382,7 @@ function setBottomNavActive(tab) {
     pickupAddress.readOnly = true;
     pickupAddress.setAttribute("data-role", "pickup-address");
 
-    // Загрузить точки продаж и установить текущую
+    // Загрузить Филиалы и установить текущую
     let pickupStores = [];
     let selectedPickupStoreId = null;
 
@@ -9385,7 +9485,7 @@ function setBottomNavActive(tab) {
 
     const timeOptions = (cfg.timeOptions || []).map(x => ({ code: x.code, title: x.title }));
     const deliveryIsOpen = Boolean(cfg.deliveryIsOpen);
-    const filteredTimeOptions = deliveryIsOpen ? timeOptions : timeOptions.filter((opt) => opt.code === "on_date");
+    const filteredTimeOptions = deliveryIsOpen ? timeOptions : timeOptions.filter((opt) => opt.code !== "asap");
     const availableTimeOptions = filteredTimeOptions.length ? filteredTimeOptions : timeOptions;
     const timeDefault = pickDefaultCode(availableTimeOptions, draft.time_option_code, deliveryIsOpen ? "asap" : "on_date");
     const timeSelect = buildDropdown(availableTimeOptions, timeDefault);
@@ -9957,6 +10057,7 @@ async function init() {
     await loadUnitConversions();
     renderCategories();
     renderCategoryChips();
+    updateStoreStatus();
 
     const visibleCategories = getVisibleCategories();
     const first = visibleCategories[0] || null;
