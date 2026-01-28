@@ -389,6 +389,57 @@ header{
     display: none;
   }
 
+/* Clients list: phone in one line, no wrapping */
+.clients-panel .order-line.muted{
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.clients-panel .order-line.muted .client-phone{
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Clients-specific row layout: tighter right column and responsive middle */
+.clients-panel .order-row{
+  grid-template-columns: 64px minmax(200px, 1fr) 80px !important;
+}
+
+.clients-panel .order-main{ /* compact left */
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+
+.clients-panel .order-mid{ /* ensure mid column can shrink */
+  min-width:0;
+}
+
+.clients-panel .order-actions{ /* align pill to right and make it compact */
+  display:flex;
+  justify-content:flex-end;
+}
+
+.clients-panel .pill{
+  padding:6px 10px;
+  font-size:13px;
+  height:32px;
+  line-height:20px;
+  min-width:40px;
+  max-width:80px;
+  box-sizing:border-box;
+}
+
+@media (max-width:768px){
+  .clients-panel .order-row{
+    grid-template-columns: 56px minmax(160px, 1fr) 64px !important;
+  }
+  .clients-panel .pill{ font-size:12px; padding:6px 8px; height:28px; }
+}
+
   .shop-mobile-address-actions {
     display: flex;
     align-items: center;
