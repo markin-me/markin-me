@@ -1715,6 +1715,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
 
+      // Получаем timezone филиала для правильной записи времени
+      const [storeForTz] = await db.query(
+        'SELECT timezone FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, storeId]
+      );
+      const storeTimezone = storeForTz[0]?.timezone || '+0';
+
       // auth customer (optional)
       const token = str(req.headers['x-customer-token']);
       const authCustomer = token ? await getCustomerByToken(tenantId, token) : null;
@@ -2319,6 +2326,19 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       const publicId = makeUuid36();
 
+      // Вычисляем локальное время филиала для created_at
+      // Date.now() возвращает UTC timestamp, добавляем offset филиала
+      const tzOffsetHours = Number.isNaN(Number(storeTimezone)) ? 0 : Number(storeTimezone);
+      const tzOffsetMs = tzOffsetHours * 60 * 60 * 1000;
+      const storeLocalTime = new Date(Date.now() + tzOffsetMs);
+      // Форматируем как YYYY-MM-DD HH:MM:SS (локальное время филиала)
+      const createdAt = storeLocalTime.getUTCFullYear() + '-' +
+        String(storeLocalTime.getUTCMonth() + 1).padStart(2, '0') + '-' +
+        String(storeLocalTime.getUTCDate()).padStart(2, '0') + ' ' +
+        String(storeLocalTime.getUTCHours()).padStart(2, '0') + ':' +
+        String(storeLocalTime.getUTCMinutes()).padStart(2, '0') + ':' +
+        String(storeLocalTime.getUTCSeconds()).padStart(2, '0');
+
       // ВАЖНО: никаких updated_at тут нет (в твоей таблице order_orders его нет)
       const [r] = await db.query(
         `INSERT INTO order_orders
@@ -2326,9 +2346,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           address, delivery_address_id, pickup_store_id, comment, cutlery_qty, change_from,
           items, total_price,
           delivery_type_id, payment_id, time_option_id,
-          status_id, status_sort, scheduled_at,
+          status_id, status_sort, scheduled_at, created_at,
           created_via, is_active, public_id)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
         [
           tenantId,
           storeId,
@@ -2350,6 +2370,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           statusId,
           0, // status_sort
           scheduledAt,
+          createdAt, // Явно передаём UTC время из Node.js
           publicId,
         ]
       );

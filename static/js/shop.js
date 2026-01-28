@@ -9067,6 +9067,56 @@ function setBottomNavActive(tab) {
     }
   }
 
+  /**
+   * Get store opening time for today
+   * @param {Array} storeHours - Store hours array from API
+   * @param {number} currentDay - Day of week (0-6, Sunday-Saturday)
+   * @returns {number|null} - Opening time in minutes from midnight, or null if closed
+   */
+  function getStoreOpeningTime(storeHours, currentDay) {
+    if (!Array.isArray(storeHours) || !storeHours.length) return null;
+
+    const entry = storeHours.find(h => Number(h.day_of_week) === currentDay);
+    if (!entry || Number(entry.is_closed) === 1) return null;
+
+    const match = entry.opens_at?.match(/(\d{1,2}):(\d{2})/);
+    if (!match) return null;
+
+    return parseInt(match[1]) * 60 + parseInt(match[2]);
+  }
+
+  /**
+   * Determine which time segment we're in for time option filtering
+   * @param {boolean} storeIsOpen - Is store currently open
+   * @param {string} storeTimezone - Store timezone offset (e.g., "+7")
+   * @param {Array} storeHours - Store hours array from API
+   * @returns {string} - "OPEN" | "CLOSED_BEFORE_MIDNIGHT" | "CLOSED_AFTER_MIDNIGHT"
+   */
+  function getTimeSegment(storeIsOpen, storeTimezone, storeHours) {
+    // If store is open, easy case
+    if (storeIsOpen) return "OPEN";
+
+    // Store is closed - check if we're before or after midnight
+    const offsetHours = Number.isNaN(Number(storeTimezone)) ? 0 : Number(storeTimezone);
+    const offsetMs = offsetHours * 60 * 60 * 1000;
+    const localNow = Date.now() + offsetMs;
+    const localDate = new Date(localNow);
+
+    const currentDay = localDate.getUTCDay();
+    const currentMinutes = localDate.getUTCHours() * 60 + localDate.getUTCMinutes();
+
+    // Get store opening time for today
+    const openingMinutes = getStoreOpeningTime(storeHours, currentDay);
+
+    // If no opening time today, or if current time is before opening time
+    if (openingMinutes !== null && currentMinutes < openingMinutes) {
+      return "CLOSED_AFTER_MIDNIGHT";
+    }
+
+    // Otherwise, we're after store closed but before midnight (or store closed all day)
+    return "CLOSED_BEFORE_MIDNIGHT";
+  }
+
   function buildDropdown(options, value) {
     const wrap = document.createElement("div");
     wrap.className = "shop-checkout-dropdown-wrap";
@@ -9151,11 +9201,28 @@ function setBottomNavActive(tab) {
     return fallback || null;
   }
 
-  function getTodayDateString() {
-    const d = new Date();
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
+  /**
+   * Get current date in store's timezone
+   * @param {string} timezone - Timezone offset (e.g., "+7")
+   * @returns {Date} - Date object representing current time in store timezone
+   */
+  function getStoreDateNow(timezone) {
+    const offsetHours = Number.isNaN(Number(timezone)) ? 0 : Number(timezone);
+    const offsetMs = offsetHours * 60 * 60 * 1000;
+    const localNow = Date.now() + offsetMs;
+    return new Date(localNow);
+  }
+
+  /**
+   * Get today's date string in YYYY-MM-DD format using store timezone
+   * @param {string} timezone - Timezone offset (e.g., "+7")
+   * @returns {string} - Date string in format "YYYY-MM-DD"
+   */
+  function getTodayDateString(timezone) {
+    const d = timezone ? getStoreDateNow(timezone) : new Date();
+    const yyyy = d.getUTCFullYear();
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(d.getUTCDate()).padStart(2, "0");
     return `${yyyy}-${mm}-${dd}`;
   }
 
@@ -9484,10 +9551,39 @@ function setBottomNavActive(tab) {
     wrap.appendChild(timeLabel);
 
     const timeOptions = (cfg.timeOptions || []).map(x => ({ code: x.code, title: x.title }));
-    const deliveryIsOpen = Boolean(cfg.deliveryIsOpen);
-    const filteredTimeOptions = deliveryIsOpen ? timeOptions : timeOptions.filter((opt) => opt.code !== "asap");
+    const storeIsOpen = Boolean(cfg.storeIsOpen);
+    const storeTimezone = cfg.storeTimezone || "+0";
+    const storeHours = cfg.storeHours || [];
+    const timeSegment = getTimeSegment(storeIsOpen, storeTimezone, storeHours);
+
+    // Filter options based on time segment
+    let filteredTimeOptions = timeOptions;
+    let defaultFallback = "asap";
+
+    if (timeSegment === "OPEN") {
+      // Rule 1: Store open - all options available, default "asap"
+      filteredTimeOptions = timeOptions;
+      defaultFallback = "asap";
+
+    } else if (timeSegment === "CLOSED_BEFORE_MIDNIGHT") {
+      // Rule 2: After closing, before midnight - only "on_date"
+      filteredTimeOptions = timeOptions.filter(opt => opt.code === "on_date");
+      defaultFallback = "on_date";
+
+    } else if (timeSegment === "CLOSED_AFTER_MIDNIGHT") {
+      // Rule 3: After midnight, before opening - "at_time" and "on_date"
+      filteredTimeOptions = timeOptions.filter(opt =>
+        opt.code === "at_time" || opt.code === "on_date"
+      );
+      defaultFallback = "at_time";
+    }
+
     const availableTimeOptions = filteredTimeOptions.length ? filteredTimeOptions : timeOptions;
-    const timeDefault = pickDefaultCode(availableTimeOptions, draft.time_option_code, deliveryIsOpen ? "asap" : "on_date");
+
+    // Always use defaultFallback for the segment, ignore saved draft
+    // Draft can cause wrong defaults (e.g., "on_date" when store is OPEN and should be "asap")
+    const timeDefault = availableTimeOptions[0]?.code || defaultFallback;
+
     const timeSelect = buildDropdown(availableTimeOptions, timeDefault);
 
     // --- Hidden input для итогового значения времени ---
@@ -9985,10 +10081,12 @@ function setBottomNavActive(tab) {
           alert("Укажите время");
           return;
         }
+        // Use store timezone to ensure correct date is used
+        const storeTimezone = cfg.storeTimezone || "+0";
         if (payload.time_option_code === "on_date") {
           payload.scheduled_at = `${getDateString(selectedDate)} ${timeInput.value}:00`;
         } else {
-          payload.scheduled_at = `${getTodayDateString()} ${timeInput.value}:00`;
+          payload.scheduled_at = `${getTodayDateString(storeTimezone)} ${timeInput.value}:00`;
         }
       }
 

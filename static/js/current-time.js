@@ -10,8 +10,8 @@
   // Format timezone offset for display (e.g., "+3" -> "UTC+3")
   function formatTimezone(offset) {
     if (!offset || offset === '+0' || offset === '0') return 'UTC';
-    const sign = offset.startsWith('-') ? '' : '+';
-    return 'UTC' + sign + offset;
+    // offset уже содержит знак
+    return 'UTC' + offset;
   }
 
   window.CurrentTime = {
@@ -32,12 +32,15 @@
           const data = await response.json();
 
           if (data.ok && data.data) {
-            currentTimezone = data.data.timezone || '+0';
-            const serverTime = data.data.localTimestamp;
+            // Получаем timezone филиала
+            currentTimezone = data.data.storeTimezone || '+0';
+
+            // Получаем время филиала с сервера
+            const storeTime = data.data.storeTimestamp;
             const clientTime = Date.now();
 
-            // Calculate offset between server and client
-            offsetMs = serverTime - clientTime;
+            // Вычисляем разницу между временем филиала и браузером
+            offsetMs = storeTime - clientTime;
 
             updateDisplay();
           }

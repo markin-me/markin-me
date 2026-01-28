@@ -13,6 +13,8 @@ const pool = mysql.createPool({
   connectTimeout: 20000, // Увеличено до 20 секунд
   enableKeepAlive: true,
   keepAliveInitialDelay: 0,
+  // Не используем параметр timezone - пусть MySQL работает как есть
+  // Вместо этого будем корректировать отображение на фронтенде
 });
 
 pool.getConnection((err, conn) => {
@@ -29,6 +31,7 @@ pool.getConnection((err, conn) => {
     console.error('  3. Файрвол не блокирует порт 3306');
     return;
   }
+
   console.log('✅ Подключение к MySQL успешно!');
   conn.release();
 });

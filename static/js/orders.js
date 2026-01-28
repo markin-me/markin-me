@@ -104,6 +104,7 @@
     activeOrderId: null,
     draggingOrderId: null,
     lastEventId: null,
+    storeTimezone: "+0",
     date: {
       start: null,
       end: null,
@@ -123,22 +124,31 @@
 
   function formatTime(ts) {
     if (!ts) return "";
-    const d = new Date(ts);
+    // Время в базе уже в timezone филиала, просто парсим и показываем
+    const dateStr = String(ts).replace(' ', 'T');
+    const d = new Date(dateStr);
     if (Number.isNaN(d.getTime())) return "";
-    return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
   }
 
   function formatDateTime(ts) {
     if (!ts) return "";
-    const d = new Date(ts);
+    // Время в базе уже в timezone филиала, просто парсим и показываем
+    const dateStr = String(ts).replace(' ', 'T');
+    const d = new Date(dateStr);
     if (Number.isNaN(d.getTime())) return "";
-    return d.toLocaleString("ru-RU", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = d.getMonth();
+    const year = d.getFullYear();
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+
+    const monthNames = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+    return `${day} ${monthNames[month]} ${year}, ${hours}:${minutes}`;
   }
 
   function escapeHtml(s) {
@@ -162,6 +172,22 @@
     const mm = String(d.getMonth() + 1).padStart(2, "0");
     const dd = String(d.getDate()).padStart(2, "0");
     return `${yyyy}-${mm}-${dd}`;
+  }
+
+  /**
+   * Get current date in store's timezone
+   * Returns a Date object that when accessed with local methods (.getFullYear(), .getDate(), etc.)
+   * gives the correct date/time for the store's timezone
+   */
+  function getStoreDateNow(timezone) {
+    const storeOffsetHours = Number.isNaN(Number(timezone)) ? 0 : Number(timezone);
+    const now = new Date();
+    // Browser offset in hours (positive for east of UTC)
+    const browserOffsetHours = -now.getTimezoneOffset() / 60;
+    // Difference between store and browser timezones
+    const diffHours = storeOffsetHours - browserOffsetHours;
+    // Adjust timestamp so that local methods return store's date/time
+    return new Date(now.getTime() + diffHours * 60 * 60 * 1000);
   }
 
   function parseDateKey(s) {
@@ -715,11 +741,17 @@
     }
 
     if (state.date.start && state.date.end) {
-      const d = new Date(order.created_at);
+      // Use scheduled_at if available, otherwise fall back to created_at
+      const dateStr = order.scheduled_at || order.created_at;
+      // Время в базе уже в timezone филиала
+      const d = new Date(String(dateStr).replace(' ', 'T'));
       if (Number.isNaN(d.getTime())) return false;
+
+      // Сравниваем даты напрямую
       const key = toDateKey(d);
       const startKey = toDateKey(state.date.start);
       const endKey = toDateKey(state.date.end);
+
       if (key < startKey || key > endKey) return false;
     }
 
@@ -1001,7 +1033,8 @@
     const first = new Date(year, month, 1);
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const offset = (first.getDay() + 6) % 7;
-    const todayKey = toDateKey(new Date());
+    // Используем getStoreDateNow для определения "сегодня" в часовом поясе филиала
+    const todayKey = toDateKey(getStoreDateNow(state.storeTimezone));
 
     const monthTitle = first.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
     dateTitle.textContent = monthTitle.charAt(0).toUpperCase() + monthTitle.slice(1);
@@ -1090,7 +1123,7 @@
   }
 
   function resetDateFilter() {
-    const today = new Date();
+    const today = getStoreDateNow(state.storeTimezone);
     state.date.start = today;
     state.date.end = today;
     state.date.viewYear = today.getFullYear();
@@ -1398,14 +1431,17 @@
 
   // Функция генерации HTML для чека
   function generateReceiptHTML(order) {
-    const date = new Date(order.created_at);
-    const dateStr = date.toLocaleString("ru-RU", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    // Время в базе уже в timezone филиала
+    const createdAtStr = String(order.created_at).replace(' ', 'T');
+    const date = new Date(createdAtStr);
+
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+
+    const dateStr = `${day}.${month}.${year}, ${hours}:${minutes}`;
 
     let itemsHtml = '';
     if (order.items && Array.isArray(order.items)) {
@@ -1656,11 +1692,25 @@
   // -----------------------------
   async function init() {
     try {
-      const today = new Date();
-      state.date.start = today;
-      state.date.end = today;
-      state.date.viewYear = today.getFullYear();
-      state.date.viewMonth = today.getMonth();
+      // Load store timezone from API (not from localStorage)
+      try {
+        const response = await apiJson('/api/admin/tenant/current-time');
+        if (response.ok && response.data) {
+          state.storeTimezone = response.data.storeTimezone || "+0";
+        } else {
+          state.storeTimezone = "+0";
+        }
+      } catch (err) {
+        console.error("Failed to load store timezone:", err);
+        state.storeTimezone = "+0";
+      }
+
+      // Initialize date filter with store's current date
+      const storeNow = getStoreDateNow(state.storeTimezone);
+      state.date.start = storeNow;
+      state.date.end = storeNow;
+      state.date.viewYear = storeNow.getFullYear();
+      state.date.viewMonth = storeNow.getMonth();
 
       renderCalendar();
       updateDateLabel();

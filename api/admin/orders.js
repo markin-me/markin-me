@@ -126,7 +126,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const storeId = helpers.getStoreId(req);
       const range = normalizeDateRange(req.query.start_date, req.query.end_date);
 
-      const joinDate = range ? "AND DATE(o.created_at) BETWEEN ? AND ?" : "";
+      // Use scheduled_at if available, otherwise fall back to created_at
+      const joinDate = range ? "AND DATE(COALESCE(o.scheduled_at, o.created_at)) BETWEEN ? AND ?" : "";
 
       const params = [];
       if (range) params.push(range.start, range.end);
@@ -193,7 +194,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
 
       if (range) {
-        where += ` AND DATE(o.created_at) BETWEEN ? AND ?`;
+        // Use scheduled_at if available, otherwise fall back to created_at
+        where += ` AND DATE(COALESCE(o.scheduled_at, o.created_at)) BETWEEN ? AND ?`;
         params.push(range.start, range.end);
       }
 

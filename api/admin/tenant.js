@@ -251,7 +251,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
 
   /**
    * GET /api/admin/tenant
-   * Возвращает Профиль компании (tenant) для текущего пользователя
+   * Возвращает Компания (tenant) для текущего пользователя
    */
   router.get('/', async (req, res) => {
     try {
@@ -381,51 +381,52 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       }
 
-      // Get store timezone, fallback to tenant timezone, then UTC
-      let timezone = '+0';
-
+      // Получаем timezone филиала
+      let storeTimezone = '+0';
       if (storeId) {
         const [storeRows] = await db.query(
           'SELECT timezone FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
           [tenantId, storeId]
         );
         if (storeRows[0]?.timezone) {
-          timezone = storeRows[0].timezone;
+          storeTimezone = storeRows[0].timezone;
         }
       }
 
-      // If no store timezone, get tenant timezone
-      if (timezone === '+0' || !timezone) {
+      // Если нет timezone у филиала, берем у тенанта
+      if (!storeTimezone || storeTimezone === '+0') {
         const [tenantRows] = await db.query(
           'SELECT timezone FROM ten_tenants WHERE id=? LIMIT 1',
           [tenantId]
         );
         if (tenantRows[0]?.timezone) {
-          timezone = tenantRows[0].timezone;
+          storeTimezone = tenantRows[0].timezone;
         }
       }
 
-      // Calculate current time in the store's timezone
-      const offsetHours = Number.isNaN(Number(timezone)) ? 0 : Number(timezone);
+      // Получаем РЕАЛЬНОЕ UTC время (не от MySQL, а от Node.js)
+      const realUtcNow = Date.now();
+
+      // Вычисляем время филиала
+      const offsetHours = Number.isNaN(Number(storeTimezone)) ? 0 : Number(storeTimezone);
       const offsetMs = offsetHours * 60 * 60 * 1000;
-      const utcNow = Date.now();
-      const localTimestamp = utcNow + offsetMs;
-      const localDate = new Date(localTimestamp);
+      const storeTime = realUtcNow + offsetMs;
+      const storeDate = new Date(storeTime);
 
       res.json({
         ok: true,
         data: {
-          utcTimestamp: utcNow,
-          localTimestamp: localTimestamp,
-          timezone: timezone,
+          storeTimezone: storeTimezone,
+          utcTimestamp: realUtcNow,
+          storeTimestamp: storeTime,
           localTime: {
-            hours: localDate.getUTCHours(),
-            minutes: localDate.getUTCMinutes(),
-            seconds: localDate.getUTCSeconds(),
-            day: localDate.getUTCDay(),
-            date: localDate.getUTCDate(),
-            month: localDate.getUTCMonth(),
-            year: localDate.getUTCFullYear()
+            hours: storeDate.getUTCHours(),
+            minutes: storeDate.getUTCMinutes(),
+            seconds: storeDate.getUTCSeconds(),
+            day: storeDate.getUTCDay(),
+            date: storeDate.getUTCDate(),
+            month: storeDate.getUTCMonth(),
+            year: storeDate.getUTCFullYear()
           }
         }
       });
