@@ -2141,6 +2141,20 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   white-space: nowrap;
 }
 
+.shop-address-card-hours{
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
+.shop-address-row.is-closed{
+  opacity: 0.6;
+}
+
+.shop-address-row.is-closed .shop-address-card-hours{
+  color: var(--color-danger, #dc3545);
+}
+
 .shop-address-actions--compact{
   margin-top: 0;
 }

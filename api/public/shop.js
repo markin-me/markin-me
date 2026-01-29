@@ -390,11 +390,32 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const [rows] = await db.query(
         `SELECT tenant_id, id, code, name, city, address, phone, timezone, is_active
          FROM ten_stores
-         WHERE tenant_id=?
+         WHERE tenant_id=? AND is_active=1
          ORDER BY id ASC`,
         [tenantId]
       );
-      res.json({ ok: true, stores: rows || [] });
+
+      // Для каждого филиала загружаем часы работы и проверяем статус
+      const storesWithHours = await Promise.all(rows.map(async (store) => {
+        const [storeHours] = await db.query(
+          `SELECT day_of_week, opens_at, closes_at, is_closed
+           FROM ten_store_hours
+           WHERE tenant_id=? AND store_id=?
+           ORDER BY day_of_week ASC`,
+          [tenantId, store.id]
+        );
+
+        const storeTimezone = store.timezone || "+0";
+        const isOpen = isStoreOpenNow(storeHours, storeTimezone);
+
+        return {
+          ...store,
+          storeHours,
+          isOpen
+        };
+      }));
+
+      res.json({ ok: true, stores: storesWithHours });
     } catch (err) {
       console.error('Ошибка получения точек продаж:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });

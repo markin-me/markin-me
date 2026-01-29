@@ -119,7 +119,7 @@ app.use((req, res, next) => {
   return renderShop(req, res);
 });
 
-app.get('/', (req, res) => res.redirect('/login'));
+app.get('/', (req, res) => res.render('pages/saas'));
 
 app.get('/login', (req, res) => {
   try {

@@ -1,0 +1,55 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  background: #fff;
+  color: #1a1a1a;
+}
+
+.saas-header {
+  border-bottom: 1px solid #e5e5e5;
+}
+
+.saas-header__content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.saas-header__left {
+  flex: 1;
+}
+
+.saas-header__right {
+  display: flex;
+  align-items: center;
+}
+
+.saas-btn {
+  display: inline-block;
+  padding: 10px 24px;
+  background: #1a1a1a;
+  color: #fff;
+  text-decoration: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.saas-btn:hover {
+  background: #333;
+}
+
+.saas-main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+}

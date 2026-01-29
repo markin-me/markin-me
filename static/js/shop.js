@@ -1952,8 +1952,11 @@ function showProductView() {
       const isSelected = currentStoreId && Number(store.id) === Number(currentStoreId);
       if (isSelected) row.classList.add("is-selected");
 
-      const parts = [store.city, store.address].filter(Boolean);
-      const fullAddress = parts.join(', ') || store.name || 'Точка #' + store.id;
+      // Добавляем класс для закрытых точек
+      if (store.isOpen === false) row.classList.add("is-closed");
+
+      // Убираем город из адреса (город виден в хедере)
+      const fullAddress = store.address || store.name || 'Точка #' + store.id;
 
       const card = document.createElement("div");
       card.className = "shop-address-card";
@@ -1970,6 +1973,15 @@ function showProductView() {
       subEl.className = "shop-address-card-sub";
       subEl.textContent = fullAddress;
       main.appendChild(subEl);
+
+      // Добавляем часы работы на сегодня
+      const hoursText = formatTodayHours(store.storeHours, store.timezone);
+      if (hoursText) {
+        const hoursEl = document.createElement("div");
+        hoursEl.className = "shop-address-card-hours";
+        hoursEl.textContent = hoursText;
+        main.appendChild(hoursEl);
+      }
 
       card.appendChild(main);
 
@@ -7093,8 +7105,11 @@ function showSheetAddressList(backMode) {
       const isSelected = currentStoreId && Number(store.id) === Number(currentStoreId);
       if (isSelected) row.classList.add("is-selected");
 
-      const parts = [store.city, store.address].filter(Boolean);
-      const fullAddress = parts.join(', ') || store.name || 'Точка #' + store.id;
+      // Добавляем класс для закрытых точек
+      if (store.isOpen === false) row.classList.add("is-closed");
+
+      // Убираем город из адреса (город виден в хедере)
+      const fullAddress = store.address || store.name || 'Точка #' + store.id;
 
       const card = document.createElement("div");
       card.className = "shop-address-card";
@@ -7111,6 +7126,15 @@ function showSheetAddressList(backMode) {
       subEl.className = "shop-address-card-sub";
       subEl.textContent = fullAddress;
       main.appendChild(subEl);
+
+      // Добавляем часы работы на сегодня
+      const hoursText = formatTodayHours(store.storeHours, store.timezone);
+      if (hoursText) {
+        const hoursEl = document.createElement("div");
+        hoursEl.className = "shop-address-card-hours";
+        hoursEl.textContent = hoursText;
+        main.appendChild(hoursEl);
+      }
 
       card.appendChild(main);
 
@@ -9029,6 +9053,39 @@ function setBottomNavActive(tab) {
   }
 
   /**
+   * Форматирует часы работы на сегодня для отображения в карточке
+   * @param {Array} storeHours - Массив часов работы
+   * @param {string} timezone - Часовой пояс магазина
+   * @returns {string} - Строка вида "Сегодня: 10:00–22:00" или "Сегодня: выходной"
+   */
+  function formatTodayHours(storeHours, timezone) {
+    if (!Array.isArray(storeHours) || !storeHours.length) return '';
+
+    // Получаем текущий день недели по времени магазина
+    const offsetHours = Number.isNaN(Number(timezone)) ? 0 : Number(timezone);
+    const now = new Date();
+    const utcMs = now.getTime() + now.getTimezoneOffset() * 60 * 1000;
+    const localMs = utcMs + offsetHours * 60 * 60 * 1000;
+    const localDate = new Date(localMs);
+    const currentDay = localDate.getDay();
+
+    const entry = storeHours.find(h => Number(h.day_of_week) === currentDay);
+
+    if (!entry || Number(entry.is_closed) === 1) {
+      return 'Сегодня: выходной';
+    }
+
+    const opens = entry.opens_at ? entry.opens_at.slice(0, 5) : '';
+    const closes = entry.closes_at ? entry.closes_at.slice(0, 5) : '';
+
+    if (opens && closes) {
+      return `Сегодня: ${opens}–${closes}`;
+    }
+
+    return '';
+  }
+
+  /**
    * Update the store status notice in the toolbar
    */
   async function updateStoreStatus() {
@@ -9516,8 +9573,8 @@ function setBottomNavActive(tab) {
 
       const store = pickupStores.find(s => Number(s.id) === Number(selectedPickupStoreId));
       if (store) {
-        const parts = [store.city, store.address].filter(Boolean);
-        pickupAddress.value = parts.join(', ') || store.name || '—';
+        // Убираем город из адреса (город виден в хедере)
+        pickupAddress.value = store.address || store.name || '—';
       }
     }
 
