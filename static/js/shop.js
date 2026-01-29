@@ -9175,6 +9175,11 @@ function setBottomNavActive(tab) {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       list.classList.toggle("is-open");
+      if (list.classList.contains("is-open")) {
+        setTimeout(() => {
+          list.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }, 10);
+      }
     });
 
     document.addEventListener("click", (e) => {
@@ -9316,6 +9321,14 @@ function setBottomNavActive(tab) {
       return;
     }
 
+    // Вычисляем сумму заказа для фильтрации опций сдачи
+    const orderTotal = items.reduce((sum, i) => {
+      const base = Number(i.variant_unit_price || i.product?.price || 0);
+      const opt = optionItemsTotal(i.option_items || []);
+      const ing = Number(i.ingredient_price_diff || 0);
+      return sum + (base + opt + ing) * i.qty;
+    }, 0);
+
     const cfg = await getOrderConfig();
     const draft = loadCheckoutDraft();
 
@@ -9336,45 +9349,50 @@ function setBottomNavActive(tab) {
     title.textContent = "Ваш заказ:";
     wrap.appendChild(title);
 
-    const emptyNote = document.createElement("div");
-    emptyNote.className = "shop-checkout-note muted";
-    emptyNote.textContent = "Поля обязательные: имя и телефон.";
-    wrap.appendChild(emptyNote);
+    // Поля имя и телефон только для неавторизованных
+    let name = { value: me ? str(me.name || "") : "" };
+    let phone = { value: me ? (me.phone || "") : "" };
 
-    const nameRow = document.createElement("div");
-    nameRow.className = "shop-checkout-grid-row";
-
-    const nameWrap = document.createElement("div");
-    const nameLabel = document.createElement("label");
-    nameLabel.className = "field-label";
-    nameLabel.textContent = "Имя";
-    const name = document.createElement("input");
-    name.className = "control shop-checkout-name";
-    name.type = "text";
-    name.value = me ? str(me.name || "") : (draft.customer_name || "");
-    nameWrap.appendChild(nameLabel);
-    nameWrap.appendChild(name);
-
-    const phoneWrap = document.createElement("div");
-    const phoneLabel = document.createElement("label");
-    phoneLabel.className = "field-label";
-    phoneLabel.textContent = "Телефон";
-    const phone = document.createElement("input");
-    phone.className = "control shop-checkout-phone";
-    phone.type = "tel";
-    phone.placeholder = "+7 (999) 000-00-00";
-    phone.value = me ? formatPhonePlus7(me.phone || "") : (draft.customer_phone || "");
-    if (me) phone.disabled = true;
     if (!me) {
-      phone.addEventListener("input", () => enforcePhonePrefix(phone));
-      phone.addEventListener("focus", () => enforcePhonePrefix(phone));
-    }
-    phoneWrap.appendChild(phoneLabel);
-    phoneWrap.appendChild(phone);
+      const emptyNote = document.createElement("div");
+      emptyNote.className = "shop-checkout-note muted";
+      emptyNote.textContent = "Поля обязательные: имя и телефон.";
+      wrap.appendChild(emptyNote);
 
-    nameRow.appendChild(nameWrap);
-    nameRow.appendChild(phoneWrap);
-    wrap.appendChild(nameRow);
+      const nameRow = document.createElement("div");
+      nameRow.className = "shop-checkout-grid-row";
+
+      const nameWrap = document.createElement("div");
+      const nameLabel = document.createElement("label");
+      nameLabel.className = "field-label";
+      nameLabel.textContent = "Имя";
+      const nameInput = document.createElement("input");
+      nameInput.className = "control shop-checkout-name";
+      nameInput.type = "text";
+      nameInput.value = draft.customer_name || "";
+      nameWrap.appendChild(nameLabel);
+      nameWrap.appendChild(nameInput);
+      name = nameInput;
+
+      const phoneWrap = document.createElement("div");
+      const phoneLabel = document.createElement("label");
+      phoneLabel.className = "field-label";
+      phoneLabel.textContent = "Телефон";
+      const phoneInput = document.createElement("input");
+      phoneInput.className = "control shop-checkout-phone";
+      phoneInput.type = "tel";
+      phoneInput.placeholder = "+7 (999) 000-00-00";
+      phoneInput.value = draft.customer_phone || "";
+      phoneInput.addEventListener("input", () => enforcePhonePrefix(phoneInput));
+      phoneInput.addEventListener("focus", () => enforcePhonePrefix(phoneInput));
+      phoneWrap.appendChild(phoneLabel);
+      phoneWrap.appendChild(phoneInput);
+      phone = phoneInput;
+
+      nameRow.appendChild(nameWrap);
+      nameRow.appendChild(phoneWrap);
+      wrap.appendChild(nameRow);
+    }
 
     const methods = (cfg.methods || []).map(x => ({ code: x.code, title: x.title }));
     const methodUserSelected = Boolean(draft.method_user_selected);
@@ -9888,11 +9906,14 @@ function setBottomNavActive(tab) {
     const payDefault = pickDefaultCode(payments, draft.payment_code, "cash");
     const paySelect = buildDropdown(payments, payDefault);
 
+    const changeAmounts = [500, 1000, 2000, 5000].filter(v => v > orderTotal);
     const changeOptions = [
       { code: "", title: "Сдача не нужна" },
-      ...[500, 1000, 2000, 5000].map(v => ({ code: String(v), title: String(v) })),
+      ...changeAmounts.map(v => ({ code: String(v), title: String(v) })),
+      { code: "custom", title: "Другая сумма" },
     ];
-    const changeDefault = draft.change_from ? String(draft.change_from) : "";
+    const isCustomChange = draft.change_from && !changeAmounts.includes(draft.change_from);
+    const changeDefault = isCustomChange ? "custom" : (draft.change_from ? String(draft.change_from) : "");
     const changeSelect = buildDropdown(changeOptions, changeDefault);
 
     const payWrap = document.createElement("div");
@@ -9910,6 +9931,23 @@ function setBottomNavActive(tab) {
     changeWrap.appendChild(changeLabel);
     changeWrap.appendChild(changeSelect.root);
 
+    const changeCustomInput = document.createElement("input");
+    const minChangeAmount = Math.ceil(orderTotal) + 1;
+    changeCustomInput.className = "control shop-checkout-change-custom";
+    changeCustomInput.type = "number";
+    changeCustomInput.min = String(minChangeAmount);
+    changeCustomInput.placeholder = `Больше ${Math.ceil(orderTotal)}`;
+    changeCustomInput.value = isCustomChange ? String(draft.change_from) : "";
+    changeCustomInput.style.display = isCustomChange ? "" : "none";
+    changeCustomInput.addEventListener("blur", () => {
+      const val = parseInt(changeCustomInput.value, 10);
+      if (val && val <= orderTotal) {
+        changeCustomInput.value = "";
+        alert(`Сумма должна быть больше ${Math.ceil(orderTotal)} ₽`);
+      }
+    });
+    changeWrap.appendChild(changeCustomInput);
+
     const payRow = document.createElement("div");
     payRow.className = "shop-checkout-grid-row shop-checkout-grid-row--two";
     payRow.appendChild(payWrap);
@@ -9917,21 +9955,27 @@ function setBottomNavActive(tab) {
     wrap.appendChild(payRow);
 
     function refreshChangeVisibility() {
-      changeWrap.style.display = (paySelect.getValue() === "cash") ? "" : "none";
+      const isCash = paySelect.getValue() === "cash";
+      changeWrap.style.display = isCash ? "" : "none";
+      const isCustom = changeSelect.getValue() === "custom";
+      changeCustomInput.style.display = (isCash && isCustom) ? "" : "none";
     }
     paySelect.root.addEventListener("change", refreshChangeVisibility);
+    changeSelect.root.addEventListener("change", refreshChangeVisibility);
     refreshChangeVisibility();
 
-    const promoLabel = document.createElement("label");
-    promoLabel.className = "field-label";
-    promoLabel.textContent = "Промокод";
-    const promo = document.createElement("input");
-    promo.className = "control";
-    promo.type = "text";
-    promo.placeholder = "";
-    promo.value = draft.promo_code || "";
-    wrap.appendChild(promoLabel);
-    wrap.appendChild(promo);
+    function getChangeFromValue() {
+      const val = changeSelect.getValue();
+      if (!val) return null;
+      if (val === "custom") {
+        const customVal = parseInt(changeCustomInput.value, 10);
+        return customVal > 0 ? customVal : null;
+      }
+      return Number(val);
+    }
+
+    // Промокод временно скрыт
+    const promo = { value: draft.promo_code || "" };
 
       if (hasAddressEditor) {
         changeAddrBtn.addEventListener("click", async () => {
@@ -9949,7 +9993,7 @@ function setBottomNavActive(tab) {
             scheduled_at: timeInput.value || "",
             scheduled_date: getDateString(selectedDate),
             payment_code: paySelect.getValue() || payDefault || "cash",
-            change_from: changeSelect.getValue() ? Number(changeSelect.getValue()) : null,
+            change_from: getChangeFromValue(),
           });
           if (typeof onEditAddress === "function") onEditAddress();
           else await openAddressEditorFromCheckout();
@@ -9979,7 +10023,7 @@ function setBottomNavActive(tab) {
           scheduled_at: timeInput.value || "",
           scheduled_date: getDateString(selectedDate),
           payment_code: paySelect.getValue() || payDefault || "cash",
-          change_from: changeSelect.getValue() ? Number(changeSelect.getValue()) : null,
+          change_from: getChangeFromValue(),
         });
 
         // Переключаем на pickup view (sheet или panel)
@@ -10007,7 +10051,7 @@ function setBottomNavActive(tab) {
         scheduled_at: null,
         payment_code: paySelect.getValue() || payDefault || "cash",
         cutlery_qty: 0,
-        change_from: changeSelect.getValue() ? Number(changeSelect.getValue()) : null,
+        change_from: getChangeFromValue(),
         items: cartItemsResolved().map(x => {
           // Рассчитываем итоговую цену товара (базовая + опции + разница ингредиентов + варианты)
           const old = Number(x.product.old_price || 0);

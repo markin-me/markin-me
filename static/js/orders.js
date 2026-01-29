@@ -67,6 +67,7 @@
 
     payMethod: $$('[data-info="payment-method"]'),
     payIcon: $$('[data-info="payment-icon"]'),
+    changeFrom: $$('[data-info="change-from"]'),
     total: $$('[data-info="order-total"]'),
 
     deliveryType: $$('[data-info="delivery-type"]'),
@@ -574,13 +575,27 @@
       el.innerHTML = `<i class="fas ${paymentIcon(order.payment_code)}"></i>`;
     });
 
+    const changeFrom = order.change_from;
+    const orderTotalNum = Number(order.total_price) || 0;
+    if (changeFrom && changeFrom > orderTotalNum) {
+      const changeAmount = changeFrom - orderTotalNum;
+      setTextAll(infoEls.changeFrom, `Сдача с ${money(changeFrom)} (подготовить ${money(changeAmount)})`);
+    } else {
+      setTextAll(infoEls.changeFrom, changeFrom ? `Сдача с ${money(changeFrom)}` : "");
+    }
+    setHiddenAll(infoEls.changeFrom, !changeFrom);
+
     const qty = totalQty(order.items || []);
     setTextAll(infoEls.deliveryQty, `${qty} шт.`);
 
     const methodTitle = order.method_title || (order.method_code === "pickup" ? "Самовывоз" : "Доставка");
     setTextAll(infoEls.deliveryType, methodTitle || "?");
 
-    const intervalText = order.time_option_title || (order.scheduled_at ? formatTime(order.scheduled_at) : "");
+    let intervalText = order.time_option_title || "";
+    if (order.scheduled_at) {
+      const scheduledStr = formatDateTime(order.scheduled_at);
+      intervalText = intervalText ? `${intervalText}: ${scheduledStr}` : scheduledStr;
+    }
     setTextAll(infoEls.deliveryInterval, intervalText);
     setHiddenAll(infoEls.deliveryInterval, !intervalText);
 

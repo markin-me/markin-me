@@ -182,6 +182,10 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
     z-index: 140;
   }
 
+  body.page-shop .logo-text{
+    display: none;
+  }
+
   body.page-shop .center-stack > .panel:first-child{
     display: none;
   }
@@ -2288,6 +2292,11 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   content: "▾";
   font-size: 12px;
   color: var(--color-text-muted);
+}
+
+.shop-checkout-change-custom{
+  margin-top: 8px;
+  width: 100%;
 }
 
 .shop-checkout-dropdown{

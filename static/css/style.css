@@ -132,7 +132,7 @@ header{
 .logo{display:flex;align-items:center;gap:.75rem;user-select:none}
 .logo-icon{
   width:36px;height:36px;border-radius:var(--radius-md);
-  background:var(--color-primary);color:var(--on-primary);
+  background:var(--color-surface-2);color:var(--color-text-muted);
   display:flex;align-items:center;justify-content:center;
   font-weight:800;font-size:1rem;
 }
