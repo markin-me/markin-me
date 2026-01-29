@@ -2254,6 +2254,17 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   align-items: center;
 }
 
+.shop-checkout-delivery-info{
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.shop-checkout-total-row{
+  margin-top: 6px;
+  font-weight: 700;
+}
+
 .shop-checkout-grid-row .control{
   min-width: 0;
   width: 100%;

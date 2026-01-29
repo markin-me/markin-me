@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Хост: 10.0.231.119
--- Время создания: Янв 28 2026 г., 19:12
+-- Время создания: Янв 29 2026 г., 14:11
 -- Версия сервера: 8.0.37-29
 -- Версия PHP: 7.2.34
 
@@ -165,7 +165,7 @@ CREATE TABLE `app_users` (
 --
 
 INSERT INTO `app_users` (`id`, `tenant_id`, `email`, `phone`, `password_hash`, `name`, `role`, `is_active`, `last_login_at`, `created_at`, `updated_at`) VALUES
-(1, 1, 'admin@test.ru', NULL, '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', 'Владелец', 'owner', 1, '2026-01-27 18:16:03', '2026-01-21 13:15:27', '2026-01-27 15:16:03');
+(1, 1, 'admin@test.ru', NULL, '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', 'Владелец', 'owner', 1, '2026-01-29 10:29:56', '2026-01-21 13:15:27', '2026-01-29 07:29:56');
 
 -- --------------------------------------------------------
 
@@ -287,12 +287,13 @@ INSERT INTO `cust_customer_sessions` (`id`, `tenant_id`, `store_id`, `customer_i
 (22, 1, 1, 1, 'ce8c84e7c1154c16a422f3deb89a4243', '2026-01-24 07:02:22', '2026-02-23 07:02:22', 1),
 (23, 1, 1, 1, '157fd23fc9f14876897d6a395c197fba', '2026-01-24 10:32:32', '2026-02-23 10:32:32', 1),
 (24, 1, 1, 1, 'e07f062bc2744a8eb618f620fce65dc7', '2026-01-24 15:48:57', '2026-02-23 15:48:57', 1),
-(25, 1, 1, 1, '296a3d8dbaed4572af1b9ddc9655f771', '2026-01-25 14:14:07', '2026-02-24 14:14:07', 1),
+(25, 1, 1, 1, '296a3d8dbaed4572af1b9ddc9655f771', '2026-01-25 14:14:07', '2026-02-24 14:14:07', 0),
 (26, 1, 1, 1, 'b8ca9d340f4940ee90fe1a866b700a86', '2026-01-26 08:50:54', '2026-02-25 08:50:54', 1),
 (27, 1, 1, 4, '1f0613b5e2d44b4b9c565e730de9a04b', '2026-01-27 13:45:42', '2026-02-26 13:45:42', 1),
 (28, 1, 1, 4, 'be102fa131444db1ad877e446175e55c', '2026-01-27 13:59:47', '2026-02-26 13:59:47', 0),
 (29, 1, 1, 4, 'b5376e3188224a198e89cdc9a9e6330a', '2026-01-27 17:18:43', '2026-02-26 17:18:43', 1),
-(30, 1, 1, 4, '766ffa755b0348ebabc97cc95c352708', '2026-01-27 18:03:25', '2026-02-26 18:03:25', 1);
+(30, 1, 1, 4, '766ffa755b0348ebabc97cc95c352708', '2026-01-27 18:03:25', '2026-02-26 18:03:25', 1),
+(31, 1, 1, 1, '20e9cef3102743e58341aeac68d05c14', '2026-01-29 10:45:50', '2026-02-28 10:45:50', 1);
 
 -- --------------------------------------------------------
 
@@ -377,6 +378,7 @@ CREATE TABLE `order_orders` (
   `change_from` decimal(10,2) DEFAULT NULL,
   `items` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
   `total_price` decimal(10,2) DEFAULT NULL,
+  `delivery_cost` decimal(10,2) DEFAULT '0.00',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `delivery_type_id` int DEFAULT NULL,
   `payment_id` int DEFAULT NULL,
@@ -392,8 +394,13 @@ CREATE TABLE `order_orders` (
 -- Дамп данных таблицы `order_orders`
 --
 
-INSERT INTO `order_orders` (`id`, `public_id`, `tenant_id`, `store_id`, `customer_id`, `customer_name`, `customer_phone`, `promo_code`, `address`, `delivery_address_id`, `pickup_store_id`, `comment`, `cutlery_qty`, `change_from`, `items`, `total_price`, `created_at`, `delivery_type_id`, `payment_id`, `time_option_id`, `status_id`, `status_sort`, `scheduled_at`, `created_via`, `is_active`) VALUES
-(75, 'f5df5d15-218a-46c4-845f-138bf70e1de7', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, 1, NULL, 0, 234.00, '[{\"product_id\":6,\"name\":\"Рис с овощами\",\"qty\":1,\"price\":800,\"old_price\":179,\"line_total\":80,\"photos\":[\"/static/uploads/products/1/b7d5215763b1e8b3a3a05564c83352f0.jpg\"],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":0,\"group_title\":\"порц\",\"value\":\"100 г\",\"label\":\"100 г\",\"price_diff\":0}]}]', 80.00, '2026-01-28 23:00:02', 4, 1, 3, 1, 0, '2026-01-29 10:00:00', 'web', 1);
+INSERT INTO `order_orders` (`id`, `public_id`, `tenant_id`, `store_id`, `customer_id`, `customer_name`, `customer_phone`, `promo_code`, `address`, `delivery_address_id`, `pickup_store_id`, `comment`, `cutlery_qty`, `change_from`, `items`, `total_price`, `delivery_cost`, `created_at`, `delivery_type_id`, `payment_id`, `time_option_id`, `status_id`, `status_sort`, `scheduled_at`, `created_via`, `is_active`) VALUES
+(75, 'f5df5d15-218a-46c4-845f-138bf70e1de7', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, 1, NULL, 0, 234.00, '[{\"product_id\":6,\"name\":\"Рис с овощами\",\"qty\":1,\"price\":800,\"old_price\":179,\"line_total\":80,\"photos\":[\"/static/uploads/products/1/b7d5215763b1e8b3a3a05564c83352f0.jpg\"],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":0,\"group_title\":\"порц\",\"value\":\"100 г\",\"label\":\"100 г\",\"price_diff\":0}]}]', 80.00, 0.00, '2026-01-28 23:00:02', 4, 1, 3, 1, 0, '2026-01-29 10:00:00', 'web', 1),
+(76, '9a2bc549-cf71-40c7-abdc-d42684140d10', 1, 1, 1, 'Максим', '79021461966', NULL, 'Деповская 48, подъезд 2, этаж 3, кв 45', NULL, 1, NULL, 0, 1200.00, '[{\"product_id\":12,\"name\":\"Картофельное пюре\",\"qty\":1,\"price\":800,\"old_price\":0,\"line_total\":160,\"photos\":[\"/static/uploads/products/1/9fdc3cffd1457f84af2705bfc55c33a2.webp\"],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":1,\"group_title\":\"порц\",\"value\":\"200 г\",\"label\":\"200 г\",\"price_diff\":0}]},{\"product_id\":21,\"name\":\"Гречка с овощами\",\"qty\":1,\"price\":150,\"old_price\":0,\"line_total\":1008,\"photos\":[\"/static/uploads/products/1/ccbfd8c94a01992063130008a89452ca.webp\"],\"options\":[{\"id\":33,\"title\":\"Запеканка\",\"price\":299,\"qty\":2},{\"id\":34,\"title\":\"Картошка фриКартошка фриКартошка фри\",\"price\":10,\"qty\":2},{\"id\":35,\"title\":\"Кола\",\"price\":120,\"qty\":2}],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":0,\"group_title\":\"порц\",\"value\":\"100 г\",\"label\":\"100 г\",\"price_diff\":0}]}]', 1168.00, 0.00, '2026-01-28 23:39:41', 4, 1, 3, 1, 0, '2026-01-29 10:00:00', 'web', 1),
+(77, '35737bf8-da81-413a-bb65-da78d50c9aac', 1, 1, 1, 'Максим', '79021461966', NULL, NULL, NULL, 1, NULL, 0, 5000.00, '[{\"product_id\":12,\"name\":\"Картофельное пюре\",\"qty\":1,\"price\":800,\"old_price\":0,\"line_total\":160,\"photos\":[\"/static/uploads/products/1/9fdc3cffd1457f84af2705bfc55c33a2.webp\"],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":1,\"group_title\":\"порц\",\"value\":\"200 г\",\"label\":\"200 г\",\"price_diff\":0}]}]', 160.00, 0.00, '2026-01-29 14:46:17', 3, 1, 1, 1, 0, NULL, 'web', 1),
+(78, 'c7adae5c-9c9d-4da5-a801-6108381f7c4b', 1, 1, 1, 'Максим', '79021461966', NULL, NULL, NULL, 1, NULL, 0, 0.00, '[{\"product_id\":10,\"name\":\"Котлета с пюрешкой\",\"qty\":1,\"price\":299,\"old_price\":319,\"line_total\":299,\"photos\":[\"/static/uploads/products/1/48df187f637a1df0f3e763d1191989d8.jpg\"]}]', 299.00, 0.00, '2026-01-29 14:55:50', 3, 1, 1, 1, 0, NULL, 'web', 1),
+(79, '61a58dbe-70f4-4ea0-a4c1-a776fb700724', 1, 1, 1, 'Максим', '79021461966', NULL, NULL, NULL, 1, NULL, 0, 0.00, '[{\"product_id\":21,\"name\":\"Гречка с овощами\",\"qty\":1,\"price\":150,\"old_price\":0,\"line_total\":1008,\"photos\":[\"/static/uploads/products/1/ccbfd8c94a01992063130008a89452ca.webp\"],\"options\":[{\"id\":33,\"title\":\"Запеканка\",\"price\":299,\"qty\":2},{\"id\":34,\"title\":\"Картошка фриКартошка фриКартошка фри\",\"price\":10,\"qty\":2},{\"id\":35,\"title\":\"Кола\",\"price\":120,\"qty\":2}],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":0,\"group_title\":\"порц\",\"value\":\"100 г\",\"label\":\"100 г\",\"price_diff\":0}]}]', 1008.00, 0.00, '2026-01-29 14:57:04', 3, 1, 1, 1, 0, NULL, 'web', 1),
+(80, '467f0bd8-9ba7-43b2-9b5c-a8f3d7b2c58d', 1, 1, 1, 'Максим', '79021461966', NULL, NULL, NULL, 1, NULL, 0, 0.00, '[{\"product_id\":6,\"name\":\"Рис с овощами\",\"qty\":1,\"price\":800,\"old_price\":179,\"line_total\":80,\"photos\":[\"/static/uploads/products/1/b7d5215763b1e8b3a3a05564c83352f0.jpg\"],\"variants\":[{\"variant_group_id\":2,\"variant_value_index\":0,\"group_title\":\"порц\",\"value\":\"100 г\",\"label\":\"100 г\",\"price_diff\":0}]}]', 80.00, 0.00, '2026-01-29 14:59:20', 3, 1, 1, 1, 0, NULL, 'web', 1);
 
 -- --------------------------------------------------------
 
@@ -1065,8 +1072,6 @@ INSERT INTO `prod_variant_discount_tiers` (`id`, `tenant_id`, `store_id`, `varia
 (7, 1, 1, 2, 1.000, 0.00, 1, '2026-01-19 06:16:52', '2026-01-19 06:16:52'),
 (8, 1, 1, 2, 1.000, 0.00, 2, '2026-01-19 06:16:52', '2026-01-19 06:16:52'),
 (9, 1, 1, 2, 1.000, 0.00, 3, '2026-01-19 06:16:52', '2026-01-19 06:16:52'),
-(10, 1, 1, 3, 1.000, 0.00, 0, '2026-01-20 11:11:24', '2026-01-20 11:11:24'),
-(11, 1, 1, 3, 1.000, 0.00, 1, '2026-01-20 11:11:24', '2026-01-20 11:11:24'),
 (12, 1, 1, 1, 1.000, 0.00, 4, '2026-01-20 14:03:33', '2026-01-20 14:03:33');
 
 -- --------------------------------------------------------
@@ -1096,8 +1101,51 @@ CREATE TABLE `prod_variant_groups` (
 
 INSERT INTO `prod_variant_groups` (`id`, `tenant_id`, `store_id`, `title`, `unit_id`, `values`, `default_value_index`, `selection_type`, `is_active`, `sort_order`, `created_at`, `updated_at`) VALUES
 (1, 1, 1, 'шт', 1, '[\"1\",\"2\",\"3\",\"4\",\"5\"]', 1, 'single', 1, 0, '2026-01-18 15:54:47', '2026-01-21 06:26:12'),
-(2, 1, 1, 'порц', 3, '[\"100\",\"200\",\"300\",\"400\"]', 0, 'single', 1, 0, '2026-01-19 05:48:48', '2026-01-20 14:46:50'),
-(3, 1, 1, 'Штуки', 1, '[\"1\",\"2\"]', 0, 'single', 1, 0, '2026-01-20 11:11:24', '2026-01-20 14:46:50');
+(2, 1, 1, 'порц', 3, '[\"100\",\"200\",\"300\",\"400\"]', 0, 'single', 1, 0, '2026-01-19 05:48:48', '2026-01-20 14:46:50');
+
+-- --------------------------------------------------------
+
+--
+-- Структура таблицы `ten_delivery_settings`
+--
+
+CREATE TABLE `ten_delivery_settings` (
+  `id` int NOT NULL,
+  `tenant_id` int NOT NULL,
+  `name` varchar(255) COLLATE utf8mb3_unicode_ci NOT NULL,
+  `delivery_cost` decimal(10,2) DEFAULT '0.00',
+  `min_order_amount` decimal(10,2) DEFAULT '0.00',
+  `free_delivery_from` decimal(10,2) DEFAULT NULL,
+  `is_active` tinyint(1) DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_unicode_ci;
+
+--
+-- Дамп данных таблицы `ten_delivery_settings`
+--
+
+INSERT INTO `ten_delivery_settings` (`id`, `tenant_id`, `name`, `delivery_cost`, `min_order_amount`, `free_delivery_from`, `is_active`, `created_at`, `updated_at`) VALUES
+(1, 1, 'Доставка по Новоалтайску', 59.00, 0.00, 400.00, 1, '2026-01-29 11:10:45', '2026-01-29 11:10:45');
+
+-- --------------------------------------------------------
+
+--
+-- Структура таблицы `ten_delivery_settings_stores`
+--
+
+CREATE TABLE `ten_delivery_settings_stores` (
+  `delivery_setting_id` int NOT NULL,
+  `store_id` int NOT NULL,
+  `tenant_id` int NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_unicode_ci;
+
+--
+-- Дамп данных таблицы `ten_delivery_settings_stores`
+--
+
+INSERT INTO `ten_delivery_settings_stores` (`delivery_setting_id`, `store_id`, `tenant_id`) VALUES
+(1, 1, 1);
 
 -- --------------------------------------------------------
 
@@ -1490,6 +1538,20 @@ ALTER TABLE `prod_variant_groups`
   ADD KEY `fk_varntgrp_unit` (`unit_id`);
 
 --
+-- Индексы таблицы `ten_delivery_settings`
+--
+ALTER TABLE `ten_delivery_settings`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_tenant` (`tenant_id`);
+
+--
+-- Индексы таблицы `ten_delivery_settings_stores`
+--
+ALTER TABLE `ten_delivery_settings_stores`
+  ADD PRIMARY KEY (`delivery_setting_id`,`store_id`,`tenant_id`),
+  ADD KEY `idx_store` (`tenant_id`,`store_id`);
+
+--
 -- Индексы таблицы `ten_stores`
 --
 ALTER TABLE `ten_stores`
@@ -1542,7 +1604,7 @@ ALTER TABLE `cust_customer_addresses`
 -- AUTO_INCREMENT для таблицы `cust_customer_sessions`
 --
 ALTER TABLE `cust_customer_sessions`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=31;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=32;
 
 --
 -- AUTO_INCREMENT для таблицы `cust_statuses`
@@ -1675,6 +1737,12 @@ ALTER TABLE `prod_variant_discount_tiers`
 --
 ALTER TABLE `prod_variant_groups`
   MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+
+--
+-- AUTO_INCREMENT для таблицы `ten_delivery_settings`
+--
+ALTER TABLE `ten_delivery_settings`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
 
 --
 -- AUTO_INCREMENT для таблицы `ten_tenants`

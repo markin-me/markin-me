@@ -68,6 +68,8 @@
     payMethod: $$('[data-info="payment-method"]'),
     payIcon: $$('[data-info="payment-icon"]'),
     changeFrom: $$('[data-info="change-from"]'),
+    deliveryRow: $$('[data-info="delivery-row"]'),
+    deliveryCost: $$('[data-info="delivery-cost"]'),
     total: $$('[data-info="order-total"]'),
 
     deliveryType: $$('[data-info="delivery-type"]'),
@@ -569,6 +571,10 @@
 
     const payTitle = order.payment_title || "?";
     setTextAll(infoEls.payMethod, payTitle);
+    const isDelivery = order.method_code === "delivery";
+    const deliveryCost = Number(order.delivery_cost || 0);
+    setTextAll(infoEls.deliveryCost, money(deliveryCost));
+    setHiddenAll(infoEls.deliveryRow, !isDelivery);
     setTextAll(infoEls.total, money(order.total_price || 0));
     infoEls.payIcon.forEach((el) => {
       if (!el) return;

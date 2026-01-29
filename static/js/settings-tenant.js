@@ -372,6 +372,7 @@
     };
     const storeTabs = new Map();
     let activeRightTabId = "";
+    const DELIVERY_TAB_ID = "delivery-settings";
     const STORE_HOUR_DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
     const STORE_DAY_LABELS = {
       0: "Вс",
@@ -701,13 +702,15 @@
     }
     function setActiveRightTab(tabId) {
       activeRightTabId = tabId;
+      const section = document.body.getAttribute("data-settings-section");
+      const isDeliverySection = section === "delivery";
       if (rightTabs) {
         rightTabs.querySelectorAll(".product-tab").forEach((tab) => {
           tab.classList.toggle("is-active", tab.getAttribute("data-right-tab") === tabId);
         });
       }
 
-      if (rightDefault) rightDefault.classList.toggle("hidden", tabId !== "");
+      if (rightDefault) rightDefault.classList.toggle("hidden", tabId !== "" || isDeliverySection);
       if (logoPanel) logoPanel.classList.toggle("hidden", tabId !== "logo");
       if (sitePanel) sitePanel.classList.toggle("hidden", tabId !== "site");
       if (brandPanel) brandPanel.classList.toggle("hidden", tabId !== "brand");
@@ -715,11 +718,15 @@
       if (orderPaymentsPanel) orderPaymentsPanel.classList.toggle("hidden", tabId !== "order-payments");
       if (orderDeliveryPanel) orderDeliveryPanel.classList.toggle("hidden", tabId !== "order-delivery");
       if (orderTimeOptionsPanel) orderTimeOptionsPanel.classList.toggle("hidden", tabId !== "order-time-options");
+      if (settingsDeliveryPanel) settingsDeliveryPanel.classList.toggle("hidden", tabId !== DELIVERY_TAB_ID);
       if (settingsStorePanel) settingsStorePanel.classList.toggle("hidden", !tabId.startsWith("store-"));
       if (settingsStoreEmpty) {
-        const section = document.body.getAttribute("data-settings-section");
         const shouldShow = section === "stores" && tabId === "";
         settingsStoreEmpty.classList.toggle("hidden", !shouldShow);
+      }
+      if (settingsDeliveryEmpty) {
+        const shouldShow = isDeliverySection && tabId === "";
+        settingsDeliveryEmpty.classList.toggle("hidden", !shouldShow);
       }
 
       if (tabId === "order-statuses" || tabId === "order-payments" || tabId === "order-delivery" || tabId === "order-time-options") {
@@ -773,6 +780,12 @@
           if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.remove("is-active");
           if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.remove("is-active");
           if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.remove("is-active");
+          if (tabId === DELIVERY_TAB_ID) {
+            deliverySettingsState.selectedId = null;
+            deliverySettingsState.snapshot = null;
+            deliverySettingsState.mode = "view";
+            setActiveRightTab("");
+          }
           if (tabId.startsWith("store-")) {
             storeTabs.delete(tabId);
             if (activeRightTabId === tabId) {
@@ -862,10 +875,7 @@
     if (settingsAddOrderBtn) {
       settingsAddOrderBtn.addEventListener("click", () => {
         const section = document.body.getAttribute("data-settings-section");
-        if (section !== "stores") {
-          const storesBtn = document.querySelector("[data-settings-section=\"stores\"]");
-          if (storesBtn) storesBtn.click();
-        }
+        if (section !== "stores") return;
         startCreateStore();
       });
     }
@@ -1781,6 +1791,381 @@
         if (passInput) passInput.value = "";
         if (passConfirmInput) passConfirmInput.value = "";
         alert("\u041f\u0430\u0440\u043e\u043b\u044c \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d.");
+      });
+    }
+
+    // ========================================
+    // Delivery Settings
+    // ========================================
+    const deliveryPanel = document.getElementById("deliveryPanel");
+    const deliverySettingsList = document.getElementById("deliverySettingsList");
+    const deliveryEmpty = document.getElementById("deliveryEmpty");
+    const settingsDeliveryEmpty = document.getElementById("settingsDeliveryEmpty");
+    const settingsDeliveryPanel = document.getElementById("settingsDeliveryPanel");
+    const settingsDeliverySubtitle = document.getElementById("settingsDeliverySubtitle");
+    const settingsDeliveryName = document.getElementById("settingsDeliveryName");
+    const settingsDeliveryCost = document.getElementById("settingsDeliveryCost");
+    const settingsDeliveryMinOrder = document.getElementById("settingsDeliveryMinOrder");
+    const settingsDeliveryFreeFrom = document.getElementById("settingsDeliveryFreeFrom");
+    const settingsDeliveryActive = document.getElementById("settingsDeliveryActive");
+    const settingsDeliverySaveBtn = document.getElementById("settingsDeliverySaveBtn");
+    const settingsDeliverySaveText = document.getElementById("settingsDeliverySaveText");
+    const settingsDeliveryResetBtn = document.getElementById("settingsDeliveryResetBtn");
+    const settingsDeliveryDeleteBtn = document.getElementById("settingsDeliveryDeleteBtn");
+    const deliveryStoresList = document.getElementById("deliveryStoresList");
+
+    const deliverySettingsState = {
+      loaded: false,
+      items: [],
+      selectedId: null,
+      snapshot: null,
+      mode: "view"
+    };
+
+    async function fetchDeliverySettings() {
+      try {
+        const res = await authFetch("/api/admin/tenant/delivery-settings");
+        const data = await res.json();
+        return data || null;
+      } catch (err) {
+        console.error("Не удалось загрузить настройки доставки:", err);
+        return null;
+      }
+    }
+
+    async function createDeliverySetting(payload) {
+      try {
+        const res = await authFetch("/api/admin/tenant/delivery-settings", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        return data || null;
+      } catch (err) {
+        console.error("Не удалось создать настройку доставки:", err);
+        return null;
+      }
+    }
+
+    async function updateDeliverySetting(id, payload) {
+      try {
+        const res = await authFetch(`/api/admin/tenant/delivery-settings/${encodeURIComponent(id)}`, {
+          method: "PUT",
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        return data || null;
+      } catch (err) {
+        console.error("Не удалось обновить настройку доставки:", err);
+        return null;
+      }
+    }
+
+    async function deleteDeliverySetting(id) {
+      try {
+        const res = await authFetch(`/api/admin/tenant/delivery-settings/${encodeURIComponent(id)}`, {
+          method: "DELETE"
+        });
+        const data = await res.json();
+        return data || null;
+      } catch (err) {
+        console.error("Не удалось удалить настройку доставки:", err);
+        return null;
+      }
+    }
+
+    function renderDeliverySettingsList(items) {
+      if (!deliverySettingsList) return;
+      deliverySettingsList.innerHTML = "";
+      if (!items.length) {
+        if (deliveryEmpty) deliveryEmpty.classList.remove("hidden");
+        return;
+      }
+      if (deliveryEmpty) deliveryEmpty.classList.add("hidden");
+
+      items.forEach((setting) => {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "order-row product-row settings-card";
+        row.dataset.id = String(setting.id);
+
+        const avatar = document.createElement("div");
+        avatar.className = "product-avatar";
+        avatar.innerHTML = '<i class="fas fa-truck"></i>';
+
+        const info = document.createElement("div");
+        info.className = "order-col";
+
+        const title = document.createElement("div");
+        title.className = "product-title";
+        title.textContent = setting.name || `Настройка #${setting.id}`;
+
+        const subtitle = document.createElement("div");
+        subtitle.className = "muted";
+        const costText = setting.delivery_cost > 0 ? `${setting.delivery_cost} ₽` : "Бесплатно";
+        const storesCount = Array.isArray(setting.store_ids) ? setting.store_ids.length : 0;
+        subtitle.textContent = `${costText} • ${storesCount} филиал(ов)`;
+
+        info.appendChild(title);
+        info.appendChild(subtitle);
+
+        const action = document.createElement("div");
+        action.className = "order-col";
+
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = "Открыть";
+        action.appendChild(badge);
+
+        row.appendChild(avatar);
+        row.appendChild(info);
+        row.appendChild(action);
+
+        row.addEventListener("click", () => selectDeliverySetting(setting));
+        deliverySettingsList.appendChild(row);
+      });
+    }
+
+    function renderDeliveryStoresCheckboxes(storeIds = []) {
+      if (!deliveryStoresList) return;
+      deliveryStoresList.innerHTML = "";
+
+      const stores = storesState.items || [];
+      if (!stores.length) {
+        deliveryStoresList.innerHTML = '<div class="muted">Нет филиалов</div>';
+        return;
+      }
+
+      stores.forEach((store) => {
+        const label = document.createElement("label");
+        label.className = "switch delivery-store-switch";
+
+        const input = document.createElement("input");
+        input.className = "switch-input";
+        input.type = "checkbox";
+        input.value = store.id;
+        input.checked = storeIds.includes(store.id);
+
+        const ui = document.createElement("span");
+        ui.className = "switch-ui";
+
+        const text = document.createElement("span");
+        text.className = "switch-text";
+        text.textContent = store.name || `Филиал #${store.id}`;
+
+        label.appendChild(input);
+        label.appendChild(ui);
+        label.appendChild(text);
+        deliveryStoresList.appendChild(label);
+      });
+    }
+
+    function getSelectedDeliveryStoreIds() {
+      if (!deliveryStoresList) return [];
+      const checkboxes = deliveryStoresList.querySelectorAll("input[type=\"checkbox\"]:checked");
+      return Array.from(checkboxes).map((cb) => Number(cb.value)).filter((v) => Number.isFinite(v));
+    }
+
+    function fillDeliverySettingForm(setting) {
+      if (!setting) return;
+      if (settingsDeliverySubtitle) {
+        settingsDeliverySubtitle.textContent = `ID ${setting.id}`;
+      }
+      if (settingsDeliveryName) settingsDeliveryName.value = setting.name || "";
+      if (settingsDeliveryCost) settingsDeliveryCost.value = setting.delivery_cost || "";
+      if (settingsDeliveryMinOrder) settingsDeliveryMinOrder.value = setting.min_order_amount || "";
+      if (settingsDeliveryFreeFrom) settingsDeliveryFreeFrom.value = setting.free_delivery_from || "";
+      if (settingsDeliveryActive) settingsDeliveryActive.checked = Number(setting.is_active) === 1;
+      renderDeliveryStoresCheckboxes(setting.store_ids || []);
+    }
+
+    function setDeliveryMode(mode, setting) {
+      deliverySettingsState.mode = mode;
+      if (settingsDeliverySaveText) {
+        settingsDeliverySaveText.textContent = mode === "create" ? "Создать" : "Сохранить";
+      }
+      if (settingsDeliveryDeleteBtn) {
+        settingsDeliveryDeleteBtn.classList.toggle("hidden", mode === "create");
+      }
+      if (mode === "create") {
+        if (settingsDeliverySubtitle) settingsDeliverySubtitle.textContent = "Новая настройка";
+        if (settingsDeliveryName) settingsDeliveryName.value = "";
+        if (settingsDeliveryCost) settingsDeliveryCost.value = "";
+        if (settingsDeliveryMinOrder) settingsDeliveryMinOrder.value = "";
+        if (settingsDeliveryFreeFrom) settingsDeliveryFreeFrom.value = "";
+        if (settingsDeliveryActive) settingsDeliveryActive.checked = true;
+        renderDeliveryStoresCheckboxes([]);
+      } else if (setting) {
+        fillDeliverySettingForm(setting);
+      }
+    }
+
+    function selectDeliverySetting(setting) {
+      if (!setting) return;
+      deliverySettingsState.selectedId = setting.id;
+      deliverySettingsState.snapshot = { ...setting };
+      setDeliveryMode("edit", setting);
+      ensureTab(DELIVERY_TAB_ID, setting.name || "Настройка доставки");
+    }
+
+    async function loadDeliverySettings() {
+      const data = await fetchDeliverySettings();
+      if (!data || !data.ok) return;
+      const items = Array.isArray(data.items) ? data.items : [];
+      deliverySettingsState.loaded = true;
+      deliverySettingsState.items = items;
+      if (settingsCenterSubtitle) {
+        const section = document.body.getAttribute("data-settings-section");
+        if (section === "delivery") {
+          const count = items.length;
+          settingsCenterSubtitle.textContent = count ? `Настроек: ${count}` : "Настроек пока нет";
+        }
+      }
+      renderDeliverySettingsList(items);
+      if (!deliverySettingsState.selectedId) {
+        setActiveRightTab("");
+      } else {
+        const current = items.find((s) => s.id === deliverySettingsState.selectedId);
+        if (current) {
+          selectDeliverySetting(current);
+        } else {
+          deliverySettingsState.selectedId = null;
+          setActiveRightTab("");
+        }
+      }
+    }
+
+    function startCreateDeliverySetting() {
+      deliverySettingsState.selectedId = null;
+      deliverySettingsState.snapshot = null;
+      setDeliveryMode("create");
+      ensureTab(DELIVERY_TAB_ID, "Новая настройка");
+      if (settingsDeliveryName) settingsDeliveryName.focus();
+    }
+
+    // Update settingsSectionButtons click handler for delivery section
+    settingsSectionButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const section = btn.getAttribute("data-settings-section") || "";
+        const isDelivery = section === "delivery";
+
+        if (settingsCenterTitle && isDelivery) {
+          settingsCenterTitle.textContent = "Доставка";
+        }
+        if (settingsCenterSubtitle && isDelivery) {
+          settingsCenterSubtitle.textContent = "Загрузка...";
+        }
+        if (settingsTenantCards) settingsTenantCards.classList.toggle("hidden", isDelivery || section === "stores");
+        if (settingsCardsPanel) settingsCardsPanel.classList.toggle("hidden", isDelivery || section === "stores");
+        if (deliveryPanel) deliveryPanel.classList.toggle("hidden", !isDelivery);
+        if (storesPanel) storesPanel.classList.toggle("hidden", section !== "stores");
+
+        if (isDelivery) {
+          if (rightDefault) rightDefault.classList.add("hidden");
+          if (rightHeader) rightHeader.classList.add("hidden");
+          if (rightTabs) rightTabs.classList.add("hidden");
+          if (settingsStoreEmpty) settingsStoreEmpty.classList.add("hidden");
+          if (settingsStorePanel) settingsStorePanel.classList.add("hidden");
+          setActiveRightTab("");
+
+          // Load stores first for checkboxes, then load delivery settings
+          if (!storesState.loaded) {
+            fetchStores().then((data) => {
+              if (data && data.ok) {
+                storesState.items = data.stores || [];
+                storesState.loaded = true;
+              }
+              loadDeliverySettings();
+            });
+          } else {
+            loadDeliverySettings();
+          }
+        } else {
+          if (settingsDeliveryPanel) settingsDeliveryPanel.classList.add("hidden");
+          if (settingsDeliveryEmpty) settingsDeliveryEmpty.classList.add("hidden");
+        }
+      });
+    });
+
+    // Add new delivery setting button
+    if (settingsAddOrderBtn) {
+      settingsAddOrderBtn.addEventListener("click", () => {
+        const section = document.body.getAttribute("data-settings-section");
+        if (section === "delivery") {
+          startCreateDeliverySetting();
+        }
+      });
+    }
+
+    if (settingsDeliverySaveBtn) {
+      settingsDeliverySaveBtn.addEventListener("click", async () => {
+        const payload = {
+          name: settingsDeliveryName?.value.trim() || null,
+          delivery_cost: Number(settingsDeliveryCost?.value) || 0,
+          min_order_amount: Number(settingsDeliveryMinOrder?.value) || 0,
+          free_delivery_from: settingsDeliveryFreeFrom?.value ? Number(settingsDeliveryFreeFrom.value) : null,
+          is_active: settingsDeliveryActive?.checked ? 1 : 0,
+          store_ids: getSelectedDeliveryStoreIds()
+        };
+
+        if (!payload.name) {
+          alert("Введите название настройки доставки.");
+          return;
+        }
+
+        let data = null;
+        if (deliverySettingsState.mode === "create") {
+          data = await createDeliverySetting(payload);
+          if (!data || !data.ok || !data.item) {
+            alert("Не удалось создать настройку доставки.");
+            return;
+          }
+          deliverySettingsState.selectedId = data.item.id;
+          deliverySettingsState.snapshot = { ...data.item };
+          setDeliveryMode("edit", data.item);
+          ensureTab(DELIVERY_TAB_ID, data.item.name || "Настройка доставки");
+        } else {
+          const id = deliverySettingsState.selectedId;
+          if (!id) return;
+          data = await updateDeliverySetting(id, payload);
+          if (!data || !data.ok || !data.item) {
+            alert("Не удалось сохранить изменения.");
+            return;
+          }
+          deliverySettingsState.snapshot = { ...data.item };
+          fillDeliverySettingForm(data.item);
+          ensureTab(DELIVERY_TAB_ID, data.item.name || "Настройка доставки");
+        }
+
+        await loadDeliverySettings();
+      });
+    }
+
+    if (settingsDeliveryResetBtn) {
+      settingsDeliveryResetBtn.addEventListener("click", () => {
+        if (deliverySettingsState.mode === "create") {
+          setDeliveryMode("create");
+          return;
+        }
+        if (!deliverySettingsState.snapshot) return;
+        fillDeliverySettingForm(deliverySettingsState.snapshot);
+      });
+    }
+
+    if (settingsDeliveryDeleteBtn) {
+      settingsDeliveryDeleteBtn.addEventListener("click", async () => {
+        const id = deliverySettingsState.selectedId;
+        if (!id) return;
+        if (!confirm("Удалить эту настройку доставки?")) return;
+        const data = await deleteDeliverySetting(id);
+        if (!data || !data.ok) {
+          alert("Не удалось удалить настройку.");
+          return;
+        }
+        deliverySettingsState.selectedId = null;
+        deliverySettingsState.snapshot = null;
+        setActiveRightTab("");
+        await loadDeliverySettings();
       });
     }
   });

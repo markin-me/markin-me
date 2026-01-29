@@ -911,6 +911,240 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
     }
   });
 
+  // ------------------------------
+  // Delivery Settings CRUD
+  // ------------------------------
+
+  /**
+   * GET /api/admin/tenant/delivery-settings
+   * Возвращает список настроек доставки с привязанными филиалами
+   */
+  router.get('/delivery-settings', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+
+      const [settings] = await db.query(
+        `SELECT id, tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, is_active, created_at, updated_at
+         FROM ten_delivery_settings
+         WHERE tenant_id=?
+         ORDER BY id ASC`,
+        [tenantId]
+      );
+
+      // Получаем связи с филиалами
+      const settingIds = settings.map(s => s.id);
+      let storeLinks = [];
+      if (settingIds.length) {
+        const placeholders = settingIds.map(() => '?').join(',');
+        const [links] = await db.query(
+          `SELECT delivery_setting_id, store_id
+           FROM ten_delivery_settings_stores
+           WHERE tenant_id=? AND delivery_setting_id IN (${placeholders})`,
+          [tenantId, ...settingIds]
+        );
+        storeLinks = links;
+      }
+
+      // Группируем store_id по delivery_setting_id
+      const storeMap = new Map();
+      storeLinks.forEach(link => {
+        if (!storeMap.has(link.delivery_setting_id)) {
+          storeMap.set(link.delivery_setting_id, []);
+        }
+        storeMap.get(link.delivery_setting_id).push(link.store_id);
+      });
+
+      const enriched = settings.map(s => ({
+        ...s,
+        store_ids: storeMap.get(s.id) || []
+      }));
+
+      res.json({ ok: true, items: enriched });
+    } catch (err) {
+      console.error('Ошибка получения настроек доставки:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
+   * POST /api/admin/tenant/delivery-settings
+   * Создаёт новую настройку доставки
+   * body: { name, delivery_cost, min_order_amount, free_delivery_from, is_active, store_ids }
+   */
+  router.post('/delivery-settings', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+
+      const name = helpers.strOrNull(req.body.name);
+      if (!name) return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
+
+      const deliveryCost = helpers.numOrNull(req.body.delivery_cost) ?? 0;
+      const minOrderAmount = helpers.numOrNull(req.body.min_order_amount) ?? 0;
+      const freeDeliveryFrom = helpers.numOrNull(req.body.free_delivery_from);
+      const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+      const storeIds = Array.isArray(req.body.store_ids)
+        ? req.body.store_ids.map(Number).filter(v => Number.isFinite(v) && v > 0)
+        : [];
+
+      const [result] = await db.query(
+        `INSERT INTO ten_delivery_settings (tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, is_active)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [tenantId, name, deliveryCost, minOrderAmount, freeDeliveryFrom, isActive]
+      );
+
+      const newId = result.insertId;
+
+      // Сохраняем связи с филиалами
+      if (storeIds.length) {
+        const linkValues = storeIds.map(storeId => [newId, storeId, tenantId]);
+        const linkPlaceholders = linkValues.map(() => '(?, ?, ?)').join(',');
+        await db.query(
+          `INSERT INTO ten_delivery_settings_stores (delivery_setting_id, store_id, tenant_id) VALUES ${linkPlaceholders}`,
+          linkValues.flat()
+        );
+      }
+
+      const [rows] = await db.query(
+        `SELECT id, tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, is_active, created_at, updated_at
+         FROM ten_delivery_settings
+         WHERE tenant_id=? AND id=? LIMIT 1`,
+        [tenantId, newId]
+      );
+
+      res.json({ ok: true, item: { ...rows[0], store_ids: storeIds } });
+    } catch (err) {
+      console.error('Ошибка создания настройки доставки:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
+   * PUT /api/admin/tenant/delivery-settings/:id
+   * Обновляет настройку доставки
+   */
+  router.put('/delivery-settings/:id', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const id = helpers.numOrNull(req.params.id);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!id) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
+
+      // Проверяем существование
+      const [existing] = await db.query(
+        'SELECT id FROM ten_delivery_settings WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, id]
+      );
+      if (!existing.length) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      const updates = [];
+      const params = [];
+
+      if (req.body.name !== undefined) {
+        const name = helpers.strOrNull(req.body.name);
+        if (!name) return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
+        updates.push('name=?');
+        params.push(name);
+      }
+      if (req.body.delivery_cost !== undefined) {
+        updates.push('delivery_cost=?');
+        params.push(helpers.numOrNull(req.body.delivery_cost) ?? 0);
+      }
+      if (req.body.min_order_amount !== undefined) {
+        updates.push('min_order_amount=?');
+        params.push(helpers.numOrNull(req.body.min_order_amount) ?? 0);
+      }
+      if (req.body.free_delivery_from !== undefined) {
+        updates.push('free_delivery_from=?');
+        params.push(helpers.numOrNull(req.body.free_delivery_from));
+      }
+      if (req.body.is_active !== undefined) {
+        updates.push('is_active=?');
+        params.push(helpers.toBool(req.body.is_active, true) ? 1 : 0);
+      }
+
+      if (updates.length) {
+        params.push(tenantId, id);
+        await db.query(
+          `UPDATE ten_delivery_settings SET ${updates.join(', ')} WHERE tenant_id=? AND id=?`,
+          params
+        );
+      }
+
+      // Обновляем связи с филиалами
+      if (req.body.store_ids !== undefined) {
+        const storeIds = Array.isArray(req.body.store_ids)
+          ? req.body.store_ids.map(Number).filter(v => Number.isFinite(v) && v > 0)
+          : [];
+
+        await db.query(
+          'DELETE FROM ten_delivery_settings_stores WHERE tenant_id=? AND delivery_setting_id=?',
+          [tenantId, id]
+        );
+
+        if (storeIds.length) {
+          const linkValues = storeIds.map(storeId => [id, storeId, tenantId]);
+          const linkPlaceholders = linkValues.map(() => '(?, ?, ?)').join(',');
+          await db.query(
+            `INSERT INTO ten_delivery_settings_stores (delivery_setting_id, store_id, tenant_id) VALUES ${linkPlaceholders}`,
+            linkValues.flat()
+          );
+        }
+      }
+
+      // Возвращаем обновлённую запись
+      const [rows] = await db.query(
+        `SELECT id, tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, is_active, created_at, updated_at
+         FROM ten_delivery_settings
+         WHERE tenant_id=? AND id=? LIMIT 1`,
+        [tenantId, id]
+      );
+
+      const [links] = await db.query(
+        'SELECT store_id FROM ten_delivery_settings_stores WHERE tenant_id=? AND delivery_setting_id=?',
+        [tenantId, id]
+      );
+
+      res.json({ ok: true, item: { ...rows[0], store_ids: links.map(l => l.store_id) } });
+    } catch (err) {
+      console.error('Ошибка обновления настройки доставки:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
+   * DELETE /api/admin/tenant/delivery-settings/:id
+   * Удаляет настройку доставки
+   */
+  router.delete('/delivery-settings/:id', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const id = helpers.numOrNull(req.params.id);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!id) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
+
+      // Удаляем связи
+      await db.query(
+        'DELETE FROM ten_delivery_settings_stores WHERE tenant_id=? AND delivery_setting_id=?',
+        [tenantId, id]
+      );
+
+      // Удаляем настройку
+      await db.query(
+        'DELETE FROM ten_delivery_settings WHERE tenant_id=? AND id=?',
+        [tenantId, id]
+      );
+
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Ошибка удаления настройки доставки:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   /**
    * POST /api/admin/tenant/password
    * body: { password, password_confirm }

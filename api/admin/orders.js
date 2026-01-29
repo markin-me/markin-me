@@ -35,6 +35,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         o.cutlery_qty,
         o.change_from,
         o.total_price,
+        o.delivery_cost,
         o.items,
         o.scheduled_at,
         o.delivery_type_id,
@@ -86,6 +87,15 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const parsed = r.items ? JSON.parse(r.items) : [];
       if (Array.isArray(parsed)) items = parsed;
     } catch {}
+    const itemsTotal = items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
+    const totalPrice = Number(r.total_price || 0);
+    let deliveryCost = 0;
+    if ((r.methodCode ?? null) === 'delivery') {
+      const diff = totalPrice - itemsTotal;
+      const computed = diff > 0 ? diff : 0;
+      const stored = r.delivery_cost != null ? Number(r.delivery_cost || 0) : null;
+      deliveryCost = stored && stored > 0 ? stored : computed;
+    }
 
     return {
       id: r.id,
@@ -98,7 +108,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       comment: r.comment,
       cutlery_qty: r.cutlery_qty,
       change_from: r.change_from,
-      total_price: Number(r.total_price || 0),
+      total_price: totalPrice,
+      items_total: itemsTotal,
+      delivery_cost: deliveryCost,
       items,
       scheduled_at: r.scheduled_at,
       delivery_type_id: r.delivery_type_id,
@@ -228,6 +240,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           o.cutlery_qty,
           o.change_from,
           o.total_price,
+          o.delivery_cost,
           o.items,
           o.scheduled_at,
           o.delivery_type_id,
@@ -279,11 +292,22 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           const parsed = r.items ? JSON.parse(r.items) : [];
           if (Array.isArray(parsed)) items = parsed;
         } catch {}
+        const itemsTotal = items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
+        const totalPrice = Number(r.total_price || 0);
+        let deliveryCost = 0;
+        if ((r.methodCode ?? null) === 'delivery') {
+          const diff = totalPrice - itemsTotal;
+          const computed = diff > 0 ? diff : 0;
+          const stored = r.delivery_cost != null ? Number(r.delivery_cost || 0) : null;
+          deliveryCost = stored && stored > 0 ? stored : computed;
+        }
 
         return {
           ...r,
           items,
-          total_price: Number(r.total_price || 0),
+          total_price: totalPrice,
+          items_total: itemsTotal,
+          delivery_cost: deliveryCost,
 
           status_code: r.statusCode ?? null,
           status_title: r.statusTitle ?? null,

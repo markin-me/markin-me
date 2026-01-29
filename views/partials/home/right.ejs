@@ -246,6 +246,55 @@
         </div>
         <div class="settings-list" data-settings-list="order-time-options"></div>
       </div>
+
+      <div class="info-card hidden" id="settingsDeliveryEmpty">
+        <div class="info-title">Настройки доставки</div>
+        <div class="info-text">Выберите настройку слева или создайте новую.</div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsDeliveryPanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">Настройка доставки</div>
+          <div class="settings-list-subtitle" id="settingsDeliverySubtitle">—</div>
+        </div>
+        <form class="settings-site-form" id="settingsDeliveryForm">
+          <div class="settings-site-field">
+            <label class="field-label">НАЗВАНИЕ</label>
+            <input class="control" type="text" id="settingsDeliveryName" placeholder="Например: Доставка по городу" required />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">СТОИМОСТЬ ДОСТАВКИ</label>
+            <input class="control" type="number" id="settingsDeliveryCost" placeholder="0" min="0" step="1" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">МИНИМАЛЬНАЯ СУММА ЗАКАЗА</label>
+            <input class="control" type="number" id="settingsDeliveryMinOrder" placeholder="0" min="0" step="1" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">БЕСПЛАТНАЯ ДОСТАВКА ОТ</label>
+            <input class="control" type="number" id="settingsDeliveryFreeFrom" placeholder="Оставьте пустым, если нет" min="0" step="1" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ФИЛИАЛЫ</label>
+            <div class="delivery-stores-list" id="deliveryStoresList"></div>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">СТАТУС</label>
+            <label class="switch">
+              <input class="switch-input" type="checkbox" id="settingsDeliveryActive" checked />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Активна</span>
+            </label>
+          </div>
+        </form>
+        <div class="stores-form-actions">
+          <button class="btn btn-primary btn-sm" type="button" id="settingsDeliverySaveBtn">
+            <span id="settingsDeliverySaveText">Сохранить</span>
+          </button>
+          <button class="btn btn-link btn-sm" type="button" id="settingsDeliveryResetBtn">Сбросить</button>
+          <button class="btn btn-danger btn-sm" type="button" id="settingsDeliveryDeleteBtn">Удалить</button>
+        </div>
+      </div>
     </div>
   </div>
 <% } else { %>

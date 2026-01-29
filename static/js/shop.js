@@ -8275,6 +8275,12 @@ function renderSheetAddressList() {
         html += `</div>`;
       }
       
+      if (order.method_code === "delivery") {
+        html += `<div class="shop-order-info-row">`;
+        html += `<div class="shop-order-info-label">Доставка</div>`;
+        html += `<div class="shop-order-info-value">${money(order.delivery_cost || 0)}</div>`;
+        html += `</div>`;
+      }
       // Итоговая сумма
       html += `<div class="shop-order-details-total">`;
       html += `<div class="shop-order-total-label">Итого</div>`;
@@ -8996,6 +9002,15 @@ function setBottomNavActive(tab) {
     return orderConfigCache;
   }
 
+  let deliverySettingsCache = null;
+
+  async function getDeliverySettings() {
+    if (deliverySettingsCache) return deliverySettingsCache;
+    const json = await apiJson("/api/public/delivery-settings");
+    deliverySettingsCache = json.data || null;
+    return deliverySettingsCache;
+  }
+
   /**
    * Calculate the next opening time for the store
    * @param {Array} hours - Store hours array from API
@@ -9392,6 +9407,18 @@ function setBottomNavActive(tab) {
     }, 0);
 
     const cfg = await getOrderConfig();
+    let deliverySettings = null;
+    try {
+      deliverySettings = await getDeliverySettings();
+    } catch (err) {
+      console.error("Failed to load delivery settings:", err);
+    }
+    const deliveryRules = {
+      cost: Number(deliverySettings?.delivery_cost || 0),
+      minOrder: Number(deliverySettings?.min_order_amount || 0),
+      freeFrom: deliverySettings?.free_delivery_from != null ? Number(deliverySettings.free_delivery_from) : null,
+      hasSettings: Boolean(deliverySettings?.has_settings),
+    };
     const draft = loadCheckoutDraft();
 
     const me = await fetchMeSafe(); // если залогинен — подставим
@@ -9470,6 +9497,7 @@ function setBottomNavActive(tab) {
       draft.method_code = methodSelect.getValue();
       draft.method_user_selected = true;
       saveCheckoutDraft(draft);
+      updateDeliveryPricing();
     });
 
     const methodWrap = document.createElement("div");
@@ -9964,11 +9992,23 @@ function setBottomNavActive(tab) {
     refreshTimeInputVisibility();
     updateTimeSlotsOptions();
 
+    function getDeliveryCostForTotal(baseTotal) {
+      if (deliveryRules.freeFrom != null && baseTotal >= deliveryRules.freeFrom) return 0;
+      return deliveryRules.cost;
+    }
+
+    function getPayableTotalForMethod(methodCode) {
+      if (methodCode !== "delivery") return orderTotal;
+      return orderTotal + getDeliveryCostForTotal(orderTotal);
+    }
+
+    let currentPayableTotal = getPayableTotalForMethod(methodSelect.getValue());
+
     const payments = (cfg.payments || []).map(x => ({ code: x.code, title: x.title }));
     const payDefault = pickDefaultCode(payments, draft.payment_code, "cash");
     const paySelect = buildDropdown(payments, payDefault);
 
-    const changeAmounts = [500, 1000, 2000, 5000].filter(v => v > orderTotal);
+    const changeAmounts = [500, 1000, 2000, 5000].filter(v => v > currentPayableTotal);
     const changeOptions = [
       { code: "", title: "Сдача не нужна" },
       ...changeAmounts.map(v => ({ code: String(v), title: String(v) })),
@@ -9994,18 +10034,18 @@ function setBottomNavActive(tab) {
     changeWrap.appendChild(changeSelect.root);
 
     const changeCustomInput = document.createElement("input");
-    const minChangeAmount = Math.ceil(orderTotal) + 1;
+    const minChangeAmount = Math.ceil(currentPayableTotal) + 1;
     changeCustomInput.className = "control shop-checkout-change-custom";
     changeCustomInput.type = "number";
     changeCustomInput.min = String(minChangeAmount);
-    changeCustomInput.placeholder = `Больше ${Math.ceil(orderTotal)}`;
+    changeCustomInput.placeholder = `Больше ${Math.ceil(currentPayableTotal)}`;
     changeCustomInput.value = isCustomChange ? String(draft.change_from) : "";
     changeCustomInput.style.display = isCustomChange ? "" : "none";
     changeCustomInput.addEventListener("blur", () => {
       const val = parseInt(changeCustomInput.value, 10);
-      if (val && val <= orderTotal) {
+      if (val && val <= currentPayableTotal) {
         changeCustomInput.value = "";
-        alert(`Сумма должна быть больше ${Math.ceil(orderTotal)} ₽`);
+        alert(`Сумма должна быть больше ${Math.ceil(currentPayableTotal)} ₽`);
       }
     });
     changeWrap.appendChild(changeCustomInput);
@@ -10016,6 +10056,110 @@ function setBottomNavActive(tab) {
     payRow.appendChild(changeWrap);
     wrap.appendChild(payRow);
 
+    const deliveryInfoWrap = document.createElement("div");
+    deliveryInfoWrap.className = "shop-checkout-delivery-info";
+
+    const deliveryCostRow = document.createElement("div");
+    deliveryCostRow.className = "shop-checkout-grid-row";
+    const deliveryCostLabel = document.createElement("div");
+    deliveryCostLabel.className = "muted";
+    deliveryCostLabel.textContent = "Стоимость доставки";
+    const deliveryCostValue = document.createElement("div");
+    deliveryCostRow.appendChild(deliveryCostLabel);
+    deliveryCostRow.appendChild(deliveryCostValue);
+    deliveryInfoWrap.appendChild(deliveryCostRow);
+
+    const deliveryFreeNote = document.createElement("div");
+    deliveryFreeNote.className = "shop-checkout-note muted";
+    deliveryInfoWrap.appendChild(deliveryFreeNote);
+
+    const deliveryMinNote = document.createElement("div");
+    deliveryMinNote.className = "shop-checkout-note muted";
+    deliveryInfoWrap.appendChild(deliveryMinNote);
+
+    wrap.appendChild(deliveryInfoWrap);
+
+    const totalRow = document.createElement("div");
+    totalRow.className = "shop-checkout-grid-row shop-checkout-total-row";
+    const totalLabel = document.createElement("div");
+    totalLabel.textContent = "Итого";
+    const totalValue = document.createElement("div");
+    totalValue.textContent = money(currentPayableTotal);
+    totalRow.appendChild(totalLabel);
+    totalRow.appendChild(totalValue);
+    wrap.appendChild(totalRow);
+
+    function updateChangeOptions(nextTotal) {
+      currentPayableTotal = nextTotal;
+      const amounts = [500, 1000, 2000, 5000].filter(v => v > currentPayableTotal);
+      const options = [
+        { code: "", title: "Сдача не нужна" },
+        ...amounts.map(v => ({ code: String(v), title: String(v) })),
+        { code: "custom", title: "Другая сумма" },
+      ];
+      const currentValue = changeSelect.getValue();
+      const isCustom = currentValue === "custom";
+      const nextValue = isCustom ? "custom" : (options.find(o => o.code === currentValue) ? currentValue : "");
+      changeSelect.setOptions(options, nextValue);
+
+      const minAmount = Math.ceil(currentPayableTotal) + 1;
+      changeCustomInput.min = String(minAmount);
+      changeCustomInput.placeholder = `Больше ${Math.ceil(currentPayableTotal)}`;
+      if (changeCustomInput.value) {
+        const val = parseInt(changeCustomInput.value, 10);
+        if (val && val <= currentPayableTotal) changeCustomInput.value = "";
+      }
+    }
+
+    function updateDeliveryPricing() {
+      const methodCode = methodSelect.getValue() || methodDefault || "takeaway";
+      const isDelivery = methodCode === "delivery";
+      const deliveryCost = isDelivery ? getDeliveryCostForTotal(orderTotal) : 0;
+      const payableTotal = orderTotal + deliveryCost;
+
+      updateChangeOptions(payableTotal);
+      refreshChangeVisibility();
+
+      if (deliveryInfoWrap) deliveryInfoWrap.style.display = isDelivery ? "" : "none";
+      if (deliveryCostValue) deliveryCostValue.textContent = isDelivery ? money(deliveryCost) : "—";
+
+      if (deliveryFreeNote) {
+        if (!isDelivery) {
+          deliveryFreeNote.style.display = "none";
+        } else if (deliveryRules.freeFrom != null) {
+          if (deliveryRules.freeFrom <= 0) {
+            deliveryFreeNote.textContent = "Доставка бесплатно";
+          } else {
+            deliveryFreeNote.textContent = `Бесплатно от ${money(deliveryRules.freeFrom)}`;
+          }
+          deliveryFreeNote.style.display = "";
+        } else {
+          deliveryFreeNote.style.display = "none";
+        }
+      }
+
+      if (deliveryMinNote) {
+        if (!isDelivery || deliveryRules.minOrder <= 0) {
+          deliveryMinNote.style.display = "none";
+        } else {
+          if (orderTotal < deliveryRules.minOrder) {
+            const diff = deliveryRules.minOrder - orderTotal;
+            deliveryMinNote.textContent = `Минимальная сумма заказа ${money(deliveryRules.minOrder)}. Добавьте ещё ${money(diff)}.`;
+          } else {
+            deliveryMinNote.textContent = `Минимальная сумма заказа ${money(deliveryRules.minOrder)}.`;
+          }
+          deliveryMinNote.style.display = "";
+        }
+      }
+
+      if (totalValue) totalValue.textContent = money(payableTotal);
+
+      if (actions?.submitBtn) {
+        const shouldBlock = isDelivery && deliveryRules.minOrder > 0 && orderTotal < deliveryRules.minOrder;
+        actions.submitBtn.disabled = shouldBlock;
+      }
+    }
+
     function refreshChangeVisibility() {
       const isCash = paySelect.getValue() === "cash";
       changeWrap.style.display = isCash ? "" : "none";
@@ -10025,6 +10169,7 @@ function setBottomNavActive(tab) {
     paySelect.root.addEventListener("change", refreshChangeVisibility);
     changeSelect.root.addEventListener("change", refreshChangeVisibility);
     refreshChangeVisibility();
+    updateDeliveryPricing();
 
     function getChangeFromValue() {
       const val = changeSelect.getValue();
@@ -10172,6 +10317,11 @@ function setBottomNavActive(tab) {
         }
       }
 
+      if (payload.method_code === "delivery" && deliveryRules.minOrder > 0 && orderTotal < deliveryRules.minOrder) {
+        const diff = deliveryRules.minOrder - orderTotal;
+        alert(`Минимальная сумма заказа ${money(deliveryRules.minOrder)}. Добавьте ещё ${money(diff)}.`);
+        return;
+      }
       if (payload.method_code === "delivery" && !payload.delivery_address) {
         alert("Введите адрес доставки");
         return;
@@ -10235,6 +10385,12 @@ function setBottomNavActive(tab) {
         window.location.href = getShopBasePath();
       } catch (e) {
         console.error(e);
+        if (e.message === "MIN_ORDER" && deliveryRules.minOrder > 0) {
+          alert(`Минимальная сумма заказа ${money(deliveryRules.minOrder)}.`);
+          actions.submitBtn.disabled = false;
+          actions.submitBtn.textContent = "????????";
+          return;
+        }
         alert("Ошибка оформления заказа: " + (e.message || "UNKNOWN"));
         actions.submitBtn.disabled = false;
         actions.submitBtn.textContent = "Заказать";
@@ -11079,6 +11235,12 @@ async function init() {
           html += `</div>`;
         }
         
+        if (order.method_code === "delivery") {
+          html += `<div class="shop-order-info-row">`;
+          html += `<div class="shop-order-info-label">Доставка</div>`;
+          html += `<div class="shop-order-info-value">${money(order.delivery_cost || 0)}</div>`;
+          html += `</div>`;
+        }
         // Итоговая сумма
         html += `<div class="shop-order-details-total">`;
         html += `<div class="shop-order-total-label">Итого</div>`;

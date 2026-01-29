@@ -181,6 +181,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         o.cutlery_qty,
         o.change_from,
         o.total_price,
+        o.delivery_cost,
         o.items,
         o.scheduled_at,
         o.delivery_type_id,
@@ -222,6 +223,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const parsed = r.items ? JSON.parse(r.items) : [];
       if (Array.isArray(parsed)) items = parsed;
     } catch {}
+    const itemsTotal = items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
+    const totalPrice = Number(r.total_price || 0);
+    let deliveryCost = 0;
+    if ((r.methodCode ?? null) === 'delivery') {
+      const diff = totalPrice - itemsTotal;
+      const computed = diff > 0 ? diff : 0;
+      const stored = r.delivery_cost != null ? Number(r.delivery_cost || 0) : null;
+      deliveryCost = stored && stored > 0 ? stored : computed;
+    }
 
     return {
       id: r.id,
@@ -234,7 +244,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       comment: r.comment,
       cutlery_qty: r.cutlery_qty,
       change_from: r.change_from,
-      total_price: Number(r.total_price || 0),
+      total_price: totalPrice,
+      items_total: itemsTotal,
+      delivery_cost: deliveryCost,
       items,
       scheduled_at: r.scheduled_at,
       delivery_type_id: r.delivery_type_id,
@@ -2310,6 +2322,38 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       if (!normItems.length) return res.status(400).json({ ok: false, error: 'NO_PRODUCTS' });
 
       const itemsJson = JSON.stringify(normItems);
+      let deliveryCost = 0;
+      const isDeliveryMethod = str(methodCode).trim() === 'delivery';
+      if (isDeliveryMethod) {
+        let minOrderAmount = 0;
+        let freeDeliveryFrom = null;
+
+        const [settings] = await db.query(
+          `SELECT ds.delivery_cost, ds.min_order_amount, ds.free_delivery_from
+           FROM ten_delivery_settings ds
+           JOIN ten_delivery_settings_stores dss ON dss.delivery_setting_id = ds.id AND dss.tenant_id = ds.tenant_id
+           WHERE ds.tenant_id=? AND dss.store_id=? AND ds.is_active=1
+           LIMIT 1`,
+          [tenantId, storeId]
+        );
+
+        if (settings.length) {
+          const s = settings[0];
+          deliveryCost = Number(s.delivery_cost || 0);
+          minOrderAmount = Number(s.min_order_amount || 0);
+          freeDeliveryFrom = s.free_delivery_from != null ? Number(s.free_delivery_from) : null;
+        }
+
+        if (minOrderAmount > 0 && total < minOrderAmount) {
+          return res.status(409).json({ ok: false, error: 'MIN_ORDER', min_order_amount: minOrderAmount });
+        }
+
+        if (freeDeliveryFrom != null && total >= freeDeliveryFrom) {
+          deliveryCost = 0;
+        }
+
+        total += deliveryCost;
+      }
 
       // Серверная защита от дублей при повторной отправке (например, из-за сетевых ошибок)
       // Ищем идентичный заказ, созданный недавно тем же клиентом.
@@ -2365,11 +2409,11 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         `INSERT INTO order_orders
          (tenant_id, store_id, customer_id, customer_name, customer_phone, promo_code,
           address, delivery_address_id, pickup_store_id, comment, cutlery_qty, change_from,
-          items, total_price,
+          items, total_price, delivery_cost,
           delivery_type_id, payment_id, time_option_id,
           status_id, status_sort, scheduled_at, created_at,
           created_via, is_active, public_id)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
         [
           tenantId,
           storeId,
@@ -2385,6 +2429,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           changeFrom,
           itemsJson,
           total,
+          deliveryCost,
           deliveryTypeId,
           paymentId,
           timeOptionId,
@@ -2403,6 +2448,54 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
 
       res.json({ ok: true, data: { id: r.insertId, public_id: publicId } });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
+   * GET /api/public/delivery-settings
+   * Возвращает настройки доставки для текущего филиала
+   */
+  router.get('/delivery-settings', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+
+      // Ищем настройку доставки, привязанную к текущему филиалу
+      const [settings] = await db.query(
+        `SELECT ds.id, ds.name, ds.delivery_cost, ds.min_order_amount, ds.free_delivery_from, ds.is_active
+         FROM ten_delivery_settings ds
+         JOIN ten_delivery_settings_stores dss ON dss.delivery_setting_id = ds.id AND dss.tenant_id = ds.tenant_id
+         WHERE ds.tenant_id=? AND dss.store_id=? AND ds.is_active=1
+         LIMIT 1`,
+        [tenantId, storeId]
+      );
+
+      if (!settings.length) {
+        // Нет настроек - доставка бесплатная, без ограничений
+        return res.json({
+          ok: true,
+          data: {
+            delivery_cost: 0,
+            min_order_amount: 0,
+            free_delivery_from: null,
+            has_settings: false
+          }
+        });
+      }
+
+      const s = settings[0];
+      res.json({
+        ok: true,
+        data: {
+          delivery_cost: Number(s.delivery_cost || 0),
+          min_order_amount: Number(s.min_order_amount || 0),
+          free_delivery_from: s.free_delivery_from != null ? Number(s.free_delivery_from) : null,
+          has_settings: true
+        }
+      });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
