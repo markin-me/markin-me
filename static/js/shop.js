@@ -6907,12 +6907,17 @@ function applySheetAddressTitle(backMode = "cart") {
     
     // Синхронизируем мобильные кнопки
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    if (isMobile && elMobileCartActionsCart && elMobileCartActionsCheckout) {
-      elMobileCartActionsCart.classList.add("hidden");
-      elMobileCartActionsCheckout.classList.remove("hidden");
-    }
-    if (isMobile && elMobileAddressActions) {
-      elMobileAddressActions.classList.add("hidden");
+    if (isMobile) {
+      if (elMobileCartActions) {
+        elMobileCartActions.classList.remove("hidden");
+      }
+      if (elMobileCartActionsCart && elMobileCartActionsCheckout) {
+        elMobileCartActionsCart.classList.add("hidden");
+        elMobileCartActionsCheckout.classList.remove("hidden");
+      }
+      if (elMobileAddressActions) {
+        elMobileAddressActions.classList.add("hidden");
+      }
     }
 
     // title = адрес, без стрелок/иконок

@@ -45,8 +45,21 @@ function getSubdomain(hostname) {
   if (!host) return null;
   if (host === 'localhost') return null;
   const parts = host.split('.');
+
+  // shop.localhost -> shop
   if (parts.length === 2 && parts[1] === 'localhost') return parts[0];
-  if (parts.length >= 2 && host !== 'localhost') return parts[0];
+
+  // Для обычных доменов:
+  // markin-me.ru (2 части) -> нет субдомена (основной домен)
+  // posham.markin-me.ru (3 части) -> posham (субдомен)
+  // www.markin-me.ru -> www (но www обычно игнорируется)
+  if (parts.length >= 3) {
+    const sub = parts[0];
+    // Игнорируем www как субдомен
+    if (sub === 'www') return null;
+    return sub;
+  }
+
   return null;
 }
 

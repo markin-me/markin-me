@@ -602,8 +602,14 @@
     const urgent = Boolean(order.is_urgent || order.urgent || order.time_option_code === "urgent");
     setHiddenAll(infoEls.deliveryUrgent, !urgent);
 
-    const address = order.address || "?";
-    setTextAll(infoEls.deliveryAddress, address);
+    // Для самовывоза показываем адрес точки, для доставки - адрес клиента
+    let address = order.address;
+    if (!address && order.pickup_store_address) {
+      address = order.pickup_store_name
+        ? `${order.pickup_store_name}, ${order.pickup_store_address}`
+        : order.pickup_store_address;
+    }
+    setTextAll(infoEls.deliveryAddress, address || "?");
 
     const comment = order.comment || "";
     setTextAll(infoEls.deliveryComment, comment);
@@ -883,7 +889,13 @@
       </div>
 
       <div class="order-col order-address">
-        <div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(order.address || "?")}</div>
+        <div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(
+          order.address ||
+          (order.pickup_store_address
+            ? (order.pickup_store_name ? `${order.pickup_store_name}, ${order.pickup_store_address}` : order.pickup_store_address)
+            : "?"
+          )
+        )}</div>
         <div class="order-address-comment muted"><i class="far fa-comment"></i> ${escapeHtml(comment)}</div>
         <div class="order-address-courier ${hasCourier ? "" : "order-courier-assign"}">
           <i class="fas fa-user"></i> 

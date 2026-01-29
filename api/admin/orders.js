@@ -41,6 +41,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         o.payment_id,
         o.time_option_id,
         o.status_id,
+        o.pickup_store_id,
 
         s.code AS statusCode,
         s.title AS statusTitle,
@@ -54,7 +55,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         t.code AS timeOptionCode,
         t.title AS timeOptionTitle,
 
-        c.telegram_user_id AS customerTelegramId
+        c.telegram_user_id AS customerTelegramId,
+
+        ps.name AS pickupStoreName,
+        ps.address AS pickupStoreAddress
       FROM order_orders o
       LEFT JOIN order_statuses s
         ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
@@ -66,6 +70,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
       LEFT JOIN cust_customers c
         ON c.tenant_id=o.tenant_id AND c.store_id=o.store_id AND c.id=o.customer_id
+      LEFT JOIN ten_stores ps
+        ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
       WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1
       LIMIT 1
       `,
@@ -113,6 +119,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       time_option_title: r.timeOptionTitle ?? null,
 
       telegram_user_id: r.customerTelegramId ?? null,
+
+      pickup_store_id: r.pickup_store_id ?? null,
+      pickup_store_name: r.pickupStoreName ?? null,
+      pickup_store_address: r.pickupStoreAddress ?? null,
     };
   }
 
@@ -238,7 +248,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           t.code AS timeOptionCode,
           t.title AS timeOptionTitle,
 
-          c.telegram_user_id AS customerTelegramId
+          c.telegram_user_id AS customerTelegramId,
+
+          o.pickup_store_id,
+          ps.name AS pickupStoreName,
+          ps.address AS pickupStoreAddress
         FROM order_orders o
         LEFT JOIN order_statuses s
           ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
@@ -250,6 +264,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
         LEFT JOIN cust_customers c
           ON c.tenant_id=o.tenant_id AND c.store_id=o.store_id AND c.id=o.customer_id
+        LEFT JOIN ten_stores ps
+          ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
         WHERE ${where}
         ORDER BY ${orderBy}
         LIMIT ? OFFSET ?
@@ -283,6 +299,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           time_option_title: r.timeOptionTitle ?? null,
 
           telegram_user_id: r.customerTelegramId ?? null,
+
+          pickup_store_id: r.pickup_store_id ?? null,
+          pickup_store_name: r.pickupStoreName ?? null,
+          pickup_store_address: r.pickupStoreAddress ?? null,
         };
       });
 
