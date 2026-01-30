@@ -3113,6 +3113,68 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   color: var(--color-text-muted);
 }
 
+/* Экран результата заказа (успех / конфликт) */
+.shop-order-result.hidden {
+  display: none;
+}
+
+.shop-order-result-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 24px 16px;
+  gap: 12px;
+}
+
+.shop-order-result-icon {
+  font-size: 48px;
+  color: var(--shop-buy);
+}
+
+.shop-order-result-icon--warn {
+  color: var(--color-warning, #e6a800);
+}
+
+.shop-order-result-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.shop-order-result-order,
+.shop-order-result-total {
+  margin: 0;
+  font-size: 16px;
+}
+
+.shop-order-result-total {
+  font-weight: 700;
+  color: var(--shop-buy);
+}
+
+.shop-order-result-text {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-text-muted);
+}
+
+.shop-order-result-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.shop-order-result-btn {
+  width: 100%;
+}
+
+.shop-order-result-conflict .shop-order-result-actions {
+  max-width: 280px;
+}
+
 .shop-cart-items {
   display: grid;
   gap: 10px;

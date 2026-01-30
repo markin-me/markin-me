@@ -10961,6 +10961,59 @@ function setBottomNavActive(tab) {
 
     container.appendChild(wrap);
 
+    const resultWrap = document.createElement("div");
+    resultWrap.className = "shop-order-result hidden";
+    container.appendChild(resultWrap);
+
+    function showOrderSuccess(orderId, publicId, totalPrice) {
+      resultWrap.innerHTML = `
+        <div class="shop-order-result-card">
+          <div class="shop-order-result-icon"><i class="fas fa-check-circle"></i></div>
+          <h2 class="shop-order-result-title">Заказ оформлен</h2>
+          <p class="shop-order-result-order">Заказ #${orderId}</p>
+          <p class="shop-order-result-total">${money(totalPrice)}</p>
+          <button type="button" class="btn btn-primary shop-order-result-btn" data-action="order-success-main">На главную</button>
+        </div>`;
+      resultWrap.classList.remove("hidden");
+      wrap.classList.add("hidden");
+      const btn = resultWrap.querySelector("[data-action=\"order-success-main\"]");
+      if (btn) {
+        btn.onclick = async () => {
+          clearCartAll();
+          saveCheckoutDraft({});
+          if (typeof window.updateActiveOrdersBadge === "function") await window.updateActiveOrdersBadge();
+          if (isSheet && window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen()) window.AppModal.close("sheet");
+          window.location.href = getShopBasePath();
+        };
+      }
+    }
+
+    function showOrderConflict(existingOrder, onCreateNew, onCancel) {
+      const totalStr = money(existingOrder.total_price || 0);
+      resultWrap.innerHTML = `
+        <div class="shop-order-result-card shop-order-result-conflict">
+          <div class="shop-order-result-icon shop-order-result-icon--warn"><i class="fas fa-info-circle"></i></div>
+          <h2 class="shop-order-result-title">Похожий заказ уже есть</h2>
+          <p class="shop-order-result-text">У вас уже есть заказ #${existingOrder.id} на сумму ${totalStr}.</p>
+          <p class="shop-order-result-text">Создать новый заказ?</p>
+          <div class="shop-order-result-actions">
+            <button type="button" class="btn btn-primary shop-order-result-btn" data-action="order-conflict-new">Создать новый заказ</button>
+            <button type="button" class="btn shop-order-result-btn" data-action="order-conflict-cancel">Нет, вернуться</button>
+          </div>
+        </div>`;
+      resultWrap.classList.remove("hidden");
+      wrap.classList.add("hidden");
+      const btnNew = resultWrap.querySelector("[data-action=\"order-conflict-new\"]");
+      const btnCancel = resultWrap.querySelector("[data-action=\"order-conflict-cancel\"]");
+      if (btnNew) btnNew.onclick = () => onCreateNew();
+      if (btnCancel) btnCancel.onclick = () => {
+        resultWrap.classList.add("hidden");
+        resultWrap.innerHTML = "";
+        wrap.classList.remove("hidden");
+        onCancel();
+      };
+    }
+
     if (actions?.backBtn && typeof onBack === "function") {
       actions.backBtn.onclick = () => onBack();
     }
@@ -11077,25 +11130,56 @@ function setBottomNavActive(tab) {
       actions.submitBtn.disabled = true;
       actions.submitBtn.textContent = "Отправляем…";
 
+      const orderTotalWithDelivery = orderTotal + getDeliveryCostForTotal(orderTotal);
+
       try {
         const res = await apiJson("/api/public/orders", { method: "POST", body: payload });
 
-        if (res.data && res.data.public_id) {
-          localStorage.setItem(LAST_ORDER_KEY, String(res.data.public_id));
+        if (res.data && res.data.duplicate && res.data.needConfirmation && res.data.existingOrder) {
+          actions.submitBtn.disabled = false;
+          actions.submitBtn.textContent = "Заказать";
+          showOrderConflict(res.data.existingOrder, async () => {
+            payload.force_new = true;
+            const btnNewAgain = resultWrap.querySelector("[data-action=\"order-conflict-new\"]");
+            if (btnNewAgain) {
+              btnNewAgain.disabled = true;
+              btnNewAgain.textContent = "Отправляем…";
+            }
+            try {
+              const res2 = await apiJson("/api/public/orders", { method: "POST", body: payload });
+              if (res2.data && res2.data.id && res2.data.public_id) {
+                localStorage.setItem(LAST_ORDER_KEY, String(res2.data.public_id));
+                showOrderSuccess(res2.data.id, res2.data.public_id, orderTotalWithDelivery);
+              } else {
+                alert("Не удалось создать заказ.");
+                if (btnNewAgain) {
+                  btnNewAgain.disabled = false;
+                  btnNewAgain.textContent = "Создать новый заказ";
+                }
+              }
+            } catch (e2) {
+              console.error(e2);
+              alert("Ошибка оформления заказа: " + (e2.message || "UNKNOWN"));
+              if (btnNewAgain) {
+                btnNewAgain.disabled = false;
+                btnNewAgain.textContent = "Создать новый заказ";
+              }
+            }
+          }, () => {
+            actions.submitBtn.disabled = false;
+            actions.submitBtn.textContent = "Заказать";
+          });
+          return;
         }
 
-        clearCartAll();
-        saveCheckoutDraft({});
-        
-        // Обновляем бейдж активных заказов перед редиректом
-        if (typeof window.updateActiveOrdersBadge === "function") {
-          await window.updateActiveOrdersBadge();
+        if (res.data && res.data.id && res.data.public_id) {
+          localStorage.setItem(LAST_ORDER_KEY, String(res.data.public_id));
+          if (typeof window.updateActiveOrdersBadge === "function") await window.updateActiveOrdersBadge();
+          showOrderSuccess(res.data.id, res.data.public_id, orderTotalWithDelivery);
+        } else {
+          actions.submitBtn.disabled = false;
+          actions.submitBtn.textContent = "Заказать";
         }
-        
-        if (isSheet && window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen()) {
-          window.AppModal.close("sheet");
-        }
-        window.location.href = getShopBasePath();
       } catch (e) {
         console.error(e);
         if (e.message === "MIN_ORDER" && deliveryRules.minOrder > 0) {

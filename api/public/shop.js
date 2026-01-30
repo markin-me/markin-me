@@ -2453,30 +2453,57 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         total += deliveryCost;
       }
 
-      // Серверная защита от дублей при повторной отправке (например, из-за сетевых ошибок)
-      // Ищем идентичный заказ, созданный недавно тем же клиентом.
-      const [recentDup] = await db.query(
-        `SELECT id, public_id
-         FROM order_orders
-         WHERE tenant_id=? AND store_id=? AND is_active=1
-           AND customer_phone=?
-           AND total_price=?
-           AND items=?
-           AND created_at >= (NOW() - INTERVAL 2 MINUTE)
-         ORDER BY id DESC
-         LIMIT 1`,
-        [tenantId, storeId, customerPhone, total, itemsJson]
-      );
-      if (recentDup.length) {
-        return res.json({ ok: true, data: { id: recentDup[0].id, public_id: recentDup[0].public_id, duplicate: true } });
+      // Адрес и точка самовывоза нужны для проверки дубля (читаем до неё)
+      const deliveryAddress = helpers.strOrNull(req.body.delivery_address);
+      const pickupStoreId = Number.isFinite(Number(req.body.pickup_store_id)) ? Number(req.body.pickup_store_id) : null;
+      const addrForDup = (deliveryAddress && String(deliveryAddress).trim()) ? String(deliveryAddress).trim() : '';
+      const pickupIdForDup = (pickupStoreId && Number.isFinite(pickupStoreId)) ? pickupStoreId : 0;
+
+      // Серверная защита от дублей (двойная отправка / повтор запроса). Окно 60 сек.
+      // created_at в БД хранится в локальном времени филиала — сравниваем в той же зоне.
+      const forceNew = req.body.force_new === true || req.body.force_new === 'true';
+      if (!forceNew) {
+        const tzOffsetHours = Number.isNaN(Number(storeTimezone)) ? 0 : Number(storeTimezone);
+        const tzOffsetMs = tzOffsetHours * 60 * 60 * 1000;
+        const thresholdLocal = new Date(Date.now() + tzOffsetMs - 60000);
+        const dupThresholdStr = thresholdLocal.getUTCFullYear() + '-' +
+          String(thresholdLocal.getUTCMonth() + 1).padStart(2, '0') + '-' +
+          String(thresholdLocal.getUTCDate()).padStart(2, '0') + ' ' +
+          String(thresholdLocal.getUTCHours()).padStart(2, '0') + ':' +
+          String(thresholdLocal.getUTCMinutes()).padStart(2, '0') + ':' +
+          String(thresholdLocal.getUTCSeconds()).padStart(2, '0');
+        const [recentDup] = await db.query(
+          `SELECT id, public_id, total_price
+           FROM order_orders
+           WHERE tenant_id=? AND store_id=? AND is_active=1
+             AND customer_phone=?
+             AND total_price=?
+             AND items=?
+             AND COALESCE(address, '') = ?
+             AND COALESCE(pickup_store_id, 0) = ?
+             AND created_at >= ?
+           ORDER BY id DESC
+           LIMIT 1`,
+          [tenantId, storeId, customerPhone, total, itemsJson, addrForDup, pickupIdForDup, dupThresholdStr]
+        );
+        if (recentDup.length) {
+          const dup = recentDup[0];
+          return res.json({
+            ok: true,
+            data: {
+              id: dup.id,
+              public_id: dup.public_id,
+              duplicate: true,
+              needConfirmation: true,
+              existingOrder: { id: dup.id, public_id: dup.public_id, total_price: dup.total_price }
+            }
+          });
+        }
       }
 
       const statusId = await getActiveStatusIdDefault(tenantId, storeId);
       if (!statusId) return res.status(500).json({ ok: false, error: 'NO_STATUSES' });
 
-      // ПЕРЕИМЕНОВАНО: delivery_address -> address (в таблице order_orders)
-      const deliveryAddress = helpers.strOrNull(req.body.delivery_address);
-      const pickupStoreId = Number(req.body.pickup_store_id) || null;
       const addrLine = (str(methodCode).trim() === 'delivery') ? deliveryAddress : null;
 
       const comment = helpers.strOrNull(req.body.comment);
