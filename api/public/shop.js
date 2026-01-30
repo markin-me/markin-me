@@ -1454,6 +1454,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       
       // Загружаем варианты для всех товаров-опций одним запросом
       let variantsByProductId = new Map();
+      let tiersByGroupId = new Map();
       if (productIds.length > 0) {
         const [variantAssignments] = await db.query(
           `SELECT 
@@ -1477,6 +1478,29 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
            ORDER BY va.product_id, va.sort_order ASC`,
           [tenantId, storeId, ...productIds]
         );
+
+        // Собираем все id групп вариантов, чтобы подтянуть скидки/надбавки
+        const variantGroupIds = Array.from(
+          new Set(variantAssignments.map((va) => Number(va.variant_group_id)).filter(Number.isFinite))
+        );
+        if (variantGroupIds.length > 0) {
+          const [tiers] = await db.query(
+            `SELECT variant_group_id, min_quantity, discount_percent, sort_order
+             FROM prod_variant_discount_tiers
+             WHERE tenant_id=? AND store_id=? AND variant_group_id IN (${variantGroupIds.map(() => '?').join(',')})
+             ORDER BY variant_group_id ASC, sort_order ASC, min_quantity ASC`,
+            [tenantId, storeId, ...variantGroupIds]
+          );
+          for (const t of tiers) {
+            const gid = Number(t.variant_group_id);
+            if (!tiersByGroupId.has(gid)) tiersByGroupId.set(gid, []);
+            tiersByGroupId.get(gid).push({
+              min_quantity: t.min_quantity,
+              discount_percent: t.discount_percent,
+              sort_order: t.sort_order,
+            });
+          }
+        }
         
         // Группируем варианты по product_id
         for (const va of variantAssignments) {
@@ -1488,8 +1512,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           const assignmentDefaultIdx = va.assignment_default_value_index != null ? Number(va.assignment_default_value_index) : null;
           // Определяем дефолтный индекс: сначала из привязки, потом из группы
           const defaultIdx = assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx;
+          const groupId = Number(va.variant_group_id);
           variantsByProductId.get(pid).push({
-            variant_group_id: Number(va.variant_group_id),
+            variant_group_id: groupId,
             title: str(va.variant_title || ""),
             unit_id: va.unit_id ? Number(va.unit_id) : null,
             unit_code: str(va.unit_code || ""),
@@ -1497,6 +1522,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             unit_short_title: str(va.unit_short_title || ""),
             values: safeJsonArray(va.variant_values),
             default_value_index: defaultIdx,
+            discount_tiers: tiersByGroupId.get(groupId) || [],
           });
         }
       }

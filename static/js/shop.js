@@ -523,7 +523,8 @@
       } else if (sheetNavigationState.type === 'activeOrders') {
         return handleActiveOrdersSheetBack();
       } else if (sheetNavigationState.type === 'categories' || 
-                 sheetNavigationState.type === 'profile') {
+                 sheetNavigationState.type === 'profile' ||
+                 sheetNavigationState.type === 'favorites') {
         // Простые bottom sheets без навигации - просто закрываем
         closeShopSheetIfOpen();
         return true;
@@ -3236,8 +3237,23 @@ async function initAddresses() {
   // -----------------------------
   // Cart render
   // -----------------------------
+  function sortCartItemsForDisplay(items) {
+    const normal = [];
+    const auto = [];
+    (Array.isArray(items) ? items : []).forEach((item) => {
+      if (Number(item?.auto_add || 0) === 1) auto.push(item);
+      else normal.push(item);
+    });
+    auto.sort((a, b) => {
+      const nameA = String(a?.product?.name || "");
+      const nameB = String(b?.product?.name || "");
+      return nameA.localeCompare(nameB, "ru", { sensitivity: "base" });
+    });
+    return normal.concat(auto);
+  }
+
   function renderCartInto(listEl, totalEl, emptyPlaceholderEl) {
-    const items = cartItemsResolved();
+    const items = sortCartItemsForDisplay(cartItemsResolved());
     if (listEl) listEl.innerHTML = "";
 
     if (!items.length) {
@@ -8412,9 +8428,18 @@ function renderSheetAddressList() {
     if (!window.AppModal) return;
     const wrap = buildLoginContent({ onSuccess });
     setAppModalMode("shop");
+    // Помечаем как профильный шит, чтобы работали повторный клик и Android Back
+    sheetNavigationState.type = 'profile';
+    sheetNavigationState.screen = null;
+    sheetNavigationState.data = null;
     window.AppModal.open({
       title: "Профиль",
       content: wrap,
+      onClose: () => {
+        sheetNavigationState.type = null;
+        sheetNavigationState.screen = null;
+        sheetNavigationState.data = null;
+      },
     });
   }
 

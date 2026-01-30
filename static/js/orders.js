@@ -154,6 +154,26 @@
     return `${day} ${monthNames[month]} ${year}, ${hours}:${minutes}`;
   }
 
+  function formatScheduleText(order, { includeTitle = true } = {}) {
+    if (!order) return "";
+    const title = String(order.time_option_title || "").trim();
+    const scheduledAt = order.scheduled_at;
+    if (!scheduledAt) return includeTitle ? title : "";
+
+    const dateStr = String(scheduledAt).replace(' ', 'T');
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) return includeTitle ? title : "";
+
+    const code = String(order.time_option_code || "").trim();
+    const storeNow = getStoreDateNow(state.storeTimezone || "+0");
+    const isToday = toDateKey(d) === toDateKey(storeNow);
+    const showDate = code === "on_date" ? true : code === "at_time" ? false : !isToday;
+    const valueText = showDate ? formatDateTime(scheduledAt) : formatTime(scheduledAt);
+    if (!valueText) return includeTitle ? title : "";
+    if (includeTitle && title) return `${title}: ${valueText}`;
+    return valueText;
+  }
+
   function escapeHtml(s) {
     return String(s ?? "")
       .replaceAll("&", "&amp;")
@@ -595,13 +615,10 @@
     setTextAll(infoEls.deliveryQty, `${qty} шт.`);
 
     const methodTitle = order.method_title || (order.method_code === "pickup" ? "Самовывоз" : "Доставка");
+    const deliverySectionTitle = order.method_code === "pickup" ? "Самовывоз:" : "Доставка:";
     setTextAll(infoEls.deliveryType, methodTitle || "?");
 
-    let intervalText = order.time_option_title || "";
-    if (order.scheduled_at) {
-      const scheduledStr = formatDateTime(order.scheduled_at);
-      intervalText = intervalText ? `${intervalText}: ${scheduledStr}` : scheduledStr;
-    }
+    const intervalText = formatScheduleText(order, { includeTitle: true });
     setTextAll(infoEls.deliveryInterval, intervalText);
     setHiddenAll(infoEls.deliveryInterval, !intervalText);
 
@@ -855,9 +872,9 @@
     row.setAttribute("data-order-id", String(order.id));
 
     const urgent = Boolean(order.is_urgent || order.urgent || order.time_option_code === "urgent" || order.time_option_code === "asap");
-    const intervalText = order.time_option_title || (order.scheduled_at ? formatTime(order.scheduled_at) : "");
+    const intervalText = formatScheduleText(order, { includeTitle: false });
     const hasScheduledTime = Boolean(
-      (order.scheduled_at || order.time_option_code === "at_time" || order.time_option_code === "on_date") && !urgent
+      intervalText && (order.scheduled_at || order.time_option_code === "at_time" || order.time_option_code === "on_date") && !urgent
     );
     const comment = order.comment || "Нет комментария";
     const courier = order.courier_name || null;
@@ -1476,13 +1493,33 @@
 
     const dateStr = `${day}.${month}.${year}, ${hours}:${minutes}`;
 
+    const methodTitle = order.method_title || (order.method_code === "pickup" ? "Самовывоз" : "Доставка");
+    const deliverySectionTitle = order.method_code === "pickup" ? "Самовывоз:" : "Доставка:";
+    let address = order.address;
+    if (!address && order.pickup_store_address) {
+      address = order.pickup_store_name
+        ? `${order.pickup_store_name}, ${order.pickup_store_address}`
+        : order.pickup_store_address;
+    }
+    const isUrgent = order.is_urgent || order.urgent || order.time_option_code === "urgent";
+    const total = parseFloat(order.total_price || order.total || 0);
+    const deliveryCost = Number(order.delivery_cost || 0);
+    const changeFromRaw = order.change_from;
+    const changeFrom = Number.isFinite(Number(changeFromRaw)) ? Number(changeFromRaw) : 0;
+    const paymentTitle = order.payment_method_title || order.payment_title || "";
+    const paymentCode = order.payment_code || "";
+    const changeAmount = Math.max(0, changeFrom - total);
+    const showChange = changeAmount > 0;
+    const scheduleText = formatScheduleText(order, { includeTitle: true });
+
     let itemsHtml = '';
     if (order.items && Array.isArray(order.items)) {
       order.items.forEach(item => {
         const name = escapeHtml(item.product_name || item.name || 'Товар');
         const qty = item.quantity || item.qty || 1;
-        const price = parseFloat(item.price || 0);
-        const total = price * qty;
+        const basePrice = parseFloat(item.price || 0);
+        const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? (basePrice * qty) ?? 0);
+        const unitPrice = qty ? (lineTotal / qty) : basePrice;
         
         // Варианты товара (первыми)
         const variants = Array.isArray(item.variants) ? item.variants : [];
@@ -1552,7 +1589,7 @@
         itemsHtml += `
           <div class="receipt-item">
             <div class="receipt-item-name">${name}</div>
-            <div class="receipt-item-details">${qty} x ${price.toFixed(2)} = ${total.toFixed(2)}</div>
+            <div class="receipt-item-details">${qty} x ${unitPrice.toFixed(2)} = ${lineTotal.toFixed(2)}</div>
             ${variantsHtml}
             ${ingredientsHtml}
             ${optionsHtml}
@@ -1560,9 +1597,6 @@
         `;
       });
     }
-
-    const total = parseFloat(order.total || order.total_price || 0);
-    const isUrgent = order.is_urgent || order.urgent || order.time_option_code === "urgent";
 
     return `
 <!DOCTYPE html>
@@ -1654,6 +1688,19 @@
       border-bottom: 1px dashed #000;
       padding: 10px 0;
     }
+    .receipt-summary-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .receipt-summary-label {
+      flex: 1;
+    }
+    .receipt-summary-value {
+      flex-shrink: 0;
+      text-align: right;
+    }
     .receipt-urgent {
       text-align: center;
       font-weight: bold;
@@ -1678,15 +1725,13 @@
     ${order.customer_phone ? `<div>${escapeHtml(order.customer_phone)}</div>` : ''}
   </div>
   
-  ${(order.address || order.method_title) ? `
   <div class="receipt-section">
-    <div class="receipt-section-title">Доставка:</div>
-    ${order.method_title ? `<div>${escapeHtml(order.method_title)}</div>` : ''}
-    ${order.address ? `<div>${escapeHtml(order.address)}</div>` : ''}
-    ${order.time_option_title ? `<div>${escapeHtml(order.time_option_title)}</div>` : ''}
+    <div class="receipt-section-title">${deliverySectionTitle}</div>
+    <div>${escapeHtml(methodTitle || "—")}</div>
+    <div>${escapeHtml(address || "—")}</div>
+    ${scheduleText ? `<div>${escapeHtml(scheduleText)}</div>` : ''}
     ${isUrgent ? '<div class="receipt-urgent">⚡ СРОЧНО</div>' : ''}
   </div>
-  ` : ''}
   
   ${order.comment ? `
   <div class="receipt-section">
@@ -1703,14 +1748,15 @@
   </div>
   
   <div class="receipt-divider"></div>
-  
-  <div class="receipt-total">ИТОГО: ${total.toFixed(2)}</div>
-  
-  ${order.payment_method_title ? `
+
   <div class="receipt-section">
-    <div>Оплата: ${escapeHtml(order.payment_method_title)}</div>
+    <div class="receipt-section-title">Суммы:</div>
+    ${paymentTitle ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Оплата</div><div class="receipt-summary-value">${escapeHtml(paymentTitle)}</div></div>` : ''}
+    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача с</div><div class="receipt-summary-value">${money(changeFrom)}</div></div>` : ''}
+    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача</div><div class="receipt-summary-value">${money(changeAmount)}</div></div>` : ''}
+    <div class="receipt-summary-row"><div class="receipt-summary-label">Доставка</div><div class="receipt-summary-value">${money(deliveryCost)}</div></div>
+    <div class="receipt-total">ИТОГО: ${money(total)}</div>
   </div>
-  ` : ''}
   
   <div style="margin-top: 20px; text-align: center; font-size: 10pt;">
     <div>Спасибо за заказ!</div>
