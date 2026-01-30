@@ -4222,7 +4222,7 @@ function updateCartBadge() {
     const tiers = Array.isArray(variantGroup?.discount_tiers) ? variantGroup.discount_tiers : [];
     const tier = tiers.find((t) => Number(t.sort_order) === idx);
     const discountPercent = Number(tier?.discount_percent || 0) || 0;
-    if (discountPercent > 0) {
+    if (discountPercent !== 0) {
       unitPrice = unitPrice * (1 - discountPercent / 100);
     }
     return unitPrice;
@@ -4255,7 +4255,7 @@ function updateCartBadge() {
     const tiers = Array.isArray(group.discount_tiers) ? group.discount_tiers : [];
     const tier = tiers.find((t) => Number(t.sort_order) === selectedIndex);
     const discountPercent = Number(tier?.discount_percent || 0) || 0;
-    if (discountPercent > 0) {
+    if (discountPercent !== 0) {
       unitPrice = unitPrice * (1 - discountPercent / 100);
     }
     return unitPrice;

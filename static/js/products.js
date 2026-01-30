@@ -3588,13 +3588,23 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       if (Number.isFinite(idx)) tierMap.set(idx, tier);
     });
     const defaultIdx = defaultValueIndex != null ? Number(defaultValueIndex) : null;
+    const formatSignedPercent = (storedValue) => {
+      const num = Number(storedValue || 0);
+      const uiValue = Number.isFinite(num) ? -num : 0;
+      if (!uiValue) return "+0";
+      return `${uiValue > 0 ? "+" : ""}${uiValue}`;
+    };
+
     return `
       <div class="option-summary-list">
         ${list.map((value, idx) => {
           const tier = tierMap.get(idx) || {};
           const discountRaw = tier.discount_percent != null ? tier.discount_percent : (tier.discount_value || 0);
           const discount = Number(discountRaw) || 0;
-          const metaLabel = discount > 0 ? `Скидка: ${discount}%` : "Без скидки";
+          const uiSigned = Number.isFinite(discount) ? -discount : 0;
+          const metaLabel = uiSigned < 0
+            ? `Скидка: ${formatSignedPercent(discount)}%`
+            : (uiSigned > 0 ? `Надбавка: ${formatSignedPercent(discount)}%` : "Без изменения");
           const isDefault = defaultIdx !== null && idx === defaultIdx;
           const starIcon = isDefault 
             ? '<i class="fas fa-star" style="color: #ff7a00; margin-right: 8px;"></i>'
@@ -3615,7 +3625,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
                 </div>
               </div>
               <div class="option-summary-price">
-                <span>${discount > 0 ? `${discount}%` : ""}</span>
+                <span>${uiSigned !== 0 ? `${formatSignedPercent(discount)}%` : ""}</span>
               </div>
             </div>
           `;
@@ -4864,12 +4874,20 @@ function updateOptionGroupSelectionUi() {
       }
     }
     
+    const formatSignedDiscount = (storedValue) => {
+      const num = Number(storedValue || 0);
+      const uiValue = Number.isFinite(num) ? -num : 0;
+      if (!uiValue) return "+0";
+      return `${uiValue > 0 ? "+" : ""}${uiValue}`;
+    };
+
     variantItemsList.innerHTML = values.map((value, idx) => {
       const tier = tiers.find(t => Number(t.sort_order) === idx) || { discount_type: "percent", discount_percent: 0, discount_value: 0 };
       const discountType = tier.discount_type || "percent";
       const discountValue = discountType === "percent" 
         ? (tier.discount_percent != null ? tier.discount_percent : (tier.discount_value || 0))
         : (tier.discount_value != null ? tier.discount_value : (tier.discount_percent || 0));
+      const displayDiscount = formatSignedDiscount(discountValue);
       
       const isDefault = defaultIdx !== null && idx === defaultIdx;
       const starIcon = isDefault 
@@ -4891,7 +4909,7 @@ function updateOptionGroupSelectionUi() {
             </select>
           </div>
           <div class="option-item-col">
-            <input class="control" type="number" data-variant-discount="${idx}" value="${discountValue}" placeholder="0" step="0.01" min="0" ${isVariantEditable() ? "" : "disabled"} />
+            <input class="control" type="text" inputmode="decimal" data-variant-discount="${idx}" value="${displayDiscount}" placeholder="+0" ${isVariantEditable() ? "" : "disabled"} />
           </div>
           ${isVariantEditable() ? `<button class="option-row-remove" type="button" data-variant-remove="${idx}" title="Удалить" aria-label="Удалить вариант"><i class="fas fa-times"></i></button>` : ""}
         </div>
@@ -4922,7 +4940,8 @@ function updateOptionGroupSelectionUi() {
           const discountValue = state.variantDraft.tiers[idx].discount_type === "percent" 
             ? (state.variantDraft.tiers[idx].discount_percent || 0)
             : (state.variantDraft.tiers[idx].discount_value || 0);
-          discountInput.value = discountValue;
+          const uiValue = Number.isFinite(Number(discountValue)) ? -Number(discountValue) : 0;
+          discountInput.value = uiValue === 0 ? "+0" : `${uiValue > 0 ? "+" : ""}${uiValue}`;
         }
       });
     });
@@ -4935,11 +4954,20 @@ function updateOptionGroupSelectionUi() {
           state.variantDraft.tiers[idx] = { sort_order: idx, discount_type: "percent", discount_value: 0 };
         }
         const discountType = state.variantDraft.tiers[idx].discount_type || "percent";
-        const value = Number(input.value) || 0;
+        const raw = String(input.value || "").trim();
+        const hasSign = /^[+-]/.test(raw);
+        const normalized = raw.replace(",", ".");
+        const parsed = Number(normalized);
+        if (!raw || !hasSign || !Number.isFinite(parsed)) {
+          input.classList.add("is-invalid");
+          return;
+        }
+        input.classList.remove("is-invalid");
+        const storedValue = -parsed;
         if (discountType === "percent") {
-          state.variantDraft.tiers[idx].discount_percent = value;
+          state.variantDraft.tiers[idx].discount_percent = storedValue;
         } else {
-          state.variantDraft.tiers[idx].discount_value = value;
+          state.variantDraft.tiers[idx].discount_value = storedValue;
         }
       });
     });
@@ -6087,6 +6115,38 @@ function updateOptionGroupSelectionUi() {
     renderVariantGroupLevel();
   }
 
+  function syncVariantDiscountInputs() {
+    if (!variantItemsList) return true;
+    const inputs = Array.from(variantItemsList.querySelectorAll("[data-variant-discount]"));
+    for (const input of inputs) {
+      const idx = Number(input.dataset.variantDiscount);
+      const raw = String(input.value || "").trim();
+      const hasSign = /^[+-]/.test(raw);
+      const normalized = raw.replace(",", ".");
+      const parsed = Number(normalized);
+      if (!raw || !hasSign || !Number.isFinite(parsed)) {
+        input.classList.add("is-invalid");
+        showToast("Укажите знак + или - в значении варианта.");
+        input.focus();
+        return false;
+      }
+      input.classList.remove("is-invalid");
+      if (!state.variantDraft) state.variantDraft = { group: { values: [] }, tiers: [], assignments: [] };
+      if (!state.variantDraft.tiers) state.variantDraft.tiers = [];
+      if (!state.variantDraft.tiers[idx]) {
+        state.variantDraft.tiers[idx] = { sort_order: idx, discount_type: "percent", discount_value: 0 };
+      }
+      const discountType = state.variantDraft.tiers[idx].discount_type || "percent";
+      const storedValue = -parsed;
+      if (discountType === "percent") {
+        state.variantDraft.tiers[idx].discount_percent = storedValue;
+      } else {
+        state.variantDraft.tiers[idx].discount_value = storedValue;
+      }
+    }
+    return true;
+  }
+
   async function saveVariantGroup() {
     if (!variantGroupForm) return;
     const formValues = getVariantGroupFormValues();
@@ -6114,6 +6174,10 @@ function updateOptionGroupSelectionUi() {
 
     if (!payload.title) {
       variantGroupTitleInput?.focus();
+      return;
+    }
+
+    if (!syncVariantDiscountInputs()) {
       return;
     }
 
@@ -11736,8 +11800,8 @@ function updateOptionGroupSelectionUi() {
           }
           return;
         }
-        // Option edit save
-        if (state.mode === "options" && state.optionPanel.mode === "edit" && state.selectedOptionGroupId) {
+        // Option edit/create save
+        if (state.mode === "options" && (state.optionPanel.mode === "edit" || state.optionPanel.mode === "create")) {
           try {
             await saveOptionGroup();
           } catch (e) {
