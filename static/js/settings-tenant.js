@@ -245,6 +245,12 @@
         if (key in tenant) el.value = tenant[key] ?? "";
         setPreviewFromValue(key, tenant[key]);
       });
+      if (settingsPriceRoundingMode && !settingsPriceRoundingMode.value) {
+        settingsPriceRoundingMode.value = "none";
+      }
+      if (settingsPriceRoundingPrecision && !settingsPriceRoundingPrecision.value) {
+        settingsPriceRoundingPrecision.value = "2";
+      }
 
       fillTimezoneSelect(tenant.timezone, "tenantTimezoneSelect");
       fillTimezoneSelect(tenant.timezone, "brandTimezoneSelect");
@@ -361,6 +367,8 @@
     const orderPaymentsPanel = document.getElementById("settingsOrderPaymentsPanel");
     const orderDeliveryPanel = document.getElementById("settingsOrderDeliveryPanel");
     const orderTimeOptionsPanel = document.getElementById("settingsOrderTimeOptionsPanel");
+    const settingsPriceRoundingMode = document.getElementById("settingsPriceRoundingMode");
+    const settingsPriceRoundingPrecision = document.getElementById("settingsPriceRoundingPrecision");
     const rightTabs = document.getElementById("settingsRightTabs");
     const rightHeader = rightTabs ? rightTabs.closest(".settings-right-header") : null;
     const settingsStoreEmpty = document.getElementById("settingsStoreEmpty");
@@ -1767,6 +1775,34 @@
         }
       });
     });
+
+    if (settingsPriceRoundingMode || settingsPriceRoundingPrecision) {
+      const saveRounding = async () => {
+        const mode = settingsPriceRoundingMode ? settingsPriceRoundingMode.value : "none";
+        const precisionRaw = settingsPriceRoundingPrecision ? settingsPriceRoundingPrecision.value : "2";
+        const precision = precisionRaw === "0" ? 0 : 2;
+        const data = await updateTenantFields({
+          price_rounding_mode: mode || "none",
+          price_rounding_precision: precision
+        });
+        if (!data || !data.ok) {
+          alert("Не удалось сохранить настройки округления.");
+          await loadTenantProfile();
+          return;
+        }
+        if (data.tenant) {
+          updateTenantCache(data.tenant);
+          applyBrandFromTenant(data.tenant);
+        }
+      };
+
+      if (settingsPriceRoundingMode) {
+        settingsPriceRoundingMode.addEventListener("change", saveRounding);
+      }
+      if (settingsPriceRoundingPrecision) {
+        settingsPriceRoundingPrecision.addEventListener("change", saveRounding);
+      }
+    }
 
     const select = document.getElementById("tenantTimezoneSelect");
     if (select) {

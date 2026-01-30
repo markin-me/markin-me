@@ -263,6 +263,24 @@
           <div class="settings-list-title">Способы оплаты</div>
           <div class="settings-list-subtitle">Перетащите строку, чтобы изменить порядок.</div>
         </div>
+        <div class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">ОКРУГЛЕНИЕ СУММЫ</label>
+            <select class="control" id="settingsPriceRoundingMode" data-tenant-input="price_rounding_mode" data-rounding-input="mode">
+              <option value="none">Не округлять</option>
+              <option value="down">В меньшую сторону</option>
+              <option value="up">В большую сторону</option>
+              <option value="nearest">До ближайшего</option>
+            </select>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ТОЧНОСТЬ</label>
+            <select class="control" id="settingsPriceRoundingPrecision" data-tenant-input="price_rounding_precision" data-rounding-input="precision">
+              <option value="2">До копеек</option>
+              <option value="0">До рубля</option>
+            </select>
+          </div>
+        </div>
         <div class="settings-list" data-settings-list="order-payments"></div>
       </div>
 

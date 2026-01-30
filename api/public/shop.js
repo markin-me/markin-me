@@ -1748,6 +1748,26 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
 
+      const [tenantRows] = await db.query(
+        'SELECT price_rounding_mode, price_rounding_precision FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+      const roundingModeRaw = tenantRows[0]?.price_rounding_mode || 'none';
+      const roundingPrecisionRaw = Number(tenantRows[0]?.price_rounding_precision);
+      const allowedRounding = new Set(['none', 'down', 'up', 'nearest']);
+      const roundingMode = allowedRounding.has(roundingModeRaw) ? roundingModeRaw : 'none';
+      const roundingPrecision = roundingPrecisionRaw === 0 ? 0 : 2;
+
+      function roundPrice(value) {
+        const n = Number(value || 0);
+        if (!Number.isFinite(n)) return 0;
+        if (roundingMode === 'none') return n;
+        const factor = roundingPrecision > 0 ? Math.pow(10, roundingPrecision) : 1;
+        if (roundingMode === 'up') return Math.ceil(n * factor) / factor;
+        if (roundingMode === 'down') return Math.floor(n * factor) / factor;
+        return Math.round(n * factor) / factor;
+      }
+
       // Получаем timezone филиала для правильной записи времени
       const [storeForTz] = await db.query(
         'SELECT timezone FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
@@ -1940,7 +1960,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         const basePrice = Number(p.price || 0);
         const lineTotalFromRequest = Number(it.line_total);
         const useLineTotalFromRequest = Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0;
-        const lineTotal = useLineTotalFromRequest ? lineTotalFromRequest : basePrice * qty;
+        const lineTotalRaw = useLineTotalFromRequest ? lineTotalFromRequest : basePrice * qty;
+        const lineTotal = roundPrice(lineTotalRaw);
         nonAutoItemsTotal += lineTotal;
       }
 
@@ -2330,14 +2351,21 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         // Если line_total не передан, используем базовую цену товара (для товаров без опций/вариантов/состава)
         const autoRule = autoRulesByProduct.get(pid);
         let unitPrice = basePrice;
+        let paidQty = qty;
         let lineTotal = useLineTotalFromRequest ? lineTotalFromRequest : basePrice * qty;
         if (autoRule) {
           unitPrice = autoRule.price_override != null ? Number(autoRule.price_override) : basePrice;
           const freeQty = calcAutoFreeQty(autoRule, nonAutoItemsTotal);
-          const paidQty = Math.max(0, qty - freeQty);
+          paidQty = Math.max(0, qty - freeQty);
           lineTotal = paidQty * unitPrice;
         }
 
+        unitPrice = roundPrice(unitPrice);
+        if (autoRule) {
+          lineTotal = roundPrice(unitPrice * paidQty);
+        } else {
+          lineTotal = roundPrice(useLineTotalFromRequest ? lineTotalFromRequest : unitPrice * paidQty);
+        }
         total += lineTotal;
 
         // Получаем фото товара для сохранения в заказе

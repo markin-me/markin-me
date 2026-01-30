@@ -297,6 +297,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const faviconDark = req.body.favicon_dark_url !== undefined ? helpers.strOrNull(req.body.favicon_dark_url) : undefined;
       const appleTouchIcon = req.body.apple_touch_icon_url !== undefined ? helpers.strOrNull(req.body.apple_touch_icon_url) : undefined;
       const androidIcon = req.body.android_icon_url !== undefined ? helpers.strOrNull(req.body.android_icon_url) : undefined;
+      const roundingModeRaw = req.body.price_rounding_mode !== undefined ? helpers.strOrNull(req.body.price_rounding_mode) : undefined;
+      const roundingPrecisionRaw = req.body.price_rounding_precision !== undefined ? helpers.numOrNull(req.body.price_rounding_precision) : undefined;
       const siteName = req.body.site_name !== undefined ? helpers.strOrNull(req.body.site_name) : undefined;
       const siteDescription = req.body.site_description !== undefined ? helpers.strOrNull(req.body.site_description) : undefined;
       const subdomain = req.body.subdomain !== undefined ? normalizeSubdomain(req.body.subdomain) : undefined;
@@ -322,6 +324,18 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const nextFaviconDark = faviconDark !== undefined ? faviconDark : current.favicon_dark_url;
       const nextAppleTouchIcon = appleTouchIcon !== undefined ? appleTouchIcon : current.apple_touch_icon_url;
       const nextAndroidIcon = androidIcon !== undefined ? androidIcon : current.android_icon_url;
+      const allowedRoundingModes = new Set(['none', 'down', 'up', 'nearest']);
+      const sanitizedRoundingMode =
+        roundingModeRaw !== undefined
+          ? (allowedRoundingModes.has(roundingModeRaw) ? roundingModeRaw : 'none')
+          : undefined;
+      const sanitizedRoundingPrecision =
+        roundingPrecisionRaw !== undefined
+          ? (Number(roundingPrecisionRaw) === 0 ? 0 : 2)
+          : undefined;
+      const nextRoundingMode = sanitizedRoundingMode !== undefined ? sanitizedRoundingMode : current.price_rounding_mode;
+      const nextRoundingPrecision =
+        sanitizedRoundingPrecision !== undefined ? sanitizedRoundingPrecision : (current.price_rounding_precision ?? 2);
       const nextSiteName = siteName !== undefined ? siteName : current.site_name;
       const nextSiteDescription = siteDescription !== undefined ? siteDescription : current.site_description;
       let nextSubdomain = subdomain !== undefined ? subdomain : current.subdomain;
@@ -358,8 +372,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, site_name=?, site_description=?, subdomain=?, custom_domain=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, site_name=?, site_description=?, subdomain=?, custom_domain=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, tenantId]
       );
 
       const [rows] = await db.query(

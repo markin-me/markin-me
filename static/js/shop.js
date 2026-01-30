@@ -174,13 +174,44 @@
   // -----------------------------
   const moneyFmt = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 });
 
+  function getTenantFromStorage() {
+    try {
+      const t = localStorage.getItem("tenant");
+      return t ? JSON.parse(t) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function getPriceRoundingSettings() {
+    const tenant = getTenantFromStorage();
+    const modeRaw = tenant?.price_rounding_mode;
+    const mode = typeof modeRaw === "string" ? modeRaw : "none";
+    const allowed = new Set(["none", "down", "up", "nearest"]);
+    const safeMode = allowed.has(mode) ? mode : "none";
+    const precisionRaw = Number(tenant?.price_rounding_precision);
+    const precision = precisionRaw === 0 ? 0 : 2;
+    return { mode: safeMode, precision };
+  }
+
+  function roundPrice(value) {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n)) return 0;
+    const { mode, precision } = getPriceRoundingSettings();
+    if (!mode || mode === "none") return n;
+    const factor = precision > 0 ? Math.pow(10, precision) : 1;
+    if (mode === "up") return Math.ceil(n * factor) / factor;
+    if (mode === "down") return Math.floor(n * factor) / factor;
+    return Math.round(n * factor) / factor;
+  }
+
   function money(v) {
-    const n = Number(v || 0);
+    const n = roundPrice(Number(v || 0));
     return moneyFmt.format(Number.isFinite(n) ? n : 0) + " ₽";
   }
 
   function moneyNoSign(v) {
-    const n = Number(v || 0);
+    const n = roundPrice(Number(v || 0));
     return moneyFmt.format(Number.isFinite(n) ? n : 0);
   }
 
@@ -1271,7 +1302,9 @@
       const qty = Math.max(0, Number(item?.qty || 0));
       if (!qty) return sum;
       const { baseUnit } = getItemUnitParts(item);
-      return sum + baseUnit * qty;
+      const unitPrice = roundPrice(baseUnit);
+      const lineTotal = roundPrice(unitPrice * qty);
+      return sum + lineTotal;
     }, 0);
   }
 
@@ -1282,14 +1315,21 @@
       const isAuto = Number(item?.auto_add || 0) === 1;
       if (!isAuto) {
         const parts = getItemUnitParts(item);
-        return sum + parts.baseUnit * qty;
+        const unitPrice = roundPrice(parts.baseUnit);
+        const lineTotal = roundPrice(unitPrice * qty);
+        return sum + lineTotal;
       }
       const rule = getAutoRuleByProductId(item?.product?.id || item?.product_id);
       const parts = getItemUnitParts(item);
-      if (!rule) return sum + parts.baseUnit * qty;
+      if (!rule) {
+        const unitPrice = roundPrice(parts.baseUnit);
+        const lineTotal = roundPrice(unitPrice * qty);
+        return sum + lineTotal;
+      }
       const priceOverride = rule.price_override != null ? Number(rule.price_override) : parts.baseProductUnit;
-      const unitPrice = priceOverride + parts.optionTotal + parts.ingredientDiff;
-      return sum + unitPrice * qty;
+      const unitPrice = roundPrice(priceOverride + parts.optionTotal + parts.ingredientDiff);
+      const lineTotal = roundPrice(unitPrice * qty);
+      return sum + lineTotal;
     }, 0);
   }
 
@@ -1315,7 +1355,8 @@
       isAutoItem = true;
     }
 
-    const lineTotal = unitPrice * paidQty;
+    unitPrice = roundPrice(unitPrice);
+    const lineTotal = roundPrice(unitPrice * paidQty);
     return { lineTotal, unitPrice, paidQty, freeQty, isAuto: isAutoItem, parts };
   }
 
@@ -3003,6 +3044,7 @@ async function initAddresses() {
     }
 
     // Сохраняем в кэш
+    price = roundPrice(price);
     defaultPriceCache.set(productId, price);
     return price;
   }
@@ -6707,10 +6749,10 @@ optionGroups.forEach((group) => {
     const variantUnitPrice = getVariantUnitPrice(product, variants, variantState);
     const basePrice = Number(variantUnitPrice || 0) + optionTotal;
     const ingredientsPriceDiff = calculateIngredientPrice(); // Разница от базового состава
-    const unitPrice = basePrice + ingredientsPriceDiff;
+    const unitPrice = roundPrice(basePrice + ingredientsPriceDiff);
 
     // total = unit * qty
-    const totalPrice = unitPrice * Number(qty || 1);
+    const totalPrice = roundPrice(unitPrice * Number(qty || 1));
 
     // Новая структура: цена сверху, текст "в корзину" снизу
     actionBtnRef.innerHTML = `
@@ -6893,8 +6935,8 @@ optionGroups.forEach((group) => {
         const variantUnitPrice = getVariantUnitPrice(product, variants, variantState);
         const basePrice = Number(variantUnitPrice || 0) + optionTotal;
         const ingredientsPriceDiff = calculateIngredientPrice();
-        const unitPrice = basePrice + ingredientsPriceDiff;
-        const totalPrice = unitPrice * Number(qty || 1);
+        const unitPrice = roundPrice(basePrice + ingredientsPriceDiff);
+        const totalPrice = roundPrice(unitPrice * Number(qty || 1));
         elMobileProductPrice.textContent = money(totalPrice);
         elMobileProductLabel.textContent = editMode ? "Сохранить" : "в корзину";
         }

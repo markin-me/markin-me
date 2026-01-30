@@ -1524,6 +1524,8 @@ CREATE TABLE `ten_tenants` (
   `favicon_dark_url` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `apple_touch_icon_url` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `android_icon_url` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `price_rounding_mode` varchar(16) COLLATE utf8mb4_general_ci DEFAULT 'none',
+  `price_rounding_precision` tinyint NOT NULL DEFAULT '2',
   `timezone` varchar(64) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `site_name` varchar(150) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `site_description` text COLLATE utf8mb4_general_ci,
@@ -1534,8 +1536,8 @@ CREATE TABLE `ten_tenants` (
 -- Дамп данных таблицы `ten_tenants`
 --
 
-INSERT INTO `ten_tenants` (`id`, `store_id`, `name`, `slug`, `subdomain`, `email`, `password_hash`, `phone`, `is_active`, `created_at`, `updated_at`, `logo_light_url`, `logo_dark_url`, `favicon_light_url`, `favicon_dark_url`, `apple_touch_icon_url`, `android_icon_url`, `timezone`, `site_name`, `site_description`, `custom_domain`) VALUES
-(1, 1, 'По щам - домашняя еда с доставкой', NULL, 'posham', 'admin@test.ru', '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', '79021461966', 1, '2026-01-21 13:07:16', '2026-01-25 15:22:49', '/static/uploads/tenants/1/2bcab539a2056f905b05b2fe1e6175ca.png', '/static/uploads/tenants/1/1c30d7740e24c5295301e5190bb9a8a1.png', '/static/uploads/tenants/1/87a8ced908be6c4daaed371594cfde4c.png', '/static/uploads/tenants/1/ae6927d41ab198580ec4c62af9f32e14.png', NULL, NULL, NULL, 'По щам', NULL, NULL);
+INSERT INTO `ten_tenants` (`id`, `store_id`, `name`, `slug`, `subdomain`, `email`, `password_hash`, `phone`, `is_active`, `created_at`, `updated_at`, `logo_light_url`, `logo_dark_url`, `favicon_light_url`, `favicon_dark_url`, `apple_touch_icon_url`, `android_icon_url`, `price_rounding_mode`, `price_rounding_precision`, `timezone`, `site_name`, `site_description`, `custom_domain`) VALUES
+(1, 1, 'По щам - домашняя еда с доставкой', NULL, 'posham', 'admin@test.ru', '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', '79021461966', 1, '2026-01-21 13:07:16', '2026-01-25 15:22:49', '/static/uploads/tenants/1/2bcab539a2056f905b05b2fe1e6175ca.png', '/static/uploads/tenants/1/1c30d7740e24c5295301e5190bb9a8a1.png', '/static/uploads/tenants/1/87a8ced908be6c4daaed371594cfde4c.png', '/static/uploads/tenants/1/ae6927d41ab198580ec4c62af9f32e14.png', NULL, NULL, 'none', 2, NULL, 'По щам', NULL, NULL);
 
 --
 -- Индексы сохранённых таблиц
