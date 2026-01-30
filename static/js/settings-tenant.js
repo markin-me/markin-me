@@ -1960,6 +1960,7 @@
     const settingsDeliveryResetBtn = document.getElementById("settingsDeliveryResetBtn");
     const settingsDeliveryDeleteBtn = document.getElementById("settingsDeliveryDeleteBtn");
     const deliveryStoresList = document.getElementById("deliveryStoresList");
+    const settingsDeliveryDefaultStore = document.getElementById("settingsDeliveryDefaultStore");
 
     const deliverySettingsState = {
       loaded: false,
@@ -2073,13 +2074,14 @@
       });
     }
 
-    function renderDeliveryStoresCheckboxes(storeIds = []) {
+    function renderDeliveryStoresCheckboxes(storeIds = [], defaultStoreId = null) {
       if (!deliveryStoresList) return;
       deliveryStoresList.innerHTML = "";
 
       const stores = storesState.items || [];
       if (!stores.length) {
         deliveryStoresList.innerHTML = '<div class="muted">Нет филиалов</div>';
+        updateDeliveryDefaultStoreSelect([], null);
         return;
       }
 
@@ -2105,12 +2107,46 @@
         label.appendChild(text);
         deliveryStoresList.appendChild(label);
       });
+
+      updateDeliveryDefaultStoreSelect(storeIds, defaultStoreId);
+    }
+
+    function updateDeliveryDefaultStoreSelect(storeIds, defaultStoreId) {
+      if (!settingsDeliveryDefaultStore) return;
+      const stores = storesState.items || [];
+      const selectedStores = stores.filter((s) => storeIds.includes(s.id));
+      settingsDeliveryDefaultStore.innerHTML = '<option value="">— не выбран —</option>';
+      selectedStores.forEach((store) => {
+        const opt = document.createElement("option");
+        opt.value = store.id;
+        opt.textContent = store.name || `Филиал #${store.id}`;
+        if (defaultStoreId != null && store.id === defaultStoreId) opt.selected = true;
+        settingsDeliveryDefaultStore.appendChild(opt);
+      });
+      if (defaultStoreId == null || !storeIds.includes(defaultStoreId)) {
+        settingsDeliveryDefaultStore.value = "";
+      }
+    }
+
+    if (deliveryStoresList) {
+      deliveryStoresList.addEventListener("change", () => {
+        const selected = getSelectedDeliveryStoreIds();
+        const currentDefault = settingsDeliveryDefaultStore && settingsDeliveryDefaultStore.value ? Number(settingsDeliveryDefaultStore.value) : null;
+        const keepDefault = currentDefault != null && selected.includes(currentDefault) ? currentDefault : null;
+        updateDeliveryDefaultStoreSelect(selected, keepDefault);
+      });
     }
 
     function getSelectedDeliveryStoreIds() {
       if (!deliveryStoresList) return [];
       const checkboxes = deliveryStoresList.querySelectorAll("input[type=\"checkbox\"]:checked");
       return Array.from(checkboxes).map((cb) => Number(cb.value)).filter((v) => Number.isFinite(v));
+    }
+
+    function getSelectedDefaultDeliveryStoreId() {
+      if (!settingsDeliveryDefaultStore || !settingsDeliveryDefaultStore.value) return null;
+      const n = Number(settingsDeliveryDefaultStore.value);
+      return Number.isFinite(n) && n > 0 ? n : null;
     }
 
     function fillDeliverySettingForm(setting) {
@@ -2123,7 +2159,9 @@
       if (settingsDeliveryMinOrder) settingsDeliveryMinOrder.value = setting.min_order_amount || "";
       if (settingsDeliveryFreeFrom) settingsDeliveryFreeFrom.value = setting.free_delivery_from || "";
       if (settingsDeliveryActive) settingsDeliveryActive.checked = Number(setting.is_active) === 1;
-      renderDeliveryStoresCheckboxes(setting.store_ids || []);
+      const storeIds = setting.store_ids || [];
+      const defaultStoreId = setting.default_store_id != null ? Number(setting.default_store_id) : null;
+      renderDeliveryStoresCheckboxes(storeIds, defaultStoreId);
     }
 
     function setDeliveryMode(mode, setting) {
@@ -2141,7 +2179,7 @@
         if (settingsDeliveryMinOrder) settingsDeliveryMinOrder.value = "";
         if (settingsDeliveryFreeFrom) settingsDeliveryFreeFrom.value = "";
         if (settingsDeliveryActive) settingsDeliveryActive.checked = true;
-        renderDeliveryStoresCheckboxes([]);
+        renderDeliveryStoresCheckboxes([], null);
       } else if (setting) {
         fillDeliverySettingForm(setting);
       }
@@ -2252,7 +2290,8 @@
           min_order_amount: Number(settingsDeliveryMinOrder?.value) || 0,
           free_delivery_from: settingsDeliveryFreeFrom?.value ? Number(settingsDeliveryFreeFrom.value) : null,
           is_active: settingsDeliveryActive?.checked ? 1 : 0,
-          store_ids: getSelectedDeliveryStoreIds()
+          store_ids: getSelectedDeliveryStoreIds(),
+          default_store_id: getSelectedDefaultDeliveryStoreId()
         };
 
         if (!payload.name) {

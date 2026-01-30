@@ -1015,7 +1015,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
 
       const [settings] = await db.query(
-        `SELECT id, tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, is_active, created_at, updated_at
+        `SELECT id, tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, default_store_id, is_active, created_at, updated_at
          FROM ten_delivery_settings
          WHERE tenant_id=?
          ORDER BY id ASC`,
@@ -1047,7 +1047,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
 
       const enriched = settings.map(s => ({
         ...s,
-        store_ids: storeMap.get(s.id) || []
+        store_ids: storeMap.get(s.id) || [],
+        default_store_id: s.default_store_id != null ? Number(s.default_store_id) : null
       }));
 
       res.json({ ok: true, items: enriched });
@@ -1077,11 +1078,13 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const storeIds = Array.isArray(req.body.store_ids)
         ? req.body.store_ids.map(Number).filter(v => Number.isFinite(v) && v > 0)
         : [];
+      let defaultStoreId = helpers.numOrNull(req.body.default_store_id);
+      if (defaultStoreId != null && !storeIds.includes(defaultStoreId)) defaultStoreId = null;
 
       const [result] = await db.query(
-        `INSERT INTO ten_delivery_settings (tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, is_active)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [tenantId, name, deliveryCost, minOrderAmount, freeDeliveryFrom, isActive]
+        `INSERT INTO ten_delivery_settings (tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, default_store_id, is_active)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [tenantId, name, deliveryCost, minOrderAmount, freeDeliveryFrom, defaultStoreId, isActive]
       );
 
       const newId = result.insertId;
@@ -1097,13 +1100,13 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       const [rows] = await db.query(
-        `SELECT id, tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, is_active, created_at, updated_at
+        `SELECT id, tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, default_store_id, is_active, created_at, updated_at
          FROM ten_delivery_settings
          WHERE tenant_id=? AND id=? LIMIT 1`,
         [tenantId, newId]
       );
 
-      res.json({ ok: true, item: { ...rows[0], store_ids: storeIds } });
+      res.json({ ok: true, item: { ...rows[0], store_ids: storeIds, default_store_id: defaultStoreId } });
     } catch (err) {
       console.error('Ошибка создания настройки доставки:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -1155,6 +1158,22 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         updates.push('is_active=?');
         params.push(helpers.toBool(req.body.is_active, true) ? 1 : 0);
       }
+      if (req.body.default_store_id !== undefined) {
+        let storeIds = req.body.store_ids !== undefined
+          ? (Array.isArray(req.body.store_ids) ? req.body.store_ids.map(Number).filter(v => Number.isFinite(v) && v > 0) : [])
+          : null;
+        if (storeIds === null) {
+          const [links] = await db.query(
+            'SELECT store_id FROM ten_delivery_settings_stores WHERE tenant_id=? AND delivery_setting_id=?',
+            [tenantId, id]
+          );
+          storeIds = links.map(l => l.store_id);
+        }
+        let defaultStoreId = helpers.numOrNull(req.body.default_store_id);
+        if (defaultStoreId != null && storeIds.length && !storeIds.includes(defaultStoreId)) defaultStoreId = null;
+        updates.push('default_store_id=?');
+        params.push(defaultStoreId);
+      }
 
       if (updates.length) {
         params.push(tenantId, id);
@@ -1187,7 +1206,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
 
       // Возвращаем обновлённую запись
       const [rows] = await db.query(
-        `SELECT id, tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, is_active, created_at, updated_at
+        `SELECT id, tenant_id, name, delivery_cost, min_order_amount, free_delivery_from, default_store_id, is_active, created_at, updated_at
          FROM ten_delivery_settings
          WHERE tenant_id=? AND id=? LIMIT 1`,
         [tenantId, id]
@@ -1198,7 +1217,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         [tenantId, id]
       );
 
-      res.json({ ok: true, item: { ...rows[0], store_ids: links.map(l => l.store_id) } });
+      const storeIds = links.map(l => l.store_id);
+      const item = rows[0];
+      res.json({ ok: true, item: { ...item, store_ids: storeIds, default_store_id: item.default_store_id != null ? Number(item.default_store_id) : null } });
     } catch (err) {
       console.error('Ошибка обновления настройки доставки:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });

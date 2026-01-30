@@ -1365,6 +1365,7 @@ CREATE TABLE `ten_delivery_settings` (
   `delivery_cost` decimal(10,2) DEFAULT '0.00',
   `min_order_amount` decimal(10,2) DEFAULT '0.00',
   `free_delivery_from` decimal(10,2) DEFAULT NULL,
+  `default_store_id` int DEFAULT NULL,
   `is_active` tinyint(1) DEFAULT '1',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP

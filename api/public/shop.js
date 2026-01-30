@@ -1773,6 +1773,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      let orderStoreId = storeId;
 
       const [tenantRows] = await db.query(
         'SELECT price_rounding_mode, price_rounding_precision FROM ten_tenants WHERE id=? LIMIT 1',
@@ -1793,13 +1794,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         if (roundingMode === 'down') return Math.floor(n * factor) / factor;
         return Math.round(n * factor) / factor;
       }
-
-      // Получаем timezone филиала для правильной записи времени
-      const [storeForTz] = await db.query(
-        'SELECT timezone FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
-        [tenantId, storeId]
-      );
-      const storeTimezone = storeForTz[0]?.timezone || '+0';
 
       // auth customer (optional)
       const token = str(req.headers['x-customer-token']);
@@ -2427,7 +2421,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         let freeDeliveryFrom = null;
 
         const [settings] = await db.query(
-          `SELECT ds.delivery_cost, ds.min_order_amount, ds.free_delivery_from
+          `SELECT ds.delivery_cost, ds.min_order_amount, ds.free_delivery_from, ds.default_store_id
            FROM ten_delivery_settings ds
            JOIN ten_delivery_settings_stores dss ON dss.delivery_setting_id = ds.id AND dss.tenant_id = ds.tenant_id
            WHERE ds.tenant_id=? AND dss.store_id=? AND ds.is_active=1
@@ -2440,6 +2434,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           deliveryCost = Number(s.delivery_cost || 0);
           minOrderAmount = Number(s.min_order_amount || 0);
           freeDeliveryFrom = s.free_delivery_from != null ? Number(s.free_delivery_from) : null;
+          if (s.default_store_id != null && Number.isFinite(Number(s.default_store_id))) {
+            orderStoreId = Number(s.default_store_id);
+          }
         }
 
         if (minOrderAmount > 0 && total < minOrderAmount) {
@@ -2452,6 +2449,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
         total += deliveryCost;
       }
+
+      // Timezone филиала, к которому привязан заказ (orderStoreId)
+      const [storeForTz] = await db.query(
+        'SELECT timezone FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, orderStoreId]
+      );
+      const storeTimezone = storeForTz[0]?.timezone || '+0';
 
       // Адрес и точка самовывоза нужны для проверки дубля (читаем до неё)
       const deliveryAddress = helpers.strOrNull(req.body.delivery_address);
@@ -2484,7 +2488,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
              AND created_at >= ?
            ORDER BY id DESC
            LIMIT 1`,
-          [tenantId, storeId, customerPhone, total, itemsJson, addrForDup, pickupIdForDup, dupThresholdStr]
+          [tenantId, orderStoreId, customerPhone, total, itemsJson, addrForDup, pickupIdForDup, dupThresholdStr]
         );
         if (recentDup.length) {
           const dup = recentDup[0];
@@ -2501,7 +2505,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         }
       }
 
-      const statusId = await getActiveStatusIdDefault(tenantId, storeId);
+      const statusId = await getActiveStatusIdDefault(tenantId, orderStoreId);
       if (!statusId) return res.status(500).json({ ok: false, error: 'NO_STATUSES' });
 
       const addrLine = (str(methodCode).trim() === 'delivery') ? deliveryAddress : null;
@@ -2541,7 +2545,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
         [
           tenantId,
-          storeId,
+          orderStoreId,
           customerId,
           customerName,
           customerPhone,
@@ -2566,10 +2570,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         ]
       );
 
-      const payload = await fetchOrderPayload(tenantId, storeId, r.insertId);
+      const payload = await fetchOrderPayload(tenantId, orderStoreId, r.insertId);
 
       if (payload) {
-        ordersEvents.publish(tenantId, storeId, 'order.created', payload);
+        ordersEvents.publish(tenantId, orderStoreId, 'order.created', payload);
       }
 
       res.json({ ok: true, data: { id: r.insertId, public_id: publicId } });
