@@ -224,7 +224,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         'logo_light_url',
         'logo_dark_url',
         'favicon_light_url',
-        'favicon_dark_url'
+        'favicon_dark_url',
+        'apple_touch_icon_url',
+        'android_icon_url'
       ]);
       if (!field || !allowed.has(field)) {
         return res.status(400).json({ ok: false, error: 'FIELD_INVALID' });
@@ -293,6 +295,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const logoDark = req.body.logo_dark_url !== undefined ? helpers.strOrNull(req.body.logo_dark_url) : undefined;
       const faviconLight = req.body.favicon_light_url !== undefined ? helpers.strOrNull(req.body.favicon_light_url) : undefined;
       const faviconDark = req.body.favicon_dark_url !== undefined ? helpers.strOrNull(req.body.favicon_dark_url) : undefined;
+      const appleTouchIcon = req.body.apple_touch_icon_url !== undefined ? helpers.strOrNull(req.body.apple_touch_icon_url) : undefined;
+      const androidIcon = req.body.android_icon_url !== undefined ? helpers.strOrNull(req.body.android_icon_url) : undefined;
       const siteName = req.body.site_name !== undefined ? helpers.strOrNull(req.body.site_name) : undefined;
       const siteDescription = req.body.site_description !== undefined ? helpers.strOrNull(req.body.site_description) : undefined;
       const subdomain = req.body.subdomain !== undefined ? normalizeSubdomain(req.body.subdomain) : undefined;
@@ -316,6 +320,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const nextLogoDark = logoDark !== undefined ? logoDark : current.logo_dark_url;
       const nextFaviconLight = faviconLight !== undefined ? faviconLight : current.favicon_light_url;
       const nextFaviconDark = faviconDark !== undefined ? faviconDark : current.favicon_dark_url;
+      const nextAppleTouchIcon = appleTouchIcon !== undefined ? appleTouchIcon : current.apple_touch_icon_url;
+      const nextAndroidIcon = androidIcon !== undefined ? androidIcon : current.android_icon_url;
       const nextSiteName = siteName !== undefined ? siteName : current.site_name;
       const nextSiteDescription = siteDescription !== undefined ? siteDescription : current.site_description;
       let nextSubdomain = subdomain !== undefined ? subdomain : current.subdomain;
@@ -352,8 +358,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, site_name=?, site_description=?, subdomain=?, custom_domain=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, site_name=?, site_description=?, subdomain=?, custom_domain=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, tenantId]
       );
 
       const [rows] = await db.query(

@@ -63,43 +63,49 @@ function getSubdomain(hostname) {
   return null;
 }
 
-async function renderShop(req, res) {
-  try {
-    const host = String(req.hostname || '').toLowerCase();
-    const queryTenantId = Number(req.query.tenant_id);
-    const querySubdomain = helpers.strOrNull(req.query.subdomain);
-    let tenant = null;
+async function resolveTenant(req) {
+  const host = String(req.hostname || '').toLowerCase();
+  const queryTenantId = Number(req.query.tenant_id);
+  const querySubdomain = helpers.strOrNull(req.query.subdomain);
+  let tenant = null;
 
-    if (Number.isFinite(queryTenantId) && queryTenantId > 0) {
-      const [rows] = await db.query('SELECT * FROM ten_tenants WHERE id=? LIMIT 1', [queryTenantId]);
-      tenant = rows[0] || null;
-    } else if (querySubdomain) {
-      const [rows] = await db.query('SELECT * FROM ten_tenants WHERE subdomain=? LIMIT 1', [querySubdomain.toLowerCase()]);
-      tenant = rows[0] || null;
-    } else if (host) {
-      const [custom] = await db.query('SELECT * FROM ten_tenants WHERE custom_domain=? LIMIT 1', [host]);
-      if (custom.length) {
-        tenant = custom[0];
-      } else {
-        const sub = getSubdomain(host);
-        if (sub) {
-          const [rows] = await db.query('SELECT * FROM ten_tenants WHERE subdomain=? LIMIT 1', [sub]);
-          tenant = rows[0] || null;
-        }
+  if (Number.isFinite(queryTenantId) && queryTenantId > 0) {
+    const [rows] = await db.query('SELECT * FROM ten_tenants WHERE id=? LIMIT 1', [queryTenantId]);
+    tenant = rows[0] || null;
+  } else if (querySubdomain) {
+    const [rows] = await db.query('SELECT * FROM ten_tenants WHERE subdomain=? LIMIT 1', [querySubdomain.toLowerCase()]);
+    tenant = rows[0] || null;
+  } else if (host) {
+    const [custom] = await db.query('SELECT * FROM ten_tenants WHERE custom_domain=? LIMIT 1', [host]);
+    if (custom.length) {
+      tenant = custom[0];
+    } else {
+      const sub = getSubdomain(host);
+      if (sub) {
+        const [rows] = await db.query('SELECT * FROM ten_tenants WHERE subdomain=? LIMIT 1', [sub]);
+        tenant = rows[0] || null;
       }
     }
+  }
 
-    if (!tenant) {
-      const [rows] = await db.query('SELECT * FROM ten_tenants WHERE id=1 LIMIT 1');
-      tenant = rows[0] || null;
-    }
+  if (!tenant) {
+    const [rows] = await db.query('SELECT * FROM ten_tenants WHERE id=1 LIMIT 1');
+    tenant = rows[0] || null;
+  }
 
-    const pageTitle = (tenant && (tenant.site_name || tenant.name)) ? (tenant.site_name || tenant.name) : '???????';
+  return tenant;
+}
+
+async function renderShop(req, res) {
+  try {
+    const tenant = await resolveTenant(req);
+
+    const pageTitle = (tenant && (tenant.site_name || tenant.name)) ? (tenant.site_name || tenant.name) : 'Магазин';
     const tenantId = tenant && tenant.id ? tenant.id : 1;
     res.render('pages/shop', { pageTitle, tenant, tenantId });
   } catch (err) {
-    console.error('?????? ???????? ???????:', err);
-    res.status(500).send('?????? ???????? ???????');
+    console.error('Ошибка загрузки страницы:', err);
+    res.status(500).send('Ошибка загрузки страницы');
   }
 }
 
@@ -112,10 +118,46 @@ app.use('/api/auth', makeAuthRouter({ db, helpers }));
 // ------------------------------
 // Pages
 // ------------------------------
+app.get('/manifest.json', async (req, res) => {
+  try {
+    const tenant = await resolveTenant(req);
+    const name = (tenant && (tenant.site_name || tenant.name)) ? (tenant.site_name || tenant.name) : 'Магазин';
+    const iconBase = tenant && (
+      tenant.android_icon_url ||
+      tenant.apple_touch_icon_url ||
+      tenant.logo_light_url ||
+      tenant.logo_dark_url ||
+      tenant.favicon_light_url ||
+      tenant.favicon_dark_url
+    );
+
+    const icons = [];
+    if (iconBase) {
+      icons.push({ src: iconBase, sizes: '192x192', purpose: 'any' });
+      icons.push({ src: iconBase, sizes: '512x512', purpose: 'any' });
+    }
+
+    res.setHeader('Content-Type', 'application/manifest+json');
+    res.json({
+      name,
+      short_name: name,
+      start_url: '/',
+      scope: '/',
+      display: 'standalone',
+      background_color: '#ffffff',
+      theme_color: '#ffffff',
+      icons
+    });
+  } catch (err) {
+    console.error('Ошибка генерации manifest:', err);
+    res.status(500).json({});
+  }
+});
+
 app.use((req, res, next) => {
   const sub = getSubdomain(req.hostname);
   if (!sub) return next();
-  if (req.path.startsWith('/api') || req.path.startsWith('/static')) return next();
+  if (req.path.startsWith('/api') || req.path.startsWith('/static') || req.path === '/manifest.json') return next();
   return renderShop(req, res);
 });
 

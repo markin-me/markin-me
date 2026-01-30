@@ -164,6 +164,7 @@
   const LAST_ORDER_KEY = `shop_last_order_public_t${tenantId}`;
   const CHECKOUT_DRAFT_KEY = `shop_checkout_draft_t${tenantId}`;
   const ADDRESS_DRAFT_KEY = `shop_address_draft_t${tenantId}`;
+  const AUTO_ADD_DISMISSED_KEY = `shop_auto_add_dismissed_t${tenantId}_s${getActiveStoreId()}`;
 
   const CUSTOMER_TOKEN_KEY = `shop_customer_token_t${tenantId}`;
   const CUSTOMER_CACHE_KEY = `shop_customer_cache_t${tenantId}`;
@@ -428,6 +429,13 @@
     optionGroupCache: new Map(),
     productOptionsCache: new Map(),
     unitConversions: [],
+    autoAdd: {
+      groups: [],
+      items: [],
+      byProductId: new Map(),
+      byGroupId: new Map(),
+    },
+    autoAddDismissed: loadAutoAddDismissed(),
 
     // addresses (cart header chip)
     addresses: [],
@@ -749,6 +757,8 @@
               : null,
             variant_label: str(item.variant_label || ""),
             variant_unit_price: Number(item.variant_unit_price || 0),
+            auto_add: Number(item?.auto_add || 0) ? 1 : 0,
+            auto_add_group_id: Number(item?.auto_add_group_id ?? null),
           };
         })
         .filter(Boolean);
@@ -770,6 +780,8 @@
             variant_value_index: null,
             variant_label: "",
             variant_unit_price: 0,
+            auto_add: 0,
+            auto_add_group_id: null,
           };
         })
         .filter(Boolean);
@@ -791,6 +803,225 @@
     try {
       localStorage.setItem(CART_KEY, JSON.stringify(state.cart));
     } catch {}
+  }
+
+  function loadAutoAddDismissed() {
+    try {
+      const raw = localStorage.getItem(AUTO_ADD_DISMISSED_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return new Set();
+      return new Set(parsed.map((x) => String(x)).filter(Boolean));
+    } catch {
+      return new Set();
+    }
+  }
+
+  function applyAutoAddRules() {
+    const groups = Array.isArray(state.autoAdd?.groups) ? state.autoAdd.groups : [];
+    const rules = Array.isArray(state.autoAdd?.items) ? state.autoAdd.items : [];
+    if (!groups.length || !rules.length) return false;
+
+    let changed = false;
+
+    const hasBaseItems = state.cart.some((item) => {
+      const pid = Number(item.product_id || item.id);
+      const qty = Number(item.qty || 0);
+      if (!Number.isFinite(pid) || qty <= 0) return false;
+      return Number(item.auto_add || 0) !== 1;
+    });
+
+    if (!hasBaseItems) {
+      const before = state.cart.length;
+      state.cart = state.cart.filter((item) => {
+        const qty = Number(item.qty || 0);
+        if (qty <= 0) return false;
+        return Number(item.auto_add || 0) !== 1;
+      });
+      if (state.cart.length !== before) {
+        changed = true;
+      }
+      if (state.cart.length === 0) {
+        if (state.autoAddDismissed.size) {
+          clearAllAutoAddDismissed();
+          changed = true;
+        }
+      }
+      return changed;
+    }
+
+    const itemsByGroup = new Map();
+    rules.forEach((rule) => {
+      const gid = Number(rule.group_id);
+      if (!Number.isFinite(gid)) return;
+      if (!itemsByGroup.has(gid)) itemsByGroup.set(gid, []);
+      itemsByGroup.get(gid).push(rule);
+    });
+
+    const totals = computeCartTotals(cartItemsResolved());
+    const nonAutoTotal = totals.nonAutoTotal;
+    const autoEligibleTotal = totals.autoEligibleTotal;
+
+    const sortedGroups = groups
+      .slice()
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || Number(a.id || 0) - Number(b.id || 0));
+
+    sortedGroups.forEach((group) => {
+      const groupId = Number(group.id);
+      if (!Number.isFinite(groupId)) return;
+      const groupRules = (itemsByGroup.get(groupId) || []).slice().sort(
+        (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || Number(a.id || 0) - Number(b.id || 0)
+      );
+      if (!groupRules.length) return;
+
+      const baseTotal = Number(group.include_auto_in_total || 0) === 1 ? autoEligibleTotal : nonAutoTotal;
+      const minAmount = group.min_cart_amount != null ? Number(group.min_cart_amount) : null;
+      const maxAmount = group.max_cart_amount != null ? Number(group.max_cart_amount) : null;
+      const minOk = minAmount == null || baseTotal >= minAmount;
+      const maxOk = maxAmount == null || baseTotal <= maxAmount;
+      const eligible = minOk && maxOk;
+
+      if (!eligible) {
+        groupRules.forEach((rule) => {
+          const pid = Number(rule.product_id);
+          if (!Number.isFinite(pid)) return;
+          const key = makeCartKey(pid, []);
+          if (getCartItemByKey(key)) {
+            state.cart = state.cart.filter((x) => x.key !== key);
+            changed = true;
+          }
+        });
+        return;
+      }
+
+      const allowQty = Number(group.allow_customer_qty ?? 1) === 1;
+
+      groupRules.forEach((rule) => {
+        const pid = Number(rule.product_id);
+        if (!Number.isFinite(pid)) return;
+
+        const p = state.productCache.get(pid);
+        if (p && !isProductAvailable(p)) return;
+
+        const key = makeCartKey(pid, []);
+        const matching = state.cart.filter((x) => Number(x.product_id || x.id) === pid);
+        let item = matching.find((x) => Number(x.auto_add || 0) === 1) || null;
+        if (!item) {
+          item = matching.find((x) => isPlainCartItem(x)) || null;
+        }
+        if (!item && matching.length === 1) {
+          item = matching[0] || null;
+        }
+
+        const dismissed = isAutoAddDismissed(groupId, pid);
+        if (item && dismissed) {
+          clearAutoAddDismissed(groupId, pid);
+        }
+        if (!item && dismissed) return;
+
+        if (item && Number(item.auto_add || 0) !== 1) {
+          item.auto_add = 1;
+          item.auto_add_group_id = groupId;
+          changed = true;
+        }
+
+        if (matching.length > 1 && item) {
+          matching.forEach((candidate) => {
+            if (candidate === item) return;
+            if (Number(candidate.auto_add || 0) === 1 || isPlainCartItem(candidate)) {
+              const idx = state.cart.indexOf(candidate);
+              if (idx !== -1) {
+                state.cart.splice(idx, 1);
+                changed = true;
+              }
+            }
+          });
+        }
+
+        const minQty = Math.max(0, Number(rule.min_qty || 0));
+        const defaultQty = Math.max(0, Number(rule.default_qty || 0));
+        const maxQty = rule.max_qty != null ? Math.max(0, Number(rule.max_qty)) : null;
+        const desired = Math.max(minQty, defaultQty);
+
+        if (!item && desired > 0) {
+          item = {
+            key,
+            product_id: pid,
+            qty: desired,
+            option_item_ids: [],
+            option_items: [],
+            ingredients: [],
+            ingredient_price_diff: 0,
+            variant_group_id: null,
+            variant_value_index: null,
+            variant_label: "",
+            variant_unit_price: 0,
+            auto_add: 1,
+            auto_add_group_id: groupId,
+          };
+          state.cart.push(item);
+          changed = true;
+        }
+
+        if (!item) return;
+
+        let nextQty = Math.max(0, Number(item.qty || 0));
+        if (!allowQty) {
+          nextQty = desired;
+        } else {
+          if (minQty > 0 && nextQty < minQty) nextQty = minQty;
+          if (maxQty != null && nextQty > maxQty) nextQty = maxQty;
+        }
+        if (maxQty != null && nextQty > maxQty) nextQty = maxQty;
+
+        if (nextQty !== item.qty) {
+          item.qty = nextQty;
+          changed = true;
+        }
+        if (nextQty <= 0) {
+          state.cart = state.cart.filter((x) => x !== item && x.key !== key);
+          changed = true;
+        }
+      });
+
+      const maxGroupQty = group.max_items_qty != null ? Number(group.max_items_qty) : null;
+      if (maxGroupQty != null && Number.isFinite(maxGroupQty)) {
+        const groupItems = groupRules.map((rule) => {
+          const pid = Number(rule.product_id);
+          if (!Number.isFinite(pid)) return null;
+          const key = makeCartKey(pid, []);
+          const item = getCartItemByKey(key);
+          if (!item) return null;
+          return { rule, item, key };
+        }).filter(Boolean);
+
+        const totalQty = groupItems.reduce((sum, entry) => sum + Math.max(0, Number(entry.item.qty || 0)), 0);
+        let overflow = totalQty - maxGroupQty;
+        if (overflow > 0) {
+          const sortedItems = groupItems.slice().sort((a, b) => {
+            const aSort = a.rule.sort_order ?? 0;
+            const bSort = b.rule.sort_order ?? 0;
+            return bSort - aSort || Number(b.rule.id || 0) - Number(a.rule.id || 0);
+          });
+          sortedItems.forEach((entry) => {
+            if (overflow <= 0) return;
+            const minQty = Math.max(0, Number(entry.rule.min_qty || 0));
+            const currentQty = Math.max(0, Number(entry.item.qty || 0));
+            const reducible = Math.max(0, currentQty - minQty);
+            if (reducible <= 0) return;
+            const reduceBy = Math.min(reducible, overflow);
+            const nextQty = currentQty - reduceBy;
+            entry.item.qty = nextQty;
+            overflow -= reduceBy;
+            changed = true;
+            if (nextQty <= 0 && minQty <= 0 && Number(entry.rule.default_qty || 0) <= 0) {
+              state.cart = state.cart.filter((x) => x.key !== entry.key);
+            }
+          });
+        }
+      }
+    });
+
+    return changed;
   }
 
   function pruneUnavailableCartItems() {
@@ -911,6 +1142,8 @@
           : null,
         variant_label: str(item.variant_label || ""),
         variant_unit_price: Number(item.variant_unit_price || 0),
+        auto_add: Number(item.auto_add || 0),
+        auto_add_group_id: Number(item.auto_add_group_id ?? null),
       });
     }
     return items;
@@ -921,6 +1154,180 @@
       const qty = Math.max(0, Number(opt?.qty || opt?.quantity || 1)) || 1;
       return sum + Number(opt?.price || 0) * qty;
     }, 0);
+  }
+
+  function getAutoRuleByProductId(productId) {
+    const pid = Number(productId);
+    if (!Number.isFinite(pid)) return null;
+    const rule = state.autoAdd?.byProductId?.get(pid) || null;
+    if (rule && !rule.group && state.autoAdd?.byGroupId) {
+      rule.group = state.autoAdd.byGroupId.get(Number(rule.group_id)) || null;
+    }
+    return rule;
+  }
+
+  function makeAutoAddDismissKey(groupId, productId) {
+    const gid = Number(groupId);
+    const pid = Number(productId);
+    if (!Number.isFinite(gid) || !Number.isFinite(pid)) return null;
+    return `${gid}:${pid}`;
+  }
+
+  function saveAutoAddDismissed() {
+    try {
+      localStorage.setItem(AUTO_ADD_DISMISSED_KEY, JSON.stringify(Array.from(state.autoAddDismissed)));
+    } catch {}
+  }
+
+  function isAutoAddDismissed(groupId, productId) {
+    const key = makeAutoAddDismissKey(groupId, productId);
+    if (!key) return false;
+    return state.autoAddDismissed.has(key);
+  }
+
+  function markAutoAddDismissed(groupId, productId) {
+    const key = makeAutoAddDismissKey(groupId, productId);
+    if (!key) return;
+    if (!state.autoAddDismissed.has(key)) {
+      state.autoAddDismissed.add(key);
+      saveAutoAddDismissed();
+    }
+  }
+
+  function clearAutoAddDismissed(groupId, productId) {
+    const key = makeAutoAddDismissKey(groupId, productId);
+    if (!key) return;
+    if (state.autoAddDismissed.delete(key)) {
+      saveAutoAddDismissed();
+    }
+  }
+
+  function markAutoAddDismissedByProduct(productId) {
+    const rule = getAutoRuleByProductId(productId);
+    if (!rule) return;
+    markAutoAddDismissed(rule.group_id, productId);
+  }
+
+  function clearAutoAddDismissedByProduct(productId) {
+    const rule = getAutoRuleByProductId(productId);
+    if (!rule) return;
+    clearAutoAddDismissed(rule.group_id, productId);
+  }
+
+  function clearAllAutoAddDismissed() {
+    if (!state.autoAddDismissed.size) return;
+    state.autoAddDismissed.clear();
+    saveAutoAddDismissed();
+  }
+
+  function clearAutoAddDismissedIfCartEmpty() {
+    if (cartCountTotal() !== 0) return;
+    clearAllAutoAddDismissed();
+  }
+
+  function getAutoAddDesiredQty(rule) {
+    const minQty = Math.max(0, Number(rule?.min_qty || 0));
+    const defaultQty = Math.max(0, Number(rule?.default_qty || 0));
+    const desired = Math.max(minQty, defaultQty);
+    return desired > 0 ? desired : 1;
+  }
+
+  function isPlainCartItem(item) {
+    if (!item) return false;
+    const optionItems = Array.isArray(item.option_items) ? item.option_items : [];
+    const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+    const hasOptions = optionItems.length > 0;
+    const hasIngredients = ingredients.length > 0;
+    const hasVariant = Number.isFinite(Number(item.variant_group_id)) || Number.isFinite(Number(item.variant_value_index));
+    return !hasOptions && !hasIngredients && !hasVariant;
+  }
+
+  function calcAutoFreeQty(rule, baseTotal) {
+    if (!rule) return 0;
+    let freeQty = Math.max(0, Number(rule.free_first_qty || 0));
+    const amountStep = Number(rule.free_per_amount || 0);
+    const stepQty = Math.max(0, Number(rule.free_per_amount_qty || 0));
+    if (amountStep > 0 && stepQty > 0 && baseTotal > 0) {
+      freeQty += Math.floor(baseTotal / amountStep) * stepQty;
+    }
+    const maxFree = rule.max_free_qty != null ? Number(rule.max_free_qty) : null;
+    if (maxFree != null && Number.isFinite(maxFree)) {
+      freeQty = Math.min(freeQty, Math.max(0, maxFree));
+    }
+    return freeQty;
+  }
+
+  function getItemUnitParts(item) {
+    const baseProductUnit = Number(item?.variant_unit_price || item?.product?.price || 0);
+    const optionTotal = optionItemsTotal(item?.option_items || []);
+    const ingredientDiff = Number(item?.ingredient_price_diff || 0);
+    const baseUnit = baseProductUnit + optionTotal + ingredientDiff;
+    return { baseProductUnit, optionTotal, ingredientDiff, baseUnit };
+  }
+
+  function computeNonAutoTotal(items) {
+    return (Array.isArray(items) ? items : []).reduce((sum, item) => {
+      if (Number(item?.auto_add || 0) === 1) return sum;
+      const qty = Math.max(0, Number(item?.qty || 0));
+      if (!qty) return sum;
+      const { baseUnit } = getItemUnitParts(item);
+      return sum + baseUnit * qty;
+    }, 0);
+  }
+
+  function computeAutoEligibleTotal(items) {
+    return (Array.isArray(items) ? items : []).reduce((sum, item) => {
+      const qty = Math.max(0, Number(item?.qty || 0));
+      if (!qty) return sum;
+      const isAuto = Number(item?.auto_add || 0) === 1;
+      if (!isAuto) {
+        const parts = getItemUnitParts(item);
+        return sum + parts.baseUnit * qty;
+      }
+      const rule = getAutoRuleByProductId(item?.product?.id || item?.product_id);
+      const parts = getItemUnitParts(item);
+      if (!rule) return sum + parts.baseUnit * qty;
+      const priceOverride = rule.price_override != null ? Number(rule.price_override) : parts.baseProductUnit;
+      const unitPrice = priceOverride + parts.optionTotal + parts.ingredientDiff;
+      return sum + unitPrice * qty;
+    }, 0);
+  }
+
+  function computeItemPricing(item, totals) {
+    const qty = Math.max(0, Number(item?.qty || 0));
+    const rule = getAutoRuleByProductId(item?.product?.id || item?.product_id);
+    const isAuto = Number(item?.auto_add || 0) === 1;
+    const parts = getItemUnitParts(item);
+    let unitPrice = parts.baseUnit;
+    let paidQty = qty;
+    let freeQty = 0;
+    let isAutoItem = false;
+
+    if (rule && isAuto) {
+      const group = rule.group || null;
+      const nonAutoTotal = totals?.nonAutoTotal ?? 0;
+      const autoEligibleTotal = totals?.autoEligibleTotal ?? nonAutoTotal;
+      const baseTotal = group && Number(group.include_auto_in_total || 0) === 1 ? autoEligibleTotal : nonAutoTotal;
+      const priceOverride = rule.price_override != null ? Number(rule.price_override) : parts.baseProductUnit;
+      unitPrice = priceOverride + parts.optionTotal + parts.ingredientDiff;
+      freeQty = calcAutoFreeQty(rule, baseTotal);
+      paidQty = Math.max(0, qty - freeQty);
+      isAutoItem = true;
+    }
+
+    const lineTotal = unitPrice * paidQty;
+    return { lineTotal, unitPrice, paidQty, freeQty, isAuto: isAutoItem, parts };
+  }
+
+  function computeCartTotals(items) {
+    const nonAutoTotal = computeNonAutoTotal(items);
+    const autoEligibleTotal = computeAutoEligibleTotal(items);
+    let total = 0;
+    (Array.isArray(items) ? items : []).forEach((item) => {
+      const pricing = computeItemPricing(item, { nonAutoTotal, autoEligibleTotal });
+      total += pricing.lineTotal;
+    });
+    return { nonAutoTotal, autoEligibleTotal, total };
   }
 
   function cartLinePrice(product, optionItems) {
@@ -2801,14 +3208,44 @@ async function initAddresses() {
     if (emptyPlaceholderEl) emptyPlaceholderEl.classList.add("hidden");
 
     let total = 0;
+    const totals = {
+      nonAutoTotal: computeNonAutoTotal(items),
+      autoEligibleTotal: computeAutoEligibleTotal(items),
+    };
 
-    items.forEach(({ product, qty, key, option_items: optionItems, ingredients: cartIngredients, ingredient_price_diff = 0, variant_label: variantLabel, variant_unit_price: variantUnitPrice }) => {
+    items.forEach((item) => {
+      const {
+        product,
+        qty,
+        key,
+        option_items: optionItems,
+        ingredients: cartIngredients,
+        ingredient_price_diff = 0,
+        variant_label: variantLabel,
+        variant_unit_price: variantUnitPrice,
+      } = item;
+      const pricing = computeItemPricing(
+        {
+          product,
+          qty,
+          option_items: optionItems,
+          ingredients: cartIngredients,
+          ingredient_price_diff,
+          variant_label: variantLabel,
+          variant_unit_price: variantUnitPrice,
+          auto_add: Number(item.auto_add || 0),
+          auto_add_group_id: Number(item.auto_add_group_id ?? null),
+        },
+        totals
+      );
+      const rule = pricing.isAuto ? getAutoRuleByProductId(product.id) : null;
+      const group = rule?.group || null;
+      const allowQty = !pricing.isAuto || !group ? true : Number(group.allow_customer_qty ?? 1) === 1;
+      const allowRemove = true;
       const old = Number(product.old_price || 0);
-      const basePrice = Number(variantUnitPrice || product.price || 0);
-      const optionTotal = optionItemsTotal(optionItems);
-      const ingredientPriceDiff = Number(ingredient_price_diff || 0);
-      const price = basePrice + optionTotal + ingredientPriceDiff;
-      total += price * qty;
+      const parts = pricing.parts;
+      const oldUnit = old > 0 ? (old + parts.optionTotal + parts.ingredientDiff) : 0;
+      total += pricing.lineTotal;
 
       // Свайп-контейнер
       const swipeContainer = document.createElement("div");
@@ -2840,11 +3277,17 @@ async function initAddresses() {
       deleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
       deleteBtn.addEventListener("click", (e) => {
         e.stopPropagation();
+        if (!allowRemove) return;
         // Haptic feedback
         if (navigator.vibrate) navigator.vibrate(20);
         // Удалить с анимацией
         deleteCartItemWithAnimation(swipeContainer, product.id, key);
       });
+      if (!allowRemove) {
+        deleteBtn.disabled = true;
+        deleteBtn.style.pointerEvents = "none";
+        deleteBtn.style.opacity = "0.5";
+      }
 
       swipeActions.appendChild(favBtn);
       swipeActions.appendChild(deleteBtn);
@@ -2909,6 +3352,10 @@ async function initAddresses() {
           if (formatted) optionParts.push(formatted);
         });
       }
+
+      if (pricing.isAuto && pricing.freeQty > 0) {
+        optionParts.push(`Бесплатно: ${pricing.freeQty} шт.`);
+      }
       
       // Объединяем все элементы
       const allParts = [...variantParts, ...ingredientParts, ...optionParts];
@@ -2949,19 +3396,26 @@ async function initAddresses() {
       const { pill, btnMinus, btnPlus, center } = createQtyPill({
         variant: "muted",
         centerText: String(qty),
-        minusEnabled: qty > 0,
+        minusEnabled: qty > 0 && allowQty,
       });
 
       btnPlus.addEventListener("click", (e) => {
         e.stopPropagation();
+        if (!allowQty) return;
         changeQty(product.id, +1, null, key);
         center.textContent = String(getCartItemByKey(key)?.qty || 0);
       });
       btnMinus.addEventListener("click", (e) => {
         e.stopPropagation();
+        if (!allowQty) return;
         changeQty(product.id, -1, null, key);
         center.textContent = String(getCartItemByKey(key)?.qty || 0);
       });
+      if (!allowQty) {
+        btnPlus.disabled = true;
+        btnMinus.disabled = true;
+        pill.classList.add("is-disabled");
+      }
 
       q.appendChild(pill);
       mid.appendChild(q);
@@ -2970,16 +3424,16 @@ async function initAddresses() {
       const right = document.createElement("div");
       right.className = "cart-right";
 
-      const showOld = old > 0 && old > basePrice;
+      const showOld = !pricing.isAuto && oldUnit > 0 && oldUnit > pricing.unitPrice;
 
       const oldEl = document.createElement("div");
       oldEl.className = "cart-old";
-      oldEl.textContent = showOld ? moneyNoSign((old + optionTotal) * qty) : "";
+      oldEl.textContent = showOld ? moneyNoSign(oldUnit * qty) : "";
       if (!showOld) oldEl.classList.add("hidden");
 
       const pr = document.createElement("div");
       pr.className = "cart-price";
-      pr.textContent = money(price * qty);
+      pr.textContent = money(pricing.lineTotal);
 
       right.appendChild(oldEl);
       right.appendChild(pr);
@@ -3006,8 +3460,14 @@ async function initAddresses() {
       desktopDeleteBtn.title = "Удалить";
       desktopDeleteBtn.addEventListener("click", (e) => {
         e.stopPropagation();
+        if (!allowRemove) return;
         deleteCartItemWithAnimation(swipeContainer, product.id, key);
       });
+      if (!allowRemove) {
+        desktopDeleteBtn.disabled = true;
+        desktopDeleteBtn.style.pointerEvents = "none";
+        desktopDeleteBtn.style.opacity = "0.5";
+      }
 
       desktopActions.appendChild(desktopFavBtn);
       desktopActions.appendChild(desktopDeleteBtn);
@@ -3022,6 +3482,129 @@ async function initAddresses() {
 
       listEl.appendChild(swipeContainer);
     });
+
+    const hasBaseItems = items.some((item) => {
+      const pid = Number(item?.product?.id || item?.product_id);
+      const qty = Number(item?.qty || 0);
+      if (!Number.isFinite(pid) || qty <= 0) return false;
+      return Number(item?.auto_add || 0) !== 1;
+    });
+
+    if (listEl && hasBaseItems && state.autoAddDismissed.size) {
+      const cartProductIds = new Set(
+        items
+          .map((item) => Number(item?.product?.id || item?.product_id))
+          .filter((pid) => Number.isFinite(pid))
+      );
+      const groups = Array.isArray(state.autoAdd?.groups) ? state.autoAdd.groups : [];
+      const rules = Array.isArray(state.autoAdd?.items) ? state.autoAdd.items : [];
+      const itemsByGroup = new Map();
+      rules.forEach((rule) => {
+        const gid = Number(rule.group_id);
+        if (!Number.isFinite(gid)) return;
+        if (!itemsByGroup.has(gid)) itemsByGroup.set(gid, []);
+        itemsByGroup.get(gid).push(rule);
+      });
+
+      const sortedGroups = groups
+        .slice()
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || Number(a.id || 0) - Number(b.id || 0));
+
+      sortedGroups.forEach((group) => {
+        const groupId = Number(group.id);
+        if (!Number.isFinite(groupId)) return;
+        const groupRules = (itemsByGroup.get(groupId) || []).slice().sort(
+          (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || Number(a.id || 0) - Number(b.id || 0)
+        );
+        if (!groupRules.length) return;
+
+        const baseTotal = Number(group.include_auto_in_total || 0) === 1 ? totals.autoEligibleTotal : totals.nonAutoTotal;
+        const minAmount = group.min_cart_amount != null ? Number(group.min_cart_amount) : null;
+        const maxAmount = group.max_cart_amount != null ? Number(group.max_cart_amount) : null;
+        const minOk = minAmount == null || baseTotal >= minAmount;
+        const maxOk = maxAmount == null || baseTotal <= maxAmount;
+        const eligible = minOk && maxOk;
+        if (!eligible) return;
+
+        groupRules.forEach((rule) => {
+          const pid = Number(rule.product_id);
+          if (!Number.isFinite(pid)) return;
+          if (cartProductIds.has(pid)) return;
+          if (!isAutoAddDismissed(groupId, pid)) return;
+
+          const product = state.productCache.get(pid) || rule.product;
+          if (!product) return;
+          if (!isProductAvailable(product)) return;
+
+          const row = document.createElement("div");
+          row.className = "cart-row is-auto-ghost";
+          row.setAttribute("data-product-id", String(product.id));
+          row.addEventListener("click", () => {
+            openProductDetails(product.id);
+          });
+
+          const photos = safePhotos(product);
+          const mainPhoto = photos[0] || "";
+          const img = createOptimizedImage(mainPhoto || "/static/img/placeholder.png", {
+            type: "cart-thumb",
+            className: "cart-thumb",
+            alt: "",
+          });
+          row.appendChild(img);
+
+          const mid = document.createElement("div");
+          mid.className = "cart-mid";
+
+          const t = document.createElement("div");
+          t.className = "cart-title";
+          t.textContent = `${str(product.name)} × 0`;
+          mid.appendChild(t);
+
+          const subContainer = document.createElement("div");
+          subContainer.className = "cart-sub-container";
+          subContainer.textContent = "Автодобавление";
+          mid.appendChild(subContainer);
+
+          const q = document.createElement("div");
+          q.className = "cart-qty";
+          const { pill, btnMinus, btnPlus, center } = createQtyPill({
+            variant: "muted",
+            centerText: "0",
+            minusEnabled: false,
+          });
+          btnMinus.disabled = true;
+          pill.classList.add("is-disabled");
+
+          btnPlus.addEventListener("click", (e) => {
+            e.stopPropagation();
+            clearAutoAddDismissed(groupId, pid);
+            const desiredQty = getAutoAddDesiredQty(rule);
+            const targetKey = makeCartKey(pid, []);
+            changeQty(pid, desiredQty, null, targetKey);
+            const restored = getCartItemByKey(targetKey) || state.cart.find((x) => Number(x.product_id || x.id) === pid) || null;
+            if (restored) {
+              restored.auto_add = 1;
+              restored.auto_add_group_id = groupId;
+            }
+            center.textContent = String(getCartItemByKey(targetKey)?.qty || restored?.qty || 0);
+          });
+
+          q.appendChild(pill);
+          mid.appendChild(q);
+          row.appendChild(mid);
+
+          const right = document.createElement("div");
+          right.className = "cart-right";
+          const pr = document.createElement("div");
+          pr.className = "cart-price";
+          pr.textContent = money(0);
+          right.appendChild(pr);
+          row.appendChild(right);
+
+          listEl.appendChild(row);
+        });
+      });
+    }
 
     if (totalEl) totalEl.textContent = money(total);
     return { items, total };
@@ -3121,7 +3704,16 @@ async function initAddresses() {
       return false;
     });
     if (idx !== -1) {
+      const removedItem = state.cart[idx];
+      if (removedItem) {
+        const pid = Number(removedItem.product_id || removedItem.id);
+        if (Number.isFinite(pid) && Number(removedItem.auto_add || 0) === 1) {
+          markAutoAddDismissedByProduct(pid);
+        }
+      }
       state.cart.splice(idx, 1);
+      applyAutoAddRules();
+      clearAutoAddDismissedIfCartEmpty();
       saveCart();
       renderProducts();
       updateCartBadge();
@@ -3135,12 +3727,7 @@ async function initAddresses() {
         if (openCartSheetCtx.checkoutBtn) {
           openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
           const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
-          const total = items.reduce((sum, i) => {
-            const base = Number(i.variant_unit_price || i.product?.price || 0);
-            const opt = optionItemsTotal(i.option_items);
-            const ing = Number(i.ingredient_price_diff || 0);
-            return sum + (base + opt + ing) * i.qty;
-          }, 0);
+          const total = computeCartTotals(items).total;
           if (tspan) tspan.textContent = money(total);
           // Синхронизируем с мобильными кнопками
           const isMobile = window.matchMedia("(max-width: 768px)").matches;
@@ -3152,12 +3739,7 @@ async function initAddresses() {
           }
         }
         if (openCartSheetCtx.totalEl) {
-          openCartSheetCtx.totalEl.textContent = money(items.reduce((sum, i) => {
-            const base = Number(i.variant_unit_price || i.product?.price || 0);
-            const opt = optionItemsTotal(i.option_items);
-            const ing = Number(i.ingredient_price_diff || 0);
-            return sum + (base + opt + ing) * i.qty;
-          }, 0));
+          openCartSheetCtx.totalEl.textContent = money(computeCartTotals(items).total);
         }
         // Если корзина пуста - показать сообщение
         if (items.length === 0 && openCartSheetCtx.listEl) {
@@ -3333,6 +3915,8 @@ function updateCartBadge() {
 
   function clearCartAll() {
     state.cart = [];
+    clearAllAutoAddDismissed();
+    applyAutoAddRules();
     saveCart();
     renderProducts();
     renderCart();
@@ -3402,6 +3986,8 @@ function updateCartBadge() {
     const pid = Number(productId);
     if (!Number.isFinite(pid)) return;
 
+    const wasEmpty = cartCountTotal() === 0;
+
     const p = state.productCache.get(pid);
     if (delta > 0 && p && !isProductAvailable(p)) return;
 
@@ -3416,8 +4002,13 @@ function updateCartBadge() {
         qty: 0,
         option_item_ids: [],
         option_items: [],
+        auto_add: 0,
+        auto_add_group_id: null,
       };
       state.cart.push(item);
+      if (wasEmpty) {
+        clearAllAutoAddDismissed();
+      }
     }
 
     if (item) {
@@ -3425,10 +4016,21 @@ function updateCartBadge() {
       nextQty = Math.max(0, prevQty + delta);
       item.qty = nextQty;
       if (nextQty <= 0) {
+        if (prevQty > 0 && Number(item.auto_add || 0) === 1) {
+          markAutoAddDismissedByProduct(pid);
+        }
         state.cart = state.cart.filter((x) => x.key !== targetKey);
       }
     }
 
+    if (applyAutoAddRules()) {
+      nextQty = Number(getCartItemByKey(targetKey)?.qty || 0);
+    }
+    clearAutoAddDismissedIfCartEmpty();
+    const currentItem = getCartItemByKey(targetKey);
+    if (currentItem && Number(currentItem.qty || 0) > 0 && Number(currentItem.auto_add || 0) === 1) {
+      clearAutoAddDismissedByProduct(pid);
+    }
     saveCart();
 
     const cards = elProductsGrid.querySelectorAll(`.sp-card[data-product-id="${pid}"]`);
@@ -3464,6 +4066,42 @@ function updateCartBadge() {
   async function loadCategories() {
     const json = await apiJson("/api/public/categories");
     state.categories = Array.isArray(json.data) ? json.data : [];
+  }
+
+  async function loadAutoAdd() {
+    try {
+      const json = await apiJson("/api/public/auto-add");
+      const groups = Array.isArray(json.data?.groups) ? json.data.groups : [];
+      const items = Array.isArray(json.data?.items) ? json.data.items : [];
+      state.autoAdd.groups = groups;
+      state.autoAdd.items = items;
+      state.autoAdd.byGroupId = new Map(
+        groups
+          .map((g) => [Number(g.id), g])
+          .filter(([gid]) => Number.isFinite(gid))
+      );
+      state.autoAdd.byProductId = new Map(
+        items
+          .map((it) => [Number(it.product_id), it])
+          .filter(([pid]) => Number.isFinite(pid))
+      );
+
+      items.forEach((it) => {
+        if (!it.group && Number.isFinite(Number(it.group_id))) {
+          it.group = state.autoAdd.byGroupId.get(Number(it.group_id)) || null;
+        }
+        const p = it.product;
+        if (!p) return;
+        if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
+        state.productCache.set(Number(p.id), p);
+      });
+    } catch (e) {
+      console.warn("Failed to load auto-add rules", e);
+      state.autoAdd.groups = [];
+      state.autoAdd.items = [];
+      state.autoAdd.byProductId = new Map();
+      state.autoAdd.byGroupId = new Map();
+    }
   }
 
   async function loadUnitConversions() {
@@ -6309,6 +6947,7 @@ optionGroups.forEach((group) => {
 
   actionBtn.addEventListener("click", () => {
     if (!available) return;
+    const wasEmpty = cartCountTotal() === 0;
     const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
     const optionItemIds = selectedItems.map((item) => item.id);
     const selectedVariantGroupId = Number(variantState.groupId);
@@ -6378,6 +7017,8 @@ optionGroups.forEach((group) => {
         editingItem.variant_label = variantLabel;
         editingItem.variant_unit_price = Number(variantUnitPrice || 0);
         editingItem.qty = safeQty;
+        if (editingItem.auto_add == null) editingItem.auto_add = 0;
+        if (editingItem.auto_add_group_id == null) editingItem.auto_add_group_id = null;
       }
     } else {
       // режим добавления: merge по конфигурации
@@ -6390,6 +7031,8 @@ optionGroups.forEach((group) => {
         existing.variant_value_index = hasVariantSelection ? selectedVariantIndex : null;
         existing.variant_label = variantLabel;
         existing.variant_unit_price = Number(variantUnitPrice || 0);
+        if (existing.auto_add == null) existing.auto_add = 0;
+        if (existing.auto_add_group_id == null) existing.auto_add_group_id = null;
       } else {
         state.cart.push({
           key: nextKey,
@@ -6403,10 +7046,17 @@ optionGroups.forEach((group) => {
           variant_value_index: hasVariantSelection ? selectedVariantIndex : null,
           variant_label: variantLabel,
           variant_unit_price: Number(variantUnitPrice || 0),
+          auto_add: 0,
+          auto_add_group_id: null,
         });
       }
     }
 
+    if (wasEmpty) {
+      clearAllAutoAddDismissed();
+    }
+    applyAutoAddRules();
+    clearAutoAddDismissedIfCartEmpty();
     saveCart();
     renderProducts();
     renderCart();
@@ -8430,7 +9080,9 @@ function renderSheetAddressList() {
       addBtn.addEventListener("click", async () => {
         const get = (k) => str($(`[data-a="${k}"]`, addressFormCard)?.value || "").trim();
 
-        const payload = {
+        const resolvedItems = cartItemsResolved();
+      const { nonAutoTotal } = computeCartTotals(resolvedItems);
+      const payload = {
           street: get("street"),
           house: get("house"),
           entrance: get("entrance") || null,
@@ -9399,12 +10051,7 @@ function setBottomNavActive(tab) {
     }
 
     // Вычисляем сумму заказа для фильтрации опций сдачи
-    const orderTotal = items.reduce((sum, i) => {
-      const base = Number(i.variant_unit_price || i.product?.price || 0);
-      const opt = optionItemsTotal(i.option_items || []);
-      const ing = Number(i.ingredient_price_diff || 0);
-      return sum + (base + opt + ing) * i.qty;
-    }, 0);
+    const { total: orderTotal } = computeCartTotals(items);
 
     const cfg = await getOrderConfig();
     let deliverySettings = null;
@@ -10246,7 +10893,9 @@ function setBottomNavActive(tab) {
 
     if (actions?.submitBtn) {
       actions.submitBtn.onclick = async () => {
-      const payload = {
+        const resolvedItems = cartItemsResolved();
+        const totals = computeCartTotals(resolvedItems);
+        const payload = {
         customer_name: str(name.value).trim(),
         customer_phone: str(phone.value).trim(),
         promo_code: str(promo.value).trim() || null,
@@ -10259,20 +10908,10 @@ function setBottomNavActive(tab) {
         payment_code: paySelect.getValue() || payDefault || "cash",
         cutlery_qty: 0,
         change_from: getChangeFromValue(),
-        items: cartItemsResolved().map(x => {
+        items: resolvedItems.map(x => {
           // Рассчитываем итоговую цену товара (базовая + опции + разница ингредиентов + варианты)
-          const old = Number(x.product.old_price || 0);
-          const baseProductPrice = Number(x.product.price || 0);
-          const variantUnitPrice = Number(x.variant_unit_price || 0);
-          const basePrice = variantUnitPrice || baseProductPrice;
-          const optionTotal = optionItemsTotal(x.option_items || []);
-          const ingredientPriceDiff = Number(x.ingredient_price_diff || 0);
-          
-          // Варианты не добавляют доплату - они пересчитывают цену пропорционально количеству
-          // Поэтому price_diff для вариантов всегда 0
-          const variantPriceDiff = 0;
-          
-          const lineTotal = (basePrice + optionTotal + ingredientPriceDiff) * x.qty;
+          const pricing = computeItemPricing(x, totals);
+          const lineTotal = pricing.lineTotal;
 
           // Формируем информацию о варианте для сохранения
           const variant = (x.variant_group_id && x.variant_label) ? {
@@ -10388,7 +11027,7 @@ function setBottomNavActive(tab) {
         if (e.message === "MIN_ORDER" && deliveryRules.minOrder > 0) {
           alert(`Минимальная сумма заказа ${money(deliveryRules.minOrder)}.`);
           actions.submitBtn.disabled = false;
-          actions.submitBtn.textContent = "????????";
+          actions.submitBtn.textContent = "Заказать";
           return;
         }
         alert("Ошибка оформления заказа: " + (e.message || "UNKNOWN"));
@@ -10430,6 +11069,8 @@ async function init() {
     }
 
     await loadProductsByCategory();
+    await loadAutoAdd();
+    if (applyAutoAddRules()) saveCart();
     renderProducts();
     bindCategoryScrollSpy();
     await warmupCartProducts();
@@ -11318,3 +11959,4 @@ async function init() {
 }
   init();
 })();
+

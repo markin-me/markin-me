@@ -17,6 +17,8 @@
     const logoFallback = document.getElementById('headerLogoFallback');
     const brandNameEl = document.getElementById('headerBrandName');
     const favicon = document.getElementById('appFavicon');
+    const appleIcon = document.getElementById('appAppleTouchIcon');
+    const manifest = document.getElementById('appManifest');
 
     if (tenant) {
       const brandName = tenant.name || tenant.site_name || '';
@@ -48,6 +50,22 @@
 
       if (favicon && fav) {
         favicon.href = fav;
+      }
+
+      const apple =
+        tenant.apple_touch_icon_url ||
+        tenant.logo_light_url ||
+        tenant.logo_dark_url ||
+        tenant.favicon_light_url ||
+        tenant.favicon_dark_url;
+
+      if (appleIcon && apple) {
+        appleIcon.href = apple;
+      }
+
+      if (manifest) {
+        const ver = tenant.updated_at ? encodeURIComponent(String(tenant.updated_at)) : '';
+        manifest.href = `/manifest.json${ver ? `?v=${ver}` : ''}`;
       }
     }
   }

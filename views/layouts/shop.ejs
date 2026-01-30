@@ -6,6 +6,10 @@
   <title><%= pageTitle || 'Витрина' %></title>
   <meta name="tenant_id" content="<%= tenantId || 1 %>" />
   <link id="appFavicon" rel="icon" />
+  <% const appleIcon = (typeof tenant !== 'undefined' && tenant) ? (tenant.apple_touch_icon_url || tenant.logo_light_url || tenant.logo_dark_url || tenant.favicon_light_url || tenant.favicon_dark_url) : ''; %>
+  <% const manifestVer = (typeof tenant !== 'undefined' && tenant && tenant.updated_at) ? encodeURIComponent(String(tenant.updated_at)) : ''; %>
+  <link id="appAppleTouchIcon" rel="apple-touch-icon" href="<%= appleIcon || '' %>" />
+  <link id="appManifest" rel="manifest" href="/manifest.json<%= manifestVer ? ('?v=' + manifestVer) : '' %>" />
 
   <script>
     (function () {

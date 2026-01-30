@@ -773,6 +773,18 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   margin-bottom: 10px;
 }
 
+.cart-row.is-auto-ghost{
+  background: var(--color-surface-2);
+  border-style: dashed;
+  opacity: 0.65;
+}
+
+.cart-row.is-auto-ghost .cart-title,
+.cart-row.is-auto-ghost .cart-sub-container,
+.cart-row.is-auto-ghost .cart-price{
+  color: var(--color-text-muted);
+}
+
 .cart-thumb{
   width: 92px;
   height: 92px;

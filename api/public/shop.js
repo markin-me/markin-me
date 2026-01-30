@@ -1906,6 +1906,44 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       );
       const byId = new Map(products.map(p => [Number(p.id), p]));
 
+      const [autoAddRows] = await db.query(
+        `SELECT i.*
+         FROM prod_auto_add_items i
+         JOIN prod_auto_add_groups g
+           ON g.tenant_id=i.tenant_id AND g.store_id=i.store_id AND g.id=i.group_id
+         WHERE i.tenant_id=? AND i.store_id=? AND i.is_active=1 AND g.is_active=1`,
+        [tenantId, storeId]
+      );
+      const autoRulesByProduct = new Map(autoAddRows.map(r => [Number(r.product_id), r]));
+
+      function calcAutoFreeQty(rule, baseTotal) {
+        let freeQty = Math.max(0, Number(rule.free_first_qty || 0));
+        const amountStep = Number(rule.free_per_amount || 0);
+        const stepQty = Math.max(0, Number(rule.free_per_amount_qty || 0));
+        if (amountStep > 0 && stepQty > 0 && baseTotal > 0) {
+          freeQty += Math.floor(baseTotal / amountStep) * stepQty;
+        }
+        const maxFree = rule.max_free_qty != null ? Number(rule.max_free_qty) : null;
+        if (maxFree != null && Number.isFinite(maxFree)) {
+          freeQty = Math.min(freeQty, Math.max(0, maxFree));
+        }
+        return freeQty;
+      }
+
+      let nonAutoItemsTotal = 0;
+      for (const it of items) {
+        const pid = Number(it.product_id);
+        const p = byId.get(pid);
+        if (!p) continue;
+        if (autoRulesByProduct.has(pid)) continue;
+        const qty = Math.max(1, Number(it.qty || it.quantity || 1));
+        const basePrice = Number(p.price || 0);
+        const lineTotalFromRequest = Number(it.line_total);
+        const useLineTotalFromRequest = Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0;
+        const lineTotal = useLineTotalFromRequest ? lineTotalFromRequest : basePrice * qty;
+        nonAutoItemsTotal += lineTotal;
+      }
+
       const normItems = [];
       let total = 0;
 
@@ -2290,9 +2328,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
         // Используем line_total из запроса (уже посчитан на фронте)
         // Если line_total не передан, используем базовую цену товара (для товаров без опций/вариантов/состава)
-        const lineTotal = useLineTotalFromRequest 
-          ? lineTotalFromRequest 
-          : basePrice * qty;
+        const autoRule = autoRulesByProduct.get(pid);
+        let unitPrice = basePrice;
+        let lineTotal = useLineTotalFromRequest ? lineTotalFromRequest : basePrice * qty;
+        if (autoRule) {
+          unitPrice = autoRule.price_override != null ? Number(autoRule.price_override) : basePrice;
+          const freeQty = calcAutoFreeQty(autoRule, nonAutoItemsTotal);
+          const paidQty = Math.max(0, qty - freeQty);
+          lineTotal = paidQty * unitPrice;
+        }
 
         total += lineTotal;
 
@@ -2309,7 +2353,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           product_id: pid,
           name: p.name,
           qty,
-          price: basePrice,
+          price: unitPrice,
           old_price: oldPrice,
           line_total: lineTotal,
           photos, // Сохраняем фото для отчетов
@@ -2448,6 +2492,86 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
 
       res.json({ ok: true, data: { id: r.insertId, public_id: publicId } });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+
+  // ------------------------------
+  // Auto-add items config (public)
+  // ------------------------------
+  router.get('/auto-add', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+
+      const [groupRows] = await db.query(
+        `SELECT id, title, description, sort_order,
+                min_cart_amount, max_cart_amount, include_auto_in_total,
+                max_items_qty, allow_customer_qty, allow_customer_remove
+         FROM prod_auto_add_groups
+         WHERE tenant_id=? AND store_id=? AND is_active=1
+         ORDER BY sort_order ASC, id ASC`,
+        [tenantId, storeId]
+      );
+      const groups = groupRows.map((g) => ({
+        id: Number(g.id),
+        title: g.title,
+        description: g.description,
+        sort_order: Number(g.sort_order || 0),
+        min_cart_amount: g.min_cart_amount != null ? Number(g.min_cart_amount) : null,
+        max_cart_amount: g.max_cart_amount != null ? Number(g.max_cart_amount) : null,
+        include_auto_in_total: Number(g.include_auto_in_total || 0),
+        max_items_qty: g.max_items_qty != null ? Number(g.max_items_qty) : null,
+        allow_customer_qty: Number(g.allow_customer_qty ?? 1),
+        allow_customer_remove: Number(g.allow_customer_remove ?? 1),
+      }));
+
+      const [rows] = await db.query(
+        `SELECT i.*,
+                p.name AS product_name,
+                p.price AS product_price,
+                p.old_price AS product_old_price,
+                p.photos_json AS product_photos_json,
+                s.qty AS stock_qty
+         FROM prod_auto_add_items i
+         JOIN prod_auto_add_groups g
+           ON g.tenant_id=i.tenant_id AND g.store_id=i.store_id AND g.id=i.group_id
+         JOIN prod_products p
+           ON p.tenant_id=i.tenant_id AND p.id=i.product_id
+         LEFT JOIN prod_product_stocks s
+           ON s.tenant_id=p.tenant_id AND s.store_id=i.store_id AND s.product_id=p.id
+         WHERE i.tenant_id=? AND i.store_id=? AND i.is_active=1 AND g.is_active=1 AND p.is_active=1
+         ORDER BY g.sort_order ASC, i.sort_order ASC, i.id ASC`,
+        [tenantId, storeId]
+      );
+
+      const items = rows.map((r) => ({
+        id: Number(r.id),
+        group_id: Number(r.group_id),
+        product_id: Number(r.product_id),
+        default_qty: Number(r.default_qty || 0),
+        min_qty: Number(r.min_qty || 0),
+        max_qty: r.max_qty != null ? Number(r.max_qty) : null,
+        price_override: r.price_override != null ? Number(r.price_override) : null,
+        free_first_qty: Number(r.free_first_qty || 0),
+        free_per_amount: r.free_per_amount != null ? Number(r.free_per_amount) : null,
+        free_per_amount_qty: Number(r.free_per_amount_qty || 0),
+        max_free_qty: r.max_free_qty != null ? Number(r.max_free_qty) : null,
+        sort_order: Number(r.sort_order || 0),
+        product: {
+          id: Number(r.product_id),
+          name: r.product_name || "",
+          price: Number(r.product_price || 0),
+          old_price: Number(r.product_old_price || 0),
+          photos: helpers.safeJsonArray(r.product_photos_json),
+          stock_qty: r.stock_qty != null ? Number(r.stock_qty) : null,
+        },
+      }));
+
+      res.json({ ok: true, data: { groups, items } });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });

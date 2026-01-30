@@ -20,6 +20,8 @@
   const optionsGroupsEmpty = $("#optionsGroupsEmpty");
   const variantsGroupsList = $("#variantsGroupsList");
   const variantsGroupsEmpty = $("#variantsGroupsEmpty");
+  const autoAddGroupsList = $("#autoAddGroupsList");
+  const autoAddGroupsEmpty = $("#autoAddGroupsEmpty");
   const unitsListEl = $("#unitsList");
   const unitsEmptyHint = $("#unitsEmptyHint");
   
@@ -42,7 +44,29 @@
   const categoryEmpty = $("#categoryEmpty");
   const categoryInfo = $("#categoryInfo");
   const optionEmpty = $("#optionEmpty");
+  const autoAddEmpty = $("#autoAddEmpty");
   const optionGroupInfo = $("#optionGroupInfo");
+  const autoAddGroupInfo = $("#autoAddGroupInfo");
+  const autoAddGroupForm = $("#autoAddGroupForm");
+  const autoAddGroupTitleInput = $("#autoAddGroupTitle");
+  const autoAddGroupDescInput = $("#autoAddGroupDesc");
+  const autoAddGroupSortInput = $("#autoAddGroupSort");
+  const autoAddGroupIsActiveInput = $("#autoAddGroupIsActive");
+  const autoAddMinAmountInput = $("#autoAddMinAmount");
+  const autoAddMaxAmountInput = $("#autoAddMaxAmount");
+  const autoAddIncludeAutoTotalInput = $("#autoAddIncludeAutoTotal");
+  const autoAddMaxItemsQtyInput = $("#autoAddMaxItemsQty");
+  const autoAddAllowCustomerQtyInput = $("#autoAddAllowCustomerQty");
+  const autoAddAllowCustomerRemoveInput = $("#autoAddAllowCustomerRemove");
+  const autoAddLevelGroup = $("#autoAddLevelGroup");
+  const autoAddLevelPicker = $("#autoAddLevelPicker");
+  const autoAddPickerTabs = $("#autoAddPickerTabs");
+  const autoAddPickerSearch = $("#autoAddPickerSearch");
+  const autoAddPickerSelectAll = $("#autoAddPickerSelectAll");
+  const autoAddPickerSelectAllLabel = $("#autoAddPickerSelectAllLabel");
+  const autoAddPickerList = $("#autoAddPickerList");
+  const autoAddItemsList = $("#autoAddItemsList");
+  const autoAddItemsAddBtn = $("#autoAddItemsAddBtn");
   const variantGroupInfo = $("#variantGroupInfo");
   const variantLevelGroup = $("#variantLevelGroup");
   const variantGroupForm = $("#variantGroupForm");
@@ -351,6 +375,7 @@
   const editingCategories = new Map(); // Map<categoryId, { navigationState }>
   const editingOptions = new Map(); // Map<optionGroupId, { mode, optionDraft, snapshotData }>
   const editingVariants = new Map(); // Map<variantGroupId, { mode, variantDraft, snapshotData }>
+  const editingAutoAdds = new Map(); // Map<autoAddGroupId, { mode, autoAddDraft, snapshotData }>
 
   const state = {
     mode: "products", // products | categories | ...
@@ -363,8 +388,12 @@
     selectedProductCategories: [], // full objects
     optionGroups: [],
     variantGroups: [],
+    autoAddGroups: [],
+    autoAddItems: [],
+    selectedAutoAddGroupId: null,
     selectedOptionGroupId: null,
     selectedVariantGroupId: null,
+    autoAddGroupDetails: null,
     optionGroupDetails: null,
     variantGroupDetails: null,
     optionGroupCache: new Map(),
@@ -391,6 +420,20 @@
       activeToggleBusy: false,
     },
     optionDraft: null,
+    autoAddPanel: {
+      level: "empty",
+      mode: "view", // view | edit | create
+      itemsDirty: false,
+      tabKey: null,
+      snapshotData: null,
+      pickerSelection: new Set(),
+      pickerCategoryId: null,
+      pickerProducts: [],
+      pickerQuery: "",
+      pickerTabsScrollLeft: 0,
+      pickerInitialSelection: new Set(),
+    },
+    autoAddDraft: null,
     variantPanel: {
       level: "empty", // empty | group | picker
       mode: "view", // view | edit | create
@@ -432,8 +475,11 @@
   let variantPickerSavedHandlers = null;
   let optionPanelPickerSavedFooterState = null;
   let optionPanelPickerSavedHandlers = null;
+  let autoAddPickerSavedFooterState = null;
+  let autoAddPickerSavedHandlers = null;
   let unitPickerSavedFooterState = null;
   let unitPickerSavedHandlers = null;
+  const autoAddSearchTimers = new Map();
 
   // ---------------- API ----------------
 
@@ -678,6 +724,29 @@
     return api(`/api/admin/variants/assignments/${id}`, { method: "DELETE" });
   }
 
+  // Auto-add API functions
+  async function apiGetAutoAddGroups() {
+    return api("/api/admin/auto-add/groups");
+  }
+  async function apiCreateAutoAddGroup(payload) {
+    return api("/api/admin/auto-add/groups", { method: "POST", body: JSON.stringify(payload) });
+  }
+  async function apiPatchAutoAddGroup(id, payload) {
+    return api(`/api/admin/auto-add/groups/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+  }
+  async function apiDeleteAutoAddGroup(id) {
+    return api(`/api/admin/auto-add/groups/${id}`, { method: "DELETE" });
+  }
+  async function apiCreateAutoAddItem(groupId, payload) {
+    return api(`/api/admin/auto-add/groups/${groupId}/items`, { method: "POST", body: JSON.stringify(payload) });
+  }
+  async function apiPatchAutoAddItem(id, payload) {
+    return api(`/api/admin/auto-add/items/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+  }
+  async function apiDeleteAutoAddItem(id) {
+    return api(`/api/admin/auto-add/items/${id}`, { method: "DELETE" });
+  }
+
   async function apiGetCatalogCategories() {
     return api("/api/admin/catalog/categories");
   }
@@ -896,6 +965,9 @@
     } else if (state.mode === "variants") {
       const btn = productsAccordion.querySelector('[data-view="variants"]');
       if (btn) btn.classList.add("is-active");
+    } else if (state.mode === "auto-add") {
+      const btn = productsAccordion.querySelector('[data-view="auto-add"]');
+      if (btn) btn.classList.add("is-active");
     } else if (state.mode === "units") {
       const btn = productsAccordion.querySelector('[data-view="units"]');
       if (btn) btn.classList.add("is-active");
@@ -959,6 +1031,17 @@
     clearProductSelection();
     showDetailsEmpty();
     syncActiveMenuItems();
+  }
+
+  async function enterAutoAddMode() {
+    state.mode = "auto-add";
+    setToolbarTitle("Автодобавления");
+    showView("auto-add");
+    clearProductSelection();
+    showDetailsEmpty();
+    syncActiveMenuItems();
+    await loadAutoAddManagement();
+    renderAutoAddGroupsList();
   }
 
   async function enterUnitsMode() {
@@ -2062,6 +2145,1297 @@ function buildOptionGroupPayload(formValues) {
   function renderAllOptionGroupsLists() {
     renderOptionGroupsList();
     // Не рендерим варианты здесь, только опции
+  }
+
+  function formatAutoAddRuleSummary(item) {
+    const parts = [];
+    const defQty = Number(item.default_qty || 0);
+    const minQty = Number(item.min_qty || 0);
+    const maxQty = item.max_qty != null ? Number(item.max_qty) : null;
+    const freeFirst = Number(item.free_first_qty || 0);
+    const freePer = item.free_per_amount != null ? Number(item.free_per_amount) : null;
+    const freePerQty = Number(item.free_per_amount_qty || 0);
+    const maxFree = item.max_free_qty != null ? Number(item.max_free_qty) : null;
+
+    if (defQty > 0) parts.push(`по умолчанию ${defQty} шт.`);
+    if (minQty > 0 && minQty !== defQty) parts.push(`мин ${minQty} шт.`);
+    if (maxQty != null) parts.push(`макс ${maxQty} шт.`);
+    if (freeFirst > 0) parts.push(`первые ${freeFirst} бесплатно`);
+    if (freePer && freePer > 0 && freePerQty > 0) parts.push(`${freePerQty} бесплатно / ${formatMoney(freePer)}`);
+    if (maxFree != null) parts.push(`лимит бесплатно ${maxFree} шт.`);
+    if (item.price_override != null) parts.push(`цена ${formatMoney(item.price_override)}`);
+    return parts.join(" • ") || "—";
+  }
+
+  async function loadAutoAddManagement() {
+    try {
+      const res = await apiGetAutoAddGroups();
+      const data = res.data || {};
+      state.autoAddGroups = Array.isArray(data.groups) ? data.groups : [];
+      state.autoAddItems = Array.isArray(data.items) ? data.items : [];
+    } catch (e) {
+      console.error("Failed to load auto-add groups", e);
+      state.autoAddGroups = [];
+      state.autoAddItems = [];
+    }
+  }
+
+  function renderAutoAddGroupsList(listEl = autoAddGroupsList, emptyEl = autoAddGroupsEmpty) {
+    if (!listEl || !emptyEl) return;
+
+    const groups = state.autoAddGroups
+      .slice()
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+
+    if (!groups.length) {
+      listEl.innerHTML = "";
+      emptyEl.classList.remove("hidden");
+      return;
+    }
+
+    emptyEl.classList.add("hidden");
+
+    const itemsByGroup = new Map();
+    state.autoAddItems.forEach((item) => {
+      const gid = Number(item.group_id);
+      if (!Number.isFinite(gid)) return;
+      if (!itemsByGroup.has(gid)) itemsByGroup.set(gid, []);
+      itemsByGroup.get(gid).push(item);
+    });
+
+    const disableSwitch = state.autoAddPanel.mode !== "view";
+
+    listEl.innerHTML = groups.map((group) => {
+      const items = itemsByGroup.get(Number(group.id)) || [];
+      const isActive = Number(group.id) === Number(state.selectedAutoAddGroupId);
+      return `
+        <div class="options-row ${isActive ? "is-active" : ""}" data-auto-group-id="${group.id}">
+          <div>
+            <div class="options-row-title">${escapeHtml(group.title || "")}</div>
+            ${group.description ? `<div class="options-row-meta">${escapeHtml(group.description)}</div>` : ""}
+          </div>
+          <div class="options-row-meta">Товаров: ${items.length}</div>
+          <div class="options-row-meta">Сортировка: ${group.sort_order ?? 0}</div>
+          <div class="options-row-meta">
+            <label class="switch switch-compact options-row-active">
+              <input class="switch-input" type="checkbox" data-auto-group-active-id="${group.id}" ${group.is_active ? "checked" : ""} ${disableSwitch ? "disabled" : ""} />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Активна</span>
+            </label>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    listEl.querySelectorAll("[data-auto-group-id]").forEach((row) => {
+      row.addEventListener("click", async () => {
+        const id = Number(row.dataset.autoGroupId);
+        if (!Number.isFinite(id)) return;
+        state.selectedAutoAddGroupId = id;
+        const details = buildAutoAddGroupDetails(id);
+        if (!details) {
+          await loadAutoAddManagement();
+          state.autoAddGroupDetails = buildAutoAddGroupDetails(id);
+        } else {
+          state.autoAddGroupDetails = details;
+        }
+        renderAutoAddGroupsList();
+        if (state.autoAddGroupDetails) {
+          showAutoAddDetails(state.autoAddGroupDetails, { mode: "view" });
+        }
+        const group = state.autoAddGroups.find((g) => Number(g.id) === id);
+        openAutoAddGroupTab(id, group?.title || "Автодобавление", { activate: false });
+      });
+    });
+
+    listEl.querySelectorAll("[data-auto-group-active-id]").forEach((input) => {
+      input.addEventListener("click", (event) => event.stopPropagation());
+      input.addEventListener("change", async (event) => {
+        event.stopPropagation();
+        if (disableSwitch) return;
+        const id = Number(input.dataset.autoGroupActiveId);
+        if (!Number.isFinite(id)) return;
+        const group = state.autoAddGroups.find((g) => Number(g.id) === id);
+        if (!group) return;
+        try {
+          await apiPatchAutoAddGroup(id, { is_active: input.checked ? 1 : 0 });
+          await loadAutoAddManagement();
+          renderAutoAddGroupsList();
+        } catch (e) {
+          console.error("Failed to toggle auto-add group", e);
+          input.checked = !input.checked;
+          alert("Не удалось обновить статус автодобавления.");
+        }
+      });
+    });
+  }
+
+function buildAutoAddGroupDetails(groupId) {
+    const group = state.autoAddGroups.find((g) => Number(g.id) === Number(groupId));
+    if (!group) return null;
+    const items = state.autoAddItems
+      .filter((item) => Number(item.group_id) === Number(groupId))
+      .slice()
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+    return { group, items };
+  }
+
+  function isAutoAddEditable() {
+    return state.autoAddPanel.mode === "edit" || state.autoAddPanel.mode === "create";
+  }
+
+  function getAutoAddItemsSource() {
+    if (state.autoAddPanel.mode === "create" || state.autoAddPanel.mode === "edit") {
+      return state.autoAddDraft?.items || [];
+    }
+    return state.autoAddGroupDetails?.items || [];
+  }
+
+  function getAutoAddGroupFormValues() {
+    return {
+      title: (autoAddGroupTitleInput?.value || "").trim(),
+      description: (autoAddGroupDescInput?.value || "").trim() || null,
+      sort_order: autoAddGroupSortInput?.value ? Number(autoAddGroupSortInput.value) : 0,
+      is_active: autoAddGroupIsActiveInput?.checked ? 1 : 0,
+      min_cart_amount: autoAddMinAmountInput?.value === "" || autoAddMinAmountInput?.value == null
+        ? null
+        : Number(autoAddMinAmountInput.value),
+      max_cart_amount: autoAddMaxAmountInput?.value === "" || autoAddMaxAmountInput?.value == null
+        ? null
+        : Number(autoAddMaxAmountInput.value),
+      include_auto_in_total: autoAddIncludeAutoTotalInput?.checked ? 1 : 0,
+      max_items_qty: autoAddMaxItemsQtyInput?.value === "" || autoAddMaxItemsQtyInput?.value == null
+        ? null
+        : Number(autoAddMaxItemsQtyInput.value),
+      allow_customer_qty: autoAddAllowCustomerQtyInput?.checked ? 1 : 0,
+      allow_customer_remove: autoAddAllowCustomerRemoveInput?.checked ? 1 : 0,
+    };
+  }
+
+  function syncAutoAddDraftGroupFromForm() {
+    if (!state.autoAddDraft) return;
+    state.autoAddDraft.group = { ...state.autoAddDraft.group, ...getAutoAddGroupFormValues() };
+  }
+
+  function persistAutoAddEditState() {
+    if (state.autoAddPanel.mode !== "edit" || !state.selectedAutoAddGroupId || !state.autoAddDraft) return;
+    editingAutoAdds.set(state.selectedAutoAddGroupId, {
+      mode: "edit",
+      autoAddDraft: deepClone(state.autoAddDraft),
+      snapshotData: deepClone(state.autoAddPanel.snapshotData),
+    });
+  }
+
+  function setAutoAddGroupFormDisabled(disabled) {
+    if (autoAddGroupTitleInput) autoAddGroupTitleInput.disabled = disabled;
+    if (autoAddGroupDescInput) autoAddGroupDescInput.disabled = disabled;
+    if (autoAddGroupSortInput) autoAddGroupSortInput.disabled = disabled;
+    if (autoAddGroupIsActiveInput) autoAddGroupIsActiveInput.disabled = disabled;
+    if (autoAddMinAmountInput) autoAddMinAmountInput.disabled = disabled;
+    if (autoAddMaxAmountInput) autoAddMaxAmountInput.disabled = disabled;
+    if (autoAddIncludeAutoTotalInput) autoAddIncludeAutoTotalInput.disabled = disabled;
+    if (autoAddMaxItemsQtyInput) autoAddMaxItemsQtyInput.disabled = disabled;
+    if (autoAddAllowCustomerQtyInput) autoAddAllowCustomerQtyInput.disabled = disabled;
+    if (autoAddAllowCustomerRemoveInput) autoAddAllowCustomerRemoveInput.disabled = disabled;
+  }
+
+  function fillAutoAddGroupForm(group) {
+    if (!autoAddGroupForm || !group) return;
+    if (autoAddGroupTitleInput) autoAddGroupTitleInput.value = group.title || "";
+    if (autoAddGroupDescInput) autoAddGroupDescInput.value = group.description || "";
+    if (autoAddGroupSortInput) autoAddGroupSortInput.value = group.sort_order ?? 0;
+    if (autoAddGroupIsActiveInput) autoAddGroupIsActiveInput.checked = Number(group.is_active || 0) === 1;
+    if (autoAddMinAmountInput) {
+      autoAddMinAmountInput.value = group.min_cart_amount != null ? group.min_cart_amount : "";
+    }
+    if (autoAddMaxAmountInput) {
+      autoAddMaxAmountInput.value = group.max_cart_amount != null ? group.max_cart_amount : "";
+    }
+    if (autoAddIncludeAutoTotalInput) {
+      autoAddIncludeAutoTotalInput.checked = Number(group.include_auto_in_total || 0) === 1;
+    }
+    if (autoAddMaxItemsQtyInput) {
+      autoAddMaxItemsQtyInput.value = group.max_items_qty != null ? group.max_items_qty : "";
+    }
+    if (autoAddAllowCustomerQtyInput) {
+      const allowQty = group.allow_customer_qty == null ? 1 : group.allow_customer_qty;
+      autoAddAllowCustomerQtyInput.checked = Number(allowQty) === 1;
+    }
+    if (autoAddAllowCustomerRemoveInput) {
+      const allowRemove = group.allow_customer_remove == null ? 1 : group.allow_customer_remove;
+      autoAddAllowCustomerRemoveInput.checked = Number(allowRemove) === 1;
+    }
+  }
+
+  function getAutoAddItemKey(item) {
+    return String(item?.tempId ?? item?.id ?? item?.product_id ?? "");
+  }
+
+  function getAutoAddDraftItemByKey(key) {
+    if (!state.autoAddDraft || !Array.isArray(state.autoAddDraft.items)) return null;
+    return state.autoAddDraft.items.find(
+      (item) => String(item.tempId ?? item.id ?? item.product_id) === String(key)
+    );
+  }
+
+  function createAutoAddDraftItem() {
+    const index = Array.isArray(state.autoAddDraft?.items) ? state.autoAddDraft.items.length : 0;
+    return {
+      tempId: `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      product_id: null,
+      product_name: "",
+      default_qty: 1,
+      min_qty: 1,
+      max_qty: null,
+      price_override: null,
+      free_first_qty: 0,
+      free_per_amount: null,
+      free_per_amount_qty: 1,
+      max_free_qty: null,
+      sort_order: index * 10,
+      is_active: 1,
+    };
+  }
+
+  function buildAutoAddItemPayload(item, idx = 0) {
+    return {
+      product_id: Number(item.product_id),
+      default_qty: Math.max(0, Number(item.default_qty || 0)),
+      min_qty: Math.max(0, Number(item.min_qty || 0)),
+      max_qty: item.max_qty != null && item.max_qty !== "" ? Math.max(0, Number(item.max_qty)) : null,
+      price_override: item.price_override != null && item.price_override !== "" ? Number(item.price_override) : null,
+      free_first_qty: Math.max(0, Number(item.free_first_qty || 0)),
+      free_per_amount: item.free_per_amount != null && item.free_per_amount !== "" ? Number(item.free_per_amount) : null,
+      free_per_amount_qty: Math.max(1, Number(item.free_per_amount_qty || 1)),
+      max_free_qty: item.max_free_qty != null && item.max_free_qty !== "" ? Number(item.max_free_qty) : null,
+      sort_order: item.sort_order != null && item.sort_order !== "" ? Number(item.sort_order) : idx * 10,
+      is_active: item.is_active === 0 ? 0 : 1,
+    };
+  }
+
+  function renderAutoAddItems(items) {
+    if (!autoAddItemsList) return;
+    const editable = isAutoAddEditable();
+
+    if (!items.length) {
+      autoAddItemsList.innerHTML = `<div class="empty-hint">Пока нет товаров...</div>`;
+      return;
+    }
+
+    autoAddItemsList.innerHTML = items.map((item, idx) => {
+      const key = getAutoAddItemKey(item) || `auto-${idx}`;
+      const safeName = escapeHtml(item.product_name || "");
+      const selectedLabel = safeName || "Не выбран";
+      const defaultQty = item.default_qty ?? 1;
+      const minQty = item.min_qty ?? 1;
+      const maxQty = item.max_qty ?? "";
+      const priceOverride = item.price_override ?? "";
+      const freeFirst = item.free_first_qty ?? 0;
+      const freePerAmount = item.free_per_amount ?? "";
+      const freePerQty = item.free_per_amount_qty ?? 1;
+      const maxFree = item.max_free_qty ?? "";
+      const sortOrder = item.sort_order ?? 0;
+      const isActive = item.is_active === 0 ? "" : "checked";
+      const disabled = editable ? "" : "disabled";
+
+      return `
+        <div class="option-item-row auto-add-item-card" data-auto-item-key="${key}">
+          <div class="auto-add-item-header">
+            <div class="auto-add-item-title">
+              <label class="field-label">Товар *</label>
+              <input class="control auto-add-item-search" type="search" placeholder="Начните вводить название..." data-auto-item-search="${key}" value="${safeName}" ${disabled} />
+              <div class="options-list auto-add-search-results" data-auto-item-results="${key}"></div>
+              <div class="options-row-meta auto-add-item-selected" data-auto-item-selected="${key}">${selectedLabel}</div>
+            </div>
+            <div class="auto-add-item-actions">
+              <label class="switch switch-compact">
+                <input class="switch-input" type="checkbox" data-auto-item-field="is_active" data-auto-item-key="${key}" ${isActive} ${disabled} />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">Активен</span>
+              </label>
+              ${editable ? `
+                <button class="btn btn-icon auto-add-item-remove" type="button" data-auto-item-remove="${key}" title="Удалить" aria-label="Удалить товар">
+                  <i class="fas fa-times"></i>
+                </button>
+              ` : ""}
+            </div>
+          </div>
+          <div class="form-row-3 auto-add-item-row">
+            <div>
+              <label class="field-label">По умолчанию</label>
+              <input class="control" type="number" min="0" data-auto-item-field="default_qty" data-auto-item-key="${key}" value="${defaultQty}" ${disabled} />
+            </div>
+            <div>
+              <label class="field-label">Мин.</label>
+              <input class="control" type="number" min="0" data-auto-item-field="min_qty" data-auto-item-key="${key}" value="${minQty}" ${disabled} />
+            </div>
+            <div>
+              <label class="field-label">Макс.</label>
+              <input class="control" type="number" min="0" data-auto-item-field="max_qty" data-auto-item-key="${key}" value="${maxQty}" ${disabled} />
+            </div>
+          </div>
+          <div class="form-row-3 auto-add-item-row">
+            <div>
+              <label class="field-label">Цена (override)</label>
+              <input class="control" type="number" min="0" step="0.01" data-auto-item-field="price_override" data-auto-item-key="${key}" value="${priceOverride}" ${disabled} />
+            </div>
+            <div>
+              <label class="field-label">Первые бесплатно</label>
+              <input class="control" type="number" min="0" data-auto-item-field="free_first_qty" data-auto-item-key="${key}" value="${freeFirst}" ${disabled} />
+            </div>
+            <div>
+              <label class="field-label">Бесплатно за сумму</label>
+              <input class="control" type="number" min="0" step="1" data-auto-item-field="free_per_amount" data-auto-item-key="${key}" value="${freePerAmount}" ${disabled} />
+            </div>
+          </div>
+          <div class="form-row-3 auto-add-item-row">
+            <div>
+              <label class="field-label">Кол-во за сумму</label>
+              <input class="control" type="number" min="1" data-auto-item-field="free_per_amount_qty" data-auto-item-key="${key}" value="${freePerQty}" ${disabled} />
+            </div>
+            <div>
+              <label class="field-label">Лимит бесплатно</label>
+              <input class="control" type="number" min="0" data-auto-item-field="max_free_qty" data-auto-item-key="${key}" value="${maxFree}" ${disabled} />
+            </div>
+            <div>
+              <label class="field-label">Сортировка</label>
+              <input class="control" type="number" min="0" data-auto-item-field="sort_order" data-auto-item-key="${key}" value="${sortOrder}" ${disabled} />
+            </div>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    bindAutoAddItemsListEvents();
+  }
+
+  function bindAutoAddItemsListEvents() {
+    if (!autoAddItemsList || autoAddItemsList.__bound) return;
+    autoAddItemsList.__bound = true;
+
+    autoAddItemsList.addEventListener("input", (event) => {
+      if (!isAutoAddEditable()) return;
+      const target = event.target;
+      const searchInput = target.closest("[data-auto-item-search]");
+      if (searchInput) {
+        const key = searchInput.dataset.autoItemSearch;
+        const row = searchInput.closest("[data-auto-item-key]");
+        const resultsEl = row ? row.querySelector("[data-auto-item-results]") : null;
+        scheduleAutoAddSearch(key, searchInput.value || "", resultsEl);
+        return;
+      }
+
+      const fieldInput = target.closest("[data-auto-item-field]");
+      if (!fieldInput) return;
+      const field = fieldInput.dataset.autoItemField;
+      const key = fieldInput.dataset.autoItemKey;
+      const item = getAutoAddDraftItemByKey(key);
+      if (!item || !field) return;
+
+      if (field === "default_qty") {
+        item.default_qty = Math.max(0, Number(fieldInput.value || 0));
+      } else if (field === "min_qty") {
+        item.min_qty = Math.max(0, Number(fieldInput.value || 0));
+      } else if (field === "max_qty") {
+        item.max_qty = fieldInput.value === "" ? null : Math.max(0, Number(fieldInput.value || 0));
+      } else if (field === "price_override") {
+        item.price_override = fieldInput.value === "" ? null : Number(fieldInput.value || 0);
+      } else if (field === "free_first_qty") {
+        item.free_first_qty = Math.max(0, Number(fieldInput.value || 0));
+      } else if (field === "free_per_amount") {
+        item.free_per_amount = fieldInput.value === "" ? null : Number(fieldInput.value || 0);
+      } else if (field === "free_per_amount_qty") {
+        item.free_per_amount_qty = Math.max(1, Number(fieldInput.value || 1));
+      } else if (field === "max_free_qty") {
+        item.max_free_qty = fieldInput.value === "" ? null : Math.max(0, Number(fieldInput.value || 0));
+      } else if (field === "sort_order") {
+        item.sort_order = fieldInput.value === "" ? 0 : Number(fieldInput.value || 0);
+      }
+      state.autoAddPanel.itemsDirty = true;
+      persistAutoAddEditState();
+    });
+
+    autoAddItemsList.addEventListener("change", (event) => {
+      if (!isAutoAddEditable()) return;
+      const target = event.target;
+      const fieldInput = target.closest("[data-auto-item-field]");
+      if (!fieldInput) return;
+      const field = fieldInput.dataset.autoItemField;
+      const key = fieldInput.dataset.autoItemKey;
+      const item = getAutoAddDraftItemByKey(key);
+      if (!item || !field) return;
+      if (field === "is_active") {
+        item.is_active = fieldInput.checked ? 1 : 0;
+        state.autoAddPanel.itemsDirty = true;
+        persistAutoAddEditState();
+      }
+    });
+
+    autoAddItemsList.addEventListener("click", (event) => {
+      if (!isAutoAddEditable()) return;
+      const removeBtn = event.target.closest("[data-auto-item-remove]");
+      if (removeBtn) {
+        const key = removeBtn.dataset.autoItemRemove;
+        const item = getAutoAddDraftItemByKey(key);
+        if (!item || !state.autoAddDraft) return;
+        if (item.id) {
+          state.autoAddDraft.removedItemIds = Array.isArray(state.autoAddDraft.removedItemIds)
+            ? state.autoAddDraft.removedItemIds
+            : [];
+          state.autoAddDraft.removedItemIds.push(item.id);
+        }
+        state.autoAddDraft.items = state.autoAddDraft.items.filter(
+          (x) => String(x.tempId ?? x.id ?? x.product_id) !== String(key)
+        );
+        state.autoAddPanel.itemsDirty = true;
+        renderAutoAddItems(getAutoAddItemsSource());
+        persistAutoAddEditState();
+        return;
+      }
+
+      const pickBtn = event.target.closest("[data-auto-pick-id]");
+      if (pickBtn) {
+        const key = pickBtn.dataset.autoItemKey;
+        const productId = Number(pickBtn.dataset.autoPickId || 0);
+        const productName = pickBtn.dataset.autoPickName || "";
+        const productPrice = pickBtn.dataset.autoPickPrice ? Number(pickBtn.dataset.autoPickPrice) : null;
+        const item = getAutoAddDraftItemByKey(key);
+        if (!item) return;
+        item.product_id = productId;
+        item.product_name = productName;
+        if (Number.isFinite(productPrice)) {
+          item.product_price = productPrice;
+        }
+        const row = pickBtn.closest("[data-auto-item-key]");
+        if (row) {
+          const searchInput = row.querySelector("[data-auto-item-search]");
+          const selectedEl = row.querySelector("[data-auto-item-selected]");
+          const resultsEl = row.querySelector("[data-auto-item-results]");
+          if (searchInput) searchInput.value = productName;
+          if (selectedEl) selectedEl.textContent = productName || "Не выбран";
+          if (resultsEl) resultsEl.innerHTML = "";
+        }
+        state.autoAddPanel.itemsDirty = true;
+        persistAutoAddEditState();
+      }
+    });
+  }
+
+  function scheduleAutoAddSearch(key, query, resultsEl) {
+    if (!resultsEl) return;
+    if (autoAddSearchTimers.has(key)) {
+      clearTimeout(autoAddSearchTimers.get(key));
+    }
+    const q = String(query || "").trim();
+    if (!q || q.length < 2) {
+      resultsEl.innerHTML = "";
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await apiGetCatalogProducts({ query: q });
+        const list = Array.isArray(res.data) ? res.data : [];
+        resultsEl.innerHTML = list.map((p) => {
+          const priceLabel = formatMoney(p.price || 0);
+          return `
+            <button class="options-row auto-add-pick-row" type="button" data-auto-item-key="${key}" data-auto-pick-id="${p.id}" data-auto-pick-name="${escapeHtml(p.name || "")}" data-auto-pick-price="${p.price || 0}">
+              <div>
+                <div class="options-row-title">${escapeHtml(p.name || "")}</div>
+                <div class="options-row-meta">${priceLabel}</div>
+              </div>
+            </button>
+          `;
+        }).join("");
+      } catch (e) {
+        console.error("Auto-add search failed", e);
+      }
+    }, 300);
+    autoAddSearchTimers.set(key, timer);
+  }
+
+  function renderAutoAddHeader() {
+    if (state.autoAddPanel.level === "empty") {
+      if (productInfoHeader) productInfoHeader.classList.add("hidden");
+      return;
+    }
+    if (productInfoHeader) productInfoHeader.classList.remove("hidden");
+    setHeaderMode("product");
+    if (productHeaderActions) productHeaderActions.classList.add("hidden");
+    const isPicker = state.autoAddPanel.level === "picker";
+    const groupTitle = String(state.autoAddDraft?.group?.title || state.autoAddGroupDetails?.group?.title || "").trim();
+    const fallbackTitle = state.autoAddPanel.mode === "create" ? "Новое условие" : "—";
+    if (productTitle) {
+      productTitle.textContent = isPicker ? "Выбор товаров для автодобавления" : (groupTitle || fallbackTitle);
+    }
+    if (productSku) {
+      productSku.textContent = isPicker ? `Выбрано: ${state.autoAddPanel.pickerSelection.size}` : "Автодобавления";
+    }
+  }
+
+  function renderAutoAddPickerTabs() {
+    if (!autoAddPickerTabs) return;
+    const lastScroll = Number.isFinite(state.autoAddPanel.pickerTabsScrollLeft)
+      ? state.autoAddPanel.pickerTabsScrollLeft
+      : autoAddPickerTabs.scrollLeft;
+    autoAddPickerTabs.innerHTML = state.catalogCategories.map((cat) => {
+      const active = Number(cat.id) === Number(state.autoAddPanel.pickerCategoryId);
+      return `
+        <button class="option-picker-tab chip ${active ? "is-active" : ""}" type="button" data-cat-id="${cat.id}">
+          ${escapeHtml(cat.title || "")}
+        </button>
+      `;
+    }).join("");
+
+    bindHorizontalScroll(autoAddPickerTabs);
+    requestAnimationFrame(() => {
+      autoAddPickerTabs.scrollLeft = lastScroll;
+    });
+
+    autoAddPickerTabs.querySelectorAll("[data-cat-id]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        state.autoAddPanel.pickerCategoryId = Number(btn.dataset.catId);
+        renderAutoAddPickerTabs();
+        await refreshAutoAddPickerProducts();
+      });
+    });
+  }
+
+  function renderAutoAddPickerList() {
+    if (!autoAddPickerList) return;
+    autoAddPickerList.innerHTML = state.autoAddPanel.pickerProducts.map((product) => {
+      const id = Number(product.id);
+      const checked = Number.isFinite(id) && state.autoAddPanel.pickerSelection.has(id);
+      return `
+        <div class="option-picker-row ${checked ? "is-selected" : ""}" data-product-id="${Number.isFinite(id) ? id : ""}">
+          <div class="option-picker-title">${escapeHtml(product.name || "")}</div>
+          <div class="option-picker-price">Цена: ${product.price != null ? formatPriceInteger(product.price) : "—"}</div>
+          <input class="option-picker-checkbox" type="checkbox" data-product-id="${Number.isFinite(id) ? id : ""}" ${checked ? "checked" : ""} />
+        </div>
+      `;
+    }).join("");
+
+    autoAddPickerList.querySelectorAll(".option-picker-row[data-product-id]").forEach((row) => {
+      row.addEventListener("click", () => {
+        const id = Number(row.dataset.productId);
+        if (!Number.isFinite(id)) return;
+        if (state.autoAddPanel.pickerSelection.has(id)) {
+          state.autoAddPanel.pickerSelection.delete(id);
+        } else {
+          state.autoAddPanel.pickerSelection.add(id);
+        }
+        renderAutoAddPickerList();
+        renderAutoAddHeader();
+      });
+    });
+
+    updateAutoAddPickerSelectAllState();
+  }
+
+  function updateAutoAddPickerSelectAllState() {
+    if (!autoAddPickerSelectAll || !autoAddPickerSelectAllLabel) return;
+    const products = state.autoAddPanel.pickerProducts || [];
+    const ids = products
+      .map((product) => Number(product.id))
+      .filter((id) => Number.isFinite(id));
+    const selectedCount = ids.filter((id) => state.autoAddPanel.pickerSelection.has(id)).length;
+    const allSelected = ids.length > 0 && selectedCount === ids.length;
+    const noneSelected = selectedCount === 0;
+    autoAddPickerSelectAll.checked = allSelected;
+    autoAddPickerSelectAll.indeterminate = !allSelected && !noneSelected;
+    autoAddPickerSelectAll.disabled = ids.length === 0;
+    const label = allSelected ? "Сбросить все" : "Выделить все";
+    autoAddPickerSelectAllLabel.textContent = label;
+    autoAddPickerSelectAll.setAttribute("aria-label", label);
+  }
+
+  async function refreshAutoAddPickerProducts() {
+    const res = await apiGetCatalogProducts({
+      categoryId: state.autoAddPanel.pickerCategoryId,
+      query: state.autoAddPanel.pickerQuery,
+    });
+    state.autoAddPanel.pickerProducts = Array.isArray(res.data)
+      ? res.data.map((product) => {
+          const id = Number(product.id);
+          return Number.isFinite(id) ? { ...product, id } : product;
+        })
+      : [];
+    renderAutoAddPickerList();
+  }
+
+  async function openAutoAddPicker() {
+    syncAutoAddDraftGroupFromForm();
+    if (!state.catalogCategories.length) {
+      await loadCatalogCategories();
+    }
+    state.autoAddPanel.level = "picker";
+    const existingSelection = new Set();
+    getAutoAddItemsSource().forEach((item) => {
+      const id = Number(item.product_id ?? item.id);
+      if (Number.isFinite(id) && id > 0) existingSelection.add(id);
+    });
+    state.autoAddPanel.pickerSelection = existingSelection;
+    state.autoAddPanel.pickerInitialSelection = new Set(existingSelection);
+    state.autoAddPanel.pickerCategoryId = state.catalogCategories[0] ? Number(state.catalogCategories[0].id) : null;
+    state.autoAddPanel.pickerQuery = "";
+    if (autoAddPickerSearch) autoAddPickerSearch.value = "";
+    await refreshAutoAddPickerProducts();
+    renderAutoAddPickerLevel();
+  }
+
+  async function applyAutoAddPickerSelection() {
+    const footerCancelBtn = $("#productFooterCancelBtn");
+    const footerSaveBtn = $("#productFooterSaveBtn");
+    if (footerCancelBtn) delete footerCancelBtn.dataset.pickerType;
+    if (footerSaveBtn) delete footerSaveBtn.dataset.pickerType;
+    delete window._closeAutoAddPickerFn;
+    delete window._saveAutoAddPickerFn;
+    restoreAutoAddPickerFooter();
+
+    if (isSameSelection(state.autoAddPanel.pickerSelection, state.autoAddPanel.pickerInitialSelection)) {
+      state.autoAddPanel.level = "group";
+      renderAutoAddGroupLevel();
+      return;
+    }
+    const selectedIds = Array.from(state.autoAddPanel.pickerSelection);
+    if (!selectedIds.length) {
+      state.autoAddPanel.level = "group";
+      renderAutoAddGroupLevel();
+      return;
+    }
+    if (!state.autoAddDraft) {
+      state.autoAddPanel.level = "group";
+      renderAutoAddGroupLevel();
+      return;
+    }
+
+    const existing = new Set(
+      state.autoAddDraft.items
+        .map((x) => Number(x.product_id))
+        .filter((pid) => Number.isFinite(pid) && pid > 0)
+    );
+    const emptySlots = state.autoAddDraft.items.filter((x) => !Number(x.product_id));
+    let emptyIndex = 0;
+    state.autoAddPanel.pickerProducts.forEach((product) => {
+      const id = Number(product.id);
+      if (!Number.isFinite(id)) return;
+      if (!state.autoAddPanel.pickerSelection.has(id)) return;
+      if (existing.has(id)) return;
+      let target = emptySlots[emptyIndex] || null;
+      if (target) {
+        emptyIndex += 1;
+      } else {
+        target = createAutoAddDraftItem();
+        state.autoAddDraft.items.push(target);
+      }
+      target.product_id = id;
+      target.product_name = product.name;
+      target.product_price = product.price;
+    });
+    state.autoAddPanel.itemsDirty = true;
+    persistAutoAddEditState();
+
+    state.autoAddPanel.level = "group";
+    if (state.autoAddPanel.level === "picker") {
+      renderAutoAddPickerLevel();
+    } else {
+      renderAutoAddGroupLevel();
+    }
+  }
+
+  function renderAutoAddPickerLevel() {
+    if (!autoAddLevelPicker) return;
+    if (autoAddLevelGroup) autoAddLevelGroup.classList.add("hidden");
+    autoAddLevelPicker.classList.remove("hidden");
+    renderAutoAddPickerTabs();
+    renderAutoAddPickerList();
+    renderAutoAddHeader();
+    showProductFooterEdit();
+
+    const footer = $("#productInfoFooter");
+    const footerView = $("#productFooterView");
+    const footerEditMode = $("#productFooterEditMode");
+    const footerCancelBtn = $("#productFooterCancelBtn");
+    const footerSaveBtn = $("#productFooterSaveBtn");
+    const footerDeleteBtn = $("#productFooterDeleteEditBtn");
+    const footerMoreBtn = $("#productFooterMoreEditBtn");
+    if (footer && footerView && footerEditMode && footerCancelBtn && footerSaveBtn) {
+      if (!autoAddPickerSavedFooterState) {
+        autoAddPickerSavedFooterState = {
+          footerHidden: footer.classList.contains("hidden"),
+          viewHidden: footerView.classList.contains("hidden"),
+          editHidden: footerEditMode.classList.contains("hidden"),
+          deleteBtnHidden: footerDeleteBtn ? footerDeleteBtn.classList.contains("hidden") : false,
+          moreBtnHidden: footerMoreBtn ? footerMoreBtn.classList.contains("hidden") : false,
+          cancelBtnIsConfirm: footerCancelBtn.classList.contains("is-confirm"),
+          cancelBtnIsFullwidth: footerCancelBtn.classList.contains("is-fullwidth"),
+        };
+        autoAddPickerSavedHandlers = {
+          cancel: footerCancelBtn.onclick,
+          save: footerSaveBtn.onclick,
+        };
+      }
+
+      footer.classList.remove("hidden");
+      footerView.classList.add("hidden");
+      footerEditMode.classList.remove("hidden");
+      if (footerDeleteBtn) footerDeleteBtn.classList.add("hidden");
+      if (footerMoreBtn) footerMoreBtn.classList.add("hidden");
+
+      footerCancelBtn.classList.remove("is-confirm");
+      footerCancelBtn.classList.add("is-fullwidth");
+      if (!footerCancelBtn.dataset.pickerOriginalHtml) {
+        footerCancelBtn.dataset.pickerOriginalHtml = footerCancelBtn.innerHTML;
+      }
+      footerCancelBtn.textContent = "Отменить";
+      footerCancelBtn.title = "Отменить";
+      footerCancelBtn.setAttribute("aria-label", "Отменить");
+    }
+    if (footerCancelBtn) footerCancelBtn.dataset.pickerType = "auto-add";
+    if (footerSaveBtn) footerSaveBtn.dataset.pickerType = "auto-add";
+    window._closeAutoAddPickerFn = () => {
+      if (footerCancelBtn) delete footerCancelBtn.dataset.pickerType;
+      if (footerSaveBtn) delete footerSaveBtn.dataset.pickerType;
+      delete window._closeAutoAddPickerFn;
+      delete window._saveAutoAddPickerFn;
+      restoreAutoAddPickerFooter();
+      state.autoAddPanel.level = "group";
+      renderAutoAddGroupLevel();
+    };
+    window._saveAutoAddPickerFn = async () => {
+      await applyAutoAddPickerSelection();
+    };
+  }
+
+  function restoreAutoAddPickerFooter() {
+    const footer = $("#productInfoFooter");
+    const footerView = $("#productFooterView");
+    const footerEditMode = $("#productFooterEditMode");
+    const footerCancelBtn = $("#productFooterCancelBtn");
+    const footerSaveBtn = $("#productFooterSaveBtn");
+    const footerDeleteBtn = $("#productFooterDeleteEditBtn");
+    const footerMoreBtn = $("#productFooterMoreEditBtn");
+    if (!footer || !footerView || !footerEditMode || !footerCancelBtn || !footerSaveBtn || !autoAddPickerSavedFooterState) return;
+
+    if (autoAddPickerSavedFooterState.footerHidden) {
+      footer.classList.add("hidden");
+    } else {
+      footer.classList.remove("hidden");
+    }
+    if (autoAddPickerSavedFooterState.viewHidden) {
+      footerView.classList.add("hidden");
+    } else {
+      footerView.classList.remove("hidden");
+    }
+    if (autoAddPickerSavedFooterState.editHidden) {
+      footerEditMode.classList.add("hidden");
+    } else {
+      footerEditMode.classList.remove("hidden");
+    }
+
+    if (footerDeleteBtn) {
+      if (autoAddPickerSavedFooterState.deleteBtnHidden) {
+        footerDeleteBtn.classList.add("hidden");
+      } else {
+        footerDeleteBtn.classList.remove("hidden");
+      }
+    }
+    if (footerMoreBtn) {
+      if (autoAddPickerSavedFooterState.moreBtnHidden) {
+        footerMoreBtn.classList.add("hidden");
+      } else {
+        footerMoreBtn.classList.remove("hidden");
+      }
+    }
+
+    if (autoAddPickerSavedFooterState.cancelBtnIsFullwidth) {
+      footerCancelBtn.classList.add("is-fullwidth");
+    } else {
+      footerCancelBtn.classList.remove("is-fullwidth");
+    }
+    if (autoAddPickerSavedFooterState.cancelBtnIsConfirm) {
+      footerCancelBtn.classList.add("is-confirm");
+    } else {
+      footerCancelBtn.classList.remove("is-confirm");
+    }
+    if (footerCancelBtn.dataset.pickerOriginalHtml) {
+      footerCancelBtn.innerHTML = footerCancelBtn.dataset.pickerOriginalHtml;
+      delete footerCancelBtn.dataset.pickerOriginalHtml;
+    }
+
+    if (autoAddPickerSavedHandlers) {
+      footerCancelBtn.onclick = autoAddPickerSavedHandlers.cancel;
+      footerSaveBtn.onclick = autoAddPickerSavedHandlers.save;
+    }
+
+    autoAddPickerSavedFooterState = null;
+    autoAddPickerSavedHandlers = null;
+  }
+
+  function closeAutoAddPicker() {
+    state.autoAddPanel.level = "group";
+    state.autoAddPanel.pickerSelection = new Set();
+    renderAutoAddGroupLevel();
+  }
+
+  function renderAutoAddGroupLevel() {
+    const editable = isAutoAddEditable();
+    const data = editable ? state.autoAddDraft : state.autoAddGroupDetails;
+    if (!data) return;
+    state.autoAddPanel.level = "group";
+    if (autoAddLevelGroup) autoAddLevelGroup.classList.remove("hidden");
+    if (autoAddLevelPicker) autoAddLevelPicker.classList.add("hidden");
+
+    fillAutoAddGroupForm(data.group);
+    setAutoAddGroupFormDisabled(!editable);
+
+    if (autoAddItemsAddBtn) autoAddItemsAddBtn.classList.toggle("hidden", !editable);
+    renderAutoAddItems(getAutoAddItemsSource());
+    renderAutoAddHeader();
+
+    if (state.autoAddPanel.mode === "view") {
+      showProductFooterView();
+    } else {
+      showProductFooterEdit();
+    }
+  }
+
+  function showAutoAddDetails(details, { mode }) {
+    if (!details && mode !== "create") return;
+    state.autoAddPanel.level = "group";
+    state.autoAddPanel.mode = mode || "view";
+    state.autoAddPanel.itemsDirty = false;
+    if (state.autoAddPanel.mode === "view") {
+      state.autoAddDraft = null;
+      state.autoAddPanel.snapshotData = null;
+    }
+
+    if (productInfoHeader) productInfoHeader.classList.remove("hidden");
+    if (editProductBtn) editProductBtn.classList.add("hidden");
+
+    hideProductFooter();
+
+    productEmpty && productEmpty.classList.add("hidden");
+    categoryEmpty && categoryEmpty.classList.add("hidden");
+    optionEmpty && optionEmpty.classList.add("hidden");
+    autoAddEmpty && autoAddEmpty.classList.add("hidden");
+    productInfo && productInfo.classList.add("hidden");
+    categoryInfo && categoryInfo.classList.add("hidden");
+    optionGroupInfo && optionGroupInfo.classList.add("hidden");
+    variantGroupInfo && variantGroupInfo.classList.add("hidden");
+    unitInfo && unitInfo.classList.add("hidden");
+    autoAddGroupInfo && autoAddGroupInfo.classList.remove("hidden");
+    if (productInfoHeader) productInfoHeader.classList.remove("hidden");
+
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile && sheetHost && autoAddGroupInfo) {
+      sheetHost.innerHTML = "";
+      sheetHost.appendChild(autoAddGroupInfo);
+      openSheet();
+    } else {
+      if (detailsDesktopHost && autoAddGroupInfo && autoAddGroupInfo.parentElement !== detailsDesktopHost) {
+        detailsDesktopHost.appendChild(autoAddGroupInfo);
+      }
+      closeSheet();
+    }
+
+    renderAutoAddGroupLevel();
+  }
+
+  function openAutoAddGroupTab(groupId, title, { activate = true } = {}) {
+    if (!Number.isFinite(groupId)) return;
+    ensureTab({
+      type: "auto-add",
+      id: groupId,
+      title: title || "Автодобавление",
+      onActivate: async () => {
+        await loadAutoAddManagement();
+        state.selectedAutoAddGroupId = groupId;
+        state.autoAddGroupDetails = buildAutoAddGroupDetails(groupId);
+        renderAutoAddGroupsList();
+
+        if (editingAutoAdds.has(groupId)) {
+          const editingState = editingAutoAdds.get(groupId);
+          state.autoAddPanel.mode = editingState.mode;
+          state.autoAddDraft = deepClone(editingState.autoAddDraft);
+          state.autoAddPanel.snapshotData = deepClone(editingState.snapshotData);
+          showAutoAddDetails(state.autoAddGroupDetails, { mode: editingState.mode });
+        } else {
+          state.autoAddPanel.mode = "view";
+          state.autoAddDraft = null;
+          state.autoAddPanel.snapshotData = null;
+          showAutoAddDetails(state.autoAddGroupDetails, { mode: "view" });
+        }
+      },
+      activate,
+    });
+  }
+
+  function startAutoAddCreate() {
+    state.autoAddPanel.mode = "create";
+    state.autoAddPanel.itemsDirty = false;
+    state.autoAddDraft = {
+      group: {
+        title: "",
+        description: "",
+        sort_order: 0,
+        is_active: 1,
+        min_cart_amount: null,
+        max_cart_amount: null,
+        include_auto_in_total: 0,
+        max_items_qty: null,
+        allow_customer_qty: 1,
+        allow_customer_remove: 1,
+      },
+      items: [createAutoAddDraftItem()],
+      removedItemIds: [],
+    };
+
+    const tabId = `new-auto-add-${Date.now()}`;
+    ensureTab({
+      type: "auto-add",
+      id: tabId,
+      title: "Новое условие",
+      onActivate: () => {
+        showAutoAddDetails({ group: state.autoAddDraft.group, items: state.autoAddDraft.items }, { mode: "create" });
+        showProductFooterEdit();
+      },
+      activate: true,
+    });
+
+    state.autoAddPanel.tabKey = buildTabKey("auto-add", tabId);
+    showAutoAddDetails({ group: state.autoAddDraft.group, items: state.autoAddDraft.items }, { mode: "create" });
+    showProductFooterEdit();
+  }
+
+  function startAutoAddEdit({ silent = false } = {}) {
+    if (!state.autoAddGroupDetails?.group) return;
+    state.autoAddPanel.snapshotData = deepClone({
+      group: state.autoAddGroupDetails.group,
+      items: state.autoAddGroupDetails.items || [],
+    });
+    state.autoAddDraft = deepClone({
+      group: state.autoAddGroupDetails.group,
+      items: state.autoAddGroupDetails.items || [],
+      removedItemIds: [],
+    });
+    state.autoAddPanel.mode = "edit";
+
+    if (state.selectedAutoAddGroupId) {
+      editingAutoAdds.set(state.selectedAutoAddGroupId, {
+        mode: "edit",
+        autoAddDraft: deepClone(state.autoAddDraft),
+        snapshotData: deepClone(state.autoAddPanel.snapshotData),
+      });
+    }
+
+    if (silent) return;
+    renderAutoAddGroupLevel();
+  }
+
+  function cancelAutoAddEdit() {
+    if (state.autoAddPanel.mode === "create") {
+      if (state.autoAddPanel.tabKey) {
+        closeTab(state.autoAddPanel.tabKey);
+      }
+      state.autoAddDraft = null;
+      state.autoAddPanel.mode = "view";
+      state.autoAddPanel.tabKey = null;
+      state.selectedAutoAddGroupId = null;
+      hideProductFooter();
+      showDetailsEmpty();
+      return;
+    }
+    if (state.autoAddPanel.mode === "edit" && state.selectedAutoAddGroupId) {
+      editingAutoAdds.delete(state.selectedAutoAddGroupId);
+      (async () => {
+        state.autoAddPanel.mode = "view";
+        state.autoAddDraft = null;
+        state.autoAddPanel.snapshotData = null;
+        await loadAutoAddManagement();
+        state.autoAddGroupDetails = buildAutoAddGroupDetails(state.selectedAutoAddGroupId);
+        showAutoAddDetails(state.autoAddGroupDetails, { mode: "view" });
+      })();
+    }
+  }
+
+  async function saveAutoAddGroup() {
+    if (!autoAddGroupForm || !state.autoAddDraft) return;
+    const groupValues = getAutoAddGroupFormValues();
+
+    if (!groupValues.title) {
+      autoAddGroupTitleInput?.focus();
+      return;
+    }
+
+    const items = Array.isArray(state.autoAddDraft.items) ? state.autoAddDraft.items : [];
+    for (const item of items) {
+      const pid = Number(item.product_id || 0);
+      if (!Number.isFinite(pid) || pid <= 0) {
+        alert("Выберите товар для автодобавления.");
+        return;
+      }
+    }
+
+    if (state.autoAddPanel.mode === "create") {
+      const res = await apiCreateAutoAddGroup(groupValues);
+      const groupId = res.id;
+      await Promise.all(items.map((item, idx) => apiCreateAutoAddItem(groupId, buildAutoAddItemPayload(item, idx))));
+
+      await loadAutoAddManagement();
+      state.selectedAutoAddGroupId = groupId;
+      state.autoAddGroupDetails = buildAutoAddGroupDetails(groupId);
+      renderAutoAddGroupsList();
+
+      if (state.autoAddPanel.tabKey) {
+        replaceTabKey(state.autoAddPanel.tabKey, {
+          type: "auto-add",
+          id: groupId,
+          title: groupValues.title || "Автодобавление",
+          onActivate: async () => {
+            await loadAutoAddManagement();
+            state.selectedAutoAddGroupId = groupId;
+            state.autoAddGroupDetails = buildAutoAddGroupDetails(groupId);
+            renderAutoAddGroupsList();
+            showAutoAddDetails(state.autoAddGroupDetails, { mode: "view" });
+          },
+        });
+        state.autoAddPanel.tabKey = null;
+      }
+
+      state.autoAddPanel.mode = "view";
+      state.autoAddDraft = null;
+      state.autoAddPanel.snapshotData = null;
+      showAutoAddDetails(state.autoAddGroupDetails, { mode: "view" });
+      return;
+    }
+
+    if (state.selectedAutoAddGroupId) {
+      const groupId = state.selectedAutoAddGroupId;
+      await apiPatchAutoAddGroup(groupId, groupValues);
+
+      const removedIds = Array.isArray(state.autoAddDraft.removedItemIds) ? state.autoAddDraft.removedItemIds : [];
+      const createItems = items.filter((item) => !item.id);
+      const updateItems = items.filter((item) => item.id);
+
+      await Promise.all([
+        ...removedIds.map((id) => apiDeleteAutoAddItem(id)),
+        ...createItems.map((item, idx) => apiCreateAutoAddItem(groupId, buildAutoAddItemPayload(item, idx))),
+        ...updateItems.map((item, idx) => apiPatchAutoAddItem(item.id, buildAutoAddItemPayload(item, idx))),
+      ]);
+
+      await loadAutoAddManagement();
+      state.autoAddGroupDetails = buildAutoAddGroupDetails(groupId);
+      renderAutoAddGroupsList();
+      editingAutoAdds.delete(groupId);
+
+      state.autoAddPanel.mode = "view";
+      state.autoAddDraft = null;
+      state.autoAddPanel.snapshotData = null;
+      showAutoAddDetails(state.autoAddGroupDetails, { mode: "view" });
+    }
+  }
+
+function openAutoAddGroupModal({ mode, group } = {}) {
+    const isEdit = mode === "edit";
+    const title = isEdit ? "Редактировать автодобавление" : "Новое автодобавление";
+    const g = group || {};
+
+    const content = `
+      <div class="form-grid">
+        <div>
+          <label class="field-label">Название *</label>
+          <input class="control" id="autoAddGroupTitle" type="text" value="${escapeHtml(g.title || "")}" />
+        </div>
+        <div>
+          <label class="field-label">Описание</label>
+          <input class="control" id="autoAddGroupDesc" type="text" value="${escapeHtml(g.description || "")}" />
+        </div>
+        <div class="form-row-2">
+          <label class="switch">
+            <input class="switch-input" id="autoAddGroupActive" type="checkbox" ${g.is_active ? "checked" : ""} />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="switch-text">Активна</span>
+          </label>
+          <div>
+            <label class="field-label">Сортировка</label>
+            <input class="control" id="autoAddGroupSort" type="number" value="${g.sort_order ?? 0}" />
+          </div>
+        </div>
+      </div>
+    `;
+
+    window.AppModal?.open({
+      title,
+      content,
+      onSave: async ({ body }) => {
+        const nameInput = body.querySelector("#autoAddGroupTitle");
+        const descInput = body.querySelector("#autoAddGroupDesc");
+        const activeInput = body.querySelector("#autoAddGroupActive");
+        const sortInput = body.querySelector("#autoAddGroupSort");
+
+        const titleValue = (nameInput?.value || "").trim();
+        if (!titleValue) {
+          alert("Название обязательно");
+          return false;
+        }
+
+        const payload = {
+          title: titleValue,
+          description: (descInput?.value || "").trim() || null,
+          is_active: activeInput?.checked ? 1 : 0,
+          sort_order: sortInput?.value ? Number(sortInput.value) : 0,
+        };
+
+        if (isEdit) await apiPatchAutoAddGroup(g.id, payload);
+        else await apiCreateAutoAddGroup(payload);
+
+        await loadAutoAddManagement();
+        renderAutoAddGroupsList();
+      }
+    });
+  }
+
+  function openAutoAddItemModal({ mode, groupId, item } = {}) {
+    const isEdit = mode === "edit";
+    const it = item || {};
+    const title = isEdit ? "Редактировать товар автодобавления" : "Добавить товар";
+
+    const content = `
+      <div class="form-grid">
+        <div>
+          <label class="field-label">Товар *</label>
+          <input class="control" id="autoAddItemSearch" type="search" placeholder="Начните вводить название..." value="${escapeHtml(it.product_name || "")}" />
+          <div class="options-list auto-add-search-results" id="autoAddItemResults"></div>
+          <div class="options-row-meta" id="autoAddItemSelected">${escapeHtml(it.product_name || "Не выбран")}</div>
+          <input type="hidden" id="autoAddItemProductId" value="${it.product_id || ""}" />
+        </div>
+        <div class="form-row-3">
+          <div>
+            <label class="field-label">По умолчанию</label>
+            <input class="control" id="autoAddItemDefaultQty" type="number" min="0" value="${it.default_qty ?? 0}" />
+          </div>
+          <div>
+            <label class="field-label">Мин.</label>
+            <input class="control" id="autoAddItemMinQty" type="number" min="0" value="${it.min_qty ?? 0}" />
+          </div>
+          <div>
+            <label class="field-label">Макс.</label>
+            <input class="control" id="autoAddItemMaxQty" type="number" min="0" value="${it.max_qty ?? ""}" />
+          </div>
+        </div>
+        <div class="form-row-3">
+          <div>
+            <label class="field-label">Цена (override)</label>
+            <input class="control" id="autoAddItemPrice" type="number" min="0" step="0.01" value="${it.price_override ?? ""}" />
+          </div>
+          <div>
+            <label class="field-label">Первые бесплатно</label>
+            <input class="control" id="autoAddItemFreeFirst" type="number" min="0" value="${it.free_first_qty ?? 0}" />
+          </div>
+          <div>
+            <label class="field-label">Бесплатно за сумму</label>
+            <input class="control" id="autoAddItemFreePerAmount" type="number" min="0" step="1" value="${it.free_per_amount ?? ""}" />
+          </div>
+        </div>
+        <div class="form-row-3">
+          <div>
+            <label class="field-label">Кол-во за сумму</label>
+            <input class="control" id="autoAddItemFreePerQty" type="number" min="1" value="${it.free_per_amount_qty ?? 1}" />
+          </div>
+          <div>
+            <label class="field-label">Лимит бесплатно</label>
+            <input class="control" id="autoAddItemMaxFree" type="number" min="0" value="${it.max_free_qty ?? ""}" />
+          </div>
+          <div>
+            <label class="field-label">Сортировка</label>
+            <input class="control" id="autoAddItemSort" type="number" value="${it.sort_order ?? 0}" />
+          </div>
+        </div>
+        <div>
+          <label class="switch">
+            <input class="switch-input" id="autoAddItemActive" type="checkbox" ${it.is_active === 0 ? "" : "checked"} />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="switch-text">Активен</span>
+          </label>
+        </div>
+      </div>
+    `;
+
+    window.AppModal?.open({
+      title,
+      content,
+      onSave: async ({ body }) => {
+        const productIdInput = body.querySelector("#autoAddItemProductId");
+        const productId = Number(productIdInput?.value || 0);
+        if (!Number.isFinite(productId) || productId <= 0) {
+          alert("Выберите товар");
+          return false;
+        }
+
+        const payload = {
+          product_id: productId,
+          default_qty: Number(body.querySelector("#autoAddItemDefaultQty")?.value || 0),
+          min_qty: Number(body.querySelector("#autoAddItemMinQty")?.value || 0),
+          max_qty: body.querySelector("#autoAddItemMaxQty")?.value ? Number(body.querySelector("#autoAddItemMaxQty").value) : null,
+          price_override: body.querySelector("#autoAddItemPrice")?.value ? Number(body.querySelector("#autoAddItemPrice").value) : null,
+          free_first_qty: Number(body.querySelector("#autoAddItemFreeFirst")?.value || 0),
+          free_per_amount: body.querySelector("#autoAddItemFreePerAmount")?.value ? Number(body.querySelector("#autoAddItemFreePerAmount").value) : null,
+          free_per_amount_qty: Number(body.querySelector("#autoAddItemFreePerQty")?.value || 1),
+          max_free_qty: body.querySelector("#autoAddItemMaxFree")?.value ? Number(body.querySelector("#autoAddItemMaxFree").value) : null,
+          sort_order: body.querySelector("#autoAddItemSort")?.value ? Number(body.querySelector("#autoAddItemSort").value) : 0,
+          is_active: body.querySelector("#autoAddItemActive")?.checked ? 1 : 0,
+        };
+
+        if (isEdit) await apiPatchAutoAddItem(it.id, payload);
+        else await apiCreateAutoAddItem(groupId, payload);
+
+        await loadAutoAddManagement();
+        renderAutoAddGroupsList();
+      },
+      onClose: () => {}
+    });
+
+    const body = window.AppModal?.body;
+    if (!body) return;
+    const searchInput = body.querySelector("#autoAddItemSearch");
+    const resultsEl = body.querySelector("#autoAddItemResults");
+    const selectedEl = body.querySelector("#autoAddItemSelected");
+    const productIdInput = body.querySelector("#autoAddItemProductId");
+
+    let searchTimer = null;
+
+    async function runSearch() {
+      const q = (searchInput?.value || "").trim();
+      if (!q || q.length < 2) {
+        if (resultsEl) resultsEl.innerHTML = "";
+        return;
+      }
+      const res = await apiGetCatalogProducts({ query: q });
+      const list = Array.isArray(res.data) ? res.data : [];
+      if (!resultsEl) return;
+      resultsEl.innerHTML = list.map((p) => {
+        const priceLabel = formatMoney(p.price || 0);
+        return `<button class="options-row auto-add-pick-row" type="button" data-pick-id="${p.id}" data-pick-name="${escapeHtml(p.name || "")}"><div><div class="options-row-title">${escapeHtml(p.name || "")}</div><div class="options-row-meta">${priceLabel}</div></div></button>`;
+      }).join("");
+
+      resultsEl.querySelectorAll("[data-pick-id]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const pid = Number(btn.dataset.pickId);
+          const name = btn.dataset.pickName || "";
+          if (productIdInput) productIdInput.value = String(pid || "");
+          if (selectedEl) selectedEl.textContent = name || "Не выбран";
+          if (searchInput) searchInput.value = name || "";
+          if (resultsEl) resultsEl.innerHTML = "";
+        });
+      });
+    }
+
+    if (searchInput) {
+      searchInput.addEventListener("input", () => {
+        if (searchTimer) clearTimeout(searchTimer);
+        searchTimer = setTimeout(runSearch, 300);
+      });
+    }
   }
 
   function renderVariantGroupsList(listEl, emptyEl) {
@@ -5424,18 +6798,21 @@ function updateOptionGroupSelectionUi() {
   function showDetailsEmpty() {
     const showCategory = state.mode === "categories";
     const showOption = state.mode === "options";
+    const showAutoAdd = state.mode === "auto-add";
     const showUnit = state.mode === "units";
     productInfo && productInfo.classList.add("hidden");
     categoryInfo && categoryInfo.classList.add("hidden");
     optionGroupInfo && optionGroupInfo.classList.add("hidden");
+    autoAddGroupInfo && autoAddGroupInfo.classList.add("hidden");
     variantGroupInfo && variantGroupInfo.classList.add("hidden");
     unitInfo && unitInfo.classList.add("hidden");
     if (productInfoHeader) productInfoHeader.classList.add("hidden");
     setHeaderMode("product");
-    if (productEmpty) productEmpty.classList.toggle("hidden", showCategory || showOption || showUnit);
+    if (productEmpty) productEmpty.classList.toggle("hidden", showCategory || showOption || showAutoAdd || showUnit);
     if (categoryEmpty) categoryEmpty.classList.toggle("hidden", !showCategory);
     if (optionEmpty) optionEmpty.classList.toggle("hidden", !showOption);
-    if (editProductBtn && (showOption || showUnit)) editProductBtn.classList.add("hidden");
+    if (autoAddEmpty) autoAddEmpty.classList.toggle("hidden", !showAutoAdd);
+    if (editProductBtn && (showOption || showAutoAdd || showUnit)) editProductBtn.classList.add("hidden");
     hideProductFooter();
     closeSheet();
   }
@@ -5690,6 +7067,15 @@ function updateOptionGroupSelectionUi() {
             shouldCleanup = true;
           }
         }
+      } else if (type === "auto-add") {
+        // Check if auto-add is being edited
+        if (isTempTab || (Number.isFinite(id) && editingAutoAdds.has(id))) {
+          shouldCleanup = true;
+        } else if (state.autoAddPanel.mode === "edit" || state.autoAddPanel.mode === "create") {
+          if (state.selectedAutoAddGroupId === id || state.autoAddPanel.tabKey === key) {
+            shouldCleanup = true;
+          }
+        }
       } else if (type === "unit") {
         // Check if unit is being edited
         if (isTempTab || (state.unitPanel.mode === "edit" || state.unitPanel.mode === "create")) {
@@ -5732,6 +7118,20 @@ function updateOptionGroupSelectionUi() {
             state.variantPanel.tabKey = null;
           }
         }
+
+        // For auto-add, cancel edit/create mode
+        if (type === "auto-add" && (state.autoAddPanel.mode === "edit" || state.autoAddPanel.mode === "create")) {
+          if (Number.isFinite(id) && editingAutoAdds.has(id)) {
+            state.autoAddPanel.mode = "view";
+            state.autoAddDraft = null;
+            state.autoAddPanel.snapshotData = null;
+            editingAutoAdds.delete(id);
+          } else if (isTempTab) {
+            state.autoAddPanel.mode = "view";
+            state.autoAddDraft = null;
+            state.autoAddPanel.tabKey = null;
+          }
+        }
         
         // For units, cancel edit/create mode
         if (type === "unit" && (state.unitPanel.mode === "edit" || state.unitPanel.mode === "create")) {
@@ -5748,6 +7148,8 @@ function updateOptionGroupSelectionUi() {
           editingOptions.delete(id);
         } else if (type === "variant" && Number.isFinite(id)) {
           editingVariants.delete(id);
+        } else if (type === "auto-add" && Number.isFinite(id)) {
+          editingAutoAdds.delete(id);
         }
         
         // Clear navigation state
@@ -5981,6 +7383,8 @@ function updateOptionGroupSelectionUi() {
     state.selectedProductCategories = [];
     state.selectedOptionGroupId = null;
     state.optionGroupDetails = null;
+    state.selectedAutoAddGroupId = null;
+    state.autoAddGroupDetails = null;
     state.selectedProductOptionAssignments = [];
     state.optionPanel.level = "empty";
     state.optionPanel.mode = "view";
@@ -5988,6 +7392,15 @@ function updateOptionGroupSelectionUi() {
     state.optionPanel.returnTo = null;
     state.optionPanel.snapshotData = null;
     state.optionDraft = null;
+    state.autoAddPanel.level = "empty";
+    state.autoAddPanel.mode = "view";
+    state.autoAddPanel.snapshotData = null;
+    state.autoAddPanel.pickerSelection = new Set();
+    state.autoAddPanel.pickerInitialSelection = new Set();
+    state.autoAddPanel.pickerCategoryId = null;
+    state.autoAddPanel.pickerProducts = [];
+    state.autoAddPanel.pickerQuery = "";
+    state.autoAddDraft = null;
     
     // Clear navigation stack
     clearNavigationStack();
@@ -5996,6 +7409,7 @@ function updateOptionGroupSelectionUi() {
     if (productsList) $$(".order-row", productsList).forEach((x) => x.classList.remove("is-active"));
     if (categoriesMainList) $$(".order-row", categoriesMainList).forEach((x) => x.classList.remove("is-active"));
     if (optionsGroupsList) $$(".options-row", optionsGroupsList).forEach((x) => x.classList.remove("is-active"));
+    if (autoAddGroupsList) $$(".options-row", autoAddGroupsList).forEach((x) => x.classList.remove("is-active"));
   }
 
   // ---------------- Modal: product (chips + photos) ----------------
@@ -9770,6 +11184,21 @@ function updateOptionGroupSelectionUi() {
       }
       return;
     }
+    if (state.mode === "auto-add") {
+      await loadAutoAddManagement();
+      renderAutoAddGroupsList();
+      if (state.selectedAutoAddGroupId && !state.autoAddGroups.some((g) => Number(g.id) === Number(state.selectedAutoAddGroupId))) {
+        state.selectedAutoAddGroupId = null;
+        state.autoAddGroupDetails = null;
+        showDetailsEmpty();
+      } else if (state.selectedAutoAddGroupId && state.autoAddPanel.mode !== "create") {
+        state.autoAddGroupDetails = buildAutoAddGroupDetails(state.selectedAutoAddGroupId);
+        if (state.autoAddPanel.level !== "empty") {
+          showAutoAddDetails(state.autoAddGroupDetails, { mode: state.autoAddPanel.mode });
+        }
+      }
+      return;
+    }
     if (state.mode === "variants") {
       await loadVariantGroups();
       renderVariantGroupsList(variantsGroupsList, variantsGroupsEmpty);
@@ -9842,6 +11271,7 @@ function updateOptionGroupSelectionUi() {
         if (state.mode === "products") return openProductModal({ mode: "create" });
         if (state.mode === "options") return startOptionCreate();
         if (state.mode === "variants") return startVariantCreate();
+        if (state.mode === "auto-add") return startAutoAddCreate();
         if (state.mode === "units") {
           state.selectedUnitId = null;
           state.unitDetails = null;
@@ -9875,6 +11305,10 @@ function updateOptionGroupSelectionUi() {
           loadVariantGroups().then(() => {
             renderVariantGroupsList(variantsGroupsList, variantsGroupsEmpty);
           });
+          return;
+        }
+        if (view === "auto-add") {
+          enterAutoAddMode();
           return;
         }
         if (view === "units") {
@@ -10083,6 +11517,26 @@ function updateOptionGroupSelectionUi() {
               alert(message);
             }
           })();
+        } else if (state.mode === "auto-add" && state.selectedAutoAddGroupId) {
+          const groupId = state.selectedAutoAddGroupId;
+          (async () => {
+            if (!confirm("Удалить условие и все товары в нем?")) return;
+            try {
+              await apiDeleteAutoAddGroup(groupId);
+              editingAutoAdds.delete(groupId);
+              if (tabsState.tabs.some((t) => t.key === buildTabKey("auto-add", groupId))) {
+                closeTab(buildTabKey("auto-add", groupId));
+              }
+              await loadAutoAddManagement();
+              state.selectedAutoAddGroupId = null;
+              state.autoAddGroupDetails = null;
+              renderAutoAddGroupsList();
+              showDetailsEmpty();
+            } catch (e) {
+              const message = e && e.message ? e.message : "Не удалось удалить условие.";
+              alert(message);
+            }
+          })();
         } else if (state.selectedProductId) {
           confirmProductDelete();
         }
@@ -10104,6 +11558,10 @@ function updateOptionGroupSelectionUi() {
         } else if (state.mode === "variants" && state.selectedVariantGroupId) {
           if (state.variantPanel.mode === "view" && state.variantGroupDetails) {
             startVariantEdit();
+          }
+        } else if (state.mode === "auto-add" && state.selectedAutoAddGroupId) {
+          if (state.autoAddPanel.mode === "view" && state.autoAddGroupDetails) {
+            startAutoAddEdit();
           }
         } else {
           // Products mode - existing logic
@@ -10130,6 +11588,28 @@ function updateOptionGroupSelectionUi() {
     // Edit mode buttons
     if (footerDeleteEditBtn) {
       attachTwoStepButton(footerDeleteEditBtn, () => {
+        if (state.mode === "auto-add" && state.selectedAutoAddGroupId) {
+          const groupId = state.selectedAutoAddGroupId;
+          (async () => {
+            if (!confirm("Удалить условие и все товары в нем?")) return;
+            try {
+              await apiDeleteAutoAddGroup(groupId);
+              editingAutoAdds.delete(groupId);
+              if (tabsState.tabs.some((t) => t.key === buildTabKey("auto-add", groupId))) {
+                closeTab(buildTabKey("auto-add", groupId));
+              }
+              await loadAutoAddManagement();
+              state.selectedAutoAddGroupId = null;
+              state.autoAddGroupDetails = null;
+              renderAutoAddGroupsList();
+              showDetailsEmpty();
+            } catch (e) {
+              const message = e && e.message ? e.message : "Не удалось удалить условие.";
+              alert(message);
+            }
+          })();
+          return;
+        }
         if (currentNavigationState?.product?.id) {
           confirmProductDelete();
         }
@@ -10154,6 +11634,11 @@ function updateOptionGroupSelectionUi() {
           if (closeFn) closeFn();
           return;
         }
+        if (footerCancelBtn.dataset.pickerType === "auto-add") {
+          const closeFn = window._closeAutoAddPickerFn;
+          if (closeFn) closeFn();
+          return;
+        }
         if (footerCancelBtn.dataset.pickerType === "category") {
           const closeFn = window._closeCategoryPickerFn;
           if (closeFn) closeFn();
@@ -10167,6 +11652,11 @@ function updateOptionGroupSelectionUi() {
         // Option edit cancel
         if (state.mode === "options" && state.optionPanel.mode === "edit" && state.selectedOptionGroupId) {
           cancelOptionEdit();
+          return;
+        }
+        // Auto-add edit/create cancel
+        if (state.mode === "auto-add" && (state.autoAddPanel.mode === "edit" || state.autoAddPanel.mode === "create")) {
+          cancelAutoAddEdit();
           return;
         }
         // Category edit cancel
@@ -10221,6 +11711,13 @@ function updateOptionGroupSelectionUi() {
           }
           return;
         }
+        if (footerSaveBtn.dataset.pickerType === "auto-add") {
+          const saveFn = window._saveAutoAddPickerFn;
+          if (saveFn) {
+            await saveFn();
+          }
+          return;
+        }
         if (footerSaveBtn.dataset.pickerType === "category") {
           const saveFn = window._saveCategoryPickerFn;
           if (saveFn) {
@@ -10246,6 +11743,16 @@ function updateOptionGroupSelectionUi() {
           } catch (e) {
             console.error('Error saving option', e);
             alert('Ошибка при сохранении опции: ' + (e.message || 'Неизвестная ошибка'));
+          }
+          return;
+        }
+        // Auto-add edit/create save
+        if (state.mode === "auto-add" && (state.autoAddPanel.mode === "edit" || state.autoAddPanel.mode === "create")) {
+          try {
+            await saveAutoAddGroup();
+          } catch (e) {
+            console.error("Error saving auto-add", e);
+            alert("Ошибка при сохранении автодобавления: " + (e.message || "Неизвестная ошибка"));
           }
           return;
         }
@@ -10357,6 +11864,14 @@ function updateOptionGroupSelectionUi() {
       });
     }
 
+    if (autoAddItemsAddBtn) {
+      autoAddItemsAddBtn.addEventListener("click", () => {
+        if (state.autoAddPanel.mode === "create" || state.autoAddPanel.mode === "edit") {
+          openAutoAddPicker();
+        }
+      });
+    }
+
     if (variantGroupForm) {
       variantGroupForm.addEventListener("input", () => {
         if (!state.variantDraft) state.variantDraft = { group: {}, tiers: [], assignments: [] };
@@ -10378,6 +11893,19 @@ function updateOptionGroupSelectionUi() {
       optionGroupForm.addEventListener("change", () => {
         syncOptionDraftGroupFromForm();
         renderOptionHeader();
+      });
+    }
+
+    if (autoAddGroupForm) {
+      autoAddGroupForm.addEventListener("input", () => {
+        syncAutoAddDraftGroupFromForm();
+        persistAutoAddEditState();
+        renderAutoAddHeader();
+      });
+      autoAddGroupForm.addEventListener("change", () => {
+        syncAutoAddDraftGroupFromForm();
+        persistAutoAddEditState();
+        renderAutoAddHeader();
       });
     }
 
@@ -10434,6 +11962,29 @@ function updateOptionGroupSelectionUi() {
         }
         renderOptionPickerList();
         renderOptionHeader();
+      });
+    }
+
+    if (autoAddPickerSearch) {
+      autoAddPickerSearch.addEventListener("input", async () => {
+        state.autoAddPanel.pickerQuery = autoAddPickerSearch.value;
+        await refreshAutoAddPickerProducts();
+      });
+    }
+
+    if (autoAddPickerSelectAll) {
+      autoAddPickerSelectAll.addEventListener("change", () => {
+        const products = state.autoAddPanel.pickerProducts || [];
+        const ids = products.map((product) => product.id);
+        const selectedCount = ids.filter((id) => state.autoAddPanel.pickerSelection.has(id)).length;
+        const allSelected = ids.length > 0 && selectedCount === ids.length;
+        if (allSelected) {
+          ids.forEach((id) => state.autoAddPanel.pickerSelection.delete(id));
+        } else {
+          ids.forEach((id) => state.autoAddPanel.pickerSelection.add(id));
+        }
+        renderAutoAddPickerList();
+        renderAutoAddHeader();
       });
     }
 
@@ -10696,6 +12247,9 @@ function updateOptionGroupSelectionUi() {
         if (optionGroupInfo && optionGroupInfo.parentElement !== detailsDesktopHost) {
           detailsDesktopHost.appendChild(optionGroupInfo);
         }
+        if (autoAddGroupInfo && autoAddGroupInfo.parentElement !== detailsDesktopHost) {
+          detailsDesktopHost.appendChild(autoAddGroupInfo);
+        }
         closeSheet();
       }
     });
@@ -10707,6 +12261,7 @@ function updateOptionGroupSelectionUi() {
     bindAccordionContainer(productsAccordion);
     bindAccordionContainer(optionGroupInfo);
     bindAccordionContainer(variantGroupInfo);
+    bindAccordionContainer(autoAddGroupInfo);
     if (unitInfo) {
       bindAccordionContainer(unitInfo);
     }

@@ -1611,6 +1611,345 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     }
   });
 
+  // ------------------------------
+  // Auto-add items to cart (groups + items)
+  // ------------------------------
+
+  router.get('/admin/auto-add/groups', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+
+      const [groups] = await db.query(
+        `SELECT g.*,
+                (SELECT COUNT(*) FROM prod_auto_add_items i
+                 WHERE i.tenant_id=g.tenant_id AND i.store_id=g.store_id AND i.group_id=g.id) AS items_count
+         FROM prod_auto_add_groups g
+         WHERE g.tenant_id=? AND g.store_id=?
+         ORDER BY g.sort_order ASC, g.id ASC`,
+        [tenantId, storeId]
+      );
+
+      const [items] = await db.query(
+        `SELECT i.*,
+                p.name AS product_name,
+                p.price AS product_price,
+                p.photos_json AS product_photos_json
+         FROM prod_auto_add_items i
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.product_id
+         WHERE i.tenant_id=? AND i.store_id=?
+         ORDER BY i.sort_order ASC, i.id ASC`,
+        [tenantId, storeId]
+      );
+
+      for (const it of items) {
+        it.product_photos = helpers.safeJsonArray(it.product_photos_json);
+      }
+
+      res.json({ ok: true, data: { groups, items } });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/auto-add/groups', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const title = helpers.strOrNull(req.body.title);
+      if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+
+      const description = helpers.strOrNull(req.body.description);
+      const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+      const sortOrder = helpers.numOrNull(req.body.sort_order) ?? 0;
+      const minCartAmount = helpers.numOrNull(req.body.min_cart_amount);
+      const maxCartAmount = helpers.numOrNull(req.body.max_cart_amount);
+      const includeAutoInTotal = helpers.toBool(req.body.include_auto_in_total, false) ? 1 : 0;
+      const maxItemsQty = helpers.numOrNull(req.body.max_items_qty);
+      const allowCustomerQty = helpers.toBool(req.body.allow_customer_qty, true) ? 1 : 0;
+      const allowCustomerRemove = helpers.toBool(req.body.allow_customer_remove, true) ? 1 : 0;
+
+      const [r] = await db.query(
+        `INSERT INTO prod_auto_add_groups
+         (tenant_id, store_id, title, description, is_active, sort_order, min_cart_amount, max_cart_amount, include_auto_in_total, max_items_qty, allow_customer_qty, allow_customer_remove)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [tenantId, storeId, title, description, isActive, sortOrder, minCartAmount, maxCartAmount, includeAutoInTotal, maxItemsQty, allowCustomerQty, allowCustomerRemove]
+      );
+
+      res.json({ ok: true, id: r.insertId });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.patch('/admin/auto-add/groups/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const fields = [];
+      const values = [];
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'title')) {
+        const title = helpers.strOrNull(req.body.title);
+        if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+        fields.push('title=?');
+        values.push(title);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'description')) {
+        fields.push('description=?');
+        values.push(helpers.strOrNull(req.body.description));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'is_active')) {
+        fields.push('is_active=?');
+        values.push(helpers.toBool(req.body.is_active, true) ? 1 : 0);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'sort_order')) {
+        fields.push('sort_order=?');
+        values.push(helpers.numOrNull(req.body.sort_order) ?? 0);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'min_cart_amount')) {
+        fields.push('min_cart_amount=?');
+        values.push(helpers.numOrNull(req.body.min_cart_amount));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'max_cart_amount')) {
+        fields.push('max_cart_amount=?');
+        values.push(helpers.numOrNull(req.body.max_cart_amount));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'include_auto_in_total')) {
+        fields.push('include_auto_in_total=?');
+        values.push(helpers.toBool(req.body.include_auto_in_total, false) ? 1 : 0);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'max_items_qty')) {
+        fields.push('max_items_qty=?');
+        values.push(helpers.numOrNull(req.body.max_items_qty));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'allow_customer_qty')) {
+        fields.push('allow_customer_qty=?');
+        values.push(helpers.toBool(req.body.allow_customer_qty, true) ? 1 : 0);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'allow_customer_remove')) {
+        fields.push('allow_customer_remove=?');
+        values.push(helpers.toBool(req.body.allow_customer_remove, true) ? 1 : 0);
+      }
+
+      if (!fields.length) return res.json({ ok: true });
+
+      values.push(tenantId, storeId, id);
+      await db.query(
+        `UPDATE prod_auto_add_groups
+         SET ${fields.join(', ')}
+         WHERE tenant_id=? AND store_id=? AND id=?`,
+        values
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/admin/auto-add/groups/:id', async (req, res) => {
+    const conn = await db.getConnection();
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      await conn.beginTransaction();
+      await conn.query(
+        `DELETE FROM prod_auto_add_items WHERE tenant_id=? AND store_id=? AND group_id=?`,
+        [tenantId, storeId, id]
+      );
+      await conn.query(
+        `DELETE FROM prod_auto_add_groups WHERE tenant_id=? AND store_id=? AND id=?`,
+        [tenantId, storeId, id]
+      );
+      await conn.commit();
+
+      res.json({ ok: true });
+    } catch (e) {
+      await conn.rollback();
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  router.post('/admin/auto-add/groups/:id/items', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const groupId = Number(req.params.id);
+      if (!Number.isFinite(groupId) || groupId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const productId = Number(req.body.product_id);
+      if (!Number.isFinite(productId) || productId <= 0) {
+        return res.status(400).json({ ok: false, error: 'PRODUCT_REQUIRED' });
+      }
+
+      const defaultQty = Math.max(0, Number(req.body.default_qty || 0));
+      const minQty = Math.max(0, Number(req.body.min_qty || 0));
+      const maxQty = helpers.numOrNull(req.body.max_qty);
+      const priceOverride = helpers.numOrNull(req.body.price_override);
+      const freeFirstQty = Math.max(0, Number(req.body.free_first_qty || 0));
+      const freePerAmount = helpers.numOrNull(req.body.free_per_amount);
+      const freePerAmountQty = Math.max(1, Number(req.body.free_per_amount_qty || 1));
+      const maxFreeQty = helpers.numOrNull(req.body.max_free_qty);
+      const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+      const sortOrder = helpers.numOrNull(req.body.sort_order) ?? 0;
+
+      const [r] = await db.query(
+        `INSERT INTO prod_auto_add_items
+         (tenant_id, store_id, group_id, product_id, default_qty, min_qty, max_qty, price_override,
+          free_first_qty, free_per_amount, free_per_amount_qty, max_free_qty, is_active, sort_order)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [
+          tenantId,
+          storeId,
+          groupId,
+          productId,
+          defaultQty,
+          minQty,
+          maxQty,
+          priceOverride,
+          freeFirstQty,
+          freePerAmount,
+          freePerAmountQty,
+          maxFreeQty,
+          isActive,
+          sortOrder
+        ]
+      );
+
+      res.json({ ok: true, id: r.insertId });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.patch('/admin/auto-add/items/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const fields = [];
+      const values = [];
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'product_id')) {
+        const productId = Number(req.body.product_id);
+        if (!Number.isFinite(productId) || productId <= 0) {
+          return res.status(400).json({ ok: false, error: 'PRODUCT_REQUIRED' });
+        }
+        fields.push('product_id=?');
+        values.push(productId);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'default_qty')) {
+        fields.push('default_qty=?');
+        values.push(Math.max(0, Number(req.body.default_qty || 0)));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'min_qty')) {
+        fields.push('min_qty=?');
+        values.push(Math.max(0, Number(req.body.min_qty || 0)));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'max_qty')) {
+        fields.push('max_qty=?');
+        values.push(helpers.numOrNull(req.body.max_qty));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'price_override')) {
+        fields.push('price_override=?');
+        values.push(helpers.numOrNull(req.body.price_override));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'free_first_qty')) {
+        fields.push('free_first_qty=?');
+        values.push(Math.max(0, Number(req.body.free_first_qty || 0)));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'free_per_amount')) {
+        fields.push('free_per_amount=?');
+        values.push(helpers.numOrNull(req.body.free_per_amount));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'free_per_amount_qty')) {
+        fields.push('free_per_amount_qty=?');
+        values.push(Math.max(1, Number(req.body.free_per_amount_qty || 1)));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'max_free_qty')) {
+        fields.push('max_free_qty=?');
+        values.push(helpers.numOrNull(req.body.max_free_qty));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'is_active')) {
+        fields.push('is_active=?');
+        values.push(helpers.toBool(req.body.is_active, true) ? 1 : 0);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'sort_order')) {
+        fields.push('sort_order=?');
+        values.push(helpers.numOrNull(req.body.sort_order) ?? 0);
+      }
+
+      if (!fields.length) return res.json({ ok: true });
+
+      values.push(tenantId, storeId, id);
+      await db.query(
+        `UPDATE prod_auto_add_items
+         SET ${fields.join(', ')}
+         WHERE tenant_id=? AND store_id=? AND id=?`,
+        values
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/admin/auto-add/items/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      await db.query(
+        `DELETE FROM prod_auto_add_items WHERE tenant_id=? AND store_id=? AND id=?`,
+        [tenantId, storeId, id]
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/admin/catalog/categories', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);

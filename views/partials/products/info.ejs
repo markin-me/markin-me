@@ -24,6 +24,12 @@
       <div class="empty-text">Нажмите на опцию слева, чтобы увидеть детали</div>
     </div>
 
+
+    <div id="autoAddEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-mouse-pointer"></i></div>
+      <div class="empty-title">Выберите условие</div>
+      <div class="empty-text">Нажмите на условие слева, чтобы увидеть детали</div>
+    </div>
     <!-- Product info -->
     <div id="productInfo" class="hidden">
       <div class="product-info-title">
@@ -65,7 +71,7 @@
 
         <div class="info-card">
           <div class="info-row">
-            <div class="info-text">Цена</div>
+            <div class="info-text">Р¦РµРЅР°</div>
             <div class="info-title" id="productPrice">—</div>
           </div>
 
@@ -83,7 +89,7 @@
           <div class="info-title" id="productBaseUnit">—</div>
         </div>
         <div class="info-row">
-          <div class="info-text">Базовое кол-во</div>
+          <div class="info-text">Р‘Р°Р·РѕРІРѕРµ РєРѕР»-РІРѕ</div>
           <div class="info-title" id="productBaseQty">—</div>
         </div>
 
@@ -276,7 +282,133 @@
     </div>
   </div>
 
-    <div id="variantGroupInfo" class="hidden">
+            <div id="autoAddGroupInfo" class="hidden">
+  <div id="autoAddLevelGroup">
+    <form id="autoAddGroupForm" class="form-grid" autocomplete="off">
+      <div class="option-group-section">
+        <div class="section-title">Условие</div>
+
+        <div class="option-group-row">
+          <div class="option-group-title-field">
+            <label class="field-label" for="autoAddGroupTitle">Название *</label>
+            <input class="control" id="autoAddGroupTitle" name="title" type="text" required />
+          </div>
+
+          <div class="option-group-select-field">
+            <label class="field-label" for="autoAddGroupSort">Порядок сортировки</label>
+            <input class="control" id="autoAddGroupSort" name="sort_order" type="number" min="0" value="0" />
+          </div>
+        </div>
+
+        <div class="option-group-row">
+          <div class="option-group-title-field">
+            <label class="field-label" for="autoAddGroupDesc">Описание</label>
+            <input class="control" id="autoAddGroupDesc" name="description" type="text" />
+          </div>
+          <div></div>
+        </div>
+
+        <div class="form-row-2 option-group-switches">
+          <label class="switch">
+            <input class="switch-input" type="checkbox" id="autoAddGroupIsActive" />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="switch-text">Активна</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="option-group-section">
+        <div class="section-title">Условия</div>
+
+        <div class="option-group-row">
+          <div class="option-group-title-field">
+            <label class="field-label" for="autoAddMinAmount">Минимальная сумма</label>
+            <input class="control" id="autoAddMinAmount" name="min_cart_amount" type="number" min="0" step="0.01" />
+          </div>
+
+          <div class="option-group-select-field">
+            <label class="field-label" for="autoAddMaxAmount">Максимальная сумма</label>
+            <input class="control" id="autoAddMaxAmount" name="max_cart_amount" type="number" min="0" step="0.01" />
+          </div>
+        </div>
+
+        <div class="form-row-2 option-group-switches">
+          <label class="switch">
+            <input class="switch-input" type="checkbox" id="autoAddIncludeAutoTotal" />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="switch-text">Учитывать автодобавления в сумме</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="option-group-section">
+        <div class="section-title">Ограничения</div>
+
+        <div class="option-group-row">
+          <div class="option-group-title-field">
+            <label class="field-label" for="autoAddMaxItemsQty">Максимум товаров в группе</label>
+            <input class="control" id="autoAddMaxItemsQty" name="max_items_qty" type="number" min="0" step="1" />
+          </div>
+          <div></div>
+        </div>
+
+        <div class="form-row-2 option-group-switches">
+          <label class="switch">
+            <input class="switch-input" type="checkbox" id="autoAddAllowCustomerQty" />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="switch-text">Разрешить менять количество</span>
+          </label>
+          <label class="switch">
+            <input class="switch-input" type="checkbox" id="autoAddAllowCustomerRemove" />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="switch-text">Разрешить удалять из корзины</span>
+          </label>
+        </div>
+      </div>
+    </form>
+
+    <div class="info-card info-accordion">
+      <div class="acc-item">
+        <div class="acc-header">
+          <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+            <span class="stage-meta stage-text">
+              <b>Товары</b>
+            </span>
+            <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+          </button>
+          <button class="btn btn-icon acc-add" type="button" id="autoAddItemsAddBtn" title="Добавить товар" aria-label="Добавить товар">
+            <i class="fas fa-plus"></i>
+          </button>
+        </div>
+        <div class="acc-panel" data-acc-panel>
+          <div class="acc-panel-inner">
+            <div class="option-items-table" id="autoAddItemsList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="autoAddLevelPicker" class="hidden">
+    <div class="info-card">
+      <div class="option-group-section option-picker-panel">
+        <div class="option-picker-tabs" id="autoAddPickerTabs"></div>
+        <div class="option-picker-controls">
+          <div class="option-picker-search">
+            <input class="control" id="autoAddPickerSearch" type="search" placeholder="Поиск по названию" />
+          </div>
+          <label class="option-picker-select-all" for="autoAddPickerSelectAll">
+            <input id="autoAddPickerSelectAll" type="checkbox" aria-label="Выделить все в категории" />
+            <span id="autoAddPickerSelectAllLabel">Выделить все</span>
+          </label>
+        </div>
+        <div class="option-picker-list" id="autoAddPickerList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="variantGroupInfo" class="hidden">
       <div id="variantLevelGroup">
         <form id="variantGroupForm" class="form-grid" autocomplete="off">
         <div class="option-group-section">
@@ -457,3 +589,5 @@
     </div>
   </div>
 </div>
+
+

@@ -102,6 +102,8 @@
     const logoFallback = document.getElementById("headerLogoFallback");
     const brandNameEl = document.getElementById("headerBrandName");
     const favicon = document.getElementById("appFavicon");
+    const appleIcon = document.getElementById("appAppleTouchIcon");
+    const manifest = document.getElementById("appManifest");
 
     const brandName = tenant.name || tenant.site_name || "";
     if (brandNameEl && brandName) {
@@ -132,6 +134,22 @@
 
     if (favicon && fav) {
       favicon.href = fav;
+    }
+
+    const apple =
+      tenant.apple_touch_icon_url ||
+      tenant.logo_light_url ||
+      tenant.logo_dark_url ||
+      tenant.favicon_light_url ||
+      tenant.favicon_dark_url;
+
+    if (appleIcon && apple) {
+      appleIcon.href = apple;
+    }
+
+    if (manifest) {
+      const ver = tenant.updated_at ? encodeURIComponent(String(tenant.updated_at)) : "";
+      manifest.href = `/manifest.json${ver ? `?v=${ver}` : ""}`;
     }
   }
 
@@ -907,9 +925,9 @@
           data = await createStore(payload);
           if (!data || !data.ok || !data.store) {
             if (data && data.error === "CODE_TAKEN") {
-              alert("??? ??? ????????????. ??????? ??????.");
+              alert("Код уже используется. Введите другой.");
             } else {
-              alert("?? ??????? ??????? ????? ??????.");
+              alert("Не удалось создать филиал.");
             }
             return;
           }
@@ -919,11 +937,11 @@
           data = await updateStore(id, payload);
           if (!data || !data.ok || !data.store) {
             if (data && data.error === "CODE_TAKEN") {
-              alert("??? ??? ????????????. ??????? ??????.");
+              alert("Код уже используется. Введите другой.");
             } else if (data && data.error === "NAME_REQUIRED") {
-              alert("???????? ???????????.");
+              alert("Название обязательно.");
             } else {
-              alert("?? ??????? ????????? ?????????.");
+              alert("Не удалось обновить филиал.");
             }
             return;
           }
@@ -935,11 +953,11 @@
           tabData.storeId = data.store.id;
           tabData.snapshot = { ...data.store };
           storeTabs.set(activeRightTabId, tabData);
-          ensureTab(activeRightTabId, data.store.name || "????? ??????");
+          ensureTab(activeRightTabId, data.store.name || "Филиал");
         } else if (tabData) {
           tabData.snapshot = { ...data.store };
           storeTabs.set(activeRightTabId, tabData);
-          ensureTab(activeRightTabId, data.store.name || "????? ??????");
+          ensureTab(activeRightTabId, data.store.name || "Филиал");
         }
         selectStore(data.store);
       });
