@@ -250,6 +250,75 @@
 
       
 
+      <div class="info-card settings-right-panel hidden" id="settingsSoundsPanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">Звуки уведомлений</div>
+          <div class="settings-list-subtitle">Загрузите звуковые файлы для новых заказов, отмен и сообщений.</div>
+        </div>
+        <div class="settings-sounds-grid">
+          <div class="settings-sound-tile" data-sound-key="sound_new_order_url">
+            <div class="settings-sound-title">Новый заказ</div>
+            <div class="settings-sound-hint">Воспроизводится при появлении нового заказа</div>
+            <div class="settings-sound-box" data-sound-box="sound_new_order_url">
+              <span class="settings-sound-label" data-sound-label="sound_new_order_url">Файл не выбран</span>
+              <button class="btn btn-icon btn-sm settings-sound-play hidden" type="button" title="Прослушать" data-sound-play="sound_new_order_url" aria-label="Прослушать">
+                <i class="fas fa-play"></i>
+              </button>
+            </div>
+            <input class="hidden" type="file" accept="audio/*,.mp3,.wav,.ogg,.webm,.m4a,.aac" data-sound-input="sound_new_order_url" />
+            <input class="hidden" type="text" data-tenant-input="sound_new_order_url" />
+            <div class="settings-sound-actions">
+              <button class="btn btn-icon btn-sm settings-sound-upload" type="button" title="Загрузить" data-sound-upload="sound_new_order_url">
+                <i class="fas fa-upload"></i>
+              </button>
+              <button class="btn btn-icon btn-sm settings-sound-delete" type="button" title="Удалить" data-sound-delete="sound_new_order_url">
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+          </div>
+          <div class="settings-sound-tile" data-sound-key="sound_order_cancelled_url">
+            <div class="settings-sound-title">Отмена заказа</div>
+            <div class="settings-sound-hint">Воспроизводится при отмене заказа</div>
+            <div class="settings-sound-box" data-sound-box="sound_order_cancelled_url">
+              <span class="settings-sound-label" data-sound-label="sound_order_cancelled_url">Файл не выбран</span>
+              <button class="btn btn-icon btn-sm settings-sound-play hidden" type="button" title="Прослушать" data-sound-play="sound_order_cancelled_url" aria-label="Прослушать">
+                <i class="fas fa-play"></i>
+              </button>
+            </div>
+            <input class="hidden" type="file" accept="audio/*,.mp3,.wav,.ogg,.webm,.m4a,.aac" data-sound-input="sound_order_cancelled_url" />
+            <input class="hidden" type="text" data-tenant-input="sound_order_cancelled_url" />
+            <div class="settings-sound-actions">
+              <button class="btn btn-icon btn-sm settings-sound-upload" type="button" title="Загрузить" data-sound-upload="sound_order_cancelled_url">
+                <i class="fas fa-upload"></i>
+              </button>
+              <button class="btn btn-icon btn-sm settings-sound-delete" type="button" title="Удалить" data-sound-delete="sound_order_cancelled_url">
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+          </div>
+          <div class="settings-sound-tile" data-sound-key="sound_new_message_url">
+            <div class="settings-sound-title">Новое сообщение</div>
+            <div class="settings-sound-hint">Воспроизводится при появлении нового сообщения</div>
+            <div class="settings-sound-box" data-sound-box="sound_new_message_url">
+              <span class="settings-sound-label" data-sound-label="sound_new_message_url">Файл не выбран</span>
+              <button class="btn btn-icon btn-sm settings-sound-play hidden" type="button" title="Прослушать" data-sound-play="sound_new_message_url" aria-label="Прослушать">
+                <i class="fas fa-play"></i>
+              </button>
+            </div>
+            <input class="hidden" type="file" accept="audio/*,.mp3,.wav,.ogg,.webm,.m4a,.aac" data-sound-input="sound_new_message_url" />
+            <input class="hidden" type="text" data-tenant-input="sound_new_message_url" />
+            <div class="settings-sound-actions">
+              <button class="btn btn-icon btn-sm settings-sound-upload" type="button" title="Загрузить" data-sound-upload="sound_new_message_url">
+                <i class="fas fa-upload"></i>
+              </button>
+              <button class="btn btn-icon btn-sm settings-sound-delete" type="button" title="Удалить" data-sound-delete="sound_new_message_url">
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="info-card settings-right-panel hidden" id="settingsOrderStatusesPanel">
         <div class="settings-list-header">
           <div class="settings-list-title">Этапы заказов</div>

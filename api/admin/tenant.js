@@ -251,6 +251,70 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
     }
   });
 
+  // ------------------------------
+  // Upload: звуки уведомлений (минимальные ограничения по формату)
+  // POST /api/admin/tenant/upload-sound
+  // form-data: { file, field }  field: sound_new_order_url | sound_order_cancelled_url
+  // ------------------------------
+  const tenantSoundStorage = multer.diskStorage({
+    destination(req, file, cb) {
+      const tenantId = helpers.getTenantId(req);
+      const folder = path.join(__dirname, '..', '..', 'static', 'uploads', 'tenants', String(tenantId), 'sounds');
+      helpers.ensureDir(folder);
+      cb(null, folder);
+    },
+    filename(req, file, cb) {
+      const ext = (path.extname(file.originalname || '') || '.mp3').toLowerCase();
+      const name = crypto.randomBytes(16).toString('hex') + ext;
+      cb(null, name);
+    }
+  });
+
+  const tenantSoundUpload = multer({
+    storage: tenantSoundStorage,
+    limits: { files: 1, fileSize: 15 * 1024 * 1024 },
+    fileFilter(req, file, cb) {
+      const type = (file.mimetype || '').toLowerCase();
+      const isAudio = type.startsWith('audio/');
+      const ext = (path.extname(file.originalname || '') || '').toLowerCase();
+      const audioExt = new Set(['.mp3', '.wav', '.ogg', '.webm', '.m4a', '.aac']);
+      cb(isAudio || audioExt.has(ext) ? null : new Error('ONLY_AUDIO'), isAudio || audioExt.has(ext));
+    }
+  });
+
+  router.post('/upload-sound', tenantSoundUpload.single('file'), async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const field = helpers.strOrNull(req.body.field);
+      const file = req.file;
+
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!file) return res.status(400).json({ ok: false, error: 'FILE_REQUIRED' });
+
+      const allowed = new Set(['sound_new_order_url', 'sound_order_cancelled_url', 'sound_new_message_url']);
+      if (!field || !allowed.has(field)) {
+        return res.status(400).json({ ok: false, error: 'FIELD_INVALID' });
+      }
+
+      const url = `/static/uploads/tenants/${tenantId}/sounds/${file.filename}`;
+
+      await db.query(
+        `UPDATE ten_tenants SET ${field}=? WHERE id=?`,
+        [url, tenantId]
+      );
+
+      const [rows] = await db.query(
+        'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+
+      res.json({ ok: true, url, tenant: rows[0] || null });
+    } catch (err) {
+      console.error('Ошибка загрузки звука:', err);
+      res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
+    }
+  });
+
   /**
    * GET /api/admin/tenant
    * Возвращает Компания (tenant) для текущего пользователя
@@ -303,6 +367,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const siteDescription = req.body.site_description !== undefined ? helpers.strOrNull(req.body.site_description) : undefined;
       const subdomain = req.body.subdomain !== undefined ? normalizeSubdomain(req.body.subdomain) : undefined;
       const customDomain = req.body.custom_domain !== undefined ? helpers.strOrNull(req.body.custom_domain) : undefined;
+      const soundNewOrder = req.body.sound_new_order_url !== undefined ? helpers.strOrNull(req.body.sound_new_order_url) : undefined;
+      const soundCancelled = req.body.sound_order_cancelled_url !== undefined ? helpers.strOrNull(req.body.sound_order_cancelled_url) : undefined;
+      const soundNewMessage = req.body.sound_new_message_url !== undefined ? helpers.strOrNull(req.body.sound_new_message_url) : undefined;
 
       if (!tenantId) {
         return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
@@ -357,6 +424,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         }
       }
       const nextCustomDomain = customDomain !== undefined ? customDomain : current.custom_domain;
+      const nextSoundNewOrder = soundNewOrder !== undefined ? soundNewOrder : (current.sound_new_order_url ?? null);
+      const nextSoundCancelled = soundCancelled !== undefined ? soundCancelled : (current.sound_order_cancelled_url ?? null);
+      const nextSoundNewMessage = soundNewMessage !== undefined ? soundNewMessage : (current.sound_new_message_url ?? null);
       const nextName = name !== undefined ? name : current.name;
       const nextEmail = email !== undefined ? email : current.email;
       const nextPhone = phone !== undefined ? phone : current.phone;
@@ -372,8 +442,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, site_name=?, site_description=?, subdomain=?, custom_domain=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, tenantId]
       );
 
       const [rows] = await db.query(

@@ -210,6 +210,21 @@
     return data || null;
   }
 
+  async function uploadTenantSound(field, file) {
+    const token = typeof getAuthToken === "function" ? getAuthToken() : null;
+    const form = new FormData();
+    form.append("file", file);
+    form.append("field", field);
+
+    const res = await fetch("/api/admin/tenant/upload-sound", {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form
+    });
+    const data = await res.json();
+    return data || null;
+  }
+
   function setPreviewFromValue(key, value) {
     const img = document.querySelector(`[data-upload-preview=\"${key}\"]`);
     if (!img) return;
@@ -220,6 +235,13 @@
       img.removeAttribute("src");
       img.classList.add("hidden");
     }
+  }
+
+  function setSoundPreview(key, url) {
+    const label = document.querySelector(`[data-sound-label=\"${key}\"]`);
+    const playBtn = document.querySelector(`[data-sound-play=\"${key}\"]`);
+    if (label) label.textContent = url ? "Файл загружен" : "Файл не выбран";
+    if (playBtn) playBtn.classList.toggle("hidden", !url);
   }
 
   async function loadTenantProfile() {
@@ -244,6 +266,9 @@
         const key = el.getAttribute("data-tenant-input");
         if (key in tenant) el.value = tenant[key] ?? "";
         setPreviewFromValue(key, tenant[key]);
+        if (key === "sound_new_order_url" || key === "sound_order_cancelled_url" || key === "sound_new_message_url") {
+          setSoundPreview(key, tenant[key]);
+        }
       });
       if (settingsPriceRoundingMode && !settingsPriceRoundingMode.value) {
         settingsPriceRoundingMode.value = "none";
@@ -359,6 +384,7 @@
     const orderPaymentsCard = document.getElementById("settingsOrderPaymentsCard");
     const orderDeliveryCard = document.getElementById("settingsOrderDeliveryCard");
     const orderTimeOptionsCard = document.getElementById("settingsOrderTimeOptionsCard");
+    const soundsCard = document.getElementById("settingsSoundsCard");
     const rightDefault = document.getElementById("settingsRightDefault");
     const logoPanel = document.getElementById("settingsLogoPanel");
     const sitePanel = document.getElementById("settingsSitePanel");
@@ -367,6 +393,7 @@
     const orderPaymentsPanel = document.getElementById("settingsOrderPaymentsPanel");
     const orderDeliveryPanel = document.getElementById("settingsOrderDeliveryPanel");
     const orderTimeOptionsPanel = document.getElementById("settingsOrderTimeOptionsPanel");
+    const soundsPanel = document.getElementById("settingsSoundsPanel");
     const settingsPriceRoundingMode = document.getElementById("settingsPriceRoundingMode");
     const settingsPriceRoundingPrecision = document.getElementById("settingsPriceRoundingPrecision");
     const rightTabs = document.getElementById("settingsRightTabs");
@@ -744,6 +771,7 @@
       if (orderPaymentsPanel) orderPaymentsPanel.classList.toggle("hidden", tabId !== "order-payments");
       if (orderDeliveryPanel) orderDeliveryPanel.classList.toggle("hidden", tabId !== "order-delivery");
       if (orderTimeOptionsPanel) orderTimeOptionsPanel.classList.toggle("hidden", tabId !== "order-time-options");
+      if (soundsPanel) soundsPanel.classList.toggle("hidden", tabId !== "sounds");
       if (settingsDeliveryPanel) settingsDeliveryPanel.classList.toggle("hidden", tabId !== DELIVERY_TAB_ID);
       if (settingsStorePanel) settingsStorePanel.classList.toggle("hidden", !tabId.startsWith("store-"));
       if (settingsStoreEmpty) {
@@ -806,6 +834,7 @@
           if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.remove("is-active");
           if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.remove("is-active");
           if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.remove("is-active");
+          if (tabId === "sounds" && soundsCard) soundsCard.classList.remove("is-active");
           if (tabId === DELIVERY_TAB_ID) {
             deliverySettingsState.selectedId = null;
             deliverySettingsState.snapshot = null;
@@ -846,6 +875,7 @@
       if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.add("is-active");
       if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.add("is-active");
       if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.add("is-active");
+      if (tabId === "sounds" && soundsCard) soundsCard.classList.add("is-active");
     }
 
     if (logoCard) {
@@ -887,6 +917,12 @@
     if (orderTimeOptionsCard) {
       orderTimeOptionsCard.addEventListener("click", () => {
         ensureTab("order-time-options", "Интервалы времени");
+      });
+    }
+
+    if (soundsCard) {
+      soundsCard.addEventListener("click", () => {
+        ensureTab("sounds", "Звуки уведомлений");
       });
     }
 
@@ -1713,6 +1749,63 @@
             applyBrandFromTenant(res.tenant);
           }
         }
+      });
+    });
+
+    document.querySelectorAll("[data-sound-box], [data-sound-upload]").forEach((el) => {
+      el.addEventListener("click", () => {
+        const key = el.getAttribute("data-sound-box") || el.getAttribute("data-sound-upload");
+        if (key) {
+          const input = document.querySelector(`[data-sound-input=\"${key}\"]`);
+          if (input) input.click();
+        }
+      });
+    });
+    document.querySelectorAll("[data-sound-input]").forEach((input) => {
+      input.addEventListener("change", async () => {
+        if (!input.files || !input.files.length) return;
+        const file = input.files[0];
+        const key = input.getAttribute("data-sound-input");
+        if (!key) return;
+        const res = await uploadTenantSound(key, file);
+        if (res && res.url) {
+          const hiddenInput = document.querySelector(`[data-tenant-input=\"${key}\"]`);
+          if (hiddenInput) hiddenInput.value = res.url;
+          setSoundPreview(key, res.url);
+          if (res.tenant) {
+            updateTenantCache(res.tenant);
+            applyBrandFromTenant(res.tenant);
+          }
+        }
+        input.value = "";
+      });
+    });
+    document.querySelectorAll("[data-sound-delete]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const key = btn.getAttribute("data-sound-delete");
+        if (!key) return;
+        const hiddenInput = document.querySelector(`[data-tenant-input=\"${key}\"]`);
+        if (hiddenInput) hiddenInput.value = "";
+        setSoundPreview(key, "");
+        const payload = { [key]: null };
+        const data = await updateTenantFields(payload);
+        if (data && data.tenant) {
+          updateTenantCache(data.tenant);
+          applyBrandFromTenant(data.tenant);
+        }
+      });
+    });
+    document.querySelectorAll("[data-sound-play]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const key = btn.getAttribute("data-sound-play");
+        if (!key) return;
+        const hiddenInput = document.querySelector(`[data-tenant-input=\"${key}\"]`);
+        const url = hiddenInput && hiddenInput.value ? hiddenInput.value.trim() : "";
+        if (!url) return;
+        const audio = new Audio(url);
+        audio.play().catch(() => {});
       });
     });
 

@@ -47,20 +47,33 @@
     </div>
   </div>
 
-  <div class="info-card order-info-pay">
-    <div class="pay-left">
-      <span class="pay-icon" data-info="payment-icon"><i class="fas fa-credit-card"></i></span>
-      <div class="pay-method" data-info="payment-method">—</div>
-      <div class="pay-change muted hidden" data-info="change-from"></div>
+  <div class="info-card order-summary">
+    <div class="order-summary-title">Суммы:</div>
+    <div class="order-summary-row">
+      <span class="order-summary-label">Оплата</span>
+      <span class="order-summary-value">
+        <span class="order-summary-pay-icon" data-info="payment-icon"><i class="fas fa-credit-card"></i></span>
+        <span data-info="payment-method">—</span>
+      </span>
     </div>
-    <div class="pay-right">
-      <div class="pay-delivery-row hidden" data-info="delivery-row">
-        <div class="muted">Доставка</div>
-        <div class="pay-delivery" data-info="delivery-cost">—</div>
-      </div>
-      <div class="muted">Итого</div>
-      <div class="pay-total" data-info="order-total">—</div>
+    <div class="order-summary-row hidden" data-info="change-from-row">
+      <span class="order-summary-label">Сдача с</span>
+      <span class="order-summary-value" data-info="change-from">—</span>
     </div>
+    <div class="order-summary-row hidden" data-info="change-amount-row">
+      <span class="order-summary-label">Сдача</span>
+      <span class="order-summary-value" data-info="change-amount">—</span>
+    </div>
+    <div class="order-summary-row hidden" data-info="delivery-row">
+      <span class="order-summary-label">Доставка</span>
+      <span class="order-summary-value" data-info="delivery-cost">—</span>
+    </div>
+    <div class="order-summary-divider"></div>
+    <div class="order-summary-total-row">
+      <span class="order-summary-total-label">ИТОГО</span>
+      <span class="order-summary-total-value" data-info="order-total">—</span>
+    </div>
+    <div class="order-summary-thanks">Спасибо за заказ!</div>
   </div>
 
   <div class="info-card order-info-delivery">

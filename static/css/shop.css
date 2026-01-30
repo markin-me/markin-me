@@ -3056,6 +3056,63 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   color: var(--shop-buy);
 }
 
+/* Нормализованный блок «Суммы» в деталях заказа */
+.shop-order-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shop-order-summary-title {
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.shop-order-summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.shop-order-summary-label {
+  color: var(--color-text-muted);
+}
+
+.shop-order-summary-value {
+  text-align: right;
+}
+
+.shop-order-summary-divider {
+  border-top: 1px dashed var(--color-border);
+  margin: 8px 0 4px;
+}
+
+.shop-order-summary-total-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-weight: 700;
+}
+
+.shop-order-summary-total-label {
+  font-size: 16px;
+}
+
+.shop-order-summary-total-value {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--shop-buy);
+}
+
+.shop-order-summary-thanks {
+  margin-top: 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
 .shop-cart-items {
   display: grid;
   gap: 10px;

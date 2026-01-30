@@ -68,6 +68,9 @@
     payMethod: $$('[data-info="payment-method"]'),
     payIcon: $$('[data-info="payment-icon"]'),
     changeFrom: $$('[data-info="change-from"]'),
+    changeAmount: $$('[data-info="change-amount"]'),
+    changeFromRow: $$('[data-info="change-from-row"]'),
+    changeAmountRow: $$('[data-info="change-amount-row"]'),
     deliveryRow: $$('[data-info="delivery-row"]'),
     deliveryCost: $$('[data-info="delivery-cost"]'),
     total: $$('[data-info="order-total"]'),
@@ -108,6 +111,7 @@
     draggingOrderId: null,
     lastEventId: null,
     storeTimezone: "+0",
+    tenantSounds: {},
     date: {
       start: null,
       end: null,
@@ -603,13 +607,12 @@
 
     const changeFrom = order.change_from;
     const orderTotalNum = Number(order.total_price) || 0;
-    if (changeFrom && changeFrom > orderTotalNum) {
-      const changeAmount = changeFrom - orderTotalNum;
-      setTextAll(infoEls.changeFrom, `Сдача с ${money(changeFrom)} (подготовить ${money(changeAmount)})`);
-    } else {
-      setTextAll(infoEls.changeFrom, changeFrom ? `Сдача с ${money(changeFrom)}` : "");
-    }
-    setHiddenAll(infoEls.changeFrom, !changeFrom);
+    const hasChange = changeFrom && changeFrom > orderTotalNum;
+    const changeAmountVal = hasChange ? changeFrom - orderTotalNum : 0;
+    setTextAll(infoEls.changeFrom, money(changeFrom || 0));
+    setTextAll(infoEls.changeAmount, money(changeAmountVal));
+    setHiddenAll(infoEls.changeFromRow, !changeFrom);
+    setHiddenAll(infoEls.changeAmountRow, !changeFrom);
 
     const qty = totalQty(order.items || []);
     setTextAll(infoEls.deliveryQty, `${qty} шт.`);
@@ -1199,11 +1202,18 @@
     }, 200);
   }
 
+  function playNotificationSound(url) {
+    if (!url || document.visibilityState !== "visible") return;
+    const audio = new Audio(url);
+    audio.play().catch(() => {});
+  }
+
   function handleOrderEvent(order) {
     if (!order || !order.id) return;
 
     const idx = state.orders.findIndex((o) => Number(o.id) === Number(order.id));
-    if (idx >= 0) {
+    const wasExisting = idx >= 0;
+    if (wasExisting) {
       state.orders[idx] = { ...state.orders[idx], ...order };
     } else {
       state.orders.unshift(order);
@@ -1216,6 +1226,12 @@
     }
 
     scheduleStageRefresh();
+
+    const statusCode = (order.status_code || "").toLowerCase();
+    if (statusCode === "cancelled" || statusCode === "canceled") {
+      const url = state.tenantSounds && state.tenantSounds.sound_order_cancelled_url;
+      if (url) playNotificationSound(url);
+    }
   }
 
   async function fetchChanges() {
@@ -1254,6 +1270,8 @@
       try {
         const data = JSON.parse(e.data || "{}");
         handleOrderEvent(data);
+        const url = state.tenantSounds && state.tenantSounds.sound_new_order_url;
+        if (url) playNotificationSound(url);
       } catch (err) {
         console.error(err);
       }
@@ -1797,6 +1815,20 @@
       await loadStatuses();
       renderStages();
       await loadAndRenderOrders(false);
+
+      try {
+        const tenantRes = await apiJson("/api/admin/tenant");
+        if (tenantRes && tenantRes.tenant) {
+          state.tenantSounds = {
+            sound_new_order_url: tenantRes.tenant.sound_new_order_url || null,
+            sound_order_cancelled_url: tenantRes.tenant.sound_order_cancelled_url || null,
+            sound_new_message_url: tenantRes.tenant.sound_new_message_url || null
+          };
+        }
+      } catch (err) {
+        console.error(err);
+      }
+
       initSse();
     } catch (e) {
       console.error(e);

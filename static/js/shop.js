@@ -8916,13 +8916,6 @@ function renderSheetAddressList() {
       html += `<div class="shop-order-info-value">${new Date(order.created_at).toLocaleString("ru-RU")}</div>`;
       html += `</div>`;
       
-      if (order.payment_title) {
-        html += `<div class="shop-order-info-row">`;
-        html += `<div class="shop-order-info-label">Способ оплаты</div>`;
-        html += `<div class="shop-order-info-value">${escapeHtml(order.payment_title)}</div>`;
-        html += `</div>`;
-      }
-      
       if (order.method_title) {
         html += `<div class="shop-order-info-row">`;
         html += `<div class="shop-order-info-label">Способ доставки</div>`;
@@ -8975,15 +8968,6 @@ function renderSheetAddressList() {
         html += `</div>`;
       }
       
-      if (order.change_from && Number(order.change_from) > 0) {
-        html += `<div class="shop-order-details-section">`;
-        html += `<div class="shop-order-info-row">`;
-        html += `<div class="shop-order-info-label">Сдача с</div>`;
-        html += `<div class="shop-order-info-value">${money(order.change_from)}</div>`;
-        html += `</div>`;
-        html += `</div>`;
-      }
-      
       // Комментарий
       if (order.comment) {
         html += `<div class="shop-order-details-section">`;
@@ -8992,16 +8976,39 @@ function renderSheetAddressList() {
         html += `</div>`;
       }
       
-      if (order.method_code === "delivery") {
-        html += `<div class="shop-order-info-row">`;
-        html += `<div class="shop-order-info-label">Доставка</div>`;
-        html += `<div class="shop-order-info-value">${money(order.delivery_cost || 0)}</div>`;
+      // Суммы (нормализованный вид)
+      const orderTotalNum = Number(order.total_price) || 0;
+      const changeFromNum = Number(order.change_from) || 0;
+      const hasChange = changeFromNum > orderTotalNum;
+      const changeAmountVal = hasChange ? changeFromNum - orderTotalNum : 0;
+      html += `<div class="shop-order-details-section shop-order-summary">`;
+      html += `<div class="shop-order-summary-title">Суммы:</div>`;
+      if (order.payment_title) {
+        html += `<div class="shop-order-summary-row">`;
+        html += `<span class="shop-order-summary-label">Оплата</span>`;
+        html += `<span class="shop-order-summary-value">${escapeHtml(order.payment_title)}</span>`;
         html += `</div>`;
       }
-      // Итоговая сумма
-      html += `<div class="shop-order-details-total">`;
-      html += `<div class="shop-order-total-label">Итого</div>`;
-      html += `<div class="shop-order-total-value"><strong>${money(order.total_price || 0)}</strong></div>`;
+      if (hasChange) {
+        html += `<div class="shop-order-summary-row">`;
+        html += `<span class="shop-order-summary-label">Сдача с</span>`;
+        html += `<span class="shop-order-summary-value">${money(order.change_from)}</span>`;
+        html += `</div>`;
+        html += `<div class="shop-order-summary-row">`;
+        html += `<span class="shop-order-summary-label">Сдача</span>`;
+        html += `<span class="shop-order-summary-value">${money(changeAmountVal)}</span>`;
+        html += `</div>`;
+      }
+      html += `<div class="shop-order-summary-row">`;
+      html += `<span class="shop-order-summary-label">Доставка</span>`;
+      html += `<span class="shop-order-summary-value">${money(order.delivery_cost || 0)}</span>`;
+      html += `</div>`;
+      html += `<div class="shop-order-summary-divider"></div>`;
+      html += `<div class="shop-order-summary-total-row">`;
+      html += `<span class="shop-order-summary-total-label">ИТОГО</span>`;
+      html += `<span class="shop-order-summary-total-value">${money(order.total_price || 0)}</span>`;
+      html += `</div>`;
+      html += `<div class="shop-order-summary-thanks">Спасибо за заказ!</div>`;
       html += `</div>`;
       
       html += `</div>`;
@@ -11834,13 +11841,6 @@ async function init() {
         html += `<div class="shop-order-info-value">${new Date(order.created_at).toLocaleString("ru-RU")}</div>`;
         html += `</div>`;
         
-        if (order.payment_title) {
-          html += `<div class="shop-order-info-row">`;
-          html += `<div class="shop-order-info-label">Способ оплаты</div>`;
-          html += `<div class="shop-order-info-value">${escapeHtml(order.payment_title)}</div>`;
-          html += `</div>`;
-        }
-        
         if (order.method_title) {
           html += `<div class="shop-order-info-row">`;
           html += `<div class="shop-order-info-label">Способ доставки</div>`;
@@ -11926,15 +11926,6 @@ async function init() {
           html += `</div>`;
         }
         
-        if (order.change_from && Number(order.change_from) > 0) {
-          html += `<div class="shop-order-details-section">`;
-          html += `<div class="shop-order-info-row">`;
-          html += `<div class="shop-order-info-label">Сдача с</div>`;
-          html += `<div class="shop-order-info-value">${money(order.change_from)}</div>`;
-          html += `</div>`;
-          html += `</div>`;
-        }
-        
         // Комментарий
         if (order.comment) {
           html += `<div class="shop-order-details-section">`;
@@ -11943,16 +11934,39 @@ async function init() {
           html += `</div>`;
         }
         
-        if (order.method_code === "delivery") {
-          html += `<div class="shop-order-info-row">`;
-          html += `<div class="shop-order-info-label">Доставка</div>`;
-          html += `<div class="shop-order-info-value">${money(order.delivery_cost || 0)}</div>`;
+        // Суммы (нормализованный вид)
+        const orderTotalNum2 = Number(order.total_price) || 0;
+        const changeFromNum2 = Number(order.change_from) || 0;
+        const hasChange2 = changeFromNum2 > orderTotalNum2;
+        const changeAmountVal2 = hasChange2 ? changeFromNum2 - orderTotalNum2 : 0;
+        html += `<div class="shop-order-details-section shop-order-summary">`;
+        html += `<div class="shop-order-summary-title">Суммы:</div>`;
+        if (order.payment_title) {
+          html += `<div class="shop-order-summary-row">`;
+          html += `<span class="shop-order-summary-label">Оплата</span>`;
+          html += `<span class="shop-order-summary-value">${escapeHtml(order.payment_title)}</span>`;
           html += `</div>`;
         }
-        // Итоговая сумма
-        html += `<div class="shop-order-details-total">`;
-        html += `<div class="shop-order-total-label">Итого</div>`;
-        html += `<div class="shop-order-total-value"><strong>${money(order.total_price || 0)}</strong></div>`;
+        if (hasChange2) {
+          html += `<div class="shop-order-summary-row">`;
+          html += `<span class="shop-order-summary-label">Сдача с</span>`;
+          html += `<span class="shop-order-summary-value">${money(order.change_from)}</span>`;
+          html += `</div>`;
+          html += `<div class="shop-order-summary-row">`;
+          html += `<span class="shop-order-summary-label">Сдача</span>`;
+          html += `<span class="shop-order-summary-value">${money(changeAmountVal2)}</span>`;
+          html += `</div>`;
+        }
+        html += `<div class="shop-order-summary-row">`;
+        html += `<span class="shop-order-summary-label">Доставка</span>`;
+        html += `<span class="shop-order-summary-value">${money(order.delivery_cost || 0)}</span>`;
+        html += `</div>`;
+        html += `<div class="shop-order-summary-divider"></div>`;
+        html += `<div class="shop-order-summary-total-row">`;
+        html += `<span class="shop-order-summary-total-label">ИТОГО</span>`;
+        html += `<span class="shop-order-summary-total-value">${money(order.total_price || 0)}</span>`;
+        html += `</div>`;
+        html += `<div class="shop-order-summary-thanks">Спасибо за заказ!</div>`;
         html += `</div>`;
         
         // Пустое поле 200px внизу для скролла
