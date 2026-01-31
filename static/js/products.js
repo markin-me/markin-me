@@ -1,4 +1,4 @@
-﻿(function () {
+(function () {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
@@ -4033,6 +4033,18 @@ function openAutoAddGroupModal({ mode, group } = {}) {
   function showProductDetails(p) {
     if (!p) return;
 
+    // Close any open sub-panels from product edit (composition, option picker, variant picker)
+    // so selecting another product always closes them and opens the new product
+    if (typeof window._closeIngredientPickerFn === "function") {
+      window._closeIngredientPickerFn();
+    }
+    if (typeof window._closeOptionPickerFn === "function") {
+      window._closeOptionPickerFn();
+    }
+    if (typeof window._closeVariantPickerFn === "function") {
+      window._closeVariantPickerFn();
+    }
+
     state.selectedProductId = p.id;
     if (productsList) {
       $$(".order-row", productsList).forEach((x) =>
@@ -4062,6 +4074,9 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       showProductFooterEdit();
       return;
     }
+
+    // Ensure tab exists for view mode so tab bar matches content
+    openProductTab(p, { activate: false });
 
     // Clear navigation stack when selecting a new product (not being edited)
     clearNavigationStack();
@@ -5799,6 +5814,7 @@ function updateOptionGroupSelectionUi() {
     optionEmpty && optionEmpty.classList.add("hidden");
     productInfo && productInfo.classList.add("hidden");
     categoryInfo && categoryInfo.classList.add("hidden");
+    variantGroupInfo && variantGroupInfo.classList.add("hidden");
     optionGroupInfo && optionGroupInfo.classList.remove("hidden");
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
 
@@ -7296,11 +7312,21 @@ function updateOptionGroupSelectionUi() {
       id: groupId,
       title: title || "Опция",
       onActivate: async () => {
+        // Save current option's editing state when switching to another option tab
+        const prevId = state.selectedOptionGroupId;
+        if (prevId != null && prevId !== groupId && (state.optionPanel.mode === "edit" || state.optionPanel.mode === "create" || editingOptions.has(prevId))) {
+          editingOptions.set(prevId, {
+            mode: state.optionPanel.mode || "view",
+            optionDraft: state.optionDraft ? deepClone(state.optionDraft) : null,
+            snapshotData: state.optionPanel.snapshotData ? deepClone(state.optionPanel.snapshotData) : null
+          });
+        }
+
         state.selectedOptionGroupId = groupId;
         await loadOptionGroupDetails(groupId);
         renderAllOptionGroupsLists();
-        
-        // Check if this option is being edited
+
+        // Restore edit state when switching back to an option tab that was being edited
         if (editingOptions.has(groupId)) {
           const editingState = editingOptions.get(groupId);
           state.optionPanel.mode = editingState.mode;
@@ -7322,13 +7348,30 @@ function updateOptionGroupSelectionUi() {
       id: groupId,
       title: title || "Вариант",
       onActivate: async () => {
+        // Save current variant's editing state when switching to another variant tab
+        const prevId = state.selectedVariantGroupId;
+        if (prevId != null && prevId !== groupId && (state.variantPanel.mode === "edit" || state.variantPanel.mode === "create" || editingVariants.has(prevId))) {
+          editingVariants.set(prevId, {
+            mode: state.variantPanel.mode || "view",
+            variantDraft: state.variantDraft ? deepClone(state.variantDraft) : null,
+            snapshotData: state.variantPanel.snapshotData ? deepClone(state.variantPanel.snapshotData) : null
+          });
+        }
+
         state.selectedVariantGroupId = groupId;
         await loadVariantGroupDetails(groupId);
         renderVariantGroupsList();
-        
-        // Всегда показываем свежие данные с сервера, игнорируя кеш
-        // При нажатии "Редактировать" будет создан новый draft из свежих данных
-        showVariantGroupDetails(state.variantGroupDetails, { mode: state.variantPanel.mode || "view" });
+
+        // Restore edit state when switching back to a variant tab that was being edited
+        if (editingVariants.has(groupId)) {
+          const editingState = editingVariants.get(groupId);
+          state.variantPanel.mode = editingState.mode;
+          state.variantDraft = deepClone(editingState.variantDraft);
+          state.variantPanel.snapshotData = editingState.snapshotData ? deepClone(editingState.snapshotData) : null;
+          showVariantGroupDetails(state.variantGroupDetails, { mode: editingState.mode });
+        } else {
+          showVariantGroupDetails(state.variantGroupDetails, { mode: state.variantPanel.mode || "view" });
+        }
       },
       activate,
     });
@@ -10319,6 +10362,17 @@ function updateOptionGroupSelectionUi() {
             ingredientPickerCategoryId = raw === "" ? null : Number(raw);
             renderTabs();
             await renderList();
+            // Keep footer visible after switching category tab (it can disappear when list re-renders)
+            const footer = $("#productInfoFooter");
+            if (footer) {
+              footer.classList.remove("hidden");
+              const footerEditMode = $("#productFooterEditMode");
+              if (footerEditMode) footerEditMode.classList.remove("hidden");
+              const cancelBtn = $("#productFooterCancelBtn");
+              const saveBtn = $("#productFooterSaveBtn");
+              if (cancelBtn) cancelBtn.dataset.pickerType = "ingredient";
+              if (saveBtn) saveBtn.dataset.pickerType = "ingredient";
+            }
           });
         });
       }
@@ -10330,9 +10384,18 @@ function updateOptionGroupSelectionUi() {
         try {
           const categoryId = Number.isFinite(ingredientPickerCategoryId) ? ingredientPickerCategoryId : null;
           const res = await apiGetCatalogProducts({ query, categoryId });
-          const products = Array.isArray(res.data) ? res.data : [];
+          const raw = Array.isArray(res.data) ? res.data : [];
+          // Deduplicate by id (API may return same product multiple times e.g. per category)
+          const seenIds = new Set();
+          const products = raw.filter(p => {
+            const id = Number(p.id);
+            if (seenIds.has(id)) return false;
+            seenIds.add(id);
+            return true;
+          });
 
           listContent.innerHTML = products
+            .filter(p => Number(p.is_active) !== 0)
             .filter(p => !query || String(p.name || "").toLowerCase().includes(query))
             .map(p => {
               const id = Number(p.id);
@@ -10622,10 +10685,19 @@ function updateOptionGroupSelectionUi() {
       
       try {
         const res = await apiGetCatalogProducts({ query });
-        const products = Array.isArray(res.data) ? res.data : [];
+        const raw = Array.isArray(res.data) ? res.data : [];
         const existingIds = new Set(Array.from(draftIngredients.keys()));
+        // Deduplicate by id (API may return same product multiple times)
+        const seenIds = new Set();
+        const products = raw.filter(p => {
+          const id = Number(p.id);
+          if (seenIds.has(id)) return false;
+          seenIds.add(id);
+          return true;
+        });
 
         ui.ingredientModalList.innerHTML = products
+          .filter(p => Number(p.is_active) !== 0)
           .filter(p => !existingIds.has(Number(p.id)))
           .filter(p => !query || String(p.name || "").toLowerCase().includes(query))
           .map(p => {
@@ -11307,6 +11379,12 @@ function updateOptionGroupSelectionUi() {
           if (key) setActiveTabKey(key);
         }
       });
+      productTabs.addEventListener("wheel", (e) => {
+        if (e.deltaY !== 0) {
+          e.preventDefault();
+          productTabs.scrollLeft += e.deltaY;
+        }
+      }, { passive: false });
     }
 
     if (categoriesNav) {

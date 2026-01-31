@@ -1,8 +1,9 @@
 (function () {
   const sidebar = document.getElementById('app-sidebar');
-  const toggleBtn = document.getElementById('sidebar-toggle');
+  const edgeToggle = document.getElementById('sidebar-edge-toggle');
+  const openTab = document.getElementById('sidebar-open-tab');
 
-  if (!sidebar || !toggleBtn) return;
+  if (!sidebar || !edgeToggle) return;
 
   // overlay (из layout)
   let overlay = document.getElementById('sidebarOverlay');
@@ -45,11 +46,11 @@
     });
   }
 
-  toggleBtn.addEventListener('click', (e) => {
+  edgeToggle.addEventListener('click', (e) => {
     e.stopPropagation();
 
     if (isMobile()) {
-      sidebar.classList.contains('is-open') ? closeMobileSidebar() : openMobileSidebar();
+      if (sidebar.classList.contains('is-open')) closeMobileSidebar();
       return;
     }
 
@@ -63,6 +64,13 @@
     });
   });
 
+  if (openTab) {
+    openTab.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (isMobile() && !sidebar.classList.contains('is-open')) openMobileSidebar();
+    });
+  }
+
   overlay.addEventListener('click', () => {
     if (isMobile()) closeMobileSidebar();
   });
@@ -73,9 +81,10 @@
 
     const target = e.target;
     const clickedInsideSidebar = sidebar.contains(target);
-    const clickedToggle = toggleBtn.contains(target);
+    const clickedEdgeToggle = edgeToggle && edgeToggle.contains(target);
+    const clickedOpenTab = openTab && openTab.contains(target);
 
-    if (!clickedInsideSidebar && !clickedToggle) {
+    if (!clickedInsideSidebar && !clickedEdgeToggle && !clickedOpenTab) {
       closeMobileSidebar();
     }
   });

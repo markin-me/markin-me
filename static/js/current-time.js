@@ -1,4 +1,10 @@
 (function () {
+  // Ensure global state exists and store timezone when we get it
+  function setStoreTimezone(tz) {
+    window.state = window.state || {};
+    window.state.storeTimezone = tz || '+0';
+  }
+
   // Format time as HH:MM:SS
   function formatTime(hours, minutes, seconds) {
     const h = String(hours).padStart(2, '0');
@@ -13,6 +19,21 @@
     // offset уже содержит знак
     return 'UTC' + offset;
   }
+
+  // Fetch current-time once on load so window.state.storeTimezone is available on any page
+  (function fetchStoreTimezoneOnce() {
+    if (typeof authFetch !== 'function') return;
+    authFetch('/api/admin/tenant/current-time')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data && data.ok && data.data && data.data.storeTimezone != null) {
+          setStoreTimezone(data.data.storeTimezone);
+        } else {
+          setStoreTimezone('+0');
+        }
+      })
+      .catch(function () { setStoreTimezone('+0'); });
+  })();
 
   window.CurrentTime = {
     /**
@@ -34,6 +55,7 @@
           if (data.ok && data.data) {
             // Получаем timezone филиала
             currentTimezone = data.data.storeTimezone || '+0';
+            setStoreTimezone(currentTimezone);
 
             // Получаем время филиала с сервера
             const storeTime = data.data.storeTimestamp;

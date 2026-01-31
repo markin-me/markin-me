@@ -1117,7 +1117,7 @@
     const ingEntries = (Array.isArray(ingredients) ? ingredients : [])
       .map((ing) => {
         const id = Number(ing.ingredient_id || ing.id);
-        const qty = Number(ing.quantity || ing.qty || 1);
+        const qty = Number(ing.quantity ?? ing.qty ?? 1);
         if (!Number.isFinite(id)) return null;
         return { id, qty };
       })
@@ -1400,7 +1400,7 @@
   function formatIngredient(ing) {
     const name = str(ing.ingredient_name || "");
     if (!name) return null;
-    const qty = Number(ing.quantity || 1);
+    const qty = Number(ing.quantity ?? 1);
     const unit = str(ing.unit_label || "");
     // Формат: количествоединица название (например "150г картофельное пюре")
     return `${qty}${unit} ${name}`.trim();
@@ -1469,7 +1469,7 @@
         const ingredientName = ing.ingredient_name || ing.name || ing.ingredientName;
         if (!ingredientName) return; // Пропускаем если нет названия
         
-        const quantity = ing.quantity || ing.qty || 1;
+        const quantity = ing.quantity ?? ing.qty ?? 1;
         // Единицы измерения могут быть в разных полях
         // В JSON из БД единицы могут отсутствовать, используем "г" по умолчанию для весовых ингредиентов
         let unitLabel = ing.unit_label || ing.unit || ing.unitLabel || ing.unit_short_title || ing.unit_title || "";
@@ -6169,17 +6169,18 @@ function buildProductDetailsContent(
       const ingId = Number(ing.ingredient_id);
       const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
       const state = ingredientState?.get(ingId) || {
-        quantity: Number(ing.quantity || 1),
+        quantity: Number(ing.quantity ?? 1),
       };
 
-      // Получаем min/max/step из данных ингредиента
-      const defaultQty = Number(ing.quantity || 1);
-      const min = ing.quantity_min != null ? Number(ing.quantity_min) : defaultQty;
+      // Получаем min/max/step из данных ингредиента (для переменного: null/не число min = 0, иначе defaultQty)
+      const defaultQty = Number(ing.quantity ?? 1);
+      const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
+      const min = rawMin !== null ? rawMin : (isVariable ? 0 : defaultQty);
       const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
       const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
       
       // Начальное количество: берем из state или из ing.quantity, затем ограничиваем и округляем до шага
-      let initialQty = isVariable ? (state.quantity || defaultQty) : defaultQty;
+      let initialQty = isVariable ? (state.quantity ?? defaultQty) : defaultQty;
       initialQty = Math.max(min, Math.min(max, initialQty));
       
       // Округляем до шага при инициализации (относительно min)
@@ -6207,7 +6208,7 @@ function buildProductDetailsContent(
       const currentTotalPrice = currentQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * currentQtyInBase : 0;
       
       // Цена базового количества (из БД)
-      const baseQty = Number(ing.quantity || 1);
+      const baseQty = Number(ing.quantity ?? 1);
       const baseQtyInBase = getQtyInBase(ing, baseQty);
       const baseTotalPrice = baseQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * baseQtyInBase : 0;
       
@@ -6296,18 +6297,21 @@ function buildProductDetailsContent(
         cardContent.appendChild(info);
         cardContent.appendChild(controls);
 
-        // Handlers
-        btnMinus.addEventListener("click", () => {
-          // Берем актуальное значение из state, а не из замыкания
-          const currentStateQty = state.quantity || currentQty;
+        // Handlers: минус — вычитаем шаг, округляем до шага от min, ограничиваем min..max
+        btnMinus.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const currentStateQty = state.quantity ?? currentQty;
           let newQty = currentStateQty - step;
-          // Округляем до шага (относительно min)
-          if (step > 0) {
-            const stepsFromMin = Math.round((newQty - min) / step);
-            newQty = min + (stepsFromMin * step);
+          // Для переменного: если после вычитания получилось ≤0 — разрешаем 0 (на случай если min в данных не 0)
+          if (isVariable && newQty <= 0) {
+            newQty = 0;
+          } else {
+            if (step > 0) {
+              const stepsFromMin = Math.round((newQty - min) / step);
+              newQty = min + (stepsFromMin * step);
+            }
+            newQty = Math.max(min, Math.min(max, newQty));
           }
-          // Ограничиваем min/max
-          newQty = Math.max(min, Math.min(max, newQty));
           if (newQty !== currentStateQty && typeof onIngredientChange === "function") {
             state.quantity = newQty;
             ingredientState?.set(ingId, state);
@@ -6315,9 +6319,9 @@ function buildProductDetailsContent(
           }
         });
 
-        btnPlus.addEventListener("click", () => {
-          // Берем актуальное значение из state, а не из замыкания
-          const currentStateQty = state.quantity || currentQty;
+        btnPlus.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const currentStateQty = state.quantity ?? currentQty;
           let newQty = currentStateQty + step;
           // Округляем до шага (относительно min)
           if (step > 0) {
@@ -6532,11 +6536,12 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
 
   // Initialize ingredient state with proper min/max/step handling
   ingredients.forEach(ing => {
-    const defaultQty = Number(ing.quantity || 1);
-    const min = ing.quantity_min != null ? Number(ing.quantity_min) : defaultQty;
+    const defaultQty = Number(ing.quantity ?? 1);
+    const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
+    const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
+    const min = rawMin !== null ? rawMin : (isVariable ? 0 : defaultQty);
     const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
     const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
-    const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
     
     // Начальное количество: ограничиваем min/max и округляем до шага (относительно min)
     let initialQty = isVariable ? defaultQty : defaultQty;
@@ -6575,13 +6580,15 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
         const ing = ingredients.find(i => Number(i.ingredient_id) === ingId);
         if (!ing) return;
         
-        const defaultQty = Number(ing.quantity || 1);
-        const min = ing.quantity_min != null ? Number(ing.quantity_min) : defaultQty;
+        const defaultQty = Number(ing.quantity ?? 1);
+        const isVariableIng = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
+        const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
+        const min = rawMin !== null ? rawMin : (isVariableIng ? 0 : defaultQty);
         const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
         const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
         
         // Берем количество из корзины, нормализуем до допустимого (кратное шагу от min)
-        let qty = Number(cartIng.quantity || 1);
+        let qty = Number(cartIng.quantity ?? 1);
         qty = Math.max(min, Math.min(max, qty));
         
         // Округляем до шага (относительно min)
@@ -6704,7 +6711,7 @@ optionGroups.forEach((group) => {
   const calculateBaseIngredientPrice = () => {
     let total = 0;
     ingredients.forEach(ing => {
-      const baseQty = ing.quantity || 1; // Базовое количество из БД
+      const baseQty = Number(ing.quantity ?? 1); // Базовое количество из БД
       
       // Рассчитываем цену за единицу с учетом base_qty
       const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
@@ -6727,8 +6734,8 @@ optionGroups.forEach((group) => {
     
     ingredients.forEach(ing => {
       const state = ingredientState.get(Number(ing.ingredient_id));
-      const currentQty = state ? (state.quantity || Number(ing.quantity || 1)) : Number(ing.quantity || 1);
-      const baseQty = Number(ing.quantity || 1); // Базовое количество из БД
+      const currentQty = state ? (state.quantity ?? Number(ing.quantity ?? 1)) : Number(ing.quantity ?? 1);
+      const baseQty = Number(ing.quantity ?? 1); // Базовое количество из БД
       
       // Рассчитываем цену за единицу с учетом base_qty
       const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
@@ -6801,10 +6808,13 @@ optionGroups.forEach((group) => {
       const block = ingredientsWrapRef.querySelector(`[data-ingredient-id="${ingId}"]`);
       if (!block) return;
       
-      const min = ing.quantity_min != null ? Number(ing.quantity_min) : Number(ing.quantity || 1);
-      const max = ing.quantity_max != null ? Number(ing.quantity_max) : Number(ing.quantity || 1);
+      const defaultQtyNum = Number(ing.quantity ?? 1);
+      const isVariableIng = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
+      const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
+      const min = rawMin !== null ? rawMin : (isVariableIng ? 0 : defaultQtyNum);
+      const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQtyNum;
       const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
-      let currentQty = state.quantity || Number(ing.quantity || 1);
+      let currentQty = state.quantity ?? Number(ing.quantity ?? 1);
       // Round to step (относительно min)
       if (step > 0) {
         const stepsFromMin = Math.round((currentQty - min) / step);
@@ -6826,7 +6836,7 @@ optionGroups.forEach((group) => {
       const currentTotalPrice = currentQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * currentQtyInBase : 0;
       
       // Цена базового количества (из БД)
-      const baseQty = Number(ing.quantity || 1);
+      const baseQty = Number(ing.quantity ?? 1);
       const baseQtyInBase = getQtyInBase(ing, baseQty);
       const baseTotalPrice = baseQtyInBase != null && Number.isFinite(pricePerUnit) ? pricePerUnit * baseQtyInBase : 0;
       
@@ -7032,7 +7042,7 @@ optionGroups.forEach((group) => {
       // Используем quantity из state если есть, иначе базовое значение из ing
       const quantity = (state && state.quantity !== undefined) 
         ? state.quantity 
-        : Number(ing.quantity || 1);
+        : Number(ing.quantity ?? 1);
       const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
       ingredientQuantities.push({
         ingredient_id: ingId,
@@ -12124,4 +12134,3 @@ async function init() {
 }
   init();
 })();
-

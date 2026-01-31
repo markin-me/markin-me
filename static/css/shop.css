@@ -17,7 +17,7 @@
 
   /* ===== Базовые нейтрали (используются локально в shop.css) ===== */
   --shop-white: #ffffff;          /* белый (иконки/текст на фото, фон кнопок) */
-  --shop-border: #e6e9f2;         /* локальная рамка для иконок в хедере */
+  --shop-border: #e5e7eb;        /* локальная рамка для иконок в хедере */
   --shop-gray-400: #9ca3af;       /* нейтральные иконки/звёзды "не активно" */
   --shop-amber-500: #f59e0b;      /* звезда "основной адрес" */
   --shop-danger: #ef4444;         /* опасные действия/ошибки (fallback) */
@@ -92,7 +92,7 @@ body.page-shop .shop-toolbar-cart{
 .shop-cat-chips::-webkit-scrollbar{ display: none; }
 .shop-cat-chip{
   border: 1px solid var(--color-border);
-  background: #eef0f3;
+  background: #f3f4f6;
   color: var(--color-text);
   border-radius: 999px;
   padding: 8px 14px;
@@ -3235,7 +3235,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 }
 
 .store-hours-card {
-  border: 1px solid #edf1f5;
+  border: 1px solid var(--color-border, #e5e7eb);
   border-radius: 12px;
   padding: 12px;
   background: #fff;

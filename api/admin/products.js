@@ -371,10 +371,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   });
 
   // ------------------------------
-  // DELETE product (soft delete)
+  // DELETE product (hard delete from DB; order history kept in order_orders.items JSON)
   // DELETE /api/prod_products/:id
   // ------------------------------
   router.delete('/prod_products/:id', async (req, res) => {
+    let conn;
     try {
       const tenantId = helpers.getTenantId(req);
       const id = Number(req.params.id);
@@ -382,26 +383,43 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
-      // Проверяем существование товара
-      const [rows] = await db.query(
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+
+      const [rows] = await conn.query(
         'SELECT id FROM prod_products WHERE tenant_id=? AND id=? LIMIT 1',
         [tenantId, id]
       );
       if (!rows.length) {
+        await conn.rollback();
+        conn.release();
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
 
-      // Soft delete: устанавливаем is_active=0 и site_visibility=0
-      // Данные товара в заказах сохраняются в JSON поле items
-      await db.query(
-        `UPDATE prod_products
-         SET is_active=0, site_visibility=0
-         WHERE tenant_id=? AND id=?`,
+      // Remove this product where it is used as ingredient in other products (FK has no ON DELETE)
+      await conn.query(
+        'DELETE FROM prod_product_ingredients WHERE tenant_id=? AND ingredient_id=?',
+        [tenantId, id]
+      );
+      // Remove category links (no FK to prod_products in schema; avoid orphans)
+      await conn.query(
+        'DELETE FROM prod_product_categories WHERE tenant_id=? AND product_id=?',
+        [tenantId, id]
+      );
+      // Delete product (CASCADE will remove: prod_product_ingredients product_id, prod_product_stocks, prod_variant_assignments)
+      await conn.query(
+        'DELETE FROM prod_products WHERE tenant_id=? AND id=?',
         [tenantId, id]
       );
 
+      await conn.commit();
+      conn.release();
       res.json({ ok: true });
     } catch (e) {
+      if (conn) {
+        try { await conn.rollback(); } catch (_) {}
+        conn.release();
+      }
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
@@ -1975,7 +1993,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       const params = [];
       let sql =
-        `SELECT p.id, p.name, p.price, p.cost_price, p.unit_id, p.base_unit_id, p.base_qty, p.photos_json
+        `SELECT p.id, p.name, p.price, p.cost_price, p.unit_id, p.base_unit_id, p.base_qty, p.photos_json, p.is_active
          FROM prod_products p`;
 
       if (categoryId) {
@@ -1984,7 +2002,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         params.push(categoryId);
       }
 
-      sql += ` WHERE p.tenant_id=?`;
+      sql += ` WHERE p.tenant_id=? AND p.is_active=1`;
       params.push(tenantId);
 
       if (q) {

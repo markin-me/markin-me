@@ -398,6 +398,14 @@
     const settingsPriceRoundingPrecision = document.getElementById("settingsPriceRoundingPrecision");
     const rightTabs = document.getElementById("settingsRightTabs");
     const rightHeader = rightTabs ? rightTabs.closest(".settings-right-header") : null;
+    if (rightTabs) {
+      rightTabs.addEventListener("wheel", (e) => {
+        if (e.deltaY !== 0) {
+          e.preventDefault();
+          rightTabs.scrollLeft += e.deltaY;
+        }
+      }, { passive: false });
+    }
     const settingsStoreEmpty = document.getElementById("settingsStoreEmpty");
     const settingsStorePanel = document.getElementById("settingsStorePanel");
     const settingsStoreSubtitle = document.getElementById("settingsStoreSubtitle");
