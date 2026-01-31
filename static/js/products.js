@@ -822,6 +822,18 @@
     return api(`/api/admin/products/${productId}/ingredients`);
   }
 
+  async function apiGetProductsUsingAsIngredient(ingredientId) {
+    return api(`/api/admin/products/used-as-ingredient/${ingredientId}`);
+  }
+
+  async function apiGetProduct(id) {
+    return api(`/api/prod_products/${id}`);
+  }
+
+  async function apiPatchProductRecalc(id, payload) {
+    return api(`/api/prod_products/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+  }
+
   async function apiAddProductIngredient(productId, payload) {
     return api(`/api/admin/products/${productId}/ingredients`, {
       method: "POST",
@@ -1368,10 +1380,7 @@
       };
     }
     
-    if (optionGroupInfo) optionGroupInfo.classList.add("hidden");
-    if (variantGroupInfo) variantGroupInfo.classList.add("hidden");
-    if (productInfo) productInfo.classList.add("hidden");
-    if (categoryInfo) categoryInfo.classList.add("hidden");
+    hideAllDetailPanels();
     if (optionEmpty) optionEmpty.classList.add("hidden");
     if (unitInfo) unitInfo.classList.remove("hidden");
     
@@ -3018,11 +3027,7 @@ function buildAutoAddGroupDetails(groupId) {
     categoryEmpty && categoryEmpty.classList.add("hidden");
     optionEmpty && optionEmpty.classList.add("hidden");
     autoAddEmpty && autoAddEmpty.classList.add("hidden");
-    productInfo && productInfo.classList.add("hidden");
-    categoryInfo && categoryInfo.classList.add("hidden");
-    optionGroupInfo && optionGroupInfo.classList.add("hidden");
-    variantGroupInfo && variantGroupInfo.classList.add("hidden");
-    unitInfo && unitInfo.classList.add("hidden");
+    hideAllDetailPanels();
     autoAddGroupInfo && autoAddGroupInfo.classList.remove("hidden");
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
 
@@ -3534,6 +3539,24 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (!Number.isFinite(n)) return "—";
     // format price as integer in UI
     return n.toFixed(0);
+  }
+
+  /** Для инпутов: целые без дробной части, дробные — с запятой и без лишних нулей */
+  function formatNumberForInput(v) {
+    if (v === "" || v == null) return "";
+    const n = Number(v);
+    if (!Number.isFinite(n)) return "";
+    if (Number.isInteger(n)) return String(n);
+    let s = String(n).replace(/0+$/, "").replace(/\.$/, "");
+    return s.replace(".", ",");
+  }
+
+  /** Парсинг из инпута: и точка, и запятая как десятичный разделитель */
+  function parseNumberFromInput(str) {
+    const s = String(str || "").trim().replace(",", ".");
+    if (s === "") return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
   }
 
   function setHeaderMode(mode) {
@@ -4098,6 +4121,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     productEmpty && productEmpty.classList.add("hidden");
     categoryEmpty && categoryEmpty.classList.add("hidden");
     categoryInfo && categoryInfo.classList.add("hidden");
+    hideAllDetailPanels();
     productInfo && productInfo.classList.remove("hidden");
     if (productInfoBody) productInfoBody.classList.remove("hidden");
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
@@ -4179,8 +4203,8 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     renderCategoryPreview(cat.icon);
 
     productEmpty && productEmpty.classList.add("hidden");
-    productInfo && productInfo.classList.add("hidden");
     categoryEmpty && categoryEmpty.classList.add("hidden");
+    hideAllDetailPanels();
     categoryInfo && categoryInfo.classList.remove("hidden");
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
     setHeaderMode("product");
@@ -5812,9 +5836,7 @@ function updateOptionGroupSelectionUi() {
     productEmpty && productEmpty.classList.add("hidden");
     categoryEmpty && categoryEmpty.classList.add("hidden");
     optionEmpty && optionEmpty.classList.add("hidden");
-    productInfo && productInfo.classList.add("hidden");
-    categoryInfo && categoryInfo.classList.add("hidden");
-    variantGroupInfo && variantGroupInfo.classList.add("hidden");
+    hideAllDetailPanels();
     optionGroupInfo && optionGroupInfo.classList.remove("hidden");
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
 
@@ -5868,9 +5890,7 @@ function updateOptionGroupSelectionUi() {
     productEmpty && productEmpty.classList.add("hidden");
     categoryEmpty && categoryEmpty.classList.add("hidden");
     optionEmpty && optionEmpty.classList.add("hidden");
-    productInfo && productInfo.classList.add("hidden");
-    categoryInfo && categoryInfo.classList.add("hidden");
-    optionGroupInfo && optionGroupInfo.classList.add("hidden");
+    hideAllDetailPanels();
     variantGroupInfo && variantGroupInfo.classList.remove("hidden");
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
 
@@ -6392,7 +6412,12 @@ function updateOptionGroupSelectionUi() {
       id: tabId,
       title: "Новая опция",
       onActivate: () => {
-        showOptionGroupDetails({ group: state.optionDraft.group }, { mode: "create" });
+        if (editingOptions.has(tabId)) {
+          const es = editingOptions.get(tabId);
+          state.optionDraft = es.optionDraft ? deepClone(es.optionDraft) : state.optionDraft;
+          state.optionPanel.snapshotData = es.snapshotData ? deepClone(es.snapshotData) : null;
+        }
+        showOptionGroupDetails({ group: (state.optionDraft || {}).group || {} }, { mode: "create" });
         showProductFooterEdit();
       },
       activate: true,
@@ -6428,7 +6453,12 @@ function updateOptionGroupSelectionUi() {
       id: tabId,
       title: "Новый вариант",
       onActivate: () => {
-        showVariantGroupDetails({ group: state.variantDraft.group }, { mode: "create" });
+        if (editingVariants.has(tabId)) {
+          const es = editingVariants.get(tabId);
+          state.variantDraft = es.variantDraft ? deepClone(es.variantDraft) : state.variantDraft;
+          state.variantPanel.snapshotData = es.snapshotData ? deepClone(es.snapshotData) : null;
+        }
+        showVariantGroupDetails({ group: (state.variantDraft || {}).group || {} }, { mode: "create" });
         showProductFooterEdit();
       },
       activate: true,
@@ -6529,6 +6559,31 @@ function updateOptionGroupSelectionUi() {
         await loadVariantGroupDetails(state.selectedVariantGroupId);
         showVariantGroupDetails(state.variantGroupDetails, { mode: "view" });
       })();
+    }
+  }
+
+  function cancelVariantEdit() {
+    if (state.variantPanel.mode === "edit") {
+      if (state.selectedVariantGroupId) {
+        editingVariants.delete(state.selectedVariantGroupId);
+      }
+      state.variantPanel.mode = "view";
+      state.variantPanel.itemsDirty = false;
+      state.variantDraft = null;
+      state.variantPanel.snapshotData = null;
+      hideProductFooter();
+      return;
+    }
+    if (state.variantPanel.mode === "create") {
+      state.variantPanel.mode = "view";
+      state.variantDraft = null;
+      state.variantPanel.tabKey = null;
+      state.selectedVariantGroupId = null;
+      state.variantGroupDetails = null;
+      state.variantPanel.itemsDirty = false;
+      state.variantPanel.snapshotData = null;
+      hideProductFooter();
+      renderVariantGroupsList();
     }
   }
 
@@ -6875,17 +6930,21 @@ function updateOptionGroupSelectionUi() {
     showDetailsEmpty();
   }
 
+  function hideAllDetailPanels() {
+    productInfo && productInfo.classList.add("hidden");
+    categoryInfo && categoryInfo.classList.add("hidden");
+    optionGroupInfo && optionGroupInfo.classList.add("hidden");
+    variantGroupInfo && variantGroupInfo.classList.add("hidden");
+    autoAddGroupInfo && autoAddGroupInfo.classList.add("hidden");
+    unitInfo && unitInfo.classList.add("hidden");
+  }
+
   function showDetailsEmpty() {
     const showCategory = state.mode === "categories";
     const showOption = state.mode === "options";
     const showAutoAdd = state.mode === "auto-add";
     const showUnit = state.mode === "units";
-    productInfo && productInfo.classList.add("hidden");
-    categoryInfo && categoryInfo.classList.add("hidden");
-    optionGroupInfo && optionGroupInfo.classList.add("hidden");
-    autoAddGroupInfo && autoAddGroupInfo.classList.add("hidden");
-    variantGroupInfo && variantGroupInfo.classList.add("hidden");
-    unitInfo && unitInfo.classList.add("hidden");
+    hideAllDetailPanels();
     if (productInfoHeader) productInfoHeader.classList.add("hidden");
     setHeaderMode("product");
     if (productEmpty) productEmpty.classList.toggle("hidden", showCategory || showOption || showAutoAdd || showUnit);
@@ -6898,6 +6957,76 @@ function updateOptionGroupSelectionUi() {
   }
 
   // ---------------- Product Footer ----------------
+
+  function saveCurrentTabEditingStateBeforeSwitch(currentTab) {
+    if (!currentTab) return;
+    const [type, idStr] = currentTab.key.split(":");
+    const isTempTab = idStr.startsWith("new-");
+    const id = isTempTab ? idStr : (type === "option" ? Number(idStr) : Number(idStr));
+
+    if (type === "product") {
+      if (currentNavigationState?.type === "product-edit" && currentNavigationState?.product?.id) {
+        const productId = currentNavigationState.product.id;
+        const currentEditingState = editingProducts.get(productId) || {};
+        editingProducts.set(productId, {
+          navigationState: currentNavigationState,
+          draft: currentEditingState.draft,
+          draftIngredients: currentEditingState.draftIngredients
+        });
+      }
+    } else if (type === "option" && Number.isFinite(id)) {
+      if (state.optionPanel.mode === "edit" || state.optionPanel.mode === "create") {
+        if (state.selectedOptionGroupId === id || state.optionPanel.tabKey === currentTab.key) {
+          editingOptions.set(id, {
+            mode: state.optionPanel.mode || "view",
+            optionDraft: state.optionDraft ? deepClone(state.optionDraft) : null,
+            snapshotData: state.optionPanel.snapshotData ? deepClone(state.optionPanel.snapshotData) : null
+          });
+        }
+      }
+    } else if (type === "option" && isTempTab) {
+      if (state.optionPanel.mode === "create" && state.optionPanel.tabKey === currentTab.key) {
+        editingOptions.set(idStr, {
+          mode: "create",
+          optionDraft: state.optionDraft ? deepClone(state.optionDraft) : null,
+          snapshotData: state.optionPanel.snapshotData ? deepClone(state.optionPanel.snapshotData) : null
+        });
+      }
+    } else if (type === "variant" && Number.isFinite(id)) {
+      if (state.variantPanel.mode === "edit" || state.variantPanel.mode === "create") {
+        if (state.selectedVariantGroupId === id || state.variantPanel.tabKey === currentTab.key) {
+          editingVariants.set(id, {
+            mode: state.variantPanel.mode || "view",
+            variantDraft: state.variantDraft ? deepClone(state.variantDraft) : null,
+            snapshotData: state.variantPanel.snapshotData ? deepClone(state.variantPanel.snapshotData) : null
+          });
+        }
+      }
+    } else if (type === "variant" && isTempTab) {
+      if (state.variantPanel.mode === "create" && state.variantPanel.tabKey === currentTab.key) {
+        editingVariants.set(idStr, {
+          mode: "create",
+          variantDraft: state.variantDraft ? deepClone(state.variantDraft) : null,
+          snapshotData: state.variantPanel.snapshotData ? deepClone(state.variantPanel.snapshotData) : null
+        });
+      }
+    } else if (type === "category" && Number.isFinite(id)) {
+      if (currentNavigationState?.type === "category-edit" && currentNavigationState?.category?.id === id) {
+        editingCategories.set(id, { navigationState: currentNavigationState });
+      }
+    } else if (type === "auto-add" && (Number.isFinite(id) || isTempTab)) {
+      if (state.autoAddPanel.mode === "edit" || state.autoAddPanel.mode === "create") {
+        const storeId = isTempTab ? idStr : id;
+        if (state.selectedAutoAddGroupId === id || state.autoAddPanel.tabKey === currentTab.key) {
+          editingAutoAdds.set(storeId, {
+            mode: state.autoAddPanel.mode || "view",
+            autoAddDraft: state.autoAddDraft ? deepClone(state.autoAddDraft) : null,
+            snapshotData: state.autoAddPanel.snapshotData ? deepClone(state.autoAddPanel.snapshotData) : null
+          });
+        }
+      }
+    }
+  }
 
   function saveTabFooterState(tab) {
     if (!tab) return;
@@ -7035,14 +7164,15 @@ function updateOptionGroupSelectionUi() {
     }).join("");
   }
 
-  function setActiveTabKey(key, { activate = true } = {}) {
+  async function setActiveTabKey(key, { activate = true } = {}) {
     const tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) return;
     
-    // Сохраняем состояние футера текущего активного таба перед переключением
+    // Сохраняем состояние редактирования и футера текущего активного таба перед переключением
     if (tabsState.activeKey && tabsState.activeKey !== key) {
       const currentTab = tabsState.tabs.find((t) => t.key === tabsState.activeKey);
       if (currentTab) {
+        saveCurrentTabEditingStateBeforeSwitch(currentTab);
         saveTabFooterState(currentTab);
       }
     }
@@ -7057,7 +7187,11 @@ function updateOptionGroupSelectionUi() {
     }
     
     if (activate && typeof tab.onActivate === "function") {
-      tab.onActivate();
+      const result = tab.onActivate();
+      // Ждём завершения async onActivate перед обновлением футера
+      if (result != null && typeof result.then === "function") {
+        await result;
+      }
       // После onActivate обновляем состояние футера в табе (на случай если onActivate изменил его)
       updateActiveTabFooterState();
     }
@@ -7088,7 +7222,7 @@ function updateOptionGroupSelectionUi() {
     return tab;
   }
 
-  function closeTab(key) {
+  async function closeTab(key) {
     const idx = tabsState.tabs.findIndex((t) => t.key === key);
     if (idx === -1) return;
     const tab = tabsState.tabs[idx];
@@ -7186,17 +7320,7 @@ function updateOptionGroupSelectionUi() {
         
         // For variants, cancel edit/create mode
         if (type === "variant" && (state.variantPanel.mode === "edit" || state.variantPanel.mode === "create")) {
-          if (Number.isFinite(id) && editingVariants.has(id)) {
-            // Cancel edit mode - TODO: implement cancelVariantEdit
-            state.variantPanel.mode = "view";
-            state.variantDraft = null;
-            editingVariants.delete(id);
-          } else if (isTempTab) {
-            // Cancel create mode
-            state.variantPanel.mode = "view";
-            state.variantDraft = null;
-            state.variantPanel.tabKey = null;
-          }
+          cancelVariantEdit();
         }
 
         // For auto-add, cancel edit/create mode
@@ -7248,7 +7372,7 @@ function updateOptionGroupSelectionUi() {
     if (wasActive) {
       const next = tabsState.tabs[idx] || tabsState.tabs[idx - 1];
       if (next) {
-        setActiveTabKey(next.key);
+        await setActiveTabKey(next.key);
       } else {
         tabsState.activeKey = null;
         renderTabs();
@@ -7693,144 +7817,9 @@ function updateOptionGroupSelectionUi() {
 
           const baseUnitId = form.base_unit_id?.value === "" ? null : Number(form.base_unit_id?.value);
           
-          // Логика себестоимости: если поле пустое/0 и есть состав, использовать расчётное значение
-          let costPriceValue = null;
-          const costPriceInputValue = String(form.cost_price.value || "").trim();
-          
-          // Рассчитываем себестоимость из состава для проверки
-          const calculatedCostFromIngredients = calcTotalCostFromIngredientsGlobal();
-          const calculatedCost = calculatedCostFromIngredients != null ? calculatedCostFromIngredients : 0;
-          
-          if (costPriceInputValue === "" || costPriceInputValue === "0") {
-            // Если поле пустое или "0", проверяем состав
-            if (draftIngredients && draftIngredients.size > 0) {
-              costPriceValue = calculatedCost;
-            } else {
-              // Нет состава - сохраняем 0
-              costPriceValue = 0;
-            }
-          } else {
-            // Поле заполнено вручную - проверяем разницу с расчётной
-            const manualCost = Number(costPriceInputValue);
-            
-            // Если есть состав и введённая себестоимость отличается от расчётной - показываем модальное окно
-            if (draftIngredients && draftIngredients.size > 0 && calculatedCost != null && Math.abs(manualCost - calculatedCost) > 0.01) {
-              // Показываем модальное окно с предложением пересчитать
-              let shouldRecalculate = false;
-              
-              if (!window.AppModal) {
-                // Если AppModal недоступен, используем confirm как fallback
-                shouldRecalculate = confirm(`Расчётная себестоимость из состава: ${formatMoney(calculatedCost)}\nТекущая себестоимость: ${formatMoney(manualCost)}\n\nПересчитать себестоимость из состава?`);
-              } else {
-                // Используем модальное окно - создаём Promise для ожидания ответа пользователя
-                const modalPromise = new Promise((resolve) => {
-                  let resolved = false;
-                  window.AppModal.open({
-                    title: "Пересчитать себестоимость?",
-                    content: `
-                      <div class="modal-text">
-                        <p>У товара указана себестоимость вручную.</p>
-                        <p><strong>Текущая себестоимость:</strong> ${formatMoney(manualCost)}</p>
-                        <p><strong>Расчётная себестоимость из состава:</strong> ${formatMoney(calculatedCost)}</p>
-                        <p>Пересчитать себестоимость из состава?</p>
-                      </div>
-                    `,
-                    saveText: "Пересчитать",
-                    cancelText: "Оставить текущую",
-                    onSave: async () => {
-                      resolved = true;
-                      resolve(true);
-                      return true;
-                    },
-                    onClose: () => {
-                      if (!resolved) {
-                        resolve(false);
-                      }
-                    },
-                  });
-                });
-                
-                // Ждём ответа пользователя
-                shouldRecalculate = await modalPromise;
-              }
-              
-              // Обновляем значение в зависимости от выбора пользователя
-              costPriceValue = shouldRecalculate ? calculatedCost : manualCost;
-            } else {
-              // Нет разницы или нет состава - используем введённое значение
-              costPriceValue = manualCost;
-            }
-          }
-          
-          // Логика цены: если поле пустое/0 и есть состав, использовать расчётное значение
-          let priceValue = null;
-          const priceInputValue = String(form.price.value || "").trim();
-          
-          // Рассчитываем цену из состава для проверки
-          const calculatedPriceFromIngredients = calcTotalPriceFromIngredientsGlobal();
-          const calculatedPrice = calculatedPriceFromIngredients != null ? calculatedPriceFromIngredients : 0;
-          
-          if (priceInputValue === "" || priceInputValue === "0") {
-            // Если поле пустое или "0", проверяем состав
-            if (draftIngredients && draftIngredients.size > 0) {
-              priceValue = calculatedPrice;
-            } else {
-              // Нет состава - сохраняем 0
-              priceValue = 0;
-            }
-          } else {
-            // Поле заполнено вручную - проверяем разницу с расчётной
-            const manualPrice = Number(priceInputValue);
-            
-            // Если есть состав и введённая цена отличается от расчётной - показываем модальное окно
-            if (draftIngredients && draftIngredients.size > 0 && calculatedPrice != null && Math.abs(manualPrice - calculatedPrice) > 0.01) {
-              // Показываем модальное окно с предложением пересчитать
-              let shouldRecalculate = false;
-              
-              if (!window.AppModal) {
-                // Если AppModal недоступен, используем confirm как fallback
-                shouldRecalculate = confirm(`Расчётная цена из состава: ${formatMoney(calculatedPrice)}\nТекущая цена: ${formatMoney(manualPrice)}\n\nПересчитать цену из состава?`);
-              } else {
-                // Используем модальное окно - создаём Promise для ожидания ответа пользователя
-                const modalPromise = new Promise((resolve) => {
-                  let resolved = false;
-                  window.AppModal.open({
-                    title: "Пересчитать цену?",
-                    content: `
-                      <div class="modal-text">
-                        <p>У товара указана цена вручную.</p>
-                        <p><strong>Текущая цена:</strong> ${formatMoney(manualPrice)}</p>
-                        <p><strong>Расчётная цена из состава:</strong> ${formatMoney(calculatedPrice)}</p>
-                        <p>Пересчитать цену из состава?</p>
-                      </div>
-                    `,
-                    saveText: "Пересчитать",
-                    cancelText: "Оставить текущую",
-                    onSave: async () => {
-                      resolved = true;
-                      resolve(true);
-                      return true;
-                    },
-                    onClose: () => {
-                      if (!resolved) {
-                        resolve(false);
-                      }
-                    },
-                  });
-                });
-                
-                // Ждём ответа пользователя
-                shouldRecalculate = await modalPromise;
-              }
-              
-              // Обновляем значение в зависимости от выбора пользователя
-              priceValue = shouldRecalculate ? calculatedPrice : manualPrice;
-            } else {
-              // Нет разницы или нет состава - используем введённое значение
-              priceValue = manualPrice;
-            }
-          }
-          
+          // Сохраняем себестоимость и цену как введено в форме (пересчёт только через меню «три точки»)
+          const costPriceValue = parseNumberFromInput(form.cost_price.value) ?? 0;
+          const priceValue = parseNumberFromInput(form.price.value) ?? 0;
           const payload = {
             tenant_id: TENANT_ID,
             name: String(form.name.value || "").trim(),
@@ -7838,12 +7827,12 @@ function updateOptionGroupSelectionUi() {
             description_short: String(form.description_short.value || "").trim(),
             description: String(form.description.value || "").trim(),
             price: priceValue,
-            old_price: form.old_price.value === "" ? null : Number(form.old_price.value),
+            old_price: parseNumberFromInput(form.old_price.value),
             cost_price: costPriceValue,
             unit_id: baseUnitId,
             base_unit_id: baseUnitId,
-            base_qty: form.base_qty?.value === "" ? null : Number(form.base_qty?.value),
-            stock: form.stock?.value === "" ? null : Number(form.stock?.value),
+            base_qty: parseNumberFromInput(form.base_qty?.value),
+            stock: parseNumberFromInput(form.stock?.value),
             is_active: form.is_active.checked ? 1 : 0,
             site_visibility: form.site_visibility.checked ? 1 : 0,
 
@@ -7881,7 +7870,11 @@ function updateOptionGroupSelectionUi() {
           }
 
           try {
-            await savePcsLink(productId, baseUnitId);
+            if (pcsUnitId && baseUnitId === pcsUnitId) {
+              await savePcsToUnitLink(productId);
+            } else {
+              await savePcsLink(productId, baseUnitId);
+            }
           } catch (e) {
             console.error("Failed to save pcs link", e);
           }
@@ -8111,6 +8104,7 @@ function updateOptionGroupSelectionUi() {
             clearNavigationStack();
           }
           
+          if (window.__productEditorRecalc) window.__productEditorRecalc = null;
           return true;
         } catch (e) {
           console.error('Unexpected error in onSave', e);
@@ -8122,6 +8116,10 @@ function updateOptionGroupSelectionUi() {
         // Remove from editing state when canceling
         if (product && product.id && editingProducts.has(product.id)) {
           editingProducts.delete(product.id);
+        }
+        // Сбрасываем пересчёт из меню «три точки»
+        if (window.__productEditorRecalc) {
+          window.__productEditorRecalc = null;
         }
         // Удаляем обработчик клавиатуры при закрытии
         if (keyboardHandler) {
@@ -8186,24 +8184,23 @@ function updateOptionGroupSelectionUi() {
       form.sku.value = product.sku || "";
       form.description_short.value = product.description_short || "";
       form.description.value = product.description || "";
-      form.price.value = product.price != null ? String(product.price) : "";
-      form.old_price.value = product.old_price != null ? String(product.old_price) : "";
-      form.cost_price.value = product.cost_price != null ? String(product.cost_price) : "";
+      form.price.value = product.price != null ? formatNumberForInput(product.price) : "";
+      form.old_price.value = product.old_price != null ? formatNumberForInput(product.old_price) : "";
+      form.cost_price.value = product.cost_price != null ? formatNumberForInput(product.cost_price) : "";
       if (form.base_unit_id) {
         form.base_unit_id.value = product.base_unit_id || product.unit_id || "";
       }
       if (form.base_qty) {
-        form.base_qty.value = product.base_qty != null ? String(product.base_qty) : "";
+        form.base_qty.value = product.base_qty != null ? formatNumberForInput(product.base_qty) : "";
       }
       if (form.stock) {
-        form.stock.value = product.stock_qty != null ? String(product.stock_qty) : "";
+        form.stock.value = product.stock_qty != null ? formatNumberForInput(product.stock_qty) : "";
       }
       form.is_active.checked = Boolean(product.is_active);
       form.site_visibility.checked = Boolean(product.site_visibility);
     } else {
-      // При создании нового товара инициализируем поле себестоимости значением "0"
       if (form.cost_price) {
-        form.cost_price.value = "0";
+        form.cost_price.value = formatNumberForInput(0);
       }
     }
 
@@ -8216,6 +8213,20 @@ function updateOptionGroupSelectionUi() {
         }
       });
     }
+
+    // Нормализация числовых инпутов: точка/запятая → запятая при вводе; при blur — целые без дробной части, дробные без лишних нулей
+    (function bindNumericInputBehavior(container) {
+      const inputs = container.querySelectorAll("[data-numeric-input]");
+      inputs.forEach(function(el) {
+        el.addEventListener("input", function() {
+          if (this.value && this.value.indexOf(".") !== -1) this.value = this.value.replace(/\./g, ",");
+        });
+        el.addEventListener("blur", function() {
+          const num = parseNumberFromInput(this.value);
+          this.value = num === null ? "" : formatNumberForInput(num);
+        });
+      });
+    })(wrapper);
 
     const ui = {
       chips: $("#peCategoryChips", wrapper),
@@ -8248,11 +8259,15 @@ function updateOptionGroupSelectionUi() {
       pcsLinkWrap: $("#pePcsLinkWrap", wrapper),
       pcsFactorInput: $("#pe_pcs_factor", wrapper),
       pcsBaseLabel: $("#pePcsBaseLabel", wrapper),
+      pcsToUnitWrap: $("#pePcsToUnitWrap", wrapper),
+      pcsToUnitFactorInput: $("#pe_pcs_to_unit_factor", wrapper),
+      pcsToUnitSelect: $("#pe_pcs_to_unit_id", wrapper),
       ingredientAccordion: $("#peIngredientAccordion", wrapper),
       ingredientAddBtn: $("#peIngredientAddBtn", wrapper),
       ingredientSearch: $("#peIngredientSearch", wrapper),
       ingredientCostTotal: $("#peIngredientCostTotal", wrapper),
       ingredientPriceTotal: $("#peIngredientPriceTotal", wrapper),
+      ingredientWeightTotal: $("#peIngredientWeightTotal", wrapper),
       ingredientBackdrop: $("#peIngredientBackdrop", wrapper),
       ingredientModal: $("#peIngredientModal", wrapper),
       ingredientModalClose: $("#peIngredientModalClose", wrapper),
@@ -9774,15 +9789,60 @@ function updateOptionGroupSelectionUi() {
       }
     }
 
+    // Конвертер для штучных товаров: 1 штука = X [ед.] — показывается только при Ед. изм = Штука
+    function updatePcsToUnitVisibility() {
+      if (!ui.pcsToUnitWrap || !ui.pcsToUnitFactorInput || !ui.pcsToUnitSelect || !ui.baseUnitSelect) return;
+      const baseUnitId = Number(ui.baseUnitSelect.value || 0);
+      const isPcsBase = pcsUnitId && baseUnitId === pcsUnitId;
+      if (!isPcsBase) {
+        ui.pcsToUnitWrap.classList.add("hidden");
+        return;
+      }
+      ui.pcsToUnitWrap.classList.remove("hidden");
+      // Заполняем список единиц (все кроме штуки)
+      const otherUnits = unitsList.filter((u) => Number(u.id) !== Number(pcsUnitId));
+      ui.pcsToUnitSelect.innerHTML = '<option value="">—</option>' + otherUnits.map((u) =>
+        `<option value="${u.id}">${escapeHtml(u.title || u.short_title || u.code)}</option>`
+      ).join("");
+      // Загружаем сохранённую связь: unit_id=pcs, base_unit_id=любая другая единица
+      const link = productUnitLinks.find((l) => Number(l.unit_id) === Number(pcsUnitId) && Number(l.base_unit_id) !== Number(pcsUnitId));
+      if (link) {
+        ui.pcsToUnitFactorInput.value = link.factor != null ? formatNumberForInput(link.factor) : "";
+        ui.pcsToUnitSelect.value = String(link.base_unit_id);
+      } else {
+        ui.pcsToUnitFactorInput.value = "";
+        ui.pcsToUnitSelect.value = "";
+      }
+    }
+
     async function loadProductUnitLinks() {
       if ((!isEdit && !isView) || !product || !product.id) return;
       try {
         const res = await apiGetProductUnitLinks(product.id);
         productUnitLinks = Array.isArray(res.data) ? res.data : [];
         updatePcsLinkVisibility();
+        updatePcsToUnitVisibility();
       } catch (e) {
         console.error("Failed to load product unit links", e);
       }
+    }
+
+    async function savePcsToUnitLink(productId) {
+      if (!productId || !pcsUnitId) return;
+      const factorValue = ui.pcsToUnitFactorInput?.value;
+      const factor = parseNumberFromInput(factorValue);
+      const baseUnitId = Number(ui.pcsToUnitSelect?.value || 0);
+      if (!baseUnitId || baseUnitId === pcsUnitId || !factor || !Number.isFinite(factor)) {
+        try {
+          await apiDeleteProductUnitLink(productId, pcsUnitId);
+        } catch {}
+        return;
+      }
+      await apiUpsertProductUnitLink(productId, {
+        unit_id: pcsUnitId,
+        base_unit_id: baseUnitId,
+        factor,
+      });
     }
 
     async function savePcsLink(productId, baseUnitId) {
@@ -9824,6 +9884,7 @@ function updateOptionGroupSelectionUi() {
           }
         }
         updatePcsLinkVisibility();
+        updatePcsToUnitVisibility();
       } catch (e) {
         console.error('Failed to load units', e);
       }
@@ -9848,10 +9909,17 @@ function updateOptionGroupSelectionUi() {
             qtyInBase = null;
           } else if (Number(fromUnitId) === Number(baseUnitId)) {
             qtyInBase = Number(ing.quantity || 0);
+          } else if (pcsUnitId && Number(fromUnitId) === Number(pcsUnitId)) {
+            // Ингредиент в штуках: для себестоимости qtyInBase = количество в шт (costBase уже за 1 шт)
+            if (Number(baseUnitId) === Number(pcsUnitId)) {
+              qtyInBase = Number(ing.quantity || 0);
+            } else if (ing.ingredient_pcs_factor != null) {
+              qtyInBase = Number(ing.quantity || 0) * Number(ing.ingredient_pcs_factor);
+            } else {
+              qtyInBase = null;
+            }
           } else if (pcsUnitId && Number(baseUnitId) === Number(pcsUnitId)) {
             qtyInBase = null;
-          } else if (pcsUnitId && Number(fromUnitId) === Number(pcsUnitId)) {
-            qtyInBase = ing.ingredient_pcs_factor != null ? Number(ing.quantity || 0) * Number(ing.ingredient_pcs_factor) : null;
           } else {
             const factor = getConversionFactor(fromUnitId, baseUnitId);
             qtyInBase = factor != null ? Number(ing.quantity || 0) * factor : null;
@@ -9888,10 +9956,16 @@ function updateOptionGroupSelectionUi() {
             qtyInBase = null;
           } else if (Number(fromUnitId) === Number(baseUnitId)) {
             qtyInBase = Number(ing.quantity || 0);
+          } else if (pcsUnitId && Number(fromUnitId) === Number(pcsUnitId)) {
+            if (Number(baseUnitId) === Number(pcsUnitId)) {
+              qtyInBase = Number(ing.quantity || 0);
+            } else if (ing.ingredient_pcs_factor != null) {
+              qtyInBase = Number(ing.quantity || 0) * Number(ing.ingredient_pcs_factor);
+            } else {
+              qtyInBase = null;
+            }
           } else if (pcsUnitId && Number(baseUnitId) === Number(pcsUnitId)) {
             qtyInBase = null;
-          } else if (pcsUnitId && Number(fromUnitId) === Number(pcsUnitId)) {
-            qtyInBase = ing.ingredient_pcs_factor != null ? Number(ing.quantity || 0) * Number(ing.ingredient_pcs_factor) : null;
           } else {
             const factor = getConversionFactor(fromUnitId, baseUnitId);
             qtyInBase = factor != null ? Number(ing.quantity || 0) * factor : null;
@@ -9905,6 +9979,76 @@ function updateOptionGroupSelectionUi() {
         });
       }
       return hasValidPrice ? total : null;
+    }
+
+    // Сумма веса состава в базовой единице товара (рецепта)
+    function calcTotalWeightInBaseUnitGlobal() {
+      const baseUnitId = Number(ui.baseUnitSelect?.value || 0);
+      if (!baseUnitId || !draftIngredients || draftIngredients.size === 0) return null;
+      let total = 0;
+      let hasValid = false;
+      draftIngredients.forEach(ing => {
+        const fromUnitId = Number(ing.unit_id || 0);
+        if (!fromUnitId) return;
+        if (Number(fromUnitId) === Number(baseUnitId)) {
+          total += Number(ing.quantity || 0);
+          hasValid = true;
+          return;
+        }
+        if (pcsUnitId && Number(fromUnitId) === Number(pcsUnitId) && ing.ingredient_pcs_factor != null) {
+          total += Number(ing.quantity || 0) * Number(ing.ingredient_pcs_factor);
+          hasValid = true;
+          return;
+        }
+        const factor = getConversionFactor(fromUnitId, baseUnitId);
+        if (factor != null) {
+          total += Number(ing.quantity || 0) * factor;
+          hasValid = true;
+        }
+      });
+      return hasValid ? total : null;
+    }
+
+    /** Расчёт себестоимости, цены и веса по массиву ингредиентов (формат API). Для пересчёта блюд, где текущий товар в составе. */
+    function calcTotalsFromComposition(recipeBaseUnitId, ingredientsArray) {
+      if (!Array.isArray(ingredientsArray) || ingredientsArray.length === 0) return null;
+      let cost = 0, price = 0, weight = 0;
+      let hasCost = false, hasPrice = false, hasWeight = false;
+      const baseUnitIdNum = Number(recipeBaseUnitId || 0);
+      ingredientsArray.forEach(ing => {
+        const baseUnitId = ing.ingredient_base_unit_id || ing.ingredient_unit_id || ing.unit_id;
+        const fromUnitId = Number(ing.unit_id || 0);
+        let qtyInIngBase = null;
+        if (baseUnitId && fromUnitId) {
+          if (Number(fromUnitId) === Number(baseUnitId)) {
+            qtyInIngBase = Number(ing.quantity || 0);
+          } else if (pcsUnitId && Number(fromUnitId) === Number(pcsUnitId)) {
+            if (Number(baseUnitId) === Number(pcsUnitId)) qtyInIngBase = Number(ing.quantity || 0);
+            else if (ing.ingredient_pcs_factor != null) qtyInIngBase = Number(ing.quantity || 0) * Number(ing.ingredient_pcs_factor);
+          } else if (pcsUnitId && Number(baseUnitId) !== Number(pcsUnitId)) {
+            const factor = getConversionFactor(fromUnitId, baseUnitId);
+            qtyInIngBase = factor != null ? Number(ing.quantity || 0) * factor : null;
+          }
+        }
+        if (qtyInIngBase != null) {
+          const baseQty = ing.ingredient_base_qty != null ? Number(ing.ingredient_base_qty) : 1;
+          const costBase = baseQty > 0 ? Number(ing.ingredient_cost_price || 0) / baseQty : Number(ing.ingredient_cost_price || 0);
+          const catalogPriceBase = baseQty > 0 ? Number(ing.ingredient_price || 0) / baseQty : Number(ing.ingredient_price || 0);
+          const priceBase = ing.price_override != null ? Number(ing.price_override) : catalogPriceBase;
+          cost += costBase * qtyInIngBase;
+          price += priceBase * qtyInIngBase;
+          hasCost = true;
+          hasPrice = true;
+        }
+        if (baseUnitIdNum && fromUnitId) {
+          let w = null;
+          if (Number(fromUnitId) === baseUnitIdNum) w = Number(ing.quantity || 0);
+          else if (pcsUnitId && Number(fromUnitId) === Number(pcsUnitId) && ing.ingredient_pcs_factor != null) w = Number(ing.quantity || 0) * Number(ing.ingredient_pcs_factor);
+          else { const f = getConversionFactor(fromUnitId, baseUnitIdNum); if (f != null) w = Number(ing.quantity || 0) * f; }
+          if (w != null) { weight += w; hasWeight = true; }
+        }
+      });
+      return (hasCost || hasPrice || hasWeight) ? { cost: hasCost ? Math.round(cost * 100) / 100 : null, price: hasPrice ? Math.round(price * 100) / 100 : null, weight: hasWeight ? Math.round(weight * 1000) / 1000 : null } : null;
     }
 
     // Функция для обновления placeholder себестоимости (доступна на уровне openProductModal)
@@ -9953,6 +10097,80 @@ function updateOptionGroupSelectionUi() {
       }
     }
 
+    // Обновление отображения суммы веса состава
+    function updateWeightTotalDisplayGlobal() {
+      const total = calcTotalWeightInBaseUnitGlobal();
+      const el = ui.ingredientWeightTotal || document.getElementById("peIngredientWeightTotal");
+      if (!el) return;
+      const baseUnitId = Number(ui.baseUnitSelect?.value || 0);
+      const unitLabel = baseUnitId ? getUnitLabel(baseUnitId) : "";
+      if (total == null) {
+        el.textContent = "—";
+        return;
+      }
+      const value = Math.round(total * 1000) / 1000;
+      el.textContent = unitLabel ? `${value} ${unitLabel}` : String(value);
+    }
+
+    // Регистрируем пересчёт для меню «три точки» в футере (пересчёт по нажатию пункта меню)
+    window.__productEditorRecalc = {
+      recalcCost: function() {
+        const v = calcTotalCostFromIngredientsGlobal();
+        if (v != null && ui.costPriceInput) {
+          ui.costPriceInput.value = formatNumberForInput(Math.round(v * 100) / 100);
+          updateCostPricePlaceholderGlobal();
+        }
+      },
+      recalcPrice: function() {
+        const v = calcTotalPriceFromIngredientsGlobal();
+        if (v != null && ui.priceInput) {
+          ui.priceInput.value = formatNumberForInput(Math.round(v * 100) / 100);
+          updatePricePlaceholderGlobal();
+        }
+      },
+      recalcWeight: function() {
+        const v = calcTotalWeightInBaseUnitGlobal();
+        if (v != null && ui.baseQtyInput) {
+          ui.baseQtyInput.value = formatNumberForInput(Math.round(v * 1000) / 1000);
+          updateWeightTotalDisplayGlobal();
+        }
+      },
+      /** Пересчитать в составе: все блюда, где этот товар — ингредиент: пересчитать и сохранить у них себестоимость, цену и вес */
+      recalcAllFromComposition: async function() {
+        const ingredientId = product?.id;
+        if (!ingredientId) return;
+        try {
+          const res = await apiGetProductsUsingAsIngredient(ingredientId);
+          const productIds = res?.product_ids || [];
+          if (productIds.length === 0) {
+            alert("Нет блюд с этим товаром в составе.");
+            return;
+          }
+          let updated = 0;
+          for (const productId of productIds) {
+            const prodRes = await apiGetProduct(productId);
+            const prod = prodRes?.data;
+            if (!prod) continue;
+            const ingRes = await apiGetProductIngredients(productId);
+            const ingredients = Array.isArray(ingRes?.data) ? ingRes.data : [];
+            const totals = calcTotalsFromComposition(prod.base_unit_id, ingredients);
+            if (!totals) continue;
+            const payload = {};
+            if (totals.cost != null) payload.cost_price = totals.cost;
+            if (totals.price != null) payload.price = totals.price;
+            if (totals.weight != null) payload.base_qty = totals.weight;
+            if (Object.keys(payload).length === 0) continue;
+            await apiPatchProductRecalc(productId, payload);
+            updated++;
+          }
+          alert(updated > 0 ? `Обновлено товаров: ${updated}` : "Не удалось пересчитать ни один товар.");
+        } catch (e) {
+          console.error("recalcAllFromComposition", e);
+          alert("Ошибка при пересчёте: " + (e?.message || "неизвестная ошибка"));
+        }
+      }
+    };
+
     async function loadIngredients() {
       if ((!isEdit && !isView) || !product) return;
       try {
@@ -9992,6 +10210,7 @@ function updateOptionGroupSelectionUi() {
         renderIngredientAccordion();
         updateCostPricePlaceholderGlobal();
         updatePricePlaceholderGlobal();
+        updateWeightTotalDisplayGlobal();
         snapshotIngredients();
       } catch (e) {
         console.error('Failed to load ingredients', e);
@@ -10174,6 +10393,7 @@ function updateOptionGroupSelectionUi() {
       bindAccordionContainer(ui.ingredientAccordion);
       updateCostPricePlaceholderGlobal();
       updatePricePlaceholderGlobal();
+      updateWeightTotalDisplayGlobal();
 
       if (isView) return;
 
@@ -10194,6 +10414,7 @@ function updateOptionGroupSelectionUi() {
         if (costInput) costInput.value = costTotal == null ? "—" : formatMoney(costTotal);
         updateCostPricePlaceholderGlobal();
         updatePricePlaceholderGlobal();
+        updateWeightTotalDisplayGlobal();
       };
 
       // Toggle variable fields on switch change
@@ -10553,6 +10774,19 @@ function updateOptionGroupSelectionUi() {
                 const baseQty = selectedProduct?.base_qty != null ? Number(selectedProduct.base_qty) : null;
                 const unit = unitsList.find(u => u.id === (baseUnitId || unitId));
 
+                let ingredientPcsFactor = null;
+                if (pcsUnitId && baseUnitId === pcsUnitId) {
+                  const recipeBaseUnitId = Number(ui.baseUnitSelect?.value || 0);
+                  if (recipeBaseUnitId && recipeBaseUnitId !== pcsUnitId) {
+                    try {
+                      const linkRes = await apiGetProductUnitLinks(productId);
+                      const links = Array.isArray(linkRes?.data) ? linkRes.data : [];
+                      const link = links.find((l) => Number(l.unit_id) === Number(pcsUnitId) && Number(l.base_unit_id) === recipeBaseUnitId);
+                      if (link && link.factor != null) ingredientPcsFactor = Number(link.factor);
+                    } catch (_) {}
+                  }
+                }
+
                 nextSort += 10;
                 draftIngredients.set(productId, {
                   id: 0,
@@ -10562,6 +10796,7 @@ function updateOptionGroupSelectionUi() {
                   ingredient_cost_price: productCostPrice,
                   ingredient_base_unit_id: baseUnitId || null,
                   ingredient_base_qty: baseQty,
+                  ingredient_pcs_factor: ingredientPcsFactor,
                   ingredient_photos: productPhotos,
                   ingredient_unit_id: baseUnitId || unitId,
                   quantity: 1,
@@ -10579,6 +10814,9 @@ function updateOptionGroupSelectionUi() {
               }
 
               renderIngredientAccordion();
+              updateCostPricePlaceholderGlobal();
+              updatePricePlaceholderGlobal();
+              updateWeightTotalDisplayGlobal();
             } catch (e) {
               console.error('Failed to save ingredients', e);
               alert('Ошибка при сохранении состава');
@@ -10752,7 +10990,20 @@ function updateOptionGroupSelectionUi() {
             });
             nextSort += 10;
 
-            // Add to draft (works for both new and existing products)
+            let ingredientPcsFactor = null;
+            if (pcsUnitId && baseUnitId === pcsUnitId) {
+              const recipeBaseUnitId = Number(ui.baseUnitSelect?.value || 0);
+              if (recipeBaseUnitId && recipeBaseUnitId !== pcsUnitId) {
+                try {
+                  const linkRes = await apiGetProductUnitLinks(productId);
+                  const links = Array.isArray(linkRes?.data) ? linkRes.data : [];
+                  const link = links.find((l) => Number(l.unit_id) === Number(pcsUnitId) && Number(l.base_unit_id) === recipeBaseUnitId);
+                  if (link && link.factor != null) ingredientPcsFactor = Number(link.factor);
+                } catch (_) {}
+              }
+            }
+
+            const unit = unitsList.find(u => u.id === (baseUnitId || unitId));
             draftIngredients.set(productId, {
               id: 0,
               ingredient_id: productId,
@@ -10761,13 +11012,14 @@ function updateOptionGroupSelectionUi() {
               ingredient_cost_price: productCostPrice,
               ingredient_base_unit_id: baseUnitId || null,
               ingredient_base_qty: baseQty,
+              ingredient_pcs_factor: ingredientPcsFactor,
               ingredient_photos: productPhotos,
               ingredient_unit_id: baseUnitId || unitId,
               quantity: 1,
               unit_id: baseUnitId || unitId,
-              unit_code: unitsList.find(u => u.id === (baseUnitId || unitId))?.code || '',
-              unit_title: unitsList.find(u => u.id === (baseUnitId || unitId))?.title || '',
-              unit_short_title: unitsList.find(u => u.id === (baseUnitId || unitId))?.short_title || '',
+              unit_code: unit?.code || '',
+              unit_title: unit?.title || '',
+              unit_short_title: unit?.short_title || '',
               quantity_min: null,
               quantity_max: null,
               quantity_step: null,
@@ -10776,6 +11028,9 @@ function updateOptionGroupSelectionUi() {
               sort_order: nextSort,
             });
             renderIngredientAccordion();
+            updateCostPricePlaceholderGlobal();
+            updatePricePlaceholderGlobal();
+            updateWeightTotalDisplayGlobal();
           });
         });
       } catch (e) {
@@ -10809,6 +11064,8 @@ function updateOptionGroupSelectionUi() {
     if (ui.baseUnitSelect && !isView) {
       ui.baseUnitSelect.addEventListener("change", () => {
         updatePcsLinkVisibility();
+        updatePcsToUnitVisibility();
+        updateWeightTotalDisplayGlobal();
       });
     }
 
@@ -10832,6 +11089,7 @@ function updateOptionGroupSelectionUi() {
         // При создании нового товара инициализируем поле себестоимости состава
         updateCostPricePlaceholderGlobal();
         updatePricePlaceholderGlobal();
+        updateWeightTotalDisplayGlobal();
       }
       requestAnimationFrame(refreshOpenAccordions);
     })();
@@ -11946,9 +12204,76 @@ function updateOptionGroupSelectionUi() {
     }
 
     if (footerMoreEditBtn) {
-      // Placeholder for future actions
-      footerMoreEditBtn.addEventListener("click", () => {
-        // TODO: Add actions menu
+      footerMoreEditBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const isProductEdit = currentNavigationState?.type === "product-edit";
+        const recalc = window.__productEditorRecalc;
+        if (!isProductEdit || !recalc) return;
+
+        const closeDropdown = () => {
+          const existing = document.getElementById("productFooterMoreDropdown");
+          if (existing) existing.remove();
+          document.removeEventListener("click", closeDropdown);
+          document.removeEventListener("touchstart", closeDropdown);
+        };
+
+        const existing = document.getElementById("productFooterMoreDropdown");
+        if (existing) {
+          closeDropdown();
+          return;
+        }
+
+        const dropdown = document.createElement("div");
+        dropdown.id = "productFooterMoreDropdown";
+        dropdown.className = "product-footer-more-dropdown";
+        dropdown.innerHTML = `
+          <button type="button" class="product-footer-more-dropdown-item" data-action="recalc-cost">
+            <i class="fas fa-sync-alt" aria-hidden="true"></i>
+            <span>Пересчитать себестоимость</span>
+          </button>
+          <button type="button" class="product-footer-more-dropdown-item" data-action="recalc-price">
+            <i class="fas fa-sync-alt" aria-hidden="true"></i>
+            <span>Пересчитать стоимость</span>
+          </button>
+          <button type="button" class="product-footer-more-dropdown-item" data-action="recalc-weight">
+            <i class="fas fa-sync-alt" aria-hidden="true"></i>
+            <span>Пересчет веса</span>
+          </button>
+          <button type="button" class="product-footer-more-dropdown-item" data-action="recalc-composition">
+            <i class="fas fa-sync-alt" aria-hidden="true"></i>
+            <span>Пересчитать в составе</span>
+          </button>
+        `;
+
+        dropdown.querySelector("[data-action=recalc-cost]").addEventListener("click", () => {
+          if (window.__productEditorRecalc?.recalcCost) window.__productEditorRecalc.recalcCost();
+          closeDropdown();
+        });
+        dropdown.querySelector("[data-action=recalc-price]").addEventListener("click", () => {
+          if (window.__productEditorRecalc?.recalcPrice) window.__productEditorRecalc.recalcPrice();
+          closeDropdown();
+        });
+        dropdown.querySelector("[data-action=recalc-weight]").addEventListener("click", () => {
+          if (window.__productEditorRecalc?.recalcWeight) window.__productEditorRecalc.recalcWeight();
+          closeDropdown();
+        });
+        dropdown.querySelector("[data-action=recalc-composition]").addEventListener("click", () => {
+          if (window.__productEditorRecalc?.recalcAllFromComposition) window.__productEditorRecalc.recalcAllFromComposition();
+          closeDropdown();
+        });
+
+        document.body.appendChild(dropdown);
+        const rect = footerMoreEditBtn.getBoundingClientRect();
+        const dropdownRect = dropdown.getBoundingClientRect();
+        let left = rect.right - dropdownRect.width;
+        left = Math.max(8, Math.min(left, window.innerWidth - dropdownRect.width - 8));
+        dropdown.style.left = `${left}px`;
+        dropdown.style.top = `${rect.top - dropdownRect.height - 8}px`;
+
+        requestAnimationFrame(() => {
+          document.addEventListener("click", closeDropdown);
+          document.addEventListener("touchstart", closeDropdown);
+        });
       });
     }
 

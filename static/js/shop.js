@@ -4782,19 +4782,14 @@ function buildProductDetailsContent(
   title.className = "shop-pd-title";
   title.textContent = str(product.name);
 
-  // === ДОБАВИЛИ: базовая цена товара (без опций) ===
-  const basePrice = document.createElement("div");
-  basePrice.className = "shop-pd-baseprice";
-  basePrice.textContent = money(product.price || 0);
+  // Цена отображается только в кнопке «В корзину» (shop-pd-action-price)
 
-  // === ДОБАВИЛИ: короткое описание под ценой (если есть) ===
   const shortDescText = str(product.description_short || "").trim();
   const shortDesc = document.createElement("div");
   shortDesc.className = "shop-pd-short";
   if (shortDescText) shortDesc.textContent = shortDescText;
 
   meta.appendChild(title);
-  meta.appendChild(basePrice);
   if (shortDescText) meta.appendChild(shortDesc);
 
   scroll.appendChild(meta);
@@ -6424,7 +6419,7 @@ function buildProductDetailsContent(
   footer.appendChild(actionBtn);
   wrap.appendChild(footer);
 
-  return { wrap, actionBtn, qtyWrap, basePriceEl: basePrice };
+  return { wrap, actionBtn, qtyWrap, basePriceEl: null };
 }
 
 

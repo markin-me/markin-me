@@ -156,6 +156,58 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   });
 
   // ------------------------------
+  // Products that use a given product as ingredient (for "Пересчитать в составе")
+  // GET /api/admin/products/used-as-ingredient/:ingredientId
+  // ------------------------------
+  router.get('/admin/products/used-as-ingredient/:ingredientId', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const ingredientId = Number(req.params.ingredientId);
+      if (!Number.isFinite(ingredientId) || ingredientId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_INGREDIENT_ID' });
+      }
+      const [rows] = await db.query(
+        `SELECT DISTINCT product_id
+         FROM prod_product_ingredients
+         WHERE tenant_id=? AND ingredient_id=?
+         ORDER BY product_id ASC`,
+        [tenantId, ingredientId]
+      );
+      const product_ids = rows.map((r) => Number(r.product_id)).filter((id) => Number.isFinite(id));
+      res.json({ ok: true, product_ids });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // GET one product (for recalc: need base_unit_id, base_qty)
+  router.get('/prod_products/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const [rows] = await db.query(
+        `SELECT p.id, p.name, p.sku, p.description_short, p.description, p.price, p.old_price, p.cost_price,
+                p.unit_id, p.base_unit_id, p.base_qty, p.photos_json, p.is_active, p.site_visibility,
+                s.qty AS stock_qty
+         FROM prod_products p
+         LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+         WHERE p.tenant_id=? AND p.id=? LIMIT 1`,
+        [storeId, tenantId, id]
+      );
+      if (!rows.length) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      const r = rows[0];
+      r.photos = helpers.safeJsonArray(r.photos_json);
+      res.json({ ok: true, data: r });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // ------------------------------
   // Product categories (chips)
   // GET /api/prod_products/:id/categories
   // ------------------------------
@@ -363,6 +415,33 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         [tenantId, storeId, id, stock_qty]
       );
 
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // PATCH /api/prod_products/:id — только cost_price, price, base_qty (для пересчёта по составу)
+  router.patch('/prod_products/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const cost_price = helpers.numOrNull(req.body.cost_price);
+      const price = helpers.numOrNull(req.body.price);
+      const base_qty = helpers.numOrNull(req.body.base_qty);
+      const updates = [];
+      const params = [];
+      if (cost_price != null) { updates.push('cost_price=?'); params.push(cost_price); }
+      if (price != null) { updates.push('price=?'); params.push(price); }
+      if (base_qty != null) { updates.push('base_qty=?'); params.push(base_qty); }
+      if (updates.length === 0) return res.json({ ok: true });
+      params.push(tenantId, id);
+      await db.query(
+        `UPDATE prod_products SET ${updates.join(', ')} WHERE tenant_id=? AND id=?`,
+        params
+      );
       res.json({ ok: true });
     } catch (e) {
       console.error(e);
@@ -2430,6 +2509,17 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       );
       const pcsUnitId = pcsRows.length ? Number(pcsRows[0].id) : null;
 
+      let recipeBaseUnitId = null;
+      if (pcsUnitId) {
+        const [recipeRows] = await db.query(
+          `SELECT base_unit_id FROM prod_products WHERE tenant_id=? AND id=? LIMIT 1`,
+          [tenantId, productId]
+        );
+        if (recipeRows.length && recipeRows[0].base_unit_id) {
+          recipeBaseUnitId = Number(recipeRows[0].base_unit_id);
+        }
+      }
+
       const [rows] = await db.query(
         `SELECT 
            i.id,
@@ -2459,11 +2549,15 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
          LEFT JOIN prod_product_unit_links pul
            ON pul.tenant_id=i.tenant_id
           AND pul.product_id=i.ingredient_id
-          AND pul.base_unit_id=p.base_unit_id
           AND pul.unit_id=?
+          AND (
+            (p.base_unit_id = ? AND pul.base_unit_id = ?)
+            OR
+            (p.base_unit_id <> ? AND pul.base_unit_id = p.base_unit_id)
+          )
          WHERE i.tenant_id=? AND i.product_id=?
          ORDER BY i.sort_order ASC, i.id ASC`,
-        [pcsUnitId || 0, tenantId, productId]
+        [pcsUnitId || 0, pcsUnitId || 0, recipeBaseUnitId || 0, pcsUnitId || 0, tenantId, productId]
       );
 
       for (const r of rows) {

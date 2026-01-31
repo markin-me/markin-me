@@ -100,7 +100,7 @@
       </div>
 
       <div class="product-editor-meta">
-        <div>
+        <div class="field-wrap">
           <label class="field-label" for="pe_name">Название *</label>
           <input class="control" id="pe_name" name="name" type="text" placeholder="Например: Бургер" required />
         </div>
@@ -110,7 +110,7 @@
           <div class="chips" id="peCategoryChips"></div>
         </div>
 
-        <div>
+        <div class="field-wrap">
           <label class="field-label" for="pe_sku">Артикул (SKU)</label>
           <input class="control" id="pe_sku" name="sku" type="text" placeholder="BRG-001" />
         </div>
@@ -119,35 +119,49 @@
 
     <!-- Цены в один ряд: Себестоимость / Цена / Старая цена -->
     <div class="form-row-3">
-      <div>
+      <div class="field-wrap">
         <label class="field-label" for="pe_cost_price">Себестоимость</label>
-        <input class="control" id="pe_cost_price" name="cost_price" type="number" step="0.01" min="0" placeholder="0" />
+        <input class="control" id="pe_cost_price" name="cost_price" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
       </div>
-      <div>
+      <div class="field-wrap">
         <label class="field-label" for="pe_price">Цена</label>
-        <input class="control" id="pe_price" name="price" type="number" step="0.01" min="0" placeholder="0" />
+        <input class="control" id="pe_price" name="price" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
       </div>
-      <div>
+      <div class="field-wrap">
         <label class="field-label" for="pe_old_price">Старая цена</label>
-        <input class="control" id="pe_old_price" name="old_price" type="number" step="0.01" min="0" placeholder="0" />
+        <input class="control" id="pe_old_price" name="old_price" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
       </div>
     </div>
 
     <!-- Единицы в один ряд: Норма / Ед. изм / Остаток -->
     <div class="form-row-3">
-      <div>
+      <div class="field-wrap">
         <label class="field-label" for="pe_base_qty">Норма</label>
-        <input class="control" id="pe_base_qty" name="base_qty" type="number" step="0.001" min="0" placeholder="1" />
+        <input class="control" id="pe_base_qty" name="base_qty" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="1" />
       </div>
-      <div>
+      <div class="field-wrap">
         <label class="field-label" for="pe_base_unit_id">Ед. изм</label>
         <select class="control" id="pe_base_unit_id" name="base_unit_id">
           <option value="">—</option>
         </select>
       </div>
-      <div>
+      <div class="field-wrap">
         <label class="field-label" for="pe_stock">Остаток</label>
-        <input class="control" id="pe_stock" name="stock" type="number" step="0.001" min="0" />
+        <input class="control" id="pe_stock" name="stock" type="text" inputmode="decimal" autocomplete="off" data-numeric-input />
+      </div>
+    </div>
+
+    <!-- Конвертер для штучных товаров: 1 штука = X [ед.] (показывается только при Ед. изм = Штука) -->
+    <div class="form-row-pcs-converter hidden" id="pePcsToUnitWrap">
+      <div class="field-wrap">
+        <label class="field-label" for="pe_pcs_to_unit_factor">1 штука =</label>
+        <input class="control" id="pe_pcs_to_unit_factor" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+      </div>
+      <div class="field-wrap">
+        <label class="field-label" for="pe_pcs_to_unit_id">Ед.</label>
+        <select class="control" id="pe_pcs_to_unit_id">
+          <option value="">—</option>
+        </select>
       </div>
     </div>
 
@@ -175,12 +189,12 @@
         </button>
         <div class="acc-panel" data-acc-panel>
           <div class="acc-panel-inner">
-            <div>
+            <div class="field-wrap" style="margin-top:0;">
               <label class="field-label" for="pe_desc_short">Короткое описание</label>
               <textarea class="textarea" id="pe_desc_short" name="description_short" rows="3"></textarea>
             </div>
 
-            <div style="margin-top:12px;">
+            <div class="field-wrap" style="margin-top:12px;">
               <label class="field-label" for="pe_desc">Описание</label>
               <textarea class="textarea" id="pe_desc" name="description" rows="5"></textarea>
             </div>
@@ -193,8 +207,8 @@
       <div class="option-section-header">
         <div class="kv-label">Варианты товара</div>
         <div class="option-actions">
-          <button class="btn btn-sm" type="button" id="peVariantManageBtn">
-            <i class="fas fa-plus"></i> Добавить
+          <button class="btn btn-sm btn-icon" type="button" id="peVariantManageBtn" title="Добавить">
+            <i class="fas fa-plus"></i>
           </button>
         </div>
       </div>
@@ -205,8 +219,8 @@
       <div class="option-section-header">
         <div class="kv-label">Опции</div>
         <div class="option-actions">
-          <button class="btn btn-sm" type="button" id="peOptionManageBtn">
-            <i class="fas fa-plus"></i> Добавить
+          <button class="btn btn-sm btn-icon" type="button" id="peOptionManageBtn" title="Добавить">
+            <i class="fas fa-plus"></i>
           </button>
         </div>
       </div>
@@ -243,8 +257,12 @@
             <span class="ingredient-control-label">Цена</span>
             <span class="chip" id="peIngredientPriceTotal" style="width: 80px; height: 34px; padding: 0 10px; border-radius: 8px; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; margin-top: 0;">0 ₽</span>
           </div>
-          <button class="btn btn-sm" type="button" id="peIngredientAddBtn">
-            <i class="fas fa-plus"></i> Добавить
+          <div style="position: relative;">
+            <span class="ingredient-control-label">Вес</span>
+            <span class="chip" id="peIngredientWeightTotal" style="width: 80px; height: 34px; padding: 0 10px; border-radius: 8px; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; margin-top: 0;">—</span>
+          </div>
+          <button class="btn btn-sm btn-icon" type="button" id="peIngredientAddBtn" title="Добавить">
+            <i class="fas fa-plus"></i>
           </button>
         </div>
       </div>
