@@ -1203,7 +1203,7 @@
   }
 
   function playNotificationSound(url) {
-    if (!url || document.visibilityState !== "visible") return;
+    if (!url) return;
     const audio = new Audio(url);
     audio.play().catch(() => {});
   }
@@ -1252,6 +1252,34 @@
       console.error(e);
       await loadAndRenderOrders(true);
     }
+  }
+
+  // Фоновый опрос списка заказов (резерв, когда SSE обрывается на хостинге)
+  const ORDERS_POLL_INTERVAL_MS = 15000; // 15 сек
+  let ordersPollTimer = null;
+
+  async function pollOrdersList() {
+    try {
+      const prevIds = new Set(state.orders.map((o) => Number(o.id)));
+      await loadOrders();
+      const newOrders = state.orders.filter((o) => !prevIds.has(Number(o.id)));
+      if (newOrders.length) {
+        const soundUrl = state.tenantSounds && state.tenantSounds.sound_new_order_url;
+        if (soundUrl) playNotificationSound(soundUrl);
+      }
+      renderOrders();
+      if (state.activeOrderId) {
+        const order = state.orders.find((o) => Number(o.id) === Number(state.activeOrderId));
+        if (order) setInfo(order);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  function startOrdersPolling() {
+    if (ordersPollTimer) return;
+    ordersPollTimer = setInterval(pollOrdersList, ORDERS_POLL_INTERVAL_MS);
   }
 
   let sseEventSource = null;
@@ -1844,6 +1872,7 @@
       }
 
       initSse();
+      startOrdersPolling();
     } catch (e) {
       console.error(e);
     }
