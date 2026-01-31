@@ -230,22 +230,37 @@
     return items.reduce((acc, it) => acc + Math.max(0, Number(it.qty || it.quantity || 0)), 0);
   }
 
+  function orderItemTotalStr(val) {
+    const n = Number(val);
+    if (!Number.isFinite(n) || n === 0) return '';
+    return Math.round(n) === n ? String(Math.round(n)) : n.toFixed(2);
+  }
+
   function itemsToHtml(items) {
     if (!Array.isArray(items) || !items.length) return '<div class="muted">?</div>';
 
-    return items
-      .map((it, itemIdx) => {
-        const name = escapeHtml(it.name || "Товар");
-        const qty = Math.max(0, Number(it.qty || it.quantity || 0));
-        const price = Number(it.price || 0);
-        const lineTotal = Number(it.line_total || price * qty || 0);
+    const sorted = items.slice().sort((a, b) => {
+      const aAuto = Number(a.auto_add || 0) === 1;
+      const bAuto = Number(b.auto_add || 0) === 1;
+      if (aAuto && !bAuto) return 1;
+      if (!aAuto && bAuto) return -1;
+      return 0;
+    });
 
-        // Фото товара (массив из items или пустой)
+    return sorted
+      .map((it, itemIdx) => {
+        const name = escapeHtml(it.product_name || it.name || "Товар");
+        const qty = Math.max(1, Number(it.qty || it.quantity || 0));
+        const price = Number(it.price || 0);
+        const lineTotal = Number(it.line_total ?? it.total ?? it.total_price ?? price * qty ?? 0);
+        const totalStr = orderItemTotalStr(lineTotal);
+        const mainLine = totalStr ? `${qty} Х ${name} — ${totalStr}` : `${qty} Х ${name}`;
+        const bulletPrefix = qty > 1 ? `${qty} Х • ` : "• ";
+
         const photos = Array.isArray(it.photos) ? it.photos.filter(Boolean) : [];
         const hasPhotos = photos.length > 0;
         const uniqueId = `order-item-${itemIdx}-${Date.now()}`;
 
-        // HTML для фото с листанием
         let photosHtml = "";
         if (hasPhotos) {
           photosHtml = `
@@ -282,97 +297,74 @@
           `;
         }
 
-        // Упрощенное фото 40×40 (только первое фото)
-        const photoHtml = hasPhotos 
+        const photoHtml = hasPhotos
           ? `<div class="order-item-photo-small"><img src="${escapeHtml(photos[0])}" alt="${escapeHtml(name)}" /></div>`
           : "";
 
-        // Отображаем варианты товара (первыми)
-        // Формат: значение название_группы (например "200г порц")
         const variants = Array.isArray(it.variants) ? it.variants : [];
         const variantsHtml = variants.length
           ? `<div class="order-item-composition">
               ${variants.map((v) => {
                 const groupTitle = escapeHtml(v.group_title || "Вариант");
                 const variantValue = escapeHtml(v.label || v.value || "");
-                // Проверяем, не заканчивается ли variantValue на groupTitle (чтобы избежать дублирования)
-                // Например, если variantValue = "1 шт", а groupTitle = "шт", то не добавляем groupTitle
                 const variantValueTrimmed = variantValue.trim();
                 const groupTitleTrimmed = groupTitle.trim();
                 let formatted;
                 if (variantValueTrimmed && groupTitleTrimmed) {
                   const variantLower = variantValueTrimmed.toLowerCase();
                   const groupLower = groupTitleTrimmed.toLowerCase();
-                  // Проверяем, заканчивается ли variantValue на пробел + groupTitle или просто на groupTitle
                   if (variantLower.endsWith(" " + groupLower) || variantLower.endsWith(groupLower)) {
-                    // variantValue уже содержит единицу из groupTitle, не дублируем
                     formatted = variantValue;
                   } else {
-                    // Формат: значение название_группы (например "200г порц" или "1шт порц")
                     formatted = `${variantValue} ${groupTitle}`.trim();
                   }
                 } else {
-                  // Если одно из значений пустое, просто объединяем
                   formatted = `${variantValue} ${groupTitle}`.trim();
                 }
-                return `<div class="order-item-composition-item">• ${formatted}</div>`;
+                return `<div class="order-item-composition-item">${bulletPrefix}${formatted}</div>`;
               }).join("")}
             </div>`
           : "";
 
-        // Отображаем ингредиенты товара (вторыми)
-        // Формат: количествоединица название (например "150г картофельное пюре")
         const ingredients = Array.isArray(it.ingredients) ? it.ingredients : [];
         const ingredientsHtml = ingredients.length
           ? `<div class="order-item-composition">
               ${ingredients.map((ing) => {
                 const ingName = escapeHtml(ing.name || "Ингредиент");
                 const ingQty = Math.max(1, Number(ing.quantity || ing.qty || 1));
-                // Получаем единицу из разных полей
                 let ingUnit = escapeHtml(ing.unit_label || ing.unit || ing.unitLabel || ing.unit_short_title || ing.unit_title || "");
-                // Если единица не указана, определяем по количеству: если > 10, вероятно граммы
-                if (!ingUnit) {
-                  ingUnit = ingQty > 10 ? "г" : "шт";
-                }
-                // Формат: количествоединица название (например "150г картофельное пюре")
+                if (!ingUnit) ingUnit = ingQty > 10 ? "г" : "шт";
                 const formatted = `${ingQty}${ingUnit} ${ingName}`;
-                return `<div class="order-item-composition-item">• ${formatted}</div>`;
+                return `<div class="order-item-composition-item">${bulletPrefix}${formatted}</div>`;
               }).join("")}
             </div>`
           : "";
 
-        // Отображаем опции товара (третьими)
-        // Формат: количествоединица название (например "1шт кола" или "300г Гречка с овощами")
         const options = Array.isArray(it.options) ? it.options : [];
         const optionsHtml = options.length
           ? `<div class="order-item-composition">
               ${options.map((opt) => {
                 const optName = escapeHtml(opt.title || "Опция");
-                // Если у опции есть вариант (variant_label), используем его вместо количества "шт"
                 const variantLabel = escapeHtml((opt.variant_label || opt.variantLabel || "").trim());
                 let formatted;
                 if (variantLabel) {
-                  // variant_label уже содержит значение с единицей (например "300 г")
                   formatted = `${variantLabel} ${optName}`;
                 } else {
-                  // Если варианта нет, используем стандартный формат с количеством
                   const optQty = Math.max(1, Number(opt.qty || 1));
-                  // Формат: количествоединица название (например "1шт кола")
                   formatted = `${optQty}шт ${optName}`;
                 }
-                return `<div class="order-item-composition-item">• ${formatted}</div>`;
+                return `<div class="order-item-composition-item">${bulletPrefix}${formatted}</div>`;
               }).join("")}
             </div>`
           : "";
 
-        // Порядок: варианты → ингредиенты → опции
         const subHtml = variantsHtml + ingredientsHtml + optionsHtml;
 
         const base = `
           <div class="order-item-line" style="display: flex; align-items: flex-start; gap: 12px;">
             ${photoHtml}
             <div class="order-item-content" style="flex: 1;">
-              <div class="order-item-name">${name} × ${qty} — ${money(lineTotal)}</div>
+              <div class="order-item-name">${mainLine}</div>
               ${subHtml}
             </div>
           </div>
@@ -1567,15 +1559,24 @@
     const showChange = changeAmount > 0;
     const scheduleText = formatScheduleText(order, { includeTitle: true });
 
+    function receiptTotalStr(val) {
+      const n = Number(val);
+      if (!Number.isFinite(n)) return '';
+      if (n === 0) return '';
+      return Math.round(n) === n ? String(Math.round(n)) : n.toFixed(2);
+    }
+
     let itemsHtml = '';
     if (order.items && Array.isArray(order.items)) {
       order.items.forEach(item => {
         const name = escapeHtml(item.product_name || item.name || 'Товар');
-        const qty = item.quantity || item.qty || 1;
+        const qty = Math.max(1, Number(item.quantity || item.qty || 1));
         const basePrice = parseFloat(item.price || 0);
         const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? (basePrice * qty) ?? 0);
-        const unitPrice = qty ? (lineTotal / qty) : basePrice;
-        
+        const priceStr = receiptTotalStr(lineTotal);
+        const mainLine = priceStr ? `${qty} Х ${name} - ${priceStr}` : `${qty} Х ${name}`;
+        const bulletPrefix = qty > 1 ? `${qty} Х • ` : '• ';
+
         // Варианты товара (первыми)
         const variants = Array.isArray(item.variants) ? item.variants : [];
         let variantsHtml = '';
@@ -1598,11 +1599,11 @@
             } else {
               formatted = `${variantValue} ${groupTitle}`.trim();
             }
-            variantsHtml += `<div class="receipt-composition-item">• ${formatted}</div>`;
+            variantsHtml += `<div class="receipt-composition-item">${bulletPrefix}${formatted}</div>`;
           });
           variantsHtml += '</div>';
         }
-        
+
         // Ингредиенты товара (вторыми)
         const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
         let ingredientsHtml = '';
@@ -1616,11 +1617,11 @@
               ingUnit = ingQty > 10 ? "г" : "шт";
             }
             const formatted = `${ingQty}${ingUnit} ${ingName}`;
-            ingredientsHtml += `<div class="receipt-composition-item">• ${formatted}</div>`;
+            ingredientsHtml += `<div class="receipt-composition-item">${bulletPrefix}${formatted}</div>`;
           });
           ingredientsHtml += '</div>';
         }
-        
+
         // Опции товара (третьими)
         const options = Array.isArray(item.options) ? item.options : [];
         let optionsHtml = '';
@@ -1636,15 +1637,14 @@
               const optQty = Math.max(1, Number(opt.qty || 1));
               formatted = `${optQty}шт ${optName}`;
             }
-            optionsHtml += `<div class="receipt-composition-item">• ${formatted}</div>`;
+            optionsHtml += `<div class="receipt-composition-item">${bulletPrefix}${formatted}</div>`;
           });
           optionsHtml += '</div>';
         }
-        
+
         itemsHtml += `
           <div class="receipt-item">
-            <div class="receipt-item-name">${name}</div>
-            <div class="receipt-item-details">${qty} x ${unitPrice.toFixed(2)} = ${lineTotal.toFixed(2)}</div>
+            <div class="receipt-item-name">${mainLine}</div>
             ${variantsHtml}
             ${ingredientsHtml}
             ${optionsHtml}
@@ -1723,10 +1723,6 @@
     .receipt-item-name {
       font-weight: bold;
     }
-    .receipt-item-details {
-      margin-left: 10px;
-      font-size: 10pt;
-    }
     .receipt-composition {
       margin: 3px 0 3px 15px;
       font-size: 9pt;
@@ -1775,13 +1771,11 @@
   <div class="receipt-divider"></div>
   
   <div class="receipt-section">
-    <div class="receipt-section-title">Клиент:</div>
     ${order.customer_name ? `<div>${escapeHtml(order.customer_name)}</div>` : ''}
     ${order.customer_phone ? `<div>${escapeHtml(order.customer_phone)}</div>` : ''}
   </div>
   
   <div class="receipt-section">
-    <div class="receipt-section-title">${deliverySectionTitle}</div>
     <div>${escapeHtml(methodTitle || "—")}</div>
     <div>${escapeHtml(address || "—")}</div>
     ${scheduleText ? `<div>${escapeHtml(scheduleText)}</div>` : ''}
@@ -1798,14 +1792,12 @@
   <div class="receipt-divider"></div>
   
   <div class="receipt-section">
-    <div class="receipt-section-title">Товары:</div>
     ${itemsHtml}
   </div>
   
   <div class="receipt-divider"></div>
 
   <div class="receipt-section">
-    <div class="receipt-section-title">Суммы:</div>
     ${paymentTitle ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Оплата</div><div class="receipt-summary-value">${escapeHtml(paymentTitle)}</div></div>` : ''}
     ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача с</div><div class="receipt-summary-value">${money(changeFrom)}</div></div>` : ''}
     ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача</div><div class="receipt-summary-value">${money(changeAmount)}</div></div>` : ''}
