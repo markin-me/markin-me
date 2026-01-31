@@ -20,7 +20,8 @@ function getTenantId(req) {
 function getStoreId(req) {
   const fromUser = req.user?.store_id ?? req.user?.storeId ?? req.session?.store_id ?? req.session?.storeId;
   const fromHeader = req.headers['x-store-id'];
-  const v = fromUser ?? fromHeader ?? 1;
+  const fromQuery = req.query?.store_id;
+  const v = fromUser ?? fromHeader ?? fromQuery ?? 1;
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : 1;
 }

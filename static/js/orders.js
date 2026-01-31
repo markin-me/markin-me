@@ -1254,30 +1254,39 @@
     }
   }
 
+  let sseEventSource = null;
+
   function initSse() {
     if (typeof EventSource === "undefined") return;
 
-    // EventSource не поддерживает кастомные заголовки, передаем токен через query
+    if (sseEventSource) {
+      sseEventSource.close();
+      sseEventSource = null;
+    }
+
+    // EventSource не поддерживает кастомные заголовки — передаём токен и store_id через query
     const token = localStorage.getItem('authToken');
-    const url = token 
-      ? `/api/admin/orders/events?token=${encodeURIComponent(token)}`
-      : "/api/admin/orders/events";
-    
-    const es = new EventSource(url);
+    const storeId = localStorage.getItem('activeStoreId') || '1';
+    const params = new URLSearchParams();
+    if (token) params.set('token', token);
+    params.set('store_id', storeId);
+    const url = `/api/admin/orders/events?${params.toString()}`;
 
-    es.addEventListener("order.created", (e) => {
+    sseEventSource = new EventSource(url);
+
+    sseEventSource.addEventListener("order.created", (e) => {
       if (e.lastEventId) state.lastEventId = e.lastEventId;
       try {
         const data = JSON.parse(e.data || "{}");
         handleOrderEvent(data);
-        const url = state.tenantSounds && state.tenantSounds.sound_new_order_url;
-        if (url) playNotificationSound(url);
+        const soundUrl = state.tenantSounds && state.tenantSounds.sound_new_order_url;
+        if (soundUrl) playNotificationSound(soundUrl);
       } catch (err) {
         console.error(err);
       }
     });
 
-    es.addEventListener("order.updated", (e) => {
+    sseEventSource.addEventListener("order.updated", (e) => {
       if (e.lastEventId) state.lastEventId = e.lastEventId;
       try {
         const data = JSON.parse(e.data || "{}");
@@ -1287,7 +1296,7 @@
       }
     });
 
-    es.addEventListener("error", () => {
+    sseEventSource.addEventListener("error", () => {
       fetchChanges().catch(console.error);
     });
   }
@@ -1842,10 +1851,10 @@
 
   init();
 
-  // Слушать изменение Филиалы
+  // Слушать изменение филиала: переподключить SSE к каналу нового филиала и перезагрузить заказы
   document.addEventListener('tenantStoreChanged', (event) => {
     console.log('Филиал изменен:', event.detail.store);
-    // Перезагрузить заказы для новой точки
     loadAndRenderOrders(false);
+    initSse();
   });
 })();
