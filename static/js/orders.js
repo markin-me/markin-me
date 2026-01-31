@@ -961,11 +961,8 @@
       elOrdersList.appendChild(row);
     });
 
-    if (!state.activeOrderId && filtered.length) {
-      state.activeOrderId = filtered[0].id;
-      setInfo(filtered[0]);
-      const firstRow = $(`.order-row[data-order-id="${filtered[0].id}"]`, elOrdersList);
-      if (firstRow) firstRow.classList.add("is-active");
+    if (!state.activeOrderId) {
+      setInfo(null);
     }
   }
 
@@ -1023,6 +1020,9 @@
 
   async function loadAndRenderOrders(keepSelection = false) {
     const prevActive = keepSelection ? state.activeOrderId : null;
+    if (!keepSelection) {
+      state.activeOrderId = null;
+    }
 
     await loadOrders();
     renderOrders();
@@ -1813,6 +1813,11 @@
       updateDateLabel();
 
       await loadStatuses();
+      // По умолчанию выбран этап "Новые" (первый статус по сортировке)
+      const sortedStatuses = [...state.statuses].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || a.id - b.id);
+      if (sortedStatuses.length) {
+        state.activeStatusId = sortedStatuses[0].id;
+      }
       renderStages();
       await loadAndRenderOrders(false);
 
