@@ -1032,6 +1032,17 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   width: 100%;
 }
 
+.shop-checkout-footer-actions.is-order-success .shop-checkout-back,
+.shop-mobile-cart-actions-checkout.is-order-success .shop-checkout-back{
+  display: none !important;
+}
+.shop-checkout-footer-actions.is-order-success .shop-checkout-submit-btn,
+.shop-mobile-cart-actions-checkout.is-order-success .shop-checkout-submit-btn{
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+}
+
 .shop-cart-sheet-total{
   display: grid;
   gap: 4px;

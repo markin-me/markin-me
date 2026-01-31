@@ -218,6 +218,11 @@ header{
   display:none;
 }
 
+/* Статус «Мы закрыты» в хедере — только на мобилке */
+.header-store-status{
+  display:none;
+}
+
 @media (max-width:768px){
   header{
     position:relative;
@@ -227,9 +232,20 @@ header{
     right:0;
     bottom:0;
     z-index:10;
+    flex-wrap:wrap;
+    justify-content:flex-end;
   }
   .logo-text{
     margin-right:0;
+  }
+  .header-store-status:not(.hidden){
+    display:block;
+    width:100%;
+    margin-top:0.25rem;
+    font-size:0.8rem;
+    color:var(--color-text-muted);
+    text-align:right;
+    line-height:1.2;
   }
 }
 

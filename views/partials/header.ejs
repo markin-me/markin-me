@@ -10,6 +10,7 @@
         <% const hasCitySelector = (typeof showCitySelector !== 'undefined' && showCitySelector === true); %>
         <% if (hasCitySelector) { %>
           <div class="logo-city-wrapper" id="headerCitySelector">
+            <span class="header-store-status hidden" id="shopMobileHeaderStatus" aria-live="polite"></span>
             <button
               type="button"
               class="header-city-button"

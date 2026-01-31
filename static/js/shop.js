@@ -9832,11 +9832,21 @@ function setBottomNavActive(tab) {
   }
 
   /**
-   * Update the store status notice in the toolbar
+   * Update the store status notice in the toolbar (desktop) and in the header (mobile)
    */
   async function updateStoreStatus() {
     const statusEl = $("#shopToolbarStatus");
-    if (!statusEl) return;
+    const mobileStatusEl = $("#shopMobileHeaderStatus");
+
+    function setStatus(el, visible, text) {
+      if (!el) return;
+      if (visible) {
+        el.textContent = text || "";
+        el.classList.remove("hidden");
+      } else {
+        el.classList.add("hidden");
+      }
+    }
 
     try {
       const config = await getOrderConfig();
@@ -9844,23 +9854,20 @@ function setBottomNavActive(tab) {
 
       const { storeIsOpen, storeHours, storeTimezone } = config;
 
-      // If store is open, hide status
       if (storeIsOpen) {
-        statusEl.classList.add("hidden");
+        setStatus(statusEl, false);
+        setStatus(mobileStatusEl, false);
         return;
       }
 
-      // Store is closed - calculate next opening
       const nextOpening = getNextOpeningTime(storeHours, storeTimezone);
 
       if (!nextOpening) {
-        // No opening time found
-        statusEl.textContent = "Мы закрыты";
-        statusEl.classList.remove("hidden");
+        setStatus(statusEl, true, "Мы закрыты");
+        setStatus(mobileStatusEl, true, "Мы закрыты");
         return;
       }
 
-      // Format message
       let message = "Мы закрыты. ";
       if (nextOpening.isToday) {
         message += `Откроемся сегодня в ${nextOpening.time}`;
@@ -9868,8 +9875,8 @@ function setBottomNavActive(tab) {
         message += `Откроемся ${nextOpening.dayName} в ${nextOpening.time}`;
       }
 
-      statusEl.textContent = message;
-      statusEl.classList.remove("hidden");
+      setStatus(statusEl, true, message);
+      setStatus(mobileStatusEl, true, message);
     } catch (err) {
       console.error("Failed to update store status:", err);
     }
@@ -10154,6 +10161,18 @@ function setBottomNavActive(tab) {
     if (actions?.submitBtn) {
       actions.submitBtn.disabled = false;
       actions.submitBtn.textContent = "Заказать";
+    }
+    if (actions?.backBtn) actions.backBtn.classList.remove("hidden");
+    const footerEl = actions?.backBtn?.parentElement;
+    if (footerEl) footerEl.classList.remove("is-order-success");
+    if (elCheckoutFooterActions) elCheckoutFooterActions.classList.remove("is-order-success");
+    if (elMobileCheckoutBackBtn) {
+      elMobileCheckoutBackBtn.classList.remove("hidden");
+      elMobileCheckoutBackBtn.parentElement?.classList.remove("is-order-success");
+    }
+    if (elMobileCheckoutSubmitBtn) {
+      elMobileCheckoutSubmitBtn.textContent = "Заказать";
+      if (actions?.submitBtn) elMobileCheckoutSubmitBtn.onclick = () => actions.submitBtn.click();
     }
 
     const wrap = document.createElement("div");
@@ -10977,18 +10996,42 @@ function setBottomNavActive(tab) {
           <h2 class="shop-order-result-title">Заказ оформлен</h2>
           <p class="shop-order-result-order">Заказ #${orderId}</p>
           <p class="shop-order-result-total">${money(totalPrice)}</p>
-          <button type="button" class="btn btn-primary shop-order-result-btn" data-action="order-success-main">На главную</button>
         </div>`;
       resultWrap.classList.remove("hidden");
       wrap.classList.add("hidden");
-      const btn = resultWrap.querySelector("[data-action=\"order-success-main\"]");
-      if (btn) {
-        btn.onclick = async () => {
-          clearCartAll();
-          saveCheckoutDraft({});
-          if (typeof window.updateActiveOrdersBadge === "function") await window.updateActiveOrdersBadge();
-          if (isSheet && window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen()) window.AppModal.close("sheet");
-          window.location.href = getShopBasePath();
+
+      const goToMain = async () => {
+        clearCartAll();
+        saveCheckoutDraft({});
+        if (typeof window.updateActiveOrdersBadge === "function") await window.updateActiveOrdersBadge();
+        if (isSheet && window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen()) window.AppModal.close("sheet");
+        window.location.href = getShopBasePath();
+      };
+
+      if (actions?.backBtn) {
+        actions.backBtn.classList.add("hidden");
+      }
+      if (actions?.submitBtn) {
+        actions.submitBtn.textContent = "На главную";
+        actions.submitBtn.disabled = false;
+        actions.submitBtn.onclick = (e) => {
+          e.preventDefault();
+          goToMain();
+        };
+      }
+      const footerEl = actions?.backBtn?.parentElement;
+      if (footerEl) footerEl.classList.add("is-order-success");
+
+      if (elCheckoutFooterActions) elCheckoutFooterActions.classList.add("is-order-success");
+      if (elMobileCheckoutBackBtn) {
+        elMobileCheckoutBackBtn.classList.add("hidden");
+        elMobileCheckoutBackBtn.parentElement?.classList.add("is-order-success");
+      }
+      if (elMobileCheckoutSubmitBtn) {
+        elMobileCheckoutSubmitBtn.textContent = "На главную";
+        elMobileCheckoutSubmitBtn.onclick = (e) => {
+          e.preventDefault();
+          goToMain();
         };
       }
     }
