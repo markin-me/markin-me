@@ -8838,41 +8838,23 @@ function renderSheetAddressList() {
     themeRow.appendChild(themeSwitch);
     settingsWrap.appendChild(themeRow);
 
-    const clearCacheRow = document.createElement("div");
-    clearCacheRow.className = "shop-profile-settings-row";
-    const clearCacheTitle = document.createElement("div");
-    clearCacheTitle.className = "shop-profile-settings-title";
-    clearCacheTitle.textContent = "Очистить кэш";
-    const clearCacheBtn = document.createElement("button");
-    clearCacheBtn.type = "button";
-    clearCacheBtn.className = "btn btn-sm";
-    clearCacheBtn.textContent = "Очистить";
-    clearCacheBtn.addEventListener("click", async () => {
-      clearCacheBtn.disabled = true;
-      clearCacheBtn.textContent = "…";
-      try {
-        if ("caches" in window) {
-          const keys = await caches.keys();
-          await Promise.all(keys.map((k) => caches.delete(k)));
-        }
-        if ("serviceWorker" in navigator) {
-          const regs = await navigator.serviceWorker.getRegistrations();
-          await Promise.all(regs.map((r) => r.unregister()));
-        }
-        clearCacheBtn.textContent = "Готово";
-        setTimeout(() => {
-          clearCacheBtn.disabled = false;
-          clearCacheBtn.textContent = "Очистить";
-        }, 1500);
-      } catch (e) {
-        clearCacheBtn.textContent = "Ошибка";
-        clearCacheBtn.disabled = false;
-        setTimeout(() => { clearCacheBtn.textContent = "Очистить"; }, 1500);
-      }
+    const updateRow = document.createElement("div");
+    updateRow.className = "shop-profile-settings-row";
+    const updateTitle = document.createElement("div");
+    updateTitle.className = "shop-profile-settings-title";
+    updateTitle.textContent = "Обновить приложение";
+    const updateBtn = document.createElement("button");
+    updateBtn.type = "button";
+    updateBtn.className = "btn btn-sm";
+    updateBtn.textContent = "Обновить";
+    updateBtn.addEventListener("click", () => {
+      updateBtn.disabled = true;
+      updateBtn.textContent = "…";
+      window.location.reload();
     });
-    clearCacheRow.appendChild(clearCacheTitle);
-    clearCacheRow.appendChild(clearCacheBtn);
-    settingsWrap.appendChild(clearCacheRow);
+    updateRow.appendChild(updateTitle);
+    updateRow.appendChild(updateBtn);
+    settingsWrap.appendChild(updateRow);
 
     settingsPanel.appendChild(settingsWrap);
 
