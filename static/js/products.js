@@ -7400,7 +7400,17 @@ function updateOptionGroupSelectionUi() {
   async function openProductById(productId) {
     if (!Number.isFinite(Number(productId))) return;
     const id = Number(productId);
-    const p = state.products.find((x) => Number(x.id) === id);
+    let p = state.products.find((x) => Number(x.id) === id);
+    if (!p) {
+      // Товар из другой категории — загружаем по API (чтобы табы работали при смене категории)
+      try {
+        const res = await apiGetProduct(id);
+        if (res && res.data) p = res.data;
+      } catch (e) {
+        console.warn('openProductById: failed to fetch product', id, e);
+        return;
+      }
+    }
     if (!p) return;
     state.selectedProductId = id;
     if (productsList) {
@@ -8086,8 +8096,7 @@ function updateOptionGroupSelectionUi() {
             const newProduct = state.products.find(p => p.id === productId);
             if (newProduct) {
               clearNavigationStack();
-              showProductDetails(newProduct);
-              showProductFooterView();
+              // Сначала заменяем таб «Новый товар» на таб с реальным id, чтобы showProductDetails не добавил дубликат
               replaceTabKey(tabKey, {
                 type: "product",
                 id: newProduct.id,
@@ -8096,6 +8105,8 @@ function updateOptionGroupSelectionUi() {
                   openProductById(newProduct.id);
                 },
               });
+              showProductDetails(newProduct);
+              showProductFooterView();
             } else {
               clearNavigationStack();
             }

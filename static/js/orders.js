@@ -338,7 +338,7 @@
           ? `<div class="order-item-composition">
               ${ingredients.map((ing) => {
                 const ingName = escapeHtml(ing.name || "Ингредиент");
-                const ingQty = Math.max(1, Number(ing.quantity || ing.qty || 1));
+                const ingQty = Number(ing.quantity ?? ing.qty ?? 0);
                 let ingUnit = escapeHtml(ing.unit_label || ing.unit || ing.unitLabel || ing.unit_short_title || ing.unit_title || "");
                 if (!ingUnit) ingUnit = ingQty > 10 ? "г" : "шт";
                 const formatted = `${ingQty}${ingUnit} ${ingName}`;
@@ -1626,7 +1626,7 @@
           ingredientsHtml = '<div class="receipt-composition">';
           ingredients.forEach((ing) => {
             const ingName = escapeHtml(ing.name || "Ингредиент");
-            const ingQty = Math.max(1, Number(ing.quantity || ing.qty || 1));
+            const ingQty = Number(ing.quantity ?? ing.qty ?? 0);
             let ingUnit = escapeHtml(ing.unit_label || ing.unit || ing.unitLabel || ing.unit_short_title || ing.unit_title || "");
             if (!ingUnit) {
               ingUnit = ingQty > 10 ? "г" : "шт";

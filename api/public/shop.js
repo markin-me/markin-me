@@ -53,6 +53,155 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return v === undefined || v === null ? '' : String(v);
   }
 
+  function parseVariantValueNumber(value) {
+    const s = String(value ?? '').replace(',', '.');
+    const match = s.match(/-?\d+(?:\.\d+)?/);
+    return match ? Number(match[0]) : NaN;
+  }
+
+  function getConversionFactorMap(tenantId, db) {
+    const map = new Map();
+    return async function getConversionFactor(fromUnitId, toUnitId) {
+      if (!fromUnitId || !toUnitId || Number(fromUnitId) === Number(toUnitId)) return 1;
+      const key = `${Number(fromUnitId)}_${Number(toUnitId)}`;
+      if (map.has(key)) return map.get(key);
+      const [direct] = await db.query(
+        `SELECT factor FROM prod_unit_conversions
+         WHERE tenant_id=? AND from_unit_id=? AND to_unit_id=? AND is_active=1 LIMIT 1`,
+        [tenantId, fromUnitId, toUnitId]
+      );
+      if (direct.length && direct[0].factor) {
+        const f = Number(direct[0].factor);
+        map.set(key, f);
+        return f;
+      }
+      const [inverse] = await db.query(
+        `SELECT factor FROM prod_unit_conversions
+         WHERE tenant_id=? AND from_unit_id=? AND to_unit_id=? AND is_active=1 LIMIT 1`,
+        [tenantId, toUnitId, fromUnitId]
+      );
+      if (inverse.length && inverse[0].factor) {
+        const f = 1 / Number(inverse[0].factor);
+        map.set(key, f);
+        return f;
+      }
+      map.set(key, null);
+      return null;
+    };
+  }
+
+  async function computeDisplayPriceForProduct(product, variant, getConversionFactor, roundPrice) {
+    const basePrice = Number(product.price || 0);
+    if (!variant || !variant.values || !variant.values.length) return roundPrice(basePrice);
+    const defaultIndex = variant.default_value_index != null ? Number(variant.default_value_index) : 0;
+    const selectedIndex = defaultIndex >= 0 && defaultIndex < variant.values.length ? defaultIndex : 0;
+    const value = variant.values[selectedIndex];
+    const numericValue = parseVariantValueNumber(value);
+    if (!Number.isFinite(numericValue)) return roundPrice(basePrice);
+
+    const baseUnitId = Number(product.base_unit_id || product.unit_id || variant.unit_id || 0);
+    const baseQty = Number(product.base_qty || 1) || 1;
+    const variantUnitId = Number(variant.unit_id || 0);
+    if (!Number.isFinite(baseUnitId) || !Number.isFinite(variantUnitId)) return roundPrice(basePrice);
+
+    const factor = await getConversionFactor(variantUnitId, baseUnitId);
+    if (factor == null) return roundPrice(basePrice);
+    const qtyInBase = numericValue * Number(factor || 0);
+    if (!Number.isFinite(qtyInBase) || qtyInBase <= 0) return roundPrice(basePrice);
+
+    let unitPrice = basePrice * (qtyInBase / baseQty);
+    const tiers = Array.isArray(variant.discount_tiers) ? variant.discount_tiers : [];
+    const tier = tiers.find((t) => Number(t.sort_order) === selectedIndex);
+    const discountPercent = Number(tier?.discount_percent || 0) || 0;
+    if (discountPercent !== 0) {
+      unitPrice = unitPrice * (1 - discountPercent / 100);
+    }
+    return roundPrice(unitPrice);
+  }
+
+  async function enrichProductsWithDisplayPrice(rows, tenantId) {
+    if (!rows.length) return;
+    const productIds = [...new Set(rows.map((r) => Number(r.id)).filter(Boolean))];
+    if (!productIds.length) return;
+
+    const [tenantRows] = await db.query(
+      'SELECT price_rounding_mode, price_rounding_precision FROM ten_tenants WHERE id=? LIMIT 1',
+      [tenantId]
+    );
+    const roundingModeRaw = tenantRows[0]?.price_rounding_mode || 'none';
+    const roundingPrecisionRaw = Number(tenantRows[0]?.price_rounding_precision);
+    const allowedRounding = new Set(['none', 'down', 'up', 'nearest']);
+    const roundingMode = allowedRounding.has(roundingModeRaw) ? roundingModeRaw : 'none';
+    const roundingPrecision = roundingPrecisionRaw === 0 ? 0 : 2;
+
+    function roundPrice(value) {
+      const n = Number(value || 0);
+      if (!Number.isFinite(n)) return 0;
+      if (roundingMode === 'none') return n;
+      const factor = roundingPrecision > 0 ? Math.pow(10, roundingPrecision) : 1;
+      if (roundingMode === 'up') return Math.ceil(n * factor) / factor;
+      if (roundingMode === 'down') return Math.floor(n * factor) / factor;
+      return Math.round(n * factor) / factor;
+    }
+
+    const getConversionFactor = getConversionFactorMap(tenantId, db);
+
+    const placeholders = productIds.map(() => '?').join(',');
+    const [vaRows] = await db.query(
+      `SELECT va.product_id, va.variant_group_id,
+              COALESCE(va.default_value_index, vg.default_value_index) AS default_value_index,
+              vg.unit_id, vg.values, vg.sort_order
+       FROM prod_variant_assignments va
+       JOIN prod_variant_groups vg ON vg.id = va.variant_group_id AND vg.tenant_id = va.tenant_id
+       WHERE va.tenant_id = ? AND va.product_id IN (${placeholders})
+         AND va.is_active = 1 AND vg.is_active = 1
+       ORDER BY va.sort_order ASC, vg.sort_order ASC`,
+      [tenantId, ...productIds]
+    );
+
+    const variantGroupIds = [...new Set(vaRows.map((r) => Number(r.variant_group_id)).filter(Boolean))];
+    let tiersByGroup = new Map();
+    if (variantGroupIds.length) {
+      const tierPlaceholders = variantGroupIds.map(() => '?').join(',');
+      const [tierRows] = await db.query(
+        `SELECT variant_group_id, min_quantity, discount_percent, sort_order
+         FROM prod_variant_discount_tiers
+         WHERE tenant_id = ? AND variant_group_id IN (${tierPlaceholders})
+         ORDER BY variant_group_id, sort_order ASC`,
+        [tenantId, ...variantGroupIds]
+      );
+      for (const t of tierRows) {
+        const gid = Number(t.variant_group_id);
+        if (!tiersByGroup.has(gid)) tiersByGroup.set(gid, []);
+        tiersByGroup.get(gid).push({
+          min_quantity: t.min_quantity,
+          discount_percent: t.discount_percent,
+          sort_order: t.sort_order,
+        });
+      }
+    }
+
+    const variantByProductId = new Map();
+    for (const r of vaRows) {
+      const pid = Number(r.product_id);
+      if (variantByProductId.has(pid)) continue;
+      const values = safeJsonArray(r.values);
+      if (!values.length) continue;
+      const defaultIdx = r.default_value_index != null ? Number(r.default_value_index) : 0;
+      variantByProductId.set(pid, {
+        unit_id: r.unit_id,
+        values,
+        default_value_index: defaultIdx >= 0 && defaultIdx < values.length ? defaultIdx : 0,
+        discount_tiers: tiersByGroup.get(Number(r.variant_group_id)) || [],
+      });
+    }
+
+    for (const row of rows) {
+      const variant = variantByProductId.get(Number(row.id));
+      row.display_price = await computeDisplayPriceForProduct(row, variant, getConversionFactor, roundPrice);
+    }
+  }
+
   function parseBirthdayDDMMYYYY(input) {
     const s = str(input).trim();
     // dd.mm.yyyy
@@ -958,9 +1107,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const [rows] = await db.query(
         `SELECT id, tenant_id, code, title, icon, site_visibility, is_active, sort_order
          FROM prod_categories
-         WHERE tenant_id=? AND store_id=? AND is_active=1 AND site_visibility=1
+         WHERE tenant_id=? AND is_active=1 AND site_visibility=1
          ORDER BY sort_order ASC, id ASC`,
-        [tenantId, storeId]
+        [tenantId]
       );
 
       res.json({ ok: true, data: rows });
@@ -970,12 +1119,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
-  async function resolveCategoryIdFromQuery(tenantId, storeId, req) {
+  async function resolveCategoryIdFromQuery(tenantId, req) {
     const code = helpers.strOrNull(req.query.category_code);
     if (code) {
       const [r] = await db.query(
-        'SELECT id FROM prod_categories WHERE tenant_id=? AND store_id=? AND code=? LIMIT 1',
-        [tenantId, storeId, code]
+        'SELECT id FROM prod_categories WHERE tenant_id=? AND code=? LIMIT 1',
+        [tenantId, code]
       );
       if (r.length) return Number(r[0].id);
     }
@@ -985,8 +1134,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
     // fallback: "all"
     const [all] = await db.query(
-      `SELECT id FROM prod_categories WHERE tenant_id=? AND store_id=? AND code='all' LIMIT 1`,
-      [tenantId, storeId]
+      `SELECT id FROM prod_categories WHERE tenant_id=? AND code='all' LIMIT 1`,
+      [tenantId]
     );
     return all.length ? Number(all[0].id) : null;
   }
@@ -996,15 +1145,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
 
-      const categoryId = await resolveCategoryIdFromQuery(tenantId, storeId, req);
+      const categoryId = await resolveCategoryIdFromQuery(tenantId, req);
       if (!Number.isFinite(categoryId)) {
         return res.status(400).json({ ok: false, error: 'BAD_CATEGORY_ID' });
       }
 
       // "all"
       const [all] = await db.query(
-        `SELECT id FROM prod_categories WHERE tenant_id=? AND store_id=? AND code='all' LIMIT 1`,
-        [tenantId, storeId]
+        `SELECT id FROM prod_categories WHERE tenant_id=? AND code='all' LIMIT 1`,
+        [tenantId]
       );
       const allCategoryId = all.length ? Number(all[0].id) : null;
 
@@ -1017,15 +1166,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                 SELECT 1
                 FROM prod_product_ingredients i
                 JOIN prod_product_stocks si
-                  ON si.tenant_id=i.tenant_id AND si.store_id=i.store_id AND si.product_id=i.ingredient_id
-                WHERE i.tenant_id=p.tenant_id AND i.store_id=p.store_id AND i.product_id=p.id
+                  ON si.tenant_id=i.tenant_id AND si.store_id=? AND si.product_id=i.ingredient_id
+                WHERE i.tenant_id=p.tenant_id AND i.product_id=p.id
                   AND si.qty IS NOT NULL AND si.qty <= 0
               ) AND NOT EXISTS (
                 SELECT 1
                 FROM prod_option_assignments oa
                 JOIN prod_option_groups og
-                  ON og.tenant_id=oa.tenant_id AND og.store_id=oa.store_id AND og.id=oa.group_id
-                WHERE oa.tenant_id=p.tenant_id AND oa.store_id=p.store_id
+                  ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
+                WHERE oa.tenant_id=p.tenant_id
                   AND oa.assign_type='product' AND oa.assign_id=p.id
                   AND oa.is_active=1
                   AND og.is_active=1
@@ -1034,10 +1183,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                     SELECT 1
                     FROM prod_option_items oi
                     JOIN prod_products op
-                      ON op.tenant_id=oi.tenant_id AND op.store_id=oi.store_id AND op.id=oi.target_product_id
+                      ON op.tenant_id=oi.tenant_id AND op.id=oi.target_product_id
                     LEFT JOIN prod_product_stocks ops
-                      ON ops.tenant_id=op.tenant_id AND ops.store_id=op.store_id AND ops.product_id=op.id
-                    WHERE oi.tenant_id=oa.tenant_id AND oi.store_id=oa.store_id AND oi.group_id=oa.group_id
+                      ON ops.tenant_id=op.tenant_id AND ops.store_id=? AND ops.product_id=op.id
+                    WHERE oi.tenant_id=oa.tenant_id AND oi.group_id=oa.group_id
                       AND oi.target_type='product'
                       AND oi.is_active=1
                       AND op.is_active=1
@@ -1047,8 +1196,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                         SELECT 1
                         FROM prod_product_ingredients ip
                         JOIN prod_product_stocks ips
-                          ON ips.tenant_id=ip.tenant_id AND ips.store_id=ip.store_id AND ips.product_id=ip.ingredient_id
-                        WHERE ip.tenant_id=op.tenant_id AND ip.store_id=op.store_id AND ip.product_id=op.id
+                          ON ips.tenant_id=ip.tenant_id AND ips.store_id=? AND ips.product_id=ip.ingredient_id
+                        WHERE ip.tenant_id=op.tenant_id AND ip.product_id=op.id
                           AND ips.qty IS NOT NULL AND ips.qty <= 0
                       )
                   )
@@ -1057,18 +1206,19 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             END AS is_available
            FROM prod_products p
            LEFT JOIN prod_product_stocks s
-             ON s.tenant_id = p.tenant_id AND s.store_id = p.store_id AND s.product_id = p.id
+             ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
            LEFT JOIN prod_product_categories pc
-             ON pc.tenant_id = p.tenant_id AND pc.store_id = p.store_id AND pc.product_id = p.id AND pc.category_id = ?
-           WHERE p.tenant_id=? AND p.store_id=? AND p.is_active=1 AND p.site_visibility=1
+             ON pc.tenant_id = p.tenant_id AND pc.product_id = p.id AND pc.category_id = ?
+           WHERE p.tenant_id=? AND p.is_active=1 AND p.site_visibility=1
            ORDER BY COALESCE(pc.sort_order, 999999) ASC, p.id ASC`,
-          [categoryId, tenantId, storeId]
+          [storeId, storeId, storeId, storeId, categoryId, tenantId]
         );
 
         for (const r of rows) {
           r.photos = safeJsonArray(r.photos_json);
           r.is_available = Number(r.is_available || 0) === 1;
         }
+        await enrichProductsWithDisplayPrice(rows, tenantId);
         return res.json({ ok: true, data: rows, category_id: categoryId });
       }
 
@@ -1080,15 +1230,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
               SELECT 1
               FROM prod_product_ingredients i
               JOIN prod_product_stocks si
-                ON si.tenant_id=i.tenant_id AND si.store_id=i.store_id AND si.product_id=i.ingredient_id
-              WHERE i.tenant_id=p.tenant_id AND i.store_id=p.store_id AND i.product_id=p.id
+                ON si.tenant_id=i.tenant_id AND si.store_id=? AND si.product_id=i.ingredient_id
+              WHERE i.tenant_id=p.tenant_id AND i.product_id=p.id
                 AND si.qty IS NOT NULL AND si.qty <= 0
             ) AND NOT EXISTS (
               SELECT 1
               FROM prod_option_assignments oa
               JOIN prod_option_groups og
-                ON og.tenant_id=oa.tenant_id AND og.store_id=oa.store_id AND og.id=oa.group_id
-              WHERE oa.tenant_id=p.tenant_id AND oa.store_id=p.store_id
+                ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
+              WHERE oa.tenant_id=p.tenant_id
                 AND oa.assign_type='product' AND oa.assign_id=p.id
                 AND oa.is_active=1
                 AND og.is_active=1
@@ -1097,10 +1247,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                   SELECT 1
                   FROM prod_option_items oi
                   JOIN prod_products op
-                    ON op.tenant_id=oi.tenant_id AND op.store_id=oi.store_id AND op.id=oi.target_product_id
+                    ON op.tenant_id=oi.tenant_id AND op.id=oi.target_product_id
                   LEFT JOIN prod_product_stocks ops
-                    ON ops.tenant_id=op.tenant_id AND ops.store_id=op.store_id AND ops.product_id=op.id
-                  WHERE oi.tenant_id=oa.tenant_id AND oi.store_id=oa.store_id AND oi.group_id=oa.group_id
+                    ON ops.tenant_id=op.tenant_id AND ops.store_id=? AND ops.product_id=op.id
+                  WHERE oi.tenant_id=oa.tenant_id AND oi.group_id=oa.group_id
                     AND oi.target_type='product'
                     AND oi.is_active=1
                     AND op.is_active=1
@@ -1110,8 +1260,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                       SELECT 1
                       FROM prod_product_ingredients ip
                       JOIN prod_product_stocks ips
-                        ON ips.tenant_id=ip.tenant_id AND ips.store_id=ip.store_id AND ips.product_id=ip.ingredient_id
-                      WHERE ip.tenant_id=op.tenant_id AND ip.store_id=op.store_id AND ip.product_id=op.id
+                        ON ips.tenant_id=ip.tenant_id AND ips.store_id=? AND ips.product_id=ip.ingredient_id
+                      WHERE ip.tenant_id=op.tenant_id AND ip.product_id=op.id
                         AND ips.qty IS NOT NULL AND ips.qty <= 0
                     )
                 )
@@ -1120,19 +1270,20 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           END AS is_available
          FROM prod_product_categories pc
          JOIN prod_products p
-           ON p.tenant_id = pc.tenant_id AND p.store_id = pc.store_id AND p.id = pc.product_id
+           ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
          LEFT JOIN prod_product_stocks s
-           ON s.tenant_id = p.tenant_id AND s.store_id = p.store_id AND s.product_id = p.id
-         WHERE pc.tenant_id=? AND pc.store_id=? AND pc.category_id=?
+           ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+         WHERE pc.tenant_id=? AND pc.category_id=?
            AND p.is_active=1 AND p.site_visibility=1
          ORDER BY pc.sort_order ASC, pc.id ASC`,
-        [tenantId, storeId, categoryId]
+        [storeId, storeId, storeId, storeId, tenantId, categoryId]
       );
 
       for (const r of rows) {
         r.photos = safeJsonArray(r.photos_json);
         r.is_available = Number(r.is_available || 0) === 1;
       }
+      await enrichProductsWithDisplayPrice(rows, tenantId);
       res.json({ ok: true, data: rows, category_id: categoryId });
     } catch (e) {
       console.error(e);
@@ -1155,15 +1306,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                 SELECT 1
                 FROM prod_product_ingredients i
                 JOIN prod_product_stocks si
-                  ON si.tenant_id=i.tenant_id AND si.store_id=i.store_id AND si.product_id=i.ingredient_id
-                WHERE i.tenant_id=p.tenant_id AND i.store_id=p.store_id AND i.product_id=p.id
+                  ON si.tenant_id=i.tenant_id AND si.store_id=? AND si.product_id=i.ingredient_id
+                WHERE i.tenant_id=p.tenant_id AND i.product_id=p.id
                   AND si.qty IS NOT NULL AND si.qty <= 0
               ) AND NOT EXISTS (
                 SELECT 1
                 FROM prod_option_assignments oa
                 JOIN prod_option_groups og
-                  ON og.tenant_id=oa.tenant_id AND og.store_id=oa.store_id AND og.id=oa.group_id
-                WHERE oa.tenant_id=p.tenant_id AND oa.store_id=p.store_id
+                  ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
+                WHERE oa.tenant_id=p.tenant_id
                   AND oa.assign_type='product' AND oa.assign_id=p.id
                   AND oa.is_active=1
                   AND og.is_active=1
@@ -1172,10 +1323,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                     SELECT 1
                     FROM prod_option_items oi
                     JOIN prod_products op
-                      ON op.tenant_id=oi.tenant_id AND op.store_id=oi.store_id AND op.id=oi.target_product_id
+                      ON op.tenant_id=oi.tenant_id AND op.id=oi.target_product_id
                     LEFT JOIN prod_product_stocks ops
-                      ON ops.tenant_id=op.tenant_id AND ops.store_id=op.store_id AND ops.product_id=op.id
-                    WHERE oi.tenant_id=oa.tenant_id AND oi.store_id=oa.store_id AND oi.group_id=oa.group_id
+                      ON ops.tenant_id=op.tenant_id AND ops.store_id=? AND ops.product_id=op.id
+                    WHERE oi.tenant_id=oa.tenant_id AND oi.group_id=oa.group_id
                       AND oi.target_type='product'
                       AND oi.is_active=1
                       AND op.is_active=1
@@ -1185,8 +1336,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                         SELECT 1
                         FROM prod_product_ingredients ip
                         JOIN prod_product_stocks ips
-                          ON ips.tenant_id=ip.tenant_id AND ips.store_id=ip.store_id AND ips.product_id=ip.ingredient_id
-                        WHERE ip.tenant_id=op.tenant_id AND ip.store_id=op.store_id AND ip.product_id=op.id
+                          ON ips.tenant_id=ip.tenant_id AND ips.store_id=? AND ips.product_id=ip.ingredient_id
+                        WHERE ip.tenant_id=op.tenant_id AND ip.product_id=op.id
                           AND ips.qty IS NOT NULL AND ips.qty <= 0
                       )
                   )
@@ -1195,10 +1346,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             END AS is_available
          FROM prod_products p
          LEFT JOIN prod_product_stocks s
-           ON s.tenant_id = p.tenant_id AND s.store_id = p.store_id AND s.product_id = p.id
-         WHERE p.tenant_id=? AND p.store_id=? AND p.id=? AND p.is_active=1 AND p.site_visibility=1
+           ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+         WHERE p.tenant_id=? AND p.id=? AND p.is_active=1 AND p.site_visibility=1
          LIMIT 1`,
-        [tenantId, storeId, id]
+        [storeId, storeId, storeId, storeId, tenantId, id]
       );
       if (!rows.length) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
 
@@ -1223,8 +1374,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
 
       const [pcsRows] = await db.query(
-        `SELECT id FROM prod_units WHERE tenant_id=? AND store_id=? AND code='pcs' LIMIT 1`,
-        [tenantId, storeId]
+        `SELECT id FROM prod_units WHERE tenant_id=? AND code='pcs' LIMIT 1`,
+        [tenantId]
       );
       const pcsUnitId = pcsRows.length ? Number(pcsRows[0].id) : null;
 
@@ -1251,18 +1402,17 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
            u.short_title AS unit_short_title,
            pul.factor AS ingredient_pcs_factor
          FROM prod_product_ingredients i
-         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.store_id=i.store_id AND p.id=i.ingredient_id
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
          JOIN prod_units u ON u.id=i.unit_id
          LEFT JOIN prod_product_unit_links pul
            ON pul.tenant_id=i.tenant_id
-          AND pul.store_id=i.store_id
           AND pul.product_id=i.ingredient_id
           AND pul.base_unit_id=p.base_unit_id
           AND pul.unit_id=?
-         WHERE i.tenant_id=? AND i.store_id=? AND i.product_id=?
+         WHERE i.tenant_id=? AND i.product_id=?
            AND (i.is_variable = 1 OR i.is_variable IS NULL)
          ORDER BY i.sort_order ASC, i.id ASC`,
-        [pcsUnitId || 0, tenantId, storeId, productId]
+        [pcsUnitId || 0, tenantId, productId]
       );
 
       for (const r of rows) {
@@ -1288,9 +1438,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       // Проверяем, что товар активен и виден на сайте
       const [productCheck] = await db.query(
         `SELECT id FROM prod_products 
-         WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1 AND site_visibility=1 
+         WHERE tenant_id=? AND id=? AND is_active=1 AND site_visibility=1 
          LIMIT 1`,
-        [tenantId, storeId, productId]
+        [tenantId, productId]
       );
       if (!productCheck.length) {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
@@ -1314,14 +1464,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
            g.is_required,
            g.out_of_stock_action
          FROM prod_option_assignments a
-         JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.store_id=a.store_id AND g.id=a.group_id
-         WHERE a.tenant_id=? AND a.store_id=? 
+         JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id
+         WHERE a.tenant_id=? 
            AND a.assign_type='product' 
            AND a.assign_id=?
            AND a.is_active=1
            AND g.is_active=1
          ORDER BY a.sort_order ASC, a.id ASC`,
-        [tenantId, storeId, productId]
+        [tenantId, productId]
       );
 
       // Нормализуем данные: используем значения из назначения, если заданы, иначе из группы
@@ -1360,9 +1510,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       try {
         const [rows] = await db.query(
           `SELECT * FROM prod_option_groups 
-           WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1 
+           WHERE tenant_id=? AND id=? AND is_active=1 
            LIMIT 1`,
-          [tenantId, storeId, id]
+          [tenantId, id]
         );
         group = rows[0] || null;
       } catch (dbError) {
@@ -1394,10 +1544,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
            p.price AS product_price,
            p.photos_json AS product_photos_json
          FROM prod_option_items i
-         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.store_id=i.store_id AND p.id=i.target_product_id
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
          LEFT JOIN prod_product_stocks ps
-           ON ps.tenant_id = p.tenant_id AND ps.store_id = p.store_id AND ps.product_id = p.id
-         WHERE i.tenant_id=? AND i.store_id=? 
+           ON ps.tenant_id = p.tenant_id AND ps.store_id = ? AND ps.product_id = p.id
+         WHERE i.tenant_id=? 
            AND i.group_id=? 
            AND i.target_type='product'
            AND i.is_active=1
@@ -1408,16 +1558,16 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
              SELECT 1
              FROM prod_product_ingredients pi
              JOIN prod_product_stocks psi
-               ON psi.tenant_id=pi.tenant_id AND psi.store_id=pi.store_id AND psi.product_id=pi.ingredient_id
-             WHERE pi.tenant_id=p.tenant_id AND pi.store_id=p.store_id AND pi.product_id=p.id
+               ON psi.tenant_id=pi.tenant_id AND psi.store_id=? AND psi.product_id=pi.ingredient_id
+             WHERE pi.tenant_id=p.tenant_id AND pi.product_id=p.id
                AND psi.qty IS NOT NULL AND psi.qty <= 0
            )
            AND NOT EXISTS (
              SELECT 1
              FROM prod_option_assignments oa
              JOIN prod_option_groups og
-               ON og.tenant_id=oa.tenant_id AND og.store_id=oa.store_id AND og.id=oa.group_id
-             WHERE oa.tenant_id=p.tenant_id AND oa.store_id=p.store_id
+               ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
+             WHERE oa.tenant_id=p.tenant_id
                AND oa.assign_type='product' AND oa.assign_id=p.id
                AND oa.is_active=1
                AND og.is_active=1
@@ -1426,10 +1576,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                  SELECT 1
                  FROM prod_option_items oi
                  JOIN prod_products op
-                   ON op.tenant_id=oi.tenant_id AND op.store_id=oi.store_id AND op.id=oi.target_product_id
+                   ON op.tenant_id=oi.tenant_id AND op.id=oi.target_product_id
                  LEFT JOIN prod_product_stocks ops
-                   ON ops.tenant_id=op.tenant_id AND ops.store_id=op.store_id AND ops.product_id=op.id
-                 WHERE oi.tenant_id=oa.tenant_id AND oi.store_id=oa.store_id AND oi.group_id=oa.group_id
+                   ON ops.tenant_id=op.tenant_id AND ops.store_id=? AND ops.product_id=op.id
+                 WHERE oi.tenant_id=oa.tenant_id AND oi.group_id=oa.group_id
                    AND oi.target_type='product'
                    AND oi.is_active=1
                    AND op.is_active=1
@@ -1439,14 +1589,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                      SELECT 1
                      FROM prod_product_ingredients ip
                      JOIN prod_product_stocks ips
-                       ON ips.tenant_id=ip.tenant_id AND ips.store_id=ip.store_id AND ips.product_id=ip.ingredient_id
-                     WHERE ip.tenant_id=op.tenant_id AND ip.store_id=op.store_id AND ip.product_id=op.id
+                       ON ips.tenant_id=ip.tenant_id AND ips.store_id=? AND ips.product_id=ip.ingredient_id
+                     WHERE ip.tenant_id=op.tenant_id AND ip.product_id=op.id
                        AND ips.qty IS NOT NULL AND ips.qty <= 0
                    )
                )
            )
          ORDER BY i.sort_order ASC, i.id ASC`,
-        [tenantId, storeId, id]
+        [storeId, tenantId, id, storeId, storeId, storeId]
       );
 
       // Собираем все product_id для загрузки вариантов
@@ -1472,11 +1622,11 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
            FROM prod_variant_assignments va
            JOIN prod_variant_groups vg ON vg.id = va.variant_group_id
            LEFT JOIN prod_units u ON u.id = vg.unit_id
-           WHERE va.tenant_id = ? AND va.store_id = ? 
+           WHERE va.tenant_id = ? 
              AND va.product_id IN (${productIds.map(() => '?').join(',')})
              AND va.is_active = 1 AND vg.is_active = 1
            ORDER BY va.product_id, va.sort_order ASC`,
-          [tenantId, storeId, ...productIds]
+          [tenantId, ...productIds]
         );
 
         // Собираем все id групп вариантов, чтобы подтянуть скидки/надбавки
@@ -1487,9 +1637,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           const [tiers] = await db.query(
             `SELECT variant_group_id, min_quantity, discount_percent, sort_order
              FROM prod_variant_discount_tiers
-             WHERE tenant_id=? AND store_id=? AND variant_group_id IN (${variantGroupIds.map(() => '?').join(',')})
+             WHERE tenant_id=? AND variant_group_id IN (${variantGroupIds.map(() => '?').join(',')})
              ORDER BY variant_group_id ASC, sort_order ASC, min_quantity ASC`,
-            [tenantId, storeId, ...variantGroupIds]
+            [tenantId, ...variantGroupIds]
           );
           for (const t of tiers) {
             const gid = Number(t.variant_group_id);
@@ -1599,10 +1749,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          FROM prod_variant_assignments va
          JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
          LEFT JOIN prod_units u ON u.id=vg.unit_id
-         WHERE va.tenant_id=? AND va.store_id=? AND va.product_id=?
+         WHERE va.tenant_id=? AND va.product_id=?
            AND va.is_active=1 AND vg.is_active=1
          ORDER BY va.sort_order ASC, vg.sort_order ASC`,
-        [tenantId, storeId, productId]
+        [tenantId, productId]
       );
 
       for (const v of variants) {
@@ -1613,9 +1763,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         const [tiers] = await db.query(
           `SELECT min_quantity, discount_percent, sort_order
            FROM prod_variant_discount_tiers
-           WHERE tenant_id=? AND store_id=? AND variant_group_id=?
+           WHERE tenant_id=? AND variant_group_id=?
            ORDER BY sort_order ASC, min_quantity ASC`,
-          [tenantId, storeId, v.id]
+          [tenantId, v.id]
         );
         v.discount_tiers = tiers;
       }
@@ -1885,15 +2035,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                   SELECT 1
                   FROM prod_product_ingredients i
                   JOIN prod_product_stocks si
-                    ON si.tenant_id=i.tenant_id AND si.store_id=i.store_id AND si.product_id=i.ingredient_id
-                  WHERE i.tenant_id=p.tenant_id AND i.store_id=p.store_id AND i.product_id=p.id
+                    ON si.tenant_id=i.tenant_id AND si.store_id=? AND si.product_id=i.ingredient_id
+                  WHERE i.tenant_id=p.tenant_id AND i.product_id=p.id
                     AND si.qty IS NOT NULL AND si.qty <= 0
                 ) AND NOT EXISTS (
                   SELECT 1
                   FROM prod_option_assignments oa
                   JOIN prod_option_groups og
-                    ON og.tenant_id=oa.tenant_id AND og.store_id=oa.store_id AND og.id=oa.group_id
-                  WHERE oa.tenant_id=p.tenant_id AND oa.store_id=p.store_id
+                    ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
+                  WHERE oa.tenant_id=p.tenant_id
                     AND oa.assign_type='product' AND oa.assign_id=p.id
                     AND oa.is_active=1
                     AND og.is_active=1
@@ -1902,10 +2052,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                       SELECT 1
                       FROM prod_option_items oi
                       JOIN prod_products op
-                        ON op.tenant_id=oi.tenant_id AND op.store_id=oi.store_id AND op.id=oi.target_product_id
+                        ON op.tenant_id=oi.tenant_id AND op.id=oi.target_product_id
                       LEFT JOIN prod_product_stocks ops
-                        ON ops.tenant_id=op.tenant_id AND ops.store_id=op.store_id AND ops.product_id=op.id
-                      WHERE oi.tenant_id=oa.tenant_id AND oi.store_id=oa.store_id AND oi.group_id=oa.group_id
+                        ON ops.tenant_id=op.tenant_id AND ops.store_id=? AND ops.product_id=op.id
+                      WHERE oi.tenant_id=oa.tenant_id AND oi.group_id=oa.group_id
                         AND oi.target_type='product'
                         AND oi.is_active=1
                         AND op.is_active=1
@@ -1915,8 +2065,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                           SELECT 1
                           FROM prod_product_ingredients ip
                           JOIN prod_product_stocks ips
-                            ON ips.tenant_id=ip.tenant_id AND ips.store_id=ip.store_id AND ips.product_id=ip.ingredient_id
-                          WHERE ip.tenant_id=op.tenant_id AND ip.store_id=op.store_id AND ip.product_id=op.id
+                            ON ips.tenant_id=ip.tenant_id AND ips.store_id=? AND ips.product_id=ip.ingredient_id
+                          WHERE ip.tenant_id=op.tenant_id AND ip.product_id=op.id
                             AND ips.qty IS NOT NULL AND ips.qty <= 0
                         )
                     )
@@ -1925,9 +2075,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
               END AS is_available
            FROM prod_products p
            LEFT JOIN prod_product_stocks s
-             ON s.tenant_id = p.tenant_id AND s.store_id = p.store_id AND s.product_id = p.id
-           WHERE p.tenant_id=? AND p.store_id=? AND p.id IN (${ids.map(() => '?').join(',')})`,
-          [tenantId, storeId, ...ids]
+             ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+           WHERE p.tenant_id=? AND p.id IN (${ids.map(() => '?').join(',')})`,
+          [storeId, storeId, storeId, storeId, tenantId, ...ids]
         );
 
         const foundIds = new Set(availability.map(r => Number(r.id)));
@@ -1950,9 +2100,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         `SELECT i.*
          FROM prod_auto_add_items i
          JOIN prod_auto_add_groups g
-           ON g.tenant_id=i.tenant_id AND g.store_id=i.store_id AND g.id=i.group_id
-         WHERE i.tenant_id=? AND i.store_id=? AND i.is_active=1 AND g.is_active=1`,
-        [tenantId, storeId]
+           ON g.tenant_id=i.tenant_id AND g.id=i.group_id
+         WHERE i.tenant_id=? AND i.is_active=1 AND g.is_active=1`,
+        [tenantId]
       );
       const autoRulesByProduct = new Map(autoAddRows.map(r => [Number(r.product_id), r]));
 
@@ -2018,15 +2168,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                 SELECT 1
                 FROM prod_product_ingredients pi
                 JOIN prod_product_stocks psi
-                  ON psi.tenant_id=pi.tenant_id AND psi.store_id=pi.store_id AND psi.product_id=pi.ingredient_id
-                WHERE pi.tenant_id=p.tenant_id AND pi.store_id=p.store_id AND pi.product_id=p.id
+                  ON psi.tenant_id=pi.tenant_id AND psi.store_id=? AND psi.product_id=pi.ingredient_id
+                WHERE pi.tenant_id=p.tenant_id AND pi.product_id=p.id
                   AND psi.qty IS NOT NULL AND psi.qty <= 0
               ) AND NOT EXISTS (
                 SELECT 1
                 FROM prod_option_assignments oa
                 JOIN prod_option_groups og
-                  ON og.tenant_id=oa.tenant_id AND og.store_id=oa.store_id AND og.id=oa.group_id
-                WHERE oa.tenant_id=p.tenant_id AND oa.store_id=p.store_id
+                  ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
+                WHERE oa.tenant_id=p.tenant_id
                   AND oa.assign_type='product' AND oa.assign_id=p.id
                   AND oa.is_active=1
                   AND og.is_active=1
@@ -2035,10 +2185,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                     SELECT 1
                     FROM prod_option_items oi
                     JOIN prod_products op
-                      ON op.tenant_id=oi.tenant_id AND op.store_id=oi.store_id AND op.id=oi.target_product_id
+                      ON op.tenant_id=oi.tenant_id AND op.id=oi.target_product_id
                     LEFT JOIN prod_product_stocks ops
-                      ON ops.tenant_id=op.tenant_id AND ops.store_id=op.store_id AND ops.product_id=op.id
-                    WHERE oi.tenant_id=oa.tenant_id AND oi.store_id=oa.store_id AND oi.group_id=oa.group_id
+                      ON ops.tenant_id=op.tenant_id AND ops.store_id=? AND ops.product_id=op.id
+                    WHERE oi.tenant_id=oa.tenant_id AND oi.group_id=oa.group_id
                       AND oi.target_type='product'
                       AND oi.is_active=1
                       AND op.is_active=1
@@ -2048,8 +2198,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                         SELECT 1
                         FROM prod_product_ingredients ip
                         JOIN prod_product_stocks ips
-                          ON ips.tenant_id=ip.tenant_id AND ips.store_id=ip.store_id AND ips.product_id=ip.ingredient_id
-                        WHERE ip.tenant_id=op.tenant_id AND ip.store_id=op.store_id AND ip.product_id=op.id
+                          ON ips.tenant_id=ip.tenant_id AND ips.store_id=? AND ips.product_id=ip.ingredient_id
+                        WHERE ip.tenant_id=op.tenant_id AND ip.product_id=op.id
                           AND ips.qty IS NOT NULL AND ips.qty <= 0
                       )
                   )
@@ -2058,11 +2208,11 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             END AS is_available
           FROM prod_option_items i
           LEFT JOIN prod_products p 
-            ON p.tenant_id=i.tenant_id AND p.store_id=i.store_id AND p.id=i.target_product_id
+            ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
           LEFT JOIN prod_product_stocks ps
-            ON ps.tenant_id = p.tenant_id AND ps.store_id = p.store_id AND ps.product_id = p.id
-          WHERE i.tenant_id=? AND i.store_id=? AND i.id IN (${placeholders}) AND i.is_active=1`,
-          [tenantId, storeId, ...allOptionItemIds]
+            ON ps.tenant_id = p.tenant_id AND ps.store_id = ? AND ps.product_id = p.id
+          WHERE i.tenant_id=? AND i.id IN (${placeholders}) AND i.is_active=1`,
+          [storeId, storeId, storeId, storeId, tenantId, ...allOptionItemIds]
         );
 
         if (optionRows.some((row) => Number(row.is_available || 0) !== 1)) {
@@ -2187,9 +2337,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                 p.base_unit_id AS ingredient_base_unit_id,
                 p.base_qty AS ingredient_base_qty
               FROM prod_product_ingredients i
-              JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.store_id=i.store_id AND p.id=i.ingredient_id
-              WHERE i.tenant_id=? AND i.store_id=? AND i.product_id=? AND i.ingredient_id IN (${ingIds.map(() => '?').join(',')})`,
-              [tenantId, storeId, pid, ...ingIds]
+              JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+              WHERE i.tenant_id=? AND i.product_id=? AND i.ingredient_id IN (${ingIds.map(() => '?').join(',')})`,
+              [tenantId, pid, ...ingIds]
             );
 
             const ingMap = new Map(ingRows.map(r => [Number(r.ingredient_id), r]));
@@ -2201,16 +2351,16 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
               // Прямая конвертация из prod_unit_conversions
               const [direct] = await db.query(
                 `SELECT factor FROM prod_unit_conversions 
-                 WHERE tenant_id=? AND store_id=? AND from_unit_id=? AND to_unit_id=? AND is_active=1 LIMIT 1`,
-                [tenantId, storeId, fromUnitId, toUnitId]
+                 WHERE tenant_id=? AND from_unit_id=? AND to_unit_id=? AND is_active=1 LIMIT 1`,
+                [tenantId, fromUnitId, toUnitId]
               );
               if (direct.length && direct[0].factor) return Number(direct[0].factor);
               
               // Обратная конвертация
               const [inverse] = await db.query(
                 `SELECT factor FROM prod_unit_conversions 
-                 WHERE tenant_id=? AND store_id=? AND from_unit_id=? AND to_unit_id=? AND is_active=1 LIMIT 1`,
-                [tenantId, storeId, toUnitId, fromUnitId]
+                 WHERE tenant_id=? AND from_unit_id=? AND to_unit_id=? AND is_active=1 LIMIT 1`,
+                [tenantId, toUnitId, fromUnitId]
               );
               if (inverse.length && inverse[0].factor) return 1 / Number(inverse[0].factor);
               
@@ -2218,8 +2368,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
               if (productIdForPul) {
                 const [pul] = await db.query(
                   `SELECT factor FROM prod_product_unit_links
-                   WHERE tenant_id=? AND store_id=? AND product_id=? AND base_unit_id=? AND unit_id=? LIMIT 1`,
-                  [tenantId, storeId, productIdForPul, toUnitId, fromUnitId]
+                   WHERE tenant_id=? AND product_id=? AND base_unit_id=? AND unit_id=? LIMIT 1`,
+                  [tenantId, productIdForPul, toUnitId, fromUnitId]
                 );
                 if (pul.length && pul[0].factor) return Number(pul[0].factor);
               }
@@ -2229,7 +2379,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             
             for (const cartIng of cartIngredients) {
               const ingId = Number(cartIng.ingredient_id);
-              const ingQty = Number(cartIng.quantity || 1);
+              const ingQty = Number(cartIng.quantity ?? 1);
               const ingInfo = ingMap.get(ingId);
               if (!ingInfo) continue;
 
@@ -2318,9 +2468,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           const [variantGroupRows] = await db.query(
             `SELECT id, title, unit_id
              FROM prod_variant_groups
-             WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1
+             WHERE tenant_id=? AND id=? AND is_active=1
              LIMIT 1`,
-            [tenantId, storeId, variantGroupId]
+            [tenantId, variantGroupId]
           );
           
           if (variantGroupRows.length) {
@@ -2331,9 +2481,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             const [variantValuesRows] = await db.query(
               `SELECT \`values\`
                FROM prod_variant_groups
-               WHERE tenant_id=? AND store_id=? AND id=?
+               WHERE tenant_id=? AND id=?
                LIMIT 1`,
-              [tenantId, storeId, variantGroupId]
+              [tenantId, variantGroupId]
             );
             
             let variantValue = variantLabel;
@@ -2598,9 +2748,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                 min_cart_amount, max_cart_amount, include_auto_in_total,
                 max_items_qty, allow_customer_qty, allow_customer_remove
          FROM prod_auto_add_groups
-         WHERE tenant_id=? AND store_id=? AND is_active=1
+         WHERE tenant_id=? AND is_active=1
          ORDER BY sort_order ASC, id ASC`,
-        [tenantId, storeId]
+        [tenantId]
       );
       const groups = groupRows.map((g) => ({
         id: Number(g.id),
@@ -2624,14 +2774,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                 s.qty AS stock_qty
          FROM prod_auto_add_items i
          JOIN prod_auto_add_groups g
-           ON g.tenant_id=i.tenant_id AND g.store_id=i.store_id AND g.id=i.group_id
+           ON g.tenant_id=i.tenant_id AND g.id=i.group_id
          JOIN prod_products p
            ON p.tenant_id=i.tenant_id AND p.id=i.product_id
          LEFT JOIN prod_product_stocks s
-           ON s.tenant_id=p.tenant_id AND s.store_id=i.store_id AND s.product_id=p.id
-         WHERE i.tenant_id=? AND i.store_id=? AND i.is_active=1 AND g.is_active=1 AND p.is_active=1
+           ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+         WHERE i.tenant_id=? AND i.is_active=1 AND g.is_active=1 AND p.is_active=1
          ORDER BY g.sort_order ASC, i.sort_order ASC, i.id ASC`,
-        [tenantId, storeId]
+        [storeId, tenantId]
       );
 
       const items = rows.map((r) => ({

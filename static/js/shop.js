@@ -2960,7 +2960,9 @@ async function initAddresses() {
 
   function catalogCenterHtml(product, qty, calculatedPrice = null) {
     const old = Number(product.old_price || 0);
-    const price = calculatedPrice != null ? calculatedPrice : Number(product.price || 0);
+    const price = calculatedPrice != null
+      ? calculatedPrice
+      : (product.display_price != null ? Number(product.display_price) : Number(product.price || 0));
     const showOld = old > 0 && old > price;
 
     if (!isProductAvailable(product)) return "Нет в наличии";
@@ -3168,8 +3170,8 @@ async function initAddresses() {
       elProductsGrid.appendChild(card);
       applyCardState(card, p, qty, null);
       
-      // Асинхронно обновляем цену с учётом вариантов и опций по умолчанию
-      updateCardPrice(card, p);
+      // Если с бэкенда не пришёл display_price — асинхронно подгружаем варианты и обновляем цену
+      if (p.display_price == null) updateCardPrice(card, p);
       });
     });
 
@@ -4631,6 +4633,7 @@ function buildProductDetailsContent(
     onQtyMinus,
     onQtyPlus,
     onQtyCenterClick,
+    setDefaultVariantForOptionItem = () => {},
   } = {}
 ) {
   const wrap = document.createElement("div");
@@ -5349,6 +5352,8 @@ function buildProductDetailsContent(
               return;
             }
             groupState.selectedId = itemId;
+            // Сразу выставляем дефолтный вариант у опции с вариантами, чтобы цена отображалась верно
+            if (hasVariants && typeof setDefaultVariantForOptionItem === "function") setDefaultVariantForOptionItem(item, groupState.variantByItemId);
             renderSlot();
             closeList();
             if (typeof onSelectionChange === "function") onSelectionChange();
@@ -5456,6 +5461,8 @@ function buildProductDetailsContent(
 
             if (checkbox.checked) {
               groupState.selectedIds.add(itemId);
+              // Сразу выставляем дефолтный вариант у опции с вариантами, чтобы цена отображалась верно
+              if (hasVariants && typeof setDefaultVariantForOptionItem === "function") setDefaultVariantForOptionItem(item, groupState.variantByItemId);
             } else {
               groupState.selectedIds.delete(itemId);
             }
@@ -5796,6 +5803,7 @@ function buildProductDetailsContent(
             const newQty = Math.max(itemMin, current - 1);
             if (newQty > 0) {
               groupState.qtyById.set(itemId, newQty);
+              if (hasVariants && typeof setDefaultVariantForOptionItem === "function") setDefaultVariantForOptionItem(item, groupState.variantByItemId);
             } else {
               groupState.qtyById.delete(itemId);
             }
@@ -5824,6 +5832,7 @@ function buildProductDetailsContent(
               newQty = Math.min(itemMax, current + 1);
             }
             groupState.qtyById.set(itemId, newQty);
+            if (newQty > 0 && hasVariants && typeof setDefaultVariantForOptionItem === "function") setDefaultVariantForOptionItem(item, groupState.variantByItemId);
             updateItemCard();
             if (onSelectionChange) onSelectionChange();
           });
@@ -6628,6 +6637,30 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
     }
   });
 
+  // Устанавливает дефолтный вариант для опции с вариантами (если ещё не задан)
+  function setDefaultVariantForOptionItem(item, variantByItemIdMap) {
+    const itemId = Number(item.id);
+    if (!Number.isFinite(itemId) || variantByItemIdMap.has(itemId)) return;
+    const itemVariants = Array.isArray(item.variants) ? item.variants : [];
+    if (itemVariants.length === 0 || !(itemVariants[0]?.values?.length)) return;
+    const vg = itemVariants[0];
+    const values = Array.isArray(vg.values) ? vg.values : [];
+    const defaultIdx = vg.default_value_index != null ? Number(vg.default_value_index) : (values.length ? 0 : null);
+    if (defaultIdx == null || defaultIdx < 0 || defaultIdx >= values.length) return;
+    const unitPrice = getOptionItemVariantUnitPrice(item, vg, defaultIdx);
+    const priceDiff = unitPrice - Number(item.price || 0);
+    const unitLabel = str(vg.unit_short_title || vg.unit_code || vg.unit_title || "").trim();
+    const valueText = str(values[defaultIdx] ?? "");
+    const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
+    const variantLabel = unitLabel && !hasLetters(valueText) ? `${valueText} ${unitLabel}` : valueText;
+    variantByItemIdMap.set(itemId, {
+      variant_group_id: Number(vg.id || vg.variant_group_id || 0),
+      variant_value_index: defaultIdx,
+      variant_label: variantLabel,
+      variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
+    });
+  }
+
 optionGroups.forEach((group) => {
   const type = getOptionGroupUiType(group);
 
@@ -6678,6 +6711,27 @@ optionGroups.forEach((group) => {
 
   selectionState.set(group.id, stateEntry);
 });
+
+  // Для выбранных опций с вариантами сразу выставляем дефолтный вариант, чтобы цена отображалась верно
+  optionGroups.forEach((group) => {
+    const stateEntry = selectionState.get(group.id);
+    if (!stateEntry || !group.items?.length) return;
+    if (stateEntry.type === "single" && stateEntry.selectedId) {
+      const item = group.items.find((it) => Number(it.id) === Number(stateEntry.selectedId));
+      if (item) setDefaultVariantForOptionItem(item, stateEntry.variantByItemId);
+    } else if (stateEntry.type === "multiple_group") {
+      stateEntry.selectedIds.forEach((itemId) => {
+        const item = group.items.find((it) => Number(it.id) === Number(itemId));
+        if (item) setDefaultVariantForOptionItem(item, stateEntry.variantByItemId);
+      });
+    } else if (stateEntry.type === "multiple_item") {
+      stateEntry.qtyById.forEach((qty, itemId) => {
+        if (qty <= 0) return;
+        const item = group.items.find((it) => Number(it.id) === Number(itemId));
+        if (item) setDefaultVariantForOptionItem(item, stateEntry.variantByItemId);
+      });
+    }
+  });
 
   // qty pill UI
   const qtyPill = createQtyPill({
@@ -6900,6 +6954,7 @@ optionGroups.forEach((group) => {
       qtyPill,
       onQtyMinus,
       onQtyPlus,
+      setDefaultVariantForOptionItem,
     }
   );
 

@@ -634,7 +634,6 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
 router.post('/admin/options/group-bundle', async (req, res) => {
   const tenantId = helpers.getTenantId(req);
-  const storeId = helpers.getStoreId(req);
   const group = req.body.group || req.body || {};
   const items = Array.isArray(req.body.items) ? req.body.items : [];
   const assignments = Array.isArray(req.body.assignments) ? req.body.assignments : [];
@@ -667,9 +666,9 @@ router.post('/admin/options/group-bundle', async (req, res) => {
 
     const [result] = await conn.query(
       `INSERT INTO prod_option_groups
-       (tenant_id, store_id, title, selection_type, min_select, max_select, is_active, is_required, allow_variants, out_of_stock_action, sort_order)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-      [tenantId, storeId, title, selectionType, minSelect, maxSelect, isActive, isRequired, allowVariants, outOfStockAction, sortOrder]
+       (tenant_id, title, selection_type, min_select, max_select, is_active, is_required, allow_variants, out_of_stock_action, sort_order)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [tenantId, title, selectionType, minSelect, maxSelect, isActive, isRequired, allowVariants, outOfStockAction, sortOrder]
     );
     const groupId = result.insertId;
 
@@ -689,7 +688,6 @@ router.post('/admin/options/group-bundle', async (req, res) => {
 
         return [
           tenantId,
-          storeId,
           groupId,
           'product',
           Number(item.target_product_id),
@@ -704,7 +702,7 @@ router.post('/admin/options/group-bundle', async (req, res) => {
 
       await conn.query(
         `INSERT INTO prod_option_items
-         (tenant_id, store_id, group_id, target_type, target_product_id, price_mode, price_value, qty_min, qty_max, is_active, sort_order)
+         (tenant_id, group_id, target_type, target_product_id, price_mode, price_value, qty_min, qty_max, is_active, sort_order)
          VALUES ?`,
         [values]
       );
@@ -713,7 +711,6 @@ router.post('/admin/options/group-bundle', async (req, res) => {
     if (assignments.length) {
       const values = assignments.map((assignment, idx) => ([
         tenantId,
-        storeId,
         groupId,
         'product',
         Number(assignment.assign_id),
@@ -724,7 +721,7 @@ router.post('/admin/options/group-bundle', async (req, res) => {
       ]));
       await conn.query(
         `INSERT INTO prod_option_assignments
-         (tenant_id, store_id, group_id, assign_type, assign_id, priority, sort_order, out_of_stock_action, is_active)
+         (tenant_id, group_id, assign_type, assign_id, priority, sort_order, out_of_stock_action, is_active)
          VALUES ?
          ON DUPLICATE KEY UPDATE
            priority=VALUES(priority),
@@ -973,12 +970,11 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         const sortOrder = helpers.numOrNull(item.sort_order) ?? 0;
 
         if (!row) {
-          const storeId = helpers.getStoreId(req);
           await conn.query(
             `INSERT INTO prod_option_items
-             (tenant_id, store_id, group_id, target_type, target_product_id, price_mode, price_value, qty_min, qty_max, is_active, sort_order)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-            [tenantId, storeId, groupId, 'product', targetId, priceMode, priceValue, qtyMin, qtyMax, 1, sortOrder]
+             (tenant_id, group_id, target_type, target_product_id, price_mode, price_value, qty_min, qty_max, is_active, sort_order)
+             VALUES (?,?,?,?,?,?,?,?,?,?)`,
+            [tenantId, groupId, 'product', targetId, priceMode, priceValue, qtyMin, qtyMax, 1, sortOrder]
           );
           added.push(targetId);
           continue;
@@ -1295,8 +1291,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
         await conn.query(
           `INSERT INTO prod_variant_discount_tiers
-           (tenant_id, store_id, variant_group_id, min_quantity, discount_percent, sort_order)
-           VALUES (?,1,?,?,?,?)`,
+           (tenant_id, variant_group_id, min_quantity, discount_percent, sort_order)
+           VALUES (?,?,?,?,?)`,
           [tenantId, groupId, minQuantity, discountPercent, tierSortOrder]
         );
       }
@@ -1515,8 +1511,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
           } else {
             await conn.query(
               `INSERT INTO prod_variant_discount_tiers
-               (tenant_id, store_id, variant_group_id, min_quantity, discount_percent, sort_order)
-               VALUES (?,1,?,?,?,?)`,
+               (tenant_id, variant_group_id, min_quantity, discount_percent, sort_order)
+               VALUES (?,?,?,?,?)`,
               [tenantId, groupId, minQuantity, discountPercent, tierSortOrder]
             );
           }
@@ -1715,16 +1711,15 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   router.get('/admin/auto-add/groups', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
-      const storeId = helpers.getStoreId(req);
 
       const [groups] = await db.query(
         `SELECT g.*,
                 (SELECT COUNT(*) FROM prod_auto_add_items i
-                 WHERE i.tenant_id=g.tenant_id AND i.store_id=g.store_id AND i.group_id=g.id) AS items_count
+                 WHERE i.tenant_id=g.tenant_id AND i.group_id=g.id) AS items_count
          FROM prod_auto_add_groups g
-         WHERE g.tenant_id=? AND g.store_id=?
+         WHERE g.tenant_id=?
          ORDER BY g.sort_order ASC, g.id ASC`,
-        [tenantId, storeId]
+        [tenantId]
       );
 
       const [items] = await db.query(
@@ -1734,9 +1729,9 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
                 p.photos_json AS product_photos_json
          FROM prod_auto_add_items i
          JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.product_id
-         WHERE i.tenant_id=? AND i.store_id=?
+         WHERE i.tenant_id=?
          ORDER BY i.sort_order ASC, i.id ASC`,
-        [tenantId, storeId]
+        [tenantId]
       );
 
       for (const it of items) {
@@ -1753,7 +1748,6 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   router.post('/admin/auto-add/groups', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
-      const storeId = helpers.getStoreId(req);
       const title = helpers.strOrNull(req.body.title);
       if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
 
@@ -1769,9 +1763,9 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       const [r] = await db.query(
         `INSERT INTO prod_auto_add_groups
-         (tenant_id, store_id, title, description, is_active, sort_order, min_cart_amount, max_cart_amount, include_auto_in_total, max_items_qty, allow_customer_qty, allow_customer_remove)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [tenantId, storeId, title, description, isActive, sortOrder, minCartAmount, maxCartAmount, includeAutoInTotal, maxItemsQty, allowCustomerQty, allowCustomerRemove]
+         (tenant_id, title, description, is_active, sort_order, min_cart_amount, max_cart_amount, include_auto_in_total, max_items_qty, allow_customer_qty, allow_customer_remove)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        [tenantId, title, description, isActive, sortOrder, minCartAmount, maxCartAmount, includeAutoInTotal, maxItemsQty, allowCustomerQty, allowCustomerRemove]
       );
 
       res.json({ ok: true, id: r.insertId });
@@ -1784,7 +1778,6 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   router.patch('/admin/auto-add/groups/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
-      const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
@@ -1845,11 +1838,11 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       if (!fields.length) return res.json({ ok: true });
 
-      values.push(tenantId, storeId, id);
+      values.push(tenantId, id);
       await db.query(
         `UPDATE prod_auto_add_groups
          SET ${fields.join(', ')}
-         WHERE tenant_id=? AND store_id=? AND id=?`,
+         WHERE tenant_id=? AND id=?`,
         values
       );
 
@@ -1864,18 +1857,17 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     const conn = await db.getConnection();
     try {
       const tenantId = helpers.getTenantId(req);
-      const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
       await conn.beginTransaction();
       await conn.query(
-        `DELETE FROM prod_auto_add_items WHERE tenant_id=? AND store_id=? AND group_id=?`,
-        [tenantId, storeId, id]
+        `DELETE FROM prod_auto_add_items WHERE tenant_id=? AND group_id=?`,
+        [tenantId, id]
       );
       await conn.query(
-        `DELETE FROM prod_auto_add_groups WHERE tenant_id=? AND store_id=? AND id=?`,
-        [tenantId, storeId, id]
+        `DELETE FROM prod_auto_add_groups WHERE tenant_id=? AND id=?`,
+        [tenantId, id]
       );
       await conn.commit();
 
@@ -1892,7 +1884,6 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   router.post('/admin/auto-add/groups/:id/items', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
-      const storeId = helpers.getStoreId(req);
       const groupId = Number(req.params.id);
       if (!Number.isFinite(groupId) || groupId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
@@ -1914,12 +1905,11 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       const [r] = await db.query(
         `INSERT INTO prod_auto_add_items
-         (tenant_id, store_id, group_id, product_id, default_qty, min_qty, max_qty, price_override,
+         (tenant_id, group_id, product_id, default_qty, min_qty, max_qty, price_override,
           free_first_qty, free_per_amount, free_per_amount_qty, max_free_qty, is_active, sort_order)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           tenantId,
-          storeId,
           groupId,
           productId,
           defaultQty,
@@ -1945,7 +1935,6 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   router.patch('/admin/auto-add/items/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
-      const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
@@ -2013,11 +2002,11 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       if (!fields.length) return res.json({ ok: true });
 
-      values.push(tenantId, storeId, id);
+      values.push(tenantId, id);
       await db.query(
         `UPDATE prod_auto_add_items
          SET ${fields.join(', ')}
-         WHERE tenant_id=? AND store_id=? AND id=?`,
+         WHERE tenant_id=? AND id=?`,
         values
       );
 
@@ -2031,13 +2020,12 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   router.delete('/admin/auto-add/items/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
-      const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
       await db.query(
-        `DELETE FROM prod_auto_add_items WHERE tenant_id=? AND store_id=? AND id=?`,
-        [tenantId, storeId, id]
+        `DELETE FROM prod_auto_add_items WHERE tenant_id=? AND id=?`,
+        [tenantId, id]
       );
 
       res.json({ ok: true });
@@ -2247,8 +2235,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       const [result] = await db.query(
         `INSERT INTO prod_units
-         (tenant_id, store_id, code, title, short_title, sort_order, is_active)
-         VALUES (?, 1, ?, ?, ?, ?, ?)`,
+         (tenant_id, code, title, short_title, sort_order, is_active)
+         VALUES (?, ?, ?, ?, ?, ?)`,
         [tenantId, code, title, shortTitle, sortOrder, isActive]
       );
 
@@ -2341,8 +2329,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       const [result] = await db.query(
         `INSERT INTO prod_unit_conversions
-         (tenant_id, store_id, from_unit_id, to_unit_id, factor, is_active)
-         VALUES (?, 1, ?, ?, ?, 1)`,
+         (tenant_id, from_unit_id, to_unit_id, factor, is_active)
+         VALUES (?, ?, ?, ?, 1)`,
         [tenantId, fromUnitId, toUnitId, factor]
       );
       res.json({ ok: true, id: result.insertId });
@@ -2457,8 +2445,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       const [result] = await db.query(
         `INSERT INTO prod_product_unit_links
-         (tenant_id, store_id, product_id, unit_id, base_unit_id, factor)
-         VALUES (?, 1, ?, ?, ?, ?)`,
+         (tenant_id, product_id, unit_id, base_unit_id, factor)
+         VALUES (?, ?, ?, ?, ?)`,
         [tenantId, productId, unitId, baseUnitId, factor]
       );
       res.json({ ok: true, id: result.insertId });
@@ -2619,8 +2607,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       const [result] = await db.query(
         `INSERT INTO prod_product_ingredients
-         (tenant_id, store_id, product_id, ingredient_id, quantity, unit_id, quantity_min, quantity_max, quantity_step, price_override, is_variable, sort_order)
-         VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (tenant_id, product_id, ingredient_id, quantity, unit_id, quantity_min, quantity_max, quantity_step, price_override, is_variable, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [tenantId, productId, ingredientId, quantity, unitId, quantityMin, quantityMax, quantityStep, priceOverride, isVariable, sortOrder]
       );
 

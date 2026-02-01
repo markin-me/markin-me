@@ -1300,7 +1300,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .shop-pd-back{
@@ -1312,7 +1312,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   min-height: 0;
   overflow: auto;
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 @media (max-width: 768px){
@@ -1378,6 +1378,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 
 .shop-pd-title{
   font-weight: 900;
+  font-size: 1.2em;
   color: var(--color-text);
   line-height: 1.15;
 
@@ -1439,7 +1440,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 .shop-pd-options{
   display: grid;
-  gap: 12px;
+  gap: 6px;
 }
 .shop-pd-option-accordion{
   border: 0;
@@ -1450,10 +1451,12 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  font-weight: 700;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--color-text-muted);
   cursor: pointer;
   list-style: none;
-  padding: 6px 0;
+  padding: 4px 0;
 }
 .shop-pd-option-summary::-webkit-details-marker{
   display: none;
@@ -1466,8 +1469,8 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 .shop-pd-option-cards{
   display: grid;
-  gap: 8px;
-  margin-top: 8px;
+  gap: 6px;
+  margin-top: 4px;
 }
 .shop-pd-option-card{
   display: flex;
@@ -1491,10 +1494,21 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 .shop-pd-option-thumb{
   width: 40px;
   height: 40px;
+  min-width: 40px;
+  min-height: 40px;
   border-radius: 10px;
   object-fit: cover;
   background: var(--color-bg);
   flex: 0 0 auto;
+}
+/* placeholder "—" когда нет фото: центрируем текст */
+div.shop-pd-option-thumb{
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--color-text-muted);
 }
 .shop-pd-option-info{
   display: flex;
@@ -1504,8 +1518,9 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   min-width: 0;
 }
 .shop-pd-option-name{
-  font-weight: 600;
-  color: var(--color-text);
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--color-text-muted);
 }
 .shop-pd-option-price{
   font-size: 12px;
@@ -1541,10 +1556,12 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  font-weight: 700;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--color-text-muted);
   cursor: pointer;
   list-style: none;
-  padding: 6px 0;
+  padding: 4px 0;
 }
 .shop-pd-accordion-summary::-webkit-details-marker{
   display: none;
@@ -1593,14 +1610,15 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 /* ================= Ingredients ================= */
 .shop-pd-ingredients{
   display: grid;
-  gap: 12px;
-  margin-top: 20px;
+  gap: 6px;
+  margin-top: 4px;
 }
 
 .shop-pd-section-title{
-  font-weight: 700;
-  font-size: 16px;
-  margin-bottom: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  margin-bottom: 4px;
 }
 
 .shop-pd-ingredient-block{
@@ -1641,8 +1659,9 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 .shop-pd-ingredient-name{
-  font-weight: 600;
-  font-size: 14px;
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--color-text-muted);
   flex: 1;
   min-width: 0;
 }
@@ -1812,6 +1831,19 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   .shop-product-hero-arrow{
     display: none;
   }
+}
+
+.shop-product-hero-meta{
+  margin-top: 8px;
+  padding: 0 4px;
+}
+
+.shop-product-hero-title{
+  font-weight: 900;
+  font-size: 1.25em;
+  line-height: 1.2;
+  color: var(--color-text);
+  margin: 0;
 }
 
 /* ==========================================================================

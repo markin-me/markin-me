@@ -5,6 +5,10 @@
     window.state.storeTimezone = tz || '+0';
   }
 
+  // Инициализируем window.state сразу (до fetch), чтобы он был доступен
+  window.state = window.state || {};
+  window.state.storeTimezone = window.state.storeTimezone || '+0';
+
   // Format time as HH:MM:SS
   function formatTime(hours, minutes, seconds) {
     const h = String(hours).padStart(2, '0');
