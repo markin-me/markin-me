@@ -80,6 +80,10 @@
         icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
       }
     }
+    var themeColorMeta = document.getElementById('themeColorMeta');
+    if (themeColorMeta) {
+      themeColorMeta.content = theme === 'dark' ? '#1a1a1a' : '#ffffff';
+    }
     applyBrand(theme);
   }
 

@@ -10,6 +10,7 @@
   <% const manifestVer = (typeof tenant !== 'undefined' && tenant && tenant.updated_at) ? encodeURIComponent(String(tenant.updated_at)) : ''; %>
   <link id="appAppleTouchIcon" rel="apple-touch-icon" href="<%= appleIcon || '' %>" />
   <link id="appManifest" rel="manifest" href="/manifest.json<%= manifestVer ? ('?v=' + manifestVer) : '' %>" />
+  <meta name="theme-color" content="#ffffff" id="themeColorMeta" />
 
   <script>
     (function () {
@@ -19,6 +20,8 @@
           t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
         }
         document.documentElement.setAttribute('data-theme', t);
+        var m = document.getElementById('themeColorMeta');
+        if (m) m.content = t === 'dark' ? '#1a1a1a' : '#ffffff';
       } catch (e) {}
     })();
   </script>
@@ -42,6 +45,10 @@
 
 <body class="<%= pageClass || '' %>">
   <%- include('../partials/header', { logoHref: '/shop', hideBurger: true, showCitySelector: true }) %>
+
+  <div id="shopConnectionBanner" class="shop-connection-banner hidden" aria-live="polite" role="status">
+    <span class="shop-connection-banner__text"></span>
+  </div>
 
   <div class="main-container shop-main shop-grid">
     <section class="page-col page-col-left">
@@ -72,5 +79,52 @@
       <script src="<%= src %>"></script>
     <% }) %>
   <% } %>
+  <script>
+    (function () {
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {});
+        });
+      }
+    })();
+  </script>
+  <script>
+    (function () {
+      var banner = document.getElementById('shopConnectionBanner');
+      var textEl = banner && banner.querySelector('.shop-connection-banner__text');
+      if (!banner || !textEl) return;
+
+      function showOffline() {
+        window.clearTimeout(banner._onlineHideTimer);
+        banner.classList.remove('hidden', 'shop-connection-banner--online');
+        banner.classList.add('shop-connection-banner--offline');
+        textEl.textContent = 'Нет подключения к интернету';
+      }
+
+      function showOnline() {
+        banner.classList.remove('hidden', 'shop-connection-banner--offline');
+        banner.classList.add('shop-connection-banner--online');
+        textEl.textContent = 'Подключение восстановлено';
+        window.clearTimeout(banner._onlineHideTimer);
+        banner._onlineHideTimer = window.setTimeout(function () {
+          banner.classList.add('hidden');
+        }, 2500);
+      }
+
+      function hide() {
+        banner.classList.add('hidden');
+        banner.classList.remove('shop-connection-banner--offline', 'shop-connection-banner--online');
+      }
+
+      window.addEventListener('offline', showOffline);
+      window.addEventListener('online', showOnline);
+
+      if (!navigator.onLine) {
+        showOffline();
+      } else {
+        hide();
+      }
+    })();
+  </script>
 </body>
 </html>

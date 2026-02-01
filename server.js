@@ -135,15 +135,19 @@ app.get('/manifest.json', async (req, res) => {
     if (iconBase) {
       icons.push({ src: iconBase, sizes: '192x192', purpose: 'any' });
       icons.push({ src: iconBase, sizes: '512x512', purpose: 'any' });
+      icons.push({ src: iconBase, sizes: '192x192', purpose: 'maskable' });
+      icons.push({ src: iconBase, sizes: '512x512', purpose: 'maskable' });
     }
 
     res.setHeader('Content-Type', 'application/manifest+json');
     res.json({
       name,
       short_name: name,
-      start_url: '/',
+      description: (tenant && tenant.site_description) ? tenant.site_description : undefined,
+      start_url: '/shop',
       scope: '/',
       display: 'standalone',
+      orientation: 'portrait',
       background_color: '#ffffff',
       theme_color: '#ffffff',
       icons
@@ -154,10 +158,22 @@ app.get('/manifest.json', async (req, res) => {
   }
 });
 
+// Service Worker для PWA (Android / установка на домашний экран)
+const serviceWorkerScript = `
+self.addEventListener('install', function () { self.skipWaiting(); });
+self.addEventListener('activate', function (e) { e.waitUntil(self.clients.claim()); });
+self.addEventListener('fetch', function () {});
+`;
+app.get('/sw.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.send(serviceWorkerScript);
+});
+
 app.use((req, res, next) => {
   const sub = getSubdomain(req.hostname);
   if (!sub) return next();
-  if (req.path.startsWith('/api') || req.path.startsWith('/static') || req.path === '/manifest.json') return next();
+  if (req.path.startsWith('/api') || req.path.startsWith('/static') || req.path === '/manifest.json' || req.path === '/sw.js') return next();
   return renderShop(req, res);
 });
 

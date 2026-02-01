@@ -4329,6 +4329,45 @@ function updateCartBadge() {
     }
   }
 
+  async function refreshShopData() {
+    const statusEl = document.getElementById("shopToolbarStatus");
+    const showStatus = (text) => {
+      if (statusEl) {
+        statusEl.textContent = text || "";
+        statusEl.classList.toggle("hidden", !text);
+      }
+    };
+    showStatus("Обновление…");
+    try {
+      await loadCategories();
+      await loadUnitConversions();
+      renderCategories();
+      renderCategoryChips();
+      updateStoreStatus();
+      const visible = getVisibleCategories();
+      const stillActive = visible.some((c) => Number(c.id) === Number(state.activeCategoryId));
+      if (!stillActive && visible.length) {
+        const first = visible[0];
+        setActiveCategory(first.id, first.title, { scroll: false });
+      } else if (!visible.length) {
+        state.activeCategoryId = null;
+        state.activeCategoryTitle = "Каталог";
+        if (elCategoryTitle) elCategoryTitle.textContent = state.activeCategoryTitle;
+      }
+      await loadProductsByCategory();
+      await loadAutoAdd();
+      if (applyAutoAddRules()) saveCart();
+      renderProducts();
+      renderCart();
+      updateCartBadge();
+      await warmupCartProducts();
+      renderCart();
+      updateCartBadge();
+    } finally {
+      showStatus("");
+    }
+  }
+
   // -----------------------------
   // Product details (modal)
   // -----------------------------
@@ -8798,6 +8837,43 @@ function renderSheetAddressList() {
     themeRow.appendChild(themeTitle);
     themeRow.appendChild(themeSwitch);
     settingsWrap.appendChild(themeRow);
+
+    const clearCacheRow = document.createElement("div");
+    clearCacheRow.className = "shop-profile-settings-row";
+    const clearCacheTitle = document.createElement("div");
+    clearCacheTitle.className = "shop-profile-settings-title";
+    clearCacheTitle.textContent = "Очистить кэш";
+    const clearCacheBtn = document.createElement("button");
+    clearCacheBtn.type = "button";
+    clearCacheBtn.className = "btn btn-sm";
+    clearCacheBtn.textContent = "Очистить";
+    clearCacheBtn.addEventListener("click", async () => {
+      clearCacheBtn.disabled = true;
+      clearCacheBtn.textContent = "…";
+      try {
+        if ("caches" in window) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map((k) => caches.delete(k)));
+        }
+        if ("serviceWorker" in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map((r) => r.unregister()));
+        }
+        clearCacheBtn.textContent = "Готово";
+        setTimeout(() => {
+          clearCacheBtn.disabled = false;
+          clearCacheBtn.textContent = "Очистить";
+        }, 1500);
+      } catch (e) {
+        clearCacheBtn.textContent = "Ошибка";
+        clearCacheBtn.disabled = false;
+        setTimeout(() => { clearCacheBtn.textContent = "Очистить"; }, 1500);
+      }
+    });
+    clearCacheRow.appendChild(clearCacheTitle);
+    clearCacheRow.appendChild(clearCacheBtn);
+    settingsWrap.appendChild(clearCacheRow);
+
     settingsPanel.appendChild(settingsWrap);
 
     wrap.appendChild(addressesPanel);
@@ -11300,6 +11376,64 @@ function setBottomNavActive(tab) {
   }
 
   // -----------------------------
+  // Pull-to-refresh (PWA / мобилка)
+  // -----------------------------
+  function getScrollTopForRefresh() {
+    const panel = document.querySelector(".shop-products-panel .panel-body");
+    if (panel) {
+      const style = window.getComputedStyle(panel);
+      const overflowY = style.overflowY;
+      const isScrollable = panel.scrollHeight > panel.clientHeight && overflowY !== "visible";
+      if (isScrollable) return panel.scrollTop;
+    }
+    return window.scrollY || 0;
+  }
+
+  function initPullToRefresh() {
+    if (!isShopPage()) return;
+    const PULL_THRESHOLD = 70;
+    let pullStartY = null;
+    let pullDistance = 0;
+
+    document.addEventListener(
+      "touchstart",
+      (e) => {
+        if (getScrollTopForRefresh() === 0) {
+          pullStartY = e.touches[0].pageY;
+          pullDistance = 0;
+        } else {
+          pullStartY = null;
+        }
+      },
+      { passive: true }
+    );
+
+    document.addEventListener(
+      "touchmove",
+      (e) => {
+        if (pullStartY === null) return;
+        const currentY = e.touches[0].pageY;
+        if (currentY > pullStartY && getScrollTopForRefresh() === 0) {
+          pullDistance = currentY - pullStartY;
+        }
+      },
+      { passive: true }
+    );
+
+    document.addEventListener(
+      "touchend",
+      () => {
+        if (pullStartY !== null && pullDistance >= PULL_THRESHOLD) {
+          refreshShopData();
+        }
+        pullStartY = null;
+        pullDistance = 0;
+      },
+      { passive: true }
+    );
+  }
+
+  // -----------------------------
   // Init
   // -----------------------------
 async function init() {
@@ -11334,6 +11468,7 @@ async function init() {
     if (applyAutoAddRules()) saveCart();
     renderProducts();
     bindCategoryScrollSpy();
+    initPullToRefresh();
     await warmupCartProducts();
     renderCart();
     updateCartBadge();

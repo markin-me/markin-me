@@ -74,6 +74,35 @@ body.page-shop .shop-toolbar-cart{
   display: none;
 }
 
+/* Баннер онлайн/офлайн (витрина) */
+.shop-connection-banner{
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: var(--header-height, 56px);
+  z-index: 900;
+  padding: 10px 14px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0,0,0,.15);
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.shop-connection-banner.hidden{
+  display: none;
+}
+.shop-connection-banner--offline{
+  background: var(--shop-danger, #ef4444);
+  color: #fff;
+}
+.shop-connection-banner--online{
+  background: #22c55e;
+  color: #fff;
+}
+.shop-connection-banner__text{
+  display: block;
+}
+
 /* Chips under header (mobile categories) */
 .shop-cat-chips-wrap{
   flex: 1;
