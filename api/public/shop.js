@@ -2408,6 +2408,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           options: options.length > 0 ? options : undefined, // Сохраняем опции только если они есть
           ingredients: ingredients.length > 0 ? ingredients : undefined, // Сохраняем ингредиенты только если они есть
           variants: variantData ? [variantData] : undefined, // Сохраняем варианты только если они есть
+          auto_add: Number(it.auto_add || 0) === 1 ? 1 : 0, // Для сортировки: автодобавления (приборы) в конец списка
         });
       }
 

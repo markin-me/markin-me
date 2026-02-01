@@ -236,12 +236,19 @@
     return Math.round(n) === n ? String(Math.round(n)) : n.toFixed(2);
   }
 
+  /** Позиции «Приборы» и прочие auto_add — в конец списка (по флагу или по названию). */
+  function isAutoAddItem(item) {
+    if (Number(item?.auto_add || 0) === 1) return true;
+    const name = String(item?.product_name || item?.name || '').trim().toLowerCase();
+    return name === 'приборы';
+  }
+
   function itemsToHtml(items) {
     if (!Array.isArray(items) || !items.length) return '<div class="muted">?</div>';
 
     const sorted = items.slice().sort((a, b) => {
-      const aAuto = Number(a.auto_add || 0) === 1;
-      const bAuto = Number(b.auto_add || 0) === 1;
+      const aAuto = isAutoAddItem(a);
+      const bAuto = isAutoAddItem(b);
       if (aAuto && !bAuto) return 1;
       if (!aAuto && bAuto) return -1;
       return 0;
@@ -1566,15 +1573,23 @@
       return Math.round(n) === n ? String(Math.round(n)) : n.toFixed(2);
     }
 
+    const receiptItems = Array.isArray(order.items) ? order.items.slice().sort((a, b) => {
+      const aAuto = isAutoAddItem(a);
+      const bAuto = isAutoAddItem(b);
+      if (aAuto && !bAuto) return 1;
+      if (!aAuto && bAuto) return -1;
+      return 0;
+    }) : [];
+
     let itemsHtml = '';
-    if (order.items && Array.isArray(order.items)) {
-      order.items.forEach(item => {
+    if (receiptItems.length) {
+      receiptItems.forEach(item => {
         const name = escapeHtml(item.product_name || item.name || 'Товар');
         const qty = Math.max(1, Number(item.quantity || item.qty || 1));
         const basePrice = parseFloat(item.price || 0);
         const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? (basePrice * qty) ?? 0);
         const priceStr = receiptTotalStr(lineTotal);
-        const mainLine = priceStr ? `${qty} Х ${name} - ${priceStr}` : `${qty} Х ${name}`;
+        const qtyStr = `${qty} Х`;
         const bulletPrefix = qty > 1 ? `${qty} Х • ` : '• ';
 
         // Варианты товара (первыми)
@@ -1644,7 +1659,11 @@
 
         itemsHtml += `
           <div class="receipt-item">
-            <div class="receipt-item-name">${mainLine}</div>
+            <div class="receipt-item-row">
+              <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
+              <span class="receipt-item-name">${name}</span>
+              ${priceStr ? `<span class="receipt-item-price">${escapeHtml(priceStr)}</span>` : ''}
+            </div>
             ${variantsHtml}
             ${ingredientsHtml}
             ${optionsHtml}
@@ -1672,12 +1691,14 @@
       }
       body {
         margin: 0;
-        padding: 5mm;
+        padding: 5mm 3mm;
         font-family: 'Courier New', monospace;
         font-size: 11pt;
+        font-weight: bold;
         line-height: 1.3;
-        width: 70mm;
-        max-width: 70mm;
+        width: 80mm;
+        max-width: 80mm;
+        box-sizing: border-box;
       }
       .no-print {
         display: none !important;
@@ -1690,12 +1711,14 @@
     }
     body {
       margin: 0;
-      padding: 5mm;
+      padding: 5mm 3mm;
       font-family: 'Courier New', monospace;
       font-size: 11pt;
+      font-weight: bold;
       line-height: 1.3;
-      width: 70mm;
-      max-width: 70mm;
+      width: 80mm;
+      max-width: 80mm;
+      box-sizing: border-box;
       background: white;
     }
     .receipt-header {
@@ -1720,8 +1743,22 @@
     .receipt-item {
       margin: 5px 0;
     }
+    .receipt-item-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+    }
+    .receipt-item-qty {
+      flex-shrink: 0;
+    }
     .receipt-item-name {
-      font-weight: bold;
+      flex: 1;
+      min-width: 0;
+      word-wrap: break-word;
+    }
+    .receipt-item-price {
+      flex-shrink: 0;
+      text-align: right;
     }
     .receipt-composition {
       margin: 3px 0 3px 15px;
@@ -1762,6 +1799,12 @@
       border-top: 1px dashed #000;
       margin: 10px 0;
     }
+    .receipt-when-block {
+      font-weight: bold;
+    }
+    .receipt-when-text {
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
@@ -1769,6 +1812,12 @@
   <div class="receipt-date">${dateStr}</div>
   
   <div class="receipt-divider"></div>
+  ${(scheduleText || isUrgent) ? `
+  <div class="receipt-section receipt-when-block">
+    <div class="receipt-when-text">${escapeHtml(scheduleText || (isUrgent ? "Быстрее" : ""))}</div>
+  </div>
+  <div class="receipt-divider"></div>
+  ` : ''}
   
   <div class="receipt-section">
     ${order.customer_name ? `<div>${escapeHtml(order.customer_name)}</div>` : ''}
@@ -1778,8 +1827,6 @@
   <div class="receipt-section">
     <div>${escapeHtml(methodTitle || "—")}</div>
     <div>${escapeHtml(address || "—")}</div>
-    ${scheduleText ? `<div>${escapeHtml(scheduleText)}</div>` : ''}
-    ${isUrgent ? '<div class="receipt-urgent">⚡ СРОЧНО</div>' : ''}
   </div>
   
   ${order.comment ? `
