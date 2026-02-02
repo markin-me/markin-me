@@ -198,6 +198,7 @@ app.get('/register', (req, res) => {
 });
 
 // Защищённые страницы (проверка авторизации на клиенте через JS)
+app.get('/dashboard/cash', (req, res) => res.render('pages/cash'));
 app.get('/dashboard/products', (req, res) => res.render('pages/products'));
 app.get('/dashboard/orders', (req, res) => res.render('pages/orders'));
 app.get('/dashboard/clients', (req, res) => res.render('pages/clients', { activePage: 'clients' }));

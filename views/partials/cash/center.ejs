@@ -1,0 +1,62 @@
+<div class="center-stack">
+  <!-- Верхняя панель инструментов кассы -->
+  <div class="panel toolbar-island cash-toolbar">
+    <div class="panel-header">
+      <div class="panel-title">
+        <i class="fas fa-cash-register"></i>
+        <span>Чеки</span>
+      </div>
+      <div class="toolbar-right">
+        <div class="date-filter" id="cashDateFilter">
+          <button class="btn btn-ghost" type="button" id="cashDateBtn" aria-haspopup="dialog" aria-expanded="false">
+            <i class="fas fa-calendar-day"></i>
+            <span class="btn-text" id="cashDateLabel">Сегодня</span>
+          </button>
+
+          <div class="date-popover hidden" id="cashDatePopover" role="dialog" aria-label="Фильтр даты">
+            <div class="date-popover-header">
+              <button class="icon-btn btn-xs" id="cashDatePrev" type="button" aria-label="Предыдущий месяц">
+                <i class="fas fa-chevron-left"></i>
+              </button>
+              <div class="date-popover-title" id="cashDateTitle"></div>
+              <button class="icon-btn btn-xs" id="cashDateNext" type="button" aria-label="Следующий месяц">
+                <i class="fas fa-chevron-right"></i>
+              </button>
+            </div>
+
+            <div class="date-weekdays">
+              <span>Пн</span>
+              <span>Вт</span>
+              <span>Ср</span>
+              <span>Чт</span>
+              <span>Пт</span>
+              <span>Сб</span>
+              <span>Вс</span>
+            </div>
+            <div class="date-grid" id="cashDateGrid"></div>
+
+            <div class="date-popover-actions">
+              <button class="btn btn-ghost btn-sm" id="cashDateReset" type="button">Сбросить</button>
+            </div>
+          </div>
+        </div>
+
+        <button class="btn btn-primary" type="button" id="cashAddBtn">
+          <i class="fas fa-plus"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Основной список чеков -->
+  <div class="panel cash-center cash-center-panel">
+    <div class="panel-body no-scrollbar">
+      <div class="orders-list cash-list" id="cashList">
+        <!-- Список чеков будет отрисовываться здесь -->
+      </div>
+
+      <div class="empty-hint" id="cashEmptyHint">Чеков пока нет</div>
+    </div>
+  </div>
+</div>
+

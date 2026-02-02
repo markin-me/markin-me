@@ -1660,6 +1660,186 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
              box-shadow var(--dur-fast) var(--ease-smooth),
              transform var(--dur-fast) var(--ease-smooth);
 }
+
+.cash-order-row{
+  grid-template-columns:70px minmax(260px,1fr) 120px;
+}
+.cash-order-row .order-main-line{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  flex-wrap:nowrap;
+}
+
+.cash-day-section{
+  border-radius:12px;
+  border:1px solid var(--primary-25);
+  padding:6px 8px 8px;
+  background:var(--color-surface);
+  box-shadow:0 0 0 1px var(--primary-12);
+}
+.cash-day-section + .cash-day-section{
+  margin-top:8px;
+}
+.cash-day-header{
+  width:100%;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  background:transparent;
+  border:none;
+  padding:2px 4px 6px;
+  cursor:pointer;
+  font-size:13px;
+  font-weight:600;
+}
+.cash-day-title{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+.cash-day-count{
+  font-size:12px;
+  color:var(--color-text-muted);
+}
+.cash-day-chevron{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  color:var(--color-text-muted);
+  transition:transform var(--dur-fast) var(--ease-smooth);
+}
+.cash-day-chevron.is-collapsed{
+  transform:rotate(-90deg);
+}
+.cash-day-panel{
+  margin-top:4px;
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+
+/* Cash receipt preview (right column) — отступы как у товаров */
+.cash-info.panel .panel-body{
+  padding:8px;
+}
+.cash-tabs-header{
+  padding:6px 10px;
+  border-bottom:1px solid var(--color-border);
+}
+.cash-tabs{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  overflow-x:auto;
+  padding-bottom:2px;
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+.cash-tabs::-webkit-scrollbar{display:none;}
+.cash-tab{
+  width:100px;
+  flex:0 0 100px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:6px;
+  padding:6px 8px;
+  border-radius:10px;
+  border:1px solid var(--color-border);
+  background:var(--color-surface-2);
+  cursor:pointer;
+  user-select:none;
+}
+.cash-tab.is-active{
+  background:var(--primary-14);
+  border-color:var(--primary-25);
+}
+.cash-tab-title{
+  font-size:12px;
+  font-weight:600;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  flex:1 1 auto;
+}
+.cash-tab-close{
+  border:none;
+  background:transparent;
+  color:var(--color-text-muted);
+  width:16px;
+  height:16px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  padding:0;
+}
+.cash-receipt-scroll{
+  max-height:100%;
+  overflow:auto;
+  padding-top:6px;
+}
+.cash-receipt-box{
+  margin:0 auto;
+  max-width:320px;
+  background:#fff;
+  border-radius:10px;
+  border:1px solid var(--color-border);
+  padding:8px 10px;
+  font-family:"Courier New",monospace;
+  font-size:11px;
+  line-height:1.4;
+  color:#000;
+}
+
+/* Стили как в печатном чеке (orders.js) */
+.receipt-header{
+  text-align:center;
+  font-weight:bold;
+  font-size:14px;
+  margin-bottom:6px;
+}
+.receipt-date{
+  text-align:center;
+  margin-bottom:6px;
+  border-bottom:1px dashed #000;
+  padding-bottom:6px;
+}
+.receipt-section{margin:6px 0;}
+.receipt-section-title{font-weight:bold;margin-bottom:4px;}
+.receipt-item{margin:4px 0;}
+.receipt-item-row{
+  display:flex;
+  align-items:flex-start;
+  gap:6px;
+}
+.receipt-item-qty{flex-shrink:0;}
+.receipt-item-name{flex:1;min-width:0;word-wrap:break-word;}
+.receipt-item-price{flex-shrink:0;text-align:right;}
+.receipt-composition{margin:3px 0 3px 15px;font-size:10px;}
+.receipt-composition-item{margin:2px 0;}
+.receipt-total{
+  text-align:center;
+  font-weight:bold;
+  font-size:13px;
+  margin:10px 0;
+  border-top:1px dashed #000;
+  border-bottom:1px dashed #000;
+  padding:6px 0;
+}
+.receipt-summary-row{
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+  margin-top:4px;
+}
+.receipt-summary-label{flex:1;}
+.receipt-summary-value{flex-shrink:0;text-align:right;}
+.receipt-divider{border-top:1px dashed #000;margin:6px 0;}
+.receipt-when-block{font-weight:bold;}
+.receipt-when-text{font-weight:bold;}
 .order-row:hover{
   background:var(--color-surface-2);
   transform:translateY(-2px);

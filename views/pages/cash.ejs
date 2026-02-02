@@ -1,0 +1,11 @@
+<%- include('../layouts/app', {
+  pageTitle: 'Касса',
+  activePage: 'cash',
+  pageClass: 'page-cash',
+  leftPartial: '../partials/cash/left',
+  centerPartial: '../partials/cash/center',
+  rightPartial: '../partials/cash/right',
+  extraPartial: null,
+  pageScripts: ['/static/js/cash.js?v=' + Date.now()]
+}) %>
+

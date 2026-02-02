@@ -2,6 +2,12 @@
   <nav class="app-sidebar-nav no-scrollbar">
     <ul class="app-sidebar-list">
       <li>
+        <a href="/dashboard/cash" class="nav-item <%= activePage === 'cash' ? 'active-nav' : '' %>">
+          <i class="fas fa-cash-register nav-icon"></i>
+          <span class="nav-text">Касса</span>
+        </a>
+      </li>
+      <li>
         <a href="/dashboard/products" class="nav-item <%= activePage === 'products' ? 'active-nav' : '' %>">
           <i class="fas fa-box nav-icon"></i>
           <span class="nav-text">Товары</span>
