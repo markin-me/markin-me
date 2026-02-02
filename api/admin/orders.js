@@ -20,13 +20,37 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     return start <= end ? { start, end } : { start: end, end: start };
   }
 
-  async function fetchOrderPayload(tenantId, storeId, id) {
+  async function getStoreTimezone(tenantId, storeId) {
+    let storeTimezone = '+0';
+    if (storeId) {
+      const [rows] = await db.query(
+        'SELECT timezone FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, storeId]
+      );
+      if (rows[0]?.timezone) {
+        storeTimezone = rows[0].timezone;
+      }
+    }
+    if (!storeTimezone || storeTimezone === '+0') {
+      const [tenantRows] = await db.query(
+        'SELECT timezone FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+      if (tenantRows[0]?.timezone) {
+        storeTimezone = tenantRows[0].timezone;
+      }
+    }
+    return storeTimezone || '+0';
+  }
+
+  async function fetchOrderPayload(tenantId, storeId, id, opts = {}) {
+    const storeTimezone = opts.storeTimezone ?? await getStoreTimezone(tenantId, storeId);
     const [rows] = await db.query(
       `
       SELECT
         o.id,
         o.public_id,
-        o.created_at,
+        DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
         o.customer_id,
         o.customer_name,
         o.customer_phone,
@@ -100,7 +124,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     return {
       id: r.id,
       public_id: r.public_id || null,
-      created_at: r.created_at,
+      created_at: helpers.utcToStoreDateTime(r.created_at, storeTimezone),
       customer_id: r.customer_id,
       customer_name: r.customer_name,
       customer_phone: r.customer_phone,
@@ -147,12 +171,16 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const range = normalizeDateRange(req.query.start_date, req.query.end_date);
+      const storeTimezone = await getStoreTimezone(tenantId, storeId);
+      const storeOffsetMinutes = helpers.parseTimezoneOffsetToMinutes(storeTimezone);
 
       // Use scheduled_at if available, otherwise fall back to created_at
-      const joinDate = range ? "AND DATE(COALESCE(o.scheduled_at, o.created_at)) BETWEEN ? AND ?" : "";
+      const joinDate = range
+        ? "AND DATE(COALESCE(o.scheduled_at, TIMESTAMPADD(MINUTE, ?, o.created_at))) BETWEEN ? AND ?"
+        : "";
 
       const params = [];
-      if (range) params.push(range.start, range.end);
+      if (range) params.push(storeOffsetMinutes, range.start, range.end);
       params.push(tenantId, storeId);
 
       const [rows] = await db.query(
@@ -206,6 +234,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const limit = Math.min(200, Math.max(10, Number(req.query.limit || 50)));
       const offset = Math.max(0, Number(req.query.offset || 0));
       const range = normalizeDateRange(req.query.start_date, req.query.end_date);
+      const storeTimezone = await getStoreTimezone(tenantId, storeId);
+      const storeOffsetMinutes = helpers.parseTimezoneOffsetToMinutes(storeTimezone);
 
       let where = `o.tenant_id=? AND o.store_id=? AND o.is_active=1`;
       const params = [tenantId, storeId];
@@ -217,8 +247,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
       if (range) {
         // Use scheduled_at if available, otherwise fall back to created_at
-        where += ` AND DATE(COALESCE(o.scheduled_at, o.created_at)) BETWEEN ? AND ?`;
-        params.push(range.start, range.end);
+        where += ` AND DATE(COALESCE(o.scheduled_at, TIMESTAMPADD(MINUTE, ?, o.created_at))) BETWEEN ? AND ?`;
+        params.push(storeOffsetMinutes, range.start, range.end);
       }
 
       const orderBy = (Number.isFinite(statusId) && statusId > 0)
@@ -230,7 +260,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         SELECT
           o.id,
           o.public_id,
-          o.created_at,
+          DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
           o.customer_id,
           o.customer_name,
           o.customer_phone,
@@ -304,6 +334,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
         return {
           ...r,
+          created_at: helpers.utcToStoreDateTime(r.created_at, storeTimezone),
           items,
           total_price: totalPrice,
           items_total: itemsTotal,

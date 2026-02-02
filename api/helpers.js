@@ -90,6 +90,103 @@ function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
 }
 
+function parseTimezoneOffsetToMinutes(v) {
+  if (v === undefined || v === null || v === '') return 0;
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    return Math.round(v * 60);
+  }
+
+  let s = String(v).trim();
+  if (!s) return 0;
+  if (/^utc/i.test(s)) s = s.slice(3).trim();
+  if (!s) return 0;
+  if (s === 'Z') return 0;
+
+  const direct = Number(s);
+  if (Number.isFinite(direct)) {
+    return Math.round(direct * 60);
+  }
+
+  const m = s.match(/^([+-]?)(\d{1,2})(?::?(\d{2}))?$/);
+  if (!m) return 0;
+
+  const sign = m[1] === '-' ? -1 : 1;
+  const hh = Number(m[2] || 0);
+  const mm = Number(m[3] || 0);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return 0;
+  if (hh > 14 || mm > 59) return 0;
+
+  return sign * (hh * 60 + mm);
+}
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+function parseUtcDateTimeInput(value) {
+  if (value === undefined || value === null || value === '') return null;
+
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    if (!Number.isFinite(ms)) return null;
+    return ms;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  const s = String(value).trim();
+  if (!s) return null;
+
+  const sqlMatch = s.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[ T])(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?$/
+  );
+  if (sqlMatch) {
+    const yyyy = Number(sqlMatch[1]);
+    const mm = Number(sqlMatch[2]);
+    const dd = Number(sqlMatch[3]);
+    const hh = Number(sqlMatch[4]);
+    const mi = Number(sqlMatch[5]);
+    const ss = Number(sqlMatch[6]);
+    return Date.UTC(yyyy, mm - 1, dd, hh, mi, ss);
+  }
+
+  const ms = Date.parse(s);
+  if (!Number.isFinite(ms)) return null;
+  return ms;
+}
+
+function formatUtcDateTime(value = Date.now()) {
+  const ms = parseUtcDateTimeInput(value);
+  if (!Number.isFinite(ms)) return null;
+  const d = new Date(ms);
+  return (
+    d.getUTCFullYear() +
+    '-' +
+    pad2(d.getUTCMonth() + 1) +
+    '-' +
+    pad2(d.getUTCDate()) +
+    ' ' +
+    pad2(d.getUTCHours()) +
+    ':' +
+    pad2(d.getUTCMinutes()) +
+    ':' +
+    pad2(d.getUTCSeconds())
+  );
+}
+
+function utcToStoreDateTime(utcValue, timezone) {
+  const utcMs = parseUtcDateTimeInput(utcValue);
+  if (!Number.isFinite(utcMs)) {
+    if (utcValue === undefined || utcValue === null) return null;
+    return String(utcValue);
+  }
+  const offsetMinutes = parseTimezoneOffsetToMinutes(timezone);
+  const shifted = utcMs + offsetMinutes * 60 * 1000;
+  return formatUtcDateTime(shifted);
+}
+
 // ------------------------------
 // DB helpers (need db)
 // ------------------------------
@@ -243,6 +340,9 @@ module.exports = {
   normalizePhone,
   makePublicId,
   ensureDir,
+  parseTimezoneOffsetToMinutes,
+  formatUtcDateTime,
+  utcToStoreDateTime,
 
   getIdByCode,
   nextSortOrderForCategory,

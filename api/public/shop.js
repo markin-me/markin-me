@@ -315,13 +315,37 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return r2.length ? Number(r2[0].id) : null;
   }
 
-  async function fetchOrderPayload(tenantId, storeId, id) {
+  async function getStoreTimezone(tenantId, storeId) {
+    let storeTimezone = '+0';
+    if (storeId) {
+      const [rows] = await db.query(
+        'SELECT timezone FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, storeId]
+      );
+      if (rows[0]?.timezone) {
+        storeTimezone = rows[0].timezone;
+      }
+    }
+    if (!storeTimezone || storeTimezone === '+0') {
+      const [tenantRows] = await db.query(
+        'SELECT timezone FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+      if (tenantRows[0]?.timezone) {
+        storeTimezone = tenantRows[0].timezone;
+      }
+    }
+    return storeTimezone || '+0';
+  }
+
+  async function fetchOrderPayload(tenantId, storeId, id, opts = {}) {
+    const storeTimezone = opts.storeTimezone ?? await getStoreTimezone(tenantId, storeId);
     const [rows] = await db.query(
       `
       SELECT
         o.id,
         o.public_id,
-        o.created_at,
+        DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at_utc,
         o.customer_id,
         o.customer_name,
         o.customer_phone,
@@ -385,7 +409,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return {
       id: r.id,
       public_id: r.public_id || null,
-      created_at: r.created_at,
+      created_at: helpers.utcToStoreDateTime(r.created_at_utc ?? r.created_at, storeTimezone),
       customer_id: r.customer_id,
       customer_name: r.customer_name,
       customer_phone: r.customer_phone,
@@ -1020,10 +1044,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       let limit = Number(req.query.limit ?? 50);
       if (!Number.isFinite(limit) || limit <= 0) limit = 50;
       if (limit > 200) limit = 200;
+      const storeTimezone = await getStoreTimezone(tenantId, storeId);
 
       const [rows] = await db.query(
         `SELECT
-           o.id, o.created_at, o.total_price, o.items, o.public_id,
+           o.id,
+           DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at_utc,
+           o.total_price, o.items, o.public_id,
            s.title AS status_title, s.code AS status_code, s.is_final AS status_is_final,
            p.title AS payment_title, p.code AS payment_code
          FROM order_orders o
@@ -1046,7 +1073,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         return {
           id: Number(r.id),
           public_id: r.public_id || null,
-          created_at: r.created_at,
+          created_at: helpers.utcToStoreDateTime(r.created_at_utc ?? r.created_at, storeTimezone),
           total_price: Number(r.total_price || 0),
           status_title: r.status_title || null,
           status_code: r.status_code || null,
@@ -2602,11 +2629,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
 
       // Timezone филиала, к которому привязан заказ (orderStoreId)
-      const [storeForTz] = await db.query(
-        'SELECT timezone FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
-        [tenantId, orderStoreId]
-      );
-      const storeTimezone = storeForTz[0]?.timezone || '+0';
+      const storeTimezone = await getStoreTimezone(tenantId, orderStoreId);
 
       // Адрес и точка самовывоза нужны для проверки дубля (читаем до неё)
       const deliveryAddress = helpers.strOrNull(req.body.delivery_address);
@@ -2615,18 +2638,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const pickupIdForDup = (pickupStoreId && Number.isFinite(pickupStoreId)) ? pickupStoreId : 0;
 
       // Серверная защита от дублей (двойная отправка / повтор запроса). Окно 60 сек.
-      // created_at в БД хранится в локальном времени филиала — сравниваем в той же зоне.
+      // created_at в БД хранится в UTC — сравниваем тоже в UTC.
       const forceNew = req.body.force_new === true || req.body.force_new === 'true';
       if (!forceNew) {
-        const tzOffsetHours = Number.isNaN(Number(storeTimezone)) ? 0 : Number(storeTimezone);
-        const tzOffsetMs = tzOffsetHours * 60 * 60 * 1000;
-        const thresholdLocal = new Date(Date.now() + tzOffsetMs - 60000);
-        const dupThresholdStr = thresholdLocal.getUTCFullYear() + '-' +
-          String(thresholdLocal.getUTCMonth() + 1).padStart(2, '0') + '-' +
-          String(thresholdLocal.getUTCDate()).padStart(2, '0') + ' ' +
-          String(thresholdLocal.getUTCHours()).padStart(2, '0') + ':' +
-          String(thresholdLocal.getUTCMinutes()).padStart(2, '0') + ':' +
-          String(thresholdLocal.getUTCSeconds()).padStart(2, '0');
+        const dupThresholdStr = helpers.formatUtcDateTime(Date.now() - 60000);
         const [recentDup] = await db.query(
           `SELECT id, public_id, total_price
            FROM order_orders
@@ -2671,18 +2686,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       const publicId = makeUuid36();
 
-      // Вычисляем локальное время филиала для created_at
-      // Date.now() возвращает UTC timestamp, добавляем offset филиала
-      const tzOffsetHours = Number.isNaN(Number(storeTimezone)) ? 0 : Number(storeTimezone);
-      const tzOffsetMs = tzOffsetHours * 60 * 60 * 1000;
-      const storeLocalTime = new Date(Date.now() + tzOffsetMs);
-      // Форматируем как YYYY-MM-DD HH:MM:SS (локальное время филиала)
-      const createdAt = storeLocalTime.getUTCFullYear() + '-' +
-        String(storeLocalTime.getUTCMonth() + 1).padStart(2, '0') + '-' +
-        String(storeLocalTime.getUTCDate()).padStart(2, '0') + ' ' +
-        String(storeLocalTime.getUTCHours()).padStart(2, '0') + ':' +
-        String(storeLocalTime.getUTCMinutes()).padStart(2, '0') + ':' +
-        String(storeLocalTime.getUTCSeconds()).padStart(2, '0');
+      // created_at в БД сохраняем только в UTC.
+      const createdAt = helpers.formatUtcDateTime(Date.now());
 
       // ВАЖНО: никаких updated_at тут нет (в твоей таблице order_orders его нет)
       const [r] = await db.query(
@@ -2716,12 +2721,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           statusId,
           0, // status_sort
           scheduledAt,
-          createdAt, // Явно передаём UTC время из Node.js
+          createdAt,
           publicId,
         ]
       );
 
-      const payload = await fetchOrderPayload(tenantId, orderStoreId, r.insertId);
+      const payload = await fetchOrderPayload(tenantId, orderStoreId, r.insertId, { storeTimezone });
 
       if (payload) {
         ordersEvents.publish(tenantId, orderStoreId, 'order.created', payload);

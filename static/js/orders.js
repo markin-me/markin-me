@@ -334,9 +334,10 @@
           : "";
 
         const ingredients = Array.isArray(it.ingredients) ? it.ingredients : [];
-        const ingredientsHtml = ingredients.length
+        const ingredientsFiltered = ingredients.filter((ing) => Number(ing.quantity ?? ing.qty ?? 0) > 0);
+        const ingredientsHtml = ingredientsFiltered.length
           ? `<div class="order-item-composition">
-              ${ingredients.map((ing) => {
+              ${ingredientsFiltered.map((ing) => {
                 const ingName = escapeHtml(ing.name || "Ингредиент");
                 const ingQty = Number(ing.quantity ?? ing.qty ?? 0);
                 let ingUnit = escapeHtml(ing.unit_label || ing.unit || ing.unitLabel || ing.unit_short_title || ing.unit_title || "");
@@ -348,9 +349,10 @@
           : "";
 
         const options = Array.isArray(it.options) ? it.options : [];
-        const optionsHtml = options.length
+        const optionsFiltered = options.filter((opt) => Number(opt.qty ?? opt.quantity ?? 0) > 0);
+        const optionsHtml = optionsFiltered.length
           ? `<div class="order-item-composition">
-              ${options.map((opt) => {
+              ${optionsFiltered.map((opt) => {
                 const optName = escapeHtml(opt.title || "Опция");
                 const variantLabel = escapeHtml((opt.variant_label || opt.variantLabel || "").trim());
                 let formatted;
@@ -1207,6 +1209,11 @@
     audio.play().catch(() => {});
   }
 
+  function playNewOrderSound() {
+    const soundUrl = state.tenantSounds && state.tenantSounds.sound_new_order_url;
+    if (soundUrl) playNotificationSound(soundUrl);
+  }
+
   function handleOrderEvent(order) {
     if (!order || !order.id) return;
 
@@ -1235,7 +1242,12 @@
 
   async function fetchChanges() {
     if (!state.lastEventId) {
+      const prevIds = new Set(state.orders.map((o) => Number(o.id)));
       await loadAndRenderOrders(true);
+      const hasNewOrders = state.orders.some((o) => !prevIds.has(Number(o.id)));
+      if (hasNewOrders) {
+        playNewOrderSound();
+      }
       return;
     }
 
@@ -1246,10 +1258,19 @@
       changes.forEach((evt) => {
         state.lastEventId = evt.id || state.lastEventId;
         handleOrderEvent(evt.data);
+        const eventName = String(evt.event || "").toLowerCase();
+        if (eventName === "order.created") {
+          playNewOrderSound();
+        }
       });
     } catch (e) {
       console.error(e);
+      const prevIds = new Set(state.orders.map((o) => Number(o.id)));
       await loadAndRenderOrders(true);
+      const hasNewOrders = state.orders.some((o) => !prevIds.has(Number(o.id)));
+      if (hasNewOrders) {
+        playNewOrderSound();
+      }
     }
   }
 
@@ -1263,8 +1284,7 @@
       await loadOrders();
       const newOrders = state.orders.filter((o) => !prevIds.has(Number(o.id)));
       if (newOrders.length) {
-        const soundUrl = state.tenantSounds && state.tenantSounds.sound_new_order_url;
-        if (soundUrl) playNotificationSound(soundUrl);
+        playNewOrderSound();
       }
       renderOrders();
       if (state.activeOrderId) {
@@ -1306,8 +1326,7 @@
       try {
         const data = JSON.parse(e.data || "{}");
         handleOrderEvent(data);
-        const soundUrl = state.tenantSounds && state.tenantSounds.sound_new_order_url;
-        if (soundUrl) playNotificationSound(soundUrl);
+        playNewOrderSound();
       } catch (err) {
         console.error(err);
       }
@@ -1619,12 +1638,13 @@
           variantsHtml += '</div>';
         }
 
-        // Ингредиенты товара (вторыми)
+        // Ингредиенты товара (вторыми) — не показываем с количеством 0
         const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+        const ingredientsFilteredReceipt = ingredients.filter((ing) => Number(ing.quantity ?? ing.qty ?? 0) > 0);
         let ingredientsHtml = '';
-        if (ingredients.length) {
+        if (ingredientsFilteredReceipt.length) {
           ingredientsHtml = '<div class="receipt-composition">';
-          ingredients.forEach((ing) => {
+          ingredientsFilteredReceipt.forEach((ing) => {
             const ingName = escapeHtml(ing.name || "Ингредиент");
             const ingQty = Number(ing.quantity ?? ing.qty ?? 0);
             let ingUnit = escapeHtml(ing.unit_label || ing.unit || ing.unitLabel || ing.unit_short_title || ing.unit_title || "");
@@ -1637,12 +1657,13 @@
           ingredientsHtml += '</div>';
         }
 
-        // Опции товара (третьими)
+        // Опции товара (третьими) — не показываем с количеством 0
         const options = Array.isArray(item.options) ? item.options : [];
+        const optionsFilteredReceipt = options.filter((opt) => Number(opt.qty ?? opt.quantity ?? 0) > 0);
         let optionsHtml = '';
-        if (options.length) {
+        if (optionsFilteredReceipt.length) {
           optionsHtml = '<div class="receipt-composition">';
-          options.forEach((opt) => {
+          optionsFilteredReceipt.forEach((opt) => {
             const optName = escapeHtml(opt.title || "Опция");
             const variantLabel = escapeHtml((opt.variant_label || opt.variantLabel || "").trim());
             let formatted;

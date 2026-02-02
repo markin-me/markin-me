@@ -1396,11 +1396,12 @@
     return variantLabel.trim();
   }
 
-  // Форматирование ингредиента: количествоединица название
+  // Форматирование ингредиента: количествоединица название (позиции с 0 не показываем)
   function formatIngredient(ing) {
     const name = str(ing.ingredient_name || "");
     if (!name) return null;
-    const qty = Number(ing.quantity ?? 1);
+    const qty = Number(ing.quantity ?? ing.qty ?? 1);
+    if (qty <= 0) return null;
     const unit = str(ing.unit_label || "");
     // Формат: количествоединица название (например "150г картофельное пюре")
     return `${qty}${unit} ${name}`.trim();
@@ -1452,6 +1453,7 @@
     // 2. Опции (вторыми)
     if (item.options && Array.isArray(item.options) && item.options.length > 0) {
       item.options.forEach(opt => {
+        if (Number(opt.qty ?? opt.quantity ?? 0) <= 0) return; // Не показываем опции с нулевым количеством
         const formatted = formatOption({
           title: opt.title || opt.name,
           qty: opt.qty || opt.quantity,
@@ -1470,6 +1472,7 @@
         if (!ingredientName) return; // Пропускаем если нет названия
         
         const quantity = ing.quantity ?? ing.qty ?? 1;
+        if (Number(quantity) <= 0) return; // Не показываем позиции с нулевым количеством
         // Единицы измерения могут быть в разных полях
         // В JSON из БД единицы могут отсутствовать, используем "г" по умолчанию для весовых ингредиентов
         let unitLabel = ing.unit_label || ing.unit || ing.unitLabel || ing.unit_short_title || ing.unit_title || "";
@@ -3397,17 +3400,19 @@ async function initAddresses() {
         if (formatted) variantParts.push(formatted);
       }
       
-      // 2. Ингредиенты (вторыми)
+      // 2. Ингредиенты (вторыми) — не показываем с количеством 0
       if (Array.isArray(cartIngredients) && cartIngredients.length > 0) {
         cartIngredients.forEach(ing => {
+          if (Number(ing.quantity ?? ing.qty ?? 0) <= 0) return;
           const formatted = formatIngredient(ing);
           if (formatted) ingredientParts.push(formatted);
         });
       }
       
-      // 3. Опции (третьими)
+      // 3. Опции (третьими) — не показываем с количеством 0
       if (Array.isArray(optionItems) && optionItems.length > 0) {
         optionItems.forEach(opt => {
+          if (Number(opt.qty ?? opt.quantity ?? 0) <= 0) return;
           const formatted = formatOption(opt);
           if (formatted) optionParts.push(formatted);
         });
@@ -11310,6 +11315,8 @@ function setBottomNavActive(tab) {
               const res2 = await apiJson("/api/public/orders", { method: "POST", body: payload });
               if (res2.data && res2.data.id && res2.data.public_id) {
                 localStorage.setItem(LAST_ORDER_KEY, String(res2.data.public_id));
+                clearCartAll();
+                saveCheckoutDraft({});
                 showOrderSuccess(res2.data.id, res2.data.public_id, orderTotalWithDelivery);
               } else {
                 alert("Не удалось создать заказ.");
@@ -11335,6 +11342,8 @@ function setBottomNavActive(tab) {
 
         if (res.data && res.data.id && res.data.public_id) {
           localStorage.setItem(LAST_ORDER_KEY, String(res.data.public_id));
+          clearCartAll();
+          saveCheckoutDraft({});
           if (typeof window.updateActiveOrdersBadge === "function") await window.updateActiveOrdersBadge();
           showOrderSuccess(res.data.id, res.data.public_id, orderTotalWithDelivery);
         } else {
