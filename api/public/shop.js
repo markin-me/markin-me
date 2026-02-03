@@ -1201,6 +1201,87 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  /**
+   * Один комбо-набор для магазина: данные комбо + блоки с товарами (для экрана выбора).
+   */
+  router.get('/combos/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+
+      const [[combo]] = await db.query(
+        `SELECT id, title, description, discount_percent, image_url
+         FROM prod_combos WHERE tenant_id=? AND id=? AND is_active=1 LIMIT 1`,
+        [tenantId, id]
+      );
+      if (!combo) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+
+      const [setBlocks] = await db.query(
+        `SELECT sb.block_id, sb.sort_order, b.title AS block_title, b.min_select, b.max_select
+         FROM prod_combo_set_blocks sb
+         JOIN prod_combo_blocks b ON b.id = sb.block_id AND b.tenant_id = sb.tenant_id
+         WHERE sb.tenant_id=? AND sb.combo_id=? ORDER BY sb.sort_order ASC, sb.id ASC`,
+        [tenantId, id]
+      );
+
+      const blocks = [];
+      for (const sb of setBlocks) {
+        const [productsRaw] = await db.query(
+          `SELECT bp.product_id, bp.sort_order, bp.is_default, p.name AS product_name, p.description_short AS product_description_short, p.price, p.photos_json AS product_photos_json
+           FROM prod_combo_block_products bp
+           JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
+           LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+           WHERE bp.tenant_id=? AND bp.block_id=? AND p.is_active=1 AND p.site_visibility=1
+             AND (s.qty IS NULL OR s.qty > 0)
+           ORDER BY bp.sort_order ASC, bp.id ASC`,
+          [storeId, tenantId, sb.block_id]
+        );
+        const products = productsRaw.map((r) => {
+          const photos = safeJsonArray(r.product_photos_json);
+          return {
+            product_id: r.product_id,
+            product_name: r.product_name,
+            product_description_short: r.product_description_short || null,
+            price: Number(r.price) || 0,
+            sort_order: r.sort_order,
+            is_default: Number(r.is_default) === 1,
+            product_photo: photos.length ? photos[0] : null,
+          };
+        });
+        let defaultSet = false;
+        for (const p of products) {
+          const wasDefault = p.is_default;
+          p.is_default = wasDefault && !defaultSet;
+          if (wasDefault) defaultSet = true;
+        }
+        blocks.push({
+          block_id: sb.block_id,
+          block_title: sb.block_title || '',
+          min_select: Math.max(1, Number(sb.min_select) || 1),
+          max_select: Math.max(1, Number(sb.max_select) || 1),
+          products,
+        });
+      }
+
+      res.json({
+        ok: true,
+        data: {
+          id: combo.id,
+          title: combo.title || '',
+          description: combo.description || '',
+          discount_percent: Number(combo.discount_percent) || 0,
+          image_url: combo.image_url || null,
+          blocks,
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   async function resolveCategoryIdFromQuery(tenantId, req) {
     const code = helpers.strOrNull(req.query.category_code);
     if (code) {
@@ -1220,6 +1301,87 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       [tenantId]
     );
     return all.length ? Number(all[0].id) : null;
+  }
+
+  /**
+   * Комбо-наборы для каталога: по категории (category_code), с min_price и фото для 2x2 сетки.
+   * min_price = сумма по блокам (min_select самых дешёвых товаров в блоке), затем скидка %.
+   */
+  async function getCombosForCategory(tenantId, storeId, categoryId) {
+    const [[catRow]] = await db.query(
+      'SELECT id, code FROM prod_categories WHERE tenant_id=? AND id=? LIMIT 1',
+      [tenantId, categoryId]
+    );
+    if (!catRow) return [];
+    const categoryCode = (catRow.code || '').trim().toLowerCase();
+    if (categoryCode === 'all') return [];
+
+    const [combos] = await db.query(
+      `SELECT id, title, description, discount_percent, image_url, sort_order
+       FROM prod_combos
+       WHERE tenant_id=? AND is_active=1 AND (category_code = ? OR (category_code IS NULL AND ? = ''))
+       ORDER BY sort_order ASC, id ASC`,
+      [tenantId, categoryCode, categoryCode]
+    );
+    if (!combos.length) return [];
+
+    const roundPrice = (v) => Math.round(Number(v) * 100) / 100;
+    const result = [];
+
+    for (const combo of combos) {
+      const [setBlocks] = await db.query(
+        `SELECT sb.block_id, b.min_select
+         FROM prod_combo_set_blocks sb
+         JOIN prod_combo_blocks b ON b.id = sb.block_id AND b.tenant_id = sb.tenant_id
+         WHERE sb.tenant_id=? AND sb.combo_id=?
+         ORDER BY sb.sort_order ASC, sb.id ASC`,
+        [tenantId, combo.id]
+      );
+
+      let minPriceSum = 0;
+      const gridPhotos = [];
+
+      for (const sb of setBlocks) {
+        const minSelect = Math.max(1, Number(sb.min_select) || 1);
+        const [blockProducts] = await db.query(
+          `SELECT p.id, p.price, p.photos_json
+           FROM prod_combo_block_products bp
+           JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
+           LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+           WHERE bp.tenant_id=? AND bp.block_id=? AND p.is_active=1 AND p.site_visibility=1
+             AND (s.qty IS NULL OR s.qty > 0)
+           ORDER BY p.price ASC
+           LIMIT ?`,
+          [storeId, tenantId, sb.block_id, minSelect]
+        );
+        let blockSum = 0;
+        for (const r of blockProducts) {
+          blockSum += Number(r.price || 0);
+          if (gridPhotos.length < 4) {
+            const photos = safeJsonArray(r.photos_json);
+            if (photos.length) gridPhotos.push(photos[0]);
+          }
+        }
+        minPriceSum += blockSum;
+      }
+
+      const discountPercent = Number(combo.discount_percent) || 0;
+      const minPrice = discountPercent > 0
+        ? roundPrice(minPriceSum * (1 - discountPercent / 100))
+        : roundPrice(minPriceSum);
+
+      result.push({
+        id: combo.id,
+        title: combo.title || '',
+        description: combo.description || '',
+        discount_percent: discountPercent,
+        image_url: combo.image_url || null,
+        min_price: minPrice,
+        grid_photos: gridPhotos.slice(0, 4),
+      });
+    }
+
+    return result;
   }
 
   router.get('/products', async (req, res) => {
@@ -1301,7 +1463,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           r.is_available = Number(r.is_available || 0) === 1;
         }
         await enrichProductsWithDisplayPrice(rows, tenantId);
-        return res.json({ ok: true, data: rows, category_id: categoryId });
+        const combos = await getCombosForCategory(tenantId, storeId, categoryId);
+        return res.json({ ok: true, data: rows, combos, category_id: categoryId });
       }
 
       const [rows] = await db.query(
@@ -1366,7 +1529,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         r.is_available = Number(r.is_available || 0) === 1;
       }
       await enrichProductsWithDisplayPrice(rows, tenantId);
-      res.json({ ok: true, data: rows, category_id: categoryId });
+      const combos = await getCombosForCategory(tenantId, storeId, categoryId);
+      res.json({ ok: true, data: rows, combos, category_id: categoryId });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
