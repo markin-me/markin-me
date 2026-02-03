@@ -30,6 +30,12 @@
       <div class="empty-title">Выберите условие</div>
       <div class="empty-text">Нажмите на условие слева, чтобы увидеть детали</div>
     </div>
+
+    <div id="comboEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-layer-group"></i></div>
+      <div class="empty-title">Комбо-наборы</div>
+      <div class="empty-text">Нажмите «+» для создания комбо-набора</div>
+    </div>
     <!-- Product info -->
     <div id="productInfo" class="hidden">
       <div class="product-info-title">
@@ -280,9 +286,8 @@
         </div>
       </div>
     </div>
-  </div>
 
-            <div id="autoAddGroupInfo" class="hidden">
+  <div id="autoAddGroupInfo" class="hidden">
   <div id="autoAddLevelGroup">
     <form id="autoAddGroupForm" class="form-grid" autocomplete="off">
       <div class="option-group-section">
@@ -557,6 +562,148 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <div id="comboInfo" class="hidden">
+    <div id="comboBlockLevelGroup">
+      <form id="comboBlockForm" class="form-grid" autocomplete="off">
+        <div class="option-group-section">
+          <div class="section-title">Блок комбо</div>
+
+          <div class="option-group-row">
+            <div class="option-group-title-field">
+              <label class="field-label" for="comboBlockTitle">Название блока *</label>
+              <input class="control" id="comboBlockTitle" name="title" type="text" placeholder="Напр. Второе, Суп или салат" required />
+            </div>
+
+            <div class="option-group-select-field">
+              <label class="field-label" for="comboBlockSortOrder">Порядок сортировки</label>
+              <input class="control" id="comboBlockSortOrder" name="sort_order" type="number" min="0" value="0" />
+            </div>
+
+            <div class="hidden" aria-hidden="true">
+              <div class="option-group-select-field">
+                <label class="field-label" for="comboBlockMinSelect">Мин. товаров в блоке</label>
+                <input class="control" id="comboBlockMinSelect" name="min_select" type="number" min="0" value="1" />
+              </div>
+              <div class="option-group-select-field">
+                <label class="field-label" for="comboBlockMaxSelect">Макс. товаров в блоке</label>
+                <input class="control" id="comboBlockMaxSelect" name="max_select" type="number" min="1" value="1" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </form>
+
+      <div class="info-card info-accordion">
+        <div class="acc-item">
+          <div class="acc-header">
+            <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+              <span class="stage-meta stage-text">
+                <b>Товары в блоке</b>
+                <small class="muted">список товаров на выбор в этом блоке</small>
+              </span>
+              <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+            </button>
+            <button class="btn btn-icon acc-add" type="button" id="comboBlockProductsAddBtn" title="Добавить товар" aria-label="Добавить товар">
+              <i class="fas fa-plus"></i>
+            </button>
+          </div>
+          <div class="acc-panel" data-acc-panel>
+            <div class="acc-panel-inner combo-block-products-panel-inner">
+              <div class="option-items-table" id="comboBlockProductsList"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="comboBlockLevelPicker" class="hidden">
+      <div class="info-card">
+        <div class="option-group-section option-picker-panel">
+          <div class="option-picker-tabs" id="comboBlockPickerTabs"></div>
+          <div class="option-picker-controls">
+            <div class="option-picker-search">
+              <input class="control" id="comboBlockPickerSearch" type="search" placeholder="Поиск по названию" />
+            </div>
+            <label class="option-picker-select-all" for="comboBlockPickerSelectAll">
+              <input id="comboBlockPickerSelectAll" type="checkbox" aria-label="Выделить все в категории" />
+              <span id="comboBlockPickerSelectAllLabel">Выделить все</span>
+            </label>
+          </div>
+          <div class="option-picker-list" id="comboBlockPickerList"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="comboSetInfo" class="hidden">
+    <form id="comboSetForm" class="form-grid" autocomplete="off">
+      <!-- Верхний блок: как у товара — фото слева, название и категории справа -->
+      <div class="product-editor-top">
+        <div>
+          <div class="product-photo-main" id="comboSetPhotoMainContainer">
+            <div class="photo-main-wrapper">
+              <img id="comboSetPhotoMain" class="product-photo-img hidden" alt="" />
+              <div id="comboSetPhotoPlaceholder" class="product-photo-placeholder">Нет фото<br><small>Перетащите файлы сюда</small></div>
+              <button class="photo-nav-btn photo-nav-prev hidden" type="button" id="comboSetPhotoPrev" aria-label="Предыдущее фото"><i class="fas fa-chevron-left"></i></button>
+              <button class="photo-nav-btn photo-nav-next hidden" type="button" id="comboSetPhotoNext" aria-label="Следующее фото"><i class="fas fa-chevron-right"></i></button>
+              <div class="photo-dots hidden" id="comboSetPhotoDots"></div>
+            </div>
+          </div>
+          <div class="product-photo-thumbs-wrapper" id="comboSetPhotoThumbsWrapper">
+            <button class="product-thumbs-nav product-thumbs-prev hidden" type="button" id="comboSetPhotoThumbsPrev" aria-label="Листать миниатюры влево"><i class="fas fa-chevron-left"></i></button>
+            <div class="product-photo-thumbs img-thumbs" id="comboSetPhotoThumbs"></div>
+            <button class="product-thumbs-nav product-thumbs-next hidden" type="button" id="comboSetPhotoThumbsNext" aria-label="Листать миниатюры вправо"><i class="fas fa-chevron-right"></i></button>
+          </div>
+          <div class="product-photo-tools">
+            <input id="comboSetPhotosInput" type="file" accept="image/*" multiple class="hidden" />
+            <button class="btn" type="button" id="comboSetAddPhotosBtn"><i class="fas fa-image"></i> Фото</button>
+            <div class="muted" id="comboSetPhotosCounter">0/10</div>
+          </div>
+        </div>
+        <div class="product-editor-meta">
+          <div class="field-wrap">
+            <label class="field-label" for="comboSetTitle">Название *</label>
+            <input class="control" id="comboSetTitle" name="title" type="text" placeholder="Напр. Второе + суп или салат" required />
+          </div>
+          <div>
+            <label class="field-label">Категории</label>
+            <div class="chips" id="comboSetCategoryChips"></div>
+          </div>
+        </div>
+      </div>
+      <!-- Подпись, скидка %, свитч Активен -->
+      <div class="field-wrap">
+        <label class="field-label" for="comboSetDescription">Подпись</label>
+        <input class="control" id="comboSetDescription" name="description" type="text" placeholder="На обед, На обед и ужин" />
+      </div>
+      <div style="display:flex; flex-wrap:wrap; align-items:center; gap:16px;">
+        <div class="field-wrap" style="width:120px;">
+          <label class="field-label" for="comboSetDiscount">Скидка %</label>
+          <input class="control" id="comboSetDiscount" name="discount_percent" type="number" min="0" max="100" step="0.01" value="0" />
+        </div>
+        <label class="switch" style="align-self:center">
+          <input class="switch-input" type="checkbox" id="comboSetIsActive" checked />
+          <span class="switch-ui" aria-hidden="true"></span>
+          <span class="switch-text">Активен</span>
+        </label>
+      </div>
+      <input type="hidden" id="comboSetSortOrder" name="sort_order" value="0" />
+    </form>
+    <div class="combo-set-blocks-section">
+      <div class="combo-set-blocks-header">
+        <button class="btn btn-icon btn-primary" type="button" id="comboSetBlocksAddBtn" title="Добавить блок" aria-label="Добавить блок">
+          <i class="fas fa-plus"></i>
+        </button>
+        <div class="combo-set-blocks-header-card">
+          <b>Блоки в наборе</b>
+          <small class="muted">добавляйте блоки комбо, один и тот же можно несколько раз</small>
+        </div>
+      </div>
+      <div class="option-items-table" id="comboSetBlocksList"></div>
+    </div>
+  </div>
   </div>
 
   <!-- Footer -->

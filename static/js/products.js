@@ -27,6 +27,24 @@
   
   // Unit info panel elements
   const unitInfo = $("#unitInfo");
+  const comboEmpty = $("#comboEmpty");
+  const comboInfo = $("#comboInfo");
+  const comboBlockForm = $("#comboBlockForm");
+  const comboBlockTitleInput = $("#comboBlockTitle");
+  const comboBlockSortOrderInput = $("#comboBlockSortOrder");
+  const comboBlockMinSelectInput = $("#comboBlockMinSelect");
+  const comboBlockMaxSelectInput = $("#comboBlockMaxSelect");
+  const comboBlocksList = $("#comboBlocksList");
+  const comboBlocksEmptyHint = $("#comboBlocksEmptyHint");
+  const comboBlockProductsList = $("#comboBlockProductsList");
+  const comboBlockProductsAddBtn = $("#comboBlockProductsAddBtn");
+  const comboBlockLevelGroup = $("#comboBlockLevelGroup");
+  const comboBlockLevelPicker = $("#comboBlockLevelPicker");
+  const comboBlockPickerTabs = $("#comboBlockPickerTabs");
+  const comboBlockPickerSearch = $("#comboBlockPickerSearch");
+  const comboBlockPickerSelectAll = $("#comboBlockPickerSelectAll");
+  const comboBlockPickerSelectAllLabel = $("#comboBlockPickerSelectAllLabel");
+  const comboBlockPickerList = $("#comboBlockPickerList");
   const unitLevelGroup = $("#unitLevelGroup");
   const unitLevelPicker = $("#unitLevelPicker");
   const unitForm = $("#unitForm");
@@ -177,11 +195,12 @@
   }
   
   function clearNavigationStack() {
-    // Completely clear navigation stack and return to empty state
+    // Completely clear navigation stack and return to empty state; remove only dynamic editor, keep static panels (comboSetInfo etc.)
     navigationStack.length = 0;
     currentNavigationState = null;
     if (productInfoBody) {
-      productInfoBody.innerHTML = "";
+      const wrapper = productInfoBody.querySelector(".product-editor-wrapper");
+      if (wrapper) wrapper.remove();
     }
     const footer = $("#productInfoFooter");
     if (footer) {
@@ -206,8 +225,13 @@
     if (categoryEmpty) categoryEmpty.classList.add("hidden");
     if (optionEmpty) optionEmpty.classList.add("hidden");
     
-    // Clear productInfoBody to avoid duplicate content
-    if (productInfoBody && (state.type === "product-edit" || state.type === "product-view" || state.type === "category-edit" || state.type === "option-picker" || state.type === "ingredient-picker" || state.type === "option-edit")) {
+    // For product/category edit: hide combo-set and other panels; show editor without destroying static content (avoids overlap when switching tabs)
+    if (productInfoBody && (state.type === "product-edit" || state.type === "product-view" || state.type === "category-edit")) {
+      const comboSetInfo = document.getElementById("comboSetInfo");
+      if (comboSetInfo) comboSetInfo.classList.add("hidden");
+      const existingEditor = productInfoBody.querySelector(".product-editor-wrapper");
+      if (existingEditor) existingEditor.classList.add("hidden");
+    } else if (productInfoBody && (state.type === "option-picker" || state.type === "ingredient-picker" || state.type === "option-edit")) {
       productInfoBody.innerHTML = "";
     }
 
@@ -279,18 +303,19 @@
     // Show appropriate content based on state type
     if (state.type === "product-edit" || state.type === "product-view" || state.type === "category-edit") {
       if (state.content) {
-        // Ensure productInfoBody exists
+        // Ensure productInfoBody exists; do not clear body so combo-set tab can switch back without losing DOM
         const body = productInfoBody || document.querySelector("#productInfoBody");
         if (body) {
-          // Clear first to avoid duplicates
-          body.innerHTML = "";
-          body.appendChild(state.content);
+          if (state.content.parentNode === body) {
+            state.content.classList.remove("hidden");
+          } else {
+            body.appendChild(state.content);
+          }
           body.classList.remove("hidden");
           // Make sure body is visible
           if (body.parentElement) {
             body.parentElement.classList.remove("hidden");
           }
-          // Buttons are now in header, no need to setup footer handlers
         } else {
           console.error("productInfoBody not found");
         }
@@ -375,6 +400,7 @@
   const editingCategories = new Map(); // Map<categoryId, { navigationState }>
   const editingOptions = new Map(); // Map<optionGroupId, { mode, optionDraft, snapshotData }>
   const editingVariants = new Map(); // Map<variantGroupId, { mode, variantDraft, snapshotData }>
+  const editingCombos = new Map(); // Map<comboTabId, { mode, blockDraft, products }>
   const editingAutoAdds = new Map(); // Map<autoAddGroupId, { mode, autoAddDraft, snapshotData }>
 
   const state = {
@@ -469,6 +495,29 @@
       tabKey: null,
     },
     unitDraft: null,
+    comboPanel: {
+      level: "empty", // empty | group | picker
+      mode: "view", // view | edit | create
+      tabKey: null,
+      pickerCategoryId: null,
+      pickerQuery: "",
+      pickerSelection: new Set(),
+      pickerTabsScrollLeft: 0,
+    },
+    comboBlockDraft: null, // { title, sort_order }
+    comboBlockProducts: [], // [{ product_id, name?, sort_order, is_default }]
+    comboBlocks: [], // list of blocks for center
+    selectedComboBlockId: null,
+    comboSetPanel: {
+      mode: "create", // create | view | edit
+      comboId: null,
+      blocks: [], // [{ block_id, block_title, sort_order }] — один блок можно добавить несколько раз
+      blockPickerOpen: false,
+      blockPickerSelection: new Set(),
+      photos: [], // [{ kind: 'url', url }] — как у товара, image_url = photos[0]?.url
+      activePhotoIdx: -1,
+      categoryIds: [], // id категорий (как у товара), category_code = первый по code
+    },
   };
 
   let variantPickerSavedFooterState = null;
@@ -479,6 +528,8 @@
   let autoAddPickerSavedHandlers = null;
   let unitPickerSavedFooterState = null;
   let unitPickerSavedHandlers = null;
+  let comboBlockPickerSavedFooterState = null;
+  let comboBlockPickerSavedHandlers = null;
   const autoAddSearchTimers = new Map();
 
   // ---------------- API ----------------
@@ -759,6 +810,50 @@
     return api(`/api/admin/catalog/products${qs ? `?${qs}` : ""}`);
   }
 
+  async function apiGetComboBlocks() {
+    return api("/api/admin/combo-blocks");
+  }
+  async function apiGetComboBlock(id) {
+    return api(`/api/admin/combo-blocks/${id}`);
+  }
+  async function apiPostComboBlock(payload) {
+    return api("/api/admin/combo-blocks", { method: "POST", body: JSON.stringify(payload) });
+  }
+  async function apiPatchComboBlock(id, payload) {
+    return api(`/api/admin/combo-blocks/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+  }
+  async function apiDeleteComboBlock(id) {
+    return api(`/api/admin/combo-blocks/${id}`, { method: "DELETE" });
+  }
+  async function apiGetComboBlockProductFlags(productIds) {
+    if (!Array.isArray(productIds) || productIds.length === 0) return { data: [] };
+    const ids = [...new Set(productIds.map((id) => Number(id)).filter(Number.isFinite))];
+    if (ids.length === 0) return { data: [] };
+    return api(`/api/admin/combo-blocks/product-flags?ids=${ids.join(",")}`);
+  }
+
+  async function apiGetCombos() {
+    return api("/api/admin/combos");
+  }
+  async function apiGetCombo(id) {
+    return api(`/api/admin/combos/${id}`);
+  }
+  async function apiGetComboSetBlocks(comboId) {
+    return api(`/api/admin/combos/${comboId}/blocks`);
+  }
+  async function apiPostCombo(payload) {
+    return api("/api/admin/combos", { method: "POST", body: JSON.stringify(payload) });
+  }
+  async function apiPatchCombo(id, payload) {
+    return api(`/api/admin/combos/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+  }
+  async function apiPutComboBlocks(comboId, blocks) {
+    return api(`/api/admin/combos/${comboId}/blocks`, { method: "PUT", body: JSON.stringify({ blocks }) });
+  }
+  async function apiDeleteCombo(id) {
+    return api(`/api/admin/combos/${id}`, { method: "DELETE" });
+  }
+
   async function apiGetProductOptionAssignments(productId) {
     return api(`/api/admin/products/${productId}/option-assignments`);
   }
@@ -989,6 +1084,9 @@
     } else if (state.mode === "diets") {
       const btn = productsAccordion.querySelector('[data-view="diets"]');
       if (btn) btn.classList.add("is-active");
+    } else if (state.mode === "combo-blocks") {
+      const btn = productsAccordion.querySelector('[data-view="combo-blocks"]');
+      if (btn) btn.classList.add("is-active");
     } else if (state.mode === "stock-in") {
       const btn = productsAccordion.querySelector('[data-view="stock-in"]');
       if (btn) btn.classList.add("is-active");
@@ -1069,6 +1167,151 @@
     renderUnitsList();
   }
 
+  async function enterComboBlocksMode() {
+    state.mode = "combo-blocks";
+    setToolbarTitle("Блоки комбо");
+    showView("combo-blocks");
+    clearProductSelection();
+    showDetailsEmpty();
+    syncActiveMenuItems();
+    await loadComboBlocks();
+    renderComboBlocksList();
+  }
+
+  async function loadComboBlocks() {
+    try {
+      const res = await apiGetComboBlocks();
+      state.comboBlocks = Array.isArray(res?.data) ? res.data : [];
+    } catch (e) {
+      console.error("loadComboBlocks", e);
+      state.comboBlocks = [];
+    }
+  }
+
+  function renderComboBlocksList() {
+    if (!comboBlocksList || !comboBlocksEmptyHint) return;
+    const blocks = state.comboBlocks || [];
+    if (blocks.length === 0) {
+      comboBlocksList.innerHTML = "";
+      comboBlocksEmptyHint.classList.remove("hidden");
+      return;
+    }
+    comboBlocksEmptyHint.classList.add("hidden");
+    comboBlocksList.innerHTML = blocks.map((b) => `
+      <div class="stage-item order-row" data-block-id="${b.id}" type="button">
+        <span class="stage-meta stage-text"><b>${escapeHtml(b.title || "")}</b><small>${(b.products_count ?? 0)} т.</small></span>
+        <span class="acc-spacer"></span>
+      </div>
+    `).join("");
+    comboBlocksList.querySelectorAll("[data-block-id]").forEach((row) => {
+      row.addEventListener("click", () => openComboBlock(Number(row.dataset.blockId)));
+    });
+  }
+
+  async function openComboBlock(blockId) {
+    const block = state.comboBlocks.find((b) => Number(b.id) === blockId);
+    if (!block) return;
+    let blockData = block;
+    try {
+      const res = await apiGetComboBlock(blockId);
+      if (res?.data) blockData = res.data;
+    } catch (e) {
+      console.error("openComboBlock", e);
+    }
+    const products = Array.isArray(blockData.products)
+      ? blockData.products.map((p) => ({ product_id: p.product_id, name: p.product_name || p.name, sort_order: p.sort_order ?? 0, is_default: p.is_default ? 1 : 0, photo: p.product_photo || null, price: p.product_price ?? p.price ?? 0, has_variants: p.has_variants ? 1 : 0, has_changeable_composition: p.has_changeable_composition ? 1 : 0 }))
+      : [];
+    const tabId = `combo-block-${blockId}`;
+    ensureTab({
+      type: "combo",
+      id: tabId,
+      title: blockData.title || "Блок",
+      onActivate: () => {
+        state.selectedComboBlockId = blockId;
+        state.comboBlockDraft = { title: blockData.title, sort_order: blockData.sort_order ?? 0, min_select: blockData.min_select ?? 1, max_select: blockData.max_select ?? 1 };
+        state.comboBlockProducts = products;
+        showComboBlockDetails({ block: state.comboBlockDraft, products: state.comboBlockProducts }, { mode: "view" });
+        showProductFooterView();
+      },
+      activate: true,
+    });
+    state.comboPanel.tabKey = buildTabKey("combo", tabId);
+    state.selectedComboBlockId = blockId;
+    state.comboBlockDraft = { title: blockData.title, sort_order: blockData.sort_order ?? 0, min_select: blockData.min_select ?? 1, max_select: blockData.max_select ?? 1 };
+    state.comboBlockProducts = products;
+    showComboBlockDetails({ block: state.comboBlockDraft, products: state.comboBlockProducts }, { mode: "view" });
+    showProductFooterView();
+  }
+
+  async function saveComboBlock() {
+    const title = (comboBlockTitleInput?.value ?? "").trim();
+    if (!title) {
+      comboBlockTitleInput?.focus();
+      alert("Введите название блока.");
+      return;
+    }
+    const sortOrder = parseInt(comboBlockSortOrderInput?.value, 10) || 0;
+    const minSelect = Math.max(0, parseInt(comboBlockMinSelectInput?.value, 10) || 1);
+    const maxSelect = Math.max(1, parseInt(comboBlockMaxSelectInput?.value, 10) || 1);
+    const products = (state.comboBlockProducts || []).map((p, i) => ({
+      product_id: p.product_id,
+      sort_order: p.sort_order ?? i,
+      is_default: p.is_default ? 1 : 0,
+    }));
+    const tabKey = state.comboPanel.tabKey;
+    const isNew = tabKey && tabKey.includes("new-combo-block-");
+    try {
+      if (isNew) {
+        const res = await apiPostComboBlock({ title, sort_order: sortOrder, min_select: minSelect, max_select: Math.max(minSelect, maxSelect), products });
+        const block = res?.data;
+        if (!block || !block.id) throw new Error("Нет ответа от сервера");
+        const oldKey = tabKey;
+        replaceTabKey(oldKey, {
+          type: "combo",
+          id: `combo-block-${block.id}`,
+          title: block.title || title,
+          onActivate: () => {
+            state.selectedComboBlockId = block.id;
+            state.comboBlockDraft = { title: block.title, sort_order: block.sort_order ?? 0, min_select: block.min_select ?? 1, max_select: block.max_select ?? 1 };
+            state.comboBlockProducts = [];
+            showComboBlockDetails({ block: state.comboBlockDraft, products: [] }, { mode: "view" });
+            apiGetComboBlock(block.id).then((r) => {
+              if (r?.data?.products) state.comboBlockProducts = r.data.products.map((p) => ({ product_id: p.product_id, name: p.product_name, sort_order: p.sort_order, is_default: p.is_default ? 1 : 0, photo: p.product_photo || null, price: p.product_price ?? 0, has_variants: p.has_variants ? 1 : 0, has_changeable_composition: p.has_changeable_composition ? 1 : 0 }));
+              renderComboBlockProductsList();
+            });
+            showProductFooterView();
+          },
+        });
+        state.comboPanel.tabKey = buildTabKey("combo", `combo-block-${block.id}`);
+        state.selectedComboBlockId = block.id;
+        state.comboBlockDraft = { title: block.title || title, sort_order: block.sort_order ?? sortOrder };
+        editingCombos.delete(String(tabKey).split(":")[1]);
+        await loadComboBlocks();
+        renderComboBlocksList();
+        showComboBlockDetails({ block: state.comboBlockDraft, products: state.comboBlockProducts }, { mode: "view" });
+        showProductFooterView();
+      } else {
+        const id = state.selectedComboBlockId;
+        if (!id) throw new Error("Блок не выбран");
+        await apiPatchComboBlock(id, { title, sort_order: sortOrder, min_select: minSelect, max_select: Math.max(minSelect, maxSelect), products });
+        await loadComboBlocks();
+        renderComboBlocksList();
+        const block = state.comboBlocks.find((b) => Number(b.id) === Number(id));
+        if (block) {
+          const tab = tabsState.tabs.find((t) => t.key === state.comboPanel.tabKey);
+          if (tab) tab.title = block.title || title;
+          renderTabs();
+        }
+        state.comboBlockDraft = { title, sort_order: sortOrder, min_select: minSelect, max_select: Math.max(minSelect, maxSelect) };
+        showComboBlockDetails({ block: state.comboBlockDraft, products: state.comboBlockProducts }, { mode: "view" });
+        showProductFooterView();
+      }
+    } catch (e) {
+      console.error("saveComboBlock", e);
+      alert("Ошибка при сохранении блока: " + (e && e.message ? e.message : "Неизвестная ошибка"));
+    }
+  }
+
   // ---------------- Load ----------------
 
   async function loadCategories() {
@@ -1085,6 +1328,7 @@
     const cid = categoryId || state.currentCategoryId;
     if (!cid) {
       state.products = [];
+      state.combosInCategory = [];
       return;
     }
     const res = await api(`/api/prod_products?tenant_id=${TENANT_ID}&category_id=${cid}`);
@@ -1093,6 +1337,19 @@
     state.products = products.filter(
       (p) => !(Number(p.is_active) === 0 && Number(p.site_visibility) === 0)
     );
+    const cat = state.categories.find((c) => Number(c.id) === Number(cid));
+    const categoryCode = cat && cat.code && String(cat.code).trim() && cat.code !== "all" ? String(cat.code).trim() : null;
+    try {
+      const combosRes = await apiGetCombos();
+      const allCombos = Array.isArray(combosRes?.data) ? combosRes.data : [];
+      if (categoryCode) {
+        state.combosInCategory = allCombos.filter((c) => String(c.category_code || "").trim() === categoryCode);
+      } else {
+        state.combosInCategory = allCombos;
+      }
+    } catch (e) {
+      state.combosInCategory = [];
+    }
   }
 
   async function loadOptionGroups() {
@@ -3660,7 +3917,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
   function renderProductsList() {
     if (!productsList) return;
 
-    productsList.innerHTML = state.products.map((p) => {
+    const productRows = state.products.map((p) => {
       const active = p.id === state.selectedProductId ? "is-active" : "";
       const sku = p.sku ? escapeHtml(p.sku) : "—";
 
@@ -3681,13 +3938,42 @@ function openAutoAddGroupModal({ mode, group } = {}) {
           </div>
         </div>
       `;
-    }).join("");
+    });
 
-    const empty = state.products.length === 0;
+    const combos = state.combosInCategory ?? [];
+    const comboRows = combos.map((c) => {
+      const title = (c.title || "").trim() || "Комбо";
+      const gridPlaceholder = `<div class="combo-row-photo-grid" data-combo-grid-id="${c.id}">${buildComboRowPhotoGridHtml([])}</div>`;
+      return `
+        <div class="order-row combo-row" data-combo-id="${c.id}" draggable="false">
+          ${gridPlaceholder}
+          <div class="combo-row-content">
+            <span class="product-title">${escapeHtml(title)}</span>
+            <span class="pill combo-row-pill">Комбо</span>
+            <span class="muted combo-row-muted">Комбо-набор</span>
+          </div>
+          <div class="product-right"></div>
+        </div>
+      `;
+    });
+
+    productsList.innerHTML = productRows.join("") + comboRows.join("");
+
+    combos.forEach((c) => {
+      const comboId = Number(c.id);
+      if (!Number.isFinite(comboId)) return;
+      getFirstFourBlockPhotosForCombo(comboId).then((urls) => {
+        const row = productsList.querySelector(`.combo-row[data-combo-id="${comboId}"]`);
+        const grid = row?.querySelector(".combo-row-photo-grid[data-combo-grid-id]");
+        if (grid) grid.innerHTML = buildComboRowPhotoGridHtml(urls);
+      });
+    });
+
+    const empty = state.products.length === 0 && combos.length === 0;
     if (productsEmptyHint) productsEmptyHint.style.display = empty ? "block" : "none";
 
-    // click select
-    $$(".order-row[data-id]", productsList).forEach((row) => {
+    // click select — product
+    $$(".order-row.product-row[data-id]", productsList).forEach((row) => {
       row.addEventListener("click", async () => {
         const id = Number(row.dataset.id);
         const p = state.products.find((x) => x.id === id);
@@ -3697,9 +3983,18 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       });
     });
 
-    // sortable persist
-    makeSortable(productsList, ".order-row", async () => {
-      const ordered = $$(".order-row", productsList).map((el) => Number(el.dataset.id)).filter(Number.isFinite);
+    // click select — combo (открываем в режиме просмотра)
+    $$(".order-row.combo-row[data-combo-id]", productsList).forEach((row) => {
+      row.addEventListener("click", () => {
+        const comboId = Number(row.dataset.comboId);
+        if (!Number.isFinite(comboId)) return;
+        openComboSetView(comboId);
+      });
+    });
+
+    // sortable persist (only product rows)
+    makeSortable(productsList, ".order-row.product-row", async () => {
+      const ordered = $$(".order-row.product-row", productsList).map((el) => Number(el.dataset.id)).filter(Number.isFinite);
       await api("/api/sort/prod_products", {
         method: "POST",
         body: JSON.stringify({ category_id: state.currentCategoryId, orderedProductIds: ordered }),
@@ -5909,6 +6204,613 @@ function updateOptionGroupSelectionUi() {
     renderVariantGroupLevel();
   }
 
+  function showComboBlockDetails(details, { mode }) {
+    if (!details && mode !== "create") return;
+    state.comboPanel.level = "group";
+    state.comboPanel.mode = mode || "view";
+    if (comboBlockLevelGroup) comboBlockLevelGroup.classList.remove("hidden");
+    if (comboBlockLevelPicker) comboBlockLevelPicker.classList.add("hidden");
+    const block = details?.block || {};
+    const products = details?.products ?? [];
+    state.comboBlockProducts = Array.isArray(products) ? products : [];
+    if (productTitle) productTitle.textContent = block.title || "Новый блок комбо";
+    if (productSku) productSku.textContent = "Блоки комбо";
+    if (productInfoHeader) productInfoHeader.classList.remove("hidden");
+    setHeaderMode("option");
+    if (editProductBtn) editProductBtn.classList.add("hidden");
+    hideProductFooter();
+
+    productEmpty && productEmpty.classList.add("hidden");
+    categoryEmpty && categoryEmpty.classList.add("hidden");
+    optionEmpty && optionEmpty.classList.add("hidden");
+    comboEmpty && comboEmpty.classList.add("hidden");
+    hideAllDetailPanels();
+    comboInfo && comboInfo.classList.remove("hidden");
+    if (productInfoHeader) productInfoHeader.classList.remove("hidden");
+
+    if (comboBlockTitleInput) comboBlockTitleInput.value = block.title ?? "";
+    if (comboBlockSortOrderInput) comboBlockSortOrderInput.value = block.sort_order ?? 0;
+    if (comboBlockMinSelectInput) comboBlockMinSelectInput.value = block.min_select ?? 1;
+    if (comboBlockMaxSelectInput) comboBlockMaxSelectInput.value = block.max_select ?? 1;
+
+    const isViewMode = (mode || state.comboPanel.mode) === "view";
+    if (comboBlockTitleInput) comboBlockTitleInput.readOnly = isViewMode;
+    if (comboBlockSortOrderInput) comboBlockSortOrderInput.readOnly = isViewMode;
+    if (comboBlockMinSelectInput) comboBlockMinSelectInput.readOnly = isViewMode;
+    if (comboBlockMaxSelectInput) comboBlockMaxSelectInput.readOnly = isViewMode;
+    const comboBlockProductsAddBtn = document.getElementById("comboBlockProductsAddBtn");
+    if (comboBlockProductsAddBtn) comboBlockProductsAddBtn.classList.toggle("hidden", isViewMode);
+
+    renderComboBlockProductsList();
+
+    if (mode === "view") showProductFooterView();
+    else showProductFooterEdit();
+
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile && sheetHost && comboInfo) {
+      sheetHost.innerHTML = "";
+      sheetHost.appendChild(comboInfo);
+      openSheet();
+    } else {
+      if (detailsDesktopHost && comboInfo && comboInfo.parentElement !== detailsDesktopHost) {
+        detailsDesktopHost.appendChild(comboInfo);
+      }
+      closeSheet();
+    }
+  }
+
+  function renderComboBlockProductsList() {
+    if (!comboBlockProductsList) return;
+    const items = state.comboBlockProducts || [];
+    if (items.length === 0) {
+      comboBlockProductsList.innerHTML = "<div class=\"muted\" style=\"padding:8px;\">Товаров пока нет. Нажмите «Добавить товар».</div>";
+      return;
+    }
+const isViewMode = state.comboPanel.mode === "view";
+    comboBlockProductsList.classList.toggle("is-view-mode", isViewMode);
+    comboBlockProductsList.innerHTML = items.map((item, idx) => {
+      const name = item.name || `Товар #${item.product_id}`;
+      const defaultBadge = item.is_default ? " <span class=\"muted\">(по умолчанию)</span>" : "";
+      const photoUrl = item.photo || "";
+      const thumb = photoUrl ? `<img class="combo-block-product-thumb" src="${escapeHtml(photoUrl)}" alt="" />` : "<span class=\"combo-block-product-thumb combo-block-product-thumb-placeholder\"><i class=\"fas fa-image\"></i></span>";
+      const priceNum = Number(item.price);
+      const priceStr = Number.isFinite(priceNum) ? formatPriceInteger(priceNum) + " Р" : "";
+      const starBtn = isViewMode ? "" : `<button class="btn btn-icon btn-ghost combo-block-product-star" type="button" data-set-default title="${item.is_default ? "По умолчанию" : "Сделать по умолчанию"}"><i class="${item.is_default ? "fas" : "far"} fa-star"></i></button>`;
+      const removeBtn = isViewMode ? "" : `<button class="option-row-remove" type="button" data-remove title="Удалить" aria-label="Удалить"><i class="fas fa-times"></i></button>`;
+      return `
+        <div class="combo-block-product-row-wrapper" data-idx="${idx}">
+          <div class="option-item-row combo-block-product-row" data-product-id="${item.product_id}" data-idx="${idx}">
+            <button class="combo-block-product-chevron" type="button" data-combo-chevron aria-expanded="false" title="Подробнее"><i class="fas fa-chevron-down"></i></button>
+            ${thumb}
+            <span class="option-item-title">${escapeHtml(name)}${defaultBadge}</span>
+            <span class="combo-block-product-price" data-product-id="${item.product_id}">${priceStr ? escapeHtml(priceStr) : ""}</span>
+            ${starBtn}
+            ${removeBtn}
+          </div>
+          <div class="combo-block-product-details" hidden data-product-id="${item.product_id}">
+            <div class="combo-block-product-details-inner"></div>
+          </div>
+        </div>
+      `;
+    }).join("");
+    comboBlockProductsList.querySelectorAll("[data-remove]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const row = btn.closest(".combo-block-product-row-wrapper");
+        const idx = parseInt(row?.dataset?.idx, 10);
+        if (!Number.isFinite(idx)) return;
+        state.comboBlockProducts.splice(idx, 1);
+        renderComboBlockProductsList();
+      });
+    });
+    comboBlockProductsList.querySelectorAll("[data-set-default]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const row = btn.closest(".combo-block-product-row-wrapper");
+        const idx = parseInt(row?.dataset?.idx, 10);
+        if (!Number.isFinite(idx)) return;
+        state.comboBlockProducts.forEach((p, i) => { p.is_default = i === idx ? 1 : 0; });
+        renderComboBlockProductsList();
+      });
+    });
+    comboBlockProductsList.querySelectorAll("[data-combo-chevron]").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const wrapper = btn.closest(".combo-block-product-row-wrapper");
+        const details = wrapper?.querySelector(".combo-block-product-details");
+        const inner = details?.querySelector(".combo-block-product-details-inner");
+        const productId = details?.dataset?.productId ? Number(details.dataset.productId) : null;
+        const wasExpanded = details?.getAttribute("hidden") == null;
+        if (details) details.hidden = wasExpanded;
+        if (btn) {
+          btn.setAttribute("aria-expanded", wasExpanded ? "false" : "true");
+          const icon = btn.querySelector("i");
+          if (icon) icon.className = wasExpanded ? "fas fa-chevron-down" : "fas fa-chevron-up";
+        }
+        if (!wasExpanded && details) {
+          requestAnimationFrame(() => {
+            details.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          });
+        }
+        if (!wasExpanded && inner && Number.isFinite(productId)) {
+          if (!inner.dataset.loaded) {
+            inner.dataset.loaded = "1";
+            inner.innerHTML = "<div class=\"muted\" style=\"padding:8px;\">Загрузка…</div>";
+            try {
+              if (!state.unitConversions || state.unitConversions.length === 0) {
+                const convRes = await apiGetUnitConversions();
+                state.unitConversions = Array.isArray(convRes?.data) ? convRes.data : [];
+              }
+              const [productRes, variantsRes, ingredientsRes] = await Promise.all([
+                apiGetProduct(productId),
+                apiGetProductVariants(productId),
+                apiGetProductIngredients(productId),
+              ]);
+              const product = productRes?.data || null;
+              const variants = (variantsRes?.data && Array.isArray(variantsRes.data)) ? variantsRes.data : [];
+              const ingredients = (ingredientsRes?.data && Array.isArray(ingredientsRes.data)) ? ingredientsRes.data : [];
+              inner.innerHTML = buildComboBlockProductDetailsHtml(product, variants, ingredients);
+              attachComboBlockProductDetailsHandlers(inner, wrapper, productId, product, variants, ingredients);
+              requestAnimationFrame(() => {
+                if (details) details.scrollIntoView({ behavior: "smooth", block: "nearest" });
+              });
+            } catch (err) {
+              inner.innerHTML = "<div class=\"muted\" style=\"padding:8px;\">Ошибка загрузки</div>";
+            }
+          }
+        }
+      });
+    });
+  }
+
+  function parseVariantValueNumber(value) {
+    const s = String(value ?? "").replace(",", ".");
+    const match = s.match(/-?\d+(?:\.\d+)?/);
+    return match ? Number(match[0]) : NaN;
+  }
+
+  function getComboBlockVariantUnitPrice(product, variants, selectedIndex) {
+    if (!product) return Number(product?.price || 0);
+    const basePrice = Number(product.price || 0);
+    if (!Array.isArray(variants) || !variants.length) return basePrice;
+    const idx = Number(selectedIndex);
+    if (!Number.isFinite(idx) || idx < 0) return basePrice;
+    const group = variants[0];
+    const baseUnitId = Number(product.base_unit_id || product.unit_id || group.unit_id || 0);
+    const baseQty = Number(product.base_qty || 1) || 1;
+    const variantUnitId = Number(group.unit_id || 0);
+    if (!Number.isFinite(baseUnitId) || !Number.isFinite(variantUnitId)) return basePrice;
+    const value = Array.isArray(group.values) ? group.values[idx] : null;
+    const numericValue = parseVariantValueNumber(value);
+    if (!Number.isFinite(numericValue)) return basePrice;
+    const factor = getConversionFactor(variantUnitId, baseUnitId);
+    if (factor == null) return basePrice;
+    const qtyInBase = numericValue * Number(factor || 0);
+    if (!Number.isFinite(qtyInBase) || qtyInBase <= 0) return basePrice;
+    let unitPrice = basePrice * (qtyInBase / baseQty);
+    const tiers = Array.isArray(group.discount_tiers) ? group.discount_tiers : [];
+    const tier = tiers.find((t) => Number(t.sort_order) === idx);
+    const discountPercent = Number(tier?.discount_percent || 0) || 0;
+    if (discountPercent !== 0) unitPrice = unitPrice * (1 - discountPercent / 100);
+    return unitPrice;
+  }
+
+  function getComboBlockQtyInBase(ing, qty) {
+    const baseUnitId = ing.ingredient_base_unit_id || ing.ingredient_unit_id;
+    const fromUnitId = Number(ing.unit_id || 0);
+    if (!baseUnitId || !fromUnitId) return null;
+    if (Number(fromUnitId) === Number(baseUnitId)) return Number(qty || 0);
+    const factor = getConversionFactor(fromUnitId, baseUnitId);
+    return factor != null ? Number(qty || 0) * factor : null;
+  }
+
+  function getComboBlockIngredientPriceDiff(ingredients, ingredientState) {
+    let currentTotal = 0;
+    let baseTotal = 0;
+    const variableIngredients = ingredients.filter((i) => Number(i.is_variable) === 1);
+    variableIngredients.forEach((ing) => {
+      const ingId = Number(ing.ingredient_id);
+      const currentQty = ingredientState.get(ingId) ?? Number(ing.quantity ?? 1);
+      const baseQty = Number(ing.quantity ?? 1);
+      const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
+      const ingredientPrice = Number(ing.ingredient_price || 0);
+      const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0 ? ingredientPrice / ingredientBaseQty : (ingredientPrice > 0 ? ingredientPrice : 0);
+      const pricePerUnit = ing.price_override != null && Number(ing.price_override) >= 0 ? Number(ing.price_override) : catalogBasePrice;
+      const currentQtyInBase = getComboBlockQtyInBase(ing, currentQty);
+      const baseQtyInBase = getComboBlockQtyInBase(ing, baseQty);
+      if (currentQtyInBase != null && Number.isFinite(pricePerUnit)) currentTotal += pricePerUnit * currentQtyInBase;
+      if (baseQtyInBase != null && Number.isFinite(pricePerUnit)) baseTotal += pricePerUnit * baseQtyInBase;
+    });
+    return currentTotal - baseTotal;
+  }
+
+  function buildComboBlockProductDetailsHtml(product, variants, ingredients) {
+    const parts = [];
+    const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
+    const formatVariantValue = (val, unitLabel) => {
+      const valueText = String(val ?? "").trim();
+      if (!valueText) return "";
+      if (!unitLabel || hasLetters(valueText)) return escapeHtml(valueText);
+      return escapeHtml(valueText + " " + unitLabel);
+    };
+    const defaultVariantIndex = (variants[0] && (variants[0].default_value_index != null || variants[0].assignment_default_value_index != null))
+      ? (Number(variants[0].assignment_default_value_index ?? variants[0].default_value_index) ?? 0)
+      : 0;
+    if (variants.length > 0) {
+      variants.forEach((vg, gIdx) => {
+        const unitLabel = (vg.unit_short_title || vg.unit_code || "").trim();
+        const title = (vg.title || "Варианты").trim();
+        const values = Array.isArray(vg.values) ? vg.values : [];
+        if (values.length === 0) return;
+        const defIdx = gIdx === 0 ? defaultVariantIndex : 0;
+        parts.push("<div class=\"combo-block-product-detail combo-block-detail-section\" data-variant-group-index=\"" + gIdx + "\">");
+        parts.push("<div class=\"combo-block-detail-label\">" + escapeHtml(title) + "</div>");
+        parts.push("<div class=\"combo-block-detail-chips\">");
+        values.forEach((val, vIdx) => {
+          const label = formatVariantValue(val, unitLabel);
+          if (!label) return;
+          const isSelected = gIdx === 0 && vIdx === defIdx;
+          parts.push("<button type=\"button\" class=\"combo-block-detail-chip" + (isSelected ? " is-selected" : "") + "\" data-variant-value-index=\"" + vIdx + "\">" + label + "</button>");
+        });
+        parts.push("</div></div>");
+      });
+    }
+    const variableIngredients = ingredients.filter((i) => Number(i.is_variable) === 1);
+    if (variableIngredients.length > 0) {
+      parts.push("<div class=\"combo-block-product-detail combo-block-detail-section\">");
+      parts.push("<div class=\"combo-block-detail-label\">Состав (можно настроить):</div>");
+      parts.push("<div class=\"combo-block-detail-ingredients\">");
+      variableIngredients.forEach((ing) => {
+        const qty = Number(ing.quantity) ?? 0;
+        const unit = (ing.unit_short_title || ing.unit_title || ing.unit_code || "").trim();
+        const name = (ing.ingredient_name || "").trim() || "—";
+        const ingId = Number(ing.ingredient_id);
+        const photos = Array.isArray(ing.ingredient_photos) ? ing.ingredient_photos : [];
+        const photoUrl = photos.length > 0 ? (photos[0].url || photos[0]) : "";
+        const thumb = photoUrl ? "<img class=\"combo-block-ingredient-thumb\" src=\"" + escapeHtml(photoUrl) + "\" alt=\"\" />" : "<span class=\"combo-block-ingredient-thumb combo-block-ingredient-thumb-placeholder\"><i class=\"fas fa-image\"></i></span>";
+        parts.push("<div class=\"combo-block-detail-ingredient-row\" data-ingredient-id=\"" + ingId + "\">");
+        parts.push(thumb);
+        parts.push("<span class=\"combo-block-ingredient-name\">" + escapeHtml(name) + "</span>");
+        parts.push("<div class=\"combo-block-ingredient-qty-wrap\"><button type=\"button\" class=\"combo-block-ingredient-btn combo-block-ingredient-minus\" aria-label=\"Меньше\">−</button><span class=\"combo-block-ingredient-qty\">" + qty + " " + escapeHtml(unit) + "</span><button type=\"button\" class=\"combo-block-ingredient-btn combo-block-ingredient-plus\" aria-label=\"Больше\">+</button></div>");
+        parts.push("</div>");
+      });
+      parts.push("</div></div>");
+    }
+    if (parts.length === 0) {
+      return "<div class=\"combo-block-product-detail muted\">Нет вариантов и изменяемого состава</div>";
+    }
+    return parts.join("");
+  }
+
+  function attachComboBlockProductDetailsHandlers(inner, wrapper, productId, product, variants, ingredients) {
+    const priceEl = wrapper?.querySelector(".combo-block-product-price[data-product-id=\"" + productId + "\"]");
+    const priceCell = wrapper?.querySelector(".combo-set-price-cell");
+    const variableIngredients = ingredients.filter((i) => Number(i.is_variable) === 1);
+    const defaultVariantIndex = (variants[0] && (variants[0].default_value_index != null || variants[0].assignment_default_value_index != null))
+      ? (Number(variants[0].assignment_default_value_index ?? variants[0].default_value_index) ?? 0)
+      : 0;
+    let variantSelectedIndex = defaultVariantIndex;
+    const ingredientState = new Map();
+    variableIngredients.forEach((ing) => {
+      ingredientState.set(Number(ing.ingredient_id), Number(ing.quantity ?? 0));
+    });
+    function updatePriceDisplay() {
+      if (!priceEl && !priceCell) return;
+      const basePrice = getComboBlockVariantUnitPrice(product, variants, variantSelectedIndex);
+      const diff = getComboBlockIngredientPriceDiff(ingredients, ingredientState);
+      const total = (Number(basePrice) || 0) + (Number(diff) || 0);
+      const rounded = Math.round(total);
+      const inComboSet = wrapper?.closest("#comboSetBlocksList");
+      if (inComboSet && priceCell) {
+        const discountEl = document.getElementById("comboSetDiscount");
+        const discountPercent = Number(discountEl?.value) || 0;
+        const oldStr = formatPriceInteger(rounded) + " Р";
+        const newNum = discountPercent > 0 ? rounded * (1 - discountPercent / 100) : rounded;
+        const newStr = formatPriceInteger(Math.round(newNum)) + " Р";
+        if (discountPercent > 0) {
+          priceCell.innerHTML = `<span class="combo-set-price-wrap"><span class="combo-set-price-old" data-base-price="${rounded}">${oldStr}</span> <span class="combo-block-product-price" data-product-id="${productId}" data-base-price="${rounded}">${newStr}</span></span>`;
+        } else {
+          priceCell.innerHTML = `<span class="combo-block-product-price" data-product-id="${productId}" data-base-price="${rounded}">${oldStr}</span>`;
+        }
+        return;
+      }
+      if (priceEl) priceEl.textContent = formatPriceInteger(rounded) + " Р";
+    }
+    inner.querySelectorAll(".combo-block-detail-chip").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const groupSection = btn.closest("[data-variant-group-index]");
+        const groupIndex = groupSection ? parseInt(groupSection.dataset.variantGroupIndex, 10) : 0;
+        if (groupIndex !== 0) return;
+        const idx = parseInt(btn.dataset.variantValueIndex, 10);
+        if (!Number.isFinite(idx)) return;
+        variantSelectedIndex = idx;
+        inner.querySelectorAll(".combo-block-detail-chip").forEach((b) => b.classList.remove("is-selected"));
+        btn.classList.add("is-selected");
+        updatePriceDisplay();
+      });
+    });
+    variableIngredients.forEach((ing) => {
+      const ingId = Number(ing.ingredient_id);
+      const row = inner.querySelector(".combo-block-detail-ingredient-row[data-ingredient-id=\"" + ingId + "\"]");
+      if (!row) return;
+      const qtyDisplay = row.querySelector(".combo-block-ingredient-qty");
+      const minusBtn = row.querySelector(".combo-block-ingredient-minus");
+      const plusBtn = row.querySelector(".combo-block-ingredient-plus");
+      const defaultQty = Number(ing.quantity ?? 0);
+      const isVariable = Number(ing.is_variable) === 1;
+      const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
+      const min = rawMin !== null ? rawMin : (isVariable ? 0 : defaultQty);
+      const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
+      const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
+      const unitLabel = (ing.unit_short_title || ing.unit_title || ing.unit_code || "").trim();
+      function updateQtyDisplay() {
+        const q = ingredientState.get(ingId) ?? defaultQty;
+        if (qtyDisplay) qtyDisplay.textContent = q + " " + unitLabel;
+      }
+      function setQty(newQty) {
+        let v = newQty;
+        if (step > 0) {
+          const stepsFromMin = Math.round((v - min) / step);
+          v = min + (stepsFromMin * step);
+        }
+        v = Math.max(min, Math.min(max, v));
+        ingredientState.set(ingId, v);
+        updateQtyDisplay();
+        updatePriceDisplay();
+      }
+      if (minusBtn) minusBtn.addEventListener("click", () => setQty((ingredientState.get(ingId) ?? defaultQty) - step));
+      if (plusBtn) plusBtn.addEventListener("click", () => setQty((ingredientState.get(ingId) ?? defaultQty) + step));
+      updateQtyDisplay();
+    });
+    updatePriceDisplay();
+  }
+
+  function openComboBlockProductsAccordion() {
+    if (!comboBlockProductsList) return;
+    const item = comboBlockProductsList.closest(".acc-item");
+    const trigger = item?.querySelector("[data-acc-trigger]");
+    const panel = item?.querySelector("[data-acc-panel]");
+    if (!panel || !trigger) return;
+    if (panel.classList.contains("is-open")) {
+      requestAnimationFrame(() => { panel.style.maxHeight = panel.scrollHeight + "px"; });
+      return;
+    }
+    panel.classList.add("is-open");
+    trigger.classList.add("is-open");
+    panel.style.maxHeight = panel.scrollHeight + "px";
+  }
+
+  async function openComboBlockProductPicker() {
+    if (!state.catalogCategories.length) {
+      await loadCatalogCategories();
+    }
+    state.comboPanel.level = "picker";
+    const list = state.catalogCategories || [];
+    const hasAllCategory = list.some((c) => c.code === "all" || (c.title || "").trim() === "Все товары");
+    state.comboPanel.pickerCategoryId = hasAllCategory && list[0] ? Number(list[0].id) : null;
+    state.comboPanel.pickerQuery = "";
+    state.comboPanel.pickerSelection = new Set();
+    if (comboBlockPickerSearch) comboBlockPickerSearch.value = "";
+    await refreshComboBlockPickerProducts();
+    if (comboBlockLevelGroup) comboBlockLevelGroup.classList.add("hidden");
+    if (comboBlockLevelPicker) comboBlockLevelPicker.classList.remove("hidden");
+    renderComboBlockPickerTabs();
+    renderComboBlockPickerList();
+    showProductFooterEdit();
+    const footer = $("#productInfoFooter");
+    const footerView = $("#productFooterView");
+    const footerEditMode = $("#productFooterEditMode");
+    const footerCancelBtn = $("#productFooterCancelBtn");
+    const footerSaveBtn = $("#productFooterSaveBtn");
+    const footerDeleteBtn = $("#productFooterDeleteEditBtn");
+    const footerMoreBtn = $("#productFooterMoreEditBtn");
+    if (footer && footerView && footerEditMode && footerCancelBtn && footerSaveBtn) {
+      if (!comboBlockPickerSavedFooterState) {
+        comboBlockPickerSavedFooterState = {
+          footerHidden: footer.classList.contains("hidden"),
+          viewHidden: footerView.classList.contains("hidden"),
+          editHidden: footerEditMode.classList.contains("hidden"),
+          deleteBtnHidden: footerDeleteBtn ? footerDeleteBtn.classList.contains("hidden") : false,
+          moreBtnHidden: footerMoreBtn ? footerMoreBtn.classList.contains("hidden") : false,
+          cancelBtnIsConfirm: footerCancelBtn.classList.contains("is-confirm"),
+          cancelBtnIsFullwidth: footerCancelBtn.classList.contains("is-fullwidth"),
+        };
+        comboBlockPickerSavedHandlers = { cancel: footerCancelBtn.onclick, save: footerSaveBtn.onclick };
+      }
+      footer.classList.remove("hidden");
+      footerView.classList.add("hidden");
+      footerEditMode.classList.remove("hidden");
+      if (footerDeleteBtn) footerDeleteBtn.classList.add("hidden");
+      if (footerMoreBtn) footerMoreBtn.classList.add("hidden");
+      footerCancelBtn.classList.remove("is-confirm");
+      footerCancelBtn.classList.add("is-fullwidth");
+      if (!footerCancelBtn.dataset.pickerOriginalHtml) footerCancelBtn.dataset.pickerOriginalHtml = footerCancelBtn.innerHTML;
+      footerCancelBtn.textContent = "Отменить";
+      footerSaveBtn.textContent = "Добавить выбранные";
+      footerCancelBtn.dataset.pickerType = "combo";
+      footerSaveBtn.dataset.pickerType = "combo";
+      window._closeComboBlockPickerFn = () => {
+        if (footerCancelBtn) delete footerCancelBtn.dataset.pickerType;
+        if (footerSaveBtn) delete footerSaveBtn.dataset.pickerType;
+        delete window._closeComboBlockPickerFn;
+        delete window._saveComboBlockPickerFn;
+        restoreComboBlockPickerFooter();
+        state.comboPanel.level = "group";
+        if (comboBlockLevelGroup) comboBlockLevelGroup.classList.remove("hidden");
+        if (comboBlockLevelPicker) comboBlockLevelPicker.classList.add("hidden");
+      };
+      window._saveComboBlockPickerFn = applyComboBlockPickerSelection;
+      footerCancelBtn.onclick = window._closeComboBlockPickerFn;
+      footerSaveBtn.onclick = async () => { await window._saveComboBlockPickerFn(); };
+    }
+  }
+
+  function restoreComboBlockPickerFooter() {
+    const footer = $("#productInfoFooter");
+    const footerView = $("#productFooterView");
+    const footerEditMode = $("#productFooterEditMode");
+    const footerCancelBtn = $("#productFooterCancelBtn");
+    const footerSaveBtn = $("#productFooterSaveBtn");
+    const footerDeleteBtn = $("#productFooterDeleteEditBtn");
+    const footerMoreBtn = $("#productFooterMoreEditBtn");
+    if (!footer || !footerView || !footerEditMode || !footerCancelBtn || !footerSaveBtn || !comboBlockPickerSavedFooterState) return;
+    if (comboBlockPickerSavedFooterState.footerHidden) footer.classList.add("hidden"); else footer.classList.remove("hidden");
+    if (comboBlockPickerSavedFooterState.viewHidden) footerView.classList.add("hidden"); else footerView.classList.remove("hidden");
+    if (comboBlockPickerSavedFooterState.editHidden) footerEditMode.classList.add("hidden"); else footerEditMode.classList.remove("hidden");
+    if (footerDeleteBtn) (comboBlockPickerSavedFooterState.deleteBtnHidden ? footerDeleteBtn.classList.add("hidden") : footerDeleteBtn.classList.remove("hidden"));
+    if (footerMoreBtn) (comboBlockPickerSavedFooterState.moreBtnHidden ? footerMoreBtn.classList.add("hidden") : footerMoreBtn.classList.remove("hidden"));
+    if (comboBlockPickerSavedFooterState.cancelBtnIsFullwidth) footerCancelBtn.classList.add("is-fullwidth"); else footerCancelBtn.classList.remove("is-fullwidth");
+    if (comboBlockPickerSavedFooterState.cancelBtnIsConfirm) footerCancelBtn.classList.add("is-confirm"); else footerCancelBtn.classList.remove("is-confirm");
+    if (footerCancelBtn.dataset.pickerOriginalHtml) { footerCancelBtn.innerHTML = footerCancelBtn.dataset.pickerOriginalHtml; delete footerCancelBtn.dataset.pickerOriginalHtml; }
+    footerSaveBtn.textContent = "Сохранить";
+    if (comboBlockPickerSavedHandlers) { footerCancelBtn.onclick = comboBlockPickerSavedHandlers.cancel; footerSaveBtn.onclick = comboBlockPickerSavedHandlers.save; }
+    comboBlockPickerSavedFooterState = null;
+    comboBlockPickerSavedHandlers = null;
+  }
+
+  async function applyComboBlockPickerSelection() {
+    const footerCancelBtn = $("#productFooterCancelBtn");
+    const footerSaveBtn = $("#productFooterSaveBtn");
+    if (footerCancelBtn) delete footerCancelBtn.dataset.pickerType;
+    if (footerSaveBtn) delete footerSaveBtn.dataset.pickerType;
+    delete window._closeComboBlockPickerFn;
+    delete window._saveComboBlockPickerFn;
+    restoreComboBlockPickerFooter();
+    state.comboPanel.level = "group";
+    if (comboBlockLevelGroup) comboBlockLevelGroup.classList.remove("hidden");
+    if (comboBlockLevelPicker) comboBlockLevelPicker.classList.add("hidden");
+    const selectedIds = new Set(Array.from(state.comboPanel.pickerSelection || []).map((id) => Number(id)));
+    const products = state.comboPanel.pickerProducts || [];
+    const existingIds = new Set((state.comboBlockProducts || []).map((p) => Number(p.product_id)));
+    const hadNone = state.comboBlockProducts.length === 0;
+    const addedIds = [];
+    let firstNew = true;
+    for (const product of products) {
+      const pid = Number(product.id);
+      if (!Number.isFinite(pid) || !selectedIds.has(pid)) continue;
+      if (existingIds.has(pid)) continue;
+      const photos = product.photos || product.photos_json;
+      const photo = Array.isArray(photos) && photos.length > 0 ? photos[0] : null;
+      state.comboBlockProducts.push({
+        product_id: product.id,
+        name: product.name || "",
+        sort_order: state.comboBlockProducts.length,
+        is_default: hadNone && firstNew ? 1 : 0,
+        photo: photo || null,
+        price: Number(product.price) || 0,
+        has_variants: Number(product.has_variants) ? 1 : 0,
+        has_changeable_composition: Number(product.has_changeable_composition) ? 1 : 0,
+      });
+      addedIds.push(pid);
+      existingIds.add(pid);
+      firstNew = false;
+    }
+    if (addedIds.length > 0) {
+      try {
+        const res = await apiGetComboBlockProductFlags(addedIds);
+        const flagsList = Array.isArray(res?.data) ? res.data : [];
+        const flagsByPid = new Map(flagsList.map((f) => [Number(f.product_id), f]));
+        state.comboBlockProducts.forEach((p) => {
+          const fid = Number(p.product_id);
+          const flags = flagsByPid.get(fid);
+          if (flags) {
+            p.has_variants = flags.has_variants ? 1 : 0;
+            p.has_changeable_composition = flags.has_changeable_composition ? 1 : 0;
+          }
+        });
+      } catch (_) {}
+    }
+    renderComboBlockProductsList();
+    openComboBlockProductsAccordion();
+  }
+
+  function closeComboBlockProductPicker() {
+    if (window._closeComboBlockPickerFn) window._closeComboBlockPickerFn();
+  }
+
+  async function refreshComboBlockPickerProducts() {
+    const res = await apiGetCatalogProducts({
+      categoryId: state.comboPanel.pickerCategoryId,
+      query: state.comboPanel.pickerQuery,
+    });
+    state.comboPanel.pickerProducts = Array.isArray(res?.data) ? res.data : [];
+  }
+
+  function renderComboBlockPickerTabs() {
+    if (!comboBlockPickerTabs) return;
+    const list = state.catalogCategories || [];
+    const isAllCat = (c) => c.code === "all" || (c.title || "").trim() === "Все товары";
+    const hasAllCategory = list.some(isAllCat);
+    const categories = hasAllCategory
+      ? (() => {
+          const allCat = list.find(isAllCat);
+          const rest = list.filter((c) => !isAllCat(c));
+          return allCat ? [allCat, ...rest] : [{ id: null, title: "Все товары" }, ...list];
+        })()
+      : [{ id: null, title: "Все товары" }].concat(list);
+    const lastScroll = Number.isFinite(state.comboPanel.pickerTabsScrollLeft) ? state.comboPanel.pickerTabsScrollLeft : comboBlockPickerTabs.scrollLeft;
+    comboBlockPickerTabs.innerHTML = categories.map((cat) => {
+      const active = (cat.id == null && state.comboPanel.pickerCategoryId == null) || Number(cat.id) === Number(state.comboPanel.pickerCategoryId);
+      return `<button class="option-picker-tab chip ${active ? "is-active" : ""}" type="button" data-cat-id="${cat.id == null ? "" : cat.id}">${escapeHtml(cat.title || "")}</button>`;
+    }).join("");
+    if (typeof bindHorizontalScroll === "function") bindHorizontalScroll(comboBlockPickerTabs);
+    requestAnimationFrame(() => { comboBlockPickerTabs.scrollLeft = lastScroll; });
+    comboBlockPickerTabs.querySelectorAll("[data-cat-id]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const v = btn.dataset.catId;
+        state.comboPanel.pickerCategoryId = v === "" ? null : Number(v);
+        renderComboBlockPickerTabs();
+        await refreshComboBlockPickerProducts();
+        renderComboBlockPickerList();
+      });
+    });
+  }
+
+  function updateComboBlockPickerSelectAllState() {
+    if (!comboBlockPickerSelectAll || !comboBlockPickerSelectAllLabel) return;
+    const products = state.comboPanel.pickerProducts || [];
+    const ids = products.map((p) => Number(p.id));
+    const selectedCount = ids.filter((id) => Number.isFinite(id) && state.comboPanel.pickerSelection.has(id)).length;
+    const allSelected = ids.length > 0 && selectedCount === ids.length;
+    const noneSelected = selectedCount === 0;
+    comboBlockPickerSelectAll.checked = allSelected;
+    comboBlockPickerSelectAll.indeterminate = !allSelected && !noneSelected;
+    comboBlockPickerSelectAll.disabled = ids.length === 0;
+    const label = allSelected ? "Сбросить все" : "Выделить все";
+    comboBlockPickerSelectAllLabel.textContent = label;
+  }
+
+  function renderComboBlockPickerList() {
+    if (!comboBlockPickerList) return;
+    const products = state.comboPanel.pickerProducts || [];
+    const query = (comboBlockPickerSearch?.value ?? "").trim().toLowerCase();
+    const filtered = query ? products.filter((p) => (p.name || "").toLowerCase().includes(query)) : products;
+    comboBlockPickerList.innerHTML = filtered.map((product) => {
+      const pid = Number(product.id);
+      const checked = Number.isFinite(pid) && state.comboPanel.pickerSelection.has(pid);
+      return `
+        <div class="option-picker-row ${checked ? "is-selected" : ""}" data-product-id="${product.id}">
+          <div class="option-picker-title">${escapeHtml(product.name || "")}</div>
+          <div class="option-picker-price">Цена: ${product.price != null ? formatPriceInteger(product.price) : "—"}</div>
+          <input class="option-picker-checkbox" type="checkbox" data-product-id="${product.id}" ${checked ? "checked" : ""} />
+        </div>
+      `;
+    }).join("");
+    comboBlockPickerList.querySelectorAll(".option-picker-row[data-product-id]").forEach((row) => {
+      row.addEventListener("click", () => {
+        const id = Number(row.dataset.productId);
+        if (!Number.isFinite(id)) return;
+        if (state.comboPanel.pickerSelection.has(id)) state.comboPanel.pickerSelection.delete(id);
+        else state.comboPanel.pickerSelection.add(id);
+        renderComboBlockPickerList();
+      });
+    });
+    comboBlockPickerList.querySelectorAll(".option-picker-checkbox").forEach((cb) => {
+      cb.addEventListener("click", (e) => e.stopPropagation());
+    });
+    updateComboBlockPickerSelectAllState();
+  }
+
   async function openVariantPicker(mode) {
     if (!state.variantDraft) state.variantDraft = { group: {}, tiers: [], assignments: [] };
     if (!state.catalogCategories.length) {
@@ -6471,6 +7373,33 @@ function updateOptionGroupSelectionUi() {
     showProductFooterEdit();
   }
 
+  function startComboBlockCreate() {
+    state.comboBlockDraft = { title: "", sort_order: 0, min_select: 1, max_select: 1 };
+    state.comboBlockProducts = [];
+    state.comboPanel.mode = "create";
+
+    const tabId = `new-combo-block-${Date.now()}`;
+    ensureTab({
+      type: "combo",
+      id: tabId,
+      title: "Новый блок комбо",
+      onActivate: () => {
+        if (editingCombos.has(tabId)) {
+          const es = editingCombos.get(tabId);
+          state.comboBlockDraft = es.blockDraft ? deepClone(es.blockDraft) : state.comboBlockDraft;
+          state.comboBlockProducts = es.products ? deepClone(es.products) : state.comboBlockProducts;
+        }
+        showComboBlockDetails({ block: state.comboBlockDraft || {}, products: state.comboBlockProducts }, { mode: "create" });
+        showProductFooterEdit();
+      },
+      activate: true,
+    });
+
+    state.comboPanel.tabKey = buildTabKey("combo", tabId);
+    showComboBlockDetails({ block: state.comboBlockDraft, products: state.comboBlockProducts }, { mode: "create" });
+    showProductFooterEdit();
+  }
+
   function startOptionEdit({ silent = false } = {}) {
     if (!state.optionGroupDetails?.group) return;
     state.optionPanel.snapshotData = deepClone({
@@ -6937,6 +7866,9 @@ function updateOptionGroupSelectionUi() {
     variantGroupInfo && variantGroupInfo.classList.add("hidden");
     autoAddGroupInfo && autoAddGroupInfo.classList.add("hidden");
     unitInfo && unitInfo.classList.add("hidden");
+    comboInfo && comboInfo.classList.add("hidden");
+    const comboSetInfo = document.getElementById("comboSetInfo");
+    if (comboSetInfo) comboSetInfo.classList.add("hidden");
   }
 
   function showDetailsEmpty() {
@@ -6944,16 +7876,988 @@ function updateOptionGroupSelectionUi() {
     const showOption = state.mode === "options";
     const showAutoAdd = state.mode === "auto-add";
     const showUnit = state.mode === "units";
+    const showCombo = state.mode === "combo-blocks";
     hideAllDetailPanels();
     if (productInfoHeader) productInfoHeader.classList.add("hidden");
     setHeaderMode("product");
-    if (productEmpty) productEmpty.classList.toggle("hidden", showCategory || showOption || showAutoAdd || showUnit);
+    if (productEmpty) productEmpty.classList.toggle("hidden", showCategory || showOption || showAutoAdd || showUnit || showCombo);
     if (categoryEmpty) categoryEmpty.classList.toggle("hidden", !showCategory);
     if (optionEmpty) optionEmpty.classList.toggle("hidden", !showOption);
     if (autoAddEmpty) autoAddEmpty.classList.toggle("hidden", !showAutoAdd);
-    if (editProductBtn && (showOption || showAutoAdd || showUnit)) editProductBtn.classList.add("hidden");
+    if (comboEmpty) comboEmpty.classList.toggle("hidden", !showCombo);
+    if (editProductBtn && (showOption || showAutoAdd || showUnit || showCombo)) editProductBtn.classList.add("hidden");
     hideProductFooter();
     closeSheet();
+  }
+
+  function setComboSetFormReadOnly(readOnly) {
+    const comboSetInfo = document.getElementById("comboSetInfo");
+    const ids = ["comboSetTitle", "comboSetDescription", "comboSetDiscount", "comboSetSortOrder", "comboSetIsActive"];
+    ids.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        if (el.type === "checkbox") el.disabled = readOnly;
+        else el.readOnly = readOnly;
+      }
+    });
+    if (comboSetInfo) comboSetInfo.classList.toggle("combo-set-view-mode", readOnly);
+  }
+
+  function activateComboSetTab() {
+    hideAllDetailPanels();
+    if (productInfoHeader) productInfoHeader.classList.add("hidden");
+    if (productEmpty) productEmpty.classList.add("hidden");
+    if (comboEmpty) comboEmpty.classList.add("hidden");
+    setHeaderMode("product");
+    const productEditorWrapper = productInfoBody && productInfoBody.querySelector(".product-editor-wrapper");
+    if (productEditorWrapper) productEditorWrapper.classList.add("hidden");
+    const comboSetInfo = document.getElementById("comboSetInfo");
+    if (comboSetInfo) comboSetInfo.classList.remove("hidden");
+    fillComboSetFormFromState();
+    renderComboSetBlocksList();
+    closeComboSetBlockPicker();
+    const isView = state.comboSetPanel?.mode === "view";
+    setComboSetFormReadOnly(isView);
+    if (isView) {
+      showProductFooterView();
+    } else {
+      showProductFooterEdit();
+      const footerCancelBtn = document.getElementById("productFooterCancelBtn");
+      const footerSaveBtn = document.getElementById("productFooterSaveBtn");
+      const footerDeleteBtn = document.getElementById("productFooterDeleteEditBtn");
+      if (footerCancelBtn) {
+        resetTwoStepButton(footerCancelBtn);
+        delete footerCancelBtn.dataset.pickerType;
+        delete footerCancelBtn.dataset.pickerOriginalHtml;
+        footerCancelBtn.classList.remove("is-confirm");
+        footerCancelBtn.classList.remove("is-fullwidth");
+        footerCancelBtn.innerHTML = "<i class=\"fas fa-times\"></i>";
+        footerCancelBtn.title = "Отменить";
+        footerCancelBtn.setAttribute("aria-label", "Отменить");
+      }
+      if (footerSaveBtn) {
+        footerSaveBtn.textContent = "Сохранить";
+        footerSaveBtn.onclick = saveComboSet;
+      }
+      if (footerDeleteBtn) footerDeleteBtn.classList.remove("hidden");
+    }
+  }
+
+  function openComboSetCreate() {
+    state.comboSetPanel = state.comboSetPanel || {
+      mode: "create",
+      comboId: null,
+      blocks: [],
+      blockPickerOpen: false,
+      blockPickerSelection: new Set(),
+    };
+    state.comboSetPanel.mode = "create";
+    state.comboSetPanel.comboId = null;
+    state.comboSetPanel.blocks = [];
+    state.comboSetPanel.blockPickerOpen = false;
+    state.comboSetPanel.blockPickerSelection = new Set();
+    state.comboSetPanel.photos = [];
+    state.comboSetPanel.activePhotoIdx = -1;
+    if (state.mode === "products" && state.currentCategoryId) {
+      state.comboSetPanel.categoryIds = [state.currentCategoryId];
+    } else {
+      state.comboSetPanel.categoryIds = [];
+    }
+    state.comboSetPanel.formInitialized = false;
+    const tabId = "new-combo-set-" + Date.now();
+    ensureTab({
+      type: "combo-set",
+      id: tabId,
+      title: "Новый комбо-набор",
+      onActivate: activateComboSetTab,
+      activate: true,
+    });
+  }
+
+  async function openComboSetView(comboId) {
+    if (!Number.isFinite(comboId)) return;
+    try {
+      const [comboRes, blocksRes] = await Promise.all([
+        apiGetCombo(comboId),
+        apiGetComboSetBlocks(comboId),
+      ]);
+      const combo = comboRes?.data;
+      if (!combo) return;
+      const blocksRows = Array.isArray(blocksRes?.data) ? blocksRes.data : [];
+      const blocks = blocksRows.map((r) => ({
+        block_id: r.block_id,
+        block_title: r.block_title,
+        sort_order: r.sort_order ?? 0,
+      }));
+      state.comboSetPanel = state.comboSetPanel || {};
+      state.comboSetPanel.mode = "view";
+      state.comboSetPanel.comboId = comboId;
+      state.comboSetPanel.combo = combo;
+      state.comboSetPanel.blocks = blocks;
+      state.comboSetPanel.blockPickerOpen = false;
+      state.comboSetPanel.blockPickerSelection = new Set();
+      state.comboSetPanel.photos = combo.image_url ? [{ kind: "url", url: String(combo.image_url).trim() }] : [];
+      state.comboSetPanel.activePhotoIdx = state.comboSetPanel.photos.length ? 0 : -1;
+      const code = (combo.category_code || "").trim();
+      const catByCode = state.categories.find((c) => String(c.code || "").trim() === code);
+      state.comboSetPanel.categoryIds = catByCode ? [Number(catByCode.id)] : [];
+      state.comboSetPanel.formInitialized = true;
+      ensureTab({
+        type: "combo-set",
+        id: String(comboId),
+        title: (combo.title || "").trim() || "Комбо",
+        onActivate: activateComboSetTab,
+        activate: true,
+      });
+    } catch (e) {
+      console.error("openComboSetView", e);
+      if (typeof toast !== "undefined") toast("Ошибка загрузки комбо-набора");
+    }
+  }
+
+  async function openComboSetEdit(comboId) {
+    if (!Number.isFinite(comboId)) return;
+    try {
+      const [comboRes, blocksRes] = await Promise.all([
+        apiGetCombo(comboId),
+        apiGetComboSetBlocks(comboId),
+      ]);
+      const combo = comboRes?.data;
+      if (!combo) return;
+      const blocksRows = Array.isArray(blocksRes?.data) ? blocksRes.data : [];
+      const blocks = blocksRows.map((r) => ({
+        block_id: r.block_id,
+        block_title: r.block_title,
+        sort_order: r.sort_order ?? 0,
+      }));
+      state.comboSetPanel = state.comboSetPanel || {};
+      state.comboSetPanel.mode = "edit";
+      state.comboSetPanel.comboId = comboId;
+      state.comboSetPanel.combo = combo;
+      state.comboSetPanel.blocks = blocks;
+      state.comboSetPanel.blockPickerOpen = false;
+      state.comboSetPanel.blockPickerSelection = new Set();
+      state.comboSetPanel.photos = combo.image_url ? [{ kind: "url", url: String(combo.image_url).trim() }] : [];
+      state.comboSetPanel.activePhotoIdx = state.comboSetPanel.photos.length ? 0 : -1;
+      const code = (combo.category_code || "").trim();
+      const catByCode = state.categories.find((c) => String(c.code || "").trim() === code);
+      state.comboSetPanel.categoryIds = catByCode ? [Number(catByCode.id)] : [];
+      state.comboSetPanel.formInitialized = true;
+      ensureTab({
+        type: "combo-set",
+        id: String(comboId),
+        title: (combo.title || "").trim() || "Комбо",
+        onActivate: activateComboSetTab,
+        activate: true,
+      });
+    } catch (e) {
+      console.error("openComboSetEdit", e);
+      if (typeof toast !== "undefined") toast("Ошибка загрузки комбо-набора");
+    }
+  }
+
+  function fillComboSetFormFromState() {
+    const titleEl = document.getElementById("comboSetTitle");
+    const descEl = document.getElementById("comboSetDescription");
+    const discountEl = document.getElementById("comboSetDiscount");
+    const sortEl = document.getElementById("comboSetSortOrder");
+    const activeEl = document.getElementById("comboSetIsActive");
+    if (state.comboSetPanel.mode === "create" || !state.comboSetPanel.comboId) {
+      if (!state.comboSetPanel.formInitialized) {
+        if (titleEl) titleEl.value = "";
+        if (descEl) descEl.value = "";
+        if (discountEl) discountEl.value = "0";
+        if (sortEl) sortEl.value = "0";
+        if (activeEl) activeEl.checked = true;
+        state.comboSetPanel.photos = [];
+        state.comboSetPanel.activePhotoIdx = -1;
+        state.comboSetPanel.categoryIds = [];
+        state.comboSetPanel.formInitialized = true;
+      } else {
+        state.comboSetPanel.categoryIds = state.comboSetPanel.categoryIds ?? [];
+        state.comboSetPanel.photos = state.comboSetPanel.photos ?? [];
+        state.comboSetPanel.activePhotoIdx = typeof state.comboSetPanel.activePhotoIdx === "number" ? state.comboSetPanel.activePhotoIdx : -1;
+      }
+      renderComboSetPhotos();
+      renderComboSetCategoryChips();
+      return;
+    }
+    const combo = state.comboSetPanel.combo || {};
+    if (titleEl) titleEl.value = combo.title ?? "";
+    if (descEl) descEl.value = combo.description ?? "";
+    if (discountEl) discountEl.value = combo.discount_percent ?? 0;
+    if (sortEl) sortEl.value = combo.sort_order ?? 0;
+    if (activeEl) activeEl.checked = combo.is_active !== 0;
+    const url = combo.image_url ? String(combo.image_url).trim() : "";
+    state.comboSetPanel.photos = url ? [{ kind: "url", url }] : [];
+    state.comboSetPanel.activePhotoIdx = state.comboSetPanel.photos.length ? 0 : -1;
+    const code = (combo.category_code || "").trim();
+    const cat = state.categories.find((c) => String(c.code || "").trim() === code);
+    state.comboSetPanel.categoryIds = cat ? [Number(cat.id)] : [];
+    renderComboSetPhotos();
+    renderComboSetCategoryChips();
+  }
+
+  function refreshComboSetBlockCardPrices() {
+    const discountEl = document.getElementById("comboSetDiscount");
+    const discountPercent = Number(discountEl?.value) || 0;
+    const listEl = document.getElementById("comboSetBlocksList");
+    if (!listEl) return;
+    listEl.querySelectorAll(".combo-set-price-cell").forEach((cell) => {
+      const priceEl = cell.querySelector(".combo-block-product-price");
+      const oldEl = cell.querySelector(".combo-set-price-old");
+      const basePrice = priceEl ? Number(priceEl.dataset.basePrice) : (oldEl ? Number(oldEl.dataset.basePrice) : NaN);
+      if (!Number.isFinite(basePrice)) return;
+      const oldStr = formatPriceInteger(basePrice) + " Р";
+      const newNum = discountPercent > 0 ? basePrice * (1 - discountPercent / 100) : basePrice;
+      const newStr = formatPriceInteger(Math.round(newNum)) + " Р";
+      const productId = priceEl?.dataset?.productId ?? "";
+      if (discountPercent > 0) {
+        cell.innerHTML = `<span class="combo-set-price-wrap"><span class="combo-set-price-old" data-base-price="${basePrice}">${oldStr}</span> <span class="combo-block-product-price" data-product-id="${productId}" data-base-price="${basePrice}">${newStr}</span></span>`;
+      } else {
+        cell.innerHTML = `<span class="combo-block-product-price" data-product-id="${productId}" data-base-price="${basePrice}">${oldStr}</span>`;
+      }
+    });
+  }
+
+  function getComboSetFormPayload() {
+    const titleEl = document.getElementById("comboSetTitle");
+    const descEl = document.getElementById("comboSetDescription");
+    const discountEl = document.getElementById("comboSetDiscount");
+    const sortEl = document.getElementById("comboSetSortOrder");
+    const activeEl = document.getElementById("comboSetIsActive");
+    const photos = state.comboSetPanel?.photos ?? [];
+    const firstUrl = photos.length && photos[0].url ? photos[0].url : null;
+    const categoryIds = state.comboSetPanel?.categoryIds ?? [];
+    const firstCat = categoryIds.length ? state.categories.find((c) => Number(c.id) === Number(categoryIds[0])) : null;
+    const categoryCode = firstCat ? (firstCat.code || null) : null;
+    return {
+      title: titleEl?.value?.trim() ?? "",
+      description: descEl?.value?.trim() || null,
+      discount_percent: Number(discountEl?.value) || 0,
+      category_code: categoryCode,
+      image_url: firstUrl,
+      sort_order: Number(sortEl?.value) || 0,
+      is_active: activeEl?.checked ? 1 : 0,
+    };
+  }
+
+  function buildComboSetPhotoGridHtml(urls) {
+    const four = Array(4).fill(null).map((_, i) => urls[i] || null);
+    return `<div class="combo-set-photo-grid" aria-hidden="true">${four.map((url) => {
+      if (url && String(url).trim()) return `<div class="combo-set-photo-grid-cell"><img src="${escapeHtml(url)}" alt="" /></div>`;
+      return `<div class="combo-set-photo-grid-cell combo-set-photo-grid-cell-empty"></div>`;
+    }).join("")}</div><small class="combo-set-photo-grid-hint">Перетащите файлы сюда</small>`;
+  }
+
+  async function loadComboSetFirstFourBlockPhotos() {
+    const blocks = (state.comboSetPanel?.blocks ?? []).slice(0, 4);
+    const urls = [];
+    for (const b of blocks) {
+      const blockId = Number(b.block_id);
+      if (!Number.isFinite(blockId)) { urls.push(null); continue; }
+      try {
+        const res = await apiGetComboBlock(blockId);
+        const products = Array.isArray(res?.data?.products) ? res.data.products : [];
+        const first = products[0];
+        const photo = first && (first.product_photo != null) ? String(first.product_photo).trim() : null;
+        urls.push(photo || null);
+      } catch (e) {
+        urls.push(null);
+      }
+    }
+    while (urls.length < 4) urls.push(null);
+    return urls.slice(0, 4);
+  }
+
+  async function getFirstFourBlockPhotosForCombo(comboId) {
+    if (!Number.isFinite(comboId)) return [null, null, null, null];
+    try {
+      const blocksRes = await apiGetComboSetBlocks(comboId);
+      const blocks = Array.isArray(blocksRes?.data) ? blocksRes.data : [];
+      const firstFour = blocks.slice(0, 4);
+      const urls = [];
+      for (const b of firstFour) {
+        const blockId = Number(b.block_id);
+        if (!Number.isFinite(blockId)) { urls.push(null); continue; }
+        try {
+          const res = await apiGetComboBlock(blockId);
+          const products = Array.isArray(res?.data?.products) ? res.data.products : [];
+          const first = products[0];
+          const photo = first && (first.product_photo != null) ? String(first.product_photo).trim() : null;
+          urls.push(photo || null);
+        } catch (e) {
+          urls.push(null);
+        }
+      }
+      while (urls.length < 4) urls.push(null);
+      return urls.slice(0, 4);
+    } catch (e) {
+      return [null, null, null, null];
+    }
+  }
+
+  function buildComboRowPhotoGridHtml(urls) {
+    const four = Array(4).fill(null).map((_, i) => urls[i] || null);
+    return four.map((url) => {
+      if (url && String(url).trim()) return `<div class="combo-row-photo-grid-cell"><img src="${escapeHtml(url)}" alt="" /></div>`;
+      return `<div class="combo-row-photo-grid-cell combo-row-photo-grid-cell-empty"></div>`;
+    }).join("");
+  }
+
+  function renderComboSetPhotos() {
+    const photos = state.comboSetPanel?.photos ?? [];
+    const activeIdx = typeof state.comboSetPanel?.activePhotoIdx === "number" ? state.comboSetPanel.activePhotoIdx : -1;
+    const total = Math.min(photos.length, 10);
+    const mainEl = document.getElementById("comboSetPhotoMain");
+    const placeholderEl = document.getElementById("comboSetPhotoPlaceholder");
+    const prevBtn = document.getElementById("comboSetPhotoPrev");
+    const nextBtn = document.getElementById("comboSetPhotoNext");
+    const dotsEl = document.getElementById("comboSetPhotoDots");
+    const thumbsEl = document.getElementById("comboSetPhotoThumbs");
+    const thumbsWrapper = document.getElementById("comboSetPhotoThumbsWrapper");
+    const counterEl = document.getElementById("comboSetPhotosCounter");
+    if (counterEl) counterEl.textContent = total + "/10";
+    if (!total) {
+      if (mainEl) { mainEl.src = ""; mainEl.classList.add("hidden"); }
+      if (placeholderEl) {
+        placeholderEl.classList.remove("hidden");
+        const blocks = (state.comboSetPanel?.blocks ?? []).slice(0, 4);
+        const urls = blocks.map(() => null);
+        placeholderEl.innerHTML = buildComboSetPhotoGridHtml(urls);
+        loadComboSetFirstFourBlockPhotos().then((urls) => {
+          const el = document.getElementById("comboSetPhotoPlaceholder");
+          if (el && state.comboSetPanel?.photos?.length === 0) el.innerHTML = buildComboSetPhotoGridHtml(urls);
+        });
+      }
+      if (prevBtn) prevBtn.classList.add("hidden");
+      if (nextBtn) nextBtn.classList.add("hidden");
+      if (dotsEl) dotsEl.classList.add("hidden");
+      if (thumbsWrapper) thumbsWrapper.classList.add("hidden");
+      if (thumbsEl) thumbsEl.innerHTML = "";
+      return;
+    }
+    const active = photos[activeIdx >= 0 && activeIdx < total ? activeIdx : 0];
+    const src = active.kind === "url" ? active.url : (active.preview || "");
+    if (mainEl) { mainEl.src = src; mainEl.classList.remove("hidden"); }
+    if (placeholderEl) placeholderEl.classList.add("hidden");
+    const showNav = total > 1;
+    if (prevBtn) prevBtn.classList.toggle("hidden", !showNav);
+    if (nextBtn) nextBtn.classList.toggle("hidden", !showNav);
+    if (dotsEl) { dotsEl.classList.toggle("hidden", !showNav); dotsEl.innerHTML = photos.slice(0, 10).map((_, i) => `<span class="photo-dot ${i === (activeIdx >= 0 ? activeIdx : 0) ? "is-active" : ""}" data-combo-set-dot="${i}"></span>`).join(""); }
+    if (thumbsEl) {
+      thumbsEl.innerHTML = photos.slice(0, 10).map((p, i) => {
+        const s = (p.kind === "url" ? p.url : (p.preview || "")).replace(/'/g, "\\'");
+        return `<div class="img-thumb ${i === (activeIdx >= 0 ? activeIdx : 0) ? "is-active" : ""}" data-combo-set-thumb="${i}" style="background-image:url('${s}')"></div>`;
+      }).join("");
+    }
+    if (thumbsWrapper) thumbsWrapper.classList.toggle("hidden", total === 0);
+  }
+
+  let comboSetCategoryPickerSelection = null;
+  let comboSetCategoryPickerSavedFooterState = null;
+  let comboSetCategoryPickerSavedHandlers = null;
+
+  function renderComboSetCategoryChips() {
+    const chipsEl = document.getElementById("comboSetCategoryChips");
+    if (!chipsEl) return;
+    const categoryIds = state.comboSetPanel?.categoryIds ?? [];
+    const list = categoryIds
+      .map((id) => state.categories.find((c) => Number(c.id) === Number(id)))
+      .filter(Boolean)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id)
+      .filter((c) => c.code !== "all");
+    const chips = list
+      .map((c) => `
+        <span class="chip">
+          ${escapeHtml(c.title || "")}
+          <button class="chip-remove" type="button" data-combo-set-cat-remove="${c.id}">
+            <i class="fas fa-times"></i>
+          </button>
+        </span>
+      `)
+      .join("");
+    chipsEl.innerHTML = chips + '<button type="button" class="chip chip-plus" id="comboSetCategoryChipPlus"><i class="fas fa-plus"></i></button>';
+    chipsEl.querySelectorAll("[data-combo-set-cat-remove]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const id = Number(btn.getAttribute("data-combo-set-cat-remove"));
+        if (!Number.isFinite(id)) return;
+        const arr = state.comboSetPanel.categoryIds || [];
+        const idx = arr.indexOf(id);
+        if (idx !== -1) arr.splice(idx, 1);
+        renderComboSetCategoryChips();
+      });
+    });
+    const plus = document.getElementById("comboSetCategoryChipPlus");
+    if (plus) plus.addEventListener("click", () => openComboSetCategoryPicker());
+  }
+
+  function closeComboSetCategoryPicker() {
+    comboSetCategoryPickerSelection = null;
+    const panel = document.getElementById("productInfoPanel");
+    if (panel) {
+      const overlay = panel.querySelector("#comboSetCategoryPickerOverlay");
+      if (overlay) overlay.remove();
+    }
+    const cancelBtn = document.getElementById("productFooterCancelBtn");
+    const saveBtn = document.getElementById("productFooterSaveBtn");
+    if (cancelBtn) delete cancelBtn.dataset.pickerType;
+    if (saveBtn) delete saveBtn.dataset.pickerType;
+    delete window._closeComboSetCategoryPickerFn;
+    delete window._saveComboSetCategoryPickerFn;
+    const footer = document.getElementById("productInfoFooter");
+    const footerView = document.getElementById("productFooterView");
+    const footerEditMode = document.getElementById("productFooterEditMode");
+    const footerDeleteBtn = document.getElementById("productFooterDeleteEditBtn");
+    const footerMoreBtn = document.getElementById("productFooterMoreEditBtn");
+    if (footer && footerView && footerEditMode && cancelBtn && saveBtn && comboSetCategoryPickerSavedFooterState) {
+      if (comboSetCategoryPickerSavedFooterState.footerHidden) footer.classList.add("hidden");
+      else footer.classList.remove("hidden");
+      if (comboSetCategoryPickerSavedFooterState.viewHidden) footerView.classList.add("hidden");
+      else footerView.classList.remove("hidden");
+      if (comboSetCategoryPickerSavedFooterState.editHidden) footerEditMode.classList.add("hidden");
+      else footerEditMode.classList.remove("hidden");
+      if (footerDeleteBtn) footerDeleteBtn.classList.toggle("hidden", !!comboSetCategoryPickerSavedFooterState.deleteBtnHidden);
+      if (footerMoreBtn) footerMoreBtn.classList.toggle("hidden", !!comboSetCategoryPickerSavedFooterState.moreBtnHidden);
+      cancelBtn.classList.remove("is-fullwidth");
+      if (comboSetCategoryPickerSavedFooterState.cancelBtnIsConfirm) cancelBtn.classList.add("is-confirm");
+      else cancelBtn.classList.remove("is-confirm");
+      if (cancelBtn.dataset.pickerOriginalHtml) { cancelBtn.innerHTML = cancelBtn.dataset.pickerOriginalHtml; delete cancelBtn.dataset.pickerOriginalHtml; }
+      cancelBtn.title = ""; cancelBtn.setAttribute("aria-label", "");
+      if (comboSetCategoryPickerSavedHandlers) {
+        cancelBtn.onclick = comboSetCategoryPickerSavedHandlers.cancel;
+        saveBtn.onclick = comboSetCategoryPickerSavedHandlers.save;
+      }
+    }
+    comboSetCategoryPickerSavedFooterState = null;
+    comboSetCategoryPickerSavedHandlers = null;
+  }
+
+  function openComboSetCategoryPicker() {
+    comboSetCategoryPickerSelection = new Set(state.comboSetPanel?.categoryIds ?? []);
+    const pickerOverlay = document.createElement("div");
+    pickerOverlay.className = "picker-overlay";
+    pickerOverlay.id = "comboSetCategoryPickerOverlay";
+    const pickerContent = document.createElement("div");
+    pickerContent.className = "picker-overlay-content";
+    pickerContent.innerHTML = `
+      <div class="picker-overlay-header">
+        <div class="panel-title">Категории</div>
+      </div>
+      <div class="picker-overlay-body">
+        <div class="info-card">
+          <div class="option-picker-search" style="margin-bottom: 16px;">
+            <input class="control" id="comboSetCategoryPickerSearch" type="search" placeholder="Поиск по названию" />
+          </div>
+          <div class="option-picker-list" id="comboSetCategoryPickerList"></div>
+        </div>
+      </div>
+    `;
+    pickerOverlay.appendChild(pickerContent);
+    const searchInput = pickerContent.querySelector("#comboSetCategoryPickerSearch");
+    const listContent = pickerContent.querySelector("#comboSetCategoryPickerList");
+    function renderList() {
+      const query = String(searchInput?.value || "").trim().toLowerCase();
+      const list = (state.categories || [])
+        .slice()
+        .filter((c) => !query || String(c.title || "").toLowerCase().includes(query))
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+      if (!listContent) return;
+      listContent.innerHTML = list.map((c) => {
+        const id = Number(c.id);
+        const isAll = c.code === "all";
+        const checked = comboSetCategoryPickerSelection.has(id);
+        const iconHtml = typeof renderCategoryIcon === "function" ? renderCategoryIcon(c.icon, "category-picker-icon") : "";
+        return `
+          <div class="option-picker-row ${checked ? "is-selected" : ""} ${isAll ? "is-disabled" : ""}" data-cat-id="${id}" ${isAll ? 'data-disabled="true"' : ""}>
+            ${iconHtml}
+            <div class="option-picker-meta">
+              <div class="options-row-title">${escapeHtml(c.title || "")}</div>
+            </div>
+          </div>
+        `;
+      }).join("");
+      listContent.querySelectorAll(".option-picker-row[data-cat-id]").forEach((row) => {
+        row.addEventListener("click", () => {
+          if (row.dataset.disabled === "true") return;
+          const id = Number(row.dataset.catId);
+          if (!Number.isFinite(id)) return;
+          if (comboSetCategoryPickerSelection.has(id)) comboSetCategoryPickerSelection.delete(id);
+          else comboSetCategoryPickerSelection.add(id);
+          renderList();
+        });
+      });
+    }
+    if (searchInput) searchInput.addEventListener("input", renderList);
+    renderList();
+    const panel = document.getElementById("productInfoPanel");
+    if (panel) {
+      const existing = panel.querySelector("#comboSetCategoryPickerOverlay");
+      if (existing) existing.remove();
+      panel.appendChild(pickerOverlay);
+    }
+    const footer = document.getElementById("productInfoFooter");
+    const footerView = document.getElementById("productFooterView");
+    const footerEditMode = document.getElementById("productFooterEditMode");
+    const cancelBtn = document.getElementById("productFooterCancelBtn");
+    const saveBtn = document.getElementById("productFooterSaveBtn");
+    const footerDeleteBtn = document.getElementById("productFooterDeleteEditBtn");
+    const footerMoreBtn = document.getElementById("productFooterMoreEditBtn");
+    if (footer && footerView && footerEditMode && cancelBtn && saveBtn) {
+      comboSetCategoryPickerSavedFooterState = {
+        footerHidden: footer.classList.contains("hidden"),
+        viewHidden: footerView.classList.contains("hidden"),
+        editHidden: footerEditMode.classList.contains("hidden"),
+        deleteBtnHidden: footerDeleteBtn ? footerDeleteBtn.classList.contains("hidden") : false,
+        moreBtnHidden: footerMoreBtn ? footerMoreBtn.classList.contains("hidden") : false,
+        cancelBtnIsConfirm: cancelBtn.classList.contains("is-confirm"),
+      };
+      comboSetCategoryPickerSavedHandlers = { cancel: cancelBtn.onclick, save: saveBtn.onclick };
+      footer.classList.remove("hidden");
+      footerView.classList.add("hidden");
+      footerEditMode.classList.remove("hidden");
+      if (footerDeleteBtn) footerDeleteBtn.classList.add("hidden");
+      if (footerMoreBtn) footerMoreBtn.classList.add("hidden");
+      cancelBtn.classList.remove("is-confirm");
+      cancelBtn.classList.add("is-fullwidth");
+      if (!cancelBtn.dataset.pickerOriginalHtml) cancelBtn.dataset.pickerOriginalHtml = cancelBtn.innerHTML;
+      cancelBtn.textContent = "Отменить";
+      cancelBtn.title = "Отменить";
+      cancelBtn.setAttribute("aria-label", "Отменить");
+      cancelBtn.dataset.pickerType = "category";
+      saveBtn.dataset.pickerType = "category";
+      window._closeComboSetCategoryPickerFn = closeComboSetCategoryPicker;
+      window._saveComboSetCategoryPickerFn = () => {
+        state.comboSetPanel.categoryIds = Array.from(comboSetCategoryPickerSelection || []);
+        renderComboSetCategoryChips();
+        closeComboSetCategoryPicker();
+      };
+      cancelBtn.onclick = () => { if (window._closeComboSetCategoryPickerFn) window._closeComboSetCategoryPickerFn(); };
+      saveBtn.onclick = () => { if (window._saveComboSetCategoryPickerFn) window._saveComboSetCategoryPickerFn(); };
+    }
+  }
+
+  async function renderComboSetBlockPanelContent(panelInner, blockId) {
+    if (!panelInner || !Number.isFinite(blockId)) return;
+    if (panelInner.dataset.loaded === "1") return;
+    panelInner.dataset.loaded = "1";
+    panelInner.innerHTML = "<div class=\"muted\" style=\"padding:8px;\">Загрузка…</div>";
+    let blockData;
+    try {
+      const res = await apiGetComboBlock(blockId);
+      blockData = res?.data || null;
+    } catch (e) {
+      panelInner.innerHTML = "<div class=\"muted\" style=\"padding:8px;\">Ошибка загрузки блока</div>";
+      return;
+    }
+    const products = Array.isArray(blockData?.products) ? blockData.products : [];
+    const items = products.map((p) => ({
+      product_id: p.product_id,
+      name: p.product_name || `Товар #${p.product_id}`,
+      sort_order: p.sort_order ?? 0,
+      is_default: p.is_default ? 1 : 0,
+      photo: p.product_photo || null,
+      price: p.product_price ?? 0,
+      has_variants: p.has_variants ? 1 : 0,
+      has_changeable_composition: p.has_changeable_composition ? 1 : 0,
+    }));
+    if (items.length === 0) {
+      panelInner.innerHTML = "<div class=\"muted\" style=\"padding:8px;\">В блоке пока нет товаров</div>";
+      return;
+    }
+    const isViewMode = true;
+    panelInner.innerHTML = "<div class=\"option-items-table combo-set-block-products-list is-view-mode\"></div>";
+    const table = panelInner.querySelector(".combo-set-block-products-list");
+    const discountEl = document.getElementById("comboSetDiscount");
+    const discountPercent = Number(discountEl?.value) || 0;
+    const getPriceHtml = (basePrice, productId) => {
+      const oldNum = Number(basePrice);
+      if (!Number.isFinite(oldNum)) return `<span class="combo-block-product-price" data-product-id="${productId}" data-base-price="">—</span>`;
+      const newNum = discountPercent > 0 ? oldNum * (1 - discountPercent / 100) : oldNum;
+      const oldStr = formatPriceInteger(oldNum) + " Р";
+      const newStr = formatPriceInteger(Math.round(newNum)) + " Р";
+      if (discountPercent > 0) {
+        return `<span class="combo-set-price-wrap"><span class="combo-set-price-old" data-base-price="${oldNum}">${oldStr}</span> <span class="combo-block-product-price" data-product-id="${productId}" data-base-price="${oldNum}">${newStr}</span></span>`;
+      }
+      return `<span class="combo-block-product-price" data-product-id="${productId}" data-base-price="${oldNum}">${oldStr}</span>`;
+    };
+    table.innerHTML = items.map((item, idx) => {
+      const name = item.name || `Товар #${item.product_id}`;
+      const defaultBadge = item.is_default ? " <span class=\"muted\">(по умолчанию)</span>" : "";
+      const photoUrl = item.photo || "";
+      const thumb = photoUrl ? `<img class="combo-block-product-thumb" src="${escapeHtml(photoUrl)}" alt="" />` : "<span class=\"combo-block-product-thumb combo-block-product-thumb-placeholder\"><i class=\"fas fa-image\"></i></span>";
+      const basePrice = Number(item.price);
+      const priceHtml = getPriceHtml(basePrice, item.product_id);
+      const starBtn = isViewMode ? "" : "";
+      const removeBtn = "";
+      return `
+        <div class="combo-block-product-row-wrapper" data-idx="${idx}">
+          <div class="option-item-row combo-block-product-row" data-product-id="${item.product_id}" data-idx="${idx}">
+            <button class="combo-block-product-chevron" type="button" data-combo-chevron aria-expanded="false" title="Подробнее"><i class="fas fa-chevron-down"></i></button>
+            ${thumb}
+            <span class="option-item-title">${escapeHtml(name)}${defaultBadge}</span>
+            <span class="combo-set-price-cell">${priceHtml}</span>
+            ${starBtn}
+            ${removeBtn}
+          </div>
+          <div class="combo-block-product-details" hidden data-product-id="${item.product_id}">
+            <div class="combo-block-product-details-inner"></div>
+          </div>
+        </div>
+      `;
+    }).join("");
+    table.querySelectorAll("[data-combo-chevron]").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const wrapper = btn.closest(".combo-block-product-row-wrapper");
+        const details = wrapper?.querySelector(".combo-block-product-details");
+        const inner = details?.querySelector(".combo-block-product-details-inner");
+        const productId = details?.dataset?.productId ? Number(details.dataset.productId) : null;
+        const wasExpanded = details?.getAttribute("hidden") == null;
+        if (details) details.hidden = wasExpanded;
+        if (btn) {
+          btn.setAttribute("aria-expanded", wasExpanded ? "false" : "true");
+          const icon = btn.querySelector("i");
+          if (icon) icon.className = wasExpanded ? "fas fa-chevron-down" : "fas fa-chevron-up";
+        }
+        if (!wasExpanded && details) {
+          requestAnimationFrame(() => {
+            details.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          });
+        }
+        if (!wasExpanded && inner && Number.isFinite(productId)) {
+          if (!inner.dataset.loaded) {
+            inner.dataset.loaded = "1";
+            inner.innerHTML = "<div class=\"muted\" style=\"padding:8px;\">Загрузка…</div>";
+            try {
+              if (!state.unitConversions || state.unitConversions.length === 0) {
+                const convRes = await apiGetUnitConversions();
+                state.unitConversions = Array.isArray(convRes?.data) ? convRes.data : [];
+              }
+              const [productRes, variantsRes, ingredientsRes] = await Promise.all([
+                apiGetProduct(productId),
+                apiGetProductVariants(productId),
+                apiGetProductIngredients(productId),
+              ]);
+              const product = productRes?.data || null;
+              const variants = (variantsRes?.data && Array.isArray(variantsRes.data)) ? variantsRes.data : [];
+              const ingredients = (ingredientsRes?.data && Array.isArray(ingredientsRes.data)) ? ingredientsRes.data : [];
+              inner.innerHTML = buildComboBlockProductDetailsHtml(product, variants, ingredients);
+              attachComboBlockProductDetailsHandlers(inner, wrapper, productId, product, variants, ingredients);
+              requestAnimationFrame(() => {
+                if (details) details.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                const accPanel = panelInner.closest("[data-acc-panel]");
+                if (accPanel && accPanel.classList.contains("is-open")) accPanel.style.maxHeight = accPanel.scrollHeight + "px";
+              });
+            } catch (err) {
+              inner.innerHTML = "<div class=\"muted\" style=\"padding:8px;\">Ошибка загрузки</div>";
+            }
+          }
+        }
+      });
+    });
+  }
+
+  function renderComboSetBlocksList() {
+    const listEl = document.getElementById("comboSetBlocksList");
+    if (!listEl) return;
+    const blocks = state.comboSetPanel?.blocks ?? [];
+    listEl.innerHTML = blocks.map((b, idx) => {
+      const title = (b.block_title || b.title || "").trim() || `Блок #${b.block_id}`;
+      return `
+        <div class="acc-item combo-set-block-acc-item" data-combo-set-block-index="${idx}" data-block-id="${b.block_id}">
+          <div class="acc-header combo-set-block-acc-header">
+            <button type="button" class="acc-trigger" data-acc-trigger>
+              <span class="combo-set-block-trigger-text">
+                <span class="option-item-title">${escapeHtml(title)}</span>
+                <span class="option-item-meta">#${b.block_id}</span>
+              </span>
+              <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+            </button>
+            <button type="button" class="btn btn-icon option-row-remove" data-remove-combo-set-block="${idx}" title="Удалить" aria-label="Удалить"><i class="fas fa-times"></i></button>
+          </div>
+          <div class="acc-panel" data-acc-panel>
+            <div class="acc-panel-inner combo-set-block-panel-inner"></div>
+          </div>
+        </div>
+      `;
+    }).join("");
+    listEl.querySelectorAll("[data-remove-combo-set-block]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const idx = Number(btn.getAttribute("data-remove-combo-set-block"));
+        if (!Number.isFinite(idx) || idx < 0) return;
+        state.comboSetPanel.blocks.splice(idx, 1);
+        state.comboSetPanel.blocks.forEach((b, i) => { b.sort_order = i; });
+        renderComboSetBlocksList();
+      });
+    });
+    listEl.querySelectorAll(".combo-set-block-acc-item").forEach((item) => {
+      const trigger = item.querySelector("[data-acc-trigger]");
+      const panel = item.querySelector("[data-acc-panel]");
+      const panelInner = panel?.querySelector(".combo-set-block-panel-inner");
+      const blockId = item.dataset.blockId ? Number(item.dataset.blockId) : null;
+      if (!trigger || !panel || !panelInner || !Number.isFinite(blockId)) return;
+      trigger.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const open = !panel.classList.contains("is-open");
+        if (open) {
+          await renderComboSetBlockPanelContent(panelInner, blockId);
+        }
+        panel.classList.toggle("is-open", open);
+        trigger.classList.toggle("is-open", open);
+        panel.style.maxHeight = open ? panel.scrollHeight + "px" : "0px";
+      });
+    });
+  }
+
+  let comboSetBlockPickerOverlay = null;
+  let comboSetBlockPickerSavedFooterState = null;
+  let comboSetBlockPickerSavedHandlers = null;
+
+  async function openComboSetBlockPicker() {
+    state.comboSetPanel.blockPickerOpen = true;
+    state.comboSetPanel.blockPickerSelection = new Set();
+    let res;
+    try {
+      res = await apiGetComboBlocks();
+    } catch (e) {
+      res = { ok: false, data: [] };
+    }
+    const blocks = res?.ok ? (res.data || []) : [];
+    state.comboSetPanel.blockPickerBlocks = blocks;
+
+    const pickerOverlay = document.createElement("div");
+    pickerOverlay.className = "picker-overlay";
+    comboSetBlockPickerOverlay = pickerOverlay;
+
+    const pickerContent = document.createElement("div");
+    pickerContent.className = "picker-overlay-content";
+    pickerContent.innerHTML = `
+      <div class="picker-overlay-header">
+        <div class="panel-title">Блоки комбо</div>
+      </div>
+      <div class="picker-overlay-body">
+        <div class="info-card">
+          <div class="option-picker-search" style="margin-bottom: 16px;">
+            <input class="control" id="comboSetBlockPickerSearchInput" type="search" placeholder="Поиск по названию" />
+          </div>
+          <div class="option-picker-list" id="comboSetBlockPickerListContent"></div>
+        </div>
+      </div>
+    `;
+    pickerOverlay.appendChild(pickerContent);
+
+    const searchInput = pickerContent.querySelector("#comboSetBlockPickerSearchInput");
+    const listContent = pickerContent.querySelector("#comboSetBlockPickerListContent");
+
+    function renderList() {
+      const query = String(searchInput?.value || "").trim().toLowerCase();
+      const blocksFiltered = (state.comboSetPanel?.blockPickerBlocks ?? []).filter(
+        (b) => !query || String(b.title || "").toLowerCase().includes(query)
+      );
+      const selectedId = state.comboSetPanel?.blockPickerSelectedId ?? null;
+      if (!listContent) return;
+      if (!blocksFiltered.length) {
+        listContent.innerHTML = `<div class="empty-hint">Нет блоков</div>`;
+        return;
+      }
+      listContent.innerHTML = blocksFiltered.map((b) => {
+        const id = Number(b.id);
+        const selected = Number.isFinite(id) && id === selectedId;
+        const title = (b.title || "").trim() || `Блок #${id}`;
+        return `
+          <div class="option-picker-row ${selected ? "is-selected" : ""}" data-block-id="${id}">
+            <div class="option-picker-title">${escapeHtml(title)}</div>
+            <input class="option-picker-checkbox" type="radio" name="combo-set-block-picker" ${selected ? "checked" : ""} />
+          </div>
+        `;
+      }).join("");
+      listContent.querySelectorAll(".option-picker-row[data-block-id]").forEach((row) => {
+        row.addEventListener("click", () => {
+          const id = Number(row.dataset.blockId);
+          if (!Number.isFinite(id)) return;
+          state.comboSetPanel.blockPickerSelectedId = id;
+          renderList();
+        });
+      });
+    }
+
+    if (searchInput) searchInput.addEventListener("input", renderList);
+    renderList();
+
+    const productInfoPanel = $("#productInfoPanel");
+    if (productInfoPanel) {
+      const existing = productInfoPanel.querySelector(".picker-overlay[data-combo-set-block-picker]");
+      if (existing) existing.remove();
+      pickerOverlay.setAttribute("data-combo-set-block-picker", "1");
+      productInfoPanel.appendChild(pickerOverlay);
+
+      const footer = $("#productInfoFooter");
+      const footerView = $("#productFooterView");
+      const footerEditMode = $("#productFooterEditMode");
+      const cancelBtn = $("#productFooterCancelBtn");
+      const saveBtn = $("#productFooterSaveBtn");
+      const deleteBtn = $("#productFooterDeleteEditBtn");
+      const moreBtn = $("#productFooterMoreEditBtn");
+
+      if (footer && footerView && footerEditMode && cancelBtn && saveBtn) {
+        comboSetBlockPickerSavedFooterState = {
+          footerHidden: footer.classList.contains("hidden"),
+          viewHidden: footerView.classList.contains("hidden"),
+          editHidden: footerEditMode.classList.contains("hidden"),
+          deleteBtnHidden: deleteBtn ? deleteBtn.classList.contains("hidden") : false,
+          moreBtnHidden: moreBtn ? moreBtn.classList.contains("hidden") : false,
+          cancelBtnIsConfirm: cancelBtn.classList.contains("is-confirm"),
+          cancelBtnIsFullwidth: cancelBtn.classList.contains("is-fullwidth"),
+          cancelHtml: cancelBtn.innerHTML,
+          cancelTitle: cancelBtn.title || "",
+          cancelAria: cancelBtn.getAttribute("aria-label") || "",
+          saveHtml: saveBtn.innerHTML,
+          saveTitle: saveBtn.title || "",
+          saveAria: saveBtn.getAttribute("aria-label") || "",
+        };
+        comboSetBlockPickerSavedHandlers = { cancel: cancelBtn.onclick, save: saveBtn.onclick };
+        footer.classList.remove("hidden");
+        footerView.classList.add("hidden");
+        footerEditMode.classList.remove("hidden");
+        if (deleteBtn) deleteBtn.classList.add("hidden");
+        if (moreBtn) moreBtn.classList.add("hidden");
+        cancelBtn.classList.remove("is-confirm");
+        cancelBtn.classList.add("is-fullwidth");
+        cancelBtn.textContent = "Отменить";
+        cancelBtn.title = "Отменить";
+        cancelBtn.setAttribute("aria-label", "Отменить");
+        cancelBtn.onclick = () => closeComboSetBlockPicker();
+        saveBtn.textContent = "Сохранить";
+        saveBtn.onclick = () => applyComboSetBlockPickerSelection();
+      }
+    }
+  }
+
+  function closeComboSetBlockPicker() {
+    state.comboSetPanel.blockPickerOpen = false;
+    if (comboSetBlockPickerOverlay && comboSetBlockPickerOverlay.parentNode) {
+      comboSetBlockPickerOverlay.remove();
+      comboSetBlockPickerOverlay = null;
+    }
+    const productInfoPanel = $("#productInfoPanel");
+    if (productInfoPanel) {
+      const existing = productInfoPanel.querySelector(".picker-overlay[data-combo-set-block-picker]");
+      if (existing) existing.remove();
+    }
+    const footer = $("#productInfoFooter");
+    const footerView = $("#productFooterView");
+    const footerEditMode = $("#productFooterEditMode");
+    const cancelBtn = $("#productFooterCancelBtn");
+    const saveBtn = $("#productFooterSaveBtn");
+    const deleteBtn = $("#productFooterDeleteEditBtn");
+    const moreBtn = $("#productFooterMoreEditBtn");
+    if (comboSetBlockPickerSavedFooterState && footer && footerView && footerEditMode && cancelBtn && saveBtn) {
+      if (comboSetBlockPickerSavedFooterState.footerHidden) footer.classList.add("hidden");
+      else footer.classList.remove("hidden");
+      if (comboSetBlockPickerSavedFooterState.viewHidden) footerView.classList.add("hidden");
+      else footerView.classList.remove("hidden");
+      if (comboSetBlockPickerSavedFooterState.editHidden) footerEditMode.classList.add("hidden");
+      else footerEditMode.classList.remove("hidden");
+      if (deleteBtn && comboSetBlockPickerSavedFooterState.deleteBtnHidden) deleteBtn.classList.add("hidden");
+      else if (deleteBtn) deleteBtn.classList.remove("hidden");
+      if (moreBtn && comboSetBlockPickerSavedFooterState.moreBtnHidden) moreBtn.classList.add("hidden");
+      else if (moreBtn) moreBtn.classList.remove("hidden");
+      if (comboSetBlockPickerSavedFooterState.cancelBtnIsFullwidth) cancelBtn.classList.add("is-fullwidth");
+      else cancelBtn.classList.remove("is-fullwidth");
+      cancelBtn.innerHTML = comboSetBlockPickerSavedFooterState.cancelHtml || "×";
+      cancelBtn.title = comboSetBlockPickerSavedFooterState.cancelTitle || "";
+      cancelBtn.setAttribute("aria-label", comboSetBlockPickerSavedFooterState.cancelAria || "");
+      cancelBtn.onclick = comboSetBlockPickerSavedHandlers?.cancel || null;
+      saveBtn.innerHTML = comboSetBlockPickerSavedFooterState.saveHtml || "Сохранить";
+      saveBtn.title = comboSetBlockPickerSavedFooterState.saveTitle || "";
+      saveBtn.setAttribute("aria-label", comboSetBlockPickerSavedFooterState.saveAria || "");
+      saveBtn.onclick = comboSetBlockPickerSavedHandlers?.save || null;
+    }
+    renderComboSetBlocksList();
+  }
+
+  function applyComboSetBlockPickerSelection() {
+    const selectedId = state.comboSetPanel?.blockPickerSelectedId;
+    if (!Number.isFinite(selectedId)) {
+      if (typeof toast !== "undefined") toast("Выберите блок");
+      return;
+    }
+    const blocks = state.comboSetPanel?.blockPickerBlocks ?? [];
+    const block = blocks.find((b) => Number(b.id) === selectedId);
+    if (!block) return;
+    const list = state.comboSetPanel.blocks || [];
+    const nextOrder = list.length;
+    list.push({
+      block_id: Number(block.id),
+      block_title: (block.title || "").trim() || `Блок #${block.id}`,
+      sort_order: nextOrder,
+    });
+    closeComboSetBlockPicker();
+    renderComboSetBlocksList();
+  }
+
+  async function saveComboSet() {
+    const payload = getComboSetFormPayload();
+    if (!payload.title) {
+      if (typeof toast !== "undefined") toast("Укажите название комбо-набора");
+      return;
+    }
+    const blocksPayload = (state.comboSetPanel?.blocks ?? []).map((b, i) => ({ block_id: b.block_id, sort_order: i }));
+    if (state.comboSetPanel.mode === "create") {
+      try {
+        const res = await apiPostCombo({ ...payload, blocks: blocksPayload });
+        if (res && res.ok === true && res.data) {
+          if (typeof toast !== "undefined") toast("Комбо-набор создан");
+          closeComboSetPanel();
+          const activeKey = tabsState?.activeKey;
+          if (activeKey && activeKey.startsWith("combo-set:")) {
+            closeTab(activeKey);
+          }
+          return;
+        }
+        if (typeof toast !== "undefined") toast("Ошибка сохранения");
+      } catch (e) {
+        console.error("saveComboSet create", e);
+        if (typeof toast !== "undefined") toast("Ошибка сохранения");
+      }
+      return;
+    }
+    const comboId = state.comboSetPanel?.comboId;
+    if (!Number.isFinite(comboId)) {
+      if (typeof toast !== "undefined") toast("Ошибка: набор не найден");
+      return;
+    }
+    try {
+      await apiPatchCombo(comboId, payload);
+      await apiPutComboBlocks(comboId, blocksPayload);
+      if (typeof toast !== "undefined") toast("Комбо-набор сохранён");
+      closeComboSetPanel();
+      const activeKey = tabsState?.activeKey;
+      if (activeKey && activeKey.startsWith("combo-set:")) {
+        closeTab(activeKey);
+      }
+    } catch (e) {
+      console.error("saveComboSet update", e);
+      if (typeof toast !== "undefined") toast("Ошибка сохранения");
+    }
+  }
+
+  function cancelComboSet() {
+    closeComboSetPanel();
+    const activeKey = tabsState?.activeKey;
+    if (activeKey && activeKey.startsWith("combo-set:")) {
+      closeTab(activeKey);
+    }
+  }
+
+  function closeComboSetPanel() {
+    const comboSetInfo = document.getElementById("comboSetInfo");
+    if (comboSetInfo) comboSetInfo.classList.add("hidden");
+    hideProductFooter();
+    state.comboSetPanel = { mode: "create", comboId: null, blocks: [], blockPickerOpen: false, blockPickerSelection: new Set() };
   }
 
   // ---------------- Product Footer ----------------
@@ -7022,6 +8926,23 @@ function updateOptionGroupSelectionUi() {
             mode: state.autoAddPanel.mode || "view",
             autoAddDraft: state.autoAddDraft ? deepClone(state.autoAddDraft) : null,
             snapshotData: state.autoAddPanel.snapshotData ? deepClone(state.autoAddPanel.snapshotData) : null
+          });
+        }
+      }
+    } else if (type === "combo") {
+      if (state.comboPanel.mode === "create" || state.comboPanel.mode === "edit") {
+        if (state.comboPanel.tabKey === currentTab.key && (comboBlockTitleInput || comboBlockForm)) {
+          const blockDraft = {
+            title: comboBlockTitleInput?.value ?? "",
+            sort_order: parseInt(comboBlockSortOrderInput?.value, 10) || 0,
+            min_select: Math.max(0, parseInt(comboBlockMinSelectInput?.value, 10) || 1),
+            max_select: Math.max(1, parseInt(comboBlockMaxSelectInput?.value, 10) || 1),
+          };
+          state.comboBlockDraft = blockDraft;
+          editingCombos.set(idStr, {
+            mode: state.comboPanel.mode || "view",
+            blockDraft: deepClone(blockDraft),
+            products: deepClone(state.comboBlockProducts || [])
           });
         }
       }
@@ -7297,12 +9218,21 @@ function updateOptionGroupSelectionUi() {
             shouldCleanup = true;
           }
         }
+      } else if (type === "combo") {
+        if (state.comboPanel.tabKey === key || editingCombos.has(idStr)) {
+          shouldCleanup = true;
+        }
+      } else if (type === "combo-set") {
+        shouldCleanup = true;
       }
       
       if (shouldCleanup) {
         // Call onClose if exists (for products and categories)
         if (currentNavigationState?.onClose) {
           currentNavigationState.onClose();
+        }
+        if (type === "combo-set") {
+          closeComboSetPanel();
         }
         
         // For options, call cancelOptionEdit if in edit/create mode
@@ -7342,6 +9272,14 @@ function updateOptionGroupSelectionUi() {
           cancelUnitEdit();
           state.unitPanel.tabKey = null;
         }
+
+        // For combo block, cancel create/edit mode
+        if (type === "combo" && (state.comboPanel.mode === "edit" || state.comboPanel.mode === "create")) {
+          state.comboPanel.mode = "view";
+          state.comboBlockDraft = null;
+          state.comboBlockProducts = [];
+          state.comboPanel.tabKey = null;
+        }
         
         // Remove from editing Maps
         if (type === "product" && Number.isFinite(id)) {
@@ -7354,16 +9292,19 @@ function updateOptionGroupSelectionUi() {
           editingVariants.delete(id);
         } else if (type === "auto-add" && Number.isFinite(id)) {
           editingAutoAdds.delete(id);
+        } else if (type === "combo") {
+          editingCombos.delete(idStr);
         }
         
         // Clear navigation state
         clearNavigationStack();
         currentNavigationState = null;
         
-        // Clear content
+        // Remove only dynamic content (product editor wrapper), keep static panels so combo-set tab can still show
         const productInfoBody = $("#productInfoBody");
-        if (productInfoBody) {
-          productInfoBody.innerHTML = "";
+        if (productInfoBody && type !== "combo-set") {
+          const wrapper = productInfoBody.querySelector(".product-editor-wrapper");
+          if (wrapper) wrapper.remove();
         }
       }
     }
@@ -8171,7 +10112,7 @@ function updateOptionGroupSelectionUi() {
             showNavigationState(navigationState);
             showProductFooterEdit();
           },
-          activate: false,
+          activate: true,
         });
       }
       
@@ -11677,12 +13618,21 @@ function updateOptionGroupSelectionUi() {
     }
 
     if (addMainBtn) {
-      addMainBtn.addEventListener("click", () => {
+      addMainBtn.addEventListener("click", (e) => {
+        if (state.mode === "products") {
+          const wrapper = document.getElementById("addMainWrapper");
+          const dropdown = document.getElementById("addMainDropdown");
+          if (wrapper && dropdown) {
+            wrapper.classList.toggle("is-open");
+            e.stopPropagation();
+          }
+          return;
+        }
         if (state.mode === "categories") return openCategoryEditor({ mode: "create" });
-        if (state.mode === "products") return openProductModal({ mode: "create" });
         if (state.mode === "options") return startOptionCreate();
         if (state.mode === "variants") return startVariantCreate();
         if (state.mode === "auto-add") return startAutoAddCreate();
+        if (state.mode === "combo-blocks") return startComboBlockCreate();
         if (state.mode === "units") {
           state.selectedUnitId = null;
           state.unitDetails = null;
@@ -11694,6 +13644,23 @@ function updateOptionGroupSelectionUi() {
           showUnitDetails(null, { mode: "create" });
         }
       });
+    }
+
+    const addMainDropdown = document.getElementById("addMainDropdown");
+    const addMainWrapper = document.getElementById("addMainWrapper");
+    if (addMainDropdown && addMainWrapper) {
+      addMainDropdown.addEventListener("click", (e) => {
+        const item = e.target.closest("[data-add-action]");
+        if (!item) return;
+        addMainWrapper.classList.remove("is-open");
+        const action = item.getAttribute("data-add-action");
+        if (action === "product") openProductModal({ mode: "create" });
+        else if (action === "combo") openComboSetCreate();
+      });
+      document.addEventListener("click", () => {
+        addMainWrapper.classList.remove("is-open");
+      });
+      addMainWrapper.addEventListener("click", (e) => e.stopPropagation());
     }
 
     // left other views
@@ -11728,6 +13695,10 @@ function updateOptionGroupSelectionUi() {
             renderUnitsList();
             loadUnitConversions();
           });
+          return;
+        }
+        if (view === "combo-blocks") {
+          enterComboBlocksMode();
           return;
         }
         if (view === "products") {
@@ -11948,6 +13919,36 @@ function updateOptionGroupSelectionUi() {
               alert(message);
             }
           })();
+        } else if (tabsState.activeKey && tabsState.activeKey.startsWith("combo-set:") && state.comboSetPanel?.mode === "view" && Number.isFinite(state.comboSetPanel?.comboId)) {
+          const comboId = state.comboSetPanel.comboId;
+          (async () => {
+            try {
+              await apiDeleteCombo(comboId);
+              if (typeof toast !== "undefined") toast("Комбо-набор удалён");
+              closeComboSetPanel();
+              if (tabsState.activeKey && tabsState.activeKey.startsWith("combo-set:")) closeTab(tabsState.activeKey);
+              await refreshProductsOnly();
+              showDetailsEmpty();
+            } catch (e) {
+              console.error("deleteCombo", e);
+              if (typeof toast !== "undefined") toast("Не удалось удалить комбо-набор");
+            }
+          })();
+        } else if (tabsState.activeKey && tabsState.activeKey.startsWith("combo-set:") && state.comboSetPanel?.mode === "view" && Number.isFinite(state.comboSetPanel?.comboId)) {
+          const comboId = state.comboSetPanel.comboId;
+          (async () => {
+            try {
+              await apiDeleteCombo(comboId);
+              if (typeof toast !== "undefined") toast("Комбо-набор удалён");
+              closeComboSetPanel();
+              if (tabsState.activeKey && tabsState.activeKey.startsWith("combo-set:")) closeTab(tabsState.activeKey);
+              await refreshProductsOnly();
+              showDetailsEmpty();
+            } catch (e) {
+              console.error("deleteCombo", e);
+              if (typeof toast !== "undefined") toast("Не удалось удалить комбо-набор");
+            }
+          })();
         } else if (state.selectedProductId) {
           confirmProductDelete();
         }
@@ -11974,6 +13975,15 @@ function updateOptionGroupSelectionUi() {
           if (state.autoAddPanel.mode === "view" && state.autoAddGroupDetails) {
             startAutoAddEdit();
           }
+        } else if (state.mode === "combo-blocks" && state.selectedComboBlockId) {
+          if (state.comboPanel.mode === "view") {
+            state.comboPanel.mode = "edit";
+            showComboBlockDetails({ block: state.comboBlockDraft, products: state.comboBlockProducts }, { mode: "edit" });
+            showProductFooterEdit();
+          }
+        } else if (tabsState.activeKey && tabsState.activeKey.startsWith("combo-set:") && state.comboSetPanel?.comboId && state.comboSetPanel?.mode === "view") {
+          state.comboSetPanel.mode = "edit";
+          activateComboSetTab();
         } else {
           // Products mode - existing logic
         const p = state.products.find((x) => x.id === state.selectedProductId);
@@ -12021,6 +14031,29 @@ function updateOptionGroupSelectionUi() {
           })();
           return;
         }
+        if (tabsState.activeKey && tabsState.activeKey.startsWith("combo-set:")) {
+          if (Number.isFinite(state.comboSetPanel?.comboId)) {
+            const comboId = state.comboSetPanel.comboId;
+            (async () => {
+              try {
+                await apiDeleteCombo(comboId);
+                if (typeof toast !== "undefined") toast("Комбо-набор удалён");
+                closeComboSetPanel();
+                if (tabsState.activeKey && tabsState.activeKey.startsWith("combo-set:")) {
+                  closeTab(tabsState.activeKey);
+                }
+                await refreshProductsOnly();
+                showDetailsEmpty();
+              } catch (e) {
+                console.error("deleteCombo", e);
+                if (typeof toast !== "undefined") toast("Не удалось удалить комбо-набор");
+              }
+            })();
+          } else {
+            cancelComboSet();
+          }
+          return;
+        }
         if (currentNavigationState?.product?.id) {
           confirmProductDelete();
         }
@@ -12051,8 +14084,47 @@ function updateOptionGroupSelectionUi() {
           return;
         }
         if (footerCancelBtn.dataset.pickerType === "category") {
+          if (window._closeComboSetCategoryPickerFn) {
+            window._closeComboSetCategoryPickerFn();
+            return;
+          }
           const closeFn = window._closeCategoryPickerFn;
           if (closeFn) closeFn();
+          return;
+        }
+        if (footerCancelBtn.dataset.pickerType === "combo") {
+          const closeFn = window._closeComboBlockPickerFn;
+          if (closeFn) closeFn();
+          return;
+        }
+        // Combo-set tab cancel
+        if (tabsState.activeKey && tabsState.activeKey.startsWith("combo-set:")) {
+          cancelComboSet();
+          return;
+        }
+        // Combo block edit cancel — сбросить черновик, перезагрузить блок, режим просмотра
+        if (state.mode === "combo-blocks" && state.comboPanel.mode === "edit" && state.selectedComboBlockId) {
+          (async () => {
+            try {
+              const r = await apiGetComboBlock(state.selectedComboBlockId);
+              if (r?.data) {
+                const block = r.data;
+                state.comboBlockDraft = { title: block.title, sort_order: block.sort_order ?? 0, min_select: block.min_select ?? 1, max_select: block.max_select ?? 1 };
+                state.comboBlockProducts = Array.isArray(block.products)
+                  ? block.products.map((p) => ({ product_id: p.product_id, name: p.product_name || p.name, sort_order: p.sort_order ?? 0, is_default: p.is_default ? 1 : 0, photo: p.product_photo || null, price: p.product_price ?? 0, has_variants: p.has_variants ? 1 : 0, has_changeable_composition: p.has_changeable_composition ? 1 : 0 }))
+                  : [];
+                state.comboPanel.mode = "view";
+                showComboBlockDetails({ block: state.comboBlockDraft, products: state.comboBlockProducts }, { mode: "view" });
+              }
+            } catch (e) {
+              console.error("cancelComboBlockEdit", e);
+            }
+          })();
+          return;
+        }
+        // Combo block create cancel — закрыть таб
+        if (state.mode === "combo-blocks" && state.comboPanel.mode === "create") {
+          if (state.comboPanel.tabKey) closeTab(state.comboPanel.tabKey);
           return;
         }
         // Variant edit/create cancel
@@ -12130,9 +14202,30 @@ function updateOptionGroupSelectionUi() {
           return;
         }
         if (footerSaveBtn.dataset.pickerType === "category") {
+          if (window._saveComboSetCategoryPickerFn) {
+            window._saveComboSetCategoryPickerFn();
+            return;
+          }
           const saveFn = window._saveCategoryPickerFn;
           if (saveFn) {
             await saveFn();
+          }
+          return;
+        }
+        if (footerSaveBtn.dataset.pickerType === "combo") {
+          const saveFn = window._saveComboBlockPickerFn;
+          if (saveFn) {
+            await saveFn();
+          }
+          return;
+        }
+        // Combo block edit/create save
+        if (state.mode === "combo-blocks" && (state.comboPanel.mode === "edit" || state.comboPanel.mode === "create")) {
+          try {
+            await saveComboBlock();
+          } catch (e) {
+            console.error("Error saving combo block", e);
+            alert("Ошибка при сохранении блока: " + (e && e.message ? e.message : "Неизвестная ошибка"));
           }
           return;
         }
@@ -12347,6 +14440,112 @@ function updateOptionGroupSelectionUi() {
         if (state.autoAddPanel.mode === "create" || state.autoAddPanel.mode === "edit") {
           openAutoAddPicker();
         }
+      });
+    }
+
+    if (comboBlockProductsAddBtn) {
+      comboBlockProductsAddBtn.addEventListener("click", () => {
+        if (state.comboPanel.mode === "create" || state.comboPanel.mode === "edit" || state.selectedComboBlockId) {
+          openComboBlockProductPicker();
+        }
+      });
+    }
+    const comboSetBlocksAddBtn = document.getElementById("comboSetBlocksAddBtn");
+    if (comboSetBlocksAddBtn) {
+      comboSetBlocksAddBtn.addEventListener("click", () => {
+        if (state.comboSetPanel) openComboSetBlockPicker();
+      });
+    }
+    const comboSetDiscountEl = document.getElementById("comboSetDiscount");
+    if (comboSetDiscountEl) {
+      comboSetDiscountEl.addEventListener("input", () => { if (typeof refreshComboSetBlockCardPrices === "function") refreshComboSetBlockCardPrices(); });
+      comboSetDiscountEl.addEventListener("change", () => { if (typeof refreshComboSetBlockCardPrices === "function") refreshComboSetBlockCardPrices(); });
+    }
+    const comboSetAddPhotosBtn = document.getElementById("comboSetAddPhotosBtn");
+    const comboSetPhotosInput = document.getElementById("comboSetPhotosInput");
+    const comboSetPhotoMainContainer = document.getElementById("comboSetPhotoMainContainer");
+    const comboSetPhotoPrev = document.getElementById("comboSetPhotoPrev");
+    const comboSetPhotoNext = document.getElementById("comboSetPhotoNext");
+    const comboSetInfoPanel = document.getElementById("comboSetInfo");
+    if (comboSetAddPhotosBtn && comboSetPhotosInput) {
+      comboSetAddPhotosBtn.addEventListener("click", () => comboSetPhotosInput.click());
+      comboSetPhotosInput.addEventListener("change", async (e) => {
+        const files = Array.from(e.target.files || []);
+        e.target.value = "";
+        if (!files.length || !state.comboSetPanel) return;
+        const photos = state.comboSetPanel.photos || [];
+        const space = Math.max(0, 10 - photos.length);
+        const toAdd = files.slice(0, space).filter((f) => /^image\//.test(f.type || ""));
+        if (!toAdd.length) return;
+        try {
+          const urls = await apiUploadImages(toAdd);
+          urls.forEach((url) => photos.push({ kind: "url", url }));
+          state.comboSetPanel.activePhotoIdx = photos.length - urls.length;
+          if (state.comboSetPanel.activePhotoIdx < 0) state.comboSetPanel.activePhotoIdx = 0;
+          renderComboSetPhotos();
+        } catch (err) {
+          if (typeof toast !== "undefined") toast("Ошибка загрузки фото");
+        }
+      });
+    }
+    if (comboSetPhotoMainContainer) {
+      comboSetPhotoMainContainer.addEventListener("dragover", (e) => { e.preventDefault(); e.currentTarget.classList.add("drag-over"); });
+      comboSetPhotoMainContainer.addEventListener("dragleave", (e) => { e.currentTarget.classList.remove("drag-over"); });
+      comboSetPhotoMainContainer.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        e.currentTarget.classList.remove("drag-over");
+        const files = Array.from(e.dataTransfer?.files || []).filter((f) => /^image\//.test(f.type || ""));
+        if (!files.length || !state.comboSetPanel) return;
+        const photos = state.comboSetPanel.photos || [];
+        const space = Math.max(0, 10 - photos.length);
+        const toAdd = files.slice(0, space);
+        if (!toAdd.length) return;
+        try {
+          const urls = await apiUploadImages(toAdd);
+          urls.forEach((url) => photos.push({ kind: "url", url }));
+          state.comboSetPanel.activePhotoIdx = photos.length - urls.length;
+          if (state.comboSetPanel.activePhotoIdx < 0) state.comboSetPanel.activePhotoIdx = 0;
+          renderComboSetPhotos();
+        } catch (err) {
+          if (typeof toast !== "undefined") toast("Ошибка загрузки фото");
+        }
+      });
+    }
+    if (comboSetInfoPanel) {
+      comboSetInfoPanel.addEventListener("click", (e) => {
+        if (!state.comboSetPanel) return;
+        const n = (state.comboSetPanel.photos || []).length;
+        if (e.target.closest("#comboSetPhotoPrev")) {
+          if (n > 1) { state.comboSetPanel.activePhotoIdx = (state.comboSetPanel.activePhotoIdx - 1 + n) % n; renderComboSetPhotos(); }
+          return;
+        }
+        if (e.target.closest("#comboSetPhotoNext")) {
+          if (n > 1) { state.comboSetPanel.activePhotoIdx = (state.comboSetPanel.activePhotoIdx + 1) % n; renderComboSetPhotos(); }
+          return;
+        }
+        const t = e.target.closest("[data-combo-set-thumb]");
+        if (t) { const idx = Number(t.getAttribute("data-combo-set-thumb")); if (Number.isFinite(idx)) { state.comboSetPanel.activePhotoIdx = idx; renderComboSetPhotos(); } return; }
+        const d = e.target.closest("[data-combo-set-dot]");
+        if (d) { const idx = Number(d.getAttribute("data-combo-set-dot")); if (Number.isFinite(idx)) { state.comboSetPanel.activePhotoIdx = idx; renderComboSetPhotos(); } }
+      });
+    }
+    if (comboBlockPickerSearch) {
+      comboBlockPickerSearch.addEventListener("input", () => {
+        state.comboPanel.pickerQuery = comboBlockPickerSearch.value || "";
+        refreshComboBlockPickerProducts().then(() => renderComboBlockPickerList());
+      });
+    }
+    if (comboBlockPickerSelectAll) {
+      comboBlockPickerSelectAll.addEventListener("click", () => {
+        const products = state.comboPanel.pickerProducts || [];
+        const ids = products.map((p) => Number(p.id)).filter(Number.isFinite);
+        const allSelected = ids.length > 0 && ids.every((id) => state.comboPanel.pickerSelection.has(id));
+        if (allSelected) {
+          ids.forEach((id) => state.comboPanel.pickerSelection.delete(id));
+        } else {
+          ids.forEach((id) => state.comboPanel.pickerSelection.add(id));
+        }
+        renderComboBlockPickerList();
       });
     }
 
@@ -12742,6 +14941,9 @@ function updateOptionGroupSelectionUi() {
     bindAccordionContainer(autoAddGroupInfo);
     if (unitInfo) {
       bindAccordionContainer(unitInfo);
+    }
+    if (comboInfo) {
+      bindAccordionContainer(comboInfo);
     }
     bindEvents();
 

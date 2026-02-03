@@ -1,15 +1,26 @@
 <div class="center-stack">
-  <div class="panel">
+  <div class="panel toolbar-island">
     <div class="toolbar">
       <div class="toolbar-title">
         <i class="fas fa-box"></i>
         <span id="productsToolbarText">Товары</span>
       </div>
 
-      <div class="toolbar-right">
+      <div class="toolbar-right add-main-wrapper" id="addMainWrapper">
         <button class="btn btn-icon btn-primary" id="addMainBtn" type="button" title="Создать">
           <i class="fas fa-plus"></i>
         </button>
+        <div class="add-main-dropdown hidden" id="addMainDropdown" role="menu" aria-label="Создать">
+          <button type="button" class="add-main-dropdown-item" data-add-action="product" role="menuitem">
+            <i class="fas fa-box"></i>
+            <span>Товар</span>
+          </button>
+          <div class="add-main-dropdown-sep" aria-hidden="true"></div>
+          <button type="button" class="add-main-dropdown-item" data-add-action="combo" role="menuitem">
+            <i class="fas fa-layer-group"></i>
+            <span>Комбо-набор</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -46,6 +57,10 @@
       </div>
       <div class="content-view hidden" data-view-content="allergens"><div class="info-card">Аллергены...</div></div>
       <div class="content-view hidden" data-view-content="diets"><div class="info-card">Диеты...</div></div>
+      <div class="content-view hidden" data-view-content="combo-blocks">
+        <div class="options-list" id="comboBlocksList"></div>
+        <div class="empty-hint" id="comboBlocksEmptyHint">Пока нет блоков. Нажмите «+» для создания.</div>
+      </div>
       <div class="content-view hidden" data-view-content="stock-in"><div class="info-card">Приход...</div></div>
       <div class="content-view hidden" data-view-content="stock-out"><div class="info-card">Списание...</div></div>
       <div class="content-view hidden" data-view-content="stock-movements"><div class="info-card">Движения...</div></div>

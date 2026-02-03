@@ -1146,6 +1146,61 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  /**
+   * Комбо-блоки для клиента: только блоки и только товары, доступные на сайте
+   * (is_active=1, site_visibility=1). Товары с остатком 0 / выключенные в блоке остаются,
+   * но в ответ не попадают — клиент их не видит.
+   */
+  router.get('/combo-blocks', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+
+      const [blocks] = await db.query(
+        `SELECT id, title, sort_order, min_select, max_select FROM prod_combo_blocks
+         WHERE tenant_id=? ORDER BY sort_order ASC, id ASC`,
+        [tenantId]
+      );
+
+      const result = [];
+      for (const block of blocks) {
+        const [productsRaw] = await db.query(
+          `SELECT bp.product_id, bp.sort_order, bp.is_default, p.name AS product_name, p.price, p.photos_json AS product_photos_json
+           FROM prod_combo_block_products bp
+           JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
+           LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+           WHERE bp.tenant_id=? AND bp.block_id=? AND p.is_active=1 AND p.site_visibility=1
+             AND (s.qty IS NULL OR s.qty > 0)
+           ORDER BY bp.sort_order ASC, bp.id ASC`,
+          [storeId, tenantId, block.id]
+        );
+        const products = productsRaw.map((r) => {
+          const photos = safeJsonArray(r.product_photos_json);
+          return {
+            product_id: r.product_id,
+            product_name: r.product_name,
+            price: Number(r.price) || 0,
+            sort_order: r.sort_order,
+            is_default: Number(r.is_default) === 1,
+            product_photo: photos.length ? photos[0] : null,
+          };
+        });
+        let defaultSet = false;
+        for (const p of products) {
+          const wasDefault = p.is_default;
+          p.is_default = wasDefault && !defaultSet;
+          if (wasDefault) defaultSet = true;
+        }
+        result.push({ id: block.id, title: block.title, sort_order: block.sort_order, min_select: block.min_select ?? 1, max_select: block.max_select ?? 1, products });
+      }
+
+      res.json({ ok: true, data: result });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   async function resolveCategoryIdFromQuery(tenantId, req) {
     const code = helpers.strOrNull(req.query.category_code);
     if (code) {

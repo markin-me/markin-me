@@ -1673,9 +1673,13 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
           va.variant_group_id,
           va.product_id,
           va.sort_order AS assignment_sort_order,
-          va.default_value_index AS assignment_default_value_index
+          va.default_value_index AS assignment_default_value_index,
+          u.code AS unit_code,
+          u.short_title AS unit_short_title,
+          u.title AS unit_title
         FROM prod_variant_assignments va
         JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
+        LEFT JOIN prod_units u ON u.id=vg.unit_id AND u.tenant_id=vg.tenant_id
         WHERE va.tenant_id=? AND va.product_id=? AND va.is_active=1 AND vg.is_active=1
         ORDER BY va.sort_order ASC, vg.sort_order ASC`,
         [tenantId, productId]
@@ -2060,7 +2064,12 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       const params = [];
       let sql =
-        `SELECT p.id, p.name, p.price, p.cost_price, p.unit_id, p.base_unit_id, p.base_qty, p.photos_json, p.is_active
+        `SELECT p.id, p.name, p.price, p.cost_price, p.unit_id, p.base_unit_id, p.base_qty, p.photos_json, p.is_active,
+           (SELECT 1 FROM prod_variant_assignments va
+            INNER JOIN prod_variant_groups vg ON vg.id = va.variant_group_id AND vg.tenant_id = va.tenant_id
+            WHERE va.tenant_id = p.tenant_id AND va.product_id = p.id AND va.is_active = 1 AND vg.is_active = 1 LIMIT 1) AS has_variants,
+           (SELECT 1 FROM prod_product_ingredients pi
+            WHERE pi.tenant_id = p.tenant_id AND pi.product_id = p.id AND pi.is_variable = 1 LIMIT 1) AS has_changeable_composition
          FROM prod_products p`;
 
       if (categoryId) {
@@ -2084,9 +2093,415 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       for (const r of rows) {
         r.photos = helpers.safeJsonArray(r.photos_json);
         r.photos_json = r.photos;
+        r.has_variants = r.has_variants != null ? 1 : 0;
+        r.has_changeable_composition = r.has_changeable_composition != null ? 1 : 0;
       }
       
       res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // ------------------------------
+  // Combo blocks (блоки комбо)
+  // ------------------------------
+  router.get('/admin/combo-blocks/product-flags', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const idsParam = req.query.ids;
+      if (!idsParam || typeof idsParam !== 'string') {
+        return res.json({ ok: true, data: [] });
+      }
+      const ids = idsParam.split(',').map((id) => parseInt(id, 10)).filter((id) => Number.isFinite(id) && id > 0);
+      if (ids.length === 0) return res.json({ ok: true, data: [] });
+      const placeholders = ids.map(() => '?').join(',');
+      const [rows] = await db.query(
+        `SELECT p.id AS product_id,
+           (SELECT 1 FROM prod_variant_assignments va
+            INNER JOIN prod_variant_groups vg ON vg.id = va.variant_group_id AND vg.tenant_id = va.tenant_id
+            WHERE va.tenant_id = p.tenant_id AND va.product_id = p.id AND va.is_active = 1 AND vg.is_active = 1 LIMIT 1) AS has_variants,
+           (SELECT 1 FROM prod_product_ingredients pi
+            WHERE pi.tenant_id = p.tenant_id AND pi.product_id = p.id AND pi.is_variable = 1 LIMIT 1) AS has_changeable_composition
+         FROM prod_products p
+         WHERE p.tenant_id=? AND p.id IN (${placeholders})`,
+        [tenantId, ...ids]
+      );
+      const data = rows.map((r) => ({
+        product_id: r.product_id,
+        has_variants: r.has_variants != null ? 1 : 0,
+        has_changeable_composition: r.has_changeable_composition != null ? 1 : 0,
+      }));
+      res.json({ ok: true, data });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/admin/combo-blocks', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const [rows] = await db.query(
+        `SELECT b.id, b.title, b.sort_order, b.min_select, b.max_select, b.created_at, b.updated_at,
+                (SELECT COUNT(*) FROM prod_combo_block_products bp WHERE bp.block_id = b.id) AS products_count
+         FROM prod_combo_blocks b
+         WHERE b.tenant_id=?
+         ORDER BY b.sort_order ASC, b.id ASC`,
+        [tenantId]
+      );
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/admin/combo-blocks/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const [[block]] = await db.query(
+        'SELECT id, title, sort_order, min_select, max_select, created_at, updated_at FROM prod_combo_blocks WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, id]
+      );
+      if (!block) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      const [productsRaw] = await db.query(
+        `SELECT bp.id, bp.product_id, bp.sort_order, bp.is_default, p.name AS product_name, p.price AS product_price, p.photos_json AS product_photos_json,
+           (SELECT 1 FROM prod_variant_assignments va
+            INNER JOIN prod_variant_groups vg ON vg.id = va.variant_group_id AND vg.tenant_id = va.tenant_id
+            WHERE va.tenant_id = bp.tenant_id AND va.product_id = bp.product_id AND va.is_active = 1 AND vg.is_active = 1 LIMIT 1) AS has_variants,
+           (SELECT 1 FROM prod_product_ingredients pi
+            WHERE pi.tenant_id = bp.tenant_id AND pi.product_id = bp.product_id AND pi.is_variable = 1 LIMIT 1) AS has_changeable_composition
+         FROM prod_combo_block_products bp
+         JOIN prod_products p ON p.id = bp.product_id
+         WHERE bp.tenant_id=? AND bp.block_id=?
+         ORDER BY bp.sort_order ASC, bp.id ASC`,
+        [tenantId, id]
+      );
+      const photos = productsRaw.map((r) => helpers.safeJsonArray(r.product_photos_json));
+      const products = productsRaw.map((r, i) => {
+        const arr = photos[i];
+        const product_photo = Array.isArray(arr) && arr.length > 0 ? arr[0] : null;
+        return {
+          id: r.id,
+          product_id: r.product_id,
+          product_name: r.product_name,
+          product_price: r.product_price != null ? Number(r.product_price) : 0,
+          sort_order: r.sort_order,
+          is_default: r.is_default,
+          product_photo,
+          has_variants: r.has_variants != null ? 1 : 0,
+          has_changeable_composition: r.has_changeable_composition != null ? 1 : 0,
+        };
+      });
+      let defaultSet = false;
+      for (const p of products) {
+        const wasDefault = Number(p.is_default) === 1;
+        p.is_default = wasDefault && !defaultSet ? 1 : 0;
+        if (wasDefault) defaultSet = true;
+      }
+      res.json({ ok: true, data: { ...block, products } });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/combo-blocks', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req) || 1;
+      const title = helpers.strOrNull(req.body.title);
+      const sortOrder = helpers.numOrNull(req.body.sort_order) ?? 0;
+      const minSelect = Math.max(0, parseInt(helpers.numOrNull(req.body.min_select), 10) || 1);
+      const maxSelect = Math.max(1, parseInt(helpers.numOrNull(req.body.max_select), 10) || 1);
+      if (!title || !title.trim()) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+      const [result] = await db.query(
+        'INSERT INTO prod_combo_blocks (tenant_id, store_id, title, sort_order, min_select, max_select) VALUES (?,?,?,?,?,?)',
+        [tenantId, storeId, title.trim(), sortOrder, minSelect, Math.max(minSelect, maxSelect)]
+      );
+      const blockId = result.insertId;
+      const products = Array.isArray(req.body.products) ? req.body.products : [];
+      if (products.length) {
+        let defaultSet = false;
+        for (let i = 0; i < products.length; i++) {
+          const p = products[i];
+          const productId = Number(p.product_id);
+          if (!Number.isFinite(productId) || productId <= 0) continue;
+          const isDefault = p.is_default ? 1 : (defaultSet ? 0 : (defaultSet = true, 1));
+          await db.query(
+            'INSERT INTO prod_combo_block_products (tenant_id, store_id, block_id, product_id, sort_order, is_default) VALUES (?,?,?,?,?,?)',
+            [tenantId, storeId, blockId, productId, Number(p.sort_order) ?? i, isDefault]
+          );
+        }
+      }
+      const [[block]] = await db.query(
+        'SELECT id, title, sort_order, min_select, max_select, created_at, updated_at FROM prod_combo_blocks WHERE id=? LIMIT 1',
+        [blockId]
+      );
+      res.status(201).json({ ok: true, data: block });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.patch('/admin/combo-blocks/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req) || 1;
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const [[existing]] = await db.query(
+        'SELECT id FROM prod_combo_blocks WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, id]
+      );
+      if (!existing) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      const title = helpers.strOrNull(req.body.title);
+      const sortOrder = helpers.numOrNull(req.body.sort_order);
+      const minSelect = req.body.min_select !== undefined ? Math.max(0, parseInt(req.body.min_select, 10) || 1) : null;
+      const maxSelect = req.body.max_select !== undefined ? Math.max(1, parseInt(req.body.max_select, 10) || 1) : null;
+      if (title !== null) {
+        await db.query('UPDATE prod_combo_blocks SET title=? WHERE tenant_id=? AND id=?', [title.trim(), tenantId, id]);
+      }
+      if (sortOrder !== undefined && sortOrder !== null) {
+        await db.query('UPDATE prod_combo_blocks SET sort_order=? WHERE tenant_id=? AND id=?', [sortOrder, tenantId, id]);
+      }
+      if (minSelect !== null) {
+        await db.query('UPDATE prod_combo_blocks SET min_select=? WHERE tenant_id=? AND id=?', [minSelect, tenantId, id]);
+      }
+      if (maxSelect !== null) {
+        await db.query('UPDATE prod_combo_blocks SET max_select = GREATEST(COALESCE(min_select,1), ?) WHERE tenant_id=? AND id=?', [maxSelect, tenantId, id]);
+      }
+      if (Array.isArray(req.body.products)) {
+        await db.query('DELETE FROM prod_combo_block_products WHERE tenant_id=? AND block_id=?', [tenantId, id]);
+        const products = req.body.products;
+        let defaultSet = false;
+        for (let i = 0; i < products.length; i++) {
+          const p = products[i];
+          const productId = Number(p.product_id);
+          if (!Number.isFinite(productId) || productId <= 0) continue;
+          const isDefault = p.is_default ? 1 : (defaultSet ? 0 : (defaultSet = true, 1));
+          await db.query(
+            'INSERT INTO prod_combo_block_products (tenant_id, store_id, block_id, product_id, sort_order, is_default) VALUES (?,?,?,?,?,?)',
+            [tenantId, storeId, id, productId, Number(p.sort_order) ?? i, isDefault]
+          );
+        }
+      }
+      const [[block]] = await db.query(
+        'SELECT id, title, sort_order, min_select, max_select, created_at, updated_at FROM prod_combo_blocks WHERE id=? LIMIT 1',
+        [id]
+      );
+      res.json({ ok: true, data: block });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/admin/combo-blocks/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const [result] = await db.query('DELETE FROM prod_combo_blocks WHERE tenant_id=? AND id=?', [tenantId, id]);
+      if (result.affectedRows === 0) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // ------------------------------
+  // Combo sets (prod_combos) CRUD + blocks
+  // ------------------------------
+  router.get('/admin/combos', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const [rows] = await db.query(
+        `SELECT id, tenant_id, store_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at
+         FROM prod_combos WHERE tenant_id=? ORDER BY sort_order ASC, id ASC`,
+        [tenantId]
+      );
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/admin/combos/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const [[row]] = await db.query(
+        'SELECT id, tenant_id, store_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at FROM prod_combos WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, id]
+      );
+      if (!row) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      res.json({ ok: true, data: row });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/admin/combos/:id/blocks', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const comboId = Number(req.params.id);
+      if (!Number.isFinite(comboId) || comboId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const [[combo]] = await db.query('SELECT id FROM prod_combos WHERE tenant_id=? AND id=? LIMIT 1', [tenantId, comboId]);
+      if (!combo) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      const [rows] = await db.query(
+        `SELECT sb.id, sb.combo_id, sb.block_id, sb.sort_order, b.title AS block_title
+         FROM prod_combo_set_blocks sb
+         JOIN prod_combo_blocks b ON b.id = sb.block_id AND b.tenant_id = sb.tenant_id
+         WHERE sb.tenant_id=? AND sb.combo_id=? ORDER BY sb.sort_order ASC, sb.id ASC`,
+        [tenantId, comboId]
+      );
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/admin/combos', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req) || 1;
+      const title = helpers.strOrNull(req.body.title);
+      const description = helpers.strOrNull(req.body.description) || null;
+      const discountPercent = helpers.numOrNull(req.body.discount_percent) ?? 0;
+      const categoryCode = helpers.strOrNull(req.body.category_code) || null;
+      const imageUrl = helpers.strOrNull(req.body.image_url) || null;
+      const isActive = req.body.is_active === false || req.body.is_active === '0' ? 0 : 1;
+      const sortOrder = helpers.numOrNull(req.body.sort_order) ?? 0;
+      if (!title || !title.trim()) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+      const [result] = await db.query(
+        'INSERT INTO prod_combos (tenant_id, store_id, title, description, discount_percent, category_code, image_url, is_active, sort_order) VALUES (?,?,?,?,?,?,?,?,?)',
+        [tenantId, storeId, title.trim(), description, discountPercent, categoryCode, imageUrl, isActive, sortOrder]
+      );
+      const comboId = result.insertId;
+      const blocks = Array.isArray(req.body.blocks) ? req.body.blocks : [];
+      for (let i = 0; i < blocks.length; i++) {
+        const b = blocks[i];
+        const blockId = Number(b.block_id);
+        if (!Number.isFinite(blockId) || blockId <= 0) continue;
+        await db.query(
+          'INSERT INTO prod_combo_set_blocks (tenant_id, store_id, combo_id, block_id, sort_order) VALUES (?,?,?,?,?)',
+          [tenantId, storeId, comboId, blockId, Number(b.sort_order) ?? i]
+        );
+      }
+      const [[row]] = await db.query(
+        'SELECT id, tenant_id, store_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at FROM prod_combos WHERE id=? LIMIT 1',
+        [comboId]
+      );
+      res.status(201).json({ ok: true, data: row });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.patch('/admin/combos/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req) || 1;
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const [[existing]] = await db.query('SELECT id FROM prod_combos WHERE tenant_id=? AND id=? LIMIT 1', [tenantId, id]);
+      if (!existing) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      const title = helpers.strOrNull(req.body.title);
+      const description = helpers.strOrNull(req.body.description);
+      const discountPercent = req.body.discount_percent !== undefined ? (helpers.numOrNull(req.body.discount_percent) ?? 0) : null;
+      const categoryCode = req.body.category_code !== undefined ? (helpers.strOrNull(req.body.category_code) || null) : null;
+      const imageUrl = req.body.image_url !== undefined ? (helpers.strOrNull(req.body.image_url) || null) : null;
+      const isActive = req.body.is_active !== undefined ? (req.body.is_active === false || req.body.is_active === '0' ? 0 : 1) : null;
+      const sortOrder = req.body.sort_order !== undefined ? (helpers.numOrNull(req.body.sort_order) ?? 0) : null;
+      const updates = [];
+      const params = [];
+      if (title !== null) { updates.push('title=?'); params.push(title.trim()); }
+      if (description !== undefined) { updates.push('description=?'); params.push(description); }
+      if (discountPercent !== null) { updates.push('discount_percent=?'); params.push(discountPercent); }
+      if (categoryCode !== undefined) { updates.push('category_code=?'); params.push(categoryCode); }
+      if (imageUrl !== undefined) { updates.push('image_url=?'); params.push(imageUrl); }
+      if (isActive !== null) { updates.push('is_active=?'); params.push(isActive); }
+      if (sortOrder !== null) { updates.push('sort_order=?'); params.push(sortOrder); }
+      if (updates.length) {
+        params.push(tenantId, id);
+        await db.query('UPDATE prod_combos SET ' + updates.join(', ') + ' WHERE tenant_id=? AND id=?', params);
+      }
+      if (Array.isArray(req.body.blocks)) {
+        await db.query('DELETE FROM prod_combo_set_blocks WHERE tenant_id=? AND combo_id=?', [tenantId, id]);
+        for (let i = 0; i < req.body.blocks.length; i++) {
+          const b = req.body.blocks[i];
+          const blockId = Number(b.block_id);
+          if (!Number.isFinite(blockId) || blockId <= 0) continue;
+          await db.query(
+            'INSERT INTO prod_combo_set_blocks (tenant_id, store_id, combo_id, block_id, sort_order) VALUES (?,?,?,?,?)',
+            [tenantId, storeId, id, blockId, Number(b.sort_order) ?? i]
+          );
+        }
+      }
+      const [[row]] = await db.query(
+        'SELECT id, tenant_id, store_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at FROM prod_combos WHERE id=? LIMIT 1',
+        [id]
+      );
+      res.json({ ok: true, data: row });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/admin/combos/:id/blocks', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req) || 1;
+      const comboId = Number(req.params.id);
+      if (!Number.isFinite(comboId) || comboId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const [[combo]] = await db.query('SELECT id FROM prod_combos WHERE tenant_id=? AND id=? LIMIT 1', [tenantId, comboId]);
+      if (!combo) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      await db.query('DELETE FROM prod_combo_set_blocks WHERE tenant_id=? AND combo_id=?', [tenantId, comboId]);
+      const blocks = Array.isArray(req.body.blocks) ? req.body.blocks : [];
+      for (let i = 0; i < blocks.length; i++) {
+        const b = blocks[i];
+        const blockId = Number(b.block_id);
+        if (!Number.isFinite(blockId) || blockId <= 0) continue;
+        await db.query(
+          'INSERT INTO prod_combo_set_blocks (tenant_id, store_id, combo_id, block_id, sort_order) VALUES (?,?,?,?,?)',
+          [tenantId, storeId, comboId, blockId, Number(b.sort_order) ?? i]
+        );
+      }
+      const [rows] = await db.query(
+        `SELECT sb.id, sb.combo_id, sb.block_id, sb.sort_order, b.title AS block_title
+         FROM prod_combo_set_blocks sb
+         JOIN prod_combo_blocks b ON b.id = sb.block_id AND b.tenant_id = sb.tenant_id
+         WHERE sb.tenant_id=? AND sb.combo_id=? ORDER BY sb.sort_order ASC, sb.id ASC`,
+        [tenantId, comboId]
+      );
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.delete('/admin/combos/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const [result] = await db.query('DELETE FROM prod_combos WHERE tenant_id=? AND id=?', [tenantId, id]);
+      if (result.affectedRows === 0) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      res.json({ ok: true });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
