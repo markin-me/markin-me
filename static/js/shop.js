@@ -4515,9 +4515,10 @@ function updateCartBadge() {
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (isMobile && elMobileCartActions) {
-      elMobileCartActions.classList.add("hidden");
+      // Оставляем блок видимым — шкала доставки должна отображаться и при пустой корзине
       if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
       if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
+      updateMobileDeliveryProgress();
     }
   }
 
