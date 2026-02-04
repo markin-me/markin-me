@@ -33,11 +33,19 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     }
   });
 
-  router.post('/upload/product-images', upload.array('images', 10), (req, res) => {
+  router.post('/upload/product-images', upload.array('images', 10), async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
       const files = req.files || [];
-      const urls = files.map((f) => `/static/uploads/products/${tenantId}/${f.filename}`);
+      // Гарантируем наличие WebP-варианта для каждого файла
+      await Promise.all(
+        files.map((f) =>
+          helpers.ensureWebpVariant(f.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'products', String(tenantId), f.filename))
+        )
+      );
+      // Отдаём и сохраняем в БД URL на .webp — по нему и отдаём картинку (оригинал остаётся на диске как fallback)
+      const webpName = (name) => name.replace(/\.(jpe?g|png|gif)$/i, '.webp');
+      const urls = files.map((f) => `/static/uploads/products/${tenantId}/${webpName(f.filename)}`);
       res.json({ ok: true, urls });
     } catch (e) {
       console.error(e);
@@ -71,11 +79,12 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     }
   });
 
-  router.post('/upload/category-icon', categoryIconUpload.single('icon'), (req, res) => {
+  router.post('/upload/category-icon', categoryIconUpload.single('icon'), async (req, res) => {
     try {
       const file = req.file;
       if (!file) return res.status(400).json({ ok: false, error: 'ICON_REQUIRED' });
-      const url = `/static/uploads/categories/${file.filename}`;
+      await helpers.ensureWebpVariant(file.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'categories', file.filename));
+      const url = `/static/uploads/categories/${file.filename.replace(/\.(jpe?g|png|gif)$/i, '.webp')}`;
       res.json({ ok: true, url });
     } catch (e) {
       console.error(e);

@@ -448,6 +448,48 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   display: block;
 }
 
+/* Полноразмерное изображение может быть в <picture> (WebP) — не ломаем сетку */
+.sp-media > picture{
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.sp-media > picture > img{
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* LQIP-превью и основное изображение в карточке товара */
+.sp-img-lqip,
+.sp-img-full{
+  position: absolute;
+  inset: 0;
+}
+
+.sp-img-lqip{
+  filter: blur(14px);
+  transform: scale(1.08);
+  transition: opacity 200ms ease-out;
+}
+
+.sp-img-full{
+  opacity: 0;
+  transition: opacity 220ms ease-out;
+}
+
+.sp-media.is-loaded .sp-img-full{
+  opacity: 1;
+}
+
+.sp-media.is-loaded .sp-img-lqip{
+  opacity: 0;
+}
+
 /* затемнение при добавлении */
 .sp-media.is-dim .sp-img{
   filter: brightness(.62);
@@ -538,16 +580,40 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   background: var(--color-surface-2);
 }
 .sp-combo-grid__cell{
+  position: relative;
   overflow: hidden;
   background: var(--color-surface-2);
 }
 .sp-combo-grid__cell--empty{
   background: #e8e8e8;
 }
+.sp-combo-grid__cell > picture{
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.sp-combo-grid__cell > picture > img{
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 .sp-combo-grid__cell .sp-img{
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* Плавное появление изображений в сетке комбо */
+.sp-combo-grid__cell.is-loaded .sp-img-full{
+  opacity: 1;
+}
+
+.sp-combo-grid__cell.is-loaded .sp-img-lqip{
+  opacity: 0;
 }
 .sp-combo-discount{
   position: absolute;

@@ -756,7 +756,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
         if (!file) return res.status(400).json({ ok: false, error: 'PHOTO_REQUIRED' });
 
-        const photoUrl = `/static/uploads/avatars/${file.filename}`;
+        // Создаём WebP-вариант аватара (оригинал остаётся как fallback)
+        await helpers.ensureWebpVariant(file.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'avatars', file.filename));
+
+        const photoUrl = `/static/uploads/avatars/${file.filename.replace(/\.(jpe?g|png|gif)$/i, '.webp')}`;
 
         await db.query(
           `UPDATE cust_customers

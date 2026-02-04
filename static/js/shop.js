@@ -237,12 +237,24 @@
    */
   function getImageUrlForFormat(imageUrl, format = 'original') {
     if (!imageUrl || imageUrl === '/static/img/placeholder.png') return imageUrl;
+
+    // Внешние URL не трогаем
+    if (/^https?:\/\//i.test(imageUrl)) return imageUrl;
+
     if (format === 'original') return imageUrl;
-    
-    // В будущем здесь можно добавить логику преобразования URL
-    // Например: /static/uploads/products/1/photo.jpg -> /static/uploads/products/1/photo.webp
-    // Или использовать серверный endpoint для конвертации: /api/image/convert?url=...&format=webp
-    // Пока возвращаем оригинальный URL
+
+    // WebP: подставляем только если URL уже .webp (файл точно есть).
+    // Для старых .jpg/.png не подставляем .webp — файлов ещё нет, будет 404.
+    if (format === 'webp') {
+      if (imageUrl.endsWith('.webp')) return imageUrl;
+      return imageUrl;
+    }
+
+    // AVIF пока не поддерживаем — возвращаем оригинал
+    if (format === 'avif') {
+      return imageUrl;
+    }
+
     return imageUrl;
   }
 
@@ -256,6 +268,7 @@
    * @param {boolean} options.usePicture - Использовать picture элемент с поддержкой WebP/AVIF (по умолчанию false)
    * @param {string} options.alt - Alt текст
    * @param {string} options.className - CSS класс
+   * @param {boolean} options.priority - Принудительный приоритет загрузки (hero / первые карточки)
    * @returns {HTMLImageElement|HTMLPictureElement}
    */
   function createOptimizedImage(imageUrl, options = {}) {
@@ -265,7 +278,8 @@
       srcset: customSrcset,
       usePicture = false,
       alt = '',
-      className = ''
+      className = '',
+      priority = false,
     } = options;
 
     // Настройки sizes для разных типов изображений
@@ -280,34 +294,24 @@
     const finalUrl = imageUrl || '/static/img/placeholder.png';
     const finalSizes = sizesMap[type] || sizesMap['custom'];
 
-    // Если нужно использовать picture элемент для поддержки современных форматов
-    if (usePicture) {
+    // Picture с WebP только когда URL уже ведёт на .webp (файл есть на сервере).
+    // Для старых .jpg/.png используем один img, чтобы не запрашивать несуществующий .webp.
+    if (usePicture && finalUrl.endsWith('.webp')) {
       const picture = document.createElement('picture');
-      
-      // AVIF (самый современный формат)
-      const avifSource = document.createElement('source');
-      avifSource.type = 'image/avif';
-      avifSource.srcset = getImageUrlForFormat(finalUrl, 'avif');
-      picture.appendChild(avifSource);
-      
-      // WebP (хорошая поддержка)
       const webpSource = document.createElement('source');
       webpSource.type = 'image/webp';
-      webpSource.srcset = getImageUrlForFormat(finalUrl, 'webp');
+      webpSource.srcset = finalUrl;
       picture.appendChild(webpSource);
-      
-      // Fallback на оригинальный формат
       const img = document.createElement('img');
       if (className) img.className = className;
       img.alt = alt;
-      img.loading = 'lazy';
-      img.src = finalUrl;
-      
-      if (customSrcset) {
-        img.srcset = customSrcset;
+      img.loading = priority ? 'eager' : 'lazy';
+      if (priority && 'fetchPriority' in img) {
+        img.fetchPriority = 'high';
       }
+      img.src = finalUrl;
+      if (customSrcset) img.srcset = customSrcset;
       img.sizes = finalSizes;
-      
       picture.appendChild(img);
       return picture;
     }
@@ -316,7 +320,10 @@
     const img = document.createElement('img');
     if (className) img.className = className;
     img.alt = alt;
-    img.loading = 'lazy';
+    img.loading = priority ? 'eager' : 'lazy';
+    if (priority && 'fetchPriority' in img) {
+      img.fetchPriority = 'high';
+    }
 
     if (customSrcset) {
       img.srcset = customSrcset;
@@ -2811,7 +2818,8 @@ async function initAddresses() {
       const img = createOptimizedImage(v, {
         type: 'thumb',
         className: 'shop-cat-icon-img',
-        alt: ''
+        alt: '',
+        usePicture: true,
       });
       wrap.appendChild(img);
       return wrap;
@@ -3184,6 +3192,8 @@ async function initAddresses() {
 
     const categories = getVisibleCategories();
     let totalProducts = 0;
+    const CRITICAL_PRODUCT_CARDS = 8;
+    let globalCardIndex = 0; // сквозной индекс карточек (товары + комбо) для приоритезации изображений
 
     categories.forEach((c) => {
       const header = document.createElement("div");
@@ -3197,92 +3207,116 @@ async function initAddresses() {
       totalProducts += products.length;
 
       products.forEach((p) => {
-      const id = p.id;
-      const qty = cartQty(id);
-      const available = isProductAvailable(p);
-      const photos = safePhotos(p);
-      const mainPhoto = photos[0] || "";
+        const id = p.id;
+        const qty = cartQty(id);
+        const available = isProductAvailable(p);
+        const photos = safePhotos(p);
+        const mainPhoto = photos[0] || "";
+        const previewPhoto = p.photo_lqip || mainPhoto || "/static/img/placeholder.png";
 
-      const card = document.createElement("article");
-      card.className = "sp-card";
-      card.setAttribute("data-product-id", String(id));
-      card.setAttribute("data-qty", String(qty));
-      if (qty > 0) card.classList.add("is-in-cart");
+        const card = document.createElement("article");
+        card.className = "sp-card";
+        card.setAttribute("data-product-id", String(id));
+        card.setAttribute("data-qty", String(qty));
+        if (qty > 0) card.classList.add("is-in-cart");
 
-      const media = document.createElement("div");
-      media.className = "sp-media";
+        const media = document.createElement("div");
+        media.className = "sp-media";
 
-      const img = createOptimizedImage(mainPhoto || "/static/img/placeholder.png", {
-        type: 'product-grid',
-        className: 'sp-img',
-        alt: ''
-      });
-      media.appendChild(img);
+        const isCriticalCard = globalCardIndex < CRITICAL_PRODUCT_CARDS;
 
-      const overlay = document.createElement("div");
-      overlay.className = "sp-qtyOverlay";
-      if (qty <= 0) overlay.classList.add("hidden");
+        // LQIP-превью (может использовать отдельный previewPhoto, если бэкенд его отдаёт)
+        const imgPreview = createOptimizedImage(previewPhoto, {
+          type: 'product-grid',
+          className: 'sp-img sp-img-lqip',
+          alt: '',
+          usePicture: false,
+          priority: isCriticalCard,
+        });
+        media.appendChild(imgPreview);
 
-      const qBox = document.createElement("div");
-      qBox.className = "qty-carousel";
-      qBox.textContent = String(qty || "");
-      qBox.setAttribute("data-v", String(qty || 0));
+        // Полноценное изображение товара (createOptimizedImage может вернуть <picture> для .webp)
+        const imgFull = createOptimizedImage(mainPhoto || "/static/img/placeholder.png", {
+          type: 'product-grid',
+          className: 'sp-img sp-img-full',
+          alt: '',
+          usePicture: true,
+          priority: isCriticalCard,
+        });
+        const fullImgEl = imgFull.tagName === 'PICTURE' ? imgFull.querySelector('img') : imgFull;
+        if (fullImgEl) {
+          fullImgEl.addEventListener("load", () => media.classList.add("is-loaded"));
+          fullImgEl.addEventListener("error", () => media.classList.add("is-loaded"));
+        }
+        media.appendChild(imgFull);
+        if (fullImgEl && fullImgEl.complete) media.classList.add("is-loaded");
 
-      overlay.appendChild(qBox);
-      media.appendChild(overlay);
+        const overlay = document.createElement("div");
+        overlay.className = "sp-qtyOverlay";
+        if (qty <= 0) overlay.classList.add("hidden");
 
-      card.appendChild(media);
+        const qBox = document.createElement("div");
+        qBox.className = "qty-carousel";
+        qBox.textContent = String(qty || "");
+        qBox.setAttribute("data-v", String(qty || 0));
 
-      const info = document.createElement("div");
-      info.className = "sp-info";
+        overlay.appendChild(qBox);
+        media.appendChild(overlay);
 
-      const title = document.createElement("div");
-      title.className = "sp-title";
-      title.textContent = str(p.name);
-      info.appendChild(title);
+        card.appendChild(media);
 
-      const sub = document.createElement("div");
-      sub.className = "sp-sub";
-      sub.textContent = str(p.description_short || "");
-      info.appendChild(sub);
+        const info = document.createElement("div");
+        info.className = "sp-info";
 
-      const bottom = document.createElement("div");
-      bottom.className = "sp-bottom";
+        const title = document.createElement("div");
+        title.className = "sp-title";
+        title.textContent = str(p.name);
+        info.appendChild(title);
 
-      const { pill, btnMinus, btnPlus, center } = createQtyPill({
-        variant: available ? "buy" : "muted",
-        centerHtml: catalogCenterHtml(p, qty),
-        minusEnabled: qty > 0 && available,
-        plusEnabled: available,
-      });
+        const sub = document.createElement("div");
+        sub.className = "sp-sub";
+        sub.textContent = str(p.description_short || "");
+        info.appendChild(sub);
 
-      if (qty <= 0) pill.classList.add("is-empty");
-      else pill.classList.add("has-qty");
-      if (!available) card.classList.add("is-unavailable");
+        const bottom = document.createElement("div");
+        bottom.className = "sp-bottom";
 
-      bottom.appendChild(pill);
-      info.appendChild(bottom);
-      card.appendChild(info);
+        const { pill, btnMinus, btnPlus, center } = createQtyPill({
+          variant: available ? "buy" : "muted",
+          centerHtml: catalogCenterHtml(p, qty),
+          minusEnabled: qty > 0 && available,
+          plusEnabled: available,
+        });
 
-      btnPlus.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        // Всегда открываем карточку товара при нажатии +, если доступен
-        if (!available) return;
-        await openProductDetails(id);
-      });
+        if (qty <= 0) pill.classList.add("is-empty");
+        else pill.classList.add("has-qty");
+        if (!available) card.classList.add("is-unavailable");
 
-      btnMinus.addEventListener("click", (e) => {
-        e.stopPropagation();
-        changeQty(id, -1);
-      });
+        bottom.appendChild(pill);
+        info.appendChild(bottom);
+        card.appendChild(info);
 
-      card.addEventListener("click", () => openProductDetails(id));
+        btnPlus.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          // Всегда открываем карточку товара при нажатии +, если доступен
+          if (!available) return;
+          await openProductDetails(id);
+        });
 
-      elProductsGrid.appendChild(card);
-      applyCardState(card, p, qty, null);
-      
-      // Если с бэкенда не пришёл display_price — асинхронно подгружаем варианты и обновляем цену
-      if (p.display_price == null) updateCardPrice(card, p);
+        btnMinus.addEventListener("click", (e) => {
+          e.stopPropagation();
+          changeQty(id, -1);
+        });
+
+        card.addEventListener("click", () => openProductDetails(id));
+
+        elProductsGrid.appendChild(card);
+        applyCardState(card, p, qty, null);
+
+        // Если с бэкенда не пришёл display_price — асинхронно подгружаем варианты и обновляем цену
+        if (p.display_price == null) updateCardPrice(card, p);
+
+        globalCardIndex += 1;
       });
 
       // Карточки комбо-наборов в этой категории
@@ -3299,10 +3333,32 @@ async function initAddresses() {
         const singleImage = (combo.image_url || "").trim();
         // Порядок фото в сетке 2×2: ячейки 0,1,2,3 → фото 1, 3, 4, 2 (индексы 0, 2, 3, 1)
         const comboGridOrder = [0, 2, 3, 1];
+        const isCriticalCard = globalCardIndex < CRITICAL_PRODUCT_CARDS;
 
         if (singleImage) {
-          const img = createOptimizedImage(singleImage, { type: "product-grid", className: "sp-img", alt: "" });
-          media.appendChild(img);
+          const previewUrl = combo.image_lqip || singleImage;
+
+          const imgPreview = createOptimizedImage(previewUrl, {
+            type: "product-grid",
+            className: "sp-img sp-img-lqip",
+            alt: "",
+            priority: isCriticalCard,
+          });
+          media.appendChild(imgPreview);
+
+          const imgFull = createOptimizedImage(singleImage, {
+            type: "product-grid",
+            className: "sp-img sp-img-full",
+            alt: "",
+            priority: isCriticalCard,
+          });
+          const fullImgEl = imgFull.tagName === 'PICTURE' ? imgFull.querySelector('img') : imgFull;
+          if (fullImgEl) {
+            fullImgEl.addEventListener("load", () => media.classList.add("is-loaded"));
+            fullImgEl.addEventListener("error", () => media.classList.add("is-loaded"));
+          }
+          media.appendChild(imgFull);
+          if (fullImgEl && fullImgEl.complete) media.classList.add("is-loaded");
         } else if (gridPhotos.length > 0) {
           const grid = document.createElement("div");
           grid.className = "sp-combo-grid";
@@ -3311,8 +3367,29 @@ async function initAddresses() {
             cell.className = "sp-combo-grid__cell";
             const src = gridPhotos[comboGridOrder[i]] || "";
             if (src) {
-              const img = createOptimizedImage(src, { type: "product-grid", className: "sp-img", alt: "" });
-              cell.appendChild(img);
+              const previewUrl = src; // при желании сюда можно подставить отдельный LQIP для ячейки
+
+              const imgPreview = createOptimizedImage(previewUrl, {
+                type: "product-grid",
+                className: "sp-img sp-img-lqip",
+                alt: "",
+                priority: isCriticalCard,
+              });
+              cell.appendChild(imgPreview);
+
+              const imgFull = createOptimizedImage(src, {
+                type: "product-grid",
+                className: "sp-img sp-img-full",
+                alt: "",
+                priority: isCriticalCard,
+              });
+              const fullImgEl = imgFull.tagName === 'PICTURE' ? imgFull.querySelector('img') : imgFull;
+              if (fullImgEl) {
+                fullImgEl.addEventListener("load", () => cell.classList.add("is-loaded"));
+                fullImgEl.addEventListener("error", () => cell.classList.add("is-loaded"));
+              }
+              cell.appendChild(imgFull);
+              if (fullImgEl && fullImgEl.complete) cell.classList.add("is-loaded");
             } else {
               cell.classList.add("sp-combo-grid__cell--empty");
             }
@@ -3320,8 +3397,27 @@ async function initAddresses() {
           }
           media.appendChild(grid);
         } else {
-          const img = createOptimizedImage("/static/img/placeholder.png", { type: "product-grid", className: "sp-img", alt: "" });
-          media.appendChild(img);
+          const imgPreview = createOptimizedImage("/static/img/placeholder.png", {
+            type: "product-grid",
+            className: "sp-img sp-img-lqip",
+            alt: "",
+            priority: isCriticalCard,
+          });
+          media.appendChild(imgPreview);
+
+          const imgFull = createOptimizedImage("/static/img/placeholder.png", {
+            type: "product-grid",
+            className: "sp-img sp-img-full",
+            alt: "",
+            priority: isCriticalCard,
+          });
+          const fullImgEl = imgFull.tagName === 'PICTURE' ? imgFull.querySelector('img') : imgFull;
+          if (fullImgEl) {
+            fullImgEl.addEventListener("load", () => media.classList.add("is-loaded"));
+            fullImgEl.addEventListener("error", () => media.classList.add("is-loaded"));
+          }
+          media.appendChild(imgFull);
+          if (fullImgEl && fullImgEl.complete) media.classList.add("is-loaded");
         }
 
         const discountPercent = Number(combo.discount_percent) || 0;
@@ -3368,6 +3464,7 @@ async function initAddresses() {
 
         elProductsGrid.appendChild(card);
         totalProducts += 1;
+        globalCardIndex += 1;
       });
     });
 
@@ -3796,7 +3893,8 @@ async function initAddresses() {
       const img = createOptimizedImage(mainPhoto || "/static/img/placeholder.png", {
         type: 'cart-thumb',
         className: 'cart-thumb',
-        alt: ''
+        alt: '',
+        usePicture: true,
       });
       row.appendChild(img);
 
@@ -5124,7 +5222,8 @@ function buildProductDetailsContent(
   const img = createOptimizedImage(photos[0] || "/static/img/placeholder.png", {
     type: 'product-hero',
     className: 'shop-product-hero-image',
-    alt: ''
+    alt: '',
+    priority: true,
   });
   img.style.objectFit = "cover";
   media.appendChild(img);
@@ -6917,7 +7016,9 @@ function buildShopProductHero(product, { onBack } = {}) {
   const img = createOptimizedImage(images[0] || "", {
     type: 'product-hero',
     className: 'shop-product-hero-image',
-    alt: product.title || ""
+    alt: product.title || "",
+    usePicture: true,
+    priority: true,
   });
 
   media.appendChild(img);
@@ -8267,6 +8368,7 @@ optionGroups.forEach((group) => {
           type: "cart-thumb",
           className: "cart-thumb",
           alt: "",
+          usePicture: true,
         });
         row.appendChild(img);
 
@@ -8460,6 +8562,7 @@ optionGroups.forEach((group) => {
           type: "cart-thumb",
           className: "cart-thumb",
           alt: "",
+          usePicture: true,
         });
         card.appendChild(img);
 

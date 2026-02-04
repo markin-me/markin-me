@@ -1,5 +1,7 @@
 const fs = require('fs');
 const crypto = require('crypto');
+const path = require('path');
+const sharp = require('sharp');
 
 // ------------------------------
 // Basic helpers
@@ -329,6 +331,54 @@ async function resolveCategoryIdFromQuery(db, tenantId, req) {
   return await getAllCategoryId(db, tenantId);
 }
 
+// ------------------------------
+// Image helpers (WebP variants)
+// ------------------------------
+
+/**
+ * Гарантирует наличие WebP-варианта для исходного изображения.
+ * Оригинал остаётся нетронутым (используется как fallback).
+ *
+ * @param {string} originalPath - абсолютный путь к исходному файлу (jpg/png/webp/gif)
+ * @param {object} opts
+ * @param {number} [opts.quality=82]
+ * @returns {Promise<string|null>} абсолютный путь к .webp файлу или null при ошибке
+ */
+async function ensureWebpVariant(originalPath, opts = {}) {
+  const quality = Number.isFinite(opts.quality) ? opts.quality : 82;
+  try {
+    const ext = (path.extname(originalPath) || '').toLowerCase();
+
+    // Уже WebP — ничего делать не нужно
+    if (ext === '.webp') {
+      return originalPath;
+    }
+
+    const dir = path.dirname(originalPath);
+    const base = path.basename(originalPath, ext);
+    const webpPath = path.join(dir, `${base}.webp`);
+
+    // Если WebP уже есть и не старше оригинала — оставляем как есть
+    try {
+      const [srcStat, webpStat] = [fs.statSync(originalPath), fs.statSync(webpPath)];
+      if (webpStat.mtimeMs >= srcStat.mtimeMs) {
+        return webpPath;
+      }
+    } catch {
+      // Одного из файлов может не быть — просто продолжаем
+    }
+
+    await sharp(originalPath)
+      .webp({ quality })
+      .toFile(webpPath);
+
+    return webpPath;
+  } catch (err) {
+    console.error('ensureWebpVariant error for', originalPath, err);
+    return null;
+  }
+}
+
 module.exports = {
   getTenantId,
   getStoreId,
@@ -351,4 +401,6 @@ module.exports = {
   getAllCategoryId,
   setProductCategories,
   resolveCategoryIdFromQuery,
+
+  ensureWebpVariant,
 };

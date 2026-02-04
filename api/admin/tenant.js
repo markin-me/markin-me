@@ -232,7 +232,12 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         return res.status(400).json({ ok: false, error: 'FIELD_INVALID' });
       }
 
-      const url = `/static/uploads/tenants/${tenantId}/${file.filename}`;
+      // Создаём WebP-вариант логотипа / иконки (оригинал оставляем как fallback)
+      await helpers.ensureWebpVariant(
+        file.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'tenants', String(tenantId), file.filename)
+      );
+
+      const url = `/static/uploads/tenants/${tenantId}/${file.filename.replace(/\.(jpe?g|png|gif)$/i, '.webp')}`;
 
       await db.query(
         `UPDATE ten_tenants SET ${field}=? WHERE id=?`,
@@ -979,7 +984,13 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       if (!file) return res.status(400).json({ ok: false, error: 'FILE_REQUIRED' });
       if (cfg.hasIcon === false) return res.status(400).json({ ok: false, error: 'ICON_NOT_SUPPORTED' });
 
-      const url = `/static/uploads/tenants/${tenantId}/lists/${file.filename}`;
+      // Создаём WebP-вариант иконки списка (оригинал остаётся как fallback)
+      await helpers.ensureWebpVariant(
+        file.path ||
+          path.join(__dirname, '..', '..', 'static', 'uploads', 'tenants', String(tenantId), 'lists', file.filename)
+      );
+
+      const url = `/static/uploads/tenants/${tenantId}/lists/${file.filename.replace(/\.(jpe?g|png|gif)$/i, '.webp')}`;
       await db.query(
         `UPDATE ${cfg.table} SET icon=? WHERE tenant_id=? AND store_id=1 AND id=?`,
         [url, tenantId, id]

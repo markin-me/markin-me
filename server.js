@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const cookieParser = require('cookie-parser');
 
 const db = require('./db');
@@ -35,10 +36,50 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-app.use('/static', express.static('static'));
+// Статика: долгий кэш для изображений, короткий/по умолчанию — для остального
+app.use('/static', express.static(path.join(__dirname, 'static'), {
+  setHeaders(res, filePath) {
+    const isImage = /\.(avif|gif|jpe?g|png|webp|svg|ico)$/i.test(filePath);
+    if (isImage) {
+      // Долгий кэш + валидация по ETag/Last-Modified (Express добавляет сам)
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    } else {
+      // Для не-картинок — более консервативный кэш
+      if (!res.getHeader('Cache-Control')) {
+        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+      }
+    }
+  }
+}));
 
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
+
+// Helper для версионирования URL картинок по времени изменения файла
+app.locals.imageUrl = function imageUrl(src) {
+  try {
+    if (!src || typeof src !== 'string') return src;
+
+    // Внешние / data-URL не трогаем
+    if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) return src;
+
+    // Работаем только с картинками из /static
+    if (!src.startsWith('/static/')) return src;
+
+    const relativePath = src.replace(/^\/static\//, '');
+    const filePath = path.join(__dirname, 'static', relativePath);
+
+    const stat = fs.statSync(filePath);
+    const mtime = stat.mtimeMs || stat.mtime.getTime();
+    const version = Math.round(mtime);
+
+    const separator = src.includes('?') ? '&' : '?';
+    return `${src}${separator}v=${version}`;
+  } catch (e) {
+    // Если файла нет или ошибка — возвращаем исходный URL
+    return src;
+  }
+};
 
 function getSubdomain(hostname) {
   const host = String(hostname || '').toLowerCase();
