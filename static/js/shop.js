@@ -101,6 +101,10 @@
   const elMobileCartClearBtn = $("#shopMobileCartClearBtn");
   const elMobileCheckoutBtn = $("#shopMobileCheckoutBtn");
   const elMobileCartTotal = $("#shopMobileCartTotal");
+  const elMobileDeliveryProgressWrap = $("#shopMobileDeliveryProgressWrap");
+  const elMobileDeliveryProgressFill = $("#shopMobileDeliveryProgressFill");
+  const elMobileDeliveryProgressLabel = $("#shopMobileDeliveryProgressLabel");
+  const elMobileDeliveryProgressBar = document.querySelector(".shop-mobile-delivery-progress-bar");
   const elMobileCheckoutBackBtn = $("#shopMobileCheckoutBackBtn");
   const elMobileCheckoutSubmitBtn = $("#shopMobileCheckoutSubmitBtn");
   const elMobileAddressActions = $("#shopMobileAddressActions");
@@ -118,6 +122,9 @@
   // desktop cart footer
   const elCartFooter = $("#shopCartFooter");
   const elCartFooterActions = $("#shopCartFooterActions");
+  const elDesktopDeliveryProgressWrap = $("#shopCartDeliveryProgress");
+  const elDesktopDeliveryProgressFill = $("#shopCartDeliveryProgressFill");
+  const elDesktopDeliveryProgressLabel = $("#shopCartDeliveryProgressLabel");
   const elCheckoutFooterActions = $("#shopCheckoutFooterActions");
   const elCheckoutBtn = $("#shopCheckoutBtn");
   const elCartClearBtn = $("#shopCartClearBtn");
@@ -1990,6 +1997,7 @@ function showCartView() {
   cartViewMode = "cart";
   openProductCtx = null;
   if (typeof window._comboStepBackCallback !== "undefined") window._comboStepBackCallback = null;
+  window._checkoutMethodCode = null;
 
   if (elAddressContent) elAddressContent.classList.add("hidden");
   if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
@@ -3717,11 +3725,7 @@ async function initAddresses() {
           updateComboQty();
           const { total: newTotal } = computeCartTotals(cartItemsResolved());
           if (totalEl) totalEl.textContent = money(newTotal);
-          // Мобилка: синхронизируем сумму в кнопке "Оформить"
-          const isMobile = window.matchMedia("(max-width: 768px)").matches;
-          if (isMobile && elMobileCartTotal) {
-            elMobileCartTotal.textContent = money(newTotal);
-          }
+          if (window.matchMedia("(max-width: 768px)").matches) updateMobileDeliveryProgress();
         });
         btnMinus.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -3737,11 +3741,7 @@ async function initAddresses() {
           }
           const { total: newTotal } = computeCartTotals(cartItemsResolved());
           if (totalEl) totalEl.textContent = money(newTotal);
-          // Мобилка: синхронизируем сумму в кнопке "Оформить"
-          const isMobile = window.matchMedia("(max-width: 768px)").matches;
-          if (isMobile && elMobileCartTotal) {
-            elMobileCartTotal.textContent = money(newTotal);
-          }
+          if (window.matchMedia("(max-width: 768px)").matches) updateMobileDeliveryProgress();
         });
         if (qty <= 1) btnMinus.classList.add("is-disabled");
         q.appendChild(pill);
@@ -4304,6 +4304,7 @@ async function initAddresses() {
 
       // Обновляем footer и кнопку оформления
       const items = cartItemsResolved();
+      const isMobile = window.matchMedia("(max-width: 768px)").matches;
       if (openCartSheetCtx) {
         if (openCartSheetCtx.footerEl) {
           openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
@@ -4313,11 +4314,6 @@ async function initAddresses() {
           const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
           const total = computeCartTotals(items).total;
           if (tspan) tspan.textContent = money(total);
-          // Синхронизируем с мобильными кнопками
-          const isMobile = window.matchMedia("(max-width: 768px)").matches;
-          if (isMobile && elMobileCartTotal) {
-            elMobileCartTotal.textContent = money(total);
-          }
           if (isMobile && elMobileCheckoutBtn) {
             elMobileCheckoutBtn.disabled = items.length === 0;
           }
@@ -4331,13 +4327,17 @@ async function initAddresses() {
         }
       }
 
-      // Мобилка: скрыть нижние кнопки корзины, если корзина пуста
-      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      // Мобилка: пересчёт кнопки и полоски прогресса доставки (сумма ± доставка)
+      if (isMobile) updateMobileDeliveryProgress();
+      // Мобилка: при пустой корзине скрываем только кнопки (× и Оформить), полоска прогресса доставки остаётся
       if (isMobile && elMobileCartActions) {
         if (items.length === 0) {
-          elMobileCartActions.classList.add("hidden");
-          if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
-          if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
+          elMobileCartActionsCart?.classList.add("hidden");
+          elMobileCartActionsCheckout?.classList.add("hidden");
+          updateMobileDeliveryProgress();
+        } else {
+          elMobileCartActionsCart?.classList.remove("hidden");
+          updateMobileDeliveryProgress();
         }
       }
 
@@ -4469,6 +4469,7 @@ async function initAddresses() {
       const totalSpan = $("#shopCartTotal", elCheckoutBtn) || $(".shop-checkout-total", elCheckoutBtn);
       if (totalSpan) totalSpan.textContent = money(total);
     }
+    updateMobileDeliveryProgress();
   }
 
 function updateCartBadge() {
@@ -4635,6 +4636,7 @@ function updateCartBadge() {
         const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
         if (tspan) tspan.textContent = money(total);
       }
+      if (window.matchMedia("(max-width: 768px)").matches) updateMobileDeliveryProgress();
     }
   }
 
@@ -7394,10 +7396,17 @@ optionGroups.forEach((group) => {
 
     // total = unit * qty
     const totalPrice = roundPrice(unitPrice * Number(qty || 1));
+    // Зачёркнутая цена: product.old_price из БД (поле «Старая цена» в админке)
+    const oldBase = Number(product.old_price || 0);
+    const oldUnit = oldBase > 0 ? roundPrice(oldBase + optionTotal + ingredientsPriceDiff) : 0;
+    const totalOld = oldUnit > unitPrice ? roundPrice(oldUnit * Number(qty || 1)) : 0;
+    const showOld = totalOld > 0 && totalOld > totalPrice;
 
-    // Новая структура: цена сверху, текст "в корзину" снизу
     actionBtnRef.innerHTML = `
-      <span class="shop-checkout-total shop-pd-action-price">${money(totalPrice)}</span>
+      <span class="shop-pd-action-prices">
+        ${showOld ? `<span class="shop-pd-action-old">${money(totalOld)}</span>` : ""}
+        <span class="shop-checkout-total shop-pd-action-price">${money(totalPrice)}</span>
+      </span>
       <span class="shop-pd-action-label">${editMode ? "Сохранить" : "в корзину"}</span>
     `;
 
@@ -7407,6 +7416,22 @@ optionGroups.forEach((group) => {
         basePriceElRef.textContent = `${variantLabel} — ${money(variantUnitPrice)}`;
       } else {
         basePriceElRef.textContent = money(product.price || 0);
+      }
+    }
+    // Синхронизация с мобильной кнопкой «В корзину»
+    if (elMobileProductPrice) {
+      const priceEl = actionBtnRef.querySelector(".shop-pd-action-price");
+      if (priceEl) elMobileProductPrice.textContent = priceEl.textContent;
+    }
+    const oldPriceEl = actionBtnRef.querySelector(".shop-pd-action-old");
+    const mobileOldPrice = elMobileAddToCartBtn?.querySelector(".shop-pd-action-old");
+    if (mobileOldPrice) {
+      if (oldPriceEl && oldPriceEl.textContent.trim()) {
+        mobileOldPrice.textContent = oldPriceEl.textContent;
+        mobileOldPrice.classList.remove("hidden");
+      } else {
+        mobileOldPrice.textContent = "";
+        mobileOldPrice.classList.add("hidden");
       }
     }
   };
@@ -9332,12 +9357,17 @@ function openCartSheet() {
     
     // Показываем мобильные кнопки
     elMobileCartActions.classList.remove("hidden");
-    if (elMobileCartActionsCart) elMobileCartActionsCart.classList.remove("hidden");
+    if (items.length > 0) {
+      if (elMobileCartActionsCart) elMobileCartActionsCart.classList.remove("hidden");
+    } else {
+      if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
+    }
     if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
     
     // Синхронизируем состояние
     elMobileCartTotal.textContent = money(total);
     elMobileCheckoutBtn.disabled = items.length === 0;
+    updateMobileDeliveryProgress();
     
     // Скрываем ботомщит активного заказа при открытии корзины
     if (elActiveOrdersSheetCollapsed) {
@@ -9488,6 +9518,7 @@ function applySheetAddressTitle(backMode = "cart") {
       if (elMobileAddressActions) {
         elMobileAddressActions.classList.add("hidden");
       }
+      updateMobileDeliveryProgress();
     }
 
     // title = адрес, без стрелок/иконок
@@ -9521,6 +9552,7 @@ function applySheetAddressTitle(backMode = "cart") {
     productWrap.classList.add("hidden");
     pickupSheetWrap.classList.add("hidden");
 
+    window._checkoutMethodCode = null;
     const hasItems = cartItemsResolved().length > 0;
     setCartSheetFooterMode(openCartSheetCtx, hasItems ? "cart" : "hidden");
     if (openCartSheetCtx?.checkoutBtn) {
@@ -9539,21 +9571,25 @@ function applySheetAddressTitle(backMode = "cart") {
       if (elMobileProductActions) {
         elMobileProductActions.classList.add("hidden");
       }
-      if (elMobileCartActions && hasItems) {
+      // На экране корзины всегда показываем блок (полоска прогресса видна и при пустой корзине)
+      if (elMobileCartActions) {
         elMobileCartActions.classList.remove("hidden");
-      } else if (elMobileCartActions && !hasItems) {
-        elMobileCartActions.classList.add("hidden");
       }
       if (elMobileAddressActions) {
         elMobileAddressActions.classList.add("hidden");
       }
       if (elMobileCartActionsCart && elMobileCartActionsCheckout) {
-        elMobileCartActionsCart.classList.remove("hidden");
+        if (hasItems) {
+          elMobileCartActionsCart.classList.remove("hidden");
+        } else {
+          elMobileCartActionsCart.classList.add("hidden");
+        }
         elMobileCartActionsCheckout.classList.add("hidden");
       }
       if (elMobileCheckoutBtn) {
         elMobileCheckoutBtn.disabled = !hasItems;
       }
+      updateMobileDeliveryProgress();
     }
     // Обновляем ботомщит активного заказа
     if (typeof window.updateActiveOrdersBadge === "function") {
@@ -11637,6 +11673,87 @@ function setBottomNavActive(tab) {
   }
 
   /**
+   * Обновляет полоску прогресса до бесплатной доставки и сумму в кнопке «Оформить» (мобилка и десктоп).
+   * В кнопке: сумма корзины + стоимость доставки, если доставка платная; при достижении порога — только сумма корзины.
+   */
+  async function updateMobileDeliveryProgress() {
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    const isDesktop = !isMobile;
+    if (window._checkoutMethodCode != null && window._checkoutMethodCode !== "delivery") {
+      if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
+      if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
+      return;
+    }
+    let data;
+    try {
+      data = await getDeliverySettings();
+    } catch (e) {
+      const cartTotal = computeCartTotals(cartItemsResolved()).total;
+      if (elMobileCartTotal) elMobileCartTotal.innerHTML = "<strong>" + money(cartTotal) + "</strong>";
+      if (elCartTotal) elCartTotal.innerHTML = "<strong>" + money(cartTotal) + "</strong>";
+      if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
+      if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
+      return;
+    }
+    const deliveryCost = Number(data?.delivery_cost || 0) || 0;
+    const freeFrom = data?.free_delivery_from != null ? Number(data.free_delivery_from) : null;
+    const items = cartItemsResolved();
+    const cartTotal = computeCartTotals(items).total;
+    const deliveryApplied = freeFrom != null && cartTotal >= freeFrom ? 0 : deliveryCost;
+    const setTotalHtml = (el, total, applied) => {
+      if (!el) return;
+      if (applied > 0) {
+        el.innerHTML = "<strong>" + money(total) + "</strong> + <strong>" + money(applied) + "</strong>";
+      } else {
+        el.innerHTML = "<strong>" + money(total) + "</strong>";
+      }
+    };
+    if (isMobile) {
+      setTotalHtml(elMobileCartTotal, cartTotal, deliveryApplied);
+    }
+    if (isDesktop && elCartTotal) {
+      setTotalHtml(elCartTotal, cartTotal, deliveryApplied);
+    }
+    const progress = freeFrom != null && freeFrom > 0 ? Math.min(100, (cartTotal / freeFrom) * 100) : 0;
+    const labelFreeHtml = "Бесплатная доставка <i class=\"fas fa-check shop-delivery-check\" aria-hidden=\"true\"></i>";
+    const labelProgressHtml = (left, withDelivery) =>
+      (withDelivery ? "Доставка <strong>" + money(deliveryCost) + "</strong>. " : "") + "Ещё <strong>" + money(left) + "</strong> до бесплатной доставки";
+
+    if (isMobile && elMobileDeliveryProgressWrap && elMobileDeliveryProgressFill && elMobileDeliveryProgressLabel) {
+      if (freeFrom == null || freeFrom <= 0) {
+        elMobileDeliveryProgressWrap.classList.add("hidden");
+      } else {
+        elMobileDeliveryProgressFill.style.width = progress + "%";
+        if (elMobileDeliveryProgressBar) elMobileDeliveryProgressBar.setAttribute("aria-valuenow", Math.round(progress));
+        if (progress >= 100) {
+          elMobileDeliveryProgressLabel.classList.add("is-free");
+          elMobileDeliveryProgressLabel.innerHTML = labelFreeHtml;
+        } else {
+          elMobileDeliveryProgressLabel.classList.remove("is-free");
+          elMobileDeliveryProgressLabel.innerHTML = labelProgressHtml(Math.ceil(freeFrom - cartTotal), deliveryCost > 0);
+        }
+        elMobileDeliveryProgressWrap.classList.remove("hidden");
+      }
+    }
+    if (isDesktop && elDesktopDeliveryProgressWrap && elDesktopDeliveryProgressFill && elDesktopDeliveryProgressLabel) {
+      if (freeFrom == null || freeFrom <= 0) {
+        elDesktopDeliveryProgressWrap.classList.add("hidden");
+      } else {
+        elDesktopDeliveryProgressFill.style.width = progress + "%";
+        elDesktopDeliveryProgressWrap.querySelector(".shop-cart-delivery-progress-bar")?.setAttribute("aria-valuenow", Math.round(progress));
+        if (progress >= 100) {
+          elDesktopDeliveryProgressLabel.classList.add("is-free");
+          elDesktopDeliveryProgressLabel.innerHTML = labelFreeHtml;
+        } else {
+          elDesktopDeliveryProgressLabel.classList.remove("is-free");
+          elDesktopDeliveryProgressLabel.innerHTML = labelProgressHtml(Math.ceil(freeFrom - cartTotal), deliveryCost > 0);
+        }
+        elDesktopDeliveryProgressWrap.classList.remove("hidden");
+      }
+    }
+  }
+
+  /**
    * Calculate the next opening time for the store
    * @param {Array} hours - Store hours array from API
    * @param {string} timezone - Store timezone offset (e.g., "+3")
@@ -12136,7 +12253,9 @@ function setBottomNavActive(tab) {
       draft.method_code = methodSelect.getValue();
       draft.method_user_selected = true;
       saveCheckoutDraft(draft);
+      window._checkoutMethodCode = methodSelect.getValue();
       updateDeliveryPricing();
+      updateMobileDeliveryProgress();
     });
 
     const methodWrap = document.createElement("div");
@@ -12280,6 +12399,7 @@ function setBottomNavActive(tab) {
     }
     methodSelect.root.addEventListener("change", refreshAddressVisibility);
     refreshAddressVisibility();
+    window._checkoutMethodCode = methodSelect.getValue();
 
     const cLabel = document.createElement("label");
     cLabel.className = "field-label";
@@ -12879,6 +12999,8 @@ function setBottomNavActive(tab) {
 
     container.appendChild(wrap);
 
+    updateMobileDeliveryProgress();
+
     const resultWrap = document.createElement("div");
     resultWrap.className = "shop-order-result hidden";
     container.appendChild(resultWrap);
@@ -12937,7 +13059,9 @@ function setBottomNavActive(tab) {
         if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
         elMobileCartActionsCheckout.classList.remove("hidden");
         elMobileCartActionsCheckout.classList.add("is-order-success");
+        if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
       }
+      if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
     }
 
     function showOrderConflict(existingOrder, onCreateNew, onCancel) {

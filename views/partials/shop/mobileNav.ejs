@@ -13,6 +13,13 @@
 
   <!-- Кнопки корзины (Оформить/Заказать) - показываются в корзине -->
   <div class="shop-mobile-cart-actions hidden" id="shopMobileCartActions">
+    <!-- Полоска прогресса до бесплатной доставки (в корзине) -->
+    <div class="shop-mobile-delivery-progress-wrap hidden" id="shopMobileDeliveryProgressWrap">
+      <div class="shop-mobile-delivery-progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+        <div class="shop-mobile-delivery-progress-fill" id="shopMobileDeliveryProgressFill"></div>
+      </div>
+      <div class="shop-mobile-delivery-progress-label" id="shopMobileDeliveryProgressLabel"></div>
+    </div>
     <div class="shop-mobile-cart-actions-cart hidden" id="shopMobileCartActionsCart">
       <button class="shop-cart-clear" id="shopMobileCartClearBtn" type="button" title="Очистить корзину" aria-label="Очистить корзину">×</button>
       <button class="shop-checkout-btn" id="shopMobileCheckoutBtn" type="button">

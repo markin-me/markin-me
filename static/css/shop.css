@@ -722,14 +722,12 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  /* делаем именно view скроллящимся контейнером, чтобы хвост был "за" контентом */
-  overflow: auto;
-  padding-bottom: 200px; /* доскролл под контентом, чтобы приподнять над нижним баром */
+  overflow: hidden;
 }
 .shop-combo-detail-scroll{
-  flex: 1 0 auto;
+  flex: 1;
   min-height: 0;
-  /* сам контент больше не управляет скроллом, только внутренние отступы */
+  overflow: auto;
   padding: var(--sp-pad);
 }
 
@@ -811,11 +809,14 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   color: var(--color-text);
 }
 
-/* Футер комбо — такой же как у товара */
+/* Футер комбо — прижат к низу панели, не скроллится */
 .shop-combo-footer{
-  position: sticky;
-  bottom: 0;
+  flex-shrink: 0;
   background: var(--color-surface);
+  padding: 4px 12px calc(4px + env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 /* Выбор внутри блока */
@@ -1844,6 +1845,87 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   gap: 10px;
   z-index: 10; /* Футер должен быть поверх контента */
   box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.05); /* Легкая тень для визуального разделения */
+}
+
+/* Шкала доставки на десктопе — один блок с кнопкой «Оформить» */
+.shop-cart-delivery-progress{
+  padding: 10px 12px 6px;
+  background: var(--color-surface);
+  flex-shrink: 0;
+}
+.shop-cart-delivery-progress.hidden{
+  display: none;
+}
+.shop-cart-delivery-progress-bar{
+  height: 6px;
+  background: var(--color-border, #e5e5e5);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.shop-cart-delivery-progress-fill{
+  height: 100%;
+  width: 0%;
+  max-width: 100%;
+  background: var(--shop-buy, #f97316);
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+.shop-cart-delivery-progress-label{
+  font-size: 12px;
+  color: var(--color-text-muted, #666);
+  margin-top: 4px;
+  line-height: 1.2;
+}
+.shop-cart-delivery-progress-label strong{
+  font-weight: 700;
+}
+.shop-cart-delivery-progress-label.is-free{
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.shop-cart-delivery-progress-label .shop-delivery-check{
+  color: #16a34a;
+  font-size: 15px;
+  font-weight: 900;
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+/* Десктоп: шкала и футер — один блок (общая рамка сверху), увеличенный шрифт */
+@media (min-width: 769px){
+  .shop-cart-delivery-progress{
+    padding: 12px 12px 8px;
+    border-top: 1px solid var(--color-border);
+  }
+  .shop-cart-delivery-progress:not(.hidden) + .shop-cart-footer{
+    border-top: none;
+  }
+  .shop-cart-delivery-progress-label{
+    font-size: 14px;
+  }
+  .shop-cart-delivery-progress-label.is-free{
+    font-size: 15px;
+  }
+  .shop-cart-delivery-progress-label .shop-delivery-check{
+    font-size: 16px;
+  }
+  .shop-cart-footer .shop-checkout-total{
+    font-size: calc(1em + 2pt);
+    font-weight: 700;
+  }
+}
+/* Не показывать шкалу доставки при просмотре товара или комбо */
+@media (min-width: 769px){
+  .shop-cart-body:has(.shop-product-content:not(.hidden)) .shop-cart-delivery-progress{
+    display: none !important;
+  }
+}
+@media (max-width: 768px){
+  .shop-cart-delivery-progress{
+    display: none !important;
+  }
 }
 
 @media (max-width: 768px){
