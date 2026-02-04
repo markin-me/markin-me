@@ -119,6 +119,44 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return roundPrice(unitPrice);
   }
 
+  /**
+   * Минимальная возможная цена товара с учётом вариантов (порций/объёмов).
+   * Если у товара есть варианты — перебираем все значения и возвращаем минимум; иначе — базовую цену.
+   */
+  async function computeMinPriceForProduct(product, variant, getConversionFactor, roundPrice) {
+    const basePrice = Number(product.price || 0);
+    if (!variant || !variant.values || !variant.values.length) return roundPrice(basePrice);
+
+    const baseUnitId = Number(product.base_unit_id || product.unit_id || variant.unit_id || 0);
+    const baseQty = Number(product.base_qty || 1) || 1;
+    const variantUnitId = Number(variant.unit_id || 0);
+    if (!Number.isFinite(baseUnitId) || !Number.isFinite(variantUnitId)) return roundPrice(basePrice);
+
+    const factor = await getConversionFactor(variantUnitId, baseUnitId);
+    if (factor == null) return roundPrice(basePrice);
+
+    const tiers = Array.isArray(variant.discount_tiers) ? variant.discount_tiers : [];
+    let minPrice = basePrice;
+
+    for (let selectedIndex = 0; selectedIndex < variant.values.length; selectedIndex++) {
+      const value = variant.values[selectedIndex];
+      const numericValue = parseVariantValueNumber(value);
+      if (!Number.isFinite(numericValue)) continue;
+      const qtyInBase = numericValue * Number(factor || 0);
+      if (!Number.isFinite(qtyInBase) || qtyInBase <= 0) continue;
+
+      let unitPrice = basePrice * (qtyInBase / baseQty);
+      const tier = tiers.find((t) => Number(t.sort_order) === selectedIndex);
+      const discountPercent = Number(tier?.discount_percent || 0) || 0;
+      if (discountPercent !== 0) {
+        unitPrice = unitPrice * (1 - discountPercent / 100);
+      }
+      if (unitPrice < minPrice) minPrice = unitPrice;
+    }
+
+    return roundPrice(minPrice);
+  }
+
   async function enrichProductsWithDisplayPrice(rows, tenantId) {
     if (!rows.length) return;
     const productIds = [...new Set(rows.map((r) => Number(r.id)).filter(Boolean))];
@@ -1305,7 +1343,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
   /**
    * Комбо-наборы для каталога: по категории (category_code), с min_price и фото для 2x2 сетки.
-   * min_price = сумма по блокам (min_select самых дешёвых товаров в блоке), затем скидка %.
+   * Самая низкая цена «От X Р»: по каждому блоку берём min_select товаров с наименьшей возможной ценой
+   * (с учётом вариантов/порций — берётся минимум по всем вариантам товара), суммируем, применяем скидку комбо.
    */
   async function getCombosForCategory(tenantId, storeId, categoryId) {
     const [[catRow]] = await db.query(
@@ -1326,6 +1365,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     if (!combos.length) return [];
 
     const roundPrice = (v) => Math.round(Number(v) * 100) / 100;
+    const getConversionFactor = getConversionFactorMap(tenantId, db);
     const result = [];
 
     for (const combo of combos) {
@@ -1343,26 +1383,85 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       for (const sb of setBlocks) {
         const minSelect = Math.max(1, Number(sb.min_select) || 1);
-        const [blockProducts] = await db.query(
-          `SELECT p.id, p.price, p.photos_json
+        // Все доступные товары блока (с base_unit_id, base_qty для расчёта цены вариантов)
+        const [blockProductsRaw] = await db.query(
+          `SELECT p.id, p.price, p.photos_json, p.base_unit_id, p.base_qty, p.unit_id
            FROM prod_combo_block_products bp
            JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
            LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
            WHERE bp.tenant_id=? AND bp.block_id=? AND p.is_active=1 AND p.site_visibility=1
              AND (s.qty IS NULL OR s.qty > 0)
-           ORDER BY p.price ASC
-           LIMIT ?`,
-          [storeId, tenantId, sb.block_id, minSelect]
+           ORDER BY bp.sort_order ASC, bp.id ASC`,
+          [storeId, tenantId, sb.block_id]
         );
+        if (!blockProductsRaw.length) continue;
+
+        const blockProductIds = blockProductsRaw.map((r) => Number(r.id)).filter(Boolean);
+        const [vaRows] = await db.query(
+          `SELECT va.product_id, va.variant_group_id,
+                  COALESCE(va.default_value_index, vg.default_value_index) AS default_value_index,
+                  vg.unit_id, vg.values, vg.sort_order
+           FROM prod_variant_assignments va
+           JOIN prod_variant_groups vg ON vg.id = va.variant_group_id AND vg.tenant_id = va.tenant_id
+           WHERE va.tenant_id=? AND va.product_id IN (${blockProductIds.map(() => '?').join(',')})
+             AND va.is_active=1 AND vg.is_active=1
+           ORDER BY va.sort_order ASC, vg.sort_order ASC`,
+          [tenantId, ...blockProductIds]
+        );
+
+        const variantGroupIds = [...new Set(vaRows.map((r) => Number(r.variant_group_id)).filter(Boolean))];
+        let tiersByGroup = new Map();
+        if (variantGroupIds.length) {
+          const [tierRows] = await db.query(
+            `SELECT variant_group_id, min_quantity, discount_percent, sort_order
+             FROM prod_variant_discount_tiers
+             WHERE tenant_id=? AND variant_group_id IN (${variantGroupIds.map(() => '?').join(',')})
+             ORDER BY variant_group_id, sort_order ASC`,
+            [tenantId, ...variantGroupIds]
+          );
+          for (const t of tierRows) {
+            const gid = Number(t.variant_group_id);
+            if (!tiersByGroup.has(gid)) tiersByGroup.set(gid, []);
+            tiersByGroup.get(gid).push({
+              min_quantity: t.min_quantity,
+              discount_percent: t.discount_percent,
+              sort_order: t.sort_order,
+            });
+          }
+        }
+
+        const variantByProductId = new Map();
+        for (const r of vaRows) {
+          const pid = Number(r.product_id);
+          if (variantByProductId.has(pid)) continue;
+          const values = safeJsonArray(r.values);
+          if (!values.length) continue;
+          variantByProductId.set(pid, {
+            unit_id: r.unit_id,
+            values,
+            default_value_index: r.default_value_index != null ? Number(r.default_value_index) : 0,
+            discount_tiers: tiersByGroup.get(Number(r.variant_group_id)) || [],
+          });
+        }
+
+        const productsWithMinPrice = await Promise.all(
+          blockProductsRaw.map(async (r) => {
+            const variant = variantByProductId.get(Number(r.id));
+            const minP = await computeMinPriceForProduct(r, variant, getConversionFactor, roundPrice);
+            return { ...r, minPrice: minP };
+          })
+        );
+        productsWithMinPrice.sort((a, b) => (a.minPrice || 0) - (b.minPrice || 0));
+        const selected = productsWithMinPrice.slice(0, minSelect);
         let blockSum = 0;
-        for (const r of blockProducts) {
-          blockSum += Number(r.price || 0);
+        for (const r of selected) {
+          blockSum += Number(r.minPrice || 0);
           if (gridPhotos.length < 4) {
             const photos = safeJsonArray(r.photos_json);
             if (photos.length) gridPhotos.push(photos[0]);
           }
         }
-        minPriceSum += blockSum;
+        minPriceSum += roundPrice(blockSum);
       }
 
       const discountPercent = Number(combo.discount_percent) || 0;
@@ -2268,12 +2367,16 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         }
       }
 
-      // calculate total from products
-      const ids = items.map(it => Number(it.product_id)).filter(n => Number.isFinite(n) && n > 0);
-      if (!ids.length) return res.status(400).json({ ok: false, error: 'BAD_ITEMS' });
+      // product_ids только у обычных товаров; комбо приходят с type === 'combo'
+      const ids = items
+        .filter(it => it.type !== 'combo')
+        .map(it => Number(it.product_id))
+        .filter(n => Number.isFinite(n) && n > 0);
+      const hasCombos = items.some(it => it.type === 'combo');
+      if (!ids.length && !hasCombos) return res.status(400).json({ ok: false, error: 'BAD_ITEMS' });
 
-      // availability check for products (stock + ingredients)
-      {
+      // availability check for products (stock + ingredients) — только если в заказе есть обычные товары
+      if (ids.length) {
         const [availability] = await db.query(
           `SELECT p.id,
               CASE
@@ -2334,13 +2437,16 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         }
       }
 
-      const [products] = await db.query(
-        `SELECT id, name, price, old_price, photos_json
-         FROM prod_products
-         WHERE tenant_id=? AND id IN (${ids.map(() => '?').join(',')})`,
-        [tenantId, ...ids]
-      );
-      const byId = new Map(products.map(p => [Number(p.id), p]));
+      let byId = new Map();
+      if (ids.length) {
+        const [products] = await db.query(
+          `SELECT id, name, price, old_price, photos_json
+           FROM prod_products
+           WHERE tenant_id=? AND id IN (${ids.map(() => '?').join(',')})`,
+          [tenantId, ...ids]
+        );
+        byId = new Map(products.map(p => [Number(p.id), p]));
+      }
 
       const [autoAddRows] = await db.query(
         `SELECT i.*
@@ -2368,6 +2474,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       let nonAutoItemsTotal = 0;
       for (const it of items) {
+        if (it.type === 'combo') {
+          const lineTotalFromRequest = Number(it.line_total);
+          if (Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0) {
+            nonAutoItemsTotal += roundPrice(lineTotalFromRequest);
+          }
+          continue;
+        }
         const pid = Number(it.product_id);
         const p = byId.get(pid);
         if (!p) continue;
@@ -2485,6 +2598,41 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
 
       for (const it of items) {
+        if (it.type === 'combo') {
+          const qty = Math.max(1, Number(it.qty || it.quantity || 1));
+          const lineTotalFromRequest = Number(it.line_total);
+          const lineTotal = Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0
+            ? roundPrice(lineTotalFromRequest)
+            : roundPrice(0);
+          total += lineTotal;
+          const selections = Array.isArray(it.selections) ? it.selections : [];
+          const photos = [];
+          selections.forEach((s) => {
+            if (s.product_photo) photos.push(s.product_photo);
+          });
+          normItems.push({
+            type: 'combo',
+            combo_id: it.combo_id,
+            name: it.combo_title || 'Комбо',
+            qty,
+            price: qty > 0 ? roundPrice(lineTotal / qty) : 0,
+            old_price: 0,
+            line_total: lineTotal,
+            photos,
+            selections: selections.map((s) => ({
+              product_id: s.product_id,
+              product_name: s.product_name,
+              product_photo: s.product_photo,
+              variant_label: s.variant_label,
+              variant_group_title: s.variant_group_title,
+              variant_unit: s.variant_unit,
+              ingredients_display: Array.isArray(s.ingredients_display) ? s.ingredients_display : [],
+            })),
+            auto_add: 0,
+          });
+          continue;
+        }
+
         const pid = Number(it.product_id);
         const qty = Math.max(1, Number(it.qty || it.quantity || 1));
         const p = byId.get(pid);

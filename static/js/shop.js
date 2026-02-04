@@ -1490,7 +1490,52 @@
 
   // Форматирование товара заказа - вынесено в глобальную область для использования в bottom sheet
   window.formatOrderItem = function formatOrderItem(item) {
-    // Используем формат как в корзине, но сразу раскрытый
+    // Комбо: тот же формат, что в корзине и в админке — название комбо и вложенный состав без позиций с 0
+    if (item.type === "combo") {
+      const photos = Array.isArray(item.photos) ? item.photos.filter(Boolean) : [];
+      const mainPhoto = photos[0] || "/static/img/placeholder.png";
+      const itemQty = Number(item.qty || item.quantity || 1);
+      const itemName = `${escapeHtml(item.name || item.combo_title || "Комбо")} × ${itemQty}`;
+      let html = `<div class="cart-row cart-row--combo">`;
+      html += `<img class="cart-thumb" src="${escapeHtml(mainPhoto)}" alt="" />`;
+      html += `<div class="cart-mid">`;
+      html += `<div class="cart-title">${itemName}</div>`;
+      const selections = Array.isArray(item.selections) ? item.selections : [];
+      if (selections.length) {
+        html += `<div class="cart-sub-container cart-combo-details" style="margin-top: 4px; padding-left: 8px;">`;
+        selections.forEach((sel) => {
+          const productName = str(sel.product_name || "—").trim();
+          html += `<div class="cart-combo-detail-block">`;
+          html += `<div class="cart-combo-detail-name" style="font-weight: 600;">1 × ${escapeHtml(productName)}</div>`;
+          const vParts = [sel.variant_label, sel.variant_unit, sel.variant_group_title].filter(Boolean);
+          if (vParts.length) {
+            html += `<div class="cart-sub-detail-item" style="font-size: 0.9em; color: var(--color-text-muted, #666); margin-top: 2px;">• ${escapeHtml(vParts.join(" "))}</div>`;
+          }
+          const ingredientsDisplay = Array.isArray(sel.ingredients_display) ? sel.ingredients_display : [];
+          ingredientsDisplay.forEach((ing) => {
+            const rawQty = ing.qty ?? ing.quantity;
+            const numQty = typeof rawQty === "number" ? rawQty : parseFloat(rawQty);
+            if (!Number.isFinite(numQty) || numQty <= 0) return; // не показываем значения с 0
+            const name = str(ing.name || "").trim();
+            if (!name && (rawQty == null || rawQty === "")) return;
+            const unit = str(ing.unit || "").trim();
+            const parts = [];
+            if (rawQty != null && rawQty !== "") parts.push(String(rawQty));
+            if (unit) parts.push(unit);
+            if (name) parts.push(name);
+            html += `<div class="cart-sub-detail-item" style="font-size: 0.9em; color: var(--color-text-muted, #666); margin-top: 2px;">• ${escapeHtml(parts.join(" "))}</div>`;
+          });
+          html += `</div>`;
+        });
+        html += `</div>`;
+      }
+      html += `</div>`;
+      html += `<div class="cart-right"><div class="cart-price">${money(item.line_total || item.price || 0)}</div></div>`;
+      html += `</div>`;
+      return html;
+    }
+
+    // Обычный товар: используем формат как в корзине, но сразу раскрытый
     const photos = Array.isArray(item.photos) ? item.photos.filter(Boolean) : [];
     const mainPhoto = photos[0] || "/static/img/placeholder.png";
     
@@ -1937,6 +1982,7 @@ function setSheetHeaderMode(mode, { onBack } = {}) {
 function showCartView() {
   cartViewMode = "cart";
   openProductCtx = null;
+  if (typeof window._comboStepBackCallback !== "undefined") window._comboStepBackCallback = null;
 
   if (elAddressContent) elAddressContent.classList.add("hidden");
   if (elCheckoutContent) elCheckoutContent.classList.add("hidden");
@@ -8166,6 +8212,9 @@ optionGroups.forEach((group) => {
         openCartSheetCtx.comboStepBack = null;
         sheetNavigationState.screen = "combo";
         setSheetHeaderMode("product", { onBack });
+      } else {
+        // Десктоп: кнопка «Назад» снова закрывает панель комбо
+        window._comboStepBackCallback = null;
       }
       container.innerHTML = "";
       const wrap = document.createElement("div");
@@ -8347,6 +8396,14 @@ optionGroups.forEach((group) => {
     function renderBlockPicker(blockIndex) {
       const block = blocks[blockIndex];
       if (!block || !block.products || !block.products.length) return;
+
+      // Десктоп: кнопка «Назад» возвращает на шаг назад (в основное представление комбо), а не закрывает панель
+      if (!openCartSheetCtx) {
+        window._comboStepBackCallback = () => {
+          renderMainView();
+          window._comboStepBackCallback = null;
+        };
+      }
 
       container.innerHTML = "";
       const wrap = document.createElement("div");
@@ -12806,6 +12863,30 @@ function setBottomNavActive(tab) {
         cutlery_qty: 0,
         change_from: getChangeFromValue(),
         items: resolvedItems.map(x => {
+          if (x.type === "combo") {
+            const pricing = computeItemPricing(x, totals);
+            return {
+              type: "combo",
+              combo_id: x.combo_id,
+              combo_title: x.combo_title || "Комбо",
+              qty: x.qty,
+              line_total: pricing.lineTotal,
+              selections: Array.isArray(x.selections)
+                ? x.selections.map((s) => ({
+                    product_id: s.product_id,
+                    product_name: s.product_name,
+                    product_photo: s.product_photo,
+                    variant_label: s.variant_label,
+                    variant_group_title: s.variant_group_title,
+                    variant_unit: s.variant_unit,
+                    variant_value_index: s.variant_value_index,
+                    variant_group_id: s.variant_group_id,
+                    ingredients_display: Array.isArray(s.ingredients_display) ? s.ingredients_display : [],
+                    unit_price_override: s.unit_price_override,
+                  }))
+                : [],
+            };
+          }
           // Рассчитываем итоговую цену товара (базовая + опции + разница ингредиентов + варианты)
           const pricing = computeItemPricing(x, totals);
           const lineTotal = pricing.lineTotal;
@@ -13092,7 +13173,12 @@ async function init() {
 
     if (elCartBackBtn) {
       elCartBackBtn.addEventListener("click", () => {
-        // Проверяем, находимся ли мы в режиме просмотра деталей заказа
+        // Комбо: шаг назад (экран "Заменить" → основное представление комбо)
+        if (typeof window._comboStepBackCallback === "function") {
+          window._comboStepBackCallback();
+          return;
+        }
+        // Режим просмотра деталей заказа
         if (window._isViewingOrderDetails && typeof window._showOrdersListCallback === "function") {
           window._showOrdersListCallback();
           return;

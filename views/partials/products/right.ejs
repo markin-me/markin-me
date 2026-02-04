@@ -1,0 +1,83 @@
+<div class="panel">
+  <div class="panel-header">
+    <div class="panel-title">Информация</div>
+  </div>
+
+  <div class="panel-body no-scrollbar">
+    <div id="productDetailsHost">
+      <!-- Empty state -->
+      <div id="emptyState" class="empty-state">
+        <div class="empty-icon">
+          <i class="fas fa-mouse-pointer"></i>
+        </div>
+        <div class="empty-title">Выберите товар</div>
+        <div class="empty-text">Нажмите на любой товар для просмотра подробной информации</div>
+      </div>
+
+      <!-- Product info (JS показывает/скрывает) -->
+      <div id="productInfo" class="hidden fade-in">
+        <div class="stat-card stat-header">
+          <button class="icon-btn" type="button" onclick="closeProductDetails()" aria-label="Закрыть">
+            <i class="fas fa-times"></i>
+          </button>
+
+          <div class="stat-headline">
+            <div class="stat-title" id="detailProductTitle">Название товара</div>
+            <div class="stat-subtitle" id="detailProductSkuHeader">Артикул: ...</div>
+          </div>
+
+          <div class="stat-actions">
+            <button class="icon-btn" type="button" title="Редактировать">
+              <i class="fas fa-pencil-alt"></i>
+            </button>
+            <button class="icon-btn" type="button" title="Остатки">
+              <i class="fas fa-boxes"></i>
+            </button>
+            <button class="icon-btn" type="button" title="История">
+              <i class="fas fa-history"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="stack scroll-stack">
+          <div class="stat-card">
+            <div class="img-box" id="productImageContainer">PM</div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-card-title">Основная информация</div>
+            <div class="kv">
+              <div class="kv-row"><span>Название:</span><b id="detailProductName">...</b></div>
+              <div class="kv-row"><span>Артикул:</span><b id="detailProductSku">...</b></div>
+              <div class="kv-row"><span>Единица:</span><b id="detailProductUnit">...</b></div>
+              <div class="kv-row"><span>Категория:</span><b id="detailProductCategory">...</b></div>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="two-cols">
+              <div>
+                <div class="stat-card-title">Цена</div>
+                <div class="big" id="detailProductPrice">₽0</div>
+              </div>
+              <div>
+                <div class="stat-card-title">Остаток</div>
+                <div class="big" id="detailProductStock">0 шт.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-card-title">Описание</div>
+            <div class="muted" id="detailProductDescription">...</div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-card-title">Состав товара</div>
+            <div id="productItemsList" class="stack"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
