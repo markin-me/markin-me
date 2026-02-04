@@ -1895,6 +1895,10 @@ function setSheetHeaderMode(mode, { onBack } = {}) {
   const header = document.querySelector(".app-modal-header");
   if (!header) return;
 
+  // Убираем кнопку «назад» из деталей заказа, чтобы не было двух стрелок после перехода с экрана заказа
+  const orderBackBtn = header.querySelector(".app-modal-back-btn");
+  if (orderBackBtn) orderBackBtn.remove();
+
   // пробуем найти крестик (в разных сборках AppModal он может называться по-разному)
   const closeBtn =
     header.querySelector(".app-modal-close") ||
@@ -9046,11 +9050,26 @@ optionGroups.forEach((group) => {
   function closeShopSheetIfOpen() {
     if (!window.AppModal) return;
     if (window.AppModal.isOpen()) {
+      // Сбрасываем состояние просмотра деталей заказа, чтобы при переходе на другую вкладку
+      // (домик → каталог) стрелка «назад» не вела в список активных заказов
+      sheetNavigationState.type = null;
+      sheetNavigationState.screen = null;
+      sheetNavigationState.data = null;
+      window._isViewingOrderDetails = false;
+      window._showOrdersListCallback = null;
+
+      // Убираем кнопку «назад» из хедера деталей заказа, иначе она остаётся при следующем открытии шита
+      const modalHeader = document.querySelector(".app-modal-header");
+      if (modalHeader) {
+        const orderBackBtn = modalHeader.querySelector(".app-modal-back-btn");
+        if (orderBackBtn) orderBackBtn.remove();
+      }
+
       window.AppModal.close("sheet");
       // Принудительно обнуляем контекст, чтобы следующее открытие создало новый sheet
       openCartSheetCtx = null;
       openProductCtx = null;
-      
+
       // На мобильных: скрываем мобильные кнопки при закрытии sheet
       if (elMobileProductActions) {
         elMobileProductActions.classList.add("hidden");
@@ -12026,6 +12045,159 @@ function setBottomNavActive(tab) {
     };
   }
 
+  /**
+   * Apple-style time wheel: one column, scroll to select, expands in place.
+   * API compatible with buildDropdown: root, getValue(), setValue(v), setOptions(opts, val), "change" event.
+   */
+  function buildTimeWheelPicker(options, value) {
+    const ITEM_HEIGHT = 44;
+    const VISIBLE_ROWS = 5;
+    const PADDING_ROWS = 2;
+    const WRAP_CLASS = "shop-checkout-time-wheel-wrap";
+    const PANEL_CLASS = "shop-checkout-time-wheel-panel";
+    const SCROLL_CLASS = "shop-checkout-time-wheel-scroll";
+    const ITEM_CLASS = "shop-checkout-time-wheel-item";
+
+    const wrap = document.createElement("div");
+    wrap.className = WRAP_CLASS;
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "shop-checkout-select shop-checkout-time-wheel-trigger";
+
+    const panel = document.createElement("div");
+    panel.className = PANEL_CLASS;
+
+    const panelInner = document.createElement("div");
+    panelInner.className = "shop-checkout-time-wheel-panel-inner";
+
+    const scrollEl = document.createElement("div");
+    scrollEl.className = SCROLL_CLASS;
+
+    let opts = Array.isArray(options) ? options.slice() : [];
+    let current = value || (opts[0] ? opts[0].code : "");
+
+    function getSelectedIndex() {
+      const i = opts.findIndex(o => o.code === current);
+      return i >= 0 ? i : 0;
+    }
+
+    function updateButtonText() {
+      const active = opts.find(o => o.code === current) || opts[0];
+      btn.textContent = active ? active.title : "—";
+    }
+
+    function scrollToIndex(index) {
+      const clamped = Math.max(0, Math.min(index, opts.length - 1));
+      scrollEl.scrollTop = clamped * ITEM_HEIGHT;
+    }
+
+    function indexFromScrollTop() {
+      const index = Math.round(scrollEl.scrollTop / ITEM_HEIGHT);
+      return Math.max(0, Math.min(index, opts.length - 1));
+    }
+
+    function onScrollEnd() {
+      if (opts.length === 0) return;
+      const index = indexFromScrollTop();
+      const newCode = opts[index].code;
+      if (newCode !== current) {
+        current = newCode;
+        updateButtonText();
+        wrap.dispatchEvent(new Event("change"));
+      }
+      scrollToIndex(index);
+    }
+
+    let scrollEndTimer = null;
+    scrollEl.addEventListener("scroll", () => {
+      if (scrollEndTimer) clearTimeout(scrollEndTimer);
+      scrollEndTimer = setTimeout(onScrollEnd, 100);
+    });
+
+    function renderItems() {
+      scrollEl.innerHTML = "";
+      const topPad = document.createElement("div");
+      topPad.className = "shop-checkout-time-wheel-pad";
+      topPad.style.height = PADDING_ROWS * ITEM_HEIGHT + "px";
+      scrollEl.appendChild(topPad);
+
+      opts.forEach((o, i) => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = ITEM_CLASS;
+        item.textContent = o.title;
+        item.dataset.index = String(i);
+        item.style.height = ITEM_HEIGHT + "px";
+        item.addEventListener("click", () => {
+          current = o.code;
+          scrollToIndex(i);
+          updateButtonText();
+          panel.classList.remove("is-open");
+          wrap.dispatchEvent(new Event("change"));
+        });
+        scrollEl.appendChild(item);
+      });
+
+      const bottomPad = document.createElement("div");
+      bottomPad.className = "shop-checkout-time-wheel-pad";
+      bottomPad.style.height = PADDING_ROWS * ITEM_HEIGHT + "px";
+      scrollEl.appendChild(bottomPad);
+    }
+
+    function setOptions(nextOptions = [], nextValue) {
+      opts = Array.isArray(nextOptions) ? nextOptions.slice() : [];
+      if (nextValue !== undefined) {
+        current = nextValue;
+      } else if (!opts.find(o => o.code === current)) {
+        current = opts[0]?.code || "";
+      }
+      updateButtonText();
+      renderItems();
+      if (panel.classList.contains("is-open")) {
+        scrollToIndex(getSelectedIndex());
+      }
+    }
+
+    function setValue(val) {
+      current = val;
+      updateButtonText();
+      if (panel.classList.contains("is-open")) {
+        scrollToIndex(getSelectedIndex());
+      }
+    }
+
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (opts.length === 0) return;
+      panel.classList.toggle("is-open");
+      if (panel.classList.contains("is-open")) {
+        requestAnimationFrame(() => {
+          scrollToIndex(getSelectedIndex());
+        });
+      }
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!wrap.contains(e.target)) {
+        panel.classList.remove("is-open");
+      }
+    });
+
+    updateButtonText();
+    wrap.appendChild(btn);
+    panelInner.appendChild(scrollEl);
+    panel.appendChild(panelInner);
+    wrap.appendChild(panel);
+
+    return {
+      root: wrap,
+      getValue: () => current,
+      setValue,
+      setOptions,
+    };
+  }
+
   function pickDefaultCode(options, preferred, fallback) {
     const arr = Array.isArray(options) ? options : [];
     if (preferred && arr.some(x => x.code === preferred)) return preferred;
@@ -12547,7 +12719,7 @@ function setBottomNavActive(tab) {
     dateDisplay.className = "shop-checkout-select shop-checkout-date-display";
     dateDisplayWrap.appendChild(dateDisplay);
 
-    const timeSlotsDropdown = buildDropdown([], "");
+    const timeSlotsDropdown = buildTimeWheelPicker([], "");
     const dateSlotsWrap = document.createElement("div");
     dateSlotsWrap.className = "shop-checkout-time-input--slots";
     dateSlotsWrap.appendChild(timeSlotsDropdown.root);
@@ -12560,7 +12732,7 @@ function setBottomNavActive(tab) {
     const timeSlotsWrapAtTime = document.createElement("div");
     timeSlotsWrapAtTime.className = "shop-checkout-time-input--slots";
     timeSlotsWrapAtTime.style.display = "none";
-    const timeSlotsDropdownAtTime = buildDropdown([], "");
+    const timeSlotsDropdownAtTime = buildTimeWheelPicker([], "");
     timeSlotsWrapAtTime.appendChild(timeSlotsDropdownAtTime.root);
     timeRow.appendChild(timeSlotsWrapAtTime);
 
@@ -12776,7 +12948,7 @@ function setBottomNavActive(tab) {
     ];
     const isCustomChange = draft.change_from && !changeAmounts.includes(draft.change_from);
     const changeDefault = isCustomChange ? "custom" : (draft.change_from ? String(draft.change_from) : "");
-    const changeSelect = buildDropdown(changeOptions, changeDefault);
+    const changeSelect = buildTimeWheelPicker(changeOptions, changeDefault);
 
     const payWrap = document.createElement("div");
     const payLabel = document.createElement("label");

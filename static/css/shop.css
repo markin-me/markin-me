@@ -3362,10 +3362,13 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   display: grid;
 }
 
-/* Убираем overflow у родителей когда dropdown открыт — иначе список обрезается */
+/* Убираем overflow у родителей когда dropdown или time wheel открыт — иначе список обрезается */
 .shop-checkout-content:has(.shop-checkout-dropdown.is-open),
+.shop-checkout-content:has(.shop-checkout-time-wheel-panel.is-open),
 .app-modal-body:has(.shop-checkout-dropdown.is-open),
-.panel-body:has(.shop-checkout-dropdown.is-open){
+.app-modal-body:has(.shop-checkout-time-wheel-panel.is-open),
+.panel-body:has(.shop-checkout-dropdown.is-open),
+.panel-body:has(.shop-checkout-time-wheel-panel.is-open){
   overflow: visible !important;
 }
 
@@ -3477,6 +3480,103 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 /* dateDisplay стилизуется через .shop-checkout-select, убираем стрелку */
 .shop-checkout-date-display.shop-checkout-select::after{
   content:none;
+}
+
+/* === Time wheel (Apple-style): поверх контента, значение по центру === */
+.shop-checkout-time-wheel-wrap{
+  position: relative;
+  width: 100%;
+}
+.shop-checkout-time-wheel-trigger{
+  width: 100%;
+}
+/* Панель раскрывается в обе стороны: центр (серая полоса) на месте кнопки */
+.shop-checkout-time-wheel-panel{
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  z-index: 1001;
+  transform: translateY(-50%);
+  padding: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.08);
+  visibility: hidden;
+  opacity: 0;
+  transition: visibility 0.2s, opacity 0.2s ease;
+  pointer-events: none;
+}
+.shop-checkout-time-wheel-panel.is-open{
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+}
+/* Обёртка: полоса выделения сзади, контент спереди — значение видно по центру */
+.shop-checkout-time-wheel-panel-inner{
+  position: relative;
+  height: 220px;
+}
+/* Полоса выделения ЗА контентом (z-index 0), чтобы цифры были поверх и по центру */
+.shop-checkout-time-wheel-panel-inner::before{
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 44px;
+  border-radius: 10px;
+  background: var(--color-surface-2);
+  pointer-events: none;
+  z-index: 0;
+  box-shadow: 0 0 0 1px var(--color-border);
+}
+.shop-checkout-time-wheel-scroll{
+  position: relative;
+  z-index: 1;
+  height: 220px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-snap-type: y mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  mask-image: linear-gradient(to bottom, transparent 0%, black 30%, black 70%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 30%, black 70%, transparent 100%);
+}
+.shop-checkout-time-wheel-scroll::-webkit-scrollbar{
+  display: none;
+}
+.shop-checkout-time-wheel-pad{
+  flex-shrink: 0;
+  pointer-events: none;
+}
+.shop-checkout-time-wheel-item{
+  scroll-snap-align: center;
+  scroll-snap-stop: always;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 44px;
+  padding: 0 16px;
+  box-sizing: border-box;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 1.15rem;
+  letter-spacing: 0.02em;
+  color: var(--color-text);
+  line-height: 1;
+}
+.shop-checkout-time-wheel-item:hover{
+  background: transparent;
+}
+.shop-checkout-time-wheel-item:active{
+  background: transparent;
 }
 
 /* Серый qty-pill в карточке товара на мобильных */
