@@ -694,6 +694,11 @@ header{
   font-weight: 700;
 }
 
+/* Доскролл в списке активных заказов (bottom sheet), чтобы последняя карточка не упиралась в нижнее меню */
+.shop-active-orders-list {
+  padding-bottom: 200px;
+}
+
 .user-menu-dropdown {
   position: absolute;
   top: calc(100% + 0.5rem);

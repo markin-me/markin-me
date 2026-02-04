@@ -52,6 +52,29 @@ html[data-theme="dark"]{
   --shop-buy-hover: #ea580c;
 }
 
+/* Тёмная тема витрины: более контрастные подписи категорий */
+html[data-theme="dark"] body.page-shop{
+  /* можно переиспользовать в будущих местах */
+  --shop-category-title-color: #f9fafb;
+}
+
+html[data-theme="dark"] body.page-shop .shop-cat-title{
+  color: var(--shop-category-title-color, #f9fafb);
+}
+
+/* Чипы категорий под хедером (мобильный вид) в тёмной теме */
+html[data-theme="dark"] body.page-shop .shop-cat-chip{
+  background: rgba(15,23,42,0.9);
+  border-color: rgba(148,163,184,0.7);
+  color: #e5e7eb;
+}
+
+html[data-theme="dark"] body.page-shop .shop-cat-chip.is-active{
+  background: var(--shop-buy);
+  border-color: var(--shop-buy);
+  color: var(--shop-buy-text);
+}
+
 body.page-shop{
   --column-scroll-pad: 400px;
 }
@@ -633,11 +656,14 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  /* делаем именно view скроллящимся контейнером, чтобы хвост был "за" контентом */
+  overflow: auto;
+  padding-bottom: 200px; /* доскролл под контентом, чтобы приподнять над нижним баром */
 }
 .shop-combo-detail-scroll{
-  flex: 1;
+  flex: 1 0 auto;
   min-height: 0;
-  overflow: auto;
+  /* сам контент больше не управляет скроллом, только внутренние отступы */
   padding: var(--sp-pad);
 }
 

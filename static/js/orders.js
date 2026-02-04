@@ -263,7 +263,7 @@
           const lineTotal = Number(it.line_total ?? it.total ?? it.total_price ?? 0);
           const totalStr = orderItemTotalStr(lineTotal);
           const mainLine = totalStr ? `${qty} Х ${name} — ${totalStr}` : `${qty} Х ${name}`;
-          const bulletPrefix = qty > 1 ? `${qty} Х • ` : "• ";
+          const bulletPrefix = "• ";
 
           const photos = Array.isArray(it.photos) ? it.photos.filter(Boolean) : [];
           const hasPhotos = photos.length > 0;
@@ -349,7 +349,7 @@
         const lineTotal = Number(it.line_total ?? it.total ?? it.total_price ?? price * qty ?? 0);
         const totalStr = orderItemTotalStr(lineTotal);
         const mainLine = totalStr ? `${qty} Х ${name} — ${totalStr}` : `${qty} Х ${name}`;
-        const bulletPrefix = qty > 1 ? `${qty} Х • ` : "• ";
+        const bulletPrefix = "• ";
 
         const photos = Array.isArray(it.photos) ? it.photos.filter(Boolean) : [];
         const hasPhotos = photos.length > 0;
@@ -1697,7 +1697,7 @@
           const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? 0);
           const priceStr = receiptTotalStr(lineTotal);
           const qtyStr = `${qty} Х`;
-          const bulletPrefix = qty > 1 ? `${qty} Х • ` : '• ';
+          const bulletPrefix = '• ';
           let compositionHtml = '';
           const selections = Array.isArray(item.selections) ? item.selections : [];
           selections.forEach((sel) => {
@@ -1740,7 +1740,7 @@
         const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? (basePrice * qty) ?? 0);
         const priceStr = receiptTotalStr(lineTotal);
         const qtyStr = `${qty} Х`;
-        const bulletPrefix = qty > 1 ? `${qty} Х • ` : '• ';
+        const bulletPrefix = '• ';
 
         // Варианты товара (первыми)
         const variants = Array.isArray(item.variants) ? item.variants : [];

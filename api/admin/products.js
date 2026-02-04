@@ -2419,7 +2419,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const discountPercent = req.body.discount_percent !== undefined ? (helpers.numOrNull(req.body.discount_percent) ?? 0) : null;
       const categoryCode = req.body.category_code !== undefined ? (helpers.strOrNull(req.body.category_code) || null) : null;
       const imageUrl = req.body.image_url !== undefined ? (helpers.strOrNull(req.body.image_url) || null) : null;
-      const isActive = req.body.is_active !== undefined ? (req.body.is_active === false || req.body.is_active === '0' ? 0 : 1) : null;
+      const isActive = req.body.is_active !== undefined ? (req.body.is_active === false || req.body.is_active === '0' || req.body.is_active === 0 ? 0 : 1) : null;
       const sortOrder = req.body.sort_order !== undefined ? (helpers.numOrNull(req.body.sort_order) ?? 0) : null;
       const updates = [];
       const params = [];

@@ -3618,7 +3618,13 @@ async function initAddresses() {
           cartItem.qty = Math.max(1, Number(cartItem.qty || 0) + 1);
           saveCart();
           updateComboQty();
-          if (totalEl) totalEl.textContent = money(computeCartTotals(cartItemsResolved()).total);
+          const { total: newTotal } = computeCartTotals(cartItemsResolved());
+          if (totalEl) totalEl.textContent = money(newTotal);
+          // Мобилка: синхронизируем сумму в кнопке "Оформить"
+          const isMobile = window.matchMedia("(max-width: 768px)").matches;
+          if (isMobile && elMobileCartTotal) {
+            elMobileCartTotal.textContent = money(newTotal);
+          }
         });
         btnMinus.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -3632,7 +3638,13 @@ async function initAddresses() {
             saveCart();
             updateComboQty();
           }
-          if (totalEl) totalEl.textContent = money(computeCartTotals(cartItemsResolved()).total);
+          const { total: newTotal } = computeCartTotals(cartItemsResolved());
+          if (totalEl) totalEl.textContent = money(newTotal);
+          // Мобилка: синхронизируем сумму в кнопке "Оформить"
+          const isMobile = window.matchMedia("(max-width: 768px)").matches;
+          if (isMobile && elMobileCartTotal) {
+            elMobileCartTotal.textContent = money(newTotal);
+          }
         });
         if (qty <= 1) btnMinus.classList.add("is-disabled");
         q.appendChild(pill);
@@ -12812,6 +12824,16 @@ function setBottomNavActive(tab) {
           e.preventDefault();
           goToMain();
         };
+      }
+
+      // Мобильная навигация: после оформления заказа показываем
+      // нижний блок корзины в режиме "успешный заказ" с кнопкой "На главную"
+      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      if (isMobile && elMobileCartActions && elMobileCartActionsCheckout) {
+        elMobileCartActions.classList.remove("hidden");
+        if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
+        elMobileCartActionsCheckout.classList.remove("hidden");
+        elMobileCartActionsCheckout.classList.add("is-order-success");
       }
     }
 

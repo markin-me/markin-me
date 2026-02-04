@@ -8294,6 +8294,9 @@ const isViewMode = state.comboPanel.mode === "view";
   }
 
   function closeComboSetCategoryPicker() {
+    // Восстанавливает футер после пикера категорий. saveBtn.onclick = saveComboSet.
+    // Критично: addEventListener на Save должен вызывать stopImmediatePropagation при pickerType=category,
+    // иначе этот restore произойдёт до завершения клика и saveComboSet закроет всю карточку.
     comboSetCategoryPickerSelection = null;
     const panel = document.getElementById("productInfoPanel");
     if (panel) {
@@ -8413,6 +8416,7 @@ const isViewMode = state.comboPanel.mode === "view";
         moreBtnHidden: footerMoreBtn ? footerMoreBtn.classList.contains("hidden") : false,
         cancelBtnIsConfirm: cancelBtn.classList.contains("is-confirm"),
       };
+      // Сохраняем исходные обработчики, чтобы полностью вернуть поведение после закрытия пикера
       comboSetCategoryPickerSavedHandlers = { cancel: cancelBtn.onclick, save: saveBtn.onclick };
       footer.classList.remove("hidden");
       footerView.classList.add("hidden");
@@ -8429,12 +8433,42 @@ const isViewMode = state.comboPanel.mode === "view";
       saveBtn.dataset.pickerType = "category";
       window._closeComboSetCategoryPickerFn = closeComboSetCategoryPicker;
       window._saveComboSetCategoryPickerFn = () => {
-        state.comboSetPanel.categoryIds = Array.from(comboSetCategoryPickerSelection || []);
+        // Применяет выбранные категории в state, закрывает пикер. НЕ вызывает saveComboSet.
+        // Гарантируем, что берём актуальный выбор из UI даже если
+        // внутренний Set по какой‑то причине не обновился.
+        let selection = comboSetCategoryPickerSelection;
+        if (!selection) {
+          selection = new Set();
+          if (listContent) {
+            listContent
+              .querySelectorAll(".option-picker-row.is-selected[data-cat-id]")
+              .forEach((row) => {
+                const id = Number(row.dataset.catId);
+                if (Number.isFinite(id)) selection.add(id);
+              });
+          }
+        }
+        state.comboSetPanel.categoryIds = Array.from(selection || []);
         renderComboSetCategoryChips();
         closeComboSetCategoryPicker();
       };
-      cancelBtn.onclick = () => { if (window._closeComboSetCategoryPickerFn) window._closeComboSetCategoryPickerFn(); };
-      saveBtn.onclick = () => { if (window._saveComboSetCategoryPickerFn) window._saveComboSetCategoryPickerFn(); };
+      // В режиме пикера "Отменить" только закрывает его, не трогая сохранение комбо.
+      cancelBtn.onclick = (e) => {
+        if (e) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        if (window._closeComboSetCategoryPickerFn) window._closeComboSetCategoryPickerFn();
+      };
+      // В режиме пикера "Сохранить" применяет выбранные категории и закрывает пикер, НЕ закрывая карточку комбо.
+      // ВАЖНО: saveBtn.onclick ОБЯЗАТЕЛЬНО менять — иначе клик вызовет saveComboSet и закроет всё. См. addEventListener выше.
+      saveBtn.onclick = (e) => {
+        if (e) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        if (window._saveComboSetCategoryPickerFn) window._saveComboSetCategoryPickerFn();
+      };
     }
   }
 
@@ -8811,10 +8845,14 @@ const isViewMode = state.comboPanel.mode === "view";
         const res = await apiPostCombo({ ...payload, blocks: blocksPayload });
         if (res && res.ok === true && res.data) {
           if (typeof toast !== "undefined") toast("Комбо-набор создан");
-          closeComboSetPanel();
+          const newComboId = res.data.id;
           const activeKey = tabsState?.activeKey;
           if (activeKey && activeKey.startsWith("combo-set:")) {
             closeTab(activeKey);
+          }
+          if (state.mode === "products") await refreshProductsOnly();
+          if (Number.isFinite(newComboId)) {
+            await openComboSetView(newComboId);
           }
           return;
         }
@@ -8831,14 +8869,30 @@ const isViewMode = state.comboPanel.mode === "view";
       return;
     }
     try {
-      await apiPatchCombo(comboId, payload);
-      await apiPutComboBlocks(comboId, blocksPayload);
+      const [patchRes, blocksRes] = await Promise.all([
+        apiPatchCombo(comboId, payload),
+        apiPutComboBlocks(comboId, blocksPayload),
+      ]);
       if (typeof toast !== "undefined") toast("Комбо-набор сохранён");
-      closeComboSetPanel();
-      const activeKey = tabsState?.activeKey;
-      if (activeKey && activeKey.startsWith("combo-set:")) {
-        closeTab(activeKey);
-      }
+      const combo = patchRes?.data;
+      const blocksRows = Array.isArray(blocksRes?.data) ? blocksRes.data : [];
+      const blocks = blocksRows.map((r) => ({
+        block_id: r.block_id,
+        block_title: r.block_title,
+        sort_order: r.sort_order ?? 0,
+      }));
+      state.comboSetPanel.mode = "view";
+      state.comboSetPanel.combo = combo || state.comboSetPanel.combo;
+      state.comboSetPanel.blocks = blocks;
+      state.comboSetPanel.photos = combo?.image_url ? [{ kind: "url", url: String(combo.image_url).trim() }] : state.comboSetPanel.photos ?? [];
+      state.comboSetPanel.activePhotoIdx = state.comboSetPanel.photos.length ? 0 : -1;
+      const code = (combo?.category_code || "").trim();
+      const catByCode = state.categories.find((c) => String(c.code || "").trim() === code);
+      state.comboSetPanel.categoryIds = catByCode ? [Number(catByCode.id)] : [];
+      const tab = tabsState.tabs.find((t) => t.key === `combo-set:${comboId}`);
+      if (tab && combo?.title) tab.title = (combo.title || "").trim() || "Комбо";
+      activateComboSetTab();
+      if (state.mode === "products") await refreshProductsOnly();
     } catch (e) {
       console.error("saveComboSet update", e);
       if (typeof toast !== "undefined") toast("Ошибка сохранения");
@@ -8846,10 +8900,17 @@ const isViewMode = state.comboPanel.mode === "view";
   }
 
   function cancelComboSet() {
-    closeComboSetPanel();
-    const activeKey = tabsState?.activeKey;
-    if (activeKey && activeKey.startsWith("combo-set:")) {
-      closeTab(activeKey);
+    const comboId = state.comboSetPanel?.comboId;
+    const isNewTab = tabsState?.activeKey && String(tabsState.activeKey).includes("new-combo-set-");
+    if (Number.isFinite(comboId) && !isNewTab) {
+      state.comboSetPanel.mode = "view";
+      activateComboSetTab();
+    } else {
+      closeComboSetPanel();
+      const activeKey = tabsState?.activeKey;
+      if (activeKey && activeKey.startsWith("combo-set:")) {
+        closeTab(activeKey);
+      }
     }
   }
 
@@ -14171,8 +14232,18 @@ const isViewMode = state.comboPanel.mode === "view";
     }
 
     if (footerSaveBtn) {
-      footerSaveBtn.addEventListener("click", async () => {
-        // Check if picker is open - priority over product edit
+      footerSaveBtn.addEventListener("click", async (e) => {
+        // ВАЖНО: Пикер категорий комбо — обрабатываем ПЕРВЫМ. stopImmediatePropagation
+        // обязателен, иначе closeComboSetCategoryPicker восстановит onclick=saveComboSet
+        // и тот же клик вызовет saveComboSet → закроет всю карточку комбо. НЕ МЕНЯТЬ порядок.
+        if (footerSaveBtn.dataset.pickerType === "category") {
+          if (window._saveComboSetCategoryPickerFn) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            window._saveComboSetCategoryPickerFn();
+            return;
+          }
+        }
         if (footerSaveBtn.dataset.pickerType === "option") {
           const saveFn = window._saveOptionPickerFn;
           if (saveFn) {
@@ -14202,10 +14273,6 @@ const isViewMode = state.comboPanel.mode === "view";
           return;
         }
         if (footerSaveBtn.dataset.pickerType === "category") {
-          if (window._saveComboSetCategoryPickerFn) {
-            window._saveComboSetCategoryPickerFn();
-            return;
-          }
           const saveFn = window._saveCategoryPickerFn;
           if (saveFn) {
             await saveFn();

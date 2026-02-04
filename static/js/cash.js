@@ -610,7 +610,7 @@
             var lineTotal = Number(item.line_total != null ? item.line_total : item.total != null ? item.total : item.total_price != null ? item.total_price : 0);
             var priceStr = receiptTotalStr(lineTotal);
             var qtyStr = qty + " Х";
-            var bulletPrefix = qty > 1 ? qtyStr + " • " : "• ";
+            var bulletPrefix = "• ";
             var compositionHtml = "";
             var selections = Array.isArray(item.selections) ? item.selections : [];
             selections.forEach(function (sel) {
@@ -656,7 +656,7 @@
           );
           var priceStr = receiptTotalStr(lineTotal);
           var qtyStr = qty + " Х";
-          var bulletPrefix = qty > 1 ? qtyStr + " • " : "• ";
+          var bulletPrefix = "• ";
 
           var variants = Array.isArray(item.variants) ? item.variants : [];
           var variantsHtml = "";
