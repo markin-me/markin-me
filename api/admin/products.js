@@ -2213,15 +2213,14 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   router.post('/admin/combo-blocks', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
-      const storeId = helpers.getStoreId(req) || 1;
       const title = helpers.strOrNull(req.body.title);
       const sortOrder = helpers.numOrNull(req.body.sort_order) ?? 0;
       const minSelect = Math.max(0, parseInt(helpers.numOrNull(req.body.min_select), 10) || 1);
       const maxSelect = Math.max(1, parseInt(helpers.numOrNull(req.body.max_select), 10) || 1);
       if (!title || !title.trim()) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
       const [result] = await db.query(
-        'INSERT INTO prod_combo_blocks (tenant_id, store_id, title, sort_order, min_select, max_select) VALUES (?,?,?,?,?,?)',
-        [tenantId, storeId, title.trim(), sortOrder, minSelect, Math.max(minSelect, maxSelect)]
+        'INSERT INTO prod_combo_blocks (tenant_id, title, sort_order, min_select, max_select) VALUES (?,?,?,?,?)',
+        [tenantId, title.trim(), sortOrder, minSelect, Math.max(minSelect, maxSelect)]
       );
       const blockId = result.insertId;
       const products = Array.isArray(req.body.products) ? req.body.products : [];
@@ -2233,8 +2232,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
           if (!Number.isFinite(productId) || productId <= 0) continue;
           const isDefault = p.is_default ? 1 : (defaultSet ? 0 : (defaultSet = true, 1));
           await db.query(
-            'INSERT INTO prod_combo_block_products (tenant_id, store_id, block_id, product_id, sort_order, is_default) VALUES (?,?,?,?,?,?)',
-            [tenantId, storeId, blockId, productId, Number(p.sort_order) ?? i, isDefault]
+            'INSERT INTO prod_combo_block_products (tenant_id, block_id, product_id, sort_order, is_default) VALUES (?,?,?,?,?)',
+            [tenantId, blockId, productId, Number(p.sort_order) ?? i, isDefault]
           );
         }
       }
@@ -2252,7 +2251,6 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   router.patch('/admin/combo-blocks/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
-      const storeId = helpers.getStoreId(req) || 1;
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
       const [[existing]] = await db.query(
@@ -2286,8 +2284,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
           if (!Number.isFinite(productId) || productId <= 0) continue;
           const isDefault = p.is_default ? 1 : (defaultSet ? 0 : (defaultSet = true, 1));
           await db.query(
-            'INSERT INTO prod_combo_block_products (tenant_id, store_id, block_id, product_id, sort_order, is_default) VALUES (?,?,?,?,?,?)',
-            [tenantId, storeId, id, productId, Number(p.sort_order) ?? i, isDefault]
+            'INSERT INTO prod_combo_block_products (tenant_id, block_id, product_id, sort_order, is_default) VALUES (?,?,?,?,?)',
+            [tenantId, id, productId, Number(p.sort_order) ?? i, isDefault]
           );
         }
       }
@@ -2323,7 +2321,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
       const [rows] = await db.query(
-        `SELECT id, tenant_id, store_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at
+        `SELECT id, tenant_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at
          FROM prod_combos WHERE tenant_id=? ORDER BY sort_order ASC, id ASC`,
         [tenantId]
       );
@@ -2340,7 +2338,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
       const [[row]] = await db.query(
-        'SELECT id, tenant_id, store_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at FROM prod_combos WHERE tenant_id=? AND id=? LIMIT 1',
+        'SELECT id, tenant_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at FROM prod_combos WHERE tenant_id=? AND id=? LIMIT 1',
         [tenantId, id]
       );
       if (!row) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
@@ -2375,7 +2373,6 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   router.post('/admin/combos', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
-      const storeId = helpers.getStoreId(req) || 1;
       const title = helpers.strOrNull(req.body.title);
       const description = helpers.strOrNull(req.body.description) || null;
       const discountPercent = helpers.numOrNull(req.body.discount_percent) ?? 0;
@@ -2385,8 +2382,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const sortOrder = helpers.numOrNull(req.body.sort_order) ?? 0;
       if (!title || !title.trim()) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
       const [result] = await db.query(
-        'INSERT INTO prod_combos (tenant_id, store_id, title, description, discount_percent, category_code, image_url, is_active, sort_order) VALUES (?,?,?,?,?,?,?,?,?)',
-        [tenantId, storeId, title.trim(), description, discountPercent, categoryCode, imageUrl, isActive, sortOrder]
+        'INSERT INTO prod_combos (tenant_id, title, description, discount_percent, category_code, image_url, is_active, sort_order) VALUES (?,?,?,?,?,?,?,?)',
+        [tenantId, title.trim(), description, discountPercent, categoryCode, imageUrl, isActive, sortOrder]
       );
       const comboId = result.insertId;
       const blocks = Array.isArray(req.body.blocks) ? req.body.blocks : [];
@@ -2395,12 +2392,12 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         const blockId = Number(b.block_id);
         if (!Number.isFinite(blockId) || blockId <= 0) continue;
         await db.query(
-          'INSERT INTO prod_combo_set_blocks (tenant_id, store_id, combo_id, block_id, sort_order) VALUES (?,?,?,?,?)',
-          [tenantId, storeId, comboId, blockId, Number(b.sort_order) ?? i]
+          'INSERT INTO prod_combo_set_blocks (tenant_id, combo_id, block_id, sort_order) VALUES (?,?,?,?)',
+          [tenantId, comboId, blockId, Number(b.sort_order) ?? i]
         );
       }
       const [[row]] = await db.query(
-        'SELECT id, tenant_id, store_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at FROM prod_combos WHERE id=? LIMIT 1',
+        'SELECT id, tenant_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at FROM prod_combos WHERE id=? LIMIT 1',
         [comboId]
       );
       res.status(201).json({ ok: true, data: row });
@@ -2413,7 +2410,6 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   router.patch('/admin/combos/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
-      const storeId = helpers.getStoreId(req) || 1;
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
       const [[existing]] = await db.query('SELECT id FROM prod_combos WHERE tenant_id=? AND id=? LIMIT 1', [tenantId, id]);
@@ -2445,13 +2441,13 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
           const blockId = Number(b.block_id);
           if (!Number.isFinite(blockId) || blockId <= 0) continue;
           await db.query(
-            'INSERT INTO prod_combo_set_blocks (tenant_id, store_id, combo_id, block_id, sort_order) VALUES (?,?,?,?,?)',
-            [tenantId, storeId, id, blockId, Number(b.sort_order) ?? i]
+            'INSERT INTO prod_combo_set_blocks (tenant_id, combo_id, block_id, sort_order) VALUES (?,?,?,?)',
+            [tenantId, id, blockId, Number(b.sort_order) ?? i]
           );
         }
       }
       const [[row]] = await db.query(
-        'SELECT id, tenant_id, store_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at FROM prod_combos WHERE id=? LIMIT 1',
+        'SELECT id, tenant_id, title, description, discount_percent, category_code, image_url, is_active, sort_order, created_at, updated_at FROM prod_combos WHERE id=? LIMIT 1',
         [id]
       );
       res.json({ ok: true, data: row });
@@ -2464,7 +2460,6 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   router.put('/admin/combos/:id/blocks', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
-      const storeId = helpers.getStoreId(req) || 1;
       const comboId = Number(req.params.id);
       if (!Number.isFinite(comboId) || comboId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
       const [[combo]] = await db.query('SELECT id FROM prod_combos WHERE tenant_id=? AND id=? LIMIT 1', [tenantId, comboId]);
@@ -2476,8 +2471,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         const blockId = Number(b.block_id);
         if (!Number.isFinite(blockId) || blockId <= 0) continue;
         await db.query(
-          'INSERT INTO prod_combo_set_blocks (tenant_id, store_id, combo_id, block_id, sort_order) VALUES (?,?,?,?,?)',
-          [tenantId, storeId, comboId, blockId, Number(b.sort_order) ?? i]
+          'INSERT INTO prod_combo_set_blocks (tenant_id, combo_id, block_id, sort_order) VALUES (?,?,?,?)',
+          [tenantId, comboId, blockId, Number(b.sort_order) ?? i]
         );
       }
       const [rows] = await db.query(

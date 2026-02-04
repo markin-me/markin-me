@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Хост: 10.0.231.119
--- Время создания: Фев 02 2026 г., 16:00
+-- Время создания: Фев 04 2026 г., 06:32
 -- Версия сервера: 8.0.37-29
 -- Версия PHP: 7.2.34
 
@@ -165,7 +165,7 @@ CREATE TABLE `app_users` (
 --
 
 INSERT INTO `app_users` (`id`, `tenant_id`, `email`, `phone`, `password_hash`, `name`, `role`, `is_active`, `last_login_at`, `created_at`, `updated_at`) VALUES
-(1, 1, 'admin@test.ru', NULL, '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', 'Владелец', 'owner', 1, '2026-01-31 10:26:37', '2026-01-21 13:15:27', '2026-01-31 07:26:37');
+(1, 1, 'admin@test.ru', NULL, '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', 'Владелец', 'owner', 1, '2026-02-03 10:47:37', '2026-01-21 13:15:27', '2026-02-03 07:47:37');
 
 -- --------------------------------------------------------
 
@@ -307,7 +307,10 @@ INSERT INTO `cust_customer_sessions` (`id`, `tenant_id`, `store_id`, `customer_i
 (40, 1, 1, 1, 'fe63d546e9c244288369e4ecfb9d06ca', '2026-02-01 15:03:47', '2026-03-03 15:03:47', 1),
 (41, 1, 1, 1, 'd5ed8bca40df4f65bf3b6bbd100cab8f', '2026-02-01 15:06:18', '2026-03-03 15:06:18', 1),
 (42, 1, 1, 1, '2388e12d2fee441281f6922583569301', '2026-02-01 15:15:08', '2026-03-03 15:15:08', 1),
-(43, 1, 1, 4, '69809d533b9b4924bdb132718d1943bc', '2026-02-02 07:13:40', '2026-03-04 07:13:40', 1);
+(43, 1, 1, 4, '69809d533b9b4924bdb132718d1943bc', '2026-02-02 07:13:40', '2026-03-04 07:13:40', 1),
+(44, 1, 1, 1, '4e3c623d3cdf4b35b29c15e3f8af5909', '2026-02-02 21:32:58', '2026-03-04 21:32:58', 1),
+(45, 1, 1, 1, '9828fd118a964f1488581dd2fc4cb3ed', '2026-02-03 09:15:43', '2026-03-05 09:15:43', 1),
+(46, 1, 1, 1, 'fc8b38f560154018bf2afcee0bf13edd', '2026-02-03 10:41:48', '2026-03-05 10:41:48', 1);
 
 -- --------------------------------------------------------
 
@@ -421,7 +424,8 @@ INSERT INTO `order_orders` (`id`, `public_id`, `tenant_id`, `store_id`, `custome
 (127, '89590ff5-c3d4-4efd-87a3-9f256133d9a9', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', NULL, 1, NULL, 0, 0.00, '[{\"product_id\":43,\"name\":\"Котлета по-киевски с пюре\",\"qty\":1,\"price\":364,\"old_price\":0,\"line_total\":364,\"photos\":[\"/static/uploads/products/1/09cd5b0d1aed7a48097d4dc409448df0.png\"],\"ingredients\":[{\"ingredient_id\":12,\"name\":\"Картофельное пюре\",\"quantity\":150,\"price\":0.7689489718202589,\"total\":115.34234577303883},{\"ingredient_id\":27,\"name\":\"Котлета по-киевски\",\"quantity\":1,\"price\":249,\"total\":249}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0},{\"product_id\":14,\"name\":\"Пюре с куриной котлетой\",\"qty\":1,\"price\":278,\"old_price\":0,\"line_total\":278,\"photos\":[\"/static/uploads/products/1/8d7527fdbc8e7476d39e29192a4d70d0.webp\"],\"ingredients\":[{\"ingredient_id\":12,\"name\":\"Картофельное пюре\",\"quantity\":150,\"price\":0.7689489718202589,\"total\":115.34234577303883},{\"ingredient_id\":13,\"name\":\"Куринная котлета\",\"quantity\":1,\"price\":163,\"total\":163}],\"auto_add\":0}]', 642.00, 0.00, '2026-02-02 07:30:13', 4, 1, 1, 1, 0, NULL, 'web', 1),
 (128, '992de4bb-2ba8-4cce-958b-ab7e72a4b7b2', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', NULL, 1, NULL, 0, 0.00, '[{\"product_id\":40,\"name\":\"Жареная картошка\",\"qty\":1,\"price\":200,\"old_price\":0,\"line_total\":200,\"photos\":[\"/static/uploads/products/1/2987a8ec41f868a8261a8e1a2313dde6.jpg\"],\"ingredients\":[{\"ingredient_id\":15,\"name\":\"Картофель\",\"quantity\":250,\"price\":0.8,\"total\":200},{\"ingredient_id\":65,\"name\":\"Лук репчатый\",\"quantity\":0,\"price\":1000,\"total\":0},{\"ingredient_id\":66,\"name\":\"Шампиньоны\",\"quantity\":0,\"price\":2500,\"total\":0},{\"ingredient_id\":68,\"name\":\"Масло с зеленью\",\"quantity\":0,\"price\":2700,\"total\":0}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0}]', 259.00, 59.00, '2026-02-02 07:45:00', 4, 1, 1, 1, 0, NULL, 'web', 1),
 (129, 'cefed2c6-cc9f-4da9-b5ff-256c698c41e4', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', NULL, 1, NULL, 0, 0.00, '[{\"product_id\":40,\"name\":\"Жареная картошка\",\"qty\":1,\"price\":200,\"old_price\":0,\"line_total\":200,\"photos\":[\"/static/uploads/products/1/2987a8ec41f868a8261a8e1a2313dde6.jpg\"],\"ingredients\":[{\"ingredient_id\":15,\"name\":\"Картофель\",\"quantity\":250,\"price\":0.8,\"total\":200},{\"ingredient_id\":65,\"name\":\"Лук репчатый\",\"quantity\":0,\"price\":1000,\"total\":0},{\"ingredient_id\":66,\"name\":\"Шампиньоны\",\"quantity\":0,\"price\":2500,\"total\":0},{\"ingredient_id\":68,\"name\":\"Масло с зеленью\",\"quantity\":0,\"price\":2700,\"total\":0}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0}]', 259.00, 59.00, '2026-02-02 07:50:21', 4, 1, 1, 1, 0, NULL, 'web', 1),
-(130, 'a84a2fb8-d2e7-4206-8361-f5c6ab41f246', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', NULL, 1, NULL, 0, 0.00, '[{\"product_id\":40,\"name\":\"Жареная картошка\",\"qty\":1,\"price\":200,\"old_price\":0,\"line_total\":200,\"photos\":[\"/static/uploads/products/1/2987a8ec41f868a8261a8e1a2313dde6.jpg\"],\"ingredients\":[{\"ingredient_id\":15,\"name\":\"Картофель\",\"quantity\":250,\"price\":0.8,\"total\":200},{\"ingredient_id\":65,\"name\":\"Лук репчатый\",\"quantity\":0,\"price\":1000,\"total\":0},{\"ingredient_id\":66,\"name\":\"Шампиньоны\",\"quantity\":0,\"price\":2500,\"total\":0},{\"ingredient_id\":68,\"name\":\"Масло с зеленью\",\"quantity\":0,\"price\":2700,\"total\":0}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0},{\"product_id\":39,\"name\":\"Тефтели с пюре\",\"qty\":1,\"price\":204,\"old_price\":0,\"line_total\":204,\"photos\":[\"/static/uploads/products/1/97f3015b45f4aad749bb4bae10190c93.jpg\"],\"ingredients\":[{\"ingredient_id\":12,\"name\":\"Картофельное пюре\",\"quantity\":150,\"price\":0.7689489718202589,\"total\":115.34234577303883},{\"ingredient_id\":7,\"name\":\"Тефтели с рисом\",\"quantity\":1,\"price\":89,\"total\":89}],\"auto_add\":0}]', 404.00, 0.00, '2026-02-02 07:51:23', 4, 1, 1, 1, 0, NULL, 'web', 1);
+(130, 'a84a2fb8-d2e7-4206-8361-f5c6ab41f246', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', NULL, 1, NULL, 0, 0.00, '[{\"product_id\":40,\"name\":\"Жареная картошка\",\"qty\":1,\"price\":200,\"old_price\":0,\"line_total\":200,\"photos\":[\"/static/uploads/products/1/2987a8ec41f868a8261a8e1a2313dde6.jpg\"],\"ingredients\":[{\"ingredient_id\":15,\"name\":\"Картофель\",\"quantity\":250,\"price\":0.8,\"total\":200},{\"ingredient_id\":65,\"name\":\"Лук репчатый\",\"quantity\":0,\"price\":1000,\"total\":0},{\"ingredient_id\":66,\"name\":\"Шампиньоны\",\"quantity\":0,\"price\":2500,\"total\":0},{\"ingredient_id\":68,\"name\":\"Масло с зеленью\",\"quantity\":0,\"price\":2700,\"total\":0}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0},{\"product_id\":39,\"name\":\"Тефтели с пюре\",\"qty\":1,\"price\":204,\"old_price\":0,\"line_total\":204,\"photos\":[\"/static/uploads/products/1/97f3015b45f4aad749bb4bae10190c93.jpg\"],\"ingredients\":[{\"ingredient_id\":12,\"name\":\"Картофельное пюре\",\"quantity\":150,\"price\":0.7689489718202589,\"total\":115.34234577303883},{\"ingredient_id\":7,\"name\":\"Тефтели с рисом\",\"quantity\":1,\"price\":89,\"total\":89}],\"auto_add\":0}]', 404.00, 0.00, '2026-02-02 07:51:23', 4, 1, 1, 1, 0, NULL, 'web', 1),
+(131, 'c7b000e3-54fa-430f-a3cc-71cea1ff7017', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', NULL, 1, NULL, 0, 0.00, '[{\"type\":\"combo\",\"combo_id\":7,\"name\":\"Первое+второе\",\"qty\":1,\"price\":608,\"old_price\":0,\"line_total\":608,\"photos\":[\"/static/uploads/products/1/2b04b5dc060e31f2d05231fe302a535d.jpg\",\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\"],\"selections\":[{\"product_id\":37,\"product_name\":\"Солянка мясная сборная\",\"product_photo\":\"/static/uploads/products/1/2b04b5dc060e31f2d05231fe302a535d.jpg\",\"variant_label\":\"250\",\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"ingredients_display\":[{\"ingredient_id\":71,\"name\":\"Долька лимона\",\"quantity\":0,\"qty\":0,\"unit\":\"шт\"}]},{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"variant_label\":\"\",\"variant_group_title\":\"\",\"variant_unit\":\"\",\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":250,\"qty\":250,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":2,\"qty\":2,\"unit\":\"шт\"}]}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0},{\"type\":\"combo\",\"combo_id\":8,\"name\":\"Первое+второе+напиток\",\"qty\":1,\"price\":452,\"old_price\":0,\"line_total\":452,\"photos\":[\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\"],\"selections\":[{\"product_id\":38,\"product_name\":\"Гороховый с копченостями\",\"product_photo\":\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"variant_label\":\"250\",\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"ingredients_display\":[]},{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"variant_label\":\"\",\"variant_group_title\":\"\",\"variant_unit\":\"\",\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":1,\"qty\":1,\"unit\":\"шт\"}]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\",\"variant_label\":\"500\",\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"ingredients_display\":[]}],\"auto_add\":0}]', 1060.00, 0.00, '2026-02-03 14:20:04', 4, 1, 3, 1, 0, '2026-02-04 10:00:00', 'web', 1);
 
 -- --------------------------------------------------------
 
@@ -578,7 +582,7 @@ CREATE TABLE `prod_auto_add_items` (
 --
 
 INSERT INTO `prod_auto_add_items` (`id`, `tenant_id`, `group_id`, `product_id`, `default_qty`, `min_qty`, `max_qty`, `price_override`, `free_first_qty`, `free_per_amount`, `free_per_amount_qty`, `max_free_qty`, `is_active`, `sort_order`, `created_at`, `updated_at`) VALUES
-(3, 1, 1, 59, 1, 1, NULL, NULL, 1, 500.00, 1, NULL, 1, 0, '2026-01-30 05:07:19', '2026-01-30 16:24:55');
+(3, 1, 1, 59, 1, 1, NULL, NULL, 1, 500.00, 1, NULL, 1, 0, '2026-01-30 05:07:19', '2026-02-03 13:06:31');
 
 -- --------------------------------------------------------
 
@@ -605,17 +609,18 @@ CREATE TABLE `prod_categories` (
 
 INSERT INTO `prod_categories` (`id`, `tenant_id`, `code`, `title`, `icon`, `site_visibility`, `is_active`, `sort_order`, `created_at`, `updated_at`) VALUES
 (1, 1, 'all', 'Все товары', '/static/uploads/categories/91156401f285b03bed37f9561f1b2fe4.jpg', 1, 1, 0, '2026-01-03 07:37:51', '2026-02-01 13:33:35'),
-(2, 1, 'burgers', 'Салаты', '/static/uploads/categories/887417257c45dc1bd3fd5de970168993.jpg', 1, 1, 50, '2026-01-03 07:37:51', '2026-02-01 13:28:20'),
-(3, 1, 'drinks', 'Закуски', '/static/uploads/categories/43b5da1647bd1900bca78cb0f3cb4f84.jpg', 1, 1, 60, '2026-01-03 07:37:51', '2026-02-01 13:28:29'),
-(4, 1, 'cat-mk239ojm', 'Горячее', '/static/uploads/categories/53c6650bd9db23a988886c53c50751ad.jpg', 1, 1, 40, '2026-01-06 04:27:59', '2026-02-01 13:28:09'),
-(5, 1, 'cat-mk2a0iyv', 'Гарнир', '/static/uploads/categories/3663ec08dafff609f21e780ac206741a.jpg', 1, 1, 30, '2026-01-06 07:36:49', '2026-02-01 13:27:57'),
-(6, 1, 'cat-mk2nkp4p', 'Супы', '/static/uploads/categories/05aee622a14776d699ab77bb592237f8.jpg', 1, 1, 20, '2026-01-06 13:56:26', '2026-02-01 13:27:49'),
-(7, 1, 'cat-mk57sj5q', 'Вторые блюда', '/static/uploads/categories/fb33b457cb3ce9aaa9933358cc2c200c.jpg', 1, 1, 10, '2026-01-08 08:57:56', '2026-02-01 13:27:31'),
-(8, 1, 'cat-mkgtrfi2', 'Продукты', '/static/uploads/categories/1c1701f8a4e90f2cf1ff4658c979054c.jpg', 0, 1, 100, '2026-01-16 11:58:24', '2026-02-01 13:33:57'),
-(9, 1, 'cat-ml0f74l8', 'Упаковка', '/static/uploads/categories/9e53e3abcb5b7277987201dc695eea54.jpg', 0, 1, 110, '2026-01-30 05:06:05', '2026-02-01 13:34:06'),
-(10, 1, 'cat-ml1571gc', 'Полуфабрикаты', '/static/uploads/categories/5eeb0ff37c3ebe08b2915228a6bd8d16.jpg', 0, 1, 90, '2026-01-30 17:13:50', '2026-02-01 13:33:48'),
-(11, 1, 'cat-ml3cdrkt', 'Добавки', '/static/uploads/categories/4fcd1ca6979a2e7c69567b5c529c398f.jpg', 1, 1, 80, '2026-02-01 06:10:35', '2026-02-01 13:28:49'),
-(12, 1, 'cat-ml3kiwci', 'Напитки', '/static/uploads/categories/cc3d5680c613a5c597a6472ecdfac683.jpg', 1, 1, 70, '2026-02-01 09:58:30', '2026-02-01 13:28:37');
+(2, 1, 'burgers', 'Салаты', '/static/uploads/categories/887417257c45dc1bd3fd5de970168993.jpg', 1, 1, 60, '2026-01-03 07:37:51', '2026-02-02 13:46:04'),
+(3, 1, 'drinks', 'Закуски', '/static/uploads/categories/43b5da1647bd1900bca78cb0f3cb4f84.jpg', 1, 1, 70, '2026-01-03 07:37:51', '2026-02-02 13:46:12'),
+(4, 1, 'cat-mk239ojm', 'Горячее', '/static/uploads/categories/53c6650bd9db23a988886c53c50751ad.jpg', 1, 1, 50, '2026-01-06 04:27:59', '2026-02-02 13:46:04'),
+(5, 1, 'cat-mk2a0iyv', 'Гарнир', '/static/uploads/categories/3663ec08dafff609f21e780ac206741a.jpg', 1, 1, 40, '2026-01-06 07:36:49', '2026-02-02 13:46:04'),
+(6, 1, 'cat-mk2nkp4p', 'Супы', '/static/uploads/categories/05aee622a14776d699ab77bb592237f8.jpg', 1, 1, 30, '2026-01-06 13:56:26', '2026-02-02 13:46:04'),
+(7, 1, 'cat-mk57sj5q', 'Вторые блюда', '/static/uploads/categories/fb33b457cb3ce9aaa9933358cc2c200c.jpg', 1, 1, 20, '2026-01-08 08:57:56', '2026-02-02 13:46:04'),
+(8, 1, 'cat-mkgtrfi2', 'Продукты', '/static/uploads/categories/1c1701f8a4e90f2cf1ff4658c979054c.jpg', 0, 1, 110, '2026-01-16 11:58:24', '2026-02-02 13:46:12'),
+(9, 1, 'cat-ml0f74l8', 'Упаковка', '/static/uploads/categories/9e53e3abcb5b7277987201dc695eea54.jpg', 0, 1, 120, '2026-01-30 05:06:05', '2026-02-02 13:46:12'),
+(10, 1, 'cat-ml1571gc', 'Полуфабрикаты', '/static/uploads/categories/5eeb0ff37c3ebe08b2915228a6bd8d16.jpg', 0, 1, 100, '2026-01-30 17:13:50', '2026-02-02 13:46:12'),
+(11, 1, 'cat-ml3cdrkt', 'Добавки', '/static/uploads/categories/4fcd1ca6979a2e7c69567b5c529c398f.jpg', 1, 1, 90, '2026-02-01 06:10:35', '2026-02-02 13:46:12'),
+(12, 1, 'cat-ml3kiwci', 'Напитки', '/static/uploads/categories/cc3d5680c613a5c597a6472ecdfac683.jpg', 1, 1, 80, '2026-02-01 09:58:30', '2026-02-02 13:46:12'),
+(13, 1, 'cat-ml5837lr', 'Комбо обеды', '/static/uploads/categories/1780ce6a60e0245c74a8e84967292bbd.png', 1, 1, 10, '2026-02-02 13:45:56', '2026-02-02 13:46:11');
 
 -- --------------------------------------------------------
 
@@ -626,7 +631,6 @@ INSERT INTO `prod_categories` (`id`, `tenant_id`, `code`, `title`, `icon`, `site
 CREATE TABLE `prod_combos` (
   `id` bigint UNSIGNED NOT NULL,
   `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
-  `store_id` int NOT NULL DEFAULT '1',
   `title` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Название комбо, напр. Второе + суп или салат',
   `description` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Подпись: На обед, На обед и ужин',
   `discount_percent` decimal(5,2) NOT NULL DEFAULT '0.00' COMMENT 'Скидка в % на всё комбо',
@@ -638,6 +642,14 @@ CREATE TABLE `prod_combos` (
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Комбо-наборы';
 
+--
+-- Дамп данных таблицы `prod_combos`
+--
+
+INSERT INTO `prod_combos` (`id`, `tenant_id`, `title`, `description`, `discount_percent`, `category_code`, `image_url`, `is_active`, `sort_order`, `created_at`, `updated_at`) VALUES
+(7, 1, 'Первое+второе', 'На обед', 5.00, 'cat-ml5837lr', NULL, 1, 0, '2026-02-03 04:52:39', '2026-02-03 04:53:18'),
+(8, 1, 'Первое+второе+напиток', NULL, 15.00, 'cat-ml5837lr', NULL, 1, 0, '2026-02-03 06:17:50', '2026-02-03 08:04:17');
+
 -- --------------------------------------------------------
 
 --
@@ -647,7 +659,6 @@ CREATE TABLE `prod_combos` (
 CREATE TABLE `prod_combo_blocks` (
   `id` bigint UNSIGNED NOT NULL,
   `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
-  `store_id` int NOT NULL DEFAULT '1',
   `title` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'Название блока для админки',
   `sort_order` int NOT NULL DEFAULT '0',
   `min_select` int UNSIGNED NOT NULL DEFAULT '1' COMMENT 'Минимум товаров в блоке',
@@ -660,9 +671,10 @@ CREATE TABLE `prod_combo_blocks` (
 -- Дамп данных таблицы `prod_combo_blocks`
 --
 
-INSERT INTO `prod_combo_blocks` (`id`, `tenant_id`, `store_id`, `title`, `sort_order`, `min_select`, `max_select`, `created_at`, `updated_at`) VALUES
-(2, 1, 1, 'Суп', 0, 1, 1, '2026-02-02 12:21:10', '2026-02-02 12:21:10'),
-(3, 1, 1, 'Второе', 0, 1, 1, '2026-02-02 12:52:42', '2026-02-02 12:52:42');
+INSERT INTO `prod_combo_blocks` (`id`, `tenant_id`, `title`, `sort_order`, `min_select`, `max_select`, `created_at`, `updated_at`) VALUES
+(2, 1, 'Суп', 0, 1, 1, '2026-02-02 12:21:10', '2026-02-02 12:21:10'),
+(3, 1, 'Второе', 0, 1, 1, '2026-02-02 12:52:42', '2026-02-02 12:52:42'),
+(4, 1, 'Напиток', 0, 1, 1, '2026-02-03 06:18:28', '2026-02-03 06:18:28');
 
 -- --------------------------------------------------------
 
@@ -673,7 +685,6 @@ INSERT INTO `prod_combo_blocks` (`id`, `tenant_id`, `store_id`, `title`, `sort_o
 CREATE TABLE `prod_combo_block_products` (
   `id` bigint UNSIGNED NOT NULL,
   `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
-  `store_id` int NOT NULL DEFAULT '1',
   `block_id` bigint UNSIGNED NOT NULL,
   `product_id` bigint UNSIGNED NOT NULL,
   `sort_order` int NOT NULL DEFAULT '0',
@@ -686,37 +697,55 @@ CREATE TABLE `prod_combo_block_products` (
 -- Дамп данных таблицы `prod_combo_block_products`
 --
 
-INSERT INTO `prod_combo_block_products` (`id`, `tenant_id`, `store_id`, `block_id`, `product_id`, `sort_order`, `is_default`, `created_at`, `updated_at`) VALUES
-(1, 1, 1, 2, 99, 0, 1, '2026-02-02 12:21:33', '2026-02-02 12:21:33'),
-(2, 1, 1, 2, 38, 1, 1, '2026-02-02 12:21:34', '2026-02-02 12:21:34'),
-(3, 1, 1, 2, 88, 2, 0, '2026-02-02 12:21:34', '2026-02-02 12:21:34'),
-(4, 1, 1, 2, 87, 3, 0, '2026-02-02 12:21:34', '2026-02-02 12:21:34'),
-(5, 1, 1, 2, 98, 4, 0, '2026-02-02 12:21:34', '2026-02-02 12:21:34'),
-(6, 1, 1, 2, 37, 5, 0, '2026-02-02 12:21:34', '2026-02-02 12:21:34'),
-(7, 1, 1, 2, 89, 6, 0, '2026-02-02 12:21:34', '2026-02-02 12:21:34'),
-(8, 1, 1, 3, 42, 0, 1, '2026-02-02 12:52:42', '2026-02-02 12:52:42'),
-(9, 1, 1, 3, 47, 4, 1, '2026-02-02 12:52:42', '2026-02-02 12:52:42'),
-(10, 1, 1, 3, 48, 6, 0, '2026-02-02 12:52:42', '2026-02-02 12:52:42'),
-(11, 1, 1, 3, 40, 7, 0, '2026-02-02 12:52:42', '2026-02-02 12:52:42'),
-(12, 1, 1, 3, 52, 8, 0, '2026-02-02 12:52:42', '2026-02-02 12:52:42'),
-(13, 1, 1, 3, 41, 9, 0, '2026-02-02 12:52:42', '2026-02-02 12:52:42'),
-(14, 1, 1, 3, 50, 10, 0, '2026-02-02 12:52:42', '2026-02-02 12:52:42'),
-(15, 1, 1, 3, 46, 11, 0, '2026-02-02 12:52:42', '2026-02-02 12:52:42'),
-(16, 1, 1, 3, 43, 12, 0, '2026-02-02 12:52:42', '2026-02-02 12:52:42'),
-(17, 1, 1, 3, 51, 13, 0, '2026-02-02 12:52:43', '2026-02-02 12:52:43'),
-(18, 1, 1, 3, 9, 14, 0, '2026-02-02 12:52:43', '2026-02-02 12:52:43'),
-(19, 1, 1, 3, 8, 15, 0, '2026-02-02 12:52:43', '2026-02-02 12:52:43'),
-(20, 1, 1, 3, 63, 16, 0, '2026-02-02 12:52:43', '2026-02-02 12:52:43'),
-(21, 1, 1, 3, 62, 18, 0, '2026-02-02 12:52:43', '2026-02-02 12:52:43'),
-(22, 1, 1, 3, 14, 20, 0, '2026-02-02 12:52:43', '2026-02-02 12:52:43'),
-(23, 1, 1, 3, 3, 21, 0, '2026-02-02 12:52:43', '2026-02-02 12:52:43'),
-(24, 1, 1, 3, 60, 22, 0, '2026-02-02 12:52:43', '2026-02-02 12:52:43'),
-(25, 1, 1, 3, 45, 23, 0, '2026-02-02 12:52:43', '2026-02-02 12:52:43'),
-(26, 1, 1, 3, 49, 24, 0, '2026-02-02 12:52:44', '2026-02-02 12:52:44'),
-(27, 1, 1, 3, 44, 25, 0, '2026-02-02 12:52:44', '2026-02-02 12:52:44'),
-(28, 1, 1, 3, 39, 26, 0, '2026-02-02 12:52:44', '2026-02-02 12:52:44'),
-(29, 1, 1, 3, 61, 27, 0, '2026-02-02 12:52:44', '2026-02-02 12:52:44'),
-(30, 1, 1, 3, 29, 28, 0, '2026-02-02 12:52:44', '2026-02-02 12:52:44');
+INSERT INTO `prod_combo_block_products` (`id`, `tenant_id`, `block_id`, `product_id`, `sort_order`, `is_default`, `created_at`, `updated_at`) VALUES
+(38, 1, 3, 42, 0, 1, '2026-02-02 13:36:18', '2026-02-02 13:36:18'),
+(39, 1, 3, 48, 6, 1, '2026-02-02 13:36:18', '2026-02-02 13:36:18'),
+(40, 1, 3, 40, 7, 0, '2026-02-02 13:36:18', '2026-02-02 13:36:18'),
+(41, 1, 3, 52, 8, 0, '2026-02-02 13:36:18', '2026-02-02 13:36:18'),
+(42, 1, 3, 41, 9, 0, '2026-02-02 13:36:18', '2026-02-02 13:36:18'),
+(43, 1, 3, 50, 10, 0, '2026-02-02 13:36:18', '2026-02-02 13:36:18'),
+(44, 1, 3, 46, 11, 0, '2026-02-02 13:36:18', '2026-02-02 13:36:18'),
+(45, 1, 3, 43, 12, 0, '2026-02-02 13:36:18', '2026-02-02 13:36:18'),
+(46, 1, 3, 51, 13, 0, '2026-02-02 13:36:18', '2026-02-02 13:36:18'),
+(47, 1, 3, 9, 14, 0, '2026-02-02 13:36:18', '2026-02-02 13:36:18'),
+(48, 1, 3, 8, 15, 0, '2026-02-02 13:36:19', '2026-02-02 13:36:19'),
+(49, 1, 3, 14, 20, 0, '2026-02-02 13:36:19', '2026-02-02 13:36:19'),
+(50, 1, 3, 3, 21, 0, '2026-02-02 13:36:19', '2026-02-02 13:36:19'),
+(51, 1, 3, 45, 23, 0, '2026-02-02 13:36:19', '2026-02-02 13:36:19'),
+(52, 1, 3, 49, 24, 0, '2026-02-02 13:36:19', '2026-02-02 13:36:19'),
+(53, 1, 3, 44, 25, 0, '2026-02-02 13:36:19', '2026-02-02 13:36:19'),
+(54, 1, 3, 39, 26, 0, '2026-02-02 13:36:19', '2026-02-02 13:36:19'),
+(57, 1, 2, 38, 1, 1, '2026-02-02 17:16:41', '2026-02-02 17:16:41'),
+(58, 1, 2, 37, 5, 1, '2026-02-02 17:16:42', '2026-02-02 17:16:42'),
+(59, 1, 4, 81, 0, 1, '2026-02-03 06:18:28', '2026-02-03 06:18:28'),
+(60, 1, 4, 80, 1, 1, '2026-02-03 06:18:28', '2026-02-03 06:18:28');
+
+-- --------------------------------------------------------
+
+--
+-- Структура таблицы `prod_combo_set_blocks`
+--
+
+CREATE TABLE `prod_combo_set_blocks` (
+  `id` bigint UNSIGNED NOT NULL,
+  `tenant_id` bigint UNSIGNED NOT NULL DEFAULT '1',
+  `combo_id` bigint UNSIGNED NOT NULL,
+  `block_id` bigint UNSIGNED NOT NULL,
+  `sort_order` int NOT NULL DEFAULT '0',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Блоки в комбо-наборе (один блок можно добавить несколько раз)';
+
+--
+-- Дамп данных таблицы `prod_combo_set_blocks`
+--
+
+INSERT INTO `prod_combo_set_blocks` (`id`, `tenant_id`, `combo_id`, `block_id`, `sort_order`, `created_at`, `updated_at`) VALUES
+(10, 1, 7, 2, 0, '2026-02-03 04:54:59', '2026-02-03 04:54:59'),
+(11, 1, 7, 3, 1, '2026-02-03 04:54:59', '2026-02-03 04:54:59'),
+(17, 1, 8, 2, 0, '2026-02-03 08:04:17', '2026-02-03 08:04:17'),
+(18, 1, 8, 3, 1, '2026-02-03 08:04:17', '2026-02-03 08:04:17'),
+(19, 1, 8, 4, 2, '2026-02-03 08:04:17', '2026-02-03 08:04:17');
 
 -- --------------------------------------------------------
 
@@ -2018,7 +2047,6 @@ ALTER TABLE `prod_categories`
 ALTER TABLE `prod_combos`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_prod_combos_tenant` (`tenant_id`),
-  ADD KEY `idx_prod_combos_store` (`store_id`),
   ADD KEY `idx_prod_combos_active_sort` (`is_active`,`sort_order`);
 
 --
@@ -2036,6 +2064,15 @@ ALTER TABLE `prod_combo_block_products`
   ADD UNIQUE KEY `uq_prod_combo_block_products_block_product` (`block_id`,`product_id`),
   ADD KEY `idx_prod_combo_block_products_block` (`block_id`),
   ADD KEY `idx_prod_combo_block_products_product` (`product_id`);
+
+--
+-- Индексы таблицы `prod_combo_set_blocks`
+--
+ALTER TABLE `prod_combo_set_blocks`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_combo_set_blocks_combo` (`combo_id`),
+  ADD KEY `idx_combo_set_blocks_block` (`block_id`),
+  ADD KEY `idx_combo_set_blocks_tenant` (`tenant_id`);
 
 --
 -- Индексы таблицы `prod_option_assignments`
@@ -2241,7 +2278,7 @@ ALTER TABLE `cust_customer_addresses`
 -- AUTO_INCREMENT для таблицы `cust_customer_sessions`
 --
 ALTER TABLE `cust_customer_sessions`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=44;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=47;
 
 --
 -- AUTO_INCREMENT для таблицы `cust_statuses`
@@ -2295,25 +2332,31 @@ ALTER TABLE `prod_auto_add_items`
 -- AUTO_INCREMENT для таблицы `prod_categories`
 --
 ALTER TABLE `prod_categories`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_combos`
 --
 ALTER TABLE `prod_combos`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_combo_blocks`
 --
 ALTER TABLE `prod_combo_blocks`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_combo_block_products`
 --
 ALTER TABLE `prod_combo_block_products`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=31;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=61;
+
+--
+-- AUTO_INCREMENT для таблицы `prod_combo_set_blocks`
+--
+ALTER TABLE `prod_combo_set_blocks`
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=20;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_option_assignments`
@@ -2456,6 +2499,13 @@ ALTER TABLE `order_orders`
 ALTER TABLE `prod_combo_block_products`
   ADD CONSTRAINT `fk_prod_combo_block_products_block` FOREIGN KEY (`block_id`) REFERENCES `prod_combo_blocks` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
   ADD CONSTRAINT `fk_prod_combo_block_products_product` FOREIGN KEY (`product_id`) REFERENCES `prod_products` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+--
+-- Ограничения внешнего ключа таблицы `prod_combo_set_blocks`
+--
+ALTER TABLE `prod_combo_set_blocks`
+  ADD CONSTRAINT `fk_combo_set_blocks_block` FOREIGN KEY (`block_id`) REFERENCES `prod_combo_blocks` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  ADD CONSTRAINT `fk_combo_set_blocks_combo` FOREIGN KEY (`combo_id`) REFERENCES `prod_combos` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 --
 -- Ограничения внешнего ключа таблицы `prod_option_assignments`

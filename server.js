@@ -215,7 +215,7 @@ app.get('/auth', (req, res) => res.redirect('/login'));
 // ------------------------------
 // API: Public (публичные роуты должны быть ПЕРЕД админскими)
 // ------------------------------
-app.use('/api/public', makePublicShopRouter({ db, helpers, ordersEvents }));
+app.use('/api/public', makePublicShopRouter({ db, helpers, ordersEvents, appVersion: SHOP_APP_VERSION }));
 
 // ------------------------------
 // API: Admin (требуют авторизации)

@@ -603,6 +603,48 @@
       var itemsHtml = '';
       if (items.length) {
         items.forEach(function (item) {
+          // Комбо: тот же состав, что в админке и у клиента; позиции с количеством 0 не показываем
+          if (item.type === "combo") {
+            var name = escapeHtml(item.name || item.combo_title || "Комбо");
+            var qty = Math.max(1, Number(item.quantity || item.qty || 0) || 1);
+            var lineTotal = Number(item.line_total != null ? item.line_total : item.total != null ? item.total : item.total_price != null ? item.total_price : 0);
+            var priceStr = receiptTotalStr(lineTotal);
+            var qtyStr = qty + " Х";
+            var bulletPrefix = qty > 1 ? qtyStr + " • " : "• ";
+            var compositionHtml = "";
+            var selections = Array.isArray(item.selections) ? item.selections : [];
+            selections.forEach(function (sel) {
+              compositionHtml += '<div class="receipt-composition-item" style="font-weight: bold;">1 × ' + escapeHtml(sel.product_name || "—") + '</div>';
+              var vParts = [sel.variant_label, sel.variant_unit, sel.variant_group_title].filter(Boolean);
+              if (vParts.length) {
+                compositionHtml += '<div class="receipt-composition-item">' + bulletPrefix + escapeHtml(vParts.join(" ")) + '</div>';
+              }
+              var ingredientsDisplay = Array.isArray(sel.ingredients_display) ? sel.ingredients_display : [];
+              ingredientsDisplay.forEach(function (ing) {
+                var rawQty = ing.qty != null ? ing.qty : ing.quantity;
+                var numQty = typeof rawQty === "number" ? rawQty : parseFloat(rawQty);
+                if (!(numQty > 0)) return;
+                var ingName = escapeHtml(ing.name || "");
+                var unit = escapeHtml(String(ing.unit || "").trim());
+                var parts = [];
+                if (rawQty != null && rawQty !== "") parts.push(String(rawQty));
+                if (unit) parts.push(unit);
+                if (ingName) parts.push(ingName);
+                compositionHtml += '<div class="receipt-composition-item">' + bulletPrefix + escapeHtml(parts.join(" ")) + '</div>';
+              });
+            });
+            itemsHtml +=
+              '<div class="receipt-item">' +
+                '<div class="receipt-item-row">' +
+                  '<span class="receipt-item-qty">' + escapeHtml(qtyStr) + '</span>' +
+                  '<span class="receipt-item-name">' + name + '</span>' +
+                  (priceStr ? '<span class="receipt-item-price">' + escapeHtml(priceStr) + '</span>' : '') +
+                '</div>' +
+                (compositionHtml ? '<div class="receipt-composition">' + compositionHtml + '</div>' : '') +
+              '</div>';
+            return;
+          }
+
           var name = escapeHtml(item.product_name || item.name || "Товар");
           var qty = Math.max(1, Number(item.quantity || item.qty || 0) || 1);
           var basePrice = parseFloat(item.price || 0);

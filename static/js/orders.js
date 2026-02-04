@@ -256,6 +256,93 @@
 
     return sorted
       .map((it, itemIdx) => {
+        // Комбо: как в корзине — название комбо и вложенный состав (селекции с вариантами и ингредиентами)
+        if (it.type === "combo") {
+          const name = escapeHtml(it.name || it.combo_title || "Комбо");
+          const qty = Math.max(1, Number(it.qty || it.quantity || 0));
+          const lineTotal = Number(it.line_total ?? it.total ?? it.total_price ?? 0);
+          const totalStr = orderItemTotalStr(lineTotal);
+          const mainLine = totalStr ? `${qty} Х ${name} — ${totalStr}` : `${qty} Х ${name}`;
+          const bulletPrefix = qty > 1 ? `${qty} Х • ` : "• ";
+
+          const photos = Array.isArray(it.photos) ? it.photos.filter(Boolean) : [];
+          const hasPhotos = photos.length > 0;
+          const uniqueId = `order-item-${itemIdx}-${Date.now()}`;
+          let photosHtml = "";
+          if (hasPhotos) {
+            photosHtml = `
+              <div class="order-item-photos" data-item-photos="${uniqueId}">
+                <div class="order-item-photo-main">
+                  <img class="order-item-photo-img" src="${escapeHtml(photos[0])}" alt="${escapeHtml(name)}" data-photo-idx="0" />
+                  ${photos.length > 1 ? `
+                    <button class="order-item-photo-nav order-item-photo-prev" type="button" aria-label="Предыдущее фото"><i class="fas fa-chevron-left"></i></button>
+                    <button class="order-item-photo-nav order-item-photo-next" type="button" aria-label="Следующее фото"><i class="fas fa-chevron-right"></i></button>
+                  ` : ""}
+                </div>
+                ${photos.length > 1 ? `
+                  <div class="order-item-photo-thumbs-wrapper">
+                    <button class="order-item-thumbs-nav order-item-thumbs-prev" type="button" aria-label="Листать влево"><i class="fas fa-chevron-left"></i></button>
+                    <div class="order-item-photo-thumbs" data-thumbs="${uniqueId}">
+                      ${photos.map((photo, idx) => `
+                        <button class="order-item-photo-thumb ${idx === 0 ? "is-active" : ""}" type="button" data-thumb-idx="${idx}">
+                          <img src="${escapeHtml(photo)}" alt="" />
+                        </button>
+                      `).join("")}
+                    </div>
+                    <button class="order-item-thumbs-nav order-item-thumbs-next" type="button" aria-label="Листать вправо"><i class="fas fa-chevron-right"></i></button>
+                  </div>
+                ` : ""}
+              </div>
+            `;
+          }
+          const photoHtml = hasPhotos
+            ? `<div class="order-item-photo-small"><img src="${escapeHtml(photos[0])}" alt="${escapeHtml(name)}" /></div>`
+            : "";
+
+          const selections = Array.isArray(it.selections) ? it.selections : [];
+          const comboDetailsHtml = selections.length
+            ? `<div class="order-item-composition">
+                ${selections.map((sel) => {
+                  const productName = escapeHtml(sel.product_name || "—");
+                  const nameLine = `<div class="order-item-composition-item" style="font-weight: 600;">1 × ${productName}</div>`;
+                  const vParts = [sel.variant_label, sel.variant_unit, sel.variant_group_title].filter(Boolean);
+                  const variantLine = vParts.length
+                    ? `<div class="order-item-composition-item">${bulletPrefix}${escapeHtml(vParts.join(" "))}</div>`
+                    : "";
+                  const ingredientsDisplay = Array.isArray(sel.ingredients_display) ? sel.ingredients_display : [];
+                  const ingLines = ingredientsDisplay
+                    .map((ing) => {
+                      const ingName = escapeHtml(ing.name || "");
+                      const rawQty = ing.qty ?? ing.quantity;
+                      const numQty = typeof rawQty === "number" ? rawQty : parseFloat(rawQty);
+                      if (Number(numQty) <= 0) return ""; // не показываем позиции с количеством 0
+                      if (!ingName && (rawQty == null || rawQty === "")) return "";
+                      const unit = String(ing.unit || "").trim();
+                      const parts = [];
+                      if (rawQty != null && rawQty !== "") parts.push(String(rawQty));
+                      if (unit) parts.push(unit);
+                      if (ingName) parts.push(ingName);
+                      return `<div class="order-item-composition-item">${bulletPrefix}${escapeHtml(parts.join(" "))}</div>`;
+                    })
+                    .filter(Boolean)
+                    .join("");
+                  return nameLine + variantLine + ingLines;
+                }).join("")}
+              </div>`
+            : "";
+
+          const base = `
+            <div class="order-item-line" style="display: flex; align-items: flex-start; gap: 12px;">
+              ${photoHtml}
+              <div class="order-item-content" style="flex: 1;">
+                <div class="order-item-name">${mainLine}</div>
+                ${comboDetailsHtml}
+              </div>
+            </div>
+          `;
+          return `<div class="order-item order-item--combo" data-item-idx="${itemIdx}">${base}</div>`;
+        }
+
         const name = escapeHtml(it.product_name || it.name || "Товар");
         const qty = Math.max(1, Number(it.qty || it.quantity || 0));
         const price = Number(it.price || 0);
@@ -1603,6 +1690,50 @@
     let itemsHtml = '';
     if (receiptItems.length) {
       receiptItems.forEach(item => {
+        // Комбо: тот же состав, что в админке и у клиента; позиции с количеством 0 не показываем
+        if (item.type === 'combo') {
+          const name = escapeHtml(item.name || item.combo_title || 'Комбо');
+          const qty = Math.max(1, Number(item.quantity || item.qty || 1));
+          const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? 0);
+          const priceStr = receiptTotalStr(lineTotal);
+          const qtyStr = `${qty} Х`;
+          const bulletPrefix = qty > 1 ? `${qty} Х • ` : '• ';
+          let compositionHtml = '';
+          const selections = Array.isArray(item.selections) ? item.selections : [];
+          selections.forEach((sel) => {
+            const productName = escapeHtml(sel.product_name || '—');
+            compositionHtml += `<div class="receipt-composition-item" style="font-weight: bold;">1 × ${productName}</div>`;
+            const vParts = [sel.variant_label, sel.variant_unit, sel.variant_group_title].filter(Boolean);
+            if (vParts.length) {
+              compositionHtml += `<div class="receipt-composition-item">${bulletPrefix}${escapeHtml(vParts.join(' '))}</div>`;
+            }
+            const ingredientsDisplay = Array.isArray(sel.ingredients_display) ? sel.ingredients_display : [];
+            ingredientsDisplay.forEach((ing) => {
+              const rawQty = ing.qty ?? ing.quantity;
+              const numQty = typeof rawQty === 'number' ? rawQty : parseFloat(rawQty);
+              if (!Number.isFinite(numQty) || numQty <= 0) return;
+              const ingName = escapeHtml(ing.name || '');
+              const unit = escapeHtml(String(ing.unit || '').trim());
+              const parts = [];
+              if (rawQty != null && rawQty !== '') parts.push(String(rawQty));
+              if (unit) parts.push(unit);
+              if (ingName) parts.push(ingName);
+              compositionHtml += `<div class="receipt-composition-item">${bulletPrefix}${escapeHtml(parts.join(' '))}</div>`;
+            });
+          });
+          itemsHtml += `
+          <div class="receipt-item">
+            <div class="receipt-item-row">
+              <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
+              <span class="receipt-item-name">${name}</span>
+              ${priceStr ? `<span class="receipt-item-price">${escapeHtml(priceStr)}</span>` : ''}
+            </div>
+            ${compositionHtml ? '<div class="receipt-composition">' + compositionHtml + '</div>' : ''}
+          </div>
+        `;
+          return;
+        }
+
         const name = escapeHtml(item.product_name || item.name || 'Товар');
         const qty = Math.max(1, Number(item.quantity || item.qty || 1));
         const basePrice = parseFloat(item.price || 0);
