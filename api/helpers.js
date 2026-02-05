@@ -1,7 +1,20 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
-const sharp = require('sharp');
+
+// Sharp может не работать на некоторых хостингах (native-модуль падает при загрузке).
+// Поэтому делаем его опциональным и включаем только при явном флаге SHARP_ENABLED=1.
+const SHARP_ENABLED = process.env.SHARP_ENABLED === '1';
+let sharp = null;
+if (SHARP_ENABLED) {
+  try {
+    // eslint-disable-next-line global-require, import/no-extraneous-dependencies
+    sharp = require('sharp');
+  } catch (e) {
+    console.error('Не удалось загрузить sharp, отключаем обработку изображений:', e);
+    sharp = null;
+  }
+}
 
 // ------------------------------
 // Basic helpers
@@ -347,6 +360,11 @@ async function resolveCategoryIdFromQuery(db, tenantId, req) {
 async function ensureWebpVariant(originalPath, opts = {}) {
   const quality = Number.isFinite(opts.quality) ? opts.quality : 82;
   try {
+    if (!sharp) {
+      // Обработка изображений отключена – возвращаем оригинал как есть.
+      return originalPath;
+    }
+
     const ext = (path.extname(originalPath) || '').toLowerCase();
 
     // Уже WebP — ничего делать не нужно
@@ -394,6 +412,11 @@ async function ensureThumbVariant(originalPath, opts = {}) {
   const quality = Number.isFinite(opts.quality) ? opts.quality : 72;
   const suffix = typeof opts.suffix === 'string' && opts.suffix ? opts.suffix : '-thumb';
   try {
+    if (!sharp) {
+      // Обработка изображений отключена – пропускаем генерацию превью.
+      return null;
+    }
+
     const ext = (path.extname(originalPath) || '').toLowerCase();
     const dir = path.dirname(originalPath);
     const base = path.basename(originalPath, ext || '');
