@@ -155,7 +155,8 @@
 
   function updateShopLink(tenant) {
     const linkEl = document.getElementById("siteSubdomainLink");
-    if (!linkEl) return;
+    const tgLinkEl = document.getElementById("tenantTelegramMiniAppLink");
+    if (!linkEl && !tgLinkEl) return;
     const subdomain = tenant && tenant.subdomain ? String(tenant.subdomain).trim() : "";
     const customDomain = tenant && tenant.custom_domain ? String(tenant.custom_domain).trim() : "";
     const protocol = window.location.protocol || "http:";
@@ -170,15 +171,27 @@
       host = `${subdomain}.${hostname}`;
     }
 
-    if (!host) {
-      linkEl.textContent = "—";
-      linkEl.setAttribute("href", "#");
-      return;
+    if (linkEl) {
+      if (!host) {
+        linkEl.textContent = "—";
+        linkEl.setAttribute("href", "#");
+      } else {
+        const url = `${protocol}//${host}${isLocal ? port : ""}`;
+        linkEl.textContent = url;
+        linkEl.setAttribute("href", url);
+      }
     }
 
-    const url = `${protocol}//${host}${isLocal ? port : ""}`;
-    linkEl.textContent = url;
-    linkEl.setAttribute("href", url);
+    if (tgLinkEl) {
+      const tgUrl = tenant && tenant.telegram_mini_app_url ? String(tenant.telegram_mini_app_url).trim() : "";
+      if (tgUrl) {
+        tgLinkEl.textContent = tgUrl;
+        tgLinkEl.setAttribute("href", tgUrl);
+      } else {
+        tgLinkEl.textContent = "—";
+        tgLinkEl.setAttribute("href", "#");
+      }
+    }
   }
 
   async function updateTenantFields(payload) {

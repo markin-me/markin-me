@@ -341,7 +341,24 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
       }
 
-      res.json({ ok: true, tenant: rows[0] });
+      const tenant = rows[0];
+
+      // Вычисляем ссылку для Telegram mini app без хранения в БД.
+      // Подстраиваемся под текущий домен и протокол (localhost, markin-me.ru и т.п.).
+      const forwardedProto = req.headers['x-forwarded-proto'];
+      const forwardedHost = req.headers['x-forwarded-host'];
+      const protocol = (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto) || req.protocol || 'https';
+      const hostHeader = (Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost) || req.get('host') || 'localhost:3000';
+      const baseUrl = `${protocol}://${hostHeader}`;
+      const telegramMiniAppUrl = `${baseUrl}/tg-app?tenant_id=${tenant.id}`;
+
+      res.json({
+        ok: true,
+        tenant: {
+          ...tenant,
+          telegram_mini_app_url: telegramMiniAppUrl
+        }
+      });
     } catch (err) {
       console.error('Ошибка получения tenant профиля:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });

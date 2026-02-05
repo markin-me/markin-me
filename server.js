@@ -20,6 +20,7 @@ const makePublicShopRouter = require('./api/public/shop');
 const { authMiddleware } = require('./api/middleware/auth');
 
 const app = express();
+const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '1';
 const PORT = process.env.PORT || 3000;
 
 // Инициализация с обработкой ошибок
@@ -236,6 +237,24 @@ app.get('/register', (req, res) => {
     console.error('Ошибка рендеринга страницы регистрации:', err);
     res.status(500).send('Ошибка загрузки страницы');
   }
+});
+
+// Telegram mini app entry-point (versioned redirect)
+app.get('/tg-app', (req, res) => {
+  try {
+    const qs = new URLSearchParams(req.query);
+    qs.set('v', TELEGRAM_APP_VERSION);
+    const target = `/telegram/app?${qs.toString()}`;
+    res.redirect(302, target);
+  } catch (err) {
+    console.error('Ошибка редиректа /tg-app:', err);
+    res.redirect(302, '/');
+  }
+});
+
+// Telegram mini app: витрина как на /shop или posham.localhost:3000/
+app.get('/telegram/app', (req, res) => {
+  return renderShop(req, res);
 });
 
 // Защищённые страницы (проверка авторизации на клиенте через JS)
