@@ -748,10 +748,41 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 .shop-combo-row{
   margin-bottom: 0;
   cursor: default;
+  position: relative;
+  grid-template-columns: 92px 1fr; /* убираем колонку для цены */
+}
+.shop-combo-row .shop-combo-mid{
+  padding-right: 80px; /* место для цены справа */
+}
+.shop-combo-row .shop-combo-right{
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  text-align: right;
 }
 
 .shop-combo-row .cart-title{
   font-weight: 800;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-right: -80px; /* выходим за padding контейнера */
+  padding-right: 12px; /* отступ от края карточки */
+}
+.shop-combo-picker-row .cart-title{
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-right: -70px; /* выходим за padding контейнера */
+  padding-right: 12px; /* отступ от края карточки */
 }
 .shop-combo-row .cart-sub,
 .shop-combo-picker-row .cart-sub{
@@ -831,6 +862,8 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   border: 1px solid var(--color-border);
   background: var(--color-surface);
   cursor: pointer;
+  position: relative;
+  grid-template-columns: 92px 1fr; /* убираем колонку для actions */
 }
 .shop-combo-picker-row.is-selected{
   border-color: var(--shop-buy);
@@ -839,6 +872,13 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   display: flex;
   flex-direction: column;
   min-height: 0;
+  padding-right: 70px; /* место для actions справа */
+}
+.shop-combo-picker-row .shop-combo-picker-actions{
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 .shop-combo-picker-bottom{
   margin-top: auto;
@@ -1828,6 +1868,20 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   margin-top: auto;
   position: static;
   bottom: auto;
+}
+
+/* Комбо-экран в шите (мобильный) */
+.shop-cart-sheet .shop-product-content .shop-combo-view{
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+.shop-cart-sheet .shop-product-content .shop-combo-detail-scroll{
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: calc(12px + var(--shop-bottomnav-h) + env(safe-area-inset-bottom));
 }
 
 /* футер корзины в шите/панели — липкий снизу */
@@ -3364,14 +3418,18 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   display: grid;
 }
 
-/* Убираем overflow у родителей когда dropdown или time wheel открыт — иначе список обрезается */
-.shop-checkout-content:has(.shop-checkout-dropdown.is-open),
-.shop-checkout-content:has(.shop-checkout-time-wheel-panel.is-open),
-.app-modal-body:has(.shop-checkout-dropdown.is-open),
-.app-modal-body:has(.shop-checkout-time-wheel-panel.is-open),
-.panel-body:has(.shop-checkout-dropdown.is-open),
-.panel-body:has(.shop-checkout-time-wheel-panel.is-open){
-  overflow: visible !important;
+/* Убираем overflow у родителей когда dropdown или time wheel открыт — чтобы список не обрезался.
+   Ограничиваем это поведение десктопом: на мобилке изменение overflow дергает bottom sheet
+   и уводит пользователя в начало формы. */
+@media (min-width: 769px){
+  .shop-checkout-content:has(.shop-checkout-dropdown.is-open),
+  .shop-checkout-content:has(.shop-checkout-time-wheel-panel.is-open),
+  .app-modal-body:has(.shop-checkout-dropdown.is-open),
+  .app-modal-body:has(.shop-checkout-time-wheel-panel.is-open),
+  .panel-body:has(.shop-checkout-dropdown.is-open),
+  .panel-body:has(.shop-checkout-time-wheel-panel.is-open){
+    overflow: visible !important;
+  }
 }
 
 .shop-checkout-option{

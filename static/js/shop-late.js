@@ -7059,6 +7059,32 @@ function setBottomNavActive(tab) {
     return "CLOSED_BEFORE_MIDNIGHT";
   }
 
+  // Унифицированный поиск скролл-контейнера checkout/bottom sheet,
+  // чтобы при открытии/закрытии селектов можно было сохранить позицию.
+  function getShopScrollContainer(startEl) {
+    if (!startEl || typeof startEl.closest !== "function") {
+      return document.scrollingElement || document.documentElement || document.body;
+    }
+
+    // Основной скролл внутри checkout
+    const directCheckout = startEl.closest(".shop-checkout-content");
+    if (directCheckout) return directCheckout;
+
+    // Если элемент внутри тела модалки корзины, ищем checkout там
+    const sheetBody = startEl.closest(".shop-cart-sheet-body");
+    if (sheetBody) {
+      const innerCheckout = sheetBody.querySelector(".shop-checkout-content");
+      if (innerCheckout) return innerCheckout;
+    }
+
+    // Fallback: глобальный checkout, если открыт
+    const globalCheckout = document.querySelector(".shop-cart-sheet .shop-checkout-content");
+    if (globalCheckout) return globalCheckout;
+
+    // В крайнем случае — общий скролл документа
+    return document.scrollingElement || document.documentElement || document.body;
+  }
+
   function buildDropdown(options, value) {
     const wrap = document.createElement("div");
     wrap.className = "shop-checkout-dropdown-wrap";
@@ -7116,12 +7142,27 @@ function setBottomNavActive(tab) {
 
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
+
+      const scrollParent = getShopScrollContainer(btn);
+      const prevScrollTop = scrollParent ? scrollParent.scrollTop : null;
+      const prevWindowScroll = typeof window !== "undefined" ? (window.scrollY || 0) : 0;
+
       list.classList.toggle("is-open");
-      if (list.classList.contains("is-open")) {
-        setTimeout(() => {
-          list.scrollIntoView({ behavior: "smooth", block: "nearest" });
-        }, 10);
+
+      if (scrollParent != null && prevScrollTop != null) {
+        requestAnimationFrame(() => {
+          scrollParent.scrollTop = prevScrollTop;
+        });
       }
+      if (typeof window !== "undefined" && typeof window.scrollTo === "function") {
+        requestAnimationFrame(() => {
+          window.scrollTo(0, prevWindowScroll);
+        });
+      }
+
+      // Раньше здесь был scrollIntoView, который на мобилке вызывал
+      // заметный «рывок» контента при открытии любого селектора.
+      // Теперь мы сохраняем скролл и просто раскрываем список.
     });
 
     document.addEventListener("click", (e) => {
@@ -7265,9 +7306,28 @@ function setBottomNavActive(tab) {
 
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (opts.length === 0) return;
+
+      const scrollParent = getShopScrollContainer(btn);
+      const prevScrollTop = scrollParent ? scrollParent.scrollTop : null;
+      const prevWindowScroll = typeof window !== "undefined" ? (window.scrollY || 0) : 0;
+
+      // Даже когда слотов нет (opts.length === 0), даём панели
+      // раскрыться — так пользователь явно видит, что селектор
+      // отреагировал на нажатие, а не «сломался».
       panel.classList.toggle("is-open");
-      if (panel.classList.contains("is-open")) {
+
+      if (scrollParent != null && prevScrollTop != null) {
+        requestAnimationFrame(() => {
+          scrollParent.scrollTop = prevScrollTop;
+        });
+      }
+      if (typeof window !== "undefined" && typeof window.scrollTo === "function") {
+        requestAnimationFrame(() => {
+          window.scrollTo(0, prevWindowScroll);
+        });
+      }
+
+      if (panel.classList.contains("is-open") && opts.length > 0) {
         requestAnimationFrame(() => {
           scrollToIndex(getSelectedIndex());
         });

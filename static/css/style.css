@@ -418,7 +418,7 @@ header{
     transition: width 0.25s ease;
   }
   .shop-mobile-delivery-progress-label {
-    font-size: 12px;
+    font-size: 13px;
     color: var(--color-text-muted, #666);
     margin-top: 4px;
     line-height: 1.2;
@@ -427,7 +427,7 @@ header{
     font-weight: 700;
   }
   .shop-mobile-delivery-progress-label.is-free {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
     display: flex;
     align-items: center;

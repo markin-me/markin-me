@@ -5178,7 +5178,10 @@ function updateCartBadge() {
         state.productCache.set(Number(p.id), p);
       }
       const combos = Array.isArray(json.combos) ? json.combos : [];
-      state.combosByCategory.set(cid, combos);
+      // В lite режиме не перезаписываем комбо пустым массивом, если они уже загружены
+      if (combos.length || !lite) {
+        state.combosByCategory.set(cid, combos);
+      }
       if (!(state.productsByCategory instanceof Map)) state.productsByCategory = new Map();
       state.productsByCategory.set(cid, list);
       try { if (lite) __categoryLoadLimit.set(cid, limit); } catch {}
