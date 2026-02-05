@@ -3,6 +3,12 @@ function createOrdersEventsHub() {
   const MAX_EVENTS = 500;
   const HEARTBEAT_MS = 20000;
 
+  function log(level, msg, meta = {}) {
+    const ts = new Date().toISOString();
+    const metaStr = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : "";
+    console.log(`[SSE ${ts}] [${level}] ${msg}${metaStr}`);
+  }
+
   function getKey(tenantId, storeId) {
     return `${tenantId}:${storeId}`;
   }
@@ -16,9 +22,14 @@ function createOrdersEventsHub() {
   }
 
   function sendEvent(res, evt) {
-    res.write(`id: ${evt.id}\n`);
-    res.write(`event: ${evt.event}\n`);
-    res.write(`data: ${JSON.stringify(evt.data)}\n\n`);
+    try {
+      res.write(`id: ${evt.id}\n`);
+      res.write(`event: ${evt.event}\n`);
+      res.write(`data: ${JSON.stringify(evt.data)}\n\n`);
+    } catch (err) {
+      log("ERROR", "sendEvent failed", { error: err.message });
+      throw err;
+    }
   }
 
   function publish(tenantId, storeId, event, data) {
@@ -34,11 +45,23 @@ function createOrdersEventsHub() {
     channel.log.push(payload);
     if (channel.log.length > MAX_EVENTS) channel.log.shift();
 
+    let sendErrors = 0;
     channel.clients.forEach((res) => {
       try {
         sendEvent(res, payload);
-      } catch {}
+      } catch (err) {
+        sendErrors += 1;
+      }
     });
+    if (sendErrors > 0) {
+      log("WARN", "publish: failed to send to some clients", {
+        tenantId,
+        storeId,
+        event,
+        sendErrors,
+        totalClients: channel.clients.size,
+      });
+    }
   }
 
   function getChanges(tenantId, storeId, since) {
@@ -66,12 +89,19 @@ function createOrdersEventsHub() {
     const heartbeat = setInterval(() => {
       try {
         res.write(": ping\n\n");
-      } catch {}
+      } catch (err) {
+        log("WARN", "heartbeat write failed", { tenantId, storeId, error: err.message });
+      }
     }, HEARTBEAT_MS);
 
     res.on("close", () => {
       clearInterval(heartbeat);
       channel.clients.delete(res);
+      log("INFO", "SSE client disconnected", {
+        tenantId,
+        storeId,
+        clientCount: channel.clients.size,
+      });
     });
   }
 

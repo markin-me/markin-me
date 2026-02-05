@@ -99,6 +99,7 @@
   const datePrev = $("#ordersDatePrev");
   const dateNext = $("#ordersDateNext");
   const dateReset = $("#ordersDateReset");
+  const notifyBtn = $("#ordersNotifyBtn");
 
   // -----------------------------
   // State
@@ -1290,6 +1291,17 @@
     }, 200);
   }
 
+  let audioUnlocked = false;
+
+  function unlockAudioOnce() {
+    if (audioUnlocked) return;
+    const url = state.tenantSounds && state.tenantSounds.sound_new_order_url;
+    if (!url) return;
+    const audio = new Audio(url);
+    audio.volume = 0.001;
+    audio.play().then(() => { audioUnlocked = true; }).catch(() => {});
+  }
+
   function playNotificationSound(url) {
     if (!url) return;
     const audio = new Audio(url);
@@ -1299,6 +1311,34 @@
   function playNewOrderSound() {
     const soundUrl = state.tenantSounds && state.tenantSounds.sound_new_order_url;
     if (soundUrl) playNotificationSound(soundUrl);
+  }
+
+  function requestNotificationPermission() {
+    if (!("Notification" in window)) return Promise.resolve("unsupported");
+    if (Notification.permission === "granted") return Promise.resolve("granted");
+    if (Notification.permission === "denied") return Promise.resolve("denied");
+    return Notification.requestPermission();
+  }
+
+  function showNewOrderNotification(orders) {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    if (!orders || !orders.length) return;
+    const o = orders[0];
+    const title = "Новый заказ";
+    const body = orders.length === 1
+      ? `Заказ #${o.id} — ${money(o.total_price || 0)}`
+      : `${orders.length} новых заказов`;
+    try {
+      const n = new Notification(title, { body });
+      n.onclick = () => { window.focus(); n.close(); };
+    } catch (err) {
+      console.warn("Notification failed:", err);
+    }
+  }
+
+  function notifyNewOrders(orders) {
+    playNewOrderSound();
+    showNewOrderNotification(orders && orders.length ? orders : null);
   }
 
   function handleOrderEvent(order) {
@@ -1331,9 +1371,9 @@
     if (!state.lastEventId) {
       const prevIds = new Set(state.orders.map((o) => Number(o.id)));
       await loadAndRenderOrders(true);
-      const hasNewOrders = state.orders.some((o) => !prevIds.has(Number(o.id)));
-      if (hasNewOrders) {
-        playNewOrderSound();
+      const newOrders = state.orders.filter((o) => !prevIds.has(Number(o.id)));
+      if (newOrders.length) {
+        notifyNewOrders(newOrders);
       }
       return;
     }
@@ -1347,21 +1387,23 @@
         handleOrderEvent(evt.data);
         const eventName = String(evt.event || "").toLowerCase();
         if (eventName === "order.created") {
-          playNewOrderSound();
+          notifyNewOrders([evt.data]);
         }
       });
     } catch (e) {
       console.error(e);
       const prevIds = new Set(state.orders.map((o) => Number(o.id)));
       await loadAndRenderOrders(true);
-      const hasNewOrders = state.orders.some((o) => !prevIds.has(Number(o.id)));
-      if (hasNewOrders) {
-        playNewOrderSound();
+      const newOrders = state.orders.filter((o) => !prevIds.has(Number(o.id)));
+      if (newOrders.length) {
+        notifyNewOrders(newOrders);
       }
     }
   }
 
   // Фоновый опрос списка заказов (резерв, когда SSE обрывается на хостинге)
+  // Важно: Chrome троттлит setInterval в фоновых вкладках до 1 раза в минуту и более.
+  // При возврате на вкладку вызываем pollOrdersList сразу (visibilitychange).
   const ORDERS_POLL_INTERVAL_MS = 15000; // 15 сек
   let ordersPollTimer = null;
 
@@ -1371,7 +1413,7 @@
       await loadOrders();
       const newOrders = state.orders.filter((o) => !prevIds.has(Number(o.id)));
       if (newOrders.length) {
-        playNewOrderSound();
+        notifyNewOrders(newOrders);
       }
       renderOrders();
       if (state.activeOrderId) {
@@ -1383,15 +1425,39 @@
     }
   }
 
+  function scheduleNextPoll() {
+    if (!ordersPollTimer) return;
+    ordersPollTimer = setTimeout(() => {
+      pollOrdersList().finally(() => scheduleNextPoll());
+    }, ORDERS_POLL_INTERVAL_MS);
+  }
+
   function startOrdersPolling() {
     if (ordersPollTimer) return;
-    ordersPollTimer = setInterval(pollOrdersList, ORDERS_POLL_INTERVAL_MS);
+    ordersPollTimer = true; // маркер что polling активен
+    scheduleNextPoll();
+  }
+
+  function stopOrdersPolling() {
+    if (ordersPollTimer != null && typeof ordersPollTimer === "number") {
+      clearTimeout(ordersPollTimer);
+    }
+    ordersPollTimer = null;
   }
 
   let sseEventSource = null;
+  let sseReconnectTimeout = null;
+  let sseReconnectAttempts = 0;
+  const SSE_RECONNECT_DELAY_MS = 3000;
+  const SSE_MAX_RECONNECT_DELAY_MS = 60000;
 
   function initSse() {
     if (typeof EventSource === "undefined") return;
+
+    if (sseReconnectTimeout) {
+      clearTimeout(sseReconnectTimeout);
+      sseReconnectTimeout = null;
+    }
 
     if (sseEventSource) {
       sseEventSource.close();
@@ -1408,12 +1474,16 @@
 
     sseEventSource = new EventSource(url);
 
+    sseEventSource.addEventListener("open", () => {
+      sseReconnectAttempts = 0;
+    });
+
     sseEventSource.addEventListener("order.created", (e) => {
       if (e.lastEventId) state.lastEventId = e.lastEventId;
       try {
         const data = JSON.parse(e.data || "{}");
         handleOrderEvent(data);
-        playNewOrderSound();
+        notifyNewOrders([data]);
       } catch (err) {
         console.error(err);
       }
@@ -1431,8 +1501,25 @@
 
     sseEventSource.addEventListener("error", () => {
       fetchChanges().catch(console.error);
+      sseEventSource.close();
+      sseEventSource = null;
+      const delay = Math.min(
+        SSE_RECONNECT_DELAY_MS * Math.pow(2, sseReconnectAttempts),
+        SSE_MAX_RECONNECT_DELAY_MS
+      );
+      sseReconnectAttempts += 1;
+      sseReconnectTimeout = setTimeout(() => {
+        sseReconnectTimeout = null;
+        initSse();
+      }, delay);
     });
   }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && ordersPollTimer) {
+      pollOrdersList().catch(console.error);
+    }
+  });
 
   // -----------------------------
   // Click handlers
@@ -1479,6 +1566,21 @@
   window.addEventListener("resize", () => {
     if (!isMobile()) closeSheet();
   });
+
+  if (notifyBtn) {
+    notifyBtn.addEventListener("click", () => {
+      requestNotificationPermission().then((perm) => {
+        if (perm === "granted") {
+          notifyBtn.classList.add("is-enabled");
+          notifyBtn.title = "Уведомления включены";
+        }
+      }).catch(() => {});
+    });
+    if ("Notification" in window && Notification.permission === "granted") {
+      notifyBtn.classList.add("is-enabled");
+      notifyBtn.title = "Уведомления включены";
+    }
+  }
 
   if (dateBtn && datePopover) {
     dateBtn.addEventListener("click", (e) => {
@@ -2062,6 +2164,9 @@
         console.error(err);
       }
 
+      document.addEventListener("click", unlockAudioOnce, { once: true });
+      document.addEventListener("keydown", unlockAudioOnce, { once: true });
+
       initSse();
       startOrdersPolling();
     } catch (e) {
@@ -2076,5 +2181,6 @@
     console.log('Филиал изменен:', event.detail.store);
     loadAndRenderOrders(false);
     initSse();
+    startOrdersPolling();
   });
 })();

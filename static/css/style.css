@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
 :root{
   --font-main:'Inter',sans-serif;
 
@@ -160,6 +158,8 @@ header{
   color:var(--color-text);
   font-size:.95rem;
   font-weight:600;
+  min-height:32px;
+  min-width:140px;
   cursor:pointer;
   transition:background var(--dur-fast) var(--ease-smooth), transform var(--dur-fast) var(--ease-smooth);
 }
@@ -174,6 +174,8 @@ header{
 .header-city-name{
   color:var(--color-primary);
   font-weight:700;
+  display:inline-block;
+  min-width:90px;
 }
 .header-city-dropdown{
   position:absolute;
@@ -1418,6 +1420,7 @@ body.page-home .page-col-right .panel{
 }
 .btn-ghost{background:var(--color-surface);border-color:var(--color-border)}
 .btn-ghost:hover{background:var(--color-surface-2)}
+#ordersNotifyBtn.is-enabled{color:var(--color-primary)}
 .btn-sm{height:34px;padding:0 10px;border-radius:8px;font-size:13px}
 .btn-xs{height:32px;padding:0 10px;border-radius:8px;font-size:12px}
 .icon-btn.btn-xs{width:32px;height:32px;border-radius:8px}

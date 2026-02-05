@@ -2841,6 +2841,8 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 .shop-address-chip{
   cursor:pointer;
   max-width:280px;
+  min-width:200px;
+  min-height:28px;
   overflow:hidden;
   text-overflow:ellipsis;
   white-space:nowrap;

@@ -38,10 +38,18 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const tenantId = helpers.getTenantId(req);
       const files = req.files || [];
       // Гарантируем наличие WebP-варианта для каждого файла
-      await Promise.all(
+      const webpPaths = await Promise.all(
         files.map((f) =>
-          helpers.ensureWebpVariant(f.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'products', String(tenantId), f.filename))
+          helpers.ensureWebpVariant(
+            f.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'products', String(tenantId), f.filename)
+          )
         )
+      );
+      // Генерируем уменьшенные варианты для сетки витрины (LCP)
+      await Promise.all(
+        webpPaths
+          .filter(Boolean)
+          .map((p) => helpers.ensureThumbVariant(p, { width: 480, quality: 70 }))
       );
       // Отдаём и сохраняем в БД URL на .webp — по нему и отдаём картинку (оригинал остаётся на диске как fallback)
       const webpName = (name) => name.replace(/\.(jpe?g|png|gif)$/i, '.webp');

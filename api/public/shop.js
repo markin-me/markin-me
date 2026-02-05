@@ -49,6 +49,29 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return [];
   }
 
+  function getThumbUrl(url) {
+    if (!url) return null;
+    if (typeof helpers.getThumbUrlIfExists === 'function') {
+      return helpers.getThumbUrlIfExists(url);
+    }
+    return null;
+  }
+
+  function attachProductThumbs(row) {
+    const photos = Array.isArray(row?.photos) ? row.photos : [];
+    const main = photos[0] || null;
+    row.photo_thumb = getThumbUrl(main);
+    return row;
+  }
+
+  function attachComboThumbs(combo) {
+    combo.image_thumb = getThumbUrl(combo.image_url);
+    if (Array.isArray(combo.grid_photos)) {
+      combo.grid_photos_thumb = combo.grid_photos.map((u) => getThumbUrl(u));
+    }
+    return combo;
+  }
+
   function str(v) {
     return v === undefined || v === null ? '' : String(v);
   }
@@ -1472,15 +1495,18 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         ? roundPrice(minPriceSum * (1 - discountPercent / 100))
         : roundPrice(minPriceSum);
 
-      result.push({
+      const gridPhotosFinal = gridPhotos.slice(0, 4);
+      const entry = {
         id: combo.id,
         title: combo.title || '',
         description: combo.description || '',
         discount_percent: discountPercent,
         image_url: combo.image_url || null,
         min_price: minPrice,
-        grid_photos: gridPhotos.slice(0, 4),
-      });
+        grid_photos: gridPhotosFinal,
+      };
+      attachComboThumbs(entry);
+      result.push(entry);
     }
 
     return result;
@@ -1494,6 +1520,69 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const categoryId = await resolveCategoryIdFromQuery(tenantId, req);
       if (!Number.isFinite(categoryId)) {
         return res.status(400).json({ ok: false, error: 'BAD_CATEGORY_ID' });
+      }
+
+      // Быстрый "lite" режим для первого экрана витрины:
+      // - минимальный набор полей
+      // - упрощённая доступность (только по stock_qty)
+      // - ограничение количества
+      // Нужен, чтобы LCP-картинка начинала грузиться сразу, а не после тяжёлых подзапросов.
+      const lite = helpers.toBool(req.query.lite, false);
+      const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 0)) || 0;
+      if (lite) {
+        // "all"
+        const [all] = await db.query(
+          `SELECT id FROM prod_categories WHERE tenant_id=? AND code='all' LIMIT 1`,
+          [tenantId]
+        );
+        const allCategoryId = all.length ? Number(all[0].id) : null;
+
+        const limSql = limit > 0 ? `LIMIT ${Number(limit)}` : '';
+
+        if (allCategoryId && categoryId === allCategoryId) {
+          const [rows] = await db.query(
+            `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json,
+              s.qty AS stock_qty,
+              pc.sort_order AS link_sort_order
+             FROM prod_products p
+             LEFT JOIN prod_product_stocks s
+               ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+             LEFT JOIN prod_product_categories pc
+               ON pc.tenant_id = p.tenant_id AND pc.product_id = p.id AND pc.category_id = ?
+             WHERE p.tenant_id=? AND p.is_active=1 AND p.site_visibility=1
+             ORDER BY COALESCE(pc.sort_order, 999999) ASC, p.id ASC
+             ${limSql}`,
+            [storeId, categoryId, tenantId]
+          );
+          for (const r of rows) {
+            r.photos = safeJsonArray(r.photos_json);
+            r.is_available = (r.stock_qty == null || Number(r.stock_qty) > 0);
+            attachProductThumbs(r);
+          }
+          return res.json({ ok: true, data: rows, combos: [], category_id: categoryId, lite: true });
+        }
+
+        const [rows] = await db.query(
+          `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json,
+            s.qty AS stock_qty,
+            pc.sort_order AS link_sort_order
+           FROM prod_product_categories pc
+           JOIN prod_products p
+             ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
+           LEFT JOIN prod_product_stocks s
+             ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+           WHERE pc.tenant_id=? AND pc.category_id=?
+             AND p.is_active=1 AND p.site_visibility=1
+           ORDER BY pc.sort_order ASC, pc.id ASC
+           ${limSql}`,
+          [storeId, tenantId, categoryId]
+        );
+        for (const r of rows) {
+          r.photos = safeJsonArray(r.photos_json);
+          r.is_available = (r.stock_qty == null || Number(r.stock_qty) > 0);
+          attachProductThumbs(r);
+        }
+        return res.json({ ok: true, data: rows, combos: [], category_id: categoryId, lite: true });
       }
 
       // "all"
@@ -1563,6 +1652,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         for (const r of rows) {
           r.photos = safeJsonArray(r.photos_json);
           r.is_available = Number(r.is_available || 0) === 1;
+          attachProductThumbs(r);
         }
         await enrichProductsWithDisplayPrice(rows, tenantId);
         const combos = await getCombosForCategory(tenantId, storeId, categoryId);
@@ -1629,6 +1719,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       for (const r of rows) {
         r.photos = safeJsonArray(r.photos_json);
         r.is_available = Number(r.is_available || 0) === 1;
+        attachProductThumbs(r);
       }
       await enrichProductsWithDisplayPrice(rows, tenantId);
       const combos = await getCombosForCategory(tenantId, storeId, categoryId);
@@ -1703,6 +1794,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       const p = rows[0];
       p.photos = safeJsonArray(p.photos_json);
+      attachProductThumbs(p);
       p.is_available = Number(p.is_available || 0) === 1;
 
       res.json({ ok: true, data: p });

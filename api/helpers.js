@@ -379,6 +379,74 @@ async function ensureWebpVariant(originalPath, opts = {}) {
   }
 }
 
+/**
+ * Создаёт уменьшенный WebP-вариант изображения (thumbnail).
+ *
+ * @param {string} originalPath - абсолютный путь к исходному файлу (желательно .webp)
+ * @param {object} opts
+ * @param {number} [opts.width=480]
+ * @param {number} [opts.quality=72]
+ * @param {string} [opts.suffix='-thumb']
+ * @returns {Promise<string|null>} абсолютный путь к thumb-файлу или null при ошибке
+ */
+async function ensureThumbVariant(originalPath, opts = {}) {
+  const width = Number.isFinite(opts.width) ? opts.width : 480;
+  const quality = Number.isFinite(opts.quality) ? opts.quality : 72;
+  const suffix = typeof opts.suffix === 'string' && opts.suffix ? opts.suffix : '-thumb';
+  try {
+    const ext = (path.extname(originalPath) || '').toLowerCase();
+    const dir = path.dirname(originalPath);
+    const base = path.basename(originalPath, ext || '');
+    const thumbPath = path.join(dir, `${base}${suffix}.webp`);
+
+    try {
+      const [srcStat, thumbStat] = [fs.statSync(originalPath), fs.statSync(thumbPath)];
+      if (thumbStat.mtimeMs >= srcStat.mtimeMs) {
+        return thumbPath;
+      }
+    } catch {
+      // если файла нет — создаём
+    }
+
+    await sharp(originalPath)
+      .resize({ width, withoutEnlargement: true })
+      .webp({ quality })
+      .toFile(thumbPath);
+
+    return thumbPath;
+  } catch (err) {
+    console.error('ensureThumbVariant error for', originalPath, err);
+    return null;
+  }
+}
+
+function thumbUrlFromImageUrl(url, opts = {}) {
+  if (!url || typeof url !== 'string') return null;
+  if (/^(https?:)?\/\//i.test(url) || url.startsWith('data:')) return null;
+  if (!url.startsWith('/static/')) return null;
+
+  const suffix = typeof opts.suffix === 'string' && opts.suffix ? opts.suffix : '-thumb';
+  const parts = url.split('?');
+  const base = parts[0];
+  if (!/\.webp$/i.test(base)) return null;
+  const thumb = base.replace(/\.webp$/i, `${suffix}.webp`);
+  return parts.length > 1 ? `${thumb}?${parts.slice(1).join('?')}` : thumb;
+}
+
+function getThumbUrlIfExists(url, opts = {}) {
+  const thumbUrl = thumbUrlFromImageUrl(url, opts);
+  if (!thumbUrl) return null;
+  try {
+    const cleanUrl = thumbUrl.split('?')[0];
+    const relativePath = cleanUrl.replace(/^\/static\//, '');
+    const filePath = path.join(__dirname, '..', 'static', relativePath);
+    if (fs.existsSync(filePath)) return thumbUrl;
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 module.exports = {
   getTenantId,
   getStoreId,
@@ -403,4 +471,7 @@ module.exports = {
   resolveCategoryIdFromQuery,
 
   ensureWebpVariant,
+  ensureThumbVariant,
+  thumbUrlFromImageUrl,
+  getThumbUrlIfExists,
 };

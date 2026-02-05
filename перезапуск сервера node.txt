@@ -7,6 +7,15 @@
 5.Обнови сайт в браузере.
 
 
+Перезапуск Nginx (только когда менял конфиг Nginx, например для SSE):
+1. Подключись по SSH (пункты 1–2 выше).
+2. Проверка конфига: nginx -t
+Ожидаемый вывод:
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+3. Перезагрузка: nginx -s reload
+(Если нужен sudo: sudo nginx -t и sudo nginx -s reload)
+
 
 Настройки для работы с SSH
 Сервер
