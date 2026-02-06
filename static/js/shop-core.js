@@ -4848,7 +4848,19 @@ function updateCartBadge() {
     const p = state.productCache.get(pid);
     if (delta > 0 && p && !isProductAvailable(p)) return;
 
-    const targetKey = cartKey || makeCartKey(pid, []);
+    let targetKey = cartKey;
+    if (targetKey == null && delta < 0) {
+      // Из каталога нажали «−» — убираем последнюю добавленную позицию этого товара (любой вариант)
+      let lastIdx = -1;
+      for (let i = state.cart.length - 1; i >= 0; i--) {
+        if (Number(state.cart[i].product_id) === pid) {
+          lastIdx = i;
+          break;
+        }
+      }
+      if (lastIdx >= 0) targetKey = state.cart[lastIdx].key;
+    }
+    if (targetKey == null) targetKey = makeCartKey(pid, []);
     let item = getCartItemByKey(targetKey);
     let nextQty = 0;
 

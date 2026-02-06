@@ -2051,9 +2051,10 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
     font-weight: 700;
   }
 }
-/* Не показывать шкалу доставки при просмотре товара или комбо */
+/* Не показывать шкалу доставки при просмотре товара, комбо или профиля */
 @media (min-width: 769px){
-  .shop-cart-body:has(.shop-product-content:not(.hidden)) .shop-cart-delivery-progress{
+  .shop-cart-body:has(.shop-product-content:not(.hidden)) .shop-cart-delivery-progress,
+  .shop-cart-body:has(.shop-profile-content:not(.hidden)) .shop-cart-delivery-progress{
     display: none !important;
   }
 }
