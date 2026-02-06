@@ -2280,6 +2280,14 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
   display:grid;
   gap:8px;
 }
+/* В редакторе блока комбо список товаров визуально входит в основной контейнер,
+   поэтому убираем дополнительную карточку-обертку */
+#comboInfo .info-card.info-accordion{
+  border:none;
+  border-radius:0;
+  padding:0;
+  background:transparent;
+}
 .info-title{font-weight:900}
 .info-text{color:var(--color-text-muted);font-size:14px}
 .info-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -2642,6 +2650,13 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
   max-height:0;
   overflow:hidden;
   transition:max-height var(--dur-med) var(--ease-smooth);
+}
+
+/* В редакторе блока комбо секция "Товары в блоке" всегда раскрыта,
+   поэтому панель не должна схлопываться */
+#comboInfo .acc-panel{
+  max-height:none;
+  overflow:visible;
 }
 
 /* Отступы между пунктами меню внутри аккордеона */
@@ -4357,6 +4372,16 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   max-height:min(55vh, 480px);
   overflow-y:auto;
   padding-bottom:80px;
+  /* общий контейнер со скроллом, но без видимого скроллбара */
+  scrollbar-width:none; /* Firefox */
+}
+.combo-block-products-panel-inner::-webkit-scrollbar{
+  display:none; /* WebKit */
+}
+/* Внутри блока комбо убираем "рамку" вокруг товаров — остаётся общий контейнер */
+.combo-block-products-panel-inner .option-item-row.combo-block-product-row{
+  background:transparent;
+  border:none;
 }
 .combo-block-product-details{
   padding:8px 10px 10px 36px;

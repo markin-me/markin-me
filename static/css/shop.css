@@ -2406,6 +2406,8 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   overflow: auto;
   display: grid;
   gap: 8px;
+  grid-auto-rows: minmax(min-content, auto);
+  align-content: start;
 }
 
 @media (max-width: 768px){
@@ -2538,6 +2540,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 .shop-pd-option-accordion{
   border: 0;
   background: transparent;
+  contain: layout;
 }
 .shop-pd-option-summary{
   display: flex;

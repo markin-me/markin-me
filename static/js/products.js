@@ -6242,6 +6242,8 @@ function updateOptionGroupSelectionUi() {
     if (comboBlockProductsAddBtn) comboBlockProductsAddBtn.classList.toggle("hidden", isViewMode);
 
     renderComboBlockProductsList();
+    // Всегда разворачиваем аккордеон "Товары в блоке" при открытии блока
+    openComboBlockProductsAccordion();
 
     if (mode === "view") showProductFooterView();
     else showProductFooterEdit();
@@ -6318,8 +6320,6 @@ const isViewMode = state.comboPanel.mode === "view";
         e.stopPropagation();
         const wrapper = btn.closest(".combo-block-product-row-wrapper");
         const details = wrapper?.querySelector(".combo-block-product-details");
-        const inner = details?.querySelector(".combo-block-product-details-inner");
-        const productId = details?.dataset?.productId ? Number(details.dataset.productId) : null;
         const wasExpanded = details?.getAttribute("hidden") == null;
         if (details) details.hidden = wasExpanded;
         if (btn) {
@@ -6327,40 +6327,57 @@ const isViewMode = state.comboPanel.mode === "view";
           const icon = btn.querySelector("i");
           if (icon) icon.className = wasExpanded ? "fas fa-chevron-down" : "fas fa-chevron-up";
         }
-        if (!wasExpanded && details) {
-          requestAnimationFrame(() => {
-            details.scrollIntoView({ behavior: "smooth", block: "nearest" });
-          });
-        }
-        if (!wasExpanded && inner && Number.isFinite(productId)) {
-          if (!inner.dataset.loaded) {
-            inner.dataset.loaded = "1";
-            inner.innerHTML = "<div class=\"muted\" style=\"padding:8px;\">Загрузка…</div>";
-            try {
-              if (!state.unitConversions || state.unitConversions.length === 0) {
-                const convRes = await apiGetUnitConversions();
-                state.unitConversions = Array.isArray(convRes?.data) ? convRes.data : [];
-              }
-              const [productRes, variantsRes, ingredientsRes] = await Promise.all([
-                apiGetProduct(productId),
-                apiGetProductVariants(productId),
-                apiGetProductIngredients(productId),
-              ]);
-              const product = productRes?.data || null;
-              const variants = (variantsRes?.data && Array.isArray(variantsRes.data)) ? variantsRes.data : [];
-              const ingredients = (ingredientsRes?.data && Array.isArray(ingredientsRes.data)) ? ingredientsRes.data : [];
-              inner.innerHTML = buildComboBlockProductDetailsHtml(product, variants, ingredients);
-              attachComboBlockProductDetailsHandlers(inner, wrapper, productId, product, variants, ingredients);
-              requestAnimationFrame(() => {
-                if (details) details.scrollIntoView({ behavior: "smooth", block: "nearest" });
-              });
-            } catch (err) {
-              inner.innerHTML = "<div class=\"muted\" style=\"padding:8px;\">Ошибка загрузки</div>";
-            }
-          }
+        if (!wasExpanded) {
+          await loadComboBlockProductDetails(wrapper, { scrollIntoView: true });
         }
       });
     });
+
+    // Предзагружаем состав и пересчёт цены для товаров с настраиваемым составом,
+    // чтобы сразу показывать корректную цену без раскрытия.
+    comboBlockProductsList.querySelectorAll(".combo-block-product-row-wrapper").forEach((wrapper) => {
+      const idx = parseInt(wrapper.dataset.idx ?? "-1", 10);
+      if (!Number.isFinite(idx) || idx < 0) return;
+      const item = (state.comboBlockProducts || [])[idx];
+      if (item && item.has_changeable_composition) {
+        loadComboBlockProductDetails(wrapper, { scrollIntoView: false });
+      }
+    });
+  }
+
+  async function loadComboBlockProductDetails(wrapper, { scrollIntoView = false } = {}) {
+    if (!wrapper) return;
+    const details = wrapper.querySelector(".combo-block-product-details");
+    const inner = details?.querySelector(".combo-block-product-details-inner");
+    const productId = details?.dataset?.productId ? Number(details.dataset.productId) : null;
+    if (!details || !inner || !Number.isFinite(productId)) return;
+    if (!inner.dataset.loaded) {
+      inner.dataset.loaded = "1";
+      inner.innerHTML = "<div class=\"muted\" style=\"padding:8px;\">Загрузка…</div>";
+      try {
+        if (!state.unitConversions || state.unitConversions.length === 0) {
+          const convRes = await apiGetUnitConversions();
+          state.unitConversions = Array.isArray(convRes?.data) ? convRes.data : [];
+        }
+        const [productRes, variantsRes, ingredientsRes] = await Promise.all([
+          apiGetProduct(productId),
+          apiGetProductVariants(productId),
+          apiGetProductIngredients(productId),
+        ]);
+        const product = productRes?.data || null;
+        const variants = (variantsRes?.data && Array.isArray(variantsRes.data)) ? variantsRes.data : [];
+        const ingredients = (ingredientsRes?.data && Array.isArray(ingredientsRes.data)) ? ingredientsRes.data : [];
+        inner.innerHTML = buildComboBlockProductDetailsHtml(product, variants, ingredients);
+        attachComboBlockProductDetailsHandlers(inner, wrapper, productId, product, variants, ingredients);
+      } catch (err) {
+        inner.innerHTML = "<div class=\"muted\" style=\"padding:8px;\">Ошибка загрузки</div>";
+      }
+    }
+    if (scrollIntoView && details) {
+      requestAnimationFrame(() => {
+        details.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+    }
   }
 
   function parseVariantValueNumber(value) {
@@ -6424,6 +6441,53 @@ const isViewMode = state.comboPanel.mode === "view";
     return currentTotal - baseTotal;
   }
 
+  // Расчёт полной цены товара по текущему состоянию состава (как calcTotalPriceFromIngredientsGlobal),
+  // но на основе массива ingredients и локального состояния quantity (ingredientState).
+  function getComboBlockIngredientsTotalPrice(product, ingredients, ingredientState) {
+    if (!Array.isArray(ingredients) || ingredients.length === 0) return null;
+    let total = 0;
+    let hasValidPrice = false;
+    const pcsUnitId = state.units.find((u) => u.code === "pcs")?.id || null;
+    ingredients.forEach((ing) => {
+      const baseQty = ing.ingredient_base_qty != null ? Number(ing.ingredient_base_qty) : 1;
+      const catalogBasePrice = baseQty > 0 ? Number(ing.ingredient_price || 0) / baseQty : Number(ing.ingredient_price || 0);
+      const priceBase = ing.price_override != null ? Number(ing.price_override) : catalogBasePrice;
+
+      const baseUnitId = ing.ingredient_base_unit_id || ing.ingredient_unit_id || ing.unit_id;
+      const fromUnitId = Number(ing.unit_id || 0);
+      let qty = ingredientState?.get(Number(ing.ingredient_id));
+      if (qty == null) qty = Number(ing.quantity || 0);
+      let qtyInBase = null;
+
+      if (!baseUnitId || !fromUnitId) {
+        qtyInBase = null;
+      } else if (Number(fromUnitId) === Number(baseUnitId)) {
+        qtyInBase = qty;
+      } else if (pcsUnitId && Number(fromUnitId) === Number(pcsUnitId)) {
+        if (Number(baseUnitId) === Number(pcsUnitId)) {
+          qtyInBase = qty;
+        } else if (ing.ingredient_pcs_factor != null) {
+          qtyInBase = qty * Number(ing.ingredient_pcs_factor);
+        } else {
+          qtyInBase = null;
+        }
+      } else if (pcsUnitId && Number(baseUnitId) === Number(pcsUnitId)) {
+        qtyInBase = null;
+      } else {
+        const factor = getConversionFactor(fromUnitId, baseUnitId);
+        qtyInBase = factor != null ? qty * factor : null;
+      }
+
+      if (qtyInBase != null) {
+        total += priceBase * qtyInBase;
+        hasValidPrice = true;
+      }
+    });
+    if (!hasValidPrice) return null;
+    // Скругляем как в calcTotalsFromComposition / recalcPrice
+    return Math.round(total);
+  }
+
   function buildComboBlockProductDetailsHtml(product, variants, ingredients) {
     const parts = [];
     const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
@@ -6460,6 +6524,7 @@ const isViewMode = state.comboPanel.mode === "view";
       parts.push("<div class=\"combo-block-product-detail combo-block-detail-section\">");
       parts.push("<div class=\"combo-block-detail-label\">Состав (можно настроить):</div>");
       parts.push("<div class=\"combo-block-detail-ingredients\">");
+      const pcsUnitId = state.units.find((u) => u.code === "pcs")?.id || null;
       variableIngredients.forEach((ing) => {
         const qty = Number(ing.quantity) ?? 0;
         const unit = (ing.unit_short_title || ing.unit_title || ing.unit_code || "").trim();
@@ -6468,9 +6533,42 @@ const isViewMode = state.comboPanel.mode === "view";
         const photos = Array.isArray(ing.ingredient_photos) ? ing.ingredient_photos : [];
         const photoUrl = photos.length > 0 ? (photos[0].url || photos[0]) : "";
         const thumb = photoUrl ? "<img class=\"combo-block-ingredient-thumb\" src=\"" + escapeHtml(photoUrl) + "\" alt=\"\" />" : "<span class=\"combo-block-ingredient-thumb combo-block-ingredient-thumb-placeholder\"><i class=\"fas fa-image\"></i></span>";
+
+        // Строка с диапазоном количества и шагом — как в редакторе состава
+        const isVariable = Number(ing.is_variable) === 1;
+        const hasVariable = isVariable && (ing.quantity_min != null || ing.quantity_max != null);
+        const rangeLabel = hasVariable
+          ? `${ing.quantity_min != null ? formatQuantity(ing.quantity_min) : formatQuantity(qty)} - ${ing.quantity_max != null ? formatQuantity(ing.quantity_max) : "∞"}${ing.quantity_step != null ? `, шаг ${formatQuantity(ing.quantity_step)}` : ""}`
+          : `${formatQuantity(qty)}`;
+        const unitLabel = unit || (ing.unit_short_title || ing.unit_title || ing.unit_code || "");
+
+        // Цена как в админке состава
+        const baseUnitId = ing.ingredient_base_unit_id || ing.ingredient_unit_id;
+        const baseQty = ing.ingredient_base_qty != null ? Number(ing.ingredient_base_qty) : 1;
+        const catalogPriceBase = baseQty > 0 ? Number(ing.ingredient_price || 0) / baseQty : Number(ing.ingredient_price || 0);
+        const priceBase = ing.price_override != null ? Number(ing.price_override) : catalogPriceBase;
+        const fromUnitId = Number(ing.unit_id || 0);
+        let qtyInBase = null;
+        if (baseUnitId && fromUnitId) {
+          if (Number(fromUnitId) === Number(baseUnitId)) {
+            qtyInBase = qty;
+          } else if (String(baseUnitId) === String(pcsUnitId)) {
+            qtyInBase = null;
+          } else if (String(fromUnitId) === String(pcsUnitId)) {
+            qtyInBase = ing.ingredient_pcs_factor != null ? qty * Number(ing.ingredient_pcs_factor) : null;
+          } else {
+            const factor = getConversionFactor(fromUnitId, baseUnitId);
+            qtyInBase = factor != null ? qty * factor : null;
+          }
+        }
+        const totalPrice = qtyInBase == null ? null : priceBase * qtyInBase;
+        const priceLabel = qtyInBase == null ? "—" : formatMoney(priceBase);
+        const totalLabel = totalPrice == null ? "—" : formatMoney(totalPrice);
+        const summary = `${rangeLabel} ${unitLabel} × ${priceLabel} = ${totalLabel}`;
+
         parts.push("<div class=\"combo-block-detail-ingredient-row\" data-ingredient-id=\"" + ingId + "\">");
         parts.push(thumb);
-        parts.push("<span class=\"combo-block-ingredient-name\">" + escapeHtml(name) + "</span>");
+        parts.push("<span class=\"combo-block-ingredient-name\">" + escapeHtml(name) + "<br><small class=\"combo-block-ingredient-meta\">" + escapeHtml(summary) + "</small></span>");
         parts.push("<div class=\"combo-block-ingredient-qty-wrap\"><button type=\"button\" class=\"combo-block-ingredient-btn combo-block-ingredient-minus\" aria-label=\"Меньше\">−</button><span class=\"combo-block-ingredient-qty\">" + qty + " " + escapeHtml(unit) + "</span><button type=\"button\" class=\"combo-block-ingredient-btn combo-block-ingredient-plus\" aria-label=\"Больше\">+</button></div>");
         parts.push("</div>");
       });
@@ -6496,9 +6594,13 @@ const isViewMode = state.comboPanel.mode === "view";
     });
     function updatePriceDisplay() {
       if (!priceEl && !priceCell) return;
-      const basePrice = getComboBlockVariantUnitPrice(product, variants, variantSelectedIndex);
-      const diff = getComboBlockIngredientPriceDiff(ingredients, ingredientState);
-      const total = (Number(basePrice) || 0) + (Number(diff) || 0);
+      // Полная цена по составу — как в карточке товара
+      let total = getComboBlockIngredientsTotalPrice(product, ingredients, ingredientState);
+      // Если состав не задан или нет данных,fallback к цене товара / вариантам
+      if (total == null) {
+        const basePrice = getComboBlockVariantUnitPrice(product, variants, variantSelectedIndex);
+        total = Math.round(Number(basePrice) || 0);
+      }
       const rounded = Math.round(total);
       const inComboSet = wrapper?.closest("#comboSetBlocksList");
       if (inComboSet && priceCell) {
@@ -6585,11 +6687,20 @@ const isViewMode = state.comboPanel.mode === "view";
       await loadCatalogCategories();
     }
     state.comboPanel.level = "picker";
+    // Предзаполняем выбор уже добавленными товарами блока,
+    // чтобы в списке они сразу были выделены
+    const existingSelection = new Set();
+    (state.comboBlockProducts || []).forEach((p) => {
+      const id = Number(p.product_id);
+      if (Number.isFinite(id)) existingSelection.add(id);
+    });
     const list = state.catalogCategories || [];
     const hasAllCategory = list.some((c) => c.code === "all" || (c.title || "").trim() === "Все товары");
     state.comboPanel.pickerCategoryId = hasAllCategory && list[0] ? Number(list[0].id) : null;
     state.comboPanel.pickerQuery = "";
-    state.comboPanel.pickerSelection = new Set();
+    // хранить текущее и начальное состояние выбора — как в вариантах/опциях
+    state.comboPanel.pickerSelection = existingSelection;
+    state.comboPanel.pickerInitialSelection = new Set(existingSelection);
     if (comboBlockPickerSearch) comboBlockPickerSearch.value = "";
     await refreshComboBlockPickerProducts();
     if (comboBlockLevelGroup) comboBlockLevelGroup.classList.add("hidden");
@@ -6626,7 +6737,7 @@ const isViewMode = state.comboPanel.mode === "view";
       footerCancelBtn.classList.add("is-fullwidth");
       if (!footerCancelBtn.dataset.pickerOriginalHtml) footerCancelBtn.dataset.pickerOriginalHtml = footerCancelBtn.innerHTML;
       footerCancelBtn.textContent = "Отменить";
-      footerSaveBtn.textContent = "Добавить выбранные";
+      footerSaveBtn.textContent = "Сохранить";
       footerCancelBtn.dataset.pickerType = "combo";
       footerSaveBtn.dataset.pickerType = "combo";
       window._closeComboBlockPickerFn = () => {
@@ -6679,38 +6790,62 @@ const isViewMode = state.comboPanel.mode === "view";
     state.comboPanel.level = "group";
     if (comboBlockLevelGroup) comboBlockLevelGroup.classList.remove("hidden");
     if (comboBlockLevelPicker) comboBlockLevelPicker.classList.add("hidden");
+
+    // Итоговый набор выбранных ID — именно он определяет, какие товары останутся в блоке
     const selectedIds = new Set(Array.from(state.comboPanel.pickerSelection || []).map((id) => Number(id)));
-    const products = state.comboPanel.pickerProducts || [];
-    const existingIds = new Set((state.comboBlockProducts || []).map((p) => Number(p.product_id)));
-    const hadNone = state.comboBlockProducts.length === 0;
+    const pickerProducts = state.comboPanel.pickerProducts || [];
+
+    const oldProducts = state.comboBlockProducts || [];
+    const oldById = new Map(oldProducts.map((p) => [Number(p.product_id), p]));
+
+    const newProducts = [];
     const addedIds = [];
-    let firstNew = true;
-    for (const product of products) {
+
+    // 1) Сначала переносим уже существующие товары блока, которые остались выделены
+    for (const p of oldProducts) {
+      const pid = Number(p.product_id);
+      if (!Number.isFinite(pid) || !selectedIds.has(pid)) continue;
+      newProducts.push({ ...p });
+      selectedIds.delete(pid); // чтобы не обрабатывать как "новый"
+    }
+
+    // 2) Добавляем новые товары, которые были выбраны, но раньше не входили в блок
+    for (const product of pickerProducts) {
       const pid = Number(product.id);
       if (!Number.isFinite(pid) || !selectedIds.has(pid)) continue;
-      if (existingIds.has(pid)) continue;
       const photos = product.photos || product.photos_json;
       const photo = Array.isArray(photos) && photos.length > 0 ? photos[0] : null;
-      state.comboBlockProducts.push({
+      newProducts.push({
         product_id: product.id,
         name: product.name || "",
-        sort_order: state.comboBlockProducts.length,
-        is_default: hadNone && firstNew ? 1 : 0,
+        sort_order: newProducts.length,
+        is_default: 0,
         photo: photo || null,
         price: Number(product.price) || 0,
         has_variants: Number(product.has_variants) ? 1 : 0,
         has_changeable_composition: Number(product.has_changeable_composition) ? 1 : 0,
       });
       addedIds.push(pid);
-      existingIds.add(pid);
-      firstNew = false;
     }
+
+    // Пересчитать sort_order последовательно
+    newProducts.forEach((p, idx) => { p.sort_order = idx; });
+
+    // Гарантировать, что есть один товар "по умолчанию"
+    let hasDefault = newProducts.some((p) => p.is_default);
+    if (!hasDefault && newProducts.length > 0) {
+      newProducts[0].is_default = 1;
+      hasDefault = true;
+    }
+
+    state.comboBlockProducts = newProducts;
+
     if (addedIds.length > 0) {
       try {
         const res = await apiGetComboBlockProductFlags(addedIds);
         const flagsList = Array.isArray(res?.data) ? res.data : [];
         const flagsByPid = new Map(flagsList.map((f) => [Number(f.product_id), f]));
-        state.comboBlockProducts.forEach((p) => {
+        newProducts.forEach((p) => {
           const fid = Number(p.product_id);
           const flags = flagsByPid.get(fid);
           if (flags) {

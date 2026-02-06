@@ -311,6 +311,110 @@ function buildProductDetailsContent(
   const scroll = document.createElement("div");
   scroll.className = "shop-pd-scroll";
 
+  // Умный скролл: при раскрытии секций (например, опций) доскролливаем так,
+  // чтобы блок оказался сразу под хедером на мобильных.
+  function smartScrollIntoView(targetEl) {
+    try {
+      if (!targetEl || !scroll) return;
+
+      // Только мобильный режим — на десктопе и так всё видно.
+      if (!window.matchMedia || !window.matchMedia("(max-width: 768px)").matches) {
+        return;
+      }
+
+      const header = document.querySelector("header");
+      let offset = 0;
+      if (header) {
+        const headerRect = header.getBoundingClientRect();
+        const headerH =
+          headerRect.height ||
+          header.offsetHeight ||
+          parseFloat(getComputedStyle(header).height) ||
+          0;
+        // Немного запаса под хедером
+        offset = headerH + 8;
+      }
+
+      const scrollRect = scroll.getBoundingClientRect();
+      const targetRect = targetEl.getBoundingClientRect();
+
+      // Положение верха блока относительно начала скролл-контейнера
+      const currentTop = targetRect.top - scrollRect.top;
+      const desiredTop = offset;
+      const delta = currentTop - desiredTop;
+
+      // Если и так почти на месте — ничего не делаем
+      if (Math.abs(delta) < 4) return;
+
+      scroll.scrollBy({
+        top: delta,
+        behavior: "smooth",
+      });
+    } catch {
+      // В случае ошибки просто не скроллим, чтобы не ломать UX
+    }
+  }
+
+  // Плавное открытие/закрытие списка (аккордеон по высоте),
+  // чтобы не было резких "схлопываний"
+  function slideDown(listEl, duration = 180) {
+    if (!listEl) return;
+    listEl.classList.remove("hidden");
+    listEl.style.overflow = "hidden";
+    listEl.style.maxHeight = "0px";
+
+    // Следующий кадр — анимируем до полной высоты
+    const run = () => {
+      const full = listEl.scrollHeight || 0;
+      listEl.style.transition = `max-height ${duration}ms ease`;
+      listEl.style.maxHeight = `${full}px`;
+    };
+    if (window.requestAnimationFrame) {
+      requestAnimationFrame(run);
+    } else {
+      run();
+    }
+
+    const onEnd = () => {
+      listEl.style.maxHeight = "";
+      listEl.style.overflow = "";
+      listEl.style.transition = "";
+      listEl.removeEventListener("transitionend", onEnd);
+    };
+    listEl.addEventListener("transitionend", onEnd);
+  }
+
+  function slideUp(listEl, duration = 180, afterHide) {
+    if (!listEl) {
+      if (typeof afterHide === "function") afterHide();
+      return;
+    }
+    const full = listEl.scrollHeight || 0;
+    listEl.style.overflow = "hidden";
+    listEl.style.maxHeight = `${full}px`;
+    listEl.style.transition = `max-height ${duration}ms ease`;
+
+    // Следующий кадр — анимируем до 0
+    const run = () => {
+      listEl.style.maxHeight = "0px";
+    };
+    if (window.requestAnimationFrame) {
+      requestAnimationFrame(run);
+    } else {
+      run();
+    }
+
+    const onEnd = () => {
+      listEl.classList.add("hidden");
+      listEl.style.maxHeight = "";
+      listEl.style.overflow = "";
+      listEl.style.transition = "";
+      listEl.removeEventListener("transitionend", onEnd);
+      if (typeof afterHide === "function") afterHide();
+    };
+    listEl.addEventListener("transitionend", onEnd);
+  }
+
   /* ================= HERO (ФОТО + СТРЕЛКИ DESKTOP + СВАЙП MOBILE + DOTS) ================= */
 
   const photos = safePhotos(product);
@@ -587,10 +691,24 @@ function buildProductDetailsContent(
         const openList = () => {
           slotWrap.classList.add("hidden");
           list.classList.remove("hidden");
+          // При раскрытии прокручиваем карточку так, чтобы блок опции оказался под хедером
+          if (block) {
+            if (window.requestAnimationFrame) {
+              requestAnimationFrame(() => smartScrollIntoView(block));
+            } else {
+              smartScrollIntoView(block);
+            }
+          }
         };
         const closeList = () => {
-          list.classList.add("hidden");
-          slotWrap.classList.remove("hidden");
+          // Если уже закрыто — ничего не делаем
+          if (list.classList.contains("hidden")) return;
+
+          // Плавно схлопываем список по высоте за 300мс.
+          // Скролл не трогаем — остаёмся на том же месте.
+          slideUp(list, 300, () => {
+            slotWrap.classList.remove("hidden");
+          });
         };
 
         function renderSlot() {
@@ -733,6 +851,10 @@ function buildProductDetailsContent(
         }
         // =================================================================
 
+        // Контроллеры аккордеонов вариантов внутри этой группы,
+        // чтобы одновременно был открыт только один.
+        const singleVariantControllers = [];
+
         (group.items || []).forEach((item) => {
           const itemId = Number(item.id);
           const allowVariants = Boolean(group.allow_variants);
@@ -874,7 +996,20 @@ function buildProductDetailsContent(
                   setGearState(false);
                 }
               } else {
-                // Шестерёнка: открываем аккордеон с вариантами
+                // Шестерёнка: открываем аккордеон с вариантами.
+                // Перед этим закрываем остальные аккордеоны в этой группе,
+                // чтобы одновременно был открыт только один.
+                singleVariantControllers.forEach((ctrl) => {
+                  if (ctrl.itemId !== itemId) ctrl.setOpen(false);
+                });
+                // Дефолтный вариант, который уже подсвечен, сразу считаем выбранным:
+                // фиксируем его в состоянии и делаем этот товар текущей опцией группы,
+                // чтобы «В корзину» без клика по варианту добавляло именно его.
+                if (typeof setDefaultVariantForOptionItem === "function") {
+                  setDefaultVariantForOptionItem(item, groupState.variantByItemId);
+                }
+                groupState.selectedId = itemId;
+                if (typeof onSelectionChange === "function") onSelectionChange();
                 setGearState(true);
               }
             });
@@ -963,8 +1098,11 @@ function buildProductDetailsContent(
 
               variantBtn.addEventListener("click", (e) => {
                 e.stopPropagation();
+
                 const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
                 const priceDiff = unitPrice - Number(item.price || 0);
+
+                // 1) Фиксируем выбранный вариант для этой опции
                 groupState.variantByItemId.set(itemId, {
                   variant_group_id: Number(variantGroup.variant_group_id),
                   variant_value_index: idx,
@@ -972,13 +1110,18 @@ function buildProductDetailsContent(
                   variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
                 });
 
-                // Мгновенно обновляем цену и вариант в карточке
+                // 2) Сразу считаем, что выбран именно этот товар-опция
+                //    (последний кликнутый вариант = актуальный выбор группы)
+                groupState.selectedId = itemId;
+
+                // 3) Мгновенно обновляем цену и вариант в карточке списка
                 if (priceEl) {
                   const base = Number(item.price || 0);
                   const diff = Number.isFinite(priceDiff) ? priceDiff : 0;
                   priceEl.textContent = money(base + diff);
                 }
 
+                // 4) Перекрашиваем кнопки вариантов в скролле
                 variantScroll.querySelectorAll(".shop-pd-option-variant-btn").forEach((btn) => {
                   const btnIdx = Number(btn.dataset.variantIndex);
                   const isSel = btnIdx === idx;
@@ -994,15 +1137,15 @@ function buildProductDetailsContent(
                   }
                 });
 
-                // Обновляем вариант в первой строке (вариант + название)
+                // 5) Обновляем подпись варианта в первой строке (вариант + название)
                 if (variantLabelEl) {
                   variantLabelEl.textContent = formatValueLabel(value) + " ";
                 }
 
-                // Если это текущая выбранная опция — обновим summary-карточку тоже
-                if (Number(groupState.selectedId) === itemId) {
-                  renderSlot();
-                }
+                // 6) Обновляем summary-карточку, чтобы сверху сразу отобразился новый вариант
+                renderSlot();
+
+                // 7) Уведомляем об изменении — пересчёт цены на кнопке "В корзину" и т.п.
                 if (typeof onSelectionChange === "function") onSelectionChange();
               });
 
@@ -1011,6 +1154,12 @@ function buildProductDetailsContent(
 
             variantAccordion.appendChild(variantScroll);
             row.appendChild(gearBtn);
+
+            // Регистрируем контроллер для управления открытым аккордеоном
+            singleVariantControllers.push({
+              itemId,
+              setOpen: setGearState,
+            });
           }
 
           card.appendChild(row);
@@ -1065,6 +1214,10 @@ function buildProductDetailsContent(
           // Обновляем состояние валидности (можно добавить визуальную индикацию)
           return { count: selectedCount, isValid };
         };
+
+        // Контроллеры аккордеонов вариантов для multiple_group,
+        // чтобы одновременно был открыт только один.
+        const multiVariantControllers = [];
 
         (group.items || []).forEach((item) => {
           const itemId = Number(item.id);
@@ -1379,10 +1532,26 @@ function buildProductDetailsContent(
             gearBtn.addEventListener("click", (e) => {
               e.stopPropagation();
               accordionOpen = !accordionOpen;
-              variantAccordion.style.display = accordionOpen ? "block" : "none";
-              gearBtn.innerHTML = accordionOpen ? checkIcon : gearIcon;
-              gearBtn.classList.toggle("is-open", accordionOpen);
-              gearBtn.style.color = accordionOpen ? "var(--accent-color, #ff7a00)" : "var(--text-muted, #888)";
+              if (accordionOpen) {
+                // Перед открытием закрываем другие аккордеоны в группе
+                multiVariantControllers.forEach((ctrl) => {
+                  if (ctrl.itemId !== itemId) ctrl.close();
+                });
+                // Дефолтный подсвеченный вариант сразу считаем выбранным для этого товара
+                if (typeof setDefaultVariantForOptionItem === "function") {
+                  setDefaultVariantForOptionItem(item, groupState.variantByItemId);
+                }
+                if (typeof onSelectionChange === "function") onSelectionChange();
+                variantAccordion.style.display = "block";
+                gearBtn.innerHTML = checkIcon;
+                gearBtn.classList.add("is-open");
+                gearBtn.style.color = "var(--accent-color, #ff7a00)";
+              } else {
+                variantAccordion.style.display = "none";
+                gearBtn.innerHTML = gearIcon;
+                gearBtn.classList.remove("is-open");
+                gearBtn.style.color = "var(--text-muted, #888)";
+              }
             });
           }
 
@@ -1390,6 +1559,18 @@ function buildProductDetailsContent(
           
           if (variantAccordion) {
             card.appendChild(variantAccordion);
+
+            // Регистрируем контроллер, чтобы можно было закрыть этот аккордеон при открытии другого
+            multiVariantControllers.push({
+              itemId,
+              close: () => {
+                accordionOpen = false;
+                variantAccordion.style.display = "none";
+                gearBtn.innerHTML = gearIcon;
+                gearBtn.classList.remove("is-open");
+                gearBtn.style.color = "var(--text-muted, #888)";
+              },
+            });
           }
 
           card.addEventListener("click", (e) => {
@@ -1791,6 +1972,13 @@ function buildProductDetailsContent(
             gearBtn.addEventListener("click", (e) => {
               e.stopPropagation();
               accordionOpen = !accordionOpen;
+              if (accordionOpen) {
+                // Дефолтный подсвеченный вариант сразу считаем выбранным
+                if (typeof setDefaultVariantForOptionItem === "function") {
+                  setDefaultVariantForOptionItem(item, groupState.variantByItemId);
+                }
+                if (typeof onSelectionChange === "function") onSelectionChange();
+              }
               variantAccordion.style.display = accordionOpen ? "block" : "none";
               gearBtn.innerHTML = accordionOpen ? checkIcon : gearIcon;
               gearBtn.classList.toggle("is-open", accordionOpen);
