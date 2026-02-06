@@ -347,8 +347,15 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       // Подстраиваемся под текущий домен и протокол (localhost, markin-me.ru и т.п.).
       const forwardedProto = req.headers['x-forwarded-proto'];
       const forwardedHost = req.headers['x-forwarded-host'];
-      const protocol = (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto) || req.protocol || 'https';
-      const hostHeader = (Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost) || req.get('host') || 'localhost:3000';
+
+      function firstHeaderValue(raw, fallback = '') {
+        if (!raw) return fallback;
+        if (Array.isArray(raw)) return String(raw[0]).trim();
+        return String(raw).split(',')[0].trim();
+      }
+
+      const protocol = firstHeaderValue(forwardedProto, req.protocol || 'https');
+      const hostHeader = firstHeaderValue(forwardedHost, req.get('host') || 'localhost:3000');
       const baseUrl = `${protocol}://${hostHeader}`;
       const telegramMiniAppUrl = `${baseUrl}/tg-app?tenant_id=${tenant.id}`;
 
