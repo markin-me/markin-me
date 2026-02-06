@@ -3255,8 +3255,8 @@ optionGroups.forEach((group) => {
           unit += diff;
         });
 
-        // Ниже базовой цены варианта не опускаем — чтобы не показывать 0
-        unit = Math.max(baseUnit, unit);
+        // Разрешаем цене быть ниже базовой при уменьшении состава, но не ниже нуля.
+        unit = Math.max(0, unit);
         state.unit_price_before_discount = roundPrice(unit);
         const discounted = comboDiscountedPrice(unit, discountPercent);
         state.unit_price_override = roundPrice(discounted);
@@ -3420,7 +3420,8 @@ optionGroups.forEach((group) => {
                 : (Number.isFinite(pricePerUnit) ? (q - baseQty) * pricePerUnit : 0);
               unit += diff;
             });
-            unit = Math.max(baseUnit, unit);
+            // Разрешаем цене опускаться ниже базовой при уменьшении состава, но не ниже нуля.
+            unit = Math.max(0, unit);
             unit_price_before_discount = roundPrice(unit);
             unit_price_override = roundPrice(comboDiscountedPrice(unit, discountPercent));
           } catch (e) {
@@ -3633,7 +3634,7 @@ optionGroups.forEach((group) => {
 
     let pickerFooterUpdate = null;
 
-    function renderBlockPicker(blockIndex) {
+    function renderBlockPicker(blockIndex, scrollToRestore) {
       const block = blocks[blockIndex];
       if (!block || !block.products || !block.products.length) return;
 
@@ -3737,9 +3738,6 @@ optionGroups.forEach((group) => {
         priceWrap.appendChild(newSpan);
         bottomRow.appendChild(priceWrap);
 
-        mid.appendChild(bottomRow);
-        card.appendChild(mid);
-
         const actionsWrap = document.createElement("div");
         actionsWrap.className = "shop-combo-picker-actions";
 
@@ -3753,12 +3751,33 @@ optionGroups.forEach((group) => {
           e.preventDefault();
           if (idx !== currentSelected) selectedIndexByBlock[blockIndex] = idx;
           expandedPickerProductIndex = expandedPickerProductIndex === idx ? null : idx;
+          const detailScroll = container.querySelector(".shop-combo-detail-scroll");
+          const listScroll = container.querySelector(".shop-combo-picker-list");
+          let scrollParent = null;
+          let parentScrollTop = 0;
+          let p = container.parentElement;
+          while (p) {
+            const style = window.getComputedStyle(p);
+            const oy = style.overflowY || style.overflow;
+            if ((oy === "auto" || oy === "scroll" || oy === "overlay") && p.scrollHeight > p.clientHeight) {
+              scrollParent = p;
+              parentScrollTop = p.scrollTop;
+              break;
+            }
+            p = p.parentElement;
+          }
+          const savedScroll = {
+            detail: detailScroll ? detailScroll.scrollTop : 0,
+            list: listScroll ? listScroll.scrollTop : 0,
+            parentEl: scrollParent,
+            parentTop: parentScrollTop,
+          };
           hydrateBlockSelection(blockIndex)
             .then(() => {
-              renderBlockPicker(blockIndex);
+              renderBlockPicker(blockIndex, savedScroll);
             })
             .catch(() => {
-              renderBlockPicker(blockIndex);
+              renderBlockPicker(blockIndex, savedScroll);
             });
         });
         actionsWrap.appendChild(gearBtn);
@@ -3782,7 +3801,10 @@ optionGroups.forEach((group) => {
           }
         });
         actionsWrap.appendChild(radio);
-        card.appendChild(actionsWrap);
+        bottomRow.appendChild(actionsWrap);
+
+        card.appendChild(mid);
+        card.appendChild(bottomRow);
 
         card.addEventListener("click", (e) => {
           if (e.target.closest(".shop-combo-picker-gear") || e.target.closest(".shop-combo-radio")) return;
@@ -3883,8 +3905,8 @@ optionGroups.forEach((group) => {
                   : (Number.isFinite(pricePerUnit) ? (q - baseQty) * pricePerUnit : 0);
                 unit += diff;
               });
-              // Ниже базовой цены варианта не опускаем — чтобы не показывать 0
-              unit = Math.max(baseUnit, unit);
+              // Разрешаем цене опускаться ниже базовой при уменьшении состава, но не ниже нуля.
+              unit = Math.max(0, unit);
               state.unit_price_before_discount = roundPrice(unit);
               const discounted = comboDiscountedPrice(unit, discountPercent);
               state.unit_price_override = roundPrice(discounted);
@@ -3935,11 +3957,15 @@ optionGroups.forEach((group) => {
               vTitle.className = "shop-combo-picker-expand-title";
               vTitle.textContent = vGroup.title || "Вариант";
               vBlock.appendChild(vTitle);
+              const unitShort = str(vGroup.unit_short_title || vGroup.unit_title || vGroup.unit_code || "").trim();
+              const vValuesRow = document.createElement("div");
+              vValuesRow.className = "shop-combo-picker-variants-row";
               values.forEach((val, vIdx) => {
                 const btn = document.createElement("button");
                 btn.type = "button";
                 btn.className = "shop-combo-picker-variant-btn" + (vIdx === safeVariantIdx ? " is-active" : "");
-                btn.textContent = String(val);
+                const valStr = String(val);
+                btn.textContent = unitShort ? valStr + " " + unitShort : valStr;
                 btn.addEventListener("click", (e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -3948,8 +3974,9 @@ optionGroups.forEach((group) => {
                   expandWrap.querySelectorAll(".shop-combo-picker-variant-btn").forEach((b, i) => b.classList.toggle("is-active", i === vIdx));
                   updatePrice();
                 });
-                vBlock.appendChild(btn);
+                vValuesRow.appendChild(btn);
               });
+              vBlock.appendChild(vValuesRow);
               expandInner.appendChild(vBlock);
             }
 
@@ -4047,7 +4074,29 @@ optionGroups.forEach((group) => {
             });
             updatePrice();
             requestAnimationFrame(() => {
-              expandWrap.scrollIntoView({ behavior: "smooth", block: "nearest" });
+              let scrollContainer = expandWrap.parentElement;
+              while (scrollContainer) {
+                const style = window.getComputedStyle(scrollContainer);
+                const oy = style.overflowY || style.overflow;
+                if ((oy === "auto" || oy === "scroll" || oy === "overlay") && scrollContainer.scrollHeight > scrollContainer.clientHeight) {
+                  break;
+                }
+                scrollContainer = scrollContainer.parentElement;
+              }
+              if (!scrollContainer) return;
+              const expandH = expandWrap.offsetHeight;
+              const containerH = scrollContainer.clientHeight;
+              const footerOffset = 100;
+              const visibleH = Math.max(containerH - footerOffset, 200);
+              const expandRect = expandWrap.getBoundingClientRect();
+              const containerRect = scrollContainer.getBoundingClientRect();
+              const expandTopInContent = scrollContainer.scrollTop + (expandRect.top - containerRect.top);
+              const expandBottomInContent = expandTopInContent + expandH;
+              if (expandH <= visibleH) {
+                scrollContainer.scrollTop = expandBottomInContent - visibleH;
+              } else {
+                scrollContainer.scrollTop = expandTopInContent;
+              }
             });
           })();
         }
@@ -4095,6 +4144,16 @@ optionGroups.forEach((group) => {
       viewWrap.appendChild(wrap);
       viewWrap.appendChild(footer);
       container.appendChild(viewWrap);
+
+      if (scrollToRestore) {
+        const detailEl = container.querySelector(".shop-combo-detail-scroll");
+        const listEl = container.querySelector(".shop-combo-picker-list");
+        if (detailEl && scrollToRestore.detail >= 0) detailEl.scrollTop = scrollToRestore.detail;
+        if (listEl && scrollToRestore.list >= 0) listEl.scrollTop = scrollToRestore.list;
+        if (scrollToRestore.parentEl && scrollToRestore.parentEl.isConnected && scrollToRestore.parentTop >= 0) {
+          scrollToRestore.parentEl.scrollTop = scrollToRestore.parentTop;
+        }
+      }
 
       // Шаг назад: стрелка в шапке и кнопка "Назад" на Android
       if (openCartSheetCtx) {

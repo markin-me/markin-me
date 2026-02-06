@@ -731,6 +731,14 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   padding: var(--sp-pad);
 }
 
+/* Мобилка: уменьшаем горизонтальные отступы на экранах комбо (чтобы контейнер был шире) */
+@media (max-width: 768px){
+  .shop-product-content .shop-combo-detail-scroll{
+    padding-left: 0;
+    padding-right: 0;
+  }
+}
+
 /* Новый экран комбо (как корзина) */
 .shop-combo-detail-caption{
   font-size: 14px;
@@ -781,8 +789,8 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-right: -70px; /* выходим за padding контейнера */
-  padding-right: 12px; /* отступ от края карточки */
+  min-width: 0;
+  max-width: 100%;
 }
 .shop-combo-row .cart-sub,
 .shop-combo-picker-row .cart-sub{
@@ -863,26 +871,35 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   background: var(--color-surface);
   cursor: pointer;
   position: relative;
-  grid-template-columns: 92px 1fr; /* убираем колонку для actions */
+  grid-template-columns: 92px 1fr;
+  grid-template-rows: 92px auto;
 }
 .shop-combo-picker-row.is-selected{
   border-color: var(--shop-buy);
+}
+.shop-combo-picker-row > .cart-thumb{
+  grid-row: 1;
+  grid-column: 1;
+  align-self: start;
+}
+.shop-combo-picker-row > .shop-combo-picker-mid{
+  grid-row: 1;
+  grid-column: 2;
+  align-self: start;
+  min-height: 0;
+}
+.shop-combo-picker-row > .shop-combo-picker-bottom{
+  grid-row: 2;
+  grid-column: 2;
+  align-self: end;
 }
 .shop-combo-picker-mid{
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding-right: 70px; /* место для actions справа */
-}
-.shop-combo-picker-row .shop-combo-picker-actions{
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
 }
 .shop-combo-picker-bottom{
-  margin-top: auto;
-  padding-top: 8px;
+  padding-top: 6px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -911,7 +928,6 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
-  align-self: center;
 }
 .shop-combo-picker-price{
   display: flex;
@@ -919,8 +935,8 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   gap: 8px;
 }
 .shop-combo-radio{
-  width: 22px;
-  height: 22px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   border: 2px solid rgba(0,0,0,0.15);
   margin-left: 0;
@@ -928,6 +944,8 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   align-self: center;
   position: relative;
   cursor: pointer;
+  display: grid;
+  place-items: center;
 }
 .shop-combo-radio.is-selected{
   border-color: var(--shop-buy);
@@ -940,17 +958,19 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   display: grid;
   place-items: center;
   color: var(--shop-buy-text);
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 900;
 }
 
-/* Расширение самой карточки: варианты и состав внутри */
+/* Расширение самой карточки: варианты и состав внутри; разграничитель по низу фото/строки с ценой */
 .shop-combo-picker-expand{
-  margin-top: 8px;
+  margin-top: 0;
   border-top: 1px solid var(--color-border);
   background: var(--color-surface);
-  /* внутри .cart-row (grid) растягиваемся на всю ширину карточки */
+  grid-row: 3;
   grid-column: 1 / -1;
+  min-width: 0;
+  overflow-x: hidden;
 }
 .shop-combo-picker-expand-loading{
   padding: 20px;
@@ -1019,6 +1039,8 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 .shop-combo-picker-expand-inner{
   padding: 12px 14px 14px;
   background: var(--color-surface);
+  min-width: 0;
+  overflow-x: hidden;
 }
 .shop-combo-picker-expand-title{
   font-weight: 700;
@@ -1031,15 +1053,24 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 }
 .shop-combo-picker-variants{
   display: flex;
-  flex-wrap: nowrap;
+  flex-direction: column;
   gap: 8px;
   margin-bottom: 16px;
-  overflow-x: auto;
-  padding-bottom: 4px;
-  scrollbar-width: thin;
 }
 .shop-combo-picker-variants:last-child{
   margin-bottom: 0;
+}
+.shop-combo-picker-variants-row{
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.shop-combo-picker-variants-row::-webkit-scrollbar{
+  display: none;
 }
 .shop-combo-picker-variant-btn{
   padding: 10px 16px;
@@ -1098,6 +1129,9 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   min-width: 0;
   font-size: 14px;
   color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .shop-combo-picker-ingredient-qty{
   display: flex;
@@ -1711,6 +1745,36 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   white-space: nowrap; /* 1 строка */
 }
 
+/* Корзина (панель + sheet): заголовок товара/комбо — 2 строки и ellipsis */
+.shop-cart-content .cart-title,
+.shop-cart-sheet .cart-title,
+#shopCartContent .cart-title,
+.shop-cart-body .cart-title{
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 100%;
+  line-height: 1.3;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+/* Комбо в заказах/корзине: на всякий случай дублируем правило по селектору строки */
+.cart-row--combo .cart-title{
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .cart-sub{
   font-size: 12px;
   color: var(--color-text-muted);
@@ -1800,6 +1864,23 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   gap: 8px;
   flex-wrap: nowrap;
   align-self: end;
+}
+
+/* Нижняя строка корзины: qty, цена и иконки в одну линию (мобилка + десктоп) */
+.shop-cart-sheet .cart-row,
+#shopCartContent .cart-row,
+.shop-cart-content .cart-row{
+  grid-template-columns: 92px 1fr;
+}
+.cart-bottom-row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+}
+.cart-bottom-row .cart-right{
+  align-self: center;
 }
 
 .cart-old{
@@ -3819,6 +3900,29 @@ body.page-shop .app-modal-body::after{
 }
 
 /* ==========================================================================
+   Невидимые скроллбары на странице магазина (десктоп и мобилка, прокрутка сохраняется)
+   ========================================================================== */
+body.page-shop .shop-col .panel-body,
+body.page-shop .shop-combo-detail-scroll,
+body.page-shop .shop-combo-picker-list,
+body.page-shop .shop-combo-picker-variants,
+body.page-shop .shop-pd-scroll,
+body.page-shop .shop-cart-sheet .shop-product-content .shop-pd-scroll,
+body.page-shop .shop-cart-sheet .shop-product-content .shop-combo-detail-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+body.page-shop .shop-col .panel-body::-webkit-scrollbar,
+body.page-shop .shop-combo-detail-scroll::-webkit-scrollbar,
+body.page-shop .shop-combo-picker-list::-webkit-scrollbar,
+body.page-shop .shop-combo-picker-variants::-webkit-scrollbar,
+body.page-shop .shop-pd-scroll::-webkit-scrollbar,
+body.page-shop .shop-cart-sheet .shop-product-content .shop-pd-scroll::-webkit-scrollbar,
+body.page-shop .shop-cart-sheet .shop-product-content .shop-combo-detail-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* ==========================================================================
    Utilities / мелкие фиксы
    ========================================================================== */
 
@@ -4351,10 +4455,21 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 
 .shop-cart-items .cart-title {
   white-space: normal;
-  text-overflow: clip;
-  overflow: visible;
-  word-wrap: break-word;
-  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 100%;
+  line-height: 1.3;
+}
+
+/* В корзине у комбо состав может занимать место под правым блоком (цена/кол-во) */
+.cart-row--combo .cart-combo-details{
+  margin-right: -120px;
+  padding-right: 12px;
 }
 
 /* ==========================================================================

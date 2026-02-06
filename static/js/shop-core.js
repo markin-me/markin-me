@@ -3936,53 +3936,10 @@ async function initAddresses() {
         const { pill, btnMinus, btnPlus, center } = createQtyPill({
           variant: "muted",
           centerText: String(qty),
-          minusEnabled: qty > 1,
+          // Минус всегда активен при qty > 0 — при qty = 1 будет работать как удаление
+          minusEnabled: qty > 0,
           plusEnabled: true,
         });
-        const updateComboQty = () => {
-          const cartItem = state.cart.find((x) => x.key === key);
-          const newQty = Math.max(1, Number(cartItem?.qty || 0));
-          center.textContent = String(newQty);
-          btnMinus.classList.toggle("is-disabled", newQty <= 1);
-          pr.textContent = money(roundPrice(unitPrice * newQty));
-          const oldEl = row.querySelector(".cart-combo-old");
-          if (oldEl) {
-            const uOld = Number(cartItem?.unit_price_before_discount || 0) || unitPrice;
-            oldEl.textContent = moneyNoSign(roundPrice(uOld * newQty)) + " ₽";
-          }
-        };
-        btnPlus.addEventListener("click", (e) => {
-          e.stopPropagation();
-          const cartItem = state.cart.find((x) => x.key === key);
-          if (!cartItem) return;
-          cartItem.qty = Math.max(1, Number(cartItem.qty || 0) + 1);
-          saveCart();
-          updateComboQty();
-          const { total: newTotal } = computeCartTotals(cartItemsResolved());
-          if (totalEl) totalEl.textContent = money(newTotal);
-          if (window.matchMedia("(max-width: 768px)").matches) updateMobileDeliveryProgress();
-        });
-        btnMinus.addEventListener("click", (e) => {
-          e.stopPropagation();
-          const cartItem = state.cart.find((x) => x.key === key);
-          if (!cartItem || Number(cartItem.qty || 0) <= 1) return;
-          cartItem.qty = Math.max(0, Number(cartItem.qty || 0) - 1);
-          if (cartItem.qty < 1) {
-            removeFromCartByKey(key, null);
-            swipeContainer.remove();
-          } else {
-            saveCart();
-            updateComboQty();
-          }
-          const { total: newTotal } = computeCartTotals(cartItemsResolved());
-          if (totalEl) totalEl.textContent = money(newTotal);
-          if (window.matchMedia("(max-width: 768px)").matches) updateMobileDeliveryProgress();
-        });
-        if (qty <= 1) btnMinus.classList.add("is-disabled");
-        q.appendChild(pill);
-        mid.appendChild(q);
-        row.appendChild(mid);
-
         const right = document.createElement("div");
         right.className = "cart-right";
         if (showComboOld) {
@@ -4019,7 +3976,54 @@ async function initAddresses() {
         desktopActions.appendChild(desktopFavBtn);
         desktopActions.appendChild(desktopDeleteBtn);
         right.appendChild(desktopActions);
-        row.appendChild(right);
+
+        const updateComboQty = () => {
+          const cartItem = state.cart.find((x) => x.key === key);
+          const newQty = Math.max(1, Number(cartItem?.qty || 0));
+          center.textContent = String(newQty);
+          // Минус не блокируем на qty = 1 — он должен работать как удаление
+          btnMinus.classList.toggle("is-disabled", newQty <= 0);
+          pr.textContent = money(roundPrice(unitPrice * newQty));
+          const oldEl = row.querySelector(".cart-combo-old");
+          if (oldEl) {
+            const uOld = Number(cartItem?.unit_price_before_discount || 0) || unitPrice;
+            oldEl.textContent = moneyNoSign(roundPrice(uOld * newQty)) + " ₽";
+          }
+        };
+        btnPlus.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const cartItem = state.cart.find((x) => x.key === key);
+          if (!cartItem) return;
+          cartItem.qty = Math.max(1, Number(cartItem.qty || 0) + 1);
+          saveCart();
+          updateComboQty();
+          const { total: newTotal } = computeCartTotals(cartItemsResolved());
+          if (totalEl) totalEl.textContent = money(newTotal);
+          if (window.matchMedia("(max-width: 768px)").matches) updateMobileDeliveryProgress();
+        });
+        btnMinus.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const cartItem = state.cart.find((x) => x.key === key);
+          if (!cartItem) return;
+          cartItem.qty = Math.max(0, Number(cartItem.qty || 0) - 1);
+          if (cartItem.qty < 1) {
+            removeFromCartByKey(key, null);
+            swipeContainer.remove();
+          } else {
+            saveCart();
+            updateComboQty();
+          }
+          const { total: newTotal } = computeCartTotals(cartItemsResolved());
+          if (totalEl) totalEl.textContent = money(newTotal);
+          if (window.matchMedia("(max-width: 768px)").matches) updateMobileDeliveryProgress();
+        });
+        q.appendChild(pill);
+        const bottomRow = document.createElement("div");
+        bottomRow.className = "cart-bottom-row";
+        bottomRow.appendChild(q);
+        bottomRow.appendChild(right);
+        mid.appendChild(bottomRow);
+        row.appendChild(mid);
 
         initSwipeGesture(swipeContainer, row, null, key);
         swipeContainer.appendChild(row);
@@ -4243,9 +4247,6 @@ async function initAddresses() {
       }
 
       q.appendChild(pill);
-      mid.appendChild(q);
-      row.appendChild(mid);
-
       const right = document.createElement("div");
       right.className = "cart-right";
 
@@ -4298,7 +4299,12 @@ async function initAddresses() {
       desktopActions.appendChild(desktopDeleteBtn);
       right.appendChild(desktopActions);
 
-      row.appendChild(right);
+      const bottomRow = document.createElement("div");
+      bottomRow.className = "cart-bottom-row";
+      bottomRow.appendChild(q);
+      bottomRow.appendChild(right);
+      mid.appendChild(bottomRow);
+      row.appendChild(mid);
 
       swipeContainer.appendChild(row);
 
@@ -5291,6 +5297,11 @@ async function initCore() {
 
     renderProducts();
     prioritizeAboveFoldCardImages();
+
+    // Перед первым “боевым” рендером корзины прогреваем товары из корзины,
+    // чтобы сразу использовать тот же путь и те же данные, что и при
+    // последующих обновлениях (после любых действий пользователя).
+    await warmupCartProducts();
     renderCart();
     updateCartBadge();
     bindLateActionDelegates();
@@ -5298,6 +5309,13 @@ async function initCore() {
 
     bindCategoryScrollSpy();
     bindShopWarmups();
+
+    // Раньше initShopLate/ensureShopLateLoaded запускались только после первого клика.
+    // Теперь мы инициализируем late-часть сразу после загрузки магазина,
+    // чтобы корзина и остальные элементы не зависели от первого взаимодействия.
+    try {
+      ensureShopLateLoaded();
+    } catch {}
   } catch (e) {
     console.error(e);
   }
