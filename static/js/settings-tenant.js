@@ -1,4 +1,4 @@
-(() => {
+﻿(() => {
   function formatValue(key, value) {
     if (key == "password_hash") return "••••••";
     if (key == "is_active") return Number(value) == 1 ? "Да" : "Нет";
@@ -155,8 +155,7 @@
 
   function updateShopLink(tenant) {
     const linkEl = document.getElementById("siteSubdomainLink");
-    const tgLinkEl = document.getElementById("tenantTelegramMiniAppLink");
-    if (!linkEl && !tgLinkEl) return;
+    if (!linkEl) return;
     const subdomain = tenant && tenant.subdomain ? String(tenant.subdomain).trim() : "";
     const customDomain = tenant && tenant.custom_domain ? String(tenant.custom_domain).trim() : "";
     const protocol = window.location.protocol || "http:";
@@ -171,27 +170,15 @@
       host = `${subdomain}.${hostname}`;
     }
 
-    if (linkEl) {
-      if (!host) {
-        linkEl.textContent = "—";
-        linkEl.setAttribute("href", "#");
-      } else {
-        const url = `${protocol}//${host}${isLocal ? port : ""}`;
-        linkEl.textContent = url;
-        linkEl.setAttribute("href", url);
-      }
+    if (!host) {
+      linkEl.textContent = "—";
+      linkEl.setAttribute("href", "#");
+      return;
     }
 
-    if (tgLinkEl) {
-      const tgUrl = tenant && tenant.telegram_mini_app_url ? String(tenant.telegram_mini_app_url).trim() : "";
-      if (tgUrl) {
-        tgLinkEl.textContent = tgUrl;
-        tgLinkEl.setAttribute("href", tgUrl);
-      } else {
-        tgLinkEl.textContent = "—";
-        tgLinkEl.setAttribute("href", "#");
-      }
-    }
+    const url = `${protocol}//${host}${isLocal ? port : ""}`;
+    linkEl.textContent = url;
+    linkEl.setAttribute("href", url);
   }
 
   async function updateTenantFields(payload) {
@@ -398,7 +385,7 @@
     const orderDeliveryCard = document.getElementById("settingsOrderDeliveryCard");
     const orderTimeOptionsCard = document.getElementById("settingsOrderTimeOptionsCard");
     const soundsCard = document.getElementById("settingsSoundsCard");
-    const settingsNotificationsCard = document.getElementById("settingsNotificationsCard");
+    const printApiCard = document.getElementById("settingsPrintApiCard");
     const rightDefault = document.getElementById("settingsRightDefault");
     const logoPanel = document.getElementById("settingsLogoPanel");
     const sitePanel = document.getElementById("settingsSitePanel");
@@ -408,8 +395,7 @@
     const orderDeliveryPanel = document.getElementById("settingsOrderDeliveryPanel");
     const orderTimeOptionsPanel = document.getElementById("settingsOrderTimeOptionsPanel");
     const soundsPanel = document.getElementById("settingsSoundsPanel");
-    const settingsNotificationsPanel = document.getElementById("settingsNotificationsPanel");
-    const notificationsStoresList = document.getElementById("notificationsStoresList");
+    const printApiPanel = document.getElementById("settingsPrintApiPanel");
     const settingsPriceRoundingMode = document.getElementById("settingsPriceRoundingMode");
     const settingsPriceRoundingPrecision = document.getElementById("settingsPriceRoundingPrecision");
     const rightTabs = document.getElementById("settingsRightTabs");
@@ -439,15 +425,12 @@
     const settingsStoreHoursContainer = document.getElementById("settingsStoreHoursContainer");
     const settingsStoreDeliveryHoursSwitch = document.getElementById("settingsStoreDeliveryHoursSameSwitch");
     const settingsStoreDeliveryHoursContainer = document.getElementById("settingsStoreDeliveryHoursContainer");
-    const settingsStoreTelegramStatus = document.getElementById("settingsStoreTelegramStatus");
-    const settingsStoreTelegramActions = document.getElementById("settingsStoreTelegramActions");
-    const settingsStoreTelegramConnectBtn = document.getElementById("settingsStoreTelegramConnectBtn");
-    const settingsStoreTelegramLinkBox = document.getElementById("settingsStoreTelegramLinkBox");
-    const settingsStoreTelegramLink = document.getElementById("settingsStoreTelegramLink");
-    const settingsStoreTelegramList = document.getElementById("settingsStoreTelegramList");
-    const settingsStoreTelegramApiKey = document.getElementById("settingsStoreTelegramApiKey");
-    const settingsStoreTelegramSecretKey = document.getElementById("settingsStoreTelegramSecretKey");
-    const settingsStoreTelegramAddByKeysBtn = document.getElementById("settingsStoreTelegramAddByKeysBtn");
+    const settingsPrintApiStore = document.getElementById("settingsPrintApiStore");
+    const settingsPrintApiUrl = document.getElementById("settingsPrintApiUrl");
+    const settingsPrintApiToken = document.getElementById("settingsPrintApiToken");
+    const settingsPrintApiGenerateBtn = document.getElementById("settingsPrintApiGenerateBtn");
+    const settingsPrintApiCopyUrl = document.getElementById("settingsPrintApiCopyUrl");
+    const settingsPrintApiCopyToken = document.getElementById("settingsPrintApiCopyToken");
 
     const storesState = {
       loaded: false,
@@ -805,7 +788,7 @@
       if (orderDeliveryPanel) orderDeliveryPanel.classList.toggle("hidden", tabId !== "order-delivery");
       if (orderTimeOptionsPanel) orderTimeOptionsPanel.classList.toggle("hidden", tabId !== "order-time-options");
       if (soundsPanel) soundsPanel.classList.toggle("hidden", tabId !== "sounds");
-      if (settingsNotificationsPanel) settingsNotificationsPanel.classList.toggle("hidden", tabId !== "notifications");
+      if (printApiPanel) printApiPanel.classList.toggle("hidden", tabId !== "print-api");
       if (settingsDeliveryPanel) settingsDeliveryPanel.classList.toggle("hidden", tabId !== DELIVERY_TAB_ID);
       if (settingsStorePanel) settingsStorePanel.classList.toggle("hidden", !tabId.startsWith("store-"));
       if (settingsStoreEmpty) {
@@ -823,8 +806,8 @@
       if (tabId.startsWith("store-")) {
         applyStoreTabState(tabId);
       }
-      if (tabId === "notifications") {
-        loadNotificationsOverview();
+      if (tabId === "print-api") {
+        ensurePrintApiReady();
       }
     }
 
@@ -872,7 +855,7 @@
           if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.remove("is-active");
           if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.remove("is-active");
           if (tabId === "sounds" && soundsCard) soundsCard.classList.remove("is-active");
-          if (tabId === "notifications" && settingsNotificationsCard) settingsNotificationsCard.classList.remove("is-active");
+          if (tabId === "print-api" && printApiCard) printApiCard.classList.remove("is-active");
           if (tabId === DELIVERY_TAB_ID) {
             deliverySettingsState.selectedId = null;
             deliverySettingsState.snapshot = null;
@@ -914,7 +897,7 @@
       if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.add("is-active");
       if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.add("is-active");
       if (tabId === "sounds" && soundsCard) soundsCard.classList.add("is-active");
-      if (tabId === "notifications" && settingsNotificationsCard) settingsNotificationsCard.classList.add("is-active");
+      if (tabId === "print-api" && printApiCard) printApiCard.classList.add("is-active");
     }
 
     if (logoCard) {
@@ -965,112 +948,45 @@
       });
     }
 
-    if (settingsNotificationsCard) {
-      settingsNotificationsCard.addEventListener("click", () => {
-        ensureTab("notifications", "Уведомления");
+    if (printApiCard) {
+      printApiCard.addEventListener("click", () => {
+        ensureTab("print-api", "API");
       });
     }
 
-    if (settingsStoreTelegramConnectBtn) {
-      settingsStoreTelegramConnectBtn.addEventListener("click", async () => {
-        const storeId = storesState.selectedId;
-        if (!storeId) return;
-        try {
-          const bindRes = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/telegram");
-          const bindData = await bindRes.json();
-          const countBefore = (bindData && bindData.ok && bindData.bindings) ? bindData.bindings.length : 0;
+    if (settingsPrintApiStore) {
+      settingsPrintApiStore.addEventListener("change", () => {
+        const storeId = Number(settingsPrintApiStore.value);
+        if (storeId) loadPrintApiToken(storeId);
+      });
+    }
 
-          const res = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/telegram/connect", { method: "POST" });
-          const data = await res.json();
-          if (!data || !data.ok) {
-            alert(data.error || "Ошибка");
-            return;
-          }
-          if (data.link && settingsStoreTelegramLink) {
-            settingsStoreTelegramLink.href = data.link;
-            settingsStoreTelegramLink.textContent = data.link;
-            if (settingsStoreTelegramLinkBox) settingsStoreTelegramLinkBox.classList.remove("hidden");
-            let pollCount = 0;
-            const pollInterval = setInterval(() => {
-              pollCount++;
-              loadStoreTelegramBindings(storeId).then(() => {
-                const list = settingsStoreTelegramList;
-                const currentCount = list ? list.querySelectorAll(".store-telegram-item").length : 0;
-                if (currentCount > countBefore) {
-                  clearInterval(pollInterval);
-                  if (settingsStoreTelegramLinkBox) settingsStoreTelegramLinkBox.classList.add("hidden");
-                }
-              });
-              if (pollCount >= 30) clearInterval(pollInterval);
-            }, 2000);
-          } else {
-            alert("Укажите TELEGRAM_BOT_USERNAME в настройках сервера для ссылки.");
-          }
-        } catch (e) {
-          alert("Ошибка запроса");
+    if (settingsPrintApiGenerateBtn) {
+      settingsPrintApiGenerateBtn.addEventListener("click", () => {
+        const storeId = Number(settingsPrintApiStore && settingsPrintApiStore.value);
+        if (storeId) generatePrintApiToken(storeId);
+      });
+    }
+
+    if (settingsPrintApiCopyUrl) {
+      settingsPrintApiCopyUrl.addEventListener("click", async () => {
+        try {
+          const value = settingsPrintApiUrl ? settingsPrintApiUrl.value : "";
+          if (value) await navigator.clipboard.writeText(value);
+        } catch (err) {
+          console.error("Не удалось скопировать URL:", err);
         }
       });
     }
 
-    if (settingsStoreTelegramList) {
-      settingsStoreTelegramList.addEventListener("click", async (e) => {
-        const btn = e.target.closest("button[data-binding-id]");
-        if (!btn) return;
-        const bindingId = btn.getAttribute("data-binding-id");
-        const storeId = storesState.selectedId;
-        if (!storeId || !bindingId) return;
-        if (!confirm("Отключить уведомления в этот чат?")) return;
+    if (settingsPrintApiCopyToken) {
+      settingsPrintApiCopyToken.addEventListener("click", async () => {
         try {
-          const res = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/telegram/" + encodeURIComponent(bindingId), { method: "DELETE" });
-          const data = await res.json();
-          if (data && data.ok) loadStoreTelegramBindings(storeId);
-        } catch (err) {}
-      });
-    }
-
-    if (settingsStoreTelegramAddByKeysBtn) {
-      settingsStoreTelegramAddByKeysBtn.addEventListener("click", async () => {
-        const storeId = storesState.selectedId;
-        const apiKey = settingsStoreTelegramApiKey ? settingsStoreTelegramApiKey.value.trim() : "";
-        const secretKey = settingsStoreTelegramSecretKey ? settingsStoreTelegramSecretKey.value.trim() : "";
-        if (!storeId || !apiKey || !secretKey) {
-          alert("Введите API key и Secret key от бота.");
-          return;
+          const value = settingsPrintApiToken ? settingsPrintApiToken.value : "";
+          if (value) await navigator.clipboard.writeText(value);
+        } catch (err) {
+          console.error("Не удалось скопировать токен:", err);
         }
-        try {
-          const res = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/telegram/add-by-keys", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ api_key: apiKey, secret_key: secretKey })
-          });
-          const data = await res.json();
-          if (!data || !data.ok) {
-            alert(data.error === "SECRET_INVALID_OR_EXPIRED" ? "Secret key недействителен или истёк. Напишите /start боту заново." : (data.error || "Ошибка"));
-            return;
-          }
-          if (settingsStoreTelegramApiKey) settingsStoreTelegramApiKey.value = "";
-          if (settingsStoreTelegramSecretKey) settingsStoreTelegramSecretKey.value = "";
-          loadStoreTelegramBindings(storeId);
-        } catch (e) {
-          alert("Ошибка запроса");
-        }
-      });
-    }
-
-    if (notificationsStoresList) {
-      notificationsStoresList.addEventListener("click", (e) => {
-        const btn = e.target.closest("button[data-notif-store-id]");
-        if (!btn) return;
-        const storeId = btn.getAttribute("data-notif-store-id");
-        if (!storeId) return;
-        const storeBtn = document.querySelector("[data-settings-section=\"stores\"]");
-        if (storeBtn) storeBtn.click();
-        setTimeout(() => {
-          loadStores().then(() => {
-            const store = storesState.items.find((s) => String(s.id) === String(storeId));
-            if (store) selectStore(store);
-          });
-        }, 100);
       });
     }
 
@@ -1316,10 +1232,6 @@
       }
       if (mode === "create") {
         if (settingsStoreSubtitle) settingsStoreSubtitle.textContent = "Новая точка";
-        if (settingsStoreTelegramStatus) settingsStoreTelegramStatus.textContent = "Сначала сохраните филиал";
-        if (settingsStoreTelegramLinkBox) settingsStoreTelegramLinkBox.classList.add("hidden");
-        if (settingsStoreTelegramList) { settingsStoreTelegramList.classList.add("hidden"); settingsStoreTelegramList.innerHTML = ""; }
-        if (settingsStoreTelegramConnectBtn) settingsStoreTelegramConnectBtn.style.display = "none";
         if (settingsStoreName) settingsStoreName.value = "";
         if (settingsStoreCode) settingsStoreCode.value = "";
         if (settingsStoreAddress) settingsStoreAddress.value = "";
@@ -1356,7 +1268,6 @@
         storesState.selectedId = store.id;
         storesState.snapshot = { ...store };
         setStoreMode("edit", store);
-        loadStoreTelegramBindings(store.id);
       }
       renderStoresList(storesState.items);
       showStorePanel(true);
@@ -1411,6 +1322,77 @@
       }
     }
 
+    function getPrintApiUrl() {
+      if (typeof window === "undefined") return "";
+      return `${window.location.origin}/api/print/orders`;
+    }
+
+    function populatePrintApiStores(items) {
+      if (!settingsPrintApiStore) return;
+      settingsPrintApiStore.innerHTML = "";
+      const list = Array.isArray(items) ? items : [];
+      list.forEach((store) => {
+        const opt = document.createElement("option");
+        opt.value = String(store.id);
+        opt.textContent = store.name ? `${store.name} (#${store.id})` : `Филиал #${store.id}`;
+        settingsPrintApiStore.appendChild(opt);
+      });
+      if (list.length) {
+        const preferred = storesState.selectedId || activeStoreId || list[0].id;
+        settingsPrintApiStore.value = String(preferred);
+      }
+    }
+
+    async function loadPrintApiToken(storeId) {
+      if (!settingsPrintApiToken || !storeId) return;
+      settingsPrintApiToken.value = "";
+      try {
+        const res = await authFetch(`/api/admin/tenant/print-api?store_id=${encodeURIComponent(storeId)}`);
+        const data = await res.json();
+        if (!data || !data.ok) return;
+        const token = data.data && data.data.token ? data.data.token : "";
+        settingsPrintApiToken.value = token;
+        if (settingsPrintApiGenerateBtn) {
+          settingsPrintApiGenerateBtn.textContent = token ? "Пересоздать токен" : "Сгенерировать токен";
+        }
+      } catch (err) {
+        console.error("Не удалось загрузить print API:", err);
+      }
+    }
+
+    async function generatePrintApiToken(storeId) {
+      if (!storeId) return;
+      try {
+        const res = await authFetch("/api/admin/tenant/print-api", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ store_id: storeId })
+        });
+        const data = await res.json();
+        if (!data || !data.ok) return;
+        const token = data.data && data.data.token ? data.data.token : "";
+        if (settingsPrintApiToken) settingsPrintApiToken.value = token;
+        if (settingsPrintApiGenerateBtn) settingsPrintApiGenerateBtn.textContent = "Пересоздать токен";
+      } catch (err) {
+        console.error("Не удалось создать print API:", err);
+      }
+    }
+
+    function ensurePrintApiReady() {
+      if (settingsPrintApiUrl) settingsPrintApiUrl.value = getPrintApiUrl();
+      const loadAndSelect = async () => {
+        if (!storesState.loaded) {
+          await loadStores();
+        }
+        populatePrintApiStores(storesState.items);
+        const storeId = Number(settingsPrintApiStore && settingsPrintApiStore.value);
+        if (storeId) {
+          await loadPrintApiToken(storeId);
+        }
+      };
+      loadAndSelect();
+    }
+
     function trimOrNull(value) {
       const s = String(value ?? "").trim();
       return s ? s : null;
@@ -1435,79 +1417,6 @@
         if (data && data.storeId === storeId) return tabId;
       }
       return null;
-    }
-
-    async function loadStoreTelegramBindings(storeId) {
-      if (!settingsStoreTelegramStatus) return;
-      settingsStoreTelegramStatus.textContent = "Загрузка…";
-      if (settingsStoreTelegramLinkBox) settingsStoreTelegramLinkBox.classList.add("hidden");
-      if (settingsStoreTelegramList) {
-        settingsStoreTelegramList.classList.add("hidden");
-        settingsStoreTelegramList.innerHTML = "";
-      }
-      try {
-        const res = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/telegram");
-        const data = await res.json();
-        if (!data || !data.ok) {
-          settingsStoreTelegramStatus.textContent = "Ошибка загрузки";
-          return;
-        }
-        let bindings = data.bindings || [];
-        const byChatId = new Map();
-        bindings.forEach((b) => {
-          const cid = b.telegram_chat_id != null ? String(b.telegram_chat_id) : "";
-          if (cid && !byChatId.has(cid)) byChatId.set(cid, b);
-        });
-        bindings = Array.from(byChatId.values());
-        if (bindings.length === 0) {
-          settingsStoreTelegramStatus.textContent = "Не подключено";
-          if (settingsStoreTelegramConnectBtn) settingsStoreTelegramConnectBtn.style.display = "";
-        } else {
-          settingsStoreTelegramStatus.textContent = "Подключено чатов: " + bindings.length;
-          if (settingsStoreTelegramConnectBtn) settingsStoreTelegramConnectBtn.style.display = "";
-          if (settingsStoreTelegramList) {
-            settingsStoreTelegramList.classList.remove("hidden");
-            bindings.forEach((b) => {
-              const li = document.createElement("li");
-              li.className = "store-telegram-item";
-              const apiKey = b.telegram_chat_id != null ? String(b.telegram_chat_id) : "";
-              const secretKey = b.secret_key ? String(b.secret_key) : "";
-              li.innerHTML = "<div class=\"store-telegram-binding\"><span class=\"muted\">API key: " + apiKey + (secretKey ? ", Secret key: " + secretKey : "") + "</span> <button type=\"button\" class=\"btn btn-link btn-sm\" data-binding-id=\"" + (b.id || "") + "\">Отключить</button></div>";
-              settingsStoreTelegramList.appendChild(li);
-            });
-          }
-        }
-      } catch (e) {
-        settingsStoreTelegramStatus.textContent = "Ошибка загрузки";
-      }
-    }
-
-    async function loadNotificationsOverview() {
-      if (!notificationsStoresList) return;
-      notificationsStoresList.innerHTML = "<div class=\"muted\">Загрузка…</div>";
-      try {
-        const res = await authFetch("/api/admin/tenant/notifications");
-        const data = await res.json();
-        if (!data || !data.ok) {
-          notificationsStoresList.innerHTML = "<div class=\"muted\">Ошибка загрузки</div>";
-          return;
-        }
-        const stores = data.stores || [];
-        if (stores.length === 0) {
-          notificationsStoresList.innerHTML = "<div class=\"muted\">Нет филиалов</div>";
-          return;
-        }
-        notificationsStoresList.innerHTML = "";
-        stores.forEach((s) => {
-          const row = document.createElement("div");
-          row.className = "settings-card order-row product-row";
-          const status = s.telegram_count > 0 ? "Подключено чатов: " + s.telegram_count : "Не подключено";
-          row.innerHTML = "<div class=\"order-col\"><div class=\"product-title\">" + (s.name || "Филиал #" + s.id) + "</div><div class=\"muted\">" + status + "</div></div><div class=\"order-col\"><button type=\"button\" class=\"btn btn-primary btn-sm\" data-notif-store-id=\"" + s.id + "\">Настроить</button></div>";
-          notificationsStoresList.appendChild(row);
-        });
-      } catch (e) {
-        notificationsStoresList.innerHTML = "<div class=\"muted\">Ошибка загрузки</div>";
-      }
     }
 
     function getSettingsListConfig(type) {

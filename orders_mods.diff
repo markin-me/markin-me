@@ -1,0 +1,216 @@
+diff --git a/static/js/orders.js b/static/js/orders.js
+--- a/static/js/orders.js
++++ b/static/js/orders.js
+@@ -85,6 +85,22 @@
+   const backdrop = $("#sheetBackdrop");
+   const closeBtn = $("#sheetClose");
+ 
++  const clientSheet = $("#clientSheet");
++  const clientSheetBackdrop = $("#clientSheetBackdrop");
++  const clientSheetClose = $("#clientSheetClose");
++
++  const clientSheetInfo = {
++    title: $("#sheetClientInfoTitle"),
++    meta: $("#sheetClientInfoMeta"),
++    name: $("#sheetClientInfoName"),
++    phone: $("#sheetClientInfoPhone"),
++    birthday: $("#sheetClientInfoBirthday"),
++    orders: $("#sheetClientInfoOrders"),
++    spent: $("#sheetClientInfoSpent"),
++    last: $("#sheetClientInfoLastOrder"),
++    addrs: $("#sheetClientAddresses"),
++  };
+ 
+   const dateBtn = $("#ordersDateBtn");
+@@ -140,6 +156,13 @@
+   function formatDateTime(ts) {
+     if (!ts) return "";
+     const d = new Date(ts);
+     if (Number.isNaN(d.getTime())) return "";
+     return d.toLocaleString("ru-RU", {
+       day: "2-digit",
+       month: "short",
+       year: "numeric",
+       hour: "2-digit",
+       minute: "2-digit",
+     });
+   }
++  function formatDateOnly(value) {
++    if (!value) return "";
++    const date = new Date(value);
++    if (Number.isNaN(date.getTime())) return "";
++    return date.toLocaleDateString("ru-RU");
++  }
+ 
+   function escapeHtml(s) {
+@@ -454,6 +477,70 @@
+     });
+   }
+ 
++  function renderClientAddresses(addresses = [], { loading } = {}) {
++    const target = clientSheetInfo.addrs;
++    if (!target) return;
++    target.innerHTML = "";
++    if (loading) {
++      target.innerHTML = `<div class="empty-state" style="padding:12px; text-align:center;">Loading addresses...</div>`;
++      return;
++    }
++    if (!Array.isArray(addresses) || !addresses.length) {
++      target.innerHTML = `<div class="empty-state" style="padding:12px; border:1px solid var(--color-border); border-radius:14px; background:var(--color-surface);">
++        <div class="empty-title">No addresses</div>
++        <div class="empty-text">Add an address for the client</div>
++      </div>`;
++      return;
++    }
++
++    addresses.forEach((address) => {
++      const line1 = `${address.street || ""}${address.house ? `, ${address.house}` : ""}`.trim() || "No address";
++      const parts = [];
++      if (address.entrance) parts.push(`entrance ${address.entrance}`);
++      if (address.floor) parts.push(`floor ${address.floor}`);
++      if (address.apartment) parts.push(`apt. ${address.apartment}`);
++      const detailLine = parts.join(", ");
++      const comment = address.comment ? `<div class="cart-sub">${escapeHtml(address.comment)}</div>` : "";
++
++      const cardHtml = `
++        <div class="cart-row" style="grid-template-columns: 1fr; gap:8px;">
++          <div class="cart-mid">
++            <div class="cart-title" style="display:flex; gap:8px; align-items:center;">
++              <span>${escapeHtml(line1)}</span>
++              ${address.is_default ? `<span class="pill pill-strong">Default</span>` : ""}
++            </div>
++            ${detailLine ? `<div class="cart-sub">${escapeHtml(detailLine)}</div>` : ""}
++            ${comment}
++          </div>
++        </div>
++      `;
++
++      const wrap = document.createElement("div");
++      wrap.innerHTML = cardHtml;
++      target.appendChild(wrap.firstElementChild);
++    });
++  }
++
++  function renderClientSheet(client, addresses = [], { loading } = {}) {
++    const placeholder = loading ? "Loading..." : "?";
++    if (!client) {
++      setTextAll([clientSheetInfo.title], loading ? "Loading..." : "Client not selected");
++      setTextAll([clientSheetInfo.meta], loading ? placeholder : "Select a client");
++      setTextAll([clientSheetInfo.name, clientSheetInfo.phone, clientSheetInfo.birthday, clientSheetInfo.orders, clientSheetInfo.spent, clientSheetInfo.last], placeholder);
++      renderClientAddresses([], { loading });
++      return;
++    }
++    setTextAll([clientSheetInfo.title], `Client #${client.id}`);
++    setTextAll([clientSheetInfo.meta], client.created_at ? `Created: ${formatDateTime(client.created_at)}` : "?");
++    setTextAll([clientSheetInfo.name], client.name || "?");
++    setTextAll([clientSheetInfo.phone], client.phone || "?");
++    setTextAll([clientSheetInfo.birthday], client.birthday ? formatDateOnly(client.birthday) : "?");
++    setTextAll([clientSheetInfo.orders], String(Number(client.total_orders || 0)));
++    setTextAll([clientSheetInfo.spent], money(client.total_spent || 0));
++    setTextAll([clientSheetInfo.last], client.last_order_date ? formatDateTime(client.last_order_date) : "?");
++    renderClientAddresses(addresses, { loading: false });
++  }
+ 
+   function setAttrAll(list, name, value) {
+     list.forEach((el) => {
+       if (!el) return;
+@@ -576,6 +663,23 @@
+     }, 0);
+   }
+ 
++  function getActiveOrder() {
++    if (!state.activeOrderId) return null;
++    return state.orders.find((o) => Number(o.id) === Number(state.activeOrderId)) || null;
++  }
++
++  infoEls.clientName.forEach((el) => {
++    if (!el) return;
++    el.addEventListener("click", (event) => {
++      event.preventDefault();
++      event.stopPropagation();
++      const order = getActiveOrder();
++      const clientId = order?.customer_id;
++      if (!clientId) return;
++      showClientSheet(clientId);
++    });
++  });
+ 
+   // -----------------------------
+   // Sheet
+   // -----------------------------
+@@ -597,6 +701,49 @@
+     document.body.classList.remove("sheet-open");
+   }
+ 
++  function openClientSheetPanel() {
++    if (!clientSheet || !clientSheetBackdrop) return;
++    clientSheet.classList.add("is-open");
++    clientSheetBackdrop.classList.add("is-active");
++    clientSheet.setAttribute("aria-hidden", "false");
++    clientSheetBackdrop.setAttribute("aria-hidden", "false");
++    document.body.classList.add("sheet-open");
++  }
++
++  function closeClientSheetPanel() {
++    if (!clientSheet || !clientSheetBackdrop) return;
++    clientSheet.classList.remove("is-open");
++    clientSheetBackdrop.classList.remove("is-active");
++    clientSheet.setAttribute("aria-hidden", "true");
++    clientSheetBackdrop.setAttribute("aria-hidden", "true");
++    if (sheet && sheet.classList.contains("is-open")) {
++      document.body.classList.add("sheet-open");
++    } else {
++      document.body.classList.remove("sheet-open");
++    }
++  }
++
++  async function showClientSheet(clientId) {
++    if (!clientId || !clientSheet) return;
++    const id = Number(clientId);
++    if (!Number.isFinite(id) || id <= 0) return;
++    renderClientSheet(null, [], { loading: true });
++    openClientSheetPanel();
++    try {
++      const [clientResp, addressesResp] = await Promise.all([
++        apiJson(`/api/admin/clients/${id}`),
++        apiJson(`/api/admin/clients/${id}/addresses`),
++      ]);
++      const client = clientResp?.data || null;
++      const addresses = Array.isArray(addressesResp?.data) ? addressesResp.data : [];
++      renderClientSheet(client, addresses);
++    } catch (error) {
++      console.error(error);
++      renderClientSheet(null, [], { loading: false });
++      setTextAll([clientSheetInfo.meta], "Failed to load client");
++    }
++  }
+ 
+   // -----------------------------
+   // Render: stages
+   // -----------------------------
+@@ -1227,14 +1374,22 @@
+   closeButtons.forEach((btn) => btn.addEventListener("click", clearSelection));
+ 
+   document.addEventListener("keydown", (e) => {
+-    if (e.key === "Escape") closeSheet();
++    if (e.key === "Escape") {
++      closeSheet();
++      closeClientSheetPanel();
++    }
+   });
+ 
+   if (closeBtn) closeBtn.addEventListener("click", closeSheet);
+   if (backdrop) backdrop.addEventListener("click", closeSheet);
++  if (clientSheetClose) clientSheetClose.addEventListener("click", closeClientSheetPanel);
++  if (clientSheetBackdrop) clientSheetBackdrop.addEventListener("click", closeClientSheetPanel);
+ 
+   window.addEventListener("resize", () => {
+-    if (!isMobile()) closeSheet();
++    if (!isMobile()) {
++      closeSheet();
++      closeClientSheetPanel();
++    }
+   });
+ 
+   if (dateBtn && datePopover) {
+*** End Patch

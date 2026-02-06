@@ -14,6 +14,18 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     return s === '' ? null : s;
   }
 
+  function makePrintApiToken() {
+    return crypto.randomBytes(32).toString('hex');
+  }
+
+  async function ensureStoreExists(tenantId, storeId) {
+    const [rows] = await db.query(
+      'SELECT id FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+      [tenantId, storeId]
+    );
+    return rows.length ? Number(rows[0].id) : null;
+  }
+
   const listConfigs = {
     'order-statuses': {
       table: 'order_statuses',
@@ -1287,6 +1299,71 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       res.json({ ok: true });
     } catch (err) {
       console.error('Ошибка удаления настройки доставки:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
+   * GET /api/admin/tenant/print-api?store_id=1
+   * Возвращает токен для печати по филиалу
+   */
+  router.get('/print-api', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const storeId = Number(req.query.store_id);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!Number.isFinite(storeId) || storeId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_STORE_ID' });
+      }
+      const storeExists = await ensureStoreExists(tenantId, storeId);
+      if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+
+      const [rows] = await db.query(
+        `SELECT id, tenant_id, store_id, token, is_active, created_at, updated_at, last_used_at
+         FROM print_api_tokens
+         WHERE tenant_id=? AND store_id=? LIMIT 1`,
+        [tenantId, storeId]
+      );
+      res.json({ ok: true, data: rows[0] || null });
+    } catch (err) {
+      console.error('Ошибка получения print API:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
+   * POST /api/admin/tenant/print-api
+   * body: { store_id }
+   * Создаёт или пересоздаёт токен для печати
+   */
+  router.post('/print-api', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const storeId = Number(req.body?.store_id || req.query?.store_id);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!Number.isFinite(storeId) || storeId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_STORE_ID' });
+      }
+      const storeExists = await ensureStoreExists(tenantId, storeId);
+      if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+
+      const token = makePrintApiToken();
+      await db.query(
+        `INSERT INTO print_api_tokens (tenant_id, store_id, token, is_active)
+         VALUES (?,?,?,1)
+         ON DUPLICATE KEY UPDATE token=VALUES(token), is_active=1, updated_at=NOW()`,
+        [tenantId, storeId, token]
+      );
+
+      const [rows] = await db.query(
+        `SELECT id, tenant_id, store_id, token, is_active, created_at, updated_at, last_used_at
+         FROM print_api_tokens
+         WHERE tenant_id=? AND store_id=? LIMIT 1`,
+        [tenantId, storeId]
+      );
+      res.json({ ok: true, data: rows[0] || null });
+    } catch (err) {
+      console.error('Ошибка генерации print API:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
