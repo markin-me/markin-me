@@ -2087,9 +2087,12 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   font-weight: 900;
   font-size: 18px;
   color: var(--color-text);
-  margin-top: 8px;
+  margin-top: 18px;
   padding: 4px 2px;
   scroll-margin-top: 12px;
+}
+.shop-category-header:first-child{
+  margin-top: 8px;
 }
 
 @media (max-width: 768px){

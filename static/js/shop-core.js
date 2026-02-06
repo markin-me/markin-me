@@ -2930,7 +2930,7 @@ async function initAddresses() {
       const headerH = Number(getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0;
       const chipsPanel = document.querySelector(".center-stack > .panel:first-child");
       const chipsH = chipsPanel?.getBoundingClientRect ? chipsPanel.getBoundingClientRect().height : 0;
-      const offset = headerH + chipsH + 50;
+      const offset = headerH + chipsH + 45;
       const rect = header.getBoundingClientRect();
       const top = window.scrollY + rect.top - offset;
       window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
@@ -2948,6 +2948,9 @@ async function initAddresses() {
 
     setTimeout(() => {
       isProgrammaticCategoryScroll = false;
+      // После завершения программного скролла ещё раз выравниваем чипы,
+      // чтобы правило привязки к левому краю сработало и при выборе через список категорий.
+      scrollChipsToCategory(state.activeCategoryId);
     }, 450);
   }
 
@@ -2965,13 +2968,13 @@ async function initAddresses() {
     const wrap = elCatChipsWrap || elCatChips;
     if (!scroller || !wrap) return;
 
-    const wrapRect = wrap.getBoundingClientRect();
-    const chipRect = chip.getBoundingClientRect();
-    const visibleLeft = wrapRect.left;
-    const visibleRight = wrapRect.right;
+    // Делаем так, чтобы активный чип оказывался у левого края (с небольшим отступом)
     const paddingLeft = 12;
+    let target = Math.max(0, chip.offsetLeft - paddingLeft);
 
-    const target = Math.max(0, chip.offsetLeft - paddingLeft);
+    // Если уже почти на нужном месте — не дёргаем скролл
+    const current = scroller.scrollLeft || 0;
+    if (Math.abs(current - target) < 2) return;
     if (typeof scroller.scrollTo === "function") {
       scroller.scrollTo({ left: target, behavior: "smooth" });
     } else {
@@ -2990,7 +2993,7 @@ async function initAddresses() {
       const headerH = Number(getComputedStyle(document.documentElement).getPropertyValue("--header-height")) || 0;
       const chipsPanel = document.querySelector(".center-stack > .panel:first-child");
       const chipsH = chipsPanel?.getBoundingClientRect ? chipsPanel.getBoundingClientRect().height : 0;
-      offset = headerH + chipsH + 50;
+      offset = headerH + chipsH + 70;
       containerTop = 0;
     } else {
       containerTop = elProductsScroller?.getBoundingClientRect
