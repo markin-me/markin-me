@@ -1424,7 +1424,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
 
       const token = crypto.randomBytes(24).toString('hex');
       const secretKey = crypto.randomBytes(16).toString('hex');
-      const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
       await db.query(
         `INSERT INTO ten_store_telegram (tenant_id, store_id, connect_token, connect_token_expires_at, secret_key) VALUES (?, ?, ?, ?, ?)`,

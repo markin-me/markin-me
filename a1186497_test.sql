@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Хост: 10.0.231.119
--- Время создания: Фев 07 2026 г., 12:16
+-- Время создания: Фев 07 2026 г., 19:00
 -- Версия сервера: 8.0.37-29
 -- Версия PHP: 7.2.34
 
@@ -451,14 +451,22 @@ INSERT INTO `order_orders` (`id`, `public_id`, `tenant_id`, `store_id`, `custome
 (153, 'b4ca9951-83f1-4ca5-a672-bc76fc18ef1d', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', NULL, 1, NULL, NULL, 0, 0.00, '[{\"product_id\":21,\"name\":\"Гречка с овощами\",\"qty\":1,\"price\":89,\"old_price\":0,\"line_total\":261,\"photos\":[\"/static/uploads/products/1/ccbfd8c94a01992063130008a89452ca.webp\"],\"options\":[{\"id\":79,\"title\":\"Баварская колбаска\",\"price\":149,\"qty\":1,\"variant_group_id\":5,\"variant_value_index\":0,\"variant_label\":\"1 шт\",\"variant_price_diff\":14.900000000000006}],\"variants\":[{\"variant_group_id\":4,\"variant_value_index\":0,\"group_title\":\"Гарнира (Грамм)\",\"value\":\"150 г\",\"label\":\"150 г\",\"price_diff\":0}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0},{\"product_id\":21,\"name\":\"Гречка с овощами\",\"qty\":1,\"price\":89,\"old_price\":0,\"line_total\":97,\"photos\":[\"/static/uploads/products/1/ccbfd8c94a01992063130008a89452ca.webp\"],\"variants\":[{\"variant_group_id\":4,\"variant_value_index\":0,\"group_title\":\"Гарнира (Грамм)\",\"value\":\"150 г\",\"label\":\"150 г\",\"price_diff\":0}],\"auto_add\":0}]', 417.00, 59.00, '2026-02-06 11:24:47', 4, 1, 1, 6, 0, NULL, 'web', 1),
 (154, '2fc1627f-deba-43ea-a82c-27ec4f3afa98', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', NULL, 1, NULL, NULL, 0, 0.00, '[{\"product_id\":3,\"name\":\"Пюре с сосисками\",\"qty\":1,\"price\":313,\"old_price\":0,\"line_total\":313,\"photos\":[\"/static/uploads/products/1/aa9767ad1415f1cc4dfac5f9310d9cc8.webp\"],\"ingredients\":[{\"ingredient_id\":12,\"name\":\"Картофельное пюре\",\"quantity\":150,\"price\":0.7689489718202589,\"total\":115.34234577303883},{\"ingredient_id\":28,\"name\":\"Сосиски жареные\",\"quantity\":2,\"price\":99,\"total\":198}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0}]', 372.00, 59.00, '2026-02-07 03:21:33', 4, 1, 1, 6, 0, NULL, 'web', 1);
 INSERT INTO `order_orders` (`id`, `public_id`, `tenant_id`, `store_id`, `customer_id`, `customer_name`, `customer_phone`, `promo_code`, `address`, `delivery_address_id`, `pickup_store_id`, `comment`, `address_comment`, `cutlery_qty`, `change_from`, `items`, `total_price`, `delivery_cost`, `created_at`, `delivery_type_id`, `payment_id`, `time_option_id`, `status_id`, `status_sort`, `scheduled_at`, `created_via`, `is_active`) VALUES
-(155, '25b12002-b280-49bc-8383-38f4e1337f8e', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', NULL, 1, 'тестовый', NULL, 0, 2000.00, '[{\"type\":\"combo\",\"combo_id\":9,\"name\":\"Второе+суп Второе+суп Второе+суп Второе+суп\",\"qty\":1,\"price\":505,\"old_price\":0,\"line_total\":505,\"photos\":[\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\"],\"selections\":[{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"variant_label\":\"\",\"variant_group_title\":\"\",\"variant_unit\":\"\",\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":1,\"qty\":1,\"unit\":\"шт\"}]},{\"product_id\":38,\"product_name\":\"Гороховый с копченостями\",\"product_photo\":\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"variant_label\":\"250\",\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"ingredients_display\":[]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\",\"variant_label\":\"500\",\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"ingredients_display\":[]}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0},{\"product_id\":14,\"name\":\"Пюре с куриной котлетой\",\"qty\":1,\"price\":278,\"old_price\":0,\"line_total\":278,\"photos\":[\"/static/uploads/products/1/8d7527fdbc8e7476d39e29192a4d70d0.webp\"],\"ingredients\":[{\"ingredient_id\":12,\"name\":\"Картофельное пюре\",\"quantity\":150,\"price\":0.7689489718202589,\"total\":115.34234577303883},{\"ingredient_id\":13,\"name\":\"Куринная котлета\",\"quantity\":1,\"price\":163,\"total\":163}],\"auto_add\":0},{\"product_id\":38,\"name\":\"Гороховый с копченостями\",\"qty\":1,\"price\":249,\"old_price\":0,\"line_total\":195,\"photos\":[\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\"],\"variants\":[{\"variant_group_id\":8,\"variant_value_index\":0,\"group_title\":\"Супа (Грамм)\",\"value\":\"250 г\",\"label\":\"250 г\",\"price_diff\":0}],\"auto_add\":0},{\"product_id\":21,\"name\":\"Гречка с овощами\",\"qty\":1,\"price\":89,\"old_price\":0,\"line_total\":301,\"photos\":[\"/static/uploads/products/1/ccbfd8c94a01992063130008a89452ca.webp\"],\"options\":[{\"id\":80,\"title\":\"Гуляш по-домашнему\",\"price\":1700,\"qty\":1,\"variant_group_id\":6,\"variant_value_index\":1,\"variant_label\":\"120 г\",\"variant_price_diff\":-1496}],\"variants\":[{\"variant_group_id\":4,\"variant_value_index\":0,\"group_title\":\"Гарнира (Грамм)\",\"value\":\"150 г\",\"label\":\"150 г\",\"price_diff\":0}],\"auto_add\":0},{\"product_id\":35,\"name\":\"Цезарь с креветкой\",\"qty\":1,\"price\":349,\"old_price\":0,\"line_total\":349,\"photos\":[\"/static/uploads/products/1/b71c731e70cb2f94b121626a77885936.jpg\"],\"ingredients\":[{\"ingredient_id\":78,\"name\":\"Цезарь соус\",\"quantity\":50,\"price\":0,\"total\":0},{\"ingredient_id\":57,\"name\":\"Сухарики в специях\",\"quantity\":1,\"price\":0,\"total\":0}],\"auto_add\":0}]', 1628.00, 0.00, '2026-02-07 03:42:04', 4, 1, 1, 6, 0, NULL, 'web', 1),
+(155, '25b12002-b280-49bc-8383-38f4e1337f8e', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', NULL, 1, 'тестовый', NULL, 0, 2000.00, '[{\"type\":\"combo\",\"combo_id\":9,\"name\":\"Второе+суп Второе+суп Второе+суп Второе+суп\",\"qty\":1,\"price\":505,\"old_price\":0,\"line_total\":505,\"photos\":[\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\"],\"selections\":[{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"variant_label\":\"\",\"variant_group_title\":\"\",\"variant_unit\":\"\",\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":1,\"qty\":1,\"unit\":\"шт\"}]},{\"product_id\":38,\"product_name\":\"Гороховый с копченостями\",\"product_photo\":\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"variant_label\":\"250\",\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"ingredients_display\":[]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\",\"variant_label\":\"500\",\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"ingredients_display\":[]}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0},{\"product_id\":14,\"name\":\"Пюре с куриной котлетой\",\"qty\":1,\"price\":278,\"old_price\":0,\"line_total\":278,\"photos\":[\"/static/uploads/products/1/8d7527fdbc8e7476d39e29192a4d70d0.webp\"],\"ingredients\":[{\"ingredient_id\":12,\"name\":\"Картофельное пюре\",\"quantity\":150,\"price\":0.7689489718202589,\"total\":115.34234577303883},{\"ingredient_id\":13,\"name\":\"Куринная котлета\",\"quantity\":1,\"price\":163,\"total\":163}],\"auto_add\":0},{\"product_id\":38,\"name\":\"Гороховый с копченостями\",\"qty\":1,\"price\":249,\"old_price\":0,\"line_total\":195,\"photos\":[\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\"],\"variants\":[{\"variant_group_id\":8,\"variant_value_index\":0,\"group_title\":\"Супа (Грамм)\",\"value\":\"250 г\",\"label\":\"250 г\",\"price_diff\":0}],\"auto_add\":0},{\"product_id\":21,\"name\":\"Гречка с овощами\",\"qty\":1,\"price\":89,\"old_price\":0,\"line_total\":301,\"photos\":[\"/static/uploads/products/1/ccbfd8c94a01992063130008a89452ca.webp\"],\"options\":[{\"id\":80,\"title\":\"Гуляш по-домашнему\",\"price\":1700,\"qty\":1,\"variant_group_id\":6,\"variant_value_index\":1,\"variant_label\":\"120 г\",\"variant_price_diff\":-1496}],\"variants\":[{\"variant_group_id\":4,\"variant_value_index\":0,\"group_title\":\"Гарнира (Грамм)\",\"value\":\"150 г\",\"label\":\"150 г\",\"price_diff\":0}],\"auto_add\":0},{\"product_id\":35,\"name\":\"Цезарь с креветкой\",\"qty\":1,\"price\":349,\"old_price\":0,\"line_total\":349,\"photos\":[\"/static/uploads/products/1/b71c731e70cb2f94b121626a77885936.jpg\"],\"ingredients\":[{\"ingredient_id\":78,\"name\":\"Цезарь соус\",\"quantity\":50,\"price\":0,\"total\":0},{\"ingredient_id\":57,\"name\":\"Сухарики в специях\",\"quantity\":1,\"price\":0,\"total\":0}],\"auto_add\":0}]', 1628.00, 0.00, '2026-02-07 03:42:04', 4, 1, 1, 1, 0, NULL, 'web', 1),
 (156, 'ced948f8-f676-4c90-b65d-2f060f843995', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', NULL, 1, '6656756767', 'бьюти салон', 0, 0.00, '[{\"product_id\":14,\"name\":\"Пюре с куриной котлетой\",\"qty\":1,\"price\":278,\"old_price\":0,\"line_total\":278,\"photos\":[\"/static/uploads/products/1/8d7527fdbc8e7476d39e29192a4d70d0.webp\"],\"ingredients\":[{\"ingredient_id\":12,\"name\":\"Картофельное пюре\",\"quantity\":150,\"price\":0.7689489718202589,\"total\":115.34234577303883},{\"ingredient_id\":13,\"name\":\"Куринная котлета\",\"quantity\":1,\"price\":163,\"total\":163}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0}]', 337.00, 59.00, '2026-02-07 03:57:35', 4, 1, 1, 6, 0, NULL, 'web', 1),
 (157, '520c4d07-3d8c-4ca8-8958-45e241caa6bf', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', NULL, 1, NULL, 'бьюти салон', 0, 2000.00, '[{\"type\":\"combo\",\"combo_id\":9,\"name\":\"Второе+суп Второе+суп Второе+суп Второе+суп\",\"qty\":1,\"price\":505,\"old_price\":0,\"line_total\":505,\"photos\":[\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\"],\"selections\":[{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"variant_label\":\"\",\"variant_group_title\":\"\",\"variant_unit\":\"\",\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":1,\"qty\":1,\"unit\":\"шт\"}]},{\"product_id\":38,\"product_name\":\"Гороховый с копченостями\",\"product_photo\":\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"variant_label\":\"250\",\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"ingredients_display\":[]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\",\"variant_label\":\"500\",\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"ingredients_display\":[]}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0},{\"product_id\":14,\"name\":\"Пюре с куриной котлетой\",\"qty\":1,\"price\":278,\"old_price\":0,\"line_total\":278,\"photos\":[\"/static/uploads/products/1/8d7527fdbc8e7476d39e29192a4d70d0.webp\"],\"ingredients\":[{\"ingredient_id\":12,\"name\":\"Картофельное пюре\",\"quantity\":150,\"price\":0.7689489718202589,\"total\":115.34234577303883},{\"ingredient_id\":13,\"name\":\"Куринная котлета\",\"quantity\":1,\"price\":163,\"total\":163}],\"auto_add\":0},{\"product_id\":38,\"name\":\"Гороховый с копченостями\",\"qty\":1,\"price\":249,\"old_price\":0,\"line_total\":195,\"photos\":[\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\"],\"variants\":[{\"variant_group_id\":8,\"variant_value_index\":0,\"group_title\":\"Супа (Грамм)\",\"value\":\"250 г\",\"label\":\"250 г\",\"price_diff\":0}],\"auto_add\":0},{\"product_id\":12,\"name\":\"Картофельное пюре\",\"qty\":1,\"price\":1009,\"old_price\":0,\"line_total\":126,\"photos\":[\"/static/uploads/products/1/9fdc3cffd1457f84af2705bfc55c33a2.webp\"],\"variants\":[{\"variant_group_id\":4,\"variant_value_index\":0,\"group_title\":\"Гарнира (Грамм)\",\"value\":\"150 г\",\"label\":\"150 г\",\"price_diff\":0}],\"auto_add\":0},{\"product_id\":12,\"name\":\"Картофельное пюре\",\"qty\":1,\"price\":1009,\"old_price\":0,\"line_total\":290,\"photos\":[\"/static/uploads/products/1/9fdc3cffd1457f84af2705bfc55c33a2.webp\"],\"options\":[{\"id\":81,\"title\":\"Котлета по-домашнему\",\"price\":149,\"qty\":1,\"variant_group_id\":5,\"variant_value_index\":0,\"variant_label\":\"1 шт\",\"variant_price_diff\":14.900000000000006}],\"variants\":[{\"variant_group_id\":4,\"variant_value_index\":0,\"group_title\":\"Гарнира (Грамм)\",\"value\":\"150 г\",\"label\":\"150 г\",\"price_diff\":0}],\"auto_add\":0}]', 1394.00, 0.00, '2026-02-07 04:06:45', 4, 1, 2, 1, 0, '2026-02-07 12:30:00', 'web', 1),
 (158, '9055b316-1896-4e0e-b9b5-f150d1f75c68', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', NULL, 1, NULL, 'бьюти салон', 0, 1000.00, '[{\"type\":\"combo\",\"combo_id\":9,\"name\":\"Второе+суп Второе+суп Второе+суп Второе+суп\",\"qty\":1,\"price\":505,\"old_price\":0,\"line_total\":505,\"photos\":[\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\"],\"selections\":[{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"variant_label\":\"\",\"variant_group_title\":\"\",\"variant_unit\":\"\",\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":1,\"qty\":1,\"unit\":\"шт\"}]},{\"product_id\":38,\"product_name\":\"Гороховый с копченостями\",\"product_photo\":\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"variant_label\":\"250\",\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"ingredients_display\":[]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\",\"variant_label\":\"500\",\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"ingredients_display\":[]}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0}]', 505.00, 0.00, '2026-02-07 04:23:12', 4, 1, 2, 6, 0, '2026-02-07 12:30:00', 'web', 1),
 (159, '74426a16-95c4-44fa-9910-4d42b2484fc1', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', NULL, 1, NULL, NULL, 0, 0.00, '[{\"type\":\"combo\",\"combo_id\":9,\"name\":\"Второе+суп Второе+суп Второе+суп Второе+суп\",\"qty\":1,\"price\":505,\"old_price\":0,\"line_total\":505,\"photos\":[\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\"],\"selections\":[{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"variant_label\":\"\",\"variant_group_title\":\"\",\"variant_unit\":\"\",\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":1,\"qty\":1,\"unit\":\"шт\"}]},{\"product_id\":38,\"product_name\":\"Гороховый с копченостями\",\"product_photo\":\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"variant_label\":\"250\",\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"ingredients_display\":[]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\",\"variant_label\":\"500\",\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"ingredients_display\":[]}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0},{\"product_id\":8,\"name\":\"Макароны с тефтелями\",\"qty\":1,\"price\":328,\"old_price\":0,\"line_total\":328,\"photos\":[\"/static/uploads/products/1/d47962e1e258c2369161a1c86ccf0e3b.jpg\"],\"ingredients\":[{\"ingredient_id\":23,\"name\":\"Макароны\",\"quantity\":150,\"price\":0.6,\"total\":90},{\"ingredient_id\":7,\"name\":\"Тефтели с рисом\",\"quantity\":2,\"price\":89,\"total\":178}],\"auto_add\":0},{\"product_id\":47,\"name\":\"Вареники с картошкой\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":165,\"photos\":[\"/static/uploads/products/1/bfc21614af87135437c0610179da3978.jpg\"],\"variants\":[{\"variant_group_id\":10,\"variant_value_index\":0,\"group_title\":\"Порция (Штук)\",\"value\":\"10 шт\",\"label\":\"10 шт\",\"price_diff\":0}],\"auto_add\":0}]', 998.00, 0.00, '2026-02-07 04:28:10', 4, 1, 2, 6, 0, '2026-02-07 12:30:00', 'web', 1),
 (160, '1a0a44f8-9e39-47d4-9520-270820a25381', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', NULL, 1, NULL, NULL, 0, 0.00, '[{\"product_id\":46,\"name\":\"Котлета по-киевски с гречкой\",\"qty\":1,\"price\":397,\"old_price\":0,\"line_total\":397,\"photos\":[\"/static/uploads/products/1/dbdaec8d6696e654a6d6abdf7408e089.png\"],\"ingredients\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"price\":0.5933333333333334,\"total\":89},{\"ingredient_id\":27,\"name\":\"Котлета по-киевски\",\"quantity\":1,\"price\":249,\"total\":249}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0}]', 456.00, 59.00, '2026-02-07 04:28:27', 4, 1, 3, 6, 0, '2026-02-08 10:00:00', 'web', 1),
 (161, '76ae96bb-c6af-425c-b308-66356051aa6a', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', 2, 1, NULL, 'бьюти салон', 0, 500.00, '[{\"product_id\":48,\"name\":\"Гуляш с гречкой\",\"qty\":1,\"price\":284,\"old_price\":0,\"line_total\":284,\"photos\":[\"/static/uploads/products/1/428a06fdcda49526849c7850e7b8b3d0.jpg\"],\"ingredients\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"price\":0.5933333333333334,\"total\":89},{\"ingredient_id\":30,\"name\":\"Гуляш по-домашнему\",\"quantity\":90,\"price\":1.7,\"total\":153}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0}]', 343.00, 59.00, '2026-02-07 04:31:45', 4, 1, 2, 6, 0, '2026-02-07 13:30:00', 'web', 1),
-(162, '3dce7b1f-fa8b-4fae-bee6-aaf25ed8fec5', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', 2, 1, '4564апрапвввпрлороав', 'бьюти салон', 0, 0.00, '[{\"type\":\"combo\",\"combo_id\":9,\"name\":\"Второе+суп Второе+суп Второе+суп Второе+суп\",\"qty\":1,\"price\":505,\"old_price\":0,\"line_total\":505,\"photos\":[\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\"],\"selections\":[{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"variant_label\":\"\",\"variant_group_title\":\"\",\"variant_unit\":\"\",\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":1,\"qty\":1,\"unit\":\"шт\"}]},{\"product_id\":38,\"product_name\":\"Гороховый с копченостями\",\"product_photo\":\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"variant_label\":\"250\",\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"ingredients_display\":[]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\",\"variant_label\":\"500\",\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"ingredients_display\":[]}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0},{\"product_id\":8,\"name\":\"Макароны с тефтелями\",\"qty\":1,\"price\":328,\"old_price\":0,\"line_total\":328,\"photos\":[\"/static/uploads/products/1/d47962e1e258c2369161a1c86ccf0e3b.jpg\"],\"ingredients\":[{\"ingredient_id\":23,\"name\":\"Макароны\",\"quantity\":150,\"price\":0.6,\"total\":90},{\"ingredient_id\":7,\"name\":\"Тефтели с рисом\",\"quantity\":2,\"price\":89,\"total\":178}],\"auto_add\":0}]', 833.00, 0.00, '2026-02-07 04:33:38', 4, 1, 2, 6, 0, '2026-02-07 13:30:00', 'web', 1);
+(162, '3dce7b1f-fa8b-4fae-bee6-aaf25ed8fec5', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', 2, 1, '4564апрапвввпрлороав', 'бьюти салон', 0, 0.00, '[{\"type\":\"combo\",\"combo_id\":9,\"name\":\"Второе+суп Второе+суп Второе+суп Второе+суп\",\"qty\":1,\"price\":505,\"old_price\":0,\"line_total\":505,\"photos\":[\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\"],\"selections\":[{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"variant_label\":\"\",\"variant_group_title\":\"\",\"variant_unit\":\"\",\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":1,\"qty\":1,\"unit\":\"шт\"}]},{\"product_id\":38,\"product_name\":\"Гороховый с копченостями\",\"product_photo\":\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"variant_label\":\"250\",\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"ingredients_display\":[]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\",\"variant_label\":\"500\",\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"ingredients_display\":[]}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0},{\"product_id\":8,\"name\":\"Макароны с тефтелями\",\"qty\":1,\"price\":328,\"old_price\":0,\"line_total\":328,\"photos\":[\"/static/uploads/products/1/d47962e1e258c2369161a1c86ccf0e3b.jpg\"],\"ingredients\":[{\"ingredient_id\":23,\"name\":\"Макароны\",\"quantity\":150,\"price\":0.6,\"total\":90},{\"ingredient_id\":7,\"name\":\"Тефтели с рисом\",\"quantity\":2,\"price\":89,\"total\":178}],\"auto_add\":0}]', 833.00, 0.00, '2026-02-07 04:33:38', 4, 1, 2, 6, 0, '2026-02-07 13:30:00', 'web', 1),
+(163, '9315f688-97cc-4b73-9c3d-e28a35a4219b', 1, 1, 4, 'Александр', '79835549121', NULL, 'Гоголя 7', NULL, 1, NULL, NULL, 0, 0.00, '[{\"type\":\"combo\",\"combo_id\":9,\"name\":\"Второе+суп Второе+суп Второе+суп Второе+суп\",\"qty\":1,\"price\":505,\"old_price\":0,\"line_total\":505,\"photos\":[\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\"],\"selections\":[{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"variant_label\":\"\",\"variant_group_title\":\"\",\"variant_unit\":\"\",\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":1,\"qty\":1,\"unit\":\"шт\"}]},{\"product_id\":38,\"product_name\":\"Гороховый с копченостями\",\"product_photo\":\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"variant_label\":\"250\",\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"ingredients_display\":[]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\",\"variant_label\":\"500\",\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"ingredients_display\":[]}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0}]', 505.00, 0.00, '2026-02-07 10:09:56', 4, 1, 3, 1, 0, '2026-02-08 10:00:00', 'web', 1),
+(164, 'daf7f5d8-866e-4de3-bd37-191e520c8fa3', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', 2, 1, NULL, 'бьюти салон', 0, 0.00, '[{\"type\":\"combo\",\"combo_id\":9,\"name\":\"Второе+суп Второе+суп Второе+суп Второе+суп\",\"qty\":1,\"price\":505,\"old_price\":0,\"line_total\":505,\"photos\":[\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\"],\"selections\":[{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"variant_label\":\"\",\"variant_group_title\":\"\",\"variant_unit\":\"\",\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":1,\"qty\":1,\"unit\":\"шт\"}]},{\"product_id\":38,\"product_name\":\"Гороховый с копченостями\",\"product_photo\":\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"variant_label\":\"250\",\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"ingredients_display\":[]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\",\"variant_label\":\"500\",\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"ingredients_display\":[]}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0}]', 505.00, 0.00, '2026-02-07 10:16:09', 4, 1, 1, 1, 0, NULL, 'web', 1),
+(165, '0b077f43-2c59-45cb-993f-e382674e8e0e', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', 2, 1, NULL, 'бьюти салон', 0, 0.00, '[{\"type\":\"combo\",\"combo_id\":9,\"name\":\"Второе+суп Второе+суп Второе+суп Второе+суп\",\"qty\":1,\"price\":505,\"old_price\":0,\"line_total\":505,\"photos\":[\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\"],\"selections\":[{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/7d1a8f6e36ba24bb8981c2b67eeb8b93.jpg\",\"variant_label\":\"\",\"variant_group_title\":\"\",\"variant_unit\":\"\",\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":1,\"qty\":1,\"unit\":\"шт\"}]},{\"product_id\":38,\"product_name\":\"Гороховый с копченостями\",\"product_photo\":\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"variant_label\":\"250\",\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"ingredients_display\":[]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\",\"variant_label\":\"500\",\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"ingredients_display\":[]}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0}]', 505.00, 0.00, '2026-02-07 10:16:59', 4, 1, 1, 6, 0, NULL, 'web', 1),
+(166, 'eb205b14-bde7-48e9-8a75-26914e6f849f', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', 2, 1, NULL, NULL, 0, 0.00, '[{\"product_id\":40,\"name\":\"Жареная картошка\",\"qty\":1,\"price\":200,\"old_price\":0,\"line_total\":200,\"photos\":[\"/static/uploads/products/1/2987a8ec41f868a8261a8e1a2313dde6.jpg\"],\"ingredients\":[{\"ingredient_id\":65,\"name\":\"Лук репчатый\",\"quantity\":0,\"price\":1000,\"total\":0},{\"ingredient_id\":66,\"name\":\"Шампиньоны\",\"quantity\":0,\"price\":2500,\"total\":0},{\"ingredient_id\":68,\"name\":\"Масло с зеленью\",\"quantity\":0,\"price\":2700,\"total\":0}],\"variants\":[{\"variant_group_id\":4,\"variant_value_index\":1,\"group_title\":\"Гарнира (Грамм)\",\"value\":\"250 г\",\"label\":\"250 г\",\"price_diff\":0}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0},{\"product_id\":12,\"name\":\"Картофельное пюре\",\"qty\":1,\"price\":1009,\"old_price\":0,\"line_total\":126,\"photos\":[\"/static/uploads/products/1/9fdc3cffd1457f84af2705bfc55c33a2.webp\"],\"variants\":[{\"variant_group_id\":4,\"variant_value_index\":0,\"group_title\":\"Гарнира (Грамм)\",\"value\":\"150 г\",\"label\":\"150 г\",\"price_diff\":0}],\"auto_add\":0},{\"product_id\":21,\"name\":\"Гречка с овощами\",\"qty\":1,\"price\":89,\"old_price\":0,\"line_total\":97,\"photos\":[\"/static/uploads/products/1/ccbfd8c94a01992063130008a89452ca.webp\"],\"variants\":[{\"variant_group_id\":4,\"variant_value_index\":0,\"group_title\":\"Гарнира (Грамм)\",\"value\":\"150 г\",\"label\":\"150 г\",\"price_diff\":0}],\"auto_add\":0}]', 423.00, 0.00, '2026-02-07 10:17:37', 4, 1, 1, 6, 0, NULL, 'web', 1),
+(167, '67020f4a-eb96-4722-b136-7d37bb96a607', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', 2, 1, NULL, 'бьюти салон', 0, 0.00, '[{\"product_id\":38,\"name\":\"Гороховый с копченостями\",\"qty\":1,\"price\":249,\"old_price\":0,\"line_total\":195,\"photos\":[\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\"],\"variants\":[{\"variant_group_id\":8,\"variant_value_index\":0,\"group_title\":\"Супа (Грамм)\",\"value\":\"250 г\",\"label\":\"250 г\",\"price_diff\":0}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0}]', 254.00, 59.00, '2026-02-07 10:18:48', 4, 1, 1, 6, 0, NULL, 'web', 1),
+(168, 'd07235a7-e99c-467c-a204-631692289ec2', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', 2, 1, NULL, 'бьюти салон', 0, 0.00, '[{\"product_id\":39,\"name\":\"Тефтели с пюре\",\"qty\":1,\"price\":293,\"old_price\":0,\"line_total\":293,\"photos\":[\"/static/uploads/products/1/97f3015b45f4aad749bb4bae10190c93.jpg\"],\"ingredients\":[{\"ingredient_id\":12,\"name\":\"Картофельное пюре\",\"quantity\":150,\"price\":0.7689489718202589,\"total\":115.34234577303883},{\"ingredient_id\":7,\"name\":\"Тефтели с рисом\",\"quantity\":2,\"price\":89,\"total\":178}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0}]', 352.00, 59.00, '2026-02-07 10:19:11', 4, 1, 1, 6, 0, NULL, 'web', 1),
+(169, 'fbab6bc4-ae12-4576-ba65-df21aea1a1f3', 1, 1, 4, 'Александр', '79835549121', NULL, 'Гоголя 7', NULL, 1, 'тест', NULL, 0, 1000.00, '[{\"product_id\":40,\"name\":\"Жареная картошка\",\"qty\":1,\"price\":200,\"old_price\":0,\"line_total\":280,\"photos\":[\"/static/uploads/products/1/2987a8ec41f868a8261a8e1a2313dde6.jpg\"],\"ingredients\":[{\"ingredient_id\":65,\"name\":\"Лук репчатый\",\"quantity\":0,\"price\":1000,\"total\":0},{\"ingredient_id\":66,\"name\":\"Шампиньоны\",\"quantity\":0,\"price\":2500,\"total\":0},{\"ingredient_id\":68,\"name\":\"Масло с зеленью\",\"quantity\":0,\"price\":2700,\"total\":0}],\"variants\":[{\"variant_group_id\":4,\"variant_value_index\":2,\"group_title\":\"Гарнира (Грамм)\",\"value\":\"350 г\",\"label\":\"350 г\",\"price_diff\":0}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0},{\"product_id\":62,\"name\":\"Пельмени с курицей\",\"qty\":2,\"price\":18,\"old_price\":0,\"line_total\":396,\"photos\":[\"/static/uploads/products/1/d3b6ac736bb3667dd303ab87e9b72071.png\"],\"variants\":[{\"variant_group_id\":10,\"variant_value_index\":0,\"group_title\":\"Порция (Штук)\",\"value\":\"10 шт\",\"label\":\"10 шт\",\"price_diff\":0}],\"auto_add\":0}]', 676.00, 0.00, '2026-02-07 10:21:57', 4, 1, 3, 6, 0, '2026-02-08 10:00:00', 'web', 1),
+(170, '67327117-f8f7-40a2-98e9-680a0e34d9b6', 1, 1, 1, 'Максим', '79021461966', NULL, 'Октябрьская 25, подъезд 1, этаж 4, кв 45', 2, 1, NULL, 'бьюти салон', 0, 0.00, '[{\"product_id\":8,\"name\":\"Макароны с тефтелями\",\"qty\":1,\"price\":328,\"old_price\":0,\"line_total\":328,\"photos\":[\"/static/uploads/products/1/d47962e1e258c2369161a1c86ccf0e3b.jpg\"],\"ingredients\":[{\"ingredient_id\":23,\"name\":\"Макароны\",\"quantity\":150,\"price\":0.6,\"total\":90},{\"ingredient_id\":7,\"name\":\"Тефтели с рисом\",\"quantity\":2,\"price\":89,\"total\":178}],\"auto_add\":0},{\"product_id\":59,\"name\":\"Приборы\",\"qty\":1,\"price\":15,\"old_price\":0,\"line_total\":0,\"photos\":[\"/static/uploads/products/1/14c44e5ce024bc2f9824aca52360ef00.jpg\"],\"auto_add\":0}]', 387.00, 59.00, '2026-02-07 10:42:38', 4, 1, 1, 6, 0, NULL, 'web', 1);
 
 -- --------------------------------------------------------
 
@@ -485,7 +493,7 @@ CREATE TABLE `order_payments` (
 
 INSERT INTO `order_payments` (`id`, `tenant_id`, `store_id`, `code`, `title`, `icon`, `sort`, `is_active`, `created_at`, `updated_at`) VALUES
 (1, 1, 1, 'cash', 'Наличные', 'fa-money-bill-wave', 1, 1, '2026-01-02 19:03:40', '2026-01-02 19:03:40'),
-(2, 1, 1, 'card', 'Картой', 'fa-credit-card', 2, 1, '2026-01-02 19:03:40', '2026-01-02 19:03:40'),
+(2, 1, 1, 'card', 'Картой / QR', 'fa-credit-card', 2, 1, '2026-01-02 19:03:40', '2026-02-07 15:28:55'),
 (3, 1, 1, 'online', 'Онлайн', 'fa-globe', 3, 0, '2026-01-02 19:03:40', '2026-01-25 15:29:39');
 
 -- --------------------------------------------------------
@@ -578,7 +586,32 @@ CREATE TABLE `print_api_tokens` (
 
 INSERT INTO `print_api_tokens` (`id`, `tenant_id`, `store_id`, `token`, `is_active`, `created_at`, `updated_at`, `last_used_at`) VALUES
 (1, 1, 1, '2d71b13429835042416cad5d97eefccbcd0187519ce9b8e3c92dcabfdce51aaa', 1, '2026-02-05 17:14:15', '2026-02-07 12:14:31', '2026-02-07 10:40:04'),
-(5, 1, 2, '749706313fcce46e91ee60fb39a1ba5ebe88b82ab4a2a463d172c1de201ec71e', 1, '2026-02-07 12:15:06', '2026-02-07 12:15:06', NULL);
+(5, 1, 2, '08854a02d29c4a9c7d3af04d2d4cdcc3e19dce8cd58e74491b02705d8c4365f4', 1, '2026-02-07 12:15:06', '2026-02-07 12:16:59', NULL);
+
+-- --------------------------------------------------------
+
+--
+-- Структура таблицы `print_templates`
+--
+
+CREATE TABLE `print_templates` (
+  `id` int NOT NULL,
+  `tenant_id` int NOT NULL,
+  `store_id` int NOT NULL,
+  `title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'Default',
+  `template_html` longtext COLLATE utf8mb4_unicode_ci,
+  `is_active` tinyint DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Дамп данных таблицы `print_templates`
+--
+
+INSERT INTO `print_templates` (`id`, `tenant_id`, `store_id`, `title`, `template_html`, `is_active`, `created_at`, `updated_at`) VALUES
+(1, 1, 2, 'Default Receipt', '', 1, '2026-02-07 15:26:14', '2026-02-07 15:26:14'),
+(2, 1, 1, 'Default Receipt', '', 1, '2026-02-07 15:26:14', '2026-02-07 15:26:14');
 
 -- --------------------------------------------------------
 
@@ -1943,13 +1976,6 @@ CREATE TABLE `ten_store_telegram` (
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
---
--- Дамп данных таблицы `ten_store_telegram`
---
-
-INSERT INTO `ten_store_telegram` (`id`, `tenant_id`, `store_id`, `telegram_chat_id`, `connect_token`, `connect_token_expires_at`, `secret_key`, `label`, `created_at`) VALUES
-(17, 1, 1, 915611204, NULL, NULL, '3bf28e72d009bd9c0d5392fba16a7988', NULL, '2026-02-07 03:37:27');
-
 -- --------------------------------------------------------
 
 --
@@ -2005,6 +2031,51 @@ CREATE TABLE `ten_tenants` (
 
 INSERT INTO `ten_tenants` (`id`, `store_id`, `name`, `slug`, `subdomain`, `email`, `password_hash`, `phone`, `is_active`, `created_at`, `updated_at`, `logo_light_url`, `logo_dark_url`, `favicon_light_url`, `favicon_dark_url`, `apple_touch_icon_url`, `android_icon_url`, `price_rounding_mode`, `price_rounding_precision`, `timezone`, `site_name`, `site_description`, `custom_domain`, `sound_new_order_url`, `sound_order_cancelled_url`, `sound_new_message_url`) VALUES
 (1, 1, 'По щам - домашняя еда с доставкой', NULL, 'posham', 'admin@test.ru', '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', 'admin@test.ru', 1, '2026-01-21 13:07:16', '2026-02-02 07:51:02', '/static/uploads/tenants/1/2bcab539a2056f905b05b2fe1e6175ca.png', '/static/uploads/tenants/1/1c30d7740e24c5295301e5190bb9a8a1.png', '/static/uploads/tenants/1/87a8ced908be6c4daaed371594cfde4c.png', '/static/uploads/tenants/1/ae6927d41ab198580ec4c62af9f32e14.png', '/static/uploads/tenants/1/0a831832a7329001b3146abea34abf26.png', '/static/uploads/tenants/1/92b6768e0ba0233bdbdf6b5a9723e8bd.png', 'down', 0, NULL, 'По щам', NULL, NULL, '/static/uploads/tenants/1/sounds/3cded567d63fabaed72171f6093a0c1e.mp3', '/static/uploads/tenants/1/sounds/e0b30de53ccb7cdd20fa32c0fbb800db.mp3', '/static/uploads/tenants/1/sounds/fb3304169927ffa0144d4967880f0873.mp3');
+
+-- --------------------------------------------------------
+
+--
+-- Структура таблицы `ten_tenant_telegram`
+--
+
+CREATE TABLE `ten_tenant_telegram` (
+  `id` int NOT NULL,
+  `tenant_id` int NOT NULL,
+  `telegram_chat_id` bigint DEFAULT NULL,
+  `connect_token` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `connect_token_expires_at` datetime DEFAULT NULL,
+  `secret_key` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `label` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Дамп данных таблицы `ten_tenant_telegram`
+--
+
+INSERT INTO `ten_tenant_telegram` (`id`, `tenant_id`, `telegram_chat_id`, `connect_token`, `connect_token_expires_at`, `secret_key`, `label`, `created_at`) VALUES
+(1, 1, 915611204, NULL, NULL, '55397fec1c1b5ef0258a4d9830f7b5aa', NULL, '2026-02-07 10:14:08');
+
+-- --------------------------------------------------------
+
+--
+-- Структура таблицы `ten_tenant_telegram_stores`
+--
+
+CREATE TABLE `ten_tenant_telegram_stores` (
+  `id` int NOT NULL,
+  `tenant_telegram_id` int NOT NULL,
+  `store_id` int NOT NULL,
+  `is_enabled` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Дамп данных таблицы `ten_tenant_telegram_stores`
+--
+
+INSERT INTO `ten_tenant_telegram_stores` (`id`, `tenant_telegram_id`, `store_id`, `is_enabled`, `created_at`) VALUES
+(1, 1, 1, 1, '2026-02-07 10:14:31');
 
 --
 -- Индексы сохранённых таблиц
@@ -2117,6 +2188,14 @@ ALTER TABLE `print_api_tokens`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `uniq_token` (`token`),
   ADD UNIQUE KEY `uniq_store` (`tenant_id`,`store_id`),
+  ADD KEY `idx_active` (`is_active`);
+
+--
+-- Индексы таблицы `print_templates`
+--
+ALTER TABLE `print_templates`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `unique_default` (`tenant_id`,`store_id`),
   ADD KEY `idx_active` (`is_active`);
 
 --
@@ -2376,6 +2455,25 @@ ALTER TABLE `ten_tenants`
   ADD PRIMARY KEY (`id`);
 
 --
+-- Индексы таблицы `ten_tenant_telegram`
+--
+ALTER TABLE `ten_tenant_telegram`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `connect_token_unique` (`connect_token`),
+  ADD UNIQUE KEY `secret_key_unique` (`secret_key`),
+  ADD UNIQUE KEY `unique_tenant_chat` (`tenant_id`,`telegram_chat_id`),
+  ADD KEY `tenant_id` (`tenant_id`);
+
+--
+-- Индексы таблицы `ten_tenant_telegram_stores`
+--
+ALTER TABLE `ten_tenant_telegram_stores`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `unique_telegram_store` (`tenant_telegram_id`,`store_id`),
+  ADD KEY `tenant_telegram_id` (`tenant_telegram_id`),
+  ADD KEY `store_id` (`store_id`);
+
+--
 -- AUTO_INCREMENT для сохранённых таблиц
 --
 
@@ -2443,7 +2541,13 @@ ALTER TABLE `order_time_options`
 -- AUTO_INCREMENT для таблицы `print_api_tokens`
 --
 ALTER TABLE `print_api_tokens`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+
+--
+-- AUTO_INCREMENT для таблицы `print_templates`
+--
+ALTER TABLE `print_templates`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_auto_add_groups`
@@ -2593,12 +2697,24 @@ ALTER TABLE `ten_store_telegram`
 -- AUTO_INCREMENT для таблицы `ten_telegram_pending`
 --
 ALTER TABLE `ten_telegram_pending`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT для таблицы `ten_tenants`
 --
 ALTER TABLE `ten_tenants`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+
+--
+-- AUTO_INCREMENT для таблицы `ten_tenant_telegram`
+--
+ALTER TABLE `ten_tenant_telegram`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+
+--
+-- AUTO_INCREMENT для таблицы `ten_tenant_telegram_stores`
+--
+ALTER TABLE `ten_tenant_telegram_stores`
   MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
 
 --
@@ -2722,6 +2838,12 @@ ALTER TABLE `prod_variant_groups`
 --
 ALTER TABLE `ten_store_hours`
   ADD CONSTRAINT `ten_store_hours_ibfk_1` FOREIGN KEY (`tenant_id`,`store_id`) REFERENCES `ten_stores` (`tenant_id`, `id`);
+
+--
+-- Ограничения внешнего ключа таблицы `ten_tenant_telegram_stores`
+--
+ALTER TABLE `ten_tenant_telegram_stores`
+  ADD CONSTRAINT `fk_tenant_telegram` FOREIGN KEY (`tenant_telegram_id`) REFERENCES `ten_tenant_telegram` (`id`) ON DELETE CASCADE;
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;

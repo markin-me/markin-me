@@ -52,7 +52,7 @@ async function processUpdate(db, apiBase, update) {
     }
 
     const secretKey = crypto.randomBytes(16).toString('hex');
-    const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     await db.query(
       'INSERT INTO ten_telegram_pending (telegram_chat_id, secret_key, expires_at) VALUES (?, ?, ?)',
       [chatId, secretKey, expiresAt]
