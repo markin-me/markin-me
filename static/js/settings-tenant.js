@@ -385,6 +385,7 @@
     const orderDeliveryCard = document.getElementById("settingsOrderDeliveryCard");
     const orderTimeOptionsCard = document.getElementById("settingsOrderTimeOptionsCard");
     const soundsCard = document.getElementById("settingsSoundsCard");
+    const notificationsCard = document.getElementById("settingsNotificationsCard");
     const printApiCard = document.getElementById("settingsPrintApiCard");
     const rightDefault = document.getElementById("settingsRightDefault");
     const logoPanel = document.getElementById("settingsLogoPanel");
@@ -801,6 +802,7 @@
       if (orderDeliveryPanel) orderDeliveryPanel.classList.toggle("hidden", tabId !== "order-delivery");
       if (orderTimeOptionsPanel) orderTimeOptionsPanel.classList.toggle("hidden", tabId !== "order-time-options");
       if (soundsPanel) soundsPanel.classList.toggle("hidden", tabId !== "sounds");
+      if (settingsNotificationsPanel) settingsNotificationsPanel.classList.toggle("hidden", tabId !== "notifications");
       if (printApiPanel) printApiPanel.classList.toggle("hidden", tabId !== "print-api");
       if (settingsDeliveryPanel) settingsDeliveryPanel.classList.toggle("hidden", tabId !== DELIVERY_TAB_ID);
       if (settingsStorePanel) settingsStorePanel.classList.toggle("hidden", !tabId.startsWith("store-"));
@@ -821,6 +823,9 @@
       }
       if (tabId === "print-api") {
         ensurePrintApiReady();
+      }
+      if (tabId === "notifications") {
+        loadNotificationsOverview();
       }
     }
 
@@ -961,6 +966,12 @@
       });
     }
 
+    if (notificationsCard) {
+      notificationsCard.addEventListener("click", () => {
+        ensureTab("notifications", "Уведомления");
+      });
+    }
+
     if (printApiCard) {
       printApiCard.addEventListener("click", () => {
         ensureTab("print-api", "API");
@@ -978,6 +989,8 @@
       settingsPrintApiGenerateBtn.addEventListener("click", () => {
         const storeId = Number(settingsPrintApiStore && settingsPrintApiStore.value);
         if (storeId) generatePrintApiToken(storeId);
+      });
+    }
 
     if (settingsStoreTelegramList) {
       settingsStoreTelegramList.addEventListener("click", async (e) => {
@@ -1002,6 +1015,10 @@
           if (value) await navigator.clipboard.writeText(value);
         } catch (err) {
           console.error("Не удалось скопировать токен:", err);
+        }
+      });
+    }
+
     if (settingsStoreTelegramAddByKeysBtn) {
       settingsStoreTelegramAddByKeysBtn.addEventListener("click", async () => {
         const storeId = storesState.selectedId;
