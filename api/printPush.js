@@ -148,13 +148,16 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId }) {
 
   const pdfBuffer = await renderPdfFromHtml(html);
   if (!pdfBuffer || !pdfBuffer.length) return false;
+  const pdfBase64 = Buffer.isBuffer(pdfBuffer)
+    ? pdfBuffer.toString("base64")
+    : Buffer.from(pdfBuffer).toString("base64");
 
   const payload = {
     order: {
       id: order.id,
       public_id: order.public_id
     },
-    pdf_base64: pdfBuffer.toString("base64")
+    pdf_base64: pdfBase64
   };
 
   await postToBot(token, payload);
