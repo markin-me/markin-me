@@ -409,7 +409,13 @@
     const orderTimeOptionsPanel = document.getElementById("settingsOrderTimeOptionsPanel");
     const soundsPanel = document.getElementById("settingsSoundsPanel");
     const settingsNotificationsPanel = document.getElementById("settingsNotificationsPanel");
-    const notificationsStoresList = document.getElementById("notificationsStoresList");
+    const globalTelegramBindings = document.getElementById("globalTelegramBindings");
+    const globalTelegramConnectBlock = document.getElementById("globalTelegramConnectBlock");
+    const globalTelegramApiKey = document.getElementById("globalTelegramApiKey");
+    const globalTelegramSecretKey = document.getElementById("globalTelegramSecretKey");
+    const globalTelegramAddBtn = document.getElementById("globalTelegramAddBtn");
+    const globalTelegramToggleBtn = document.getElementById("globalTelegramToggleBtn");
+    const globalTelegramCancelBtn = document.getElementById("globalTelegramCancelBtn");
     const settingsPriceRoundingMode = document.getElementById("settingsPriceRoundingMode");
     const settingsPriceRoundingPrecision = document.getElementById("settingsPriceRoundingPrecision");
     const rightTabs = document.getElementById("settingsRightTabs");
@@ -439,15 +445,13 @@
     const settingsStoreHoursContainer = document.getElementById("settingsStoreHoursContainer");
     const settingsStoreDeliveryHoursSwitch = document.getElementById("settingsStoreDeliveryHoursSameSwitch");
     const settingsStoreDeliveryHoursContainer = document.getElementById("settingsStoreDeliveryHoursContainer");
-    const settingsStoreTelegramStatus = document.getElementById("settingsStoreTelegramStatus");
-    const settingsStoreTelegramActions = document.getElementById("settingsStoreTelegramActions");
-    const settingsStoreTelegramConnectBtn = document.getElementById("settingsStoreTelegramConnectBtn");
-    const settingsStoreTelegramLinkBox = document.getElementById("settingsStoreTelegramLinkBox");
-    const settingsStoreTelegramLink = document.getElementById("settingsStoreTelegramLink");
     const settingsStoreTelegramList = document.getElementById("settingsStoreTelegramList");
     const settingsStoreTelegramApiKey = document.getElementById("settingsStoreTelegramApiKey");
     const settingsStoreTelegramSecretKey = document.getElementById("settingsStoreTelegramSecretKey");
     const settingsStoreTelegramAddByKeysBtn = document.getElementById("settingsStoreTelegramAddByKeysBtn");
+    const settingsStoreTelegramToggleBtn = document.getElementById("settingsStoreTelegramToggleBtn");
+    const settingsStoreTelegramConnectBlock = document.getElementById("settingsStoreTelegramConnectBlock");
+    const settingsStoreTelegramCancelBtn = document.getElementById("settingsStoreTelegramCancelBtn");
 
     const storesState = {
       loaded: false,
@@ -971,47 +975,6 @@
       });
     }
 
-    if (settingsStoreTelegramConnectBtn) {
-      settingsStoreTelegramConnectBtn.addEventListener("click", async () => {
-        const storeId = storesState.selectedId;
-        if (!storeId) return;
-        try {
-          const bindRes = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/telegram");
-          const bindData = await bindRes.json();
-          const countBefore = (bindData && bindData.ok && bindData.bindings) ? bindData.bindings.length : 0;
-
-          const res = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/telegram/connect", { method: "POST" });
-          const data = await res.json();
-          if (!data || !data.ok) {
-            alert(data.error || "Ошибка");
-            return;
-          }
-          if (data.link && settingsStoreTelegramLink) {
-            settingsStoreTelegramLink.href = data.link;
-            settingsStoreTelegramLink.textContent = data.link;
-            if (settingsStoreTelegramLinkBox) settingsStoreTelegramLinkBox.classList.remove("hidden");
-            let pollCount = 0;
-            const pollInterval = setInterval(() => {
-              pollCount++;
-              loadStoreTelegramBindings(storeId).then(() => {
-                const list = settingsStoreTelegramList;
-                const currentCount = list ? list.querySelectorAll(".store-telegram-item").length : 0;
-                if (currentCount > countBefore) {
-                  clearInterval(pollInterval);
-                  if (settingsStoreTelegramLinkBox) settingsStoreTelegramLinkBox.classList.add("hidden");
-                }
-              });
-              if (pollCount >= 30) clearInterval(pollInterval);
-            }, 2000);
-          } else {
-            alert("Укажите TELEGRAM_BOT_USERNAME в настройках сервера для ссылки.");
-          }
-        } catch (e) {
-          alert("Ошибка запроса");
-        }
-      });
-    }
-
     if (settingsStoreTelegramList) {
       settingsStoreTelegramList.addEventListener("click", async (e) => {
         const btn = e.target.closest("button[data-binding-id]");
@@ -1050,6 +1013,7 @@
           }
           if (settingsStoreTelegramApiKey) settingsStoreTelegramApiKey.value = "";
           if (settingsStoreTelegramSecretKey) settingsStoreTelegramSecretKey.value = "";
+          if (settingsStoreTelegramConnectBlock) settingsStoreTelegramConnectBlock.classList.add("hidden");
           loadStoreTelegramBindings(storeId);
         } catch (e) {
           alert("Ошибка запроса");
@@ -1057,22 +1021,6 @@
       });
     }
 
-    if (notificationsStoresList) {
-      notificationsStoresList.addEventListener("click", (e) => {
-        const btn = e.target.closest("button[data-notif-store-id]");
-        if (!btn) return;
-        const storeId = btn.getAttribute("data-notif-store-id");
-        if (!storeId) return;
-        const storeBtn = document.querySelector("[data-settings-section=\"stores\"]");
-        if (storeBtn) storeBtn.click();
-        setTimeout(() => {
-          loadStores().then(() => {
-            const store = storesState.items.find((s) => String(s.id) === String(storeId));
-            if (store) selectStore(store);
-          });
-        }, 100);
-      });
-    }
 
     function startCreateStore() {
       const tabId = `store-new-${Date.now()}`;
@@ -1316,10 +1264,8 @@
       }
       if (mode === "create") {
         if (settingsStoreSubtitle) settingsStoreSubtitle.textContent = "Новая точка";
-        if (settingsStoreTelegramStatus) settingsStoreTelegramStatus.textContent = "Сначала сохраните филиал";
-        if (settingsStoreTelegramLinkBox) settingsStoreTelegramLinkBox.classList.add("hidden");
-        if (settingsStoreTelegramList) { settingsStoreTelegramList.classList.add("hidden"); settingsStoreTelegramList.innerHTML = ""; }
-        if (settingsStoreTelegramConnectBtn) settingsStoreTelegramConnectBtn.style.display = "none";
+        if (settingsStoreTelegramList) settingsStoreTelegramList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">Сначала сохраните филиал</span></div></div>";
+        if (settingsStoreTelegramConnectBlock) settingsStoreTelegramConnectBlock.classList.add("hidden");
         if (settingsStoreName) settingsStoreName.value = "";
         if (settingsStoreCode) settingsStoreCode.value = "";
         if (settingsStoreAddress) settingsStoreAddress.value = "";
@@ -1438,18 +1384,13 @@
     }
 
     async function loadStoreTelegramBindings(storeId) {
-      if (!settingsStoreTelegramStatus) return;
-      settingsStoreTelegramStatus.textContent = "Загрузка…";
-      if (settingsStoreTelegramLinkBox) settingsStoreTelegramLinkBox.classList.add("hidden");
-      if (settingsStoreTelegramList) {
-        settingsStoreTelegramList.classList.add("hidden");
-        settingsStoreTelegramList.innerHTML = "";
-      }
+      if (!settingsStoreTelegramList) return;
+      settingsStoreTelegramList.innerHTML = "<div class=\"muted\">Загрузка…</div>";
       try {
         const res = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/telegram");
         const data = await res.json();
         if (!data || !data.ok) {
-          settingsStoreTelegramStatus.textContent = "Ошибка загрузки";
+          settingsStoreTelegramList.innerHTML = "";
           return;
         }
         let bindings = data.bindings || [];
@@ -1459,55 +1400,267 @@
           if (cid && !byChatId.has(cid)) byChatId.set(cid, b);
         });
         bindings = Array.from(byChatId.values());
+        settingsStoreTelegramList.innerHTML = "";
         if (bindings.length === 0) {
-          settingsStoreTelegramStatus.textContent = "Не подключено";
-          if (settingsStoreTelegramConnectBtn) settingsStoreTelegramConnectBtn.style.display = "";
-        } else {
-          settingsStoreTelegramStatus.textContent = "Подключено чатов: " + bindings.length;
-          if (settingsStoreTelegramConnectBtn) settingsStoreTelegramConnectBtn.style.display = "";
-          if (settingsStoreTelegramList) {
-            settingsStoreTelegramList.classList.remove("hidden");
-            bindings.forEach((b) => {
-              const li = document.createElement("li");
-              li.className = "store-telegram-item";
-              const apiKey = b.telegram_chat_id != null ? String(b.telegram_chat_id) : "";
-              const secretKey = b.secret_key ? String(b.secret_key) : "";
-              li.innerHTML = "<div class=\"store-telegram-binding\"><span class=\"muted\">API key: " + apiKey + (secretKey ? ", Secret key: " + secretKey : "") + "</span> <button type=\"button\" class=\"btn btn-link btn-sm\" data-binding-id=\"" + (b.id || "") + "\">Отключить</button></div>";
-              settingsStoreTelegramList.appendChild(li);
-            });
-          }
+          settingsStoreTelegramList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">Нет подключённых аккаунтов</span></div></div>";
+          return;
         }
+        bindings.forEach((b) => {
+          const bindingEl = document.createElement("div");
+          bindingEl.className = "global-telegram-binding";
+          bindingEl.dataset.bindingId = b.id;
+
+          const header = document.createElement("div");
+          header.className = "global-telegram-header";
+
+          const apiKeySpan = document.createElement("span");
+          apiKeySpan.className = "global-telegram-api-key";
+          apiKeySpan.textContent = "API: " + (b.telegram_chat_id || "—");
+          header.appendChild(apiKeySpan);
+
+          const actions = document.createElement("div");
+          actions.className = "global-telegram-actions";
+
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "btn btn-icon btn-sm btn-danger-text";
+          deleteBtn.title = "Отключить";
+          deleteBtn.dataset.bindingId = b.id || "";
+          deleteBtn.innerHTML = "<i class=\"fas fa-times\"></i>";
+          actions.appendChild(deleteBtn);
+
+          header.appendChild(actions);
+          bindingEl.appendChild(header);
+          settingsStoreTelegramList.appendChild(bindingEl);
+        });
       } catch (e) {
-        settingsStoreTelegramStatus.textContent = "Ошибка загрузки";
+        settingsStoreTelegramList.innerHTML = "";
       }
     }
 
+    // Обработчик "+" для показа формы добавления (филиал)
+    if (settingsStoreTelegramToggleBtn) {
+      settingsStoreTelegramToggleBtn.addEventListener("click", () => {
+        if (settingsStoreTelegramConnectBlock) {
+          settingsStoreTelegramConnectBlock.classList.toggle("hidden");
+        }
+      });
+    }
+
+    // Обработчик "Отмена" для скрытия формы (филиал)
+    if (settingsStoreTelegramCancelBtn) {
+      settingsStoreTelegramCancelBtn.addEventListener("click", () => {
+        if (settingsStoreTelegramConnectBlock) {
+          settingsStoreTelegramConnectBlock.classList.add("hidden");
+        }
+        if (settingsStoreTelegramApiKey) settingsStoreTelegramApiKey.value = "";
+        if (settingsStoreTelegramSecretKey) settingsStoreTelegramSecretKey.value = "";
+      });
+    }
+
     async function loadNotificationsOverview() {
-      if (!notificationsStoresList) return;
-      notificationsStoresList.innerHTML = "<div class=\"muted\">Загрузка…</div>";
+      await loadGlobalTelegramBindings();
+    }
+
+    async function loadGlobalTelegramBindings() {
+      if (!globalTelegramBindings) return;
+      globalTelegramBindings.innerHTML = "<div class=\"muted\">Загрузка…</div>";
       try {
-        const res = await authFetch("/api/admin/tenant/notifications");
+        const res = await authFetch("/api/admin/tenant/telegram");
         const data = await res.json();
         if (!data || !data.ok) {
-          notificationsStoresList.innerHTML = "<div class=\"muted\">Ошибка загрузки</div>";
+          globalTelegramBindings.innerHTML = "";
           return;
         }
+        const bindings = data.bindings || [];
         const stores = data.stores || [];
-        if (stores.length === 0) {
-          notificationsStoresList.innerHTML = "<div class=\"muted\">Нет филиалов</div>";
+        globalTelegramBindings.innerHTML = "";
+
+        if (bindings.length === 0) {
+          globalTelegramBindings.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">Нет подключённых аккаунтов</span></div></div>";
           return;
         }
-        notificationsStoresList.innerHTML = "";
-        stores.forEach((s) => {
-          const row = document.createElement("div");
-          row.className = "settings-card order-row product-row";
-          const status = s.telegram_count > 0 ? "Подключено чатов: " + s.telegram_count : "Не подключено";
-          row.innerHTML = "<div class=\"order-col\"><div class=\"product-title\">" + (s.name || "Филиал #" + s.id) + "</div><div class=\"muted\">" + status + "</div></div><div class=\"order-col\"><button type=\"button\" class=\"btn btn-primary btn-sm\" data-notif-store-id=\"" + s.id + "\">Настроить</button></div>";
-          notificationsStoresList.appendChild(row);
+
+        bindings.forEach((b) => {
+          const bindingEl = document.createElement("div");
+          bindingEl.className = "global-telegram-binding";
+          bindingEl.dataset.bindingId = b.id;
+
+          // Компактный заголовок: API key + шестерёнка + отключить
+          const header = document.createElement("div");
+          header.className = "global-telegram-header";
+
+          const apiKeySpan = document.createElement("span");
+          apiKeySpan.className = "global-telegram-api-key";
+          apiKeySpan.textContent = "API: " + (b.telegram_chat_id || "—");
+          header.appendChild(apiKeySpan);
+
+          const actions = document.createElement("div");
+          actions.className = "global-telegram-actions";
+
+          // Кнопка шестерёнки для раскрытия филиалов
+          if (stores.length > 0) {
+            const gearBtn = document.createElement("button");
+            gearBtn.type = "button";
+            gearBtn.className = "btn btn-icon btn-sm global-telegram-gear";
+            gearBtn.title = "Настройки филиалов";
+            gearBtn.dataset.globalTelegramGear = b.id;
+            gearBtn.innerHTML = "<i class=\"fas fa-cog\"></i>";
+            actions.appendChild(gearBtn);
+          }
+
+          // Кнопка удаления
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "btn btn-icon btn-sm btn-danger-text";
+          deleteBtn.title = "Отключить";
+          deleteBtn.dataset.globalTelegramDelete = b.id;
+          deleteBtn.innerHTML = "<i class=\"fas fa-times\"></i>";
+          actions.appendChild(deleteBtn);
+
+          header.appendChild(actions);
+          bindingEl.appendChild(header);
+
+          // Аккордеон с филиалами (скрыт по умолчанию)
+          if (stores.length > 0) {
+            const storesSection = document.createElement("div");
+            storesSection.className = "global-telegram-stores hidden";
+            storesSection.dataset.storesFor = b.id;
+
+            const storesList = document.createElement("div");
+            storesList.className = "global-telegram-stores-list";
+
+            const enabledStoreIds = new Set((b.store_settings || []).filter(s => s.is_enabled).map(s => s.store_id));
+
+            stores.forEach((store) => {
+              const storeRow = document.createElement("div");
+              storeRow.className = "global-telegram-store-row";
+              const isEnabled = enabledStoreIds.has(store.id);
+              storeRow.innerHTML = "<label class=\"toggle-switch\"><input type=\"checkbox\" data-global-telegram-store=\"" + store.id + "\" data-binding-id=\"" + b.id + "\"" + (isEnabled ? " checked" : "") + "><span class=\"toggle-slider\"></span></label><span class=\"store-name\">" + (store.name || "Филиал #" + store.id) + "</span>";
+              storesList.appendChild(storeRow);
+            });
+
+            storesSection.appendChild(storesList);
+            bindingEl.appendChild(storesSection);
+          }
+
+          globalTelegramBindings.appendChild(bindingEl);
         });
+
       } catch (e) {
-        notificationsStoresList.innerHTML = "<div class=\"muted\">Ошибка загрузки</div>";
+        globalTelegramBindings.innerHTML = "";
       }
+    }
+
+    // Обработчик "+" для показа формы добавления
+    if (globalTelegramToggleBtn) {
+      globalTelegramToggleBtn.addEventListener("click", () => {
+        if (globalTelegramConnectBlock) {
+          globalTelegramConnectBlock.classList.toggle("hidden");
+        }
+      });
+    }
+
+    // Обработчик "Отмена" для скрытия формы
+    if (globalTelegramCancelBtn) {
+      globalTelegramCancelBtn.addEventListener("click", () => {
+        if (globalTelegramConnectBlock) {
+          globalTelegramConnectBlock.classList.add("hidden");
+        }
+        if (globalTelegramApiKey) globalTelegramApiKey.value = "";
+        if (globalTelegramSecretKey) globalTelegramSecretKey.value = "";
+      });
+    }
+
+    // Обработчик добавления глобального Telegram
+    if (globalTelegramAddBtn) {
+      globalTelegramAddBtn.addEventListener("click", async () => {
+        const apiKey = globalTelegramApiKey ? globalTelegramApiKey.value.trim() : "";
+        const secretKey = globalTelegramSecretKey ? globalTelegramSecretKey.value.trim() : "";
+        if (!apiKey || !secretKey) {
+          alert("Введите API key и Secret key от бота.");
+          return;
+        }
+        try {
+          const res = await authFetch("/api/admin/tenant/telegram/add-by-keys", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_key: apiKey, secret_key: secretKey })
+          });
+          const data = await res.json();
+          if (!data || !data.ok) {
+            alert(data.error === "SECRET_INVALID_OR_EXPIRED" ? "Secret key недействителен или истёк. Напишите /start боту заново." : (data.error || "Ошибка"));
+            return;
+          }
+          if (globalTelegramApiKey) globalTelegramApiKey.value = "";
+          if (globalTelegramSecretKey) globalTelegramSecretKey.value = "";
+          if (globalTelegramConnectBlock) globalTelegramConnectBlock.classList.add("hidden");
+          await loadGlobalTelegramBindings();
+        } catch (e) {
+          alert("Ошибка подключения");
+        }
+      });
+    }
+
+    // Обработчики для глобальных Telegram привязок
+    if (globalTelegramBindings) {
+      globalTelegramBindings.addEventListener("click", async (e) => {
+        // Шестерёнка — toggle аккордеон филиалов
+        const gearBtn = e.target.closest("[data-global-telegram-gear]");
+        if (gearBtn) {
+          const bindingId = gearBtn.getAttribute("data-global-telegram-gear");
+          const storesSection = globalTelegramBindings.querySelector("[data-stores-for=\"" + bindingId + "\"]");
+          if (storesSection) {
+            storesSection.classList.toggle("hidden");
+            gearBtn.classList.toggle("active");
+          }
+          return;
+        }
+
+        // Удаление
+        const deleteBtn = e.target.closest("[data-global-telegram-delete]");
+        if (deleteBtn) {
+          const bindingId = deleteBtn.getAttribute("data-global-telegram-delete");
+          if (!bindingId) return;
+          if (!confirm("Отключить Telegram?")) return;
+          try {
+            const res = await authFetch("/api/admin/tenant/telegram/" + encodeURIComponent(bindingId), { method: "DELETE" });
+            const data = await res.json();
+            if (!data || !data.ok) {
+              alert(data.error || "Ошибка");
+              return;
+            }
+            await loadGlobalTelegramBindings();
+          } catch (e) {
+            alert("Ошибка удаления");
+          }
+        }
+      });
+
+      globalTelegramBindings.addEventListener("change", async (e) => {
+        const checkbox = e.target.closest("[data-global-telegram-store]");
+        if (checkbox) {
+          const storeId = checkbox.getAttribute("data-global-telegram-store");
+          const bindingId = checkbox.getAttribute("data-binding-id");
+          const isEnabled = checkbox.checked;
+          if (!storeId || !bindingId) return;
+          try {
+            const res = await authFetch("/api/admin/tenant/telegram/" + encodeURIComponent(bindingId) + "/stores", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ store_id: Number(storeId), is_enabled: isEnabled })
+            });
+            const data = await res.json();
+            if (!data || !data.ok) {
+              checkbox.checked = !isEnabled; // Откатываем
+              alert(data.error || "Ошибка");
+            }
+          } catch (e) {
+            checkbox.checked = !isEnabled;
+            alert("Ошибка сохранения");
+          }
+        }
+      });
     }
 
     function getSettingsListConfig(type) {

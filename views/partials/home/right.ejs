@@ -75,26 +75,34 @@
             </label>
           </div>
           <div class="settings-site-field" id="settingsStoreTelegramBlock">
-            <label class="field-label">УВЕДОМЛЕНИЯ В TELEGRAM</label>
-            <div class="store-telegram-status muted" id="settingsStoreTelegramStatus">Загрузка…</div>
-            <div class="store-telegram-actions hidden" id="settingsStoreTelegramActions"></div>
-            <div class="store-telegram-by-keys mt-2">
+            <div class="settings-list-header">
+              <label class="field-label" style="margin-bottom:0">УВЕДОМЛЕНИЯ В TELEGRAM</label>
+              <button type="button" class="btn btn-icon btn-sm global-telegram-add-toggle" id="settingsStoreTelegramToggleBtn" title="Добавить Telegram">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
+            <!-- Форма добавления (скрыта по умолчанию) -->
+            <div class="global-telegram-connect hidden" id="settingsStoreTelegramConnectBlock">
               <% if (typeof telegramBotUsername !== 'undefined' && telegramBotUsername) { %>
               <p class="field-hint">Получайте заявки в Telegram с помощью нашего бота. Для этого перейдите по ссылке: <a href="https://t.me/<%= telegramBotUsername %>" target="_blank" rel="noopener">https://t.me/<%= telegramBotUsername %></a> и напишите команду <strong>/start</strong>. Через некоторое время бот пришлёт API key и Secret key, которые нужно вставить в поля ниже.</p>
               <% } else { %>
               <p class="field-hint">Перейдите в бота, напишите /start — бот пришлёт API key и Secret key. Вставьте их в поля ниже.</p>
               <% } %>
-              <div class="settings-site-field">
+              <div class="field-group">
                 <label class="field-label">TELEGRAM API KEY</label>
                 <input class="control" type="text" id="settingsStoreTelegramApiKey" placeholder="Например: 915611204" />
               </div>
-              <div class="settings-site-field">
+              <div class="field-group">
                 <label class="field-label">SECRET KEY</label>
                 <input class="control" type="text" id="settingsStoreTelegramSecretKey" placeholder="Ключ от бота" />
               </div>
-              <button class="btn btn-primary btn-sm" type="button" id="settingsStoreTelegramAddByKeysBtn">Добавить</button>
+              <div class="global-telegram-form-actions">
+                <button class="btn btn-primary btn-sm" type="button" id="settingsStoreTelegramAddByKeysBtn">Добавить</button>
+                <button class="btn btn-link btn-sm" type="button" id="settingsStoreTelegramCancelBtn">Отмена</button>
+              </div>
             </div>
-            <ul class="store-telegram-list list-unstyled hidden" id="settingsStoreTelegramList"></ul>
+            <!-- Список подключений -->
+            <div id="settingsStoreTelegramList"></div>
           </div>
         </form>
         <div class="stores-form-actions">
@@ -108,12 +116,35 @@
       <div class="info-card settings-right-panel hidden" id="settingsNotificationsPanel">
         <div class="settings-list-header">
           <div class="settings-list-title">Уведомления</div>
-          <div class="settings-list-subtitle muted">Telegram-уведомления о новых заказах по филиалам</div>
+          <button type="button" class="btn btn-icon btn-sm global-telegram-add-toggle" id="globalTelegramToggleBtn" title="Добавить Telegram">
+            <i class="fas fa-plus"></i>
+          </button>
         </div>
-        <p class="field-hint">Подключите Telegram в настройках каждого филиала — уведомления будут приходить только по заказам этой точки.</p>
-        <div class="notifications-stores-list" id="notificationsStoresList">
-          <div class="muted">Загрузка…</div>
+
+        <!-- Форма добавления (скрыта по умолчанию) -->
+        <div class="global-telegram-connect hidden" id="globalTelegramConnectBlock">
+          <p class="field-hint">
+            Получайте заявки в Telegram с помощью нашего бота. Для этого перейдите по ссылке:
+            <a href="https://t.me/noti_m_bot" target="_blank">https://t.me/noti_m_bot</a> и напишите команду /start.<br>
+            Через некоторое время бот пришлёт API key и Secret key, которые нужно вставить в поля ниже.
+          </p>
+          <div class="field-group">
+            <label class="field-label">TELEGRAM API KEY</label>
+            <input type="text" class="control" id="globalTelegramApiKey" placeholder="Например: 915611204">
+          </div>
+          <div class="field-group">
+            <label class="field-label">SECRET KEY</label>
+            <input type="text" class="control" id="globalTelegramSecretKey" placeholder="Ключ от бота">
+          </div>
+          <div class="global-telegram-form-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="globalTelegramAddBtn">Добавить</button>
+            <button type="button" class="btn btn-link btn-sm" id="globalTelegramCancelBtn">Отмена</button>
+          </div>
         </div>
+
+        <!-- Список подключений -->
+        <div id="globalTelegramBindings"></div>
+
       </div>
 
       <div class="info-card settings-right-panel hidden" id="settingsLogoPanel">

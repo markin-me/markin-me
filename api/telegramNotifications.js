@@ -7,12 +7,28 @@ const TELEGRAM_API = 'https://api.telegram.org/bot';
 async function sendNewOrderNotification(tenantId, storeId, orderPayload, { db, botToken }) {
   if (!botToken || typeof botToken !== 'string' || botToken.trim() === '') return;
 
-  const [rows] = await db.query(
+  // 1. Получаем chat_id из привязок на уровне филиала (ten_store_telegram)
+  const [storeRows] = await db.query(
     `SELECT telegram_chat_id FROM ten_store_telegram
      WHERE tenant_id = ? AND store_id = ? AND telegram_chat_id IS NOT NULL`,
     [tenantId, storeId]
   );
-  if (!rows.length) return;
+
+  // 2. Получаем chat_id из глобальных привязок (ten_tenant_telegram + ten_tenant_telegram_stores)
+  const [globalRows] = await db.query(
+    `SELECT DISTINCT t.telegram_chat_id
+     FROM ten_tenant_telegram t
+     INNER JOIN ten_tenant_telegram_stores ts ON ts.tenant_telegram_id = t.id AND ts.is_enabled = 1
+     WHERE t.tenant_id = ? AND ts.store_id = ? AND t.telegram_chat_id IS NOT NULL`,
+    [tenantId, storeId]
+  );
+
+  // Объединяем chat_id, убираем дубликаты
+  const chatIds = new Set();
+  storeRows.forEach(r => chatIds.add(String(r.telegram_chat_id)));
+  globalRows.forEach(r => chatIds.add(String(r.telegram_chat_id)));
+
+  if (chatIds.size === 0) return;
 
   const opts = {};
   const adminBase = (process.env.ADMIN_BASE_URL || process.env.ORDER_LINK_BASE || '').trim();
@@ -23,8 +39,7 @@ async function sendNewOrderNotification(tenantId, storeId, orderPayload, { db, b
   const text = formatOrderMessage(orderPayload, opts);
   const apiBase = `${TELEGRAM_API}${botToken.trim()}`;
 
-  for (const row of rows) {
-    const chatId = row.telegram_chat_id;
+  for (const chatId of chatIds) {
     try {
       await fetch(`${apiBase}/sendMessage`, {
         method: 'POST',

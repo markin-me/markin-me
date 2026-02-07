@@ -1513,5 +1513,181 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
     }
   });
 
+  // ------------------------------
+  // Глобальные Telegram-уведомления на уровне компании
+  // ------------------------------
+
+  /**
+   * GET /api/admin/tenant/telegram
+   * Список глобальных Telegram привязок компании + филиалы со статусами.
+   */
+  router.get('/telegram', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+
+      const [bindings] = await db.query(
+        `SELECT id, telegram_chat_id, secret_key, label, created_at
+         FROM ten_tenant_telegram
+         WHERE tenant_id=? AND telegram_chat_id IS NOT NULL
+         ORDER BY id DESC`,
+        [tenantId]
+      );
+
+      const [stores] = await db.query(
+        'SELECT id, name, code FROM ten_stores WHERE tenant_id=? ORDER BY id ASC',
+        [tenantId]
+      );
+
+      // Для каждой привязки получаем включённые филиалы
+      for (const b of bindings) {
+        const [enabledStores] = await db.query(
+          `SELECT store_id, is_enabled FROM ten_tenant_telegram_stores
+           WHERE tenant_telegram_id=?`,
+          [b.id]
+        );
+        b.store_settings = enabledStores.map(s => ({
+          store_id: s.store_id,
+          is_enabled: Number(s.is_enabled) === 1
+        }));
+      }
+
+      res.json({
+        ok: true,
+        bindings: bindings.map(b => ({
+          id: b.id,
+          telegram_chat_id: b.telegram_chat_id,
+          secret_key: b.secret_key || null,
+          label: b.label,
+          created_at: b.created_at,
+          store_settings: b.store_settings || []
+        })),
+        stores: stores.map(s => ({ id: s.id, name: s.name, code: s.code }))
+      });
+    } catch (err) {
+      console.error('Tenant telegram list:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
+   * POST /api/admin/tenant/telegram/add-by-keys
+   * Подключить глобальный Telegram по API key и Secret key.
+   */
+  router.post('/telegram/add-by-keys', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const apiKey = req.body.api_key != null ? String(req.body.api_key).trim() : '';
+      const secretKey = req.body.secret_key != null ? String(req.body.secret_key).trim() : '';
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!apiKey || !secretKey) return res.status(400).json({ ok: false, error: 'API_KEY_AND_SECRET_REQUIRED' });
+
+      const chatId = Number(apiKey);
+      if (!Number.isFinite(chatId)) return res.status(400).json({ ok: false, error: 'API_KEY_INVALID' });
+
+      // Проверяем secret_key в pending
+      const [pending] = await db.query(
+        'SELECT id, telegram_chat_id FROM ten_telegram_pending WHERE secret_key=? AND expires_at > NOW() LIMIT 1',
+        [secretKey]
+      );
+      if (!pending.length) return res.status(400).json({ ok: false, error: 'SECRET_INVALID_OR_EXPIRED' });
+      const row = pending[0];
+      if (Number(row.telegram_chat_id) !== chatId) return res.status(400).json({ ok: false, error: 'API_KEY_MISMATCH' });
+
+      // Проверяем, не привязан ли уже этот чат
+      const [existing] = await db.query(
+        'SELECT id FROM ten_tenant_telegram WHERE tenant_id=? AND telegram_chat_id=? LIMIT 1',
+        [tenantId, chatId]
+      );
+      await db.query('DELETE FROM ten_telegram_pending WHERE id=?', [row.id]);
+      if (existing.length) {
+        return res.json({ ok: true, id: existing[0].id });
+      }
+
+      const [result] = await db.query(
+        'INSERT INTO ten_tenant_telegram (tenant_id, telegram_chat_id, secret_key) VALUES (?, ?, ?)',
+        [tenantId, chatId, secretKey]
+      );
+
+      res.json({ ok: true, id: result.insertId });
+    } catch (err) {
+      console.error('Tenant telegram add-by-keys:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
+   * DELETE /api/admin/tenant/telegram/:bindingId
+   * Удалить глобальную привязку.
+   */
+  router.delete('/telegram/:bindingId', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const bindingId = helpers.numOrNull(req.params.bindingId);
+      if (!tenantId || !bindingId) return res.status(400).json({ ok: false, error: 'BAD_PARAMS' });
+
+      const [result] = await db.query(
+        'DELETE FROM ten_tenant_telegram WHERE id=? AND tenant_id=?',
+        [bindingId, tenantId]
+      );
+      if (result.affectedRows === 0) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Tenant telegram delete:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
+   * POST /api/admin/tenant/telegram/:bindingId/stores
+   * Обновить настройки филиалов для глобальной привязки.
+   * Body: { store_id: number, is_enabled: boolean }
+   */
+  router.post('/telegram/:bindingId/stores', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const bindingId = helpers.numOrNull(req.params.bindingId);
+      const storeId = helpers.numOrNull(req.body.store_id);
+      const isEnabled = req.body.is_enabled === true || req.body.is_enabled === 1;
+      if (!tenantId || !bindingId || !storeId) return res.status(400).json({ ok: false, error: 'BAD_PARAMS' });
+
+      // Проверяем, что привязка принадлежит tenant
+      const [binding] = await db.query(
+        'SELECT id FROM ten_tenant_telegram WHERE id=? AND tenant_id=? LIMIT 1',
+        [bindingId, tenantId]
+      );
+      if (!binding.length) return res.status(404).json({ ok: false, error: 'BINDING_NOT_FOUND' });
+
+      // Проверяем, что филиал принадлежит tenant
+      const [store] = await db.query(
+        'SELECT id FROM ten_stores WHERE id=? AND tenant_id=? LIMIT 1',
+        [storeId, tenantId]
+      );
+      if (!store.length) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+
+      if (isEnabled) {
+        // Upsert: добавляем или обновляем
+        await db.query(
+          `INSERT INTO ten_tenant_telegram_stores (tenant_telegram_id, store_id, is_enabled)
+           VALUES (?, ?, 1)
+           ON DUPLICATE KEY UPDATE is_enabled=1`,
+          [bindingId, storeId]
+        );
+      } else {
+        // Удаляем запись (или можно обновить is_enabled=0)
+        await db.query(
+          'DELETE FROM ten_tenant_telegram_stores WHERE tenant_telegram_id=? AND store_id=?',
+          [bindingId, storeId]
+        );
+      }
+
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Tenant telegram stores update:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   return router;
 };
