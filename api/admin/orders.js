@@ -56,6 +56,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         o.customer_phone,
         o.address,
         o.comment,
+        o.address_comment,
         o.cutlery_qty,
         o.change_from,
         o.total_price,
@@ -83,7 +84,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         c.telegram_user_id AS customerTelegramId,
 
         ps.name AS pickupStoreName,
-        ps.address AS pickupStoreAddress
+        ps.address AS pickupStoreAddress,
+
+        ca.comment AS address_comment_from_cust
       FROM order_orders o
       LEFT JOIN order_statuses s
         ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
@@ -97,6 +100,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         ON c.tenant_id=o.tenant_id AND c.store_id=o.store_id AND c.id=o.customer_id
       LEFT JOIN ten_stores ps
         ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
+      LEFT JOIN cust_customer_addresses ca
+        ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
       WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1
       LIMIT 1
       `,
@@ -130,6 +135,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       customer_phone: r.customer_phone,
       address: r.address,
       comment: r.comment,
+      address_comment: (r.address_comment && String(r.address_comment).trim()) ? r.address_comment : (r.address_comment_from_cust && String(r.address_comment_from_cust).trim()) ? r.address_comment_from_cust : null,
       cutlery_qty: r.cutlery_qty,
       change_from: r.change_from,
       total_price: totalPrice,
@@ -267,6 +273,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           o.promo_code,
           o.address,
           o.comment,
+          o.address_comment,
           o.cutlery_qty,
           o.change_from,
           o.total_price,
@@ -295,7 +302,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
           o.pickup_store_id,
           ps.name AS pickupStoreName,
-          ps.address AS pickupStoreAddress
+          ps.address AS pickupStoreAddress,
+
+          ca.comment AS address_comment_from_cust
         FROM order_orders o
         LEFT JOIN order_statuses s
           ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
@@ -309,6 +318,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           ON c.tenant_id=o.tenant_id AND c.store_id=o.store_id AND c.id=o.customer_id
         LEFT JOIN ten_stores ps
           ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
+        LEFT JOIN cust_customer_addresses ca
+          ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
         WHERE ${where}
         ORDER BY ${orderBy}
         LIMIT ? OFFSET ?
@@ -332,8 +343,15 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           deliveryCost = stored && stored > 0 ? stored : computed;
         }
 
+        const effectiveAddressComment = (r.address_comment && String(r.address_comment).trim())
+          ? r.address_comment
+          : (r.address_comment_from_cust && String(r.address_comment_from_cust).trim())
+            ? r.address_comment_from_cust
+            : null;
+
         return {
           ...r,
+          address_comment: effectiveAddressComment,
           created_at: helpers.utcToStoreDateTime(r.created_at, storeTimezone),
           items,
           total_price: totalPrice,

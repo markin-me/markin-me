@@ -2,6 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
 const multer = require('multer');
+const { sendNewOrderNotification } = require('../telegramNotifications');
 
 module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
@@ -412,6 +413,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         o.customer_phone,
         o.address,
         o.comment,
+        o.address_comment,
         o.cutlery_qty,
         o.change_from,
         o.total_price,
@@ -433,7 +435,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         m.title AS methodTitle,
 
         t.code AS timeOptionCode,
-        t.title AS timeOptionTitle
+        t.title AS timeOptionTitle,
+
+        ca.comment AS address_comment_from_cust
       FROM order_orders o
       LEFT JOIN order_statuses s
         ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
@@ -443,6 +447,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
       LEFT JOIN order_time_options t
         ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
+      LEFT JOIN cust_customer_addresses ca
+        ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
       WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1
       LIMIT 1
       `,
@@ -476,6 +482,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       customer_phone: r.customer_phone,
       address: r.address,
       comment: r.comment,
+      address_comment: (r.address_comment && String(r.address_comment).trim()) ? r.address_comment : (r.address_comment_from_cust && String(r.address_comment_from_cust).trim()) ? r.address_comment_from_cust : null,
       cutlery_qty: r.cutlery_qty,
       change_from: r.change_from,
       total_price: totalPrice,
@@ -3137,8 +3144,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       if (!statusId) return res.status(500).json({ ok: false, error: 'NO_STATUSES' });
 
       const addrLine = (str(methodCode).trim() === 'delivery') ? deliveryAddress : null;
+      const deliveryAddressId = (str(methodCode).trim() === 'delivery' && Number.isFinite(Number(req.body.delivery_address_id)) && Number(req.body.delivery_address_id) > 0)
+        ? Number(req.body.delivery_address_id)
+        : null;
 
       const comment = helpers.strOrNull(req.body.comment);
+      const addressComment = helpers.strOrNull(req.body.address_comment);
       const promoCode = helpers.strOrNull(req.body.promo_code);
 
       const cutleryQty = Math.max(0, Number(req.body.cutlery_qty || 0));
@@ -3155,12 +3166,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const [r] = await db.query(
         `INSERT INTO order_orders
          (tenant_id, store_id, customer_id, customer_name, customer_phone, promo_code,
-          address, delivery_address_id, pickup_store_id, comment, cutlery_qty, change_from,
+          address, delivery_address_id, pickup_store_id, comment, address_comment, cutlery_qty, change_from,
           items, total_price, delivery_cost,
           delivery_type_id, payment_id, time_option_id,
           status_id, status_sort, scheduled_at, created_at,
           created_via, is_active, public_id)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
         [
           tenantId,
           orderStoreId,
@@ -3169,9 +3180,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           customerPhone,
           promoCode,
           addrLine,
-          null, // delivery_address_id (пока не используем)
+          deliveryAddressId,
           pickupStoreId,
           comment,
+          addressComment,
           cutleryQty,
           changeFrom,
           itemsJson,
@@ -3192,6 +3204,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       if (payload) {
         ordersEvents.publish(tenantId, orderStoreId, 'order.created', payload);
+        const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        if (botToken) {
+          sendNewOrderNotification(tenantId, orderStoreId, payload, { db, botToken }).catch((err) =>
+            console.error('Telegram new order notify:', err)
+          );
+        }
       }
 
       res.json({ ok: true, data: { id: r.insertId, public_id: publicId } });

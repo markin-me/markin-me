@@ -7,6 +7,7 @@ const cookieParser = require('cookie-parser');
 const db = require('./db');
 const helpers = require('./api/helpers');
 const { createOrdersEventsHub } = require('./api/ordersEvents');
+const { startPolling: startTelegramPolling, handleWebhookUpdate, setWebhook } = require('./api/telegramBot');
 
 // routers
 const makeAuthRouter = require('./api/auth');
@@ -20,7 +21,7 @@ const makePublicShopRouter = require('./api/public/shop');
 const { authMiddleware } = require('./api/middleware/auth');
 
 const app = express();
-const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '1';
+const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '2';
 const PORT = process.env.PORT || 3000;
 
 // Инициализация с обработкой ошибок
@@ -263,7 +264,12 @@ app.get('/dashboard/products', (req, res) => res.render('pages/products'));
 app.get('/dashboard/orders', (req, res) => res.render('pages/orders'));
 app.get('/dashboard/clients', (req, res) => res.render('pages/clients', { activePage: 'clients' }));
 app.get('/dashboard/team', (req, res) => res.render('pages/home', { activePage: 'team' }));
-app.get('/dashboard/settings', (req, res) => res.render('pages/home', { activePage: 'settings' }));
+app.get('/dashboard/settings', (req, res) =>
+  res.render('pages/home', {
+    activePage: 'settings',
+    telegramBotUsername: (process.env.TELEGRAM_BOT_USERNAME || '').trim()
+  })
+);
 
 // ------------------------------
 // Shop (витрина)
@@ -271,6 +277,18 @@ app.get('/dashboard/settings', (req, res) => res.render('pages/home', { activePa
 app.get('/shop', renderShop);
 
 app.get('/auth', (req, res) => res.redirect('/login'));
+
+// ------------------------------
+// Telegram webhook (публичный, без авторизации)
+// ------------------------------
+app.post('/api/telegram/webhook', (req, res) => {
+  res.sendStatus(200);
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const update = req.body;
+  if (token && update) {
+    handleWebhookUpdate(db, token, update).catch((err) => console.error('Telegram webhook:', err));
+  }
+});
 
 // ------------------------------
 // API: Public (публичные роуты должны быть ПЕРЕД админскими)
@@ -316,6 +334,21 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`🚀 Сервер запущен на ${PORT}`);
   console.log(`📝 Откройте http://localhost:${PORT}/login в браузере`);
+  const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+  const webhookUrl = (process.env.TELEGRAM_WEBHOOK_URL || '').trim();
+  if (telegramToken) {
+    if (webhookUrl) {
+      setWebhook(telegramToken, webhookUrl)
+        .then(() => console.log('📱 Telegram: webhook зарегистрирован', webhookUrl))
+        .catch((e) => console.error('Telegram setWebhook error:', e.message));
+    } else {
+      try {
+        startTelegramPolling(db, telegramToken);
+      } catch (e) {
+        console.error('Telegram bot start error:', e.message);
+      }
+    }
+  }
 }).on('error', (err) => {
   console.error('Ошибка запуска сервера:', err);
   if (err.code === 'EADDRINUSE') {

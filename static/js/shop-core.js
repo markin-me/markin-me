@@ -1832,9 +1832,13 @@
 
   function syncSelectedAddressToCheckoutDraft() {
     const line = getSelectedAddressLine();
+    const addressComment = (state.selectedAddress && state.selectedAddress.comment)
+      ? String(state.selectedAddress.comment).trim()
+      : null;
     try {
       const d = loadCheckoutDraft();
       d.delivery_address = line || "";
+      d.address_comment = addressComment || null;
       saveCheckoutDraft(d);
     } catch {}
   }

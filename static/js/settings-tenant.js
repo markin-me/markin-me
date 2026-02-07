@@ -398,6 +398,7 @@
     const orderDeliveryCard = document.getElementById("settingsOrderDeliveryCard");
     const orderTimeOptionsCard = document.getElementById("settingsOrderTimeOptionsCard");
     const soundsCard = document.getElementById("settingsSoundsCard");
+    const settingsNotificationsCard = document.getElementById("settingsNotificationsCard");
     const rightDefault = document.getElementById("settingsRightDefault");
     const logoPanel = document.getElementById("settingsLogoPanel");
     const sitePanel = document.getElementById("settingsSitePanel");
@@ -407,6 +408,8 @@
     const orderDeliveryPanel = document.getElementById("settingsOrderDeliveryPanel");
     const orderTimeOptionsPanel = document.getElementById("settingsOrderTimeOptionsPanel");
     const soundsPanel = document.getElementById("settingsSoundsPanel");
+    const settingsNotificationsPanel = document.getElementById("settingsNotificationsPanel");
+    const notificationsStoresList = document.getElementById("notificationsStoresList");
     const settingsPriceRoundingMode = document.getElementById("settingsPriceRoundingMode");
     const settingsPriceRoundingPrecision = document.getElementById("settingsPriceRoundingPrecision");
     const rightTabs = document.getElementById("settingsRightTabs");
@@ -436,6 +439,15 @@
     const settingsStoreHoursContainer = document.getElementById("settingsStoreHoursContainer");
     const settingsStoreDeliveryHoursSwitch = document.getElementById("settingsStoreDeliveryHoursSameSwitch");
     const settingsStoreDeliveryHoursContainer = document.getElementById("settingsStoreDeliveryHoursContainer");
+    const settingsStoreTelegramStatus = document.getElementById("settingsStoreTelegramStatus");
+    const settingsStoreTelegramActions = document.getElementById("settingsStoreTelegramActions");
+    const settingsStoreTelegramConnectBtn = document.getElementById("settingsStoreTelegramConnectBtn");
+    const settingsStoreTelegramLinkBox = document.getElementById("settingsStoreTelegramLinkBox");
+    const settingsStoreTelegramLink = document.getElementById("settingsStoreTelegramLink");
+    const settingsStoreTelegramList = document.getElementById("settingsStoreTelegramList");
+    const settingsStoreTelegramApiKey = document.getElementById("settingsStoreTelegramApiKey");
+    const settingsStoreTelegramSecretKey = document.getElementById("settingsStoreTelegramSecretKey");
+    const settingsStoreTelegramAddByKeysBtn = document.getElementById("settingsStoreTelegramAddByKeysBtn");
 
     const storesState = {
       loaded: false,
@@ -793,6 +805,7 @@
       if (orderDeliveryPanel) orderDeliveryPanel.classList.toggle("hidden", tabId !== "order-delivery");
       if (orderTimeOptionsPanel) orderTimeOptionsPanel.classList.toggle("hidden", tabId !== "order-time-options");
       if (soundsPanel) soundsPanel.classList.toggle("hidden", tabId !== "sounds");
+      if (settingsNotificationsPanel) settingsNotificationsPanel.classList.toggle("hidden", tabId !== "notifications");
       if (settingsDeliveryPanel) settingsDeliveryPanel.classList.toggle("hidden", tabId !== DELIVERY_TAB_ID);
       if (settingsStorePanel) settingsStorePanel.classList.toggle("hidden", !tabId.startsWith("store-"));
       if (settingsStoreEmpty) {
@@ -809,6 +822,9 @@
       }
       if (tabId.startsWith("store-")) {
         applyStoreTabState(tabId);
+      }
+      if (tabId === "notifications") {
+        loadNotificationsOverview();
       }
     }
 
@@ -856,6 +872,7 @@
           if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.remove("is-active");
           if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.remove("is-active");
           if (tabId === "sounds" && soundsCard) soundsCard.classList.remove("is-active");
+          if (tabId === "notifications" && settingsNotificationsCard) settingsNotificationsCard.classList.remove("is-active");
           if (tabId === DELIVERY_TAB_ID) {
             deliverySettingsState.selectedId = null;
             deliverySettingsState.snapshot = null;
@@ -897,6 +914,7 @@
       if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.add("is-active");
       if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.add("is-active");
       if (tabId === "sounds" && soundsCard) soundsCard.classList.add("is-active");
+      if (tabId === "notifications" && settingsNotificationsCard) settingsNotificationsCard.classList.add("is-active");
     }
 
     if (logoCard) {
@@ -944,6 +962,115 @@
     if (soundsCard) {
       soundsCard.addEventListener("click", () => {
         ensureTab("sounds", "Звуки уведомлений");
+      });
+    }
+
+    if (settingsNotificationsCard) {
+      settingsNotificationsCard.addEventListener("click", () => {
+        ensureTab("notifications", "Уведомления");
+      });
+    }
+
+    if (settingsStoreTelegramConnectBtn) {
+      settingsStoreTelegramConnectBtn.addEventListener("click", async () => {
+        const storeId = storesState.selectedId;
+        if (!storeId) return;
+        try {
+          const bindRes = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/telegram");
+          const bindData = await bindRes.json();
+          const countBefore = (bindData && bindData.ok && bindData.bindings) ? bindData.bindings.length : 0;
+
+          const res = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/telegram/connect", { method: "POST" });
+          const data = await res.json();
+          if (!data || !data.ok) {
+            alert(data.error || "Ошибка");
+            return;
+          }
+          if (data.link && settingsStoreTelegramLink) {
+            settingsStoreTelegramLink.href = data.link;
+            settingsStoreTelegramLink.textContent = data.link;
+            if (settingsStoreTelegramLinkBox) settingsStoreTelegramLinkBox.classList.remove("hidden");
+            let pollCount = 0;
+            const pollInterval = setInterval(() => {
+              pollCount++;
+              loadStoreTelegramBindings(storeId).then(() => {
+                const list = settingsStoreTelegramList;
+                const currentCount = list ? list.querySelectorAll(".store-telegram-item").length : 0;
+                if (currentCount > countBefore) {
+                  clearInterval(pollInterval);
+                  if (settingsStoreTelegramLinkBox) settingsStoreTelegramLinkBox.classList.add("hidden");
+                }
+              });
+              if (pollCount >= 30) clearInterval(pollInterval);
+            }, 2000);
+          } else {
+            alert("Укажите TELEGRAM_BOT_USERNAME в настройках сервера для ссылки.");
+          }
+        } catch (e) {
+          alert("Ошибка запроса");
+        }
+      });
+    }
+
+    if (settingsStoreTelegramList) {
+      settingsStoreTelegramList.addEventListener("click", async (e) => {
+        const btn = e.target.closest("button[data-binding-id]");
+        if (!btn) return;
+        const bindingId = btn.getAttribute("data-binding-id");
+        const storeId = storesState.selectedId;
+        if (!storeId || !bindingId) return;
+        if (!confirm("Отключить уведомления в этот чат?")) return;
+        try {
+          const res = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/telegram/" + encodeURIComponent(bindingId), { method: "DELETE" });
+          const data = await res.json();
+          if (data && data.ok) loadStoreTelegramBindings(storeId);
+        } catch (err) {}
+      });
+    }
+
+    if (settingsStoreTelegramAddByKeysBtn) {
+      settingsStoreTelegramAddByKeysBtn.addEventListener("click", async () => {
+        const storeId = storesState.selectedId;
+        const apiKey = settingsStoreTelegramApiKey ? settingsStoreTelegramApiKey.value.trim() : "";
+        const secretKey = settingsStoreTelegramSecretKey ? settingsStoreTelegramSecretKey.value.trim() : "";
+        if (!storeId || !apiKey || !secretKey) {
+          alert("Введите API key и Secret key от бота.");
+          return;
+        }
+        try {
+          const res = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/telegram/add-by-keys", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_key: apiKey, secret_key: secretKey })
+          });
+          const data = await res.json();
+          if (!data || !data.ok) {
+            alert(data.error === "SECRET_INVALID_OR_EXPIRED" ? "Secret key недействителен или истёк. Напишите /start боту заново." : (data.error || "Ошибка"));
+            return;
+          }
+          if (settingsStoreTelegramApiKey) settingsStoreTelegramApiKey.value = "";
+          if (settingsStoreTelegramSecretKey) settingsStoreTelegramSecretKey.value = "";
+          loadStoreTelegramBindings(storeId);
+        } catch (e) {
+          alert("Ошибка запроса");
+        }
+      });
+    }
+
+    if (notificationsStoresList) {
+      notificationsStoresList.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-notif-store-id]");
+        if (!btn) return;
+        const storeId = btn.getAttribute("data-notif-store-id");
+        if (!storeId) return;
+        const storeBtn = document.querySelector("[data-settings-section=\"stores\"]");
+        if (storeBtn) storeBtn.click();
+        setTimeout(() => {
+          loadStores().then(() => {
+            const store = storesState.items.find((s) => String(s.id) === String(storeId));
+            if (store) selectStore(store);
+          });
+        }, 100);
       });
     }
 
@@ -1189,6 +1316,10 @@
       }
       if (mode === "create") {
         if (settingsStoreSubtitle) settingsStoreSubtitle.textContent = "Новая точка";
+        if (settingsStoreTelegramStatus) settingsStoreTelegramStatus.textContent = "Сначала сохраните филиал";
+        if (settingsStoreTelegramLinkBox) settingsStoreTelegramLinkBox.classList.add("hidden");
+        if (settingsStoreTelegramList) { settingsStoreTelegramList.classList.add("hidden"); settingsStoreTelegramList.innerHTML = ""; }
+        if (settingsStoreTelegramConnectBtn) settingsStoreTelegramConnectBtn.style.display = "none";
         if (settingsStoreName) settingsStoreName.value = "";
         if (settingsStoreCode) settingsStoreCode.value = "";
         if (settingsStoreAddress) settingsStoreAddress.value = "";
@@ -1225,6 +1356,7 @@
         storesState.selectedId = store.id;
         storesState.snapshot = { ...store };
         setStoreMode("edit", store);
+        loadStoreTelegramBindings(store.id);
       }
       renderStoresList(storesState.items);
       showStorePanel(true);
@@ -1303,6 +1435,79 @@
         if (data && data.storeId === storeId) return tabId;
       }
       return null;
+    }
+
+    async function loadStoreTelegramBindings(storeId) {
+      if (!settingsStoreTelegramStatus) return;
+      settingsStoreTelegramStatus.textContent = "Загрузка…";
+      if (settingsStoreTelegramLinkBox) settingsStoreTelegramLinkBox.classList.add("hidden");
+      if (settingsStoreTelegramList) {
+        settingsStoreTelegramList.classList.add("hidden");
+        settingsStoreTelegramList.innerHTML = "";
+      }
+      try {
+        const res = await authFetch("/api/admin/tenant/stores/" + encodeURIComponent(storeId) + "/telegram");
+        const data = await res.json();
+        if (!data || !data.ok) {
+          settingsStoreTelegramStatus.textContent = "Ошибка загрузки";
+          return;
+        }
+        let bindings = data.bindings || [];
+        const byChatId = new Map();
+        bindings.forEach((b) => {
+          const cid = b.telegram_chat_id != null ? String(b.telegram_chat_id) : "";
+          if (cid && !byChatId.has(cid)) byChatId.set(cid, b);
+        });
+        bindings = Array.from(byChatId.values());
+        if (bindings.length === 0) {
+          settingsStoreTelegramStatus.textContent = "Не подключено";
+          if (settingsStoreTelegramConnectBtn) settingsStoreTelegramConnectBtn.style.display = "";
+        } else {
+          settingsStoreTelegramStatus.textContent = "Подключено чатов: " + bindings.length;
+          if (settingsStoreTelegramConnectBtn) settingsStoreTelegramConnectBtn.style.display = "";
+          if (settingsStoreTelegramList) {
+            settingsStoreTelegramList.classList.remove("hidden");
+            bindings.forEach((b) => {
+              const li = document.createElement("li");
+              li.className = "store-telegram-item";
+              const apiKey = b.telegram_chat_id != null ? String(b.telegram_chat_id) : "";
+              const secretKey = b.secret_key ? String(b.secret_key) : "";
+              li.innerHTML = "<div class=\"store-telegram-binding\"><span class=\"muted\">API key: " + apiKey + (secretKey ? ", Secret key: " + secretKey : "") + "</span> <button type=\"button\" class=\"btn btn-link btn-sm\" data-binding-id=\"" + (b.id || "") + "\">Отключить</button></div>";
+              settingsStoreTelegramList.appendChild(li);
+            });
+          }
+        }
+      } catch (e) {
+        settingsStoreTelegramStatus.textContent = "Ошибка загрузки";
+      }
+    }
+
+    async function loadNotificationsOverview() {
+      if (!notificationsStoresList) return;
+      notificationsStoresList.innerHTML = "<div class=\"muted\">Загрузка…</div>";
+      try {
+        const res = await authFetch("/api/admin/tenant/notifications");
+        const data = await res.json();
+        if (!data || !data.ok) {
+          notificationsStoresList.innerHTML = "<div class=\"muted\">Ошибка загрузки</div>";
+          return;
+        }
+        const stores = data.stores || [];
+        if (stores.length === 0) {
+          notificationsStoresList.innerHTML = "<div class=\"muted\">Нет филиалов</div>";
+          return;
+        }
+        notificationsStoresList.innerHTML = "";
+        stores.forEach((s) => {
+          const row = document.createElement("div");
+          row.className = "settings-card order-row product-row";
+          const status = s.telegram_count > 0 ? "Подключено чатов: " + s.telegram_count : "Не подключено";
+          row.innerHTML = "<div class=\"order-col\"><div class=\"product-title\">" + (s.name || "Филиал #" + s.id) + "</div><div class=\"muted\">" + status + "</div></div><div class=\"order-col\"><button type=\"button\" class=\"btn btn-primary btn-sm\" data-notif-store-id=\"" + s.id + "\">Настроить</button></div>";
+          notificationsStoresList.appendChild(row);
+        });
+      } catch (e) {
+        notificationsStoresList.innerHTML = "<div class=\"muted\">Ошибка загрузки</div>";
+      }
     }
 
     function getSettingsListConfig(type) {

@@ -751,9 +751,13 @@
       html += '<div>' + escapeHtml(address || "—") + '</div>';
       html += '</div>';
 
-      if (order.comment) {
+      if (order.address_comment && String(order.address_comment).trim()) {
         html += '<div class="receipt-section">';
-        html += '<div class="receipt-section-title">Комментарий:</div>';
+        html += '<div>' + escapeHtml(order.address_comment) + '</div>';
+        html += '</div>';
+      }
+      if (order.comment && String(order.comment).trim()) {
+        html += '<div class="receipt-section">';
         html += '<div>' + escapeHtml(order.comment) + '</div>';
         html += '</div>';
       }

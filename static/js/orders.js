@@ -80,7 +80,10 @@
     deliveryUrgent: $$('[data-info="delivery-urgent"]'),
     deliveryInterval: $$('[data-info="delivery-interval"]'),
     deliveryAddress: $$('[data-info="delivery-address"]'),
-    deliveryComment: $$('[data-info="delivery-comment"]'),
+    deliveryAddressComment: $$('[data-info="delivery-address-comment"]'),
+    deliveryAddressCommentText: $$('[data-info="delivery-address-comment-text"]'),
+    orderCommentBlock: $$('[data-info="order-comment-block"]'),
+    orderCommentText: $$('[data-info="order-comment-text"]'),
 
     itemsList: $$('[data-info="items-list"]'),
   };
@@ -634,7 +637,8 @@
       setHtmlAll(infoEls.itemsList, '<div class="muted">?</div>');
       setHiddenAll(infoEls.deliveryUrgent, true);
       setHiddenAll(infoEls.deliveryInterval, true);
-      setHiddenAll(infoEls.deliveryComment, true);
+      setHiddenAll(infoEls.deliveryAddressComment, true);
+      setHiddenAll(infoEls.orderCommentBlock, true);
       setHiddenAll(infoEls.clientExtra, true);
       return;
     }
@@ -726,9 +730,13 @@
     }
     setTextAll(infoEls.deliveryAddress, address || "?");
 
-    const comment = order.comment || "";
-    setTextAll(infoEls.deliveryComment, comment);
-    setHiddenAll(infoEls.deliveryComment, !comment);
+    const addressComment = order.address_comment || "";
+    setTextAll(infoEls.deliveryAddressCommentText, addressComment);
+    setHiddenAll(infoEls.deliveryAddressComment, !addressComment);
+
+    const orderComment = order.comment || "";
+    setTextAll(infoEls.orderCommentText, orderComment);
+    setHiddenAll(infoEls.orderCommentBlock, !orderComment);
 
     setHtmlAll(infoEls.itemsList, itemsToHtml(order.items || []));
     
@@ -968,7 +976,7 @@
     const hasScheduledTime = Boolean(
       intervalText && (order.scheduled_at || order.time_option_code === "at_time" || order.time_option_code === "on_date") && !urgent
     );
-    const comment = order.comment || "Нет комментария";
+    const addressCommentDisplay = order.address_comment ?? order.comment ?? "Нет комментария";
     const courier = order.courier_name || null;
     const hasCourier = courier && courier !== "Не указан" && courier !== "Не назначен";
     const telegramId = order.telegram_user_id || null;
@@ -1011,7 +1019,7 @@
             : "?"
           )
         )}</div>
-        <div class="order-address-comment muted"><i class="far fa-comment"></i> ${escapeHtml(comment)}</div>
+        <div class="order-address-comment muted"><i class="far fa-comment"></i> ${escapeHtml(addressCommentDisplay)}</div>
         <div class="order-address-courier ${hasCourier ? "" : "order-courier-assign"}">
           <i class="fas fa-user"></i> 
           ${hasCourier ? escapeHtml(courier) : '<span data-action="assign-courier">Назначить курьера</span>'}
@@ -2083,9 +2091,13 @@
     <div>${escapeHtml(address || "—")}</div>
   </div>
   
-  ${order.comment ? `
+  ${(order.address_comment && order.address_comment.trim()) ? `
   <div class="receipt-section">
-    <div class="receipt-section-title">Комментарий:</div>
+    <div>${escapeHtml(order.address_comment)}</div>
+  </div>
+  ` : ''}
+  ${(order.comment && order.comment.trim()) ? `
+  <div class="receipt-section">
     <div>${escapeHtml(order.comment)}</div>
   </div>
   ` : ''}

@@ -1324,5 +1324,194 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
     }
   });
 
+  // ------------------------------
+  // Telegram: привязка чатов к филиалам
+  // ------------------------------
+
+  /**
+   * POST /api/admin/tenant/stores/:id/telegram/connect
+   * Генерирует одноразовую ссылку для привязки чата к филиалу.
+   */
+  router.post('/stores/:id/telegram/connect', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const storeId = helpers.numOrNull(req.params.id);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!storeId) return res.status(400).json({ ok: false, error: 'STORE_ID_REQUIRED' });
+
+      const [storeRows] = await db.query(
+        'SELECT id FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, storeId]
+      );
+      if (!storeRows.length) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+
+      const token = crypto.randomBytes(24).toString('hex');
+      const secretKey = crypto.randomBytes(16).toString('hex');
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+
+      await db.query(
+        `INSERT INTO ten_store_telegram (tenant_id, store_id, connect_token, connect_token_expires_at, secret_key) VALUES (?, ?, ?, ?, ?)`,
+        [tenantId, storeId, token, expiresAt, secretKey]
+      );
+
+      const botUsername = (process.env.TELEGRAM_BOT_USERNAME || '').trim();
+      const link = botUsername ? `https://t.me/${botUsername}?start=${token}` : null;
+
+      res.json({ ok: true, token, link, expires_at: expiresAt.toISOString() });
+    } catch (err) {
+      console.error('Telegram connect:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
+   * POST /api/admin/tenant/stores/:id/telegram/add-by-keys
+   * Подключить чат по API key (chat_id) и Secret key из бота (как у Тильды).
+   */
+  router.post('/stores/:id/telegram/add-by-keys', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const storeId = helpers.numOrNull(req.params.id);
+      const apiKey = req.body.api_key != null ? String(req.body.api_key).trim() : '';
+      const secretKey = req.body.secret_key != null ? String(req.body.secret_key).trim() : '';
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!storeId) return res.status(400).json({ ok: false, error: 'STORE_ID_REQUIRED' });
+      if (!apiKey || !secretKey) return res.status(400).json({ ok: false, error: 'API_KEY_AND_SECRET_REQUIRED' });
+
+      const chatId = Number(apiKey);
+      if (!Number.isFinite(chatId)) return res.status(400).json({ ok: false, error: 'INVALID_API_KEY' });
+
+      const [storeRows] = await db.query(
+        'SELECT id FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, storeId]
+      );
+      if (!storeRows.length) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
+
+      const [pending] = await db.query(
+        'SELECT id, telegram_chat_id FROM ten_telegram_pending WHERE secret_key=? AND expires_at > NOW() LIMIT 1',
+        [secretKey]
+      );
+      if (!pending.length) return res.status(400).json({ ok: false, error: 'SECRET_INVALID_OR_EXPIRED' });
+      const row = pending[0];
+      if (Number(row.telegram_chat_id) !== chatId) return res.status(400).json({ ok: false, error: 'API_KEY_MISMATCH' });
+
+      const [existing] = await db.query(
+        'SELECT id FROM ten_store_telegram WHERE tenant_id=? AND store_id=? AND telegram_chat_id=? LIMIT 1',
+        [tenantId, storeId, chatId]
+      );
+      await db.query('DELETE FROM ten_telegram_pending WHERE id=?', [row.id]);
+      if (existing.length) {
+        return res.json({ ok: true });
+      }
+
+      await db.query(
+        'INSERT INTO ten_store_telegram (tenant_id, store_id, telegram_chat_id, secret_key) VALUES (?, ?, ?, ?)',
+        [tenantId, storeId, chatId, secretKey]
+      );
+
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Telegram add-by-keys:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
+   * GET /api/admin/tenant/stores/:id/telegram
+   * Список привязок Telegram для филиала.
+   */
+  router.get('/stores/:id/telegram', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const storeId = helpers.numOrNull(req.params.id);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      if (!storeId) return res.status(400).json({ ok: false, error: 'STORE_ID_REQUIRED' });
+
+      const [rows] = await db.query(
+        `SELECT t.id, t.telegram_chat_id, t.secret_key, t.label, t.created_at
+         FROM ten_store_telegram t
+         INNER JOIN (
+           SELECT telegram_chat_id, MAX(id) AS max_id
+           FROM ten_store_telegram
+           WHERE tenant_id=? AND store_id=? AND telegram_chat_id IS NOT NULL
+           GROUP BY tenant_id, store_id, telegram_chat_id
+         ) g ON t.telegram_chat_id = g.telegram_chat_id AND t.id = g.max_id
+         WHERE t.tenant_id=? AND t.store_id=?
+         ORDER BY t.id DESC`,
+        [tenantId, storeId, tenantId, storeId]
+      );
+      const bindings = rows.map((r) => ({
+        id: r.id,
+        telegram_chat_id: r.telegram_chat_id,
+        secret_key: r.secret_key || null,
+        label: r.label,
+        created_at: r.created_at
+      }));
+
+      res.json({ ok: true, bindings });
+    } catch (err) {
+      console.error('Telegram list:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
+   * DELETE /api/admin/tenant/stores/:storeId/telegram/:bindingId
+   * Удалить привязку.
+   */
+  router.delete('/stores/:storeId/telegram/:bindingId', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      const storeId = helpers.numOrNull(req.params.storeId);
+      const bindingId = helpers.numOrNull(req.params.bindingId);
+      if (!tenantId || !storeId || !bindingId) return res.status(400).json({ ok: false, error: 'BAD_PARAMS' });
+
+      const [result] = await db.query(
+        'DELETE FROM ten_store_telegram WHERE id=? AND tenant_id=? AND store_id=? AND telegram_chat_id IS NOT NULL',
+        [bindingId, tenantId, storeId]
+      );
+      if (result.affectedRows === 0) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Telegram delete:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
+   * GET /api/admin/tenant/notifications
+   * Сводка по всем филиалам: есть ли привязка Telegram.
+   */
+  router.get('/notifications', async (req, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
+      if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+
+      const [stores] = await db.query(
+        'SELECT tenant_id, id, name, code FROM ten_stores WHERE tenant_id=? ORDER BY id ASC',
+        [tenantId]
+      );
+      const [bindings] = await db.query(
+        `SELECT store_id, COUNT(*) AS cnt FROM ten_store_telegram
+         WHERE tenant_id=? AND telegram_chat_id IS NOT NULL GROUP BY store_id`,
+        [tenantId]
+      );
+      const countByStore = new Map(bindings.map((b) => [Number(b.store_id), Number(b.cnt)]));
+
+      const storesWithTelegram = stores.map((s) => ({
+        id: s.id,
+        name: s.name,
+        code: s.code,
+        telegram_count: countByStore.get(s.id) || 0
+      }));
+
+      res.json({ ok: true, stores: storesWithTelegram });
+    } catch (err) {
+      console.error('Notifications overview:', err);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   return router;
 };
