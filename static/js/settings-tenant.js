@@ -426,10 +426,8 @@
     const settingsStoreDeliveryHoursSwitch = document.getElementById("settingsStoreDeliveryHoursSameSwitch");
     const settingsStoreDeliveryHoursContainer = document.getElementById("settingsStoreDeliveryHoursContainer");
     const settingsPrintApiStore = document.getElementById("settingsPrintApiStore");
-    const settingsPrintApiUrl = document.getElementById("settingsPrintApiUrl");
     const settingsPrintApiToken = document.getElementById("settingsPrintApiToken");
     const settingsPrintApiGenerateBtn = document.getElementById("settingsPrintApiGenerateBtn");
-    const settingsPrintApiCopyUrl = document.getElementById("settingsPrintApiCopyUrl");
     const settingsPrintApiCopyToken = document.getElementById("settingsPrintApiCopyToken");
 
     const storesState = {
@@ -968,17 +966,6 @@
       });
     }
 
-    if (settingsPrintApiCopyUrl) {
-      settingsPrintApiCopyUrl.addEventListener("click", async () => {
-        try {
-          const value = settingsPrintApiUrl ? settingsPrintApiUrl.value : "";
-          if (value) await navigator.clipboard.writeText(value);
-        } catch (err) {
-          console.error("Не удалось скопировать URL:", err);
-        }
-      });
-    }
-
     if (settingsPrintApiCopyToken) {
       settingsPrintApiCopyToken.addEventListener("click", async () => {
         try {
@@ -1322,11 +1309,6 @@
       }
     }
 
-    function getPrintApiUrl() {
-      if (typeof window === "undefined") return "";
-      return `${window.location.origin}/api/print/orders`;
-    }
-
     function populatePrintApiStores(items) {
       if (!settingsPrintApiStore) return;
       settingsPrintApiStore.innerHTML = "";
@@ -1379,7 +1361,6 @@
     }
 
     function ensurePrintApiReady() {
-      if (settingsPrintApiUrl) settingsPrintApiUrl.value = getPrintApiUrl();
       const loadAndSelect = async () => {
         if (!storesState.loaded) {
           await loadStores();
