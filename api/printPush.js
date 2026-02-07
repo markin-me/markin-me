@@ -1,158 +1,95 @@
 ﻿const http = require("http");
+const https = require("https");
+const { URL } = require("url");
 
 const BOT_HOST = "127.0.0.1";
 const BOT_PORT = 7788;
+const CRM_BASE_URL = (process.env.CRM_BASE_URL || "http://localhost:3000").replace(/\/+$/, "");
 
-function money(v) {
-  const n = Number(v || 0);
-  const formatted = n.toLocaleString("ru-RU", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
+let browserPromise = null;
+
+async function getPuppeteer() {
+  if (!browserPromise) {
+    browserPromise = import("puppeteer").then((mod) => mod.default || mod);
+  }
+  return browserPromise;
+}
+
+async function getBrowser() {
+  const puppeteer = await getPuppeteer();
+  if (getBrowser.instance) return getBrowser.instance;
+  getBrowser.instance = await puppeteer.launch({
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    headless: true
   });
-  return formatted + " ₽";
+  return getBrowser.instance;
 }
 
-function escapeText(value) {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
+async function renderPdfFromHtml(html) {
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+  await page.setContent(html, { waitUntil: "networkidle0" });
+  await page.emulateMediaType("print");
+
+  const dimensions = await page.evaluate(() => ({
+    width: document.body.scrollWidth,
+    height: document.body.scrollHeight
+  }));
+
+  const width = Math.ceil(dimensions.width || 0);
+  const height = Math.ceil(dimensions.height || 0);
+
+  const pdfBuffer = await page.pdf({
+    width: `${width}px`,
+    height: `${height}px`,
+    printBackground: true,
+    margin: { top: "0px", right: "0px", bottom: "0px", left: "0px" }
+  });
+
+  await page.close();
+  return pdfBuffer;
 }
 
-function formatDateTime(createdAt) {
-  const createdAtStr = String(createdAt || "").replace(" ", "T");
-  const date = new Date(createdAtStr);
-  if (isNaN(date.getTime())) return "";
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = date.getFullYear();
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  return `${day}.${month}.${year}, ${hours}:${minutes}`;
-}
-
-function buildReceiptLayout(order) {
-  const lines = [];
-  const header = `ЗАКАЗ #${order.id}`;
-  const dateStr = formatDateTime(order.created_at);
-
-  lines.push({ type: "text", text: header, align: "center", size: 16, bold: true });
-  if (dateStr) {
-    lines.push({ type: "text", text: dateStr, align: "center" });
-  }
-  lines.push({ type: "divider" });
-
-  const isUrgent = order.is_urgent || order.urgent || order.timeOptionCode === "urgent";
-  const scheduleText = order.timeOptionTitle || (isUrgent ? "Быстрее" : "");
-  if (scheduleText || isUrgent) {
-    lines.push({ type: "text", text: scheduleText || "Быстрее", align: "center", bold: true });
-    lines.push({ type: "divider" });
-  }
-
-  if (order.customer_name) lines.push({ type: "text", text: escapeText(order.customer_name) });
-  if (order.customer_phone) lines.push({ type: "text", text: escapeText(order.customer_phone) });
-
-  const methodTitle = order.methodTitle || (order.methodCode === "pickup" ? "Самовывоз" : "Доставка");
-  let address = order.address;
-  if (!address && order.pickupStoreAddress) {
-    address = order.pickupStoreName
-      ? `${order.pickupStoreName}, ${order.pickupStoreAddress}`
-      : order.pickupStoreAddress;
-  }
-  lines.push({ type: "text", text: escapeText(methodTitle || "—") });
-  lines.push({ type: "text", text: escapeText(address || "—") });
-
-  if (order.comment) {
-    lines.push({ type: "text", text: "Комментарий:", bold: true });
-    lines.push({ type: "text", text: escapeText(order.comment) });
-  }
-
-  lines.push({ type: "divider" });
-
-  const receiptItems = Array.isArray(order.items) ? order.items.slice() : [];
-  receiptItems.forEach((item) => {
-    const name = escapeText(item.product_name || item.name || "Товар");
-    const qty = Math.max(1, Number(item.quantity || item.qty || 1));
-    const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? 0);
-    const qtyStr = `${qty} Х`;
-
-    lines.push({ type: "columns", left: `${qtyStr} ${name}`.trim(), right: money(lineTotal) });
-
-    const bulletPrefix = "• ";
-
-    const variants = Array.isArray(item.variants) ? item.variants : [];
-    variants.forEach((v) => {
-      const groupTitle = escapeText(v.group_title || "Вариант");
-      const variantValue = escapeText(v.label || v.value || "");
-      const groupTitleTrimmed = groupTitle.trim().toLowerCase();
-      const variantTrimmed = variantValue.trim().toLowerCase();
-      let formatted = `${variantValue} ${groupTitle}`.trim();
-      if (variantTrimmed && groupTitleTrimmed) {
-        if (variantTrimmed.endsWith(" " + groupTitleTrimmed) || variantTrimmed.endsWith(groupTitleTrimmed)) {
-          formatted = variantValue;
-        }
+function fetchReceiptHtml(token, orderId) {
+  return new Promise((resolve) => {
+    const url = new URL(`${CRM_BASE_URL}/api/print/template/${orderId}`);
+    const client = url.protocol === "https:" ? https : http;
+    const req = client.request(
+      {
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: url.port || (url.protocol === "https:" ? 443 : 80),
+        path: url.pathname + url.search,
+        method: "GET",
+        headers: {
+          "X-Api-Key": token || "",
+          Accept: "application/json"
+        },
+        timeout: 4000
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (chunk) => {
+          body += chunk.toString("utf-8");
+        });
+        res.on("end", () => {
+          try {
+            const data = JSON.parse(body || "{}");
+            const html = data && data.data && data.data.html ? data.data.html : "";
+            resolve(html || "");
+          } catch {
+            resolve("");
+          }
+        });
       }
-      lines.push({ type: "text", text: `${bulletPrefix}${formatted}`.trim(), indent: 2 });
+    );
+    req.on("timeout", () => {
+      req.destroy();
+      resolve("");
     });
-
-    const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
-    ingredients
-      .filter((ing) => Number(ing.quantity ?? ing.qty ?? 0) > 0)
-      .forEach((ing) => {
-        const ingName = escapeText(ing.name || "Ингредиент");
-        const ingQty = Number(ing.quantity ?? ing.qty ?? 0);
-        let ingUnit = escapeText(ing.unit_label || ing.unit || ing.unitLabel || ing.unit_short_title || ing.unit_title || "");
-        if (!ingUnit) {
-          ingUnit = ingQty > 10 ? "г" : "шт";
-        }
-        const formatted = `${ingQty}${ingUnit} ${ingName}`.trim();
-        lines.push({ type: "text", text: `${bulletPrefix}${formatted}`.trim(), indent: 2 });
-      });
-
-    const options = Array.isArray(item.options) ? item.options : [];
-    options
-      .filter((opt) => Number(opt.qty ?? opt.quantity ?? 0) > 0)
-      .forEach((opt) => {
-        const optName = escapeText(opt.title || "Опция");
-        const variantLabel = escapeText((opt.variant_label || opt.variantLabel || "").trim());
-        let formatted;
-        if (variantLabel) {
-          formatted = `${variantLabel} ${optName}`;
-        } else {
-          const optQty = Math.max(1, Number(opt.qty || 1));
-          formatted = `${optQty}шт ${optName}`;
-        }
-        lines.push({ type: "text", text: `${bulletPrefix}${formatted}`.trim(), indent: 2 });
-      });
+    req.on("error", () => resolve(""));
+    req.end();
   });
-
-  lines.push({ type: "divider" });
-
-  const total = parseFloat(order.total_price || order.total || 0);
-  const deliveryCost = Number(order.delivery_cost || 0);
-  const changeFromRaw = order.change_from;
-  const changeFrom = Number.isFinite(Number(changeFromRaw)) ? Number(changeFromRaw) : 0;
-  const paymentTitle = order.paymentTitle || "";
-  const changeAmount = Math.max(0, changeFrom - total);
-  const showChange = changeAmount > 0;
-
-  if (paymentTitle) {
-    lines.push({ type: "columns", left: "Оплата", right: escapeText(paymentTitle) });
-  }
-  if (showChange) {
-    lines.push({ type: "columns", left: "Сдача с", right: money(changeFrom) });
-    lines.push({ type: "columns", left: "Сдача", right: money(changeAmount) });
-  }
-  lines.push({ type: "columns", left: "Доставка", right: money(deliveryCost) });
-
-  lines.push({ type: "divider" });
-  lines.push({ type: "text", text: `ИТОГО: ${money(total)}`, align: "center", size: 14, bold: true });
-  lines.push({ type: "divider" });
-  lines.push({ type: "text", text: "Спасибо за заказ!", align: "center" });
-
-  return {
-    width_mm: 80,
-    margin_mm: 5,
-    font: { name: "Courier New", size: 11, bold: true },
-    lines,
-  };
 }
 
 async function getPrintToken(db, tenantId, storeId) {
@@ -175,9 +112,9 @@ function postToBot(token, payload) {
         headers: {
           "Content-Type": "application/json",
           "Content-Length": body.length,
-          "X-Api-Key": token || "",
+          "X-Api-Key": token || ""
         },
-        timeout: 2000,
+        timeout: 8000
       },
       (res) => {
         res.on("data", () => {});
@@ -198,6 +135,7 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId }) {
   if (!order) return false;
   const statusId = Number(order.status_id ?? order.statusId ?? order.statusID ?? 0);
   if (statusId !== 1) return false;
+
   const resolvedTenantId = Number(tenantId || order.tenant_id || order.tenantId || order.tenantID || order.tenant);
   const resolvedStoreId = Number(storeId || order.store_id || order.storeId || order.storeID || order.store);
   if (!resolvedTenantId || !resolvedStoreId) return false;
@@ -205,10 +143,22 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId }) {
   const token = await getPrintToken(db, resolvedTenantId, resolvedStoreId);
   if (!token) return false;
 
-  const layout = buildReceiptLayout(order);
-  const payload = { order, layout };
+  const html = await fetchReceiptHtml(token, order.id || order.order_id || order.orderId);
+  if (!html) return false;
+
+  const pdfBuffer = await renderPdfFromHtml(html);
+  if (!pdfBuffer || !pdfBuffer.length) return false;
+
+  const payload = {
+    order: {
+      id: order.id,
+      public_id: order.public_id
+    },
+    pdf_base64: pdfBuffer.toString("base64")
+  };
+
   await postToBot(token, payload);
   return true;
 }
 
-module.exports = { sendOrderToPrintBot, buildReceiptLayout };
+module.exports = { sendOrderToPrintBot };
