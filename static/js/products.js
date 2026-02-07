@@ -6483,7 +6483,7 @@ const isViewMode = state.comboPanel.mode === "view";
         hasValidPrice = true;
       }
     });
-    if (!hasValidPrice) return null;
+    if (!hasValidPrice || total === 0) return null;
     // Скругляем как в calcTotalsFromComposition / recalcPrice
     return Math.round(total);
   }

@@ -3430,7 +3430,7 @@ optionGroups.forEach((group) => {
           const ingId = Number(ing.ingredient_id);
           if (!Number.isFinite(ingId)) return;
           const q = Number(ingredientQty.get(ingId) ?? 0);
-          const baseQty = Number(ing.quantity ?? 1) || 1;
+          const baseQty = Number(ing.quantity ?? 1);
           const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
           const ingredientPrice = Number(ing.ingredient_price || 0);
           const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0 ? ingredientPrice / ingredientBaseQty : (ingredientPrice > 0 ? ingredientPrice : 0);
@@ -3596,7 +3596,7 @@ optionGroups.forEach((group) => {
               const ingId = Number(ing.ingredient_id);
               if (!Number.isFinite(ingId)) return;
               const q = Number(ingredientQty.get(ingId) ?? 0);
-              const baseQty = Number(ing.quantity ?? 1) || 1;
+              const baseQty = Number(ing.quantity ?? 1);
               const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
               const ingredientPrice = Number(ing.ingredient_price || 0);
               const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0 ? ingredientPrice / ingredientBaseQty : (ingredientPrice > 0 ? ingredientPrice : 0);
@@ -4081,7 +4081,7 @@ optionGroups.forEach((group) => {
               let unit = baseUnit;
               ingredients.forEach((ing) => {
                 const q = Number(ingredientQty.get(Number(ing.ingredient_id)) ?? 0);
-                const baseQty = Number(ing.quantity ?? 1) || 1;
+                const baseQty = Number(ing.quantity ?? 1);
                 const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
                 const ingredientPrice = Number(ing.ingredient_price || 0);
                 const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0 ? ingredientPrice / ingredientBaseQty : (ingredientPrice > 0 ? ingredientPrice : 0);
