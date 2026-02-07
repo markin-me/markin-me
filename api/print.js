@@ -56,16 +56,18 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     return row;
   }
 
-  function parseScheduleDate(value) {
-    if (value instanceof Date) {
-      return Number.isFinite(value.getTime()) ? value : null;
-    }
-    if (value === undefined || value === null) {
-      return null;
-    }
-    const normalized = String(value).replace(" ", "T");
-    const date = new Date(normalized);
-    return Number.isNaN(date.getTime()) ? null : date;
+  function parseDateString(value) {
+    if (!value) return null;
+    const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+    if (!match) return null;
+    return {
+      year: Number(match[1]),
+      month: Number(match[2]),
+      day: Number(match[3]),
+      hour: Number(match[4]),
+      minute: Number(match[5]),
+      second: Number(match[6]),
+    };
   }
 
   function toDateKey(date) {
@@ -75,21 +77,28 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     return `${yyyy}-${mm}-${dd}`;
   }
 
-  function formatTimeValue(date) {
-    if (!date) return "";
-    const hours = String(date.getHours()).padStart(2, "0");
-    const minutes = String(date.getMinutes()).padStart(2, "0");
-    return `${hours}:${minutes}`;
+  function pad2(val) {
+    return String(val || 0).padStart(2, "0");
   }
 
-  function formatDateTimeValue(date) {
-    if (!date) return "";
-    const day = String(date.getDate()).padStart(2, "0");
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const year = date.getFullYear();
-    const hours = String(date.getHours()).padStart(2, "0");
-    const minutes = String(date.getMinutes()).padStart(2, "0");
-    return `${day}.${month}.${year}, ${hours}:${minutes}`;
+  function formatTimeParts(parts) {
+    if (!parts) return "";
+    return `${pad2(parts.hour)}:${pad2(parts.minute)}`;
+  }
+
+  function formatDateTimeParts(parts) {
+    if (!parts) return "";
+    return `${pad2(parts.day)}.${pad2(parts.month)}.${parts.year}, ${formatTimeParts(parts)}`;
+  }
+
+  function getPartsDateKey(parts) {
+    if (!parts) return "";
+    return `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}`;
+  }
+
+  function toStoreDateParts(value, timezone) {
+    const storeValue = helpers.utcToStoreDateTime(value, timezone ?? "+0");
+    return parseDateString(storeValue) || parseDateString(value);
   }
 
   function getStoreDateNow(timezone) {
@@ -103,8 +112,8 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
   function formatReceiptScheduleText(order, timezone) {
     if (!order) return "";
     const title = String(order.timeOptionTitle || "").trim();
-    const scheduledDate = parseScheduleDate(order.scheduled_at);
-    if (!scheduledDate) {
+    const scheduledParts = toStoreDateParts(order.scheduled_at, timezone);
+    if (!scheduledParts) {
       return title;
     }
     const code = String(order.timeOptionCode || "").trim();
@@ -114,8 +123,8 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
         ? true
         : code === "at_time"
         ? false
-        : toDateKey(scheduledDate) !== toDateKey(storeNow);
-    const valueText = showDate ? formatDateTimeValue(scheduledDate) : formatTimeValue(scheduledDate);
+        : getPartsDateKey(scheduledParts) !== toDateKey(storeNow);
+    const valueText = showDate ? formatDateTimeParts(scheduledParts) : formatTimeParts(scheduledParts);
     if (!valueText) {
       return title;
     }
@@ -252,21 +261,10 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     }
 
     try {
-      // Форматируем дату (из БД уже в timezone филиала)
+      // Форматируем дату (время приводим к timezone филиала)
       const createdAtRaw = order.created_at;
-      let dateStr = '';
-      const createdAtStr = String(createdAtRaw || '').replace(' ', 'T');
-      const date = new Date(createdAtStr);
-      if (!isNaN(date.getTime())) {
-        const day = String(date.getDate()).padStart(2, '0');
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const year = date.getFullYear();
-        const hours = String(date.getHours()).padStart(2, '0');
-        const minutes = String(date.getMinutes()).padStart(2, '0');
-        dateStr = `${day}.${month}.${year}, ${hours}:${minutes}`;
-      } else if (createdAtRaw) {
-        dateStr = String(createdAtRaw);
-      }
+      const createdAtParts = toStoreDateParts(createdAtRaw, storeTimezone);
+      const dateStr = formatDateTimeParts(createdAtParts) || (createdAtRaw ? String(createdAtRaw) : '');
 
       // Используем правильные названия полей из БД (они переименованы в SELECT)
       const methodTitle = order.methodTitle || (order.methodCode === "pickup" ? "Самовывоз" : "Доставка");
