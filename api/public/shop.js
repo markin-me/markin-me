@@ -1804,6 +1804,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       attachProductThumbs(p);
       p.is_available = Number(p.is_available || 0) === 1;
 
+      await enrichProductsWithDisplayPrice([p], tenantId);
+
       res.json({ ok: true, data: p });
     } catch (e) {
       console.error(e);

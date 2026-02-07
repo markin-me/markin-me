@@ -4852,6 +4852,7 @@ function applySheetAddressTitle(backMode = "cart") {
     showSheetAddressForm,
     showSheetProduct,
     showSheetCombo,
+    showSheetCart,
   };
 
   setCartSheetFooterMode(openCartSheetCtx, items.length ? "cart" : "hidden");
@@ -5194,6 +5195,9 @@ function showSheetAddressList(backMode) {
 
     setCartSheetFooterMode(openCartSheetCtx, "hidden");
 
+    // Просмотр карточки товара — часть главной (каталог), подсвечиваем «Главная»
+    if (typeof setActiveNav === "function") setActiveNav("menu");
+
     // product mode header: ←/♡, × скрыть, title скрыть
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("");
@@ -5224,6 +5228,10 @@ function showSheetAddressList(backMode) {
     productWrap.classList.remove("hidden");
 
     setCartSheetFooterMode(openCartSheetCtx, "hidden");
+
+    // Просмотр карточки комбо — часть главной (каталог), подсвечиваем «Главная»
+    if (typeof setActiveNav === "function") setActiveNav("menu");
+
     // На мобилке скрываем футер корзины (× и «Оформить»), у комбо свой футер «в корзину» внутри контента
     const isMobileCombo = window.matchMedia("(max-width: 768px)").matches;
     if (isMobileCombo && elMobileCartActions) {
@@ -9019,7 +9027,26 @@ function initShopLate() {
       };
 
       bindNavToggle(elNavCategories, "categories", openCategoriesSheet);
-      bindNavToggle(elNavCart, "cart", openCartSheet);
+      // Корзина: при просмотре карточки товара — сразу переключаем на корзину, а не закрываем
+      if (elNavCart) {
+        elNavCart.addEventListener("click", () => {
+          const sheetOpen = window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen();
+          const viewingProduct = sheetOpen && openCartSheetCtx && (sheetNavigationState.screen === "product" || sheetNavigationState.screen === "combo");
+          if (viewingProduct) {
+            const showCart = openCartSheetCtx?.showSheetCart;
+            if (typeof showCart === "function") showCart();
+            if (typeof setActiveNav === "function") setActiveNav("cart");
+            return;
+          }
+          if (isSheetOpenOfType("cart")) {
+            closeShopSheetIfOpen();
+            setActiveNav("menu");
+            return;
+          }
+          closeShopSheetIfOpen();
+          openCartSheet();
+        });
+      }
       bindNavToggle(elNavProfile, "profile", () => openProfileSheet());
       bindNavToggle(elNavFav, "favorites", showFavoritesPlaceholder);
 
