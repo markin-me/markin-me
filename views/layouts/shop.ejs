@@ -15,10 +15,7 @@
   <script>
     (function () {
       try {
-        var t = localStorage.getItem('theme');
-        if (!t) {
-          t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
-        }
+        var t = localStorage.getItem('theme') || 'light';
         document.documentElement.setAttribute('data-theme', t);
         var m = document.getElementById('themeColorMeta');
         if (m) m.content = t === 'dark' ? '#1a1a1a' : '#ffffff';

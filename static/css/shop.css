@@ -270,12 +270,28 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   body.page-shop .main-container{
     padding: 12px;
     padding-top: calc(12px + var(--header-height));
+    padding-left: 0;
+    padding-right: 0;
     height: auto;
     min-height: calc(100dvh - var(--header-height));
   }
 
   .shop-grid{
     grid-template-columns: 1fr;
+  }
+
+  /* Панель товаров на всю ширину экрана */
+  body.page-shop .shop-products-panel{
+    width: 100%;
+    max-width: 100vw;
+  }
+  body.page-shop .shop-products-panel .panel-body{
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  body.page-shop .center-stack > .panel:first-child{
+    padding-left: 12px;
+    padding-right: 12px;
   }
 
   .shop-col-cats,

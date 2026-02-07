@@ -87,10 +87,9 @@
     applyBrand(theme);
   }
 
-  // init theme (prefer saved, else system)
+  // init theme (prefer saved, else light by default)
   const saved = localStorage.getItem(STORAGE_KEY);
-  const systemPrefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const initial = saved || (systemPrefersDark ? 'dark' : 'light');
+  const initial = saved || 'light';
   applyTheme(initial);
 
   // handle toggle button (if present)

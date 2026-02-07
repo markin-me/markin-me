@@ -4430,16 +4430,19 @@ async function initAddresses() {
           });
 
           q.appendChild(pill);
-          mid.appendChild(q);
-          row.appendChild(mid);
-
           const right = document.createElement("div");
           right.className = "cart-right";
           const pr = document.createElement("div");
           pr.className = "cart-price";
           pr.textContent = money(0);
           right.appendChild(pr);
-          row.appendChild(right);
+
+          const bottomRow = document.createElement("div");
+          bottomRow.className = "cart-bottom-row";
+          bottomRow.appendChild(q);
+          bottomRow.appendChild(right);
+          mid.appendChild(bottomRow);
+          row.appendChild(mid);
 
           listEl.appendChild(row);
         });

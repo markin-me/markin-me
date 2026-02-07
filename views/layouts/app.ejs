@@ -14,10 +14,7 @@
         var c = localStorage.getItem('sidebar:collapsed');
         document.documentElement.setAttribute('data-sidebar-collapsed', c === '1' ? '1' : '0');
 
-        var t = localStorage.getItem('theme');
-        if (!t) {
-          t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
-        }
+        var t = localStorage.getItem('theme') || 'light';
         document.documentElement.setAttribute('data-theme', t);
       } catch (e) {}
     })();
