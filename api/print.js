@@ -1,4 +1,4 @@
-const express = require("express");
+﻿const express = require("express");
 
 module.exports = function makePrintApiRouter({ db, helpers }) {
   const router = express.Router();
@@ -186,20 +186,20 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
 
     try {
       // Форматируем дату (из БД уже в timezone филиала)
-      const createdAtStr = String(order.created_at).replace(' ', 'T');
+      const createdAtRaw = order.created_at;
+      let dateStr = '';
+      const createdAtStr = String(createdAtRaw || '').replace(' ', 'T');
       const date = new Date(createdAtStr);
-
-      if (isNaN(date.getTime())) {
-        console.warn(`[PRINT API] Invalid date: ${order.created_at}`);
-        return '<div>Ошибка форматирования даты</div>';
+      if (!isNaN(date.getTime())) {
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const year = date.getFullYear();
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        dateStr = `${day}.${month}.${year}, ${hours}:${minutes}`;
+      } else if (createdAtRaw) {
+        dateStr = String(createdAtRaw);
       }
-
-      const day = String(date.getDate()).padStart(2, '0');
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const year = date.getFullYear();
-      const hours = String(date.getHours()).padStart(2, '0');
-      const minutes = String(date.getMinutes()).padStart(2, '0');
-      const dateStr = `${day}.${month}.${year}, ${hours}:${minutes}`;
 
       // Используем правильные названия полей из БД (они переименованы в SELECT)
       const methodTitle = order.methodTitle || (order.methodCode === "pickup" ? "Самовывоз" : "Доставка");
@@ -222,14 +222,81 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       const showChange = changeAmount > 0;
       const scheduleText = order.timeOptionTitle || (isUrgent ? "Быстрее" : "");
 
-      const receiptItems = Array.isArray(order.items) ? order.items.slice() : [];
+      function receiptTotalStr(val) {
+        const n = Number(val);
+        if (!Number.isFinite(n)) return '';
+        if (n === 0) return '';
+        return Math.round(n) === n ? String(Math.round(n)) : n.toFixed(2);
+      }
+
+      function isAutoAddItem(item) {
+        if (Number(item?.auto_add || 0) === 1) return true;
+        const name = String(item?.product_name || item?.name || '').trim().toLowerCase();
+        return name === 'приборы';
+      }
+
+      const receiptItems = Array.isArray(order.items)
+        ? order.items.slice().sort((a, b) => {
+            const aAuto = isAutoAddItem(a);
+            const bAuto = isAutoAddItem(b);
+            if (aAuto && !bAuto) return 1;
+            if (!aAuto && bAuto) return -1;
+            return 0;
+          })
+        : [];
 
       let itemsHtml = '';
       if (receiptItems.length) {
         receiptItems.forEach(item => {
+          if (item.type === 'combo') {
+            const name = escapeHtml(item.name || item.combo_title || 'Комбо');
+            const qty = Math.max(1, Number(item.quantity || item.qty || 1));
+            const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? 0);
+            const priceStr = receiptTotalStr(lineTotal);
+            const qtyStr = `${qty} Х`;
+            const bulletPrefix = '• ';
+
+            const selections = Array.isArray(item.selections) ? item.selections : [];
+            let compositionHtml = '';
+            selections.forEach((sel) => {
+              const productName = escapeHtml(sel.product_name || '—');
+              compositionHtml += `<div class="receipt-composition-item" style="font-weight: bold;">1 × ${productName}</div>`;
+              const vParts = [sel.variant_label, sel.variant_unit, sel.variant_group_title].filter(Boolean);
+              if (vParts.length) {
+                compositionHtml += `<div class="receipt-composition-item">${bulletPrefix}${escapeHtml(vParts.join(' '))}</div>`;
+              }
+              const ingredientsDisplay = Array.isArray(sel.ingredients_display) ? sel.ingredients_display : [];
+              ingredientsDisplay.forEach((ing) => {
+                const rawQty = ing.qty ?? ing.quantity;
+                const numQty = typeof rawQty === 'number' ? rawQty : parseFloat(rawQty);
+                if (!Number.isFinite(numQty) || numQty <= 0) return;
+                const ingName = escapeHtml(ing.name || '');
+                const unit = escapeHtml(String(ing.unit || '').trim());
+                const parts = [];
+                if (rawQty != null && rawQty !== '') parts.push(String(rawQty));
+                if (unit) parts.push(unit);
+                if (ingName) parts.push(ingName);
+                compositionHtml += `<div class="receipt-composition-item">${bulletPrefix}${escapeHtml(parts.join(' '))}</div>`;
+              });
+            });
+
+            itemsHtml += `
+          <div class="receipt-item">
+            <div class="receipt-item-row">
+              <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
+              <span class="receipt-item-name">${name}</span>
+              ${priceStr ? `<span class="receipt-item-price">${escapeHtml(priceStr)}</span>` : ''}
+            </div>
+            ${compositionHtml ? '<div class="receipt-composition">' + compositionHtml + '</div>' : ''}
+          </div>
+        `;
+            return;
+          }
           const name = escapeHtml(item.product_name || item.name || 'Товар');
           const qty = Math.max(1, Number(item.quantity || item.qty || 1));
-          const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? 0);
+          const basePrice = parseFloat(item.price || 0);
+          const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? (basePrice * qty) ?? 0);
+          const priceStr = receiptTotalStr(lineTotal);
           const qtyStr = `${qty} Х`;
           const bulletPrefix = '• ';
 
@@ -305,7 +372,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
             <div class="receipt-item-row">
               <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
               <span class="receipt-item-name">${name}</span>
-              <span class="receipt-item-price">${escapeHtml(money(lineTotal))}</span>
+              ${priceStr ? `<span class="receipt-item-price">${escapeHtml(priceStr)}</span>` : ''}
             </div>
             ${variantsHtml}
             ${ingredientsHtml}
@@ -681,3 +748,4 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
 
   return router;
 };
+
