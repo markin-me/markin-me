@@ -16,6 +16,7 @@ const makeAdminOrdersRouter = require('./api/admin/orders');
 const makeAdminProductsRouter = require('./api/admin/products');
 const makeAdminTenantRouter = require('./api/admin/tenant');
 const makePublicShopRouter = require('./api/public/shop');
+const makePrintApiRouter = require('./api/print');
 
 // middleware
 const { authMiddleware } = require('./api/middleware/auth');
@@ -294,6 +295,7 @@ app.post('/api/telegram/webhook', (req, res) => {
 // API: Public (публичные роуты должны быть ПЕРЕД админскими)
 // ------------------------------
 app.use('/api/public', makePublicShopRouter({ db, helpers, ordersEvents }));
+app.use('/api/print', makePrintApiRouter({ db, helpers }));
 
 // ------------------------------
 // API: Admin (требуют авторизации)

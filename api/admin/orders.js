@@ -1,5 +1,6 @@
 
 const express = require("express");
+const { sendOrderToPrintBot } = require("../printPush");
 
 module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
@@ -463,6 +464,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const payload = await fetchOrderPayload(tenantId, storeId, id);
       if (payload) {
         ordersEvents.publish(tenantId, storeId, "order.updated", payload);
+        sendOrderToPrintBot({ db, order: payload, tenantId, storeId }).catch(() => {});
       }
 
       res.json({ ok: true });

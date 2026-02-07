@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const path = require('path');
 const multer = require('multer');
 const { sendNewOrderNotification } = require('../telegramNotifications');
+const { sendOrderToPrintBot } = require('../printPush');
 
 module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
@@ -3212,6 +3213,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             console.error('Telegram new order notify:', err)
           );
         }
+        sendOrderToPrintBot({ db, order: payload, tenantId, storeId: orderStoreId }).catch(() => {});
       }
 
       res.json({ ok: true, data: { id: r.insertId, public_id: publicId } });
