@@ -56,6 +56,72 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     return row;
   }
 
+  function parseScheduleDate(value) {
+    if (value instanceof Date) {
+      return Number.isFinite(value.getTime()) ? value : null;
+    }
+    if (value === undefined || value === null) {
+      return null;
+    }
+    const normalized = String(value).replace(" ", "T");
+    const date = new Date(normalized);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function toDateKey(date) {
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function formatTimeValue(date) {
+    if (!date) return "";
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    return `${hours}:${minutes}`;
+  }
+
+  function formatDateTimeValue(date) {
+    if (!date) return "";
+    const day = String(date.getDate()).padStart(2, "0");
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const year = date.getFullYear();
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    return `${day}.${month}.${year}, ${hours}:${minutes}`;
+  }
+
+  function getStoreDateNow(timezone) {
+    const now = new Date();
+    const localOffsetMinutes = -now.getTimezoneOffset();
+    const storeOffsetMinutes = helpers.parseTimezoneOffsetToMinutes(timezone ?? "+0");
+    const shiftMinutes = storeOffsetMinutes - localOffsetMinutes;
+    return new Date(now.getTime() + shiftMinutes * 60 * 1000);
+  }
+
+  function formatReceiptScheduleText(order, timezone) {
+    if (!order) return "";
+    const title = String(order.timeOptionTitle || "").trim();
+    const scheduledDate = parseScheduleDate(order.scheduled_at);
+    if (!scheduledDate) {
+      return title;
+    }
+    const code = String(order.timeOptionCode || "").trim();
+    const storeNow = getStoreDateNow(timezone ?? "+0");
+    const showDate =
+      code === "on_date"
+        ? true
+        : code === "at_time"
+        ? false
+        : toDateKey(scheduledDate) !== toDateKey(storeNow);
+    const valueText = showDate ? formatDateTimeValue(scheduledDate) : formatTimeValue(scheduledDate);
+    if (!valueText) {
+      return title;
+    }
+    return title ? `${title}: ${valueText}` : valueText;
+  }
+
   // GET /api/print/token-info - проверка токена и информация о точке
   router.get("/token-info", async (req, res) => {
     try {
@@ -152,9 +218,10 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       } catch {}
       
       order.items = items;
+      const storeTimezone = await getStoreTimezone(tenantId, storeId);
 
       // Теперь генерируем HTML ровно как в  orders.js
-      const html = generateReceiptHtmlForOrder(order);
+      const html = generateReceiptHtmlForOrder(order, storeTimezone);
 
       res.json({
         ok: true,
@@ -167,7 +234,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     }
   });
 
-  function generateReceiptHtmlForOrder(order) {
+  function generateReceiptHtmlForOrder(order, storeTimezone) {
     // Вспомогательные функции (переведены из orders.js)
     function money(v) {
       const n = Number(v || 0);
@@ -220,7 +287,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       const paymentTitle = order.paymentTitle || "";
       const changeAmount = Math.max(0, changeFrom - total);
       const showChange = changeAmount > 0;
-      const scheduleText = order.timeOptionTitle || (isUrgent ? "Быстрее" : "");
+      const scheduleText = formatReceiptScheduleText(order, storeTimezone) || (isUrgent ? "Быстрее" : "");
 
       function receiptTotalStr(val) {
         const n = Number(val);
