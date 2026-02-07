@@ -4541,11 +4541,13 @@ async function initAddresses() {
   }
 
   function removeFromCartByKey(cartKey, productId) {
+    console.log("[DEBUG] removeFromCartByKey called, cartKey:", cartKey, "productId:", productId, "cart:", JSON.stringify(state.cart.map(i => ({ key: i.key, type: i.type, product_id: i.product_id }))));
     const idx = state.cart.findIndex(item => {
       if (cartKey && item.key === cartKey) return true;
       if (!cartKey && item.id === productId && !item.key) return true;
       return false;
     });
+    console.log("[DEBUG] Found index:", idx);
     if (idx !== -1) {
       const removedItem = state.cart[idx];
       if (removedItem) {
@@ -5006,7 +5008,11 @@ function updateCartBadge() {
         const p = it.product;
         if (!p) return;
         if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
-        state.productCache.set(Number(p.id), p);
+        // Не перезаписываем продукт, если он уже есть в кэше с более полными данными
+        const pid = Number(p.id);
+        if (!state.productCache.has(pid)) {
+          state.productCache.set(pid, p);
+        }
       });
     } catch (e) {
       console.warn("Failed to load auto-add rules", e);

@@ -1568,6 +1568,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   background: var(--color-surface);
   will-change: transform;
   touch-action: pan-y;
+  overflow: hidden;
 }
 
 .cart-swipe-container .cart-row {

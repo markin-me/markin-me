@@ -87,9 +87,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   function getConversionFactorMap(tenantId, db) {
     const map = new Map();
     return async function getConversionFactor(fromUnitId, toUnitId) {
-      if (!fromUnitId || !toUnitId || Number(fromUnitId) === Number(toUnitId)) return 1;
+      if (!fromUnitId || !toUnitId || Number(fromUnitId) === Number(toUnitId)) {
+        return 1;
+      }
       const key = `${Number(fromUnitId)}_${Number(toUnitId)}`;
-      if (map.has(key)) return map.get(key);
+      if (map.has(key)) {
+        return map.get(key);
+      }
       const [direct] = await db.query(
         `SELECT factor FROM prod_unit_conversions
          WHERE tenant_id=? AND from_unit_id=? AND to_unit_id=? AND is_active=1 LIMIT 1`,
@@ -117,30 +121,50 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
   async function computeDisplayPriceForProduct(product, variant, getConversionFactor, roundPrice) {
     const basePrice = Number(product.price || 0);
-    if (!variant || !variant.values || !variant.values.length) return roundPrice(basePrice);
+
+    if (!variant || !variant.values || !variant.values.length) {
+      return roundPrice(basePrice);
+    }
+
     const defaultIndex = variant.default_value_index != null ? Number(variant.default_value_index) : 0;
     const selectedIndex = defaultIndex >= 0 && defaultIndex < variant.values.length ? defaultIndex : 0;
     const value = variant.values[selectedIndex];
     const numericValue = parseVariantValueNumber(value);
-    if (!Number.isFinite(numericValue)) return roundPrice(basePrice);
+
+    if (!Number.isFinite(numericValue)) {
+      return roundPrice(basePrice);
+    }
 
     const baseUnitId = Number(product.base_unit_id || product.unit_id || variant.unit_id || 0);
     const baseQty = Number(product.base_qty || 1) || 1;
     const variantUnitId = Number(variant.unit_id || 0);
-    if (!Number.isFinite(baseUnitId) || !Number.isFinite(variantUnitId)) return roundPrice(basePrice);
+
+    if (!Number.isFinite(baseUnitId) || !Number.isFinite(variantUnitId)) {
+      return roundPrice(basePrice);
+    }
 
     const factor = await getConversionFactor(variantUnitId, baseUnitId);
-    if (factor == null) return roundPrice(basePrice);
+
+    if (factor == null) {
+      return roundPrice(basePrice);
+    }
+
     const qtyInBase = numericValue * Number(factor || 0);
-    if (!Number.isFinite(qtyInBase) || qtyInBase <= 0) return roundPrice(basePrice);
+
+    if (!Number.isFinite(qtyInBase) || qtyInBase <= 0) {
+      return roundPrice(basePrice);
+    }
 
     let unitPrice = basePrice * (qtyInBase / baseQty);
+
     const tiers = Array.isArray(variant.discount_tiers) ? variant.discount_tiers : [];
     const tier = tiers.find((t) => Number(t.sort_order) === selectedIndex);
     const discountPercent = Number(tier?.discount_percent || 0) || 0;
+
     if (discountPercent !== 0) {
       unitPrice = unitPrice * (1 - discountPercent / 100);
     }
+
     return roundPrice(unitPrice);
   }
 
@@ -251,11 +275,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const values = safeJsonArray(r.values);
       if (!values.length) continue;
       const defaultIdx = r.default_value_index != null ? Number(r.default_value_index) : 0;
+      const tiers = tiersByGroup.get(Number(r.variant_group_id)) || [];
       variantByProductId.set(pid, {
         unit_id: r.unit_id,
         values,
         default_value_index: defaultIdx >= 0 && defaultIdx < values.length ? defaultIdx : 0,
-        discount_tiers: tiersByGroup.get(Number(r.variant_group_id)) || [],
+        discount_tiers: tiers,
       });
     }
 
@@ -1567,6 +1592,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             r.is_available = (r.stock_qty == null || Number(r.stock_qty) > 0);
             attachProductThumbs(r);
           }
+          await enrichProductsWithDisplayPrice(rows, tenantId);
           return res.json({ ok: true, data: rows, combos: [], category_id: categoryId, lite: true });
         }
 
@@ -1590,6 +1616,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           r.is_available = (r.stock_qty == null || Number(r.stock_qty) > 0);
           attachProductThumbs(r);
         }
+        await enrichProductsWithDisplayPrice(rows, tenantId);
         return res.json({ ok: true, data: rows, combos: [], category_id: categoryId, lite: true });
       }
 
@@ -3260,6 +3287,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                 p.price AS product_price,
                 p.old_price AS product_old_price,
                 p.photos_json AS product_photos_json,
+                p.base_unit_id AS product_base_unit_id,
+                p.unit_id AS product_unit_id,
+                p.base_qty AS product_base_qty,
                 s.qty AS stock_qty
          FROM prod_auto_add_items i
          JOIN prod_auto_add_groups g
@@ -3272,6 +3302,37 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          ORDER BY g.sort_order ASC, i.sort_order ASC, i.id ASC`,
         [storeId, tenantId]
       );
+
+      // Собираем продукты для расчёта display_price
+      const productIds = [...new Set(rows.map(r => Number(r.product_id)).filter(Boolean))];
+      const displayPriceMap = new Map();
+
+      if (productIds.length > 0) {
+        // Формируем массив продуктов для enrichProductsWithDisplayPrice
+        const productsForEnrich = rows.map(r => ({
+          id: Number(r.product_id),
+          price: Number(r.product_price || 0),
+          base_unit_id: r.product_base_unit_id,
+          unit_id: r.product_unit_id,
+          base_qty: r.product_base_qty,
+        }));
+
+        // Удаляем дубликаты по id
+        const uniqueProducts = [];
+        const seenIds = new Set();
+        for (const p of productsForEnrich) {
+          if (!seenIds.has(p.id)) {
+            seenIds.add(p.id);
+            uniqueProducts.push(p);
+          }
+        }
+
+        await enrichProductsWithDisplayPrice(uniqueProducts, tenantId);
+
+        for (const p of uniqueProducts) {
+          displayPriceMap.set(p.id, p.display_price);
+        }
+      }
 
       const items = rows.map((r) => ({
         id: Number(r.id),
@@ -3293,6 +3354,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           old_price: Number(r.product_old_price || 0),
           photos: helpers.safeJsonArray(r.product_photos_json),
           stock_qty: r.stock_qty != null ? Number(r.stock_qty) : null,
+          display_price: displayPriceMap.get(Number(r.product_id)) ?? Number(r.product_price || 0),
         },
       }));
 

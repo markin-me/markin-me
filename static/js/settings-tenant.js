@@ -279,6 +279,13 @@
 
       fillTimezoneSelect(tenant.timezone, "tenantTimezoneSelect");
       fillTimezoneSelect(tenant.timezone, "brandTimezoneSelect");
+
+      // Telegram mini app link
+      const tgMiniAppLink = document.getElementById("tenantTelegramMiniAppLink");
+      if (tgMiniAppLink && tenant.telegram_mini_app_url) {
+        tgMiniAppLink.href = tenant.telegram_mini_app_url;
+        tgMiniAppLink.textContent = tenant.telegram_mini_app_url;
+      }
     } catch (err) {
       console.error("Не удалось загрузить профиль tenant:", err);
     }
@@ -873,6 +880,7 @@
           if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.remove("is-active");
           if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.remove("is-active");
           if (tabId === "sounds" && soundsCard) soundsCard.classList.remove("is-active");
+          if (tabId === "notifications" && notificationsCard) notificationsCard.classList.remove("is-active");
           if (tabId === "print-api" && printApiCard) printApiCard.classList.remove("is-active");
           if (tabId === DELIVERY_TAB_ID) {
             deliverySettingsState.selectedId = null;
@@ -915,6 +923,7 @@
       if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.add("is-active");
       if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.add("is-active");
       if (tabId === "sounds" && soundsCard) soundsCard.classList.add("is-active");
+      if (tabId === "notifications" && notificationsCard) notificationsCard.classList.add("is-active");
       if (tabId === "print-api" && printApiCard) printApiCard.classList.add("is-active");
     }
 

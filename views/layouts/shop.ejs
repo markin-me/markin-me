@@ -15,7 +15,7 @@
   <script>
     (function () {
       try {
-        var t = localStorage.getItem('theme') || 'light';
+        var t = 'light'; // временно принудительно светлая тема
         document.documentElement.setAttribute('data-theme', t);
         var m = document.getElementById('themeColorMeta');
         if (m) m.content = t === 'dark' ? '#1a1a1a' : '#ffffff';
