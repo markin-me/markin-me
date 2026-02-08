@@ -3032,9 +3032,9 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   border:none;
   outline:none;
   cursor:pointer;
-  padding:6px 20px;
+  padding:8px 22px;
   border-radius:999px;
-  font-size:.85rem;
+  font-size:.9rem;
   font-weight:600;
   transition:background .2s, color .2s, box-shadow .2s;
   background:transparent;
@@ -3541,6 +3541,17 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   display: none;
 }
 
+.shop-profile-logout-btn{
+  width: 100%;
+  color: #e53935;
+  border-color: #e53935;
+  margin-top: 8px;
+}
+.shop-profile-logout-btn:hover{
+  background: #e53935;
+  color: #fff;
+}
+
 @media (max-width: 640px){
   .shop-profile-photo{
     width: 120px;
@@ -3917,19 +3928,35 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 }
 
 .shop-profile-name-value{
-  display: grid;
+  display: flex;
+  align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
 }
+
+.shop-profile-name-edit{
+  width: 28px;
+  height: 28px;
+  font-size: .75rem;
+  color: var(--color-text-muted, #888);
+  flex-shrink: 0;
+}
+.shop-profile-name-edit:hover{
+  color: var(--color-primary, #f60);
+}
+.shop-profile-name-edit.hidden{ display: none; }
 
 .shop-profile-name-input{
   width: 100%;
   margin-top: 0;
+  flex-basis: 100%;
 }
 
 .shop-profile-name-actions{
   display: flex;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 2px;
+  flex-basis: 100%;
 }
 
 .shop-profile-name-input.hidden,

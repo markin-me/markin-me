@@ -742,8 +742,8 @@ header{
 
   /* Когда активный заказ свернут, навигация и карточка сливаются в один блок */
   .shop-mobile-bottom-container .shop-active-orders-sheet-collapsed:not(.hidden) + .shop-nav,
-  .shop-mobile-bottom-container .shop-mobile-product-actions:not(.hidden) + .shop-mobile-cart-actions.hidden + .shop-mobile-address-actions.hidden + .shop-active-orders-sheet-collapsed + .shop-nav,
-  .shop-mobile-bottom-container .shop-mobile-product-actions:not(.hidden) + .shop-mobile-cart-actions.hidden + .shop-mobile-address-actions.hidden + .shop-nav,
+  .shop-mobile-bottom-container .shop-mobile-product-actions:not(.hidden) + .shop-mobile-cart-actions.hidden + .shop-mobile-address-actions.hidden + .shop-mobile-address-confirm.hidden + .shop-active-orders-sheet-collapsed + .shop-nav,
+  .shop-mobile-bottom-container .shop-mobile-product-actions:not(.hidden) + .shop-mobile-cart-actions.hidden + .shop-mobile-address-actions.hidden + .shop-mobile-address-confirm.hidden + .shop-nav,
   .shop-mobile-bottom-container .shop-mobile-cart-actions:not(.hidden) + .shop-mobile-address-actions.hidden + .shop-mobile-address-confirm.hidden + .shop-active-orders-sheet-collapsed + .shop-nav,
   .shop-mobile-bottom-container .shop-mobile-cart-actions:not(.hidden) + .shop-mobile-address-actions.hidden + .shop-mobile-address-confirm.hidden + .shop-nav,
   .shop-mobile-bottom-container .shop-mobile-address-actions:not(.hidden) + .shop-mobile-address-confirm.hidden + .shop-active-orders-sheet-collapsed + .shop-nav,
@@ -2924,9 +2924,10 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
   justify-content:space-between;
   gap:12px;
   padding:0 12px;
+  min-height:45px;
 }
-.app-modal-header .btn{height:32px}
-.app-modal-header .btn-icon{width:32px}
+.app-modal-header .btn{height:40px}
+.app-modal-header .btn-icon{width:40px}
 .shop-sheet-discount-badge{
   margin:0 auto;
   padding:4px 10px;

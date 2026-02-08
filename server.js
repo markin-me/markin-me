@@ -22,7 +22,7 @@ const makePrintApiRouter = require('./api/print');
 const { authMiddleware } = require('./api/middleware/auth');
 
 const app = express();
-const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '3';
+const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '6';
 const PORT = process.env.PORT || 3000;
 
 // Инициализация с обработкой ошибок
@@ -57,6 +57,23 @@ app.use('/static', express.static(path.join(__dirname, 'static'), {
 
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
+
+// Helper для версионирования статических ресурсов (CSS, JS) по времени изменения файла
+app.locals.assetUrl = function assetUrl(src) {
+  try {
+    if (!src || typeof src !== 'string') return src;
+    if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) return src;
+    if (!src.startsWith('/static/')) return src;
+    const relativePath = src.split('?')[0].replace(/^\/static\//, '');
+    const filePath = path.join(__dirname, 'static', relativePath);
+    const stat = fs.statSync(filePath);
+    const version = Math.round(stat.mtimeMs || stat.mtime.getTime());
+    const separator = src.includes('?') ? '&' : '?';
+    return `${src}${separator}v=${version}`;
+  } catch (e) {
+    return src;
+  }
+};
 
 // Helper для версионирования URL картинок по времени изменения файла
 app.locals.imageUrl = function imageUrl(src) {

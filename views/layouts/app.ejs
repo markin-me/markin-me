@@ -25,7 +25,7 @@
   <link rel="preload" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" as="style" onload="this.onload=null;this.rel='stylesheet'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" /></noscript>
 
-  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css') %>" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
 </head>
 
@@ -58,13 +58,13 @@
   <% } %>
 
   <!-- Скрипты -->
-  <script src="/static/js/auth.js"></script>
-  <script src="/static/js/current-time.js"></script>
-  <script src="/static/js/theme.js"></script>
-  <script src="/static/js/sidebar.js"></script>
+  <script src="<%= assetUrl('/static/js/auth.js') %>"></script>
+  <script src="<%= assetUrl('/static/js/current-time.js') %>"></script>
+  <script src="<%= assetUrl('/static/js/theme.js') %>"></script>
+  <script src="<%= assetUrl('/static/js/sidebar.js') %>"></script>
 
   <!-- ✅ Модалка -->
-  <script src="/static/js/appModal.js"></script>
+  <script src="<%= assetUrl('/static/js/appModal.js') %>"></script>
 
   <!-- Кнопка профиля / выхода -->
   <script>
@@ -287,7 +287,7 @@
 
   <% if (Array.isArray(pageScripts)) { %>
     <% pageScripts.forEach(function (src) { %>
-      <script src="<%= src %>"></script>
+      <script src="<%= assetUrl(src) %>"></script>
     <% }) %>
   <% } %>
 </body>

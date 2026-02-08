@@ -6143,6 +6143,12 @@ function renderSheetAddressList() {
     nameText.className = "shop-profile-name-text";
     nameText.textContent = str(me?.name || "—");
 
+    const nameEditBtn = document.createElement("button");
+    nameEditBtn.type = "button";
+    nameEditBtn.className = "btn btn-icon shop-profile-name-edit";
+    nameEditBtn.setAttribute("aria-label", "Изменить имя");
+    nameEditBtn.innerHTML = `<i class="fas fa-pencil"></i>`;
+
     const nameInput = document.createElement("input");
     nameInput.type = "text";
     nameInput.className = "control shop-profile-name-input hidden";
@@ -6165,6 +6171,7 @@ function renderSheetAddressList() {
     nameActions.appendChild(nameCancel);
 
     nameValue.appendChild(nameText);
+    nameValue.appendChild(nameEditBtn);
     nameValue.appendChild(nameInput);
     nameValue.appendChild(nameActions);
 
@@ -6367,6 +6374,18 @@ function renderSheetAddressList() {
     updateRow.appendChild(updateTitle);
     updateRow.appendChild(updateBtn);
     settingsWrap.appendChild(updateRow);
+
+    const logoutRow = document.createElement("div");
+    logoutRow.className = "shop-profile-settings-row";
+    const logoutBtn = document.createElement("button");
+    logoutBtn.type = "button";
+    logoutBtn.className = "btn shop-profile-logout-btn";
+    logoutBtn.textContent = "Выйти";
+    logoutBtn.addEventListener("click", async () => {
+      if (typeof onLogout === "function") onLogout();
+    });
+    logoutRow.appendChild(logoutBtn);
+    settingsWrap.appendChild(logoutRow);
 
     settingsPanel.appendChild(settingsWrap);
 
@@ -6839,10 +6858,13 @@ function renderSheetAddressList() {
 
     setProfilePhoto(me?.photo || "");
 
+    nameEditBtn.addEventListener("click", () => setEditingMode(true));
+
     function setEditingMode(next) {
       isEditing = Boolean(next);
       wrap.classList.toggle("is-editing", isEditing);
       nameText.classList.toggle("hidden", isEditing);
+      nameEditBtn.classList.toggle("hidden", isEditing);
       nameInput.classList.toggle("hidden", !isEditing);
       const isMobile = window.matchMedia("(max-width: 768px)").matches;
       nameActions.classList.toggle("hidden", !isEditing || isMobile);
@@ -7240,18 +7262,11 @@ function renderSheetAddressList() {
     sheetNavigationState.data = null;
 
     setAppModalMode("shop");
-    const cleanupMenu = mountProfileModalMenu({
-      onEdit: () => ctx.showEdit(),
-      onLogout: async () => {
-        await handleProfileLogout({ closeModal: true });
-      },
-    });
 
     window.AppModal.open({
       title: "Профиль",
       content: wrap,
       onClose: () => {
-        cleanupMenu();
         setActiveNav("menu");
         // Сбрасываем состояние навигации
         sheetNavigationState.type = null;
@@ -7543,7 +7558,6 @@ function setBottomNavActive(tab) {
    */
   async function updateStoreStatus() {
     const statusEl = $("#shopToolbarStatus");
-    const mobileStatusEl = $("#shopMobileHeaderStatus");
 
     function setStatus(el, visible, text) {
       if (!el) return;
@@ -7563,7 +7577,6 @@ function setBottomNavActive(tab) {
 
       if (storeIsOpen) {
         setStatus(statusEl, false);
-        setStatus(mobileStatusEl, false);
         return;
       }
 
@@ -7571,7 +7584,6 @@ function setBottomNavActive(tab) {
 
       if (!nextOpening) {
         setStatus(statusEl, true, "Мы закрыты");
-        setStatus(mobileStatusEl, true, "Мы закрыты");
         return;
       }
 
@@ -7583,7 +7595,6 @@ function setBottomNavActive(tab) {
       }
 
       setStatus(statusEl, true, message);
-      setStatus(mobileStatusEl, true, message);
     } catch (err) {
       console.error("Failed to update store status:", err);
     }
