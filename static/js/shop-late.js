@@ -7558,7 +7558,6 @@ function setBottomNavActive(tab) {
    */
   async function updateStoreStatus() {
     const statusEl = $("#shopToolbarStatus");
-    const mobileStatusEl = $("#shopMobileHeaderStatus");
 
     function setStatus(el, visible, text) {
       if (!el) return;
@@ -7578,7 +7577,6 @@ function setBottomNavActive(tab) {
 
       if (storeIsOpen) {
         setStatus(statusEl, false);
-        setStatus(mobileStatusEl, false);
         return;
       }
 
@@ -7586,7 +7584,6 @@ function setBottomNavActive(tab) {
 
       if (!nextOpening) {
         setStatus(statusEl, true, "Мы закрыты");
-        setStatus(mobileStatusEl, true, "Мы закрыты");
         return;
       }
 
@@ -7598,7 +7595,6 @@ function setBottomNavActive(tab) {
       }
 
       setStatus(statusEl, true, message);
-      setStatus(mobileStatusEl, true, message);
     } catch (err) {
       console.error("Failed to update store status:", err);
     }
