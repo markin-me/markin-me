@@ -129,13 +129,14 @@ async function enqueuePrintJob(db, { tenantId, storeId, tokenId, order, pdfBase6
 async function sendOrderToPrintBot({ db, order, tenantId, storeId }) {
   if (!order) return false;
   const statusId = Number(order.status_id ?? order.statusId ?? order.statusID ?? 0);
-  if (statusId !== 1) return false;
 
   const resolvedTenantId = Number(tenantId || order.tenant_id || order.tenantId || order.tenantID || order.tenant);
   const resolvedStoreId = Number(storeId || order.store_id || order.storeId || order.storeID || order.store);
   if (!resolvedTenantId || !resolvedStoreId) return false;
 
   const tokenRow = await getPrintTokenRow(db, resolvedTenantId, resolvedStoreId);
+  console.log("sendOrderToPrintBot", { orderId: order.id, statusId, tokenRow: !!tokenRow });
+  if (statusId !== 1) return false;
   if (!tokenRow?.token) return false;
 
   const orderId = order.id || order.order_id || order.orderId;
