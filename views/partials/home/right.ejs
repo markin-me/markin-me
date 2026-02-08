@@ -403,12 +403,19 @@
           <div class="settings-site-field">
             <label class="field-label">ТОКЕН (X-Api-Key)</label>
             <input class="control" type="text" id="settingsPrintApiToken" readonly />
-            <button class="btn btn-link btn-sm" type="button" id="settingsPrintApiCopyToken">Скопировать токен</button>
-            <div class="field-hint">Передавайте токен в заголовке X-Api-Key</div>
+            <div class="settings-print-api-token-actions">
+              <button class="btn btn-link btn-sm" type="button" id="settingsPrintApiCopyToken">Скопировать токен</button>
+              <button class="btn btn-primary btn-sm" type="button" id="settingsPrintApiGenerateBtn">Сгенерировать токен</button>
+            </div>
           </div>
-        </div>
-        <div class="stores-form-actions">
-          <button class="btn btn-primary btn-sm" type="button" id="settingsPrintApiGenerateBtn">Сгенерировать токен</button>
+          <div class="settings-site-field">
+            <label class="field-label">СОЕДИНЕНИЕ С СЕРВЕРОМ ПЕЧАТИ</label>
+            <input class="control" type="text" id="settingsPrintApiPrinterStatus" readonly />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ПОДКЛЮЧЕННЫЙ ПРИНТЕР</label>
+            <input class="control" type="text" id="settingsPrintApiPrinterName" readonly />
+          </div>
         </div>
       </div>
 

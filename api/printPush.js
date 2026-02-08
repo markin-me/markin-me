@@ -2,8 +2,6 @@
 const https = require("https");
 const { URL } = require("url");
 
-const BOT_HOST = "127.0.0.1";
-const BOT_PORT = 7788;
 const CRM_BASE_URL = (process.env.CRM_BASE_URL || "http://localhost:3000").replace(/\/+$/, "");
 
 let browserPromise = null;
@@ -92,43 +90,40 @@ function fetchReceiptHtml(token, orderId) {
   });
 }
 
-async function getPrintToken(db, tenantId, storeId) {
+async function getPrintTokenRow(db, tenantId, storeId) {
   const [rows] = await db.query(
-    `SELECT token FROM print_api_tokens WHERE tenant_id=? AND store_id=? AND is_active=1 ORDER BY id DESC LIMIT 1`,
+    `SELECT id, token FROM print_api_tokens WHERE tenant_id=? AND store_id=? AND is_active=1 ORDER BY id DESC LIMIT 1`,
     [tenantId, storeId]
   );
-  return rows[0]?.token || null;
+  return rows[0] || null;
 }
 
-function postToBot(token, payload) {
-  return new Promise((resolve) => {
-    const body = Buffer.from(JSON.stringify(payload));
-    const req = http.request(
-      {
-        hostname: BOT_HOST,
-        port: BOT_PORT,
-        path: "/print",
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Content-Length": body.length,
-          "X-Api-Key": token || ""
-        },
-        timeout: 8000
-      },
-      (res) => {
-        res.on("data", () => {});
-        res.on("end", () => resolve(true));
-      }
-    );
-    req.on("timeout", () => {
-      req.destroy();
-      resolve(false);
-    });
-    req.on("error", () => resolve(false));
-    req.write(body);
-    req.end();
-  });
+async function enqueuePrintJob(db, { tenantId, storeId, tokenId, order, pdfBase64 }) {
+  const orderId = Number(order?.id || order?.order_id || order?.orderId || 0);
+  if (!orderId) return false;
+  const publicId = order?.public_id || order?.publicId || null;
+  const jobName = publicId ? `CRM Receipt ${publicId}` : `CRM Receipt #${orderId}`;
+
+  await db.query(
+    `
+    INSERT INTO print_jobs
+      (tenant_id, store_id, token_id, order_id, public_id, job_name, pdf_base64, status, attempts, last_error, locked_at, acked_at)
+    VALUES
+      (?, ?, ?, ?, ?, ?, ?, 'pending', 0, NULL, NULL, NULL)
+    ON DUPLICATE KEY UPDATE
+      token_id=VALUES(token_id),
+      public_id=VALUES(public_id),
+      job_name=VALUES(job_name),
+      pdf_base64=VALUES(pdf_base64),
+      status='pending',
+      last_error=NULL,
+      locked_at=NULL,
+      acked_at=NULL,
+      updated_at=NOW()
+    `,
+    [tenantId, storeId, tokenId, orderId, publicId, jobName, pdfBase64]
+  );
+  return true;
 }
 
 async function sendOrderToPrintBot({ db, order, tenantId, storeId }) {
@@ -140,10 +135,13 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId }) {
   const resolvedStoreId = Number(storeId || order.store_id || order.storeId || order.storeID || order.store);
   if (!resolvedTenantId || !resolvedStoreId) return false;
 
-  const token = await getPrintToken(db, resolvedTenantId, resolvedStoreId);
-  if (!token) return false;
+  const tokenRow = await getPrintTokenRow(db, resolvedTenantId, resolvedStoreId);
+  if (!tokenRow?.token) return false;
 
-  const html = await fetchReceiptHtml(token, order.id || order.order_id || order.orderId);
+  const orderId = order.id || order.order_id || order.orderId;
+  if (!orderId) return false;
+
+  const html = await fetchReceiptHtml(tokenRow.token, orderId);
   if (!html) return false;
 
   const pdfBuffer = await renderPdfFromHtml(html);
@@ -152,16 +150,13 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId }) {
     ? pdfBuffer.toString("base64")
     : Buffer.from(pdfBuffer).toString("base64");
 
-  const payload = {
-    order: {
-      id: order.id,
-      public_id: order.public_id
-    },
-    pdf_base64: pdfBase64
-  };
-
-  await postToBot(token, payload);
-  return true;
+  return enqueuePrintJob(db, {
+    tenantId: resolvedTenantId,
+    storeId: resolvedStoreId,
+    tokenId: Number(tokenRow.id),
+    order,
+    pdfBase64
+  });
 }
 
 module.exports = { sendOrderToPrintBot };

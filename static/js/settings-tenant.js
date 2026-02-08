@@ -445,6 +445,8 @@
     const settingsPrintApiToken = document.getElementById("settingsPrintApiToken");
     const settingsPrintApiGenerateBtn = document.getElementById("settingsPrintApiGenerateBtn");
     const settingsPrintApiCopyToken = document.getElementById("settingsPrintApiCopyToken");
+    const settingsPrintApiPrinterStatus = document.getElementById("settingsPrintApiPrinterStatus");
+    const settingsPrintApiPrinterName = document.getElementById("settingsPrintApiPrinterName");
     const settingsStoreTelegramList = document.getElementById("settingsStoreTelegramList");
     const settingsStoreTelegramApiKey = document.getElementById("settingsStoreTelegramApiKey");
     const settingsStoreTelegramSecretKey = document.getElementById("settingsStoreTelegramSecretKey");
@@ -462,6 +464,7 @@
     };
     const storeTabs = new Map();
     let activeRightTabId = "";
+    let printApiRefreshTimer = null;
     const DELIVERY_TAB_ID = "delivery-settings";
     const STORE_HOUR_DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
     const STORE_DAY_LABELS = {
@@ -1409,20 +1412,48 @@
       }
     }
 
+    function resetPrintApiDeviceState() {
+      if (settingsPrintApiPrinterStatus) settingsPrintApiPrinterStatus.value = "Соединение разорвано";
+      if (settingsPrintApiPrinterName) settingsPrintApiPrinterName.value = "Не подключенных принтеров";
+      // agent hint removed
+    }
+
+    function applyPrintApiDeviceState(info) {
+      if (!info) {
+        resetPrintApiDeviceState();
+        return;
+      }
+      const printerOnline = Number(info.printer_online || 0) === 1;
+      const agentRunning = Number(info.agent_running || 0) === 1;
+      const printerName = info.printer_name ? String(info.printer_name) : "";
+      const agentName = info.agent_name ? String(info.agent_name) : "";
+      const agentVersion = info.agent_version ? String(info.agent_version) : "";
+      const connectionEstablished = agentRunning;
+      const statusText = connectionEstablished ? "Соединение установлено" : "Соединение разорвано";
+      if (settingsPrintApiPrinterStatus) settingsPrintApiPrinterStatus.value = statusText;
+      if (settingsPrintApiPrinterName) {
+        settingsPrintApiPrinterName.value = printerOnline ? (printerName || "Не определен") : "Нет подключенных принтеров";
+      }
+    }
+
     async function loadPrintApiToken(storeId) {
       if (!settingsPrintApiToken || !storeId) return;
-      settingsPrintApiToken.value = "";
       try {
-        const res = await authFetch(`/api/admin/tenant/print-api?store_id=${encodeURIComponent(storeId)}`);
+        const res = await authFetch(`/api/admin/tenant/print-api?store_id=${encodeURIComponent(storeId)}&_ts=${Date.now()}`);
         const data = await res.json();
-        if (!data || !data.ok) return;
+        if (!data || !data.ok) {
+          resetPrintApiDeviceState();
+          return;
+        }
         const token = data.data && data.data.token ? data.data.token : "";
         settingsPrintApiToken.value = token;
+        applyPrintApiDeviceState(data.data || null);
         if (settingsPrintApiGenerateBtn) {
           settingsPrintApiGenerateBtn.textContent = token ? "Пересоздать токен" : "Сгенерировать токен";
         }
       } catch (err) {
         console.error("Не удалось загрузить print API:", err);
+        resetPrintApiDeviceState();
       }
     }
 
@@ -1435,13 +1466,31 @@
           body: JSON.stringify({ store_id: storeId })
         });
         const data = await res.json();
-        if (!data || !data.ok) return;
+        if (!data || !data.ok) {
+          resetPrintApiDeviceState();
+          return;
+        }
         const token = data.data && data.data.token ? data.data.token : "";
         if (settingsPrintApiToken) settingsPrintApiToken.value = token;
+        applyPrintApiDeviceState(data.data || null);
         if (settingsPrintApiGenerateBtn) settingsPrintApiGenerateBtn.textContent = "Пересоздать токен";
       } catch (err) {
         console.error("Не удалось создать print API:", err);
       }
+    }
+
+    function stopPrintApiRefresh() {
+      if (!printApiRefreshTimer) return;
+      clearInterval(printApiRefreshTimer);
+      printApiRefreshTimer = null;
+    }
+
+    function startPrintApiRefresh() {
+      stopPrintApiRefresh();
+      printApiRefreshTimer = setInterval(() => {
+        const storeId = Number(settingsPrintApiStore && settingsPrintApiStore.value);
+        if (storeId) loadPrintApiToken(storeId);
+      }, 3000);
     }
 
     function ensurePrintApiReady() {
@@ -1453,10 +1502,15 @@
         const storeId = Number(settingsPrintApiStore && settingsPrintApiStore.value);
         if (storeId) {
           await loadPrintApiToken(storeId);
+        } else {
+          resetPrintApiDeviceState();
         }
       };
       loadAndSelect();
+      startPrintApiRefresh();
     }
+
+    ensurePrintApiReady();
 
     function trimOrNull(value) {
       const s = String(value ?? "").trim();

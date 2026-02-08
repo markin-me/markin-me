@@ -1319,7 +1319,15 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       if (!storeExists) return res.status(404).json({ ok: false, error: 'STORE_NOT_FOUND' });
 
       const [rows] = await db.query(
-        `SELECT id, tenant_id, store_id, token, is_active, created_at, updated_at, last_used_at
+        `SELECT id, tenant_id, store_id, token, is_active, created_at, updated_at, last_used_at,
+                printer_name, agent_name, agent_version, last_heartbeat_at, agent_running,
+                IF(
+                  agent_running=1
+                  AND last_heartbeat_at IS NOT NULL
+                  AND last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),
+                  1,
+                  0
+                ) AS printer_online
          FROM print_api_tokens
          WHERE tenant_id=? AND store_id=? LIMIT 1`,
         [tenantId, storeId]
@@ -1351,12 +1359,28 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       await db.query(
         `INSERT INTO print_api_tokens (tenant_id, store_id, token, is_active)
          VALUES (?,?,?,1)
-         ON DUPLICATE KEY UPDATE token=VALUES(token), is_active=1, updated_at=NOW()`,
+         ON DUPLICATE KEY UPDATE
+           token=VALUES(token),
+           is_active=1,
+           updated_at=NOW(),
+           printer_name=NULL,
+           agent_name=NULL,
+           agent_version=NULL,
+           last_heartbeat_at=NULL,
+           agent_running=0`,
         [tenantId, storeId, token]
       );
 
       const [rows] = await db.query(
-        `SELECT id, tenant_id, store_id, token, is_active, created_at, updated_at, last_used_at
+        `SELECT id, tenant_id, store_id, token, is_active, created_at, updated_at, last_used_at,
+                printer_name, agent_name, agent_version, last_heartbeat_at, agent_running,
+                IF(
+                  agent_running=1
+                  AND last_heartbeat_at IS NOT NULL
+                  AND last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),
+                  1,
+                  0
+                ) AS printer_online
          FROM print_api_tokens
          WHERE tenant_id=? AND store_id=? LIMIT 1`,
         [tenantId, storeId]
