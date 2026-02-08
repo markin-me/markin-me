@@ -56,6 +56,66 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     return row;
   }
 
+  async function touchTokenUsage(tokenId) {
+    if (!tokenId) return;
+    await db.query(
+      "UPDATE print_api_tokens SET last_used_at=NOW() WHERE id=?",
+      [tokenId]
+    );
+  }
+
+  async function claimNextPrintJob(tokenRow) {
+    const tenantId = Number(tokenRow.tenant_id);
+    const storeId = Number(tokenRow.store_id);
+    const tokenId = Number(tokenRow.id);
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows] = await conn.query(
+        `
+        SELECT id, order_id, public_id, job_name, pdf_base64, attempts
+        FROM print_jobs
+        WHERE tenant_id=? AND store_id=? AND token_id=?
+          AND (
+            status='pending'
+            OR (status='processing' AND locked_at < DATE_SUB(NOW(), INTERVAL 5 MINUTE))
+          )
+        ORDER BY created_at ASC, id ASC
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [tenantId, storeId, tokenId]
+      );
+
+      if (!rows.length) {
+        await conn.commit();
+        return null;
+      }
+
+      const job = rows[0];
+      await conn.query(
+        `
+        UPDATE print_jobs
+        SET status='processing', attempts=attempts+1, locked_at=NOW(), last_error=NULL, updated_at=NOW()
+        WHERE id=?
+        `,
+        [job.id]
+      );
+      await conn.commit();
+      return {
+        ...job,
+        attempts: Number(job.attempts || 0) + 1
+      };
+    } catch (e) {
+      try {
+        await conn.rollback();
+      } catch {}
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }
+
   function parseDateString(value) {
     if (!value) return null;
     const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
@@ -163,6 +223,232 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // POST /api/print/agent/heartbeat - состояние локального агента печати
+  router.post("/agent/heartbeat", async (req, res) => {
+    try {
+      const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
+      if (!apiKey) {
+        return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
+      }
+
+      const tokenRow = await resolveToken(String(apiKey).trim());
+      if (!tokenRow) {
+        return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
+      }
+
+      const printerNameRaw = req.body?.printer_name;
+      const printerOnlineRaw = req.body?.printer_online;
+      const agentNameRaw = req.body?.agent_name;
+      const agentVersionRaw = req.body?.agent_version;
+      const runningRaw = req.body?.running;
+
+      const printerName = printerNameRaw == null ? null : String(printerNameRaw).trim().slice(0, 255);
+      const printerOnline = printerOnlineRaw === true || printerOnlineRaw === "true" || printerOnlineRaw === 1 || printerOnlineRaw === "1" ? 1 : 0;
+      const agentName = agentNameRaw == null ? null : String(agentNameRaw).trim().slice(0, 255);
+      const agentVersion = agentVersionRaw == null ? null : String(agentVersionRaw).trim().slice(0, 64);
+      let running = runningRaw === false || runningRaw === "false" || runningRaw === 0 || runningRaw === "0" ? 0 : 1;
+      if (printerOnlineRaw !== undefined && printerOnlineRaw !== null) {
+        running = printerOnline;
+      }
+
+      await db.query(
+        `
+        UPDATE print_api_tokens
+        SET
+          printer_name=?,
+          agent_name=?,
+          agent_version=?,
+          last_heartbeat_at=NOW(),
+          last_used_at=NOW(),
+          agent_running=?
+        WHERE id=? AND tenant_id=? AND store_id=?
+        `,
+        [
+          printerName || null,
+          agentName || null,
+          agentVersion || null,
+          running,
+          Number(tokenRow.id),
+          Number(tokenRow.tenant_id),
+          Number(tokenRow.store_id)
+        ]
+      );
+
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // GET /api/print/jobs/next - получить следующую задачу печати
+  router.get("/jobs/next", async (req, res) => {
+    try {
+      const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
+      if (!apiKey) {
+        return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
+      }
+
+      const tokenRow = await resolveToken(String(apiKey).trim());
+      if (!tokenRow) {
+        return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
+      }
+
+      const job = await claimNextPrintJob(tokenRow);
+      await touchTokenUsage(tokenRow.id);
+
+      if (!job) {
+        return res.json({ ok: true, data: null });
+      }
+
+      return res.json({
+        ok: true,
+        data: {
+          job_id: Number(job.id),
+          job_name: job.job_name || "CRM Receipt",
+          attempts: Number(job.attempts || 0),
+          order: {
+            id: Number(job.order_id || 0) || null,
+            public_id: job.public_id || null
+          },
+          pdf_base64: job.pdf_base64 || ""
+        }
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // POST /api/print/jobs/:id/ack - подтверждение успешной печати
+  router.post("/jobs/:id/ack", async (req, res) => {
+    try {
+      const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
+      if (!apiKey) {
+        return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
+      }
+
+      const tokenRow = await resolveToken(String(apiKey).trim());
+      if (!tokenRow) {
+        return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
+      }
+
+      const jobId = Number(req.params.id);
+      if (!Number.isFinite(jobId) || jobId <= 0) {
+        return res.status(400).json({ ok: false, error: "BAD_JOB_ID" });
+      }
+
+      const [result] = await db.query(
+        `
+        UPDATE print_jobs
+        SET status='done', locked_at=NULL, acked_at=NOW(), last_error=NULL, updated_at=NOW()
+        WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND status='processing'
+        `,
+        [jobId, Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id)]
+      );
+
+      if (!Number(result.affectedRows || 0)) {
+        const [rows] = await db.query(
+          `
+          SELECT status
+          FROM print_jobs
+          WHERE id=? AND tenant_id=? AND store_id=? AND token_id=?
+          LIMIT 1
+          `,
+          [jobId, Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id)]
+        );
+        if (!rows.length) {
+          return res.status(404).json({ ok: false, error: "JOB_NOT_FOUND" });
+        }
+        if (rows[0].status !== "done") {
+          return res.status(409).json({ ok: false, error: "JOB_NOT_IN_PROCESSING" });
+        }
+      }
+
+      await touchTokenUsage(tokenRow.id);
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // POST /api/print/jobs/:id/fail - ошибка печати
+  router.post("/jobs/:id/fail", async (req, res) => {
+    try {
+      const apiKey = req.get("X-Api-Key") || req.headers["x-api-key"];
+      if (!apiKey) {
+        return res.status(401).json({ ok: false, error: "API_KEY_REQUIRED" });
+      }
+
+      const tokenRow = await resolveToken(String(apiKey).trim());
+      if (!tokenRow) {
+        return res.status(403).json({ ok: false, error: "API_KEY_INVALID" });
+      }
+
+      const jobId = Number(req.params.id);
+      if (!Number.isFinite(jobId) || jobId <= 0) {
+        return res.status(400).json({ ok: false, error: "BAD_JOB_ID" });
+      }
+
+      const errorText = String(req.body?.error || "PRINT_FAILED").slice(0, 2000);
+      const [result] = await db.query(
+        `
+        UPDATE print_jobs
+        SET
+          status=CASE WHEN attempts >= 5 THEN 'failed' ELSE 'pending' END,
+          locked_at=NULL,
+          last_error=?,
+          updated_at=NOW()
+        WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND status='processing'
+        `,
+        [errorText, jobId, Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id)]
+      );
+
+      if (!Number(result.affectedRows || 0)) {
+        const [rows] = await db.query(
+          `
+          SELECT status, attempts
+          FROM print_jobs
+          WHERE id=? AND tenant_id=? AND store_id=? AND token_id=?
+          LIMIT 1
+          `,
+          [jobId, Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id)]
+        );
+        if (!rows.length) {
+          return res.status(404).json({ ok: false, error: "JOB_NOT_FOUND" });
+        }
+        return res.status(409).json({
+          ok: false,
+          error: "JOB_NOT_IN_PROCESSING",
+          data: { status: rows[0].status, attempts: Number(rows[0].attempts || 0) }
+        });
+      }
+
+      const [rows] = await db.query(
+        `
+        SELECT status, attempts
+        FROM print_jobs
+        WHERE id=? AND tenant_id=? AND store_id=? AND token_id=?
+        LIMIT 1
+        `,
+        [jobId, Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id)]
+      );
+
+      await touchTokenUsage(tokenRow.id);
+      return res.json({
+        ok: true,
+        data: {
+          status: rows[0]?.status || null,
+          attempts: Number(rows[0]?.attempts || 0)
+        }
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: "DB_ERROR" });
     }
   });
 
