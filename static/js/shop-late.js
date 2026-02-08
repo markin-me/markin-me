@@ -3635,11 +3635,13 @@ optionGroups.forEach((group) => {
       return promise;
     }
 
+    const discountBadgeText = discountPercent ? `-${discountPercent}%` : "";
+
     function renderMainView() {
       if (openCartSheetCtx) {
         openCartSheetCtx.comboStepBack = null;
         sheetNavigationState.screen = "combo";
-        setSheetHeaderMode("product", { onBack });
+        setSheetHeaderMode("product", { onBack, discountBadge: discountBadgeText });
       } else {
         // Десктоп: кнопка «Назад» снова закрывает панель комбо
         window._comboStepBackCallback = null;
@@ -3837,19 +3839,6 @@ optionGroups.forEach((group) => {
       container.innerHTML = "";
       const wrap = document.createElement("div");
       wrap.className = "shop-combo-detail shop-combo-detail--picker";
-
-      const titleEl = document.createElement("h1");
-      titleEl.className = "shop-combo-detail-title";
-      titleEl.textContent = combo.title || "Комбо";
-      wrap.appendChild(titleEl);
-
-      const caption = (combo.description || "").trim();
-      if (caption) {
-        const captionEl = document.createElement("div");
-        captionEl.className = "shop-combo-detail-caption";
-        captionEl.textContent = caption;
-        wrap.appendChild(captionEl);
-      }
 
       const listWrap = document.createElement("div");
       listWrap.className = "shop-combo-picker-list";
@@ -4272,19 +4261,14 @@ optionGroups.forEach((group) => {
                 scrollContainer = scrollContainer.parentElement;
               }
               if (!scrollContainer) return;
-              const expandH = expandWrap.offsetHeight;
-              const containerH = scrollContainer.clientHeight;
-              const footerOffset = 100;
-              const visibleH = Math.max(containerH - footerOffset, 200);
-              const expandRect = expandWrap.getBoundingClientRect();
+              // Скроллим к родительской карточке (row), а не к expand-панели,
+              // чтобы карточка не уезжала за хедер
+              const parentRow = expandWrap.closest(".shop-combo-picker-row");
+              const target = parentRow || expandWrap;
+              const targetRect = target.getBoundingClientRect();
               const containerRect = scrollContainer.getBoundingClientRect();
-              const expandTopInContent = scrollContainer.scrollTop + (expandRect.top - containerRect.top);
-              const expandBottomInContent = expandTopInContent + expandH;
-              if (expandH <= visibleH) {
-                scrollContainer.scrollTop = expandBottomInContent - visibleH;
-              } else {
-                scrollContainer.scrollTop = expandTopInContent;
-              }
+              const targetTopInContent = scrollContainer.scrollTop + (targetRect.top - containerRect.top);
+              scrollContainer.scrollTop = targetTopInContent;
             });
           })();
         }
@@ -4347,12 +4331,12 @@ optionGroups.forEach((group) => {
       if (openCartSheetCtx) {
         const doStepBack = () => {
           renderMainView();
-          setSheetHeaderMode("product", { onBack });
+          setSheetHeaderMode("product", { onBack, discountBadge: discountBadgeText });
           openCartSheetCtx.comboStepBack = null;
           sheetNavigationState.screen = "combo";
         };
         openCartSheetCtx.comboStepBack = doStepBack;
-        setSheetHeaderMode("product", { onBack: doStepBack });
+        setSheetHeaderMode("product", { onBack: doStepBack, discountBadge: discountBadgeText });
         sheetNavigationState.screen = "comboPicker";
       }
     }
@@ -5247,7 +5231,9 @@ function showSheetAddressList(backMode) {
     sheetNavigationState.screen = "combo";
     sheetNavigationState.data = cartKey ? { cartKey } : null;
 
-    setSheetHeaderMode("product", { onBack });
+    const comboDiscount = Number(comboData.discount_percent) || 0;
+    const comboBadge = comboDiscount ? `-${comboDiscount}%` : "";
+    setSheetHeaderMode("product", { onBack, discountBadge: comboBadge });
     renderComboDetailsInto(productWrap, comboData, { onBack, cartKey });
 
     if (elActiveOrdersSheetCollapsed) {

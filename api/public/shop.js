@@ -2853,7 +2853,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           const ingIds = cartIngredients.map(ci => Number(ci.ingredient_id)).filter(n => Number.isFinite(n) && n > 0);
           if (ingIds.length) {
             const [ingRows] = await db.query(
-              `SELECT 
+              `SELECT
                 i.id,
                 i.ingredient_id,
                 i.unit_id,
@@ -2861,9 +2861,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                 p.price AS ingredient_price,
                 p.name AS ingredient_name,
                 p.base_unit_id AS ingredient_base_unit_id,
-                p.base_qty AS ingredient_base_qty
+                p.base_qty AS ingredient_base_qty,
+                u.short_title AS unit_short_title,
+                u.title AS unit_title,
+                u.code AS unit_code
               FROM prod_product_ingredients i
               JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+              LEFT JOIN prod_units u ON u.id=i.unit_id AND u.tenant_id=i.tenant_id
               WHERE i.tenant_id=? AND i.product_id=? AND i.ingredient_id IN (${ingIds.map(() => '?').join(',')})`,
               [tenantId, pid, ...ingIds]
             );
@@ -2975,9 +2979,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
               ingredients.push({
                 ingredient_id: ingId,
                 name: ingInfo.ingredient_name || '',
-                quantity: ingQty, // Сохраняем оригинальное quantity для отображения
-                price: priceForDisplay, // Цена за единицу в той единице, в которой указано quantity
+                quantity: ingQty,
+                price: priceForDisplay,
                 total: ingTotal,
+                unit_label: ingInfo.unit_short_title || ingInfo.unit_title || ingInfo.unit_code || '',
               });
             }
           }

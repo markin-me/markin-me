@@ -2857,15 +2857,23 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
 }
 
 .app-modal-header{
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding:12px;
-  border-bottom:1px solid var(--color-border);
   display:flex;
   align-items:center;
   justify-content:space-between;
   gap:12px;
+  padding:0 12px;
+}
+.app-modal-header .btn{height:32px}
+.app-modal-header .btn-icon{width:32px}
+.shop-sheet-discount-badge{
+  margin:0 auto;
+  padding:4px 10px;
+  border-radius:8px;
+  background:var(--shop-buy);
+  color:var(--shop-buy-text);
+  font-size:14px;
+  font-weight:700;
+  line-height:1.2;
 }
 .app-modal-title{
   font-weight: 900;
@@ -2883,7 +2891,7 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
 }
 
 .app-modal-body{
-  padding:12px;
+  padding:0 12px 12px;
   overflow-y:auto;
   flex:1;
   min-height:0;

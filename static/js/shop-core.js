@@ -1948,9 +1948,13 @@ function setCartHeader({
   if (elCartHeaderTitle) elCartHeaderTitle.classList.toggle("is-address-title", !!addressAsTitle);
 }
 
-function setSheetHeaderMode(mode, { onBack } = {}) {
+function setSheetHeaderMode(mode, { onBack, discountBadge } = {}) {
   const header = document.querySelector(".app-modal-header");
   if (!header) return;
+
+  // Удаляем предыдущий бейдж скидки
+  const oldBadge = header.querySelector(".shop-sheet-discount-badge");
+  if (oldBadge) oldBadge.remove();
 
   // ??????? ?????? ??????? ?В корзине пусто?, ????? ?? ???? ???В корзине пусто ???????? ? ?????? ??????
   const orderBackBtn = header.querySelector(".app-modal-back-btn");
@@ -2010,6 +2014,14 @@ function setSheetHeaderMode(mode, { onBack } = {}) {
 
   if (closeBtn) closeBtn.classList.toggle("hidden", isProduct || isOrder);
   if (titleEl) titleEl.classList.toggle("hidden", isProduct);
+
+  // Бейдж скидки по центру хедера
+  if (discountBadge) {
+    const badge = document.createElement("span");
+    badge.className = "shop-sheet-discount-badge";
+    badge.textContent = discountBadge;
+    favBtn.before(badge);
+  }
 }
 
   function setCartFooterMode(mode) {

@@ -1281,6 +1281,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 
 /* Экран выбора товара в блоке (Заменить) */
 .shop-combo-detail--picker .shop-combo-detail-title{ display: none; }
+.shop-combo-detail--picker{ padding-top: 0; }
 .shop-combo-picker-list{
   display: flex;
   flex-direction: column;
@@ -1943,7 +1944,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 .shop-cart-sheet .shop-product-content{
   flex: 1;
   min-height: 0;
-  padding: 12px 12px calc(var(--shop-bottomnav-h) + 8px + env(safe-area-inset-bottom));
+  padding: 0 12px calc(var(--shop-bottomnav-h) + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2873,6 +2874,8 @@ div.shop-pd-option-thumb{
 @media (max-width: 768px){
   .shop-product-hero-media{
     width: min(300px, 100%);
+    aspect-ratio: auto;
+    height: 250px;
   }
 }
 
