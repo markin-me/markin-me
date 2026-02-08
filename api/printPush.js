@@ -2,7 +2,7 @@
 const https = require("https");
 const { URL } = require("url");
 
-const CRM_BASE_URL = (process.env.CRM_BASE_URL || "http://localhost:3000").replace(/\/+$/, "");
+const CRM_BASE_URL = (process.env.CRM_BASE_URL || "https://markin-me.ru").replace(/\/+$/, "");
 
 let browserPromise = null;
 
