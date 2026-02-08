@@ -3014,10 +3014,101 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   padding-top:4px;
 }
 
+/* Delivery / Pickup toggle */
+.shop-delivery-toggle-wrap{
+  display:flex;
+  justify-content:center;
+  flex:1;
+  padding:0;
+}
+.shop-delivery-toggle{
+  display:inline-flex;
+  border-radius:999px;
+  background:var(--color-surface-2, #f3f4f6);
+  padding:0;
+  gap:0;
+}
+.shop-delivery-toggle-btn{
+  border:none;
+  outline:none;
+  cursor:pointer;
+  padding:6px 20px;
+  border-radius:999px;
+  font-size:.85rem;
+  font-weight:600;
+  transition:background .2s, color .2s, box-shadow .2s;
+  background:transparent;
+  color:var(--color-text-muted);
+}
+.shop-delivery-toggle-btn.is-active{
+  background:var(--color-primary);
+  color:#fff;
+  box-shadow:0 1px 4px rgba(0,0,0,.12);
+}
+
+/* Inline pickup list inside address view */
+.shop-pickup-inline-list{
+  display:flex;
+  flex-direction:column;
+}
+.shop-pickup-city{
+  font-size:.8rem;
+  color:var(--color-text-muted);
+  margin-bottom:1px;
+}
+.shop-pickup-address{
+  font-size:1rem;
+  font-weight:700;
+  color:var(--color-text);
+}
+.shop-pickup-status{
+  font-size:.78rem;
+  font-weight:600;
+  margin-top:3px;
+}
+.shop-pickup-status.is-open{color:#16a34a}
+.shop-pickup-status.is-closed{color:#ef4444}
+.shop-pickup-info-row{
+  display:flex;
+  justify-content:space-between;
+  align-items:baseline;
+  margin-top:6px;
+  font-size:.85rem;
+}
+.shop-pickup-info-label{
+  color:var(--color-text-muted);
+  white-space:nowrap;
+}
+.shop-pickup-info-value{
+  color:var(--color-text);
+}
+.shop-pickup-phone-link{
+  color:var(--color-primary);
+  text-decoration:none;
+  font-weight:500;
+}
+
 .shop-address-list-top{
   display:flex;
-  justify-content:flex-start;
+  align-items:center;
+  justify-content:space-between;
   margin-bottom:10px;
+  padding:0 4px;
+}
+.shop-address-list-title{
+  font-size:1.05rem;
+  font-weight:700;
+  color:var(--color-text);
+}
+.shop-address-new-btn{
+  border:1px solid var(--color-border);
+  border-radius:999px;
+  background:none;
+  color:var(--color-text-muted);
+  font-size:.82rem;
+  font-weight:600;
+  cursor:pointer;
+  padding:5px 14px;
 }
 
 .shop-address-list{
@@ -3027,18 +3118,41 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 }
 
 .shop-address-row{
-  border:1px solid var(--color-border);
-  border-radius:14px;
-  padding:10px 12px;
-  background:var(--color-surface);
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding:12px 4px;
+  border-bottom:1px solid var(--color-border);
   cursor:pointer;
 }
-.shop-address-row:hover{
+.shop-address-row:last-child{border-bottom:none}
+.shop-address-row:active{
   background:var(--color-surface-2);
 }
-.shop-address-row.is-selected{
-  border-color:var(--primary-25);
-  box-shadow:0 0 0 2px var(--primary-14) inset;
+.shop-address-radio{
+  width:22px;
+  height:22px;
+  border-radius:50%;
+  border:2px solid var(--color-border);
+  flex-shrink:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  transition:border-color .15s;
+}
+.shop-address-radio::after{
+  content:"";
+  width:12px;
+  height:12px;
+  border-radius:50%;
+  background:transparent;
+  transition:background .15s;
+}
+.shop-address-row.is-selected .shop-address-radio{
+  border-color:var(--color-primary);
+}
+.shop-address-row.is-selected .shop-address-radio::after{
+  background:var(--color-primary);
 }
 
 .shop-address-row-top{
@@ -3303,19 +3417,21 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  flex:1;
+  min-width:0;
 }
 
 .shop-address-card-main{
   min-width: 0;
+  flex:1;
   display: grid;
   gap: 4px;
 }
 
 .shop-address-card-title{
-  font-weight: 800;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 500;
+  font-size: .9rem;
+  line-height: 1.3;
 }
 
 .shop-address-card-sub{
@@ -4523,7 +4639,15 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 
 /* Используем те же классы что и для адресов для единообразия */
 .shop-pickup-list .shop-address-row {
+  border:1px solid var(--color-border);
+  border-radius:14px;
+  padding:10px 12px;
+  background:var(--color-surface);
+  border-bottom:1px solid var(--color-border);
   cursor: pointer;
+}
+.shop-pickup-list .shop-address-row.is-selected{
+  border-color:var(--shop-buy);
 }
 
 .shop-pickup-list .shop-address-card {

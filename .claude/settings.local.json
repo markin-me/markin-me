@@ -4,7 +4,9 @@
       "Bash(grep:*)",
       "Bash(ls:*)",
       "Bash(node:*)",
-      "Bash(mysql:*)"
+      "Bash(mysql:*)",
+      "Bash(dir:*)",
+      "Bash(test:*)"
     ]
   }
 }

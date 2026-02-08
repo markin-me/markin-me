@@ -1,6 +1,64 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const isShopPage = () => document.body && document.body.classList.contains("page-shop");
+
+  // Custom select component
+  function initCustomSelect(wrapEl, selectedValue) {
+    if (!wrapEl || !wrapEl.classList.contains("custom-select")) return;
+    const trigger = wrapEl.querySelector(".custom-select-trigger");
+    const valueEl = wrapEl.querySelector(".custom-select-value");
+    const dropdown = wrapEl.querySelector(".custom-select-dropdown");
+    if (!trigger || !valueEl || !dropdown) return;
+
+    const stores = window._pickupStores || [];
+    const cities = [...new Set(stores.map(s => s.city).filter(Boolean))].sort();
+    const current = (selectedValue && cities.includes(selectedValue)) ? selectedValue : (cities[0] || "");
+
+    wrapEl.dataset.value = current;
+    valueEl.textContent = current || "—";
+    dropdown.innerHTML = "";
+
+    cities.forEach(c => {
+      const opt = document.createElement("button");
+      opt.type = "button";
+      opt.className = "custom-select-option" + (c === current ? " is-selected" : "");
+      opt.textContent = c;
+      opt.addEventListener("click", (e) => {
+        e.stopPropagation();
+        wrapEl.dataset.value = c;
+        valueEl.textContent = c;
+        dropdown.querySelectorAll(".custom-select-option").forEach(o => o.classList.remove("is-selected"));
+        opt.classList.add("is-selected");
+        dropdown.classList.add("hidden");
+        wrapEl.classList.remove("is-open");
+      });
+      dropdown.appendChild(opt);
+    });
+
+    // toggle
+    trigger.onclick = (e) => {
+      e.stopPropagation();
+      const open = !dropdown.classList.contains("hidden");
+      if (open) {
+        dropdown.classList.add("hidden");
+        wrapEl.classList.remove("is-open");
+      } else {
+        dropdown.classList.remove("hidden");
+        wrapEl.classList.add("is-open");
+      }
+    };
+
+    // close on outside click
+    const closeHandler = (e) => {
+      if (!wrapEl.contains(e.target)) {
+        dropdown.classList.add("hidden");
+        wrapEl.classList.remove("is-open");
+      }
+    };
+    document.removeEventListener("click", wrapEl._csClose);
+    wrapEl._csClose = closeHandler;
+    document.addEventListener("click", closeHandler);
+  }
   const getShopBasePath = () => {
     const pathname = String(window.location.pathname || "");
     return pathname.startsWith("/shop") ? "/shop" : "/";
@@ -52,6 +110,7 @@
   const elPickupListView = $("#shopPickupListView");
   const elPickupList = $("#shopPickupList");
 
+  const elAddrCity = $("#shopAddrCity");
   const elAddrStreet = $("#shopAddrStreet");
   const elAddrHouse = $("#shopAddrHouse");
   const elAddrEntrance = $("#shopAddrEntrance");
@@ -110,6 +169,7 @@
   const elMobileAddressActions = $("#shopMobileAddressActions");
   const elMobileAddressSaveBtn = $("#shopMobileAddressSaveBtn");
   const elMobileAddressCancelBtn = $("#shopMobileAddressCancelBtn");
+  const elMobileAddressConfirm = $("#shopMobileAddressConfirm");
   
   // ????????? ????????? ??????
   let mobileProductActionsState = {
@@ -1797,6 +1857,7 @@
   function normalizeAddressPayload(p) {
     const a = p && typeof p === "object" ? p : {};
     const out = {
+      city: str(a.city).trim() || null,
       street: str(a.street).trim(),
       house: str(a.house).trim(),
       entrance: str(a.entrance).trim(),
@@ -1813,10 +1874,12 @@
 
   function formatAddressLine(a) {
     if (!a) return "";
+    const city = str(a.city).trim();
     const street = str(a.street).trim();
     const house = str(a.house).trim();
 
     const parts = [];
+    if (city) parts.push(city);
     if (street || house) parts.push([street, house].filter(Boolean).join(" ").trim());
 
     if (a.entrance) parts.push(`подъезд ${str(a.entrance).trim()}`);
@@ -1870,6 +1933,46 @@ function updateAddressChip() {
 
     elCartHeaderTitle.classList.toggle("is-empty-address", !line);
     elCartHeaderTitle.classList.add("is-clickable-address-title");
+  }
+}
+
+function updateHeaderAddressWidget() {
+  const textEl = document.getElementById("headerAddressText");
+  const iconEl = document.querySelector(".header-address-icon");
+  if (!textEl) return;
+
+  // Pickup mode
+  if (window._deliveryMode === "pickup" && window._selectedPickupStoreId) {
+    const stores = window._pickupStores || [];
+    const store = stores.find(s => Number(s.id) === Number(window._selectedPickupStoreId));
+    if (store) {
+      textEl.textContent = store.address || store.name || "Самовывоз";
+      textEl.classList.remove("is-placeholder");
+      if (iconEl) {
+        iconEl.classList.remove("fa-location-dot");
+        iconEl.classList.add("fa-store");
+      }
+      return;
+    }
+  }
+
+  // Delivery mode (default)
+  if (iconEl) {
+    iconEl.classList.remove("fa-store");
+    iconEl.classList.add("fa-location-dot");
+  }
+  const a = state.selectedAddress;
+  if (a) {
+    const parts = [];
+    const street = str(a.street).trim();
+    const house = str(a.house).trim();
+    if (street || house) parts.push([street, house].filter(Boolean).join(" "));
+    if (a.apartment) parts.push("кв " + str(a.apartment).trim());
+    textEl.textContent = parts.join(", ");
+    textEl.classList.remove("is-placeholder");
+  } else {
+    textEl.textContent = "Укажите адрес доставки";
+    textEl.classList.add("is-placeholder");
   }
 }
 
@@ -2051,6 +2154,7 @@ function setSheetHeaderMode(mode, { onBack, discountBadge } = {}) {
   function setSelectedAddress(addr) {
     state.selectedAddress = addr || null;
     updateAddressChip();
+    updateHeaderAddressWidget();
     syncSelectedAddressToCheckoutDraft();
 
     // ???В корзине пусто?? checkout ? ??????? ????
@@ -2171,7 +2275,7 @@ function showAddressListView(backMode = "cart") {
   renderAddressList();
 }
 
-function showAddressFormView(prefill, editingId, backMode) {
+async function showAddressFormView(prefill, editingId, backMode) {
   if (!elAddressContent || !elAddressFormView || !elAddressListView) return;
 
   state.addressEditingId = editingId ? Number(editingId) : null;
@@ -2179,6 +2283,21 @@ function showAddressFormView(prefill, editingId, backMode) {
   cartViewMode = "address";
   openProductCtx = null;
 
+  // ensure stores loaded for city selector
+  if (!window._pickupStores || !window._pickupStores.length) {
+    try {
+      const metaTenant = document.querySelector('meta[name="tenant_id"]');
+      const tenantId = metaTenant ? Number(metaTenant.content) : null;
+      if (tenantId) {
+        const resp = await fetch(`/api/public/tenant/stores?tenant_id=${tenantId}`);
+        const data = await resp.json();
+        if (data?.ok && Array.isArray(data.stores)) window._pickupStores = data.stores;
+      }
+    } catch {}
+  }
+  if (elAddrCity) {
+    initCustomSelect(elAddrCity, prefill?.city);
+  }
   if (elAddrStreet) elAddrStreet.value = str(prefill?.street || "");
   if (elAddrHouse) elAddrHouse.value = str(prefill?.house || "");
   if (elAddrEntrance) elAddrEntrance.value = str(prefill?.entrance || "");
@@ -2700,6 +2819,18 @@ async function initAddresses() {
     });
   }
 
+  // header address widget (mobile)
+  const headerAddrBtn = document.getElementById("headerAddressButton");
+  if (headerAddrBtn) {
+    headerAddrBtn.addEventListener("click", async () => {
+      if (!openCartSheetCtx) openCartSheet();
+      if (openCartSheetCtx?.showSheetAddressList) {
+        openCartSheetCtx.showSheetAddressList("header");
+      }
+      if (typeof setActiveNav === "function") setActiveNav("menu");
+    });
+  }
+
   // ???????: ???? ?? ????????? ??????? (??????)
   if (elCartHeaderTitle) {
     elCartHeaderTitle.addEventListener("click", async (e) => {
@@ -2765,6 +2896,7 @@ async function initAddresses() {
   if (elAddressSaveBtn) {
     elAddressSaveBtn.addEventListener("click", async () => {
       const payload = normalizeAddressPayload({
+        city: elAddrCity?.dataset?.value || "",
         street: elAddrStreet?.value,
         house: elAddrHouse?.value,
         entrance: elAddrEntrance?.value,
@@ -2844,6 +2976,32 @@ async function initAddresses() {
 
   await refreshAddressState();
   updateAddressChip();
+  // Restore delivery mode from checkout draft
+  try {
+    const draft = loadCheckoutDraft();
+    if (draft.method_code === "takeaway" || draft.method_code === "pickup") {
+      window._deliveryMode = "pickup";
+      if (draft.pickup_store_id) window._selectedPickupStoreId = Number(draft.pickup_store_id);
+      // Load stores for header widget display
+      if (!window._pickupStores || !window._pickupStores.length) {
+        const metaTenant = document.querySelector('meta[name="tenant_id"]');
+        const tid = metaTenant ? Number(metaTenant.content) : null;
+        if (tid) {
+          fetch(`/api/public/tenant/stores?tenant_id=${tid}`)
+            .then(r => r.json())
+            .then(d => {
+              if (d?.ok && Array.isArray(d.stores)) {
+                window._pickupStores = d.stores;
+                updateHeaderAddressWidget();
+              }
+            }).catch(() => {});
+        }
+      }
+    } else {
+      window._deliveryMode = "delivery";
+    }
+  } catch {}
+  updateHeaderAddressWidget();
 }
 
   // -----------------------------

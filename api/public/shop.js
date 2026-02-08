@@ -864,7 +864,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       const [rows] = await db.query(
         `SELECT
-           id, street, house, entrance, floor, apartment, comment,
+           id, city, street, house, entrance, floor, apartment, comment,
            is_default, is_active,
            created_at, updated_at
          FROM cust_customer_addresses
@@ -889,6 +889,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const customer = await getCustomerByToken(tenantId, token);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
+      const city = helpers.strOrNull(req.body.city);
       const street = helpers.strOrNull(req.body.street);
       const house = helpers.strOrNull(req.body.house);
       if (!street) return res.status(400).json({ ok: false, error: 'STREET_REQUIRED' });
@@ -923,9 +924,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       const [r] = await conn.query(
         `INSERT INTO cust_customer_addresses
-         (tenant_id, customer_id, street, house, entrance, floor, apartment, comment, is_default, is_active)
-         VALUES (?,?,?,?,?,?,?,?,?,1)`,
-        [tenantId, customer.id, street, house, entrance, floor, apartment, comment, isDefault]
+         (tenant_id, customer_id, city, street, house, entrance, floor, apartment, comment, is_default, is_active)
+         VALUES (?,?,?,?,?,?,?,?,?,?,1)`,
+        [tenantId, customer.id, city, street, house, entrance, floor, apartment, comment, isDefault]
       );
 
       await conn.commit();
@@ -955,6 +956,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
+      const city = helpers.strOrNull(req.body.city);
       const street = helpers.strOrNull(req.body.street);
       const house = helpers.strOrNull(req.body.house);
       if (!street) return res.status(400).json({ ok: false, error: 'STREET_REQUIRED' });
@@ -992,9 +994,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       await conn.query(
         `UPDATE cust_customer_addresses
-         SET street=?, house=?, entrance=?, floor=?, apartment=?, comment=?${makeDefault === 1 ? ', is_default=1' : ''}
+         SET city=?, street=?, house=?, entrance=?, floor=?, apartment=?, comment=?${makeDefault === 1 ? ', is_default=1' : ''}
          WHERE tenant_id=? AND customer_id=? AND id=?`,
-        [street, house, entrance, floor, apartment, comment, tenantId, customer.id, addressId]
+        [city, street, house, entrance, floor, apartment, comment, tenantId, customer.id, addressId]
       );
 
       await conn.commit();

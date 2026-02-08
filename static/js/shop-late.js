@@ -4376,6 +4376,9 @@ optionGroups.forEach((group) => {
   // -----------------------------
   function closeShopSheetIfOpen() {
     if (!window.AppModal) return;
+    // Remove delivery toggle from header if present
+    const hdrToggle = document.querySelector(".app-modal-header .shop-delivery-toggle-wrap");
+    if (hdrToggle) hdrToggle.remove();
     if (window.AppModal.isOpen()) {
       // Сбрасываем состояние просмотра деталей заказа, чтобы при переходе на другую вкладку
       // (домик → каталог) стрелка «назад» не вела в список активных заказов
@@ -4403,6 +4406,9 @@ optionGroups.forEach((group) => {
       }
       if (elMobileAddressActions) {
         elMobileAddressActions.classList.add("hidden");
+      }
+      if (elMobileAddressConfirm) {
+        elMobileAddressConfirm.classList.add("hidden");
       }
       // Обновляем ботомщит активного заказа
       if (typeof window.updateActiveOrdersBadge === "function") {
@@ -4581,26 +4587,65 @@ function openCartSheet() {
   const addressListView = document.createElement("div");
   addressListView.className = "shop-address-list-view hidden";
 
+  // Delivery / Pickup toggle
+  const deliveryToggleWrap = document.createElement("div");
+  deliveryToggleWrap.className = "shop-delivery-toggle-wrap";
+  const deliveryToggle = document.createElement("div");
+  deliveryToggle.className = "shop-delivery-toggle";
+  const toggleDeliveryBtn = document.createElement("button");
+  toggleDeliveryBtn.type = "button";
+  toggleDeliveryBtn.className = "shop-delivery-toggle-btn is-active";
+  toggleDeliveryBtn.textContent = "Доставка";
+  toggleDeliveryBtn.dataset.mode = "delivery";
+  const togglePickupBtn = document.createElement("button");
+  togglePickupBtn.type = "button";
+  togglePickupBtn.className = "shop-delivery-toggle-btn";
+  togglePickupBtn.textContent = "Самовывоз";
+  togglePickupBtn.dataset.mode = "pickup";
+  deliveryToggle.appendChild(toggleDeliveryBtn);
+  deliveryToggle.appendChild(togglePickupBtn);
+  deliveryToggleWrap.appendChild(deliveryToggle);
+
   const addressListTop = document.createElement("div");
   addressListTop.className = "shop-address-list-top";
 
+  const addressListTitle = document.createElement("span");
+  addressListTitle.className = "shop-address-list-title";
+  addressListTitle.textContent = "Мои адреса";
+  addressListTop.appendChild(addressListTitle);
+
   const addressNewBtn = document.createElement("button");
   addressNewBtn.type = "button";
-  addressNewBtn.className = "chip chip-plus";
-  addressNewBtn.textContent = "Новый адрес";
+  addressNewBtn.className = "shop-address-new-btn";
+  addressNewBtn.textContent = "+ Новый адрес";
   addressListTop.appendChild(addressNewBtn);
 
   const addressList = document.createElement("div");
   addressList.className = "shop-address-list";
 
+  // Pickup list container (inside same view)
+  const pickupInlineList = document.createElement("div");
+  pickupInlineList.className = "shop-pickup-inline-list hidden";
+
   addressListView.appendChild(addressListTop);
   addressListView.appendChild(addressList);
+  addressListView.appendChild(pickupInlineList);
   addressWrap.appendChild(addressListView);
 
   const addressFormView = document.createElement("div");
   addressFormView.className = "shop-address-form-view hidden";
   addressFormView.innerHTML = `
     <div class="shop-address-form-grid">
+      <div class="shop-address-form-row shop-address-form-row--full">
+        <label class="field-label">Город</label>
+        <div class="custom-select" data-a="city">
+          <button type="button" class="custom-select-trigger control">
+            <span class="custom-select-value"></span>
+            <i class="fas fa-chevron-down custom-select-arrow" aria-hidden="true"></i>
+          </button>
+          <div class="custom-select-dropdown hidden"></div>
+        </div>
+      </div>
       <div class="shop-address-form-row shop-address-form-row--full">
         <label class="field-label">Улица</label>
         <input class="control" data-a="street" type="text" />
@@ -4624,7 +4669,7 @@ function openCartSheet() {
         </div>
       </div>
       <div class="shop-address-form-row shop-address-form-row--full">
-        <label class="field-label">Комментарий</label>
+        <label class="field-label">Комментарий курьеру</label>
         <input class="control" data-a="comment" type="text" />
       </div>
     </div>
@@ -4782,6 +4827,11 @@ function applySheetAddressTitle(backMode = "cart") {
     title: "Введите адрес",
     content: wrap,
     onClose: () => {
+      // Remove delivery toggle from header
+      if (deliveryToggleWrap.parentNode) deliveryToggleWrap.remove();
+      const titleEl = document.querySelector(".app-modal-header .app-modal-title");
+      if (titleEl) titleEl.classList.remove("hidden");
+
       // Скрываем мобильные кнопки при закрытии sheet
       const isMobile = window.matchMedia("(max-width: 768px)").matches;
       if (isMobile && elMobileCartActions) {
@@ -4790,10 +4840,13 @@ function applySheetAddressTitle(backMode = "cart") {
       if (isMobile && elMobileAddressActions) {
         elMobileAddressActions.classList.add("hidden");
       }
+      if (isMobile && elMobileAddressConfirm) {
+        elMobileAddressConfirm.classList.add("hidden");
+      }
       if (elMobileProductActions) {
         elMobileProductActions.classList.add("hidden");
       }
-      
+
       openCartSheetCtx = null;
       if (window.AppModal?.body) window.AppModal.body.classList.remove("shop-cart-sheet-body");
       openProductCtx = null;
@@ -4837,6 +4890,7 @@ function applySheetAddressTitle(backMode = "cart") {
     showSheetProduct,
     showSheetCombo,
     showSheetCart,
+    showSheetAddressList,
   };
 
   setCartSheetFooterMode(openCartSheetCtx, items.length ? "cart" : "hidden");
@@ -4845,6 +4899,7 @@ function applySheetAddressTitle(backMode = "cart") {
   let sheetEditingId = null;
 
   async function showSheetCheckout() {
+    hideHeaderToggle();
     checkoutWrap.classList.remove("hidden");
     list.classList.add("hidden");
     addressWrap.classList.add("hidden");
@@ -4866,12 +4921,14 @@ function applySheetAddressTitle(backMode = "cart") {
       if (elMobileAddressActions) {
         elMobileAddressActions.classList.add("hidden");
       }
+      if (elMobileAddressConfirm) {
+        elMobileAddressConfirm.classList.add("hidden");
+      }
       updateMobileDeliveryProgress();
     }
 
-    // title = адрес, без стрелок/иконок
     clearSheetAddressTitleMode();
-    applySheetAddressTitle("checkout");
+    if (window.AppModal?.setTitle) window.AppModal.setTitle("");
 
     // обычный режим шапки (крестик есть)
     setSheetHeaderMode("cart");
@@ -4888,12 +4945,13 @@ function applySheetAddressTitle(backMode = "cart") {
       hasAddressEditor: true,
       isSheet: true,
       actions: { submitBtn: submitBtn, backBtn: backBtn },
-      onEditAddress: () => showSheetAddressList("checkout"),
-      onEditPickup: () => showSheetPickupList(),
+      onEditAddress: () => { window._deliveryMode = "delivery"; showSheetAddressList("checkout"); },
+      onEditPickup: () => { window._deliveryMode = "pickup"; showSheetAddressList("checkout"); },
     });
   }
 
   function showSheetCart() {
+    hideHeaderToggle();
     checkoutWrap.classList.add("hidden");
     list.classList.remove("hidden");
     addressWrap.classList.add("hidden");
@@ -4911,8 +4969,8 @@ function applySheetAddressTitle(backMode = "cart") {
     }
 
     clearSheetAddressTitleMode();
-    applySheetAddressTitle();
-    
+    if (window.AppModal?.setTitle) window.AppModal.setTitle("");
+
     // На мобильных: скрываем мобильные кнопки товара, показываем кнопки корзины
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (isMobile) {
@@ -4925,6 +4983,9 @@ function applySheetAddressTitle(backMode = "cart") {
       }
       if (elMobileAddressActions) {
         elMobileAddressActions.classList.add("hidden");
+      }
+      if (elMobileAddressConfirm) {
+        elMobileAddressConfirm.classList.add("hidden");
       }
       if (elMobileCartActionsCart && elMobileCartActionsCheckout) {
         if (hasItems) {
@@ -4987,17 +5048,23 @@ function showSheetAddressList(backMode) {
     }
 
     clearSheetAddressTitleMode();
-    if (window.AppModal?.setTitle) window.AppModal.setTitle("Введите адрес");
+    if (window.AppModal?.setTitle) window.AppModal.setTitle("");
+
+    // Insert toggle into sheet header
+    showHeaderToggle();
 
     // Обновляем состояние навигации
     sheetNavigationState.type = 'cart';
     sheetNavigationState.screen = 'addressList';
     sheetNavigationState.data = null;
 
-    renderSheetAddressList();
+    // Set toggle based on current delivery mode
+    const initMode = window._deliveryMode === "pickup" ? "pickup" : "delivery";
+    setToggleMode(initMode);
   }
 
   function showSheetPickupList() {
+    hideHeaderToggle();
     checkoutWrap.classList.add("hidden");
     list.classList.add("hidden");
     addressWrap.classList.add("hidden");
@@ -5103,7 +5170,27 @@ function showSheetAddressList(backMode) {
     });
   }
 
-  function showSheetAddressForm(prefill, editingId, backMode) {
+  async function ensureStoresLoaded() {
+    if (window._pickupStores && window._pickupStores.length) return;
+    try {
+      const metaTenant = document.querySelector('meta[name="tenant_id"]');
+      const tenantId = metaTenant ? Number(metaTenant.content) : null;
+      if (!tenantId) return;
+      const resp = await fetch(`/api/public/tenant/stores?tenant_id=${tenantId}`);
+      const data = await resp.json();
+      if (data?.ok && Array.isArray(data.stores)) {
+        window._pickupStores = data.stores;
+      }
+    } catch {}
+  }
+
+  function populateCitySelect(wrapEl, prefillCity) {
+    if (!wrapEl) return;
+    initCustomSelect(wrapEl, prefillCity);
+  }
+
+  async function showSheetAddressForm(prefill, editingId, backMode) {
+    hideHeaderToggle();
     sheetEditingId = editingId ? Number(editingId) : null;
     if (openCartSheetCtx) {
       openCartSheetCtx.addressBackMode = backMode || "cart";
@@ -5114,6 +5201,10 @@ function showSheetAddressList(backMode) {
       const el = get(k);
       if (el) el.value = str(v || "");
     };
+
+    // ensure stores loaded then populate city
+    await ensureStoresLoaded();
+    populateCitySelect(get("city"), prefill?.city);
 
     setVal("street", prefill?.street);
     setVal("house", prefill?.house);
@@ -5144,6 +5235,9 @@ function showSheetAddressList(backMode) {
       if (elMobileAddressActions) {
         elMobileAddressActions.classList.remove("hidden");
       }
+      if (elMobileAddressConfirm) {
+        elMobileAddressConfirm.classList.add("hidden");
+      }
       if (elMobileAddressSaveBtn) {
         elMobileAddressSaveBtn.onclick = () => {
           const saveBtn = get("save");
@@ -5172,6 +5266,7 @@ function showSheetAddressList(backMode) {
   }
 
   function showSheetProduct(product, { cartKey } = {}) {
+    hideHeaderToggle();
     checkoutWrap.classList.add("hidden");
     list.classList.add("hidden");
     addressWrap.classList.add("hidden");
@@ -5206,6 +5301,7 @@ function showSheetAddressList(backMode) {
   }
 
   function showSheetCombo(comboData, { cartKey } = {}) {
+    hideHeaderToggle();
     checkoutWrap.classList.add("hidden");
     list.classList.add("hidden");
     addressWrap.classList.add("hidden");
@@ -5248,34 +5344,44 @@ function renderSheetAddressList() {
   const local = !token && loadAddressDraft() ? [{ ...loadAddressDraft(), id: null, _local: true }] : [];
   const effectiveList = token ? listData : local;
 
-  const navigateAfterAddressSelection = () => {
-    const mode = openCartSheetCtx?.addressBackMode;
-    if (mode === "profile") {
-      return returnToProfileFromSheet();
-    }
-    if (mode === "checkout") {
-      return showSheetCheckout();
-    }
-    return showSheetCart();
-  };
-
   if (!effectiveList.length) {
     addressList.innerHTML = `<div class="muted">Адресов пока нет.</div>`;
     return;
   }
 
+  // temporary selection state for radio
+  let pendingAddress = state.selectedAddress || null;
+
+  const updateRadios = () => {
+    addressList.querySelectorAll(".shop-address-row").forEach((r) => {
+      const rid = r.dataset.addrId;
+      const isLocal = r.dataset.addrLocal === "1";
+      const match = pendingAddress
+        ? rid && pendingAddress.id
+          ? Number(rid) === Number(pendingAddress.id)
+          : isLocal && !!pendingAddress._local
+        : false;
+      r.classList.toggle("is-selected", match);
+    });
+  };
+
   effectiveList.forEach((a) => {
     const row = document.createElement("div");
     row.className = "shop-address-row";
-    if (Number(a.is_default) === 1) row.classList.add("is-default");
+    if (a.id) row.dataset.addrId = a.id;
+    if (a._local) row.dataset.addrLocal = "1";
 
     const isSelected = state.selectedAddress
       ? a.id && state.selectedAddress.id
         ? Number(a.id) === Number(state.selectedAddress.id)
         : !!a._local && !!state.selectedAddress._local
       : false;
-
     if (isSelected) row.classList.add("is-selected");
+
+    // radio
+    const radio = document.createElement("div");
+    radio.className = "shop-address-radio";
+    row.appendChild(radio);
 
     const title = formatAddressLine(a);
     const sub = a.comment ? str(a.comment) : "";
@@ -5301,31 +5407,7 @@ function renderSheetAddressList() {
     const actions = document.createElement("div");
     actions.className = "shop-address-actions shop-address-actions--compact";
 
-    // ⭐ default (только если залогинен)
-    if (token) {
-      const btnDef = document.createElement("button");
-      btnDef.type = "button";
-      btnDef.className = "shop-address-action-icon is-default";
-      btnDef.title = Number(a.is_default) === 1 ? "Основной адрес" : "Сделать основным";
-      btnDef.innerHTML = `<i class="fas fa-star"></i>`;
-      if (Number(a.is_default) === 1) {
-        btnDef.classList.add("is-active");
-      } else {
-        btnDef.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          try {
-            await apiJson(`/api/public/me/addresses/${a.id}/default`, { method: "PUT" });
-            await refreshAddressState();
-            renderSheetAddressList();
-          } catch (e) {
-            alert("Не удалось изменить основной адрес");
-          }
-        });
-      }
-      actions.appendChild(btnDef);
-    }
-
-    // ✏️ edit
+    // edit
     const btnEdit = document.createElement("button");
     btnEdit.type = "button";
     btnEdit.className = "shop-address-action-icon";
@@ -5336,7 +5418,7 @@ function renderSheetAddressList() {
     });
     actions.appendChild(btnEdit);
 
-    // ✖ delete
+    // delete
     const btnDel = document.createElement("button");
     btnDel.type = "button";
     btnDel.className = "shop-address-action-icon is-danger";
@@ -5344,24 +5426,19 @@ function renderSheetAddressList() {
     btnDel.addEventListener("click", async (e) => {
       e.stopPropagation();
       if (!window.confirm("Удалить адрес?")) return;
-
       if (token && a.id) {
         try {
           await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
           await refreshAddressState();
           renderSheetAddressList();
-          if (!getSelectedAddressLine()) navigateAfterAddressSelection();
         } catch (err) {
           alert("Не удалось удалить адрес");
         }
         return;
       }
-
-      // guest
       clearAddressDraft();
       setSelectedAddress(null);
       renderSheetAddressList();
-      navigateAfterAddressSelection();
     });
     actions.appendChild(btnDel);
 
@@ -5369,42 +5446,302 @@ function renderSheetAddressList() {
     card.appendChild(actions);
     row.appendChild(card);
 
-    // select by click
-    row.addEventListener("click", async () => {
-      if (token && a.id) {
-        // если уже выбран — просто закрываем
-        if (state.selectedAddress && state.selectedAddress.id && Number(state.selectedAddress.id) === Number(a.id)) {
-          navigateAfterAddressSelection();
-          return;
-        }
-        try {
-          await apiJson(`/api/public/me/addresses/${a.id}/default`, { method: "PUT" });
-          await refreshAddressState();
-          updateAddressChip();
-          navigateAfterAddressSelection();
-        } catch (e) {
-          alert("Не удалось выбрать адрес");
-        }
-        return;
-      }
-
-      // guest
-      setSelectedAddress({ ...a, _local: true });
-      syncSelectedAddressToCheckoutDraft();
-      updateAddressChip();
-      return navigateAfterAddressSelection();
+    // select radio on click
+    row.addEventListener("click", () => {
+      pendingAddress = a;
+      updateRadios();
     });
 
     addressList.appendChild(row);
   });
+
+  // confirm button
+  const elConfirmBar = document.getElementById("shopMobileAddressConfirm");
+  const elConfirmBtn = document.getElementById("shopMobileAddressConfirmBtn");
+  const isMobile = window.matchMedia("(max-width: 768px)").matches;
+  if (isMobile && elConfirmBar) {
+    elConfirmBar.classList.remove("hidden");
+  }
+  if (elConfirmBtn) {
+    elConfirmBtn.textContent = "Доставить сюда";
+    elConfirmBtn.onclick = async () => {
+      if (!pendingAddress) return;
+      if (token && pendingAddress.id) {
+        try {
+          await apiJson(`/api/public/me/addresses/${pendingAddress.id}/default`, { method: "PUT" });
+          await refreshAddressState();
+          updateAddressChip();
+        } catch (e) {
+          alert("Не удалось выбрать адрес");
+          return;
+        }
+      } else {
+        setSelectedAddress({ ...pendingAddress, _local: true });
+        syncSelectedAddressToCheckoutDraft();
+        updateAddressChip();
+      }
+      // Set delivery mode
+      window._deliveryMode = "delivery";
+      const d = loadCheckoutDraft();
+      d.method_code = "delivery";
+      d.method_user_selected = true;
+      saveCheckoutDraft(d);
+      updateHeaderAddressWidget();
+      const mode = openCartSheetCtx?.addressBackMode;
+      if (mode === "header") return closeShopSheetIfOpen();
+      if (mode === "profile") return returnToProfileFromSheet();
+      if (mode === "checkout") return showSheetCheckout();
+      return showSheetCart();
+    };
+  }
 }
+
+  // --- Delivery / Pickup toggle: header helpers ---
+  function showHeaderToggle() {
+    const header = document.querySelector(".app-modal-header");
+    if (!header) return;
+    const titleEl = header.querySelector(".app-modal-title");
+    if (titleEl) titleEl.classList.add("hidden");
+    // Insert toggle into header (before actions/close btn)
+    if (!header.contains(deliveryToggleWrap)) {
+      const actions = header.querySelector(".app-modal-actions");
+      if (actions) header.insertBefore(deliveryToggleWrap, actions);
+      else header.appendChild(deliveryToggleWrap);
+    }
+    deliveryToggleWrap.classList.remove("hidden");
+  }
+
+  function hideHeaderToggle() {
+    deliveryToggleWrap.classList.add("hidden");
+    // Move back out of header if needed
+    if (deliveryToggleWrap.parentNode) {
+      deliveryToggleWrap.remove();
+    }
+    const header = document.querySelector(".app-modal-header");
+    if (header) {
+      const titleEl = header.querySelector(".app-modal-title");
+      if (titleEl) titleEl.classList.remove("hidden");
+    }
+  }
+
+  // --- Delivery / Pickup toggle logic ---
+  let activeToggleMode = "delivery";
+
+  function setToggleMode(mode) {
+    activeToggleMode = mode;
+    toggleDeliveryBtn.classList.toggle("is-active", mode === "delivery");
+    togglePickupBtn.classList.toggle("is-active", mode === "pickup");
+
+    const elConfirmBtn = document.getElementById("shopMobileAddressConfirmBtn");
+    if (mode === "delivery") {
+      addressListTop.classList.remove("hidden");
+      addressList.classList.remove("hidden");
+      pickupInlineList.classList.add("hidden");
+      if (elConfirmBtn) elConfirmBtn.textContent = "Доставить сюда";
+      renderSheetAddressList();
+    } else {
+      addressListTop.classList.add("hidden");
+      addressList.classList.add("hidden");
+      pickupInlineList.classList.remove("hidden");
+      if (elConfirmBtn) elConfirmBtn.textContent = "Заказать здесь";
+      renderInlinePickupList();
+    }
+  }
+
+  toggleDeliveryBtn.addEventListener("click", () => setToggleMode("delivery"));
+  togglePickupBtn.addEventListener("click", () => setToggleMode("pickup"));
+
+  // --- Pickup card helpers ---
+  function cleanPhone(raw) {
+    return (raw || "").replace(/[^\d+]/g, "").replace(/^8/, "+7").replace(/^7/, "+7");
+  }
+  function formatPhone(raw) {
+    const digits = (raw || "").replace(/\D/g, "");
+    // expect 11 digits: 7XXXXXXXXXX or 8XXXXXXXXXX
+    const d = digits.length === 11 ? digits : (digits.length === 10 ? "7" + digits : digits);
+    if (d.length === 11) {
+      return `+${d[0]} ${d.slice(1,4)} ${d.slice(4,7)}-${d.slice(7,9)}-${d.slice(9,11)}`;
+    }
+    return raw;
+  }
+  function getStoreTodayHoursRange(storeHours, timezone) {
+    if (!Array.isArray(storeHours) || !storeHours.length) return "";
+    const offsetHours = Number.isNaN(Number(timezone)) ? 0 : Number(timezone);
+    const now = new Date();
+    const utcMs = now.getTime() + now.getTimezoneOffset() * 60 * 1000;
+    const localMs = utcMs + offsetHours * 60 * 60 * 1000;
+    const localDate = new Date(localMs);
+    const currentDay = localDate.getDay();
+    const entry = storeHours.find(h => Number(h.day_of_week) === currentDay);
+    if (!entry || Number(entry.is_closed) === 1) return "";
+    const opens = entry.opens_at ? entry.opens_at.slice(0, 5) : "";
+    const closes = entry.closes_at ? entry.closes_at.slice(0, 5) : "";
+    if (opens && closes) return `${opens} - ${closes}`;
+    return "";
+  }
+  function getStoreStatusInfo(store) {
+    if (!Array.isArray(store.storeHours) || !store.storeHours.length) return null;
+    const tz = Number.isNaN(Number(store.timezone)) ? 0 : Number(store.timezone);
+    const now = new Date();
+    const utcMs = now.getTime() + now.getTimezoneOffset() * 60 * 1000;
+    const localMs = utcMs + tz * 60 * 60 * 1000;
+    const localDate = new Date(localMs);
+    const currentDay = localDate.getDay();
+    const entry = store.storeHours.find(h => Number(h.day_of_week) === currentDay);
+    if (!entry || Number(entry.is_closed) === 1) return { open: false, text: "Закрыто — выходной" };
+    const opens = entry.opens_at ? entry.opens_at.slice(0, 5) : "";
+    const closes = entry.closes_at ? entry.closes_at.slice(0, 5) : "";
+    if (!opens || !closes) return null;
+    const hhmm = localDate.getHours() * 60 + localDate.getMinutes();
+    const [oh, om] = opens.split(":").map(Number);
+    const [ch, cm] = closes.split(":").map(Number);
+    const openMin = oh * 60 + om;
+    const closeMin = ch * 60 + cm;
+    if (hhmm >= openMin && hhmm < closeMin) {
+      return { open: true, text: `Открыто до ${closes}` };
+    }
+    return { open: false, text: `Закрыто до ${opens}` };
+  }
+
+  async function renderInlinePickupList() {
+    pickupInlineList.innerHTML = "";
+    await ensureStoresLoaded();
+    const stores = window._pickupStores || [];
+    if (!stores.length) {
+      pickupInlineList.innerHTML = `<div class="muted" style="padding:16px">Нет доступных точек самовывоза.</div>`;
+      return;
+    }
+
+    let pendingPickupStoreId = window._selectedPickupStoreId || null;
+
+    const updatePickupRadios = () => {
+      pickupInlineList.querySelectorAll(".shop-address-row").forEach((r) => {
+        const sid = r.dataset.storeId;
+        r.classList.toggle("is-selected", sid && pendingPickupStoreId && Number(sid) === Number(pendingPickupStoreId));
+      });
+    };
+
+    stores.forEach((store) => {
+      const row = document.createElement("div");
+      row.className = "shop-address-row shop-pickup-inline-row";
+      row.dataset.storeId = store.id;
+
+      const isSelected = pendingPickupStoreId && Number(store.id) === Number(pendingPickupStoreId);
+      if (isSelected) row.classList.add("is-selected");
+      if (store.isOpen === false) row.classList.add("is-closed");
+
+      // radio
+      const radio = document.createElement("div");
+      radio.className = "shop-address-radio";
+      row.appendChild(radio);
+
+      const fullAddress = store.address || store.name || "Точка #" + store.id;
+
+      const card = document.createElement("div");
+      card.className = "shop-address-card";
+
+      const main = document.createElement("div");
+      main.className = "shop-address-card-main";
+
+      // City (small muted above address)
+      if (store.city) {
+        const cityEl = document.createElement("div");
+        cityEl.className = "shop-pickup-city";
+        cityEl.textContent = store.city;
+        main.appendChild(cityEl);
+      }
+
+      // Address (bold, larger)
+      const addrEl = document.createElement("div");
+      addrEl.className = "shop-pickup-address";
+      addrEl.textContent = fullAddress;
+      main.appendChild(addrEl);
+
+      // Open/closed status
+      const statusInfo = getStoreStatusInfo(store);
+      if (statusInfo) {
+        const statusEl = document.createElement("div");
+        statusEl.className = "shop-pickup-status " + (statusInfo.open ? "is-open" : "is-closed");
+        statusEl.textContent = statusInfo.text;
+        main.appendChild(statusEl);
+      }
+
+      // Work hours
+      const hoursRange = getStoreTodayHoursRange(store.storeHours, store.timezone);
+      if (hoursRange) {
+        const hoursRow = document.createElement("div");
+        hoursRow.className = "shop-pickup-info-row";
+        hoursRow.innerHTML = `<span class="shop-pickup-info-label">Время работы</span><span class="shop-pickup-info-value">${hoursRange}</span>`;
+        main.appendChild(hoursRow);
+      }
+
+      // Phone
+      if (store.phone) {
+        const phoneRow = document.createElement("div");
+        phoneRow.className = "shop-pickup-info-row";
+        const formatted = formatPhone(store.phone);
+        phoneRow.innerHTML = `<span class="shop-pickup-info-label">Телефон</span><a href="tel:${cleanPhone(store.phone)}" class="shop-pickup-phone-link">${formatted}</a>`;
+        phoneRow.querySelector("a").addEventListener("click", (e) => e.stopPropagation());
+        main.appendChild(phoneRow);
+      }
+
+      card.appendChild(main);
+      row.appendChild(card);
+
+      row.addEventListener("click", () => {
+        pendingPickupStoreId = Number(store.id);
+        updatePickupRadios();
+      });
+
+      pickupInlineList.appendChild(row);
+    });
+
+    // Show confirm bar with "Заказать здесь"
+    const elConfirmBar = document.getElementById("shopMobileAddressConfirm");
+    const elConfirmBtn = document.getElementById("shopMobileAddressConfirmBtn");
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile && elConfirmBar) {
+      elConfirmBar.classList.remove("hidden");
+    }
+    if (elConfirmBtn) {
+      elConfirmBtn.textContent = "Заказать здесь";
+      elConfirmBtn.onclick = () => {
+        if (!pendingPickupStoreId) return;
+        window._selectedPickupStoreId = Number(pendingPickupStoreId);
+        if (window._updatePickupAddressCallback) {
+          window._updatePickupAddressCallback();
+        }
+        // Save delivery mode as pickup
+        window._deliveryMode = "pickup";
+        // Update checkout draft
+        const d = loadCheckoutDraft();
+        d.method_code = "takeaway";
+        d.method_user_selected = true;
+        d.pickup_store_id = Number(pendingPickupStoreId);
+        saveCheckoutDraft(d);
+        // Update header
+        updateHeaderAddressWidget();
+        // Navigate back
+        const mode = openCartSheetCtx?.addressBackMode;
+        if (mode === "header") return closeShopSheetIfOpen();
+        if (mode === "profile") return returnToProfileFromSheet();
+        if (mode === "checkout") return showSheetCheckout();
+        return showSheetCart();
+      };
+    }
+  }
 
   // events
   btn.addEventListener("click", async () => {
     await refreshAddressState();
-    // если адрес есть — checkout, если нет — адреса
-    if (getSelectedAddressLine()) showSheetCheckout();
-    else showSheetAddressList();
+    // pickup mode — go directly to checkout (no delivery address needed)
+    if (window._deliveryMode === "pickup" && window._selectedPickupStoreId) {
+      showSheetCheckout();
+    } else if (getSelectedAddressLine()) {
+      showSheetCheckout();
+    } else {
+      showSheetAddressList();
+    }
   });
 
   backBtn.addEventListener("click", () => showSheetCart());
@@ -5425,6 +5762,7 @@ function renderSheetAddressList() {
 
   saveBtn?.addEventListener("click", async () => {
     const payload = normalizeAddressPayload({
+      city: formGet("city")?.dataset?.value || "",
       street: formGet("street")?.value,
       house: formGet("house")?.value,
       entrance: formGet("entrance")?.value,
@@ -6064,7 +6402,8 @@ function renderSheetAddressList() {
           if (Number(a.is_default) === 1) row.classList.add("is-default");
 
           const txt = [
-            `${str(a.street)} ${str(a.house)}`,
+            a.city ? str(a.city) : "",
+            `${str(a.street)} ${str(a.house)}`.trim(),
             a.entrance ? `подъезд ${a.entrance}` : "",
             a.floor ? `этаж ${a.floor}` : "",
             a.apartment ? `кв ${a.apartment}` : "",
@@ -7811,7 +8150,21 @@ function setBottomNavActive(tab) {
 
     const methods = (cfg.methods || []).map(x => ({ code: x.code, title: x.title }));
     const methodUserSelected = Boolean(draft.method_user_selected);
-    const preferredMethodCode = methodUserSelected ? draft.method_code : null;
+    // Determine preferred method: from draft, or from delivery mode toggle
+    let preferredMethodCode = methodUserSelected ? draft.method_code : null;
+    // Resolve pickup aliases: "takeaway" / "pickup" may differ from DB code
+    if (preferredMethodCode && (preferredMethodCode === "takeaway" || preferredMethodCode === "pickup")) {
+      if (!methods.some(m => m.code === preferredMethodCode)) {
+        const alt = methods.find(m => m.code !== "delivery");
+        if (alt) preferredMethodCode = alt.code;
+      }
+    }
+    if (!preferredMethodCode && window._deliveryMode === "pickup") {
+      const pickupMethod = methods.find(m => m.code !== "delivery");
+      if (pickupMethod) preferredMethodCode = pickupMethod.code;
+    } else if (!preferredMethodCode && window._deliveryMode === "delivery") {
+      preferredMethodCode = "delivery";
+    }
     const methodDefault = pickDefaultCode(methods, preferredMethodCode, "takeaway");
     const methodSelect = buildDropdown(methods, methodDefault);
     if (!methodUserSelected || !draft.method_code) {
@@ -7820,10 +8173,14 @@ function setBottomNavActive(tab) {
       saveCheckoutDraft(draft);
     }
     methodSelect.root.addEventListener("change", () => {
-      draft.method_code = methodSelect.getValue();
+      const code = methodSelect.getValue();
+      draft.method_code = code;
       draft.method_user_selected = true;
       saveCheckoutDraft(draft);
-      window._checkoutMethodCode = methodSelect.getValue();
+      window._checkoutMethodCode = code;
+      // Sync header widget with selected method
+      window._deliveryMode = (code === "delivery") ? "delivery" : "pickup";
+      if (typeof updateHeaderAddressWidget === "function") updateHeaderAddressWidget();
       updateDeliveryPricing();
       updateMobileDeliveryProgress();
     });
@@ -9017,8 +9374,8 @@ function initShopLate() {
       if (elNavCart) {
         elNavCart.addEventListener("click", () => {
           const sheetOpen = window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen();
-          const viewingProduct = sheetOpen && openCartSheetCtx && (sheetNavigationState.screen === "product" || sheetNavigationState.screen === "combo");
-          if (viewingProduct) {
+          const notOnCart = sheetOpen && openCartSheetCtx && sheetNavigationState.screen && sheetNavigationState.screen !== "cart";
+          if (notOnCart) {
             const showCart = openCartSheetCtx?.showSheetCart;
             if (typeof showCart === "function") showCart();
             if (typeof setActiveNav === "function") setActiveNav("cart");

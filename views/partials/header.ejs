@@ -9,8 +9,8 @@
         <div class="logo-text" id="headerBrandName">По щам</div>
         <% const hasCitySelector = (typeof showCitySelector !== 'undefined' && showCitySelector === true); %>
         <% if (hasCitySelector) { %>
+          <span class="header-store-status hidden" id="shopMobileHeaderStatus" aria-live="polite"></span>
           <div class="logo-city-wrapper" id="headerCitySelector">
-            <span class="header-store-status hidden" id="shopMobileHeaderStatus" aria-live="polite"></span>
             <button
               type="button"
               class="header-city-button"
@@ -28,6 +28,13 @@
               role="menu"
               aria-label="Выбор города доставки"
             ></div>
+          </div>
+          <div class="header-address-widget" id="headerAddressWidget">
+            <button type="button" class="header-address-button" id="headerAddressButton">
+              <i class="fas fa-location-dot header-address-icon" aria-hidden="true"></i>
+              <span class="header-address-text is-placeholder" id="headerAddressText">Укажите адрес доставки</span>
+              <i class="fas fa-chevron-down header-address-chevron" aria-hidden="true"></i>
+            </button>
           </div>
         <% } %>
       </div>

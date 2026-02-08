@@ -61,6 +61,16 @@
         <div class="shop-address-form-view hidden" id="shopAddressFormView">
           <div class="shop-address-form-grid">
             <div class="shop-address-form-row shop-address-form-row--full">
+              <label class="field-label">Город</label>
+              <div class="custom-select" id="shopAddrCity">
+                <button type="button" class="custom-select-trigger control">
+                  <span class="custom-select-value"></span>
+                  <i class="fas fa-chevron-down custom-select-arrow" aria-hidden="true"></i>
+                </button>
+                <div class="custom-select-dropdown hidden"></div>
+              </div>
+            </div>
+            <div class="shop-address-form-row shop-address-form-row--full">
               <label class="field-label" for="shopAddrStreet">Улица</label>
               <input class="control" id="shopAddrStreet" type="text" />
             </div>
@@ -85,7 +95,7 @@
             </div>
 
             <div class="shop-address-form-row shop-address-form-row--full">
-              <label class="field-label" for="shopAddrComment">Комментарий</label>
+              <label class="field-label" for="shopAddrComment">Комментарий курьеру</label>
               <input class="control" id="shopAddrComment" type="text" />
             </div>
           </div>
