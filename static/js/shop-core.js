@@ -3451,7 +3451,7 @@ async function initAddresses() {
         return;
       }
       const s = document.createElement('script');
-      s.src = '/static/js/shop-late.js';
+      s.src = window.__shopLateUrl || '/static/js/shop-late.js';
       s.defer = true;
       s.dataset.shopLate = '1';
       s.onload = () => {
