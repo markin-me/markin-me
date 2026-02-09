@@ -1291,6 +1291,7 @@
       if (settingsStoreActive) settingsStoreActive.checked = Number(store.is_active) === 1;
       applyStoreHours(store);
       applyDeliveryHours(store);
+      loadStoreTelegramBindings(store.id);
     }
 
     function showStorePanel(show) {
@@ -1589,7 +1590,8 @@
           settingsStoreTelegramList.appendChild(bindingEl);
         });
       } catch (e) {
-        settingsStoreTelegramList.innerHTML = "";
+        console.error("loadStoreTelegramBindings error:", e);
+        settingsStoreTelegramList.innerHTML = "<div class=\"global-telegram-binding\"><div class=\"global-telegram-header\"><span class=\"muted\">Ошибка загрузки</span></div></div>";
       }
     }
 

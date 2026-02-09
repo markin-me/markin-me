@@ -299,6 +299,40 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
   });
 
   /**
+   * GET /api/admin/clients/:id/orders
+   */
+  router.get('/:id/orders', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const customerId = Number(req.params.id);
+      if (!Number.isFinite(customerId) || customerId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      const [rows] = await db.query(
+        `SELECT
+           o.id, o.public_id,
+           DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+           o.total_price, o.items, o.status_id,
+           s.title AS status_title, s.color AS status_color
+         FROM order_orders o
+         LEFT JOIN order_statuses s
+           ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+         WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
+         ORDER BY o.created_at DESC, o.id DESC
+         LIMIT 50`,
+        [tenantId, storeId, customerId]
+      );
+
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
    * DELETE /api/admin/clients/:id/addresses/:addressId
    * soft delete (is_active=0). If deleted default -> set another default.
    */

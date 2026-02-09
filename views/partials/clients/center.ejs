@@ -1,33 +1,63 @@
-<div class="panel clients-panel">
-  <div class="panel-header" style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
-    <div class="panel-title">Клиенты</div>
+<div class="center-stack">
+  <!-- Toolbar как отдельный "остров" -->
+  <div class="panel toolbar-island">
+    <div class="toolbar clients-toolbar">
+      <div class="toolbar-left">
+        <div class="toolbar-title" id="clientsToolbarTitle">
+          <i class="fas fa-users"></i>
+          <span>Клиенты</span>
+        </div>
 
-    <div style="display:flex; gap:8px; align-items:center; width: min(420px, 100%);">
-      <input
-        id="clientsSearch"
-        class="control"
-        type="text"
-        placeholder="Поиск: имя или телефон"
-        autocomplete="off"
-        style="width:100%;"
-      />
-      <select id="clientsSort" class="control" title="Сортировка" style="width:180px;">
-        <option value="last_desc">По активности (последний заказ)</option>
-        <option value="name_asc">По имени (А→Я)</option>
-        <option value="orders_desc">По количеству заказов (убыв.)</option>
-        <option value="created_desc">По дате создания (новые)</option>
-      </select>
-      <button id="clientsSearchClear" class="icon-btn" type="button" aria-label="Очистить поиск" title="Очистить">
-        <i class="fas fa-times"></i>
-      </button>
+        <!-- Expandable search (hidden by default) -->
+        <div class="cl-search-wrap hidden" id="clientsSearchWrap">
+          <input
+            id="clientsSearch"
+            class="cl-search-input"
+            type="text"
+            placeholder="Имя или телефон…"
+            autocomplete="off"
+          />
+          <button id="clientsSearchClear" class="cl-search-clear" type="button" aria-label="Очистить">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="toolbar-right">
+        <!-- Search toggle -->
+        <button id="clientsSearchToggle" class="icon-btn" type="button" aria-label="Поиск" title="Поиск">
+          <i class="fas fa-search"></i>
+        </button>
+
+        <!-- Sort toggle -->
+        <div class="cl-sort-wrap" id="clientsSortWrap">
+          <button id="clientsSortToggle" class="icon-btn" type="button" aria-label="Сортировка" title="Сортировка">
+            <i class="fas fa-sort"></i>
+          </button>
+          <div class="cl-sort-dropdown hidden" id="clientsSortDropdown">
+            <button class="cl-sort-option is-active" type="button" data-sort-val="last_desc">По активности</button>
+            <button class="cl-sort-option" type="button" data-sort-val="name_asc">По имени (А→Я)</button>
+            <button class="cl-sort-option" type="button" data-sort-val="orders_desc">По заказам (убыв.)</button>
+            <button class="cl-sort-option" type="button" data-sort-val="created_desc">По дате создания</button>
+          </div>
+        </div>
+
+        <!-- Add client stub -->
+        <button id="clientsAddBtn" class="icon-btn" type="button" aria-label="Добавить клиента" title="Добавить клиента">
+          <i class="fas fa-plus"></i>
+        </button>
+      </div>
     </div>
   </div>
 
-  <div class="panel-body no-scrollbar">
-    <div class="orders-list" id="clientsList">
-      <!-- JS отрисует сюда список клиентов -->
-    </div>
+  <!-- Основной список -->
+  <div class="panel clients-panel">
+    <div class="panel-body no-scrollbar">
+      <div class="orders-list" id="clientsList">
+        <!-- JS отрисует сюда список клиентов -->
+      </div>
 
-    <div class="empty-hint hidden" id="clientsEmptyHint">Клиентов нет</div>
+      <div class="empty-hint hidden" id="clientsEmptyHint">Клиентов нет</div>
+    </div>
   </div>
 </div>

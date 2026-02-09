@@ -1,96 +1,116 @@
 <div class="panel client-info-panel">
-  <div class="panel-header">
-    <div class="panel-title">Данные клиента</div>
+  <div class="panel-header product-tabs-header hidden" id="clientTabsHeader">
+    <div class="product-tabs" id="clientTabs"></div>
   </div>
 
-  <div class="panel-body no-scrollbar">
-    <div class="order-info">
-      <div class="order-info-title" id="clientInfoTitle">Клиент не выбран</div>
-      <div class="order-info-meta" id="clientInfoMeta">Выбери клиента в центре</div>
+  <div class="panel-body no-scrollbar" id="clientInfoBody">
+    <!-- Empty state -->
+    <div id="clientEmpty" class="empty-state">
+      <div class="empty-icon"><i class="fas fa-mouse-pointer"></i></div>
+      <div class="empty-title">Выберите клиента</div>
+      <div class="empty-text">Нажмите на клиента в списке для просмотра подробной информации</div>
+    </div>
 
-      <div class="info-grid" style="margin-top:14px;">
-        <div class="info-row">
-          <div class="info-label">Имя</div>
-          <div class="info-value" id="clientInfoName">—</div>
-        </div>
-        <div class="info-row">
-          <div class="info-label">Телефон</div>
-          <div class="info-value" id="clientInfoPhone">—</div>
-        </div>
-        <div class="info-row">
-          <div class="info-label">Дата рождения</div>
-          <div class="info-value" id="clientInfoBirthday">—</div>
-        </div>
-        <div class="info-row">
-          <div class="info-label">Заказов</div>
-          <div class="info-value" id="clientInfoOrders">—</div>
-        </div>
-        <div class="info-row">
-          <div class="info-label">Сумма</div>
-          <div class="info-value" id="clientInfoSpent">—</div>
-        </div>
-        <div class="info-row">
-          <div class="info-label">Последний заказ</div>
-          <div class="info-value" id="clientInfoLastOrder">—</div>
-        </div>
-      </div>
+    <!-- Client info (shown when client selected) -->
+    <div id="clientInfoWrap" class="hidden">
 
-      <div style="height:14px;"></div>
-
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-        <div class="panel-title" style="font-size:14px;">Адреса</div>
-        <button id="clientReloadAddresses" class="icon-btn" type="button" aria-label="Обновить адреса" title="Обновить">
-          <i class="fas fa-rotate"></i>
-        </button>
-      </div>
-
-      <div id="clientAddresses" style="display:grid; gap:10px; margin-top:10px;">
-        <!-- JS: список адресов -->
-      </div>
-
-      <div style="height:14px;"></div>
-
-      <div class="panel-title" style="font-size:14px;">Добавить адрес</div>
-
-      <div class="shop-auth-form" style="margin-top:10px;">
-        <label class="field-label">Улица</label>
-        <input id="addrStreet" class="control" type="text" placeholder="Улица" />
-
-        <label class="field-label">Дом</label>
-        <input id="addrHouse" class="control" type="text" placeholder="Дом" />
-
-        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
-          <div>
-            <label class="field-label">Подъезд</label>
-            <input id="addrEntrance" class="control" type="text" placeholder="1" />
-          </div>
-          <div>
-            <label class="field-label">Этаж</label>
-            <input id="addrFloor" class="control" type="text" placeholder="5" />
+      <!-- Profile header -->
+      <div class="shop-profile-top" id="clientProfileTop">
+        <div class="shop-profile-photo-wrap">
+          <div class="shop-profile-photo">
+            <img class="shop-profile-photo-img hidden" id="clientPhoto" alt="Фото" />
+            <div class="shop-profile-photo-placeholder" id="clientPhotoPlaceholder">
+              <i class="fas fa-user" style="font-size:32px; color:var(--color-text-muted);"></i>
+            </div>
           </div>
         </div>
 
-        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
-          <div>
-            <label class="field-label">Квартира</label>
-            <input id="addrApartment" class="control" type="text" placeholder="12" />
+        <div class="shop-profile-info">
+          <div class="shop-profile-line">
+            <div class="shop-profile-line-title">Имя</div>
+            <div class="shop-profile-line-value shop-profile-name-value">
+              <span id="clientInfoName">—</span>
+              <button type="button" class="btn btn-icon shop-profile-name-edit" id="clientEditNameBtn" aria-label="Изменить имя">
+                <i class="fas fa-pencil"></i>
+              </button>
+            </div>
           </div>
-          <div>
-            <label class="field-label">По умолчанию</label>
-            <label style="display:flex; gap:10px; align-items:center; height:44px; border:1px solid var(--color-border); border-radius:12px; padding:0 12px; background:var(--color-surface-2);">
-              <input id="addrIsDefault" type="checkbox" />
-              <span style="font-weight:700; color:var(--color-text);">Да</span>
-            </label>
+          <div class="shop-profile-line">
+            <div class="shop-profile-line-title">Телефон</div>
+            <div class="shop-profile-line-value" id="clientInfoPhone">—</div>
+          </div>
+          <div class="shop-profile-line">
+            <div class="shop-profile-line-title">Дата рождения</div>
+            <div class="shop-profile-line-value" id="clientInfoBirthday">—</div>
           </div>
         </div>
-
-        <label class="field-label">Комментарий</label>
-        <input id="addrComment" class="control" type="text" placeholder="Домофон, ориентир..." />
-
-        <button id="addrAddBtn" type="button" class="btn btn-primary" style="width:100%;">
-          Добавить адрес
-        </button>
       </div>
+
+      <!-- Content tabs -->
+      <div class="shop-profile-tabs" id="clientContentTabs">
+        <button type="button" class="shop-profile-tab is-active" data-ctab="addresses">Адреса</button>
+        <button type="button" class="shop-profile-tab" data-ctab="orders">История заказов</button>
+      </div>
+
+      <!-- Tab: Addresses -->
+      <div class="shop-profile-tab-panel is-active" data-ctab="addresses" id="clientTabAddresses">
+        <div class="shop-profile-list" id="clientAddresses">
+          <!-- JS: список адресов -->
+        </div>
+        <button type="button" class="shop-chip-btn shop-profile-address-toggle" id="clientAddrToggleBtn">+ Новый адрес</button>
+        <div class="shop-profile-card hidden" id="clientAddrFormCard">
+          <div class="shop-address-form-grid">
+            <div class="shop-address-form-row shop-address-form-row--full">
+              <label class="field-label">Улица</label>
+              <input class="control" id="addrStreet" type="text" />
+            </div>
+            <div class="shop-address-form-row shop-address-form-row--grid">
+              <div class="shop-address-form-field">
+                <label class="field-label">Дом</label>
+                <input class="control" id="addrHouse" type="text" />
+              </div>
+              <div class="shop-address-form-field">
+                <label class="field-label">Подъезд</label>
+                <input class="control" id="addrEntrance" type="text" />
+              </div>
+              <div class="shop-address-form-field">
+                <label class="field-label">Этаж</label>
+                <input class="control" id="addrFloor" type="text" />
+              </div>
+              <div class="shop-address-form-field">
+                <label class="field-label">Квартира</label>
+                <input class="control" id="addrApartment" type="text" />
+              </div>
+            </div>
+            <div class="shop-address-form-row shop-address-form-row--full">
+              <label class="field-label">Комментарий</label>
+              <input class="control" id="addrComment" type="text" />
+            </div>
+          </div>
+          <button type="button" class="btn btn-primary" style="width:100%; margin-top:10px;" id="addrAddBtn">Добавить адрес</button>
+        </div>
+      </div>
+
+      <!-- Tab: Orders -->
+      <div class="shop-profile-tab-panel" data-ctab="orders" id="clientTabOrders">
+        <!-- Orders list view -->
+        <div id="clientOrdersListView">
+          <div class="shop-profile-list" id="clientOrdersList">
+            <!-- JS: список заказов -->
+          </div>
+        </div>
+        <!-- Order detail view (hidden by default) -->
+        <div id="clientOrderDetailView" class="hidden">
+          <div class="cl-order-detail-back" id="clientOrderBackBtn">
+            <button type="button" class="icon-btn" aria-label="Назад"><i class="fas fa-arrow-left"></i></button>
+            <span>Детали заказа</span>
+          </div>
+          <div id="clientOrderDetailContent">
+            <!-- JS: детали заказа -->
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 </div>
