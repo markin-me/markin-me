@@ -1467,6 +1467,32 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   opacity: .85;
 }
 
+/* Стили скидок */
+.sp-discount-badge{
+  display: inline-block;
+  background: var(--color-danger, #ef4444);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-right: 6px;
+  vertical-align: middle;
+  line-height: 1.2;
+}
+.sp-old-price{
+  text-decoration: line-through;
+  opacity: .65;
+  margin-right: 6px;
+  font-size: 0.9em;
+  color: var(--color-text-muted, #6b7280);
+}
+.sp-discount-badge--cart{
+  font-size: 9px;
+  padding: 2px 4px;
+  margin-right: 4px;
+}
+
 /* когда корзина пустая — прячем "минус", показываем old (если есть) */
 .qty-pill.is-empty .qty-pill__btn--minus{
   display: none;
@@ -1474,6 +1500,12 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 
 /* когда товар добавлен — old скрываем (JS может добавлять класс .has-qty) */
 .qty-pill.has-qty .qty-pill__center .old{
+  display: none;
+}
+.qty-pill.has-qty .qty-pill__center .sp-discount-badge{
+  display: none;
+}
+.qty-pill.has-qty .qty-pill__center .sp-old-price{
   display: none;
 }
 
@@ -3572,9 +3604,88 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   margin-top: 8px;
 }
 
+.shop-checkout-discount-row{
+  color: var(--color-success, #22c55e);
+}
+.shop-checkout-discount-label-wrap{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.shop-checkout-discount-info-btn{
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.shop-checkout-discount-info-btn i{
+  font-size: 10px;
+}
+.shop-checkout-discount-info-btn:hover{
+  border-color: var(--color-success, #22c55e);
+  color: var(--color-success, #22c55e);
+}
+.shop-checkout-discount-info-btn:focus-visible{
+  outline: 2px solid var(--shop-buy, #f97316);
+  outline-offset: 1px;
+}
+.shop-checkout-discount-value{
+  font-weight: 600;
+  color: var(--color-success, #22c55e);
+}
+.shop-checkout-discount-breakdown{
+  display: none;
+  margin-top: 6px;
+  margin-bottom: 2px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px dashed var(--color-border);
+  background: var(--color-surface-2);
+}
+.shop-checkout-discount-breakdown.is-open{
+  display: grid;
+  gap: 6px;
+}
+.shop-checkout-discount-breakdown-row{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.shop-checkout-discount-breakdown-label{
+  color: var(--color-text-muted);
+}
+.shop-checkout-discount-breakdown-value{
+  color: var(--color-success, #22c55e);
+  font-weight: 600;
+}
+.shop-checkout-discount-breakdown-note{
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--color-text-muted);
+}
 .shop-checkout-total-row{
   margin-top: 6px;
   font-weight: 700;
+}
+
+@media (max-width: 768px){
+  .shop-checkout-discount-breakdown{
+    padding: 8px;
+  }
+  .shop-checkout-discount-breakdown-row{
+    font-size: 12px;
+  }
 }
 
 .shop-checkout-grid-row .control{
@@ -4022,6 +4133,47 @@ body.page-shop .app-modal-body::after{
   border-radius: 14px;
   padding: 10px 12px;
   background: var(--color-surface);
+}
+
+/* Стили карточки скидки в профиле */
+.shop-profile-discount-card{
+  margin-bottom: 10px;
+}
+.shop-profile-discount-header{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.shop-profile-discount-title{
+  font-weight: 600;
+  font-size: 15px;
+  flex: 1;
+  min-width: 0;
+}
+.shop-profile-discount-desc{
+  font-size: 13px;
+  color: var(--color-text-muted, #6b7280);
+  margin-bottom: 8px;
+}
+.shop-profile-discount-details{
+  font-size: 12px;
+  color: var(--color-text-muted, #6b7280);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.shop-profile-discounts-list{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.shop-profile-empty{
+  padding: 20px;
+  text-align: center;
+  color: var(--color-text-muted, #6b7280);
+  font-size: 14px;
 }
 
 .shop-profile-edit{
@@ -4526,6 +4678,80 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   text-align: right;
 }
 
+.shop-order-summary-discount-label-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.shop-order-summary-discount-info-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.shop-order-summary-discount-info-btn i {
+  font-size: 10px;
+}
+
+.shop-order-summary-discount-info-btn:hover {
+  border-color: var(--color-success, #22c55e);
+  color: var(--color-success, #22c55e);
+}
+
+.shop-order-summary-discount-info-btn:focus-visible {
+  outline: 2px solid var(--shop-buy, #f97316);
+  outline-offset: 1px;
+}
+
+.shop-order-summary-discount-breakdown {
+  display: none;
+  margin-top: 2px;
+  margin-bottom: 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px dashed var(--color-border);
+  background: var(--color-surface-2);
+}
+
+.shop-order-summary-discount-breakdown.is-open {
+  display: grid;
+  gap: 6px;
+}
+
+.shop-order-summary-discount-breakdown-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.shop-order-summary-discount-breakdown-label {
+  color: var(--color-text-muted);
+}
+
+.shop-order-summary-discount-breakdown-value {
+  color: var(--color-success, #22c55e);
+  font-weight: 600;
+}
+
+.shop-order-summary-discount-breakdown-note {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--color-text-muted);
+}
+
 .shop-order-summary-divider {
   border-top: 1px dashed var(--color-border);
   margin: 8px 0 4px;
@@ -4554,6 +4780,16 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   text-align: center;
   font-size: 13px;
   color: var(--color-text-muted);
+}
+
+@media (max-width: 768px) {
+  .shop-order-summary-discount-breakdown {
+    padding: 8px;
+  }
+
+  .shop-order-summary-discount-breakdown-row {
+    font-size: 12px;
+  }
 }
 
 /* Экран результата заказа (успех / конфликт) */
@@ -4728,4 +4964,17 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   .toolbar-status {
     display: none;
   }
+}
+
+/* Скрытие скроллбаров но сохранение прокрутки */
+.shop-order-details,
+.shop-profile-panel,
+.app-modal-body {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+.shop-order-details::-webkit-scrollbar,
+.shop-profile-panel::-webkit-scrollbar,
+.app-modal-body::-webkit-scrollbar {
+  display: none; /* Chrome/Safari */
 }

@@ -4,11 +4,280 @@
   </div>
 
   <div class="panel-body no-scrollbar" id="clientInfoBody">
-    <!-- Empty state -->
+    <!-- Empty state для клиентов -->
     <div id="clientEmpty" class="empty-state">
       <div class="empty-icon"><i class="fas fa-mouse-pointer"></i></div>
       <div class="empty-title">Выберите клиента</div>
       <div class="empty-text">Нажмите на клиента в списке для просмотра подробной информации</div>
+    </div>
+
+    <!-- Empty state для категорий -->
+    <div id="filterCategoryEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-filter"></i></div>
+      <div class="empty-title">Выберите категорию</div>
+      <div class="empty-text">Нажмите на категорию слева, чтобы увидеть детали</div>
+    </div>
+
+    <!-- Empty state для скидок -->
+    <div id="discountEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-percentage"></i></div>
+      <div class="empty-title">Выберите скидку</div>
+      <div class="empty-text">Нажмите на скидку слева или создайте новую</div>
+    </div>
+
+    <!-- Форма редактирования фильтра/категории -->
+    <div id="filterEditorWrap" class="hidden">
+      <form id="filterEditorForm" class="form-grid" autocomplete="off">
+        <div class="field-wrap">
+          <label class="field-label" for="fe_title">Название *</label>
+          <input class="control" id="fe_title" name="title" type="text" placeholder="Например: VIP клиенты" required />
+        </div>
+
+        <div class="field-wrap">
+          <label class="field-label">Логика условий</label>
+          <div class="custom-select logic-select" id="fe_logic" data-value="AND">
+            <button type="button" class="cs-trigger control">
+              <span class="cs-value">Все условия (И)</span>
+              <i class="fas fa-chevron-down cs-arrow"></i>
+            </button>
+            <div class="cs-dropdown hidden">
+              <button type="button" class="cs-option is-selected" data-value="AND">Все условия (И)</button>
+              <button type="button" class="cs-option" data-value="OR">Любое условие (ИЛИ)</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field-wrap">
+          <label class="field-label">Условия фильтрации</label>
+          <div id="filterRulesContainer"></div>
+          <button type="button" class="btn btn-sm" id="filterAddRuleBtn" style="margin-top:8px;">
+            <i class="fas fa-plus"></i> Добавить условие
+          </button>
+        </div>
+
+        <div class="form-row-2" style="margin-top:12px;">
+          <label class="switch">
+            <input class="switch-input" type="checkbox" name="is_active" id="fe_is_active" checked />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="switch-text">Активна</span>
+          </label>
+        </div>
+
+        <input type="hidden" id="fe_id" name="id" value="" />
+      </form>
+    </div>
+
+    <!-- Форма редактирования скидки -->
+    <div id="discountEditorWrap" class="hidden">
+      <form id="discountEditorForm" class="form-grid" autocomplete="off">
+        <div class="field-wrap">
+          <label class="field-label" for="de_title">Название *</label>
+          <input class="control" id="de_title" name="title" type="text" placeholder="Например: Скидка 10% на всё" required />
+        </div>
+
+        <div class="form-row-2">
+          <div class="field-wrap">
+            <label class="field-label" for="de_discount_type">Тип скидки</label>
+            <select class="control" id="de_discount_type" name="discount_type">
+              <option value="percent">Процент (%)</option>
+              <option value="fixed">Фиксированная сумма (₽)</option>
+              <option value="special_price">Специальная цена</option>
+            </select>
+          </div>
+          <div class="field-wrap">
+            <label class="field-label" for="de_discount_value">Значение *</label>
+            <input class="control" id="de_discount_value" name="discount_value" type="number" step="0.01" min="0" placeholder="10" required />
+          </div>
+        </div>
+
+        <div class="field-wrap">
+          <label class="field-label" for="de_apply_to">Применяется к</label>
+          <select class="control" id="de_apply_to" name="apply_to">
+            <option value="order">Весь заказ</option>
+            <option value="product">Конкретный товар</option>
+            <option value="category">Категория товаров</option>
+            <option value="combo">Комбо</option>
+          </select>
+        </div>
+
+        <!-- Выбранные товары (чипсы) -->
+        <div class="field-wrap" id="de_products_wrap">
+          <label class="field-label">Товары</label>
+          <div class="discount-chips-wrap">
+            <div class="discount-chips" id="de_products_chips"></div>
+            <button type="button" class="btn btn-sm" id="de_add_products_btn">
+              <i class="fas fa-plus"></i> Добавить товары
+            </button>
+          </div>
+        </div>
+
+        <!-- Выбранные клиенты (чипсы) -->
+        <div class="field-wrap" id="de_customers_wrap">
+          <label class="field-label">Клиенты</label>
+          <div class="discount-chips-wrap">
+            <div class="discount-chips" id="de_customers_chips"></div>
+            <button type="button" class="btn btn-sm" id="de_add_customers_btn">
+              <i class="fas fa-plus"></i> Добавить клиентов
+            </button>
+          </div>
+        </div>
+
+        <div class="form-row-2">
+          <div class="field-wrap">
+            <label class="field-label" for="de_min_order_amount">Мин. сумма заказа</label>
+            <input class="control" id="de_min_order_amount" name="min_order_amount" type="number" step="0.01" min="0" placeholder="500" />
+          </div>
+          <div class="field-wrap">
+            <label class="field-label" for="de_max_discount_amount">Макс. размер скидки</label>
+            <input class="control" id="de_max_discount_amount" name="max_discount_amount" type="number" step="0.01" min="0" placeholder="1000" />
+          </div>
+        </div>
+
+        <div class="form-row-2">
+          <div class="field-wrap">
+            <label class="field-label" for="de_starts_at">Дата начала</label>
+            <input class="control" id="de_starts_at" name="starts_at" type="datetime-local" />
+          </div>
+          <div class="field-wrap">
+            <label class="field-label" for="de_ends_at">Дата окончания</label>
+            <input class="control" id="de_ends_at" name="ends_at" type="datetime-local" />
+          </div>
+        </div>
+
+        <div class="field-wrap">
+          <label class="field-label">Дни недели</label>
+          <div class="weekdays-selector" id="de_schedule_days">
+            <label class="weekday-checkbox"><input type="checkbox" value="1" /><span>Пн</span></label>
+            <label class="weekday-checkbox"><input type="checkbox" value="2" /><span>Вт</span></label>
+            <label class="weekday-checkbox"><input type="checkbox" value="3" /><span>Ср</span></label>
+            <label class="weekday-checkbox"><input type="checkbox" value="4" /><span>Чт</span></label>
+            <label class="weekday-checkbox"><input type="checkbox" value="5" /><span>Пт</span></label>
+            <label class="weekday-checkbox"><input type="checkbox" value="6" /><span>Сб</span></label>
+            <label class="weekday-checkbox"><input type="checkbox" value="0" /><span>Вс</span></label>
+          </div>
+        </div>
+
+        <div class="form-row-2">
+          <div class="field-wrap">
+            <label class="field-label" for="de_schedule_time_start">Время начала</label>
+            <input class="control" id="de_schedule_time_start" name="schedule_time_start" type="time" />
+          </div>
+          <div class="field-wrap">
+            <label class="field-label" for="de_schedule_time_end">Время окончания</label>
+            <input class="control" id="de_schedule_time_end" name="schedule_time_end" type="time" />
+          </div>
+        </div>
+
+        <div class="form-row-2">
+          <div class="field-wrap">
+            <label class="field-label" for="de_usage_limit">Общий лимит</label>
+            <input class="control" id="de_usage_limit" name="usage_limit" type="number" min="0" placeholder="100" />
+          </div>
+          <div class="field-wrap">
+            <label class="field-label" for="de_usage_per_customer">Лимит на клиента</label>
+            <input class="control" id="de_usage_per_customer" name="usage_per_customer" type="number" min="0" placeholder="1" />
+          </div>
+        </div>
+
+        <div class="field-wrap">
+          <label class="field-label" for="de_priority">Приоритет</label>
+          <input class="control" id="de_priority" name="priority" type="number" min="0" value="0" placeholder="0" />
+          <div class="field-hint">Чем выше значение, тем важнее скидка</div>
+        </div>
+
+        <div class="form-row-2" style="margin-top:12px;">
+          <label class="switch">
+            <input class="switch-input" type="checkbox" name="is_stackable" id="de_is_stackable" />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="switch-text">Можно совмещать</span>
+          </label>
+          <label class="switch">
+            <input class="switch-input" type="checkbox" name="is_active" id="de_is_active" checked />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="switch-text">Активна</span>
+          </label>
+        </div>
+
+        <input type="hidden" id="de_id" name="id" value="" />
+      </form>
+    </div>
+
+    <!-- Picker для товаров -->
+    <div id="discountProductPicker" class="hidden">
+      <div class="option-picker-panel">
+        <div class="option-picker-tabs" id="discountPickerTabs"></div>
+        <div class="option-picker-controls">
+          <div class="option-picker-search">
+            <input class="control" id="discountPickerSearch" type="search" placeholder="Поиск по названию" />
+          </div>
+          <label class="option-picker-select-all">
+            <input id="discountPickerSelectAll" type="checkbox" />
+            <span>Выделить все</span>
+          </label>
+        </div>
+        <div class="option-picker-list" id="discountPickerList"></div>
+      </div>
+    </div>
+
+    <!-- Picker для клиентов -->
+    <div id="discountCustomerPicker" class="hidden">
+      <div class="option-picker-panel">
+        <div class="option-picker-tabs" id="discountCustomerPickerTabs"></div>
+        <div class="option-picker-controls">
+          <div class="option-picker-search">
+            <input class="control" id="discountCustomerPickerSearch" type="search" placeholder="Поиск..." />
+          </div>
+          <label class="option-picker-select-all">
+            <input id="discountCustomerPickerSelectAll" type="checkbox" />
+            <span>Выделить все</span>
+          </label>
+        </div>
+        <div class="option-picker-list" id="discountCustomerPickerList"></div>
+      </div>
+    </div>
+
+    <!-- Инфо-панель скидки (когда выбрана скидка, но редактирование не активно) -->
+    <div id="discountInfoWrap" class="hidden">
+      <div class="discount-info-header">
+        <div class="discount-info-icon"><i class="fas fa-percentage"></i></div>
+        <div class="discount-info-title" id="discountInfoTitle">—</div>
+        <div class="discount-info-badge" id="discountInfoBadge">Активна</div>
+      </div>
+      <div class="discount-info-stats">
+        <div class="discount-info-stat">
+          <div class="discount-info-stat-value" id="discountInfoValue">—</div>
+          <div class="discount-info-stat-label">Размер скидки</div>
+        </div>
+        <div class="discount-info-stat">
+          <div class="discount-info-stat-value" id="discountInfoUsageCount">0</div>
+          <div class="discount-info-stat-label">Использований</div>
+        </div>
+      </div>
+      <div class="discount-info-details">
+        <div class="discount-info-row">
+          <span class="discount-info-row-label">Применяется к:</span>
+          <span class="discount-info-row-value" id="discountInfoApplyTo">—</span>
+        </div>
+        <div class="discount-info-row">
+          <span class="discount-info-row-label">Период:</span>
+          <span class="discount-info-row-value" id="discountInfoPeriod">—</span>
+        </div>
+        <div class="discount-info-row">
+          <span class="discount-info-row-label">Лимит:</span>
+          <span class="discount-info-row-value" id="discountInfoLimit">—</span>
+        </div>
+      </div>
+      <div class="discount-info-section" id="discountInfoProductsSection">
+        <div class="discount-info-section-title">Привязанные товары</div>
+        <div class="discount-chips" id="discountInfoProducts"></div>
+      </div>
+      <div class="discount-info-section" id="discountInfoCustomersSection">
+        <div class="discount-info-section-title">Привязанные клиенты</div>
+        <div class="discount-chips" id="discountInfoCustomers"></div>
+      </div>
+      <button type="button" class="btn btn-primary" style="width:100%; margin-top:16px;" id="discountEditBtn">
+        <i class="fas fa-pencil"></i> Редактировать
+      </button>
     </div>
 
     <!-- Client info (shown when client selected) -->
@@ -50,6 +319,7 @@
       <div class="shop-profile-tabs" id="clientContentTabs">
         <button type="button" class="shop-profile-tab is-active" data-ctab="addresses">Адреса</button>
         <button type="button" class="shop-profile-tab" data-ctab="orders">История заказов</button>
+        <button type="button" class="shop-profile-tab" data-ctab="discounts">Скидки</button>
       </div>
 
       <!-- Tab: Addresses -->
@@ -111,6 +381,36 @@
         </div>
       </div>
 
+      <!-- Tab: Discounts -->
+      <div class="shop-profile-tab-panel" data-ctab="discounts" id="clientTabDiscounts">
+        <div class="shop-profile-list" id="clientDiscountsList">
+          <!-- JS: список скидок клиента -->
+        </div>
+        <div class="empty-hint hidden" id="clientDiscountsEmpty">Нет привязанных скидок</div>
+      </div>
+
     </div>
+  </div>
+
+  <!-- Footer для редактирования фильтра -->
+  <div class="panel-footer hidden" id="filterEditorFooter">
+    <button type="button" class="btn btn-danger" id="filterDeleteBtn">
+      <i class="fas fa-trash"></i>
+    </button>
+    <button type="button" class="btn btn-primary" id="filterSaveBtn">Редактировать</button>
+  </div>
+
+  <!-- Footer для редактирования скидки -->
+  <div class="panel-footer hidden" id="discountEditorFooter">
+    <button type="button" class="btn btn-danger" id="discountDeleteBtn">
+      <i class="fas fa-trash"></i>
+    </button>
+    <button type="button" class="btn btn-primary" id="discountSaveBtn">Сохранить</button>
+  </div>
+
+  <!-- Footer для picker'а товаров/клиентов -->
+  <div class="panel-footer hidden" id="discountPickerFooter">
+    <button type="button" class="btn" id="discountPickerCancelBtn">Отменить</button>
+    <button type="button" class="btn btn-primary" id="discountPickerApplyBtn">Применить</button>
   </div>
 </div>

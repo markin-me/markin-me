@@ -57,14 +57,64 @@
   const elList = $("#clientsList");
   const elEmpty = $("#clientsEmptyHint");
   const elSearch = $("#clientsSearch");
-  const elSearchClear = $("#clientsSearchClear");
   const elSearchToggle = $("#clientsSearchToggle");
   const elSearchWrap = $("#clientsSearchWrap");
   const elToolbarTitle = $("#clientsToolbarTitle");
+  const elToolbarText = $("#clientsToolbarText");
   const elSortToggle = $("#clientsSortToggle");
   const elSortDropdown = $("#clientsSortDropdown");
   const elSortWrap = $("#clientsSortWrap");
   const elAddBtn = $("#clientsAddBtn");
+  const elOpenFilterCategoriesBtn = $("#openFilterCategoriesBtn");
+
+  // Discounts accordion
+  const elDiscountsFilters = $("#discountsFiltersList");
+  const elAddDiscountBtn = $("#addDiscountBtn");
+
+  // Discounts view elements
+  const elDiscountsList = $("#discountsList");
+  const elDiscountsEmptyHint = $("#discountsEmptyHint");
+  const elDiscountEmpty = $("#discountEmpty");
+  const elDiscountEditorWrap = $("#discountEditorWrap");
+  const elDiscountEditorForm = $("#discountEditorForm");
+  const elDiscountEditorFooter = $("#discountEditorFooter");
+  const elDiscountInfoWrap = $("#discountInfoWrap");
+  const elDiscountSaveBtn = $("#discountSaveBtn");
+  const elDiscountDeleteBtn = $("#discountDeleteBtn");
+  const elDiscountEditBtn = $("#discountEditBtn");
+
+  // Discount picker elements
+  const elDeProductsChips = $("#de_products_chips");
+  const elDeCustomersChips = $("#de_customers_chips");
+  const elDeAddProductsBtn = $("#de_add_products_btn");
+  const elDeAddCustomersBtn = $("#de_add_customers_btn");
+  const elDiscountProductPicker = $("#discountProductPicker");
+  const elDiscountCustomerPicker = $("#discountCustomerPicker");
+  const elDiscountPickerTabs = $("#discountPickerTabs");
+  const elDiscountPickerSearch = $("#discountPickerSearch");
+  const elDiscountPickerSelectAll = $("#discountPickerSelectAll");
+  const elDiscountPickerList = $("#discountPickerList");
+  const elDiscountCustomerPickerTabs = $("#discountCustomerPickerTabs");
+  const elDiscountCustomerPickerSearch = $("#discountCustomerPickerSearch");
+  const elDiscountCustomerPickerSelectAll = $("#discountCustomerPickerSelectAll");
+  const elDiscountCustomerPickerList = $("#discountCustomerPickerList");
+  const elDiscountPickerFooter = $("#discountPickerFooter");
+  const elDiscountPickerCancelBtn = $("#discountPickerCancelBtn");
+  const elDiscountPickerApplyBtn = $("#discountPickerApplyBtn");
+
+  // Filter categories view
+  const elFilterCategoriesList = $("#filterCategoriesList");
+  const elFilterCategoriesEmpty = $("#filterCategoriesEmptyHint");
+  const elFilterCategoryEmpty = $("#filterCategoryEmpty");
+
+  // Filter editor
+  const elFilterEditorWrap = $("#filterEditorWrap");
+  const elFilterEditorForm = $("#filterEditorForm");
+  const elFilterEditorFooter = $("#filterEditorFooter");
+  const elFilterRulesContainer = $("#filterRulesContainer");
+  const elFilterAddRuleBtn = $("#filterAddRuleBtn");
+  const elFilterSaveBtn = $("#filterSaveBtn");
+  const elFilterDeleteBtn = $("#filterDeleteBtn");
 
   // client tabs (top-level, switching between clients)
   const clientTabsHeader = $("#clientTabsHeader");
@@ -85,9 +135,12 @@
   const clientContentTabs = $("#clientContentTabs");
   const clientTabAddresses = $("#clientTabAddresses");
   const clientTabOrders = $("#clientTabOrders");
+  const clientTabDiscounts = $("#clientTabDiscounts");
   const clientAddressesList = $("#clientAddresses");
   const clientOrdersList = $("#clientOrdersList");
   const clientOrdersListView = $("#clientOrdersListView");
+  const clientDiscountsList = $("#clientDiscountsList");
+  const clientDiscountsEmpty = $("#clientDiscountsEmpty");
   const clientOrderDetailView = $("#clientOrderDetailView");
   const clientOrderDetailContent = $("#clientOrderDetailContent");
   const clientOrderBackBtn = $("#clientOrderBackBtn");
@@ -123,7 +176,9 @@
   // State
   // -----------------------------
   const state = {
-    activeFilter: "all",
+    currentView: "clients",   // "clients" | "filter-categories" | "discounts"
+    activeFilter: "all",      // "all" | "custom_<id>"
+    activeCustomFilterId: null,
     q: "",
     sort: "last_desc",
     clients: [],
@@ -131,8 +186,33 @@
     activeClient: null,
     addresses: [],
     clientOrders: [],
-    totals: { all: 0, active: 0, inactive: 0 },
+    clientDiscounts: [],      // Скидки клиента
+    totals: { all: 0 },
     activeContentTab: "addresses",
+    customFilters: [],        // Кастомные фильтры из БД
+    editingFilterId: null,    // ID фильтра, который редактируем
+    // Скидки и акции
+    discounts: [],
+    discountsTotals: { all: 0 },
+    activeDiscountFilter: "all",
+    activeDiscountId: null,
+    editingDiscountId: null,    // ID редактируемой скидки
+    activeDiscount: null,       // Данные активной скидки
+    discountOrders: [],         // Заказы с применённой скидкой
+    // Picker для скидок
+    discountPickerLevel: null,        // null | 'products' | 'customers'
+    discountPickerSelection: new Set(),
+    discountPickerCategoryId: null,   // Активная категория в picker
+    discountPickerProducts: [],       // Список товаров в текущей категории
+    discountPickerQuery: '',          // Поисковый запрос
+    // Выбранные элементы для скидки
+    discountSelectedProducts: [],     // [{type:'product'|'category'|'combo', id, title}]
+    discountSelectedCustomers: [],    // [{type:'category'|'customer', id, title}]
+    // Кэш данных для picker
+    catalogCategories: [],
+    catalogProducts: [],
+    customerCategories: [],
+    customersList: [],
   };
 
   // -----------------------------
@@ -143,8 +223,8 @@
     activeKey: null,
   };
 
-  function buildTabKey(id) {
-    return `client:${id}`;
+  function buildTabKey(type, id) {
+    return `${type}:${id}`;
   }
 
   function renderTabs() {
@@ -168,13 +248,11 @@
   }
 
   function showEmptyState() {
-    if (clientEmpty) clientEmpty.classList.remove("hidden");
-    if (clientInfoWrap) clientInfoWrap.classList.add("hidden");
+    updateRightPanel();
   }
 
   function hideEmptyState() {
-    if (clientEmpty) clientEmpty.classList.add("hidden");
-    if (clientInfoWrap) clientInfoWrap.classList.remove("hidden");
+    updateRightPanel();
   }
 
   async function setActiveTabKey(key) {
@@ -183,16 +261,29 @@
     tabsState.activeKey = key;
     renderTabs();
     hideEmptyState();
+    
+    // Обработка активации таба в зависимости от типа
+    if (tab.type === 'discount') {
+      const discount = state.discounts.find(d => d.id === tab.id);
+      if (discount) {
+        state.activeDiscount = discount;
+        state.activeDiscountId = discount.id;
+        renderDiscountInfo(discount);
+      }
+    }
+    
     if (typeof tab.onActivate === "function") {
       await tab.onActivate();
     }
+    
+    updateRightPanel();
   }
 
-  function ensureTab({ id, title, onActivate, activate = true }) {
-    const key = buildTabKey(id);
+  function ensureTab({ type = 'client', id, title, onActivate, activate = true }) {
+    const key = buildTabKey(type, id);
     let tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) {
-      tab = { key, id, title, onActivate };
+      tab = { key, type, id, title, onActivate };
       tabsState.tabs.push(tab);
     } else {
       tab.title = title;
@@ -209,18 +300,37 @@
   async function closeTab(key) {
     const idx = tabsState.tabs.findIndex((t) => t.key === key);
     if (idx === -1) return;
+    const closedTab = tabsState.tabs[idx];
     const wasActive = tabsState.activeKey === key;
     tabsState.tabs.splice(idx, 1);
+    
+    // Очищаем состояние в зависимости от типа закрытого таба
+    if (closedTab.type === 'client') {
+      if (state.activeClientId === closedTab.id) {
+        state.activeClientId = null;
+        state.activeClient = null;
+      }
+    } else if (closedTab.type === 'category') {
+      if (state.editingFilterId === closedTab.id) {
+        state.editingFilterId = null;
+      }
+    } else if (closedTab.type === 'discount') {
+      if (state.activeDiscountId === closedTab.id || state.editingDiscountId === closedTab.id) {
+        state.activeDiscountId = null;
+        state.editingDiscountId = null;
+        state.activeDiscount = null;
+        state.discountOrders = [];
+      }
+    }
+    
     if (wasActive) {
       if (tabsState.tabs.length > 0) {
         const newIdx = Math.min(idx, tabsState.tabs.length - 1);
         await setActiveTabKey(tabsState.tabs[newIdx].key);
       } else {
         tabsState.activeKey = null;
-        state.activeClientId = null;
-        state.activeClient = null;
         renderTabs();
-        showEmptyState();
+        updateRightPanel();
         $$(".order-row.is-active", document).forEach((n) => n.classList.remove("is-active"));
       }
     } else {
@@ -253,7 +363,7 @@
   }
 
   // -----------------------------
-  // Content tabs (Адреса / История заказов)
+  // Content tabs (Адреса / История заказов / Скидки)
   // -----------------------------
   function setContentTab(tab) {
     state.activeContentTab = tab;
@@ -262,12 +372,16 @@
         btn.classList.toggle("is-active", btn.dataset.ctab === tab);
       });
     }
-    [clientTabAddresses, clientTabOrders].forEach((panel) => {
+    [clientTabAddresses, clientTabOrders, clientTabDiscounts].forEach((panel) => {
       if (panel) panel.classList.toggle("is-active", panel.dataset.ctab === tab);
     });
     // lazy load orders
     if (tab === "orders" && state.activeClientId) {
       loadClientOrders().catch(console.error);
+    }
+    // lazy load discounts
+    if (tab === "discounts" && state.activeClientId) {
+      loadClientDiscounts().catch(console.error);
     }
   }
 
@@ -379,31 +493,1419 @@
   function renderFilters() {
     if (!elFilters) return;
     elFilters.innerHTML = "";
-    const items = [
-      { id: "all", title: "Все клиенты", subtitle: "все", count: state.totals.all },
-      { id: "active", title: "Активные", subtitle: "is_active=1", count: state.totals.active },
-      { id: "inactive", title: "Неактивные", subtitle: "is_active=0", count: state.totals.inactive },
-    ];
-    items.forEach((it) => {
+    
+    // Базовый фильтр "Все клиенты"
+    const btnAll = document.createElement("button");
+    btnAll.type = "button";
+    btnAll.className = "stage-item";
+    btnAll.setAttribute("data-filter", "all");
+    btnAll.classList.toggle("is-active", state.activeFilter === "all");
+    btnAll.innerHTML = `
+      <span class="stage-meta stage-text"><b>Все клиенты</b></span>
+      <span class="stage-count">${escapeHtml(state.totals.all)}</span>
+    `;
+    btnAll.addEventListener("click", () => {
+      state.activeFilter = "all";
+      state.activeCustomFilterId = null;
+      if (state.currentView !== 'clients') {
+        switchView('clients');
+      }
+      renderFilters();
+      loadClients().catch(console.error);
+    });
+    elFilters.appendChild(btnAll);
+
+    // Кастомные категории клиентов
+    state.customFilters.forEach((filter) => {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "stage-item";
-      btn.setAttribute("data-filter", it.id);
-      btn.classList.toggle("is-active", state.activeFilter === it.id);
+      btn.setAttribute("data-filter", `custom_${filter.id}`);
+      btn.classList.toggle("is-active", state.activeFilter === "custom" && state.activeCustomFilterId === filter.id);
       btn.innerHTML = `
-        <span class="stage-icon"><i class="fas fa-users"></i></span>
-        <span class="stage-text">
-          <strong>${escapeHtml(it.title)}</strong>
-          <small>${escapeHtml(it.subtitle)}</small>
-        </span>
-        <span class="stage-count">${escapeHtml(it.count)}</span>
+        <span class="stage-meta stage-text"><b>${escapeHtml(filter.title)}</b></span>
+        <span class="stage-count">${escapeHtml(filter.count || 0)}</span>
       `;
       btn.addEventListener("click", () => {
-        state.activeFilter = it.id;
+        state.activeFilter = "custom";
+        state.activeCustomFilterId = filter.id;
+        if (state.currentView !== 'clients') {
+          switchView('clients');
+        }
         renderFilters();
         loadClients().catch(console.error);
       });
       elFilters.appendChild(btn);
+    });
+  }
+
+  // -----------------------------
+  // Discounts & Promotions
+  // -----------------------------
+  async function loadDiscounts() {
+    try {
+      const json = await apiJson("/api/admin/discounts");
+      state.discounts = json.discounts || [];
+      state.discountsTotals.all = state.discounts.length;
+      renderDiscountFilters();
+    } catch (err) {
+      console.error("loadDiscounts error:", err);
+    }
+  }
+
+  function renderDiscountFilters() {
+    if (!elDiscountsFilters) return;
+    elDiscountsFilters.innerHTML = "";
+
+    // Базовый фильтр "Все скидки"
+    const btnAll = document.createElement("button");
+    btnAll.type = "button";
+    btnAll.className = "stage-item";
+    btnAll.setAttribute("data-filter", "all");
+    btnAll.classList.toggle("is-active", state.activeDiscountFilter === "all");
+    btnAll.innerHTML = `
+      <span class="stage-meta stage-text"><b>Все скидки</b></span>
+      <span class="stage-count">${escapeHtml(state.discountsTotals.all)}</span>
+    `;
+    btnAll.addEventListener("click", () => {
+      state.activeDiscountFilter = "all";
+      state.activeDiscountId = null;
+      if (state.currentView !== 'discounts') {
+        switchView('discounts');
+      }
+      renderDiscountFilters();
+    });
+    elDiscountsFilters.appendChild(btnAll);
+
+    // Список скидок
+    state.discounts.forEach((discount) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "stage-item";
+      btn.setAttribute("data-filter", `discount_${discount.id}`);
+      btn.classList.toggle("is-active", state.activeDiscountId === discount.id);
+      
+      const statusIcon = discount.is_active 
+        ? '<i class="fas fa-check-circle" style="color:var(--color-success);margin-right:6px;"></i>' 
+        : '<i class="fas fa-pause-circle" style="color:var(--color-muted);margin-right:6px;"></i>';
+      
+      btn.innerHTML = `
+        <span class="stage-meta stage-text">${statusIcon}<b>${escapeHtml(discount.title)}</b></span>
+      `;
+      btn.addEventListener("click", () => {
+        state.activeDiscountFilter = "discount";
+        state.activeDiscountId = discount.id;
+        openDiscountTab(discount);
+        renderDiscountFilters();
+      });
+      elDiscountsFilters.appendChild(btn);
+    });
+  }
+
+  // Отрисовать список скидок в центральной колонке
+  function renderDiscountsList() {
+    if (!elDiscountsList) return;
+    elDiscountsList.innerHTML = '';
+
+    if (!state.discounts.length) {
+      if (elDiscountsEmptyHint) elDiscountsEmptyHint.classList.remove('hidden');
+      return;
+    }
+    if (elDiscountsEmptyHint) elDiscountsEmptyHint.classList.add('hidden');
+
+    state.discounts.forEach((discount) => {
+      const row = document.createElement('div');
+      row.className = 'discount-row';
+      row.classList.toggle('is-active', state.activeDiscountId === discount.id);
+
+      const valueText = discount.discount_type === 'percent' 
+        ? `${discount.discount_value}%`
+        : discount.discount_type === 'fixed'
+          ? `-${discount.discount_value}₽`
+          : `${discount.discount_value}₽`;
+
+      const applyToText = {
+        'order': 'Заказ',
+        'product': 'Товар',
+        'category': 'Категория',
+        'combo': 'Комбо'
+      }[discount.apply_to] || discount.apply_to;
+
+      row.innerHTML = `
+        <div class="discount-row-icon"><i class="fas fa-percentage"></i></div>
+        <div class="discount-row-info">
+          <div class="discount-row-title">${escapeHtml(discount.title)}</div>
+          <div class="discount-row-meta">${applyToText} • ${discount.usage_count || 0} использований</div>
+        </div>
+        <div class="discount-row-value">${valueText}</div>
+        <div class="discount-row-status ${discount.is_active ? '' : 'inactive'}"></div>
+      `;
+
+      row.addEventListener('click', () => {
+        state.activeDiscountId = discount.id;
+        openDiscountTab(discount);
+        renderDiscountsList();
+        renderDiscountFilters();
+      });
+
+      elDiscountsList.appendChild(row);
+    });
+  }
+
+  // Открыть таб скидки
+  async function openDiscountTab(discount) {
+    const tabKey = buildTabKey('discount', discount.id);
+    let existing = tabsState.tabs.find(t => t.key === tabKey);
+    if (!existing) {
+      tabsState.tabs.push({
+        key: tabKey,
+        type: 'discount',
+        id: discount.id,
+        title: discount.title,
+      });
+    }
+    tabsState.activeKey = tabKey;
+    state.activeDiscount = discount;
+    state.editingDiscountId = null; // Сначала показываем инфо, не редактор
+    renderTabs();
+    updateRightPanel();
+
+    // Загружаем полные данные скидки с товарами и клиентами
+    try {
+      const json = await apiJson(`/api/admin/discounts/${discount.id}`);
+      if (json.discount) {
+        state.activeDiscount = json.discount;
+        renderDiscountInfo(json.discount);
+      } else {
+        renderDiscountInfo(discount);
+      }
+    } catch (e) {
+      console.error('openDiscountTab load error:', e);
+      renderDiscountInfo(discount);
+    }
+  }
+
+  // Открыть редактор скидки
+  async function openDiscountEditor(discountId) {
+    const isNew = !discountId;
+    const tabKey = isNew ? buildTabKey('discount', 'new') : buildTabKey('discount', discountId);
+    
+    let existing = tabsState.tabs.find(t => t.key === tabKey);
+    if (!existing) {
+      tabsState.tabs.push({
+        key: tabKey,
+        type: 'discount',
+        id: discountId || 'new',
+        title: isNew ? 'Новая скидка' : 'Редактирование',
+      });
+    }
+    tabsState.activeKey = tabKey;
+    state.editingDiscountId = discountId || 'new';
+
+    // Заполняем форму
+    if (elDiscountEditorForm) {
+      if (isNew) {
+        elDiscountEditorForm.reset();
+        $('#de_id').value = '';
+        $('#de_is_active').checked = true;
+        $('#de_is_stackable').checked = false;
+        $('#de_priority').value = '0';
+        // Сброс выбранных товаров/клиентов
+        state.discountSelectedProducts = [];
+        state.discountSelectedCustomers = [];
+        renderDiscountProductChips();
+        renderDiscountCustomerChips();
+      } else {
+        // Загружаем полные данные скидки с сервера (включая products и customers)
+        try {
+          const json = await apiJson(`/api/admin/discounts/${discountId}`);
+          if (json.discount) {
+            fillDiscountForm(json.discount);
+          }
+        } catch (e) {
+          console.error('openDiscountEditor load error:', e);
+          // Fallback к локальным данным
+          const discount = state.discounts.find(d => d.id === discountId);
+          if (discount) {
+            fillDiscountForm(discount);
+          }
+        }
+      }
+    }
+
+    // Показать кнопку удаления только для существующих
+    if (elDiscountDeleteBtn) {
+      elDiscountDeleteBtn.style.display = isNew ? 'none' : '';
+    }
+
+    renderTabs();
+    updateRightPanel();
+  }
+
+  // Заполнить форму скидки данными
+  function fillDiscountForm(discount) {
+    if (!elDiscountEditorForm) return;
+    
+    $('#de_id').value = discount.id || '';
+    $('#de_title').value = discount.title || '';
+    $('#de_discount_type').value = discount.discount_type || 'percent';
+    $('#de_discount_value').value = discount.discount_value || '';
+    $('#de_apply_to').value = discount.apply_to || 'order';
+    $('#de_min_order_amount').value = discount.min_order_amount || '';
+    $('#de_max_discount_amount').value = discount.max_discount_amount || '';
+    
+    // Даты
+    if (discount.starts_at) {
+      $('#de_starts_at').value = formatDateTimeLocal(discount.starts_at);
+    } else {
+      $('#de_starts_at').value = '';
+    }
+    if (discount.ends_at) {
+      $('#de_ends_at').value = formatDateTimeLocal(discount.ends_at);
+    } else {
+      $('#de_ends_at').value = '';
+    }
+    
+    // Расписание дней
+    const scheduleDays = discount.schedule_days ? (typeof discount.schedule_days === 'string' ? JSON.parse(discount.schedule_days) : discount.schedule_days) : [];
+    $$('#de_schedule_days input[type="checkbox"]').forEach(cb => {
+      cb.checked = scheduleDays.includes(parseInt(cb.value, 10));
+    });
+    
+    $('#de_schedule_time_start').value = discount.schedule_time_start || '';
+    $('#de_schedule_time_end').value = discount.schedule_time_end || '';
+    $('#de_usage_limit').value = discount.usage_limit || '';
+    $('#de_usage_per_customer').value = discount.usage_per_customer || '';
+    $('#de_priority').value = discount.priority || '0';
+    $('#de_is_stackable').checked = !!discount.is_stackable;
+    $('#de_is_active').checked = discount.is_active !== false && discount.is_active !== 0;
+
+    // Загружаем выбранные товары
+    if (Array.isArray(discount.products)) {
+      state.discountSelectedProducts = discount.products.map(p => ({
+        type: p.entity_type || 'product',
+        id: p.entity_id,
+        title: p.title || `#${p.entity_id}`
+      }));
+    } else {
+      state.discountSelectedProducts = [];
+    }
+    renderDiscountProductChips();
+
+    // Загружаем выбранных клиентов
+    if (Array.isArray(discount.customers)) {
+      state.discountSelectedCustomers = discount.customers.map(c => ({
+        type: c.entity_type || 'customer',
+        id: c.entity_id,
+        title: c.title || `#${c.entity_id}`
+      }));
+    } else {
+      state.discountSelectedCustomers = [];
+    }
+    renderDiscountCustomerChips();
+  }
+
+  // Форматировать дату для input datetime-local
+  function formatDateTimeLocal(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    return d.toISOString().slice(0, 16);
+  }
+
+  // Отобразить инфо скидки в правой панели
+  function renderDiscountInfo(discount) {
+    if (!discount) return;
+
+    const titleEl = $('#discountInfoTitle');
+    const badgeEl = $('#discountInfoBadge');
+    const valueEl = $('#discountInfoValue');
+    const usageEl = $('#discountInfoUsageCount');
+    const applyToEl = $('#discountInfoApplyTo');
+    const periodEl = $('#discountInfoPeriod');
+    const limitEl = $('#discountInfoLimit');
+
+    if (titleEl) titleEl.textContent = discount.title;
+    
+    if (badgeEl) {
+      badgeEl.textContent = discount.is_active ? 'Активна' : 'Неактивна';
+      badgeEl.classList.toggle('inactive', !discount.is_active);
+    }
+
+    if (valueEl) {
+      const valueText = discount.discount_type === 'percent' 
+        ? `${discount.discount_value}%`
+        : discount.discount_type === 'fixed'
+          ? `-${discount.discount_value}₽`
+          : `${discount.discount_value}₽`;
+      valueEl.textContent = valueText;
+    }
+
+    if (usageEl) usageEl.textContent = discount.usage_count || 0;
+
+    if (applyToEl) {
+      const applyToText = {
+        'order': 'Весь заказ',
+        'product': 'Товар',
+        'category': 'Категория',
+        'combo': 'Комбо'
+      }[discount.apply_to] || discount.apply_to;
+      applyToEl.textContent = applyToText;
+    }
+
+    if (periodEl) {
+      if (discount.starts_at || discount.ends_at) {
+        const start = discount.starts_at ? new Date(discount.starts_at).toLocaleDateString('ru') : '—';
+        const end = discount.ends_at ? new Date(discount.ends_at).toLocaleDateString('ru') : '—';
+        periodEl.textContent = `${start} — ${end}`;
+      } else {
+        periodEl.textContent = 'Без ограничений';
+      }
+    }
+
+    if (limitEl) {
+      if (discount.usage_limit) {
+        limitEl.textContent = `${discount.usage_count || 0} / ${discount.usage_limit}`;
+      } else {
+        limitEl.textContent = 'Без ограничений';
+      }
+    }
+
+    // Отображаем привязанные товары
+    const productsEl = $('#discountInfoProducts');
+    const productsSectionEl = $('#discountInfoProductsSection');
+    if (productsEl) {
+      const products = discount.products || [];
+      if (products.length > 0) {
+        if (productsSectionEl) productsSectionEl.classList.remove('hidden');
+        productsEl.innerHTML = products.map(p => {
+          const cls = p.entity_type === 'category' ? 'is-category' : (p.entity_type === 'combo' ? 'is-combo' : '');
+          return `<span class="discount-chip ${cls}">${escapeHtml(p.title || `#${p.entity_id}`)}</span>`;
+        }).join('');
+      } else {
+        if (productsSectionEl) productsSectionEl.classList.add('hidden');
+        productsEl.innerHTML = '';
+      }
+    }
+
+    // Отображаем привязанных клиентов
+    const customersEl = $('#discountInfoCustomers');
+    const customersSectionEl = $('#discountInfoCustomersSection');
+    if (customersEl) {
+      const customers = discount.customers || [];
+      if (customers.length > 0) {
+        if (customersSectionEl) customersSectionEl.classList.remove('hidden');
+        customersEl.innerHTML = customers.map(c => {
+          const cls = c.entity_type === 'category' ? 'is-category' : '';
+          return `<span class="discount-chip ${cls}">${escapeHtml(c.title || `#${c.entity_id}`)}</span>`;
+        }).join('');
+      } else {
+        if (customersSectionEl) customersSectionEl.classList.add('hidden');
+        customersEl.innerHTML = '';
+      }
+    }
+    
+    // Загружаем заказы со скидкой
+    loadDiscountOrders(discount.id);
+  }
+
+  // Загрузить заказы, где использовалась скидка
+  async function loadDiscountOrders(discountId) {
+    try {
+      const json = await apiJson(`/api/admin/discounts/${discountId}/orders`);
+      state.discountOrders = json.orders || [];
+      renderDiscountOrders();
+    } catch (err) {
+      console.error('loadDiscountOrders error:', err);
+      state.discountOrders = [];
+    }
+  }
+
+  // Отрисовать заказы со скидкой в центральной колонке
+  function renderDiscountOrders() {
+    if (!elDiscountsList) return;
+    
+    // Если активна скидка, показываем её заказы
+    if (!state.activeDiscount) {
+      renderDiscountsList();
+      return;
+    }
+
+    elDiscountsList.innerHTML = '';
+
+    if (!state.discountOrders.length) {
+      elDiscountsList.innerHTML = '<div class="empty-hint">Нет заказов с этой скидкой</div>';
+      return;
+    }
+
+    state.discountOrders.forEach((order) => {
+      const row = document.createElement('div');
+      row.className = 'order-row';
+      
+      const date = order.used_at ? new Date(order.used_at).toLocaleString('ru') : '—';
+      const total = order.total_price ? `${order.total_price}₽` : '—';
+      const discountAmount = order.discount_amount ? `-${order.discount_amount}₽` : '';
+
+      row.innerHTML = `
+        <div class="order-row-info">
+          <div class="order-row-title">${escapeHtml(order.customer_name || order.customer_phone || 'Без имени')}</div>
+          <div class="order-row-meta">${date}</div>
+        </div>
+        <div class="order-row-right">
+          <div class="order-row-total">${total}</div>
+          <div class="order-row-discount" style="color:var(--color-success);font-size:12px;">${discountAmount}</div>
+        </div>
+      `;
+
+      elDiscountsList.appendChild(row);
+    });
+  }
+
+  // Сохранить скидку
+  async function saveDiscount() {
+    if (!elDiscountEditorForm) return;
+
+    const id = $('#de_id').value;
+    const isNew = !id || id === 'new';
+
+    // Собираем данные формы
+    const scheduleDays = [];
+    $$('#de_schedule_days input[type="checkbox"]:checked').forEach(cb => {
+      scheduleDays.push(parseInt(cb.value, 10));
+    });
+
+    const data = {
+      title: $('#de_title').value.trim(),
+      discount_type: $('#de_discount_type').value,
+      discount_value: parseFloat($('#de_discount_value').value) || 0,
+      apply_to: $('#de_apply_to').value,
+      min_order_amount: parseFloat($('#de_min_order_amount').value) || null,
+      max_discount_amount: parseFloat($('#de_max_discount_amount').value) || null,
+      starts_at: $('#de_starts_at').value || null,
+      ends_at: $('#de_ends_at').value || null,
+      schedule_days: scheduleDays.length ? scheduleDays : null,
+      schedule_time_start: $('#de_schedule_time_start').value || null,
+      schedule_time_end: $('#de_schedule_time_end').value || null,
+      usage_limit: parseInt($('#de_usage_limit').value, 10) || null,
+      usage_per_customer: parseInt($('#de_usage_per_customer').value, 10) || null,
+      priority: parseInt($('#de_priority').value, 10) || 0,
+      is_stackable: $('#de_is_stackable').checked,
+      is_active: $('#de_is_active').checked,
+      // Товары и клиенты
+      products: state.discountSelectedProducts.map(p => ({
+        entity_type: p.type,
+        entity_id: p.id
+      })),
+      customers: state.discountSelectedCustomers.map(c => ({
+        entity_type: c.type,
+        entity_id: c.id
+      })),
+    };
+
+    if (!data.title) {
+      alert('Введите название скидки');
+      return;
+    }
+    if (!data.discount_value || data.discount_value <= 0) {
+      alert('Введите корректное значение скидки');
+      return;
+    }
+
+    try {
+      if (isNew) {
+        await apiJson('/api/admin/discounts', { method: 'POST', body: data });
+      } else {
+        await apiJson(`/api/admin/discounts/${id}`, { method: 'PUT', body: data });
+      }
+
+      // Перезагружаем список скидок
+      await loadDiscounts();
+      
+      // Закрываем таб
+      closeActiveTab();
+      
+      state.editingDiscountId = null;
+      updateRightPanel();
+    } catch (err) {
+      console.error('saveDiscount error:', err);
+      alert('Ошибка сохранения: ' + err.message);
+    }
+  }
+
+  // Удалить скидку
+  async function deleteDiscount() {
+    const id = $('#de_id').value;
+    if (!id || id === 'new') return;
+
+    if (!confirm('Удалить эту скидку?')) return;
+
+    try {
+      await apiJson(`/api/admin/discounts/${id}`, { method: 'DELETE' });
+      
+      // Перезагружаем список
+      await loadDiscounts();
+      
+      // Закрываем таб
+      closeActiveTab();
+      
+      state.editingDiscountId = null;
+      state.activeDiscount = null;
+      updateRightPanel();
+    } catch (err) {
+      console.error('deleteDiscount error:', err);
+      alert('Ошибка удаления: ' + err.message);
+    }
+  }
+
+  // -----------------------------
+  // Discount Picker (products/customers)
+  // -----------------------------
+
+  // Загрузить категории товаров
+  async function loadCatalogCategories() {
+    if (state.catalogCategories.length > 0) return state.catalogCategories;
+    try {
+      const json = await apiJson('/api/prod_categories');
+      state.catalogCategories = Array.isArray(json.data) ? json.data : [];
+    } catch (e) {
+      console.error('loadCatalogCategories error:', e);
+      state.catalogCategories = [];
+    }
+    return state.catalogCategories;
+  }
+
+  // Загрузить товары по категории
+  async function loadCatalogProducts(categoryId) {
+    try {
+      const url = categoryId ? `/api/prod_products?category_id=${categoryId}` : '/api/prod_products';
+      const json = await apiJson(url);
+      state.catalogProducts = Array.isArray(json.data) ? json.data : [];
+    } catch (e) {
+      console.error('loadCatalogProducts error:', e);
+      state.catalogProducts = [];
+    }
+    return state.catalogProducts;
+  }
+
+  // Загрузить категории клиентов
+  async function loadCustomerCategories() {
+    if (state.customerCategories.length > 0) return state.customerCategories;
+    try {
+      const json = await apiJson('/api/admin/clients/filters/list');
+      state.customerCategories = Array.isArray(json.data) ? json.data : [];
+    } catch (e) {
+      console.error('loadCustomerCategories error:', e);
+      state.customerCategories = [];
+    }
+    return state.customerCategories;
+  }
+
+  // Загрузить список клиентов
+  async function loadCustomersList() {
+    try {
+      const json = await apiJson('/api/admin/clients');
+      state.customersList = Array.isArray(json.data) ? json.data : [];
+    } catch (e) {
+      console.error('loadCustomersList error:', e);
+      state.customersList = [];
+    }
+    return state.customersList;
+  }
+
+  // Открыть picker для товаров
+  async function openDiscountProductPicker() {
+    state.discountPickerLevel = 'products';
+    state.discountPickerQuery = '';
+    state.discountPickerCategoryId = null;
+    
+    // Копируем текущий выбор в Set
+    state.discountPickerSelection = new Set(
+      state.discountSelectedProducts.map(p => `${p.type}:${p.id}`)
+    );
+
+    // Загружаем категории
+    await loadCatalogCategories();
+    
+    // Показываем picker, скрываем форму
+    if (elDiscountEditorWrap) elDiscountEditorWrap.classList.add('hidden');
+    if (elDiscountEditorFooter) elDiscountEditorFooter.classList.add('hidden');
+    if (elDiscountProductPicker) elDiscountProductPicker.classList.remove('hidden');
+    if (elDiscountPickerFooter) elDiscountPickerFooter.classList.remove('hidden');
+    
+    // Рендерим
+    renderDiscountPickerTabs();
+    await refreshDiscountPickerProducts();
+  }
+
+  // Открыть picker для клиентов
+  async function openDiscountCustomerPicker() {
+    state.discountPickerLevel = 'customers';
+    state.discountPickerQuery = '';
+    state.discountPickerCategoryId = null;
+    
+    // Копируем текущий выбор в Set
+    state.discountPickerSelection = new Set(
+      state.discountSelectedCustomers.map(c => `${c.type}:${c.id}`)
+    );
+
+    // Загружаем категории клиентов
+    await loadCustomerCategories();
+    
+    // Показываем picker, скрываем форму
+    if (elDiscountEditorWrap) elDiscountEditorWrap.classList.add('hidden');
+    if (elDiscountEditorFooter) elDiscountEditorFooter.classList.add('hidden');
+    if (elDiscountCustomerPicker) elDiscountCustomerPicker.classList.remove('hidden');
+    if (elDiscountPickerFooter) elDiscountPickerFooter.classList.remove('hidden');
+    
+    // Рендерим
+    renderDiscountCustomerPickerTabs();
+    await refreshDiscountCustomerPickerList();
+  }
+
+  // Закрыть picker без сохранения
+  function closeDiscountPicker() {
+    state.discountPickerLevel = null;
+    state.discountPickerSelection.clear();
+    
+    // Скрываем pickers
+    if (elDiscountProductPicker) elDiscountProductPicker.classList.add('hidden');
+    if (elDiscountCustomerPicker) elDiscountCustomerPicker.classList.add('hidden');
+    if (elDiscountPickerFooter) elDiscountPickerFooter.classList.add('hidden');
+    
+    // Показываем форму
+    if (elDiscountEditorWrap) elDiscountEditorWrap.classList.remove('hidden');
+    if (elDiscountEditorFooter) elDiscountEditorFooter.classList.remove('hidden');
+  }
+
+  // Применить выбор
+  function applyDiscountPickerSelection() {
+    if (state.discountPickerLevel === 'products') {
+      // Конвертируем Set обратно в массив объектов
+      const newSelection = [];
+      state.discountPickerSelection.forEach(key => {
+        const [type, idStr] = key.split(':');
+        const id = parseInt(idStr, 10);
+        // Находим название
+        let title = '';
+        if (type === 'category') {
+          const cat = state.catalogCategories.find(c => c.id === id);
+          title = cat?.title || `Категория #${id}`;
+        } else {
+          const prod = state.catalogProducts.find(p => p.id === id);
+          title = prod?.name || prod?.title || `Товар #${id}`;
+        }
+        newSelection.push({ type, id, title });
+      });
+      state.discountSelectedProducts = newSelection;
+      renderDiscountProductChips();
+    } else if (state.discountPickerLevel === 'customers') {
+      const newSelection = [];
+      state.discountPickerSelection.forEach(key => {
+        const [type, idStr] = key.split(':');
+        const id = parseInt(idStr, 10);
+        let title = '';
+        if (type === 'category') {
+          const cat = state.customerCategories.find(c => c.id === id);
+          title = cat?.title || `Категория #${id}`;
+        } else {
+          const cust = state.customersList.find(c => c.id === id);
+          title = cust?.name || cust?.phone || `Клиент #${id}`;
+        }
+        newSelection.push({ type, id, title });
+      });
+      state.discountSelectedCustomers = newSelection;
+      renderDiscountCustomerChips();
+    }
+    
+    closeDiscountPicker();
+  }
+
+  // Рендеринг табов категорий товаров
+  function renderDiscountPickerTabs() {
+    if (!elDiscountPickerTabs) return;
+    
+    const categories = state.catalogCategories;
+    const activeId = state.discountPickerCategoryId;
+    
+    let html = `<button type="button" class="option-picker-tab ${activeId === null ? 'is-active' : ''}" data-cat-id="">Все</button>`;
+    categories.forEach(cat => {
+      html += `<button type="button" class="option-picker-tab ${activeId === cat.id ? 'is-active' : ''}" data-cat-id="${cat.id}">${escapeHtml(cat.title)}</button>`;
+    });
+    
+    elDiscountPickerTabs.innerHTML = html;
+  }
+
+  // Рендеринг табов категорий клиентов
+  function renderDiscountCustomerPickerTabs() {
+    if (!elDiscountCustomerPickerTabs) return;
+    
+    const categories = state.customerCategories;
+    const activeId = state.discountPickerCategoryId;
+    
+    let html = `<button type="button" class="option-picker-tab ${activeId === null ? 'is-active' : ''}" data-cat-id="">Все клиенты</button>`;
+    html += `<button type="button" class="option-picker-tab ${activeId === 'categories' ? 'is-active' : ''}" data-cat-id="categories">Категории</button>`;
+    
+    elDiscountCustomerPickerTabs.innerHTML = html;
+  }
+
+  // Обновить список товаров в picker
+  async function refreshDiscountPickerProducts() {
+    await loadCatalogProducts(state.discountPickerCategoryId);
+    renderDiscountPickerList();
+  }
+
+  // Обновить список в picker клиентов
+  async function refreshDiscountCustomerPickerList() {
+    if (state.discountPickerCategoryId === 'categories') {
+      // Показываем категории клиентов
+      renderDiscountCustomerCategoryList();
+    } else {
+      // Показываем клиентов
+      await loadCustomersList();
+      renderDiscountCustomerList();
+    }
+  }
+
+  // Рендеринг списка товаров
+  function renderDiscountPickerList() {
+    if (!elDiscountPickerList) return;
+    
+    let items = state.catalogProducts;
+    const query = state.discountPickerQuery.toLowerCase();
+    if (query) {
+      items = items.filter(p => (p.name || p.title) && (p.name || p.title).toLowerCase().includes(query));
+    }
+    
+    if (items.length === 0) {
+      elDiscountPickerList.innerHTML = '<div class="option-picker-empty">Товары не найдены</div>';
+      return;
+    }
+    
+    elDiscountPickerList.innerHTML = items.map(prod => {
+      const key = `product:${prod.id}`;
+      const isChecked = state.discountPickerSelection.has(key);
+      const prodName = prod.name || prod.title || '';
+      return `
+        <label class="option-picker-row${isChecked ? ' is-selected' : ''}">
+          <input type="checkbox" data-key="${key}" ${isChecked ? 'checked' : ''} />
+          <span class="option-picker-title">${escapeHtml(prodName)}</span>
+          <span class="option-picker-price">${prod.price ? 'Цена: ' + prod.price + ' ₽' : ''}</span>
+        </label>
+      `;
+    }).join('');
+
+    updatePickerSelectAll();
+  }
+
+  // Рендеринг списка категорий клиентов
+  function renderDiscountCustomerCategoryList() {
+    if (!elDiscountCustomerPickerList) return;
+    
+    const categories = state.customerCategories;
+    if (categories.length === 0) {
+      elDiscountCustomerPickerList.innerHTML = '<div class="option-picker-empty">Категории не найдены</div>';
+      return;
+    }
+    
+    elDiscountCustomerPickerList.innerHTML = categories.map(cat => {
+      const key = `category:${cat.id}`;
+      const isChecked = state.discountPickerSelection.has(key);
+      return `
+        <label class="option-picker-row${isChecked ? ' is-selected' : ''}">
+          <input type="checkbox" data-key="${key}" ${isChecked ? 'checked' : ''} />
+          <span class="option-picker-title">${escapeHtml(cat.title)}</span>
+        </label>
+      `;
+    }).join('');
+
+    updateCustomerPickerSelectAll();
+  }
+
+  // Рендеринг списка клиентов
+  function renderDiscountCustomerList() {
+    if (!elDiscountCustomerPickerList) return;
+    
+    let items = state.customersList;
+    const query = state.discountPickerQuery.toLowerCase();
+    if (query) {
+      items = items.filter(c => {
+        const name = (c.name || '').toLowerCase();
+        const phone = (c.phone || '').toLowerCase();
+        return name.includes(query) || phone.includes(query);
+      });
+    }
+    
+    if (items.length === 0) {
+      elDiscountCustomerPickerList.innerHTML = '<div class="option-picker-empty">Клиенты не найдены</div>';
+      return;
+    }
+    
+    elDiscountCustomerPickerList.innerHTML = items.map(cust => {
+      const key = `customer:${cust.id}`;
+      const isChecked = state.discountPickerSelection.has(key);
+      return `
+        <label class="option-picker-row${isChecked ? ' is-selected' : ''}">
+          <input type="checkbox" data-key="${key}" ${isChecked ? 'checked' : ''} />
+          <span class="option-picker-title">${escapeHtml(cust.name || 'Без имени')}</span>
+          <span class="option-picker-price">${escapeHtml(cust.phone || '')}</span>
+        </label>
+      `;
+    }).join('');
+
+    updateCustomerPickerSelectAll();
+  }
+
+  // Обновить состояние "Выбрать все"
+  function updatePickerSelectAll() {
+    if (!elDiscountPickerSelectAll) return;
+    const checkboxes = $$('#discountPickerList input[type="checkbox"]');
+    const allChecked = checkboxes.length > 0 && checkboxes.every(cb => cb.checked);
+    elDiscountPickerSelectAll.checked = allChecked;
+  }
+
+  function updateCustomerPickerSelectAll() {
+    if (!elDiscountCustomerPickerSelectAll) return;
+    const checkboxes = $$('#discountCustomerPickerList input[type="checkbox"]');
+    const allChecked = checkboxes.length > 0 && checkboxes.every(cb => cb.checked);
+    elDiscountCustomerPickerSelectAll.checked = allChecked;
+  }
+
+  // Рендеринг чипсов выбранных товаров
+  function renderDiscountProductChips() {
+    if (!elDeProductsChips) return;
+    
+    if (state.discountSelectedProducts.length === 0) {
+      elDeProductsChips.innerHTML = '<span class="discount-chips-empty">Не выбрано</span>';
+      return;
+    }
+    
+    elDeProductsChips.innerHTML = state.discountSelectedProducts.map(item => {
+      const cls = item.type === 'category' ? 'is-category' : (item.type === 'combo' ? 'is-combo' : '');
+      return `
+        <span class="discount-chip ${cls}" data-type="${item.type}" data-id="${item.id}">
+          <span class="discount-chip-text">${escapeHtml(item.title)}</span>
+          <span class="discount-chip-remove"><i class="fas fa-times"></i></span>
+        </span>
+      `;
+    }).join('');
+  }
+
+  // Рендеринг чипсов выбранных клиентов
+  function renderDiscountCustomerChips() {
+    if (!elDeCustomersChips) return;
+    
+    if (state.discountSelectedCustomers.length === 0) {
+      elDeCustomersChips.innerHTML = '<span class="discount-chips-empty">Не выбрано</span>';
+      return;
+    }
+    
+    elDeCustomersChips.innerHTML = state.discountSelectedCustomers.map(item => {
+      const cls = item.type === 'category' ? 'is-category' : '';
+      return `
+        <span class="discount-chip ${cls}" data-type="${item.type}" data-id="${item.id}">
+          <span class="discount-chip-text">${escapeHtml(item.title)}</span>
+          <span class="discount-chip-remove"><i class="fas fa-times"></i></span>
+        </span>
+      `;
+    }).join('');
+  }
+
+  // Удалить чип товара
+  function removeDiscountProductChip(type, id) {
+    state.discountSelectedProducts = state.discountSelectedProducts.filter(
+      p => !(p.type === type && p.id === id)
+    );
+    renderDiscountProductChips();
+  }
+
+  // Удалить чип клиента
+  function removeDiscountCustomerChip(type, id) {
+    state.discountSelectedCustomers = state.discountSelectedCustomers.filter(
+      c => !(c.type === type && c.id === id)
+    );
+    renderDiscountCustomerChips();
+  }
+
+  // Закрыть активный таб
+  function closeActiveTab() {
+    if (!tabsState.activeKey) return;
+    const idx = tabsState.tabs.findIndex(t => t.key === tabsState.activeKey);
+    if (idx !== -1) {
+      tabsState.tabs.splice(idx, 1);
+      tabsState.activeKey = tabsState.tabs.length > 0 ? tabsState.tabs[tabsState.tabs.length - 1].key : null;
+    }
+    renderTabs();
+  }
+
+  // -----------------------------
+  // Custom Filters (Marketing)
+  // -----------------------------
+  const filterFieldOptions = [
+    { value: 'total_orders', label: 'Количество заказов' },
+    { value: 'total_spent', label: 'Сумма покупок' },
+    { value: 'last_order_date', label: 'Последний заказ' },
+    { value: 'created_at', label: 'Дата регистрации' },
+  ];
+
+  const filterOperatorOptions = [
+    { value: '>=', label: '>=' },
+    { value: '<=', label: '<=' },
+    { value: '>', label: '>' },
+    { value: '<', label: '<' },
+    { value: '=', label: '=' },
+  ];
+
+  async function loadCustomFilters() {
+    try {
+      const json = await apiJson('/api/admin/clients/filters/list');
+      state.customFilters = Array.isArray(json.data) ? json.data : [];
+    } catch (e) {
+      console.error('Failed to load custom filters:', e);
+      state.customFilters = [];
+    }
+    // Обновляем список фильтров в левой панели
+    renderFilters();
+  }
+
+  // Переключение между views
+  function switchView(viewName) {
+    state.currentView = viewName;
+
+    // Переключаем контент в центральной колонке
+    $$('[data-view-content]').forEach(el => {
+      el.classList.toggle('hidden', el.dataset.viewContent !== viewName);
+    });
+
+    // Обновляем toolbar
+    if (elToolbarText) {
+      const titles = {
+        'clients': 'Клиенты',
+        'filter-categories': 'Категории',
+        'discounts': 'Скидки'
+      };
+      elToolbarText.textContent = titles[viewName] || 'Клиенты';
+    }
+    if (elToolbarTitle) {
+      const icon = elToolbarTitle.querySelector('i');
+      if (icon) {
+        const icons = {
+          'clients': 'fas fa-users',
+          'filter-categories': 'fas fa-filter',
+          'discounts': 'fas fa-percentage'
+        };
+        icon.className = icons[viewName] || 'fas fa-users';
+      }
+    }
+
+    // Показываем/скрываем элементы toolbar в зависимости от view
+    if (elSearchWrap) elSearchWrap.style.display = viewName === 'clients' ? '' : 'none';
+    if (elSortWrap) elSortWrap.style.display = viewName === 'clients' ? '' : 'none';
+
+    // Обновляем правую колонку
+    updateRightPanel();
+
+    // Загружаем данные
+    if (viewName === 'filter-categories') {
+      renderFilterCategoriesList();
+    } else if (viewName === 'discounts') {
+      renderDiscountsList();
+    }
+  }
+
+  function updateRightPanel() {
+    // Определяем что показывать по активному табу
+    const activeTab = tabsState.tabs.find(t => t.key === tabsState.activeKey);
+    const isClientTab = activeTab?.type === 'client';
+    const isCategoryTab = activeTab?.type === 'category';
+    const isDiscountTab = activeTab?.type === 'discount';
+    const noTabs = !activeTab;
+    
+    // Скрываем/показываем элементы правой панели
+    // Empty state для клиентов показываем только если нет табов и view = clients
+    if (clientEmpty) clientEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'clients');
+    // Info клиента показываем если активный таб = client
+    if (clientInfoWrap) clientInfoWrap.classList.toggle('hidden', !isClientTab);
+    // Empty state для категорий показываем если нет табов и view = filter-categories
+    if (elFilterCategoryEmpty) elFilterCategoryEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'filter-categories');
+    // Редактор категории показываем если активный таб = category
+    if (elFilterEditorWrap) elFilterEditorWrap.classList.toggle('hidden', !isCategoryTab);
+    if (elFilterEditorFooter) elFilterEditorFooter.classList.toggle('hidden', !isCategoryTab);
+    
+    // Empty state для скидок показываем если нет табов и view = discounts
+    if (elDiscountEmpty) elDiscountEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'discounts');
+    // Редактор скидки показываем если активный таб = discount и редактируем
+    const isEditingDiscount = isDiscountTab && state.editingDiscountId !== null;
+    const isViewingDiscount = isDiscountTab && state.editingDiscountId === null && state.activeDiscount;
+    if (elDiscountEditorWrap) elDiscountEditorWrap.classList.toggle('hidden', !isEditingDiscount);
+    if (elDiscountEditorFooter) elDiscountEditorFooter.classList.toggle('hidden', !isEditingDiscount);
+    if (elDiscountInfoWrap) elDiscountInfoWrap.classList.toggle('hidden', !isViewingDiscount);
+  }
+
+  function renderFilterCategoriesList() {
+    if (!elFilterCategoriesList) return;
+    elFilterCategoriesList.innerHTML = '';
+
+    if (!state.customFilters.length) {
+      if (elFilterCategoriesEmpty) elFilterCategoriesEmpty.classList.remove('hidden');
+      return;
+    }
+    if (elFilterCategoriesEmpty) elFilterCategoriesEmpty.classList.add('hidden');
+
+    state.customFilters.forEach((filter) => {
+      const row = document.createElement('div');
+      row.className = 'order-row';
+      row.setAttribute('role', 'button');
+      row.setAttribute('tabindex', '0');
+      row.setAttribute('data-filter-id', String(filter.id));
+      
+      // Подсветка если открыт таб этой категории
+      const tabKey = buildTabKey('category', filter.id);
+      const isTabOpen = tabsState.tabs.some(t => t.key === tabKey);
+      if (isTabOpen && tabsState.activeKey === tabKey) row.classList.add('is-active');
+
+      const rulesCount = filter.conditions?.rules?.length || 0;
+
+      row.innerHTML = `
+        <div class="order-icon"><i class="fas ${escapeHtml(filter.icon || 'fa-filter')}"></i></div>
+        <div class="order-mid"><strong>${escapeHtml(filter.title)}</strong></div>
+        <div class="order-actions"><span class="pill">${rulesCount}</span></div>
+      `;
+
+      row.addEventListener('click', () => openFilterEditor(filter));
+      elFilterCategoriesList.appendChild(row);
+    });
+  }
+
+  function openFilterEditor(filter = null) {
+    const isNew = filter === null;
+    const tabId = isNew ? 'new' : filter.id;
+    const tabTitle = isNew ? 'Новая категория' : (filter.title || 'Категория');
+    
+    ensureTab({
+      type: 'category',
+      id: tabId,
+      title: tabTitle,
+      onActivate: () => activateFilterEditor(filter),
+    });
+  }
+
+  function activateFilterEditor(filter = null) {
+    const isNew = filter === null;
+    state.editingFilterId = isNew ? 'new' : filter.id;
+
+    // Заполняем форму
+    const titleInput = $('#fe_title');
+    const logicWrap = $('#fe_logic');
+    const idInput = $('#fe_id');
+    const isActiveInput = $('#fe_is_active');
+
+    if (titleInput) titleInput.value = filter?.title || '';
+    
+    // Обновляем кастомный select для логики
+    if (logicWrap) {
+      const logicVal = filter?.conditions?.logic || 'AND';
+      logicWrap.dataset.value = logicVal;
+      const logicLabel = logicVal === 'OR' ? 'Любое условие (ИЛИ)' : 'Все условия (И)';
+      const valueSpan = logicWrap.querySelector('.cs-value');
+      if (valueSpan) valueSpan.textContent = logicLabel;
+      logicWrap.querySelectorAll('.cs-option').forEach(opt => {
+        opt.classList.toggle('is-selected', opt.dataset.value === logicVal);
+      });
+    }
+    
+    if (idInput) idInput.value = filter?.id || '';
+    if (isActiveInput) isActiveInput.checked = filter?.is_active !== false;
+
+    // Рендерим правила
+    renderFilterRules(filter?.conditions?.rules || []);
+
+    // Обновляем кнопку сохранения
+    if (elFilterSaveBtn) {
+      elFilterSaveBtn.textContent = isNew ? 'Создать' : 'Сохранить';
+    }
+
+    // Показываем/скрываем кнопку удаления
+    if (elFilterDeleteBtn) {
+      elFilterDeleteBtn.classList.toggle('hidden', isNew);
+    }
+
+    updateRightPanel();
+
+    // Обновляем список чтобы подсветить выбранный
+    renderFilterCategoriesList();
+  }
+
+  function renderFilterRules(rules) {
+    if (!elFilterRulesContainer) return;
+    elFilterRulesContainer.innerHTML = '';
+
+    if (!rules.length) {
+      // Добавляем одно пустое правило
+      rules = [{ field: 'total_orders', operator: '>=', value: '' }];
+    }
+
+    rules.forEach((rule, idx) => {
+      const html = renderRuleRow(idx, rule);
+      elFilterRulesContainer.insertAdjacentHTML('beforeend', html);
+    });
+
+    bindRuleRowEvents();
+  }
+
+  // ─── Custom Select Component ───
+  function createCustomSelect(options, selectedValue, className = '', placeholder = 'Выберите...') {
+    const selected = options.find(o => o.value === selectedValue) || options[0] || { value: '', label: placeholder };
+    const optionsHtml = options.map(opt => 
+      `<button type="button" class="cs-option${opt.value === selected.value ? ' is-selected' : ''}" data-value="${escapeHtml(opt.value)}">${escapeHtml(opt.label)}</button>`
+    ).join('');
+
+    return `
+      <div class="custom-select ${className}" data-value="${escapeHtml(selected.value)}">
+        <button type="button" class="cs-trigger control">
+          <span class="cs-value">${escapeHtml(selected.label)}</span>
+          <i class="fas fa-chevron-down cs-arrow"></i>
+        </button>
+        <div class="cs-dropdown hidden">${optionsHtml}</div>
+      </div>
+    `;
+  }
+
+  function initCustomSelects(container) {
+    if (!container) return;
+    container.querySelectorAll('.custom-select').forEach(wrap => {
+      const trigger = wrap.querySelector('.cs-trigger');
+      const dropdown = wrap.querySelector('.cs-dropdown');
+      const valueSpan = wrap.querySelector('.cs-value');
+      if (!trigger || !dropdown) return;
+
+      // Открытие/закрытие
+      trigger.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const isOpen = !dropdown.classList.contains('hidden');
+        closeAllCustomSelects();
+        if (!isOpen) {
+          dropdown.classList.remove('hidden');
+          wrap.classList.add('is-open');
+        }
+      });
+
+      // Выбор опции
+      dropdown.querySelectorAll('.cs-option').forEach(opt => {
+        opt.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const val = opt.dataset.value;
+          wrap.dataset.value = val;
+          if (valueSpan) valueSpan.textContent = opt.textContent;
+          dropdown.querySelectorAll('.cs-option').forEach(o => o.classList.remove('is-selected'));
+          opt.classList.add('is-selected');
+          dropdown.classList.add('hidden');
+          wrap.classList.remove('is-open');
+          // Dispatch change event
+          wrap.dispatchEvent(new CustomEvent('cs-change', { detail: { value: val } }));
+        });
+      });
+    });
+  }
+
+  function closeAllCustomSelects() {
+    document.querySelectorAll('.custom-select.is-open').forEach(wrap => {
+      wrap.classList.remove('is-open');
+      const dd = wrap.querySelector('.cs-dropdown');
+      if (dd) dd.classList.add('hidden');
+    });
+  }
+
+  // Закрытие при клике вне
+  document.addEventListener('click', () => closeAllCustomSelects());
+
+  function renderRuleRow(idx, rule) {
+    const isDateField = ['last_order_date', 'created_at', 'registration_date'].includes(rule.field);
+    const daysValue = typeof rule.value === 'string' && rule.value.match(/^-(\d+)d$/) ? rule.value.slice(1, -1) : '';
+
+    const fieldSelect = createCustomSelect(filterFieldOptions, rule.field, 'rule-field');
+    const operatorSelect = createCustomSelect(filterOperatorOptions, rule.operator, 'rule-operator');
+
+    return `
+      <div class="filter-rule-row">
+        ${fieldSelect}
+        ${operatorSelect}
+        <input type="text" class="control rule-value${isDateField ? ' hidden' : ''}" value="${escapeHtml(isDateField ? '' : String(rule.value || ''))}" placeholder="Значение" />
+        <div class="rule-date-input${isDateField ? '' : ' hidden'}">
+          <input type="number" class="control rule-value-days" value="${escapeHtml(daysValue)}" placeholder="Дней" />
+          <span class="rule-date-suffix">дней назад</span>
+        </div>
+        <button type="button" class="icon-btn rule-remove" title="Удалить"><i class="fas fa-times"></i></button>
+      </div>
+    `;
+  }
+
+  function bindRuleRowEvents() {
+    if (!elFilterRulesContainer) return;
+
+    // Инициализация custom selects
+    initCustomSelects(elFilterRulesContainer);
+
+    // Переключение типа ввода в зависимости от поля
+    elFilterRulesContainer.querySelectorAll('.rule-field').forEach(wrap => {
+      wrap.addEventListener('cs-change', handleFieldChange);
+    });
+
+    // Удаление правила
+    elFilterRulesContainer.querySelectorAll('.rule-remove').forEach(btn => {
+      btn.onclick = () => {
+        btn.closest('.filter-rule-row')?.remove();
+      };
+    });
+  }
+
+  function handleFieldChange(e) {
+    const row = e.target.closest('.filter-rule-row');
+    if (!row) return;
+    const fieldValue = e.detail?.value || e.target.dataset?.value;
+    const isDate = ['last_order_date', 'created_at', 'registration_date'].includes(fieldValue);
+    const valueInput = row.querySelector('.rule-value');
+    const dateInput = row.querySelector('.rule-date-input');
+    if (valueInput) valueInput.classList.toggle('hidden', isDate);
+    if (dateInput) dateInput.classList.toggle('hidden', !isDate);
+  }
+
+  function collectFilterFormData() {
+    const titleInput = $('#fe_title');
+    const logicWrap = $('#fe_logic');
+    const isActiveInput = $('#fe_is_active');
+
+    const title = titleInput?.value?.trim();
+    if (!title) {
+      titleInput?.focus();
+      return null;
+    }
+
+    const rules = [];
+    if (elFilterRulesContainer) {
+      elFilterRulesContainer.querySelectorAll('.filter-rule-row').forEach((row) => {
+        // Получаем значения из custom select компонентов
+        const fieldWrap = row.querySelector('.rule-field');
+        const operatorWrap = row.querySelector('.rule-operator');
+        const field = fieldWrap?.dataset?.value;
+        const operator = operatorWrap?.dataset?.value;
+        let value = row.querySelector('.rule-value')?.value?.trim();
+        
+        // Преобразуем относительные даты
+        const valueDays = row.querySelector('.rule-value-days')?.value;
+        if (valueDays) {
+          value = '-' + valueDays + 'd';
+        }
+
+        if (field && operator && value !== '') {
+          rules.push({ field, operator, value: isNaN(value) ? value : Number(value) });
+        }
+      });
+    }
+
+    return {
+      title,
+      conditions: {
+        logic: logicWrap?.dataset?.value || 'AND',
+        rules,
+      },
+      is_active: isActiveInput?.checked !== false,
+    };
+  }
+
+  async function saveFilter() {
+    const data = collectFilterFormData();
+    if (!data) return;
+
+    const isNew = state.editingFilterId === 'new';
+    const oldTabKey = buildTabKey('category', state.editingFilterId);
+
+    try {
+      let savedId;
+      if (isNew) {
+        const res = await apiJson('/api/admin/clients/filters', {
+          method: 'POST',
+          body: data,
+        });
+        savedId = res.data?.id;
+      } else {
+        await apiJson('/api/admin/clients/filters/' + state.editingFilterId, {
+          method: 'PUT',
+          body: data,
+        });
+        savedId = state.editingFilterId;
+      }
+      
+      await loadCustomFilters();
+      renderFilterCategoriesList();
+      
+      // Обновляем или закрываем таб
+      if (isNew && savedId) {
+        // Закрываем таб "new" и открываем таб с сохранённым фильтром
+        await closeTab(oldTabKey);
+        const savedFilter = state.customFilters.find(f => f.id === savedId);
+        if (savedFilter) {
+          openFilterEditor(savedFilter);
+        }
+      } else {
+        // Обновляем название таба
+        const tab = tabsState.tabs.find(t => t.key === oldTabKey);
+        if (tab) {
+          tab.title = data.title;
+          renderTabs();
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function deleteFilter() {
+    if (state.editingFilterId === 'new' || !state.editingFilterId) return;
+
+    const filter = state.customFilters.find(f => f.id === state.editingFilterId);
+    if (!confirm('Удалить категорию "' + (filter?.title || '') + '"?')) return;
+
+    const tabKey = buildTabKey('category', state.editingFilterId);
+
+    try {
+      await apiJson('/api/admin/clients/filters/' + state.editingFilterId, { method: 'DELETE' });
+      
+      if (state.activeCustomFilterId === state.editingFilterId) {
+        state.activeFilter = 'all';
+        state.activeCustomFilterId = null;
+      }
+      
+      // Закрываем таб удалённой категории
+      await closeTab(tabKey);
+      
+      await loadCustomFilters();
+      renderFilterCategoriesList();
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  // -----------------------------
+  // Accordion
+  // -----------------------------
+  function initClientsAccordion() {
+    const container = $("#clientsAccordion");
+    if (!container) return;
+
+    container.addEventListener("click", (e) => {
+      const trigger = e.target.closest("[data-acc-trigger]");
+      if (!trigger || !container.contains(trigger)) return;
+
+      const item = trigger.closest(".acc-item");
+      const panel = item && item.querySelector("[data-acc-panel]");
+      if (!panel) return;
+
+      const isOpen = trigger.classList.contains("is-open");
+      trigger.classList.toggle("is-open", !isOpen);
+      panel.classList.toggle("is-open", !isOpen);
+      panel.style.maxHeight = !isOpen ? panel.scrollHeight + "px" : "0px";
     });
   }
 
@@ -708,6 +2210,60 @@
   }
 
   // -----------------------------
+  // Client discounts
+  // -----------------------------
+  async function loadClientDiscounts() {
+    if (!state.activeClientId) return;
+    if (clientDiscountsList) clientDiscountsList.innerHTML = `<div class="muted">Загрузка…</div>`;
+    if (clientDiscountsEmpty) clientDiscountsEmpty.classList.add('hidden');
+
+    try {
+      const json = await apiJson(`/api/admin/clients/${state.activeClientId}/discounts`);
+      state.clientDiscounts = Array.isArray(json.data) ? json.data : [];
+      renderClientDiscounts();
+    } catch (err) {
+      console.error(err);
+      if (clientDiscountsList) clientDiscountsList.innerHTML = `<div class="muted">Ошибка загрузки скидок</div>`;
+    }
+  }
+
+  function renderClientDiscounts() {
+    if (!clientDiscountsList) return;
+    clientDiscountsList.innerHTML = "";
+
+    const list = state.clientDiscounts || [];
+    if (!list.length) {
+      if (clientDiscountsEmpty) clientDiscountsEmpty.classList.remove('hidden');
+      return;
+    }
+    if (clientDiscountsEmpty) clientDiscountsEmpty.classList.add('hidden');
+
+    list.forEach((d) => {
+      const valueText = d.discount_type === 'percent' 
+        ? `${d.discount_value}%`
+        : d.discount_type === 'fixed'
+          ? `-${d.discount_value}₽`
+          : `${d.discount_value}₽`;
+
+      const linkTypeText = d.link_type === 'direct' ? 'Напрямую' : `Категория: ${d.category_title || '—'}`;
+      const statusClass = d.is_active ? '' : 'inactive';
+
+      const card = document.createElement("div");
+      card.className = "discount-row";
+      card.innerHTML = `
+        <div class="discount-row-icon"><i class="fas fa-percentage"></i></div>
+        <div class="discount-row-info">
+          <div class="discount-row-title">${escapeHtml(d.title)}</div>
+          <div class="discount-row-meta">${escapeHtml(linkTypeText)}</div>
+        </div>
+        <div class="discount-row-value">${valueText}</div>
+        <div class="discount-row-status ${statusClass}"></div>
+      `;
+      clientDiscountsList.appendChild(card);
+    });
+  }
+
+  // -----------------------------
   // Order detail
   // -----------------------------
   async function openOrderDetail(orderId) {
@@ -909,6 +2465,7 @@
     const title = clientData ? (clientData.name || `#${clientId}`) : `#${clientId}`;
 
     ensureTab({
+      type: 'client',
       id: clientId,
       title,
       onActivate: () => openClientById(clientId),
@@ -923,11 +2480,7 @@
   async function loadTotals() {
     const q = state.q ? `&q=${encodeURIComponent(state.q)}` : "";
     const a = await apiJson(`/api/admin/clients?limit=1&offset=0${q}`);
-    const b = await apiJson(`/api/admin/clients?limit=1&offset=0&is_active=1${q}`);
-    const c = await apiJson(`/api/admin/clients?limit=1&offset=0&is_active=0${q}`);
     state.totals.all = Number(a.total || 0);
-    state.totals.active = Number(b.total || 0);
-    state.totals.inactive = Number(c.total || 0);
   }
 
   async function loadClients() {
@@ -935,8 +2488,9 @@
     qs.set("limit", "80");
     qs.set("offset", "0");
     if (state.q) qs.set("q", state.q);
-    if (state.activeFilter === "active") qs.set("is_active", "1");
-    if (state.activeFilter === "inactive") qs.set("is_active", "0");
+    if (state.activeFilter === "custom" && state.activeCustomFilterId) {
+      qs.set("filter_id", String(state.activeCustomFilterId));
+    }
 
     const json = await apiJson(`/api/admin/clients?${qs.toString()}`);
     state.clients = Array.isArray(json.data) ? json.data : [];
@@ -985,13 +2539,12 @@
   // Toolbar: expandable search
   // -----------------------------
   function openSearch() {
-    if (elSearchWrap) elSearchWrap.classList.remove("hidden");
-    if (elToolbarTitle) elToolbarTitle.classList.add("hidden");
+    if (elSearchWrap) elSearchWrap.classList.add("is-open");
     if (elSearch) { elSearch.value = state.q || ""; elSearch.focus(); }
   }
+
   function closeSearch() {
-    if (elSearchWrap) elSearchWrap.classList.add("hidden");
-    if (elToolbarTitle) elToolbarTitle.classList.remove("hidden");
+    if (elSearchWrap) elSearchWrap.classList.remove("is-open");
     if (elSearch) elSearch.value = "";
     if (state.q) {
       state.q = "";
@@ -1001,7 +2554,7 @@
 
   if (elSearchToggle) {
     elSearchToggle.addEventListener("click", () => {
-      const isOpen = elSearchWrap && !elSearchWrap.classList.contains("hidden");
+      const isOpen = elSearchWrap && elSearchWrap.classList.contains("is-open");
       if (isOpen) closeSearch();
       else openSearch();
     });
@@ -1010,11 +2563,6 @@
   if (elSearch) elSearch.addEventListener("input", onSearch);
   if (elSearch) elSearch.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeSearch();
-  });
-  if (elSearchClear) elSearchClear.addEventListener("click", () => {
-    if (elSearch) elSearch.value = "";
-    state.q = "";
-    loadClients().catch(console.error);
   });
 
   // -----------------------------
@@ -1058,20 +2606,241 @@
     }
   });
 
-  // Add client stub
+  // Add button (context-dependent)
   if (elAddBtn) {
     elAddBtn.addEventListener("click", () => {
-      // TODO: открыть форму добавления клиента
+      if (state.currentView === 'filter-categories') {
+        // Создать новую категорию/фильтр
+        openFilterEditor(null);
+      } else if (state.currentView === 'discounts') {
+        // Создать новую скидку
+        openDiscountEditor(null);
+      } else {
+        // TODO: открыть форму добавления клиента
+      }
+    });
+  }
+
+  // Кнопка "Категории" внутри аккордеона
+  if (elOpenFilterCategoriesBtn) {
+    elOpenFilterCategoriesBtn.addEventListener('click', () => {
+      switchView('filter-categories');
+    });
+  }
+
+  // Кнопка "Скидки" — переключить на view скидок
+  if (elAddDiscountBtn) {
+    elAddDiscountBtn.addEventListener('click', () => {
+      switchView('discounts');
+    });
+  }
+
+  // Кнопка добавления правила в редакторе фильтра
+  if (elFilterAddRuleBtn) {
+    elFilterAddRuleBtn.addEventListener('click', () => {
+      if (!elFilterRulesContainer) return;
+      const html = renderRuleRow(elFilterRulesContainer.querySelectorAll('.filter-rule-row').length, { field: 'total_orders', operator: '>=', value: '' });
+      elFilterRulesContainer.insertAdjacentHTML('beforeend', html);
+      bindRuleRowEvents();
+    });
+  }
+
+  // Кнопка сохранения фильтра
+  if (elFilterSaveBtn) {
+    elFilterSaveBtn.addEventListener('click', saveFilter);
+  }
+
+  // Кнопка удаления фильтра
+  if (elFilterDeleteBtn) {
+    elFilterDeleteBtn.addEventListener('click', deleteFilter);
+  }
+
+  // Кнопка сохранения скидки
+  if (elDiscountSaveBtn) {
+    elDiscountSaveBtn.addEventListener('click', saveDiscount);
+  }
+
+  // Кнопка удаления скидки
+  if (elDiscountDeleteBtn) {
+    elDiscountDeleteBtn.addEventListener('click', deleteDiscount);
+  }
+
+  // Кнопка редактирования скидки (из инфо-панели)
+  if (elDiscountEditBtn) {
+    elDiscountEditBtn.addEventListener('click', () => {
+      if (state.activeDiscount) {
+        openDiscountEditor(state.activeDiscount.id);
+      }
+    });
+  }
+
+  // Кнопка добавления товаров в скидку
+  if (elDeAddProductsBtn) {
+    elDeAddProductsBtn.addEventListener('click', openDiscountProductPicker);
+  }
+
+  // Кнопка добавления клиентов в скидку
+  if (elDeAddCustomersBtn) {
+    elDeAddCustomersBtn.addEventListener('click', openDiscountCustomerPicker);
+  }
+
+  // Отмена picker
+  if (elDiscountPickerCancelBtn) {
+    elDiscountPickerCancelBtn.addEventListener('click', closeDiscountPicker);
+  }
+
+  // Применить picker
+  if (elDiscountPickerApplyBtn) {
+    elDiscountPickerApplyBtn.addEventListener('click', applyDiscountPickerSelection);
+  }
+
+  // Поиск в picker товаров
+  if (elDiscountPickerSearch) {
+    elDiscountPickerSearch.addEventListener('input', (e) => {
+      state.discountPickerQuery = e.target.value;
+      renderDiscountPickerList();
+    });
+  }
+
+  // Поиск в picker клиентов
+  if (elDiscountCustomerPickerSearch) {
+    elDiscountCustomerPickerSearch.addEventListener('input', (e) => {
+      state.discountPickerQuery = e.target.value;
+      if (state.discountPickerCategoryId === 'categories') {
+        renderDiscountCustomerCategoryList();
+      } else {
+        renderDiscountCustomerList();
+      }
+    });
+  }
+
+  // Выделить все в picker товаров
+  if (elDiscountPickerSelectAll) {
+    elDiscountPickerSelectAll.addEventListener('change', (e) => {
+      const checkboxes = $$('#discountPickerList input[type="checkbox"]');
+      checkboxes.forEach(cb => {
+        cb.checked = e.target.checked;
+        if (e.target.checked) {
+          state.discountPickerSelection.add(cb.dataset.key);
+        } else {
+          state.discountPickerSelection.delete(cb.dataset.key);
+        }
+      });
+    });
+  }
+
+  // Выделить все в picker клиентов
+  if (elDiscountCustomerPickerSelectAll) {
+    elDiscountCustomerPickerSelectAll.addEventListener('change', (e) => {
+      const checkboxes = $$('#discountCustomerPickerList input[type="checkbox"]');
+      checkboxes.forEach(cb => {
+        cb.checked = e.target.checked;
+        if (e.target.checked) {
+          state.discountPickerSelection.add(cb.dataset.key);
+        } else {
+          state.discountPickerSelection.delete(cb.dataset.key);
+        }
+      });
+    });
+  }
+
+  // Делегирование событий для табов picker товаров
+  if (elDiscountPickerTabs) {
+    elDiscountPickerTabs.addEventListener('click', async (e) => {
+      const tab = e.target.closest('.option-picker-tab');
+      if (!tab) return;
+      const catId = tab.dataset.catId;
+      state.discountPickerCategoryId = catId ? parseInt(catId, 10) : null;
+      renderDiscountPickerTabs();
+      await refreshDiscountPickerProducts();
+    });
+  }
+
+  // Делегирование событий для табов picker клиентов
+  if (elDiscountCustomerPickerTabs) {
+    elDiscountCustomerPickerTabs.addEventListener('click', async (e) => {
+      const tab = e.target.closest('.option-picker-tab');
+      if (!tab) return;
+      const catId = tab.dataset.catId;
+      state.discountPickerCategoryId = catId || null;
+      renderDiscountCustomerPickerTabs();
+      await refreshDiscountCustomerPickerList();
+    });
+  }
+
+  // Делегирование событий для чекбоксов в picker товаров
+  if (elDiscountPickerList) {
+    elDiscountPickerList.addEventListener('change', (e) => {
+      if (e.target.type !== 'checkbox') return;
+      const key = e.target.dataset.key;
+      if (e.target.checked) {
+        state.discountPickerSelection.add(key);
+      } else {
+        state.discountPickerSelection.delete(key);
+      }
+      updatePickerSelectAll();
+    });
+  }
+
+  // Делегирование событий для чекбоксов в picker клиентов
+  if (elDiscountCustomerPickerList) {
+    elDiscountCustomerPickerList.addEventListener('change', (e) => {
+      if (e.target.type !== 'checkbox') return;
+      const key = e.target.dataset.key;
+      if (e.target.checked) {
+        state.discountPickerSelection.add(key);
+      } else {
+        state.discountPickerSelection.delete(key);
+      }
+      updateCustomerPickerSelectAll();
+    });
+  }
+
+  // Делегирование событий для удаления чипов товаров
+  if (elDeProductsChips) {
+    elDeProductsChips.addEventListener('click', (e) => {
+      const removeBtn = e.target.closest('.discount-chip-remove');
+      if (!removeBtn) return;
+      const chip = removeBtn.closest('.discount-chip');
+      if (!chip) return;
+      const type = chip.dataset.type;
+      const id = parseInt(chip.dataset.id, 10);
+      removeDiscountProductChip(type, id);
+    });
+  }
+
+  // Делегирование событий для удаления чипов клиентов
+  if (elDeCustomersChips) {
+    elDeCustomersChips.addEventListener('click', (e) => {
+      const removeBtn = e.target.closest('.discount-chip-remove');
+      if (!removeBtn) return;
+      const chip = removeBtn.closest('.discount-chip');
+      if (!chip) return;
+      const type = chip.dataset.type;
+      const id = parseInt(chip.dataset.id, 10);
+      removeDiscountCustomerChip(type, id);
     });
   }
 
   // -----------------------------
   // Init
   // -----------------------------
+  initClientsAccordion();
+  
+  // Инициализируем кастомный select для логики условий
+  const logicSelectWrap = $('#fe_logic');
+  if (logicSelectWrap) {
+    initCustomSelects(logicSelectWrap.parentElement);
+  }
+  
+  loadCustomFilters().catch(console.error);
   loadClients().catch(console.error);
+  loadDiscounts().catch(console.error);
 
   document.addEventListener('tenantStoreChanged', (event) => {
     console.log('Филиал изменен (clients):', event.detail.store);
+    loadCustomFilters().catch(console.error);
     loadClients().catch(console.error);
+    loadDiscounts().catch(console.error);
   });
 })();

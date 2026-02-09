@@ -62,6 +62,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         o.change_from,
         o.total_price,
         o.delivery_cost,
+        o.discount_amount,
+        o.discounts_json,
         o.items,
         DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
         o.delivery_type_id,
@@ -117,6 +119,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const parsed = r.items ? JSON.parse(r.items) : [];
       if (Array.isArray(parsed)) items = parsed;
     } catch {}
+    let discountsJson = [];
+    try {
+      const parsedDiscounts = r.discounts_json ? JSON.parse(r.discounts_json) : [];
+      if (Array.isArray(parsedDiscounts)) discountsJson = parsedDiscounts;
+    } catch {}
     const itemsTotal = items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
     const totalPrice = Number(r.total_price || 0);
     let deliveryCost = 0;
@@ -142,6 +149,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       total_price: totalPrice,
       items_total: itemsTotal,
       delivery_cost: deliveryCost,
+      discount_amount: Number(r.discount_amount || 0),
+      discounts_json: discountsJson,
       items,
       scheduled_at: r.scheduled_at,
       delivery_type_id: r.delivery_type_id,
@@ -279,6 +288,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           o.change_from,
           o.total_price,
           o.delivery_cost,
+          o.discount_amount,
+          o.discounts_json,
           o.items,
           DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
           o.delivery_type_id,
@@ -334,6 +345,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           const parsed = r.items ? JSON.parse(r.items) : [];
           if (Array.isArray(parsed)) items = parsed;
         } catch {}
+        let discountsJson = [];
+        try {
+          const parsedDiscounts = r.discounts_json ? JSON.parse(r.discounts_json) : [];
+          if (Array.isArray(parsedDiscounts)) discountsJson = parsedDiscounts;
+        } catch {}
         const itemsTotal = items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
         const totalPrice = Number(r.total_price || 0);
         let deliveryCost = 0;
@@ -358,6 +374,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           total_price: totalPrice,
           items_total: itemsTotal,
           delivery_cost: deliveryCost,
+          discount_amount: Number(r.discount_amount || 0),
+          discounts_json: discountsJson,
 
           status_code: r.statusCode ?? null,
           status_title: r.statusTitle ?? null,

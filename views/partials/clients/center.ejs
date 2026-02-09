@@ -5,34 +5,30 @@
       <div class="toolbar-left">
         <div class="toolbar-title" id="clientsToolbarTitle">
           <i class="fas fa-users"></i>
-          <span>Клиенты</span>
-        </div>
-
-        <!-- Expandable search (hidden by default) -->
-        <div class="cl-search-wrap hidden" id="clientsSearchWrap">
-          <input
-            id="clientsSearch"
-            class="cl-search-input"
-            type="text"
-            placeholder="Имя или телефон…"
-            autocomplete="off"
-          />
-          <button id="clientsSearchClear" class="cl-search-clear" type="button" aria-label="Очистить">
-            <i class="fas fa-times"></i>
-          </button>
+          <span id="clientsToolbarText">Клиенты</span>
         </div>
       </div>
 
       <div class="toolbar-right">
-        <!-- Search toggle -->
-        <button id="clientsSearchToggle" class="icon-btn" type="button" aria-label="Поиск" title="Поиск">
-          <i class="fas fa-search"></i>
-        </button>
+        <!-- Expandable search with toggle -->
+        <div class="cl-search-wrap" id="clientsSearchWrap">
+          <input
+            id="clientsSearch"
+            class="cl-search-input"
+            type="text"
+            placeholder="Имя или телефон..."
+            autocomplete="off"
+          />
+          <button id="clientsSearchToggle" class="icon-btn cl-search-toggle" type="button" aria-label="Поиск" title="Поиск">
+            <i class="fas fa-search"></i>
+          </button>
+        </div>
 
         <!-- Sort toggle -->
         <div class="cl-sort-wrap" id="clientsSortWrap">
           <button id="clientsSortToggle" class="icon-btn" type="button" aria-label="Сортировка" title="Сортировка">
-            <i class="fas fa-sort"></i>
+            <i class="fas fa-arrow-up"></i>
+            <i class="fas fa-arrow-down"></i>
           </button>
           <div class="cl-sort-dropdown hidden" id="clientsSortDropdown">
             <button class="cl-sort-option is-active" type="button" data-sort-val="last_desc">По активности</button>
@@ -42,22 +38,40 @@
           </div>
         </div>
 
-        <!-- Add client stub -->
-        <button id="clientsAddBtn" class="icon-btn" type="button" aria-label="Добавить клиента" title="Добавить клиента">
+        <!-- Add button (context-dependent) -->
+        <button id="clientsAddBtn" class="icon-btn" type="button" aria-label="Добавить" title="Добавить">
           <i class="fas fa-plus"></i>
         </button>
       </div>
     </div>
   </div>
 
-  <!-- Основной список -->
+  <!-- Основной контент -->
   <div class="panel clients-panel">
     <div class="panel-body no-scrollbar">
-      <div class="orders-list" id="clientsList">
-        <!-- JS отрисует сюда список клиентов -->
+      <!-- View: Список клиентов -->
+      <div class="content-view" data-view-content="clients">
+        <div class="orders-list" id="clientsList">
+          <!-- JS отрисует сюда список клиентов -->
+        </div>
+        <div class="empty-hint hidden" id="clientsEmptyHint">Клиентов нет</div>
       </div>
 
-      <div class="empty-hint hidden" id="clientsEmptyHint">Клиентов нет</div>
+      <!-- View: Список категорий/фильтров -->
+      <div class="content-view hidden" data-view-content="filter-categories">
+        <div class="orders-list" id="filterCategoriesList">
+          <!-- JS отрисует сюда список фильтров -->
+        </div>
+        <div class="empty-hint hidden" id="filterCategoriesEmptyHint">Пока нет категорий. Нажмите «+» для создания.</div>
+      </div>
+
+      <!-- View: Список скидок -->
+      <div class="content-view hidden" data-view-content="discounts">
+        <div class="orders-list" id="discountsList">
+          <!-- JS отрисует сюда список скидок или заказов -->
+        </div>
+        <div class="empty-hint hidden" id="discountsEmptyHint">Пока нет скидок. Нажмите «+» для создания.</div>
+      </div>
     </div>
   </div>
 </div>

@@ -10425,6 +10425,8 @@ const isViewMode = state.comboPanel.mode === "view";
       ingredientModalList: $("#peIngredientModalList", wrapper),
       costPriceInput: $("#pe_cost_price", wrapper),
       priceInput: $("#pe_price", wrapper),
+      discountAccordion: $("#peDiscountAccordion", wrapper),
+      discountEmpty: $("#peDiscountEmpty", wrapper),
     };
 
     const descriptionAccordion = $("#peDescriptionAccordion", wrapper);
@@ -12365,6 +12367,54 @@ const isViewMode = state.comboPanel.mode === "view";
       }
     }
 
+    // Загрузка скидок для товара
+    let productDiscountsList = [];
+    
+    async function loadProductDiscounts() {
+      if ((!isEdit && !isView) || !product) return;
+      try {
+        const res = await api(`/api/prod_products/${product.id}/discounts`);
+        productDiscountsList = Array.isArray(res.data) ? res.data : [];
+        renderProductDiscountsAccordion();
+      } catch (e) {
+        console.error('Failed to load product discounts', e);
+      }
+    }
+
+    function renderProductDiscountsAccordion() {
+      if (!ui.discountAccordion) return;
+      
+      if (productDiscountsList.length === 0) {
+        ui.discountAccordion.innerHTML = '';
+        if (ui.discountEmpty) ui.discountEmpty.classList.remove('hidden');
+        return;
+      }
+      
+      if (ui.discountEmpty) ui.discountEmpty.classList.add('hidden');
+      
+      ui.discountAccordion.innerHTML = productDiscountsList.map(d => {
+        const valueText = d.discount_type === 'percent' 
+          ? `${d.discount_value}%`
+          : d.discount_type === 'fixed'
+            ? `-${d.discount_value}₽`
+            : `${d.discount_value}₽`;
+        
+        const linkTypeText = d.link_type === 'direct' ? 'Напрямую' : `Категория: ${d.category_title || '—'}`;
+        const statusClass = d.is_active ? '' : 'inactive';
+        
+        return `
+          <div class="discount-row" style="margin-bottom:8px;">
+            <div class="discount-row-icon"><i class="fas fa-percentage"></i></div>
+            <div class="discount-row-info">
+              <div class="discount-row-title">${escapeHtml(d.title)}</div>
+              <div class="discount-row-meta">${escapeHtml(linkTypeText)} • ${valueText}</div>
+            </div>
+            <div class="discount-row-status ${statusClass}"></div>
+          </div>
+        `;
+      }).join('');
+    }
+
     function renderIngredientAccordion() {
       if (!ui.ingredientAccordion) return;
       if (draftIngredients.size === 0) {
@@ -13233,6 +13283,7 @@ const isViewMode = state.comboPanel.mode === "view";
       renderPhotos();
       if ((isEdit || isView) && product) {
         await loadIngredients();
+        await loadProductDiscounts();
       } else {
         // При создании нового товара инициализируем поле себестоимости состава
         updateCostPricePlaceholderGlobal();

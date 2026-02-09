@@ -254,6 +254,72 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   });
 
   // ------------------------------
+  // Product discounts
+  // GET /api/prod_products/:id/discounts
+  // ------------------------------
+  router.get('/prod_products/:id/discounts', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const productId = Number(req.params.id);
+      
+      if (!Number.isFinite(productId) || productId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      // Получаем категории товара
+      const [productCategories] = await db.query(
+        `SELECT category_id FROM prod_product_categories WHERE tenant_id = ? AND product_id = ?`,
+        [tenantId, productId]
+      );
+      const categoryIds = productCategories.map(c => c.category_id);
+
+      // Скидки привязанные напрямую к товару
+      const [directDiscounts] = await db.query(
+        `SELECT DISTINCT d.id, d.title, d.discount_type, d.discount_value, 
+                d.apply_to, d.is_active, d.starts_at, d.ends_at,
+                'direct' AS link_type
+         FROM mkt_discounts d
+         JOIN mkt_discount_products dp ON dp.discount_id = d.id AND dp.tenant_id = d.tenant_id
+         WHERE d.tenant_id = ? AND d.store_id = ? AND dp.product_id = ?`,
+        [tenantId, storeId, productId]
+      );
+
+      // Скидки по категориям товара
+      let categoryDiscounts = [];
+      if (categoryIds.length > 0) {
+        const [catDisc] = await db.query(
+          `SELECT DISTINCT d.id, d.title, d.discount_type, d.discount_value,
+                  d.apply_to, d.is_active, d.starts_at, d.ends_at,
+                  'category' AS link_type, pc.title AS category_title
+           FROM mkt_discounts d
+           JOIN mkt_discount_products dp ON dp.discount_id = d.id AND dp.tenant_id = d.tenant_id
+           JOIN prod_categories pc ON pc.id = dp.category_id AND pc.tenant_id = dp.tenant_id
+           WHERE d.tenant_id = ? AND d.store_id = ? AND dp.category_id IN (?)`,
+          [tenantId, storeId, categoryIds]
+        );
+        categoryDiscounts = catDisc;
+      }
+
+      // Объединяем и убираем дубликаты
+      const allDiscounts = [...directDiscounts];
+      const existingIds = new Set(directDiscounts.map(d => d.id));
+      
+      for (const discount of categoryDiscounts) {
+        if (!existingIds.has(discount.id)) {
+          allDiscounts.push(discount);
+          existingIds.add(discount.id);
+        }
+      }
+
+      res.json({ ok: true, data: allDiscounts });
+    } catch (e) {
+      console.error('GET /api/prod_products/:id/discounts error:', e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // ------------------------------
   // Products: /api/prod_products
   // ------------------------------
   router.get('/prod_products', async (req, res) => {

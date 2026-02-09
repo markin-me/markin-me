@@ -1529,6 +1529,8 @@
     let paidQty = qty;
     let freeQty = 0;
     let isAutoItem = false;
+    let discountAmount = 0;
+    let discountInfo = null;
 
     if (rule && isAuto) {
       const group = rule.group || null;
@@ -1546,19 +1548,105 @@
     }
 
     unitPrice = roundPrice(unitPrice);
-    const lineTotal = roundPrice(unitPrice * paidQty);
-    return { lineTotal, unitPrice, paidQty, freeQty, isAuto: isAutoItem, parts };
+    let lineTotal = roundPrice(unitPrice * paidQty);
+
+    function calculateProductDiscountAmount(price, discount) {
+      const srcPrice = Number(price || 0);
+      if (!(srcPrice > 0) || !discount) return 0;
+
+      const discType = String(discount.discount_type || "").trim();
+      const discValue = Number(discount.discount_value || 0);
+      if (!(discValue > 0)) return 0;
+
+      let amount = 0;
+      if (discType === "percent") {
+        amount = srcPrice * (discValue / 100);
+      } else if (discType === "fixed") {
+        amount = discValue;
+      } else if (discType === "special_price") {
+        amount = Math.max(0, srcPrice - discValue);
+      } else {
+        return 0;
+      }
+
+      const maxDiscountAmount = Number(discount.max_discount_amount);
+      if (Number.isFinite(maxDiscountAmount) && maxDiscountAmount > 0 && amount > maxDiscountAmount) {
+        amount = maxDiscountAmount;
+      }
+      if (amount > srcPrice) amount = srcPrice;
+      return Math.round(amount * 100) / 100;
+    }
+
+    // Применяем скидку если есть
+    const product = item?.product;
+    if (product?.discount && product.discount.discount_amount > 0 && !isAutoItem) {
+      discountInfo = product.discount;
+      // Рассчитываем скидку на lineTotal
+      discountAmount = calculateProductDiscountAmount(lineTotal, discountInfo);
+      lineTotal = roundPrice(lineTotal - discountAmount);
+    }
+
+    return { lineTotal, unitPrice, paidQty, freeQty, isAuto: isAutoItem, parts, discountAmount, discountInfo };
   }
 
   function computeCartTotals(items) {
     const nonAutoTotal = computeNonAutoTotal(items);
     const autoEligibleTotal = computeAutoEligibleTotal(items);
     let total = 0;
+    let totalDiscount = 0;
+    let totalBeforeDiscount = 0;
+    
     (Array.isArray(items) ? items : []).forEach((item) => {
-      const pricing = computeItemPricing(item, { nonAutoTotal, autoEligibleTotal });
-      total += pricing.lineTotal;
+      const qty = Math.max(0, Number(item?.qty || 0));
+      if (!qty) return;
+      
+      if (item.type === "combo") {
+        // Для комбо: unit_price_before_discount содержит сумму до скидки комбо
+        const unitPrice = Number(item.unit_price_override || 0);
+        const unitPriceOld = Number(item.unit_price_before_discount || 0) || unitPrice;
+        const lineTotal = roundPrice(unitPrice * qty);
+        total += lineTotal;
+        totalBeforeDiscount += roundPrice(unitPriceOld * qty);
+        // Скидка комбо = разница между старой и новой ценой
+        if (unitPriceOld > unitPrice) {
+          totalDiscount += roundPrice((unitPriceOld - unitPrice) * qty);
+        }
+      } else {
+        const pricing = computeItemPricing(item, { nonAutoTotal, autoEligibleTotal });
+        total += pricing.lineTotal;
+        totalDiscount += pricing.discountAmount || 0;
+        
+        // Рассчитываем оригинальную цену до всех скидок
+        const product = item?.product;
+        const parts = pricing.parts || {};
+        
+        // Приоритет: original_price (API) > old_price (админка) > unitPrice
+        let originalUnit = pricing.unitPrice;
+        if (product?.original_price && Number(product.original_price) > 0) {
+          // Цена до API-скидки + опции + ингредиенты
+          originalUnit = roundPrice(Number(product.original_price) + (parts.optionTotal || 0) + (parts.ingredientDiff || 0));
+        } else if (product?.old_price && Number(product.old_price) > pricing.unitPrice) {
+          // Старая цена из админки + опции + ингредиенты
+          originalUnit = roundPrice(Number(product.old_price) + (parts.optionTotal || 0) + (parts.ingredientDiff || 0));
+        }
+        
+        // Для auto_add товаров учитываем только платные позиции.
+        // Важно: 0 (полностью бесплатные позиции) должен оставаться 0, без fallback на qty.
+        const paidQty = Number.isFinite(Number(pricing.paidQty))
+          ? Math.max(0, Number(pricing.paidQty))
+          : qty;
+        totalBeforeDiscount += roundPrice(originalUnit * paidQty);
+        
+        // Если old_price > текущей цены и нет API-скидки, добавляем эту разницу к totalDiscount
+        if (!pricing.discountAmount && product?.old_price && Number(product.old_price) > pricing.unitPrice) {
+          const oldPriceDiff = roundPrice((Number(product.old_price) - pricing.unitPrice + (parts.optionTotal || 0) + (parts.ingredientDiff || 0)) * paidQty);
+          // Уже учтено в totalBeforeDiscount, добавляем в totalDiscount
+          totalDiscount += roundPrice((originalUnit - pricing.unitPrice) * paidQty);
+        }
+      }
     });
-    return { nonAutoTotal, autoEligibleTotal, total };
+    
+    return { nonAutoTotal, autoEligibleTotal, total, totalDiscount, totalBeforeDiscount };
   }
 
   function cartLinePrice(product, optionItems) {
@@ -1657,7 +1745,17 @@
         html += `</div>`;
       }
       html += `</div>`;
-      html += `<div class="cart-right"><div class="cart-price">${money(item.line_total || item.price || 0)}</div></div>`;
+      // Цена комбо с возможной зачёркнутой старой ценой
+      const comboLineTotalRaw = Number(item.line_total);
+      const comboLineTotal = Number.isFinite(comboLineTotalRaw)
+        ? comboLineTotalRaw
+        : Number(item.price || 0);
+      const comboOldLineTotal = Number(item.old_line_total || 0);
+      const comboShowOld = comboOldLineTotal > comboLineTotal;
+      const comboPriceHtml = comboShowOld 
+        ? `<span class="cart-old">${money(comboOldLineTotal)}</span>${money(comboLineTotal)}`
+        : money(comboLineTotal);
+      html += `<div class="cart-right"><div class="cart-price">${comboPriceHtml}</div></div>`;
       html += `</div>`;
       return html;
     }
@@ -1758,9 +1856,22 @@
     
     html += `</div>`;
     
-    // ?????? ????? ? ??????????? ? ?????
+    // Цена товара с возможной зачёркнутой старой ценой
+    const itemLineTotalRaw = Number(item.line_total);
+    const itemLineTotal = Number.isFinite(itemLineTotalRaw)
+      ? itemLineTotalRaw
+      : Number(item.price || 0);
+    // Старая цена: из discount.original_line_total или old_price * qty
+    const discountOriginal = item.discount?.original_line_total;
+    const itemOldPrice = Number(item.old_price || 0);
+    const qtyForOldPrice = Number(item.qty || item.quantity || 1);
+    const itemOldLineTotal = discountOriginal || (itemOldPrice > 0 ? itemOldPrice * qtyForOldPrice : 0);
+    const itemShowOld = itemOldLineTotal > itemLineTotal;
+    const itemPriceHtml = itemShowOld 
+      ? `<span class="cart-old">${money(itemOldLineTotal)}</span>${money(itemLineTotal)}`
+      : money(itemLineTotal);
     html += `<div class="cart-right">`;
-    html += `<div class="cart-price">${money(item.line_total || item.price || 0)}</div>`;
+    html += `<div class="cart-price">${itemPriceHtml}</div>`;
     html += `</div>`;
     
     html += `</div>`;
@@ -3324,14 +3435,29 @@ async function initAddresses() {
 
   function catalogCenterHtml(product, qty, calculatedPrice = null) {
     const old = Number(product.old_price || 0);
-    const price = calculatedPrice != null
+    let price = calculatedPrice != null
       ? calculatedPrice
       : (product.display_price != null ? Number(product.display_price) : Number(product.price || 0));
-    const showOld = old > 0 && old > price;
+    let showOld = old > 0 && old > price;
+
+    // Обработка скидок из API (бейдж теперь на картинке, здесь только цена)
+    if (product.discount && product.discount.discount_amount > 0) {
+      const originalPrice = Number(product.original_price || price);
+      const discountedPrice = Number(product.discounted_price || price);
+      
+      // Отображаем старую цену зачёркнутой
+      if (!showOld && originalPrice > discountedPrice) {
+        showOld = true;
+        price = discountedPrice;
+      }
+    }
 
     if (!isProductAvailable(product)) return "Нет в наличии";
     if (qty > 0) return `${moneyNoSign(price)} ₽`;
-    if (showOld) return `<span class="old">${moneyNoSign(old)} ₽</span>${moneyNoSign(price)} ₽`;
+    if (showOld) {
+      const oldPrice = product.discount ? Number(product.original_price) : old;
+      return `<span class="sp-old-price">${moneyNoSign(oldPrice)} ₽</span>${moneyNoSign(price)} ₽`;
+    }
     return `${moneyNoSign(price)} ₽`;
   }
 
@@ -3663,6 +3789,18 @@ async function initAddresses() {
 
         overlay.appendChild(qBox);
         media.appendChild(overlay);
+
+        // Бейдж скидки поверх изображения (как на комбо)
+        if (p.discount && p.discount.discount_amount > 0) {
+          const discountBadge = document.createElement("div");
+          discountBadge.className = "sp-combo-discount";
+          if (p.discount.discount_type === 'percent') {
+            discountBadge.textContent = `-${Math.round(p.discount.discount_value)}%`;
+          } else {
+            discountBadge.textContent = `-${moneyNoSign(p.discount.discount_amount)} ₽`;
+          }
+          media.appendChild(discountBadge);
+        }
 
         card.appendChild(media);
 
@@ -4427,11 +4565,14 @@ async function initAddresses() {
       const right = document.createElement("div");
       right.className = "cart-right";
 
-      const showOld = !pricing.isAuto && oldUnit > 0 && oldUnit > pricing.unitPrice;
+      // Показываем старую цену если есть скидка или old_price
+      const hasDiscount = pricing.discountAmount > 0;
+      const showOld = !pricing.isAuto && (hasDiscount || (oldUnit > 0 && oldUnit > pricing.unitPrice));
+      const originalLineTotal = hasDiscount ? (pricing.lineTotal + pricing.discountAmount) : (oldUnit * qty);
 
       const oldEl = document.createElement("div");
       oldEl.className = "cart-old";
-      oldEl.textContent = showOld ? moneyNoSign(oldUnit * qty) : "";
+      oldEl.textContent = showOld ? moneyNoSign(originalLineTotal) : "";
       if (!showOld) oldEl.classList.add("hidden");
 
       const pr = document.createElement("div");

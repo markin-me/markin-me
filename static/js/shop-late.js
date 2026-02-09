@@ -2667,6 +2667,39 @@ optionGroups.forEach((group) => {
     return currentTotal - baseTotal;
   };
 
+  // Повторяем backend-логику расчёта скидки (без tenant-round внутри скидки):
+  // 1) считаем сумму скидки
+  // 2) ограничиваем max_discount_amount/ценой
+  // 3) округляем скидку до 2 знаков
+  const calculateProductDiscountAmount = (price, discount) => {
+    const srcPrice = Number(price || 0);
+    if (!(srcPrice > 0) || !discount) return 0;
+
+    const discType = String(discount.discount_type || "").trim();
+    const discValue = Number(discount.discount_value || 0);
+    let discountAmount = 0;
+
+    if (discType === "percent") {
+      if (!(discValue > 0)) return 0;
+      discountAmount = srcPrice * (discValue / 100);
+    } else if (discType === "fixed") {
+      if (!(discValue > 0)) return 0;
+      discountAmount = discValue;
+    } else if (discType === "special_price") {
+      discountAmount = Math.max(0, srcPrice - discValue);
+    } else {
+      return 0;
+    }
+
+    const maxDiscountAmount = Number(discount.max_discount_amount);
+    if (Number.isFinite(maxDiscountAmount) && maxDiscountAmount > 0 && discountAmount > maxDiscountAmount) {
+      discountAmount = maxDiscountAmount;
+    }
+    if (discountAmount > srcPrice) discountAmount = srcPrice;
+
+    return Math.round(discountAmount * 100) / 100;
+  };
+
   let updateActionText = () => {
     if (!actionBtnRef) return;
     if (!available) {
@@ -2683,12 +2716,22 @@ optionGroups.forEach((group) => {
     const ingredientsPriceDiff = calculateIngredientPrice(); // Разница от базового состава
     const unitPrice = roundPrice(basePrice + ingredientsPriceDiff);
 
+    // Скидка считается как на бэке, tenant-round применяется к итоговой цене.
+    const discountAmount = calculateProductDiscountAmount(unitPrice, product.discount);
+    const discountedUnitPrice = roundPrice(Math.max(0, unitPrice - discountAmount));
+
     // total = unit * qty
-    const totalPrice = roundPrice(unitPrice * Number(qty || 1));
-    // Зачёркнутая цена: product.old_price из БД (поле «Старая цена» в админке)
+    const totalPrice = roundPrice(discountedUnitPrice * Number(qty || 1));
+    const totalBeforeDiscount = roundPrice(unitPrice * Number(qty || 1));
+    
+    // Зачёркнутая цена: либо скидка, либо product.old_price из БД
     const oldBase = Number(product.old_price || 0);
     const oldUnit = oldBase > 0 ? roundPrice(oldBase + optionTotal + ingredientsPriceDiff) : 0;
-    const totalOld = oldUnit > unitPrice ? roundPrice(oldUnit * Number(qty || 1)) : 0;
+    const totalOldFromDb = oldUnit > discountedUnitPrice ? roundPrice(oldUnit * Number(qty || 1)) : 0;
+    
+    // Приоритет: если есть скидка — показываем цену до скидки, иначе old_price
+    const hasApiDiscount = discountAmount > 0;
+    const totalOld = hasApiDiscount ? totalBeforeDiscount : totalOldFromDb;
     const showOld = totalOld > 0 && totalOld > totalPrice;
 
     actionBtnRef.innerHTML = `
@@ -2886,18 +2929,15 @@ optionGroups.forEach((group) => {
       if (elMobileProductPrice && elMobileProductLabel) {
         if (!available) {
           elMobileProductLabel.textContent = "Нет в наличии";
+          elMobileProductPrice.textContent = "";
           if (elMobileAddToCartBtn) elMobileAddToCartBtn.disabled = true;
         } else {
           if (elMobileAddToCartBtn) elMobileAddToCartBtn.disabled = false;
-        const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
-        const optionTotal = optionItemsTotal(selectedItems);
-        const variantUnitPrice = getVariantUnitPrice(product, variants, variantState);
-        const basePrice = Number(variantUnitPrice || 0) + optionTotal;
-        const ingredientsPriceDiff = calculateIngredientPrice();
-        const unitPrice = roundPrice(basePrice + ingredientsPriceDiff);
-        const totalPrice = roundPrice(unitPrice * Number(qty || 1));
-        elMobileProductPrice.textContent = money(totalPrice);
-        elMobileProductLabel.textContent = editMode ? "Сохранить" : "в корзину";
+          const priceEl = actionBtnRef?.querySelector(".shop-pd-action-price");
+          if (priceEl) {
+            elMobileProductPrice.textContent = priceEl.textContent;
+          }
+          elMobileProductLabel.textContent = editMode ? "Сохранить" : "в корзину";
         }
       }
       // Обновляем qty в клонированном pill
@@ -6054,6 +6094,205 @@ function renderSheetAddressList() {
     });
   }
 
+  function getOrderItemLineTotal(item) {
+    const lineTotal = Number(item?.line_total);
+    if (Number.isFinite(lineTotal)) return roundPrice(lineTotal);
+    const unitPrice = Number(item?.price || 0);
+    const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+    return roundPrice(unitPrice * qty);
+  }
+
+  function parseOrderDiscountsJson(order) {
+    const raw = order?.discounts_json;
+    if (Array.isArray(raw)) return raw;
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function buildOrderSummaryData(order) {
+    const orderTotal = roundPrice(Number(order?.total_price || 0));
+    const deliveryCost = roundPrice(Number(order?.delivery_cost || 0));
+    const items = Array.isArray(order?.items) ? order.items : [];
+    const discountsList = parseOrderDiscountsJson(order);
+
+    let itemsTotalAfterItemDiscounts = 0;
+    let comboDiscount = 0;
+    let productDiscount = 0;
+    let autoAddDiscount = 0;
+
+    items.forEach((item) => {
+      const lineTotal = getOrderItemLineTotal(item);
+      itemsTotalAfterItemDiscounts += lineTotal;
+
+      let originalLineTotal = lineTotal;
+      const comboOldLineTotal = Number(item?.old_line_total || 0);
+      const discountOriginalLineTotal = Number(item?.discount?.original_line_total || 0);
+      const oldPrice = Number(item?.old_price || 0);
+      const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+      const oldPriceLineTotal = oldPrice > 0 ? roundPrice(oldPrice * qty) : 0;
+
+      if (String(item?.type || "") === "combo" && comboOldLineTotal > lineTotal) {
+        originalLineTotal = comboOldLineTotal;
+      } else if (discountOriginalLineTotal > lineTotal) {
+        originalLineTotal = discountOriginalLineTotal;
+      } else if (oldPriceLineTotal > lineTotal) {
+        originalLineTotal = oldPriceLineTotal;
+      }
+
+      const lineDiscount = roundPrice(Math.max(0, originalLineTotal - lineTotal));
+      if (!(lineDiscount > 0)) return;
+
+      if (String(item?.type || "") === "combo") {
+        comboDiscount += lineDiscount;
+      } else if (Number(item?.auto_add || 0) === 1) {
+        autoAddDiscount += lineDiscount;
+      } else {
+        productDiscount += lineDiscount;
+      }
+    });
+
+    comboDiscount = roundPrice(comboDiscount);
+    productDiscount = roundPrice(productDiscount);
+    autoAddDiscount = roundPrice(autoAddDiscount);
+
+    const itemsPayableAfterAllDiscounts = roundPrice(Math.max(0, orderTotal - deliveryCost));
+    const customerOrderDiscount = roundPrice(Math.max(0, itemsTotalAfterItemDiscounts - itemsPayableAfterAllDiscounts));
+    const itemLevelDiscount = roundPrice(comboDiscount + productDiscount + autoAddDiscount);
+    const calculatedDiscount = roundPrice(itemLevelDiscount + customerOrderDiscount);
+    const storedDiscount = roundPrice(Math.max(0, Number(order?.discount_amount || 0)));
+    const totalDiscount = storedDiscount > calculatedDiscount ? storedDiscount : calculatedDiscount;
+    const subtotalBeforeDiscounts = roundPrice(itemsPayableAfterAllDiscounts + totalDiscount);
+
+    const orderDiscountTitles = [];
+    discountsList.forEach((d) => {
+      if (String(d?.apply_to || "").toLowerCase() !== "order") return;
+      const title = str(d?.title || "").trim();
+      if (title && !orderDiscountTitles.includes(title)) orderDiscountTitles.push(title);
+    });
+
+    const breakdown = [
+      { title: "Комбо", amount: comboDiscount },
+      { title: "Товарные скидки", amount: productDiscount },
+      { title: "Автодобавление", amount: autoAddDiscount },
+      { title: "Клиентская скидка", amount: customerOrderDiscount },
+    ].filter((x) => Number(x.amount || 0) > 0);
+    const breakdownTotal = roundPrice(breakdown.reduce((sum, entry) => sum + Number(entry.amount || 0), 0));
+    const otherDiscount = roundPrice(Math.max(0, totalDiscount - breakdownTotal));
+    if (otherDiscount > 0) breakdown.push({ title: "Прочие скидки", amount: otherDiscount });
+
+    return {
+      orderTotal,
+      deliveryCost,
+      subtotalBeforeDiscounts,
+      discountAmount: totalDiscount,
+      changeFrom: Number(order?.change_from || 0),
+      paymentTitle: str(order?.payment_title || "").trim(),
+      breakdown,
+      orderDiscountTitles,
+    };
+  }
+
+  function renderOrderSummaryBlock(order) {
+    const summary = buildOrderSummaryData(order);
+    const hasDiscount = summary.discountAmount > 0;
+    const hasChange = summary.changeFrom > summary.orderTotal;
+    const changeAmount = hasChange ? roundPrice(summary.changeFrom - summary.orderTotal) : 0;
+
+    let html = `<div class="shop-order-details-section shop-order-summary">`;
+    html += `<div class="shop-order-summary-title">Суммы:</div>`;
+
+    if (summary.paymentTitle) {
+      html += `<div class="shop-order-summary-row">`;
+      html += `<span class="shop-order-summary-label">Оплата</span>`;
+      html += `<span class="shop-order-summary-value">${escapeHtml(summary.paymentTitle)}</span>`;
+      html += `</div>`;
+    }
+
+    if (hasChange) {
+      html += `<div class="shop-order-summary-row">`;
+      html += `<span class="shop-order-summary-label">Сдача с</span>`;
+      html += `<span class="shop-order-summary-value">${money(summary.changeFrom)}</span>`;
+      html += `</div>`;
+      html += `<div class="shop-order-summary-row">`;
+      html += `<span class="shop-order-summary-label">Сдача</span>`;
+      html += `<span class="shop-order-summary-value">${money(changeAmount)}</span>`;
+      html += `</div>`;
+    }
+
+    if (hasDiscount) {
+      html += `<div class="shop-order-summary-row">`;
+      html += `<span class="shop-order-summary-label">Сумма товаров</span>`;
+      html += `<span class="shop-order-summary-value">${money(summary.subtotalBeforeDiscounts)}</span>`;
+      html += `</div>`;
+
+      const hasBreakdown = summary.breakdown.length > 0 || summary.orderDiscountTitles.length > 0;
+      html += `<div class="shop-order-summary-row shop-order-summary-discount">`;
+      if (hasBreakdown) {
+        html += `<span class="shop-order-summary-discount-label-wrap">`;
+        html += `<span class="shop-order-summary-label">Скидка</span>`;
+        html += `<button type="button" class="shop-order-summary-discount-info-btn" data-order-discount-toggle aria-label="Показать расшифровку скидки" aria-expanded="false"><i class="fas fa-info"></i></button>`;
+        html += `</span>`;
+      } else {
+        html += `<span class="shop-order-summary-label">Скидка</span>`;
+      }
+      html += `<span class="shop-order-summary-value shop-checkout-discount-value">-${money(summary.discountAmount)}</span>`;
+      html += `</div>`;
+
+      if (hasBreakdown) {
+        html += `<div class="shop-order-summary-discount-breakdown" data-order-discount-breakdown aria-hidden="true">`;
+        summary.breakdown.forEach((entry) => {
+          html += `<div class="shop-order-summary-discount-breakdown-row">`;
+          html += `<span class="shop-order-summary-discount-breakdown-label">${escapeHtml(entry.title)}</span>`;
+          html += `<span class="shop-order-summary-discount-breakdown-value">-${money(entry.amount)}</span>`;
+          html += `</div>`;
+        });
+        if (summary.orderDiscountTitles.length > 0) {
+          html += `<div class="shop-order-summary-discount-breakdown-note">Скидка клиента: ${escapeHtml(summary.orderDiscountTitles.join(", "))}</div>`;
+        }
+        html += `</div>`;
+      }
+    }
+
+    html += `<div class="shop-order-summary-row">`;
+    html += `<span class="shop-order-summary-label">Доставка</span>`;
+    html += `<span class="shop-order-summary-value">${money(summary.deliveryCost)}</span>`;
+    html += `</div>`;
+
+    html += `<div class="shop-order-summary-divider"></div>`;
+    html += `<div class="shop-order-summary-total-row">`;
+    html += `<span class="shop-order-summary-total-label">ИТОГО</span>`;
+    html += `<span class="shop-order-summary-total-value">${money(summary.orderTotal)}</span>`;
+    html += `</div>`;
+    html += `<div class="shop-order-summary-thanks">Спасибо за заказ!</div>`;
+    html += `</div>`;
+
+    return html;
+  }
+
+  function bindOrderSummaryDiscountToggles(root) {
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll("[data-order-discount-toggle]").forEach((btn) => {
+      if (btn.dataset.bound === "1") return;
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const summary = btn.closest(".shop-order-summary");
+        const breakdown = summary ? summary.querySelector("[data-order-discount-breakdown]") : null;
+        if (!breakdown) return;
+        const willOpen = !breakdown.classList.contains("is-open");
+        breakdown.classList.toggle("is-open", willOpen);
+        btn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+        breakdown.setAttribute("aria-hidden", willOpen ? "false" : "true");
+      });
+    });
+  }
+
   function buildProfileContent({ host, me, onLogout, initialTab }) {
     host.innerHTML = "";
 
@@ -6200,6 +6439,12 @@ function renderSheetAddressList() {
     tabOrders.textContent = "История заказов";
     tabOrders.dataset.tab = "orders";
 
+    const tabDiscounts = document.createElement("button");
+    tabDiscounts.type = "button";
+    tabDiscounts.className = "shop-profile-tab";
+    tabDiscounts.textContent = "Скидки";
+    tabDiscounts.dataset.tab = "discounts";
+
     const tabSettings = document.createElement("button");
     tabSettings.type = "button";
     tabSettings.className = "shop-profile-tab";
@@ -6208,6 +6453,7 @@ function renderSheetAddressList() {
 
     tabs.appendChild(tabAddresses);
     tabs.appendChild(tabOrders);
+    tabs.appendChild(tabDiscounts);
     tabs.appendChild(tabSettings);
     wrap.appendChild(tabs);
 
@@ -6320,6 +6566,20 @@ function renderSheetAddressList() {
     ordersList.className = "shop-profile-list";
     ordersPanel.appendChild(ordersList);
 
+    // Панель скидок
+    const discountsPanel = document.createElement("div");
+    discountsPanel.className = "shop-profile-tab-panel";
+    discountsPanel.dataset.tab = "discounts";
+
+    const discountsList = document.createElement("div");
+    discountsList.className = "shop-profile-list shop-profile-discounts-list";
+    discountsPanel.appendChild(discountsList);
+
+    const discountsEmpty = document.createElement("div");
+    discountsEmpty.className = "shop-profile-empty hidden";
+    discountsEmpty.textContent = "У вас пока нет активных скидок";
+    discountsPanel.appendChild(discountsEmpty);
+
     const settingsPanel = document.createElement("div");
     settingsPanel.className = "shop-profile-tab-panel";
     settingsPanel.dataset.tab = "settings";
@@ -6391,17 +6651,114 @@ function renderSheetAddressList() {
 
     wrap.appendChild(addressesPanel);
     wrap.appendChild(ordersPanel);
+    wrap.appendChild(discountsPanel);
     wrap.appendChild(settingsPanel);
 
     host.appendChild(wrap);
 
+    // Функция загрузки скидок клиента
+    async function loadCustomerDiscounts() {
+      try {
+        const res = await apiJson('/api/public/me/discounts');
+        if (!res.ok) throw new Error(res.error || 'Error');
+        return res.data || [];
+      } catch (err) {
+        console.error('loadCustomerDiscounts error:', err);
+        return [];
+      }
+    }
+
+    // Функция рендеринга скидок
+    function renderCustomerDiscounts(discounts) {
+      discountsList.innerHTML = '';
+      if (!discounts.length) {
+        discountsEmpty.classList.remove('hidden');
+        return;
+      }
+      discountsEmpty.classList.add('hidden');
+
+      discounts.forEach((d) => {
+        const card = document.createElement('div');
+        card.className = 'shop-profile-card shop-profile-discount-card';
+
+        const header = document.createElement('div');
+        header.className = 'shop-profile-discount-header';
+
+        const title = document.createElement('div');
+        title.className = 'shop-profile-discount-title';
+        title.textContent = d.title || 'Скидка';
+
+        const badge = document.createElement('span');
+        badge.className = 'sp-discount-badge';
+        if (d.discount_type === 'percent') {
+          badge.textContent = `-${Math.round(d.discount_value)}%`;
+        } else if (d.discount_type === 'fixed') {
+          badge.textContent = `-${d.discount_value} ₽`;
+        } else if (d.discount_type === 'special_price') {
+          badge.textContent = `${d.discount_value} ₽`;
+        }
+        header.appendChild(title);
+        header.appendChild(badge);
+        card.appendChild(header);
+
+        if (d.description) {
+          const desc = document.createElement('div');
+          desc.className = 'shop-profile-discount-desc';
+          desc.textContent = d.description;
+          card.appendChild(desc);
+        }
+
+        const details = document.createElement('div');
+        details.className = 'shop-profile-discount-details';
+
+        if (d.apply_to === 'order') {
+          const applyLine = document.createElement('div');
+          applyLine.textContent = 'Применяется: на весь заказ';
+          details.appendChild(applyLine);
+        } else if (d.apply_to === 'product') {
+          const applyLine = document.createElement('div');
+          applyLine.textContent = 'Применяется: на товары';
+          details.appendChild(applyLine);
+        }
+
+        if (d.min_order_amount) {
+          const minLine = document.createElement('div');
+          minLine.textContent = `Мин. сумма заказа: ${d.min_order_amount} ₽`;
+          details.appendChild(minLine);
+        }
+
+        if (d.ends_at) {
+          const dateLine = document.createElement('div');
+          const endDate = new Date(d.ends_at);
+          dateLine.textContent = `Действует до: ${endDate.toLocaleDateString('ru-RU')}`;
+          details.appendChild(dateLine);
+        }
+
+        if (details.children.length > 0) {
+          card.appendChild(details);
+        }
+
+        discountsList.appendChild(card);
+      });
+    }
+
+    let discountsLoaded = false;
+
     function setActiveTab(tab) {
-      [tabAddresses, tabOrders, tabSettings].forEach((btn) => btn.classList.toggle("is-active", btn.dataset.tab === tab));
-      [addressesPanel, ordersPanel, settingsPanel].forEach((panel) => panel.classList.toggle("is-active", panel.dataset.tab === tab));
+      [tabAddresses, tabOrders, tabDiscounts, tabSettings].forEach((btn) => btn.classList.toggle("is-active", btn.dataset.tab === tab));
+      [addressesPanel, ordersPanel, discountsPanel, settingsPanel].forEach((panel) => panel.classList.toggle("is-active", panel.dataset.tab === tab));
+      
+      // Загружаем скидки при первом открытии таба
+      if (tab === 'discounts' && !discountsLoaded) {
+        discountsLoaded = true;
+        discountsList.innerHTML = '<div class="muted">Загрузка…</div>';
+        loadCustomerDiscounts().then(renderCustomerDiscounts);
+      }
     }
 
     tabAddresses.addEventListener("click", () => setActiveTab("addresses"));
     tabOrders.addEventListener("click", () => setActiveTab("orders"));
+    tabDiscounts.addEventListener("click", () => setActiveTab("discounts"));
     tabSettings.addEventListener("click", () => setActiveTab("settings"));
 
     async function reloadAddresses() {
@@ -6626,44 +6983,13 @@ function renderSheetAddressList() {
         html += `</div>`;
       }
       
-      // Суммы (нормализованный вид)
-      const orderTotalNum = Number(order.total_price) || 0;
-      const changeFromNum = Number(order.change_from) || 0;
-      const hasChange = changeFromNum > orderTotalNum;
-      const changeAmountVal = hasChange ? changeFromNum - orderTotalNum : 0;
-      html += `<div class="shop-order-details-section shop-order-summary">`;
-      html += `<div class="shop-order-summary-title">Суммы:</div>`;
-      if (order.payment_title) {
-        html += `<div class="shop-order-summary-row">`;
-        html += `<span class="shop-order-summary-label">Оплата</span>`;
-        html += `<span class="shop-order-summary-value">${escapeHtml(order.payment_title)}</span>`;
-        html += `</div>`;
-      }
-      if (hasChange) {
-        html += `<div class="shop-order-summary-row">`;
-        html += `<span class="shop-order-summary-label">Сдача с</span>`;
-        html += `<span class="shop-order-summary-value">${money(order.change_from)}</span>`;
-        html += `</div>`;
-        html += `<div class="shop-order-summary-row">`;
-        html += `<span class="shop-order-summary-label">Сдача</span>`;
-        html += `<span class="shop-order-summary-value">${money(changeAmountVal)}</span>`;
-        html += `</div>`;
-      }
-      html += `<div class="shop-order-summary-row">`;
-      html += `<span class="shop-order-summary-label">Доставка</span>`;
-      html += `<span class="shop-order-summary-value">${money(order.delivery_cost || 0)}</span>`;
-      html += `</div>`;
-      html += `<div class="shop-order-summary-divider"></div>`;
-      html += `<div class="shop-order-summary-total-row">`;
-      html += `<span class="shop-order-summary-total-label">ИТОГО</span>`;
-      html += `<span class="shop-order-summary-total-value">${money(order.total_price || 0)}</span>`;
-      html += `</div>`;
-      html += `<div class="shop-order-summary-thanks">Спасибо за заказ!</div>`;
-      html += `</div>`;
+      // Суммы (единый блок как в активных заказах)
+      html += renderOrderSummaryBlock(order);
       
       html += `</div>`;
       
       ordersPanel.innerHTML = html;
+      bindOrderSummaryDiscountToggles(ordersPanel);
       
       // Проверяем, открыто ли модальное окно
       const isModal = document.querySelector(".app-modal") && document.querySelector(".app-modal").getAttribute("aria-hidden") !== "true";
@@ -8067,8 +8393,9 @@ function setBottomNavActive(tab) {
       return;
     }
 
-    // Вычисляем сумму заказа для фильтрации опций сдачи
-    const { total: orderTotal } = computeCartTotals(items);
+    // Базовые итоги корзины (до клиентской скидки на заказ)
+    const cartTotals = computeCartTotals(items);
+    const baseOrderTotal = roundPrice(Number(cartTotals.total || 0));
 
     const cfg = await getOrderConfig();
     let deliverySettings = null;
@@ -8086,6 +8413,128 @@ function setBottomNavActive(tab) {
     const draft = loadCheckoutDraft();
 
     const me = await fetchMeSafe(); // если залогинен — подставим
+
+    function calculateDiscountPreview(price, discountType, discountValue, maxDiscountAmount = null) {
+      const srcPrice = Number(price || 0);
+      const srcValue = Number(discountValue || 0);
+      if (!(srcPrice > 0) || !(srcValue > 0)) return 0;
+
+      let discountAmount = 0;
+      if (discountType === "percent") {
+        discountAmount = srcPrice * (srcValue / 100);
+      } else if (discountType === "fixed") {
+        discountAmount = srcValue;
+      } else if (discountType === "special_price") {
+        discountAmount = Math.max(0, srcPrice - srcValue);
+      } else {
+        return 0;
+      }
+
+      const maxAmount = Number(maxDiscountAmount);
+      if (maxAmount > 0 && discountAmount > maxAmount) {
+        discountAmount = maxAmount;
+      }
+      if (discountAmount > srcPrice) {
+        discountAmount = srcPrice;
+      }
+      return roundPrice(discountAmount);
+    }
+
+    function applyBestOrderDiscountsPreview(discounts, price) {
+      const all = Array.isArray(discounts) ? discounts : [];
+      const basePrice = roundPrice(Number(price || 0));
+      if (!all.length || !(basePrice > 0)) {
+        return { totalDiscount: 0, appliedDiscounts: [] };
+      }
+
+      const stackable = all.filter((d) => Number(d?.is_stackable || 0) === 1 || d?.is_stackable === true);
+      const nonStackable = all.filter((d) => !(Number(d?.is_stackable || 0) === 1 || d?.is_stackable === true));
+
+      let bestNonStackable = null;
+      let bestNonStackableAmount = 0;
+      nonStackable.forEach((d) => {
+        const amount = calculateDiscountPreview(
+          basePrice,
+          d?.discount_type,
+          Number(d?.discount_value || 0),
+          d?.max_discount_amount != null ? Number(d.max_discount_amount) : null
+        );
+        if (amount > bestNonStackableAmount) {
+          bestNonStackableAmount = amount;
+          bestNonStackable = d;
+        }
+      });
+
+      let stackableTotal = 0;
+      const stackableApplied = [];
+      stackable.forEach((d) => {
+        const leftPrice = roundPrice(Math.max(0, basePrice - stackableTotal));
+        if (!(leftPrice > 0)) return;
+        const amount = calculateDiscountPreview(
+          leftPrice,
+          d?.discount_type,
+          Number(d?.discount_value || 0),
+          d?.max_discount_amount != null ? Number(d.max_discount_amount) : null
+        );
+        if (!(amount > 0)) return;
+        stackableTotal = roundPrice(stackableTotal + amount);
+        stackableApplied.push({ ...d, discountAmount: amount });
+      });
+
+      let totalDiscount = 0;
+      let appliedDiscounts = [];
+      if (bestNonStackableAmount > stackableTotal) {
+        totalDiscount = bestNonStackableAmount;
+        if (bestNonStackable) {
+          appliedDiscounts = [{ ...bestNonStackable, discountAmount: bestNonStackableAmount }];
+        }
+      } else {
+        totalDiscount = stackableTotal;
+        appliedDiscounts = stackableApplied;
+      }
+
+      if (totalDiscount > basePrice) totalDiscount = basePrice;
+      return { totalDiscount: roundPrice(totalDiscount), appliedDiscounts };
+    }
+
+    let customerOrderDiscountAmount = 0;
+    let customerOrderAppliedDiscounts = [];
+    if (me) {
+      try {
+        const discountsRes = await apiJson("/api/public/me/discounts");
+        const discountsRaw = Array.isArray(discountsRes?.data) ? discountsRes.data : [];
+        const activeStoreIdVal = (typeof getActiveStoreId === "function")
+          ? Number(getActiveStoreId())
+          : Number(localStorage.getItem("activeStoreId"));
+        const activeStoreId = Number.isFinite(activeStoreIdVal) ? activeStoreIdVal : null;
+
+        const orderDiscounts = discountsRaw.filter((d) => {
+          if (!d) return false;
+          if (String(d.apply_to || "") !== "order") return false;
+          if (d.is_currently_active !== true) return false;
+
+          // Для совпадения с расчётом при создании заказа используем скидки только текущего филиала.
+          if (activeStoreId != null) {
+            const discountStoreId = Number(d.store_id);
+            if (!Number.isFinite(discountStoreId) || discountStoreId !== activeStoreId) return false;
+          }
+
+          const minOrderAmount = Number(d.min_order_amount || 0);
+          if (minOrderAmount > 0 && baseOrderTotal < minOrderAmount) return false;
+          return true;
+        });
+
+        const preview = applyBestOrderDiscountsPreview(orderDiscounts, baseOrderTotal);
+        customerOrderDiscountAmount = roundPrice(Number(preview.totalDiscount || 0));
+        customerOrderAppliedDiscounts = Array.isArray(preview.appliedDiscounts) ? preview.appliedDiscounts : [];
+      } catch (e) {
+        customerOrderDiscountAmount = 0;
+        customerOrderAppliedDiscounts = [];
+      }
+    }
+
+    // Итог товаров после всех скидок (включая клиентскую скидку)
+    const orderTotal = roundPrice(Math.max(0, baseOrderTotal - customerOrderDiscountAmount));
 
     container.innerHTML = "";
 
@@ -8776,6 +9225,198 @@ function setBottomNavActive(tab) {
 
     wrap.appendChild(deliveryInfoWrap);
 
+    const totalBeforeCustomerDiscount = roundPrice(Number(cartTotals.total || 0));
+    const itemLevelDiscount = roundPrice(Number(cartTotals.totalDiscount || 0));
+    const totalBeforeDiscount = roundPrice(Number(cartTotals.totalBeforeDiscount || totalBeforeCustomerDiscount));
+    const nonAutoTotal = Number(cartTotals.nonAutoTotal || 0);
+    const autoEligibleTotal = Number(cartTotals.autoEligibleTotal || 0);
+    const total = orderTotal;
+    const totalDiscount = roundPrice(itemLevelDiscount + customerOrderDiscountAmount);
+    // Общая скидка = разница между суммой до скидок и итогом (включая клиентскую скидку)
+    const actualDiscount = totalBeforeDiscount > total
+      ? roundPrice(totalBeforeDiscount - total)
+      : totalDiscount;
+    const hasDiscount = actualDiscount > 0;
+
+    function buildCheckoutDiscountBreakdown(cartItems, totalsForPricing, summaryDiscount, customerDiscount) {
+      const safeItems = Array.isArray(cartItems) ? cartItems : [];
+      const pricingTotals = {
+        nonAutoTotal: Number(totalsForPricing?.nonAutoTotal || 0),
+        autoEligibleTotal: Number(totalsForPricing?.autoEligibleTotal || 0),
+      };
+      let comboDiscount = 0;
+      let productDiscount = 0;
+      let autoAddDiscount = 0;
+      const customerOrderDiscount = roundPrice(Math.max(0, Number(customerDiscount) || 0));
+
+      safeItems.forEach((item) => {
+        const qty = Math.max(0, Number(item?.qty || 0));
+        if (!qty) return;
+
+        if (item.type === "combo") {
+          const currentUnit = roundPrice(Number(item.unit_price_override || 0));
+          const oldRaw = Number(item.unit_price_before_discount || 0);
+          const oldUnit = oldRaw > currentUnit ? roundPrice(oldRaw) : currentUnit;
+          const lineDiscount = roundPrice(Math.max(0, (oldUnit - currentUnit) * qty));
+          comboDiscount += lineDiscount;
+          return;
+        }
+
+        const pricing = computeItemPricing(item, pricingTotals);
+        const parts = pricing.parts || {};
+        const product = item?.product || {};
+
+        let originalUnit = Number(pricing.unitPrice || 0);
+        if (product?.original_price && Number(product.original_price) > 0) {
+          originalUnit = roundPrice(
+            Number(product.original_price) +
+            (Number(parts.optionTotal) || 0) +
+            (Number(parts.ingredientDiff) || 0)
+          );
+        } else if (product?.old_price && Number(product.old_price) > Number(pricing.unitPrice || 0)) {
+          originalUnit = roundPrice(
+            Number(product.old_price) +
+            (Number(parts.optionTotal) || 0) +
+            (Number(parts.ingredientDiff) || 0)
+          );
+        } else {
+          originalUnit = roundPrice(originalUnit);
+        }
+
+        // Для auto_add в breakdown используем ту же базу, что и в computeCartTotals:
+        // только платное количество, включая корректный ноль.
+        const originalQty = Number.isFinite(Number(pricing.paidQty))
+          ? Math.max(0, Number(pricing.paidQty))
+          : qty;
+        const originalLineTotal = roundPrice(originalUnit * originalQty);
+        const lineTotal = roundPrice(Number(pricing.lineTotal || 0));
+        const lineDiscount = roundPrice(Math.max(0, originalLineTotal - lineTotal));
+        if (!lineDiscount) return;
+
+        if (pricing.isAuto || Number(item?.auto_add || 0) === 1) {
+          autoAddDiscount += lineDiscount;
+        } else {
+          productDiscount += lineDiscount;
+        }
+      });
+
+      comboDiscount = roundPrice(comboDiscount);
+      productDiscount = roundPrice(productDiscount);
+      autoAddDiscount = roundPrice(autoAddDiscount);
+
+      const totalKnown = roundPrice(comboDiscount + productDiscount + autoAddDiscount + customerOrderDiscount);
+      const target = roundPrice(Number(summaryDiscount) || 0);
+      const otherDiscount = roundPrice(Math.max(0, target - totalKnown));
+
+      return {
+        comboDiscount,
+        productDiscount,
+        autoAddDiscount,
+        customerOrderDiscount,
+        otherDiscount,
+      };
+    }
+
+    const discountBreakdown = buildCheckoutDiscountBreakdown(
+      items,
+      { nonAutoTotal, autoEligibleTotal },
+      actualDiscount,
+      customerOrderDiscountAmount
+    );
+
+    // Строка "Сумма товаров" (показываем только если есть скидка)
+    const subtotalRow = document.createElement("div");
+    subtotalRow.className = "shop-checkout-grid-row";
+    const subtotalLabel = document.createElement("div");
+    subtotalLabel.className = "muted";
+    subtotalLabel.textContent = "Сумма товаров";
+    const subtotalValue = document.createElement("div");
+    subtotalValue.textContent = money(hasDiscount ? totalBeforeDiscount : total);
+    subtotalRow.appendChild(subtotalLabel);
+    subtotalRow.appendChild(subtotalValue);
+    if (hasDiscount) {
+      wrap.appendChild(subtotalRow);
+    }
+
+    // Строка скидки (если есть)
+    const discountRow = document.createElement("div");
+    discountRow.className = "shop-checkout-grid-row shop-checkout-discount-row";
+    const discountLabelWrap = document.createElement("div");
+    discountLabelWrap.className = "shop-checkout-discount-label-wrap";
+
+    const discountLabel = document.createElement("div");
+    discountLabel.className = "muted";
+    discountLabel.textContent = "Скидка";
+    discountLabelWrap.appendChild(discountLabel);
+
+    const discountDetailItems = [
+      { key: "combo", title: "Комбо", amount: Number(discountBreakdown.comboDiscount || 0) },
+      { key: "product", title: "Товарные скидки", amount: Number(discountBreakdown.productDiscount || 0) },
+      { key: "auto_add", title: "Автодобавление", amount: Number(discountBreakdown.autoAddDiscount || 0) },
+      { key: "customer", title: "Клиентская скидка", amount: Number(discountBreakdown.customerOrderDiscount || 0) },
+      { key: "other", title: "Прочие скидки", amount: Number(discountBreakdown.otherDiscount || 0) },
+    ].filter((x) => x.amount > 0);
+
+    const canShowDiscountDetails = discountDetailItems.length > 0;
+    const discountDetails = document.createElement("div");
+    discountDetails.className = "shop-checkout-discount-breakdown";
+    discountDetails.setAttribute("aria-hidden", "true");
+
+    discountDetailItems.forEach((entry) => {
+      const row = document.createElement("div");
+      row.className = "shop-checkout-discount-breakdown-row";
+
+      const label = document.createElement("div");
+      label.className = "shop-checkout-discount-breakdown-label";
+      label.textContent = entry.title;
+
+      const value = document.createElement("div");
+      value.className = "shop-checkout-discount-breakdown-value";
+      value.textContent = `-${money(entry.amount)}`;
+
+      row.appendChild(label);
+      row.appendChild(value);
+      discountDetails.appendChild(row);
+    });
+
+    const customerDiscountTitles = customerOrderAppliedDiscounts
+      .map((d) => str(d?.title || "").trim())
+      .filter(Boolean);
+    if (customerDiscountTitles.length > 0) {
+      const customerNote = document.createElement("div");
+      customerNote.className = "shop-checkout-discount-breakdown-note";
+      customerNote.textContent = `Скидка клиента: ${customerDiscountTitles.join(", ")}`;
+      discountDetails.appendChild(customerNote);
+    }
+
+    if (canShowDiscountDetails) {
+      const discountInfoBtn = document.createElement("button");
+      discountInfoBtn.type = "button";
+      discountInfoBtn.className = "shop-checkout-discount-info-btn";
+      discountInfoBtn.setAttribute("aria-label", "Показать расшифровку скидки");
+      discountInfoBtn.setAttribute("aria-expanded", "false");
+      discountInfoBtn.innerHTML = `<i class="fas fa-info"></i>`;
+      discountLabelWrap.appendChild(discountInfoBtn);
+
+      discountInfoBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        const willOpen = !discountDetails.classList.contains("is-open");
+        discountDetails.classList.toggle("is-open", willOpen);
+        discountInfoBtn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+        discountDetails.setAttribute("aria-hidden", willOpen ? "false" : "true");
+      });
+    }
+
+    const discountValue = document.createElement("div");
+    discountValue.className = "shop-checkout-discount-value";
+    discountValue.textContent = `-${money(actualDiscount)}`;
+    discountRow.appendChild(discountLabelWrap);
+    discountRow.appendChild(discountValue);
+    if (hasDiscount) {
+      wrap.appendChild(discountRow);
+      if (canShowDiscountDetails) wrap.appendChild(discountDetails);
+    }
+
     const totalRow = document.createElement("div");
     totalRow.className = "shop-checkout-grid-row shop-checkout-total-row";
     const totalLabel = document.createElement("div");
@@ -9056,12 +9697,15 @@ function setBottomNavActive(tab) {
         items: resolvedItems.map(x => {
           if (x.type === "combo") {
             const pricing = computeItemPricing(x, totals);
+            // Старая цена до скидки комбо
+            const comboOldLineTotal = (Number(x.unit_price_before_discount) || 0) * (x.qty || 1);
             return {
               type: "combo",
               combo_id: x.combo_id,
               combo_title: x.combo_title || "Комбо",
               qty: x.qty,
               line_total: pricing.lineTotal,
+              old_line_total: comboOldLineTotal > pricing.lineTotal ? comboOldLineTotal : 0,
               selections: Array.isArray(x.selections)
                 ? x.selections.map((s) => ({
                     product_id: s.product_id,
@@ -9103,6 +9747,7 @@ function setBottomNavActive(tab) {
             variant_label: x.variant_label || null,
             variant: variant,
             line_total: lineTotal, // Отправляем уже посчитанную итоговую цену
+            original_line_total: roundPrice(pricing.unitPrice * pricing.paidQty), // Цена до скидки
           };
         }),
       };
@@ -10086,7 +10731,7 @@ function initShopLate() {
                   html += `<div class="cart-title">${escapeHtml(item.name || "—")}</div>`;
                   html += `</div>`;
                   html += `<div class="cart-right">`;
-                  html += `<div class="cart-price">${money(item.line_total || item.price || 0)}</div>`;
+                  html += `<div class="cart-price">${money(getOrderItemLineTotal(item))}</div>`;
                   html += `</div>`;
                   html += `</div>`;
                 }
@@ -10101,7 +10746,7 @@ function initShopLate() {
                 html += `<div class="cart-title">${escapeHtml(item.name || "—")}</div>`;
                 html += `</div>`;
                 html += `<div class="cart-right">`;
-                html += `<div class="cart-price">${money(item.line_total || item.price || 0)}</div>`;
+                html += `<div class="cart-price">${money(getOrderItemLineTotal(item))}</div>`;
                 html += `</div>`;
                 html += `</div>`;
               }
@@ -10128,40 +10773,8 @@ function initShopLate() {
             html += `</div>`;
           }
         
-          // Суммы (нормализованный вид)
-          const orderTotalNum2 = Number(order.total_price) || 0;
-          const changeFromNum2 = Number(order.change_from) || 0;
-          const hasChange2 = changeFromNum2 > orderTotalNum2;
-          const changeAmountVal2 = hasChange2 ? changeFromNum2 - orderTotalNum2 : 0;
-          html += `<div class="shop-order-details-section shop-order-summary">`;
-          html += `<div class="shop-order-summary-title">Суммы:</div>`;
-          if (order.payment_title) {
-            html += `<div class="shop-order-summary-row">`;
-            html += `<span class="shop-order-summary-label">Оплата</span>`;
-            html += `<span class="shop-order-summary-value">${escapeHtml(order.payment_title)}</span>`;
-            html += `</div>`;
-          }
-          if (hasChange2) {
-            html += `<div class="shop-order-summary-row">`;
-            html += `<span class="shop-order-summary-label">Сдача с</span>`;
-            html += `<span class="shop-order-summary-value">${money(order.change_from)}</span>`;
-            html += `</div>`;
-            html += `<div class="shop-order-summary-row">`;
-            html += `<span class="shop-order-summary-label">Сдача</span>`;
-            html += `<span class="shop-order-summary-value">${money(changeAmountVal2)}</span>`;
-            html += `</div>`;
-          }
-          html += `<div class="shop-order-summary-row">`;
-          html += `<span class="shop-order-summary-label">Доставка</span>`;
-          html += `<span class="shop-order-summary-value">${money(order.delivery_cost || 0)}</span>`;
-          html += `</div>`;
-          html += `<div class="shop-order-summary-divider"></div>`;
-          html += `<div class="shop-order-summary-total-row">`;
-          html += `<span class="shop-order-summary-total-label">ИТОГО</span>`;
-          html += `<span class="shop-order-summary-total-value">${money(order.total_price || 0)}</span>`;
-          html += `</div>`;
-          html += `<div class="shop-order-summary-thanks">Спасибо за заказ!</div>`;
-          html += `</div>`;
+          // Суммы (единый блок как в истории заказов)
+          html += renderOrderSummaryBlock(order);
         
           // Пустое поле 200px внизу для скролла
           html += `<div style="height: 200px;"></div>`;
@@ -10169,6 +10782,7 @@ function initShopLate() {
           html += `</div>`;
         
           wrap.innerHTML = html;
+          bindOrderSummaryDiscountToggles(wrap);
         
           // Кнопка "Назад" уже настроена в хедере выше
         } catch (e) {

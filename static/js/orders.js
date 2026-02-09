@@ -71,6 +71,12 @@
     changeAmount: $$('[data-info="change-amount"]'),
     changeFromRow: $$('[data-info="change-from-row"]'),
     changeAmountRow: $$('[data-info="change-amount-row"]'),
+    subtotalRow: $$('[data-info="subtotal-row"]'),
+    subtotal: $$('[data-info="subtotal"]'),
+    discountRow: $$('[data-info="discount-row"]'),
+    discountAmount: $$('[data-info="discount-amount"]'),
+    discountInfoBtn: $$('[data-info="discount-info-btn"]'),
+    discountBreakdown: $$('[data-info="discount-breakdown"]'),
     deliveryRow: $$('[data-info="delivery-row"]'),
     deliveryCost: $$('[data-info="delivery-cost"]'),
     total: $$('[data-info="order-total"]'),
@@ -240,6 +246,155 @@
     return Math.round(n) === n ? String(Math.round(n)) : n.toFixed(2);
   }
 
+  function roundMoney(val) {
+    const n = Number(val || 0);
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(n * 100) / 100;
+  }
+
+  function getOrderItemLineTotal(item) {
+    const lineTotal = Number(item?.line_total ?? item?.total ?? item?.total_price);
+    if (Number.isFinite(lineTotal)) return roundMoney(lineTotal);
+    const unitPrice = Number(item?.price || 0);
+    const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+    return roundMoney(unitPrice * qty);
+  }
+
+  function parseOrderDiscountsJson(order) {
+    const raw = order?.discounts_json;
+    if (Array.isArray(raw)) return raw;
+    if (!raw) return [];
+    try {
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function buildOrderDiscountSummary(order) {
+    const orderTotal = roundMoney(Number(order?.total_price || 0));
+    const deliveryCost = roundMoney(Number(order?.delivery_cost || 0));
+    const items = Array.isArray(order?.items) ? order.items : [];
+    const discountsList = parseOrderDiscountsJson(order);
+
+    let itemsTotalAfterItemDiscounts = 0;
+    let comboDiscount = 0;
+    let productDiscount = 0;
+    let autoAddDiscount = 0;
+
+    items.forEach((item) => {
+      const lineTotal = getOrderItemLineTotal(item);
+      itemsTotalAfterItemDiscounts += lineTotal;
+
+      let originalLineTotal = lineTotal;
+      const comboOldLineTotal = Number(item?.old_line_total || 0);
+      const discountOriginalLineTotal = Number(item?.discount?.original_line_total || 0);
+      const oldPrice = Number(item?.old_price || 0);
+      const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+      const oldPriceLineTotal = oldPrice > 0 ? roundMoney(oldPrice * qty) : 0;
+
+      if (String(item?.type || "") === "combo" && comboOldLineTotal > lineTotal) {
+        originalLineTotal = comboOldLineTotal;
+      } else if (discountOriginalLineTotal > lineTotal) {
+        originalLineTotal = discountOriginalLineTotal;
+      } else if (oldPriceLineTotal > lineTotal) {
+        originalLineTotal = oldPriceLineTotal;
+      }
+
+      const lineDiscount = roundMoney(Math.max(0, originalLineTotal - lineTotal));
+      if (!(lineDiscount > 0)) return;
+
+      if (String(item?.type || "") === "combo") {
+        comboDiscount += lineDiscount;
+      } else if (isAutoAddItem(item)) {
+        autoAddDiscount += lineDiscount;
+      } else {
+        productDiscount += lineDiscount;
+      }
+    });
+
+    comboDiscount = roundMoney(comboDiscount);
+    productDiscount = roundMoney(productDiscount);
+    autoAddDiscount = roundMoney(autoAddDiscount);
+
+    const itemsPayableAfterAllDiscounts = roundMoney(Math.max(0, orderTotal - deliveryCost));
+    const customerOrderDiscount = roundMoney(
+      Math.max(0, itemsTotalAfterItemDiscounts - itemsPayableAfterAllDiscounts)
+    );
+    const itemLevelDiscount = roundMoney(comboDiscount + productDiscount + autoAddDiscount);
+    const calculatedDiscount = roundMoney(itemLevelDiscount + customerOrderDiscount);
+    const storedDiscount = roundMoney(Math.max(0, Number(order?.discount_amount || 0)));
+    const totalDiscount = storedDiscount > calculatedDiscount ? storedDiscount : calculatedDiscount;
+    const subtotalBeforeDiscount = roundMoney(itemsPayableAfterAllDiscounts + totalDiscount);
+
+    const breakdown = [
+      { title: "Комбо", amount: comboDiscount },
+      { title: "Товарные скидки", amount: productDiscount },
+      { title: "Автодобавление", amount: autoAddDiscount },
+      { title: "Клиентская скидка", amount: customerOrderDiscount },
+    ].filter((entry) => Number(entry.amount || 0) > 0);
+
+    const breakdownTotal = roundMoney(
+      breakdown.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+    );
+    const otherDiscount = roundMoney(Math.max(0, totalDiscount - breakdownTotal));
+    if (otherDiscount > 0) breakdown.push({ title: "Прочие скидки", amount: otherDiscount });
+
+    const orderDiscountTitles = [];
+    discountsList.forEach((entry) => {
+      if (String(entry?.apply_to || "").toLowerCase() !== "order") return;
+      const title = String(entry?.title || "").trim();
+      if (title && !orderDiscountTitles.includes(title)) orderDiscountTitles.push(title);
+    });
+
+    return {
+      subtotalBeforeDiscount,
+      totalDiscount,
+      breakdown,
+      orderDiscountTitles,
+    };
+  }
+
+  function renderOrderDiscountBreakdownHtml(summary) {
+    if (!summary) return "";
+    let html = "";
+    const rows = Array.isArray(summary.breakdown) ? summary.breakdown : [];
+    rows.forEach((entry) => {
+      html += `<div class="order-summary-discount-breakdown-row">`;
+      html += `<span class="order-summary-discount-breakdown-label">${escapeHtml(entry.title || "Скидка")}</span>`;
+      html += `<span class="order-summary-discount-breakdown-value">-${money(entry.amount || 0)}</span>`;
+      html += `</div>`;
+    });
+
+    const titles = Array.isArray(summary.orderDiscountTitles) ? summary.orderDiscountTitles : [];
+    if (titles.length > 0) {
+      html += `<div class="order-summary-discount-breakdown-note">Скидка клиента: ${escapeHtml(titles.join(", "))}</div>`;
+    }
+
+    return html;
+  }
+
+  function bindOrderSummaryDiscountToggles() {
+    infoEls.discountInfoBtn.forEach((btn) => {
+      if (!btn || btn.dataset.bound === "1") return;
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const summaryCard = btn.closest(".order-summary");
+        if (!summaryCard) return;
+        const breakdown = summaryCard.querySelector('[data-info="discount-breakdown"]');
+        if (!breakdown) return;
+        const willOpen = !breakdown.classList.contains("is-open");
+        breakdown.classList.toggle("is-open", willOpen);
+        breakdown.classList.toggle("hidden", !willOpen);
+        btn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+        breakdown.setAttribute("aria-hidden", willOpen ? "false" : "true");
+      });
+    });
+  }
+
   /** Позиции «Приборы» и прочие auto_add — в конец списка (по флагу или по названию). */
   function isAutoAddItem(item) {
     if (Number(item?.auto_add || 0) === 1) return true;
@@ -265,8 +420,12 @@
           const name = escapeHtml(it.name || it.combo_title || "Комбо");
           const qty = Math.max(1, Number(it.qty || it.quantity || 0));
           const lineTotal = Number(it.line_total ?? it.total ?? it.total_price ?? 0);
-          const totalStr = orderItemTotalStr(lineTotal);
-          const mainLine = totalStr ? `${qty} Х ${name} — ${totalStr}` : `${qty} Х ${name}`;
+          const oldLineTotal = Number(it.old_line_total) || 0;
+          const showOldPrice = oldLineTotal > lineTotal;
+          const priceHtml = showOldPrice
+            ? `<span class="order-item-old-price">${orderItemTotalStr(oldLineTotal)}</span>${orderItemTotalStr(lineTotal)}`
+            : orderItemTotalStr(lineTotal);
+          const mainLine = priceHtml ? `${qty} Х ${name} — ${priceHtml}` : `${qty} Х ${name}`;
           const bulletPrefix = "• ";
 
           const photos = Array.isArray(it.photos) ? it.photos.filter(Boolean) : [];
@@ -351,8 +510,13 @@
         const qty = Math.max(1, Number(it.qty || it.quantity || 0));
         const price = Number(it.price || 0);
         const lineTotal = Number(it.line_total ?? it.total ?? it.total_price ?? price * qty ?? 0);
-        const totalStr = orderItemTotalStr(lineTotal);
-        const mainLine = totalStr ? `${qty} Х ${name} — ${totalStr}` : `${qty} Х ${name}`;
+        const discountOriginal = it.discount?.original_line_total;
+        const oldLineTotal = discountOriginal || 0;
+        const showOldPrice = oldLineTotal > lineTotal;
+        const priceHtml = showOldPrice
+          ? `<span class="order-item-old-price">${orderItemTotalStr(oldLineTotal)}</span>${orderItemTotalStr(lineTotal)}`
+          : orderItemTotalStr(lineTotal);
+        const mainLine = priceHtml ? `${qty} Х ${name} — ${priceHtml}` : `${qty} Х ${name}`;
         const bulletPrefix = "• ";
 
         const photos = Array.isArray(it.photos) ? it.photos.filter(Boolean) : [];
@@ -610,6 +774,8 @@
     });
   }
 
+  bindOrderSummaryDiscountToggles();
+
   function showEmptyInfo() {
     setHiddenAll(infoEls.empty, false);
     setHiddenAll(infoEls.content, true);
@@ -640,6 +806,11 @@
       setHiddenAll(infoEls.deliveryAddressComment, true);
       setHiddenAll(infoEls.orderCommentBlock, true);
       setHiddenAll(infoEls.clientExtra, true);
+      setHiddenAll(infoEls.discountInfoBtn, true);
+      setHtmlAll(infoEls.discountBreakdown, "");
+      setHiddenAll(infoEls.discountBreakdown, true);
+      setAttrAll(infoEls.discountInfoBtn, "aria-expanded", "false");
+      setAttrAll(infoEls.discountBreakdown, "aria-hidden", "true");
       return;
     }
 
@@ -706,6 +877,34 @@
     setTextAll(infoEls.changeAmount, money(changeAmountVal));
     setHiddenAll(infoEls.changeFromRow, !changeFrom);
     setHiddenAll(infoEls.changeAmountRow, !changeFrom);
+
+    const discountSummary = buildOrderDiscountSummary(order);
+    const discountAmount = Number(discountSummary.totalDiscount || 0);
+    const hasDiscount = discountAmount > 0;
+    setTextAll(infoEls.subtotal, money(discountSummary.subtotalBeforeDiscount || 0));
+    setTextAll(infoEls.discountAmount, `-${money(discountAmount)}`);
+    setHiddenAll(infoEls.subtotalRow, !hasDiscount);
+    setHiddenAll(infoEls.discountRow, !hasDiscount);
+
+    const hasBreakdown = hasDiscount && (
+      (Array.isArray(discountSummary.breakdown) && discountSummary.breakdown.length > 0) ||
+      (Array.isArray(discountSummary.orderDiscountTitles) && discountSummary.orderDiscountTitles.length > 0)
+    );
+    setHiddenAll(infoEls.discountInfoBtn, !hasBreakdown);
+    setHtmlAll(
+      infoEls.discountBreakdown,
+      hasBreakdown ? renderOrderDiscountBreakdownHtml(discountSummary) : ""
+    );
+    infoEls.discountBreakdown.forEach((el) => {
+      if (!el) return;
+      el.classList.remove("is-open");
+      el.classList.add("hidden");
+      el.setAttribute("aria-hidden", "true");
+    });
+    infoEls.discountInfoBtn.forEach((btn) => {
+      if (!btn) return;
+      btn.setAttribute("aria-expanded", "false");
+    });
 
     const qty = totalQty(order.items || []);
     setTextAll(infoEls.deliveryQty, `${qty} шт.`);
@@ -1805,7 +2004,11 @@
           const name = escapeHtml(item.name || item.combo_title || 'Комбо');
           const qty = Math.max(1, Number(item.quantity || item.qty || 1));
           const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? 0);
-          const priceStr = receiptTotalStr(lineTotal);
+          const oldLineTotal = Number(item.old_line_total) || 0;
+          const showOldPrice = oldLineTotal > lineTotal;
+          const priceStr = showOldPrice
+            ? `<span class="receipt-old-price">${receiptTotalStr(oldLineTotal)}</span>${receiptTotalStr(lineTotal)}`
+            : receiptTotalStr(lineTotal);
           const qtyStr = `${qty} Х`;
           const bulletPrefix = '• ';
           let compositionHtml = '';
@@ -1836,7 +2039,7 @@
             <div class="receipt-item-row">
               <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
               <span class="receipt-item-name">${name}</span>
-              ${priceStr ? `<span class="receipt-item-price">${escapeHtml(priceStr)}</span>` : ''}
+              ${priceStr ? `<span class="receipt-item-price">${priceStr}</span>` : ''}
             </div>
             ${compositionHtml ? '<div class="receipt-composition">' + compositionHtml + '</div>' : ''}
           </div>
@@ -1848,7 +2051,12 @@
         const qty = Math.max(1, Number(item.quantity || item.qty || 1));
         const basePrice = parseFloat(item.price || 0);
         const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? (basePrice * qty) ?? 0);
-        const priceStr = receiptTotalStr(lineTotal);
+        const discountOriginal = item.discount?.original_line_total;
+        const oldLineTotal = discountOriginal || 0;
+        const showOldPrice = oldLineTotal > lineTotal;
+        const priceStr = showOldPrice
+          ? `<span class="receipt-old-price">${receiptTotalStr(oldLineTotal)}</span>${receiptTotalStr(lineTotal)}`
+          : receiptTotalStr(lineTotal);
         const qtyStr = `${qty} Х`;
         const bulletPrefix = '• ';
 
@@ -1924,7 +2132,7 @@
             <div class="receipt-item-row">
               <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
               <span class="receipt-item-name">${name}</span>
-              ${priceStr ? `<span class="receipt-item-price">${escapeHtml(priceStr)}</span>` : ''}
+              ${priceStr ? `<span class="receipt-item-price">${priceStr}</span>` : ''}
             </div>
             ${variantsHtml}
             ${ingredientsHtml}
@@ -1933,6 +2141,10 @@
         `;
       });
     }
+
+    const receiptDiscountSummary = buildOrderDiscountSummary(order);
+    const discountAmount = Number(receiptDiscountSummary.totalDiscount || 0);
+    const subtotal = Number(receiptDiscountSummary.subtotalBeforeDiscount || 0);
 
     return `
 <!DOCTYPE html>
@@ -2067,6 +2279,10 @@
     .receipt-when-text {
       font-weight: bold;
     }
+    .receipt-old-price {
+      text-decoration: line-through;
+      margin-right: 4px;
+    }
   </style>
 </head>
 <body>
@@ -2114,6 +2330,8 @@
     ${paymentTitle ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Оплата</div><div class="receipt-summary-value">${escapeHtml(paymentTitle)}</div></div>` : ''}
     ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача с</div><div class="receipt-summary-value">${money(changeFrom)}</div></div>` : ''}
     ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача</div><div class="receipt-summary-value">${money(changeAmount)}</div></div>` : ''}
+    ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сумма товаров</div><div class="receipt-summary-value">${money(subtotal)}</div></div>` : ''}
+    ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Скидка</div><div class="receipt-summary-value">-${money(discountAmount)}</div></div>` : ''}
     <div class="receipt-summary-row"><div class="receipt-summary-label">Доставка</div><div class="receipt-summary-value">${money(deliveryCost)}</div></div>
     <div class="receipt-total">ИТОГО: ${money(total)}</div>
   </div>

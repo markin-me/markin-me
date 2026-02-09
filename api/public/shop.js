@@ -4,6 +4,7 @@ const path = require('path');
 const multer = require('multer');
 const { sendNewOrderNotification } = require('../telegramNotifications');
 const { sendOrderToPrintBot } = require('../printPush');
+const discountHelpers = require('../helpers/discounts');
 
 module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
@@ -290,6 +291,115 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   }
 
+  /**
+   * Обогатить товары информацией о скидках
+   * @param {Object[]} rows - массив товаров
+   * @param {number} tenantId
+   * @param {number} storeId
+   */
+  async function enrichProductsWithDiscounts(rows, tenantId, storeId) {
+    if (!rows.length) return;
+    
+    const productIds = rows.map(r => Number(r.id)).filter(Boolean);
+    if (!productIds.length) return;
+
+    // Получаем категории для каждого товара
+    const placeholders = productIds.map(() => '?').join(',');
+    const [catRows] = await db.query(
+      `SELECT product_id, category_id FROM prod_product_categories
+       WHERE tenant_id = ? AND product_id IN (${placeholders})`,
+      [tenantId, ...productIds]
+    );
+    
+    const catByProduct = new Map();
+    for (const r of catRows) {
+      const pid = Number(r.product_id);
+      if (!catByProduct.has(pid)) catByProduct.set(pid, []);
+      catByProduct.get(pid).push(Number(r.category_id));
+    }
+
+    // Получаем все активные скидки на товары и категории
+    const [discountRows] = await db.query(
+      `SELECT d.*, dp.product_id, dp.category_id, dp.combo_id
+       FROM mkt_discounts d
+       JOIN mkt_discount_products dp ON dp.discount_id = d.id AND dp.tenant_id = d.tenant_id
+       WHERE d.tenant_id = ? AND d.store_id = ? AND d.is_active = 1
+         AND (dp.product_id IN (${placeholders}) OR dp.category_id IS NOT NULL)`,
+      [tenantId, storeId, ...productIds]
+    );
+
+    // Группируем скидки по товарам и категориям
+    const discountsByProduct = new Map();
+    const discountsByCategory = new Map();
+
+    for (const disc of discountRows) {
+      if (disc.product_id) {
+        const pid = Number(disc.product_id);
+        if (!discountsByProduct.has(pid)) discountsByProduct.set(pid, []);
+        discountsByProduct.get(pid).push(disc);
+      }
+      if (disc.category_id) {
+        const cid = Number(disc.category_id);
+        if (!discountsByCategory.has(cid)) discountsByCategory.set(cid, []);
+        discountsByCategory.get(cid).push(disc);
+      }
+    }
+
+    // Применяем скидки к каждому товару
+    for (const row of rows) {
+      const pid = Number(row.id);
+      const discounts = [];
+      const seenIds = new Set();
+
+      // Прямые скидки на товар
+      const directDiscounts = discountsByProduct.get(pid) || [];
+      for (const d of directDiscounts) {
+        if (!seenIds.has(d.id) && discountHelpers.isDiscountActive(d)) {
+          discounts.push(d);
+          seenIds.add(d.id);
+        }
+      }
+
+      // Скидки по категориям товара
+      const cats = catByProduct.get(pid) || [];
+      for (const catId of cats) {
+        const catDiscounts = discountsByCategory.get(catId) || [];
+        for (const d of catDiscounts) {
+          if (!seenIds.has(d.id) && discountHelpers.isDiscountActive(d)) {
+            discounts.push(d);
+            seenIds.add(d.id);
+          }
+        }
+      }
+
+      if (discounts.length > 0) {
+        // Сортируем по приоритету
+        discounts.sort((a, b) => (b.priority || 0) - (a.priority || 0));
+        const best = discounts[0];
+        const price = Number(row.display_price || row.price || 0);
+        
+        row.discount = {
+          id: best.id,
+          title: best.title,
+          discount_type: best.discount_type,
+          discount_value: Number(best.discount_value),
+          discount_amount: discountHelpers.calculateDiscount(
+            price,
+            best.discount_type,
+            Number(best.discount_value),
+            best.max_discount_amount ? Number(best.max_discount_amount) : null
+          ),
+        };
+        row.original_price = price;
+        row.discounted_price = Math.max(0, price - row.discount.discount_amount);
+      } else {
+        row.discount = null;
+        row.original_price = null;
+        row.discounted_price = null;
+      }
+    }
+  }
+
   function parseBirthdayDDMMYYYY(input) {
     const s = str(input).trim();
     // dd.mm.yyyy
@@ -444,6 +554,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         o.change_from,
         o.total_price,
         o.delivery_cost,
+        o.discount_amount,
+        o.discounts_json,
         o.items,
         DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
         o.delivery_type_id,
@@ -489,6 +601,11 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const parsed = r.items ? JSON.parse(r.items) : [];
       if (Array.isArray(parsed)) items = parsed;
     } catch {}
+    let discountsJson = [];
+    try {
+      const parsedDiscounts = r.discounts_json ? JSON.parse(r.discounts_json) : [];
+      if (Array.isArray(parsedDiscounts)) discountsJson = parsedDiscounts;
+    } catch {}
     const itemsTotal = items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
     const totalPrice = Number(r.total_price || 0);
     let deliveryCost = 0;
@@ -514,6 +631,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       total_price: totalPrice,
       items_total: itemsTotal,
       delivery_cost: deliveryCost,
+      discount_amount: Number(r.discount_amount || 0),
+      discounts_json: discountsJson,
       items,
       scheduled_at: r.scheduled_at,
       delivery_type_id: r.delivery_type_id,
@@ -1222,6 +1341,86 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   });
 
   // ------------------------------
+  // Скидки клиента
+  // ------------------------------
+  router.get('/me/discounts', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const customerId = customer.id;
+
+      // Получаем скидки, привязанные напрямую к клиенту
+      // store_id = 0 или совпадает с текущим store_id - скидка применима
+      const [directDiscounts] = await db.query(
+        `SELECT d.id, d.store_id, d.title, d.description, d.discount_type, d.discount_value,
+                d.apply_to, d.min_order_amount, d.max_discount_amount, d.is_stackable,
+                d.usage_limit, d.usage_count,
+                d.starts_at, d.ends_at, d.schedule_days, d.schedule_time_start, d.schedule_time_end,
+                d.is_active,
+                'direct' AS link_type
+         FROM mkt_discounts d
+         JOIN mkt_discount_customers dc ON dc.discount_id = d.id AND dc.tenant_id = d.tenant_id
+         WHERE d.tenant_id = ? AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL) AND dc.customer_id = ?`,
+        [tenantId, storeId, customerId]
+      );
+
+      // Получаем категории клиента из таблицы связей (если таблица существует)
+      let categoryIds = [];
+      try {
+        const [customerCats] = await db.query(
+          `SELECT category_id FROM cust_customer_category_links WHERE tenant_id = ? AND customer_id = ?`,
+          [tenantId, customerId]
+        );
+        categoryIds = customerCats.map(c => Number(c.category_id));
+      } catch (catErr) {
+        // Таблица может не существовать - пропускаем
+        console.warn('cust_customer_category_links не найдена, пропускаем:', catErr.code);
+      }
+
+      // Получаем скидки по категориям клиента
+      let categoryDiscounts = [];
+      if (categoryIds.length > 0) {
+        const [catDisc] = await db.query(
+          `SELECT d.id, d.store_id, d.title, d.description, d.discount_type, d.discount_value,
+                  d.apply_to, d.min_order_amount, d.max_discount_amount, d.is_stackable,
+                  d.usage_limit, d.usage_count,
+                  d.starts_at, d.ends_at, d.schedule_days, d.schedule_time_start, d.schedule_time_end,
+                  d.is_active,
+                  'category' AS link_type
+           FROM mkt_discounts d
+           JOIN mkt_discount_customers dc ON dc.discount_id = d.id AND dc.tenant_id = d.tenant_id
+           WHERE d.tenant_id = ? AND (d.store_id = ? OR d.store_id = 0 OR d.store_id IS NULL) AND dc.customer_category_id IN (?)`,
+          [tenantId, storeId, categoryIds]
+        );
+        categoryDiscounts = catDisc;
+      }
+
+      // Объединяем и удаляем дубликаты
+      const allDiscounts = [...directDiscounts, ...categoryDiscounts];
+      const uniqueDiscounts = [];
+      const seenIds = new Set();
+
+      for (const discount of allDiscounts) {
+        if (!seenIds.has(discount.id)) {
+          // Добавляем флаг активности для отображения на фронтенде
+          discount.is_currently_active = discountHelpers.isDiscountActive(discount);
+          uniqueDiscounts.push(discount);
+          seenIds.add(discount.id);
+        }
+      }
+
+      res.json({ ok: true, data: uniqueDiscounts });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // ------------------------------
   // PUBLIC SHOP: categories/products
   // ------------------------------
 
@@ -1595,6 +1794,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             attachProductThumbs(r);
           }
           await enrichProductsWithDisplayPrice(rows, tenantId);
+          await enrichProductsWithDiscounts(rows, tenantId, storeId);
           return res.json({ ok: true, data: rows, combos: [], category_id: categoryId, lite: true });
         }
 
@@ -1619,6 +1819,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           attachProductThumbs(r);
         }
         await enrichProductsWithDisplayPrice(rows, tenantId);
+        await enrichProductsWithDiscounts(rows, tenantId, storeId);
         return res.json({ ok: true, data: rows, combos: [], category_id: categoryId, lite: true });
       }
 
@@ -1692,6 +1893,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           attachProductThumbs(r);
         }
         await enrichProductsWithDisplayPrice(rows, tenantId);
+        await enrichProductsWithDiscounts(rows, tenantId, storeId);
         const combos = await getCombosForCategory(tenantId, storeId, categoryId);
         return res.json({ ok: true, data: rows, combos, category_id: categoryId });
       }
@@ -1759,6 +1961,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         attachProductThumbs(r);
       }
       await enrichProductsWithDisplayPrice(rows, tenantId);
+      await enrichProductsWithDiscounts(rows, tenantId, storeId);
       const combos = await getCombosForCategory(tenantId, storeId, categoryId);
       res.json({ ok: true, data: rows, combos, category_id: categoryId });
     } catch (e) {
@@ -1835,6 +2038,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       p.is_available = Number(p.is_available || 0) === 1;
 
       await enrichProductsWithDisplayPrice([p], tenantId);
+      await enrichProductsWithDiscounts([p], tenantId, storeId);
 
       res.json({ ok: true, data: p });
     } catch (e) {
@@ -2628,6 +2832,45 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         nonAutoItemsTotal += lineTotal;
       }
 
+      // ============ РАСЧЕТ СКИДОК ============
+      // Получаем скидки клиента (привязанные напрямую или через категории)
+      let orderDiscountAmount = 0;
+      const appliedDiscounts = [];
+      
+      // Получаем категории товаров для проверки скидок
+      const productCategoriesMap = new Map();
+      if (ids.length) {
+        const catPlaceholders = ids.map(() => '?').join(',');
+        const [catRows] = await db.query(
+          `SELECT product_id, category_id FROM prod_product_categories
+           WHERE tenant_id = ? AND product_id IN (${catPlaceholders})`,
+          [tenantId, ...ids]
+        );
+        for (const cr of catRows) {
+          const pid = Number(cr.product_id);
+          if (!productCategoriesMap.has(pid)) productCategoriesMap.set(pid, []);
+          productCategoriesMap.get(pid).push(Number(cr.category_id));
+        }
+      }
+
+      // Получаем активные скидки для клиента и товаров
+      const customerDiscounts = await discountHelpers.getActiveDiscountsForCustomer(db, tenantId, storeId, customerId);
+      
+      // Мапа скидок для товаров (product_id -> discount)
+      const productDiscountMap = new Map();
+      
+      // Для каждого товара проверяем применимые скидки
+      for (const pid of ids) {
+        const categoryIds = productCategoriesMap.get(pid) || [];
+        const productDiscounts = await discountHelpers.getActiveDiscountsForProduct(db, tenantId, storeId, pid, categoryIds);
+        
+        if (productDiscounts.length > 0) {
+          // Берем лучшую скидку (с наивысшим приоритетом)
+          const bestDiscount = productDiscounts[0];
+          productDiscountMap.set(pid, bestDiscount);
+        }
+      }
+
       const normItems = [];
       let total = 0;
 
@@ -2739,6 +2982,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             ? roundPrice(lineTotalFromRequest)
             : roundPrice(0);
           total += lineTotal;
+          const oldLineTotalFromRequest = Number(it.old_line_total) || 0;
           const selections = Array.isArray(it.selections) ? it.selections : [];
           const photos = [];
           selections.forEach((s) => {
@@ -2750,8 +2994,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             name: it.combo_title || 'Комбо',
             qty,
             price: qty > 0 ? roundPrice(lineTotal / qty) : 0,
-            old_price: 0,
+            old_price: oldLineTotalFromRequest > 0 && qty > 0 ? roundPrice(oldLineTotalFromRequest / qty) : 0,
             line_total: lineTotal,
+            old_line_total: oldLineTotalFromRequest,
             photos,
             selections: selections.map((s) => ({
               product_id: s.product_id,
@@ -3069,7 +3314,63 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         } else {
           lineTotal = roundPrice(useLineTotalFromRequest ? lineTotalFromRequest : unitPrice * paidQty);
         }
-        total += lineTotal;
+
+        // Расчет скидки для товара
+        // НЕ применяем скидку если:
+        // - line_total уже передан с фронта (скидка уже учтена в цене)
+        // - это auto-add товар
+        let itemDiscountAmount = 0;
+        let itemAppliedDiscount = null;
+        const productDiscount = productDiscountMap.get(pid);
+        if (productDiscount && !autoRule && !useLineTotalFromRequest) {
+          itemDiscountAmount = discountHelpers.calculateDiscount(
+            lineTotal,
+            productDiscount.discount_type,
+            Number(productDiscount.discount_value),
+            productDiscount.max_discount_amount ? Number(productDiscount.max_discount_amount) : null
+          );
+          if (itemDiscountAmount > 0) {
+            itemAppliedDiscount = {
+              discount_id: productDiscount.id,
+              title: productDiscount.title,
+              discount_type: productDiscount.discount_type,
+              discount_value: Number(productDiscount.discount_value),
+              discount_amount: itemDiscountAmount,
+              apply_to: 'product',
+              product_id: pid,
+            };
+            orderDiscountAmount += itemDiscountAmount;
+            appliedDiscounts.push(itemAppliedDiscount);
+          }
+        } else if (productDiscount && !autoRule && useLineTotalFromRequest) {
+          // Если line_total передан с фронта, но есть скидка — сохраняем информацию о скидке
+          // без повторного расчёта (скидка уже учтена в line_total)
+          const estimatedDiscount = discountHelpers.calculateDiscount(
+            unitPrice * paidQty, // Цена без скидки
+            productDiscount.discount_type,
+            Number(productDiscount.discount_value),
+            productDiscount.max_discount_amount ? Number(productDiscount.max_discount_amount) : null
+          );
+          if (estimatedDiscount > 0) {
+            itemDiscountAmount = estimatedDiscount;
+            orderDiscountAmount += estimatedDiscount;
+            itemAppliedDiscount = {
+              discount_id: productDiscount.id,
+              title: productDiscount.title,
+              discount_type: productDiscount.discount_type,
+              discount_value: Number(productDiscount.discount_value),
+              discount_amount: estimatedDiscount,
+              apply_to: 'product',
+              product_id: pid,
+            };
+            appliedDiscounts.push(itemAppliedDiscount);
+          }
+        }
+        
+        // Если line_total передан с фронта - используем его как есть (скидка уже применена)
+        // Иначе - вычитаем скидку
+        const lineTotalAfterDiscount = useLineTotalFromRequest ? lineTotal : roundPrice(lineTotal - itemDiscountAmount);
+        total += lineTotalAfterDiscount;
 
         // Получаем фото товара для сохранения в заказе
         let photos = [];
@@ -3080,22 +3381,65 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           }
         } catch {}
 
-        normItems.push({
+        const itemEntry = {
           product_id: pid,
           name: p.name,
           qty,
           price: unitPrice,
           old_price: oldPrice,
-          line_total: lineTotal,
+          line_total: lineTotalAfterDiscount,
           photos, // Сохраняем фото для отчетов
           options: options.length > 0 ? options : undefined, // Сохраняем опции только если они есть
           ingredients: ingredients.length > 0 ? ingredients : undefined, // Сохраняем ингредиенты только если они есть
           variants: variantData ? [variantData] : undefined, // Сохраняем варианты только если они есть
           auto_add: Number(it.auto_add || 0) === 1 ? 1 : 0, // Для сортировки: автодобавления (приборы) в конец списка
-        });
+        };
+        
+        // Добавляем информацию о скидке если есть
+        if (itemAppliedDiscount) {
+          // original_line_total - цена до скидки
+          // Используем переданный original_line_total, если есть (с учётом варианта)
+          const originalLineTotalFromRequest = Number(it.original_line_total) || 0;
+          const originalLineTotal = originalLineTotalFromRequest > 0
+            ? roundPrice(originalLineTotalFromRequest)
+            : (useLineTotalFromRequest 
+                ? roundPrice(lineTotal + itemDiscountAmount) 
+                : lineTotal);
+          itemEntry.discount = {
+            id: itemAppliedDiscount.discount_id,
+            title: itemAppliedDiscount.title,
+            amount: itemAppliedDiscount.discount_amount,
+            original_line_total: originalLineTotal,
+          };
+        }
+        
+        normItems.push(itemEntry);
       }
 
       if (!normItems.length) return res.status(400).json({ ok: false, error: 'NO_PRODUCTS' });
+
+      // Применяем скидки клиента на весь заказ (если есть)
+      const orderDiscountsForCustomer = await discountHelpers.getOrderDiscounts(db, tenantId, storeId, customerId, total);
+      if (orderDiscountsForCustomer.length > 0) {
+        // Применяем скидки с учетом is_stackable
+        const { totalDiscount, appliedDiscounts: orderApplied } = discountHelpers.applyBestDiscounts(orderDiscountsForCustomer, total);
+        if (totalDiscount > 0) {
+          orderDiscountAmount += totalDiscount;
+          total = roundPrice(total - totalDiscount);
+          for (const od of orderApplied) {
+            appliedDiscounts.push({
+              discount_id: od.id,
+              title: od.title,
+              discount_type: od.discount_type,
+              discount_value: Number(od.discount_value),
+              discount_amount: od.discountAmount,
+              apply_to: 'order',
+            });
+          }
+        }
+      }
+
+      const discountsJson = appliedDiscounts.length > 0 ? JSON.stringify(appliedDiscounts) : null;
 
       const itemsJson = JSON.stringify(normItems);
       let deliveryCost = 0;
@@ -3204,11 +3548,11 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         `INSERT INTO order_orders
          (tenant_id, store_id, customer_id, customer_name, customer_phone, promo_code,
           address, delivery_address_id, pickup_store_id, comment, address_comment, cutlery_qty, change_from,
-          items, total_price, delivery_cost,
+          items, total_price, delivery_cost, discount_amount, discounts_json,
           delivery_type_id, payment_id, time_option_id,
           status_id, status_sort, scheduled_at, created_at,
           created_via, is_active, public_id)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
         [
           tenantId,
           orderStoreId,
@@ -3226,6 +3570,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           itemsJson,
           total,
           deliveryCost,
+          orderDiscountAmount,
+          discountsJson,
           deliveryTypeId,
           paymentId,
           timeOptionId,
@@ -3237,7 +3583,25 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         ]
       );
 
-      const payload = await fetchOrderPayload(tenantId, orderStoreId, r.insertId, { storeTimezone });
+      const orderId = r.insertId;
+
+      // Записываем использование скидок
+      for (const appliedDiscount of appliedDiscounts) {
+        try {
+          await discountHelpers.recordDiscountUsage(
+            db,
+            tenantId,
+            appliedDiscount.discount_id,
+            orderId,
+            customerId,
+            appliedDiscount.discount_amount
+          );
+        } catch (discountErr) {
+          console.error('Failed to record discount usage:', discountErr);
+        }
+      }
+
+      const payload = await fetchOrderPayload(tenantId, orderStoreId, orderId, { storeTimezone });
 
       if (payload) {
         ordersEvents.publish(tenantId, orderStoreId, 'order.created', payload);
@@ -3250,7 +3614,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         sendOrderToPrintBot({ db, order: payload, tenantId, storeId: orderStoreId }).catch(() => {});
       }
 
-      res.json({ ok: true, data: { id: r.insertId, public_id: publicId } });
+      res.json({ ok: true, data: { id: orderId, public_id: publicId } });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });

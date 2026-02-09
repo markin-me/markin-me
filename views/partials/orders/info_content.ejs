@@ -64,6 +64,26 @@
       <span class="order-summary-label">Сдача</span>
       <span class="order-summary-value" data-info="change-amount">—</span>
     </div>
+    <div class="order-summary-row hidden" data-info="subtotal-row">
+      <span class="order-summary-label">Сумма товаров</span>
+      <span class="order-summary-value" data-info="subtotal">—</span>
+    </div>
+    <div class="order-summary-row hidden" data-info="discount-row">
+      <span class="order-summary-discount-label-wrap">
+        <span class="order-summary-label">Скидка</span>
+        <button
+          class="order-summary-discount-info-btn"
+          type="button"
+          data-info="discount-info-btn"
+          aria-label="Показать расшифровку скидки"
+          aria-expanded="false"
+        >
+          <i class="fas fa-info"></i>
+        </button>
+      </span>
+      <span class="order-summary-value order-summary-discount" data-info="discount-amount">—</span>
+    </div>
+    <div class="order-summary-discount-breakdown hidden" data-info="discount-breakdown" aria-hidden="true"></div>
     <div class="order-summary-row hidden" data-info="delivery-row">
       <span class="order-summary-label">Доставка</span>
       <span class="order-summary-value" data-info="delivery-cost">—</span>

@@ -1,10 +1,46 @@
 <div class="panel clients-filters">
   <div class="panel-header">
-    <div class="panel-title">Фильтр</div>
+    <div class="panel-title">Маркетинг</div>
   </div>
 
   <div class="panel-body no-scrollbar">
-    <!-- JS отрисует сюда кнопки фильтров с badge -->
-    <div class="stage-list" id="clientsFiltersList"></div>
+    <div class="clients-accordion" id="clientsAccordion">
+      <!-- Аккордеон Клиенты -->
+      <div class="acc-item">
+        <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+          <span class="stage-icon"><i class="fas fa-users"></i></span>
+          <span class="stage-meta stage-text"><b>Клиенты</b></span>
+          <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+        </button>
+
+        <div class="acc-panel" data-acc-panel style="max-height:0;">
+          <!-- Базовые фильтры -->
+          <div class="acc-panel-inner" id="clientsFiltersList"></div>
+
+          <!-- Кнопка "Категории" для открытия списка кастомных фильтров -->
+          <div class="acc-panel-inner">
+            <button class="stage-item is-dashed" type="button" id="openFilterCategoriesBtn">
+              <span class="stage-icon"><i class="fas fa-plus"></i></span>
+              <span class="stage-meta stage-text"><b>Категории</b></span>
+              <span class="acc-spacer"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Аккордеон Скидки -->
+      <div class="acc-item">
+        <button class="stage-item acc-trigger" type="button" data-acc-trigger>
+          <span class="stage-icon"><i class="fas fa-percentage"></i></span>
+          <span class="stage-meta stage-text"><b>Скидки</b></span>
+          <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
+        </button>
+
+        <div class="acc-panel" data-acc-panel style="max-height:0;">
+          <!-- Фильтры скидок -->
+          <div class="acc-panel-inner" id="discountsFiltersList"></div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
