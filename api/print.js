@@ -741,11 +741,11 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
   <meta charset="UTF-8">
   <title>Чек заказа #${order.id}</title>
   <style>
+    @page {
+      size: 78mm auto;
+      margin: 0;
+    }
     @media print {
-      @page {
-        size: 80mm auto;
-        margin: 0;
-      }
       * {
         margin: 0;
         padding: 0;
@@ -753,13 +753,13 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       }
       body {
         margin: 0;
-        padding: 5mm 3mm;
+        padding: 6mm 4mm;
         font-family: 'Courier New', monospace;
-        font-size: 11pt;
+        font-size: 12pt;
         font-weight: bold;
-        line-height: 1.3;
-        width: 80mm;
-        max-width: 80mm;
+        line-height: 1.35;
+        width: 78mm;
+        max-width: 78mm;
         box-sizing: border-box;
       }
       .no-print { display: none !important; }
@@ -771,13 +771,13 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     }
     body {
       margin: 0;
-      padding: 5mm 3mm;
+      padding: 6mm 4mm;
       font-family: 'Courier New', monospace;
-      font-size: 11pt;
+      font-size: 12pt;
       font-weight: bold;
-      line-height: 1.3;
-      width: 80mm;
-      max-width: 80mm;
+      line-height: 1.35;
+      width: 78mm;
+      max-width: 78mm;
       box-sizing: border-box;
       background: white;
     }
