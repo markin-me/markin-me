@@ -1,52 +1,9 @@
-﻿const http = require("http");
+const http = require("http");
 const https = require("https");
 const { URL } = require("url");
 
 const CRM_BASE_URL = (process.env.CRM_BASE_URL || "https://markin-me.ru").replace(/\/+$/, "");
-
-let browserPromise = null;
-
-async function getPuppeteer() {
-  if (!browserPromise) {
-    browserPromise = import("puppeteer").then((mod) => mod.default || mod);
-  }
-  return browserPromise;
-}
-
-async function getBrowser() {
-  const puppeteer = await getPuppeteer();
-  if (getBrowser.instance) return getBrowser.instance;
-  getBrowser.instance = await puppeteer.launch({
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    headless: true
-  });
-  return getBrowser.instance;
-}
-
-async function renderPdfFromHtml(html) {
-  const browser = await getBrowser();
-  const page = await browser.newPage();
-  await page.setContent(html, { waitUntil: "networkidle0" });
-  await page.emulateMediaType("print");
-
-  const dimensions = await page.evaluate(() => ({
-    width: document.body.scrollWidth,
-    height: document.body.scrollHeight
-  }));
-
-  const width = Math.ceil(dimensions.width || 0);
-  const height = Math.ceil(dimensions.height || 0);
-
-  const pdfBuffer = await page.pdf({
-    width: `${width}px`,
-    height: `${height}px`,
-    printBackground: true,
-    margin: { top: "0px", right: "0px", bottom: "0px", left: "0px" }
-  });
-
-  await page.close();
-  return pdfBuffer;
-}
+const HTML_JOB_PREFIX = "__HTML_BASE64__:";
 
 function fetchReceiptHtml(token, orderId) {
   return new Promise((resolve) => {
@@ -90,6 +47,12 @@ function fetchReceiptHtml(token, orderId) {
   });
 }
 
+function encodeHtmlJobPayload(html) {
+  const rawHtml = String(html || "");
+  if (!rawHtml.trim()) return "";
+  return `${HTML_JOB_PREFIX}${Buffer.from(rawHtml, "utf-8").toString("base64")}`;
+}
+
 async function getPrintTokenRow(db, tenantId, storeId) {
   const [rows] = await db.query(
     `SELECT id, token FROM print_api_tokens WHERE tenant_id=? AND store_id=? AND is_active=1 ORDER BY id DESC LIMIT 1`,
@@ -98,11 +61,13 @@ async function getPrintTokenRow(db, tenantId, storeId) {
   return rows[0] || null;
 }
 
-async function enqueuePrintJob(db, { tenantId, storeId, tokenId, order, pdfBase64 }) {
+async function enqueuePrintJob(db, { tenantId, storeId, tokenId, order, html }) {
   const orderId = Number(order?.id || order?.order_id || order?.orderId || 0);
   if (!orderId) return false;
   const publicId = order?.public_id || order?.publicId || null;
   const jobName = publicId ? `CRM Receipt ${publicId}` : `CRM Receipt #${orderId}`;
+  const jobPayload = encodeHtmlJobPayload(html);
+  if (!jobPayload) return false;
 
   await db.query(
     `
@@ -121,7 +86,7 @@ async function enqueuePrintJob(db, { tenantId, storeId, tokenId, order, pdfBase6
       acked_at=NULL,
       updated_at=NOW()
     `,
-    [tenantId, storeId, tokenId, orderId, publicId, jobName, pdfBase64]
+    [tenantId, storeId, tokenId, orderId, publicId, jobName, jobPayload]
   );
   return true;
 }
@@ -145,18 +110,12 @@ async function sendOrderToPrintBot({ db, order, tenantId, storeId }) {
   const html = await fetchReceiptHtml(tokenRow.token, orderId);
   if (!html) return false;
 
-  const pdfBuffer = await renderPdfFromHtml(html);
-  if (!pdfBuffer || !pdfBuffer.length) return false;
-  const pdfBase64 = Buffer.isBuffer(pdfBuffer)
-    ? pdfBuffer.toString("base64")
-    : Buffer.from(pdfBuffer).toString("base64");
-
   return enqueuePrintJob(db, {
     tenantId: resolvedTenantId,
     storeId: resolvedStoreId,
     tokenId: Number(tokenRow.id),
     order,
-    pdfBase64
+    html
   });
 }
 
