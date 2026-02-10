@@ -10,25 +10,6 @@
         <% const hasCitySelector = (typeof showCitySelector !== 'undefined' && showCitySelector === true); %>
         <% if (hasCitySelector) { %>
           <span class="header-store-status hidden" id="shopMobileHeaderStatus" aria-live="polite"></span>
-          <div class="logo-city-wrapper" id="headerCitySelector">
-            <button
-              type="button"
-              class="header-city-button"
-              id="headerCityButton"
-              aria-haspopup="menu"
-              aria-expanded="false"
-              disabled
-            >
-              <span class="header-city-name" id="headerCityName">—</span>
-              <i class="fas fa-chevron-down" aria-hidden="true"></i>
-            </button>
-            <div
-              class="header-city-dropdown hidden"
-              id="headerCityDropdown"
-              role="menu"
-              aria-label="Выбор города доставки"
-            ></div>
-          </div>
           <div class="header-address-widget" id="headerAddressWidget">
             <button type="button" class="header-address-button" id="headerAddressButton">
               <i class="fas fa-location-dot header-address-icon" aria-hidden="true"></i>

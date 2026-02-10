@@ -259,6 +259,17 @@
     const tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) return;
     tabsState.activeKey = key;
+
+    // Keep center column in sync with active right-side tab.
+    const targetView = tab.type === 'discount'
+      ? 'discounts'
+      : tab.type === 'category'
+        ? 'filter-categories'
+        : 'clients';
+    if (state.currentView !== targetView) {
+      switchView(targetView);
+    }
+
     renderTabs();
     hideEmptyState();
     
@@ -570,9 +581,17 @@
     btnAll.addEventListener("click", () => {
       state.activeDiscountFilter = "all";
       state.activeDiscountId = null;
+      state.activeDiscount = null;
+      state.editingDiscountId = null;
+      state.discountOrders = [];
+      tabsState.activeKey = null;
       if (state.currentView !== 'discounts') {
         switchView('discounts');
+      } else {
+        renderDiscountsList();
+        updateRightPanel();
       }
+      renderTabs();
       renderDiscountFilters();
     });
     elDiscountsFilters.appendChild(btnAll);
@@ -654,6 +673,10 @@
 
   // Открыть таб скидки
   async function openDiscountTab(discount) {
+    if (state.currentView !== 'discounts') {
+      switchView('discounts');
+    }
+
     const tabKey = buildTabKey('discount', discount.id);
     let existing = tabsState.tabs.find(t => t.key === tabKey);
     if (!existing) {
@@ -940,7 +963,7 @@
 
     state.discountOrders.forEach((order) => {
       const row = document.createElement('div');
-      row.className = 'order-row';
+      row.className = 'order-row discount-order-row';
       
       const date = order.used_at ? new Date(order.used_at).toLocaleString('ru') : '—';
       const total = order.total_price ? `${order.total_price}₽` : '—';
@@ -953,7 +976,7 @@
         </div>
         <div class="order-row-right">
           <div class="order-row-total">${total}</div>
-          <div class="order-row-discount" style="color:var(--color-success);font-size:12px;">${discountAmount}</div>
+          <div class="order-row-discount">${discountAmount}</div>
         </div>
       `;
 

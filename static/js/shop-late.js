@@ -4663,12 +4663,27 @@ function openCartSheet() {
   const addressList = document.createElement("div");
   addressList.className = "shop-address-list";
 
+  // Pickup list header (title + city selector)
+  const pickupListTop = document.createElement("div");
+  pickupListTop.className = "shop-pickup-list-top hidden";
+  pickupListTop.innerHTML = `
+    <div class="shop-pickup-list-title">Филиалы</div>
+    <div class="shop-pickup-city-selector">
+      <button class="chip chip-city" type="button">
+        <span class="chip-city-text">Все города</span>
+        <i class="fas fa-chevron-down chip-city-arrow"></i>
+      </button>
+      <div class="chip-city-dropdown hidden"></div>
+    </div>
+  `;
+
   // Pickup list container (inside same view)
   const pickupInlineList = document.createElement("div");
   pickupInlineList.className = "shop-pickup-inline-list hidden";
 
   addressListView.appendChild(addressListTop);
   addressListView.appendChild(addressList);
+  addressListView.appendChild(pickupListTop);
   addressListView.appendChild(pickupInlineList);
   addressWrap.appendChild(addressListView);
 
@@ -5089,6 +5104,7 @@ function showSheetAddressList(backMode) {
 
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("");
+    setSheetHeaderMode("cart");
 
     // Insert toggle into sheet header
     showHeaderToggle();
@@ -5128,6 +5144,7 @@ function showSheetAddressList(backMode) {
 
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("Точка самовывоза");
+    setSheetHeaderMode("cart");
 
     sheetNavigationState.type = 'cart';
     sheetNavigationState.screen = 'pickupList';
@@ -5136,16 +5153,162 @@ function showSheetAddressList(backMode) {
     renderSheetPickupList();
   }
 
+  function ensureValidSelectedPickupStoreId(stores) {
+    const ids = (Array.isArray(stores) ? stores : [])
+      .map((s) => Number(s?.id))
+      .filter((id) => Number.isFinite(id));
+    if (!ids.length) {
+      window._selectedPickupStoreId = null;
+      return null;
+    }
+
+    const currentId = Number(window._selectedPickupStoreId);
+    if (Number.isFinite(currentId) && ids.includes(currentId)) {
+      return currentId;
+    }
+
+    const activeStoreId = Number(localStorage.getItem("activeStoreId"));
+    const fallbackId = (Number.isFinite(activeStoreId) && ids.includes(activeStoreId))
+      ? activeStoreId
+      : ids[0];
+    window._selectedPickupStoreId = fallbackId;
+    return fallbackId;
+  }
+
+  let selectedPickupCity = null; // null = "Все города"
+
+  function initSheetPickupCitySelector(pickupSheetListView) {
+    const stores = window._pickupStores || [];
+    const cities = [...new Set(stores.map(s => s.city).filter(Boolean))].sort();
+
+    // Check if header already exists
+    let topSection = pickupSheetListView.querySelector(".shop-pickup-list-top");
+    if (!topSection) {
+      topSection = document.createElement("div");
+      topSection.className = "shop-pickup-list-top";
+
+      const title = document.createElement("div");
+      title.className = "shop-pickup-list-title";
+      title.textContent = "Филиалы";
+      topSection.appendChild(title);
+
+      const selector = document.createElement("div");
+      selector.className = "shop-pickup-city-selector";
+
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "chip chip-city";
+      chip.innerHTML = `
+        <span class="chip-city-text">Все города</span>
+        <i class="fas fa-chevron-down chip-city-arrow"></i>
+      `;
+
+      const dropdown = document.createElement("div");
+      dropdown.className = "chip-city-dropdown hidden";
+
+      selector.appendChild(chip);
+      selector.appendChild(dropdown);
+      topSection.appendChild(selector);
+
+      // Insert at the beginning of pickupSheetListView
+      pickupSheetListView.insertBefore(topSection, pickupSheetListView.firstChild);
+    }
+
+    const chip = topSection.querySelector(".chip-city");
+    const dropdown = topSection.querySelector(".chip-city-dropdown");
+    const chipText = chip.querySelector(".chip-city-text");
+
+    // Update chip text
+    const updateChipText = () => {
+      chipText.textContent = selectedPickupCity || "Все города";
+    };
+
+    // Render options
+    dropdown.innerHTML = "";
+
+    // Option "All cities"
+    const allOption = document.createElement("button");
+    allOption.type = "button";
+    allOption.className = "chip-city-option" + (!selectedPickupCity ? " is-selected" : "");
+    allOption.textContent = "Все города";
+    allOption.addEventListener("click", (e) => {
+      e.stopPropagation();
+      selectedPickupCity = null;
+      updateChipText();
+      dropdown.querySelectorAll(".chip-city-option").forEach(o => o.classList.remove("is-selected"));
+      allOption.classList.add("is-selected");
+      dropdown.classList.add("hidden");
+      chip.classList.remove("is-open");
+      renderSheetPickupList();
+    });
+    dropdown.appendChild(allOption);
+
+    // City options
+    cities.forEach(city => {
+      const opt = document.createElement("button");
+      opt.type = "button";
+      opt.className = "chip-city-option" + (city === selectedPickupCity ? " is-selected" : "");
+      opt.textContent = city;
+      opt.addEventListener("click", (e) => {
+        e.stopPropagation();
+        selectedPickupCity = city;
+        updateChipText();
+        dropdown.querySelectorAll(".chip-city-option").forEach(o => o.classList.remove("is-selected"));
+        opt.classList.add("is-selected");
+        dropdown.classList.add("hidden");
+        chip.classList.remove("is-open");
+        renderSheetPickupList();
+      });
+      dropdown.appendChild(opt);
+    });
+
+    updateChipText();
+
+    // Toggle
+    chip.onclick = (e) => {
+      e.stopPropagation();
+      const isOpen = !dropdown.classList.contains("hidden");
+      dropdown.classList.toggle("hidden", isOpen);
+      chip.classList.toggle("is-open", !isOpen);
+    };
+
+    // Close on outside click
+    const closeHandler = (e) => {
+      const selector = topSection.querySelector(".shop-pickup-city-selector");
+      if (selector && !selector.contains(e.target)) {
+        dropdown.classList.add("hidden");
+        chip.classList.remove("is-open");
+      }
+    };
+    const selectorEl = topSection.querySelector(".shop-pickup-city-selector");
+    if (selectorEl) {
+      document.removeEventListener("click", selectorEl._closeHandler);
+      selectorEl._closeHandler = closeHandler;
+      document.addEventListener("click", closeHandler);
+    }
+  }
+
   function renderSheetPickupList() {
     pickupSheetList.innerHTML = "";
 
-    const stores = window._pickupStores || [];
+    const allStores = window._pickupStores || [];
+
+    // Initialize city selector (creates header and selector)
+    initSheetPickupCitySelector(pickupSheetListView);
+
+    // Filter by selected city
+    const stores = selectedPickupCity
+      ? allStores.filter(s => s.city === selectedPickupCity)
+      : allStores;
+
     if (!stores.length) {
-      pickupSheetList.innerHTML = `<div class="muted" style="padding:16px">Нет доступных точек самовывоза.</div>`;
+      pickupSheetList.innerHTML = selectedPickupCity
+        ? `<div class="muted" style="padding:16px">Нет точек самовывоза в городе ${selectedPickupCity}.</div>`
+        : `<div class="muted" style="padding:16px">Нет доступных точек самовывоза.</div>`;
       return;
     }
 
-    const currentStoreId = window._selectedPickupStoreId || null;
+    const currentStoreId = ensureValidSelectedPickupStoreId(stores);
 
     stores.forEach((store) => {
       const row = document.createElement("div");
@@ -5197,6 +5360,7 @@ function showSheetAddressList(backMode) {
       row.appendChild(card);
 
       row.addEventListener("click", async () => {
+        window._deliveryMode = "pickup";
         window._selectedPickupStoreId = Number(store.id);
 
         if (window._updatePickupAddressCallback) {
@@ -5211,7 +5375,10 @@ function showSheetAddressList(backMode) {
   }
 
   async function ensureStoresLoaded() {
-    if (window._pickupStores && window._pickupStores.length) return;
+    if (window._pickupStores && window._pickupStores.length) {
+      ensureValidSelectedPickupStoreId(window._pickupStores);
+      return;
+    }
     try {
       const metaTenant = document.querySelector('meta[name="tenant_id"]');
       const tenantId = metaTenant ? Number(metaTenant.content) : null;
@@ -5220,6 +5387,7 @@ function showSheetAddressList(backMode) {
       const data = await resp.json();
       if (data?.ok && Array.isArray(data.stores)) {
         window._pickupStores = data.stores;
+        ensureValidSelectedPickupStoreId(window._pickupStores);
       }
     } catch {}
   }
@@ -5294,6 +5462,7 @@ function showSheetAddressList(backMode) {
 
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("Введите адрес");
+    setSheetHeaderMode("cart");
 
     // Обновляем состояние навигации
     sheetNavigationState.type = 'cart';
@@ -5576,12 +5745,14 @@ function renderSheetAddressList() {
     if (mode === "delivery") {
       addressListTop.classList.remove("hidden");
       addressList.classList.remove("hidden");
+      pickupListTop.classList.add("hidden");
       pickupInlineList.classList.add("hidden");
       if (elConfirmBtn) elConfirmBtn.textContent = "Доставить сюда";
       renderSheetAddressList();
     } else {
       addressListTop.classList.add("hidden");
       addressList.classList.add("hidden");
+      pickupListTop.classList.remove("hidden");
       pickupInlineList.classList.remove("hidden");
       if (elConfirmBtn) elConfirmBtn.textContent = "Заказать здесь";
       renderInlinePickupList();
@@ -5643,16 +5814,103 @@ function renderSheetAddressList() {
     return { open: false, text: `Закрыто до ${opens}` };
   }
 
+  let mobileSelectedPickupCity = null;
+
+  function initMobilePickupCitySelector() {
+    const chip = pickupListTop.querySelector(".chip-city");
+    const dropdown = pickupListTop.querySelector(".chip-city-dropdown");
+    const chipText = pickupListTop.querySelector(".chip-city-text");
+    if (!chip || !dropdown || !chipText) return;
+
+    const allStores = window._pickupStores || [];
+    const cities = [...new Set(allStores.map(s => s.city).filter(Boolean))].sort();
+
+    const updateChipText = () => {
+      chipText.textContent = mobileSelectedPickupCity || "Все города";
+    };
+
+    dropdown.innerHTML = "";
+
+    // "All cities" option
+    const allOption = document.createElement("button");
+    allOption.type = "button";
+    allOption.className = "chip-city-option" + (!mobileSelectedPickupCity ? " is-selected" : "");
+    allOption.textContent = "Все города";
+    allOption.addEventListener("click", (e) => {
+      e.stopPropagation();
+      mobileSelectedPickupCity = null;
+      updateChipText();
+      dropdown.querySelectorAll(".chip-city-option").forEach(o => o.classList.remove("is-selected"));
+      allOption.classList.add("is-selected");
+      dropdown.classList.add("hidden");
+      chip.classList.remove("is-open");
+      renderInlinePickupList();
+    });
+    dropdown.appendChild(allOption);
+
+    cities.forEach(city => {
+      const opt = document.createElement("button");
+      opt.type = "button";
+      opt.className = "chip-city-option" + (city === mobileSelectedPickupCity ? " is-selected" : "");
+      opt.textContent = city;
+      opt.addEventListener("click", (e) => {
+        e.stopPropagation();
+        mobileSelectedPickupCity = city;
+        updateChipText();
+        dropdown.querySelectorAll(".chip-city-option").forEach(o => o.classList.remove("is-selected"));
+        opt.classList.add("is-selected");
+        dropdown.classList.add("hidden");
+        chip.classList.remove("is-open");
+        renderInlinePickupList();
+      });
+      dropdown.appendChild(opt);
+    });
+
+    updateChipText();
+
+    chip.onclick = (e) => {
+      e.stopPropagation();
+      const isOpen = !dropdown.classList.contains("hidden");
+      dropdown.classList.toggle("hidden", isOpen);
+      chip.classList.toggle("is-open", !isOpen);
+    };
+
+    const selectorEl = pickupListTop.querySelector(".shop-pickup-city-selector");
+    const closeHandler = (e) => {
+      if (selectorEl && !selectorEl.contains(e.target)) {
+        dropdown.classList.add("hidden");
+        chip.classList.remove("is-open");
+      }
+    };
+    if (selectorEl) {
+      document.removeEventListener("click", selectorEl._closeHandler);
+      selectorEl._closeHandler = closeHandler;
+      document.addEventListener("click", closeHandler);
+    }
+  }
+
   async function renderInlinePickupList() {
     pickupInlineList.innerHTML = "";
     await ensureStoresLoaded();
-    const stores = window._pickupStores || [];
+
+    // Initialize city selector
+    initMobilePickupCitySelector();
+
+    const allStores = window._pickupStores || [];
+
+    // Filter by selected city
+    const stores = mobileSelectedPickupCity
+      ? allStores.filter(s => s.city === mobileSelectedPickupCity)
+      : allStores;
+
     if (!stores.length) {
-      pickupInlineList.innerHTML = `<div class="muted" style="padding:16px">Нет доступных точек самовывоза.</div>`;
+      pickupInlineList.innerHTML = mobileSelectedPickupCity
+        ? `<div class="muted" style="padding:16px">Нет точек самовывоза в городе ${mobileSelectedPickupCity}.</div>`
+        : `<div class="muted" style="padding:16px">Нет доступных точек самовывоза.</div>`;
       return;
     }
 
-    let pendingPickupStoreId = window._selectedPickupStoreId || null;
+    let pendingPickupStoreId = ensureValidSelectedPickupStoreId(stores);
 
     const updatePickupRadios = () => {
       pickupInlineList.querySelectorAll(".shop-address-row").forEach((r) => {
@@ -6747,6 +7005,10 @@ function renderSheetAddressList() {
     function setActiveTab(tab) {
       [tabAddresses, tabOrders, tabDiscounts, tabSettings].forEach((btn) => btn.classList.toggle("is-active", btn.dataset.tab === tab));
       [addressesPanel, ordersPanel, discountsPanel, settingsPanel].forEach((panel) => panel.classList.toggle("is-active", panel.dataset.tab === tab));
+      const activeBtn = tabs.querySelector('.shop-profile-tab.is-active');
+      if (activeBtn && typeof activeBtn.scrollIntoView === "function") {
+        activeBtn.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
       
       // Загружаем скидки при первом открытии таба
       if (tab === 'discounts' && !discountsLoaded) {
@@ -8627,6 +8889,13 @@ function setBottomNavActive(tab) {
     }
     const methodDefault = pickDefaultCode(methods, preferredMethodCode, "takeaway");
     const methodSelect = buildDropdown(methods, methodDefault);
+    function syncCheckoutMode(code) {
+      const resolvedCode = code || methodDefault || "takeaway";
+      window._checkoutMethodCode = resolvedCode;
+      window._deliveryMode = (resolvedCode === "delivery") ? "delivery" : "pickup";
+      if (typeof updateHeaderAddressWidget === "function") updateHeaderAddressWidget();
+      if (typeof updateAddressChip === "function") updateAddressChip();
+    }
     if (!methodUserSelected || !draft.method_code) {
       draft.method_user_selected = false;
       draft.method_code = methodSelect.getValue();
@@ -8637,10 +8906,7 @@ function setBottomNavActive(tab) {
       draft.method_code = code;
       draft.method_user_selected = true;
       saveCheckoutDraft(draft);
-      window._checkoutMethodCode = code;
-      // Sync header widget with selected method
-      window._deliveryMode = (code === "delivery") ? "delivery" : "pickup";
-      if (typeof updateHeaderAddressWidget === "function") updateHeaderAddressWidget();
+      syncCheckoutMode(code);
       updateDeliveryPricing();
       updateMobileDeliveryProgress();
     });
@@ -8705,9 +8971,54 @@ function setBottomNavActive(tab) {
     // Загрузить Филиалы и установить текущую
     let pickupStores = [];
     let selectedPickupStoreId = null;
+    function toFiniteId(value) {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    }
+    function resolvePickupStoreId(stores) {
+      const ids = (Array.isArray(stores) ? stores : [])
+        .map((s) => toFiniteId(s?.id))
+        .filter((id) => id != null);
+      if (!ids.length) return null;
+
+      const draftId = toFiniteId(draft.pickup_store_id);
+      if (draftId != null && ids.includes(draftId)) return draftId;
+
+      const selectedGlobalId = toFiniteId(window._selectedPickupStoreId);
+      if (selectedGlobalId != null && ids.includes(selectedGlobalId)) return selectedGlobalId;
+
+      const activeStoreId = toFiniteId(localStorage.getItem("activeStoreId"));
+      if (activeStoreId != null && ids.includes(activeStoreId)) return activeStoreId;
+
+      return ids[0];
+    }
+    function applyPickupStores(stores) {
+      pickupStores = Array.isArray(stores) ? stores : [];
+      window._pickupStores = pickupStores;
+
+      selectedPickupStoreId = resolvePickupStoreId(pickupStores);
+      window._selectedPickupStoreId = selectedPickupStoreId;
+
+      const draftPickupId = toFiniteId(draft.pickup_store_id);
+      const selectedId = toFiniteId(selectedPickupStoreId);
+      if (draftPickupId !== selectedId) {
+        draft.pickup_store_id = selectedId;
+        saveCheckoutDraft(draft);
+      }
+
+      updatePickupAddress();
+      if (typeof updateHeaderAddressWidget === "function") updateHeaderAddressWidget();
+      if (typeof updateAddressChip === "function") updateAddressChip();
+    }
 
     async function loadPickupStores() {
       try {
+        const cachedStores = Array.isArray(window._pickupStores) ? window._pickupStores : [];
+        if (cachedStores.length) {
+          applyPickupStores(cachedStores);
+          return;
+        }
+
         const metaTenant = document.querySelector('meta[name="tenant_id"]');
         const tenantId = metaTenant ? Number(metaTenant.content) : null;
         if (!tenantId) return;
@@ -8716,22 +9027,7 @@ function setBottomNavActive(tab) {
         const data = await response.json();
 
         if (data && data.ok && Array.isArray(data.stores)) {
-          pickupStores = data.stores;
-
-          // Сохраняем в глобальные переменные для использования в renderPickupList
-          window._pickupStores = pickupStores;
-
-          // Если есть сохраненный store_id в draft
-          if (draft.pickup_store_id) {
-            selectedPickupStoreId = draft.pickup_store_id;
-          } else {
-            // Иначе берем activeStoreId из localStorage
-            const activeStoreId = localStorage.getItem('activeStoreId');
-            selectedPickupStoreId = activeStoreId ? Number(activeStoreId) : (pickupStores[0]?.id || null);
-          }
-
-          window._selectedPickupStoreId = selectedPickupStoreId;
-          updatePickupAddress();
+          applyPickupStores(data.stores);
         }
       } catch (err) {
         console.error('Ошибка загрузки точек самовывоза:', err);
@@ -8739,22 +9035,38 @@ function setBottomNavActive(tab) {
     }
 
     function updatePickupAddress() {
-      if (!selectedPickupStoreId || !pickupStores.length) {
+      if (!pickupStores.length) {
         pickupAddress.value = '—';
         return;
       }
 
-      const store = pickupStores.find(s => Number(s.id) === Number(selectedPickupStoreId));
+      let store = pickupStores.find(s => Number(s.id) === Number(selectedPickupStoreId));
+      if (!store) {
+        const fallbackId = resolvePickupStoreId(pickupStores);
+        selectedPickupStoreId = fallbackId;
+        window._selectedPickupStoreId = fallbackId;
+        store = pickupStores.find(s => Number(s.id) === Number(fallbackId));
+      }
       if (store) {
         // Убираем город из адреса (город виден в хедере)
         pickupAddress.value = store.address || store.name || '—';
+      } else {
+        pickupAddress.value = '—';
       }
     }
 
     // Callback для обновления поля после выбора в renderPickupList
     window._updatePickupAddressCallback = () => {
-      selectedPickupStoreId = window._selectedPickupStoreId;
+      selectedPickupStoreId = toFiniteId(window._selectedPickupStoreId);
       updatePickupAddress();
+      const draftPickupId = toFiniteId(draft.pickup_store_id);
+      const selectedId = toFiniteId(selectedPickupStoreId);
+      if (draftPickupId !== selectedId) {
+        draft.pickup_store_id = selectedId;
+        saveCheckoutDraft(draft);
+      }
+      if (typeof updateHeaderAddressWidget === "function") updateHeaderAddressWidget();
+      if (typeof updateAddressChip === "function") updateAddressChip();
     };
 
     loadPickupStores();
@@ -8786,7 +9098,7 @@ function setBottomNavActive(tab) {
     }
     methodSelect.root.addEventListener("change", refreshAddressVisibility);
     refreshAddressVisibility();
-    window._checkoutMethodCode = methodSelect.getValue();
+    syncCheckoutMode(methodSelect.getValue());
 
     const cLabel = document.createElement("label");
     cLabel.className = "field-label";

@@ -2081,20 +2081,10 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 /* Десктоп: шкала и футер — один блок (общая рамка сверху), увеличенный шрифт */
 @media (min-width: 769px){
   .shop-cart-delivery-progress{
-    padding: 12px 12px 8px;
-    border-top: 1px solid var(--color-border);
+    display: none !important;
   }
-  .shop-cart-delivery-progress:not(.hidden) + .shop-cart-footer{
-    border-top: none;
-  }
-  .shop-cart-delivery-progress-label{
-    font-size: 14px;
-  }
-  .shop-cart-delivery-progress-label.is-free{
-    font-size: 15px;
-  }
-  .shop-cart-delivery-progress-label .shop-delivery-check{
-    font-size: 16px;
+  .shop-cart-footer{
+    border-top: 1px solid var(--color-border) !important;
   }
   .shop-cart-footer .shop-checkout-total{
     font-size: calc(1em + 2pt);
@@ -3046,6 +3036,37 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   padding-top:4px;
 }
 
+#shopCartPanel #shopAddressContent .shop-address-list-view{
+  display:flex;
+  flex-direction:column;
+  min-height:100%;
+  height:100%;
+}
+
+#shopCartPanel #shopAddressContent .shop-address-list,
+#shopCartPanel #shopAddressContent .shop-pickup-inline-list{
+  flex:1;
+  min-height:0;
+  overflow:auto;
+}
+
+#shopCartPanel #shopAddressContent .shop-address-confirm-wrap{
+  margin-top:auto;
+  padding:12px 0 2px;
+  border-top:1px solid var(--color-border);
+  background:var(--color-surface);
+}
+
+#shopCartPanel #shopAddressContent .shop-address-confirm-btn{
+  width:100%;
+}
+
+#shopCartPanel #shopAddressContent .shop-address-confirm-btn:disabled{
+  opacity:0.5;
+  cursor:default;
+  pointer-events:none;
+}
+
 /* Delivery / Pickup toggle */
 .shop-delivery-toggle-wrap{
   display:flex;
@@ -3132,7 +3153,92 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   font-weight:700;
   color:var(--color-text);
 }
-.shop-address-new-btn{
+
+/* Pickup list header */
+.shop-pickup-list-top{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin-bottom:10px;
+  padding:0 4px;
+  gap:12px;
+}
+.shop-pickup-list-title{
+  font-size:1.05rem;
+  font-weight:700;
+  color:var(--color-text);
+}
+.shop-pickup-city-selector{
+  position:relative;
+  flex-shrink:0;
+}
+
+/* Chip-style for city selector (matches .shop-address-new-btn) */
+.chip-city{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:5px 14px;
+  border-radius:999px;
+  background:none;
+  border:1px solid var(--color-border);
+  color:var(--color-text-muted);
+  font-weight:600;
+  font-size:.82rem;
+  cursor:pointer;
+  white-space:nowrap;
+}
+.chip-city-arrow{
+  font-size:10px;
+  transition:transform 0.2s;
+}
+.chip-city.is-open .chip-city-arrow{
+  transform:rotate(180deg);
+}
+
+/* Dropdown for cities */
+.chip-city-dropdown{
+  position:absolute;
+  top:calc(100% + 4px);
+  right:0;
+  min-width:160px;
+  max-width:250px;
+  max-height:300px;
+  overflow-y:auto;
+  background:var(--color-surface);
+  border:1px solid var(--color-border);
+  border-radius:8px;
+  box-shadow:0 4px 12px rgba(0,0,0,0.1);
+  z-index:100;
+  padding:4px;
+}
+.chip-city-dropdown.hidden{
+  display:none;
+}
+.chip-city-option{
+  display:block;
+  width:100%;
+  padding:8px 12px;
+  background:transparent;
+  border:none;
+  border-radius:4px;
+  text-align:left;
+  color:var(--color-text);
+  font-size:0.9rem;
+  cursor:pointer;
+  transition:background 0.15s;
+}
+.chip-city-option:hover{
+  background:var(--color-surface-2);
+}
+.chip-city-option.is-selected{
+  background:var(--primary-14);
+  color:var(--primary);
+  font-weight:600;
+}
+
+.shop-address-new-btn,
+.shop-address-list-top .chip-plus{
   border:1px solid var(--color-border);
   border-radius:999px;
   background:none;
@@ -3141,6 +3247,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   font-weight:600;
   cursor:pointer;
   padding:5px 14px;
+  height:auto;
 }
 
 .shop-address-list{
@@ -4078,8 +4185,17 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 
 .shop-profile-tabs{
   display: flex;
+  flex-wrap: nowrap;
   gap: 8px;
   border-bottom: 1px solid var(--color-border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.shop-profile-tabs::-webkit-scrollbar{
+  display: none;
 }
 
 /* Hide universal modal footer in shop */
@@ -4100,11 +4216,13 @@ body.page-shop .app-modal-body::after{
 }
 
 .shop-profile-tab{
+  flex: 0 0 auto;
   padding: 10px 12px;
   border: 0;
   background: transparent;
   cursor: pointer;
   font-weight: 700;
+  white-space: nowrap;
   color: var(--color-text-muted);
   border-bottom: 2px solid transparent;
 }
@@ -4276,6 +4394,8 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   display:flex;
   align-items:center;
   justify-content:space-between;
+  flex-wrap: wrap;
+  row-gap: 8px;
 }
 
 .shop-cart-header-left,
@@ -4284,6 +4404,51 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   align-items:center;
   gap:10px;
   min-width:0;
+}
+
+.shop-cart-header-mode-wrap{
+  flex: 0 0 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.shop-cart-header-mode-wrap .shop-delivery-toggle{
+  min-width: 220px;
+}
+
+.shop-cart-header.is-address-mode{
+  display: block;
+}
+
+.shop-cart-header.is-address-mode .shop-cart-header-left,
+.shop-cart-header.is-address-mode #shopCartHeaderTitle{
+  display: none !important;
+}
+
+.shop-cart-header.is-address-mode .shop-cart-header-right{
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: auto;
+  z-index: 3;
+}
+
+.shop-cart-header.is-address-mode .shop-cart-header-right > :not(#shopCartCloseBtn){
+  display: none !important;
+}
+
+.shop-cart-header.is-address-mode .shop-cart-header-mode-wrap{
+  display: flex !important;
+  justify-content: center;
+  padding-right: 56px;
+}
+
+@media (max-width: 768px){
+  .shop-cart-header-mode-wrap{
+    display: none !important;
+  }
 }
 
 #shopCartHeaderTitle{
@@ -4977,4 +5142,12 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 .shop-profile-panel::-webkit-scrollbar,
 .app-modal-body::-webkit-scrollbar {
   display: none; /* Chrome/Safari */
+}
+
+/* Mobile adaptations for pickup city selector */
+@media (max-width: 768px) {
+  .shop-pickup-list-top {
+    padding: 0 8px;
+    margin-bottom: 10px;
+  }
 }

@@ -6226,6 +6226,49 @@ body.page-shop .sidebar-open-tab{display:none}
   background:var(--color-text-muted);
 }
 
+/* История применения скидки: одна строка на запись */
+.clients-panel .order-row.discount-order-row{
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  gap: 12px;
+  align-items: center;
+}
+.discount-order-row .order-row-info{
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+.discount-order-row .order-row-title{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.discount-order-row .order-row-meta{
+  flex: 0 0 auto;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+}
+.discount-order-row .order-row-right{
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  white-space: nowrap;
+}
+.discount-order-row .order-row-total{
+  white-space: nowrap;
+  font-weight: 600;
+}
+.discount-order-row .order-row-discount{
+  white-space: nowrap;
+  color: var(--color-success);
+  font-size: 12px;
+}
+
 /* ── Discount chips (product/customer selection) ── */
 .discount-chips-wrap{
   display:flex;

@@ -27,6 +27,13 @@
         </div>
       </div>
     </div>
+
+    <div class="shop-cart-header-mode-wrap hidden" id="shopCartHeaderModeWrap">
+      <div class="shop-delivery-toggle" id="shopAddressModeToggle">
+        <button class="shop-delivery-toggle-btn is-active" id="shopAddressToggleDelivery" type="button" data-mode="delivery">Доставка</button>
+        <button class="shop-delivery-toggle-btn" id="shopAddressTogglePickup" type="button" data-mode="pickup">Самовывоз</button>
+      </div>
+    </div>
   </div>
 
   <div class="panel-body no-scrollbar shop-cart-body">
@@ -49,12 +56,28 @@
         <!-- LIST -->
         <div class="shop-address-list-view hidden" id="shopAddressListView">
           <div class="shop-address-list-top">
+            <div class="shop-address-list-title" id="shopAddressListTitle">Мои адреса</div>
             <button class="chip chip-plus" id="shopAddressNewBtn" type="button">
               <i class="fas fa-plus"></i> Новый адрес
             </button>
           </div>
 
           <div class="shop-address-list" id="shopAddressList"></div>
+          <div class="shop-pickup-list-top hidden" id="shopPickupListTop">
+            <div class="shop-pickup-list-title">Филиалы</div>
+            <div class="shop-pickup-city-selector" id="shopPickupCitySelector">
+              <button class="chip chip-city" id="shopPickupCityChip" type="button">
+                <span class="chip-city-text">Все города</span>
+                <i class="fas fa-chevron-down chip-city-arrow"></i>
+              </button>
+              <div class="chip-city-dropdown hidden" id="shopPickupCityDropdown"></div>
+            </div>
+          </div>
+          <div class="shop-pickup-inline-list hidden" id="shopAddressPickupList"></div>
+
+          <div class="shop-address-confirm-wrap" id="shopAddressConfirmWrap">
+            <button class="shop-checkout-btn shop-address-confirm-btn" id="shopAddressConfirmBtn" type="button">Доставить сюда</button>
+          </div>
         </div>
 
         <!-- FORM -->
