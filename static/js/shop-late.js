@@ -2427,12 +2427,27 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
   const editMode = !!editingItem;
   const available = isProductAvailable(product);
 
-  if (editMode && editingItem && Number.isFinite(Number(editingItem.variant_value_index))) {
-    const targetGroupId = Number(editingItem.variant_group_id);
-    if (Number.isFinite(targetGroupId)) {
-      variantState.groupId = targetGroupId;
-    }
-    variantState.selectedIndex = Number(editingItem.variant_value_index);
+  const editVariantGroupIdRaw = editingItem?.variant_group_id;
+  const editVariantValueIndexRaw = editingItem?.variant_value_index;
+  const editVariantGroupId =
+    editVariantGroupIdRaw === undefined || editVariantGroupIdRaw === null || editVariantGroupIdRaw === ""
+      ? null
+      : Number(editVariantGroupIdRaw);
+  const editVariantValueIndex =
+    editVariantValueIndexRaw === undefined || editVariantValueIndexRaw === null || editVariantValueIndexRaw === ""
+      ? null
+      : Number(editVariantValueIndexRaw);
+
+  if (
+    editMode &&
+    editingItem &&
+    Number.isFinite(editVariantGroupId) &&
+    editVariantGroupId > 0 &&
+    Number.isFinite(editVariantValueIndex) &&
+    editVariantValueIndex >= 0
+  ) {
+    variantState.groupId = editVariantGroupId;
+    variantState.selectedIndex = editVariantValueIndex;
     variantState.label = str(editingItem.variant_label || "");
   }
 
@@ -2991,14 +3006,30 @@ optionGroups.forEach((group) => {
     const wasEmpty = cartCountTotal() === 0;
     const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
     const optionItemIds = selectedItems.map((item) => item.id);
-    const selectedVariantGroupId = Number(variantState.groupId);
-    const selectedVariantIndex = Number(variantState.selectedIndex);
-    const hasVariantSelection = Number.isFinite(selectedVariantGroupId) && Number.isFinite(selectedVariantIndex);
+    const selectedVariantGroupIdRaw = variantState.groupId;
+    const selectedVariantIndexRaw = variantState.selectedIndex;
+    const selectedVariantGroupId =
+      selectedVariantGroupIdRaw === undefined || selectedVariantGroupIdRaw === null || selectedVariantGroupIdRaw === ""
+        ? null
+        : Number(selectedVariantGroupIdRaw);
+    const selectedVariantIndex =
+      selectedVariantIndexRaw === undefined || selectedVariantIndexRaw === null || selectedVariantIndexRaw === ""
+        ? null
+        : Number(selectedVariantIndexRaw);
+    const hasVariantSelection =
+      Array.isArray(variants) &&
+      variants.length > 0 &&
+      Number.isFinite(selectedVariantGroupId) &&
+      selectedVariantGroupId > 0 &&
+      Number.isFinite(selectedVariantIndex) &&
+      selectedVariantIndex >= 0;
     const variantSelection = hasVariantSelection
       ? { group_id: selectedVariantGroupId, value_index: selectedVariantIndex }
       : null;
+    const variantGroupTitle = str(variants?.[0]?.title || "").trim();
+    const variantValueLabel = str(variantState.label || "").trim();
     const variantLabel = hasVariantSelection
-      ? `${str(variants?.[0]?.title || "Вариант")}: ${str(variantState.label || "")}`.trim()
+      ? (variantGroupTitle ? `${variantGroupTitle}: ${variantValueLabel}` : variantValueLabel)
       : "";
     const variantUnitPrice = hasVariantSelection
       ? getVariantUnitPrice(product, variants, variantState)

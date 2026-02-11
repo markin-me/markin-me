@@ -50,6 +50,9 @@
   const elStagesList = $("#ordersStagesList");
   const elOrdersList = $("#ordersList");
   const elEmptyHint = $("#ordersEmptyHint");
+  const orderTabsHeader = $("#orderTabsHeader");
+  const orderTabs = $("#orderTabs");
+  const orderInfoFooter = $("#orderInfoFooter");
 
   const infoEls = {
     empty: $$('[data-info="empty"]'),
@@ -57,7 +60,6 @@
     title: $$('[data-info="order-title"]'),
     meta: $$('[data-info="order-meta"]'),
     status: $$('[data-info="order-status"]'),
-    statusSelect: $$('[data-role="status-select"]'),
     courierSelect: $$('[data-role="courier-select"]'),
 
     clientAvatar: $$('[data-info="client-avatar"]'),
@@ -82,9 +84,12 @@
     total: $$('[data-info="order-total"]'),
 
     deliveryType: $$('[data-info="delivery-type"]'),
+    deliveryDatetime: $$('[data-info="delivery-datetime"]'),
     deliveryQty: $$('[data-info="delivery-qty"]'),
     deliveryUrgent: $$('[data-info="delivery-urgent"]'),
+    deliveryIntervalRow: $$('[data-info="delivery-interval-row"]'),
     deliveryInterval: $$('[data-info="delivery-interval"]'),
+    deliveryAddressTitle: $$('[data-info="delivery-address-title"]'),
     deliveryAddress: $$('[data-info="delivery-address"]'),
     deliveryAddressComment: $$('[data-info="delivery-address-comment"]'),
     deliveryAddressCommentText: $$('[data-info="delivery-address-comment-text"]'),
@@ -130,6 +135,11 @@
     },
   };
 
+  const tabsState = {
+    tabs: [],
+    activeKey: null,
+  };
+
   // -----------------------------
   // Helpers
   // -----------------------------
@@ -168,6 +178,19 @@
     return `${day} ${monthNames[month]} ${year}, ${hours}:${minutes}`;
   }
 
+  function formatDateTimeNumeric(ts) {
+    if (!ts) return "";
+    const dateStr = String(ts).replace(' ', 'T');
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) return "";
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return `${day}.${month}.${year}, ${hours}:${minutes}`;
+  }
+
   function formatScheduleText(order, { includeTitle = true } = {}) {
     if (!order) return "";
     const title = String(order.time_option_title || "").trim();
@@ -194,6 +217,151 @@
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
+  }
+
+  function buildOrderTabKey(orderId) {
+    return `order:${String(orderId)}`;
+  }
+
+  function buildOrderTabTitle(order) {
+    const id = Number(order?.id || 0);
+    if (!Number.isFinite(id) || id <= 0) return "Заказ";
+    return `№${id}`;
+  }
+
+  function syncActiveOrderRowState() {
+    $$(".order-row.is-active").forEach((el) => el.classList.remove("is-active"));
+    if (!elOrdersList || !state.activeOrderId) return;
+    const row = $(`.order-row[data-order-id="${state.activeOrderId}"]`, elOrdersList);
+    if (row) row.classList.add("is-active");
+  }
+
+  function renderOrderTabs() {
+    if (!orderTabsHeader || !orderTabs) return;
+    const hasTabs = tabsState.tabs.length > 0;
+    orderTabsHeader.classList.toggle("hidden", !hasTabs);
+    if (!hasTabs) {
+      orderTabs.innerHTML = "";
+      return;
+    }
+    orderTabs.innerHTML = tabsState.tabs.map((tab) => {
+      const isActive = tab.key === tabsState.activeKey;
+      return `
+        <div class="product-tab ${isActive ? "is-active" : ""}" data-order-tab-key="${escapeHtml(tab.key)}">
+          <span class="product-tab-title">${escapeHtml(tab.title || "Заказ")}</span>
+          <button class="product-tab-close" type="button" data-order-tab-close="${escapeHtml(tab.key)}" aria-label="Закрыть">&times;</button>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function setActiveOrderTab(key, { openMobile = false } = {}) {
+    const tab = tabsState.tabs.find((t) => t.key === key);
+    if (!tab) return;
+    tabsState.activeKey = key;
+    state.activeOrderId = tab.orderId;
+
+    const orderFromState = state.orders.find((o) => Number(o.id) === Number(tab.orderId));
+    if (orderFromState) {
+      tab.order = { ...tab.order, ...orderFromState };
+      tab.title = buildOrderTabTitle(tab.order);
+    }
+
+    renderOrderTabs();
+    syncActiveOrderRowState();
+    setInfo(orderFromState || tab.order || null);
+
+    if (openMobile && isMobile()) openSheet();
+  }
+
+  function ensureOrderTab(order, { activate = true, openMobile = false } = {}) {
+    if (!order || !Number.isFinite(Number(order.id))) return null;
+    const orderId = Number(order.id);
+    const key = buildOrderTabKey(orderId);
+    let tab = tabsState.tabs.find((t) => t.key === key);
+    if (!tab) {
+      tab = { key, orderId, title: buildOrderTabTitle(order), order: { ...order } };
+      tabsState.tabs.push(tab);
+    } else {
+      tab.order = { ...tab.order, ...order };
+      tab.title = buildOrderTabTitle(tab.order);
+    }
+
+    if (activate) {
+      setActiveOrderTab(key, { openMobile });
+    } else {
+      renderOrderTabs();
+    }
+
+    return tab;
+  }
+
+  function syncTabsWithLatestOrders() {
+    if (!tabsState.tabs.length) {
+      tabsState.activeKey = null;
+      renderOrderTabs();
+      if (!state.activeOrderId) setInfo(null);
+      return;
+    }
+
+    tabsState.tabs.forEach((tab) => {
+      const fresh = state.orders.find((o) => Number(o.id) === Number(tab.orderId));
+      if (fresh) {
+        tab.order = { ...tab.order, ...fresh };
+        tab.title = buildOrderTabTitle(tab.order);
+      }
+    });
+
+    if (!tabsState.activeKey || !tabsState.tabs.some((tab) => tab.key === tabsState.activeKey)) {
+      tabsState.activeKey = tabsState.tabs[tabsState.tabs.length - 1]?.key || null;
+    }
+
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+    state.activeOrderId = activeTab ? activeTab.orderId : null;
+
+    renderOrderTabs();
+    syncActiveOrderRowState();
+
+    if (!activeTab) {
+      setInfo(null);
+      return;
+    }
+
+    const freshActive = state.orders.find((o) => Number(o.id) === Number(activeTab.orderId));
+    if (freshActive) {
+      activeTab.order = { ...activeTab.order, ...freshActive };
+      activeTab.title = buildOrderTabTitle(activeTab.order);
+      renderOrderTabs();
+    }
+    setInfo(freshActive || activeTab.order || null);
+  }
+
+  function closeOrderTab(key) {
+    const idx = tabsState.tabs.findIndex((tab) => tab.key === key);
+    if (idx < 0) return;
+    const wasActive = tabsState.activeKey === key;
+    tabsState.tabs.splice(idx, 1);
+
+    if (!tabsState.tabs.length) {
+      tabsState.activeKey = null;
+      state.activeOrderId = null;
+      renderOrderTabs();
+      syncActiveOrderRowState();
+      setInfo(null);
+      closeSheet();
+      return;
+    }
+
+    if (wasActive) {
+      const next = tabsState.tabs[idx] || tabsState.tabs[idx - 1] || tabsState.tabs[0];
+      if (next) {
+        setActiveOrderTab(next.key);
+        return;
+      }
+    }
+
+    renderOrderTabs();
+    syncActiveOrderRowState();
   }
 
   function initials(name) {
@@ -423,9 +591,9 @@
           const oldLineTotal = Number(it.old_line_total) || 0;
           const showOldPrice = oldLineTotal > lineTotal;
           const priceHtml = showOldPrice
-            ? `<span class="order-item-old-price">${orderItemTotalStr(oldLineTotal)}</span>${orderItemTotalStr(lineTotal)}`
-            : orderItemTotalStr(lineTotal);
-          const mainLine = priceHtml ? `${qty} Х ${name} — ${priceHtml}` : `${qty} Х ${name}`;
+            ? `<span class="order-item-old-price">${money(oldLineTotal)}</span><span class="order-item-price-current">${money(lineTotal)}</span>`
+            : `<span class="order-item-price-current">${money(lineTotal)}</span>`;
+          const titleHtml = `${name} × ${qty}`;
           const bulletPrefix = "• ";
 
           const photos = Array.isArray(it.photos) ? it.photos.filter(Boolean) : [];
@@ -467,7 +635,7 @@
             ? `<div class="order-item-composition">
                 ${selections.map((sel) => {
                   const productName = escapeHtml(sel.product_name || "—");
-                  const nameLine = `<div class="order-item-composition-item" style="font-weight: 600;">1 × ${productName}</div>`;
+                  const nameLine = `<div class="order-item-composition-item order-item-composition-item-primary">1 × ${productName}</div>`;
                   const vParts = [sel.variant_label, sel.variant_unit, sel.variant_group_title].filter(Boolean);
                   const variantLine = vParts.length
                     ? `<div class="order-item-composition-item">${bulletPrefix}${escapeHtml(vParts.join(" "))}</div>`
@@ -495,11 +663,14 @@
             : "";
 
           const base = `
-            <div class="order-item-line" style="display: flex; align-items: flex-start; gap: 12px;">
+            <div class="order-item-line">
               ${photoHtml}
-              <div class="order-item-content" style="flex: 1;">
-                <div class="order-item-name">${mainLine}</div>
+              <div class="order-item-content">
+                <div class="order-item-title">${titleHtml}</div>
                 ${comboDetailsHtml}
+                <div class="order-item-footer">
+                  <div class="order-item-price">${priceHtml}</div>
+                </div>
               </div>
             </div>
           `;
@@ -514,9 +685,9 @@
         const oldLineTotal = discountOriginal || 0;
         const showOldPrice = oldLineTotal > lineTotal;
         const priceHtml = showOldPrice
-          ? `<span class="order-item-old-price">${orderItemTotalStr(oldLineTotal)}</span>${orderItemTotalStr(lineTotal)}`
-          : orderItemTotalStr(lineTotal);
-        const mainLine = priceHtml ? `${qty} Х ${name} — ${priceHtml}` : `${qty} Х ${name}`;
+          ? `<span class="order-item-old-price">${money(oldLineTotal)}</span><span class="order-item-price-current">${money(lineTotal)}</span>`
+          : `<span class="order-item-price-current">${money(lineTotal)}</span>`;
+        const titleHtml = `${name} × ${qty}`;
         const bulletPrefix = "• ";
 
         const photos = Array.isArray(it.photos) ? it.photos.filter(Boolean) : [];
@@ -625,11 +796,14 @@
         const subHtml = variantsHtml + ingredientsHtml + optionsHtml;
 
         const base = `
-          <div class="order-item-line" style="display: flex; align-items: flex-start; gap: 12px;">
+          <div class="order-item-line">
             ${photoHtml}
-            <div class="order-item-content" style="flex: 1;">
-              <div class="order-item-name">${mainLine}</div>
+            <div class="order-item-content">
+              <div class="order-item-title">${titleHtml}</div>
               ${subHtml}
+              <div class="order-item-footer">
+                <div class="order-item-price">${priceHtml}</div>
+              </div>
             </div>
           </div>
         `;
@@ -774,16 +948,138 @@
     });
   }
 
+  function getSortedStatuses() {
+    return [...state.statuses]
+      .filter((status) => Number.isFinite(Number(status?.id)) && Number(status.id) > 0)
+      .sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || Number(a.id) - Number(b.id));
+  }
+
+  function getActiveOrder() {
+    if (!state.activeOrderId) return null;
+    const orderId = Number(state.activeOrderId);
+    const fromState = state.orders.find((o) => Number(o.id) === orderId);
+    if (fromState) return fromState;
+    const activeTab = tabsState.tabs.find((tab) => Number(tab.orderId) === orderId);
+    return activeTab?.order || null;
+  }
+
+  function setStatusControlsDisabled(disabled) {
+    $$('[data-action="order-status-next"]').forEach((btn) => {
+      btn.disabled = disabled;
+    });
+    $$('[data-action="order-status-menu-toggle"]').forEach((btn) => {
+      btn.disabled = disabled;
+    });
+  }
+
+  function closeInlineStatusMenus() {
+    $$('[data-role="order-inline-status"]').forEach((wrap) => {
+      wrap.classList.remove("is-open");
+    });
+    $$('[data-role="order-status-menu"]').forEach((dropdown) => {
+      dropdown.classList.add("hidden");
+    });
+    $$('[data-action="order-status-menu-toggle"]').forEach((btn) => {
+      btn.setAttribute("aria-expanded", "false");
+    });
+  }
+
+  function renderInlineStatusMenus(order) {
+    const statusMenus = $$('[data-role="order-status-menu"]');
+    if (!statusMenus.length) return;
+
+    const sortedStatuses = getSortedStatuses();
+    const currentStatusId = Number(order?.status_id || 0);
+    const optionsHtml = sortedStatuses.map((status) => {
+      const statusId = Number(status.id);
+      const title = escapeHtml(status.title || "—");
+      const isSelected = statusId === currentStatusId ? " is-selected" : "";
+      return `
+        <button
+          class="order-status-inline-option${isSelected}"
+          type="button"
+          data-action="order-status-menu-select"
+          data-status-id="${statusId}"
+          role="option"
+          aria-selected="${statusId === currentStatusId ? "true" : "false"}"
+        >
+          ${title}
+        </button>
+      `;
+    }).join("");
+
+    statusMenus.forEach((dropdown) => {
+      dropdown.innerHTML = optionsHtml;
+    });
+    closeInlineStatusMenus();
+  }
+
+  async function updateOrderStatus(orderId, statusId) {
+    await apiJson(`/api/admin/orders/${orderId}/status`, {
+      method: "PUT",
+      body: { status_id: statusId },
+    });
+    await loadStatuses();
+    renderStages();
+    await loadAndRenderOrders(true);
+  }
+
+  async function cycleActiveOrderStatus() {
+    const order = getActiveOrder();
+    const orderId = Number(order?.id || state.activeOrderId || 0);
+    if (!Number.isFinite(orderId) || orderId <= 0) return;
+
+    const sortedStatuses = getSortedStatuses();
+    if (!sortedStatuses.length) return;
+
+    const currentStatusId = Number(order?.status_id || 0);
+    const currentIndex = sortedStatuses.findIndex((status) => Number(status.id) === currentStatusId);
+    const nextStatus = currentIndex >= 0
+      ? sortedStatuses[(currentIndex + 1) % sortedStatuses.length]
+      : sortedStatuses[0];
+    const nextStatusId = Number(nextStatus?.id || 0);
+    if (!Number.isFinite(nextStatusId) || nextStatusId <= 0) return;
+
+    setStatusControlsDisabled(true);
+    try {
+      await updateOrderStatus(orderId, nextStatusId);
+    } finally {
+      setStatusControlsDisabled(false);
+    }
+  }
+
+  async function selectActiveOrderStatus(statusId) {
+    const order = getActiveOrder();
+    const orderId = Number(order?.id || state.activeOrderId || 0);
+    const nextStatusId = Number(statusId || 0);
+    if (!Number.isFinite(orderId) || orderId <= 0) return;
+    if (!Number.isFinite(nextStatusId) || nextStatusId <= 0) return;
+    if (Number(order?.status_id || 0) === nextStatusId) {
+      closeInlineStatusMenus();
+      return;
+    }
+
+    setStatusControlsDisabled(true);
+    try {
+      await updateOrderStatus(orderId, nextStatusId);
+    } finally {
+      setStatusControlsDisabled(false);
+      closeInlineStatusMenus();
+    }
+  }
+
   bindOrderSummaryDiscountToggles();
 
   function showEmptyInfo() {
     setHiddenAll(infoEls.empty, false);
     setHiddenAll(infoEls.content, true);
+    if (orderInfoFooter) orderInfoFooter.classList.add("hidden");
   }
 
   function showOrderInfo() {
     setHiddenAll(infoEls.empty, true);
     setHiddenAll(infoEls.content, false);
+    if (orderInfoFooter) orderInfoFooter.classList.remove("hidden");
   }
 
   function setInfo(order) {
@@ -791,6 +1087,7 @@
       showEmptyInfo();
       setTextAll(infoEls.title, "Заказ не выбран");
       setTextAll(infoEls.meta, "Выберите заказ слева.");
+      setHiddenAll(infoEls.meta, true);
       setTextAll(infoEls.status, "?");
       setTextAll(infoEls.clientName, "?");
       setTextAll(infoEls.clientPhone, "?");
@@ -798,11 +1095,14 @@
       setTextAll(infoEls.payMethod, "?");
       setTextAll(infoEls.total, "?");
       setTextAll(infoEls.deliveryType, "?");
+      setTextAll(infoEls.deliveryDatetime, "?");
       setTextAll(infoEls.deliveryQty, "0 шт.");
+      setTextAll(infoEls.deliveryInterval, "?");
+      setTextAll(infoEls.deliveryAddressTitle, "Адрес доставки");
       setTextAll(infoEls.deliveryAddress, "?");
       setHtmlAll(infoEls.itemsList, '<div class="muted">?</div>');
       setHiddenAll(infoEls.deliveryUrgent, true);
-      setHiddenAll(infoEls.deliveryInterval, true);
+      setHiddenAll(infoEls.deliveryIntervalRow, true);
       setHiddenAll(infoEls.deliveryAddressComment, true);
       setHiddenAll(infoEls.orderCommentBlock, true);
       setHiddenAll(infoEls.clientExtra, true);
@@ -811,40 +1111,17 @@
       setHiddenAll(infoEls.discountBreakdown, true);
       setAttrAll(infoEls.discountInfoBtn, "aria-expanded", "false");
       setAttrAll(infoEls.discountBreakdown, "aria-hidden", "true");
+      renderInlineStatusMenus(null);
       return;
     }
 
     showOrderInfo();
 
-    setTextAll(infoEls.title, `Заказ #${order.id}`);
-    setTextAll(infoEls.meta, formatDateTime(order.created_at));
+    setTextAll(infoEls.title, `ЗАКАЗ #${order.id}`);
+    setTextAll(infoEls.meta, formatDateTimeNumeric(order.created_at) || "—");
+    setHiddenAll(infoEls.meta, false);
     setTextAll(infoEls.status, order.status_title || "?");
-
-    // Заполняем выпадающий список статусов
-    infoEls.statusSelect.forEach((select) => {
-      if (!select) return;
-      select.innerHTML = "";
-      
-      // Добавляем текущий статус как первый вариант
-      const currentStatus = state.statuses.find((s) => Number(s.id) === Number(order.status_id));
-      if (currentStatus) {
-        const option = document.createElement("option");
-        option.value = String(currentStatus.id);
-        option.textContent = currentStatus.title || "?";
-        option.selected = true;
-        select.appendChild(option);
-      }
-      
-      // Добавляем остальные статусы
-      state.statuses.forEach((status) => {
-        if (Number(status.id) !== Number(order.status_id)) {
-          const option = document.createElement("option");
-          option.value = String(status.id);
-          option.textContent = status.title || "?";
-          select.appendChild(option);
-        }
-      });
-    });
+    renderInlineStatusMenus(order);
 
     const clientName = order.customer_name || "?";
     const clientPhone = order.customer_phone || "?";
@@ -910,12 +1187,15 @@
     setTextAll(infoEls.deliveryQty, `${qty} шт.`);
 
     const methodTitle = order.method_title || (order.method_code === "pickup" ? "Самовывоз" : "Доставка");
-    const deliverySectionTitle = order.method_code === "pickup" ? "Самовывоз:" : "Доставка:";
     setTextAll(infoEls.deliveryType, methodTitle || "?");
+    setTextAll(infoEls.deliveryDatetime, formatDateTime(order.created_at) || "?");
 
-    const intervalText = formatScheduleText(order, { includeTitle: true });
-    setTextAll(infoEls.deliveryInterval, intervalText);
-    setHiddenAll(infoEls.deliveryInterval, !intervalText);
+    const deliverySectionTitle = order.method_code === "pickup" ? "Адрес самовывоза" : "Адрес доставки";
+    setTextAll(infoEls.deliveryAddressTitle, deliverySectionTitle);
+
+    const intervalText = formatScheduleText(order, { includeTitle: false }) || String(order.time_option_title || "").trim();
+    setTextAll(infoEls.deliveryInterval, intervalText || "—");
+    setHiddenAll(infoEls.deliveryIntervalRow, !intervalText);
 
     const urgent = Boolean(order.is_urgent || order.urgent || order.time_option_code === "urgent");
     setHiddenAll(infoEls.deliveryUrgent, !urgent);
@@ -1247,7 +1527,10 @@
     const filtered = list.filter(orderMatchesFilters);
     if (!filtered.length) {
       if (elEmptyHint) elEmptyHint.classList.remove("hidden");
-      setInfo(null);
+      if (!tabsState.tabs.length) {
+        setInfo(null);
+      }
+      syncActiveOrderRowState();
       return;
     }
     if (elEmptyHint) elEmptyHint.classList.add("hidden");
@@ -1257,7 +1540,9 @@
       elOrdersList.appendChild(row);
     });
 
-    if (!state.activeOrderId) {
+    if (tabsState.tabs.length) {
+      syncActiveOrderRowState();
+    } else if (!state.activeOrderId) {
       setInfo(null);
     }
   }
@@ -1282,8 +1567,13 @@
   }
 
   function clearSelection() {
+    if (tabsState.activeKey) {
+      closeOrderTab(tabsState.activeKey);
+      return;
+    }
     state.activeOrderId = null;
-    $$(".order-row.is-active").forEach((el) => el.classList.remove("is-active"));
+    syncActiveOrderRowState();
+    renderOrderTabs();
     setInfo(null);
   }
 
@@ -1316,21 +1606,24 @@
 
   async function loadAndRenderOrders(keepSelection = false) {
     const prevActive = keepSelection ? state.activeOrderId : null;
-    if (!keepSelection) {
+    if (!keepSelection && !tabsState.tabs.length) {
       state.activeOrderId = null;
     }
 
     await loadOrders();
     renderOrders();
 
+    if (tabsState.tabs.length) {
+      syncTabsWithLatestOrders();
+      return;
+    }
+
     if (keepSelection && prevActive) {
       const found = state.orders.find((o) => Number(o.id) === Number(prevActive));
       if (found) {
         state.activeOrderId = found.id;
         setInfo(found);
-        $$(".order-row.is-active", document).forEach((el) => el.classList.remove("is-active"));
-        const row = $(`.order-row[data-order-id="${found.id}"]`, elOrdersList);
-        if (row) row.classList.add("is-active");
+        syncActiveOrderRowState();
       } else {
         state.activeOrderId = null;
         setInfo(null);
@@ -1560,8 +1853,17 @@
     }
 
     upsertOrderRow(order);
-
-    if (state.activeOrderId && Number(state.activeOrderId) === Number(order.id)) {
+    const tab = tabsState.tabs.find((t) => Number(t.orderId) === Number(order.id));
+    if (tab) {
+      tab.order = { ...tab.order, ...order };
+      tab.title = buildOrderTabTitle(tab.order);
+      if (tabsState.activeKey === tab.key) {
+        state.activeOrderId = tab.orderId;
+        setInfo(tab.order);
+      }
+      renderOrderTabs();
+      syncActiveOrderRowState();
+    } else if (state.activeOrderId && Number(state.activeOrderId) === Number(order.id)) {
       setInfo(order);
     }
 
@@ -1623,7 +1925,9 @@
         notifyNewOrders(newOrders);
       }
       renderOrders();
-      if (state.activeOrderId) {
+      if (tabsState.tabs.length) {
+        syncTabsWithLatestOrders();
+      } else if (state.activeOrderId) {
         const order = state.orders.find((o) => Number(o.id) === Number(state.activeOrderId));
         if (order) setInfo(order);
       }
@@ -1732,6 +2036,57 @@
   // Click handlers
   // -----------------------------
   document.addEventListener("click", (e) => {
+    const tabCloseBtn = e.target.closest("[data-order-tab-close]");
+    if (tabCloseBtn) {
+      e.stopPropagation();
+      const key = tabCloseBtn.getAttribute("data-order-tab-close");
+      if (key) closeOrderTab(key);
+      return;
+    }
+
+    const tabEl = e.target.closest("[data-order-tab-key]");
+    if (tabEl) {
+      const key = tabEl.getAttribute("data-order-tab-key");
+      if (key) setActiveOrderTab(key, { openMobile: true });
+      return;
+    }
+
+    const statusOptionBtn = e.target.closest('[data-action="order-status-menu-select"]');
+    if (statusOptionBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const statusId = Number(statusOptionBtn.getAttribute("data-status-id"));
+      if (!Number.isFinite(statusId) || statusId <= 0) {
+        closeInlineStatusMenus();
+        return;
+      }
+      selectActiveOrderStatus(statusId).catch((err) => {
+        console.error(err);
+      });
+      return;
+    }
+
+    const statusToggleBtn = e.target.closest('[data-action="order-status-menu-toggle"]');
+    if (statusToggleBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const wrap = statusToggleBtn.closest('[data-role="order-inline-status"]');
+      if (!wrap) return;
+      const shouldOpen = !wrap.classList.contains("is-open");
+      closeInlineStatusMenus();
+      if (shouldOpen) {
+        wrap.classList.add("is-open");
+        const dropdown = $('[data-role="order-status-menu"]', wrap);
+        if (dropdown) dropdown.classList.remove("hidden");
+        statusToggleBtn.setAttribute("aria-expanded", "true");
+      }
+      return;
+    }
+
+    if (!e.target.closest('[data-role="order-inline-status"]')) {
+      closeInlineStatusMenus();
+    }
+
     const action = e.target.closest("[data-action]");
     if (action && action.getAttribute("data-action") === "assign-courier") {
       e.stopPropagation();
@@ -1750,21 +2105,20 @@
 
     const row = e.target.closest(".js-order");
     if (!row) return;
-
-    $$(".order-row.is-active").forEach((el) => el.classList.remove("is-active"));
-    row.classList.add("is-active");
-
-    state.activeOrderId = Number(row.getAttribute("data-order-id")) || null;
-    const order = state.orders.find((o) => Number(o.id) === Number(state.activeOrderId));
-    setInfo(order || null);
-
-    if (isMobile()) openSheet();
+    const orderId = Number(row.getAttribute("data-order-id")) || null;
+    if (!orderId) return;
+    const order = state.orders.find((o) => Number(o.id) === Number(orderId));
+    if (!order) return;
+    ensureOrderTab(order, { activate: true, openMobile: true });
   });
 
   closeButtons.forEach((btn) => btn.addEventListener("click", clearSelection));
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeSheet();
+    if (e.key === "Escape") {
+      closeInlineStatusMenus();
+      closeSheet();
+    }
   });
 
   if (closeBtn) closeBtn.addEventListener("click", closeSheet);
@@ -1858,34 +2212,14 @@
     dateReset.addEventListener("click", () => resetDateFilter());
   }
 
-  // Обработчик изменения статуса через выпадающий список
-  infoEls.statusSelect.forEach((select) => {
-    if (!select) return;
-    select.addEventListener("change", async (e) => {
-      const statusId = Number(e.target.value);
-      if (!Number.isFinite(statusId) || statusId <= 0) return;
-
-      const orderId = state.activeOrderId;
-      if (!orderId) return;
-
-      try {
-        await apiJson(`/api/admin/orders/${orderId}/status`, {
-          method: "PUT",
-          body: { status_id: statusId },
-        });
-
-        // Обновляем данные заказа
-        await loadStatuses();
-        renderStages();
-        await loadAndRenderOrders(true);
-      } catch (err) {
-        console.error(err);
-        // Восстанавливаем предыдущее значение при ошибке
-        const order = state.orders.find((o) => Number(o.id) === Number(orderId));
-        if (order) {
-          e.target.value = String(order.status_id || "");
-        }
-      }
+  // Переключение статуса по клику на большую пилюлю
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest('[data-action="order-status-next"]');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    cycleActiveOrderStatus().catch((err) => {
+      console.error(err);
     });
   });
 

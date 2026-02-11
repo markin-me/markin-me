@@ -1,5 +1,23 @@
 <div class="panel orders-info">
+  <div class="panel-header product-tabs-header hidden" id="orderTabsHeader">
+    <div class="product-tabs" id="orderTabs"></div>
+  </div>
   <div class="panel-body no-scrollbar">
     <%- include('./info_content') %>
+  </div>
+  <div class="panel-footer order-info-footer hidden" id="orderInfoFooter">
+    <div class="order-footer-actions">
+      <button class="order-footer-status-pill" type="button" data-action="order-status-next" aria-label="Статус заказа">
+        <span data-info="order-status">—</span>
+      </button>
+      <div class="order-head-actions order-footer-icon-actions">
+        <button class="icon-btn order-footer-icon-btn" type="button" data-action="order-edit" aria-label="Редактировать">
+          <i class="fas fa-pen"></i>
+        </button>
+        <button class="icon-btn order-footer-icon-btn" type="button" data-action="order-print" aria-label="Печать">
+          <i class="fas fa-print"></i>
+        </button>
+      </div>
+    </div>
   </div>
 </div>

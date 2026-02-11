@@ -1,4 +1,3 @@
-
 <div class="order-info-empty empty-state" data-info="empty">
   <div class="empty-icon"><i class="fas fa-receipt"></i></div>
   <div class="empty-title">Выберите заказ слева</div>
@@ -9,42 +8,72 @@
   <div class="info-card order-info-head">
     <div class="order-head-top">
       <div class="order-head-title-row">
-        <span class="order-head-title" data-info="order-title">Заказ #—</span>
+        <span class="order-head-title" data-info="order-title">ЗАКАЗ #—</span>
         <span class="order-head-meta muted" data-info="order-meta">—</span>
-      </div>
-      <button class="icon-btn info-close" type="button" data-action="order-close" aria-label="Сбросить выбор">
-        <i class="fas fa-times"></i>
-      </button>
-    </div>
-
-    <div class="order-head-row">
-      <label class="order-head-field">
-        <select class="order-head-select" data-role="status-select">
-          <option>—</option>
-        </select>
-      </label>
-
-      <div class="order-head-actions">
-        <button class="icon-btn btn-xs" type="button" data-action="order-edit" aria-label="Редактировать">
-          <i class="fas fa-pen"></i>
-        </button>
-        <button class="icon-btn btn-xs" type="button" data-action="order-print" aria-label="Печать">
-          <i class="fas fa-print"></i>
-        </button>
       </div>
     </div>
   </div>
 
-  <div class="info-card order-info-client">
-    <div class="info-title">Клиент</div>
-    <div class="client-row">
-      <div class="client-avatar" data-info="client-avatar">—</div>
-      <div class="client-main">
-        <div class="client-name" data-info="client-name">—</div>
-        <a class="client-phone" data-info="client-phone" href="#">—</a>
-        <div class="client-extra muted hidden" data-info="client-extra"></div>
+  <div class="info-card order-info-delivery">
+    <div class="delivery-kv">
+      <div class="delivery-kv-row">
+        <span class="delivery-kv-label">Статус</span>
+        <div class="delivery-kv-value delivery-kv-value-status">
+          <div class="order-status-inline" data-role="order-inline-status">
+            <button
+              class="order-status-inline-trigger"
+              type="button"
+              data-action="order-status-menu-toggle"
+              aria-haspopup="listbox"
+              aria-expanded="false"
+            >
+              <span data-info="order-status">—</span>
+              <i class="fas fa-chevron-down order-status-inline-chevron" aria-hidden="true"></i>
+            </button>
+            <div class="order-status-inline-dropdown hidden" data-role="order-status-menu" role="listbox"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="delivery-kv-row hidden" data-info="delivery-interval-row">
+        <span class="delivery-kv-label">Время доставки</span>
+        <span class="delivery-kv-value" data-info="delivery-interval">—</span>
+      </div>
+
+      <div class="delivery-kv-row hidden" data-info="delivery-urgent">
+        <span class="delivery-kv-label">Срочность</span>
+        <span class="delivery-kv-value delivery-kv-value-urgent">Срочно</span>
+      </div>
+
+      <div class="delivery-kv-row">
+        <span class="delivery-kv-label">Клиент</span>
+        <span class="delivery-kv-value" data-info="client-name">—</span>
+      </div>
+
+      <div class="delivery-kv-row">
+        <span class="delivery-kv-label">Телефон</span>
+        <a class="delivery-kv-value delivery-kv-link" data-info="client-phone" href="#">—</a>
       </div>
     </div>
+
+    <div class="delivery-address-block">
+      <div class="delivery-section-title" data-info="delivery-address-title">Адрес доставки</div>
+      <div class="delivery-address" data-info="delivery-address">—</div>
+    </div>
+
+    <div class="delivery-address-comment muted hidden" data-info="delivery-address-comment">
+      <span class="comment-label">Комментарий к адресу:</span>
+      <span data-info="delivery-address-comment-text"></span>
+    </div>
+    <div class="order-comment-block muted hidden" data-info="order-comment-block">
+      <span class="comment-label">Комментарий к заказу:</span>
+      <span data-info="order-comment-text"></span>
+    </div>
+  </div>
+
+  <div class="info-card order-info-items">
+    <div class="info-title">Состав заказа</div>
+    <div class="order-items" data-info="items-list"></div>
   </div>
 
   <div class="info-card order-summary">
@@ -94,24 +123,5 @@
       <span class="order-summary-total-value" data-info="order-total">—</span>
     </div>
     <div class="order-summary-thanks">Спасибо за заказ!</div>
-  </div>
-
-  <div class="info-card order-info-delivery">
-    <div class="delivery-top">
-      <div class="delivery-chips">
-        <span class="chip" data-info="delivery-type">—</span>
-        <span class="chip" data-info="delivery-qty">0 шт.</span>
-        <span class="chip chip-warn hidden" data-info="delivery-urgent">⚡ Срочно</span>
-        <span class="chip hidden" data-info="delivery-interval"></span>
-      </div>
-    </div>
-    <div class="delivery-address" data-info="delivery-address">—</div>
-    <div class="delivery-address-comment muted hidden" data-info="delivery-address-comment"><span class="comment-label">Комментарий к адресу:</span> <span data-info="delivery-address-comment-text"></span></div>
-    <div class="order-comment-block muted hidden" data-info="order-comment-block"><span class="comment-label">Комментарий к заказу:</span> <span data-info="order-comment-text"></span></div>
-  </div>
-
-  <div class="info-card order-info-items">
-    <div class="info-title">Состав заказа</div>
-    <div class="order-items" data-info="items-list"></div>
   </div>
 </div>

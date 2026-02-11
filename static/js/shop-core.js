@@ -379,6 +379,12 @@
     return v === undefined || v === null ? "" : String(v);
   }
 
+  function toFiniteNumberOrNull(v) {
+    if (v === undefined || v === null || v === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+
   function escapeHtml(s) {
     if (s === null || s === undefined) return "";
     const div = document.createElement("div");
@@ -990,18 +996,29 @@
           const optionItems = Array.isArray(item?.option_items) ? item.option_items : [];
           const optionIds = Array.isArray(item?.option_item_ids) ? item.option_item_ids : optionItems.map((opt) => opt.id);
           const normalizedOptionIds = optionIds.map(Number).filter(Number.isFinite);
+          const normalizedVariantGroupId = toFiniteNumberOrNull(item?.variant_group_id);
+          const normalizedVariantValueIndex = toFiniteNumberOrNull(item?.variant_value_index);
+          const hasVariantSelection = normalizedVariantGroupId !== null && normalizedVariantValueIndex !== null;
+          const variantSelection = hasVariantSelection
+            ? { group_id: normalizedVariantGroupId, value_index: normalizedVariantValueIndex }
+            : null;
           const normalizedOptionItems = optionItems.length
-            ? optionItems.map((opt) => ({
-              id: Number(opt.id),
-              title: str(opt.title || opt.name || ""),
-              price: Number(opt.price || 0),
-              qty: Math.max(0, Number(opt.qty || opt.quantity || 1)) || 1,
-              // ???????? ?????
-              variant_group_id: opt.variant_group_id != null ? Number(opt.variant_group_id) : null,
-              variant_value_index: opt.variant_value_index != null ? Number(opt.variant_value_index) : null,
-              variant_label: str(opt.variant_label || ""),
-              variant_price_diff: Number(opt.variant_price_diff || 0),
-            }))
+            ? optionItems.map((opt) => {
+              const optionVariantGroupId = toFiniteNumberOrNull(opt.variant_group_id);
+              const optionVariantValueIndex = toFiniteNumberOrNull(opt.variant_value_index);
+              const hasOptionVariant = optionVariantGroupId !== null && optionVariantValueIndex !== null;
+              return {
+                id: Number(opt.id),
+                title: str(opt.title || opt.name || ""),
+                price: Number(opt.price || 0),
+                qty: Math.max(0, Number(opt.qty || opt.quantity || 1)) || 1,
+                // ???????? ?????
+                variant_group_id: hasOptionVariant ? optionVariantGroupId : null,
+                variant_value_index: hasOptionVariant ? optionVariantValueIndex : null,
+                variant_label: hasOptionVariant ? str(opt.variant_label || "") : "",
+                variant_price_diff: hasOptionVariant ? Number(opt.variant_price_diff || 0) : 0,
+              };
+            })
             : normalizedOptionIds.map((id) => ({
               id,
               title: "",
@@ -1016,24 +1033,19 @@
           const ingredients = Array.isArray(item?.ingredients) ? item.ingredients : [];
           
           return {
-            key: makeCartKey(productId, normalizedOptionItems, ingredients, {
-              group_id: item.variant_group_id,
-              value_index: item.variant_value_index,
-            }),
+            key: makeCartKey(productId, normalizedOptionItems, ingredients, variantSelection),
             product_id: productId,
             qty,
             option_item_ids: normalizedOptionItems.map((opt) => opt.id),
             option_items: normalizedOptionItems,
             ingredients: ingredients,
             ingredient_price_diff: Number(item?.ingredient_price_diff || 0),
-            variant_group_id: Number(item.variant_group_id ?? null),
-            variant_value_index: Number.isFinite(Number(item.variant_value_index))
-              ? Number(item.variant_value_index)
-              : null,
-            variant_label: str(item.variant_label || ""),
-            variant_unit_price: Number(item.variant_unit_price || 0),
+            variant_group_id: normalizedVariantGroupId,
+            variant_value_index: normalizedVariantValueIndex,
+            variant_label: hasVariantSelection ? str(item.variant_label || "") : "",
+            variant_unit_price: hasVariantSelection ? Number(item.variant_unit_price || 0) : 0,
             auto_add: Number(item?.auto_add || 0) ? 1 : 0,
-            auto_add_group_id: Number(item?.auto_add_group_id ?? null),
+            auto_add_group_id: toFiniteNumberOrNull(item?.auto_add_group_id),
           };
         })
         .filter(Boolean);
@@ -1425,6 +1437,9 @@
       if (!qty || !Number.isFinite(pid)) continue;
       const p = state.productCache.get(pid);
       if (!p) continue;
+      const variantGroupId = toFiniteNumberOrNull(item.variant_group_id);
+      const variantValueIndex = toFiniteNumberOrNull(item.variant_value_index);
+      const hasVariantSelection = variantGroupId !== null && variantValueIndex !== null;
       items.push({
         key: item.key,
         product: p,
@@ -1433,15 +1448,13 @@
         option_items: Array.isArray(item.option_items) ? item.option_items : [],
         ingredients: Array.isArray(item.ingredients) ? item.ingredients : [],
         ingredient_price_diff: Number(item.ingredient_price_diff || 0),
-        variant_group_id: Number(item.variant_group_id ?? null),
-        variant_value_index: Number.isFinite(Number(item.variant_value_index))
-          ? Number(item.variant_value_index)
-          : null,
-        variant_label: str(item.variant_label || ""),
-        variant_unit_price: Number(item.variant_unit_price || 0),
+        variant_group_id: variantGroupId,
+        variant_value_index: variantValueIndex,
+        variant_label: hasVariantSelection ? str(item.variant_label || "") : "",
+        variant_unit_price: hasVariantSelection ? Number(item.variant_unit_price || 0) : 0,
         unit_price_override: item.unit_price_override != null ? Number(item.unit_price_override) : null,
         auto_add: Number(item.auto_add || 0),
-        auto_add_group_id: Number(item.auto_add_group_id ?? null),
+        auto_add_group_id: toFiniteNumberOrNull(item.auto_add_group_id),
       });
     }
     return items;
@@ -1536,7 +1549,9 @@
     const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
     const hasOptions = optionItems.length > 0;
     const hasIngredients = ingredients.length > 0;
-    const hasVariant = Number.isFinite(Number(item.variant_group_id)) || Number.isFinite(Number(item.variant_value_index));
+    const hasVariant =
+      toFiniteNumberOrNull(item.variant_group_id) !== null ||
+      toFiniteNumberOrNull(item.variant_value_index) !== null;
     return !hasOptions && !hasIngredients && !hasVariant;
   }
 
@@ -1763,7 +1778,7 @@
     if (parts.length >= 2) {
       const groupTitle = parts[0].trim();
       const value = parts.slice(1).join(":").trim();
-      // ??????: ???????? ????????_?????? (???????? "1?? ????" ??? "200? ????")
+      if (!value) return null;
       return `${value} ${groupTitle}`;
     }
     // ???? ?????? ???????????, ?????????? ??? ????
@@ -1870,10 +1885,10 @@
     if (item.variants && Array.isArray(item.variants) && item.variants.length > 0) {
       item.variants.forEach(v => {
         if (v.label || v.value) {
-          const groupTitle = str(v.group_title || "Вариант");
+          const groupTitle = str(v.group_title || "");
           const variantValue = str(v.label || v.value || "");
           // ??????: ???????? ????????_?????? (???????? "200? ????")
-          const formatted = `${variantValue} ${groupTitle}`.trim();
+          const formatted = [variantValue, groupTitle].filter(Boolean).join(" ").trim();
           if (formatted) variantParts.push(formatted);
         }
       });
@@ -4824,7 +4839,7 @@ async function initAddresses() {
           variant_unit_price: variantUnitPrice,
           unit_price_override: item.unit_price_override != null ? Number(item.unit_price_override) : null,
           auto_add: Number(item.auto_add || 0),
-          auto_add_group_id: Number(item.auto_add_group_id ?? null),
+          auto_add_group_id: toFiniteNumberOrNull(item.auto_add_group_id),
         },
         totals
       );
@@ -6121,5 +6136,3 @@ if (__shopHasRequiredDom) initCore();
 
 // Late-loaded on shop-late.js. Core keeps a safe no-op to avoid ReferenceError during first paint.
 function updateMobileDeliveryProgress() {}
-
-
