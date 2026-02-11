@@ -66,6 +66,7 @@
   const elSortWrap = $("#clientsSortWrap");
   const elAddBtn = $("#clientsAddBtn");
   const elOpenFilterCategoriesBtn = $("#openFilterCategoriesBtn");
+  const elClientsScroll = elList ? elList.closest(".panel-body") : null;
 
   // Discounts accordion
   const elDiscountsFilters = $("#discountsFiltersList");
@@ -182,6 +183,10 @@
     q: "",
     sort: "last_desc",
     clients: [],
+    clientsOffset: 0,
+    clientsTotal: 0,
+    clientsHasMore: true,
+    clientsLoading: false,
     activeClientId: null,
     activeClient: null,
     addresses: [],
@@ -214,6 +219,9 @@
     customerCategories: [],
     customersList: [],
   };
+  const CLIENTS_PAGE_LIMIT = 80;
+  const CLIENTS_SCROLL_THRESHOLD_PX = 220;
+  let clientsRequestToken = 0;
 
   // -----------------------------
   // Tabs state (top-level: switching between clients)
@@ -1532,6 +1540,9 @@
       renderFilterCategoriesList();
     } else if (viewName === 'discounts') {
       renderDiscountsList();
+    } else if (viewName === 'clients') {
+      maybeLoadMoreClientsOnScroll();
+      ensureClientsScrollable().catch(console.error);
     }
   }
 
@@ -1935,6 +1946,33 @@
   // -----------------------------
   // Render: clients list
   // -----------------------------
+  function buildClientRow(c) {
+    const row = document.createElement("div");
+    row.className = "order-row js-client";
+    row.setAttribute("role", "button");
+    row.setAttribute("tabindex", "0");
+    row.setAttribute("data-client-id", String(c.id));
+    if (state.activeClientId && Number(state.activeClientId) === Number(c.id)) {
+      row.classList.add("is-active");
+    }
+    row.style.gridTemplateColumns = '64px minmax(200px, 1fr) 80px';
+    row.innerHTML = `
+      <div class="order-main">
+        <div class="order-num">${escapeHtml(c.id)}</div>
+        <div class="order-time">${escapeHtml(c.is_active ? "Активен" : "Неактивен")}</div>
+      </div>
+      <div class="order-mid">
+        <div class="order-line"><strong>${escapeHtml(c.name || "—")}</strong></div>
+        <div class="order-line muted"><i class="fas fa-phone"></i> <span class="client-phone" style="white-space:nowrap;display:inline-block;overflow:hidden;text-overflow:ellipsis;max-width:220px;">${escapeHtml(formatPhoneDigitsToRU(c.phone))}</span></div>
+      </div>
+      <div class="order-actions">
+        <div class="pill pill-strong" style="padding:6px 10px;font-size:13px;height:32px;min-width:40px;max-width:80px;box-sizing:border-box;overflow:hidden;text-align:center;">${escapeHtml(Number(c.total_orders || 0))}</div>
+      </div>
+    `;
+    row.addEventListener("click", () => selectClient(c.id));
+    return row;
+  }
+
   function renderClients() {
     if (!elList) return;
     elList.innerHTML = "";
@@ -1946,30 +1984,15 @@
     if (elEmpty) elEmpty.classList.add("hidden");
 
     list.forEach((c) => {
-      const row = document.createElement("div");
-      row.className = "order-row js-client";
-      row.setAttribute("role", "button");
-      row.setAttribute("tabindex", "0");
-      row.setAttribute("data-client-id", String(c.id));
-      if (state.activeClientId && Number(state.activeClientId) === Number(c.id)) {
-        row.classList.add("is-active");
-      }
-      row.style.gridTemplateColumns = '64px minmax(200px, 1fr) 80px';
-      row.innerHTML = `
-        <div class="order-main">
-          <div class="order-num">${escapeHtml(c.id)}</div>
-          <div class="order-time">${escapeHtml(c.is_active ? "Активен" : "Неактивен")}</div>
-        </div>
-        <div class="order-mid">
-          <div class="order-line"><strong>${escapeHtml(c.name || "—")}</strong></div>
-          <div class="order-line muted"><i class="fas fa-phone"></i> <span class="client-phone" style="white-space:nowrap;display:inline-block;overflow:hidden;text-overflow:ellipsis;max-width:220px;">${escapeHtml(formatPhoneDigitsToRU(c.phone))}</span></div>
-        </div>
-        <div class="order-actions">
-          <div class="pill pill-strong" style="padding:6px 10px;font-size:13px;height:32px;min-width:40px;max-width:80px;box-sizing:border-box;overflow:hidden;text-align:center;">${escapeHtml(Number(c.total_orders || 0))}</div>
-        </div>
-      `;
-      row.addEventListener("click", () => selectClient(c.id));
-      elList.appendChild(row);
+      elList.appendChild(buildClientRow(c));
+    });
+  }
+
+  function appendClients(items) {
+    if (!elList || !Array.isArray(items) || !items.length) return;
+    if (elEmpty) elEmpty.classList.add("hidden");
+    items.forEach((c) => {
+      elList.appendChild(buildClientRow(c));
     });
   }
 
@@ -2506,28 +2529,78 @@
     state.totals.all = Number(a.total || 0);
   }
 
-  async function loadClients() {
+  function buildClientsListQuery(offset, limit) {
     const qs = new URLSearchParams();
-    qs.set("limit", "80");
-    qs.set("offset", "0");
+    qs.set("limit", String(limit));
+    qs.set("offset", String(offset));
+    qs.set("sort", state.sort || "last_desc");
     if (state.q) qs.set("q", state.q);
     if (state.activeFilter === "custom" && state.activeCustomFilterId) {
       qs.set("filter_id", String(state.activeCustomFilterId));
     }
+    return qs;
+  }
 
-    const json = await apiJson(`/api/admin/clients?${qs.toString()}`);
-    state.clients = Array.isArray(json.data) ? json.data : [];
+  async function loadMoreClients() {
+    if (state.clientsLoading) return;
+    if (!state.clientsHasMore) return;
+
+    state.clientsLoading = true;
+    const token = clientsRequestToken;
+    try {
+      const qs = buildClientsListQuery(state.clientsOffset, CLIENTS_PAGE_LIMIT);
+      const json = await apiJson(`/api/admin/clients?${qs.toString()}`);
+      if (token !== clientsRequestToken) return;
+
+      const chunk = Array.isArray(json.data) ? json.data : [];
+      const knownIds = new Set((state.clients || []).map((x) => Number(x.id)));
+      const append = chunk.filter((x) => !knownIds.has(Number(x.id)));
+
+      state.clients = (state.clients || []).concat(append);
+      state.clientsOffset += chunk.length;
+      state.clientsTotal = Number(json.total || 0);
+      state.clientsHasMore = chunk.length > 0 && state.clients.length < state.clientsTotal;
+
+      appendClients(append);
+    } finally {
+      if (token === clientsRequestToken) {
+        state.clientsLoading = false;
+        if (state.currentView === "clients") {
+          maybeLoadMoreClientsOnScroll();
+        }
+      }
+    }
+  }
+
+  async function ensureClientsScrollable() {
+    if (!elClientsScroll) return;
+    let guard = 0;
+    while (
+      state.currentView === "clients" &&
+      state.clientsHasMore &&
+      !state.clientsLoading &&
+      elClientsScroll.scrollHeight <= (elClientsScroll.clientHeight + 20) &&
+      guard < 5
+    ) {
+      guard += 1;
+      await loadMoreClients();
+    }
+  }
+
+  async function loadClients() {
+    clientsRequestToken += 1;
+    state.clientsLoading = false;
+    state.clients = [];
+    state.clientsOffset = 0;
+    state.clientsTotal = 0;
+    state.clientsHasMore = true;
+    renderClients();
 
     await loadTotals();
     renderFilters();
-    applyClientsSort();
 
-    if (state.activeClientId) {
-      const exists = state.clients.some((x) => Number(x.id) === Number(state.activeClientId));
-      if (!exists) state.activeClientId = null;
-    }
-
-    renderClients();
+    await loadMoreClients();
+    await ensureClientsScrollable();
   }
 
   // -----------------------------
@@ -2545,6 +2618,18 @@
     state.q = elSearch ? elSearch.value.trim() : "";
     loadClients().catch(console.error);
   }, 250);
+
+  function maybeLoadMoreClientsOnScroll() {
+    if (!elClientsScroll) return;
+    if (state.currentView !== "clients") return;
+    if (state.clientsLoading || !state.clientsHasMore) return;
+    const nearBottom =
+      (elClientsScroll.scrollTop + elClientsScroll.clientHeight) >=
+      (elClientsScroll.scrollHeight - CLIENTS_SCROLL_THRESHOLD_PX);
+    if (nearBottom) {
+      loadMoreClients().catch(console.error);
+    }
+  }
 
   // -----------------------------
   // Sheet events
@@ -2587,6 +2672,9 @@
   if (elSearch) elSearch.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeSearch();
   });
+  if (elClientsScroll) {
+    elClientsScroll.addEventListener("scroll", maybeLoadMoreClientsOnScroll, { passive: true });
+  }
 
   // -----------------------------
   // Toolbar: sort dropdown
@@ -2617,8 +2705,7 @@
         b.classList.toggle("is-active", b.dataset.sortVal === state.sort);
       });
       closeSortDropdown();
-      applyClientsSort();
-      renderClients();
+      loadClients().catch(console.error);
     });
   }
 

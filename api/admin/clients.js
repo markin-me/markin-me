@@ -111,12 +111,21 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
           : null;
 
       const filterId = req.query.filter_id ? Number(req.query.filter_id) : null;
+      const sortRaw = helpers.strOrNull(req.query.sort) || 'last_desc';
 
       let limit = Number(req.query.limit ?? 50);
       let offset = Number(req.query.offset ?? 0);
       if (!Number.isFinite(limit) || limit <= 0) limit = 50;
       if (limit > 200) limit = 200;
       if (!Number.isFinite(offset) || offset < 0) offset = 0;
+
+      const orderByMap = {
+        last_desc: 'COALESCE(last_order_date, created_at) DESC, id DESC',
+        name_asc: "CASE WHEN name IS NULL OR name='' THEN 1 ELSE 0 END ASC, name ASC, id DESC",
+        orders_desc: 'total_orders DESC, id DESC',
+        created_desc: 'created_at DESC, id DESC',
+      };
+      const orderBy = orderByMap[sortRaw] || orderByMap.last_desc;
 
       const where = ['tenant_id=?'];
       const params = [tenantId];
@@ -159,7 +168,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
            created_at, updated_at
          FROM cust_customers
          WHERE ${where.join(' AND ')}${customFilterClause}
-         ORDER BY COALESCE(last_order_date, created_at) DESC, id DESC
+         ORDER BY ${orderBy}
          LIMIT ? OFFSET ?`,
         [...params, ...customFilterParams, limit, offset]
       );
