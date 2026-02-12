@@ -83,6 +83,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
         t.code AS timeOptionCode,
         t.title AS timeOptionTitle,
+        t.icon AS timeOptionIcon,
 
         c.telegram_user_id AS customerTelegramId,
 
@@ -169,6 +170,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
       time_option_code: r.timeOptionCode ?? null,
       time_option_title: r.timeOptionTitle ?? null,
+      time_option_icon: r.timeOptionIcon ?? null,
 
       telegram_user_id: r.customerTelegramId ?? null,
 
@@ -309,6 +311,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
           t.code AS timeOptionCode,
           t.title AS timeOptionTitle,
+          t.icon AS timeOptionIcon,
 
           c.telegram_user_id AS customerTelegramId,
 
@@ -389,6 +392,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
           time_option_code: r.timeOptionCode ?? null,
           time_option_title: r.timeOptionTitle ?? null,
+          time_option_icon: r.timeOptionIcon ?? null,
 
           telegram_user_id: r.customerTelegramId ?? null,
 

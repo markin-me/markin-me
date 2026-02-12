@@ -125,3 +125,7 @@
     <div class="order-summary-thanks">Спасибо за заказ!</div>
   </div>
 </div>
+
+<% if (typeof includeClientProfile === 'undefined' || includeClientProfile) { %>
+<%- include('../clients/profile_content') %>
+<% } %>

@@ -1995,6 +1995,33 @@
   // Cart warmup: ensure products for all cart items are in cache
   // (????? ??????? ?? ???????? ?В корзине пусто???? ?????????)
   // -----------------------------
+  async function ensureProductForWarmup(pid) {
+    const id = Number(pid);
+    if (!Number.isFinite(id)) return null;
+    if (state.productCache.has(id)) return state.productCache.get(id);
+
+    if (typeof ensureProduct === "function") {
+      return ensureProduct(id);
+    }
+
+    // Late bundle may not be loaded yet during first paint.
+    try {
+      await ensureShopLateLoaded();
+    } catch {}
+
+    if (typeof ensureProduct === "function") {
+      return ensureProduct(id);
+    }
+
+    // Fallback to a direct fetch so warmup never throws on missing late API.
+    const json = await apiJson(`/api/public/products/${id}`);
+    const p = json.data;
+    if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
+    p.is_available = isProductAvailable(p);
+    state.productCache.set(id, p);
+    return p;
+  }
+
   async function warmupCartProducts() {
     const missing = [];
     for (const item of state.cart) {
@@ -2008,7 +2035,7 @@
     await Promise.all(
       missing.map(async (pid) => {
         try {
-          await ensureProduct(pid);
+          await ensureProductForWarmup(pid);
         } catch (e) {
           // ???? ????? ?????? ??? API ?????????? ? ?? ??????, ?????? ??????????.
           console.warn("warmupCartProducts: failed to load product", pid, e);
