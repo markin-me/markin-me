@@ -8643,22 +8643,31 @@ function setBottomNavActive(tab) {
     return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
   }
 
-  function buildTimeSlots(option, targetDate) {
+  function buildTimeSlots(option, targetDate, storeTimezone) {
     if (!option) return [];
-    const start = parseTimeToMinutes(option.starts_at);
-    const end = parseTimeToMinutes(option.ends_at);
-    if (start === null || end === null || end <= start) return [];
+    let start = parseTimeToMinutes(option.starts_at);
+    let end = parseTimeToMinutes(option.ends_at);
     const stepMinutes = Math.max(1, Number(option.step_minutes) || 30);
     const leadMinutes = Math.max(0, Number(option.lead_minutes) || 0);
 
-    const now = new Date();
-    const todayKey = getDateString(now);
+    // Fallbacks for incomplete or midnight-bound config.
+    if (start === null) start = 0;
+    if (end === null) end = 24 * 60;
+    if (end === 0 && start > 0) end = 24 * 60;
+    if (end <= start) end += 24 * 60;
+    if (start < 0) start = 0;
+    if (end > 48 * 60) end = 48 * 60;
+    if (end <= start) return [];
+
+    // IMPORTANT: use store timezone, not device local timezone.
+    const now = getStoreDateNow(storeTimezone || "+0");
+    const todayKey = getTodayDateString(storeTimezone || "+0");
     const targetKey = targetDate ? getDateString(targetDate) : todayKey;
     const isToday = (targetKey === todayKey);
 
     let slot = start;
     if (isToday) {
-      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      const nowMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
       const minAllowed = nowMinutes + leadMinutes;
       if (slot < minAllowed) {
         const diff = minAllowed - slot;
@@ -9175,11 +9184,28 @@ function setBottomNavActive(tab) {
       defaultFallback = "at_time";
     }
 
+    // Exact guard: if "at_time" has no actual slots right now, hide it to prevent empty picker.
+    const detailedTimeOptionByCode = (cfg.timeOptions || []).reduce((acc, option) => {
+      if (option && option.code) acc[option.code] = option;
+      return acc;
+    }, {});
+    const atTimeOption = detailedTimeOptionByCode.at_time;
+    if (atTimeOption && Number(atTimeOption.has_time_window) === 1) {
+      const atTimeSlots = buildTimeSlots(atTimeOption, null, storeTimezone);
+      if (!atTimeSlots.length) {
+        filteredTimeOptions = filteredTimeOptions.filter(opt => opt.code !== "at_time");
+        if (defaultFallback === "at_time") defaultFallback = "on_date";
+      }
+    }
+
     const availableTimeOptions = filteredTimeOptions.length ? filteredTimeOptions : timeOptions;
 
     // Always use defaultFallback for the segment, ignore saved draft
     // Draft can cause wrong defaults (e.g., "on_date" when store is OPEN and should be "asap")
-    const timeDefault = availableTimeOptions[0]?.code || defaultFallback;
+    const fallbackCode = availableTimeOptions.some(opt => opt.code === defaultFallback)
+      ? defaultFallback
+      : (availableTimeOptions[0]?.code || defaultFallback);
+    const timeDefault = fallbackCode;
 
     const timeSelect = buildDropdown(availableTimeOptions, timeDefault);
 
@@ -9441,7 +9467,7 @@ function setBottomNavActive(tab) {
           return;
         }
         dateSlotsWrap.style.display = "";
-        const slots = buildTimeSlots(config, selectedDate);
+        const slots = buildTimeSlots(config, selectedDate, storeTimezone);
         const slotOptions = slots.map(value => ({ code: value, title: value }));
         const preferred = timeInput.value || storedDraftTime || "";
         const defaultSlot = slotOptions.find(slot => slot.code === preferred)
@@ -9456,7 +9482,7 @@ function setBottomNavActive(tab) {
         timeSlotsDropdownAtTime.setOptions([]);
         return;
       }
-      const slots = buildTimeSlots(config);
+      const slots = buildTimeSlots(config, null, storeTimezone);
       const slotOptions = slots.map(value => ({ code: value, title: value }));
       const preferred = timeInput.value || storedDraftTime || "";
       const defaultSlot = slotOptions.find(slot => slot.code === preferred)

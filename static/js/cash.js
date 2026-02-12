@@ -67,13 +67,40 @@
       return moneyFmt.format(isFinite(n) ? n : 0) + ' ₽';
     }
 
+    function parseLocalDateParts(ts) {
+      if (!ts) return null;
+      var raw = String(ts).trim();
+      var match = raw.match(
+        /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/
+      );
+      if (match) {
+        return {
+          year: Number(match[1]),
+          month: Number(match[2]),
+          day: Number(match[3]),
+          hour: Number(match[4]),
+          minute: Number(match[5]),
+          second: Number(match[6] || 0)
+        };
+      }
+      var fallback = new Date(raw.replace(' ', 'T'));
+      if (isNaN(fallback.getTime())) return null;
+      return {
+        year: fallback.getFullYear(),
+        month: fallback.getMonth() + 1,
+        day: fallback.getDate(),
+        hour: fallback.getHours(),
+        minute: fallback.getMinutes(),
+        second: fallback.getSeconds()
+      };
+    }
+
     function formatTime(ts) {
       if (!ts) return '';
-      var dateStr = String(ts).replace(' ', 'T');
-      var d = new Date(dateStr);
-      if (isNaN(d.getTime())) return '';
-      var hours = String(d.getHours()).padStart(2, '0');
-      var minutes = String(d.getMinutes()).padStart(2, '0');
+      var parts = parseLocalDateParts(ts);
+      if (!parts) return '';
+      var hours = String(parts.hour).padStart(2, '0');
+      var minutes = String(parts.minute).padStart(2, '0');
       return hours + ':' + minutes;
     }
 
@@ -516,14 +543,13 @@
 
     function formatReceiptDate(order) {
       if (!order || !order.created_at) return '';
-      var createdAtStr = String(order.created_at).replace(' ', 'T');
-      var date = new Date(createdAtStr);
-      if (isNaN(date.getTime())) return '';
-      var day = String(date.getDate()).padStart(2, '0');
-      var month = String(date.getMonth() + 1).padStart(2, '0');
-      var year = date.getFullYear();
-      var hours = String(date.getHours()).padStart(2, '0');
-      var minutes = String(date.getMinutes()).padStart(2, '0');
+      var parts = parseLocalDateParts(order.created_at);
+      if (!parts) return '';
+      var day = String(parts.day).padStart(2, '0');
+      var month = String(parts.month).padStart(2, '0');
+      var year = parts.year;
+      var hours = String(parts.hour).padStart(2, '0');
+      var minutes = String(parts.minute).padStart(2, '0');
       return day + '.' + month + '.' + year + ', ' + hours + ':' + minutes;
     }
 
@@ -535,14 +561,13 @@
       }
 
       // ----- Логика максимально совпадает с generateReceiptHTML -----
-      var createdAtStr = String(order.created_at).replace(' ', 'T');
-      var date = new Date(createdAtStr);
+      var createdParts = parseLocalDateParts(order.created_at);
 
-      var day = String(date.getDate()).padStart(2, '0');
-      var month = String(date.getMonth() + 1).padStart(2, '0');
-      var year = date.getFullYear();
-      var hours = String(date.getHours()).padStart(2, '0');
-      var minutes = String(date.getMinutes()).padStart(2, '0');
+      var day = createdParts ? String(createdParts.day).padStart(2, '0') : '';
+      var month = createdParts ? String(createdParts.month).padStart(2, '0') : '';
+      var year = createdParts ? createdParts.year : '';
+      var hours = createdParts ? String(createdParts.hour).padStart(2, '0') : '';
+      var minutes = createdParts ? String(createdParts.minute).padStart(2, '0') : '';
 
       var dateStr = day + '.' + month + '.' + year + ', ' + hours + ':' + minutes;
 
@@ -570,11 +595,10 @@
         var tTitle = String(order.time_option_title || "").trim();
         var scheduledAt = order.scheduled_at;
         if (scheduledAt) {
-          var dStr = String(scheduledAt).replace(' ', 'T');
-          var sd = new Date(dStr);
-          if (!isNaN(sd.getTime())) {
-            var hh = String(sd.getHours()).padStart(2, '0');
-            var mm = String(sd.getMinutes()).padStart(2, '0');
+          var scheduledParts = parseLocalDateParts(scheduledAt);
+          if (scheduledParts) {
+            var hh = String(scheduledParts.hour).padStart(2, '0');
+            var mm = String(scheduledParts.minute).padStart(2, '0');
             scheduleText = (tTitle || "Ко времени") + ": " + hh + ":" + mm;
           }
         } else {

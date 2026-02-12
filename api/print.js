@@ -116,20 +116,6 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     }
   }
 
-  function parseDateString(value) {
-    if (!value) return null;
-    const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
-    if (!match) return null;
-    return {
-      year: Number(match[1]),
-      month: Number(match[2]),
-      day: Number(match[3]),
-      hour: Number(match[4]),
-      minute: Number(match[5]),
-      second: Number(match[6]),
-    };
-  }
-
   function toDateKey(date) {
     const yyyy = date.getFullYear();
     const mm = String(date.getMonth() + 1).padStart(2, "0");
@@ -137,28 +123,59 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     return `${yyyy}-${mm}-${dd}`;
   }
 
-  function pad2(val) {
-    return String(val || 0).padStart(2, "0");
+  function parseLocalDate(value) {
+    if (!value) return null;
+    const raw = String(value).trim();
+    const match = raw.match(
+      /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/
+    );
+    if (match) {
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+      const day = Number(match[3]);
+      const hour = Number(match[4]);
+      const minute = Number(match[5]);
+      const second = Number(match[6] || 0);
+      const date = new Date(year, month - 1, day, hour, minute, second, 0);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    const fallback = new Date(raw.replace(" ", "T"));
+    return Number.isNaN(fallback.getTime()) ? null : fallback;
   }
 
-  function formatTimeParts(parts) {
-    if (!parts) return "";
-    return `${pad2(parts.hour)}:${pad2(parts.minute)}`;
+  function formatTime(value) {
+    const date = parseLocalDate(value);
+    if (!date) return "";
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    return `${hours}:${minutes}`;
   }
 
-  function formatDateTimeParts(parts) {
-    if (!parts) return "";
-    return `${pad2(parts.day)}.${pad2(parts.month)}.${parts.year}, ${formatTimeParts(parts)}`;
+  function formatDateTime(value) {
+    const date = parseLocalDate(value);
+    if (!date) return "";
+    const day = String(date.getDate()).padStart(2, "0");
+    const month = date.getMonth();
+    const year = date.getFullYear();
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    const monthNames = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
+    return `${day} ${monthNames[month]} ${year}, ${hours}:${minutes}`;
   }
 
-  function getPartsDateKey(parts) {
-    if (!parts) return "";
-    return `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}`;
+  function escapeHtml(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
   }
 
-  function toStoreDateParts(value, timezone) {
-    const storeValue = helpers.utcToStoreDateTime(value, timezone ?? "+0");
-    return parseDateString(storeValue) || parseDateString(value);
+  const moneyFmt = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 });
+  function money(v) {
+    const n = Number(v || 0);
+    return moneyFmt.format(Number.isFinite(n) ? n : 0) + " ₽";
   }
 
   function getStoreDateNow(timezone) {
@@ -169,26 +186,137 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     return new Date(now.getTime() + shiftMinutes * 60 * 1000);
   }
 
-  function formatReceiptScheduleText(order, timezone) {
+  function formatScheduleText(order, timezone, { includeTitle = true } = {}) {
     if (!order) return "";
-    const title = String(order.timeOptionTitle || "").trim();
-    const scheduledParts = toStoreDateParts(order.scheduled_at, timezone);
-    if (!scheduledParts) {
-      return title;
-    }
-    const code = String(order.timeOptionCode || "").trim();
+    const title = String(order.time_option_title || "").trim();
+    const scheduledAt = order.scheduled_at;
+    if (!scheduledAt) return includeTitle ? title : "";
+
+    const date = parseLocalDate(scheduledAt);
+    if (!date) return includeTitle ? title : "";
+
+    const code = String(order.time_option_code || "").trim();
     const storeNow = getStoreDateNow(timezone ?? "+0");
-    const showDate =
-      code === "on_date"
-        ? true
-        : code === "at_time"
-        ? false
-        : getPartsDateKey(scheduledParts) !== toDateKey(storeNow);
-    const valueText = showDate ? formatDateTimeParts(scheduledParts) : formatTimeParts(scheduledParts);
-    if (!valueText) {
-      return title;
+    const isToday = toDateKey(date) === toDateKey(storeNow);
+    const showDate = code === "on_date" ? true : code === "at_time" ? false : !isToday;
+    const valueText = showDate ? formatDateTime(scheduledAt) : formatTime(scheduledAt);
+    if (!valueText) return includeTitle ? title : "";
+    if (includeTitle && title) return `${title}: ${valueText}`;
+    return valueText;
+  }
+
+  function roundMoney(value) {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(n * 100) / 100;
+  }
+
+  function getOrderItemLineTotal(item) {
+    const lineTotal = Number(item?.line_total ?? item?.total ?? item?.total_price);
+    if (Number.isFinite(lineTotal)) return roundMoney(lineTotal);
+    const unitPrice = Number(item?.price || 0);
+    const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+    return roundMoney(unitPrice * qty);
+  }
+
+  function parseOrderDiscountsJson(order) {
+    const raw = order?.discounts_json;
+    if (Array.isArray(raw)) return raw;
+    if (!raw) return [];
+    try {
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
     }
-    return title ? `${title}: ${valueText}` : valueText;
+  }
+
+  function isAutoAddItem(item) {
+    if (Number(item?.auto_add || 0) === 1) return true;
+    const name = String(item?.product_name || item?.name || "").trim().toLowerCase();
+    return name === "приборы";
+  }
+
+  function buildOrderDiscountSummary(order) {
+    const orderTotal = roundMoney(Number(order?.total_price || 0));
+    const deliveryCost = roundMoney(Number(order?.delivery_cost || 0));
+    const items = Array.isArray(order?.items) ? order.items : [];
+    const discountsList = parseOrderDiscountsJson(order);
+
+    let itemsTotalAfterItemDiscounts = 0;
+    let comboDiscount = 0;
+    let productDiscount = 0;
+    let autoAddDiscount = 0;
+
+    items.forEach((item) => {
+      const lineTotal = getOrderItemLineTotal(item);
+      itemsTotalAfterItemDiscounts += lineTotal;
+
+      let originalLineTotal = lineTotal;
+      const comboOldLineTotal = Number(item?.old_line_total || 0);
+      const discountOriginalLineTotal = Number(item?.discount?.original_line_total || 0);
+      const oldPrice = Number(item?.old_price || 0);
+      const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+      const oldPriceLineTotal = oldPrice > 0 ? roundMoney(oldPrice * qty) : 0;
+
+      if (String(item?.type || "") === "combo" && comboOldLineTotal > lineTotal) {
+        originalLineTotal = comboOldLineTotal;
+      } else if (discountOriginalLineTotal > lineTotal) {
+        originalLineTotal = discountOriginalLineTotal;
+      } else if (oldPriceLineTotal > lineTotal) {
+        originalLineTotal = oldPriceLineTotal;
+      }
+
+      const lineDiscount = roundMoney(Math.max(0, originalLineTotal - lineTotal));
+      if (!(lineDiscount > 0)) return;
+
+      if (String(item?.type || "") === "combo") {
+        comboDiscount += lineDiscount;
+      } else if (isAutoAddItem(item)) {
+        autoAddDiscount += lineDiscount;
+      } else {
+        productDiscount += lineDiscount;
+      }
+    });
+
+    comboDiscount = roundMoney(comboDiscount);
+    productDiscount = roundMoney(productDiscount);
+    autoAddDiscount = roundMoney(autoAddDiscount);
+
+    const itemsPayableAfterAllDiscounts = roundMoney(Math.max(0, orderTotal - deliveryCost));
+    const customerOrderDiscount = roundMoney(Math.max(0, itemsTotalAfterItemDiscounts - itemsPayableAfterAllDiscounts));
+    const itemLevelDiscount = roundMoney(comboDiscount + productDiscount + autoAddDiscount);
+    const calculatedDiscount = roundMoney(itemLevelDiscount + customerOrderDiscount);
+    const storedDiscount = roundMoney(Math.max(0, Number(order?.discount_amount || 0)));
+    const totalDiscount = storedDiscount > calculatedDiscount ? storedDiscount : calculatedDiscount;
+    const subtotalBeforeDiscount = roundMoney(itemsPayableAfterAllDiscounts + totalDiscount);
+
+    const breakdown = [
+      { title: "Комбо", amount: comboDiscount },
+      { title: "Товарные скидки", amount: productDiscount },
+      { title: "Автодобавление", amount: autoAddDiscount },
+      { title: "Клиентская скидка", amount: customerOrderDiscount },
+    ].filter((entry) => Number(entry.amount || 0) > 0);
+
+    const breakdownTotal = roundMoney(
+      breakdown.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+    );
+    const otherDiscount = roundMoney(Math.max(0, totalDiscount - breakdownTotal));
+    if (otherDiscount > 0) breakdown.push({ title: "Прочие скидки", amount: otherDiscount });
+
+    const orderDiscountTitles = [];
+    discountsList.forEach((entry) => {
+      if (String(entry?.apply_to || "").toLowerCase() !== "order") return;
+      const title = String(entry?.title || "").trim();
+      if (title && !orderDiscountTitles.includes(title)) orderDiscountTitles.push(title);
+    });
+
+    return {
+      subtotalBeforeDiscount,
+      totalDiscount,
+      breakdown,
+      orderDiscountTitles,
+    };
   }
 
   // GET /api/print/token-info - проверка токена и информация о точке
@@ -475,9 +603,10 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
           o.id, o.public_id,
           DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
           o.customer_id, o.customer_name, o.customer_phone,
-          o.address, o.comment, o.cutlery_qty,
+          o.address, o.comment, o.address_comment, o.cutlery_qty,
           o.change_from, o.total_price, o.delivery_cost,
-          o.items, o.scheduled_at,
+          o.discount_amount, o.discounts_json, o.items,
+          DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
           o.delivery_type_id, o.payment_id, o.time_option_id, o.status_id,
           o.pickup_store_id,
           
@@ -486,7 +615,8 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
           m.code AS methodCode, m.title AS methodTitle,
           t.code AS timeOptionCode, t.title AS timeOptionTitle,
           c.telegram_user_id AS customerTelegramId,
-          ps.name AS pickupStoreName, ps.address AS pickupStoreAddress
+          ps.name AS pickupStoreName, ps.address AS pickupStoreAddress,
+          ca.comment AS address_comment_from_cust
         FROM order_orders o
         LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
         LEFT JOIN order_payments p ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
@@ -494,6 +624,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
         LEFT JOIN order_time_options t ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
         LEFT JOIN cust_customers c ON c.tenant_id=o.tenant_id AND c.store_id=o.store_id AND c.id=o.customer_id
         LEFT JOIN ten_stores ps ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
+        LEFT JOIN cust_customer_addresses ca ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
         WHERE o.tenant_id=? AND o.store_id=? AND o.id=? LIMIT 1
         `,
         [tenantId, storeId, orderId]
@@ -511,11 +642,32 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
         const parsed = order.items ? JSON.parse(order.items) : [];
         if (Array.isArray(parsed)) items = parsed;
       } catch {}
+
+      let discountsJson = [];
+      try {
+        const parsed = order.discounts_json ? JSON.parse(order.discounts_json) : [];
+        if (Array.isArray(parsed)) discountsJson = parsed;
+      } catch {}
       
       order.items = items;
+      order.discounts_json = discountsJson;
       const storeTimezone = await getStoreTimezone(tenantId, storeId);
+      order.created_at = helpers.utcToStoreDateTime(order.created_at, storeTimezone) || order.created_at;
+      order.address_comment = (order.address_comment && String(order.address_comment).trim())
+        ? order.address_comment
+        : (order.address_comment_from_cust && String(order.address_comment_from_cust).trim())
+          ? order.address_comment_from_cust
+          : null;
+      order.payment_title = order.paymentTitle ?? null;
+      order.payment_code = order.paymentCode ?? null;
+      order.method_title = order.methodTitle ?? null;
+      order.method_code = order.methodCode ?? null;
+      order.time_option_title = order.timeOptionTitle ?? null;
+      order.time_option_code = order.timeOptionCode ?? null;
+      order.pickup_store_name = order.pickupStoreName ?? null;
+      order.pickup_store_address = order.pickupStoreAddress ?? null;
 
-      // Теперь генерируем HTML ровно как в  orders.js
+      // Генерируем HTML в том же формате, что и CRM кнопка печати.
       const html = generateReceiptHtmlForOrder(order, storeTimezone);
 
       res.json({
@@ -530,60 +682,38 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
   });
 
   function generateReceiptHtmlForOrder(order, storeTimezone) {
-    // Вспомогательные функции (переведены из orders.js)
-    function money(v) {
-      const n = Number(v || 0);
-      const formatted = n.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
-      return formatted + ' ₽';
-    }
-
-    function escapeHtml(s) {
-      if (!s) return '';
-      return String(s)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;");
-    }
-
     try {
-      // Форматируем дату (время приводим к timezone филиала)
-      const createdAtRaw = order.created_at;
-      const createdAtParts = toStoreDateParts(createdAtRaw, storeTimezone);
-      const dateStr = formatDateTimeParts(createdAtParts) || (createdAtRaw ? String(createdAtRaw) : '');
+      const createdAtRaw = String(order.created_at || "");
+      const createdAtDate = parseLocalDate(createdAtRaw);
+      const day = createdAtDate ? String(createdAtDate.getDate()).padStart(2, "0") : "";
+      const month = createdAtDate ? String(createdAtDate.getMonth() + 1).padStart(2, "0") : "";
+      const year = createdAtDate ? createdAtDate.getFullYear() : "";
+      const hours = createdAtDate ? String(createdAtDate.getHours()).padStart(2, "0") : "";
+      const minutes = createdAtDate ? String(createdAtDate.getMinutes()).padStart(2, "0") : "";
+      const dateStr = createdAtDate ? `${day}.${month}.${year}, ${hours}:${minutes}` : createdAtRaw;
 
-      // Используем правильные названия полей из БД (они переименованы в SELECT)
-      const methodTitle = order.methodTitle || (order.methodCode === "pickup" ? "Самовывоз" : "Доставка");
-      const deliverySectionTitle = order.methodCode === "pickup" ? "Самовывоз:" : "Доставка:";
-      
+      const methodTitle = order.method_title || (order.method_code === "pickup" ? "Самовывоз" : "Доставка");
       let address = order.address;
-      if (!address && order.pickupStoreAddress) {
-        address = order.pickupStoreName
-          ? `${order.pickupStoreName}, ${order.pickupStoreAddress}`
-          : order.pickupStoreAddress;
+      if (!address && order.pickup_store_address) {
+        address = order.pickup_store_name
+          ? `${order.pickup_store_name}, ${order.pickup_store_address}`
+          : order.pickup_store_address;
       }
-
-      const isUrgent = order.is_urgent || order.urgent || order.timeOptionCode === "urgent";
+      const isUrgent = order.is_urgent || order.urgent || order.time_option_code === "urgent";
       const total = parseFloat(order.total_price || order.total || 0);
       const deliveryCost = Number(order.delivery_cost || 0);
       const changeFromRaw = order.change_from;
       const changeFrom = Number.isFinite(Number(changeFromRaw)) ? Number(changeFromRaw) : 0;
-      const paymentTitle = order.paymentTitle || "";
+      const paymentTitle = order.payment_method_title || order.payment_title || "";
       const changeAmount = Math.max(0, changeFrom - total);
       const showChange = changeAmount > 0;
-      const scheduleText = formatReceiptScheduleText(order, storeTimezone) || (isUrgent ? "Быстрее" : "");
+      const scheduleText = formatScheduleText(order, storeTimezone, { includeTitle: true });
 
       function receiptTotalStr(val) {
         const n = Number(val);
-        if (!Number.isFinite(n)) return '';
-        if (n === 0) return '';
+        if (!Number.isFinite(n)) return "";
+        if (n === 0) return "";
         return Math.round(n) === n ? String(Math.round(n)) : n.toFixed(2);
-      }
-
-      function isAutoAddItem(item) {
-        if (Number(item?.auto_add || 0) === 1) return true;
-        const name = String(item?.product_name || item?.name || '').trim().toLowerCase();
-        return name === 'приборы';
       }
 
       const receiptItems = Array.isArray(order.items)
@@ -596,66 +726,73 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
           })
         : [];
 
-      let itemsHtml = '';
+      let itemsHtml = "";
       if (receiptItems.length) {
-        receiptItems.forEach(item => {
-          if (item.type === 'combo') {
-            const name = escapeHtml(item.name || item.combo_title || 'Комбо');
+        receiptItems.forEach((item) => {
+          if (item.type === "combo") {
+            const name = escapeHtml(item.name || item.combo_title || "Комбо");
             const qty = Math.max(1, Number(item.quantity || item.qty || 1));
             const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? 0);
-            const priceStr = receiptTotalStr(lineTotal);
+            const oldLineTotal = Number(item.old_line_total) || 0;
+            const showOldPrice = oldLineTotal > lineTotal;
+            const priceStr = showOldPrice
+              ? `<span class="receipt-old-price">${receiptTotalStr(oldLineTotal)}</span>${receiptTotalStr(lineTotal)}`
+              : receiptTotalStr(lineTotal);
             const qtyStr = `${qty} Х`;
-            const bulletPrefix = '• ';
-
+            const bulletPrefix = "• ";
+            let compositionHtml = "";
             const selections = Array.isArray(item.selections) ? item.selections : [];
-            let compositionHtml = '';
             selections.forEach((sel) => {
-              const productName = escapeHtml(sel.product_name || '—');
+              const productName = escapeHtml(sel.product_name || "—");
               compositionHtml += `<div class="receipt-composition-item" style="font-weight: bold;">1 × ${productName}</div>`;
               const vParts = [sel.variant_label, sel.variant_unit, sel.variant_group_title].filter(Boolean);
               if (vParts.length) {
-                compositionHtml += `<div class="receipt-composition-item">${bulletPrefix}${escapeHtml(vParts.join(' '))}</div>`;
+                compositionHtml += `<div class="receipt-composition-item">${bulletPrefix}${escapeHtml(vParts.join(" "))}</div>`;
               }
               const ingredientsDisplay = Array.isArray(sel.ingredients_display) ? sel.ingredients_display : [];
               ingredientsDisplay.forEach((ing) => {
                 const rawQty = ing.qty ?? ing.quantity;
-                const numQty = typeof rawQty === 'number' ? rawQty : parseFloat(rawQty);
+                const numQty = typeof rawQty === "number" ? rawQty : parseFloat(rawQty);
                 if (!Number.isFinite(numQty) || numQty <= 0) return;
-                const ingName = escapeHtml(ing.name || '');
-                const unit = escapeHtml(String(ing.unit || '').trim());
+                const ingName = escapeHtml(ing.name || "");
+                const unit = escapeHtml(String(ing.unit || "").trim());
                 const parts = [];
-                if (rawQty != null && rawQty !== '') parts.push(String(rawQty));
+                if (rawQty != null && rawQty !== "") parts.push(String(rawQty));
                 if (unit) parts.push(unit);
                 if (ingName) parts.push(ingName);
-                compositionHtml += `<div class="receipt-composition-item">${bulletPrefix}${escapeHtml(parts.join(' '))}</div>`;
+                compositionHtml += `<div class="receipt-composition-item">${bulletPrefix}${escapeHtml(parts.join(" "))}</div>`;
               });
             });
-
             itemsHtml += `
           <div class="receipt-item">
             <div class="receipt-item-row">
               <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
               <span class="receipt-item-name">${name}</span>
-              ${priceStr ? `<span class="receipt-item-price">${escapeHtml(priceStr)}</span>` : ''}
+              ${priceStr ? `<span class="receipt-item-price">${priceStr}</span>` : ""}
             </div>
-            ${compositionHtml ? '<div class="receipt-composition">' + compositionHtml + '</div>' : ''}
+            ${compositionHtml ? "<div class=\"receipt-composition\">" + compositionHtml + "</div>" : ""}
           </div>
         `;
             return;
           }
-          const name = escapeHtml(item.product_name || item.name || 'Товар');
+
+          const name = escapeHtml(item.product_name || item.name || "Товар");
           const qty = Math.max(1, Number(item.quantity || item.qty || 1));
           const basePrice = parseFloat(item.price || 0);
           const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? (basePrice * qty) ?? 0);
-          const priceStr = receiptTotalStr(lineTotal);
+          const discountOriginal = item.discount?.original_line_total;
+          const oldLineTotal = discountOriginal || 0;
+          const showOldPrice = oldLineTotal > lineTotal;
+          const priceStr = showOldPrice
+            ? `<span class="receipt-old-price">${receiptTotalStr(oldLineTotal)}</span>${receiptTotalStr(lineTotal)}`
+            : receiptTotalStr(lineTotal);
           const qtyStr = `${qty} Х`;
-          const bulletPrefix = '• ';
+          const bulletPrefix = "• ";
 
-          // Варианты товара (первыми)
           const variants = Array.isArray(item.variants) ? item.variants : [];
-          let variantsHtml = '';
+          let variantsHtml = "";
           if (variants.length) {
-            variantsHtml = '<div class="receipt-composition">';
+            variantsHtml = "<div class=\"receipt-composition\">";
             variants.forEach((v) => {
               const groupTitle = escapeHtml(v.group_title || "Вариант");
               const variantValue = escapeHtml(v.label || v.value || "");
@@ -675,15 +812,14 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
               }
               variantsHtml += `<div class="receipt-composition-item">${bulletPrefix}${formatted}</div>`;
             });
-            variantsHtml += '</div>';
+            variantsHtml += "</div>";
           }
 
-          // Ингредиенты товара (вторыми) — не показываем с количеством 0
           const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
           const ingredientsFilteredReceipt = ingredients.filter((ing) => Number(ing.quantity ?? ing.qty ?? 0) > 0);
-          let ingredientsHtml = '';
+          let ingredientsHtml = "";
           if (ingredientsFilteredReceipt.length) {
-            ingredientsHtml = '<div class="receipt-composition">';
+            ingredientsHtml = "<div class=\"receipt-composition\">";
             ingredientsFilteredReceipt.forEach((ing) => {
               const ingName = escapeHtml(ing.name || "Ингредиент");
               const ingQty = Number(ing.quantity ?? ing.qty ?? 0);
@@ -694,15 +830,14 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
               const formatted = `${ingQty}${ingUnit} ${ingName}`;
               ingredientsHtml += `<div class="receipt-composition-item">${bulletPrefix}${formatted}</div>`;
             });
-            ingredientsHtml += '</div>';
+            ingredientsHtml += "</div>";
           }
 
-          // Опции товара (третьими) — не показываем с количеством 0
           const options = Array.isArray(item.options) ? item.options : [];
           const optionsFilteredReceipt = options.filter((opt) => Number(opt.qty ?? opt.quantity ?? 0) > 0);
-          let optionsHtml = '';
+          let optionsHtml = "";
           if (optionsFilteredReceipt.length) {
-            optionsHtml = '<div class="receipt-composition">';
+            optionsHtml = "<div class=\"receipt-composition\">";
             optionsFilteredReceipt.forEach((opt) => {
               const optName = escapeHtml(opt.title || "Опция");
               const variantLabel = escapeHtml((opt.variant_label || opt.variantLabel || "").trim());
@@ -715,7 +850,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
               }
               optionsHtml += `<div class="receipt-composition-item">${bulletPrefix}${formatted}</div>`;
             });
-            optionsHtml += '</div>';
+            optionsHtml += "</div>";
           }
 
           itemsHtml += `
@@ -723,7 +858,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
             <div class="receipt-item-row">
               <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
               <span class="receipt-item-name">${name}</span>
-              ${priceStr ? `<span class="receipt-item-price">${escapeHtml(priceStr)}</span>` : ''}
+              ${priceStr ? `<span class="receipt-item-price">${priceStr}</span>` : ""}
             </div>
             ${variantsHtml}
             ${ingredientsHtml}
@@ -733,7 +868,10 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
         });
       }
 
-      // Полный HTML документ с CSS стилями для печати
+      const receiptDiscountSummary = buildOrderDiscountSummary(order);
+      const discountAmount = Number(receiptDiscountSummary.totalDiscount || 0);
+      const subtotal = Number(receiptDiscountSummary.subtotalBeforeDiscount || 0);
+
       return `
 <!DOCTYPE html>
 <html>
@@ -741,11 +879,11 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
   <meta charset="UTF-8">
   <title>Чек заказа #${order.id}</title>
   <style>
-    @page {
-      size: 78mm auto;
-      margin: 0;
-    }
     @media print {
+      @page {
+        size: 80mm auto;
+        margin: 0;
+      }
       * {
         margin: 0;
         padding: 0;
@@ -753,16 +891,18 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       }
       body {
         margin: 0;
-        padding: 6mm 4mm;
+        padding: 5mm 3mm;
         font-family: 'Courier New', monospace;
-        font-size: 12pt;
+        font-size: 11pt;
         font-weight: bold;
-        line-height: 1.35;
-        width: 78mm;
-        max-width: 78mm;
+        line-height: 1.3;
+        width: 80mm;
+        max-width: 80mm;
         box-sizing: border-box;
       }
-      .no-print { display: none !important; }
+      .no-print {
+        display: none !important;
+      }
     }
     * {
       margin: 0;
@@ -771,13 +911,13 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     }
     body {
       margin: 0;
-      padding: 6mm 4mm;
+      padding: 5mm 3mm;
       font-family: 'Courier New', monospace;
-      font-size: 12pt;
+      font-size: 11pt;
       font-weight: bold;
-      line-height: 1.35;
-      width: 78mm;
-      max-width: 78mm;
+      line-height: 1.3;
+      width: 80mm;
+      max-width: 80mm;
       box-sizing: border-box;
       background: white;
     }
@@ -820,6 +960,13 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       flex-shrink: 0;
       text-align: right;
     }
+    .receipt-composition {
+      margin: 3px 0 3px 15px;
+      font-size: 9pt;
+    }
+    .receipt-composition-item {
+      margin: 2px 0;
+    }
     .receipt-total {
       text-align: center;
       font-weight: bold;
@@ -842,6 +989,12 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       flex-shrink: 0;
       text-align: right;
     }
+    .receipt-urgent {
+      text-align: center;
+      font-weight: bold;
+      color: #d00;
+      margin: 10px 0;
+    }
     .receipt-divider {
       border-top: 1px dashed #000;
       margin: 10px 0;
@@ -851,6 +1004,10 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     }
     .receipt-when-text {
       font-weight: bold;
+    }
+    .receipt-old-price {
+      text-decoration: line-through;
+      margin-right: 4px;
     }
   </style>
 </head>
@@ -864,11 +1021,11 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     <div class="receipt-when-text">${escapeHtml(scheduleText || (isUrgent ? "Быстрее" : ""))}</div>
   </div>
   <div class="receipt-divider"></div>
-  ` : ''}
+  ` : ""}
   
   <div class="receipt-section">
-    ${order.customer_name ? `<div>${escapeHtml(order.customer_name)}</div>` : ''}
-    ${order.customer_phone ? `<div>${escapeHtml(order.customer_phone)}</div>` : ''}
+    ${order.customer_name ? `<div>${escapeHtml(order.customer_name)}</div>` : ""}
+    ${order.customer_phone ? `<div>${escapeHtml(order.customer_phone)}</div>` : ""}
   </div>
   
   <div class="receipt-section">
@@ -876,12 +1033,16 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     <div>${escapeHtml(address || "—")}</div>
   </div>
   
-  ${order.comment ? `
+  ${(order.address_comment && order.address_comment.trim()) ? `
   <div class="receipt-section">
-    <div class="receipt-section-title">Комментарий:</div>
+    <div>${escapeHtml(order.address_comment)}</div>
+  </div>
+  ` : ""}
+  ${(order.comment && order.comment.trim()) ? `
+  <div class="receipt-section">
     <div>${escapeHtml(order.comment)}</div>
   </div>
-  ` : ''}
+  ` : ""}
   
   <div class="receipt-divider"></div>
   
@@ -892,9 +1053,11 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
   <div class="receipt-divider"></div>
 
   <div class="receipt-section">
-    ${paymentTitle ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Оплата</div><div class="receipt-summary-value">${escapeHtml(paymentTitle)}</div></div>` : ''}
-    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача с</div><div class="receipt-summary-value">${money(changeFrom)}</div></div>` : ''}
-    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача</div><div class="receipt-summary-value">${money(changeAmount)}</div></div>` : ''}
+    ${paymentTitle ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Оплата</div><div class="receipt-summary-value">${escapeHtml(paymentTitle)}</div></div>` : ""}
+    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача с</div><div class="receipt-summary-value">${money(changeFrom)}</div></div>` : ""}
+    ${showChange ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сдача</div><div class="receipt-summary-value">${money(changeAmount)}</div></div>` : ""}
+    ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Сумма товаров</div><div class="receipt-summary-value">${money(subtotal)}</div></div>` : ""}
+    ${discountAmount > 0 ? `<div class="receipt-summary-row"><div class="receipt-summary-label">Скидка</div><div class="receipt-summary-value">-${money(discountAmount)}</div></div>` : ""}
     <div class="receipt-summary-row"><div class="receipt-summary-label">Доставка</div><div class="receipt-summary-value">${money(deliveryCost)}</div></div>
     <div class="receipt-total">ИТОГО: ${money(total)}</div>
   </div>
@@ -904,7 +1067,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
   </div>
 </body>
 </html>
-      `;
+    `;
     } catch (err) {
       console.error("Error in generateReceiptHtmlForOrder:", err);
       throw err;

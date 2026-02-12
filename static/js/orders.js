@@ -149,45 +149,94 @@
     return moneyFmt.format(Number.isFinite(n) ? n : 0) + " ₽";
   }
 
-  function formatTime(ts) {
-    if (!ts) return "";
-    // Время в базе уже в timezone филиала, просто парсим и показываем
-    const dateStr = String(ts).replace(' ', 'T');
-    const d = new Date(dateStr);
-    if (Number.isNaN(d.getTime())) return "";
+  function parseLocalDateParts(ts) {
+    if (!ts) return null;
+    const raw = String(ts).trim();
+    const match = raw.match(
+      /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/
+    );
+    if (match) {
+      return {
+        year: Number(match[1]),
+        month: Number(match[2]),
+        day: Number(match[3]),
+        hour: Number(match[4]),
+        minute: Number(match[5]),
+        second: Number(match[6] || 0),
+      };
+    }
 
-    const hours = String(d.getHours()).padStart(2, '0');
-    const minutes = String(d.getMinutes()).padStart(2, '0');
+    const fallback = new Date(raw.replace(' ', 'T'));
+    if (Number.isNaN(fallback.getTime())) return null;
+    return {
+      year: fallback.getFullYear(),
+      month: fallback.getMonth() + 1,
+      day: fallback.getDate(),
+      hour: fallback.getHours(),
+      minute: fallback.getMinutes(),
+      second: fallback.getSeconds(),
+    };
+  }
+
+  function partsToDate(parts) {
+    if (!parts) return null;
+    return new Date(
+      Number(parts.year || 0),
+      Number(parts.month || 1) - 1,
+      Number(parts.day || 1),
+      Number(parts.hour || 0),
+      Number(parts.minute || 0),
+      Number(parts.second || 0),
+      0
+    );
+  }
+
+  function formatTime(ts) {
+    if (!ts) return '';
+    const parts = parseLocalDateParts(ts);
+    if (!parts) return '';
+    const hours = String(parts.hour).padStart(2, '0');
+    const minutes = String(parts.minute).padStart(2, '0');
     return `${hours}:${minutes}`;
   }
 
   function formatDateTime(ts) {
-    if (!ts) return "";
-    // Время в базе уже в timezone филиала, просто парсим и показываем
-    const dateStr = String(ts).replace(' ', 'T');
-    const d = new Date(dateStr);
-    if (Number.isNaN(d.getTime())) return "";
+    if (!ts) return '';
+    const parts = parseLocalDateParts(ts);
+    if (!parts) return '';
 
-    const day = String(d.getDate()).padStart(2, '0');
-    const month = d.getMonth();
-    const year = d.getFullYear();
-    const hours = String(d.getHours()).padStart(2, '0');
-    const minutes = String(d.getMinutes()).padStart(2, '0');
+    const day = String(parts.day).padStart(2, '0');
+    const month = Number(parts.month) - 1;
+    const year = parts.year;
+    const hours = String(parts.hour).padStart(2, '0');
+    const minutes = String(parts.minute).padStart(2, '0');
 
-    const monthNames = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+    const monthNames = [
+      '\u044f\u043d\u0432',
+      '\u0444\u0435\u0432',
+      '\u043c\u0430\u0440',
+      '\u0430\u043f\u0440',
+      '\u043c\u0430\u044f',
+      '\u0438\u044e\u043d',
+      '\u0438\u044e\u043b',
+      '\u0430\u0432\u0433',
+      '\u0441\u0435\u043d',
+      '\u043e\u043a\u0442',
+      '\u043d\u043e\u044f',
+      '\u0434\u0435\u043a'
+    ];
     return `${day} ${monthNames[month]} ${year}, ${hours}:${minutes}`;
   }
 
   function formatDateTimeNumeric(ts) {
-    if (!ts) return "";
-    const dateStr = String(ts).replace(' ', 'T');
-    const d = new Date(dateStr);
-    if (Number.isNaN(d.getTime())) return "";
-    const day = String(d.getDate()).padStart(2, '0');
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const year = d.getFullYear();
-    const hours = String(d.getHours()).padStart(2, '0');
-    const minutes = String(d.getMinutes()).padStart(2, '0');
+    if (!ts) return '';
+    const parts = parseLocalDateParts(ts);
+    if (!parts) return '';
+    const day = String(parts.day).padStart(2, '0');
+    const month = String(parts.month).padStart(2, '0');
+    const year = parts.year;
+    const hours = String(parts.hour).padStart(2, '0');
+    const minutes = String(parts.minute).padStart(2, '0');
     return `${day}.${month}.${year}, ${hours}:${minutes}`;
   }
 
@@ -197,9 +246,9 @@
     const scheduledAt = order.scheduled_at;
     if (!scheduledAt) return includeTitle ? title : "";
 
-    const dateStr = String(scheduledAt).replace(' ', 'T');
-    const d = new Date(dateStr);
-    if (Number.isNaN(d.getTime())) return includeTitle ? title : "";
+    const parts = parseLocalDateParts(scheduledAt);
+    const d = partsToDate(parts);
+    if (!d || Number.isNaN(d.getTime())) return includeTitle ? title : "";
 
     const code = String(order.time_option_code || "").trim();
     const storeNow = getStoreDateNow(state.storeTimezone || "+0");
