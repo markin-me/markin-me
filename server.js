@@ -23,7 +23,7 @@ const makePrintApiRouter = require('./api/print');
 const { authMiddleware } = require('./api/middleware/auth');
 
 const app = express();
-const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '7';
+const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '8';
 const PORT = process.env.PORT || 3000;
 
 // Инициализация с обработкой ошибок

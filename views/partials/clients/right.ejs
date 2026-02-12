@@ -280,118 +280,12 @@
       </button>
     </div>
 
-    <!-- Client info (shown when client selected) -->
-    <div id="clientInfoWrap" class="hidden">
+    <%- include('./profile_content') %>
 
-      <!-- Profile header -->
-      <div class="shop-profile-top" id="clientProfileTop">
-        <div class="shop-profile-photo-wrap">
-          <div class="shop-profile-photo">
-            <img class="shop-profile-photo-img hidden" id="clientPhoto" alt="Фото" />
-            <div class="shop-profile-photo-placeholder" id="clientPhotoPlaceholder">
-              <i class="fas fa-user" style="font-size:32px; color:var(--color-text-muted);"></i>
-            </div>
-          </div>
-        </div>
-
-        <div class="shop-profile-info">
-          <div class="shop-profile-line">
-            <div class="shop-profile-line-title">Имя</div>
-            <div class="shop-profile-line-value shop-profile-name-value">
-              <span id="clientInfoName">—</span>
-              <button type="button" class="btn btn-icon shop-profile-name-edit" id="clientEditNameBtn" aria-label="Изменить имя">
-                <i class="fas fa-pencil"></i>
-              </button>
-            </div>
-          </div>
-          <div class="shop-profile-line">
-            <div class="shop-profile-line-title">Телефон</div>
-            <div class="shop-profile-line-value" id="clientInfoPhone">—</div>
-          </div>
-          <div class="shop-profile-line">
-            <div class="shop-profile-line-title">Дата рождения</div>
-            <div class="shop-profile-line-value" id="clientInfoBirthday">—</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Content tabs -->
-      <div class="shop-profile-tabs" id="clientContentTabs">
-        <button type="button" class="shop-profile-tab is-active" data-ctab="addresses">Адреса</button>
-        <button type="button" class="shop-profile-tab" data-ctab="orders">История заказов</button>
-        <button type="button" class="shop-profile-tab" data-ctab="discounts">Скидки</button>
-      </div>
-
-      <!-- Tab: Addresses -->
-      <div class="shop-profile-tab-panel is-active" data-ctab="addresses" id="clientTabAddresses">
-        <div class="shop-profile-list" id="clientAddresses">
-          <!-- JS: список адресов -->
-        </div>
-        <button type="button" class="shop-chip-btn shop-profile-address-toggle" id="clientAddrToggleBtn">+ Новый адрес</button>
-        <div class="shop-profile-card hidden" id="clientAddrFormCard">
-          <div class="shop-address-form-grid">
-            <div class="shop-address-form-row shop-address-form-row--full">
-              <label class="field-label">Улица</label>
-              <input class="control" id="addrStreet" type="text" />
-            </div>
-            <div class="shop-address-form-row shop-address-form-row--grid">
-              <div class="shop-address-form-field">
-                <label class="field-label">Дом</label>
-                <input class="control" id="addrHouse" type="text" />
-              </div>
-              <div class="shop-address-form-field">
-                <label class="field-label">Подъезд</label>
-                <input class="control" id="addrEntrance" type="text" />
-              </div>
-              <div class="shop-address-form-field">
-                <label class="field-label">Этаж</label>
-                <input class="control" id="addrFloor" type="text" />
-              </div>
-              <div class="shop-address-form-field">
-                <label class="field-label">Квартира</label>
-                <input class="control" id="addrApartment" type="text" />
-              </div>
-            </div>
-            <div class="shop-address-form-row shop-address-form-row--full">
-              <label class="field-label">Комментарий</label>
-              <input class="control" id="addrComment" type="text" />
-            </div>
-          </div>
-          <button type="button" class="btn btn-primary" style="width:100%; margin-top:10px;" id="addrAddBtn">Добавить адрес</button>
-        </div>
-      </div>
-
-      <!-- Tab: Orders -->
-      <div class="shop-profile-tab-panel" data-ctab="orders" id="clientTabOrders">
-        <!-- Orders list view -->
-        <div id="clientOrdersListView">
-          <div class="shop-profile-list" id="clientOrdersList">
-            <!-- JS: список заказов -->
-          </div>
-        </div>
-        <!-- Order detail view (hidden by default) -->
-        <div id="clientOrderDetailView" class="hidden">
-          <div class="cl-order-detail-back" id="clientOrderBackBtn">
-            <button type="button" class="icon-btn" aria-label="Назад"><i class="fas fa-arrow-left"></i></button>
-            <span>Детали заказа</span>
-          </div>
-          <div id="clientOrderDetailContent">
-            <!-- JS: детали заказа -->
-          </div>
-        </div>
-      </div>
-
-      <!-- Tab: Discounts -->
-      <div class="shop-profile-tab-panel" data-ctab="discounts" id="clientTabDiscounts">
-        <div class="shop-profile-list" id="clientDiscountsList">
-          <!-- JS: список скидок клиента -->
-        </div>
-        <div class="empty-hint hidden" id="clientDiscountsEmpty">Нет привязанных скидок</div>
-      </div>
-
+    <div id="clientOrderInfoWrap" class="hidden">
+      <%- include('../orders/info_content', { includeClientProfile: false }) %>
     </div>
   </div>
-
   <!-- Footer для редактирования фильтра -->
   <div class="panel-footer hidden" id="filterEditorFooter">
     <button type="button" class="btn btn-danger" id="filterDeleteBtn">
@@ -414,3 +308,4 @@
     <button type="button" class="btn btn-primary" id="discountPickerApplyBtn">Применить</button>
   </div>
 </div>
+

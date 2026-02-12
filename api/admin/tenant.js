@@ -43,7 +43,6 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     'order-time-options': {
       table: 'order_time_options',
       hasFinal: false,
-      hasIcon: false,
       hasTimeWindowSettings: true,
       detailFields: ['description', 'has_time_window', 'starts_at', 'ends_at', 'step_minutes', 'lead_minutes'],
       patchFields: {
@@ -841,7 +840,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
 
       const [rows] = await db.query(
-        `SELECT id, code, title, description, sort, is_active,
+        `SELECT id, code, title, icon, description, sort, is_active,
                 has_time_window, starts_at, ends_at, step_minutes, lead_minutes
          FROM order_time_options
          WHERE tenant_id=? AND store_id=1

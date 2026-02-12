@@ -122,6 +122,7 @@
   const clientTabs = $("#clientTabs");
   const clientEmpty = $("#clientEmpty");
   const clientInfoWrap = $("#clientInfoWrap");
+  const clientOrderInfoWrap = $("#clientOrderInfoWrap");
 
   // profile header
   const clientPhoto = $("#clientPhoto");
@@ -189,6 +190,12 @@
     clientsLoading: false,
     activeClientId: null,
     activeClient: null,
+    activeOrderId: null,
+    activeOrder: null,
+    orderCache: new Map(),
+    orderStatuses: [],
+    orderStatusesLoaded: false,
+    orderStatusesLoading: false,
     addresses: [],
     clientOrders: [],
     clientDiscounts: [],      // Скидки клиента
@@ -218,10 +225,14 @@
     catalogProducts: [],
     customerCategories: [],
     customersList: [],
+    customersById: new Map(),
   };
   const CLIENTS_PAGE_LIMIT = 80;
   const CLIENTS_SCROLL_THRESHOLD_PX = 220;
   let clientsRequestToken = 0;
+  let orderRequestToken = 0;
+  let discountCustomerSearchToken = 0;
+  let discountCustomerSearchDebounce = null;
 
   // -----------------------------
   // Tabs state (top-level: switching between clients)
@@ -230,6 +241,49 @@
     tabs: [],
     activeKey: null,
   };
+
+  const orderInfoEls = (() => {
+    if (!clientOrderInfoWrap) return null;
+    const q = (sel) => $$(sel, clientOrderInfoWrap);
+    return {
+      empty: q('.order-info-empty'),
+      emptyTitle: q('.order-info-empty .empty-title'),
+      emptyText: q('.order-info-empty .empty-text'),
+      content: q('[data-info="content"]'),
+      title: q('[data-info="order-title"]'),
+      meta: q('[data-info="order-meta"]'),
+      status: q('[data-info="order-status"]'),
+      statusToggle: q('[data-action="order-status-menu-toggle"]'),
+      statusMenu: q('[data-role="order-status-menu"]'),
+      clientName: q('[data-info="client-name"]'),
+      clientPhone: q('[data-info="client-phone"]'),
+      deliveryIntervalRow: q('[data-info="delivery-interval-row"]'),
+      deliveryInterval: q('[data-info="delivery-interval"]'),
+      deliveryAddressTitle: q('[data-info="delivery-address-title"]'),
+      deliveryAddress: q('[data-info="delivery-address"]'),
+      deliveryAddressComment: q('[data-info="delivery-address-comment"]'),
+      deliveryAddressCommentText: q('[data-info="delivery-address-comment-text"]'),
+      orderCommentBlock: q('[data-info="order-comment-block"]'),
+      orderCommentText: q('[data-info="order-comment-text"]'),
+      itemsList: q('[data-info="items-list"]'),
+      payMethod: q('[data-info="payment-method"]'),
+      payIcon: q('[data-info="payment-icon"]'),
+      changeFrom: q('[data-info="change-from"]'),
+      changeAmount: q('[data-info="change-amount"]'),
+      changeFromRow: q('[data-info="change-from-row"]'),
+      changeAmountRow: q('[data-info="change-amount-row"]'),
+      subtotal: q('[data-info="subtotal"]'),
+      subtotalRow: q('[data-info="subtotal-row"]'),
+      discountAmount: q('[data-info="discount-amount"]'),
+      discountRow: q('[data-info="discount-row"]'),
+      discountInfoBtn: q('[data-info="discount-info-btn"]'),
+      discountBreakdown: q('[data-info="discount-breakdown"]'),
+      deliveryCost: q('[data-info="delivery-cost"]'),
+      deliveryRow: q('[data-info="delivery-row"]'),
+      total: q('[data-info="order-total"]'),
+      urgent: q('[data-info="delivery-urgent"]'),
+    };
+  })();
 
   function buildTabKey(type, id) {
     return `${type}:${id}`;
@@ -246,10 +300,11 @@
     }
     clientTabs.innerHTML = tabsState.tabs.map((tab) => {
       const isActive = tab.key === tabsState.activeKey;
+      const fallbackTitle = tab.type === 'order' ? `#${tab.id}` : 'Client';
       return `
         <div class="product-tab ${isActive ? "is-active" : ""}" data-tab-key="${tab.key}">
-          <span class="product-tab-title">${escapeHtml(tab.title || "Клиент")}</span>
-          <button class="product-tab-close" type="button" data-tab-close="${tab.key}" aria-label="Закрыть">&times;</button>
+          <span class="product-tab-title">${escapeHtml(tab.title || fallbackTitle)}</span>
+          <button class="product-tab-close" type="button" data-tab-close="${tab.key}" aria-label="Close">&times;</button>
         </div>
       `;
     }).join("");
@@ -322,8 +377,7 @@
     const closedTab = tabsState.tabs[idx];
     const wasActive = tabsState.activeKey === key;
     tabsState.tabs.splice(idx, 1);
-    
-    // Очищаем состояние в зависимости от типа закрытого таба
+
     if (closedTab.type === 'client') {
       if (state.activeClientId === closedTab.id) {
         state.activeClientId = null;
@@ -340,8 +394,13 @@
         state.activeDiscount = null;
         state.discountOrders = [];
       }
+    } else if (closedTab.type === 'order') {
+      if (state.activeOrderId === closedTab.id) {
+        state.activeOrderId = null;
+        state.activeOrder = null;
+      }
     }
-    
+
     if (wasActive) {
       if (tabsState.tabs.length > 0) {
         const newIdx = Math.min(idx, tabsState.tabs.length - 1);
@@ -380,6 +439,78 @@
       }
     }, { passive: false });
   }
+
+  document.addEventListener('click', (e) => {
+    const trigger = e.target.closest('[data-action="open-client"]');
+    if (!trigger) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    let clientId = Number(trigger.getAttribute('data-client-id') || 0);
+    const clientPhone = String(trigger.getAttribute('data-client-phone') || '').trim();
+
+    if (!Number.isFinite(clientId) || clientId <= 0) {
+      if (!clientPhone) return;
+      findClientIdByPhone(clientPhone)
+        .then((id) => {
+          if (id) selectClient(id);
+        })
+        .catch(console.error);
+      return;
+    }
+
+    selectClient(clientId).catch(console.error);
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!clientOrderInfoWrap) return;
+
+    const statusOptionBtn = e.target.closest('[data-action="order-status-menu-select"]');
+    if (statusOptionBtn && clientOrderInfoWrap.contains(statusOptionBtn)) {
+      e.preventDefault();
+      e.stopPropagation();
+      const nextStatusId = Number(statusOptionBtn.getAttribute('data-status-id') || 0);
+      if (Number.isFinite(nextStatusId) && nextStatusId > 0) {
+        selectActiveClientOrderStatus(nextStatusId).catch(console.error);
+      }
+      return;
+    }
+
+    const statusToggleBtn = e.target.closest('[data-action="order-status-menu-toggle"]');
+    if (statusToggleBtn && clientOrderInfoWrap.contains(statusToggleBtn)) {
+      e.preventDefault();
+      e.stopPropagation();
+      const wrap = statusToggleBtn.closest('[data-role="order-inline-status"]');
+      const dropdown = wrap ? $('[data-role="order-status-menu"]', wrap) : null;
+      const willOpen = !!dropdown && dropdown.classList.contains('hidden');
+      closeClientOrderStatusMenus();
+      if (dropdown && willOpen) {
+        wrap.classList.add('is-open');
+        dropdown.classList.remove('hidden');
+        statusToggleBtn.setAttribute('aria-expanded', 'true');
+      }
+      return;
+    }
+
+    const discountInfoBtn = e.target.closest('[data-info="discount-info-btn"]');
+    if (discountInfoBtn && clientOrderInfoWrap.contains(discountInfoBtn)) {
+      e.preventDefault();
+      e.stopPropagation();
+      const summaryCard = discountInfoBtn.closest('.order-summary');
+      const breakdown = summaryCard ? $('[data-info="discount-breakdown"]', summaryCard) : null;
+      if (!breakdown) return;
+      const willOpen = breakdown.classList.contains('hidden');
+      breakdown.classList.toggle('hidden', !willOpen);
+      breakdown.classList.toggle('is-open', willOpen);
+      breakdown.setAttribute('aria-hidden', willOpen ? 'false' : 'true');
+      discountInfoBtn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      return;
+    }
+
+    if (!e.target.closest('[data-role="order-inline-status"]')) {
+      closeClientOrderStatusMenus();
+    }
+  });
 
   // -----------------------------
   // Content tabs (Адреса / История заказов / Скидки)
@@ -462,6 +593,41 @@
     return `+7 (${a}) ${b}-${c}-${d}`;
   }
 
+  function normalizePhoneDigits(value) {
+    return String(value || "").replace(/[^\d]/g, "");
+  }
+
+  function getClientOpenRequestFromUrl() {
+    try {
+      const url = new URL(window.location.href);
+      const rawId = Number(url.searchParams.get("open_client_id") || 0);
+      const clientId = Number.isFinite(rawId) && rawId > 0 ? rawId : null;
+      const clientPhone = String(url.searchParams.get("open_client_phone") || "").trim();
+      return { clientId, clientPhone };
+    } catch {
+      return { clientId: null, clientPhone: "" };
+    }
+  }
+
+  function clearClientOpenRequestFromUrl() {
+    try {
+      const url = new URL(window.location.href);
+      let changed = false;
+      if (url.searchParams.has("open_client_id")) {
+        url.searchParams.delete("open_client_id");
+        changed = true;
+      }
+      if (url.searchParams.has("open_client_phone")) {
+        url.searchParams.delete("open_client_phone");
+        changed = true;
+      }
+      if (changed) {
+        const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+        window.history.replaceState({}, "", nextUrl);
+      }
+    } catch {}
+  }
+
   function escapeHtml(s) {
     return String(s ?? "")
       .replaceAll("&", "&amp;")
@@ -504,6 +670,28 @@
 
   function setTextAll(nodes, text) {
     nodes.forEach((n) => { if (n) n.textContent = text; });
+  }
+
+  function setNodesText(nodes, text) {
+    if (!Array.isArray(nodes)) return;
+    nodes.forEach((n) => {
+      if (n) n.textContent = text;
+    });
+  }
+
+  function setNodesHtml(nodes, html) {
+    if (!Array.isArray(nodes)) return;
+    nodes.forEach((n) => {
+      if (n) n.innerHTML = html;
+    });
+  }
+
+  function setNodesHidden(nodes, hidden) {
+    if (!Array.isArray(nodes)) return;
+    nodes.forEach((n) => {
+      if (!n) return;
+      n.classList.toggle('hidden', !!hidden);
+    });
   }
 
   // -----------------------------
@@ -1131,15 +1319,68 @@
     return state.customerCategories;
   }
 
-  // Загрузить список клиентов
-  async function loadCustomersList() {
+  function rememberCustomers(rows) {
+    if (!Array.isArray(rows)) return;
+    rows.forEach((row) => {
+      const id = Number(row?.id || 0);
+      if (!Number.isFinite(id) || id <= 0) return;
+      state.customersById.set(id, row);
+    });
+  }
+
+  // Загрузить список клиентов (поиск по всей таблице с пагинацией)
+  async function loadCustomersList(query = '') {
+    const token = ++discountCustomerSearchToken;
+    const search = String(query || '').trim();
+    const limit = 200;
+    let offset = 0;
+    let total = null;
+    const rows = [];
+    const seenIds = new Set();
+
     try {
-      const json = await apiJson('/api/admin/clients');
-      state.customersList = Array.isArray(json.data) ? json.data : [];
+      while (total === null || offset < total) {
+        const qs = new URLSearchParams();
+        qs.set('limit', String(limit));
+        qs.set('offset', String(offset));
+        if (search) qs.set('q', search);
+
+        const json = await apiJson(`/api/admin/clients?${qs.toString()}`);
+        if (token !== discountCustomerSearchToken) {
+          return state.customersList;
+        }
+
+        const chunk = Array.isArray(json.data) ? json.data : [];
+        total = Number(json.total || 0);
+
+        chunk.forEach((item) => {
+          const id = Number(item?.id || 0);
+          if (!Number.isFinite(id) || id <= 0) return;
+          if (seenIds.has(id)) return;
+          seenIds.add(id);
+          rows.push(item);
+        });
+
+        if (!chunk.length) break;
+        offset += chunk.length;
+
+        // Защита от бесконечного цикла при неконсистентном total
+        if (offset > 5000) break;
+      }
+
+      if (token !== discountCustomerSearchToken) {
+        return state.customersList;
+      }
+
+      state.customersList = rows;
+      rememberCustomers(rows);
     } catch (e) {
-      console.error('loadCustomersList error:', e);
-      state.customersList = [];
+      if (token === discountCustomerSearchToken) {
+        console.error('loadCustomersList error:', e);
+        state.customersList = [];
+      }
     }
+
     return state.customersList;
   }
 
@@ -1173,6 +1414,9 @@
     state.discountPickerLevel = 'customers';
     state.discountPickerQuery = '';
     state.discountPickerCategoryId = null;
+    if (elDiscountCustomerPickerSearch) {
+      elDiscountCustomerPickerSearch.value = '';
+    }
     
     // Копируем текущий выбор в Set
     state.discountPickerSelection = new Set(
@@ -1239,7 +1483,7 @@
           const cat = state.customerCategories.find(c => c.id === id);
           title = cat?.title || `Категория #${id}`;
         } else {
-          const cust = state.customersList.find(c => c.id === id);
+          const cust = state.customersById.get(id) || state.customersList.find(c => c.id === id);
           title = cust?.name || cust?.phone || `Клиент #${id}`;
         }
         newSelection.push({ type, id, title });
@@ -1291,8 +1535,11 @@
       // Показываем категории клиентов
       renderDiscountCustomerCategoryList();
     } else {
-      // Показываем клиентов
-      await loadCustomersList();
+      // Показываем клиентов (поиск по всей базе, не по локальному кэшу)
+      if (elDiscountCustomerPickerList) {
+        elDiscountCustomerPickerList.innerHTML = '<div class="option-picker-empty">Загрузка клиентов...</div>';
+      }
+      await loadCustomersList(state.discountPickerQuery);
       renderDiscountCustomerList();
     }
   }
@@ -1356,15 +1603,7 @@
   function renderDiscountCustomerList() {
     if (!elDiscountCustomerPickerList) return;
     
-    let items = state.customersList;
-    const query = state.discountPickerQuery.toLowerCase();
-    if (query) {
-      items = items.filter(c => {
-        const name = (c.name || '').toLowerCase();
-        const phone = (c.phone || '').toLowerCase();
-        return name.includes(query) || phone.includes(query);
-      });
-    }
+    const items = state.customersList;
     
     if (items.length === 0) {
       elDiscountCustomerPickerList.innerHTML = '<div class="option-picker-empty">Клиенты не найдены</div>';
@@ -1547,27 +1786,22 @@
   }
 
   function updateRightPanel() {
-    // Определяем что показывать по активному табу
-    const activeTab = tabsState.tabs.find(t => t.key === tabsState.activeKey);
+    const activeTab = tabsState.tabs.find((t) => t.key === tabsState.activeKey);
     const isClientTab = activeTab?.type === 'client';
+    const isOrderTab = activeTab?.type === 'order';
     const isCategoryTab = activeTab?.type === 'category';
     const isDiscountTab = activeTab?.type === 'discount';
     const noTabs = !activeTab;
-    
-    // Скрываем/показываем элементы правой панели
-    // Empty state для клиентов показываем только если нет табов и view = clients
+
     if (clientEmpty) clientEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'clients');
-    // Info клиента показываем если активный таб = client
     if (clientInfoWrap) clientInfoWrap.classList.toggle('hidden', !isClientTab);
-    // Empty state для категорий показываем если нет табов и view = filter-categories
+    if (clientOrderInfoWrap) clientOrderInfoWrap.classList.toggle('hidden', !isOrderTab);
+
     if (elFilterCategoryEmpty) elFilterCategoryEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'filter-categories');
-    // Редактор категории показываем если активный таб = category
     if (elFilterEditorWrap) elFilterEditorWrap.classList.toggle('hidden', !isCategoryTab);
     if (elFilterEditorFooter) elFilterEditorFooter.classList.toggle('hidden', !isCategoryTab);
-    
-    // Empty state для скидок показываем если нет табов и view = discounts
+
     if (elDiscountEmpty) elDiscountEmpty.classList.toggle('hidden', !noTabs || state.currentView !== 'discounts');
-    // Редактор скидки показываем если активный таб = discount и редактируем
     const isEditingDiscount = isDiscountTab && state.editingDiscountId !== null;
     const isViewingDiscount = isDiscountTab && state.editingDiscountId === null && state.activeDiscount;
     if (elDiscountEditorWrap) elDiscountEditorWrap.classList.toggle('hidden', !isEditingDiscount);
@@ -2237,20 +2471,24 @@
       let items;
       try {
         items = typeof o.items === "string" ? JSON.parse(o.items) : o.items;
-      } catch { items = []; }
+      } catch {
+        items = [];
+      }
       if (Array.isArray(items)) {
-        items.forEach((it) => { itemsCount += Number(it.qty || it.quantity || 0) || 0; });
+        items.forEach((it) => {
+          itemsCount += Number(it.qty || it.quantity || 0) || 0;
+        });
       }
 
       const card = document.createElement("div");
-      card.className = "shop-profile-card";
+      card.className = "shop-profile-card order-client-history-card";
       card.style.cursor = "pointer";
       card.innerHTML = `
         <div><strong>Заказ #${escapeHtml(o.id)}</strong> <span class="muted">• ${escapeHtml(o.status_title || "—")}</span></div>
         <div class="muted">${escapeHtml(fmtDateTime(o.created_at))}</div>
         <div><strong>${money(o.total_price || 0)}</strong> <span class="muted">• позиций: ${itemsCount}</span></div>
       `;
-      card.addEventListener("click", () => openOrderDetail(o.id));
+      card.addEventListener("click", () => openOrderTab(o.id));
       clientOrdersList.appendChild(card);
     });
   }
@@ -2310,171 +2548,536 @@
   }
 
   // -----------------------------
-  // Order detail
+  // Order detail (shared info_content.ejs)
   // -----------------------------
-  async function openOrderDetail(orderId) {
-    showOrderDetail();
-    if (clientOrderDetailContent) clientOrderDetailContent.innerHTML = `<div class="muted">Загрузка…</div>`;
+  function paymentIconClass(code) {
+    const raw = String(code || "").toLowerCase();
+    if (raw.includes("cash")) return "fa-money-bill-wave";
+    if (raw.includes("card")) return "fa-credit-card";
+    if (raw.includes("online")) return "fa-globe";
+    return "fa-credit-card";
+  }
 
+  function formatDateTimeNumeric(value) {
+    if (!value) return "—";
+    const date = new Date(String(value).replace(" ", "T"));
+    if (Number.isNaN(date.getTime())) return String(value);
+    const dd = String(date.getDate()).padStart(2, "0");
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const yyyy = String(date.getFullYear());
+    const hh = String(date.getHours()).padStart(2, "0");
+    const mi = String(date.getMinutes()).padStart(2, "0");
+    return `${dd}.${mm}.${yyyy}, ${hh}:${mi}`;
+  }
+
+  function formatTimeValue(value) {
+    if (!value) return "";
+    const date = new Date(String(value).replace(" ", "T"));
+    if (Number.isNaN(date.getTime())) return "";
+    const hh = String(date.getHours()).padStart(2, "0");
+    const mi = String(date.getMinutes()).padStart(2, "0");
+    return `${hh}:${mi}`;
+  }
+
+  function formatScheduleText(order) {
+    if (!order) return "";
+    const scheduledAt = order.scheduled_at;
+    const title = String(order.time_option_title || "").trim();
+    if (!scheduledAt) return title;
+
+    const code = String(order.time_option_code || "").trim().toLowerCase();
+    if (code === "at_time") {
+      return formatTimeValue(scheduledAt) || title;
+    }
+    return formatDateTimeNumeric(scheduledAt) || title;
+  }
+
+  function parseOrderItems(order) {
+    if (!order) return [];
     try {
-      const json = await apiJson(`/api/admin/orders/${orderId}`);
-      const order = json.data;
-      if (!order) {
-        if (clientOrderDetailContent) clientOrderDetailContent.innerHTML = `<div class="muted">Не удалось загрузить заказ</div>`;
+      const raw = typeof order.items === "string" ? JSON.parse(order.items) : order.items;
+      return Array.isArray(raw) ? raw : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function roundMoney(value) {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(n * 100) / 100;
+  }
+
+  function getOrderItemLineTotal(item) {
+    const explicit = Number(item?.line_total ?? item?.total ?? item?.total_price);
+    if (Number.isFinite(explicit)) return roundMoney(explicit);
+    const unit = Number(item?.price || 0);
+    const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+    return roundMoney(unit * qty);
+  }
+
+  function isAutoAddOrderItem(item) {
+    if (Number(item?.auto_add || 0) === 1) return true;
+    const name = String(item?.product_name || item?.name || "").trim().toLowerCase();
+    return name === "приборы";
+  }
+
+  function renderOrderItemComposition(item) {
+    const lines = [];
+
+    if (String(item?.type || "").toLowerCase() === "combo") {
+      const selections = Array.isArray(item?.selections) ? item.selections : [];
+      selections.forEach((sel) => {
+        const productName = String(sel?.product_name || "").trim();
+        if (productName) lines.push(`1 × ${productName}`);
+
+        const variantParts = [
+          sel?.variant_label,
+          sel?.variant_unit,
+          sel?.variant_group_title,
+        ].filter(Boolean);
+        if (variantParts.length) lines.push(variantParts.join(" "));
+
+        const ingredientsDisplay = Array.isArray(sel?.ingredients_display) ? sel.ingredients_display : [];
+        ingredientsDisplay.forEach((ing) => {
+          const qty = ing?.qty ?? ing?.quantity;
+          const numQty = Number(qty);
+          if (Number.isFinite(numQty) && numQty <= 0) return;
+          const unit = String(ing?.unit || "").trim();
+          const name = String(ing?.name || "").trim();
+          const parts = [];
+          if (qty !== null && qty !== undefined && String(qty).trim() !== "") parts.push(String(qty).trim());
+          if (unit) parts.push(unit);
+          if (name) parts.push(name);
+          if (parts.length) lines.push(parts.join(" "));
+        });
+      });
+    }
+
+    const variants = Array.isArray(item?.variants) ? item.variants : [];
+    variants.forEach((variant) => {
+      const parts = [variant?.label || variant?.value || "", variant?.unit_label || "", variant?.group_title || ""]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+      if (parts.length) lines.push(parts.join(" "));
+    });
+
+    const options = Array.isArray(item?.options) ? item.options : [];
+    options.forEach((opt) => {
+      const qty = Number(opt?.qty || opt?.quantity || 0);
+      if (qty <= 0) return;
+      const variantLabel = String(opt?.variant_label || "").trim();
+      const name = String(opt?.title || opt?.name || "").trim();
+      if (variantLabel && name) {
+        lines.push(`${variantLabel} ${name}`.trim());
         return;
       }
-      renderOrderDetail(order);
+      if (variantLabel) {
+        lines.push(variantLabel);
+        return;
+      }
+      if (name) {
+        lines.push(`${qty} шт ${name}`.trim());
+      }
+    });
+
+    const ingredients = Array.isArray(item?.ingredients) ? item.ingredients : [];
+    ingredients.forEach((ing) => {
+      const qty = ing?.quantity ?? ing?.qty;
+      const numQty = Number(qty);
+      if (Number.isFinite(numQty) && numQty <= 0) return;
+      const unit = String(ing?.unit_label || ing?.unit || "").trim();
+      const name = String(ing?.ingredient_name || ing?.name || "").trim();
+      const parts = [];
+      if (qty !== null && qty !== undefined && String(qty).trim() !== "") parts.push(String(qty).trim());
+      if (unit) parts.push(unit);
+      if (name) parts.push(name);
+      if (parts.length) lines.push(parts.join(" "));
+    });
+
+    if (!lines.length) return "";
+    return `
+      <div class="order-item-composition">
+        ${lines.map((line) => `<div class="order-item-composition-item">• ${escapeHtml(line)}</div>`).join("")}
+      </div>
+    `;
+  }
+
+  function renderOrderItemsHtml(items) {
+    if (!Array.isArray(items) || !items.length) return `<div class="muted">Нет позиций в заказе</div>`;
+
+    const sorted = items.slice().sort((a, b) => {
+      const aAuto = isAutoAddOrderItem(a);
+      const bAuto = isAutoAddOrderItem(b);
+      if (aAuto && !bAuto) return 1;
+      if (!aAuto && bAuto) return -1;
+      return 0;
+    });
+
+    return sorted.map((item) => {
+      const name = String(item?.product_name || item?.name || "Товар");
+      const qty = Math.max(1, Number(item?.qty || item?.quantity || 0) || 1);
+      const lineTotal = getOrderItemLineTotal(item);
+      let oldLineTotal = Number(item?.discount?.original_line_total || item?.old_line_total || 0);
+      const oldPrice = Number(item?.old_price || 0);
+      if (!(oldLineTotal > lineTotal) && oldPrice > 0) oldLineTotal = roundMoney(oldPrice * qty);
+      const showOldPrice = oldLineTotal > lineTotal;
+
+      const photos = Array.isArray(item?.photos) ? item.photos.filter(Boolean) : [];
+      const photoHtml = photos.length
+        ? `<div class="order-item-photo-small"><img src="${escapeHtml(photos[0])}" alt="${escapeHtml(name)}"></div>`
+        : "";
+
+      const compositionHtml = renderOrderItemComposition(item);
+      const priceHtml = showOldPrice
+        ? `<span class="order-item-old-price">${money(oldLineTotal)}</span><span class="order-item-price-current">${money(lineTotal)}</span>`
+        : `<span class="order-item-price-current">${money(lineTotal)}</span>`;
+
+      return `
+        <div class="order-item${String(item?.type || "").toLowerCase() === "combo" ? " order-item--combo" : ""}">
+          <div class="order-item-line">
+            ${photoHtml}
+            <div class="order-item-content">
+              <div class="order-item-title">${escapeHtml(name)} × ${qty}</div>
+              ${compositionHtml}
+              <div class="order-item-footer">
+                <div class="order-item-price">${priceHtml}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function parseOrderDiscounts(order) {
+    const raw = order?.discounts_json;
+    if (Array.isArray(raw)) return raw;
+    if (!raw) return [];
+    try {
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function computeOrderSummary(order, items) {
+    const total = roundMoney(Number(order?.total_price || 0));
+    const deliveryCost = roundMoney(Number(order?.delivery_cost || 0));
+    const discountAmount = roundMoney(Math.max(0, Number(order?.discount_amount || 0)));
+    const changeFrom = roundMoney(Number(order?.change_from || 0));
+    const changeAmount = changeFrom > total ? roundMoney(changeFrom - total) : 0;
+
+    let subtotal = roundMoney(Number(order?.subtotal || order?.items_total || order?.items_price || 0));
+    if (!(subtotal > 0)) {
+      const itemsTotal = roundMoney((items || []).reduce((sum, item) => sum + getOrderItemLineTotal(item), 0));
+      subtotal = itemsTotal > 0 ? roundMoney(itemsTotal + discountAmount) : roundMoney(total - deliveryCost + discountAmount);
+    }
+    if (subtotal < 0) subtotal = 0;
+
+    const breakdown = [];
+    parseOrderDiscounts(order).forEach((entry) => {
+      const amountRaw = Number(entry?.amount ?? entry?.discount_amount ?? entry?.value ?? 0);
+      const amount = roundMoney(Math.abs(amountRaw));
+      if (!(amount > 0)) return;
+      const title = String(entry?.title || "").trim() || "Скидка";
+      breakdown.push({ title, amount });
+    });
+
+    return {
+      total,
+      deliveryCost,
+      discountAmount,
+      subtotal,
+      changeFrom,
+      changeAmount,
+      breakdown,
+    };
+  }
+
+  function renderDiscountBreakdownHtml(summary) {
+    const rows = Array.isArray(summary?.breakdown) ? summary.breakdown : [];
+    if (!rows.length) return "";
+    return rows.map((entry) => `
+      <div class="order-summary-discount-breakdown-row">
+        <span class="order-summary-discount-breakdown-label">${escapeHtml(entry.title || "Скидка")}</span>
+        <span class="order-summary-discount-breakdown-value">-${money(entry.amount || 0)}</span>
+      </div>
+    `).join("");
+  }
+
+  function closeClientOrderStatusMenus() {
+    if (!Array.isArray(orderInfoEls?.statusMenu) || !Array.isArray(orderInfoEls?.statusToggle)) return;
+    orderInfoEls.statusMenu.forEach((menu) => {
+      if (!menu) return;
+      menu.classList.add("hidden");
+      const wrap = menu.closest('[data-role="order-inline-status"]');
+      if (wrap) wrap.classList.remove("is-open");
+    });
+    orderInfoEls.statusToggle.forEach((btn) => {
+      if (!btn) return;
+      btn.setAttribute("aria-expanded", "false");
+    });
+  }
+
+  function getSortedOrderStatuses() {
+    const list = Array.isArray(state.orderStatuses) ? state.orderStatuses : [];
+    return list
+      .filter((status) => Number.isFinite(Number(status?.id)) && Number(status.id) > 0)
+      .sort((a, b) => (Number(a?.sort || 0) - Number(b?.sort || 0)) || (Number(a.id) - Number(b.id)));
+  }
+
+  async function ensureOrderStatusesLoaded(force = false) {
+    if (state.orderStatusesLoading) return;
+    if (!force && state.orderStatusesLoaded) return;
+
+    state.orderStatusesLoading = true;
+    try {
+      const json = await apiJson('/api/admin/orders/statuses');
+      state.orderStatuses = Array.isArray(json.data) ? json.data : [];
+      state.orderStatusesLoaded = true;
     } catch (err) {
       console.error(err);
-      if (clientOrderDetailContent) clientOrderDetailContent.innerHTML = `<div class="muted">Ошибка загрузки заказа</div>`;
+      state.orderStatuses = [];
+      state.orderStatusesLoaded = true;
+    } finally {
+      state.orderStatusesLoading = false;
     }
   }
 
-  function formatOrderItem(item) {
-    const photos = Array.isArray(item.photos) ? item.photos.filter(Boolean) : [];
-    const mainPhoto = photos[0] || "";
-    const itemQty = Number(item.qty || item.quantity || 1);
-    const itemName = escapeHtml(item.name || "Товар");
-
-    const parts = [];
-
-    // variants
-    if (Array.isArray(item.variants)) {
-      item.variants.forEach((v) => {
-        const label = v.label || v.value || "";
-        const group = v.group_title || "";
-        if (label) parts.push(`${label} ${group}`.trim());
-      });
+  function renderClientOrderStatusMenu(order) {
+    if (!orderInfoEls) return;
+    const statuses = getSortedOrderStatuses();
+    if (!statuses.length) {
+      setNodesHtml(orderInfoEls.statusMenu, "");
+      closeClientOrderStatusMenus();
+      return;
     }
-
-    // options
-    if (Array.isArray(item.options)) {
-      item.options.forEach((opt) => {
-        const qty = Number(opt.qty || opt.quantity || 0);
-        if (qty <= 0) return;
-        const name = opt.title || opt.name || "";
-        const vl = opt.variant_label || "";
-        if (vl) { parts.push(`${vl} ${name}`.trim()); }
-        else if (name) { parts.push(`${qty}шт ${name}`.trim()); }
-      });
-    }
-
-    // ingredients
-    if (Array.isArray(item.ingredients)) {
-      item.ingredients.forEach((ing) => {
-        const name = ing.ingredient_name || ing.name || "";
-        if (!name) return;
-        const qty = Number(ing.quantity ?? ing.qty ?? 1);
-        if (qty <= 0) return;
-        const unit = ing.unit_label || ing.unit || "";
-        parts.push(`${qty}${unit} ${name}`.trim());
-      });
-    }
-
-    let html = `<div class="cl-order-item">`;
-    if (mainPhoto) {
-      html += `<img class="cl-order-item-photo" src="${escapeHtml(mainPhoto)}" alt="" />`;
-    } else {
-      html += `<div class="cl-order-item-photo cl-order-item-photo--empty"></div>`;
-    }
-    html += `<div class="cl-order-item-mid">`;
-    html += `<div class="cl-order-item-title">${itemName}</div>`;
-    if (parts.length) {
-      parts.forEach((p) => {
-        html += `<div class="cl-order-item-sub">• ${escapeHtml(p)}</div>`;
-      });
-    }
-    html += `</div>`;
-    html += `<div class="cl-order-item-right">`;
-    html += `<div class="cl-order-item-qty">× ${itemQty}</div>`;
-    html += `<div class="cl-order-item-price">${money(item.line_total || item.price || 0)}</div>`;
-    html += `</div>`;
-    html += `</div>`;
-    return html;
+    const currentStatusId = Number(order?.status_id || 0);
+    const optionsHtml = statuses.map((status) => {
+      const statusId = Number(status.id || 0);
+      const isSelected = statusId === currentStatusId;
+      return `
+        <button
+          class="order-status-inline-option${isSelected ? " is-selected" : ""}"
+          type="button"
+          data-action="order-status-menu-select"
+          data-status-id="${statusId}"
+          role="option"
+          aria-selected="${isSelected ? "true" : "false"}"
+        >
+          ${escapeHtml(status.title || "—")}
+        </button>
+      `;
+    }).join("");
+    setNodesHtml(orderInfoEls.statusMenu, optionsHtml);
+    closeClientOrderStatusMenus();
   }
 
-  function renderOrderDetail(order) {
-    if (!clientOrderDetailContent) return;
+  function showClientOrderInfoEmpty(
+    title = "Выберите заказ слева",
+    text = "Нажмите на заказ в истории клиента, чтобы открыть детали."
+  ) {
+    if (!orderInfoEls) return;
+    setNodesHidden(orderInfoEls.empty, false);
+    setNodesHidden(orderInfoEls.content, true);
+    setNodesText(orderInfoEls.emptyTitle, title);
+    setNodesText(orderInfoEls.emptyText, text);
+    closeClientOrderStatusMenus();
+  }
 
-    let items = [];
+  function renderClientOrderInfo(order) {
+    if (!orderInfoEls || !order) {
+      showClientOrderInfoEmpty();
+      return;
+    }
+
+    const orderId = Number(order.id || 0);
+    setNodesHidden(orderInfoEls.empty, true);
+    setNodesHidden(orderInfoEls.content, false);
+    setNodesText(orderInfoEls.title, `ЗАКАЗ #${orderId > 0 ? orderId : "—"}`);
+    setNodesText(orderInfoEls.meta, formatDateTimeNumeric(order.created_at));
+    setNodesText(orderInfoEls.status, String(order.status_title || "—"));
+    renderClientOrderStatusMenu(order);
+
+    const clientName = String(order.customer_name || "—").trim() || "—";
+    const clientPhoneRaw = String(order.customer_phone || "").trim();
+    const clientDigits = normalizePhoneDigits(clientPhoneRaw);
+    const clientPhoneView = clientDigits.length === 11 ? formatPhoneDigitsToRU(clientDigits) : (clientPhoneRaw || "—");
+    const clientId = Number(order.customer_id || 0);
+    setNodesText(orderInfoEls.clientName, clientName);
+    setNodesText(orderInfoEls.clientPhone, clientPhoneView);
+    orderInfoEls.clientPhone.forEach((node) => {
+      if (!node) return;
+      const canOpenClient = (Number.isFinite(clientId) && clientId > 0) || !!clientPhoneRaw;
+      if (canOpenClient) {
+        node.setAttribute("href", "#");
+        node.setAttribute("data-action", "open-client");
+        if (clientId > 0) node.setAttribute("data-client-id", String(clientId));
+        else node.removeAttribute("data-client-id");
+        node.setAttribute("data-client-phone", clientPhoneRaw);
+        node.setAttribute("data-client-name", clientName);
+      } else {
+        node.removeAttribute("href");
+        node.removeAttribute("data-action");
+        node.removeAttribute("data-client-id");
+        node.removeAttribute("data-client-phone");
+        node.removeAttribute("data-client-name");
+      }
+    });
+
+    const methodCode = String(order.method_code || "").toLowerCase();
+    const isPickup = methodCode === "pickup";
+    const deliveryTitle = isPickup ? "Адрес самовывоза" : "Адрес доставки";
+    const deliveryAddress = isPickup
+      ? (order.pickup_store_address
+        ? (order.pickup_store_name ? `${order.pickup_store_name}, ${order.pickup_store_address}` : String(order.pickup_store_address))
+        : (order.address || "—"))
+      : (order.address || "—");
+    const deliveryInterval = formatScheduleText(order);
+    const isUrgent = Boolean(order.is_urgent || order.urgent || String(order.time_option_code || "").toLowerCase() === "asap");
+    const addressComment = isPickup ? "" : String(order.address_comment || "").trim();
+    const orderComment = String(order.comment || "").trim();
+
+    setNodesText(orderInfoEls.deliveryAddressTitle, deliveryTitle);
+    setNodesText(orderInfoEls.deliveryAddress, deliveryAddress || "—");
+    setNodesText(orderInfoEls.deliveryInterval, deliveryInterval || "—");
+    setNodesHidden(orderInfoEls.deliveryIntervalRow, !deliveryInterval);
+    setNodesHidden(orderInfoEls.urgent, !isUrgent);
+    setNodesText(orderInfoEls.deliveryAddressCommentText, addressComment);
+    setNodesHidden(orderInfoEls.deliveryAddressComment, !addressComment);
+    setNodesText(orderInfoEls.orderCommentText, orderComment);
+    setNodesHidden(orderInfoEls.orderCommentBlock, !orderComment);
+
+    const items = parseOrderItems(order);
+    setNodesHtml(orderInfoEls.itemsList, renderOrderItemsHtml(items));
+
+    const summary = computeOrderSummary(order, items);
+    setNodesText(orderInfoEls.payMethod, String(order.payment_title || "—"));
+    setNodesHtml(orderInfoEls.payIcon, `<i class="fas ${paymentIconClass(order.payment_code)}"></i>`);
+    setNodesText(orderInfoEls.changeFrom, money(summary.changeFrom));
+    setNodesText(orderInfoEls.changeAmount, money(summary.changeAmount));
+    setNodesHidden(orderInfoEls.changeFromRow, !(summary.changeFrom > 0));
+    setNodesHidden(orderInfoEls.changeAmountRow, !(summary.changeFrom > 0));
+    setNodesText(orderInfoEls.subtotal, money(summary.subtotal));
+    setNodesText(orderInfoEls.discountAmount, `-${money(summary.discountAmount)}`);
+    setNodesHidden(orderInfoEls.subtotalRow, !(summary.discountAmount > 0));
+    setNodesHidden(orderInfoEls.discountRow, !(summary.discountAmount > 0));
+    setNodesText(orderInfoEls.deliveryCost, money(summary.deliveryCost));
+    setNodesHidden(orderInfoEls.deliveryRow, isPickup);
+    setNodesText(orderInfoEls.total, money(summary.total));
+
+    const breakdownHtml = renderDiscountBreakdownHtml(summary);
+    const hasBreakdown = Boolean(breakdownHtml);
+    setNodesHtml(orderInfoEls.discountBreakdown, breakdownHtml);
+    setNodesHidden(orderInfoEls.discountInfoBtn, !hasBreakdown);
+    orderInfoEls.discountInfoBtn.forEach((btn) => {
+      if (!btn) return;
+      btn.setAttribute("aria-expanded", "false");
+    });
+    orderInfoEls.discountBreakdown.forEach((node) => {
+      if (!node) return;
+      node.classList.add("hidden");
+      node.classList.remove("is-open");
+      node.setAttribute("aria-hidden", "true");
+    });
+  }
+
+  function updateClientOrderInState(order) {
+    const id = Number(order?.id || 0);
+    if (!Number.isFinite(id) || id <= 0) return;
+    state.clientOrders = (state.clientOrders || []).map((item) => {
+      if (Number(item?.id || 0) !== id) return item;
+      return { ...item, ...order };
+    });
+  }
+
+  async function selectActiveClientOrderStatus(statusId) {
+    const orderId = Number(state.activeOrderId || state.activeOrder?.id || 0);
+    const nextStatusId = Number(statusId || 0);
+    if (!Number.isFinite(orderId) || orderId <= 0) return;
+    if (!Number.isFinite(nextStatusId) || nextStatusId <= 0) return;
+    if (Number(state.activeOrder?.status_id || 0) === nextStatusId) {
+      closeClientOrderStatusMenus();
+      return;
+    }
+
     try {
-      items = typeof order.items === "string" ? JSON.parse(order.items) : order.items;
-      if (!Array.isArray(items)) items = [];
-    } catch { items = []; }
-
-    let html = `<div class="cl-order-detail">`;
-
-    // Header
-    html += `<div class="cl-od-header">`;
-    html += `<div class="cl-od-title">Заказ #${escapeHtml(order.id)}</div>`;
-    html += `<div class="cl-od-status">${escapeHtml(order.status_title || "—")}</div>`;
-    html += `</div>`;
-
-    // Info rows
-    html += `<div class="cl-od-info">`;
-    html += `<div class="cl-od-row"><span class="cl-od-label">Дата и время</span><span class="cl-od-value">${escapeHtml(fmtDateTime(order.created_at))}</span></div>`;
-    if (order.method_title) {
-      html += `<div class="cl-od-row"><span class="cl-od-label">Способ доставки</span><span class="cl-od-value">${escapeHtml(order.method_title)}</span></div>`;
-    }
-    if (order.time_option_title) {
-      html += `<div class="cl-od-row"><span class="cl-od-label">Время доставки</span><span class="cl-od-value">${escapeHtml(order.time_option_title)}</span></div>`;
-    }
-    html += `</div>`;
-
-    // Address
-    if (order.address) {
-      html += `<div class="cl-od-section">`;
-      html += `<div class="cl-od-section-title">Адрес доставки</div>`;
-      html += `<div>${escapeHtml(order.address)}</div>`;
-      if (order.address_comment) {
-        html += `<div class="muted" style="margin-top:4px;">${escapeHtml(order.address_comment)}</div>`;
+      await apiJson(`/api/admin/orders/${orderId}/status`, {
+        method: "PUT",
+        body: { status_id: nextStatusId },
+      });
+      const json = await apiJson(`/api/admin/orders/${orderId}`);
+      const order = json?.data || null;
+      if (!order) return;
+      state.activeOrder = order;
+      state.orderCache.set(orderId, order);
+      updateClientOrderInState(order);
+      renderClientOrderInfo(order);
+      if (state.activeContentTab === "orders" && state.activeClientId) {
+        renderClientOrders();
       }
-      html += `</div>`;
+    } catch (err) {
+      console.error(err);
+    } finally {
+      closeClientOrderStatusMenus();
+    }
+  }
+
+  async function activateOrderById(orderId) {
+    const id = Number(orderId || 0);
+    if (!Number.isFinite(id) || id <= 0) return;
+
+    state.activeOrderId = id;
+    state.activeOrder = null;
+
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey);
+    if (!activeTab || activeTab.type !== "order" || Number(activeTab.id) !== id) return;
+
+    await ensureOrderStatusesLoaded();
+
+    const cached = state.orderCache.get(id);
+    if (cached) {
+      state.activeOrder = cached;
+      renderClientOrderInfo(cached);
+    } else {
+      showClientOrderInfoEmpty("Загрузка заказа...", "Подождите, загружаем детали заказа.");
     }
 
-    // Pickup
-    if (order.pickup_store_name) {
-      html += `<div class="cl-od-section">`;
-      html += `<div class="cl-od-section-title">Точка самовывоза</div>`;
-      html += `<div>${escapeHtml(order.pickup_store_name)}</div>`;
-      if (order.pickup_store_address) {
-        html += `<div class="muted" style="margin-top:4px;">${escapeHtml(order.pickup_store_address)}</div>`;
+    const requestId = ++orderRequestToken;
+    try {
+      const json = await apiJson(`/api/admin/orders/${id}`);
+      if (requestId !== orderRequestToken) return;
+      const order = json?.data || null;
+      if (!order) {
+        showClientOrderInfoEmpty("Заказ не найден", "Не удалось получить детали выбранного заказа.");
+        return;
       }
-      html += `</div>`;
+      state.activeOrder = order;
+      state.orderCache.set(id, order);
+      updateClientOrderInState(order);
+
+      const stillActive = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey);
+      if (!stillActive || stillActive.type !== "order" || Number(stillActive.id) !== id) return;
+      renderClientOrderInfo(order);
+    } catch (err) {
+      if (requestId !== orderRequestToken) return;
+      console.error(err);
+      showClientOrderInfoEmpty("Ошибка загрузки", "Не удалось загрузить детали заказа.");
     }
+  }
 
-    // Items
-    if (items.length) {
-      html += `<div class="cl-od-section">`;
-      html += `<div class="cl-od-section-title">Товары</div>`;
-      html += `<div class="cl-od-items">`;
-      items.forEach((item) => { html += formatOrderItem(item); });
-      html += `</div>`;
-      html += `</div>`;
-    }
-
-    // Comment
-    if (order.comment) {
-      html += `<div class="cl-od-section">`;
-      html += `<div class="cl-od-section-title">Комментарий</div>`;
-      html += `<div>${escapeHtml(order.comment)}</div>`;
-      html += `</div>`;
-    }
-
-    // Summary
-    html += `<div class="cl-od-section cl-od-summary">`;
-    html += `<div class="cl-od-summary-title">Суммы:</div>`;
-    if (order.payment_title) {
-      html += `<div class="cl-od-summary-row"><span class="cl-od-label">Оплата</span><span>${escapeHtml(order.payment_title)}</span></div>`;
-    }
-    html += `<div class="cl-od-summary-row"><span class="cl-od-label">Доставка</span><span>${money(order.delivery_cost || 0)}</span></div>`;
-    html += `<div class="cl-od-summary-divider"></div>`;
-    html += `<div class="cl-od-summary-total"><span>ИТОГО</span><span>${money(order.total_price || 0)}</span></div>`;
-    html += `</div>`;
-
-    html += `</div>`;
-
-    clientOrderDetailContent.innerHTML = html;
+  function openOrderTab(orderId) {
+    const id = Number(orderId || 0);
+    if (!Number.isFinite(id) || id <= 0) return;
+    ensureTab({
+      type: "order",
+      id,
+      title: `№${id}`,
+      onActivate: () => activateOrderById(id),
+    });
+    if (isMobile()) openSheet();
   }
 
   // -----------------------------
@@ -2482,6 +3085,8 @@
   // -----------------------------
   async function openClientById(id) {
     state.activeClientId = Number(id) || null;
+    state.activeOrderId = null;
+    state.activeOrder = null;
 
     // highlight list
     $$(".order-row.is-active", document).forEach((n) => n.classList.remove("is-active"));
@@ -2518,6 +3123,45 @@
     });
 
     if (isMobile()) openSheet();
+  }
+
+  async function findClientIdByPhone(phoneValue) {
+    const digits = normalizePhoneDigits(phoneValue);
+    if (!digits) return null;
+
+    const localMatch = (state.clients || []).find((client) => normalizePhoneDigits(client.phone) === digits);
+    if (localMatch) {
+      const localId = Number(localMatch.id || 0);
+      return Number.isFinite(localId) && localId > 0 ? localId : null;
+    }
+
+    const qs = new URLSearchParams();
+    qs.set("limit", "1");
+    qs.set("offset", "0");
+    qs.set("q", digits);
+    const json = await apiJson(`/api/admin/clients?${qs.toString()}`);
+    const rows = Array.isArray(json.data) ? json.data : [];
+    const match = rows.find((client) => normalizePhoneDigits(client.phone) === digits) || rows[0];
+    const id = match ? Number(match.id || 0) : 0;
+    return Number.isFinite(id) && id > 0 ? id : null;
+  }
+
+  async function openClientRequestedInUrl(request) {
+    if (!request || (!request.clientId && !request.clientPhone)) return;
+
+    let targetClientId = request.clientId;
+    try {
+      if (!targetClientId && request.clientPhone) {
+        targetClientId = await findClientIdByPhone(request.clientPhone);
+      }
+      if (targetClientId) {
+        await selectClient(targetClientId);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      clearClientOpenRequestFromUrl();
+    }
   }
 
   // -----------------------------
@@ -2819,7 +3463,12 @@
       if (state.discountPickerCategoryId === 'categories') {
         renderDiscountCustomerCategoryList();
       } else {
-        renderDiscountCustomerList();
+        if (discountCustomerSearchDebounce) {
+          clearTimeout(discountCustomerSearchDebounce);
+        }
+        discountCustomerSearchDebounce = setTimeout(() => {
+          refreshDiscountCustomerPickerList().catch(console.error);
+        }, 220);
       }
     });
   }
@@ -2942,9 +3591,16 @@
   if (logicSelectWrap) {
     initCustomSelects(logicSelectWrap.parentElement);
   }
-  
+
+  const initialClientOpenRequest = getClientOpenRequestFromUrl();
+
   loadCustomFilters().catch(console.error);
-  loadClients().catch(console.error);
+  loadClients()
+    .then(() => openClientRequestedInUrl(initialClientOpenRequest))
+    .catch((err) => {
+      console.error(err);
+      clearClientOpenRequestFromUrl();
+    });
   loadDiscounts().catch(console.error);
 
   document.addEventListener('tenantStoreChanged', (event) => {
@@ -2954,3 +3610,4 @@
     loadDiscounts().catch(console.error);
   });
 })();
+

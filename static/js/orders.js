@@ -1,4 +1,3 @@
-
 (function () {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -99,6 +98,26 @@
     itemsList: $$('[data-info="items-list"]'),
   };
 
+  const clientInfoWrap = $("#clientInfoWrap");
+  const clientPhoto = $("#clientPhoto");
+  const clientPhotoPlaceholder = $("#clientPhotoPlaceholder");
+  const clientInfoName = $("#clientInfoName");
+  const clientInfoPhone = $("#clientInfoPhone");
+  const clientInfoBirthday = $("#clientInfoBirthday");
+  const clientContentTabs = $("#clientContentTabs");
+  const clientTabAddresses = $("#clientTabAddresses");
+  const clientTabOrders = $("#clientTabOrders");
+  const clientTabDiscounts = $("#clientTabDiscounts");
+  const clientAddressesList = $("#clientAddresses");
+  const clientOrdersList = $("#clientOrdersList");
+  const clientOrdersListView = $("#clientOrdersListView");
+  const clientOrderDetailView = $("#clientOrderDetailView");
+  const clientDiscountsList = $("#clientDiscountsList");
+  const clientDiscountsEmpty = $("#clientDiscountsEmpty");
+  const clientEditNameBtn = $("#clientEditNameBtn");
+  const clientAddrToggleBtn = $("#clientAddrToggleBtn");
+  const clientAddrFormCard = $("#clientAddrFormCard");
+
   const closeButtons = $$('[data-action="order-close"]');
 
   const sheet = $("#orderSheet");
@@ -127,6 +146,7 @@
     lastEventId: null,
     storeTimezone: "+0",
     tenantSounds: {},
+    clientsCache: new Map(),
     date: {
       start: null,
       end: null,
@@ -268,14 +288,207 @@
       .replaceAll('"', "&quot;");
   }
 
+  function normalizeIconClass(iconValue) {
+    const base = String(iconValue || "").trim();
+    if (!base) return "";
+    if (base.includes(" ")) return base;
+    if (base.startsWith("fa-")) return `fas ${base}`;
+    return `fas fa-${base}`;
+  }
+
+  function isIconUrl(iconValue) {
+    const val = String(iconValue || "").trim();
+    if (!val) return false;
+    return /^https?:\/\//i.test(val) || val.startsWith("/") || val.startsWith("./") || val.startsWith("../");
+  }
+
+  function fallbackTimeOptionIcon(codeValue) {
+    const code = String(codeValue || "").trim().toLowerCase();
+    if (code === "asap" || code === "urgent") return "fas fa-bolt";
+    if (code === "at_time") return "fas fa-clock";
+    if (code === "on_date") return "fas fa-calendar-day";
+    return "";
+  }
+
+  function resolveTimeOptionIcon(order) {
+    if (!order) return "";
+    const storedIcon = String(order.time_option_icon || "").trim();
+    if (storedIcon) return storedIcon;
+    return fallbackTimeOptionIcon(order.time_option_code);
+  }
+
+  function renderOrderTimeIcon(order) {
+    const iconValue = resolveTimeOptionIcon(order);
+    if (!iconValue) return "";
+    const title = String(order.time_option_title || "").trim();
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+    if (isIconUrl(iconValue)) {
+      return `<span class="order-time-icon"${titleAttr}><img src="${escapeHtml(iconValue)}" alt="" loading="lazy"></span>`;
+    }
+    const iconClass = normalizeIconClass(iconValue);
+    if (!iconClass) return "";
+    return `<span class="order-time-icon"${titleAttr}><i class="${escapeHtml(iconClass)}"></i></span>`;
+  }
+
+  function getStatusMetaById(statusId) {
+    const id = Number(statusId || 0);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    return state.statuses.find((status) => Number(status?.id) === id) || null;
+  }
+
+  function resolveOrderStatusIcon(statusMeta) {
+    const raw = String(statusMeta?.icon || "").trim();
+    if (raw) return raw;
+    return "fas fa-circle";
+  }
+
+  function getNextStatusMetaForOrder(order) {
+    const sortedStatuses = getSortedStatuses();
+    if (!sortedStatuses.length) return null;
+    const currentStatusId = Number(order?.status_id || 0);
+    const currentIndex = sortedStatuses.findIndex((status) => Number(status.id) === currentStatusId);
+    if (currentIndex < 0) return sortedStatuses[0];
+    return sortedStatuses[(currentIndex + 1) % sortedStatuses.length];
+  }
+
+  function renderOrderStatusCycleButton(order) {
+    if (!order) return "";
+    const currentStatus = getStatusMetaById(order.status_id) || getSortedStatuses()[0] || null;
+    const nextStatus = getNextStatusMetaForOrder(order);
+    const nextStatusId = Number(nextStatus?.id || 0);
+    if (!currentStatus || !Number.isFinite(nextStatusId) || nextStatusId <= 0) return "";
+
+    const currentTitle = String(currentStatus.title || "").trim() || "Этап";
+    const nextTitle = String(nextStatus.title || "").trim() || currentTitle;
+    const titleAttr = escapeHtml(`${currentTitle} -> ${nextTitle}`);
+    const iconValue = resolveOrderStatusIcon(currentStatus);
+    const iconHtml = isIconUrl(iconValue)
+      ? `<img src="${escapeHtml(iconValue)}" alt="" loading="lazy">`
+      : `<i class="${escapeHtml(normalizeIconClass(iconValue) || "fas fa-circle")}"></i>`;
+
+    return `
+      <button
+        class="order-stage-btn"
+        type="button"
+        data-action="order-row-status-next"
+        data-order-id="${escapeHtml(order.id)}"
+        data-next-status-id="${escapeHtml(nextStatusId)}"
+        title="${titleAttr}"
+        aria-label="${titleAttr}"
+      >
+        ${iconHtml}
+      </button>
+    `;
+  }
+
+  function normalizeApartmentToken(token) {
+    const src = String(token || "").trim();
+    if (!src) return "";
+    const re = /\b(?:\u043a\u0432(?:\u0430\u0440\u0442\u0438\u0440\u0430)?\.?)\s*([\p{L}\d\-\/]+)/iu;
+    const m = src.match(re);
+    if (!m || !m[1]) return "";
+    return `кв ${m[1]}`;
+  }
+
+  function normalizeHouseToken(token) {
+    const src = String(token || "").trim();
+    if (!src) return "";
+    const re = /(?:\u0434(?:\u043e\u043c)?\.?)\s*([\p{L}\d\-\/]+)/iu;
+    const m = src.match(re);
+    if (m && m[1]) return m[1];
+    if (/^\d+[\p{L}\-\/]*$/iu.test(src)) return src;
+    return "";
+  }
+
+  function isMetaAddressToken(token) {
+    const src = String(token || "").trim().toLowerCase();
+    if (!src) return true;
+    return /(?:\u043f\u043e\u0434[\u044a\u044c]\u0435\u0437\u0434|\u044d\u0442(?:\u0430\u0436)?|\u043a\u0432(?:\u0430\u0440\u0442\u0438\u0440\u0430)?|\u043e\u0444\u0438\u0441|\u043a\u043e\u043c\u043c\u0435\u043d\u0442|\u0434\u043e\u043c\u043e\u0444\u043e\u043d|\u043a\u043e\u0434)/iu.test(src);
+  }
+
+  function looksLikeStreetToken(token) {
+    const src = String(token || "").trim();
+    if (!src) return false;
+    if (isMetaAddressToken(src)) return false;
+    const streetRe = /(?:\u0443\u043b\.?|\u0443\u043b\u0438\u0446|\u043f\u0440\u043e\u0441\u043f|\u043f\u0440-\u0442|\u043f\u0435\u0440\u0435\u0443\u043b|\u043f\u0435\u0440\.?|\u0431\u0443\u043b\u044c\u0432\u0430\u0440|\u0431\u0443\u043b\.?|\u043d\u0430\u0431\.?|\u0448\u043e\u0441\u0441\u0435|\u043c\u043a\u0440\.?|\u043c\u0438\u043a\u0440\u043e\u0440\u0430\u0439\u043e\u043d|\u043f\u043b\.?|\u043f\u043b\u043e\u0449\u0430\u0434\u044c|\u0430\u043b\u043b\u0435\u044f|\u0442\u0440\u0430\u043a\u0442|\u0434\u043e\u0440\u043e\u0433\u0430|\u043f\u0440\u043e\u0435\u0437\u0434)/iu;
+    if (streetRe.test(src)) return true;
+    return /\d/.test(src);
+  }
+
+  function shortAddressForList(rawAddress) {
+    const raw = String(rawAddress || "").trim();
+    if (!raw) return "?";
+    const tokens = raw.split(",").map((v) => String(v || "").trim()).filter(Boolean);
+    if (!tokens.length) return raw;
+
+    let aptPart = "";
+    for (const token of tokens) {
+      const apt = normalizeApartmentToken(token);
+      if (apt) {
+        aptPart = apt;
+        break;
+      }
+    }
+
+    let streetIdx = tokens.findIndex((token) => looksLikeStreetToken(token));
+    if (streetIdx < 0) streetIdx = 0;
+    let streetPart = tokens[streetIdx] || "";
+
+    if (streetPart && !/\d/.test(streetPart)) {
+      const next = tokens[streetIdx + 1] || "";
+      const house = normalizeHouseToken(next);
+      if (house) streetPart = `${streetPart} ${house}`.trim();
+    }
+
+    if (!streetPart) streetPart = raw;
+    if (aptPart && !/\b(?:\u043a\u0432(?:\u0430\u0440\u0442\u0438\u0440\u0430)?\.?)\s*[\p{L}\d\-\/]+\b/iu.test(streetPart)) {
+      return `${streetPart}, ${aptPart}`;
+    }
+    return streetPart;
+  }
+
   function buildOrderTabKey(orderId) {
     return `order:${String(orderId)}`;
+  }
+
+  function buildClientTabKey(clientId) {
+    return `client:${String(clientId)}`;
   }
 
   function buildOrderTabTitle(order) {
     const id = Number(order?.id || 0);
     if (!Number.isFinite(id) || id <= 0) return "Заказ";
     return `№${id}`;
+  }
+
+  function normalizePhoneDigits(value) {
+    return String(value || "").replace(/[^\d]/g, "");
+  }
+
+  function formatPhoneDigitsToRU(value) {
+    const raw = normalizePhoneDigits(value);
+    if (raw.length !== 11) return String(value || "—");
+    const digits = raw.startsWith("8") ? `7${raw.slice(1)}` : raw;
+    if (!digits.startsWith("7")) return String(value || "—");
+    const a = digits.slice(1, 4);
+    const b = digits.slice(4, 7);
+    const c = digits.slice(7, 9);
+    const d = digits.slice(9, 11);
+    return `+7 (${a}) ${b}-${c}-${d}`;
+  }
+
+  function buildClientTabTitle({ client = null, name = "", phone = "", id = null } = {}) {
+    const fromClientName = String(client?.name || "").trim();
+    if (fromClientName) return fromClientName;
+    const fromName = String(name || "").trim();
+    if (fromName && fromName !== "?") return fromName;
+    const fromClientPhone = String(client?.phone || "").trim();
+    if (fromClientPhone) return formatPhoneDigitsToRU(fromClientPhone);
+    const fromPhone = String(phone || "").trim();
+    if (fromPhone) return formatPhoneDigitsToRU(fromPhone);
+    const clientId = Number(client?.id || id || 0);
+    if (Number.isFinite(clientId) && clientId > 0) return `Клиент #${clientId}`;
+    return "Клиент";
   }
 
   function syncActiveOrderRowState() {
@@ -297,7 +510,7 @@
       const isActive = tab.key === tabsState.activeKey;
       return `
         <div class="product-tab ${isActive ? "is-active" : ""}" data-order-tab-key="${escapeHtml(tab.key)}">
-          <span class="product-tab-title">${escapeHtml(tab.title || "Заказ")}</span>
+          <span class="product-tab-title">${escapeHtml(tab.title || (tab.type === "client" ? "Клиент" : "Заказ"))}</span>
           <button class="product-tab-close" type="button" data-order-tab-close="${escapeHtml(tab.key)}" aria-label="Закрыть">&times;</button>
         </div>
       `;
@@ -308,8 +521,16 @@
     const tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) return;
     tabsState.activeKey = key;
-    state.activeOrderId = tab.orderId;
 
+    if (tab.type === "client") {
+      state.activeOrderId = null;
+      renderOrderTabs();
+      syncActiveOrderRowState();
+      activateClientTab(tab, { openMobile }).catch(console.error);
+      return;
+    }
+
+    state.activeOrderId = tab.orderId;
     const orderFromState = state.orders.find((o) => Number(o.id) === Number(tab.orderId));
     if (orderFromState) {
       tab.order = { ...tab.order, ...orderFromState };
@@ -329,11 +550,85 @@
     const key = buildOrderTabKey(orderId);
     let tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) {
-      tab = { key, orderId, title: buildOrderTabTitle(order), order: { ...order } };
+      tab = { key, type: "order", orderId, title: buildOrderTabTitle(order), order: { ...order } };
       tabsState.tabs.push(tab);
     } else {
+      tab.type = "order";
       tab.order = { ...tab.order, ...order };
       tab.title = buildOrderTabTitle(tab.order);
+    }
+
+    if (activate) {
+      setActiveOrderTab(key, { openMobile });
+    } else {
+      renderOrderTabs();
+    }
+
+    return tab;
+  }
+
+  async function findClientIdByPhone(phoneValue) {
+    const digits = normalizePhoneDigits(phoneValue);
+    if (!digits) return null;
+
+    const localMatch = (state.orders || []).find((order) => normalizePhoneDigits(order?.customer_phone) === digits);
+    if (localMatch) {
+      const localId = Number(localMatch.customer_id || 0);
+      if (Number.isFinite(localId) && localId > 0) return localId;
+    }
+
+    const qs = new URLSearchParams();
+    qs.set("limit", "1");
+    qs.set("offset", "0");
+    qs.set("q", digits);
+    const json = await apiJson(`/api/admin/clients?${qs.toString()}`);
+    const rows = Array.isArray(json.data) ? json.data : [];
+    const match = rows.find((client) => normalizePhoneDigits(client.phone) === digits) || rows[0];
+    const id = Number(match?.id || 0);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  }
+
+  async function ensureClientTab({ clientId = null, clientPhone = "", clientName = "", activate = true, openMobile = false } = {}) {
+    let normalizedClientId = Number(clientId || 0);
+    const normalizedPhone = String(clientPhone || "").trim();
+
+    if (!Number.isFinite(normalizedClientId) || normalizedClientId <= 0) {
+      if (!normalizedPhone) return null;
+      normalizedClientId = await findClientIdByPhone(normalizedPhone);
+    }
+    if (!Number.isFinite(normalizedClientId) || normalizedClientId <= 0) return null;
+
+    const key = buildClientTabKey(normalizedClientId);
+    let tab = tabsState.tabs.find((item) => item.key === key);
+    if (!tab) {
+      tab = {
+        key,
+        type: "client",
+        clientId: normalizedClientId,
+        title: buildClientTabTitle({ name: clientName, phone: normalizedPhone, id: normalizedClientId }),
+        fallbackName: String(clientName || "").trim(),
+        fallbackPhone: normalizedPhone,
+        activeContentTab: "addresses",
+        client: null,
+        addresses: null,
+        orders: null,
+        discounts: null,
+        loading: false,
+        error: null,
+      };
+      tabsState.tabs.push(tab);
+    } else {
+      tab.type = "client";
+      if (!tab.fallbackName && clientName) tab.fallbackName = String(clientName || "").trim();
+      if (!tab.fallbackPhone && normalizedPhone) tab.fallbackPhone = normalizedPhone;
+      if (!tab.activeContentTab) tab.activeContentTab = "addresses";
+      const nextTitle = buildClientTabTitle({
+        client: tab.client,
+        name: tab.fallbackName,
+        phone: tab.fallbackPhone,
+        id: normalizedClientId,
+      });
+      if (nextTitle) tab.title = nextTitle;
     }
 
     if (activate) {
@@ -354,6 +649,7 @@
     }
 
     tabsState.tabs.forEach((tab) => {
+      if (tab.type !== "order") return;
       const fresh = state.orders.find((o) => Number(o.id) === Number(tab.orderId));
       if (fresh) {
         tab.order = { ...tab.order, ...fresh };
@@ -366,13 +662,18 @@
     }
 
     const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
-    state.activeOrderId = activeTab ? activeTab.orderId : null;
+    state.activeOrderId = activeTab?.type === "order" ? activeTab.orderId : null;
 
     renderOrderTabs();
     syncActiveOrderRowState();
 
     if (!activeTab) {
       setInfo(null);
+      return;
+    }
+
+    if (activeTab.type === "client") {
+      activateClientTab(activeTab).catch(console.error);
       return;
     }
 
@@ -1019,6 +1320,9 @@
     $$('[data-action="order-status-menu-toggle"]').forEach((btn) => {
       btn.disabled = disabled;
     });
+    $$('[data-action="order-row-status-next"]').forEach((btn) => {
+      btn.disabled = disabled;
+    });
   }
 
   function closeInlineStatusMenus() {
@@ -1119,16 +1423,316 @@
 
   bindOrderSummaryDiscountToggles();
 
+  function hideOrderClientEditingControls() {
+    if (clientEditNameBtn) clientEditNameBtn.classList.add("hidden");
+    if (clientAddrToggleBtn) clientAddrToggleBtn.classList.add("hidden");
+    if (clientAddrFormCard) clientAddrFormCard.classList.add("hidden");
+  }
+
+  hideOrderClientEditingControls();
+
   function showEmptyInfo() {
     setHiddenAll(infoEls.empty, false);
     setHiddenAll(infoEls.content, true);
+    if (clientInfoWrap) clientInfoWrap.classList.add("hidden");
     if (orderInfoFooter) orderInfoFooter.classList.add("hidden");
   }
 
   function showOrderInfo() {
     setHiddenAll(infoEls.empty, true);
     setHiddenAll(infoEls.content, false);
+    if (clientInfoWrap) clientInfoWrap.classList.add("hidden");
     if (orderInfoFooter) orderInfoFooter.classList.remove("hidden");
+  }
+
+  function showClientInfo() {
+    setHiddenAll(infoEls.empty, true);
+    setHiddenAll(infoEls.content, true);
+    if (clientInfoWrap) clientInfoWrap.classList.remove("hidden");
+    if (orderInfoFooter) orderInfoFooter.classList.add("hidden");
+  }
+
+  function formatClientDate(value) {
+    if (!value) return "—";
+    const date = new Date(String(value).replace(" ", "T"));
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleDateString("ru-RU");
+  }
+
+  function formatClientDateTime(value) {
+    if (!value) return "—";
+    const date = new Date(String(value).replace(" ", "T"));
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString("ru-RU", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  function setClientPhoto(photoUrl) {
+    const src = String(photoUrl || "").trim();
+    if (src) {
+      if (clientPhoto) {
+        clientPhoto.src = src;
+        clientPhoto.classList.remove("hidden");
+      }
+      if (clientPhotoPlaceholder) clientPhotoPlaceholder.classList.add("hidden");
+      return;
+    }
+    if (clientPhoto) {
+      clientPhoto.removeAttribute("src");
+      clientPhoto.classList.add("hidden");
+    }
+    if (clientPhotoPlaceholder) clientPhotoPlaceholder.classList.remove("hidden");
+  }
+
+  function getActiveClientTab() {
+    const tab = tabsState.tabs.find((item) => item.key === tabsState.activeKey);
+    if (!tab || tab.type !== "client") return null;
+    return tab;
+  }
+
+  function setClientContentTab(tabName) {
+    const nextTab = ["addresses", "orders", "discounts"].includes(String(tabName || ""))
+      ? String(tabName)
+      : "addresses";
+    const activeClientTab = getActiveClientTab();
+    if (activeClientTab) activeClientTab.activeContentTab = nextTab;
+
+    if (clientContentTabs) {
+      $$("[data-ctab]", clientContentTabs).forEach((btn) => {
+        btn.classList.toggle("is-active", btn.dataset.ctab === nextTab);
+      });
+    }
+
+    [clientTabAddresses, clientTabOrders, clientTabDiscounts].forEach((panel) => {
+      if (!panel) return;
+      panel.classList.toggle("is-active", panel.dataset.ctab === nextTab);
+    });
+
+    if (clientOrdersListView) clientOrdersListView.classList.remove("hidden");
+    if (clientOrderDetailView) clientOrderDetailView.classList.add("hidden");
+  }
+
+  if (clientContentTabs && clientContentTabs.dataset.bound !== "1") {
+    clientContentTabs.dataset.bound = "1";
+    clientContentTabs.addEventListener("click", (event) => {
+      const btn = event.target.closest("[data-ctab]");
+      if (!btn) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setClientContentTab(btn.dataset.ctab);
+    });
+  }
+
+  function renderClientAddressesHtml(addresses) {
+    const list = Array.isArray(addresses) ? addresses : [];
+    if (!list.length) return '<div class="muted" style="padding:4px 0;">Адресов пока нет.</div>';
+
+    return list.map((address) => {
+      const main = [address?.street, address?.house].map((v) => String(v || "").trim()).filter(Boolean).join(", ");
+      const details = [];
+      if (address?.entrance) details.push(`подъезд ${address.entrance}`);
+      if (address?.floor) details.push(`этаж ${address.floor}`);
+      if (address?.apartment) details.push(`кв ${address.apartment}`);
+      const fullAddress = [main, details.join(", ")].filter(Boolean).join(", ") || String(address?.address || "—");
+      const isDefault = Number(address?.is_default || 0) === 1;
+      const commentText = String(address?.comment || "").trim();
+
+      return `
+        <div class="shop-profile-card shop-profile-card--compact">
+          <div class="shop-address-card">
+            <div class="shop-address-card-main">
+              <div class="shop-address-card-title">
+                ${escapeHtml(fullAddress)}
+                ${isDefault ? '<span class="muted"> • основной</span>' : ""}
+              </div>
+              ${commentText ? `<div class="shop-address-card-sub">${escapeHtml(commentText)}</div>` : ""}
+            </div>
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderClientOrdersHistoryHtml(clientOrders) {
+    const list = Array.isArray(clientOrders) ? clientOrders : [];
+    if (!list.length) return '<div class="muted" style="padding:4px 0;">Заказов пока нет.</div>';
+
+    return list.map((order) => {
+      const orderId = Number(order?.id || 0);
+      const title = Number.isFinite(orderId) && orderId > 0 ? `Заказ #${orderId}` : "Заказ";
+      const statusTitle = String(order?.status_title || "").trim();
+      const metaParts = [formatClientDateTime(order?.created_at)];
+      if (statusTitle) metaParts.push(statusTitle);
+      const openAttrs = Number.isFinite(orderId) && orderId > 0
+        ? ` data-action="open-order-from-client" data-order-id="${escapeHtml(orderId)}" role="button" tabindex="0"`
+        : "";
+
+      return `
+        <div class="shop-profile-card order-client-history-card"${openAttrs}>
+          <div><strong>${escapeHtml(title)}</strong></div>
+          <div class="muted">${escapeHtml(metaParts.join(" • "))}</div>
+          <div><strong>${escapeHtml(money(order?.total_price || 0))}</strong></div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderClientDiscountsHtml(discounts) {
+    const list = Array.isArray(discounts) ? discounts : [];
+    if (!list.length) return "";
+
+    return list.map((discount) => {
+      const valueText = discount.discount_type === "percent"
+        ? `${discount.discount_value}%`
+        : discount.discount_type === "fixed"
+          ? `-${discount.discount_value}₽`
+          : `${discount.discount_value}₽`;
+      const linkTypeText = discount.link_type === "direct"
+        ? "Напрямую"
+        : `Категория: ${discount.category_title || "—"}`;
+      const statusClass = discount.is_active ? "" : "inactive";
+
+      return `
+        <div class="discount-row">
+          <div class="discount-row-icon"><i class="fas fa-percentage"></i></div>
+          <div class="discount-row-info">
+            <div class="discount-row-title">${escapeHtml(discount.title || "Скидка")}</div>
+            <div class="discount-row-meta">${escapeHtml(linkTypeText)}</div>
+          </div>
+          <div class="discount-row-value">${escapeHtml(valueText)}</div>
+          <div class="discount-row-status ${statusClass}"></div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderClientTabState(tab, { loading = false, error = "" } = {}) {
+    const client = tab?.client || null;
+    const fallbackName = String(tab?.fallbackName || "").trim();
+    const fallbackPhone = String(tab?.fallbackPhone || "").trim();
+
+    if (clientInfoName) clientInfoName.textContent = client?.name || fallbackName || "—";
+    if (clientInfoPhone) {
+      const phoneValue = client?.phone || fallbackPhone || "—";
+      clientInfoPhone.textContent = formatPhoneDigitsToRU(phoneValue);
+    }
+    if (clientInfoBirthday) clientInfoBirthday.textContent = formatClientDate(client?.birthday);
+    setClientPhoto(client?.photo || "");
+    setClientContentTab(tab?.activeContentTab || "addresses");
+
+    if (loading) {
+      if (clientAddressesList) clientAddressesList.innerHTML = '<div class="muted">Загрузка…</div>';
+      if (clientOrdersList) clientOrdersList.innerHTML = '<div class="muted">Загрузка…</div>';
+      if (clientDiscountsList) clientDiscountsList.innerHTML = '<div class="muted">Загрузка…</div>';
+      if (clientDiscountsEmpty) clientDiscountsEmpty.classList.add("hidden");
+      return;
+    }
+
+    if (error) {
+      if (clientAddressesList) clientAddressesList.innerHTML = `<div class="muted">${escapeHtml(error)}</div>`;
+      if (clientOrdersList) clientOrdersList.innerHTML = "";
+      if (clientDiscountsList) clientDiscountsList.innerHTML = "";
+      if (clientDiscountsEmpty) clientDiscountsEmpty.classList.add("hidden");
+      return;
+    }
+
+    if (clientAddressesList) clientAddressesList.innerHTML = renderClientAddressesHtml(tab?.addresses);
+    if (clientOrdersList) clientOrdersList.innerHTML = renderClientOrdersHistoryHtml(tab?.orders);
+    const discounts = Array.isArray(tab?.discounts) ? tab.discounts : [];
+    if (clientDiscountsList) clientDiscountsList.innerHTML = renderClientDiscountsHtml(discounts);
+    if (clientDiscountsEmpty) clientDiscountsEmpty.classList.toggle("hidden", discounts.length > 0);
+  }
+
+  async function loadClientTabData(tab, { forceReload = false } = {}) {
+    if (!tab || tab.type !== "client") return;
+    if (tab.loading) return;
+    if (!forceReload && tab.client && Array.isArray(tab.addresses) && Array.isArray(tab.orders) && Array.isArray(tab.discounts)) return;
+
+    tab.loading = true;
+    tab.error = null;
+    if (tabsState.activeKey === tab.key) {
+      showClientInfo();
+      renderClientTabState(tab, { loading: true });
+    }
+
+    try {
+      const [clientRes, addressesRes, ordersRes, discountsRes] = await Promise.allSettled([
+        apiJson(`/api/admin/clients/${tab.clientId}`),
+        apiJson(`/api/admin/clients/${tab.clientId}/addresses`),
+        apiJson(`/api/admin/clients/${tab.clientId}/orders`),
+        apiJson(`/api/admin/clients/${tab.clientId}/discounts`),
+      ]);
+
+      if (clientRes.status !== "fulfilled") throw clientRes.reason || new Error("CLIENT_LOAD_FAILED");
+      if (addressesRes.status !== "fulfilled") throw addressesRes.reason || new Error("CLIENT_ADDRESSES_LOAD_FAILED");
+      if (ordersRes.status !== "fulfilled") throw ordersRes.reason || new Error("CLIENT_ORDERS_LOAD_FAILED");
+
+      tab.client = clientRes.value?.data || null;
+      tab.addresses = Array.isArray(addressesRes.value?.data) ? addressesRes.value.data : [];
+      tab.orders = Array.isArray(ordersRes.value?.data) ? ordersRes.value.data : [];
+      tab.discounts = discountsRes.status === "fulfilled" && Array.isArray(discountsRes.value?.data)
+        ? discountsRes.value.data
+        : [];
+      tab.error = null;
+      tab.title = buildClientTabTitle({
+        client: tab.client,
+        name: tab.fallbackName,
+        phone: tab.fallbackPhone,
+        id: tab.clientId,
+      });
+      state.clientsCache.set(Number(tab.clientId), {
+        client: tab.client,
+        addresses: tab.addresses,
+        orders: tab.orders,
+        discounts: tab.discounts,
+      });
+      renderOrderTabs();
+      if (tabsState.activeKey === tab.key) {
+        showClientInfo();
+        renderClientTabState(tab);
+      }
+    } catch (error) {
+      console.error(error);
+      tab.error = "Не удалось загрузить данные клиента";
+      if (tabsState.activeKey === tab.key) {
+        showClientInfo();
+        renderClientTabState(tab, { error: tab.error });
+      }
+    } finally {
+      tab.loading = false;
+    }
+  }
+
+  async function activateClientTab(tab, { openMobile = false, forceReload = false } = {}) {
+    if (!tab || tab.type !== "client") return;
+
+    const cached = state.clientsCache.get(Number(tab.clientId));
+    if (cached && !tab.client) {
+      tab.client = cached.client || null;
+      tab.addresses = Array.isArray(cached.addresses) ? cached.addresses : [];
+      tab.orders = Array.isArray(cached.orders) ? cached.orders : [];
+      tab.discounts = Array.isArray(cached.discounts) ? cached.discounts : [];
+      tab.title = buildClientTabTitle({
+        client: tab.client,
+        name: tab.fallbackName,
+        phone: tab.fallbackPhone,
+        id: tab.clientId,
+      });
+      renderOrderTabs();
+    }
+
+    showClientInfo();
+    renderClientTabState(tab, {
+      loading: !tab.client || !Array.isArray(tab.addresses) || !Array.isArray(tab.orders) || !Array.isArray(tab.discounts),
+    });
+    await loadClientTabData(tab, { forceReload });
+
+    if (openMobile && isMobile()) openSheet();
   }
 
   function setInfo(order) {
@@ -1141,6 +1745,11 @@
       setTextAll(infoEls.clientName, "?");
       setTextAll(infoEls.clientPhone, "?");
       setTextAll(infoEls.clientAvatar, "?");
+      setAttrAll(infoEls.clientPhone, "href", null);
+      setAttrAll(infoEls.clientPhone, "data-action", null);
+      setAttrAll(infoEls.clientPhone, "data-client-id", null);
+      setAttrAll(infoEls.clientPhone, "data-client-phone", null);
+      setAttrAll(infoEls.clientPhone, "data-client-name", null);
       setTextAll(infoEls.payMethod, "?");
       setTextAll(infoEls.total, "?");
       setTextAll(infoEls.deliveryType, "?");
@@ -1177,7 +1786,15 @@
     setTextAll(infoEls.clientName, clientName);
     setTextAll(infoEls.clientPhone, clientPhone);
     setTextAll(infoEls.clientAvatar, initials(clientName));
-    setAttrAll(infoEls.clientPhone, "href", clientPhone && clientPhone !== "?" ? `tel:${clientPhone}` : null);
+    const clientId = Number(order.customer_id || 0);
+    const clientPhoneRaw = String(order.customer_phone || "").trim();
+    const clientPhoneValue = clientPhoneRaw === "?" ? "" : clientPhoneRaw;
+    const canOpenClientTab = (Number.isFinite(clientId) && clientId > 0) || !!clientPhoneValue;
+    setAttrAll(infoEls.clientPhone, "href", canOpenClientTab ? "#" : null);
+    setAttrAll(infoEls.clientPhone, "data-action", canOpenClientTab ? "open-client" : null);
+    setAttrAll(infoEls.clientPhone, "data-client-id", canOpenClientTab && clientId > 0 ? String(clientId) : null);
+    setAttrAll(infoEls.clientPhone, "data-client-phone", canOpenClientTab ? clientPhoneValue : null);
+    setAttrAll(infoEls.clientPhone, "data-client-name", canOpenClientTab ? String(clientName || "").trim() : null);
 
     const clientExtra = order.customer_comment || order.customer_source || "";
     setTextAll(infoEls.clientExtra, clientExtra);
@@ -1298,7 +1915,7 @@
   // -----------------------------
   // Render: stages
   // -----------------------------
-  function stageButton({ id, title, subtitle, icon, count }) {
+  function stageButton({ id, title, icon, count }) {
     const btn = document.createElement("button");
     btn.className = "stage-item";
     btn.type = "button";
@@ -1308,7 +1925,6 @@
       <span class="stage-icon"><i class="fas ${escapeHtml(icon)}"></i></span>
       <span class="stage-text">
         <strong>${escapeHtml(title)}</strong>
-        <small>${escapeHtml(subtitle)}</small>
       </span>
       <span class="stage-count">${escapeHtml(count)}</span>
     `;
@@ -1380,7 +1996,6 @@
     elStagesList.appendChild(stageButton({
       id: "all",
       title: "Все заказы",
-      subtitle: "Все статусы",
       icon: "fa-layer-group",
       count: allCount,
     }));
@@ -1392,7 +2007,6 @@
         elStagesList.appendChild(stageButton({
           id: s.id,
           title: s.title,
-          subtitle: s.subtitle || "",
           icon: s.icon || "fa-circle",
           count: Number(s.count || 0),
         }));
@@ -1499,16 +2113,40 @@
   function updateOrderRow(row, order) {
     row.setAttribute("data-order-id", String(order.id));
 
-    const urgent = Boolean(order.is_urgent || order.urgent || order.time_option_code === "urgent" || order.time_option_code === "asap");
-    const intervalText = formatScheduleText(order, { includeTitle: false });
-    const hasScheduledTime = Boolean(
-      intervalText && (order.scheduled_at || order.time_option_code === "at_time" || order.time_option_code === "on_date") && !urgent
-    );
-    const addressCommentDisplay = order.address_comment ?? order.comment ?? "Нет комментария";
-    const courier = order.courier_name || null;
-    const hasCourier = courier && courier !== "Не указан" && courier !== "Не назначен";
-    const telegramId = order.telegram_user_id || null;
-    const telegramDisplay = telegramId ? String(telegramId) : "Не указан";
+    const timeIconHtml = renderOrderTimeIcon(order);
+    const stageCycleBtnHtml = renderOrderStatusCycleButton(order);
+    const addressCommentDisplay = order.comment || "Нет комментария";
+    const rawAddress = order.address ||
+      (order.pickup_store_address
+        ? (order.pickup_store_name ? `${order.pickup_store_name}, ${order.pickup_store_address}` : order.pickup_store_address)
+        : "?"
+      );
+    const shortAddressDisplay = shortAddressForList(rawAddress);
+
+    const customerId = Number(order.customer_id || 0);
+    const customerPhoneRaw = String(order.customer_phone || "").trim();
+    const customerPhone = customerPhoneRaw === "?" ? "" : customerPhoneRaw;
+    const canOpenClient = (Number.isFinite(customerId) && customerId > 0) || !!customerPhone;
+    const clientPhoneLineHtml = canOpenClient
+      ? `
+        <button
+          type="button"
+          class="order-client-phone muted order-client-phone-link"
+          data-action="open-client"
+          data-client-id="${customerId > 0 ? customerId : ""}"
+          data-client-phone="${escapeHtml(customerPhone)}"
+          data-client-name="${escapeHtml(order.customer_name || "")}"
+        >
+          <i class="fas fa-phone"></i>
+          <span class="order-client-phone-text">${escapeHtml(order.customer_phone || "?")}</span>
+        </button>
+      `
+      : `
+        <div class="order-client-phone muted">
+          <i class="fas fa-phone"></i>
+          <span class="order-client-phone-text">${escapeHtml(order.customer_phone || "?")}</span>
+        </div>
+      `;
 
     const payment = order.payment_title || "";
     const totalText = money(order.total_price || 0);
@@ -1523,35 +2161,21 @@
       </div>
 
       <div class="order-col order-indicators">
-        ${urgent ? `
-          <span class="order-indicator urgent">⚡</span>
-        ` : hasScheduledTime ? `
-          <div class="order-indicator-time">
-            <i class="fas fa-clock"></i>
-            <span class="order-indicator-time-text">${escapeHtml(intervalText)}</span>
-          </div>
-        ` : ''}
+        ${timeIconHtml}
       </div>
 
       <div class="order-col order-client">
-        <div class="order-client-name"><i class="fas fa-user"></i> ${escapeHtml(order.customer_name || "?")}</div>
-        <div class="order-client-phone muted"><i class="fas fa-phone"></i> ${escapeHtml(order.customer_phone || "?")}</div>
-        <div class="order-client-telegram muted"><i class="fab fa-telegram-plane"></i> ${escapeHtml(telegramDisplay)}</div>
+        <div class="order-client-name"><i class="fas fa-user"></i><span class="order-client-name-text">${escapeHtml(order.customer_name || "?")}</span></div>
+        ${clientPhoneLineHtml}
       </div>
 
       <div class="order-col order-address">
-        <div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(
-          order.address ||
-          (order.pickup_store_address
-            ? (order.pickup_store_name ? `${order.pickup_store_name}, ${order.pickup_store_address}` : order.pickup_store_address)
-            : "?"
-          )
-        )}</div>
+        <div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(shortAddressDisplay)}</div>
         <div class="order-address-comment muted"><i class="far fa-comment"></i> ${escapeHtml(addressCommentDisplay)}</div>
-        <div class="order-address-courier ${hasCourier ? "" : "order-courier-assign"}">
-          <i class="fas fa-user"></i> 
-          ${hasCourier ? escapeHtml(courier) : '<span data-action="assign-courier">Назначить курьера</span>'}
-        </div>
+      </div>
+
+      <div class="order-col order-stage">
+        ${stageCycleBtnHtml}
       </div>
 
       <div class="order-col order-total">
@@ -2084,7 +2708,7 @@
   // -----------------------------
   // Click handlers
   // -----------------------------
-  document.addEventListener("click", (e) => {
+  document.addEventListener("click", async (e) => {
     const tabCloseBtn = e.target.closest("[data-order-tab-close]");
     if (tabCloseBtn) {
       e.stopPropagation();
@@ -2134,6 +2758,100 @@
 
     if (!e.target.closest('[data-role="order-inline-status"]')) {
       closeInlineStatusMenus();
+    }
+
+    const rowStageBtn = e.target.closest('[data-action="order-row-status-next"]');
+    if (rowStageBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const orderId = Number(rowStageBtn.getAttribute("data-order-id") || 0);
+      const nextStatusId = Number(rowStageBtn.getAttribute("data-next-status-id") || 0);
+      if (!Number.isFinite(orderId) || orderId <= 0) return;
+      if (!Number.isFinite(nextStatusId) || nextStatusId <= 0) return;
+      setStatusControlsDisabled(true);
+      try {
+        await updateOrderStatus(orderId, nextStatusId);
+      } finally {
+        setStatusControlsDisabled(false);
+      }
+      return;
+    }
+
+    const openOrderFromClientBtn = e.target.closest('[data-action="open-order-from-client"]');
+    if (openOrderFromClientBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const orderId = Number(openOrderFromClientBtn.getAttribute("data-order-id") || 0);
+      if (!Number.isFinite(orderId) || orderId <= 0) return;
+
+      let order = state.orders.find((x) => Number(x.id) === orderId) || null;
+      if (!order) {
+        try {
+          const json = await apiJson(`/api/admin/orders/${orderId}`);
+          order = json?.data || null;
+        } catch (err) {
+          console.error(err);
+        }
+      }
+      if (!order) return;
+
+      ensureOrderTab(order, { activate: true, openMobile: true });
+      return;
+    }
+
+    const openClientBtn = e.target.closest('[data-action="open-client"]');
+    if (openClientBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      let clientId = Number(openClientBtn.getAttribute("data-client-id") || 0);
+      let clientPhone = String(openClientBtn.getAttribute("data-client-phone") || "").trim();
+      let clientName = String(openClientBtn.getAttribute("data-client-name") || "").trim();
+
+      const row = openClientBtn.closest(".js-order");
+      if (row && ((!Number.isFinite(clientId) || clientId <= 0) || !clientPhone || !clientName)) {
+        const orderId = Number(row.getAttribute("data-order-id") || 0);
+        const order = state.orders.find((x) => Number(x.id) === orderId);
+        if (order) {
+          if (!Number.isFinite(clientId) || clientId <= 0) {
+            clientId = Number(order.customer_id || 0);
+          }
+          if (!clientPhone) {
+            clientPhone = String(order.customer_phone || "").trim();
+          }
+          if (!clientName) {
+            clientName = String(order.customer_name || "").trim();
+          }
+        }
+      }
+
+      if ((!Number.isFinite(clientId) || clientId <= 0) || !clientName || !clientPhone) {
+        const activeOrder = getActiveOrder();
+        if (activeOrder) {
+          if (!Number.isFinite(clientId) || clientId <= 0) {
+            clientId = Number(activeOrder.customer_id || 0);
+          }
+          if (!clientPhone) {
+            clientPhone = String(activeOrder.customer_phone || "").trim();
+          }
+          if (!clientName) {
+            clientName = String(activeOrder.customer_name || "").trim();
+          }
+        }
+      }
+
+      if (clientPhone === "?") clientPhone = "";
+      if ((!Number.isFinite(clientId) || clientId <= 0) && !clientPhone) return;
+
+      ensureClientTab({
+        clientId,
+        clientPhone,
+        clientName,
+        activate: true,
+        openMobile: true,
+      }).catch(console.error);
+      return;
     }
 
     const action = e.target.closest("[data-action]");
@@ -2792,8 +3510,10 @@
   // Слушать изменение филиала: переподключить SSE к каналу нового филиала и перезагрузить заказы
   document.addEventListener('tenantStoreChanged', (event) => {
     console.log('Филиал изменен:', event.detail.store);
+    state.clientsCache.clear();
     loadAndRenderOrders(false);
     initSse();
     startOrdersPolling();
   });
 })();
+

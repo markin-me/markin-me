@@ -1209,8 +1209,13 @@
       reorderEndpoint: "/api/admin/tenant/order-time-options/reorder",
       updateEndpoint: "/api/admin/tenant/order-time-options/",
       hasFinal: false,
-      hasIcon: false,
-      hasTimeWindowSettings: true
+      hasTimeWindowSettings: true,
+      iconLabel: "Иконка интервала",
+      defaultIcons: {
+        asap: "fas fa-bolt",
+        at_time: "fas fa-clock",
+        on_date: "fas fa-calendar-day"
+      }
     }
   };
 
@@ -1893,20 +1898,21 @@
       return data || null;
     }
 
-    function updateIconButton(btn, iconValue) {
+    function updateIconButton(btn, iconValue, fallbackIconValue = null) {
       if (!btn) return;
       btn.innerHTML = "";
-      if (iconValue) {
-        const isUrl = iconValue.includes("/") || iconValue.startsWith("http");
+      const resolvedIcon = iconValue || fallbackIconValue;
+      if (resolvedIcon) {
+        const isUrl = resolvedIcon.includes("/") || resolvedIcon.startsWith("http");
         if (isUrl) {
           const img = document.createElement("img");
           img.className = "settings-icon-img";
-          img.src = iconValue;
+          img.src = resolvedIcon;
           img.alt = "";
           btn.appendChild(img);
         } else {
           const icon = document.createElement("i");
-          const base = String(iconValue).trim();
+          const base = String(resolvedIcon).trim();
           if (base.includes(" ")) {
             icon.className = base;
           } else if (base.startsWith("fa-")) {
@@ -1921,6 +1927,14 @@
         btn.classList.remove("is-filled");
         btn.innerHTML = '<i class="fas fa-plus"></i>';
       }
+    }
+
+    function getSettingsDefaultIcon(type, item) {
+      const cfg = getSettingsListConfig(type);
+      if (!cfg || !cfg.defaultIcons || !item) return null;
+      const code = String(item.code || "").trim().toLowerCase();
+      if (!code) return null;
+      return cfg.defaultIcons[code] || null;
     }
 
     function createSwitch(labelText, checked, onChange) {
@@ -1954,6 +1968,7 @@
       row.className = "order-row settings-row";
       row.setAttribute("draggable", "true");
       row.dataset.id = String(item.id);
+      if (type === "order-time-options") row.classList.add("settings-row--time-option");
 
       if (cfg.hasIcon === false) {
         row.classList.add("settings-row--no-icon");
@@ -1968,7 +1983,9 @@
         iconBtn.type = "button";
         iconBtn.className = "btn btn-icon btn-sm settings-icon-btn";
         iconBtn.title = cfg.iconLabel;
-        updateIconButton(iconBtn, item.icon);
+        const fallbackIcon = getSettingsDefaultIcon(type, item);
+        if (fallbackIcon) iconBtn.dataset.fallbackIcon = fallbackIcon;
+        updateIconButton(iconBtn, item.icon, fallbackIcon);
         iconWrap.appendChild(iconBtn);
       }
 
@@ -2228,7 +2245,7 @@
         alert("Не удалось загрузить иконку.");
         return;
       }
-      updateIconButton(button, data.url);
+      updateIconButton(button, data.url, button.dataset.fallbackIcon || null);
       iconUploadInput.value = "";
       iconUploadTarget = null;
     });
