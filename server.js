@@ -16,6 +16,7 @@ const makeAdminDiscountsRouter = require('./api/admin/discounts');
 const makeAdminOrdersRouter = require('./api/admin/orders');
 const makeAdminProductsRouter = require('./api/admin/products');
 const makeAdminTenantRouter = require('./api/admin/tenant');
+const makeAdminStockRouter = require('./api/admin/stock');
 const makePublicShopRouter = require('./api/public/shop');
 const makePrintApiRouter = require('./api/print');
 
@@ -322,6 +323,7 @@ app.use('/api/admin/clients', authMiddleware, makeAdminClientsRouter({ db, helpe
 app.use('/api/admin/discounts', authMiddleware, makeAdminDiscountsRouter({ db, helpers }));
 app.use('/api/admin/orders', authMiddleware, makeAdminOrdersRouter({ db, helpers, ordersEvents }));
 app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers }));
+app.use('/api/admin/stock', authMiddleware, makeAdminStockRouter({ db, helpers, ordersEvents }));
 
 // товары/категории/сортировка/загрузка — оставляем старые пути /api/prod_* и /api/sort/*
 // Применяем middleware ко всем роутам products роутера

@@ -24,6 +24,9 @@
     const json = await apiJson(`/api/public/products/${id}`);
     const p = json.data;
     if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
+    if (typeof cacheStockFromProductPayload === "function") {
+      cacheStockFromProductPayload(p, "product_ensure_late");
+    }
     p.is_available = isProductAvailable(p);
     state.productCache.set(id, p);
     if (!p.is_available && pruneUnavailableCartItems()) {
@@ -141,7 +144,15 @@
         const itemId = Number(state.selectedId);
         const item = itemsById.get(itemId);
         if (item) {
-          const entry = { id: item.id, title: item.title, price: getPriceWithVariant(item, itemId), qty: 1 };
+          const targetProductId = Number(item.target_product_id || item.product_id || 0);
+          const entry = {
+            id: item.id,
+            title: item.title,
+            price: getPriceWithVariant(item, itemId),
+            qty: 1,
+            target_product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
+            product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
+          };
           const variant = getVariantData(itemId);
           if (variant) Object.assign(entry, variant);
           selectedItems.push(entry);
@@ -153,7 +164,15 @@
           const itemId = Number(id);
           const item = itemsById.get(itemId);
           if (item) {
-            const entry = { id: item.id, title: item.title, price: getPriceWithVariant(item, itemId), qty: 1 };
+            const targetProductId = Number(item.target_product_id || item.product_id || 0);
+            const entry = {
+              id: item.id,
+              title: item.title,
+              price: getPriceWithVariant(item, itemId),
+              qty: 1,
+              target_product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
+              product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
+            };
             const variant = getVariantData(itemId);
             if (variant) Object.assign(entry, variant);
             selectedItems.push(entry);
@@ -166,7 +185,15 @@
           const itemId = Number(id);
           const item = itemsById.get(itemId);
           if (item && qty > 0) {
-            const entry = { id: item.id, title: item.title, price: getPriceWithVariant(item, itemId), qty };
+            const targetProductId = Number(item.target_product_id || item.product_id || 0);
+            const entry = {
+              id: item.id,
+              title: item.title,
+              price: getPriceWithVariant(item, itemId),
+              qty,
+              target_product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
+              product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
+            };
             const variant = getVariantData(itemId);
             if (variant) Object.assign(entry, variant);
             selectedItems.push(entry);
@@ -298,11 +325,14 @@ function buildProductDetailsContent(
     onSelectionChange,
     onIngredientChange,
     onVariantChange,
+    canSelectVariantIndex = null,
+    probeDraftMutationAvailability = null,
     qtyPill,
     onQtyMinus,
     onQtyPlus,
     onQtyCenterClick,
     setDefaultVariantForOptionItem = () => {},
+    guardDraftMutation = null,
   } = {}
 ) {
   const wrap = document.createElement("div");
@@ -550,6 +580,120 @@ function buildProductDetailsContent(
 
   scroll.appendChild(hero);
 
+  const runGuardedMutation = (mutator, opts = {}) => {
+    if (typeof mutator !== "function") return false;
+    if (typeof guardDraftMutation !== "function") {
+      mutator();
+      return true;
+    }
+    return !!guardDraftMutation(mutator, opts);
+  };
+
+  const probeDraftAvailability = (mutator) => {
+    if (typeof mutator !== "function") return true;
+    if (typeof probeDraftMutationAvailability === "function") {
+      try {
+        return probeDraftMutationAvailability(mutator) !== false;
+      } catch {
+        return true;
+      }
+    }
+    return true;
+  };
+
+  const variantAvailabilityRefreshers = [];
+  const registerVariantAvailabilityRefresher = (refreshFn) => {
+    if (typeof refreshFn === "function") {
+      variantAvailabilityRefreshers.push(refreshFn);
+    }
+  };
+  const refreshVariantAvailability = ({ showToastOnOut = false, forceNow = false } = {}) => {
+    if (!variantAvailabilityRefreshers.length) return Promise.resolve();
+    return Promise.all(
+      variantAvailabilityRefreshers.map((refreshFn) =>
+        Promise.resolve(refreshFn({ showToastOnOut, forceNow })).catch(() => {})
+      )
+    ).then(() => {});
+  };
+
+  const createOptionVariantAvailabilityController = ({
+    values = [],
+    getSelectedIndex,
+    setDraftForIndex,
+    isOptionItemSelected,
+  } = {}) => {
+    const buttonsByIndex = new Map();
+    const availabilityByIndex = new Map();
+    let refreshSeq = 0;
+    let refreshTimer = null;
+
+    const applyButtonState = (idx) => {
+      const btn = buttonsByIndex.get(Number(idx));
+      if (!btn) return;
+      const selectedIdx = Number(typeof getSelectedIndex === "function" ? getSelectedIndex() : -1);
+      const isSelected = selectedIdx === Number(idx);
+      const knownAvailable = availabilityByIndex.has(Number(idx))
+        ? availabilityByIndex.get(Number(idx)) !== false
+        : true;
+      const shouldDisable = !knownAvailable && !isSelected;
+      btn.classList.toggle("is-unavailable", shouldDisable);
+      btn.disabled = shouldDisable;
+      btn.setAttribute("aria-disabled", shouldDisable ? "true" : "false");
+    };
+
+    const refreshNow = () => {
+      if (!Array.isArray(values) || !values.length) return;
+
+      const selectedNow = typeof isOptionItemSelected === "function" ? !!isOptionItemSelected() : true;
+      if (!selectedNow) {
+        values.forEach((_, idx) => {
+          availabilityByIndex.set(Number(idx), true);
+          applyButtonState(idx);
+        });
+        return;
+      }
+
+      values.forEach((_, idx) => {
+        const allowed = probeDraftAvailability(() => {
+          if (typeof setDraftForIndex === "function") {
+            setDraftForIndex(idx);
+          }
+        });
+        availabilityByIndex.set(Number(idx), allowed);
+        applyButtonState(idx);
+      });
+    };
+
+    const scheduleRefresh = ({ forceNow = false } = {}) => {
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+        refreshTimer = null;
+      }
+      if (forceNow) {
+        refreshNow();
+        return;
+      }
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        refreshNow();
+      }, 20);
+    };
+
+    const registerButton = (idx, btn) => {
+      if (!btn) return;
+      const key = Number(idx);
+      buttonsByIndex.set(key, btn);
+      availabilityByIndex.set(key, true);
+      applyButtonState(key);
+    };
+
+    return {
+      applyButtonState,
+      scheduleRefresh,
+      registerButton,
+    };
+  };
+
   /* ================= META ПОД ФОТО ================= */
 
   const meta = document.createElement("div");
@@ -602,18 +746,102 @@ function buildProductDetailsContent(
       return `${valueText} ${unitLabel}`;
     };
 
-    const setSelectedIndex = (idx) => {
+    const variantButtonsByIndex = new Map();
+    const variantAvailabilityByIndex = new Map();
+    let variantAvailabilityRefreshSeq = 0;
+    let variantAvailabilityRefreshTimer = null;
+
+    const applyVariantButtonState = (idx) => {
+      const btn = variantButtonsByIndex.get(Number(idx));
+      if (!btn) return;
+      const selectedIdx = Number(variantState.selectedIndex);
+      const isSelected = selectedIdx === Number(idx);
+      const knownAvailable = variantAvailabilityByIndex.has(Number(idx))
+        ? variantAvailabilityByIndex.get(Number(idx)) !== false
+        : true;
+      const shouldDisable = !knownAvailable && !isSelected;
+      btn.classList.toggle("is-unavailable", shouldDisable);
+      btn.disabled = shouldDisable;
+      btn.setAttribute("aria-disabled", shouldDisable ? "true" : "false");
+    };
+
+    const applySelectedIndex = (idx) => {
       variantState.selectedIndex = idx;
       variantState.value = values[idx];
       variantState.label = formatValueLabel(values[idx]);
       valuesWrap.querySelectorAll("[data-variant-index]").forEach((btn) => {
         const buttonIndex = Number(btn.dataset.variantIndex);
         btn.classList.toggle("is-selected", buttonIndex === idx);
+        applyVariantButtonState(buttonIndex);
       });
+    };
+
+    const setSelectedIndex = async (
+      idx,
+      { showToastOnOut = true, guard = true } = {}
+    ) => {
+      if (!Number.isFinite(Number(idx))) return false;
+      const nextIdx = Number(idx);
+      const mutator = () => applySelectedIndex(nextIdx);
+      const applied = guard
+        ? await runGuardedMutation(mutator, { showToastOnOut })
+        : (mutator(), true);
+      if (!applied) return false;
       if (typeof onVariantChange === "function") {
         onVariantChange();
       }
+      return true;
     };
+
+    const getDraftQtyForVariantCheck = () => {
+      const centerText = str(qtyPill?.center?.textContent || "").trim();
+      const qtyNum = Number(centerText);
+      if (!Number.isFinite(qtyNum) || qtyNum <= 0) return 1;
+      return qtyNum;
+    };
+
+    const refreshVariantAvailabilityNow = () => {
+      if (typeof canSelectVariantIndex !== "function" || !values.length) return;
+      const desiredQty = getDraftQtyForVariantCheck();
+
+      values.forEach((_, idx) => {
+        const available = canSelectVariantIndex(idx, { desiredQty }) !== false;
+        variantAvailabilityByIndex.set(Number(idx), available);
+        applyVariantButtonState(idx);
+      });
+
+      const selectedIdx = Number(variantState.selectedIndex);
+      const selectedAvailable =
+        !Number.isFinite(selectedIdx) ||
+        selectedIdx < 0 ||
+        variantAvailabilityByIndex.get(selectedIdx) !== false;
+
+      if (!selectedAvailable) {
+        const fallbackIdx = values.findIndex((_, idx) =>
+          variantAvailabilityByIndex.get(Number(idx)) !== false
+        );
+        if (fallbackIdx >= 0 && fallbackIdx !== selectedIdx) {
+          setSelectedIndex(fallbackIdx, { showToastOnOut: false, guard: false });
+        }
+      }
+    };
+
+    const scheduleVariantAvailabilityRefresh = ({ forceNow = false } = {}) => {
+      if (variantAvailabilityRefreshTimer) {
+        clearTimeout(variantAvailabilityRefreshTimer);
+        variantAvailabilityRefreshTimer = null;
+      }
+      if (forceNow) {
+        refreshVariantAvailabilityNow();
+        return;
+      }
+      variantAvailabilityRefreshTimer = setTimeout(() => {
+        variantAvailabilityRefreshTimer = null;
+        refreshVariantAvailabilityNow();
+      }, 20);
+    };
+
+    registerVariantAvailabilityRefresher(scheduleVariantAvailabilityRefresh);
 
     values.forEach((value, idx) => {
       const btn = document.createElement("button");
@@ -626,7 +854,13 @@ function buildProductDetailsContent(
       if (variantState.selectedIndex === idx) {
         btn.classList.add("is-selected");
       }
-      btn.addEventListener("click", () => setSelectedIndex(idx));
+      variantButtonsByIndex.set(Number(idx), btn);
+      variantAvailabilityByIndex.set(Number(idx), true);
+      applyVariantButtonState(idx);
+      btn.addEventListener("click", async () => {
+        if (btn.disabled) return;
+        await setSelectedIndex(idx, { showToastOnOut: true, guard: true });
+      });
       valuesWrap.appendChild(btn);
     });
 
@@ -635,7 +869,10 @@ function buildProductDetailsContent(
 
     // Инициализируем выбранный вариант: используем default_value_index из API (индивидуальный или групповой)
     if (Number.isFinite(variantState.selectedIndex) && !variantState.label) {
-      setSelectedIndex(variantState.selectedIndex);
+      void setSelectedIndex(variantState.selectedIndex, {
+        showToastOnOut: false,
+        guard: false,
+      });
     } else if (!Number.isFinite(variantState.selectedIndex) && values.length) {
       // Используем default_value_index (индивидуальный или групповой), если задан, иначе 0
       const defaultIndex = variantGroup.default_value_index != null 
@@ -643,8 +880,13 @@ function buildProductDetailsContent(
         : 0;
       // Проверяем что индекс валидный
       const validIndex = defaultIndex >= 0 && defaultIndex < values.length ? defaultIndex : 0;
-      setSelectedIndex(validIndex);
+      void setSelectedIndex(validIndex, {
+        showToastOnOut: false,
+        guard: false,
+      });
     }
+
+    scheduleVariantAvailabilityRefresh({ showToastOnOut: false, forceNow: true });
   }
 
   /* ================= OPTIONS (БЕЗ ИЗМЕНЕНИЙ) ================= */
@@ -857,6 +1099,18 @@ function buildProductDetailsContent(
 
         (group.items || []).forEach((item) => {
           const itemId = Number(item.id);
+          const optionProductId = Number(item.target_product_id || 0);
+          const hasOptionProductId = Number.isFinite(optionProductId) && optionProductId > 0;
+          const isOptionUnavailableNow = () => {
+            if (!hasOptionProductId) return false;
+            const allowed = probeDraftAvailability(() => {
+              groupState.selectedId = itemId;
+            });
+            return !allowed;
+          };
+          const isSelectedNow = () => Number(groupState.selectedId || 0) === itemId;
+          const shouldHideCardNow = () => !isSelectedNow() && isOptionUnavailableNow();
+          if (shouldHideCardNow()) return;
           const allowVariants = Boolean(group.allow_variants);
           const itemVariants = Array.isArray(item.variants) ? item.variants : [];
           const hasVariants = allowVariants && itemVariants.length > 0 && itemVariants[0]?.values?.length > 0;
@@ -864,6 +1118,13 @@ function buildProductDetailsContent(
           const card = document.createElement("div");
           card.className = "shop-pd-option-card is-clickable";
           if (hasVariants) card.classList.add("has-variants");
+          const refreshOptionCardState = () => {
+            const isSelected = isSelectedNow();
+            const unavailable = !isSelected && isOptionUnavailableNow();
+            card.classList.toggle("is-unavailable", unavailable);
+            card.style.display = unavailable ? "none" : "";
+          };
+          refreshOptionCardState();
 
           // content row
           const row = document.createElement("div");
@@ -1077,12 +1338,29 @@ function buildProductDetailsContent(
               const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, defaultIdx);
               const priceDiff = unitPrice - Number(item.price || 0);
               groupState.variantByItemId.set(itemId, {
-                variant_group_id: Number(variantGroup.variant_group_id),
+                variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
                 variant_value_index: defaultIdx,
                 variant_label: formatValueLabel(values[defaultIdx]),
                 variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
               });
             }
+
+            const optionVariantAvailabilityCtrl = createOptionVariantAvailabilityController({
+              values,
+              getSelectedIndex: () => Number(groupState.variantByItemId.get(itemId)?.variant_value_index),
+              setDraftForIndex: (idx) => {
+                const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
+                const priceDiff = unitPrice - Number(item.price || 0);
+                groupState.variantByItemId.set(itemId, {
+                  variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
+                  variant_value_index: idx,
+                  variant_label: formatValueLabel(values[idx]),
+                  variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
+                });
+              },
+              isOptionItemSelected: () => Number(groupState.selectedId || 0) === itemId,
+            });
+            registerVariantAvailabilityRefresher(optionVariantAvailabilityCtrl.scheduleRefresh);
 
             values.forEach((value, idx) => {
               const variantBtn = document.createElement("button");
@@ -1090,21 +1368,24 @@ function buildProductDetailsContent(
               variantBtn.className = `shop-pd-option-variant-btn ${selectedIdx === idx ? "is-selected" : ""}`;
               variantBtn.textContent = formatValueLabel(value);
               variantBtn.dataset.variantIndex = String(idx);
+              optionVariantAvailabilityCtrl.registerButton(idx, variantBtn);
               if (selectedIdx === idx) {
                 variantBtn.style.background = "var(--accent-color, #ff7a00)";
                 variantBtn.style.color = "#fff";
                 variantBtn.style.borderColor = "var(--accent-color, #ff7a00)";
               }
 
-              variantBtn.addEventListener("click", (e) => {
+              variantBtn.addEventListener("click", async (e) => {
                 e.stopPropagation();
+                if (variantBtn.disabled) return;
 
                 const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
                 const priceDiff = unitPrice - Number(item.price || 0);
+                const applied = await runGuardedMutation(() => {
 
                 // 1) Фиксируем выбранный вариант для этой опции
                 groupState.variantByItemId.set(itemId, {
-                  variant_group_id: Number(variantGroup.variant_group_id),
+                  variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
                   variant_value_index: idx,
                   variant_label: formatValueLabel(value),
                   variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
@@ -1113,6 +1394,8 @@ function buildProductDetailsContent(
                 // 2) Сразу считаем, что выбран именно этот товар-опция
                 //    (последний кликнутый вариант = актуальный выбор группы)
                 groupState.selectedId = itemId;
+                }, { showToastOnOut: true });
+                if (!applied) return;
 
                 // 3) Мгновенно обновляем цену и вариант в карточке списка
                 if (priceEl) {
@@ -1135,6 +1418,7 @@ function buildProductDetailsContent(
                     btn.style.color = "var(--text-primary, #333)";
                     btn.style.borderColor = "var(--border-color, #ddd)";
                   }
+                  optionVariantAvailabilityCtrl.applyButtonState(btnIdx);
                 });
 
                 // 5) Обновляем подпись варианта в первой строке (вариант + название)
@@ -1152,6 +1436,8 @@ function buildProductDetailsContent(
               variantScroll.appendChild(variantBtn);
             });
 
+            optionVariantAvailabilityCtrl.scheduleRefresh({ forceNow: true });
+
             variantAccordion.appendChild(variantScroll);
             row.appendChild(gearBtn);
 
@@ -1166,17 +1452,27 @@ function buildProductDetailsContent(
           if (variantAccordion) card.appendChild(variantAccordion);
 
           // Выбор товара (клик по карточке) — но не по шестерёнке/вариантам
-          card.addEventListener("click", (e) => {
+          card.addEventListener("click", async (e) => {
             if (e.target.closest(".shop-pd-option-gear-btn") || e.target.closest(".shop-pd-option-variant-accordion")) {
               return;
             }
-            groupState.selectedId = itemId;
-            // Сразу выставляем дефолтный вариант у опции с вариантами, чтобы цена отображалась верно
-            if (hasVariants && typeof setDefaultVariantForOptionItem === "function") setDefaultVariantForOptionItem(item, groupState.variantByItemId);
+            if (Number(groupState.selectedId || 0) !== itemId && isOptionUnavailableNow()) {
+              showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+              return;
+            }
+            const applied = runGuardedMutation(() => {
+              groupState.selectedId = itemId;
+              if (hasVariants && typeof setDefaultVariantForOptionItem === "function") {
+                setDefaultVariantForOptionItem(item, groupState.variantByItemId);
+              }
+            }, { showToastOnOut: true });
+            if (!applied) return;
             renderSlot();
             closeList();
             if (typeof onSelectionChange === "function") onSelectionChange();
           });
+
+          // Доступность рассчитывается локально в isOptionUnavailableNow()
 
           list.appendChild(card);
         });
@@ -1221,14 +1517,26 @@ function buildProductDetailsContent(
 
         (group.items || []).forEach((item) => {
           const itemId = Number(item.id);
-          const isSelected = groupState.selectedIds.has(itemId);
-          
+          const optionProductId = Number(item.target_product_id || 0);
+          const hasOptionProductId = Number.isFinite(optionProductId) && optionProductId > 0;
+          const isOptionUnavailableNow = () => {
+            if (!hasOptionProductId) return false;
+            const allowed = probeDraftAvailability(() => {
+              groupState.selectedIds.add(itemId);
+            });
+            return !allowed;
+          };
+          const isSelectedNow = () => groupState.selectedIds.has(itemId);
+          if (!isSelectedNow() && isOptionUnavailableNow()) return;
+          const isSelected = isSelectedNow();
+
           // Варианты товара-опции
           const itemVariants = Array.isArray(item.variants) ? item.variants : [];
           const hasVariants = allowVariants && itemVariants.length > 0 && itemVariants[0]?.values?.length > 0;
-          
+
           const card = document.createElement("div");
           card.className = `shop-pd-option-card is-clickable ${isSelected ? "is-selected" : ""}`;
+          card.classList.toggle("is-unavailable", !isSelected && isOptionUnavailableNow());
           if (hasVariants) {
             card.classList.add("has-variants");
             card.style.flexDirection = "column";
@@ -1256,8 +1564,11 @@ function buildProductDetailsContent(
           let variantLabelEl = null;
           
           const updateCard = () => {
-            const newIsSelected = groupState.selectedIds.has(itemId);
+            const newIsSelected = isSelectedNow();
+            const unavailable = !newIsSelected && isOptionUnavailableNow();
             card.classList.toggle("is-selected", newIsSelected);
+            card.classList.toggle("is-unavailable", unavailable);
+            card.style.display = unavailable ? "none" : "";
             checkbox.checked = newIsSelected;
             if (priceEl) {
               priceEl.textContent = money(getPriceWithVariant());
@@ -1272,24 +1583,37 @@ function buildProductDetailsContent(
             }
           };
           
-          checkbox.addEventListener("click", (e) => {
+          checkbox.addEventListener("click", async (e) => {
             e.stopPropagation();
             const { count } = updateSelectedCount();
             const maxReached = maxSelect != null && count >= maxSelect && !checkbox.checked;
-            
+
             if (maxReached) {
               checkbox.checked = false;
               return;
             }
 
             if (checkbox.checked) {
-              groupState.selectedIds.add(itemId);
-              // Сразу выставляем дефолтный вариант у опции с вариантами, чтобы цена отображалась верно
-              if (hasVariants && typeof setDefaultVariantForOptionItem === "function") setDefaultVariantForOptionItem(item, groupState.variantByItemId);
+              if (isOptionUnavailableNow()) {
+                checkbox.checked = false;
+                showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+                return;
+              }
+              const applied = runGuardedMutation(() => {
+                groupState.selectedIds.add(itemId);
+                if (hasVariants && typeof setDefaultVariantForOptionItem === "function") {
+                  setDefaultVariantForOptionItem(item, groupState.variantByItemId);
+                }
+              }, { showToastOnOut: true });
+              if (!applied) {
+                checkbox.checked = false;
+                updateCard();
+                return;
+              }
             } else {
               groupState.selectedIds.delete(itemId);
             }
-            
+
             updateCard();
             if (onSelectionChange) onSelectionChange();
           });
@@ -1456,12 +1780,29 @@ function buildProductDetailsContent(
               const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, defaultIdx);
               const priceDiff = unitPrice - Number(item.price || 0);
               groupState.variantByItemId.set(itemId, {
-                variant_group_id: Number(variantGroup.variant_group_id),
+                variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
                 variant_value_index: defaultIdx,
                 variant_label: formatValueLabel(values[defaultIdx]),
                 variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
               });
             }
+
+            const optionVariantAvailabilityCtrl = createOptionVariantAvailabilityController({
+              values,
+              getSelectedIndex: () => Number(groupState.variantByItemId.get(itemId)?.variant_value_index),
+              setDraftForIndex: (idx) => {
+                const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
+                const priceDiff = unitPrice - Number(item.price || 0);
+                groupState.variantByItemId.set(itemId, {
+                  variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
+                  variant_value_index: idx,
+                  variant_label: formatValueLabel(values[idx]),
+                  variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
+                });
+              },
+              isOptionItemSelected: () => groupState.selectedIds.has(itemId),
+            });
+            registerVariantAvailabilityRefresher(optionVariantAvailabilityCtrl.scheduleRefresh);
 
             values.forEach((value, idx) => {
               const variantBtn = document.createElement("button");
@@ -1469,6 +1810,7 @@ function buildProductDetailsContent(
               variantBtn.className = `shop-pd-option-variant-btn ${selectedIdx === idx ? "is-selected" : ""}`;
               variantBtn.textContent = formatValueLabel(value);
               variantBtn.dataset.variantIndex = String(idx);
+              optionVariantAvailabilityCtrl.registerButton(idx, variantBtn);
               variantBtn.style.cssText = `
                 flex-shrink: 0;
                 padding: 6px 12px;
@@ -1488,18 +1830,28 @@ function buildProductDetailsContent(
                 variantBtn.style.borderColor = "var(--accent-color, #ff7a00)";
               }
 
-              variantBtn.addEventListener("click", (e) => {
+              variantBtn.addEventListener("click", async (e) => {
                 e.stopPropagation();
+                if (variantBtn.disabled) return;
                 
                 const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
                 const priceDiff = unitPrice - Number(item.price || 0);
-                
-                groupState.variantByItemId.set(itemId, {
-                  variant_group_id: Number(variantGroup.variant_group_id),
-                  variant_value_index: idx,
-                  variant_label: formatValueLabel(value),
-                  variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
-                });
+                const applyVariantChange = () => {
+                  groupState.variantByItemId.set(itemId, {
+                    variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
+                    variant_value_index: idx,
+                    variant_label: formatValueLabel(value),
+                    variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
+                  });
+                };
+                if (groupState.selectedIds.has(itemId)) {
+                  const applied = await runGuardedMutation(applyVariantChange, {
+                    showToastOnOut: true,
+                  });
+                  if (!applied) return;
+                } else {
+                  applyVariantChange();
+                }
 
                 variantScroll.querySelectorAll(".shop-pd-option-variant-btn").forEach((btn) => {
                   const btnIdx = Number(btn.dataset.variantIndex);
@@ -1514,6 +1866,7 @@ function buildProductDetailsContent(
                     btn.style.color = "var(--text-primary, #333)";
                     btn.style.borderColor = "var(--border-color, #ddd)";
                   }
+                  optionVariantAvailabilityCtrl.applyButtonState(btnIdx);
                 });
 
                 updateCard();
@@ -1522,6 +1875,8 @@ function buildProductDetailsContent(
 
               variantScroll.appendChild(variantBtn);
             });
+
+            optionVariantAvailabilityCtrl.scheduleRefresh({ forceNow: true });
 
             variantAccordion.appendChild(variantScroll);
 
@@ -1573,7 +1928,7 @@ function buildProductDetailsContent(
             });
           }
 
-          card.addEventListener("click", (e) => {
+          card.addEventListener("click", async (e) => {
             // Не переключаем если кликнули на шестерёнку или вариант
             if (e.target.closest(".shop-pd-option-gear-btn") || e.target.closest(".shop-pd-option-variant-accordion")) {
               return;
@@ -1590,7 +1945,14 @@ function buildProductDetailsContent(
             if (currentlySelected) {
               groupState.selectedIds.delete(itemId);
             } else {
-              groupState.selectedIds.add(itemId);
+              if (isOptionUnavailableNow()) {
+                showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+                return;
+              }
+              const applied = runGuardedMutation(() => {
+                groupState.selectedIds.add(itemId);
+              }, { showToastOnOut: true });
+              if (!applied) return;
             }
             
             updateCard();
@@ -1598,6 +1960,7 @@ function buildProductDetailsContent(
           });
           
           itemsWrap.appendChild(card);
+
         });
 
         optionsWrap.appendChild(block);
@@ -1621,8 +1984,33 @@ function buildProductDetailsContent(
 
         (group.items || []).forEach((item) => {
           const itemId = Number(item.id);
+          const optionProductId = Number(item.target_product_id || 0);
+          const hasOptionProductId = Number.isFinite(optionProductId) && optionProductId > 0;
           const itemMin = item.qty_min ?? 1;
           const itemMax = item.qty_max ?? 1;
+          const probeOptionQtyAvailability = (nextQty) => {
+            if (!hasOptionProductId) return true;
+            const safeQty = Math.max(0, Number(nextQty || 0));
+            return probeDraftAvailability(() => {
+              if (safeQty > 0) groupState.qtyById.set(itemId, safeQty);
+              else groupState.qtyById.delete(itemId);
+            });
+          };
+          const isOptionUnavailableNow = () => {
+            const currentOptQty = groupState.qtyById.get(itemId) || 0;
+            const targetQty = Math.max(currentOptQty, 1);
+            return !probeOptionQtyAvailability(targetQty);
+          };
+          const isOptionUnavailableForPlus = () => {
+            const currentOptQty = groupState.qtyById.get(itemId) || 0;
+            const nextQty = currentOptQty === 0
+              ? Math.max(itemMin, 1)
+              : Math.min(itemMax, currentOptQty + 1);
+            if (nextQty <= currentOptQty) return false;
+            return !probeOptionQtyAvailability(nextQty);
+          };
+          const isSelectedNow = () => (Number(groupState.qtyById.get(itemId)) || 0) > 0;
+          if (!isSelectedNow() && isOptionUnavailableNow()) return;
           // Текущее количество из state
           const currentQty = groupState.qtyById.get(itemId) || 0;
           const isSelected = currentQty > 0;
@@ -1633,6 +2021,7 @@ function buildProductDetailsContent(
 
           const card = document.createElement("div");
           card.className = `shop-pd-option-card ${isSelected ? "is-selected" : ""}`;
+          card.classList.toggle("is-unavailable", !isSelected && isOptionUnavailableNow());
 
           const qtyControls = document.createElement("div");
           qtyControls.className = "shop-pd-option-qty-controls";
@@ -1671,19 +2060,31 @@ function buildProductDetailsContent(
           btnPlus.type = "button";
           btnPlus.className = "btn btn-sm";
           btnPlus.textContent = "+";
-          btnPlus.disabled = currentQty >= itemMax;
+          btnPlus.disabled = currentQty >= itemMax || isOptionUnavailableForPlus();
           btnPlus.addEventListener("click", (e) => {
             e.stopPropagation();
+            if (isOptionUnavailableForPlus()) {
+              btnPlus.disabled = true;
+              showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+              return;
+            }
             const current = groupState.qtyById.get(itemId) || 0;
             let newQty;
             if (current === 0) {
-              // Если сейчас 0, ставим минимум (но не меньше 1)
               newQty = Math.max(itemMin, 1);
             } else {
               newQty = Math.min(itemMax, current + 1);
             }
-            groupState.qtyById.set(itemId, newQty);
-            if (newQty > 0 && hasVariants && typeof setDefaultVariantForOptionItem === "function") setDefaultVariantForOptionItem(item, groupState.variantByItemId);
+            const applied = runGuardedMutation(() => {
+              groupState.qtyById.set(itemId, newQty);
+              if (newQty > 0 && hasVariants && typeof setDefaultVariantForOptionItem === "function") {
+                setDefaultVariantForOptionItem(item, groupState.variantByItemId);
+              }
+            }, { showToastOnOut: true });
+            if (!applied) {
+              btnPlus.disabled = true;
+              return;
+            }
             updateItemCard();
             if (onSelectionChange) onSelectionChange();
           });
@@ -1705,21 +2106,25 @@ function buildProductDetailsContent(
           // Элемент для отображения выбранного варианта
           let variantLabelEl = null;
           let priceEl = null;
+          let _optionVariantCtrl = null;
 
           const updateItemCard = () => {
             const newQty = groupState.qtyById.get(itemId) || 0;
             const newIsSelected = newQty > 0;
+            const unavailable = !newIsSelected && isOptionUnavailableNow();
             card.classList.toggle("is-selected", newIsSelected);
+            card.classList.toggle("is-unavailable", unavailable);
+            card.style.display = unavailable ? "none" : "";
             qtyDisplay.textContent = String(newQty);
             // Кнопка "-" отключена если qty <= itemMin (обязательные опции нельзя убрать)
             btnMinus.disabled = newQty <= itemMin;
-            btnPlus.disabled = newQty >= itemMax;
-            
+            btnPlus.disabled = newQty >= itemMax || isOptionUnavailableForPlus();
+
             // Обновляем цену с учётом варианта
             if (priceEl) {
               priceEl.textContent = money(getItemPriceWithVariant());
             }
-            
+
             // Обновляем отображение выбранного варианта
             if (variantLabelEl) {
               const variantData = groupState.variantByItemId.get(itemId);
@@ -1728,6 +2133,11 @@ function buildProductDetailsContent(
               } else {
                 variantLabelEl.textContent = "";
               }
+            }
+
+            // Обновляем доступность вариантов при изменении qty
+            if (_optionVariantCtrl) {
+              _optionVariantCtrl.scheduleRefresh();
             }
           };
 
@@ -1892,12 +2302,30 @@ function buildProductDetailsContent(
               const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, defaultIdx);
               const priceDiff = unitPrice - Number(item.price || 0);
               groupState.variantByItemId.set(itemId, {
-                variant_group_id: Number(variantGroup.variant_group_id),
+                variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
                 variant_value_index: defaultIdx,
                 variant_label: formatValueLabel(values[defaultIdx]),
                 variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
               });
             }
+
+            const optionVariantAvailabilityCtrl = createOptionVariantAvailabilityController({
+              values,
+              getSelectedIndex: () => Number(groupState.variantByItemId.get(itemId)?.variant_value_index),
+              setDraftForIndex: (idx) => {
+                const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
+                const priceDiff = unitPrice - Number(item.price || 0);
+                groupState.variantByItemId.set(itemId, {
+                  variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
+                  variant_value_index: idx,
+                  variant_label: formatValueLabel(values[idx]),
+                  variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
+                });
+              },
+              isOptionItemSelected: () => (Number(groupState.qtyById.get(itemId)) || 0) > 0,
+            });
+            _optionVariantCtrl = optionVariantAvailabilityCtrl;
+            registerVariantAvailabilityRefresher(optionVariantAvailabilityCtrl.scheduleRefresh);
 
             values.forEach((value, idx) => {
               const variantBtn = document.createElement("button");
@@ -1905,6 +2333,7 @@ function buildProductDetailsContent(
               variantBtn.className = `shop-pd-option-variant-btn ${selectedIdx === idx ? "is-selected" : ""}`;
               variantBtn.textContent = formatValueLabel(value);
               variantBtn.dataset.variantIndex = String(idx);
+              optionVariantAvailabilityCtrl.registerButton(idx, variantBtn);
               variantBtn.style.cssText = `
                 flex-shrink: 0;
                 padding: 6px 12px;
@@ -1924,19 +2353,30 @@ function buildProductDetailsContent(
                 variantBtn.style.borderColor = "var(--accent-color, #ff7a00)";
               }
 
-              variantBtn.addEventListener("click", (e) => {
+              variantBtn.addEventListener("click", async (e) => {
                 e.stopPropagation();
-                
+                if (variantBtn.disabled) return;
+
                 // Обновляем выбранный вариант в state
                 const unitPrice = getOptionItemVariantUnitPrice(item, variantGroup, idx);
                 const priceDiff = unitPrice - Number(item.price || 0);
-                
-                groupState.variantByItemId.set(itemId, {
-                  variant_group_id: Number(variantGroup.variant_group_id),
-                  variant_value_index: idx,
-                  variant_label: formatValueLabel(value),
-                  variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
-                });
+
+                const applyVariantChange = () => {
+                  groupState.variantByItemId.set(itemId, {
+                    variant_group_id: Number(variantGroup.variant_group_id || variantGroup.id || 0),
+                    variant_value_index: idx,
+                    variant_label: formatValueLabel(value),
+                    variant_price_diff: Number.isFinite(priceDiff) ? priceDiff : 0,
+                  });
+                };
+                if ((Number(groupState.qtyById.get(itemId)) || 0) > 0) {
+                  const applied = await runGuardedMutation(applyVariantChange, {
+                    showToastOnOut: true,
+                  });
+                  if (!applied) return;
+                } else {
+                  applyVariantChange();
+                }
 
                 // Обновляем UI всех кнопок вариантов
                 variantScroll.querySelectorAll(".shop-pd-option-variant-btn").forEach((btn) => {
@@ -1952,6 +2392,7 @@ function buildProductDetailsContent(
                     btn.style.color = "var(--text-primary, #333)";
                     btn.style.borderColor = "var(--border-color, #ddd)";
                   }
+                  optionVariantAvailabilityCtrl.applyButtonState(btnIdx);
                 });
 
                 // Обновляем карточку (цена, лейбл варианта)
@@ -1961,6 +2402,8 @@ function buildProductDetailsContent(
 
               variantScroll.appendChild(variantBtn);
             });
+
+            optionVariantAvailabilityCtrl.scheduleRefresh({ forceNow: true });
 
             variantAccordion.appendChild(variantScroll);
 
@@ -2003,6 +2446,7 @@ function buildProductDetailsContent(
           }
 
           itemsWrap.appendChild(card);
+
         });
 
         optionsWrap.appendChild(block);
@@ -2029,10 +2473,29 @@ function buildProductDetailsContent(
 
     ingredients.forEach((ing) => {
       const ingId = Number(ing.ingredient_id);
-      const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
-      const state = ingredientState?.get(ingId) || {
-        quantity: Number(ing.quantity ?? 1),
+      const hasIngredientProductId = Number.isFinite(ingId) && ingId > 0;
+      const isIngUnavailableForPlus = () => {
+        if (!hasIngredientProductId) return false;
+        const currentIngQty = Number(ingredientState?.get(ingId)?.quantity ?? ing.quantity ?? 1);
+        const step = Number(ing.quantity_step || 1) || 1;
+        const nextQty = currentIngQty + step;
+        const allowed = probeDraftAvailability(() => {
+          const stateEntry = ingredientState.get(ingId);
+          const nextState = stateEntry && typeof stateEntry === "object"
+            ? { ...stateEntry, quantity: nextQty }
+            : { quantity: nextQty };
+          ingredientState.set(ingId, nextState);
+        });
+        return !allowed;
       };
+      const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
+      const state = (() => {
+        const entry = ingredientState?.get(ingId);
+        if (entry && typeof entry === "object") return { ...entry };
+        return {
+        quantity: Number(ing.quantity ?? 1),
+        };
+      })();
 
       // Получаем min/max/step из данных ингредиента (для переменного: null/не число min = 0, иначе defaultQty)
       const defaultQty = Number(ing.quantity ?? 1);
@@ -2057,6 +2520,7 @@ function buildProductDetailsContent(
       
       // Сохраняем округленное значение в state
       state.quantity = currentQty;
+      ingredientState?.set(ingId, state);
       const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
       
       // Рассчитываем цену за единицу с учетом base_qty (как в админке)
@@ -2135,7 +2599,7 @@ function buildProductDetailsContent(
         btnPlus.type = "button";
         btnPlus.className = "btn btn-sm qty-btn qty-plus";
         btnPlus.textContent = "+";
-        btnPlus.disabled = currentQty >= max;
+        btnPlus.disabled = currentQty >= max || isIngUnavailableForPlus();
 
         controls.appendChild(btnMinus);
         controls.appendChild(qtyDisplay);
@@ -2162,7 +2626,7 @@ function buildProductDetailsContent(
         // Handlers: минус — вычитаем шаг, округляем до шага от min, ограничиваем min..max
         btnMinus.addEventListener("click", (e) => {
           e.stopPropagation();
-          const currentStateQty = state.quantity ?? currentQty;
+          const currentStateQty = Number(ingredientState?.get(ingId)?.quantity ?? currentQty);
           let newQty = currentStateQty - step;
           // Для переменного: если после вычитания получилось ≤0 — разрешаем 0 (на случай если min в данных не 0)
           if (isVariable && newQty <= 0) {
@@ -2175,29 +2639,45 @@ function buildProductDetailsContent(
             newQty = Math.max(min, Math.min(max, newQty));
           }
           if (newQty !== currentStateQty && typeof onIngredientChange === "function") {
-            state.quantity = newQty;
-            ingredientState?.set(ingId, state);
+            const prevState = ingredientState?.get(ingId);
+            const nextState = prevState && typeof prevState === "object"
+              ? { ...prevState, quantity: newQty }
+              : { quantity: newQty };
+            ingredientState?.set(ingId, nextState);
             onIngredientChange();
           }
         });
 
         btnPlus.addEventListener("click", (e) => {
           e.stopPropagation();
-          const currentStateQty = state.quantity ?? currentQty;
+          if (isIngUnavailableForPlus()) {
+            btnPlus.disabled = true;
+            showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+            return;
+          }
+          const currentStateQty = Number(ingredientState?.get(ingId)?.quantity ?? currentQty);
           let newQty = currentStateQty + step;
-          // Округляем до шага (относительно min)
           if (step > 0) {
             const stepsFromMin = Math.round((newQty - min) / step);
             newQty = min + (stepsFromMin * step);
           }
-          // Ограничиваем min/max
           newQty = Math.max(min, Math.min(max, newQty));
           if (newQty !== currentStateQty && typeof onIngredientChange === "function") {
-            state.quantity = newQty;
-            ingredientState?.set(ingId, state);
+            const applied = runGuardedMutation(() => {
+              const prevState = ingredientState?.get(ingId);
+              const nextState = prevState && typeof prevState === "object"
+                ? { ...prevState, quantity: newQty }
+                : { quantity: newQty };
+              ingredientState?.set(ingId, nextState);
+            }, { showToastOnOut: true });
+            if (!applied) {
+              btnPlus.disabled = true;
+              return;
+            }
             onIngredientChange();
           }
         });
+
       } else {
         // Fixed ingredient - show only info
         const qtyInfo = document.createElement("div");
@@ -2286,7 +2766,7 @@ function buildProductDetailsContent(
   footer.appendChild(actionBtn);
   wrap.appendChild(footer);
 
-  return { wrap, actionBtn, qtyWrap, basePriceEl: null };
+  return { wrap, actionBtn, qtyWrap, basePriceEl: null, refreshVariantAvailability };
 }
 
 
@@ -2425,7 +2905,26 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
 
   const editingItem = cartKey ? getCartItemByKey(cartKey) : null;
   const editMode = !!editingItem;
-  const available = isProductAvailable(product);
+  const productId = Number(product?.id || 0);
+  const stockAvailable = isProductAvailable(product);
+  const remainingStockForProduct =
+    Number.isFinite(productId) &&
+    productId > 0 &&
+    typeof getAvailableStock === "function"
+      ? getAvailableStock(productId)
+      : Infinity;
+  const blockedByProductStockLimit =
+    !editMode &&
+    Number.isFinite(remainingStockForProduct) &&
+    remainingStockForProduct <= 0;
+  const blockedByIngredientRequirements =
+    !editMode &&
+    Number.isFinite(productId) &&
+    productId > 0 &&
+    typeof isProductBlockedByIngredientRequirements === "function"
+      ? isProductBlockedByIngredientRequirements(productId)
+      : false;
+  const available = stockAvailable && !blockedByProductStockLimit && !blockedByIngredientRequirements;
 
   const editVariantGroupIdRaw = editingItem?.variant_group_id;
   const editVariantValueIndexRaw = editingItem?.variant_value_index;
@@ -2617,14 +3116,19 @@ optionGroups.forEach((group) => {
     plusEnabled: available,
   });
 
+  let qtyPlusBlockedByStock = available && cartCountTotal() > 0;
   let updateQtyUi = () => {
     if (qtyPill?.center) qtyPill.center.textContent = String(qty);
     // минус блокируем визуально на 1
     if (qtyPill?.btnMinus) {
-      qtyPill.btnMinus.classList.toggle("is-disabled", qty <= 1 || !available);
+      const minusDisabled = qty <= 1 || !available;
+      qtyPill.btnMinus.classList.toggle("is-disabled", minusDisabled);
+      qtyPill.btnMinus.disabled = minusDisabled;
     }
     if (qtyPill?.btnPlus) {
-      qtyPill.btnPlus.classList.toggle("is-disabled", !available);
+      const plusDisabled = !available || qtyPlusBlockedByStock;
+      qtyPill.btnPlus.classList.toggle("is-disabled", plusDisabled);
+      qtyPill.btnPlus.disabled = plusDisabled;
     }
   };
 
@@ -2784,14 +3288,18 @@ optionGroups.forEach((group) => {
   };
 
   let ingredientsWrapRef = null;
+  let refreshVariantAvailabilityUi = () => {};
   
   const onIngredientChange = () => {
     updateActionText();
+    refreshQtyPlusStockGate();
+    refreshVariantAvailabilityUi();
     // Update ingredient prices in UI
     if (!ingredientsWrapRef) return;
     
     ingredients.forEach(ing => {
       const ingId = Number(ing.ingredient_id);
+      const hasIngredientProductId = Number.isFinite(ingId) && ingId > 0;
       const state = ingredientState.get(ingId);
       if (!state) return;
       
@@ -2805,6 +3313,20 @@ optionGroups.forEach((group) => {
       const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQtyNum;
       const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
       let currentQty = state.quantity ?? Number(ing.quantity ?? 1);
+      const isIngUnavailableForPlus = () => {
+        if (!hasIngredientProductId) return false;
+        if (currentQty >= max) return false;
+        const snapshot = snapshotDraftState();
+        const stateEntry = ingredientState.get(ingId);
+        const nextQty = Math.min(max, currentQty + (step > 0 ? step : 1));
+        const nextState = stateEntry && typeof stateEntry === "object"
+          ? { ...stateEntry, quantity: nextQty }
+          : { quantity: nextQty };
+        ingredientState.set(ingId, nextState);
+        const allowed = canUseDraftQtyLocal(Math.max(1, Number(qty || 1)));
+        restoreDraftState(snapshot);
+        return !allowed;
+      };
       // Round to step (относительно min)
       if (step > 0) {
         const stepsFromMin = Math.round((currentQty - min) / step);
@@ -2859,9 +3381,373 @@ optionGroups.forEach((group) => {
       const btnMinus = block.querySelector(".qty-minus");
       const btnPlus = block.querySelector(".qty-plus");
       if (btnMinus) btnMinus.disabled = currentQty <= min;
-      if (btnPlus) btnPlus.disabled = currentQty >= max;
+      if (btnPlus) btnPlus.disabled = currentQty >= max || isIngUnavailableForPlus();
     });
   };
+
+  function buildCurrentIngredientQuantities() {
+    const ingredientQuantities = [];
+    ingredients.forEach((ing) => {
+      const ingId = Number(ing.ingredient_id);
+      const stateEntry = ingredientState.get(ingId);
+      const quantity = (stateEntry && stateEntry.quantity !== undefined)
+        ? stateEntry.quantity
+        : Number(ing.quantity ?? 1);
+      const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
+      ingredientQuantities.push({
+        ingredient_id: ingId,
+        quantity,
+        ingredient_name: ing.ingredient_name || "",
+        unit_label: unitLabel,
+      });
+    });
+    return ingredientQuantities;
+  }
+
+  function formatVariantValueLabelByIndex(variantIndex) {
+    if (!Array.isArray(variants) || !variants.length) return "";
+    const group = variants[0] || null;
+    const values = Array.isArray(group?.values) ? group.values : [];
+    const idx = Number(variantIndex);
+    if (!Number.isFinite(idx) || idx < 0 || idx >= values.length) return "";
+
+    const unitLabel = str(group?.unit_short_title || group?.unit_code || group?.unit_title || "").trim();
+    const valueText = str(values[idx]);
+    if (!valueText) return "";
+    if (!unitLabel || /[a-zа-я]/i.test(valueText)) return valueText;
+    return `${valueText} ${unitLabel}`;
+  }
+
+  function buildDraftStockItem(desiredQty, variantOverrides = null) {
+    const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
+    const optionItemIds = selectedItems.map((item) => item.id);
+    const overrides = variantOverrides && typeof variantOverrides === "object" ? variantOverrides : null;
+    const hasGroupOverride = !!(overrides && Object.prototype.hasOwnProperty.call(overrides, "variantGroupId"));
+    const hasIndexOverride = !!(overrides && Object.prototype.hasOwnProperty.call(overrides, "variantIndex"));
+    const hasLabelOverride = !!(overrides && Object.prototype.hasOwnProperty.call(overrides, "variantLabel"));
+
+    const selectedVariantGroupIdRaw = hasGroupOverride ? overrides.variantGroupId : variantState.groupId;
+    const selectedVariantIndexRaw = hasIndexOverride ? overrides.variantIndex : variantState.selectedIndex;
+    const selectedVariantGroupId =
+      selectedVariantGroupIdRaw === undefined || selectedVariantGroupIdRaw === null || selectedVariantGroupIdRaw === ""
+        ? null
+        : Number(selectedVariantGroupIdRaw);
+    const selectedVariantIndex =
+      selectedVariantIndexRaw === undefined || selectedVariantIndexRaw === null || selectedVariantIndexRaw === ""
+        ? null
+        : Number(selectedVariantIndexRaw);
+    const selectedVariantLabel = hasLabelOverride
+      ? str(overrides.variantLabel || "")
+      : (
+          hasIndexOverride
+            ? formatVariantValueLabelByIndex(selectedVariantIndex)
+            : (str(variantState.label || "") || formatVariantValueLabelByIndex(selectedVariantIndex))
+        );
+    const variantValue = toStockVariantValue(selectedVariantLabel || "");
+    const hasVariantSelection =
+      Array.isArray(variants) &&
+      variants.length > 0 &&
+      Number.isFinite(selectedVariantGroupId) &&
+      selectedVariantGroupId > 0 &&
+      Number.isFinite(selectedVariantIndex) &&
+      selectedVariantIndex >= 0 &&
+      !!variantValue;
+
+    return {
+      cart_key: editMode && editingItem ? editingItem.key : null,
+      product_id: Number(product.id),
+      qty: Math.max(1, Number(desiredQty || 1)),
+      option_item_ids: optionItemIds,
+      option_items: selectedItems,
+      ingredients: buildCurrentIngredientQuantities(),
+      variant_group_id: hasVariantSelection ? selectedVariantGroupId : null,
+      variant_value_index: hasVariantSelection ? selectedVariantIndex : null,
+      variant_label: hasVariantSelection ? variantValue : null,
+      variants: hasVariantSelection
+        ? [{
+            variant_group_id: selectedVariantGroupId,
+            variant_value_index: selectedVariantIndex,
+            value: variantValue,
+            label: variantValue,
+          }]
+        : undefined,
+    };
+  }
+
+  function buildDraftStockItemsPayload(desiredQty, variantOverrides = null) {
+    const cartPayload = buildStockCheckItemsPayloadFromResolved(cartItemsResolved());
+    const filtered = (editMode && editingItem)
+      ? cartPayload.filter((item) => String(item?.cart_key || "") !== String(editingItem.key || ""))
+      : cartPayload.slice();
+    filtered.push(buildDraftStockItem(desiredQty, variantOverrides));
+    return filtered;
+  }
+
+  // --- Локальный расчёт остатков для draft (без обращения к API) ---
+  function canUseDraftQtyLocal(desiredQty, variantOverrides) {
+    const dQty = Math.max(1, Number(desiredQty || 1));
+    // Собираем потребление draft по каждому productId
+    const draftConsumption = new Map();
+    const addC = (pid, amount) => {
+      if (!Number.isFinite(pid) || pid <= 0 || !Number.isFinite(amount) || amount <= 0) return;
+      draftConsumption.set(pid, (draftConsumption.get(pid) || 0) + amount);
+    };
+
+    // 1. Основной товар
+    const mainPid = Number(product.id || 0);
+    if (mainPid > 0) {
+      const overrides = variantOverrides && typeof variantOverrides === "object" ? variantOverrides : null;
+      let vLabel, vUnitId;
+      if (overrides && Object.prototype.hasOwnProperty.call(overrides, "variantIndex")) {
+        const idx = Number(overrides.variantIndex);
+        const group = Array.isArray(variants) && variants.length ? variants[0] : null;
+        const values = group && Array.isArray(group.values) ? group.values : [];
+        const unitLabel = str(group?.unit_short_title || group?.unit_code || group?.unit_title || "").trim();
+        const rawVal = idx >= 0 && idx < values.length ? str(values[idx]) : "";
+        const hasLetters = /[a-zа-я]/i.test(rawVal);
+        vLabel = rawVal && unitLabel && !hasLetters ? rawVal + " " + unitLabel : rawVal;
+        vUnitId = Number(group?.unit_id || 0);
+      } else {
+        vLabel = str(variantState.label || "") || formatVariantValueLabelByIndex(variantState.selectedIndex);
+        const group = Array.isArray(variants) && variants.length ? variants[0] : null;
+        vUnitId = Number(group?.unit_id || 0);
+      }
+      addC(mainPid, calcConsumedPerUnit(product, vLabel, vUnitId) * dQty);
+    }
+
+    // 2. Выбранные опции
+    for (const group of optionGroups) {
+      const gState = selectionState.get(group.id);
+      if (!gState) continue;
+      for (const item of (group.items || [])) {
+        const tpid = Number(item.target_product_id || 0);
+        if (tpid <= 0) continue;
+        const iid = Number(item.id);
+        let optQty = 0;
+        if (gState.type === "single" && Number(gState.selectedId || 0) === iid) optQty = 1;
+        else if (gState.type === "multiple_group" && gState.selectedIds && gState.selectedIds.has(iid)) optQty = 1;
+        else if (gState.type === "multiple_item" && gState.qtyById) optQty = Number(gState.qtyById.get(iid) || 0);
+        if (optQty <= 0) continue;
+
+        const optProduct = state.productCache.get(tpid);
+        const vData = gState.variantByItemId ? gState.variantByItemId.get(iid) : null;
+        const optVLabel = vData ? (vData.variant_label || "") : "";
+        const itemVars = Array.isArray(item.variants) ? item.variants : [];
+        const optVUnitId = Number(itemVars.length ? (itemVars[0].unit_id || 0) : 0);
+        addC(tpid, calcConsumedPerUnit(optProduct, optVLabel, optVUnitId) * optQty * dQty);
+      }
+    }
+
+    // 3. Ингредиенты
+    for (const ing of ingredients) {
+      const ingPid = Number(ing.ingredient_id || 0);
+      if (ingPid <= 0) continue;
+      const stateEntry = ingredientState.get(ingPid);
+      const ingQty = Number(stateEntry && stateEntry.quantity !== undefined ? stateEntry.quantity : (ing.quantity ?? 1));
+      if (ingQty <= 0) continue;
+      const ingProduct = state.productCache.get(ingPid);
+      const ingUnitId = Number(ing.unit_id || 0);
+      let consumed = ingQty;
+      if (ingProduct && ingUnitId) {
+        const baseUnitId = Number(ingProduct.base_unit_id || ingProduct.unit_id || 0);
+        if (baseUnitId && ingUnitId !== baseUnitId) {
+          const factor = getConversionFactor(ingUnitId, baseUnitId);
+          if (factor != null) consumed = ingQty * factor;
+        }
+      }
+      addC(ingPid, consumed * dQty);
+    }
+
+    // Проверка по каждому затронутому продукту
+    for (const [pid, draftAmount] of draftConsumption) {
+      const entry = getStockLevelEntry(pid);
+      if (!entry || entry.qty === null || entry.qty === undefined || entry.isUnlimited) continue;
+      const stockQty = Number(entry.qty);
+      if (!Number.isFinite(stockQty)) continue;
+      let cartConsumed = calcProductStockConsumed(pid);
+      // В режиме редактирования вычитаем потребление редактируемого элемента
+      if (editMode && editingItem) {
+        cartConsumed -= calcProductStockConsumed(pid, [editingItem]);
+      }
+      if (cartConsumed + draftAmount > stockQty) return false;
+    }
+    return true;
+  }
+
+  function canUseDraftQtyWithVariantLocal(variantIndex, desiredQty) {
+    if (!Array.isArray(variants) || !variants.length) return true;
+    const idx = Number(variantIndex);
+    if (!Number.isFinite(idx) || idx < 0) return false;
+    const qtyForCheck = Math.max(1, Number(desiredQty || qty || 1));
+    return canUseDraftQtyLocal(qtyForCheck, { variantIndex: idx });
+  }
+
+  async function canUseDraftQty(
+    desiredQty,
+    {
+      showToastOnOut = true,
+      refreshOnOut = true,
+      variantOverrides = null,
+    } = {}
+  ) {
+    const payloadItems = buildDraftStockItemsPayload(desiredQty, variantOverrides);
+    const check = await checkStockForItemsPayload(payloadItems, {
+      showToastOnOut,
+      toastMessage: "\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
+      refreshOnOut,
+    });
+    return check.available;
+  }
+
+  async function canUseDraftQtyWithVariant(
+    variantIndex,
+    {
+      desiredQty = null,
+      showToastOnOut = false,
+      refreshOnOut = false,
+    } = {}
+  ) {
+    if (!Array.isArray(variants) || !variants.length) return true;
+    const group = variants[0] || null;
+    const groupId = Number(group?.id || variantState.groupId || 0);
+    const idx = Number(variantIndex);
+    if (!Number.isFinite(idx) || idx < 0) return false;
+    const qtyForCheck = Math.max(1, Number(desiredQty || qty || 1));
+
+    return canUseDraftQty(qtyForCheck, {
+      showToastOnOut,
+      refreshOnOut,
+      variantOverrides: {
+        variantGroupId: Number.isFinite(groupId) && groupId > 0 ? groupId : null,
+        variantIndex: idx,
+      },
+    });
+  }
+
+  function cloneDraftValue(value) {
+    if (value instanceof Map) {
+      const out = new Map();
+      value.forEach((v, k) => out.set(k, cloneDraftValue(v)));
+      return out;
+    }
+    if (value instanceof Set) {
+      const out = new Set();
+      value.forEach((v) => out.add(cloneDraftValue(v)));
+      return out;
+    }
+    if (Array.isArray(value)) return value.map((v) => cloneDraftValue(v));
+    if (value && typeof value === "object") {
+      const out = {};
+      Object.keys(value).forEach((k) => {
+        out[k] = cloneDraftValue(value[k]);
+      });
+      return out;
+    }
+    return value;
+  }
+
+  function snapshotDraftState() {
+    return {
+      selectionState: cloneDraftValue(selectionState),
+      ingredientState: cloneDraftValue(ingredientState),
+      variantState: cloneDraftValue(variantState),
+    };
+  }
+
+  function isPlainDraftObject(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value) && !(value instanceof Map) && !(value instanceof Set);
+  }
+
+  function restoreDraftValueInPlace(target, source) {
+    if (source instanceof Map) {
+      if (!(target instanceof Map)) return cloneDraftValue(source);
+      const keysToDelete = [];
+      target.forEach((_, key) => {
+        if (!source.has(key)) keysToDelete.push(key);
+      });
+      keysToDelete.forEach((key) => target.delete(key));
+      source.forEach((srcValue, key) => {
+        if (target.has(key)) {
+          const tgtValue = target.get(key);
+          target.set(key, restoreDraftValueInPlace(tgtValue, srcValue));
+        } else {
+          target.set(key, cloneDraftValue(srcValue));
+        }
+      });
+      return target;
+    }
+
+    if (source instanceof Set) {
+      if (!(target instanceof Set)) return cloneDraftValue(source);
+      target.clear();
+      source.forEach((v) => target.add(cloneDraftValue(v)));
+      return target;
+    }
+
+    if (Array.isArray(source)) {
+      if (!Array.isArray(target)) return cloneDraftValue(source);
+      target.length = 0;
+      source.forEach((v) => target.push(cloneDraftValue(v)));
+      return target;
+    }
+
+    if (isPlainDraftObject(source)) {
+      if (!isPlainDraftObject(target)) return cloneDraftValue(source);
+      Object.keys(target).forEach((k) => {
+        if (!(k in source)) delete target[k];
+      });
+      Object.keys(source).forEach((k) => {
+        target[k] = restoreDraftValueInPlace(target[k], source[k]);
+      });
+      return target;
+    }
+
+    return source;
+  }
+
+  function restoreDraftState(snapshot) {
+    const selectionSnapshot = snapshot?.selectionState instanceof Map ? snapshot.selectionState : new Map();
+    restoreDraftValueInPlace(selectionState, selectionSnapshot);
+
+    const ingredientSnapshot = snapshot?.ingredientState instanceof Map ? snapshot.ingredientState : new Map();
+    restoreDraftValueInPlace(ingredientState, ingredientSnapshot);
+
+    const variantSnapshot = snapshot?.variantState && typeof snapshot.variantState === "object" ? snapshot.variantState : {};
+    restoreDraftValueInPlace(variantState, variantSnapshot);
+  }
+
+  function guardDraftMutation(mutator, { showToastOnOut = true } = {}) {
+    if (typeof mutator !== "function") return false;
+    const snapshot = snapshotDraftState();
+    mutator();
+    const allowed = canUseDraftQtyLocal(Math.max(1, Number(qty || 1)));
+    if (allowed) return true;
+    restoreDraftState(snapshot);
+    if (showToastOnOut) showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+    return false;
+  }
+
+  function probeDraftMutationAvailability(mutator) {
+    if (typeof mutator !== "function") return true;
+    const snapshot = snapshotDraftState();
+    mutator();
+    const allowed = canUseDraftQtyLocal(Math.max(1, Number(qty || 1)));
+    restoreDraftState(snapshot);
+    return allowed;
+  }
+
+  function refreshQtyPlusStockGate() {
+    if (!available) {
+      qtyPlusBlockedByStock = true;
+      updateQtyUi();
+      return false;
+    }
+    const desiredQty = Math.max(1, Number(qty || 1)) + 1;
+    const allowed = canUseDraftQtyLocal(desiredQty);
+    qtyPlusBlockedByStock = !allowed;
+    updateQtyUi();
+    return allowed;
+  }
 
   const onQtyMinus = () => {
     if (!available) return;
@@ -2869,16 +3755,33 @@ optionGroups.forEach((group) => {
     qty -= 1;
     updateQtyUi();
     updateActionText();
+    refreshQtyPlusStockGate();
+    refreshVariantAvailabilityUi();
   };
 
   const onQtyPlus = () => {
     if (!available) return;
-    qty += 1;
+    if (qtyPlusBlockedByStock) {
+      showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+      return;
+    }
+    const desiredQty = qty + 1;
+    const allowed = canUseDraftQtyLocal(desiredQty);
+    if (!allowed) {
+      qtyPlusBlockedByStock = true;
+      updateQtyUi();
+      showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+      return;
+    }
+    qty = desiredQty;
+    qtyPlusBlockedByStock = false;
     updateQtyUi();
     updateActionText();
+    refreshQtyPlusStockGate();
+    refreshVariantAvailabilityUi();
   };
 
-  const { wrap, actionBtn, basePriceEl } = buildProductDetailsContent(
+  const { wrap, actionBtn, basePriceEl, refreshVariantAvailability } = buildProductDetailsContent(
     product,
     optionGroups,
     selectionState,
@@ -2889,22 +3792,43 @@ optionGroups.forEach((group) => {
     {
       onBack,
       mode: editMode ? "edit" : "add",
-      onSelectionChange: () => updateActionText(),
+      onSelectionChange: () => {
+        updateActionText();
+        refreshQtyPlusStockGate();
+        refreshVariantAvailabilityUi();
+      },
       onIngredientChange,
-      onVariantChange: () => updateActionText(),
+      onVariantChange: () => {
+        updateActionText();
+        refreshQtyPlusStockGate();
+        refreshVariantAvailabilityUi();
+      },
+      canSelectVariantIndex: canUseDraftQtyWithVariantLocal,
+      probeDraftMutationAvailability,
       qtyPill,
       onQtyMinus,
       onQtyPlus,
       setDefaultVariantForOptionItem,
+      guardDraftMutation,
     }
   );
 
   actionBtnRef = actionBtn;
   basePriceElRef = basePriceEl;
   ingredientsWrapRef = wrap.querySelector(".shop-pd-ingredients");
+  refreshVariantAvailabilityUi = () => {
+    if (typeof refreshVariantAvailability !== "function") return;
+    try {
+      Promise
+        .resolve(refreshVariantAvailability({ showToastOnOut: false }))
+        .catch(() => {});
+    } catch {}
+  };
 
   updateQtyUi();
   updateActionText();
+  refreshQtyPlusStockGate();
+  refreshVariantAvailabilityUi();
 
   // На мобильных: синхронизируем кнопки с единым блоком
   const isMobile = window.matchMedia("(max-width: 768px)").matches;
@@ -2960,9 +3884,17 @@ optionGroups.forEach((group) => {
         const clonedCenter = elMobileQtyWrap.querySelector(".qty-pill__center");
         if (clonedCenter) clonedCenter.textContent = String(qty);
         const clonedMinus = elMobileQtyWrap.querySelector(".qty-pill__btn--minus");
-        if (clonedMinus) clonedMinus.classList.toggle("is-disabled", qty <= 1 || !available);
+        if (clonedMinus) {
+          const minusDisabled = qty <= 1 || !available;
+          clonedMinus.classList.toggle("is-disabled", minusDisabled);
+          clonedMinus.disabled = minusDisabled;
+        }
         const clonedPlus = elMobileQtyWrap.querySelector(".qty-pill__btn--plus");
-        if (clonedPlus) clonedPlus.classList.toggle("is-disabled", !available);
+        if (clonedPlus) {
+          const plusDisabled = !available || qtyPlusBlockedByStock;
+          clonedPlus.classList.toggle("is-disabled", plusDisabled);
+          clonedPlus.disabled = plusDisabled;
+        }
       }
     };
     
@@ -2974,9 +3906,17 @@ optionGroups.forEach((group) => {
         const clonedCenter = elMobileQtyWrap.querySelector(".qty-pill__center");
         if (clonedCenter) clonedCenter.textContent = String(qty);
         const clonedMinus = elMobileQtyWrap.querySelector(".qty-pill__btn--minus");
-        if (clonedMinus) clonedMinus.classList.toggle("is-disabled", qty <= 1 || !available);
+        if (clonedMinus) {
+          const minusDisabled = qty <= 1 || !available;
+          clonedMinus.classList.toggle("is-disabled", minusDisabled);
+          clonedMinus.disabled = minusDisabled;
+        }
         const clonedPlus = elMobileQtyWrap.querySelector(".qty-pill__btn--plus");
-        if (clonedPlus) clonedPlus.classList.toggle("is-disabled", !available);
+        if (clonedPlus) {
+          const plusDisabled = !available || qtyPlusBlockedByStock;
+          clonedPlus.classList.toggle("is-disabled", plusDisabled);
+          clonedPlus.disabled = plusDisabled;
+        }
       }
     };
     
@@ -3001,8 +3941,9 @@ optionGroups.forEach((group) => {
 
   container.appendChild(wrap);
 
-  actionBtn.addEventListener("click", () => {
+  actionBtn.addEventListener("click", async () => {
     if (!available) return;
+    const previousCartSnapshot = cloneCartState(state.cart);
     const wasEmpty = cartCountTotal() === 0;
     const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
     const optionItemIds = selectedItems.map((item) => item.id);
@@ -3037,24 +3978,14 @@ optionGroups.forEach((group) => {
 
     const safeQty = Math.max(1, Number(qty || 1));
 
+    if (!canUseDraftQtyLocal(safeQty)) {
+      showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+      return;
+    }
+
     // Collect ingredient quantities with names and units for display
     // ВАЖНО: сохраняем ВСЕ ингредиенты, даже если они не изменены (для отображения в админке)
-    const ingredientQuantities = [];
-    ingredients.forEach(ing => {
-      const ingId = Number(ing.ingredient_id);
-      const state = ingredientState.get(ingId);
-      // Используем quantity из state если есть, иначе базовое значение из ing
-      const quantity = (state && state.quantity !== undefined) 
-        ? state.quantity 
-        : Number(ing.quantity ?? 1);
-      const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
-      ingredientQuantities.push({
-        ingredient_id: ingId,
-        quantity: quantity,
-        ingredient_name: ing.ingredient_name || "",
-        unit_label: unitLabel,
-      });
-    });
+    const ingredientQuantities = buildCurrentIngredientQuantities();
 
     const nextKey = makeCartKey(product.id, selectedItems, ingredientQuantities, variantSelection);
     
@@ -3131,6 +4062,9 @@ optionGroups.forEach((group) => {
     clearAutoAddDismissedIfCartEmpty();
     saveCart();
     renderProducts();
+    if (typeof scheduleSyncAllProductCardsFromCart === "function") scheduleSyncAllProductCardsFromCart();
+    if (typeof primeVisibleProductAddability === "function") primeVisibleProductAddability();
+    if (typeof primeCartQtyHardLimits === "function") primeCartQtyHardLimits();
     renderCart();
     updateCartBadge();
 
@@ -3143,6 +4077,17 @@ optionGroups.forEach((group) => {
         const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
         if (tspan) tspan.textContent = money(total);
       }
+    }
+
+    queueCartStockRecheck(previousCartSnapshot, {
+      toastMessage: "Больше нет в наличии",
+    });
+    const savedItemForLimit = getCartItemByKey(nextKey);
+    const savedQtyForLimit = Number(savedItemForLimit?.qty || 0);
+    if (savedItemForLimit && savedQtyForLimit > 0) {
+      probeNextRegularCartItemLimit(Number(product.id || 0), nextKey, savedQtyForLimit).catch((e) => {
+        console.warn("Qty limit probe after add-to-cart failed:", e);
+      });
     }
 
     // На мобильных: скрываем мобильные кнопки при закрытии карточки
@@ -3193,7 +4138,18 @@ optionGroups.forEach((group) => {
     const blocks = Array.isArray(combo.blocks) ? combo.blocks : [];
     const discountPercent = Number(combo.discount_percent) || 0;
     let comboQty = 1;
-    const selectionStateByBlock = blocks.map(() => ({ product_id: null, variant_label: "", variant_group_title: "", variant_unit: "", ingredients_display: [], unit_price_override: null, unit_price_before_discount: null }));
+    const makeEmptyComboBlockState = () => ({
+      product_id: null,
+      variant_label: "",
+      variant_group_id: null,
+      variant_group_title: "",
+      variant_unit: "",
+      unit_id: null,
+      ingredients_display: [],
+      unit_price_override: null,
+      unit_price_before_discount: null,
+    });
+    const selectionStateByBlock = blocks.map(() => makeEmptyComboBlockState());
     let expandedPickerProductIndex = null;
     const comboProductPreviewCache = new Map();
 
@@ -3218,9 +4174,11 @@ optionGroups.forEach((group) => {
             const st = selectionStateByBlock[bi];
             st.product_id = Number(sel.product_id) || null;
             st.variant_label = String(sel.variant_label || "");
+            st.variant_group_id = sel.variant_group_id != null ? Number(sel.variant_group_id) : null;
             st.variant_value_index = sel.variant_value_index != null ? Number(sel.variant_value_index) : null;
             st.variant_group_title = String(sel.variant_group_title || "");
             st.variant_unit = String(sel.variant_unit || "");
+            st.unit_id = sel.unit_id != null ? Number(sel.unit_id) : null;
             st.ingredients_display = Array.isArray(sel.ingredients_display) ? sel.ingredients_display : [];
             st.unit_price_override = sel.unit_price_override != null ? Number(sel.unit_price_override) : null;
             st.unit_price_before_discount = null;
@@ -3249,7 +4207,7 @@ optionGroups.forEach((group) => {
       return roundPrice(comboDiscountedPrice(sumOld, discountPercent));
     }
 
-    function renderFooter({ onAdd, actionLabel = "в корзину" } = {}) {
+    function renderFooter({ onAdd, actionLabel = "в корзину", onQtyChanged } = {}) {
       const footer = document.createElement("div");
       footer.className = "shop-pd-footer shop-combo-footer";
 
@@ -3263,26 +4221,64 @@ optionGroups.forEach((group) => {
         plusEnabled: true,
       });
 
+      const qtyPills = [qtyPill];
+
+      function syncQtyControls() {
+        const minusDisabled = comboQty <= 1;
+        const plusDisabled = !canUseComboDraftQtyLocal(Math.max(1, Number(comboQty) + 1));
+        qtyPills.forEach((pillRef) => {
+          if (!pillRef) return;
+          if (pillRef.center) pillRef.center.textContent = String(comboQty);
+          if (pillRef.btnMinus) {
+            pillRef.btnMinus.disabled = minusDisabled;
+            pillRef.btnMinus.classList.toggle("is-disabled", minusDisabled);
+          }
+          if (pillRef.btnPlus) {
+            pillRef.btnPlus.disabled = plusDisabled;
+            pillRef.btnPlus.classList.toggle("is-disabled", plusDisabled);
+          }
+        });
+      }
+
+      function applyQtyDelta(delta) {
+        const safeDelta = Number(delta || 0);
+        if (!Number.isFinite(safeDelta) || safeDelta === 0) return false;
+        if (safeDelta < 0) {
+          if (comboQty <= 1) {
+            syncQtyControls();
+            return false;
+          }
+          comboQty = Math.max(1, comboQty + safeDelta);
+          syncQtyControls();
+          updateFooterAction();
+          if (typeof onQtyChanged === "function") onQtyChanged(comboQty);
+          return true;
+        }
+        const nextQty = Math.max(1, comboQty + safeDelta);
+        const allowed = canUseComboDraftQtyLocal(nextQty);
+        if (!allowed) {
+          showToast("Больше нет в наличии");
+          syncQtyControls();
+          return false;
+        }
+        comboQty = nextQty;
+        syncQtyControls();
+        updateFooterAction();
+        if (typeof onQtyChanged === "function") onQtyChanged(comboQty);
+        return true;
+      }
+
       qtyPill.btnPlus.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        comboQty += 1;
-        qtyPill.center.textContent = String(comboQty);
-        qtyPill.btnMinus.classList.toggle("is-disabled", comboQty <= 1);
-        updateFooterAction();
+        applyQtyDelta(+1);
       });
 
       qtyPill.btnMinus.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (comboQty <= 1) return;
-        comboQty -= 1;
-        qtyPill.center.textContent = String(comboQty);
-        qtyPill.btnMinus.classList.toggle("is-disabled", comboQty <= 1);
-        updateFooterAction();
+        applyQtyDelta(-1);
       });
-
-      if (comboQty <= 1) qtyPill.btnMinus.classList.add("is-disabled");
 
       qtyWrap.appendChild(qtyPill.pill);
 
@@ -3315,6 +4311,7 @@ optionGroups.forEach((group) => {
           ${pricesHtml}
           <span class="shop-pd-action-label">${actionLabel}</span>
         `;
+        syncQtyControls();
       }
       updateFooterAction();
 
@@ -3346,7 +4343,17 @@ optionGroups.forEach((group) => {
           const center = elMobileQtyWrap.querySelector(".qty-pill__center");
           if (center) center.textContent = String(comboQty);
           const minusBtn = elMobileQtyWrap.querySelector(".qty-pill__btn--minus");
-          if (minusBtn) minusBtn.classList.toggle("is-disabled", comboQty <= 1);
+          if (minusBtn) {
+            const minusDisabled = comboQty <= 1;
+            minusBtn.disabled = minusDisabled;
+            minusBtn.classList.toggle("is-disabled", minusDisabled);
+          }
+          const plusBtn = elMobileQtyWrap.querySelector(".qty-pill__btn--plus");
+          if (plusBtn) {
+            const plusDisabled = !canUseComboDraftQtyLocal(Math.max(1, Number(comboQty) + 1));
+            plusBtn.disabled = plusDisabled;
+            plusBtn.classList.toggle("is-disabled", plusDisabled);
+          }
         };
 
         const origUpdateFooterAction = updateFooterAction;
@@ -3360,25 +4367,27 @@ optionGroups.forEach((group) => {
         elMobileQtyWrap.appendChild(clonedPill);
         const clonedMinus = clonedPill.querySelector(".qty-pill__btn--minus");
         const clonedPlus = clonedPill.querySelector(".qty-pill__btn--plus");
+        const clonedCenter = clonedPill.querySelector(".qty-pill__center");
+        if (clonedMinus && clonedPlus && clonedCenter) {
+          qtyPills.push({
+            pill: clonedPill,
+            btnMinus: clonedMinus,
+            btnPlus: clonedPlus,
+            center: clonedCenter,
+          });
+        }
         if (clonedMinus) {
           clonedMinus.addEventListener("click", (e) => {
             e.preventDefault();
             e.stopPropagation();
-            if (comboQty <= 1) return;
-            comboQty -= 1;
-            qtyPill.center.textContent = String(comboQty);
-            qtyPill.btnMinus.classList.toggle("is-disabled", comboQty <= 1);
-            updateFooterAction();
+            applyQtyDelta(-1);
           });
         }
         if (clonedPlus) {
           clonedPlus.addEventListener("click", (e) => {
             e.preventDefault();
             e.stopPropagation();
-            comboQty += 1;
-            qtyPill.center.textContent = String(comboQty);
-            qtyPill.btnMinus.classList.toggle("is-disabled", comboQty <= 1);
-            updateFooterAction();
+            applyQtyDelta(+1);
           });
         }
 
@@ -3404,7 +4413,12 @@ optionGroups.forEach((group) => {
       const items = blocks.map((_block, blockIndex) => {
         const p = getSelectedProduct(blockIndex);
         if (!p) return null;
-        const state = selectionStateByBlock[blockIndex] || {};
+        const stateRaw = selectionStateByBlock[blockIndex] || {};
+        const stateProductId = Number(stateRaw.product_id || 0);
+        const selectedProductId = Number(p.product_id || 0);
+        const state = stateProductId === selectedProductId
+          ? stateRaw
+          : makeEmptyComboBlockState();
         const oldPrice = state.unit_price_before_discount != null && Number.isFinite(state.unit_price_before_discount)
           ? Number(state.unit_price_before_discount)
           : Number(p.price) || 0;
@@ -3426,12 +4440,238 @@ optionGroups.forEach((group) => {
           product_photo: it.p.product_photo || null,
           unit_price_override,
           variant_label: it.state.variant_label || "",
+          variant_group_id: it.state.variant_group_id != null ? Number(it.state.variant_group_id) : null,
           variant_value_index: it.state.variant_value_index,
+          unit_id: it.state.unit_id != null ? Number(it.state.unit_id) : null,
           variant_group_title: it.state.variant_group_title || "",
           variant_unit: it.state.variant_unit || "",
           ingredients_display: it.state.ingredients_display || [],
         };
       });
+    }
+
+    function calculateComboOldSum() {
+      return blocks.reduce((sum, _block, blockIndex) => {
+        const p = getSelectedProduct(blockIndex);
+        if (!p) return sum;
+        const st = selectionStateByBlock[blockIndex] || {};
+        const oldP = st.unit_price_before_discount != null && Number.isFinite(st.unit_price_before_discount)
+          ? Number(st.unit_price_before_discount)
+          : Number(p.price) || 0;
+        return sum + oldP;
+      }, 0);
+    }
+
+    function cloneComboDraftValue(value) {
+      if (Array.isArray(value)) return value.map((v) => cloneComboDraftValue(v));
+      if (value && typeof value === "object") {
+        const out = {};
+        Object.keys(value).forEach((k) => {
+          out[k] = cloneComboDraftValue(value[k]);
+        });
+        return out;
+      }
+      return value;
+    }
+
+    function snapshotComboDraftState() {
+      return {
+        selectedIndexByBlock: selectedIndexByBlock.slice(),
+        selectionStateByBlock: cloneComboDraftValue(selectionStateByBlock),
+        expandedPickerProductIndex,
+      };
+    }
+
+    function restoreComboDraftState(snapshot) {
+      const selectedSnapshot = Array.isArray(snapshot?.selectedIndexByBlock)
+        ? snapshot.selectedIndexByBlock
+        : [];
+      for (let i = 0; i < selectedIndexByBlock.length; i++) {
+        const next = Number(selectedSnapshot[i]);
+        if (Number.isFinite(next)) {
+          selectedIndexByBlock[i] = next;
+        }
+      }
+
+      const stateSnapshot = Array.isArray(snapshot?.selectionStateByBlock)
+        ? snapshot.selectionStateByBlock
+        : [];
+      for (let i = 0; i < selectionStateByBlock.length; i++) {
+        const stateRow = stateSnapshot[i];
+        const sourceState = stateRow && typeof stateRow === "object"
+          ? cloneComboDraftValue(stateRow)
+          : makeEmptyComboBlockState();
+        const targetState = selectionStateByBlock[i] && typeof selectionStateByBlock[i] === "object"
+          ? selectionStateByBlock[i]
+          : makeEmptyComboBlockState();
+        Object.keys(targetState).forEach((k) => {
+          if (!(k in sourceState)) delete targetState[k];
+        });
+        Object.keys(sourceState).forEach((k) => {
+          targetState[k] = sourceState[k];
+        });
+        selectionStateByBlock[i] = targetState;
+      }
+
+      expandedPickerProductIndex = snapshot?.expandedPickerProductIndex ?? null;
+    }
+
+    function buildDraftComboCart(desiredQty) {
+      const selections = buildComboSelections();
+      if (!selections.length) return null;
+
+      const safeQty = Math.max(1, Number(desiredQty) || 1);
+      const comboId = combo.id;
+      const draftSumOld = calculateComboOldSum();
+      const draftCart = cloneCartState(state.cart);
+
+      if (cartKey) {
+        const draftItem = draftCart.find((x) => x.key === cartKey);
+        if (!draftItem) return null;
+        draftItem.qty = safeQty;
+        draftItem.selections = selections;
+        draftItem.unit_price_before_discount = roundPrice(draftSumOld);
+      } else {
+        draftCart.push({
+          key: `combo-draft-${comboId}`,
+          type: "combo",
+          combo_id: comboId,
+          combo_title: combo.title || "Комбо",
+          qty: safeQty,
+          selections,
+          unit_price_before_discount: roundPrice(draftSumOld),
+        });
+      }
+
+      return draftCart;
+    }
+
+    function collectComboDraftProductIds(selections) {
+      const ids = new Set();
+      (Array.isArray(selections) ? selections : []).forEach((sel) => {
+        const productId = Number(sel?.product_id || 0);
+        if (Number.isFinite(productId) && productId > 0) {
+          ids.add(productId);
+          if (typeof getProductIngredientRequirementsSync === "function") {
+            const requirements = getProductIngredientRequirementsSync(productId);
+            if (requirements === null && typeof ensureProductIngredientRequirements === "function") {
+              ensureProductIngredientRequirements(productId).catch(() => {});
+            }
+            if (requirements instanceof Map) {
+              requirements.forEach((_requiredQty, depPid) => {
+                const id = Number(depPid || 0);
+                if (Number.isFinite(id) && id > 0) ids.add(id);
+              });
+            }
+          }
+        }
+        const ingredients = Array.isArray(sel?.ingredients_display) ? sel.ingredients_display : [];
+        ingredients.forEach((ing) => {
+          const ingId = Number(ing?.ingredient_id || ing?.product_id || 0);
+          if (Number.isFinite(ingId) && ingId > 0) ids.add(ingId);
+        });
+      });
+      return ids;
+    }
+
+    function canUseComboDraftQtyLocal(desiredQty) {
+      const draftCart = buildDraftComboCart(desiredQty);
+      if (!draftCart) return false;
+      const affectedProducts = collectComboDraftProductIds(buildComboSelections());
+      for (const pid of affectedProducts) {
+        const stockEntry = getStockLevelEntry(pid);
+        if (!stockEntry || stockEntry.qty === null || stockEntry.qty === undefined || stockEntry.isUnlimited) {
+          continue;
+        }
+        const stockQty = Number(stockEntry.qty);
+        if (!Number.isFinite(stockQty)) continue;
+        const consumed = calcProductStockConsumed(pid, draftCart);
+        if (consumed > stockQty + 1e-9) return false;
+      }
+      return true;
+    }
+
+    function applyComboPreviewToBlockState(blockState, productId, preview) {
+      if (!blockState || typeof blockState !== "object") return;
+      const pid = Number(productId || 0);
+      const safePreview = preview && typeof preview === "object" ? preview : {};
+      blockState.product_id = Number.isFinite(pid) && pid > 0 ? pid : null;
+      blockState.variant_label = String(safePreview.variant_label || "");
+      blockState.variant_group_id = safePreview.variant_group_id != null
+        ? Number(safePreview.variant_group_id)
+        : null;
+      blockState.variant_value_index = safePreview.variant_value_index != null
+        ? Number(safePreview.variant_value_index)
+        : null;
+      blockState.variant_group_title = String(safePreview.variant_group_title || "");
+      blockState.variant_unit = String(safePreview.variant_unit || "");
+      blockState.unit_id = safePreview.unit_id != null ? Number(safePreview.unit_id) : null;
+      const previewIngredients = Array.isArray(safePreview.ingredients_display)
+        ? safePreview.ingredients_display
+        : [];
+      blockState.ingredients_display = previewIngredients.map((ing) => cloneComboDraftValue(ing));
+      blockState.unit_price_override = safePreview.unit_price_override != null && Number.isFinite(Number(safePreview.unit_price_override))
+        ? Number(safePreview.unit_price_override)
+        : null;
+      blockState.unit_price_before_discount = safePreview.unit_price_before_discount != null && Number.isFinite(Number(safePreview.unit_price_before_discount))
+        ? Number(safePreview.unit_price_before_discount)
+        : null;
+    }
+
+    function canUseComboPickerCandidateWithPreview(blockIndex, candidateIndex, preview) {
+      const block = blocks[blockIndex];
+      if (!block || !Array.isArray(block.products)) return false;
+      const prod = block.products[candidateIndex];
+      if (!prod) return false;
+      const productId = Number(prod.product_id || 0);
+      if (!Number.isFinite(productId) || productId <= 0) return false;
+
+      const snapshot = snapshotComboDraftState();
+      try {
+        selectedIndexByBlock[blockIndex] = candidateIndex;
+        const draftState = selectionStateByBlock[blockIndex];
+        applyComboPreviewToBlockState(draftState, productId, preview);
+        return canUseComboDraftQtyLocal(Math.max(1, Number(comboQty) || 1));
+      } catch {
+        return false;
+      } finally {
+        restoreComboDraftState(snapshot);
+      }
+    }
+
+    async function canUseComboDraftQty(desiredQty, { showToastOnOut = true } = {}) {
+      const draftCart = buildDraftComboCart(desiredQty);
+      if (!draftCart) return false;
+      const payload = buildStockCheckItemsPayloadFromResolved(cartItemsResolved(draftCart));
+      const check = await checkStockForItemsPayload(payload, {
+        showToastOnOut,
+        toastMessage: "Больше нет в наличии",
+        refreshOnOut: true,
+      });
+      return check.available;
+    }
+
+    async function guardComboDraftMutation(
+      mutator,
+      { showToastOnOut = true, onReject } = {}
+    ) {
+      if (typeof mutator !== "function") return false;
+      const snapshot = snapshotComboDraftState();
+      try {
+        await mutator();
+        const allowed = canUseComboDraftQtyLocal(Math.max(1, Number(comboQty) || 1));
+        if (allowed) return true;
+      } catch (e) {
+        console.warn("Combo draft stock check failed:", e);
+      }
+      restoreComboDraftState(snapshot);
+      if (showToastOnOut) {
+        showToast("Больше нет в наличии");
+      }
+      if (typeof onReject === "function") {
+        try { onReject(); } catch {}
+      }
+      return false;
     }
 
     let comboHydratedOnce = false;
@@ -3521,8 +4761,10 @@ optionGroups.forEach((group) => {
         state.unit_price_override = roundPrice(discounted);
         state.product_id = productId;
         state.variant_label = vState.label;
+        state.variant_group_id = (vGroup && (vGroup.id || vGroup.variant_group_id)) ? Number(vGroup.id || vGroup.variant_group_id) : null;
         state.variant_group_title = (vGroup && (vGroup.title || vGroup.title_label)) ? String(vGroup.title || vGroup.title_label) : "";
         state.variant_unit = (vGroup && (vGroup.unit_short_title || vGroup.unit_title || vGroup.unit_code)) ? String(vGroup.unit_short_title || vGroup.unit_title || vGroup.unit_code) : "";
+        state.unit_id = vGroup && vGroup.unit_id != null ? Number(vGroup.unit_id) : null;
         state.variant_value_index = vIdx;
         state.ingredients_display = ingredients.map((ing) => {
           const ingId = Number(ing.ingredient_id);
@@ -3534,6 +4776,7 @@ optionGroups.forEach((group) => {
             quantity: q,
             qty: q,
             unit: unitLabel,
+            unit_id: ing.unit_id != null ? Number(ing.unit_id) : null,
           };
         });
         selectionStateByBlock[blockIndex] = state;
@@ -3593,7 +4836,18 @@ optionGroups.forEach((group) => {
     async function getComboProductPreview(productId) {
       const id = Number(productId);
       if (!Number.isFinite(id) || id <= 0) {
-        return { variant_label: "", ingredients_display: [], hasConfigurable: false, unit_price_override: null, unit_price_before_discount: null };
+        return {
+          variant_label: "",
+          variant_group_id: null,
+          variant_value_index: null,
+          variant_group_title: "",
+          variant_unit: "",
+          unit_id: null,
+          ingredients_display: [],
+          hasConfigurable: false,
+          unit_price_override: null,
+          unit_price_before_discount: null,
+        };
       }
 
       if (comboProductPreviewCache.has(id)) {
@@ -3607,7 +4861,20 @@ optionGroups.forEach((group) => {
             resolveProductVariants(id),
             resolveProductIngredients(id),
           ]);
-          if (!product) return { variant_label: "", ingredients_display: [], hasConfigurable: false, unit_price_override: null, unit_price_before_discount: null };
+          if (!product) {
+            return {
+              variant_label: "",
+              variant_group_id: null,
+              variant_value_index: null,
+              variant_group_title: "",
+              variant_unit: "",
+              unit_id: null,
+              ingredients_display: [],
+              hasConfigurable: false,
+              unit_price_override: null,
+              unit_price_before_discount: null,
+            };
+          }
 
           const vGroup = Array.isArray(variants) && variants.length ? variants[0] : null;
           const values = Array.isArray(vGroup?.values) ? vGroup.values : [];
@@ -3623,6 +4890,10 @@ optionGroups.forEach((group) => {
           }
 
           const variantLabel = values[vIdx] != null ? String(values[vIdx]) : "";
+          const variantGroupId = vGroup && (vGroup.id || vGroup.variant_group_id) != null
+            ? Number(vGroup.id || vGroup.variant_group_id)
+            : null;
+          const variantUnitId = vGroup && vGroup.unit_id != null ? Number(vGroup.unit_id) : null;
 
           const ingredientQty = new Map();
           ingredients.forEach((ing) => {
@@ -3638,14 +4909,15 @@ optionGroups.forEach((group) => {
             const ingId = Number(ing.ingredient_id);
             const q = ingredientQty.get(ingId) ?? Number(ing.quantity ?? 0) ?? 0;
             const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "г";
-            return {
-              ingredient_id: ing.ingredient_id,
-              name: ing.ingredient_name || ing.name || "",
-              quantity: q,
-              qty: q,
-              unit: unitLabel,
-            };
-          });
+              return {
+                ingredient_id: ing.ingredient_id,
+                name: ing.ingredient_name || ing.name || "",
+                quantity: q,
+                qty: q,
+                unit_id: ing.unit_id != null ? Number(ing.unit_id) : null,
+                unit: unitLabel,
+              };
+            });
 
           const hasVariantChoices = Array.isArray(values) && values.length > 1;
           const hasAdjustableIngredients = ingredients.some((ing) => {
@@ -3689,8 +4961,11 @@ optionGroups.forEach((group) => {
 
           return {
             variant_label: variantLabel,
+            variant_group_id: variantGroupId,
+            variant_value_index: vIdx,
             variant_group_title: variantGroupTitle,
             variant_unit: variantUnit,
+            unit_id: variantUnitId,
             ingredients_display: ingredientsDisplay,
             hasConfigurable: Boolean(hasVariantChoices || hasAdjustableIngredients),
             unit_price_override: unit_price_override,
@@ -3698,7 +4973,18 @@ optionGroups.forEach((group) => {
           };
         } catch (e) {
           console.warn("getComboProductPreview failed for product", id, e);
-          return { variant_label: "", ingredients_display: [], hasConfigurable: false, unit_price_override: null, unit_price_before_discount: null };
+          return {
+            variant_label: "",
+            variant_group_id: null,
+            variant_value_index: null,
+            variant_group_title: "",
+            variant_unit: "",
+            unit_id: null,
+            ingredients_display: [],
+            hasConfigurable: false,
+            unit_price_override: null,
+            unit_price_before_discount: null,
+          };
         }
       })();
 
@@ -3829,56 +5115,87 @@ optionGroups.forEach((group) => {
       const isEditFromCart = Boolean(cartKey);
       const { footer, updateFooterAction } = renderFooter({
         actionLabel: isEditFromCart ? "Сохранить" : "в корзину",
-        onAdd: ({ qty }) => {
+        onAdd: async ({ qty }) => {
+          const previousCartSnapshot = cloneCartState(state.cart);
+          let cartMutated = false;
           const selections = buildComboSelections();
           if (!selections.length) return;
           const comboId = combo.id;
+          const desiredQty = Math.max(1, Number(qty) || 1);
+          const draftSumOld = calculateComboOldSum();
+          const draftCart = cloneCartState(state.cart);
+          if (isEditFromCart && cartKey) {
+            const draftItem = draftCart.find((x) => x.key === cartKey);
+            if (!draftItem) return;
+            draftItem.qty = desiredQty;
+            draftItem.selections = selections;
+            draftItem.unit_price_before_discount = roundPrice(draftSumOld);
+          } else {
+            draftCart.push({
+              key: `combo-draft-${comboId}`,
+              type: "combo",
+              combo_id: comboId,
+              combo_title: combo.title || "Комбо",
+              qty: desiredQty,
+              selections,
+              unit_price_before_discount: roundPrice(draftSumOld),
+            });
+          }
+          try {
+            const payload = buildStockCheckItemsPayloadFromResolved(cartItemsResolved(draftCart));
+            const draftCheck = await checkStockForItemsPayload(payload, {
+              showToastOnOut: true,
+              toastMessage: "\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
+              refreshOnOut: true,
+            });
+            if (!draftCheck.available) return;
+          } catch (e) {
+            console.warn("Stock check before combo add failed:", e);
+            return;
+          }
           if (isEditFromCart && cartKey) {
             const cartItem = state.cart.find((x) => x.key === cartKey);
             if (cartItem) {
-              const sumOld = blocks.reduce((s, _, blockIndex) => {
-                const p = getSelectedProduct(blockIndex);
-                if (!p) return s;
-                const st = selectionStateByBlock[blockIndex] || {};
-                const oldP = st.unit_price_before_discount != null && Number.isFinite(st.unit_price_before_discount)
-                  ? Number(st.unit_price_before_discount)
-                  : Number(p.price) || 0;
-                return s + oldP;
-              }, 0);
-              cartItem.qty = Math.max(1, Number(qty) || 1);
+              const sumOld = calculateComboOldSum();
+              cartItem.qty = desiredQty;
               cartItem.selections = selections;
               cartItem.unit_price_before_discount = roundPrice(sumOld);
               applyAutoAddRules();
               saveCart();
+              if (typeof scheduleSyncAllProductCardsFromCart === "function") scheduleSyncAllProductCardsFromCart();
+              if (typeof primeVisibleProductAddability === "function") primeVisibleProductAddability();
+              if (typeof primeCartQtyHardLimits === "function") primeCartQtyHardLimits();
               renderCart();
               updateCartBadge();
+              cartMutated = true;
               if (typeof onBack === "function") onBack();
             }
           } else {
             const key = "combo-" + comboId + "-" + Date.now();
-            const sumOld = blocks.reduce((s, _, blockIndex) => {
-              const p = getSelectedProduct(blockIndex);
-              if (!p) return s;
-              const st = selectionStateByBlock[blockIndex] || {};
-              const oldP = st.unit_price_before_discount != null && Number.isFinite(st.unit_price_before_discount)
-                ? Number(st.unit_price_before_discount)
-                : Number(p.price) || 0;
-              return s + oldP;
-            }, 0);
+            const sumOld = calculateComboOldSum();
             state.cart.push({
               key,
               type: "combo",
               combo_id: comboId,
               combo_title: combo.title || "Комбо",
-              qty: Math.max(1, Number(qty) || 1),
+              qty: desiredQty,
               selections,
               unit_price_before_discount: roundPrice(sumOld),
             });
             applyAutoAddRules();
             saveCart();
+            if (typeof scheduleSyncAllProductCardsFromCart === "function") scheduleSyncAllProductCardsFromCart();
+            if (typeof primeVisibleProductAddability === "function") primeVisibleProductAddability();
+            if (typeof primeCartQtyHardLimits === "function") primeCartQtyHardLimits();
             renderCart();
             updateCartBadge();
+            cartMutated = true;
             if (typeof onBack === "function") onBack();
+          }
+          if (cartMutated) {
+            queueCartStockRecheck(previousCartSnapshot, {
+              toastMessage: "Больше нет в наличии",
+            });
           }
         },
       });
@@ -3917,6 +5234,29 @@ optionGroups.forEach((group) => {
       const currentSelected = selectedIndexByBlock[blockIndex];
       (block.products || []).forEach((prod, idx) => {
         const isSelected = idx === currentSelected;
+        const pickerProductId = Number(prod.product_id || 0);
+        const hasPickerProductId = Number.isFinite(pickerProductId) && pickerProductId > 0;
+        const isPickerUnavailableNow = () => {
+          if (!hasPickerProductId) return false;
+          if (idx === selectedIndexByBlock[blockIndex]) return false;
+          if (typeof isProductBlockedByIngredientRequirements === "function") {
+            try {
+              if (isProductBlockedByIngredientRequirements(pickerProductId)) return true;
+            } catch {}
+          }
+          const snapshot = snapshotComboDraftState();
+          selectedIndexByBlock[blockIndex] = idx;
+          const draftState = selectionStateByBlock[blockIndex];
+          if (draftState && Number(draftState.product_id || 0) !== pickerProductId) {
+            Object.keys(draftState).forEach((k) => delete draftState[k]);
+            Object.assign(draftState, makeEmptyComboBlockState());
+          }
+          const allowed = canUseComboDraftQtyLocal(Math.max(1, Number(comboQty) || 1));
+          restoreComboDraftState(snapshot);
+          return !allowed;
+        };
+        const pickerUnavailable = !isSelected && isPickerUnavailableNow();
+        if (pickerUnavailable) return;
         const state = isSelected ? (selectionStateByBlock[blockIndex] || {}) : {};
         const initialVariantLabel = str(state.variant_label || "").trim();
         const initialIngredientsDisplay = Array.isArray(state.ingredients_display) ? state.ingredients_display : [];
@@ -3994,11 +5334,13 @@ optionGroups.forEach((group) => {
         gearBtn.className = "shop-combo-picker-gear";
         gearBtn.title = "Настройка состава и вариантов";
         gearBtn.innerHTML = "<i class=\"fas fa-cog\"></i>";
-        gearBtn.addEventListener("click", (e) => {
+        gearBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
           e.preventDefault();
-          if (idx !== currentSelected) selectedIndexByBlock[blockIndex] = idx;
-          expandedPickerProductIndex = expandedPickerProductIndex === idx ? null : idx;
+          if (idx !== currentSelected && isPickerUnavailableNow()) {
+            showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+            return;
+          }
           const detailScroll = container.querySelector(".shop-combo-detail-scroll");
           const listScroll = container.querySelector(".shop-combo-picker-list");
           let scrollParent = null;
@@ -4020,13 +5362,20 @@ optionGroups.forEach((group) => {
             parentEl: scrollParent,
             parentTop: parentScrollTop,
           };
-          hydrateBlockSelection(blockIndex)
-            .then(() => {
-              renderBlockPicker(blockIndex, savedScroll);
-            })
-            .catch(() => {
-              renderBlockPicker(blockIndex, savedScroll);
+          if (idx !== currentSelected) {
+            const applied = await guardComboDraftMutation(async () => {
+              selectedIndexByBlock[blockIndex] = idx;
+              await hydrateBlockSelection(blockIndex);
+            }, {
+              showToastOnOut: true,
+              onReject: () => {
+                renderBlockPicker(blockIndex, savedScroll);
+              },
             });
+            if (!applied) return;
+          }
+          expandedPickerProductIndex = expandedPickerProductIndex === idx ? null : idx;
+          renderBlockPicker(blockIndex, savedScroll);
         });
         actionsWrap.appendChild(gearBtn);
 
@@ -4035,17 +5384,32 @@ optionGroups.forEach((group) => {
         radio.setAttribute("aria-hidden", "true");
         radio.title = expandedPickerProductIndex === idx ? "Сохранить и применить" : "";
         if (idx === currentSelected) radio.classList.add("is-selected");
-        radio.addEventListener("click", (e) => {
+        radio.addEventListener("click", async (e) => {
           e.preventDefault();
           e.stopPropagation();
+          if (idx !== currentSelected && isPickerUnavailableNow()) {
+            showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+            return;
+          }
           if (expandedPickerProductIndex === idx) {
             expandedPickerProductIndex = null;
             renderMainView();
           } else {
-            selectedIndexByBlock[blockIndex] = idx;
-            hydrateBlockSelection(blockIndex)
-              .then(() => renderMainView())
-              .catch(() => renderMainView());
+            if (idx !== currentSelected) {
+              const applied = await guardComboDraftMutation(async () => {
+                selectedIndexByBlock[blockIndex] = idx;
+                await hydrateBlockSelection(blockIndex);
+              }, {
+                showToastOnOut: true,
+                onReject: () => {
+                  renderBlockPicker(blockIndex);
+                },
+              });
+              if (!applied) return;
+            } else {
+              try { await hydrateBlockSelection(blockIndex); } catch {}
+            }
+            renderMainView();
           }
         });
         actionsWrap.appendChild(radio);
@@ -4054,12 +5418,27 @@ optionGroups.forEach((group) => {
         card.appendChild(mid);
         card.appendChild(bottomRow);
 
-        card.addEventListener("click", (e) => {
+        card.addEventListener("click", async (e) => {
           if (e.target.closest(".shop-combo-picker-gear") || e.target.closest(".shop-combo-radio")) return;
-          selectedIndexByBlock[blockIndex] = idx;
-          hydrateBlockSelection(blockIndex)
-            .then(() => renderMainView())
-            .catch(() => renderMainView());
+          if (idx !== currentSelected && isPickerUnavailableNow()) {
+            showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+            return;
+          }
+          if (idx !== currentSelected) {
+            const applied = await guardComboDraftMutation(async () => {
+              selectedIndexByBlock[blockIndex] = idx;
+              await hydrateBlockSelection(blockIndex);
+            }, {
+              showToastOnOut: true,
+              onReject: () => {
+                renderBlockPicker(blockIndex);
+              },
+            });
+            if (!applied) return;
+          } else {
+            try { await hydrateBlockSelection(blockIndex); } catch {}
+          }
+          renderMainView();
         });
 
         // Универсальная подгрузка превью: и для состава (у невыбранных, если нет state),
@@ -4067,6 +5446,13 @@ optionGroups.forEach((group) => {
         getComboProductPreview(prod.product_id)
           .then((preview) => {
             if (!card.isConnected) return;
+            if (!isSelected) {
+              const candidateAllowed = canUseComboPickerCandidateWithPreview(blockIndex, idx, preview);
+              if (!candidateAllowed) {
+                card.remove();
+                return;
+              }
+            }
 
             if (!isSelected && (!initialVariantLabel && !initialIngredientsDisplay.length)) {
               if (!detailsWrap.isConnected) return;
@@ -4158,15 +5544,19 @@ optionGroups.forEach((group) => {
               state.unit_price_before_discount = roundPrice(unit);
               const discounted = comboDiscountedPrice(unit, discountPercent);
               state.unit_price_override = roundPrice(discounted);
+              state.product_id = productId;
               state.variant_label = vState.label;
+              state.variant_group_id = (vGroup && (vGroup.id || vGroup.variant_group_id)) ? Number(vGroup.id || vGroup.variant_group_id) : null;
               state.variant_group_title = (vGroup && (vGroup.title || vGroup.title_label)) ? String(vGroup.title || vGroup.title_label) : "";
               state.variant_unit = (vGroup && (vGroup.unit_short_title || vGroup.unit_title || vGroup.unit_code)) ? String(vGroup.unit_short_title || vGroup.unit_title || vGroup.unit_code) : "";
+              state.unit_id = vGroup && vGroup.unit_id != null ? Number(vGroup.unit_id) : null;
               state.variant_value_index = vIdx;
               state.ingredients_display = ingredients.map((ing) => ({
                 ingredient_id: ing.ingredient_id,
                 name: ing.ingredient_name || ing.name || "",
                 quantity: ingredientQty.get(Number(ing.ingredient_id)) ?? 0,
                 qty: ingredientQty.get(Number(ing.ingredient_id)) ?? 0,
+                unit_id: ing.unit_id != null ? Number(ing.unit_id) : null,
                 unit: ing.unit_short_title || ing.unit_title || ing.unit_code || "г",
               }));
               updatePriceDisplay();
@@ -4208,22 +5598,57 @@ optionGroups.forEach((group) => {
               const unitShort = str(vGroup.unit_short_title || vGroup.unit_title || vGroup.unit_code || "").trim();
               const vValuesRow = document.createElement("div");
               vValuesRow.className = "shop-combo-picker-variants-row";
+              const canUseComboVariantIndex = (candidateIdx) => {
+                const idxNum = Number(candidateIdx);
+                if (!Number.isFinite(idxNum) || idxNum < 0 || idxNum >= values.length) return false;
+                const snapshot = snapshotComboDraftState();
+                state.variant_value_index = idxNum;
+                state.variant_label = String(values[idxNum] || "");
+                updatePrice();
+                const allowed = canUseComboDraftQtyLocal(Math.max(1, Number(comboQty) || 1));
+                restoreComboDraftState(snapshot);
+                updatePrice();
+                return allowed;
+              };
+              const refreshComboVariantButtons = () => {
+                vValuesRow.querySelectorAll(".shop-combo-picker-variant-btn").forEach((buttonEl, buttonIndex) => {
+                  const isSelectedVariant = Number(state.variant_value_index) === Number(buttonIndex);
+                  const allowed = canUseComboVariantIndex(buttonIndex);
+                  const unavailable = !allowed && !isSelectedVariant;
+                  buttonEl.disabled = unavailable;
+                  buttonEl.classList.toggle("is-unavailable", unavailable);
+                  buttonEl.classList.toggle("is-active", isSelectedVariant);
+                });
+              };
               values.forEach((val, vIdx) => {
                 const btn = document.createElement("button");
                 btn.type = "button";
                 btn.className = "shop-combo-picker-variant-btn" + (vIdx === safeVariantIdx ? " is-active" : "");
                 const valStr = String(val);
                 btn.textContent = unitShort ? valStr + " " + unitShort : valStr;
-                btn.addEventListener("click", (e) => {
+                const unavailable = !canUseComboVariantIndex(vIdx) && vIdx !== Number(state.variant_value_index);
+                btn.disabled = unavailable;
+                btn.classList.toggle("is-unavailable", unavailable);
+                btn.addEventListener("click", async (e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  state.variant_value_index = vIdx;
-                  state.variant_label = String(val);
-                  expandWrap.querySelectorAll(".shop-combo-picker-variant-btn").forEach((b, i) => b.classList.toggle("is-active", i === vIdx));
-                  updatePrice();
+                  if (btn.disabled) return;
+                  const applied = await guardComboDraftMutation(() => {
+                    state.variant_value_index = vIdx;
+                    state.variant_label = String(val);
+                    updatePrice();
+                  }, {
+                    showToastOnOut: true,
+                    onReject: () => {
+                      renderBlockPicker(blockIndex);
+                    },
+                  });
+                  if (!applied) return;
+                  refreshComboVariantButtons();
                 });
                 vValuesRow.appendChild(btn);
               });
+              refreshComboVariantButtons();
               vBlock.appendChild(vValuesRow);
               expandInner.appendChild(vBlock);
             }
@@ -4237,6 +5662,7 @@ optionGroups.forEach((group) => {
               ingBlock.appendChild(ingTitle);
               ingredients.forEach((ing) => {
                 const ingId = Number(ing.ingredient_id);
+                const hasIngredientProductId = Number.isFinite(ingId) && ingId > 0;
                 const row = document.createElement("div");
                 row.className = "shop-combo-picker-ingredient-row";
                 const ingPhoto = Array.isArray(ing.ingredient_photos) && ing.ingredient_photos[0]
@@ -4279,11 +5705,28 @@ optionGroups.forEach((group) => {
                 currentQty = Math.min(Math.max(currentQty, minQty), maxQty);
                 ingredientQty.set(ingId, currentQty);
                 qtyVal.textContent = currentQty + " " + unitShort;
+                const isIngUnavailableForPlus = () => {
+                  if (!hasIngredientProductId) return false;
+                  const prev = Number(ingredientQty.get(ingId) ?? 0);
+                  let next = prev + step;
+                  if (next > maxQty) next = maxQty;
+                  if (!Number.isFinite(next) || next <= prev) return false;
+                  const snapshot = snapshotComboDraftState();
+                  ingredientQty.set(ingId, next);
+                  updatePrice();
+                  const allowed = canUseComboDraftQtyLocal(Math.max(1, Number(comboQty) || 1));
+                  restoreComboDraftState(snapshot);
+                  ingredientQty.set(ingId, prev);
+                  updatePrice();
+                  return !allowed;
+                };
 
                 const btnPlus = document.createElement("button");
                 btnPlus.type = "button";
                 btnPlus.className = "shop-combo-picker-ingredient-btn";
                 btnPlus.textContent = "+";
+                btnMinus.disabled = currentQty <= minQty;
+                btnPlus.disabled = currentQty >= maxQty || isIngUnavailableForPlus();
 
                 btnMinus.addEventListener("click", (e) => {
                   e.stopPropagation();
@@ -4292,19 +5735,36 @@ optionGroups.forEach((group) => {
                   if (next < minQty) next = minQty;
                   if (!Number.isFinite(next)) next = minQty;
                   ingredientQty.set(ingId, next);
-                  qtyVal.textContent = next + " " + unitShort;
                   updatePrice();
+                  qtyVal.textContent = next + " " + unitShort;
+                  btnMinus.disabled = next <= minQty;
+                  btnPlus.disabled = next >= maxQty || isIngUnavailableForPlus();
                 });
 
-                btnPlus.addEventListener("click", (e) => {
+                btnPlus.addEventListener("click", async (e) => {
                   e.stopPropagation();
+                  if (isIngUnavailableForPlus()) {
+                    btnPlus.disabled = true;
+                    showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+                    return;
+                  }
                   const prev = Number(ingredientQty.get(ingId) ?? 0);
                   let next = prev + step;
                   if (next > maxQty) next = maxQty;
                   if (!Number.isFinite(next)) next = maxQty;
-                  ingredientQty.set(ingId, next);
+                  const applied = await guardComboDraftMutation(() => {
+                    ingredientQty.set(ingId, next);
+                    updatePrice();
+                  }, {
+                    showToastOnOut: true,
+                    onReject: () => {
+                      renderBlockPicker(blockIndex);
+                    },
+                  });
+                  if (!applied) return;
                   qtyVal.textContent = next + " " + unitShort;
-                  updatePrice();
+                  btnMinus.disabled = next <= minQty;
+                  btnPlus.disabled = next >= maxQty || isIngUnavailableForPlus();
                 });
 
                 qtyWrap.appendChild(btnMinus);
@@ -4348,33 +5808,78 @@ optionGroups.forEach((group) => {
       wrap.appendChild(listWrap);
 
       const { footer, updateFooterAction } = renderFooter({
-        onAdd: ({ qty }) => {
+        onQtyChanged: () => {
+          const detailEl = container.querySelector(".shop-combo-detail-scroll");
+          const listEl = container.querySelector(".shop-combo-picker-list");
+          let scrollParent = null;
+          let parentScrollTop = 0;
+          let p = container.parentElement;
+          while (p) {
+            const style = window.getComputedStyle(p);
+            const oy = style.overflowY || style.overflow;
+            if ((oy === "auto" || oy === "scroll" || oy === "overlay") && p.scrollHeight > p.clientHeight) {
+              scrollParent = p;
+              parentScrollTop = p.scrollTop;
+              break;
+            }
+            p = p.parentElement;
+          }
+          renderBlockPicker(blockIndex, {
+            detail: detailEl ? detailEl.scrollTop : 0,
+            list: listEl ? listEl.scrollTop : 0,
+            parentEl: scrollParent,
+            parentTop: parentScrollTop,
+          });
+        },
+        onAdd: async ({ qty }) => {
+          const previousCartSnapshot = cloneCartState(state.cart);
           const selections = buildComboSelections();
           if (!selections.length) return;
           const comboId = combo.id;
+          const desiredQty = Math.max(1, Number(qty) || 1);
           const key = "combo-" + comboId + "-" + Date.now();
-          const sumOld = blocks.reduce((s, _, blockIndex) => {
-            const p = getSelectedProduct(blockIndex);
-            if (!p) return s;
-            const st = selectionStateByBlock[blockIndex] || {};
-            const oldP = st.unit_price_before_discount != null && Number.isFinite(st.unit_price_before_discount)
-              ? Number(st.unit_price_before_discount)
-              : Number(p.price) || 0;
-            return s + oldP;
-          }, 0);
+          const sumOld = calculateComboOldSum();
+          const draftCart = cloneCartState(state.cart);
+          draftCart.push({
+            key: `combo-draft-${comboId}`,
+            type: "combo",
+            combo_id: comboId,
+            combo_title: combo.title || "Комбо",
+            qty: desiredQty,
+            selections,
+            unit_price_before_discount: roundPrice(sumOld),
+          });
+          try {
+            const payload = buildStockCheckItemsPayloadFromResolved(cartItemsResolved(draftCart));
+            const draftCheck = await checkStockForItemsPayload(payload, {
+              showToastOnOut: true,
+              toastMessage: "\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
+              refreshOnOut: true,
+            });
+            if (!draftCheck.available) return;
+          } catch (e) {
+            console.warn("Stock check before combo add failed:", e);
+            return;
+          }
           state.cart.push({
             key,
             type: "combo",
             combo_id: comboId,
             combo_title: combo.title || "Комбо",
-            qty: Math.max(1, Number(qty) || 1),
+            qty: desiredQty,
             selections,
             unit_price_before_discount: roundPrice(sumOld),
           });
           applyAutoAddRules();
           saveCart();
+          if (typeof scheduleSyncAllProductCardsFromCart === "function") scheduleSyncAllProductCardsFromCart();
+          if (typeof primeVisibleProductAddability === "function") primeVisibleProductAddability();
+          if (typeof primeCartQtyHardLimits === "function") primeCartQtyHardLimits();
           renderCart();
           updateCartBadge();
+          queueCartStockRecheck(previousCartSnapshot, {
+            toastMessage: "Больше нет в наличии",
+          });
           if (typeof onBack === "function") onBack();
         },
       });
@@ -4425,6 +5930,15 @@ optionGroups.forEach((group) => {
       json = await apiJson("/api/public/combos/" + encodeURIComponent(comboId));
     } catch (e) {
       console.warn("openComboDetails: failed to load combo", comboId, e);
+      if (String(e?.message || "") === "OUT_OF_STOCK") {
+        showToast("Комбо больше недоступно");
+        if (Number.isFinite(Number(state.activeCategoryId))) {
+          try {
+            await loadProductsForCategory(state.activeCategoryId, { lite: false });
+            renderProducts();
+          } catch {}
+        }
+      }
       return;
     }
     const data = json?.data;
@@ -10168,6 +11682,21 @@ function setBottomNavActive(tab) {
         }
       }
 
+      try {
+        const stockCheckItems = buildStockCheckItemsPayloadFromResolved(resolvedItems);
+        const stockCheck = await checkStockForItemsPayload(stockCheckItems, {
+          showToastOnOut: true,
+          toastMessage: "Некоторые товары уже закончились",
+          refreshOnOut: true,
+        });
+        if (!stockCheck.available) {
+          alert("Некоторые товары уже закончились. Корзина обновлена.");
+          return;
+        }
+      } catch (stockErr) {
+        console.warn("Stock check before submit failed:", stockErr);
+      }
+
       saveCheckoutDraft({
         promo_code: payload.promo_code,
         customer_name: payload.customer_name,
@@ -10324,6 +11853,8 @@ function initShopLate() {
         if (applyAutoAddRules()) {
           saveCart();
           if (typeof syncAllProductCardsFromCart === "function") syncAllProductCardsFromCart();
+          if (typeof primeVisibleProductAddability === "function") primeVisibleProductAddability();
+          if (typeof primeCartQtyHardLimits === "function") primeCartQtyHardLimits();
         }
         await warmupCartProducts();
         renderCart();

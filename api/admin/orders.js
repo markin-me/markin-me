@@ -1,9 +1,23 @@
 
 const express = require("express");
 const { sendOrderToPrintBot } = require("../printPush");
+const { applyStockDeductionForOrderItems } = require("../helpers/orderStock");
 
 module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
+
+  function publishStockChanged(tenantId, storeId, payload = {}) {
+    try {
+      if (!ordersEvents || typeof ordersEvents.publish !== "function") return;
+      ordersEvents.publish(tenantId, storeId, "stock.changed", {
+        tenant_id: Number(tenantId),
+        store_id: Number(storeId),
+        ...payload,
+      });
+    } catch (err) {
+      console.error("publishStockChanged error:", err);
+    }
+  }
 
   function parseDateParam(v) {
     if (!v) return null;
@@ -463,6 +477,15 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   // ---------------------------
   // PUT /api/admin/orders/:id/status
   router.put("/:id/status", async (req, res) => {
+    const conn = await db.getConnection();
+    let transactionStarted = false;
+    let connectionReleased = false;
+    const safeRelease = () => {
+      if (!connectionReleased) {
+        conn.release();
+        connectionReleased = true;
+      }
+    };
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
@@ -470,27 +493,156 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const statusId = Number(req.body.status_id);
 
       if (!Number.isFinite(id) || id <= 0) {
+        safeRelease();
         return res.status(400).json({ ok: false, error: "BAD_ID" });
       }
       if (!Number.isFinite(statusId) || statusId <= 0) {
+        safeRelease();
         return res.status(400).json({ ok: false, error: "BAD_STATUS_ID" });
       }
 
-      await db.query(
-        `UPDATE order_orders
-         SET status_id=?
-         WHERE tenant_id=? AND store_id=? AND id=?`,
-        [statusId, tenantId, storeId, id]
+      await conn.beginTransaction();
+      transactionStarted = true;
+
+      const [statusRows] = await conn.query(
+        `SELECT id
+         FROM order_statuses
+         WHERE tenant_id=? AND store_id=? AND id=?
+         LIMIT 1`,
+        [tenantId, storeId, statusId]
       );
+      if (!statusRows.length) {
+        await conn.rollback();
+        transactionStarted = false;
+        safeRelease();
+        return res.status(400).json({ ok: false, error: "BAD_STATUS_ID" });
+      }
+
+      const [orderRows] = await conn.query(
+        `SELECT id, public_id, items, stock_deducted_at, stock_document_id
+         FROM order_orders
+         WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1
+         LIMIT 1
+         FOR UPDATE`,
+        [tenantId, storeId, id]
+      );
+      if (!orderRows.length) {
+        await conn.rollback();
+        transactionStarted = false;
+        safeRelease();
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      }
+
+      const [tenantRows] = await conn.query(
+        `SELECT order_stock_deduct_mode, order_stock_deduct_status_id
+         FROM ten_tenants
+         WHERE id=?
+         LIMIT 1`,
+        [tenantId]
+      );
+      const orderRow = orderRows[0];
+      const deductMode = String(tenantRows[0]?.order_stock_deduct_mode || "on_create").trim();
+      let deductStatusId = Number(tenantRows[0]?.order_stock_deduct_status_id || 0) || null;
+
+      if (deductMode === "on_status" && !deductStatusId) {
+        const [fallbackRows] = await conn.query(
+          `SELECT id
+           FROM order_statuses
+           WHERE tenant_id=? AND store_id=? AND is_active=1
+             AND (code='delivered' OR (is_final=1 AND code<>'canceled'))
+           ORDER BY (code='delivered') DESC, sort ASC, id ASC
+           LIMIT 1`,
+          [tenantId, storeId]
+        );
+        if (fallbackRows.length) {
+          deductStatusId = Number(fallbackRows[0].id);
+        }
+      }
+
+      let stockDeductedAt = orderRow.stock_deducted_at || null;
+      let stockDocumentId = orderRow.stock_document_id != null ? Number(orderRow.stock_document_id) : null;
+      let stockChangedProductIds = [];
+      const shouldDeductNow =
+        deductMode === "on_status" &&
+        !stockDeductedAt &&
+        deductStatusId != null &&
+        Number(statusId) === Number(deductStatusId);
+
+      if (shouldDeductNow) {
+        let orderItems = [];
+        try {
+          const parsed = orderRow.items ? JSON.parse(orderRow.items) : [];
+          if (Array.isArray(parsed)) orderItems = parsed;
+        } catch {
+          orderItems = [];
+        }
+
+        try {
+          const deductionResult = await applyStockDeductionForOrderItems({
+            db: conn,
+            tenantId,
+            storeId,
+            items: orderItems,
+            orderId: Number(orderRow.id),
+            publicId: orderRow.public_id || null,
+            createdBy: req.user?.userId || null,
+          });
+          stockDeductedAt = deductionResult?.stockDeductedAt || helpers.formatUtcDateTime(Date.now());
+          stockDocumentId = deductionResult?.stockDocumentId || null;
+          stockChangedProductIds = Array.from(
+            new Set(
+              (Array.isArray(deductionResult?.deductions) ? deductionResult.deductions : [])
+                .map((d) => Number(d?.productId))
+                .filter((pid) => Number.isFinite(pid) && pid > 0)
+            )
+          );
+        } catch (stockErr) {
+          if (stockErr && stockErr.code === "OUT_OF_STOCK") {
+            await conn.rollback();
+            transactionStarted = false;
+            safeRelease();
+            return res.status(409).json({ ok: false, error: "OUT_OF_STOCK" });
+          }
+          throw stockErr;
+        }
+      }
+
+      await conn.query(
+        `UPDATE order_orders
+         SET status_id=?,
+             stock_deducted_at=COALESCE(?, stock_deducted_at),
+             stock_document_id=COALESCE(?, stock_document_id)
+         WHERE tenant_id=? AND store_id=? AND id=?`,
+        [statusId, stockDeductedAt, stockDocumentId, tenantId, storeId, id]
+      );
+
+      await conn.commit();
+      transactionStarted = false;
+      safeRelease();
 
       const payload = await fetchOrderPayload(tenantId, storeId, id);
       if (payload) {
-        ordersEvents.publish(tenantId, storeId, "order.updated", payload);
+        if (ordersEvents && typeof ordersEvents.publish === "function") {
+          ordersEvents.publish(tenantId, storeId, "order.updated", payload);
+        }
         sendOrderToPrintBot({ db, order: payload, tenantId, storeId }).catch(() => {});
+      }
+      if (stockChangedProductIds.length) {
+        publishStockChanged(tenantId, storeId, {
+          source: "order.status_update",
+          order_id: Number(id),
+          product_ids: stockChangedProductIds,
+        });
       }
 
       res.json({ ok: true });
     } catch (e) {
+      if (transactionStarted) {
+        try {
+          await conn.rollback();
+        } catch {}
+      }
+      safeRelease();
       console.error(e);
       res.status(500).json({ ok: false, error: "DB_ERROR" });
     }

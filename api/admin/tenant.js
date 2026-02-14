@@ -403,6 +403,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const androidIcon = req.body.android_icon_url !== undefined ? helpers.strOrNull(req.body.android_icon_url) : undefined;
       const roundingModeRaw = req.body.price_rounding_mode !== undefined ? helpers.strOrNull(req.body.price_rounding_mode) : undefined;
       const roundingPrecisionRaw = req.body.price_rounding_precision !== undefined ? helpers.numOrNull(req.body.price_rounding_precision) : undefined;
+      const stockDeductModeRaw = req.body.order_stock_deduct_mode !== undefined ? helpers.strOrNull(req.body.order_stock_deduct_mode) : undefined;
+      const stockDeductStatusIdRaw = req.body.order_stock_deduct_status_id !== undefined ? helpers.numOrNull(req.body.order_stock_deduct_status_id) : undefined;
       const siteName = req.body.site_name !== undefined ? helpers.strOrNull(req.body.site_name) : undefined;
       const siteDescription = req.body.site_description !== undefined ? helpers.strOrNull(req.body.site_description) : undefined;
       const subdomain = req.body.subdomain !== undefined ? normalizeSubdomain(req.body.subdomain) : undefined;
@@ -443,6 +445,65 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const nextRoundingMode = sanitizedRoundingMode !== undefined ? sanitizedRoundingMode : current.price_rounding_mode;
       const nextRoundingPrecision =
         sanitizedRoundingPrecision !== undefined ? sanitizedRoundingPrecision : (current.price_rounding_precision ?? 2);
+      const allowedStockDeductModes = new Set(['on_create', 'on_status']);
+      const sanitizedStockDeductMode =
+        stockDeductModeRaw !== undefined
+          ? (allowedStockDeductModes.has(stockDeductModeRaw) ? stockDeductModeRaw : 'on_create')
+          : undefined;
+      const nextStockDeductMode = sanitizedStockDeductMode !== undefined
+        ? sanitizedStockDeductMode
+        : (current.order_stock_deduct_mode || 'on_create');
+      let nextStockDeductStatusId = stockDeductStatusIdRaw !== undefined
+        ? (Number.isFinite(Number(stockDeductStatusIdRaw)) && Number(stockDeductStatusIdRaw) > 0 ? Number(stockDeductStatusIdRaw) : null)
+        : (current.order_stock_deduct_status_id != null ? Number(current.order_stock_deduct_status_id) : null);
+
+      async function resolveFallbackDeductStatusId() {
+        const [byDelivered] = await db.query(
+          `SELECT id
+           FROM order_statuses
+           WHERE tenant_id=? AND store_id=1 AND is_active=1 AND code='delivered'
+           ORDER BY sort ASC, id ASC
+           LIMIT 1`,
+          [tenantId]
+        );
+        if (byDelivered.length) return Number(byDelivered[0].id);
+
+        const [byFinal] = await db.query(
+          `SELECT id
+           FROM order_statuses
+           WHERE tenant_id=? AND store_id=1 AND is_active=1 AND is_final=1 AND code<>'canceled'
+           ORDER BY sort ASC, id ASC
+           LIMIT 1`,
+          [tenantId]
+        );
+        if (byFinal.length) return Number(byFinal[0].id);
+
+        const [firstActive] = await db.query(
+          `SELECT id
+           FROM order_statuses
+           WHERE tenant_id=? AND store_id=1 AND is_active=1
+           ORDER BY sort ASC, id ASC
+           LIMIT 1`,
+          [tenantId]
+        );
+        return firstActive.length ? Number(firstActive[0].id) : null;
+      }
+
+      if (nextStockDeductStatusId != null) {
+        const [statusRows] = await db.query(
+          `SELECT id
+           FROM order_statuses
+           WHERE tenant_id=? AND store_id=1 AND id=?
+           LIMIT 1`,
+          [tenantId, nextStockDeductStatusId]
+        );
+        if (!statusRows.length) {
+          return res.status(400).json({ ok: false, error: 'BAD_STOCK_DEDUCT_STATUS' });
+        }
+      }
+      if (nextStockDeductMode === 'on_status' && !nextStockDeductStatusId) {
+        nextStockDeductStatusId = await resolveFallbackDeductStatusId();
+      }
       const nextSiteName = siteName !== undefined ? siteName : current.site_name;
       const nextSiteDescription = siteDescription !== undefined ? siteDescription : current.site_description;
       let nextSubdomain = subdomain !== undefined ? subdomain : current.subdomain;
@@ -482,8 +543,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, tenantId]
       );
 
       const [rows] = await db.query(

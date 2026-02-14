@@ -2,7 +2,7 @@
   <div class="panel toolbar-island">
     <div class="toolbar">
       <div class="toolbar-title">
-        <i class="fas fa-box"></i>
+        <i class="fas fa-box" id="productsToolbarIcon"></i>
         <span id="productsToolbarText">Товары</span>
       </div>
 
@@ -61,9 +61,20 @@
         <div class="options-list" id="comboBlocksList"></div>
         <div class="empty-hint" id="comboBlocksEmptyHint">Пока нет блоков. Нажмите «+» для создания.</div>
       </div>
-      <div class="content-view hidden" data-view-content="stock-in"><div class="info-card">Приход...</div></div>
-      <div class="content-view hidden" data-view-content="stock-out"><div class="info-card">Списание...</div></div>
-      <div class="content-view hidden" data-view-content="stock-movements"><div class="info-card">Движения...</div></div>
+      <div class="content-view hidden" data-view-content="stock-in">
+        <div class="options-list" id="stockInList"></div>
+        <div class="empty-hint" id="stockInEmpty">Нет документов прихода</div>
+      </div>
+      <div class="content-view hidden" data-view-content="stock-out">
+        <div class="options-list" id="stockOutList"></div>
+        <div class="empty-hint" id="stockOutEmpty">Нет документов списания</div>
+      </div>
+      <div class="content-view hidden" data-view-content="stock-movements">
+        <div class="options-list" id="stockMovementsList"></div>
+        <div class="empty-hint" id="stockMovementsEmpty">Нет движений</div>
+      </div>
+      <div class="content-view hidden" data-view-content="production-plan"><div class="info-card">План производства...</div></div>
+      <div class="content-view hidden" data-view-content="production-history"><div class="info-card">История производства...</div></div>
 
     </div>
   </div>

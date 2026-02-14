@@ -424,6 +424,19 @@
           <div class="settings-list-title">Этапы заказов</div>
           <div class="settings-list-subtitle">Перетащите строку, чтобы изменить порядок.</div>
         </div>
+        <div class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">Списание остатков</label>
+            <select class="control" id="settingsOrderStockDeductMode" data-tenant-input="order_stock_deduct_mode">
+              <option value="on_create">При поступлении заказа</option>
+              <option value="on_status">При переходе на этап</option>
+            </select>
+          </div>
+          <div class="settings-site-field" id="settingsOrderStockDeductStatusField">
+            <label class="field-label">Этап списания</label>
+            <select class="control" id="settingsOrderStockDeductStatus"></select>
+          </div>
+        </div>
         <div class="settings-list" data-settings-list="order-statuses"></div>
       </div>
 

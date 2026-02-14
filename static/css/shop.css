@@ -2635,6 +2635,14 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   border-color: var(--color-primary);
   box-shadow: 0 0 0 1px var(--color-primary);
 }
+.shop-pd-option-card.is-unavailable{
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.shop-pd-option-card.is-unavailable.is-selected{
+  opacity: 1;
+  cursor: default;
+}
 .shop-pd-option-thumb{
   width: 40px;
   height: 40px;
@@ -4614,6 +4622,17 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   background: var(--accent-color, #ff7a00);
   color: #fff;
   border-color: var(--accent-color, #ff7a00);
+}
+.shop-pd-option-variant-btn.is-unavailable {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.shop-pd-option-variant-btn.is-unavailable:hover {
+  border-color: var(--border-color, #ddd);
+}
+.shop-pd-option-variant-btn.is-unavailable.is-selected {
+  opacity: 1;
+  cursor: default;
 }
 
 /* Лейбл выбранного варианта под названием опции */

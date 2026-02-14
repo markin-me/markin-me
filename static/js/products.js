@@ -11,6 +11,7 @@
 
   // center
   const toolbarText = $("#productsToolbarText");
+  const toolbarIcon = $("#productsToolbarIcon");
   const addMainBtn = $("#addMainBtn");
   const productsList = $("#productsList");
   const productsEmptyHint = $("#productsEmptyHint");
@@ -36,6 +37,15 @@
   const comboBlockMaxSelectInput = $("#comboBlockMaxSelect");
   const comboBlocksList = $("#comboBlocksList");
   const comboBlocksEmptyHint = $("#comboBlocksEmptyHint");
+
+  // stock
+  const stockInList = $("#stockInList");
+  const stockInEmpty = $("#stockInEmpty");
+  const stockOutList = $("#stockOutList");
+  const stockOutEmpty = $("#stockOutEmpty");
+  const stockMovementsList = $("#stockMovementsList");
+  const stockMovementsEmpty = $("#stockMovementsEmpty");
+  const stockDocEmpty = $("#stockDocEmpty");
   const comboBlockProductsList = $("#comboBlockProductsList");
   const comboBlockProductsAddBtn = $("#comboBlockProductsAddBtn");
   const comboBlockLevelGroup = $("#comboBlockLevelGroup");
@@ -508,6 +518,8 @@
     comboBlockProducts: [], // [{ product_id, name?, sort_order, is_default }]
     comboBlocks: [], // list of blocks for center
     selectedComboBlockId: null,
+    stockDocuments: [],
+    stockDocDetail: null, // текущий открытый документ с items
     comboSetPanel: {
       mode: "create", // create | view | edit
       comboId: null,
@@ -1050,8 +1062,9 @@
     if (target) target.classList.remove("hidden");
   }
 
-  function setToolbarTitle(text) {
+  function setToolbarTitle(text, iconClass) {
     if (toolbarText) toolbarText.textContent = text || "";
+    if (toolbarIcon && iconClass) toolbarIcon.className = "fas " + iconClass;
   }
 
   function syncActiveMenuItems() {
@@ -1108,7 +1121,7 @@
     state.mode = "products";
     if (categoryId) state.currentCategoryId = categoryId;
     const cat = getCurrentCategory();
-    setToolbarTitle(cat ? cat.title : "Товары");
+    setToolbarTitle(cat ? cat.title : "Товары", "fa-box");
     showView("products");
     showDetailsEmpty();
     syncActiveMenuItems();
@@ -1116,7 +1129,7 @@
 
   function enterCategoriesMode() {
     state.mode = "categories";
-    setToolbarTitle("Категории");
+    setToolbarTitle("Категории", "fa-th-large");
     showView("categories");
     clearProductSelection();
     showDetailsEmpty();
@@ -1126,7 +1139,7 @@
   function enterOptionsMode() {
     state.mode = "options";
     state.optionPanel.returnTo = null;
-    setToolbarTitle("Опции товара");
+    setToolbarTitle("Опции товара", "fa-sliders-h");
     showView("options");
     clearProductSelection();
     showDetailsEmpty();
@@ -1136,7 +1149,7 @@
   function enterVariantsMode() {
     state.mode = "variants";
     state.variantPanel.returnTo = null;
-    setToolbarTitle("Варианты товара");
+    setToolbarTitle("Варианты товара", "fa-cubes");
     showView("variants");
     clearProductSelection();
     showDetailsEmpty();
@@ -1145,7 +1158,7 @@
 
   async function enterAutoAddMode() {
     state.mode = "auto-add";
-    setToolbarTitle("Автодобавления");
+    setToolbarTitle("Автодобавления", "fa-cart-plus");
     showView("auto-add");
     clearProductSelection();
     showDetailsEmpty();
@@ -1157,7 +1170,7 @@
   async function enterUnitsMode() {
     state.mode = "units";
     state.unitPanel.returnTo = null;
-    setToolbarTitle("Единицы измерения");
+    setToolbarTitle("Единицы измерения", "fa-ruler");
     showView("units");
     clearProductSelection();
     showDetailsEmpty();
@@ -1169,7 +1182,7 @@
 
   async function enterComboBlocksMode() {
     state.mode = "combo-blocks";
-    setToolbarTitle("Блоки комбо");
+    setToolbarTitle("Блоки комбо", "fa-layer-group");
     showView("combo-blocks");
     clearProductSelection();
     showDetailsEmpty();
@@ -8004,6 +8017,8 @@ const isViewMode = state.comboPanel.mode === "view";
     comboInfo && comboInfo.classList.add("hidden");
     const comboSetInfo = document.getElementById("comboSetInfo");
     if (comboSetInfo) comboSetInfo.classList.add("hidden");
+    const stockDocDetail = document.getElementById("stockDocDetail");
+    if (stockDocDetail) stockDocDetail.classList.add("hidden");
   }
 
   function showDetailsEmpty() {
@@ -8012,15 +8027,17 @@ const isViewMode = state.comboPanel.mode === "view";
     const showAutoAdd = state.mode === "auto-add";
     const showUnit = state.mode === "units";
     const showCombo = state.mode === "combo-blocks";
+    const showStock = state.mode === "stock-in" || state.mode === "stock-out" || state.mode === "stock-movements";
     hideAllDetailPanels();
     if (productInfoHeader) productInfoHeader.classList.add("hidden");
     setHeaderMode("product");
-    if (productEmpty) productEmpty.classList.toggle("hidden", showCategory || showOption || showAutoAdd || showUnit || showCombo);
+    if (productEmpty) productEmpty.classList.toggle("hidden", showCategory || showOption || showAutoAdd || showUnit || showCombo || showStock);
     if (categoryEmpty) categoryEmpty.classList.toggle("hidden", !showCategory);
     if (optionEmpty) optionEmpty.classList.toggle("hidden", !showOption);
     if (autoAddEmpty) autoAddEmpty.classList.toggle("hidden", !showAutoAdd);
     if (comboEmpty) comboEmpty.classList.toggle("hidden", !showCombo);
-    if (editProductBtn && (showOption || showAutoAdd || showUnit || showCombo)) editProductBtn.classList.add("hidden");
+    if (stockDocEmpty) stockDocEmpty.classList.toggle("hidden", !showStock);
+    if (editProductBtn && (showOption || showAutoAdd || showUnit || showCombo || showStock)) editProductBtn.classList.add("hidden");
     hideProductFooter();
     closeSheet();
   }
@@ -9248,6 +9265,31 @@ const isViewMode = state.comboPanel.mode === "view";
     resetTwoStepButton($("#productFooterDeleteBtn"));
     resetTwoStepButton($("#productFooterDeleteEditBtn"));
     resetTwoStepButton($("#productFooterCancelBtn"));
+    // Сбрасываем текст и dataset кнопок после stock-doc режима
+    const saveBtn = $("#productFooterSaveBtn");
+    if (saveBtn) {
+      saveBtn.textContent = "Сохранить";
+      delete saveBtn.dataset.pickerType;
+    }
+    const cancelBtn = $("#productFooterCancelBtn");
+    if (cancelBtn) {
+      cancelBtn.classList.remove("hidden");
+      cancelBtn.classList.remove("is-fullwidth");
+      delete cancelBtn.dataset.pickerType;
+    }
+    const editBtn = $("#productFooterEditBtn");
+    if (editBtn) {
+      editBtn.textContent = "Редактировать";
+      editBtn.disabled = false;
+    }
+    const deleteBtn = $("#productFooterDeleteBtn");
+    if (deleteBtn) deleteBtn.classList.remove("hidden");
+    const deleteEditBtn = $("#productFooterDeleteEditBtn");
+    if (deleteEditBtn) deleteEditBtn.classList.remove("hidden");
+    const moreBtn = $("#productFooterMoreBtn");
+    if (moreBtn) moreBtn.classList.remove("hidden");
+    const moreEditBtn = $("#productFooterMoreEditBtn");
+    if (moreEditBtn) moreEditBtn.classList.remove("hidden");
   }
 
   // ---------------- Tabs ----------------
@@ -9420,8 +9462,10 @@ const isViewMode = state.comboPanel.mode === "view";
         }
       } else if (type === "combo-set") {
         shouldCleanup = true;
+      } else if (type === "stock-doc") {
+        shouldCleanup = true;
       }
-      
+
       if (shouldCleanup) {
         // Call onClose if exists (for products and categories)
         if (currentNavigationState?.onClose) {
@@ -9476,7 +9520,13 @@ const isViewMode = state.comboPanel.mode === "view";
           state.comboBlockProducts = [];
           state.comboPanel.tabKey = null;
         }
-        
+
+        // For stock-doc, clear detail state and close picker overlay
+        if (type === "stock-doc") {
+          state.stockDocDetail = null;
+          closeStockPicker();
+        }
+
         // Remove from editing Maps
         if (type === "product" && Number.isFinite(id)) {
           editingProducts.delete(id);
@@ -13948,6 +13998,18 @@ const isViewMode = state.comboPanel.mode === "view";
           enterComboBlocksMode();
           return;
         }
+        if (view === "stock-in") {
+          enterStockInMode();
+          return;
+        }
+        if (view === "stock-out") {
+          enterStockOutMode();
+          return;
+        }
+        if (view === "stock-movements") {
+          enterStockMovementsMode();
+          return;
+        }
         if (view === "products") {
           enterProductsMode();
           if (!restoreSuspendedProductNavigation()) {
@@ -13955,8 +14017,18 @@ const isViewMode = state.comboPanel.mode === "view";
           }
           return;
         }
+        const viewMeta = {
+          "allergens":          { title: "Аллергены",  icon: "fa-exclamation-triangle" },
+          "diets":              { title: "Типы диет",  icon: "fa-heartbeat" },
+          "stock-in":           { title: "Приход",     icon: "fa-plus-square" },
+          "stock-out":          { title: "Списания",   icon: "fa-minus-square" },
+          "stock-movements":    { title: "История",    icon: "fa-history" },
+          "production-plan":    { title: "План",       icon: "fa-clipboard-list" },
+          "production-history": { title: "История",    icon: "fa-history" },
+        };
         state.mode = view;
-        setToolbarTitle(view === "products" ? (getCurrentCategory()?.title || "Товары") : view);
+        const meta = viewMeta[view];
+        setToolbarTitle(meta?.title || view, meta?.icon);
         showView(view);
         clearProductSelection();
         syncActiveMenuItems();
@@ -14256,6 +14328,30 @@ const isViewMode = state.comboPanel.mode === "view";
     // Edit mode buttons
     if (footerDeleteEditBtn) {
       attachTwoStepButton(footerDeleteEditBtn, () => {
+        if ((state.mode === "stock-in" || state.mode === "stock-out") && state.stockDocDetail) {
+          const docId = state.stockDocDetail.id;
+          (async () => {
+            try {
+              await apiDeleteStockDocument(docId);
+              state.stockDocDetail = null;
+              const tabKey = buildTabKey("stock-doc", docId);
+              if (tabsState.tabs.some((t) => t.key === tabKey)) {
+                closeTab(tabKey);
+              }
+              showDetailsEmpty();
+              if (state.mode === "stock-in") {
+                await loadStockDocuments("in");
+                renderStockDocList(stockInList, stockInEmpty, "in");
+              } else if (state.mode === "stock-out") {
+                await loadStockDocuments("out");
+                renderStockDocList(stockOutList, stockOutEmpty, "out");
+              }
+            } catch (err) {
+              alert("Ошибка: " + (err.message || "Не удалось удалить"));
+            }
+          })();
+          return;
+        }
         if (state.mode === "auto-add" && state.selectedAutoAddGroupId) {
           const groupId = state.selectedAutoAddGroupId;
           (async () => {
@@ -14310,6 +14406,10 @@ const isViewMode = state.comboPanel.mode === "view";
     if (footerCancelBtn) {
       attachTwoStepButton(footerCancelBtn, () => {
         // Check if picker is open - priority over product edit
+        if (footerCancelBtn.dataset.pickerType === "stock-picker") {
+          closeStockPicker();
+          return;
+        }
         if (footerCancelBtn.dataset.pickerType === "option") {
           const closeFn = window._closeOptionPickerFn;
           if (closeFn) closeFn();
@@ -14470,6 +14570,28 @@ const isViewMode = state.comboPanel.mode === "view";
           if (saveFn) {
             await saveFn();
           }
+          return;
+        }
+        if (footerSaveBtn.dataset.pickerType === "stock-doc-post") {
+          if (!state.stockDocDetail) return;
+          if (!confirm("Провести документ? Остатки будут обновлены.")) return;
+          try {
+            await apiPostStockDocument(state.stockDocDetail.id);
+            await openStockDocDetail(state.stockDocDetail.id);
+            if (state.mode === "stock-in") {
+              await loadStockDocuments("in");
+              renderStockDocList(stockInList, stockInEmpty, "in");
+            } else if (state.mode === "stock-out") {
+              await loadStockDocuments("out");
+              renderStockDocList(stockOutList, stockOutEmpty, "out");
+            }
+          } catch (err) {
+            alert("Ошибка: " + (err.message || "Не удалось провести"));
+          }
+          return;
+        }
+        if (footerSaveBtn.dataset.pickerType === "stock-picker") {
+          await saveStockPickerSelection();
           return;
         }
         // Combo block edit/create save
@@ -15130,6 +15252,14 @@ const isViewMode = state.comboPanel.mode === "view";
     if (addMainBtn) {
       const originalAddHandler = addMainBtn.onclick;
       addMainBtn.addEventListener("click", () => {
+        if (state.mode === "stock-in") {
+          createNewStockDocument("in");
+          return;
+        }
+        if (state.mode === "stock-out") {
+          createNewStockDocument("out");
+          return;
+        }
         if (state.mode === "units") {
           state.selectedUnitId = null;
           state.unitDetails = null;
@@ -15187,6 +15317,759 @@ const isViewMode = state.comboPanel.mode === "view";
 
   // ---------------- Init ----------------
 
+  // =============================================
+  // STOCK API
+  // =============================================
+  async function apiGetStockDocuments(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.type) qs.set("type", params.type);
+    if (params.status) qs.set("status", params.status);
+    const q = qs.toString();
+    return api(`/api/admin/stock/documents${q ? "?" + q : ""}`);
+  }
+
+  async function apiGetStockDocument(id) {
+    return api(`/api/admin/stock/documents/${id}`);
+  }
+
+  async function apiCreateStockDocument(payload) {
+    return api("/api/admin/stock/documents", { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  async function apiUpdateStockDocument(id, payload) {
+    return api(`/api/admin/stock/documents/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+  }
+
+  async function apiDeleteStockDocument(id) {
+    return api(`/api/admin/stock/documents/${id}`, { method: "DELETE" });
+  }
+
+  async function apiAddStockItem(docId, payload) {
+    return api(`/api/admin/stock/documents/${docId}/items`, { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  async function apiUpdateStockItem(docId, itemId, payload) {
+    return api(`/api/admin/stock/documents/${docId}/items/${itemId}`, { method: "PUT", body: JSON.stringify(payload) });
+  }
+
+  async function apiDeleteStockItem(docId, itemId) {
+    return api(`/api/admin/stock/documents/${docId}/items/${itemId}`, { method: "DELETE" });
+  }
+
+  async function apiPostStockDocument(id) {
+    return api(`/api/admin/stock/documents/${id}/post`, { method: "POST" });
+  }
+
+  // =============================================
+  // STOCK MODES
+  // =============================================
+  async function enterStockInMode() {
+    state.mode = "stock-in";
+    setToolbarTitle("Приход", "fa-plus-square");
+    showView("stock-in");
+    clearProductSelection();
+    showDetailsEmpty();
+    syncActiveMenuItems();
+    await loadStockDocuments("in");
+    renderStockDocList(stockInList, stockInEmpty, "in");
+  }
+
+  async function enterStockOutMode() {
+    state.mode = "stock-out";
+    setToolbarTitle("Списания", "fa-minus-square");
+    showView("stock-out");
+    clearProductSelection();
+    showDetailsEmpty();
+    syncActiveMenuItems();
+    await loadStockDocuments("out");
+    renderStockDocList(stockOutList, stockOutEmpty, "out");
+  }
+
+  async function enterStockMovementsMode() {
+    state.mode = "stock-movements";
+    setToolbarTitle("История", "fa-history");
+    showView("stock-movements");
+    clearProductSelection();
+    showDetailsEmpty();
+    syncActiveMenuItems();
+    await loadStockDocuments(); // все типы
+    renderStockDocList(stockMovementsList, stockMovementsEmpty);
+  }
+
+  async function loadStockDocuments(type) {
+    try {
+      const params = {};
+      if (type) params.type = type;
+      const res = await apiGetStockDocuments(params);
+      state.stockDocuments = Array.isArray(res.data) ? res.data : [];
+    } catch (e) {
+      console.error("loadStockDocuments error:", e);
+      state.stockDocuments = [];
+    }
+  }
+
+  // =============================================
+  // STOCK RENDER
+  // =============================================
+  function formatStockDate(dateStr) {
+    if (!dateStr) return "—";
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return "—";
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yy = String(d.getFullYear()).slice(2);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mi = String(d.getMinutes()).padStart(2, "0");
+    return `${dd}.${mm}.${yy} ${hh}:${mi}`;
+  }
+
+  function getStockDocTypeMeta(type) {
+    if (type === "in") {
+      return { icon: "fa-plus-square", label: "Приход" };
+    }
+    if (type === "order") {
+      return { icon: "fa-receipt", label: "Заказ" };
+    }
+    return { icon: "fa-minus-square", label: "Списание" };
+  }
+
+  function formatStockMoney(value) {
+    return `${(Number(value) || 0).toFixed(0)} ₽`;
+  }
+
+  function renderStockDocList(listEl, emptyEl, filterType) {
+    if (!listEl || !emptyEl) return;
+
+    const docs = filterType
+      ? state.stockDocuments.filter((d) => d.type === filterType)
+      : state.stockDocuments;
+
+    if (!docs.length) {
+      listEl.innerHTML = "";
+      emptyEl.classList.remove("hidden");
+      return;
+    }
+
+    emptyEl.classList.add("hidden");
+
+    listEl.innerHTML = docs
+      .map((doc) => {
+        const typeMeta = getStockDocTypeMeta(doc.type);
+        const typeIcon = typeMeta.icon;
+        const typeLabel = typeMeta.label;
+        const date = formatStockDate(doc.status === "posted" ? doc.posted_at : doc.created_at);
+        const itemsCount = doc.items_count || 0;
+        const totalSum = doc.type === "order"
+          ? Number(doc.order_total_price || doc.total_sale_sum || 0)
+          : Number(doc.total_cost_sum || doc.total_sale_sum || 0);
+        const docNumber = doc.type === "order"
+          ? (doc.order_id ? `#${doc.order_id}` : `#${doc.number || doc.id}`)
+          : `№${doc.number || doc.id}`;
+
+        return `
+          <div class="options-row stock-doc-row" data-stock-doc-id="${doc.id}">
+            <div>
+              <div class="options-row-title"><i class="fas ${typeIcon}"></i> ${typeLabel} ${docNumber}</div>
+              <div class="options-row-meta">${escapeHtml(doc.comment || "")}</div>
+            </div>
+            <div class="options-row-meta">${itemsCount} поз.</div>
+            <div class="options-row-meta">${formatStockMoney(totalSum)}</div>
+            <div class="options-row-meta">${date}</div>
+          </div>
+        `;
+      })
+      .join("");
+
+    // Клик по документу — открыть детали
+    listEl.querySelectorAll("[data-stock-doc-id]").forEach((row) => {
+      row.addEventListener("click", async () => {
+        const id = Number(row.dataset.stockDocId);
+        if (!Number.isFinite(id)) return;
+        await openStockDocDetail(id);
+      });
+    });
+  }
+
+  // =============================================
+  // STOCK DOCUMENT DETAIL (right panel) — tabs + footer
+  // =============================================
+  let stockPickerSelection = new Set();
+  let stockPickerDocId = null;
+
+  async function openStockDocDetail(id) {
+    try {
+      const res = await apiGetStockDocument(id);
+      state.stockDocDetail = res.data;
+      const doc = res.data;
+      const typeLabel = getStockDocTypeMeta(doc.type).label;
+      const docNumber = doc.type === "order"
+        ? `#${doc.order?.id || doc.order_id || doc.number || doc.id}`
+        : `№${doc.number || doc.id}`;
+      const tabTitle = `${typeLabel} ${docNumber}`;
+
+      ensureTab({
+        type: "stock-doc",
+        id: doc.id,
+        title: tabTitle,
+        onActivate: async () => {
+          const freshRes = await apiGetStockDocument(doc.id);
+          state.stockDocDetail = freshRes.data;
+          renderStockDocDetail();
+          showStockDocFooter();
+        },
+        activate: true,
+      });
+
+      renderStockDocDetail();
+      showStockDocFooter();
+    } catch (e) {
+      console.error("openStockDocDetail error:", e);
+    }
+  }
+
+  function showStockDocFooter() {
+    const doc = state.stockDocDetail;
+    if (!doc) return;
+
+    const footer = $("#productInfoFooter");
+    const viewMode = $("#productFooterView");
+    const editMode = $("#productFooterEditMode");
+    if (!footer || !viewMode || !editMode) return;
+
+    resetFooterConfirmButtons();
+
+    if (doc.status === "draft") {
+      // Черновик: показываем edit mode с кнопкой "Провести"
+      footer.classList.remove("hidden");
+      viewMode.classList.add("hidden");
+      editMode.classList.remove("hidden");
+
+      const saveBtn = $("#productFooterSaveBtn");
+      if (saveBtn) {
+        saveBtn.textContent = "Провести";
+        saveBtn.dataset.pickerType = "stock-doc-post";
+      }
+      const cancelBtn = $("#productFooterCancelBtn");
+      if (cancelBtn) cancelBtn.classList.add("hidden");
+      const deleteBtn = $("#productFooterDeleteEditBtn");
+      if (deleteBtn) deleteBtn.classList.remove("hidden");
+      const moreBtn = $("#productFooterMoreEditBtn");
+      if (moreBtn) moreBtn.classList.add("hidden");
+    } else {
+      // Проведён: показываем view mode, но readonly
+      footer.classList.remove("hidden");
+      viewMode.classList.remove("hidden");
+      editMode.classList.add("hidden");
+
+      const editBtn = $("#productFooterEditBtn");
+      if (editBtn) {
+        editBtn.textContent = "Проведён";
+        editBtn.disabled = true;
+      }
+      const deleteViewBtn = $("#productFooterDeleteBtn");
+      if (deleteViewBtn) deleteViewBtn.classList.add("hidden");
+      const moreViewBtn = $("#productFooterMoreBtn");
+      if (moreViewBtn) moreViewBtn.classList.add("hidden");
+    }
+
+    updateActiveTabFooterState();
+  }
+
+  function stockGetItemPhoto(item) {
+    try {
+      const photos = JSON.parse(item?.photos_json || "[]");
+      return photos[0]?.url || photos[0] || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function stockGetOrderItemPhoto(item) {
+    const photos = Array.isArray(item?.photos) ? item.photos : [];
+    return photos[0] || "";
+  }
+
+  function renderOrderReceiptItems(orderItems) {
+    const safeItems = Array.isArray(orderItems) ? orderItems : [];
+    if (!safeItems.length) return '<div class="empty-hint">Нет позиций заказа</div>';
+
+    return safeItems.map((item) => {
+      const isCombo = String(item?.type || "") === "combo";
+      const title = escapeHtml(item?.name || item?.combo_title || "Позиция");
+      const qty = Number(item?.qty || 0);
+      const lineTotal = Number(item?.line_total || 0);
+      const unitPrice = qty > 0 ? lineTotal / qty : Number(item?.price || 0);
+      const photo = stockGetOrderItemPhoto(item);
+      const imgTag = photo
+        ? `<img src="${escapeHtml(photo)}" class="stock-item-photo" alt="" />`
+        : `<div class="stock-item-photo-empty"><i class="fas fa-box"></i></div>`;
+
+      const details = [];
+      if (isCombo) {
+        const selections = Array.isArray(item?.selections) ? item.selections : [];
+        selections.forEach((sel) => {
+          const selName = escapeHtml(sel?.product_name || "Выбор");
+          const variant = String(sel?.variant_label || "").trim();
+          const variantTitle = variant ? ` (${escapeHtml(variant)})` : "";
+          details.push(`<div class="stock-item-meta">• ${selName}${variantTitle}</div>`);
+          const ingredients = Array.isArray(sel?.ingredients_display) ? sel.ingredients_display : [];
+          ingredients.forEach((ing) => {
+            const ingName = escapeHtml(ing?.name || "Ингредиент");
+            const ingQty = Number(ing?.quantity ?? ing?.qty ?? 0);
+            const ingUnit = escapeHtml(String(ing?.unit || "").trim());
+            details.push(`<div class="stock-item-meta" style="padding-left:16px">- ${ingName}: ${ingQty}${ingUnit ? " " + ingUnit : ""}</div>`);
+          });
+        });
+      } else {
+        const variants = Array.isArray(item?.variants) ? item.variants : [];
+        if (variants.length) {
+          const v = variants[0];
+          const vLabel = escapeHtml(String(v?.label || v?.value || "").trim());
+          if (vLabel) details.push(`<div class="stock-item-meta">Вариант: ${vLabel}</div>`);
+        }
+        const options = Array.isArray(item?.options) ? item.options : [];
+        options.forEach((opt) => {
+          const optName = escapeHtml(opt?.title || "Опция");
+          const optQty = Number(opt?.qty || 1);
+          details.push(`<div class="stock-item-meta">+ ${optName} × ${optQty}</div>`);
+        });
+        const ingredients = Array.isArray(item?.ingredients) ? item.ingredients : [];
+        ingredients.forEach((ing) => {
+          const ingName = escapeHtml(ing?.name || "Ингредиент");
+          const ingQty = Number(ing?.quantity ?? ing?.qty ?? 0);
+          const ingUnit = escapeHtml(String(ing?.unit_label || "").trim());
+          details.push(`<div class="stock-item-meta">• ${ingName}: ${ingQty}${ingUnit ? " " + ingUnit : ""}</div>`);
+        });
+      }
+
+      return `
+        <div class="stock-item-row">
+          ${imgTag}
+          <div class="stock-item-info">
+            <div class="stock-item-name">${title}</div>
+            <div class="stock-item-meta">${qty} × ${unitPrice.toFixed(2)} ₽ = ${lineTotal.toFixed(0)} ₽</div>
+            ${details.join("")}
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderStockDocDetail() {
+    const doc = state.stockDocDetail;
+    if (!doc) return;
+
+    const body = $("#productInfoBody");
+    if (!body) return;
+
+    hideAllDetailPanels();
+    if (stockDocEmpty) stockDocEmpty.classList.add("hidden");
+
+    let detailEl = $("#stockDocDetail");
+    if (!detailEl) {
+      detailEl = document.createElement("div");
+      detailEl.id = "stockDocDetail";
+      body.appendChild(detailEl);
+    }
+    detailEl.classList.remove("hidden");
+
+    const isDraft = doc.status === "draft";
+    const typeMeta = getStockDocTypeMeta(doc.type);
+    const typeLabel = typeMeta.label;
+    const items = Array.isArray(doc.items) ? doc.items : [];
+    const totalCostSum = items.reduce((s, i) => s + Number(i.qty || 0) * Number(i.cost_price || 0), 0);
+    const totalSaleSum = items.reduce((s, i) => s + Number(i.qty || 0) * Number(i.price || 0), 0);
+    const orderData = doc.type === "order" ? (doc.order || null) : null;
+    const orderItems = Array.isArray(orderData?.items) ? orderData.items : [];
+    const orderTotal = Number(orderData?.total_price || doc.order_total_price || totalSaleSum || 0);
+
+    const unitsOptions = (state.units || []).map((u) =>
+      `<option value="${u.id}">${escapeHtml(u.short_title || u.title)}</option>`
+    ).join("");
+
+    let itemsHtml = "";
+    let itemsTitle = "Товары";
+    let addItemButton = isDraft ? `<button class="btn btn-icon btn-sm" id="stockAddItemBtn" title="Добавить товар"><i class="fas fa-plus"></i></button>` : "";
+
+    if (doc.type === "order" && !isDraft) {
+      itemsTitle = "Позиции заказа";
+      addItemButton = "";
+      itemsHtml = renderOrderReceiptItems(orderItems);
+    } else if (items.length) {
+      itemsHtml = items.map((item) => {
+        const photo = stockGetItemPhoto(item);
+        const imgTag = photo
+          ? `<img src="${escapeHtml(photo)}" class="stock-item-photo" alt="" />`
+          : `<div class="stock-item-photo-empty"><i class="fas fa-box"></i></div>`;
+
+        if (isDraft) {
+          return `
+            <div class="stock-item-row stock-item-editable" data-stock-item-id="${item.id}">
+              <div class="stock-item-header">
+                ${imgTag}
+                <div class="stock-item-name">${escapeHtml(item.product_name || "Товар #" + item.product_id)}</div>
+                <button class="btn btn-icon btn-sm stock-item-del" data-del-item="${item.id}" title="Удалить"><i class="fas fa-times"></i></button>
+              </div>
+              <div class="stock-item-fields">
+                <div class="stock-item-field">
+                  <label class="field-label">Кол-во</label>
+                  <input class="control control-sm" type="number" min="0" step="any" data-field="qty" data-item-id="${item.id}" value="${item.qty || ""}" placeholder="0" />
+                </div>
+                <div class="stock-item-field">
+                  <label class="field-label">Ед. изм.</label>
+                  <select class="control control-sm" data-field="unit_id" data-item-id="${item.id}">
+                    ${unitsOptions}
+                  </select>
+                </div>
+                <div class="stock-item-field">
+                  <label class="field-label">Себест.</label>
+                  <input class="control control-sm" type="number" min="0" step="any" data-field="cost_price" data-item-id="${item.id}" value="${item.cost_price || ""}" placeholder="0" />
+                </div>
+                <div class="stock-item-field">
+                  <label class="field-label">Цена</label>
+                  <input class="control control-sm" type="number" min="0" step="any" data-field="price" data-item-id="${item.id}" value="${item.price || ""}" placeholder="0" />
+                </div>
+              </div>
+            </div>
+          `;
+        }
+
+        const sum = Number(item.qty || 0) * Number(item.cost_price || 0);
+        return `
+          <div class="stock-item-row" data-stock-item-id="${item.id}">
+            ${imgTag}
+            <div class="stock-item-info">
+              <div class="stock-item-name">${escapeHtml(item.product_name || "Товар #" + item.product_id)}</div>
+              <div class="stock-item-meta">${Number(item.qty)} ${escapeHtml(item.unit_short || "шт")} × ${Number(item.cost_price || 0)} ₽ = ${sum.toFixed(0)} ₽</div>
+            </div>
+          </div>
+        `;
+      }).join("");
+    } else {
+      itemsHtml = '<div class="empty-hint">Нет позиций</div>';
+    }
+
+    const headerNumber = doc.type === "order"
+      ? `#${orderData?.id || doc.order_id || doc.number || doc.id}`
+      : `№${doc.number || doc.id}`;
+    const positionsCount = (doc.type === "order" && !isDraft) ? orderItems.length : items.length;
+
+    detailEl.innerHTML = `
+      <div class="info-card">
+        <div class="kv-row"><span class="kv-label">${typeLabel} ${headerNumber}</span></div>
+        <div class="kv-row"><span class="kv-label">Дата</span><span class="kv-value">${formatStockDate(doc.posted_at || doc.created_at)}</span></div>
+        <div class="kv-row"><span class="kv-label">Автор</span><span class="kv-value">${escapeHtml(doc.created_by_name || "—")}</span></div>
+        ${doc.comment ? `<div class="kv-row"><span class="kv-label">Комментарий</span><span class="kv-value">${escapeHtml(doc.comment)}</span></div>` : ""}
+        ${doc.type === "order" && orderData?.public_id ? `<div class="kv-row"><span class="kv-label">Публичный №</span><span class="kv-value">${escapeHtml(orderData.public_id)}</span></div>` : ""}
+        <div class="kv-row"><span class="kv-label">Позиций</span><span class="kv-value">${positionsCount}</span></div>
+        ${doc.type === "order"
+          ? `<div class="kv-row"><span class="kv-label">Сумма заказа</span><span class="kv-value"><b>${formatStockMoney(orderTotal)}</b></span></div>`
+          : `<div class="kv-row"><span class="kv-label">Себестоимость</span><span class="kv-value"><b>${formatStockMoney(totalCostSum)}</b></span></div>`}
+        ${doc.type === "order"
+          ? `<div class="kv-row"><span class="kv-label">Себестоимость списания</span><span class="kv-value"><b>${formatStockMoney(totalCostSum)}</b></span></div>`
+          : ""}
+      </div>
+
+      <div class="info-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div class="kv-label">${itemsTitle}</div>
+          ${addItemButton}
+        </div>
+        <div class="stock-items-list">${itemsHtml}</div>
+      </div>
+    `;
+
+    if (!isDraft) return;
+
+    items.forEach((item) => {
+      const sel = detailEl.querySelector(`select[data-item-id="${item.id}"]`);
+      if (sel && item.unit_id) sel.value = String(item.unit_id);
+    });
+
+    const addItemBtn = $("#stockAddItemBtn");
+    if (addItemBtn) {
+      addItemBtn.addEventListener("click", () => {
+        openStockItemPicker(doc.id);
+      });
+    }
+
+    let stockItemSaveTimer = null;
+    detailEl.querySelectorAll("[data-field][data-item-id]").forEach((input) => {
+      input.addEventListener("change", () => {
+        const itemId = Number(input.dataset.itemId);
+        if (!Number.isFinite(itemId)) return;
+        clearTimeout(stockItemSaveTimer);
+        stockItemSaveTimer = setTimeout(async () => {
+          const qtyEl = detailEl.querySelector(`[data-field="qty"][data-item-id="${itemId}"]`);
+          const unitEl = detailEl.querySelector(`[data-field="unit_id"][data-item-id="${itemId}"]`);
+          const costEl = detailEl.querySelector(`[data-field="cost_price"][data-item-id="${itemId}"]`);
+          const saleEl = detailEl.querySelector(`[data-field="price"][data-item-id="${itemId}"]`);
+          const payload = {};
+          if (qtyEl) payload.qty = Number(qtyEl.value) || 0;
+          if (unitEl) payload.unit_id = Number(unitEl.value) || null;
+          if (costEl) payload.cost_price = Number(costEl.value) || 0;
+          if (saleEl) payload.price = Number(saleEl.value) || 0;
+          try {
+            await apiUpdateStockItem(doc.id, itemId, payload);
+          } catch (err) {
+            console.error("Ошибка сохранения позиции:", err);
+          }
+        }, 400);
+      });
+    });
+
+    detailEl.querySelectorAll("[data-del-item]").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const itemId = Number(btn.dataset.delItem);
+        try {
+          await apiDeleteStockItem(doc.id, itemId);
+          await openStockDocDetail(doc.id);
+        } catch (err) {
+          alert("Ошибка удаления позиции");
+        }
+      });
+    });
+  }
+
+  // =============================================
+  // STOCK ITEM PICKER — overlay с категориями и чекбоксами
+  // =============================================
+  async function openStockItemPicker(docId) {
+    stockPickerDocId = docId;
+    stockPickerSelection = new Set();
+
+    // Загружаем категории если ещё не загружены
+    if (!state.catalogCategories.length) {
+      await loadCatalogCategories();
+    }
+
+    // Удаляем старый overlay если есть
+    const productInfoPanel = $("#productInfoPanel");
+    if (!productInfoPanel) return;
+    const existingPicker = productInfoPanel.querySelector(".picker-overlay");
+    if (existingPicker) existingPicker.remove();
+
+    // Создаём overlay
+    const pickerOverlay = document.createElement("div");
+    pickerOverlay.className = "picker-overlay";
+
+    const pickerContent = document.createElement("div");
+    pickerContent.className = "picker-overlay-content";
+
+    pickerContent.innerHTML = `
+      <div class="picker-overlay-header">
+        <div class="panel-title">Добавить товары</div>
+      </div>
+      <div class="picker-overlay-body">
+        <div class="info-card">
+          <div class="option-picker-tabs" id="stockPickerTabs"></div>
+          <div class="option-picker-search" style="margin-bottom: 16px;">
+            <input class="control" id="stockPickerSearchInput" type="search" placeholder="Поиск товара..." />
+          </div>
+          <div class="option-picker-list" id="stockPickerListContent"></div>
+        </div>
+      </div>
+    `;
+
+    pickerOverlay.appendChild(pickerContent);
+    productInfoPanel.appendChild(pickerOverlay);
+
+    const searchInput = pickerContent.querySelector("#stockPickerSearchInput");
+    const listContent = pickerContent.querySelector("#stockPickerListContent");
+    const tabsEl = pickerContent.querySelector("#stockPickerTabs");
+    let stockPickerCategoryId = null;
+
+    async function renderTabs() {
+      if (!tabsEl) return;
+      const categories = [{ id: "", title: "Все" }, ...state.catalogCategories];
+      tabsEl.innerHTML = categories.map((cat) => {
+        const active = stockPickerCategoryId == null
+          ? cat.id === ""
+          : Number(cat.id) === Number(stockPickerCategoryId);
+        return `
+          <button class="option-picker-tab chip ${active ? "is-active" : ""}" type="button" data-cat-id="${cat.id}">
+            ${escapeHtml(cat.title || "")}
+          </button>
+        `;
+      }).join("");
+
+      bindHorizontalScroll(tabsEl);
+      tabsEl.querySelectorAll("[data-cat-id]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const raw = btn.dataset.catId;
+          stockPickerCategoryId = raw === "" ? null : Number(raw);
+          renderTabs();
+          await renderList();
+        });
+      });
+    }
+
+    async function renderList() {
+      if (!listContent) return;
+      const query = String(searchInput?.value || "").trim().toLowerCase();
+
+      try {
+        const categoryId = Number.isFinite(stockPickerCategoryId) ? stockPickerCategoryId : null;
+        const res = await apiGetCatalogProducts({ query, categoryId });
+        const raw = Array.isArray(res.data) ? res.data : [];
+        const seenIds = new Set();
+        const products = raw.filter(p => {
+          const id = Number(p.id);
+          if (seenIds.has(id)) return false;
+          seenIds.add(id);
+          return true;
+        });
+
+        listContent.innerHTML = products
+          .filter(p => Number(p.is_active) !== 0)
+          .filter(p => !query || String(p.name || "").toLowerCase().includes(query))
+          .map(p => {
+            const id = Number(p.id);
+            const checked = stockPickerSelection.has(id);
+            const productPhoto = p.photos_json && Array.isArray(p.photos_json) && p.photos_json.length > 0 ? p.photos_json[0] : null;
+            const unitLabel = (() => {
+              const u = state.units.find((u) => Number(u.id) === Number(p.unit_id || p.base_unit_id));
+              return u ? u.short_title || u.title : "шт";
+            })();
+            return `
+              <div class="option-picker-row ${checked ? "is-selected" : ""}" data-product-id="${id}">
+                ${productPhoto ? `<div class="option-picker-photo"><img src="${escapeHtml(productPhoto)}" alt="" /></div>` : '<div class="option-picker-photo"></div>'}
+                <div class="option-picker-meta">
+                  <div class="options-row-title">${escapeHtml(p.name || "")}</div>
+                  <div class="options-row-meta">${unitLabel} · ${Number(p.cost_price || p.price || 0)} ₽</div>
+                </div>
+                <input class="option-picker-checkbox" type="checkbox" data-product-id="${id}" ${checked ? "checked" : ""} />
+              </div>
+            `;
+          }).join('');
+
+        listContent.querySelectorAll(".option-picker-row[data-product-id]").forEach((row) => {
+          row.addEventListener("click", () => {
+            const id = Number(row.dataset.productId);
+            if (!Number.isFinite(id)) return;
+            if (stockPickerSelection.has(id)) {
+              stockPickerSelection.delete(id);
+            } else {
+              stockPickerSelection.add(id);
+            }
+            renderList();
+          });
+        });
+      } catch (e) {
+        console.error('Failed to load products for stock picker', e);
+        listContent.innerHTML = '<div class="empty-hint">Ошибка загрузки товаров</div>';
+      }
+    }
+
+    if (searchInput) {
+      searchInput.addEventListener("input", renderList);
+    }
+
+    await renderTabs();
+    await renderList();
+
+    // Переключаем футер на режим "Отменить" / "Сохранить"
+    const footer = $("#productInfoFooter");
+    const editMode = $("#productFooterEditMode");
+    const viewMode = $("#productFooterView");
+    if (footer) footer.classList.remove("hidden");
+    if (viewMode) viewMode.classList.add("hidden");
+    if (editMode) editMode.classList.remove("hidden");
+
+    const saveBtn = $("#productFooterSaveBtn");
+    if (saveBtn) {
+      saveBtn.textContent = "Сохранить";
+      saveBtn.dataset.pickerType = "stock-picker";
+    }
+    const cancelBtn = $("#productFooterCancelBtn");
+    if (cancelBtn) {
+      cancelBtn.classList.remove("hidden");
+      cancelBtn.classList.add("is-fullwidth");
+      cancelBtn.textContent = "Отменить";
+      cancelBtn.dataset.pickerType = "stock-picker";
+    }
+    const deleteBtn = $("#productFooterDeleteEditBtn");
+    if (deleteBtn) deleteBtn.classList.add("hidden");
+    const moreBtn = $("#productFooterMoreEditBtn");
+    if (moreBtn) moreBtn.classList.add("hidden");
+  }
+
+  function closeStockPicker() {
+    const productInfoPanel = $("#productInfoPanel");
+    if (productInfoPanel) {
+      const overlay = productInfoPanel.querySelector(".picker-overlay");
+      if (overlay) overlay.remove();
+    }
+    // Восстанавливаем футер документа
+    showStockDocFooter();
+  }
+
+  async function saveStockPickerSelection() {
+    if (!stockPickerDocId || !stockPickerSelection.size) {
+      closeStockPicker();
+      return;
+    }
+
+    const products = state.products || [];
+    try {
+      for (const productId of stockPickerSelection) {
+        const product = products.find((p) => Number(p.id) === productId);
+        await apiAddStockItem(stockPickerDocId, {
+          product_id: productId,
+          qty: 0,
+          unit_id: product ? (product.base_unit_id || product.unit_id || null) : null,
+          cost_price: product ? Number(product.cost_price || 0) : 0,
+          price: product ? Number(product.price || 0) : 0,
+        });
+      }
+      closeStockPicker();
+      await openStockDocDetail(stockPickerDocId);
+    } catch (e) {
+      alert("Ошибка: " + (e.message || "Не удалось добавить товары"));
+    }
+  }
+
+  // =============================================
+  // STOCK: Создание нового документа через кнопку +
+  // =============================================
+  async function createNewStockDocument(type) {
+    try {
+      const res = await apiCreateStockDocument({ type });
+      if (res.id) {
+        const typeLabel = type === "in" ? "Новый приход" : "Новое списание";
+        ensureTab({
+          type: "stock-doc",
+          id: res.id,
+          title: typeLabel,
+          onActivate: async () => {
+            const freshRes = await apiGetStockDocument(res.id);
+            state.stockDocDetail = freshRes.data;
+            renderStockDocDetail();
+            showStockDocFooter();
+          },
+          activate: true,
+        });
+
+        const freshRes = await apiGetStockDocument(res.id);
+        state.stockDocDetail = freshRes.data;
+        renderStockDocDetail();
+        showStockDocFooter();
+
+        // Обновить список
+        if (type === "in") {
+          await loadStockDocuments("in");
+          renderStockDocList(stockInList, stockInEmpty, "in");
+        } else {
+          await loadStockDocuments("out");
+          renderStockDocList(stockOutList, stockOutEmpty, "out");
+        }
+      }
+    } catch (e) {
+      alert("Ошибка создания документа: " + (e.message || ""));
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", async () => {
     bindAccordionContainer(productsAccordion);
     bindAccordionContainer(optionGroupInfo);
@@ -15217,6 +16100,3 @@ const isViewMode = state.comboPanel.mode === "view";
     await refreshAll();
   });
 })();
-
-
-

@@ -5,6 +5,10 @@ const multer = require('multer');
 const { sendNewOrderNotification } = require('../telegramNotifications');
 const { sendOrderToPrintBot } = require('../printPush');
 const discountHelpers = require('../helpers/discounts');
+const {
+  applyStockDeductionForOrderItems,
+  checkStockAvailabilityForOrderItems,
+} = require('../helpers/orderStock');
 
 module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
@@ -75,14 +79,102 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return combo;
   }
 
+  function publishStockChanged(tenantId, storeId, payload = {}) {
+    try {
+      if (!ordersEvents || typeof ordersEvents.publish !== 'function') return;
+      ordersEvents.publish(tenantId, storeId, 'stock.changed', {
+        tenant_id: Number(tenantId),
+        store_id: Number(storeId),
+        ...payload,
+      });
+    } catch (err) {
+      console.error('publishStockChanged error:', err);
+    }
+  }
+
   function str(v) {
     return v === undefined || v === null ? '' : String(v);
   }
+
+  // ---------------------------
+  // Public SSE (shop sync)
+  // ---------------------------
+  router.get('/events', (req, res) => {
+    if (!ordersEvents || typeof ordersEvents.attach !== 'function') {
+      return res.status(503).json({ ok: false, error: 'EVENTS_UNAVAILABLE' });
+    }
+    const tenantId = helpers.getTenantId(req);
+    const storeId = helpers.getStoreId(req);
+    ordersEvents.attach(req, res, tenantId, storeId);
+  });
+
+  router.get('/changes', (req, res) => {
+    try {
+      if (!ordersEvents || typeof ordersEvents.getChanges !== 'function') {
+        return res.status(503).json({ ok: false, error: 'EVENTS_UNAVAILABLE' });
+      }
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const since = req.query.since;
+      const data = ordersEvents.getChanges(tenantId, storeId, since);
+      return res.json({ ok: true, data });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
 
   function parseVariantValueNumber(value) {
     const s = String(value ?? '').replace(',', '.');
     const match = s.match(/-?\d+(?:\.\d+)?/);
     return match ? Number(match[0]) : NaN;
+  }
+
+  function getProductIsAvailableSql(productAlias = 'p', stockAlias = 's') {
+    return `
+      (${stockAlias}.qty IS NULL OR ${stockAlias}.qty > 0)
+      AND NOT EXISTS (
+        SELECT 1
+        FROM prod_product_ingredients i
+        JOIN prod_product_stocks si
+          ON si.tenant_id=i.tenant_id AND si.store_id=? AND si.product_id=i.ingredient_id
+        WHERE i.tenant_id=${productAlias}.tenant_id AND i.product_id=${productAlias}.id
+          AND si.qty IS NOT NULL AND si.qty <= 0
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM prod_option_assignments oa
+        JOIN prod_option_groups og
+          ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
+        WHERE oa.tenant_id=${productAlias}.tenant_id
+          AND oa.assign_type='product' AND oa.assign_id=${productAlias}.id
+          AND oa.is_active=1
+          AND og.is_active=1
+          AND COALESCE(og.out_of_stock_action, 1)=0
+          AND NOT EXISTS (
+            SELECT 1
+            FROM prod_option_items oi
+            JOIN prod_products op
+              ON op.tenant_id=oi.tenant_id AND op.id=oi.target_product_id
+            LEFT JOIN prod_product_stocks ops
+              ON ops.tenant_id=op.tenant_id AND ops.store_id=? AND ops.product_id=op.id
+            WHERE oi.tenant_id=oa.tenant_id AND oi.group_id=oa.group_id
+              AND oi.target_type='product'
+              AND oi.is_active=1
+              AND op.is_active=1
+              AND op.site_visibility=1
+              AND (ops.qty IS NULL OR ops.qty > 0)
+              AND NOT EXISTS (
+                SELECT 1
+                FROM prod_product_ingredients ip
+                JOIN prod_product_stocks ips
+                  ON ips.tenant_id=ip.tenant_id AND ips.store_id=? AND ips.product_id=ip.ingredient_id
+                WHERE ip.tenant_id=op.tenant_id AND ip.product_id=op.id
+                  AND ips.qty IS NOT NULL AND ips.qty <= 0
+              )
+          )
+      )
+    `;
   }
 
   function getConversionFactorMap(tenantId, db) {
@@ -1453,6 +1545,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const productIsAvailableSql = getProductIsAvailableSql('p', 's');
 
       const [blocks] = await db.query(
         `SELECT id, title, sort_order, min_select, max_select FROM prod_combo_blocks
@@ -1468,9 +1561,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
            JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
            LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
            WHERE bp.tenant_id=? AND bp.block_id=? AND p.is_active=1 AND p.site_visibility=1
-             AND (s.qty IS NULL OR s.qty > 0)
+             AND ${productIsAvailableSql}
            ORDER BY bp.sort_order ASC, bp.id ASC`,
-          [storeId, tenantId, block.id]
+          [storeId, tenantId, block.id, storeId, storeId, storeId]
         );
         const products = productsRaw.map((r) => {
           const photos = safeJsonArray(r.product_photos_json);
@@ -1506,6 +1599,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const productIsAvailableSql = getProductIsAvailableSql('p', 's');
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
@@ -1532,10 +1626,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
            JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
            LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
            WHERE bp.tenant_id=? AND bp.block_id=? AND p.is_active=1 AND p.site_visibility=1
-             AND (s.qty IS NULL OR s.qty > 0)
+             AND ${productIsAvailableSql}
            ORDER BY bp.sort_order ASC, bp.id ASC`,
-          [storeId, tenantId, sb.block_id]
+          [storeId, tenantId, sb.block_id, storeId, storeId, storeId]
         );
+        const minSelect = Math.max(1, Number(sb.min_select) || 1);
+        if (!productsRaw.length) {
+          return res.status(409).json({ ok: false, error: 'OUT_OF_STOCK' });
+        }
         const products = productsRaw.map((r) => {
           const photos = safeJsonArray(r.product_photos_json);
           return {
@@ -1557,7 +1655,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         blocks.push({
           block_id: sb.block_id,
           block_title: sb.block_title || '',
-          min_select: Math.max(1, Number(sb.min_select) || 1),
+          min_select: minSelect,
           max_select: Math.max(1, Number(sb.max_select) || 1),
           products,
         });
@@ -1626,6 +1724,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
     const roundPrice = (v) => Math.round(Number(v) * 100) / 100;
     const getConversionFactor = getConversionFactorMap(tenantId, db);
+    const productIsAvailableSql = getProductIsAvailableSql('p', 's');
     const result = [];
 
     for (const combo of combos) {
@@ -1638,8 +1737,11 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         [tenantId, combo.id]
       );
 
+      if (!setBlocks.length) continue;
+
       let minPriceSum = 0;
       const gridPhotos = [];
+      let comboIsAvailable = true;
 
       for (const sb of setBlocks) {
         const minSelect = Math.max(1, Number(sb.min_select) || 1);
@@ -1650,11 +1752,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
            JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
            LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
            WHERE bp.tenant_id=? AND bp.block_id=? AND p.is_active=1 AND p.site_visibility=1
-             AND (s.qty IS NULL OR s.qty > 0)
+             AND ${productIsAvailableSql}
            ORDER BY bp.sort_order ASC, bp.id ASC`,
-          [storeId, tenantId, sb.block_id]
+          [storeId, tenantId, sb.block_id, storeId, storeId, storeId]
         );
-        if (!blockProductsRaw.length) continue;
+        if (!blockProductsRaw.length) {
+          comboIsAvailable = false;
+          break;
+        }
 
         const blockProductIds = blockProductsRaw.map((r) => Number(r.id)).filter(Boolean);
         const [vaRows] = await db.query(
@@ -1723,6 +1828,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         }
         minPriceSum += roundPrice(blockSum);
       }
+
+      if (!comboIsAvailable) continue;
 
       const discountPercent = Number(combo.discount_percent) || 0;
       const minPrice = discountPercent > 0
@@ -2600,6 +2707,58 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   });
 
   // ------------------------------
+  // pre-check cart stock availability (without deduction)
+  // ------------------------------
+  router.post('/orders/stock-check', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const items = Array.isArray(req.body?.items) ? req.body.items : [];
+
+      if (!items.length) {
+        return res.json({
+          ok: true,
+          data: {
+            available: true,
+            shortages: [],
+            stock_levels: [],
+          },
+        });
+      }
+
+      const checkResult = await checkStockAvailabilityForOrderItems({
+        db,
+        tenantId,
+        storeId,
+        items,
+      });
+
+      if (!checkResult.available) {
+        return res.json({
+          ok: true,
+          data: {
+            available: false,
+            shortages: checkResult.shortages,
+            stock_levels: Array.isArray(checkResult.stockLevels) ? checkResult.stockLevels : [],
+          },
+        });
+      }
+
+      return res.json({
+        ok: true,
+        data: {
+          available: true,
+          shortages: [],
+          stock_levels: Array.isArray(checkResult.stockLevels) ? checkResult.stockLevels : [],
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // ------------------------------
   // create order
   // ------------------------------
   router.post('/orders', async (req, res) => {
@@ -2609,11 +2768,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       let orderStoreId = storeId;
 
       const [tenantRows] = await db.query(
-        'SELECT price_rounding_mode, price_rounding_precision FROM ten_tenants WHERE id=? LIMIT 1',
+        'SELECT price_rounding_mode, price_rounding_precision, order_stock_deduct_mode, order_stock_deduct_status_id FROM ten_tenants WHERE id=? LIMIT 1',
         [tenantId]
       );
       const roundingModeRaw = tenantRows[0]?.price_rounding_mode || 'none';
       const roundingPrecisionRaw = Number(tenantRows[0]?.price_rounding_precision);
+      const stockDeductModeRaw = String(tenantRows[0]?.order_stock_deduct_mode || 'on_create').trim();
+      const stockDeductMode = stockDeductModeRaw === 'on_status' ? 'on_status' : 'on_create';
       const allowedRounding = new Set(['none', 'down', 'up', 'nearest']);
       const roundingMode = allowedRounding.has(roundingModeRaw) ? roundingModeRaw : 'none';
       const roundingPrecision = roundingPrecisionRaw === 0 ? 0 : 2;
@@ -2778,7 +2939,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       let byId = new Map();
       if (ids.length) {
         const [products] = await db.query(
-          `SELECT id, name, price, old_price, photos_json
+          `SELECT id, name, price, old_price, photos_json, unit_id, base_unit_id, base_qty, cost_price
            FROM prod_products
            WHERE tenant_id=? AND id IN (${ids.map(() => '?').join(',')})`,
           [tenantId, ...ids]
@@ -2955,7 +3116,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           return res.status(409).json({ ok: false, error: 'OUT_OF_STOCK' });
         }
 
-        optionRows.forEach(row => {
+        optionRows.forEach((row) => {
           let optionPrice = 0;
           if (row.price_mode === 'fixed') {
             optionPrice = Number(row.price_value || 0);
@@ -2970,9 +3131,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             id: Number(row.id),
             title: row.product_name || '',
             price: optionPrice,
+            target_product_id: row.product_id != null ? Number(row.product_id) : null,
           });
         });
-      }
+        }
 
       for (const it of items) {
         if (it.type === 'combo') {
@@ -3002,10 +3164,23 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
               product_id: s.product_id,
               product_name: s.product_name,
               product_photo: s.product_photo,
+              variant_group_id: s.variant_group_id != null ? Number(s.variant_group_id) : undefined,
+              variant_value_index: s.variant_value_index != null ? Number(s.variant_value_index) : undefined,
+              unit_id: s.unit_id != null ? Number(s.unit_id) : undefined,
               variant_label: s.variant_label,
               variant_group_title: s.variant_group_title,
               variant_unit: s.variant_unit,
-              ingredients_display: Array.isArray(s.ingredients_display) ? s.ingredients_display : [],
+              ingredients_display: Array.isArray(s.ingredients_display)
+                ? s.ingredients_display.map((ing) => ({
+                    ingredient_id: ing.ingredient_id != null ? Number(ing.ingredient_id) : undefined,
+                    product_id: ing.product_id != null ? Number(ing.product_id) : undefined,
+                    quantity: ing.quantity != null ? Number(ing.quantity) : undefined,
+                    qty: ing.qty != null ? Number(ing.qty) : undefined,
+                    unit: ing.unit,
+                    unit_id: ing.unit_id != null ? Number(ing.unit_id) : undefined,
+                    name: ing.name,
+                  }))
+                : [],
             })),
             auto_add: 0,
           });
@@ -3077,6 +3252,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             title: optInfo.title,
             price: optPrice,
             qty: optQty,
+            target_product_id: optInfo.target_product_id || undefined,
           };
           
           // Добавляем данные о варианте опции, если есть
@@ -3227,6 +3403,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
                 ingredient_id: ingId,
                 name: ingInfo.ingredient_name || '',
                 quantity: ingQty,
+                unit_id: ingredientUnitId || undefined,
                 price: priceForDisplay,
                 total: ingTotal,
                 unit_label: ingInfo.unit_short_title || ingInfo.unit_title || ingInfo.unit_code || '',
@@ -3288,6 +3465,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
               variant_group_id: variantGroupId,
               variant_value_index: variantValueIndex,
               group_title: groupTitle,
+              unit_id: Number(vg.unit_id || 0) || undefined,
               value: variantValue,
               label: variantValue, // Для отображения
               price_diff: 0, // Варианты не имеют доплаты, цена уже учтена в variant_unit_price
@@ -3542,48 +3720,121 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       // created_at в БД сохраняем только в UTC.
       const createdAt = helpers.formatUtcDateTime(Date.now());
+      let stockDeductedAt = null;
+      let stockDocumentId = null;
+      let stockChangedProductIds = [];
 
-      // ВАЖНО: никаких updated_at тут нет (в твоей таблице order_orders его нет)
-      const [r] = await db.query(
-        `INSERT INTO order_orders
-         (tenant_id, store_id, customer_id, customer_name, customer_phone, promo_code,
-          address, delivery_address_id, pickup_store_id, comment, address_comment, cutlery_qty, change_from,
-          items, total_price, delivery_cost, discount_amount, discounts_json,
-          delivery_type_id, payment_id, time_option_id,
-          status_id, status_sort, scheduled_at, created_at,
-          created_via, is_active, public_id)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
-        [
-          tenantId,
-          orderStoreId,
-          customerId,
-          customerName,
-          customerPhone,
-          promoCode,
-          addrLine,
-          deliveryAddressId,
-          pickupStoreId,
-          comment,
-          addressComment,
-          cutleryQty,
-          changeFrom,
-          itemsJson,
-          total,
-          deliveryCost,
-          orderDiscountAmount,
-          discountsJson,
-          deliveryTypeId,
-          paymentId,
-          timeOptionId,
-          statusId,
-          0, // status_sort
-          scheduledAt,
-          createdAt,
-          publicId,
-        ]
-      );
+      let orderId = null;
+      const conn = await db.getConnection();
+      try {
+        await conn.beginTransaction();
 
-      const orderId = r.insertId;
+        if (stockDeductMode === 'on_create') {
+          const deductionResult = await applyStockDeductionForOrderItems({
+            db: conn,
+            tenantId,
+            storeId: orderStoreId,
+            items: normItems,
+            publicId,
+            createdBy: null,
+          });
+          stockDeductedAt = deductionResult?.stockDeductedAt || null;
+          stockDocumentId = deductionResult?.stockDocumentId || null;
+          stockChangedProductIds = Array.from(
+            new Set(
+              (Array.isArray(deductionResult?.deductions) ? deductionResult.deductions : [])
+                .map((d) => Number(d?.productId))
+                .filter((id) => Number.isFinite(id) && id > 0)
+            )
+          );
+        } else {
+          const stockCheck = await checkStockAvailabilityForOrderItems({
+            db: conn,
+            tenantId,
+            storeId: orderStoreId,
+            items: normItems,
+          });
+          if (!stockCheck.available) {
+            const stockErr = new Error('OUT_OF_STOCK');
+            stockErr.code = 'OUT_OF_STOCK';
+            stockErr.shortages = stockCheck.shortages || [];
+            throw stockErr;
+          }
+        }
+
+        // ВАЖНО: никаких updated_at тут нет (в твоей таблице order_orders его нет)
+        const [r] = await conn.query(
+          `INSERT INTO order_orders
+           (tenant_id, store_id, customer_id, customer_name, customer_phone, promo_code,
+            address, delivery_address_id, pickup_store_id, comment, address_comment, cutlery_qty, change_from,
+            items, total_price, delivery_cost, discount_amount, discounts_json,
+            delivery_type_id, payment_id, time_option_id,
+            status_id, status_sort, scheduled_at, created_at, stock_deducted_at, stock_document_id,
+            created_via, is_active, public_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'web', 1, ?)`,
+          [
+            tenantId,
+            orderStoreId,
+            customerId,
+            customerName,
+            customerPhone,
+            promoCode,
+            addrLine,
+            deliveryAddressId,
+            pickupStoreId,
+            comment,
+            addressComment,
+            cutleryQty,
+            changeFrom,
+            itemsJson,
+            total,
+            deliveryCost,
+            orderDiscountAmount,
+            discountsJson,
+            deliveryTypeId,
+            paymentId,
+            timeOptionId,
+            statusId,
+            0, // status_sort
+            scheduledAt,
+            createdAt,
+            stockDeductedAt,
+            stockDocumentId,
+            publicId,
+          ]
+        );
+
+        orderId = Number(r.insertId || 0);
+
+        if (stockDocumentId) {
+          await conn.query(
+            `UPDATE prod_stock_documents
+             SET number=?, comment=?
+             WHERE tenant_id=? AND store_id=? AND id=?`,
+            [
+              `ORD-${orderId}`,
+              `Автосписание по заказу #${orderId} (${publicId})`,
+              tenantId,
+              orderStoreId,
+              stockDocumentId,
+            ]
+          );
+        }
+
+        await conn.commit();
+      } catch (txErr) {
+        await conn.rollback();
+        conn.release();
+        if (txErr && txErr.code === 'OUT_OF_STOCK') {
+          return res.status(409).json({
+            ok: false,
+            error: 'OUT_OF_STOCK',
+            data: { shortages: Array.isArray(txErr.shortages) ? txErr.shortages : [] },
+          });
+        }
+        throw txErr;
+      }
+      conn.release();
 
       // Записываем использование скидок
       for (const appliedDiscount of appliedDiscounts) {
@@ -3604,7 +3855,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const payload = await fetchOrderPayload(tenantId, orderStoreId, orderId, { storeTimezone });
 
       if (payload) {
-        ordersEvents.publish(tenantId, orderStoreId, 'order.created', payload);
+        if (ordersEvents && typeof ordersEvents.publish === 'function') {
+          ordersEvents.publish(tenantId, orderStoreId, 'order.created', payload);
+        }
         const botToken = process.env.TELEGRAM_BOT_TOKEN;
         if (botToken) {
           sendNewOrderNotification(tenantId, orderStoreId, payload, { db, botToken }).catch((err) =>
@@ -3612,6 +3865,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           );
         }
         sendOrderToPrintBot({ db, order: payload, tenantId, storeId: orderStoreId }).catch(() => {});
+      }
+
+      if (stockChangedProductIds.length) {
+        publishStockChanged(tenantId, orderStoreId, {
+          source: 'order.create',
+          order_id: orderId,
+          product_ids: stockChangedProductIds,
+        });
       }
 
       res.json({ ok: true, data: { id: orderId, public_id: publicId } });

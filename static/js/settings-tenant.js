@@ -94,6 +94,8 @@
   }
 
   let activeStoreId = getActiveStoreIdFromStorage();
+  let tenantStockDeductMode = "on_create";
+  let tenantStockDeductStatusId = null;
 
   function applyBrandFromTenant(tenant) {
     if (!tenant) return;
@@ -251,6 +253,10 @@
       if (!data || !data.ok || !data.tenant) return;
 
       const tenant = data.tenant;
+      tenantStockDeductMode = tenant.order_stock_deduct_mode || "on_create";
+      tenantStockDeductStatusId = tenant.order_stock_deduct_status_id != null
+        ? Number(tenant.order_stock_deduct_status_id)
+        : null;
       updateTenantCache(tenant);
       applyBrandFromTenant(tenant);
       updateShopLink(tenant);
@@ -275,6 +281,20 @@
       }
       if (settingsPriceRoundingPrecision && !settingsPriceRoundingPrecision.value) {
         settingsPriceRoundingPrecision.value = "2";
+      }
+
+      const stockDeductModeSelect = document.getElementById("settingsOrderStockDeductMode");
+      if (stockDeductModeSelect) {
+        stockDeductModeSelect.value = tenantStockDeductMode;
+      }
+      const stockDeductStatusSelect = document.getElementById("settingsOrderStockDeductStatus");
+      if (stockDeductStatusSelect) {
+        stockDeductStatusSelect.dataset.pendingValue = tenantStockDeductStatusId != null
+          ? String(tenantStockDeductStatusId)
+          : "";
+      }
+      if (typeof window.__refreshOrderStockDeductControls === "function") {
+        window.__refreshOrderStockDeductControls(tenantStockDeductStatusId);
       }
 
       fillTimezoneSelect(tenant.timezone, "tenantTimezoneSelect");
@@ -414,6 +434,9 @@
     const globalTelegramCancelBtn = document.getElementById("globalTelegramCancelBtn");
     const settingsPriceRoundingMode = document.getElementById("settingsPriceRoundingMode");
     const settingsPriceRoundingPrecision = document.getElementById("settingsPriceRoundingPrecision");
+    const settingsOrderStockDeductMode = document.getElementById("settingsOrderStockDeductMode");
+    const settingsOrderStockDeductStatus = document.getElementById("settingsOrderStockDeductStatus");
+    const settingsOrderStockDeductStatusField = document.getElementById("settingsOrderStockDeductStatusField");
     const rightTabs = document.getElementById("settingsRightTabs");
     const rightHeader = rightTabs ? rightTabs.closest(".settings-right-header") : null;
     if (rightTabs) {
@@ -1219,6 +1242,59 @@
     }
   };
 
+    function syncOrderStockDeductStatusVisibility() {
+      if (!settingsOrderStockDeductStatusField) return;
+      const mode = settingsOrderStockDeductMode ? settingsOrderStockDeductMode.value : "on_create";
+      const isOnStatus = mode === "on_status";
+      settingsOrderStockDeductStatusField.classList.toggle("hidden", !isOnStatus);
+      if (settingsOrderStockDeductStatus) {
+        settingsOrderStockDeductStatus.disabled = !isOnStatus || settingsOrderStockDeductStatus.options.length === 0;
+      }
+    }
+
+    function renderOrderStockDeductStatusOptions(preferredId = null) {
+      if (!settingsOrderStockDeductStatus) return;
+      const statusState = settingsListsState["order-statuses"];
+      const statuses = Array.isArray(statusState?.items)
+        ? statusState.items.filter((item) => Number(item.is_active) === 1)
+        : [];
+      const pendingValue = Number(settingsOrderStockDeductStatus.dataset.pendingValue || 0);
+      const currentValue = Number(settingsOrderStockDeductStatus.value || 0);
+      const targetId = Number(preferredId || pendingValue || currentValue || tenantStockDeductStatusId || 0);
+
+      settingsOrderStockDeductStatus.innerHTML = "";
+      if (!statuses.length) {
+        const emptyOpt = document.createElement("option");
+        emptyOpt.value = "";
+        emptyOpt.textContent = "Нет активных этапов";
+        settingsOrderStockDeductStatus.appendChild(emptyOpt);
+        settingsOrderStockDeductStatus.disabled = true;
+        return;
+      }
+
+      statuses.forEach((item) => {
+        const opt = document.createElement("option");
+        opt.value = String(item.id);
+        opt.textContent = item.title || `Этап #${item.id}`;
+        settingsOrderStockDeductStatus.appendChild(opt);
+      });
+
+      const hasTarget = targetId > 0 && statuses.some((item) => Number(item.id) === targetId);
+      const resolvedId = hasTarget ? targetId : Number(statuses[0].id);
+      settingsOrderStockDeductStatus.value = String(resolvedId);
+      settingsOrderStockDeductStatus.dataset.pendingValue = "";
+    }
+
+    function refreshOrderStockDeductControls(preferredId = null) {
+      if (settingsOrderStockDeductMode && !settingsOrderStockDeductMode.value) {
+        settingsOrderStockDeductMode.value = tenantStockDeductMode || "on_create";
+      }
+      renderOrderStockDeductStatusOptions(preferredId);
+      syncOrderStockDeductStatusVisibility();
+    }
+
+    window.__refreshOrderStockDeductControls = refreshOrderStockDeductControls;
+
 
     function normalizeValue(value) {
       if (value === null || value === undefined) return "";
@@ -1845,6 +1921,9 @@
         const items = Array.isArray(data.items) ? data.items : [];
         settingsListsState[type] = { loaded: true, items };
         renderSettingsList(type, items);
+        if (type === "order-statuses") {
+          refreshOrderStockDeductControls();
+        }
       } catch (err) {
         console.error("Не удалось загрузить список:", type, err);
       }
@@ -2448,6 +2527,54 @@
       if (settingsPriceRoundingPrecision) {
         settingsPriceRoundingPrecision.addEventListener("change", saveRounding);
       }
+    }
+
+    if (settingsOrderStockDeductMode || settingsOrderStockDeductStatus) {
+      const saveOrderStockDeductSettings = async () => {
+        const mode = settingsOrderStockDeductMode && settingsOrderStockDeductMode.value === "on_status"
+          ? "on_status"
+          : "on_create";
+        if (mode === "on_status" && !settingsListsState["order-statuses"]?.loaded) {
+          await loadSettingsList("order-statuses");
+        }
+        refreshOrderStockDeductControls();
+        const statusId =
+          mode === "on_status"
+            ? Number(settingsOrderStockDeductStatus?.value || tenantStockDeductStatusId || 0) || null
+            : null;
+
+        const data = await updateTenantFields({
+          order_stock_deduct_mode: mode,
+          order_stock_deduct_status_id: statusId
+        });
+        if (!data || !data.ok || !data.tenant) {
+          alert("Не удалось сохранить правило списания остатков.");
+          await loadTenantProfile();
+          return;
+        }
+
+        tenantStockDeductMode = data.tenant.order_stock_deduct_mode || mode;
+        tenantStockDeductStatusId = data.tenant.order_stock_deduct_status_id != null
+          ? Number(data.tenant.order_stock_deduct_status_id)
+          : null;
+        updateTenantCache(data.tenant);
+        applyBrandFromTenant(data.tenant);
+        if (settingsOrderStockDeductMode) {
+          settingsOrderStockDeductMode.value = tenantStockDeductMode;
+        }
+        refreshOrderStockDeductControls(tenantStockDeductStatusId);
+      };
+
+      if (settingsOrderStockDeductMode) {
+        settingsOrderStockDeductMode.addEventListener("change", saveOrderStockDeductSettings);
+      }
+      if (settingsOrderStockDeductStatus) {
+        settingsOrderStockDeductStatus.addEventListener("change", () => {
+          if (!settingsOrderStockDeductMode || settingsOrderStockDeductMode.value !== "on_status") return;
+          saveOrderStockDeductSettings();
+        });
+      }
+      refreshOrderStockDeductControls(tenantStockDeductStatusId);
     }
 
     const select = document.getElementById("tenantTimezoneSelect");

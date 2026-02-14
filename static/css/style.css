@@ -1675,18 +1675,19 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
     box-sizing:border-box;
     justify-content:center;
     gap:0;
-    padding:2px 0;
+    padding:0;
     border-radius:8px;
+    border-color:transparent;
   }
 
   html[data-sidebar-collapsed="1"] .nav-icon{
-    width:40px;
-    min-width:40px;
-    height:40px;
+    width:36px;
+    min-width:36px;
+    height:36px;
     display:flex;
     align-items:center;
     justify-content:center;
-    border-radius:12px;
+    border-radius:10px;
     box-sizing:border-box;
   }
 
@@ -6770,3 +6771,22 @@ body.page-shop .sidebar-open-tab{display:none}
   color:var(--color-text-muted, #999);
   margin-right:6px;
 }
+
+/* ================= Stock Documents ================= */
+.stock-doc-row{grid-template-columns:1.5fr .6fr .6fr .8fr .6fr}
+.chip-success{background:#ecfdf5;border-color:#6ee7b7;color:#047857}
+.chip-draft{background:#fef3c7;border-color:#fcd34d;color:#92400e}
+.stock-items-list{display:grid;gap:6px}
+.stock-item-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;border:1px solid var(--color-border);background:#fff}
+.stock-item-photo{width:36px;height:36px;border-radius:8px;object-fit:cover;flex-shrink:0}
+.stock-item-photo-empty{width:36px;height:36px;border-radius:8px;background:var(--color-surface-2);display:flex;align-items:center;justify-content:center;color:var(--color-text-muted);flex-shrink:0;font-size:14px}
+.stock-item-info{flex:1;min-width:0}
+.stock-item-name{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stock-item-meta{font-size:12px;color:#6b7280}
+.stock-item-del{flex-shrink:0}
+.stock-item-editable{flex-direction:column;align-items:stretch;gap:6px}
+.stock-item-header{display:flex;align-items:center;gap:10px}
+.stock-item-header .stock-item-name{flex:1;min-width:0}
+.stock-item-fields{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px}
+.stock-item-field .field-label{font-size:11px;margin-bottom:2px;color:#6b7280}
+.stock-item-field .control-sm{height:32px;font-size:13px;padding:4px 8px}
