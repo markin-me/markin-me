@@ -326,7 +326,7 @@ function buildProductDetailsContent(
     onIngredientChange,
     onVariantChange,
     canSelectVariantIndex = null,
-    probeDraftMutationAvailability = null,
+    canDraftMutationApply = null,
     qtyPill,
     onQtyMinus,
     onQtyPlus,
@@ -589,11 +589,11 @@ function buildProductDetailsContent(
     return !!guardDraftMutation(mutator, opts);
   };
 
-  const probeDraftAvailability = (mutator) => {
+  const canApplyDraftMutation = (mutator) => {
     if (typeof mutator !== "function") return true;
-    if (typeof probeDraftMutationAvailability === "function") {
+    if (typeof canDraftMutationApply === "function") {
       try {
-        return probeDraftMutationAvailability(mutator) !== false;
+        return canDraftMutationApply(mutator) !== false;
       } catch {
         return true;
       }
@@ -654,7 +654,7 @@ function buildProductDetailsContent(
       }
 
       values.forEach((_, idx) => {
-        const allowed = probeDraftAvailability(() => {
+        const allowed = canApplyDraftMutation(() => {
           if (typeof setDraftForIndex === "function") {
             setDraftForIndex(idx);
           }
@@ -1103,7 +1103,7 @@ function buildProductDetailsContent(
           const hasOptionProductId = Number.isFinite(optionProductId) && optionProductId > 0;
           const isOptionUnavailableNow = () => {
             if (!hasOptionProductId) return false;
-            const allowed = probeDraftAvailability(() => {
+            const allowed = canApplyDraftMutation(() => {
               groupState.selectedId = itemId;
             });
             return !allowed;
@@ -1521,7 +1521,7 @@ function buildProductDetailsContent(
           const hasOptionProductId = Number.isFinite(optionProductId) && optionProductId > 0;
           const isOptionUnavailableNow = () => {
             if (!hasOptionProductId) return false;
-            const allowed = probeDraftAvailability(() => {
+            const allowed = canApplyDraftMutation(() => {
               groupState.selectedIds.add(itemId);
             });
             return !allowed;
@@ -1988,10 +1988,10 @@ function buildProductDetailsContent(
           const hasOptionProductId = Number.isFinite(optionProductId) && optionProductId > 0;
           const itemMin = item.qty_min ?? 1;
           const itemMax = item.qty_max ?? 1;
-          const probeOptionQtyAvailability = (nextQty) => {
+          const canApplyOptionQtyMutation = (nextQty) => {
             if (!hasOptionProductId) return true;
             const safeQty = Math.max(0, Number(nextQty || 0));
-            return probeDraftAvailability(() => {
+            return canApplyDraftMutation(() => {
               if (safeQty > 0) groupState.qtyById.set(itemId, safeQty);
               else groupState.qtyById.delete(itemId);
             });
@@ -1999,7 +1999,7 @@ function buildProductDetailsContent(
           const isOptionUnavailableNow = () => {
             const currentOptQty = groupState.qtyById.get(itemId) || 0;
             const targetQty = Math.max(currentOptQty, 1);
-            return !probeOptionQtyAvailability(targetQty);
+            return !canApplyOptionQtyMutation(targetQty);
           };
           const isOptionUnavailableForPlus = () => {
             const currentOptQty = groupState.qtyById.get(itemId) || 0;
@@ -2007,7 +2007,7 @@ function buildProductDetailsContent(
               ? Math.max(itemMin, 1)
               : Math.min(itemMax, currentOptQty + 1);
             if (nextQty <= currentOptQty) return false;
-            return !probeOptionQtyAvailability(nextQty);
+            return !canApplyOptionQtyMutation(nextQty);
           };
           const isSelectedNow = () => (Number(groupState.qtyById.get(itemId)) || 0) > 0;
           if (!isSelectedNow() && isOptionUnavailableNow()) return;
@@ -2479,7 +2479,7 @@ function buildProductDetailsContent(
         const currentIngQty = Number(ingredientState?.get(ingId)?.quantity ?? ing.quantity ?? 1);
         const step = Number(ing.quantity_step || 1) || 1;
         const nextQty = currentIngQty + step;
-        const allowed = probeDraftAvailability(() => {
+        const allowed = canApplyDraftMutation(() => {
           const stateEntry = ingredientState.get(ingId);
           const nextState = stateEntry && typeof stateEntry === "object"
             ? { ...stateEntry, quantity: nextQty }
@@ -3224,6 +3224,12 @@ optionGroups.forEach((group) => {
     if (!available) {
       actionBtnRef.innerHTML = `<span class="shop-pd-action-label">Нет в наличии</span>`;
       actionBtnRef.disabled = true;
+      if (elMobileProductPrice) elMobileProductPrice.textContent = "";
+      const mobileOldPrice = elMobileAddToCartBtn?.querySelector(".shop-pd-action-old");
+      if (mobileOldPrice) {
+        mobileOldPrice.textContent = "";
+        mobileOldPrice.classList.add("hidden");
+      }
       return;
     }
     actionBtnRef.disabled = false;
@@ -3727,7 +3733,7 @@ optionGroups.forEach((group) => {
     return false;
   }
 
-  function probeDraftMutationAvailability(mutator) {
+  function canDraftMutationApplyPreview(mutator) {
     if (typeof mutator !== "function") return true;
     const snapshot = snapshotDraftState();
     mutator();
@@ -3804,7 +3810,7 @@ optionGroups.forEach((group) => {
         refreshVariantAvailabilityUi();
       },
       canSelectVariantIndex: canUseDraftQtyWithVariantLocal,
-      probeDraftMutationAvailability,
+      canDraftMutationApply: canDraftMutationApplyPreview,
       qtyPill,
       onQtyMinus,
       onQtyPlus,
@@ -3869,6 +3875,11 @@ optionGroups.forEach((group) => {
         if (!available) {
           elMobileProductLabel.textContent = "Нет в наличии";
           elMobileProductPrice.textContent = "";
+          const mobileOldPrice = elMobileAddToCartBtn?.querySelector(".shop-pd-action-old");
+          if (mobileOldPrice) {
+            mobileOldPrice.textContent = "";
+            mobileOldPrice.classList.add("hidden");
+          }
           if (elMobileAddToCartBtn) elMobileAddToCartBtn.disabled = true;
         } else {
           if (elMobileAddToCartBtn) elMobileAddToCartBtn.disabled = false;
@@ -4063,8 +4074,6 @@ optionGroups.forEach((group) => {
     saveCart();
     renderProducts();
     if (typeof scheduleSyncAllProductCardsFromCart === "function") scheduleSyncAllProductCardsFromCart();
-    if (typeof primeVisibleProductAddability === "function") primeVisibleProductAddability();
-    if (typeof primeCartQtyHardLimits === "function") primeCartQtyHardLimits();
     renderCart();
     updateCartBadge();
 
@@ -4085,9 +4094,9 @@ optionGroups.forEach((group) => {
     const savedItemForLimit = getCartItemByKey(nextKey);
     const savedQtyForLimit = Number(savedItemForLimit?.qty || 0);
     if (savedItemForLimit && savedQtyForLimit > 0) {
-      probeNextRegularCartItemLimit(Number(product.id || 0), nextKey, savedQtyForLimit).catch((e) => {
-        console.warn("Qty limit probe after add-to-cart failed:", e);
-      });
+      if (typeof refreshNextRegularCartItemLimitLocal === "function") {
+        refreshNextRegularCartItemLimitLocal(Number(product.id || 0), nextKey, savedQtyForLimit);
+      }
     }
 
     // На мобильных: скрываем мобильные кнопки при закрытии карточки
@@ -4591,6 +4600,67 @@ optionGroups.forEach((group) => {
       return true;
     }
 
+    function canUseComboDraftForProductIdsLocal(draftCart, productIds) {
+      const ids = Array.isArray(productIds)
+        ? productIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+        : [];
+      if (!ids.length) return true;
+
+      if (typeof canUseCartDraftForProductIds === "function") {
+        try {
+          return canUseCartDraftForProductIds(draftCart, ids) !== false;
+        } catch {}
+      }
+
+      for (const pid of ids) {
+        const stockEntry = getStockLevelEntry(pid);
+        if (!stockEntry || stockEntry.qty === null || stockEntry.qty === undefined || stockEntry.isUnlimited) {
+          continue;
+        }
+        const stockQty = Number(stockEntry.qty);
+        if (!Number.isFinite(stockQty)) continue;
+        const consumed = calcProductStockConsumed(pid, draftCart);
+        if (consumed > stockQty + 1e-9) return false;
+      }
+      return true;
+    }
+
+    function canUseComboBlockSelectionAtIndex(blockIndex, candidateIndex, { preview = null } = {}) {
+      const block = blocks[blockIndex];
+      if (!block || !Array.isArray(block.products)) return false;
+      const prod = block.products[candidateIndex];
+      if (!prod) return false;
+      const productId = Number(prod.product_id || 0);
+      if (!Number.isFinite(productId) || productId <= 0) return false;
+
+      const snapshot = snapshotComboDraftState();
+      try {
+        selectedIndexByBlock[blockIndex] = candidateIndex;
+        const draftState = selectionStateByBlock[blockIndex];
+        if (preview && typeof preview === "object") {
+          applyComboPreviewToBlockState(draftState, productId, preview);
+        } else if (draftState && Number(draftState.product_id || 0) !== productId) {
+          Object.keys(draftState).forEach((k) => delete draftState[k]);
+          Object.assign(draftState, makeEmptyComboBlockState());
+        }
+
+        const draftCart = buildDraftComboCart(Math.max(1, Number(comboQty) || 1));
+        if (!draftCart) return false;
+        const selections = buildComboSelections();
+        const targetSelection =
+          selections[blockIndex] ||
+          selections.find((sel) => Number(sel?.product_id || 0) === productId) ||
+          null;
+        if (!targetSelection) return false;
+        const affectedProducts = collectComboDraftProductIds([targetSelection]);
+        return canUseComboDraftForProductIdsLocal(draftCart, Array.from(affectedProducts));
+      } catch {
+        return false;
+      } finally {
+        restoreComboDraftState(snapshot);
+      }
+    }
+
     function applyComboPreviewToBlockState(blockState, productId, preview) {
       if (!blockState || typeof blockState !== "object") return;
       const pid = Number(productId || 0);
@@ -4618,25 +4688,27 @@ optionGroups.forEach((group) => {
         : null;
     }
 
-    function canUseComboPickerCandidateWithPreview(blockIndex, candidateIndex, preview) {
-      const block = blocks[blockIndex];
-      if (!block || !Array.isArray(block.products)) return false;
-      const prod = block.products[candidateIndex];
-      if (!prod) return false;
-      const productId = Number(prod.product_id || 0);
-      if (!Number.isFinite(productId) || productId <= 0) return false;
-
-      const snapshot = snapshotComboDraftState();
-      try {
-        selectedIndexByBlock[blockIndex] = candidateIndex;
-        const draftState = selectionStateByBlock[blockIndex];
-        applyComboPreviewToBlockState(draftState, productId, preview);
-        return canUseComboDraftQtyLocal(Math.max(1, Number(comboQty) || 1));
-      } catch {
-        return false;
-      } finally {
-        restoreComboDraftState(snapshot);
+    function canUseComboPickerCandidateWithPreview(blockIndex, candidateIndex, preview, { scope = "block" } = {}) {
+      if (scope === "full") {
+        const block = blocks[blockIndex];
+        if (!block || !Array.isArray(block.products)) return false;
+        const prod = block.products[candidateIndex];
+        if (!prod) return false;
+        const productId = Number(prod.product_id || 0);
+        if (!Number.isFinite(productId) || productId <= 0) return false;
+        const snapshot = snapshotComboDraftState();
+        try {
+          selectedIndexByBlock[blockIndex] = candidateIndex;
+          const draftState = selectionStateByBlock[blockIndex];
+          applyComboPreviewToBlockState(draftState, productId, preview);
+          return canUseComboDraftQtyLocal(Math.max(1, Number(comboQty) || 1));
+        } catch {
+          return false;
+        } finally {
+          restoreComboDraftState(snapshot);
+        }
       }
+      return canUseComboBlockSelectionAtIndex(blockIndex, candidateIndex, { preview });
     }
 
     async function canUseComboDraftQty(desiredQty, { showToastOnOut = true } = {}) {
@@ -4994,7 +5066,41 @@ optionGroups.forEach((group) => {
 
     const discountBadgeText = discountPercent ? `-${discountPercent}%` : "";
 
+    function reconcileComboSelectionsForMainView() {
+      blocks.forEach((block, blockIndex) => {
+        const products = Array.isArray(block?.products) ? block.products : [];
+        if (!products.length) return;
+
+        let currentIdx = Number(selectedIndexByBlock[blockIndex]);
+        if (!Number.isFinite(currentIdx)) currentIdx = 0;
+        currentIdx = Math.max(0, Math.min(currentIdx, products.length - 1));
+        selectedIndexByBlock[blockIndex] = currentIdx;
+
+        const currentAllowed = canUseComboBlockSelectionAtIndex(blockIndex, currentIdx);
+        if (currentAllowed) return;
+
+        let fallbackIdx = -1;
+        for (let idx = 0; idx < products.length; idx++) {
+          if (idx === currentIdx) continue;
+          if (canUseComboBlockSelectionAtIndex(blockIndex, idx)) {
+            fallbackIdx = idx;
+            break;
+          }
+        }
+        if (fallbackIdx < 0) return;
+
+        selectedIndexByBlock[blockIndex] = fallbackIdx;
+        const fallbackProductId = Number(products[fallbackIdx]?.product_id || 0);
+        const draftState = selectionStateByBlock[blockIndex];
+        if (draftState && Number(draftState.product_id || 0) !== fallbackProductId) {
+          Object.keys(draftState).forEach((k) => delete draftState[k]);
+          Object.assign(draftState, makeEmptyComboBlockState());
+        }
+      });
+    }
+
     function renderMainView() {
+      reconcileComboSelectionsForMainView();
       if (openCartSheetCtx) {
         openCartSheetCtx.comboStepBack = null;
         sheetNavigationState.screen = "combo";
@@ -5163,8 +5269,6 @@ optionGroups.forEach((group) => {
               applyAutoAddRules();
               saveCart();
               if (typeof scheduleSyncAllProductCardsFromCart === "function") scheduleSyncAllProductCardsFromCart();
-              if (typeof primeVisibleProductAddability === "function") primeVisibleProductAddability();
-              if (typeof primeCartQtyHardLimits === "function") primeCartQtyHardLimits();
               renderCart();
               updateCartBadge();
               cartMutated = true;
@@ -5185,8 +5289,6 @@ optionGroups.forEach((group) => {
             applyAutoAddRules();
             saveCart();
             if (typeof scheduleSyncAllProductCardsFromCart === "function") scheduleSyncAllProductCardsFromCart();
-            if (typeof primeVisibleProductAddability === "function") primeVisibleProductAddability();
-            if (typeof primeCartQtyHardLimits === "function") primeCartQtyHardLimits();
             renderCart();
             updateCartBadge();
             cartMutated = true;
@@ -5239,21 +5341,7 @@ optionGroups.forEach((group) => {
         const isPickerUnavailableNow = () => {
           if (!hasPickerProductId) return false;
           if (idx === selectedIndexByBlock[blockIndex]) return false;
-          if (typeof isProductBlockedByIngredientRequirements === "function") {
-            try {
-              if (isProductBlockedByIngredientRequirements(pickerProductId)) return true;
-            } catch {}
-          }
-          const snapshot = snapshotComboDraftState();
-          selectedIndexByBlock[blockIndex] = idx;
-          const draftState = selectionStateByBlock[blockIndex];
-          if (draftState && Number(draftState.product_id || 0) !== pickerProductId) {
-            Object.keys(draftState).forEach((k) => delete draftState[k]);
-            Object.assign(draftState, makeEmptyComboBlockState());
-          }
-          const allowed = canUseComboDraftQtyLocal(Math.max(1, Number(comboQty) || 1));
-          restoreComboDraftState(snapshot);
-          return !allowed;
+          return !canUseComboBlockSelectionAtIndex(blockIndex, idx);
         };
         const pickerUnavailable = !isSelected && isPickerUnavailableNow();
         if (pickerUnavailable) return;
@@ -5447,7 +5535,9 @@ optionGroups.forEach((group) => {
           .then((preview) => {
             if (!card.isConnected) return;
             if (!isSelected) {
-              const candidateAllowed = canUseComboPickerCandidateWithPreview(blockIndex, idx, preview);
+              const candidateAllowed = canUseComboPickerCandidateWithPreview(blockIndex, idx, preview, {
+                scope: "block",
+              });
               if (!candidateAllowed) {
                 card.remove();
                 return;
@@ -5805,6 +5895,13 @@ optionGroups.forEach((group) => {
         }
       });
 
+      if (!listWrap.childElementCount) {
+        const emptyState = document.createElement("div");
+        emptyState.className = "shop-combo-picker-empty";
+        emptyState.textContent = "Нет доступных вариантов для замены";
+        listWrap.appendChild(emptyState);
+      }
+
       wrap.appendChild(listWrap);
 
       const { footer, updateFooterAction } = renderFooter({
@@ -5873,8 +5970,6 @@ optionGroups.forEach((group) => {
           applyAutoAddRules();
           saveCart();
           if (typeof scheduleSyncAllProductCardsFromCart === "function") scheduleSyncAllProductCardsFromCart();
-          if (typeof primeVisibleProductAddability === "function") primeVisibleProductAddability();
-          if (typeof primeCartQtyHardLimits === "function") primeCartQtyHardLimits();
           renderCart();
           updateCartBadge();
           queueCartStockRecheck(previousCartSnapshot, {
@@ -11853,8 +11948,6 @@ function initShopLate() {
         if (applyAutoAddRules()) {
           saveCart();
           if (typeof syncAllProductCardsFromCart === "function") syncAllProductCardsFromCart();
-          if (typeof primeVisibleProductAddability === "function") primeVisibleProductAddability();
-          if (typeof primeCartQtyHardLimits === "function") primeCartQtyHardLimits();
         }
         await warmupCartProducts();
         renderCart();

@@ -708,10 +708,6 @@
     _addressPendingPickupStoreId: null,
     _selectedPickupCity: null,
   };
-  let __cartStockProbeVersion = 1;
-  const productCartAddabilityCache = new Map();
-  const productCartAddabilityInFlight = new Map();
-
   let openCartSheetCtx = null;
   let categoryHeaders = [];
   let isProgrammaticCategoryScroll = false;
@@ -751,16 +747,6 @@
     if (!Number.isFinite(pid) || pid <= 0) return null;
     if (!(state.stockLevels instanceof Map)) state.stockLevels = new Map();
     return state.stockLevels.get(pid) || null;
-  }
-
-  function isProductStockKnownUnavailable(productId) {
-    const entry = getStockLevelEntry(productId);
-    if (!entry) return false;
-    if (entry.isAvailable !== undefined && entry.isAvailable !== null) {
-      return entry.isAvailable === false;
-    }
-    if (entry.qty === undefined || entry.qty === null) return false;
-    return Number(entry.qty) <= 0;
   }
 
   function upsertStockLevelRow(rawRow, source = "unknown") {
@@ -1451,9 +1437,6 @@
     try {
       localStorage.setItem(CART_KEY, JSON.stringify(state.cart));
     } catch {}
-    __cartStockProbeVersion += 1;
-    productCartAddabilityCache.clear();
-    productCartAddabilityInFlight.clear();
   }
 
   function loadAutoAddDismissed() {
@@ -2235,8 +2218,6 @@
 
   function syncCartUiAfterStateChange() {
     renderProducts();
-    primeVisibleProductAddability();
-    primeCartQtyHardLimits();
     renderCart();
     updateCartBadge();
 
@@ -2390,114 +2371,6 @@
     const qty = Number(currentQty || 0);
     if (!Number.isFinite(qty)) return false;
     return qty >= limit - 1e-9;
-  }
-
-  function isProductQtyPlusBlocked(productId) {
-    const pid = Number(productId || 0);
-    if (!Number.isFinite(pid) || pid <= 0) return false;
-    const items = (Array.isArray(state.cart) ? state.cart : []).filter((it) => Number(it?.product_id || 0) === pid);
-    if (!items.length) return false;
-    let knownLimitSum = 0;
-    let hasKnownLimits = false;
-    items.forEach((it) => {
-      const limit = getCartQtyHardLimit(it?.key);
-      if (limit == null) return;
-      knownLimitSum += Math.max(0, Number(limit));
-      hasKnownLimits = true;
-    });
-    if (!hasKnownLimits) return false;
-    return Number(cartQty(pid) || 0) >= knownLimitSum - 1e-9;
-  }
-
-  function getProductCartAddabilityEntry(productId) {
-    const pid = Number(productId || 0);
-    if (!Number.isFinite(pid) || pid <= 0) return null;
-    const entry = productCartAddabilityCache.get(pid);
-    if (!entry) return null;
-    if (Number(entry.version) !== Number(__cartStockProbeVersion)) {
-      productCartAddabilityCache.delete(pid);
-      return null;
-    }
-    return entry;
-  }
-
-  function hasProductCartAddability(productId) {
-    return !!getProductCartAddabilityEntry(productId);
-  }
-
-  function isProductCartAddBlocked(productId) {
-    if (isProductStockKnownUnavailable(productId)) return true;
-    const entry = getProductCartAddabilityEntry(productId);
-    return !!entry?.blocked;
-  }
-
-  function setProductCartAddability(productId, blocked, version = __cartStockProbeVersion) {
-    const pid = Number(productId || 0);
-    if (!Number.isFinite(pid) || pid <= 0) return false;
-    const normalized = !!blocked;
-    const next = { blocked: normalized, version: Number(version) };
-    const prev = productCartAddabilityCache.get(pid);
-    const changed = !prev || !!prev.blocked !== normalized || Number(prev.version) !== Number(next.version);
-    productCartAddabilityCache.set(pid, next);
-    return changed;
-  }
-
-  async function probeProductCartAddability(productId, opts = {}) {
-    const pid = Number(productId || 0);
-    if (!Number.isFinite(pid) || pid <= 0) return { blocked: false, changed: false };
-
-    const version = Number(__cartStockProbeVersion);
-    if (cartCountTotal() <= 0) {
-      const changed = setProductCartAddability(pid, false, version);
-      return { blocked: false, changed };
-    }
-
-    if (!opts.force) {
-      const cached = getProductCartAddabilityEntry(pid);
-      if (cached) return { blocked: !!cached.blocked, changed: false };
-    }
-
-    const inFlightKey = `${pid}:${version}`;
-    if (!opts.force && productCartAddabilityInFlight.has(inFlightKey)) {
-      return productCartAddabilityInFlight.get(inFlightKey);
-    }
-
-    const probePromise = (async () => {
-      try {
-        const targetKey = resolveCartKeyForQtyChange(pid, +1, makeCartKey(pid, []), state.cart);
-        const gate = await canIncreaseRegularCartItemBeforeApply(pid, +1, targetKey, {
-          showToastOnOut: opts.showToastOnOut === true,
-          refreshOnOut: opts.refreshOnOut === true,
-          toastMessage: opts.toastMessage || null,
-        });
-        if (Number(__cartStockProbeVersion) !== version) {
-          return { blocked: false, changed: false };
-        }
-        const blocked = !gate.allowed;
-        const changed = setProductCartAddability(pid, blocked, version);
-        return { blocked, changed };
-      } catch (e) {
-        if (opts.logError !== false) console.warn("Product addability probe failed:", e);
-        return { blocked: false, changed: false };
-      } finally {
-        productCartAddabilityInFlight.delete(inFlightKey);
-      }
-    })();
-
-    productCartAddabilityInFlight.set(inFlightKey, probePromise);
-    return probePromise;
-  }
-
-  function primeVisibleProductAddability() {
-    // UI now relies on synchronous local stock calculations.
-    // Keep this as a no-op to avoid expensive warmup probes.
-    return;
-  }
-
-  function primeCartQtyHardLimits() {
-    // UI now relies on synchronous local stock calculations.
-    // Keep this as a no-op to avoid expensive warmup probes.
-    return;
   }
 
   function refreshQtyLimitUi() {
@@ -2699,7 +2572,7 @@
     return { allowed: true, targetKey, currentQty, nextQty };
   }
 
-  async function probeNextRegularCartItemLimit(pid, targetKey, expectedQty) {
+  function refreshNextRegularCartItemLimitLocal(pid, targetKey, expectedQty) {
     const currentItem = getCartItemByKey(targetKey);
     const currentQty = Number(currentItem?.qty || 0);
     if (!currentItem || currentQty <= 0 || currentQty !== Number(expectedQty)) {
@@ -6705,8 +6578,6 @@ async function initAddresses() {
       clearAutoAddDismissedIfCartEmpty();
       saveCart();
       renderProducts();
-      primeVisibleProductAddability();
-      primeCartQtyHardLimits();
       updateCartBadge();
 
       // ????????? footer ? ?????? ??????????
@@ -6911,7 +6782,6 @@ function updateCartBadge() {
     applyAutoAddRules();
     saveCart();
     renderProducts();
-    primeVisibleProductAddability();
     prioritizeAboveFoldCardImages();
     renderCart();
     updateCartBadge();
@@ -7073,7 +6943,6 @@ function updateCartBadge() {
     }
     saveCart();
     scheduleSyncAllProductCardsFromCart();
-    primeVisibleProductAddability();
 
     const cards = elProductsGrid.querySelectorAll(`.sp-card[data-product-id="${pid}"]`);
     if (cards.length && p) {
@@ -7099,9 +6968,7 @@ function updateCartBadge() {
     if (qtyDelta > 0) {
       const currentQtyForKey = Number(getCartItemByKey(targetKey)?.qty || 0);
       if (currentQtyForKey > 0) {
-        probeNextRegularCartItemLimit(pid, targetKey, currentQtyForKey).catch((e) => {
-          console.warn("Qty limit probe failed:", e);
-        });
+        refreshNextRegularCartItemLimitLocal(pid, targetKey, currentQtyForKey);
       } else {
         clearCartQtyHardLimit(targetKey);
       }
@@ -7156,7 +7023,6 @@ function updateCartBadge() {
     // Don't block click -> scroll; load in background.
     ensureCategoryLoaded(categoryId, { limit: 200 });
     await warmupCartProducts();
-    primeCartQtyHardLimits();
     renderCart();
   }
 
@@ -7463,8 +7329,6 @@ function updateCartBadge() {
         state.combosByCategory = new Map();
       }
       renderProducts();
-      primeVisibleProductAddability();
-      primeCartQtyHardLimits();
       renderCart();
       updateCartBadge();
     } finally {
@@ -7518,8 +7382,6 @@ async function initCore() {
     // чтобы сразу использовать тот же путь и те же данные, что и при
     // последующих обновлениях (после любых действий пользователя).
     await warmupCartProducts();
-    primeVisibleProductAddability();
-    primeCartQtyHardLimits();
     renderCart();
     updateCartBadge();
     bindLateActionDelegates();
