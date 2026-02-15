@@ -330,19 +330,43 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const categoryId = Number(req.query.category_id || allCategoryId);
       if (!Number.isFinite(categoryId)) return res.status(400).json({ ok: false, error: 'BAD_CATEGORY_ID' });
+      const paginationRequested = req.query.limit !== undefined || req.query.offset !== undefined;
+      const listMode = helpers.toBool(req.query.list, false);
+      const listSelectFields = `
+        p.id, p.tenant_id, p.name, p.sku, p.description_short, p.description,
+        p.price, p.old_price, p.cost_price,
+        p.unit_id, p.base_unit_id, p.base_qty,
+        p.photos_json,
+        p.is_active, p.site_visibility,
+        p.created_at, p.updated_at
+      `;
+      const productSelectFields = listMode ? listSelectFields : 'p.*';
+      let limit = null;
+      let offset = 0;
+      if (paginationRequested) {
+        limit = Number(req.query.limit ?? 80);
+        offset = Number(req.query.offset ?? 0);
+        if (!Number.isFinite(limit) || limit <= 0) limit = 80;
+        if (limit > 200) limit = 200;
+        if (!Number.isFinite(offset) || offset < 0) offset = 0;
+        limit = Math.trunc(limit);
+        offset = Math.trunc(offset);
+      }
 
       if (categoryId === allCategoryId) {
-    const [rows] = await db.query(
-        `SELECT p.*, pc.sort_order AS link_sort_order, s.qty AS stock_qty
+        const baseSql =
+          `SELECT ${productSelectFields}, pc.sort_order AS link_sort_order, s.qty AS stock_qty
          FROM prod_products p
          LEFT JOIN prod_product_stocks s
            ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
          LEFT JOIN prod_product_categories pc
            ON pc.tenant_id = p.tenant_id AND pc.product_id = p.id AND pc.category_id = ?
          WHERE p.tenant_id=?
-         ORDER BY COALESCE(pc.sort_order, 999999) ASC, p.id ASC`,
-        [storeId, categoryId, tenantId]
-      );
+         ORDER BY COALESCE(pc.sort_order, 999999) ASC, p.id ASC`;
+        const baseParams = [storeId, categoryId, tenantId];
+        const [rows] = paginationRequested
+          ? await db.query(`${baseSql} LIMIT ? OFFSET ?`, [...baseParams, limit, offset])
+          : await db.query(baseSql, baseParams);
 
         const missing = [];
         for (const r of rows) {
@@ -369,24 +393,64 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
           );
         }
 
-        return res.json({ ok: true, data: rows, category_id: categoryId });
+        if (!paginationRequested) {
+          return res.json({ ok: true, data: rows, category_id: categoryId });
+        }
+
+        const [[cntRow]] = await db.query(
+          `SELECT COUNT(*) AS c
+           FROM prod_products p
+           WHERE p.tenant_id=?`,
+          [tenantId]
+        );
+
+        return res.json({
+          ok: true,
+          data: rows,
+          category_id: categoryId,
+          total: Number(cntRow?.c || 0),
+          limit,
+          offset,
+        });
       }
 
-      const [rows] = await db.query(
-        `SELECT p.*, pc.sort_order AS link_sort_order, s.qty AS stock_qty
+      const baseSql =
+        `SELECT ${productSelectFields}, pc.sort_order AS link_sort_order, s.qty AS stock_qty
          FROM prod_product_categories pc
          JOIN prod_products p
            ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
          LEFT JOIN prod_product_stocks s
            ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
          WHERE pc.tenant_id=? AND pc.category_id=?
-         ORDER BY pc.sort_order ASC, pc.id ASC`,
-        [storeId, tenantId, categoryId]
-      );
+         ORDER BY pc.sort_order ASC, pc.id ASC`;
+      const baseParams = [storeId, tenantId, categoryId];
+      const [rows] = paginationRequested
+        ? await db.query(`${baseSql} LIMIT ? OFFSET ?`, [...baseParams, limit, offset])
+        : await db.query(baseSql, baseParams);
 
       for (const r of rows) r.photos = helpers.safeJsonArray(r.photos_json);
 
-      res.json({ ok: true, data: rows, category_id: categoryId });
+      if (!paginationRequested) {
+        return res.json({ ok: true, data: rows, category_id: categoryId });
+      }
+
+      const [[cntRow]] = await db.query(
+        `SELECT COUNT(*) AS c
+         FROM prod_product_categories pc
+         JOIN prod_products p
+           ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
+         WHERE pc.tenant_id=? AND pc.category_id=?`,
+        [tenantId, categoryId]
+      );
+
+      res.json({
+        ok: true,
+        data: rows,
+        category_id: categoryId,
+        total: Number(cntRow?.c || 0),
+        limit,
+        offset,
+      });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });

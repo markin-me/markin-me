@@ -937,13 +937,6 @@
           }
         } catch {}
 
-        if (elProductContent && !elProductContent.classList.contains("hidden")) {
-          try {
-            await openProductDetails(openedProductId, {
-              cartKey: openProductCtx?.cartKey || null,
-            });
-          } catch {}
-        }
       }
 
       await warmupCartProducts();
@@ -7383,6 +7376,8 @@ async function initCore() {
     // последующих обновлениях (после любых действий пользователя).
     await warmupCartProducts();
     renderCart();
+    // Apply cart-header address mode immediately on first paint.
+    showCartView();
     updateCartBadge();
     bindLateActionDelegates();
     try { window.scrollTo(0, 0); } catch {}
