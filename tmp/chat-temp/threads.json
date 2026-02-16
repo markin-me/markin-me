@@ -1,0 +1,250 @@
+{
+  "tenants": {
+    "1": {
+      "threads": {
+        "4": {
+          "updated_at": "2026-02-16T08:44:04.351Z",
+          "meta": {
+            "name": "Александр",
+            "phone": "79835549121"
+          },
+          "messages": [
+            {
+              "id": "1771213375020-1-s98jk",
+              "direction": "in",
+              "text": "прив",
+              "createdAt": "2026-02-16T03:42:55.020Z",
+              "editedAt": "",
+              "read": true,
+              "pinned": false,
+              "reaction": "",
+              "replyTo": null,
+              "attachment": null,
+              "deliveryStatus": "read",
+              "deliveredAt": "2026-02-16T03:42:55.727Z",
+              "readAt": "2026-02-16T04:22:56.411Z"
+            },
+            {
+              "id": "1771215719511-1-z72pr",
+              "direction": "in",
+              "text": "здравствуйте!",
+              "createdAt": "2026-02-16T04:21:59.511Z",
+              "editedAt": "",
+              "read": true,
+              "pinned": false,
+              "reaction": "",
+              "replyTo": null,
+              "attachment": null,
+              "deliveryStatus": "read",
+              "deliveredAt": "2026-02-16T04:22:00.230Z",
+              "readAt": "2026-02-16T04:22:56.411Z"
+            },
+            {
+              "id": "1771215792231-yprdfa",
+              "direction": "out",
+              "text": "привет",
+              "createdAt": "2026-02-16T04:23:12.231Z",
+              "editedAt": "",
+              "read": true,
+              "pinned": false,
+              "reaction": "",
+              "replyTo": null,
+              "attachment": null,
+              "deliveryStatus": "",
+              "deliveredAt": "2026-02-16T04:23:12.591Z",
+              "readAt": "2026-02-16T04:23:17.518Z"
+            },
+            {
+              "id": "1771218713787-1-2oq54",
+              "direction": "in",
+              "text": "при🤝🤝🤝",
+              "createdAt": "2026-02-16T05:11:53.787Z",
+              "editedAt": "",
+              "read": true,
+              "pinned": false,
+              "reaction": "",
+              "replyTo": null,
+              "attachment": null,
+              "deliveryStatus": "read",
+              "deliveredAt": "2026-02-16T05:11:54.583Z",
+              "readAt": "2026-02-16T05:11:55.584Z"
+            },
+            {
+              "id": "1771218727100-2-jjn4g",
+              "direction": "in",
+              "text": "ку",
+              "createdAt": "2026-02-16T05:12:07.100Z",
+              "editedAt": "",
+              "read": true,
+              "pinned": false,
+              "reaction": "",
+              "replyTo": null,
+              "attachment": null,
+              "deliveryStatus": "read",
+              "deliveredAt": "2026-02-16T05:12:07.806Z",
+              "readAt": "2026-02-16T05:12:14.883Z"
+            },
+            {
+              "id": "1771218743178-3-2xigc",
+              "direction": "in",
+              "text": "ку",
+              "createdAt": "2026-02-16T05:12:23.178Z",
+              "editedAt": "",
+              "read": true,
+              "pinned": false,
+              "reaction": "",
+              "replyTo": null,
+              "attachment": null,
+              "deliveryStatus": "read",
+              "deliveredAt": "2026-02-16T05:12:30.615Z",
+              "readAt": "2026-02-16T05:12:30.660Z"
+            },
+            {
+              "id": "1771218925583-4-t2aws",
+              "direction": "in",
+              "text": "какпосмотреть?",
+              "createdAt": "2026-02-16T05:15:25.583Z",
+              "editedAt": "",
+              "read": true,
+              "pinned": false,
+              "reaction": "",
+              "replyTo": {
+                "id": "1771218905553-zntodh",
+                "sender": "Лия",
+                "text": "📎 Визитки.jpg"
+              },
+              "attachment": null,
+              "deliveryStatus": "read",
+              "deliveredAt": "2026-02-16T05:15:26.290Z",
+              "readAt": "2026-02-16T05:15:27.279Z"
+            },
+            {
+              "id": "1771220499472-1-wrivo",
+              "direction": "in",
+              "text": "🚀",
+              "createdAt": "2026-02-16T05:41:39.472Z",
+              "editedAt": "",
+              "read": true,
+              "pinned": false,
+              "reaction": "",
+              "replyTo": null,
+              "attachment": null,
+              "deliveryStatus": "read",
+              "deliveredAt": "2026-02-16T05:41:40.582Z",
+              "readAt": "2026-02-16T05:41:40.582Z"
+            },
+            {
+              "id": "1771224211250-1-4ds05",
+              "direction": "in",
+              "text": "а",
+              "createdAt": "2026-02-16T06:43:31.250Z",
+              "editedAt": "2026-02-16T07:14:35.633Z",
+              "read": true,
+              "pinned": false,
+              "reaction": "",
+              "replyTo": null,
+              "attachment": null,
+              "deliveryStatus": "read",
+              "deliveredAt": "2026-02-16T06:43:31.959Z",
+              "readAt": "2026-02-16T06:43:43.019Z"
+            },
+            {
+              "id": "1771226152392-1-8l0hu",
+              "direction": "in",
+              "text": "привет",
+              "createdAt": "2026-02-16T07:15:52.392Z",
+              "editedAt": "",
+              "read": true,
+              "pinned": false,
+              "reaction": "",
+              "replyTo": {
+                "id": "1771215792231-yprdfa",
+                "sender": "Лия",
+                "text": "привет"
+              },
+              "attachment": null,
+              "deliveryStatus": "read",
+              "deliveredAt": "2026-02-16T07:15:52.608Z",
+              "readAt": "2026-02-16T07:15:53.586Z"
+            },
+            {
+              "id": "1771226288227-2-6now4",
+              "direction": "in",
+              "text": "Где мой",
+              "createdAt": "2026-02-16T07:18:08.227Z",
+              "editedAt": "2026-02-16T07:25:26.414Z",
+              "read": true,
+              "pinned": false,
+              "reaction": "",
+              "replyTo": null,
+              "attachment": null,
+              "deliveryStatus": "read",
+              "deliveredAt": "2026-02-16T07:18:13.305Z",
+              "readAt": "2026-02-16T07:18:13.306Z"
+            },
+            {
+              "id": "1771226345212-3-2xz7a",
+              "direction": "in",
+              "text": "Друг",
+              "createdAt": "2026-02-16T07:19:05.212Z",
+              "editedAt": "2026-02-16T07:25:10.888Z",
+              "read": true,
+              "pinned": false,
+              "reaction": "",
+              "replyTo": null,
+              "attachment": null,
+              "deliveryStatus": "read",
+              "deliveredAt": "2026-02-16T07:19:05.922Z",
+              "readAt": "2026-02-16T07:22:36.794Z"
+            },
+            {
+              "id": "1771226682043-y5mt8i",
+              "direction": "out",
+              "text": "какой у вас вопрос?",
+              "createdAt": "2026-02-16T07:24:42.043Z",
+              "editedAt": "",
+              "read": true,
+              "pinned": false,
+              "reaction": "",
+              "replyTo": null,
+              "attachment": null,
+              "deliveryStatus": "",
+              "deliveredAt": "2026-02-16T07:24:42.745Z",
+              "readAt": "2026-02-16T07:24:47.365Z"
+            },
+            {
+              "id": "1771226870551-2-mgmmp",
+              "direction": "in",
+              "text": "жд",
+              "createdAt": "2026-02-16T07:27:50.551Z",
+              "editedAt": "",
+              "read": true,
+              "pinned": false,
+              "reaction": "",
+              "replyTo": null,
+              "attachment": null,
+              "deliveryStatus": "read",
+              "deliveredAt": "2026-02-16T07:27:51.262Z",
+              "readAt": "2026-02-16T07:27:58.094Z"
+            },
+            {
+              "id": "1771227549087-3-1gwtq",
+              "direction": "in",
+              "text": "керукоук",
+              "createdAt": "2026-02-16T07:39:09.087Z",
+              "editedAt": "",
+              "read": true,
+              "pinned": false,
+              "reaction": "",
+              "replyTo": null,
+              "attachment": null,
+              "deliveryStatus": "read",
+              "deliveredAt": "2026-02-16T07:39:09.802Z",
+              "readAt": "2026-02-16T07:39:23.881Z"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

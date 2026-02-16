@@ -1,0 +1,124 @@
+<div class="center-stack chat-center-stack">
+  <div class="panel toolbar-island chat-header-island">
+    <div class="toolbar chat-header-toolbar">
+      <div class="chat-main-order" id="chatHeaderOrder">
+        <div class="chat-main-order-title" id="chatOrderTitle">Последний заказ: —</div>
+        <span class="chat-main-order-status" id="chatOrderStatus">—</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel chat-main-panel">
+    <div class="panel-body chat-main-body no-scrollbar" id="chatMessagesWrap">
+      <div class="empty-state chat-empty-state" id="chatEmptyState">
+        <div class="empty-icon"><i class="fas fa-comments"></i></div>
+        <div class="empty-title">Чат не выбран</div>
+        <div class="empty-text">Выберите клиента в левой колонке, чтобы открыть переписку</div>
+      </div>
+      <div class="chat-messages" id="chatMessages"></div>
+    </div>
+  </div>
+
+  <div class="panel chat-footer-island">
+    <input id="chatAttachmentInput" type="file" class="hidden" accept="image/*" multiple />
+
+    <div class="chat-main-composer">
+      <button type="button" class="icon-btn chat-composer-btn" id="chatAttachBtn" aria-label="Прикрепить файл" title="Прикрепить файл">
+        <i class="fas fa-paperclip"></i>
+      </button>
+
+      <textarea
+        id="chatMessageInput"
+        class="control chat-message-input"
+        maxlength="2000"
+        rows="1"
+        wrap="soft"
+        placeholder="Введите сообщение"
+        autocomplete="off"
+      ></textarea>
+
+      <div class="chat-emoji-wrap">
+        <button type="button" class="icon-btn chat-composer-btn" id="chatEmojiBtn" aria-label="Эмодзи" title="Эмодзи">
+          <i class="far fa-smile"></i>
+        </button>
+        <div class="chat-emoji-popover hidden" id="chatEmojiPopover"></div>
+      </div>
+
+      <button type="button" class="btn btn-primary btn-sm chat-send-btn" id="chatSendBtn">
+        <i class="fas fa-paper-plane"></i>
+      </button>
+    </div>
+  </div>
+
+  <div class="chat-selection-toolbar hidden" id="chatSelectionToolbar" aria-live="polite">
+    <button type="button" class="chat-selection-close" id="chatSelectionCloseBtn" aria-label="Отменить выбор" title="Отменить выбор">
+      <i class="fas fa-times"></i>
+    </button>
+    <div class="chat-selection-count" id="chatSelectionCount">Выбрано 0 сообщений</div>
+    <div class="chat-selection-actions">
+      <button type="button" class="chat-selection-action" id="chatSelectionForwardBtn" aria-label="Переслать" title="Переслать">
+        <i class="fas fa-share"></i>
+      </button>
+      <button type="button" class="chat-selection-action" id="chatSelectionDownloadBtn" aria-label="Скачать" title="Скачать">
+        <i class="fas fa-download"></i>
+      </button>
+      <button type="button" class="chat-selection-action" id="chatSelectionCopyBtn" aria-label="Скопировать" title="Скопировать">
+        <i class="far fa-copy"></i>
+      </button>
+      <button type="button" class="chat-selection-action is-danger" id="chatSelectionDeleteBtn" aria-label="Удалить" title="Удалить">
+        <i class="far fa-trash-alt"></i>
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="chat-reaction-bar hidden" id="chatMessageReactionBar" role="group" aria-label="Реакции">
+  <button type="button" class="chat-reaction-btn" data-chat-reaction-slot="quick" data-chat-reaction="🥰">🥰</button>
+  <button type="button" class="chat-reaction-btn" data-chat-reaction-slot="quick" data-chat-reaction="👍">👍</button>
+  <button type="button" class="chat-reaction-btn" data-chat-reaction-slot="quick" data-chat-reaction="🔥">🔥</button>
+  <button type="button" class="chat-reaction-btn" data-chat-reaction-slot="quick" data-chat-reaction="❤️">❤️</button>
+  <button type="button" class="chat-reaction-btn" data-chat-reaction-slot="quick" data-chat-reaction="👎">👎</button>
+  <button type="button" class="chat-reaction-btn" data-chat-reaction-slot="quick" data-chat-reaction="👏">👏</button>
+  <button type="button" class="chat-reaction-btn" data-chat-reaction-slot="quick" data-chat-reaction="😃">😃</button>
+
+  <button type="button" class="chat-reaction-btn chat-reaction-extra" data-chat-reaction-slot="extra" data-chat-reaction="😢">😢</button>
+  <button type="button" class="chat-reaction-btn chat-reaction-extra" data-chat-reaction-slot="extra" data-chat-reaction="😕">😕</button>
+  <button type="button" class="chat-reaction-btn chat-reaction-extra" data-chat-reaction-slot="extra" data-chat-reaction="😞">😞</button>
+  <button type="button" class="chat-reaction-btn chat-reaction-extra" data-chat-reaction-slot="extra" data-chat-reaction="😟">😟</button>
+  <button type="button" class="chat-reaction-btn chat-reaction-extra" data-chat-reaction-slot="extra" data-chat-reaction="🙁">🙁</button>
+  <button type="button" class="chat-reaction-btn chat-reaction-extra" data-chat-reaction-slot="extra" data-chat-reaction="😮">😮</button>
+
+  <button type="button" class="chat-reaction-close chat-reaction-more" data-chat-reaction="__toggle_more__" aria-label="Показать ещё реакции" aria-expanded="false">
+    <i class="fas fa-chevron-down"></i>
+  </button>
+</div>
+
+<div class="chat-message-menu hidden" id="chatMessageContextMenu" role="menu" aria-label="Действия с сообщением">
+  <button type="button" class="chat-message-menu-btn" data-chat-msg-action="reply">
+    <i class="fas fa-reply"></i>
+    <span>Ответить</span>
+  </button>
+  <button type="button" class="chat-message-menu-btn" data-chat-msg-action="copy">
+    <i class="fas fa-copy"></i>
+    <span>Скопировать</span>
+  </button>
+  <button type="button" class="chat-message-menu-btn" data-chat-msg-action="edit" id="chatMenuEditAction">
+    <i class="fas fa-pen"></i>
+    <span>Изменить</span>
+  </button>
+  <button type="button" class="chat-message-menu-btn is-danger" data-chat-msg-action="delete">
+    <i class="fas fa-trash"></i>
+    <span>Удалить</span>
+  </button>
+  <div class="chat-message-menu-divider"></div>
+  <button type="button" class="chat-message-menu-btn" data-chat-msg-action="select">
+    <i class="far fa-circle-check"></i>
+    <span>Выбрать</span>
+  </button>
+</div>
+
+<!-- Hidden scaffold so clients.js can run its original logic for the right column -->
+<div class="hidden" aria-hidden="true">
+  <%- include('../clients/left') %>
+  <%- include('../clients/center') %>
+</div>

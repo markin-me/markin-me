@@ -1,0 +1,67 @@
+<div class="shop-company-chat-overlay" id="shopCompanyChatOverlay" aria-hidden="true">
+  <section class="shop-company-chat-modal" role="dialog" aria-modal="true" aria-labelledby="shopCompanyChatTitle">
+    <header class="shop-company-chat-modal__header">
+      <h2 class="shop-company-chat-modal__title" id="shopCompanyChatTitle">Добро пожаловать в чат!</h2>
+      <button class="shop-company-chat-modal__close" id="shopCompanyChatCloseBtn" type="button" aria-label="Закрыть чат">
+        <i class="fas fa-times"></i>
+      </button>
+    </header>
+
+    <div class="shop-company-chat-modal__body">
+      <div class="shop-company-chat-feed" id="shopCompanyChatFeed" aria-live="polite">
+        <div class="shop-company-chat-thread" id="shopCompanyChatThread"></div>
+      </div>
+
+      <button class="shop-company-chat-scroll-down hidden" id="shopCompanyChatScrollDownBtn" type="button" aria-label="К последним сообщениям">
+        <i class="fas fa-chevron-down"></i>
+      </button>
+
+      <div class="shop-company-chat-reaction-bar hidden" id="shopCompanyChatReactionBar" role="group" aria-label="Реакции">
+        <button type="button" class="shop-company-chat-reaction-btn" data-reaction-slot="quick" data-reaction="🥰">🥰</button>
+        <button type="button" class="shop-company-chat-reaction-btn" data-reaction-slot="quick" data-reaction="👍">👍</button>
+        <button type="button" class="shop-company-chat-reaction-btn" data-reaction-slot="quick" data-reaction="🔥">🔥</button>
+        <button type="button" class="shop-company-chat-reaction-btn" data-reaction-slot="quick" data-reaction="❤️">❤️</button>
+        <button type="button" class="shop-company-chat-reaction-btn" data-reaction-slot="quick" data-reaction="👎">👎</button>
+        <button type="button" class="shop-company-chat-reaction-btn" data-reaction-slot="quick" data-reaction="👏">👏</button>
+        <button type="button" class="shop-company-chat-reaction-btn" data-reaction-slot="quick" data-reaction="😃">😃</button>
+
+        <button type="button" class="shop-company-chat-reaction-btn shop-company-chat-reaction-extra" data-reaction-slot="extra" data-reaction="😢">😢</button>
+        <button type="button" class="shop-company-chat-reaction-btn shop-company-chat-reaction-extra" data-reaction-slot="extra" data-reaction="😕">😕</button>
+        <button type="button" class="shop-company-chat-reaction-btn shop-company-chat-reaction-extra" data-reaction-slot="extra" data-reaction="😞">😞</button>
+        <button type="button" class="shop-company-chat-reaction-btn shop-company-chat-reaction-extra" data-reaction-slot="extra" data-reaction="😟">😟</button>
+        <button type="button" class="shop-company-chat-reaction-btn shop-company-chat-reaction-extra" data-reaction-slot="extra" data-reaction="🙁">🙁</button>
+        <button type="button" class="shop-company-chat-reaction-btn shop-company-chat-reaction-extra" data-reaction-slot="extra" data-reaction="😮">😮</button>
+
+        <button type="button" class="shop-company-chat-reaction-close shop-company-chat-reaction-more" data-reaction="__toggle_more__" aria-label="Показать ещё реакции" aria-expanded="false">
+          <i class="fas fa-chevron-down"></i>
+        </button>
+      </div>
+
+      <form class="shop-company-chat-composer" id="shopCompanyChatComposer">
+        <input id="shopCompanyChatAttachmentInput" type="file" class="hidden" accept="image/*" multiple />
+        <button class="shop-company-chat-composer__btn" id="shopCompanyChatAttachBtn" type="button" aria-label="Прикрепить">
+          <i class="fas fa-paperclip"></i>
+        </button>
+        <textarea
+          class="shop-company-chat-composer__input"
+          id="shopCompanyChatInput"
+          autocomplete="off"
+          placeholder="Введите сообщение"
+          rows="1"
+          wrap="soft"
+        ></textarea>
+
+        <div class="shop-company-chat-emoji-wrap">
+          <button class="shop-company-chat-composer__btn" id="shopCompanyChatEmojiBtn" type="button" aria-label="Эмодзи">
+            <i class="far fa-smile"></i>
+          </button>
+          <div class="shop-company-chat-emoji-popover hidden" id="shopCompanyChatEmojiPopover"></div>
+        </div>
+
+        <button class="shop-company-chat-composer__btn shop-company-chat-composer__btn--send" type="submit" aria-label="Отправить">
+          <i class="fas fa-paper-plane"></i>
+        </button>
+      </form>
+    </div>
+  </section>
+</div>

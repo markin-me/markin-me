@@ -36,6 +36,14 @@
       </li>
 
       <li>
+        <a href="/dashboard/chat" id="sidebarChatNavLink" class="nav-item nav-item--chat <%= activePage === 'chat' ? 'active-nav' : '' %>">
+          <i class="fas fa-comments nav-icon"></i>
+          <span class="nav-text">Чат с клиентами</span>
+          <span class="sidebar-chat-unread hidden" id="sidebarChatUnreadBadge" aria-live="polite" aria-atomic="true"></span>
+        </a>
+      </li>
+
+      <li>
         <a href="/dashboard/settings" class="nav-item <%= activePage === 'settings' ? 'active-nav' : '' %>">
           <i class="fas fa-cog nav-icon"></i>
           <span class="nav-text">Настройки</span>
