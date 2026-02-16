@@ -15,6 +15,7 @@
   const addMainBtn = $("#addMainBtn");
   const productsList = $("#productsList");
   const productsEmptyHint = $("#productsEmptyHint");
+  const productsScrollEl = productsList ? productsList.closest(".panel-body") : null;
   const categoriesMainList = $("#categoriesMainList");
   const categoriesEmptyHint = $("#categoriesEmptyHint");
   const optionsGroupsList = $("#optionsGroupsList");
@@ -417,6 +418,10 @@
     mode: "products", // products | categories | ...
     categories: [],
     products: [],
+    productsOffset: 0,
+    productsTotal: 0,
+    productsHasMore: true,
+    productsLoading: false,
     currentCategoryId: null,
     allCategoryId: null,
     selectedProductId: null,
@@ -543,6 +548,9 @@
   let comboBlockPickerSavedFooterState = null;
   let comboBlockPickerSavedHandlers = null;
   const autoAddSearchTimers = new Map();
+  const PRODUCTS_PAGE_LIMIT = 80;
+  const PRODUCTS_SCROLL_THRESHOLD_PX = 220;
+  let productsRequestToken = 0;
 
   // ---------------- API ----------------
 
@@ -1337,21 +1345,12 @@
     }
   }
 
-  async function loadProducts(categoryId) {
-    const cid = categoryId || state.currentCategoryId;
-    if (!cid) {
-      state.products = [];
-      state.combosInCategory = [];
-      return;
-    }
-    const res = await api(`/api/prod_products?tenant_id=${TENANT_ID}&category_id=${cid}`);
-    const products = Array.isArray(res.data) ? res.data : [];
-    // Hide items that were "deleted" via soft-delete (is_active=0 & site_visibility=0).
-    state.products = products.filter(
-      (p) => !(Number(p.is_active) === 0 && Number(p.site_visibility) === 0)
-    );
-    const cat = state.categories.find((c) => Number(c.id) === Number(cid));
-    const categoryCode = cat && cat.code && String(cat.code).trim() && cat.code !== "all" ? String(cat.code).trim() : null;
+  async function loadCombosForCategory(categoryId) {
+    const cat = state.categories.find((c) => Number(c.id) === Number(categoryId));
+    const categoryCode =
+      cat && cat.code && String(cat.code).trim() && cat.code !== "all"
+        ? String(cat.code).trim()
+        : null;
     try {
       const combosRes = await apiGetCombos();
       const allCombos = Array.isArray(combosRes?.data) ? combosRes.data : [];
@@ -1362,6 +1361,111 @@
       }
     } catch (e) {
       state.combosInCategory = [];
+    }
+  }
+
+  function buildProductsListQuery(categoryId, offset, limit) {
+    const qs = new URLSearchParams();
+    qs.set("tenant_id", String(TENANT_ID));
+    qs.set("category_id", String(categoryId));
+    qs.set("offset", String(offset));
+    qs.set("limit", String(limit));
+    qs.set("list", "1");
+    return qs;
+  }
+
+  async function loadMoreProducts() {
+    if (state.productsLoading || !state.productsHasMore) return;
+    const cid = state.currentCategoryId;
+    if (!cid) return;
+
+    state.productsLoading = true;
+    const token = productsRequestToken;
+    const prevOffset = state.productsOffset;
+    try {
+      const qs = buildProductsListQuery(cid, state.productsOffset, PRODUCTS_PAGE_LIMIT);
+      const res = await api(`/api/prod_products?${qs.toString()}`);
+      if (token !== productsRequestToken) return;
+
+      const chunkRaw = Array.isArray(res.data) ? res.data : [];
+      const knownIds = new Set((state.products || []).map((p) => Number(p.id)));
+      const append = chunkRaw
+        .filter((p) => !(Number(p.is_active) === 0 && Number(p.site_visibility) === 0))
+        .filter((p) => !knownIds.has(Number(p.id)));
+
+      state.products = (state.products || []).concat(append);
+      state.productsOffset += chunkRaw.length;
+      state.productsTotal = Number(res.total || 0);
+      state.productsHasMore = chunkRaw.length > 0 && state.productsOffset < state.productsTotal;
+
+      if (prevOffset === 0) {
+        renderProductsList();
+      } else {
+        appendProductRowsToList(append);
+      }
+    } finally {
+      if (token === productsRequestToken) {
+        state.productsLoading = false;
+        syncProductRowsSortability();
+        if (state.mode === "products") {
+          maybeLoadMoreProductsOnScroll();
+        }
+      }
+    }
+  }
+
+  async function ensureProductsScrollable() {
+    if (!productsScrollEl) return;
+    let guard = 0;
+    while (
+      state.mode === "products" &&
+      state.productsHasMore &&
+      !state.productsLoading &&
+      productsScrollEl.scrollHeight <= (productsScrollEl.clientHeight + 20) &&
+      guard < 5
+    ) {
+      guard += 1;
+      await loadMoreProducts();
+    }
+  }
+
+  async function loadProducts(categoryId) {
+    const cid = categoryId || state.currentCategoryId;
+    productsRequestToken += 1;
+    if (!cid) {
+      state.products = [];
+      state.productsOffset = 0;
+      state.productsTotal = 0;
+      state.productsHasMore = false;
+      state.productsLoading = false;
+      state.combosInCategory = [];
+      renderProductsList();
+      return;
+    }
+
+    state.products = [];
+    state.productsOffset = 0;
+    state.productsTotal = 0;
+    state.productsHasMore = true;
+    state.productsLoading = false;
+    state.combosInCategory = [];
+    renderProductsList();
+
+    await loadCombosForCategory(cid);
+    renderProductsList();
+    await loadMoreProducts();
+    await ensureProductsScrollable();
+  }
+
+  function maybeLoadMoreProductsOnScroll() {
+    if (!productsScrollEl) return;
+    if (state.mode !== "products") return;
+    if (state.productsLoading || !state.productsHasMore) return;
+    const nearBottom =
+      (productsScrollEl.scrollTop + productsScrollEl.clientHeight) >=
+      (productsScrollEl.scrollHeight - PRODUCTS_SCROLL_THRESHOLD_PX);
+    if (nearBottom) {
+      loadMoreProducts().catch(console.error);
     }
   }
 
@@ -3927,32 +4031,159 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     `;
   }
 
+  function getProductListUnitLabel(product) {
+    const unitId = Number(product?.base_unit_id || product?.unit_id || 0);
+    if (!Number.isFinite(unitId) || unitId <= 0) return "";
+    const unit = (Array.isArray(state.units) ? state.units : []).find((u) => Number(u?.id) === unitId);
+    return unit ? String(unit.short_title || unit.title || unit.code || "").trim() : "";
+  }
+
+  function toReadonlyProductFieldValue(value) {
+    if (value == null || value === "") return "";
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "";
+    return formatNumberForInput(n);
+  }
+
+  function buildProductRowHtml(product, canSortProducts) {
+    const active = Number(product.id) === Number(state.selectedProductId) ? "is-active" : "";
+    const unitLabel = getProductListUnitLabel(product);
+    const stockValue = toReadonlyProductFieldValue(product.stock_qty);
+    const costValue = toReadonlyProductFieldValue(product.cost_price);
+    const priceValue = toReadonlyProductFieldValue(product.price);
+    const oldPriceValue = toReadonlyProductFieldValue(product.old_price);
+    const hasPhoto = Array.isArray(product.photos) && product.photos.length > 0;
+    const avatar = hasPhoto
+      ? `<img class="product-thumb" src="${escapeHtml(product.photos[0])}" alt="" />`
+      : `<div class="product-avatar">${escapeHtml(initials(product.name))}</div>`;
+
+    return `
+      <div class="order-row product-row ${active}" data-id="${product.id}" draggable="${canSortProducts ? "true" : "false"}">
+        ${avatar}
+        <div class="product-main-head">
+          <div class="product-title">${escapeHtml(product.name)}</div>
+        </div>
+        <label class="switch switch-compact product-row-switch" aria-label="Показывать на сайте">
+          <input class="switch-input" type="checkbox" ${Number(product.site_visibility) ? "checked" : ""} tabindex="-1" />
+          <span class="switch-ui" aria-hidden="true"></span>
+        </label>
+        <div class="product-row-field field-wrap">
+          <label class="field-label">Остаток</label>
+          <input class="control control-sm product-row-input" type="text" value="${escapeHtml(stockValue)}" placeholder="—" readonly tabindex="-1" />
+        </div>
+        <div class="product-row-field field-wrap">
+          <label class="field-label">Ед. изм.</label>
+          <input class="control control-sm product-row-input" type="text" value="${escapeHtml(unitLabel)}" placeholder="—" readonly tabindex="-1" />
+        </div>
+        <div class="product-row-field field-wrap">
+          <label class="field-label">Себестоимость</label>
+          <input class="control control-sm product-row-input" type="text" value="${escapeHtml(costValue)}" placeholder="—" readonly tabindex="-1" />
+        </div>
+        <div class="product-row-field field-wrap">
+          <label class="field-label">Цена</label>
+          <input class="control control-sm product-row-input" type="text" value="${escapeHtml(priceValue)}" placeholder="—" readonly tabindex="-1" />
+        </div>
+        <div class="product-row-field field-wrap">
+          <label class="field-label">Старая цена</label>
+          <input class="control control-sm product-row-input" type="text" value="${escapeHtml(oldPriceValue)}" placeholder="—" readonly tabindex="-1" />
+        </div>
+      </div>
+    `;
+  }
+
+  function syncProductsListEmptyState() {
+    if (!productsEmptyHint) return;
+    const combos = state.combosInCategory ?? [];
+    const empty = state.products.length === 0 && combos.length === 0;
+    productsEmptyHint.style.display = empty ? "block" : "none";
+  }
+
+  function bindProductRowClickHandlers(root = productsList) {
+    if (!root) return;
+    $$(".order-row.product-row[data-id]", root).forEach((row) => {
+      if (row.dataset.boundClick === "1") return;
+      row.dataset.boundClick = "1";
+      row.addEventListener("click", async () => {
+        const id = Number(row.dataset.id);
+        const p = state.products.find((x) => Number(x.id) === id);
+        if (!p) return;
+        await openProductById(id);
+        openProductTab(p, { activate: false });
+      });
+    });
+  }
+
+  function bindComboRowClickHandlers(root = productsList) {
+    if (!root) return;
+    $$(".order-row.combo-row[data-combo-id]", root).forEach((row) => {
+      if (row.dataset.boundClick === "1") return;
+      row.dataset.boundClick = "1";
+      row.addEventListener("click", () => {
+        const comboId = Number(row.dataset.comboId);
+        if (!Number.isFinite(comboId)) return;
+        openComboSetView(comboId);
+      });
+    });
+  }
+
+  function hydrateComboRowThumbs() {
+    if (!productsList) return;
+    const combos = state.combosInCategory ?? [];
+    combos.forEach((combo) => {
+      const comboId = Number(combo.id);
+      if (!Number.isFinite(comboId)) return;
+      getFirstFourBlockPhotosForCombo(comboId).then((urls) => {
+        const row = productsList.querySelector(`.combo-row[data-combo-id="${comboId}"]`);
+        const grid = row?.querySelector(".combo-row-photo-grid[data-combo-grid-id]");
+        if (grid) grid.innerHTML = buildComboRowPhotoGridHtml(urls);
+      });
+    });
+  }
+
+  function syncProductRowsSortability() {
+    if (!productsList) return;
+    const canSortProducts = !state.productsHasMore && !state.productsLoading;
+    $$(".order-row.product-row[data-id]", productsList).forEach((row) => {
+      row.setAttribute("draggable", canSortProducts ? "true" : "false");
+    });
+    if (canSortProducts) {
+      makeSortable(productsList, ".order-row.product-row", async () => {
+        const ordered = $$(".order-row.product-row", productsList).map((el) => Number(el.dataset.id)).filter(Number.isFinite);
+        await api("/api/sort/prod_products", {
+          method: "POST",
+          body: JSON.stringify({ category_id: state.currentCategoryId, orderedProductIds: ordered }),
+        });
+      });
+    }
+  }
+
+  function appendProductRowsToList(items) {
+    if (!productsList) return;
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) {
+      syncProductRowsSortability();
+      syncProductsListEmptyState();
+      return;
+    }
+    const canSortProducts = !state.productsHasMore && !state.productsLoading;
+    const html = list.map((product) => buildProductRowHtml(product, canSortProducts)).join("");
+    const template = document.createElement("template");
+    template.innerHTML = html.trim();
+    const firstComboRow = productsList.querySelector(".order-row.combo-row");
+    if (firstComboRow) {
+      firstComboRow.before(template.content);
+    } else {
+      productsList.appendChild(template.content);
+    }
+    bindProductRowClickHandlers(productsList);
+    syncProductRowsSortability();
+    syncProductsListEmptyState();
+  }
+
   function renderProductsList() {
     if (!productsList) return;
-
-    const productRows = state.products.map((p) => {
-      const active = p.id === state.selectedProductId ? "is-active" : "";
-      const sku = p.sku ? escapeHtml(p.sku) : "—";
-
-      const hasPhoto = Array.isArray(p.photos) && p.photos.length > 0;
-      const avatar = hasPhoto
-        ? `<img class="product-thumb" src="${escapeHtml(p.photos[0])}" alt="" />`
-        : `<div class="product-avatar">${escapeHtml(initials(p.name))}</div>`;
-
-      return `
-        <div class="order-row product-row ${active}" data-id="${p.id}" draggable="true">
-          ${avatar}
-          <div>
-            <div class="product-title">${escapeHtml(p.name)}</div>
-            <div class="muted" style="font-size:12px;">Артикул: ${sku}</div>
-          </div>
-          <div class="product-right">
-            <div class="pill pill-strong">${formatMoney(p.price)}</div>
-          </div>
-        </div>
-      `;
-    });
-
+    const canSortProducts = !state.productsHasMore && !state.productsLoading;
+    const productRows = state.products.map((product) => buildProductRowHtml(product, canSortProducts));
     const combos = state.combosInCategory ?? [];
     const comboRows = combos.map((c) => {
       const title = (c.title || "").trim() || "Комбо";
@@ -3971,48 +4202,11 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     });
 
     productsList.innerHTML = productRows.join("") + comboRows.join("");
-
-    combos.forEach((c) => {
-      const comboId = Number(c.id);
-      if (!Number.isFinite(comboId)) return;
-      getFirstFourBlockPhotosForCombo(comboId).then((urls) => {
-        const row = productsList.querySelector(`.combo-row[data-combo-id="${comboId}"]`);
-        const grid = row?.querySelector(".combo-row-photo-grid[data-combo-grid-id]");
-        if (grid) grid.innerHTML = buildComboRowPhotoGridHtml(urls);
-      });
-    });
-
-    const empty = state.products.length === 0 && combos.length === 0;
-    if (productsEmptyHint) productsEmptyHint.style.display = empty ? "block" : "none";
-
-    // click select — product
-    $$(".order-row.product-row[data-id]", productsList).forEach((row) => {
-      row.addEventListener("click", async () => {
-        const id = Number(row.dataset.id);
-        const p = state.products.find((x) => x.id === id);
-        if (!p) return;
-        await openProductById(id);
-        openProductTab(p, { activate: false });
-      });
-    });
-
-    // click select — combo (открываем в режиме просмотра)
-    $$(".order-row.combo-row[data-combo-id]", productsList).forEach((row) => {
-      row.addEventListener("click", () => {
-        const comboId = Number(row.dataset.comboId);
-        if (!Number.isFinite(comboId)) return;
-        openComboSetView(comboId);
-      });
-    });
-
-    // sortable persist (only product rows)
-    makeSortable(productsList, ".order-row.product-row", async () => {
-      const ordered = $$(".order-row.product-row", productsList).map((el) => Number(el.dataset.id)).filter(Number.isFinite);
-      await api("/api/sort/prod_products", {
-        method: "POST",
-        body: JSON.stringify({ category_id: state.currentCategoryId, orderedProductIds: ordered }),
-      });
-    });
+    bindProductRowClickHandlers(productsList);
+    bindComboRowClickHandlers(productsList);
+    hydrateComboRowThumbs();
+    syncProductRowsSortability();
+    syncProductsListEmptyState();
   }
 
   // ---------------- Categories main list ----------------
@@ -13792,8 +13986,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
   async function refreshProductsOnly() {
     await loadProducts(state.currentCategoryId);
-    renderProductsList();
-    if (state.selectedProductId && !state.products.some((p) => p.id === state.selectedProductId)) {
+    if (state.selectedProductId && !state.productsHasMore && !state.products.some((p) => p.id === state.selectedProductId)) {
       clearProductSelection();
     }
   }
@@ -13905,6 +14098,10 @@ const isViewMode = state.comboPanel.mode === "view";
         renderCategoriesNav();
         await refreshProductsOnly();
       });
+    }
+
+    if (productsScrollEl) {
+      productsScrollEl.addEventListener("scroll", maybeLoadMoreProductsOnScroll, { passive: true });
     }
 
     if (addCategoryBtn) {
@@ -15437,6 +15634,173 @@ const isViewMode = state.comboPanel.mode === "view";
     return `${(Number(value) || 0).toFixed(0)} ₽`;
   }
 
+  function formatStockInputValue(value, { emptyZero = false } = {}) {
+    if (value == null || value === "") return "";
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "";
+    if (emptyZero && n === 0) return "";
+    if (Number.isInteger(n)) return String(n);
+    return String(n).replace(/\.?0+$/, "");
+  }
+
+  function getStockProductBaseUnitId(item) {
+    const id = Number(item?.product_base_unit_id || item?.base_unit_id || 0);
+    return Number.isFinite(id) && id > 0 ? id : 0;
+  }
+
+  function getStockProductPrimaryUnitId(item) {
+    const id = Number(item?.product_unit_id || item?.unit_id || 0);
+    return Number.isFinite(id) && id > 0 ? id : 0;
+  }
+
+  function getAllowedStockUnitsForItem(item) {
+    const allUnits = Array.isArray(state.units) ? state.units : [];
+    if (!allUnits.length) return [];
+
+    const currentUnitId = Number(item?.unit_id || 0);
+    const baseUnitId = getStockProductBaseUnitId(item);
+    const primaryUnitId = getStockProductPrimaryUnitId(item);
+    const anchorUnitId = baseUnitId || primaryUnitId || (Number.isFinite(currentUnitId) && currentUnitId > 0 ? currentUnitId : 0);
+
+    if (!anchorUnitId) return allUnits.slice();
+
+    const allowedIds = new Set();
+    if (baseUnitId) allowedIds.add(baseUnitId);
+    if (primaryUnitId) allowedIds.add(primaryUnitId);
+    if (Number.isFinite(currentUnitId) && currentUnitId > 0) allowedIds.add(currentUnitId);
+
+    allUnits.forEach((unit) => {
+      const unitId = Number(unit?.id || 0);
+      if (!unitId || allowedIds.has(unitId)) return;
+      const toAnchor = getConversionFactor(unitId, anchorUnitId);
+      const fromAnchor = getConversionFactor(anchorUnitId, unitId);
+      if ((toAnchor != null && toAnchor > 0) || (fromAnchor != null && fromAnchor > 0)) {
+        allowedIds.add(unitId);
+      }
+    });
+
+    const byId = new Map(allUnits.map((u) => [Number(u.id), u]));
+    return [...allowedIds]
+      .map((id) => byId.get(Number(id)))
+      .filter(Boolean)
+      .sort((a, b) => (Number(a.sort_order || 0) - Number(b.sort_order || 0)) || (Number(a.id || 0) - Number(b.id || 0)));
+  }
+
+  function buildStockUnitOptions(item) {
+    const optionsUnits = getAllowedStockUnitsForItem(item);
+    const selectedUnitId = Number(item?.unit_id || 0);
+    if (!optionsUnits.length) {
+      return '<option value="">—</option>';
+    }
+    return optionsUnits
+      .map((u) => {
+        const unitId = Number(u.id || 0);
+        const isSelected = Number.isFinite(selectedUnitId) && selectedUnitId > 0 && unitId === selectedUnitId;
+        const label = u.short_title || u.title || u.code || "";
+        return `<option value="${unitId}" ${isSelected ? "selected" : ""}>${escapeHtml(label)}</option>`;
+      })
+      .join("");
+  }
+
+  function getStockNormValue(record) {
+    const n = Number(record?.product_base_qty ?? record?.base_qty ?? 0);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+
+  function getStockNormLabel(record) {
+    const norm = getStockNormValue(record);
+    if (!norm) return "";
+    const baseUnitId = getStockProductBaseUnitId(record) || getStockProductPrimaryUnitId(record);
+    const unit = (state.units || []).find((u) => Number(u.id) === Number(baseUnitId));
+    const unitLabel = unit ? (unit.short_title || unit.title || unit.code || "") : "";
+    const normText = formatStockInputValue(norm);
+    return unitLabel ? `${normText} ${unitLabel}` : normText;
+  }
+
+  function roundStockPrice(value) {
+    const n = Number(value || 0);
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(n * 100) / 100;
+  }
+
+  function getStockLineTotals(qty, costPrice, salePrice, purchasePrice = null, purchaseTotal = null) {
+    const q = Number(qty || 0);
+    const c = Number(costPrice || 0);
+    const s = Number(salePrice || 0);
+    const p = purchasePrice == null || purchasePrice === "" ? Number.NaN : Number(purchasePrice);
+    const t = purchaseTotal == null || purchaseTotal === "" ? Number.NaN : Number(purchaseTotal);
+    const safeQty = Number.isFinite(q) && q > 0 ? q : 0;
+    const safeCost = Number.isFinite(c) ? c : 0;
+    const safeSale = Number.isFinite(s) ? s : 0;
+    const safePurchase = Number.isFinite(p) ? p : null;
+    const safeSpent = Number.isFinite(t)
+      ? roundStockPrice(t)
+      : (Number.isFinite(safePurchase) && safeQty > 0 ? roundStockPrice(safeQty * safePurchase) : null);
+    return {
+      total_cost: roundStockPrice(safeQty * safeCost),
+      total_price: roundStockPrice(safeQty * safeSale),
+      total_spent: safeSpent,
+    };
+  }
+
+  function getStockFactorToBaseUnit(fromUnitId, record) {
+    const fromId = Number(fromUnitId || 0);
+    const baseUnitId = getStockProductBaseUnitId(record) || getStockProductPrimaryUnitId(record);
+    if (!fromId || !baseUnitId) return null;
+    if (fromId === Number(baseUnitId)) return 1;
+
+    const generalFactor = getConversionFactor(fromId, baseUnitId);
+    if (generalFactor != null && Number(generalFactor) > 0) {
+      return Number(generalFactor);
+    }
+
+    const primaryUnitId = getStockProductPrimaryUnitId(record);
+    const norm = getStockNormValue(record);
+    if (norm && primaryUnitId && fromId === Number(primaryUnitId)) {
+      return norm;
+    }
+
+    return null;
+  }
+
+  function getStockUnitPriceByConversion(record, sourcePrice, fromUnitId, toUnitId) {
+    const source = Number(sourcePrice);
+    const fromId = Number(fromUnitId || 0);
+    const toId = Number(toUnitId || 0);
+    if (!Number.isFinite(source) || source < 0) return null;
+    if (!fromId || !toId) return null;
+    if (fromId === toId) return roundStockPrice(source);
+
+    const fromFactor = getStockFactorToBaseUnit(fromId, record);
+    const toFactor = getStockFactorToBaseUnit(toId, record);
+    if (!Number.isFinite(Number(fromFactor)) || Number(fromFactor) <= 0) return null;
+    if (!Number.isFinite(Number(toFactor)) || Number(toFactor) <= 0) return null;
+
+    const sourcePerBase = source / Number(fromFactor);
+    return roundStockPrice(sourcePerBase * Number(toFactor));
+  }
+
+  function getStockUnitPricesForRecord(record, unitId) {
+    const targetUnitId = Number(unitId || record?.unit_id || 0);
+    if (!Number.isFinite(targetUnitId) || targetUnitId <= 0) return null;
+
+    const norm = getStockNormValue(record) || 1;
+    const costTotal = Number(record?.product_cost_price ?? record?.cost_price ?? 0);
+    const saleTotal = Number(record?.product_price ?? record?.price ?? 0);
+    const factorToBase = getStockFactorToBaseUnit(targetUnitId, record);
+
+    if (!Number.isFinite(Number(factorToBase)) || Number(factorToBase) <= 0) {
+      return null;
+    }
+
+    const costPerBase = costTotal / norm;
+    const salePerBase = saleTotal / norm;
+    return {
+      cost_price: roundStockPrice(costPerBase * Number(factorToBase)),
+      price: roundStockPrice(salePerBase * Number(factorToBase)),
+    };
+  }
+
   function renderStockDocList(listEl, emptyEl, filterType) {
     if (!listEl || !emptyEl) return;
 
@@ -15461,7 +15825,9 @@ const isViewMode = state.comboPanel.mode === "view";
         const itemsCount = doc.items_count || 0;
         const totalSum = doc.type === "order"
           ? Number(doc.order_total_price || doc.total_sale_sum || 0)
-          : Number(doc.total_cost_sum || doc.total_sale_sum || 0);
+          : (doc.type === "in"
+              ? Number(doc.total_spent_sum ?? doc.total_cost_sum ?? doc.total_sale_sum ?? 0)
+              : Number(doc.total_cost_sum || doc.total_sale_sum || 0));
         const docNumber = doc.type === "order"
           ? (doc.order_id ? `#${doc.order_id}` : `#${doc.number || doc.id}`)
           : `№${doc.number || doc.id}`;
@@ -15495,6 +15861,7 @@ const isViewMode = state.comboPanel.mode === "view";
   // =============================================
   let stockPickerSelection = new Set();
   let stockPickerDocId = null;
+  let stockPickerProductsMap = new Map();
 
   async function openStockDocDetail(id) {
     try {
@@ -15677,15 +16044,14 @@ const isViewMode = state.comboPanel.mode === "view";
     const typeMeta = getStockDocTypeMeta(doc.type);
     const typeLabel = typeMeta.label;
     const items = Array.isArray(doc.items) ? doc.items : [];
+    const allowSpentAccounting = doc.type === "in";
+    const draftItemsById = new Map(items.map((item) => [Number(item?.id), item]));
     const totalCostSum = items.reduce((s, i) => s + Number(i.qty || 0) * Number(i.cost_price || 0), 0);
     const totalSaleSum = items.reduce((s, i) => s + Number(i.qty || 0) * Number(i.price || 0), 0);
+    const totalSpentSum = items.reduce((s, i) => s + Number(i?.purchase_total || 0), 0);
     const orderData = doc.type === "order" ? (doc.order || null) : null;
     const orderItems = Array.isArray(orderData?.items) ? orderData.items : [];
     const orderTotal = Number(orderData?.total_price || doc.order_total_price || totalSaleSum || 0);
-
-    const unitsOptions = (state.units || []).map((u) =>
-      `<option value="${u.id}">${escapeHtml(u.short_title || u.title)}</option>`
-    ).join("");
 
     let itemsHtml = "";
     let itemsTitle = "Товары";
@@ -15698,6 +16064,8 @@ const isViewMode = state.comboPanel.mode === "view";
     } else if (items.length) {
       itemsHtml = items.map((item) => {
         const photo = stockGetItemPhoto(item);
+        const normLabel = getStockNormLabel(item);
+        const lineTotals = getStockLineTotals(item.qty, item.cost_price, item.price, item.purchase_price, item.purchase_total);
         const imgTag = photo
           ? `<img src="${escapeHtml(photo)}" class="stock-item-photo" alt="" />`
           : `<div class="stock-item-photo-empty"><i class="fas fa-box"></i></div>`;
@@ -15710,25 +16078,46 @@ const isViewMode = state.comboPanel.mode === "view";
                 <div class="stock-item-name">${escapeHtml(item.product_name || "Товар #" + item.product_id)}</div>
                 <button class="btn btn-icon btn-sm stock-item-del" data-del-item="${item.id}" title="Удалить"><i class="fas fa-times"></i></button>
               </div>
+              ${normLabel ? `<div class="stock-item-meta">Норма: ${escapeHtml(normLabel)}</div>` : ""}
               <div class="stock-item-fields">
                 <div class="stock-item-field">
                   <label class="field-label">Кол-во</label>
-                  <input class="control control-sm" type="number" min="0" step="any" data-field="qty" data-item-id="${item.id}" value="${item.qty || ""}" placeholder="0" />
+                  <input class="control control-sm" type="number" min="0" step="any" data-field="qty" data-item-id="${item.id}" value="${formatStockInputValue(item.qty, { emptyZero: true })}" placeholder="0" />
                 </div>
                 <div class="stock-item-field">
                   <label class="field-label">Ед. изм.</label>
                   <select class="control control-sm" data-field="unit_id" data-item-id="${item.id}">
-                    ${unitsOptions}
+                    ${buildStockUnitOptions(item)}
                   </select>
                 </div>
                 <div class="stock-item-field">
                   <label class="field-label">Себест.</label>
-                  <input class="control control-sm" type="number" min="0" step="any" data-field="cost_price" data-item-id="${item.id}" value="${item.cost_price || ""}" placeholder="0" />
+                  <input class="control control-sm" type="number" min="0" step="any" data-field="cost_price" data-item-id="${item.id}" value="${formatStockInputValue(item.cost_price)}" placeholder="0" />
                 </div>
                 <div class="stock-item-field">
                   <label class="field-label">Цена</label>
-                  <input class="control control-sm" type="number" min="0" step="any" data-field="price" data-item-id="${item.id}" value="${item.price || ""}" placeholder="0" />
+                  <input class="control control-sm" type="number" min="0" step="any" data-field="price" data-item-id="${item.id}" value="${formatStockInputValue(item.price)}" placeholder="0" />
                 </div>
+                ${allowSpentAccounting ? `
+                <div class="stock-item-field">
+                  <label class="field-label">Закуп.</label>
+                  <input class="control control-sm" type="number" min="0" step="any" data-field="purchase_price" data-item-id="${item.id}" value="${formatStockInputValue(item.purchase_price)}" placeholder="0" />
+                </div>
+                ` : ""}
+                <div class="stock-item-field">
+                  <label class="field-label">Итог себест.</label>
+                  <input class="control control-sm" type="number" min="0" step="0.01" data-total-field="total_cost" data-item-id="${item.id}" value="${formatStockInputValue(lineTotals.total_cost, { emptyZero: true })}" placeholder="0" />
+                </div>
+                <div class="stock-item-field">
+                  <label class="field-label">Итог цена</label>
+                  <input class="control control-sm" type="number" min="0" step="0.01" data-total-field="total_price" data-item-id="${item.id}" value="${formatStockInputValue(lineTotals.total_price, { emptyZero: true })}" placeholder="0" />
+                </div>
+                ${allowSpentAccounting ? `
+                <div class="stock-item-field">
+                  <label class="field-label">Итог потрачено</label>
+                  <input class="control control-sm" type="number" min="0" step="0.01" data-total-field="total_spent" data-item-id="${item.id}" value="${formatStockInputValue(item.purchase_total, { emptyZero: true })}" placeholder="0" />
+                </div>
+                ` : ""}
               </div>
             </div>
           `;
@@ -15765,6 +16154,9 @@ const isViewMode = state.comboPanel.mode === "view";
         ${doc.type === "order"
           ? `<div class="kv-row"><span class="kv-label">Сумма заказа</span><span class="kv-value"><b>${formatStockMoney(orderTotal)}</b></span></div>`
           : `<div class="kv-row"><span class="kv-label">Себестоимость</span><span class="kv-value"><b>${formatStockMoney(totalCostSum)}</b></span></div>`}
+        ${allowSpentAccounting
+          ? `<div class="kv-row"><span class="kv-label">Потрачено</span><span class="kv-value"><b>${formatStockMoney(totalSpentSum)}</b></span></div>`
+          : ""}
         ${doc.type === "order"
           ? `<div class="kv-row"><span class="kv-label">Себестоимость списания</span><span class="kv-value"><b>${formatStockMoney(totalCostSum)}</b></span></div>`
           : ""}
@@ -15793,29 +16185,174 @@ const isViewMode = state.comboPanel.mode === "view";
       });
     }
 
+    function updateStockDraftTotals(itemId) {
+      if (!Number.isFinite(itemId)) return;
+      const qtyEl = detailEl.querySelector(`[data-field="qty"][data-item-id="${itemId}"]`);
+      const costEl = detailEl.querySelector(`[data-field="cost_price"][data-item-id="${itemId}"]`);
+      const saleEl = detailEl.querySelector(`[data-field="price"][data-item-id="${itemId}"]`);
+      const purchaseEl = detailEl.querySelector(`[data-field="purchase_price"][data-item-id="${itemId}"]`);
+      const totalCostEl = detailEl.querySelector(`[data-total-field="total_cost"][data-item-id="${itemId}"]`);
+      const totalPriceEl = detailEl.querySelector(`[data-total-field="total_price"][data-item-id="${itemId}"]`);
+      const totalSpentEl = detailEl.querySelector(`[data-total-field="total_spent"][data-item-id="${itemId}"]`);
+
+      const qty = Number(qtyEl?.value) || 0;
+      const cost = Number(costEl?.value) || 0;
+      const sale = Number(saleEl?.value) || 0;
+      const purchaseRaw = purchaseEl ? String(purchaseEl.value || "").trim() : "";
+      const purchase = purchaseRaw === "" ? Number.NaN : Number(purchaseRaw);
+      const totalSpentRaw = totalSpentEl ? String(totalSpentEl.value || "").trim() : "";
+      const totalSpent = totalSpentRaw === "" ? Number.NaN : Number(totalSpentRaw);
+
+      if (purchaseEl && totalSpentRaw !== "" && Number.isFinite(totalSpent) && Number.isFinite(qty) && qty > 0) {
+        purchaseEl.value = formatStockInputValue(roundStockPrice(totalSpent / qty));
+      }
+
+      const totals = getStockLineTotals(qty, cost, sale, purchase, totalSpent);
+
+      if (totalCostEl) totalCostEl.value = formatStockInputValue(totals.total_cost, { emptyZero: true });
+      if (totalPriceEl) totalPriceEl.value = formatStockInputValue(totals.total_price, { emptyZero: true });
+    }
+
+    function updateStockDraftUnitPriceFromTotal(itemId, totalField) {
+      if (!Number.isFinite(itemId)) return false;
+      const qtyEl = detailEl.querySelector(`[data-field="qty"][data-item-id="${itemId}"]`);
+      const costEl = detailEl.querySelector(`[data-field="cost_price"][data-item-id="${itemId}"]`);
+      const saleEl = detailEl.querySelector(`[data-field="price"][data-item-id="${itemId}"]`);
+      const purchaseEl = detailEl.querySelector(`[data-field="purchase_price"][data-item-id="${itemId}"]`);
+      const totalCostEl = detailEl.querySelector(`[data-total-field="total_cost"][data-item-id="${itemId}"]`);
+      const totalPriceEl = detailEl.querySelector(`[data-total-field="total_price"][data-item-id="${itemId}"]`);
+      const totalSpentEl = detailEl.querySelector(`[data-total-field="total_spent"][data-item-id="${itemId}"]`);
+
+      const qty = Number(qtyEl?.value) || 0;
+      if (!Number.isFinite(qty) || qty <= 0) return false;
+
+      if (totalField === "total_cost" && totalCostEl && costEl) {
+        const totalCost = Number(totalCostEl.value) || 0;
+        costEl.value = formatStockInputValue(roundStockPrice(totalCost / qty));
+        return true;
+      }
+
+      if (totalField === "total_price" && totalPriceEl && saleEl) {
+        const totalPrice = Number(totalPriceEl.value) || 0;
+        saleEl.value = formatStockInputValue(roundStockPrice(totalPrice / qty));
+        return true;
+      }
+
+      if (totalField === "total_spent" && totalSpentEl && purchaseEl) {
+        const totalSpentRaw = String(totalSpentEl.value || "").trim();
+        if (totalSpentRaw === "") {
+          purchaseEl.value = "";
+          return true;
+        }
+        const totalSpent = Number(totalSpentRaw);
+        if (!Number.isFinite(totalSpent)) return false;
+        purchaseEl.value = formatStockInputValue(roundStockPrice(totalSpent / qty));
+        return true;
+      }
+
+      return false;
+    }
+
     let stockItemSaveTimer = null;
+    function queueStockItemSave(itemId) {
+      if (!Number.isFinite(itemId)) return;
+      clearTimeout(stockItemSaveTimer);
+      stockItemSaveTimer = setTimeout(async () => {
+        const qtyEl = detailEl.querySelector(`[data-field="qty"][data-item-id="${itemId}"]`);
+        const unitEl = detailEl.querySelector(`[data-field="unit_id"][data-item-id="${itemId}"]`);
+        const costEl = detailEl.querySelector(`[data-field="cost_price"][data-item-id="${itemId}"]`);
+        const saleEl = detailEl.querySelector(`[data-field="price"][data-item-id="${itemId}"]`);
+        const purchaseEl = detailEl.querySelector(`[data-field="purchase_price"][data-item-id="${itemId}"]`);
+        const totalSpentEl = detailEl.querySelector(`[data-total-field="total_spent"][data-item-id="${itemId}"]`);
+        const payload = {};
+        if (qtyEl) payload.qty = Number(qtyEl.value) || 0;
+        if (unitEl) payload.unit_id = Number(unitEl.value) || null;
+        if (costEl) payload.cost_price = Number(costEl.value) || 0;
+        if (saleEl) payload.price = Number(saleEl.value) || 0;
+        if (purchaseEl) {
+          const purchaseRaw = String(purchaseEl.value || "").trim();
+          payload.purchase_price = purchaseRaw === "" ? null : (Number(purchaseEl.value) || 0);
+        }
+        if (totalSpentEl) {
+          const totalSpentRaw = String(totalSpentEl.value || "").trim();
+          payload.purchase_total = totalSpentRaw === "" ? null : (Number(totalSpentEl.value) || 0);
+        }
+        try {
+          await apiUpdateStockItem(doc.id, itemId, payload);
+        } catch (err) {
+          console.error("Ошибка сохранения позиции:", err);
+        }
+      }, 400);
+    }
+
     detailEl.querySelectorAll("[data-field][data-item-id]").forEach((input) => {
+      const field = String(input.dataset.field || "");
+      if (field === "qty" || field === "cost_price" || field === "price" || field === "purchase_price") {
+        input.addEventListener("input", () => {
+          const itemId = Number(input.dataset.itemId);
+          updateStockDraftTotals(itemId);
+        });
+      }
+
       input.addEventListener("change", () => {
         const itemId = Number(input.dataset.itemId);
         if (!Number.isFinite(itemId)) return;
-        clearTimeout(stockItemSaveTimer);
-        stockItemSaveTimer = setTimeout(async () => {
-          const qtyEl = detailEl.querySelector(`[data-field="qty"][data-item-id="${itemId}"]`);
+
+        if (String(input.dataset.field || "") === "unit_id") {
           const unitEl = detailEl.querySelector(`[data-field="unit_id"][data-item-id="${itemId}"]`);
           const costEl = detailEl.querySelector(`[data-field="cost_price"][data-item-id="${itemId}"]`);
           const saleEl = detailEl.querySelector(`[data-field="price"][data-item-id="${itemId}"]`);
-          const payload = {};
-          if (qtyEl) payload.qty = Number(qtyEl.value) || 0;
-          if (unitEl) payload.unit_id = Number(unitEl.value) || null;
-          if (costEl) payload.cost_price = Number(costEl.value) || 0;
-          if (saleEl) payload.price = Number(saleEl.value) || 0;
-          try {
-            await apiUpdateStockItem(doc.id, itemId, payload);
-          } catch (err) {
-            console.error("Ошибка сохранения позиции:", err);
+          const purchaseEl = detailEl.querySelector(`[data-field="purchase_price"][data-item-id="${itemId}"]`);
+          const totalSpentEl = detailEl.querySelector(`[data-total-field="total_spent"][data-item-id="${itemId}"]`);
+          const qtyEl = detailEl.querySelector(`[data-field="qty"][data-item-id="${itemId}"]`);
+          const targetUnitId = Number(unitEl?.value || 0);
+          const currentItem = draftItemsById.get(itemId);
+          if (currentItem && Number.isFinite(targetUnitId) && targetUnitId > 0) {
+            const recalculated = getStockUnitPricesForRecord(currentItem, targetUnitId);
+            currentItem.unit_id = targetUnitId;
+            if (recalculated) {
+              currentItem.cost_price = recalculated.cost_price;
+              currentItem.price = recalculated.price;
+              if (costEl) costEl.value = formatStockInputValue(recalculated.cost_price);
+              if (saleEl) saleEl.value = formatStockInputValue(recalculated.price);
+            }
+            if (purchaseEl) {
+              const totalSpentRaw = totalSpentEl ? String(totalSpentEl.value || "").trim() : "";
+              const qty = Number(qtyEl?.value) || 0;
+              if (totalSpentRaw !== "" && Number.isFinite(Number(totalSpentRaw)) && qty > 0) {
+                const recalculatedPurchase = roundStockPrice(Number(totalSpentRaw) / qty);
+                purchaseEl.value = formatStockInputValue(recalculatedPurchase);
+                currentItem.purchase_price = recalculatedPurchase;
+              }
+            }
           }
-        }, 400);
+        }
+
+        updateStockDraftTotals(itemId);
+        queueStockItemSave(itemId);
       });
+    });
+
+    detailEl.querySelectorAll("[data-total-field][data-item-id]").forEach((input) => {
+      input.addEventListener("input", () => {
+        const itemId = Number(input.dataset.itemId);
+        const totalField = String(input.dataset.totalField || "");
+        if (!Number.isFinite(itemId)) return;
+        updateStockDraftUnitPriceFromTotal(itemId, totalField);
+      });
+
+      input.addEventListener("change", () => {
+        const itemId = Number(input.dataset.itemId);
+        const totalField = String(input.dataset.totalField || "");
+        if (!Number.isFinite(itemId)) return;
+        updateStockDraftUnitPriceFromTotal(itemId, totalField);
+        updateStockDraftTotals(itemId);
+        queueStockItemSave(itemId);
+      });
+    });
+
+    items.forEach((item) => {
+      updateStockDraftTotals(Number(item?.id));
     });
 
     detailEl.querySelectorAll("[data-del-item]").forEach((btn) => {
@@ -15838,6 +16375,12 @@ const isViewMode = state.comboPanel.mode === "view";
   async function openStockItemPicker(docId) {
     stockPickerDocId = docId;
     stockPickerSelection = new Set();
+    stockPickerProductsMap = new Map();
+    const existingProductIds = new Set(
+      (Array.isArray(state.stockDocDetail?.items) ? state.stockDocDetail.items : [])
+        .map((item) => Number(item?.product_id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    );
 
     // Загружаем категории если ещё не загружены
     if (!state.catalogCategories.length) {
@@ -15920,8 +16463,17 @@ const isViewMode = state.comboPanel.mode === "view";
           seenIds.add(id);
           return true;
         });
+        products.forEach((p) => {
+          const id = Number(p?.id || 0);
+          if (Number.isFinite(id) && id > 0) {
+            stockPickerProductsMap.set(id, p);
+          }
+        });
 
-        listContent.innerHTML = products
+        const availableProducts = products
+          .filter((p) => !existingProductIds.has(Number(p.id)));
+
+        listContent.innerHTML = availableProducts
           .filter(p => Number(p.is_active) !== 0)
           .filter(p => !query || String(p.name || "").toLowerCase().includes(query))
           .map(p => {
@@ -15943,6 +16495,11 @@ const isViewMode = state.comboPanel.mode === "view";
               </div>
             `;
           }).join('');
+
+        if (!listContent.innerHTML.trim()) {
+          listContent.innerHTML = '<div class="empty-hint">Все товары уже добавлены</div>';
+          return;
+        }
 
         listContent.querySelectorAll(".option-picker-row[data-product-id]").forEach((row) => {
           row.addEventListener("click", () => {
@@ -16012,16 +16569,37 @@ const isViewMode = state.comboPanel.mode === "view";
     }
 
     const products = state.products || [];
+    const existingProductIds = new Set(
+      (Array.isArray(state.stockDocDetail?.items) ? state.stockDocDetail.items : [])
+        .map((item) => Number(item?.product_id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    );
     try {
       for (const productId of stockPickerSelection) {
-        const product = products.find((p) => Number(p.id) === productId);
-        await apiAddStockItem(stockPickerDocId, {
-          product_id: productId,
-          qty: 0,
-          unit_id: product ? (product.base_unit_id || product.unit_id || null) : null,
-          cost_price: product ? Number(product.cost_price || 0) : 0,
-          price: product ? Number(product.price || 0) : 0,
-        });
+        if (existingProductIds.has(productId)) continue;
+        const product = stockPickerProductsMap.get(productId) || products.find((p) => Number(p.id) === productId);
+        const defaultUnitId = Number(product?.base_unit_id || product?.unit_id || 0);
+        const recalculated = getStockUnitPricesForRecord(product || null, defaultUnitId);
+        const defaultCostPrice = recalculated ? Number(recalculated.cost_price || 0) : (product ? Number(product.cost_price || 0) : 0);
+        const defaultSalePrice = recalculated ? Number(recalculated.price || 0) : (product ? Number(product.price || 0) : 0);
+        try {
+          await apiAddStockItem(stockPickerDocId, {
+            product_id: productId,
+            qty: 0,
+            unit_id: Number.isFinite(defaultUnitId) && defaultUnitId > 0 ? defaultUnitId : null,
+            cost_price: defaultCostPrice,
+            price: defaultSalePrice,
+            purchase_price: null,
+            purchase_total: null,
+          });
+          existingProductIds.add(productId);
+        } catch (itemErr) {
+          if (String(itemErr?.message || "") === "ITEM_ALREADY_EXISTS") {
+            existingProductIds.add(productId);
+            continue;
+          }
+          throw itemErr;
+        }
       }
       closeStockPicker();
       await openStockDocDetail(stockPickerDocId);
