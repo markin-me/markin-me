@@ -2809,7 +2809,7 @@ function buildShopProductHero(product, { onBack } = {}) {
   const favBtn = document.createElement("button");
   favBtn.className = "shop-product-hero-fav";
   favBtn.type = "button";
-  favBtn.innerHTML = '<i class="far fa-heart"></i>';
+  favBtn.innerHTML = '<i class="fas fa-heart"></i>';
 
   header.appendChild(backBtn);
   header.appendChild(favBtn);
@@ -2859,7 +2859,7 @@ function buildShopProductHero(product, { onBack } = {}) {
 }
 
 
-async function renderProductDetailsInto(container, product, { onBack, cartKey } = {}) {
+async function renderProductDetailsInto(container, product, { onBack, cartKey, prefillItem } = {}) {
   if (!container) return;
   container.innerHTML = "";
 
@@ -2904,6 +2904,10 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
   });
 
   const editingItem = cartKey ? getCartItemByKey(cartKey) : null;
+  const seedItem =
+    editingItem && typeof editingItem === "object"
+      ? editingItem
+      : (prefillItem && typeof prefillItem === "object" ? prefillItem : null);
   const editMode = !!editingItem;
   const productId = Number(product?.id || 0);
   const stockAvailable = isProductAvailable(product);
@@ -2926,8 +2930,8 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
       : false;
   const available = stockAvailable && !blockedByProductStockLimit && !blockedByIngredientRequirements;
 
-  const editVariantGroupIdRaw = editingItem?.variant_group_id;
-  const editVariantValueIndexRaw = editingItem?.variant_value_index;
+  const editVariantGroupIdRaw = seedItem?.variant_group_id ?? seedItem?.variant?.variant_group_id;
+  const editVariantValueIndexRaw = seedItem?.variant_value_index ?? seedItem?.variant?.variant_value_index;
   const editVariantGroupId =
     editVariantGroupIdRaw === undefined || editVariantGroupIdRaw === null || editVariantGroupIdRaw === ""
       ? null
@@ -2938,8 +2942,7 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
       : Number(editVariantValueIndexRaw);
 
   if (
-    editMode &&
-    editingItem &&
+    seedItem &&
     Number.isFinite(editVariantGroupId) &&
     editVariantGroupId > 0 &&
     Number.isFinite(editVariantValueIndex) &&
@@ -2947,12 +2950,12 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
   ) {
     variantState.groupId = editVariantGroupId;
     variantState.selectedIndex = editVariantValueIndex;
-    variantState.label = str(editingItem.variant_label || "");
+    variantState.label = str(seedItem.variant_label || seedItem?.variant?.label || seedItem?.variant?.value || "");
   }
 
   // Restore ingredient quantities from cart if editing
-  if (editMode && editingItem && Array.isArray(editingItem.ingredients)) {
-    editingItem.ingredients.forEach(cartIng => {
+  if (seedItem && Array.isArray(seedItem.ingredients)) {
+    seedItem.ingredients.forEach(cartIng => {
       const ingId = Number(cartIng.ingredient_id);
       if (ingredientState.has(ingId)) {
         const ing = ingredients.find(i => Number(i.ingredient_id) === ingId);
@@ -2984,12 +2987,12 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
   }
 
   // qty: default 1, в edit — из корзины
-  let qty = editMode ? Math.max(1, Number(editingItem?.qty || 1)) : 1;
+  let qty = seedItem ? Math.max(1, Number(seedItem?.qty || seedItem?.quantity || 1)) : 1;
 
   // предзаполнение опций из корзины (как было)
-  const editOptionIds = new Set((editingItem?.option_item_ids || []).map(Number).filter(Number.isFinite));
+  const editOptionIds = new Set((seedItem?.option_item_ids || []).map(Number).filter(Number.isFinite));
   const editOptionQty = new Map();
-  (editingItem?.option_items || []).forEach((opt) => {
+  (seedItem?.option_items || []).forEach((opt) => {
     const id = Number(opt?.id);
     if (!Number.isFinite(id)) return;
     const q = Math.max(0, Number(opt?.qty || opt?.quantity || 1)) || 1;
@@ -2998,7 +3001,7 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey } 
 
   // Варианты опций из корзины (для восстановления при редактировании)
   const editOptionVariants = new Map();
-  (editingItem?.option_items || []).forEach((opt) => {
+  (seedItem?.option_items || []).forEach((opt) => {
     const id = Number(opt?.id);
     if (!Number.isFinite(id)) return;
     if (opt.variant_group_id != null && opt.variant_value_index != null) {
@@ -3050,7 +3053,7 @@ optionGroups.forEach((group) => {
   };
 
   if (type === "single") {
-    const preselected = (editingItem?.option_item_ids || []).find((id) =>
+    const preselected = (seedItem?.option_item_ids || []).find((id) =>
       group.items.some((item) => Number(item.id) === Number(id))
     );
 
@@ -3950,6 +3953,90 @@ optionGroups.forEach((group) => {
     }
   }
 
+  function buildCurrentProductFavoriteSnapshot() {
+    const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
+    const ingredientQuantities = buildCurrentIngredientQuantities();
+    const optionItemIds = selectedItems
+      .map((item) => Number(item.id))
+      .filter((id) => Number.isFinite(id) && id > 0);
+
+    const selectedVariantGroupIdRaw = variantState.groupId;
+    const selectedVariantIndexRaw = variantState.selectedIndex;
+    const selectedVariantGroupId =
+      selectedVariantGroupIdRaw === undefined || selectedVariantGroupIdRaw === null || selectedVariantGroupIdRaw === ""
+        ? null
+        : Number(selectedVariantGroupIdRaw);
+    const selectedVariantIndex =
+      selectedVariantIndexRaw === undefined || selectedVariantIndexRaw === null || selectedVariantIndexRaw === ""
+        ? null
+        : Number(selectedVariantIndexRaw);
+    const hasVariantSelection =
+      Array.isArray(variants) &&
+      variants.length > 0 &&
+      Number.isFinite(selectedVariantGroupId) &&
+      selectedVariantGroupId > 0 &&
+      Number.isFinite(selectedVariantIndex) &&
+      selectedVariantIndex >= 0;
+    const variantGroupTitle = str(variants?.[0]?.title || "").trim();
+    const variantValueLabel = str(variantState.label || "").trim();
+    const variantLabel = hasVariantSelection
+      ? (variantGroupTitle ? `${variantGroupTitle}: ${variantValueLabel}` : variantValueLabel)
+      : "";
+    const variantUnitPrice = hasVariantSelection
+      ? getVariantUnitPrice(product, variants, variantState)
+      : Number(product.price || 0);
+    const safeQty = Math.max(1, Number(qty || 1));
+    const ingredientsPriceDiff = calculateIngredientPrice();
+
+    const draftResolvedItem = {
+      product,
+      product_id: Number(product.id || 0),
+      qty: safeQty,
+      option_item_ids: optionItemIds,
+      option_items: selectedItems,
+      ingredients: ingredientQuantities,
+      ingredient_price_diff: Number(ingredientsPriceDiff || 0),
+      variant_group_id: hasVariantSelection ? selectedVariantGroupId : null,
+      variant_value_index: hasVariantSelection ? selectedVariantIndex : null,
+      variant_label: variantLabel,
+      variant_unit_price: Number(variantUnitPrice || 0),
+      unit_price_override: null,
+      auto_add: 0,
+      auto_add_group_id: null,
+    };
+
+    const resolvedItems = cartItemsResolved();
+    const totals = {
+      nonAutoTotal: computeNonAutoTotal(resolvedItems),
+      autoEligibleTotal: computeAutoEligibleTotal(resolvedItems),
+    };
+    const pricing = computeItemPricing(draftResolvedItem, totals);
+    const oldUnitBase = Number(product.old_price || 0);
+    const parts = pricing?.parts || {};
+    const oldUnit = oldUnitBase > 0
+      ? (oldUnitBase + Number(parts.optionTotal || 0) + Number(parts.ingredientDiff || 0))
+      : 0;
+    const hasDiscount = Number(pricing?.discountAmount || 0) > 0;
+    const showOld =
+      !pricing?.isAuto &&
+      (hasDiscount || (oldUnit > 0 && oldUnit > Number(pricing?.unitPrice || 0)));
+    const originalLineTotal = hasDiscount
+      ? roundPrice(Number(pricing?.lineTotal || 0) + Number(pricing?.discountAmount || 0))
+      : roundPrice(oldUnit * safeQty);
+
+    return buildFavoriteSnapshotFromResolvedItem(draftResolvedItem, {
+      pricing,
+      oldLineTotal: showOld ? originalLineTotal : null,
+    });
+  }
+
+  if (window.AppModal?.isOpen && window.AppModal.isOpen()) {
+    setSheetHeaderMode("product", {
+      onBack,
+      favoriteBuildSnapshot: buildCurrentProductFavoriteSnapshot,
+    });
+  }
+
   container.appendChild(wrap);
 
   actionBtn.addEventListener("click", async () => {
@@ -4120,20 +4207,23 @@ optionGroups.forEach((group) => {
   openProductCtx = { productId: product.id };
 }
 
-  async function openProductDetails(productId, { cartKey } = {}) {
+  async function openProductDetails(productId, { cartKey, prefillItem, onBack } = {}) {
     const p = await ensureProduct(productId);
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
 
     if (isMobile) {
-      if (!openCartSheetCtx) openCartSheet();
+      if (!hasLiveCartSheetContext()) {
+        openCartSheetCtx = null;
+        openCartSheet();
+      }
       if (openCartSheetCtx?.showSheetProduct) {
-        openCartSheetCtx.showSheetProduct(p, { cartKey });
+        openCartSheetCtx.showSheetProduct(p, { cartKey, prefillItem, onBack });
       }
       return;
     }
 
     showProductView(p.name);
-    await renderProductDetailsInto(elProductContent, p, { cartKey });
+    await renderProductDetailsInto(elProductContent, p, { onBack, cartKey, prefillItem });
   }
 
   function comboDiscountedPrice(price, discountPercent) {
@@ -4142,7 +4232,7 @@ optionGroups.forEach((group) => {
     return roundPrice(d >= 100 ? 0 : p * (1 - d / 100));
   }
 
-  function renderComboDetailsInto(container, combo, { onBack, cartKey } = {}) {
+  function renderComboDetailsInto(container, combo, { onBack, cartKey, prefillItem } = {}) {
     if (!container) return;
     const blocks = Array.isArray(combo.blocks) ? combo.blocks : [];
     const discountPercent = Number(combo.discount_percent) || 0;
@@ -4168,32 +4258,40 @@ optionGroups.forEach((group) => {
       return defaultIdx >= 0 ? defaultIdx : 0;
     });
 
-    if (cartKey) {
-      const cartItem = state.cart.find((x) => x.key === cartKey);
-      if (cartItem && cartItem.type === "combo") {
-        comboQty = Math.max(1, Number(cartItem.qty || 0));
-        const selList = Array.isArray(cartItem.selections) ? cartItem.selections : [];
-        blocks.forEach((block, bi) => {
-          const sel = selList[bi];
-          if (sel && block.products && block.products.length) {
-            const idx = block.products.findIndex((p) => Number(p.product_id) === Number(sel.product_id));
-            selectedIndexByBlock[bi] = idx >= 0 ? idx : 0;
-          }
-          if (sel && selectionStateByBlock[bi]) {
-            const st = selectionStateByBlock[bi];
-            st.product_id = Number(sel.product_id) || null;
-            st.variant_label = String(sel.variant_label || "");
-            st.variant_group_id = sel.variant_group_id != null ? Number(sel.variant_group_id) : null;
-            st.variant_value_index = sel.variant_value_index != null ? Number(sel.variant_value_index) : null;
-            st.variant_group_title = String(sel.variant_group_title || "");
-            st.variant_unit = String(sel.variant_unit || "");
-            st.unit_id = sel.unit_id != null ? Number(sel.unit_id) : null;
-            st.ingredients_display = Array.isArray(sel.ingredients_display) ? sel.ingredients_display : [];
-            st.unit_price_override = sel.unit_price_override != null ? Number(sel.unit_price_override) : null;
-            st.unit_price_before_discount = null;
-          }
-        });
-      }
+    const editingComboItem = cartKey ? state.cart.find((x) => x.key === cartKey) : null;
+    const seedComboItem = editingComboItem && String(editingComboItem?.type || "") === "combo"
+      ? editingComboItem
+      : (
+        prefillItem &&
+        (String(prefillItem?.type || "") === "combo" || Array.isArray(prefillItem?.selections))
+          ? prefillItem
+          : null
+      );
+    const isEditFromCart = !!(editingComboItem && String(editingComboItem?.type || "") === "combo");
+
+    if (seedComboItem) {
+      comboQty = Math.max(1, Number(seedComboItem.qty || seedComboItem.quantity || 1));
+      const selList = Array.isArray(seedComboItem.selections) ? seedComboItem.selections : [];
+      blocks.forEach((block, bi) => {
+        const sel = selList[bi];
+        if (sel && block.products && block.products.length) {
+          const idx = block.products.findIndex((p) => Number(p.product_id) === Number(sel.product_id));
+          selectedIndexByBlock[bi] = idx >= 0 ? idx : 0;
+        }
+        if (sel && selectionStateByBlock[bi]) {
+          const st = selectionStateByBlock[bi];
+          st.product_id = Number(sel.product_id) || null;
+          st.variant_label = String(sel.variant_label || "");
+          st.variant_group_id = sel.variant_group_id != null ? Number(sel.variant_group_id) : null;
+          st.variant_value_index = sel.variant_value_index != null ? Number(sel.variant_value_index) : null;
+          st.variant_group_title = String(sel.variant_group_title || "");
+          st.variant_unit = String(sel.variant_unit || "");
+          st.unit_id = sel.unit_id != null ? Number(sel.unit_id) : null;
+          st.ingredients_display = Array.isArray(sel.ingredients_display) ? sel.ingredients_display : [];
+          st.unit_price_override = sel.unit_price_override != null ? Number(sel.unit_price_override) : null;
+          st.unit_price_before_discount = null;
+        }
+      });
     }
 
     function getSelectedProduct(blockIndex) {
@@ -4471,6 +4569,35 @@ optionGroups.forEach((group) => {
       }, 0);
     }
 
+    function buildCurrentComboFavoriteSnapshot() {
+      const selections = buildComboSelections();
+      if (!selections.length) return null;
+
+      const comboId = Number(combo?.id || 0);
+      if (!Number.isFinite(comboId) || comboId <= 0) return null;
+
+      const safeQty = Math.max(1, Number(comboQty || 1));
+      const oldUnitPrice = roundPrice(calculateComboOldSum());
+      const unitPrice = roundPrice(
+        selections.reduce((sum, sel) => sum + Number(sel?.unit_price_override || 0), 0)
+      );
+
+      const resolvedComboItem = {
+        type: "combo",
+        combo_id: comboId,
+        combo_title: combo.title || "Комбо",
+        qty: safeQty,
+        selections,
+        unit_price_override: unitPrice,
+        unit_price_before_discount: oldUnitPrice,
+      };
+
+      const showOld = oldUnitPrice > unitPrice;
+      return buildFavoriteSnapshotFromResolvedItem(resolvedComboItem, {
+        oldLineTotal: showOld ? roundPrice(oldUnitPrice * safeQty) : null,
+      });
+    }
+
     function cloneComboDraftValue(value) {
       if (Array.isArray(value)) return value.map((v) => cloneComboDraftValue(v));
       if (value && typeof value === "object") {
@@ -4534,7 +4661,7 @@ optionGroups.forEach((group) => {
       const draftSumOld = calculateComboOldSum();
       const draftCart = cloneCartState(state.cart);
 
-      if (cartKey) {
+      if (isEditFromCart && cartKey) {
         const draftItem = draftCart.find((x) => x.key === cartKey);
         if (!draftItem) return null;
         draftItem.qty = safeQty;
@@ -5104,7 +5231,11 @@ optionGroups.forEach((group) => {
       if (openCartSheetCtx) {
         openCartSheetCtx.comboStepBack = null;
         sheetNavigationState.screen = "combo";
-        setSheetHeaderMode("product", { onBack, discountBadge: discountBadgeText });
+        setSheetHeaderMode("product", {
+          onBack,
+          discountBadge: discountBadgeText,
+          favoriteBuildSnapshot: buildCurrentComboFavoriteSnapshot,
+        });
       } else {
         // Десктоп: кнопка «Назад» снова закрывает панель комбо
         window._comboStepBackCallback = null;
@@ -5218,7 +5349,6 @@ optionGroups.forEach((group) => {
 
       wrap.appendChild(list);
 
-      const isEditFromCart = Boolean(cartKey);
       const { footer, updateFooterAction } = renderFooter({
         actionLabel: isEditFromCart ? "Сохранить" : "в корзину",
         onAdd: async ({ qty }) => {
@@ -6002,12 +6132,20 @@ optionGroups.forEach((group) => {
       if (openCartSheetCtx) {
         const doStepBack = () => {
           renderMainView();
-          setSheetHeaderMode("product", { onBack, discountBadge: discountBadgeText });
+          setSheetHeaderMode("product", {
+            onBack,
+            discountBadge: discountBadgeText,
+            favoriteBuildSnapshot: buildCurrentComboFavoriteSnapshot,
+          });
           openCartSheetCtx.comboStepBack = null;
           sheetNavigationState.screen = "combo";
         };
         openCartSheetCtx.comboStepBack = doStepBack;
-        setSheetHeaderMode("product", { onBack: doStepBack, discountBadge: discountBadgeText });
+        setSheetHeaderMode("product", {
+          onBack: doStepBack,
+          discountBadge: discountBadgeText,
+          favoriteBuildSnapshot: buildCurrentComboFavoriteSnapshot,
+        });
         sheetNavigationState.screen = "comboPicker";
       }
     }
@@ -6018,7 +6156,7 @@ optionGroups.forEach((group) => {
     })();
   }
 
-  async function openComboDetails(comboId, { cartKey } = {}) {
+  async function openComboDetails(comboId, { cartKey, prefillItem, onBack } = {}) {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     let json;
     try {
@@ -6040,15 +6178,18 @@ optionGroups.forEach((group) => {
     if (!data) return;
 
     if (isMobile) {
-      if (!openCartSheetCtx) openCartSheet();
+      if (!hasLiveCartSheetContext()) {
+        openCartSheetCtx = null;
+        openCartSheet();
+      }
       if (openCartSheetCtx?.showSheetCombo) {
-        openCartSheetCtx.showSheetCombo(data, { cartKey });
+        openCartSheetCtx.showSheetCombo(data, { cartKey, prefillItem, onBack });
       }
       return;
     }
 
     showProductView(data.title || "Комбо");
-    renderComboDetailsInto(elProductContent, data, { onBack: showCartView, cartKey });
+    renderComboDetailsInto(elProductContent, data, { onBack: onBack || showCartView, cartKey, prefillItem });
   }
 
   // -----------------------------
@@ -6179,20 +6320,1109 @@ function openCategoriesSheet() {
   }
 }
 
-function showFavoritesPlaceholder() {
+function openFavoritesSheet({ force = true } = {}) {
   if (!window.AppModal) return;
 
   const wrap = document.createElement("div");
-  wrap.className = "shop-sheet-content";
-  const note = document.createElement("div");
-  note.className = "muted";
-  note.style.padding = "32px 16px";
-  note.style.textAlign = "center";
-  note.textContent = "Избранное пока в разработке. Скоро появится.";
-  wrap.appendChild(note);
+  wrap.className = "shop-sheet-content shop-favorites-sheet";
 
-  sheetNavigationState.type = 'favorites';
-  sheetNavigationState.screen = null;
+  const chipsWrap = document.createElement("div");
+  chipsWrap.className = "shop-cat-chips-wrap shop-favorites-chips-wrap hidden";
+  const chips = document.createElement("div");
+  chips.className = "shop-cat-chips shop-favorites-chips";
+  chipsWrap.appendChild(chips);
+  wrap.appendChild(chipsWrap);
+
+  const list = document.createElement("div");
+  list.className = "shop-favorites-list";
+  wrap.appendChild(list);
+
+  let renderSeq = 0;
+  let currentSwipedContainer = null;
+
+  function closeCurrentSwiped(animate = true, exceptContainer = null) {
+    if (!currentSwipedContainer || currentSwipedContainer === exceptContainer) return;
+    const closeFn = currentSwipedContainer.__favoriteSwipeClose;
+    if (typeof closeFn === "function") {
+      closeFn(animate);
+      return;
+    }
+    currentSwipedContainer = null;
+  }
+
+  const handleOutsidePointerDown = (event) => {
+    if (!currentSwipedContainer) return;
+    if (currentSwipedContainer.contains(event.target)) return;
+    closeCurrentSwiped(true);
+  };
+  document.addEventListener("pointerdown", handleOutsidePointerDown, true);
+
+  function hideCategoryChips() {
+    chips.innerHTML = "";
+    chipsWrap.classList.add("hidden");
+  }
+
+  function setActiveCategoryChip(categoryId) {
+    const id = Number(categoryId || 0);
+    if (!Number.isFinite(id) || id <= 0) return;
+    const all = chips.querySelectorAll(".shop-cat-chip");
+    all.forEach((btn) => {
+      const btnId = Number(btn.getAttribute("data-cat-id"));
+      btn.classList.toggle("is-active", btnId === id);
+    });
+    const active = chips.querySelector(`.shop-cat-chip[data-cat-id="${id}"]`);
+    if (!active) return;
+    const target = Math.max(0, active.offsetLeft - 12);
+    if (typeof chips.scrollTo === "function") {
+      chips.scrollTo({ left: target, behavior: "smooth" });
+    } else {
+      chips.scrollLeft = target;
+    }
+  }
+
+  function scrollToCategorySection(categoryId) {
+    const id = Number(categoryId || 0);
+    if (!Number.isFinite(id) || id <= 0) return;
+    const header = list.querySelector(`.shop-category-header[data-cat-id="${id}"]`);
+    if (!header) return;
+    const wrapRect = wrap.getBoundingClientRect();
+    const headerRect = header.getBoundingClientRect();
+    const delta = headerRect.top - wrapRect.top;
+    const offset = (chipsWrap.offsetHeight || 0) + 8;
+    const nextTop = wrap.scrollTop + delta - offset;
+    wrap.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
+  }
+
+  function renderFavoriteCategoryChips(sections) {
+    chips.innerHTML = "";
+    const safeSections = Array.isArray(sections) ? sections : [];
+    const navSections = safeSections.filter((section) => Number.isFinite(Number(section?.id)));
+    if (!navSections.length) {
+      chipsWrap.classList.add("hidden");
+      return;
+    }
+
+    navSections.forEach((section, idx) => {
+      const sectionId = Number(section.id);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shop-cat-chip";
+      btn.setAttribute("data-cat-id", String(sectionId));
+      btn.textContent = str(section.title || "Категория");
+      if (idx === 0) btn.classList.add("is-active");
+      btn.addEventListener("click", () => {
+        setActiveCategoryChip(sectionId);
+        scrollToCategorySection(sectionId);
+      });
+      chips.appendChild(btn);
+    });
+
+    chipsWrap.classList.remove("hidden");
+  }
+
+  function renderMessage(text) {
+    hideCategoryChips();
+    list.innerHTML = "";
+    const note = document.createElement("div");
+    note.className = "muted shop-favorites-empty";
+    note.textContent = text;
+    list.appendChild(note);
+  }
+
+  function renderAuthRequired() {
+    hideCategoryChips();
+    list.innerHTML = "";
+    const box = document.createElement("div");
+    box.className = "shop-favorites-auth";
+
+    const note = document.createElement("div");
+    note.className = "muted shop-favorites-empty";
+    note.textContent = "Войдите в профиль, чтобы пользоваться избранным.";
+    box.appendChild(note);
+
+    const authBtn = document.createElement("button");
+    authBtn.type = "button";
+    authBtn.className = "btn";
+    authBtn.textContent = "Войти";
+    authBtn.addEventListener("click", () => {
+      closeShopSheetIfOpen();
+      setTimeout(() => {
+        openProfileSheet();
+      }, 0);
+    });
+    box.appendChild(authBtn);
+    list.appendChild(box);
+  }
+
+  function buildFallbackItemRow(item) {
+    const row = document.createElement("div");
+    row.className = "cart-row";
+
+    const img = document.createElement("img");
+    img.className = "cart-thumb";
+    const photos = Array.isArray(item?.photos) ? item.photos.filter(Boolean) : [];
+    img.src = photos[0] || "/static/img/placeholder.png";
+    img.alt = "";
+    row.appendChild(img);
+
+    const mid = document.createElement("div");
+    mid.className = "cart-mid";
+    const title = document.createElement("div");
+    title.className = "cart-title";
+    title.textContent = str(item?.name || item?.combo_title || "Товар");
+    mid.appendChild(title);
+    row.appendChild(mid);
+
+    const right = document.createElement("div");
+    right.className = "cart-right";
+    const price = document.createElement("div");
+    price.className = "cart-price";
+    const lineTotalRaw = Number(item?.line_total);
+    const lineTotal = Number.isFinite(lineTotalRaw) ? lineTotalRaw : Number(item?.price || 0);
+    price.textContent = money(lineTotal);
+    right.appendChild(price);
+    row.appendChild(right);
+    return row;
+  }
+
+  function collectFavoriteSnapshotProductIds(snapshot) {
+    const prefill = buildRepeatPrefillItem(snapshot);
+    if (!prefill) return [];
+
+    const ids = new Set();
+    if (String(prefill.type || "") === "combo") {
+      const selections = Array.isArray(prefill.selections) ? prefill.selections : [];
+      selections.forEach((sel) => {
+        const pid = Number(sel?.product_id || 0);
+        if (Number.isFinite(pid) && pid > 0) ids.add(pid);
+      });
+      return [...ids];
+    }
+
+    const baseProductId = Number(prefill.product_id || 0);
+    if (Number.isFinite(baseProductId) && baseProductId > 0) ids.add(baseProductId);
+
+    const optionItems = Array.isArray(prefill.option_items) ? prefill.option_items : [];
+    optionItems.forEach((opt) => {
+      const pid = Number(opt?.target_product_id || opt?.product_id || 0);
+      if (Number.isFinite(pid) && pid > 0) ids.add(pid);
+    });
+
+    return [...ids];
+  }
+
+  function getFavoritesCatalogCategories() {
+    let categories = [];
+    if (typeof getVisibleCategories === "function") {
+      try {
+        categories = getVisibleCategories();
+      } catch {
+        categories = [];
+      }
+    }
+    if (!Array.isArray(categories) || !categories.length) {
+      categories = Array.isArray(state.categories) ? state.categories : [];
+      categories = categories.filter((cat) => String(cat?.code || "").toLowerCase() !== "all");
+    }
+    return Array.isArray(categories) ? categories : [];
+  }
+
+  function buildFavoriteCategoryLookups(categories) {
+    const safeCategories = Array.isArray(categories) ? categories : [];
+    const productCategoryById = new Map();
+    const comboCategoryById = new Map();
+
+    safeCategories.forEach((cat) => {
+      const cid = Number(cat?.id || 0);
+      if (!Number.isFinite(cid) || cid <= 0) return;
+
+      const products = state.productsByCategory instanceof Map ? (state.productsByCategory.get(cid) || []) : [];
+      (Array.isArray(products) ? products : []).forEach((product) => {
+        const pid = Number(product?.id || 0);
+        if (!Number.isFinite(pid) || pid <= 0 || productCategoryById.has(pid)) return;
+        productCategoryById.set(pid, cid);
+      });
+
+      const combos = state.combosByCategory instanceof Map ? (state.combosByCategory.get(cid) || []) : [];
+      (Array.isArray(combos) ? combos : []).forEach((combo) => {
+        const comboId = Number(combo?.id || 0);
+        if (!Number.isFinite(comboId) || comboId <= 0 || comboCategoryById.has(comboId)) return;
+        comboCategoryById.set(comboId, cid);
+      });
+    });
+
+    return { productCategoryById, comboCategoryById };
+  }
+
+  function resolveFavoriteCategoryId(favoriteRow, snapshot, lookups, categoriesById, categoriesByCode) {
+    const productCategoryById = lookups?.productCategoryById instanceof Map ? lookups.productCategoryById : new Map();
+    const comboCategoryById = lookups?.comboCategoryById instanceof Map ? lookups.comboCategoryById : new Map();
+    const byId = categoriesById instanceof Map ? categoriesById : new Map();
+    const byCode = categoriesByCode instanceof Map ? categoriesByCode : new Map();
+
+    const itemType = str(snapshot?.type || favoriteRow?.item_type || "").toLowerCase();
+    const isCombo = itemType === "combo";
+
+    const categoryIdRaw = Number(snapshot?.category_id || snapshot?.categoryId || 0);
+    if (Number.isFinite(categoryIdRaw) && categoryIdRaw > 0 && byId.has(categoryIdRaw)) return categoryIdRaw;
+
+    const categoryCode = str(snapshot?.category_code || snapshot?.categoryCode || "").toLowerCase();
+    if (categoryCode && byCode.has(categoryCode)) return byCode.get(categoryCode);
+
+    if (isCombo) {
+      const comboId = Number(favoriteRow?.combo_id || snapshot?.combo_id || 0);
+      if (Number.isFinite(comboId) && comboId > 0 && comboCategoryById.has(comboId)) {
+        return comboCategoryById.get(comboId);
+      }
+      return null;
+    }
+
+    const productId = Number(favoriteRow?.product_id || snapshot?.product_id || 0);
+    if (Number.isFinite(productId) && productId > 0) {
+      if (productCategoryById.has(productId)) {
+        return productCategoryById.get(productId);
+      }
+      const product = state.productCache.get(productId);
+      const productCategoryId = Number(product?.category_id || product?.categoryId || 0);
+      if (Number.isFinite(productCategoryId) && productCategoryId > 0 && byId.has(productCategoryId)) {
+        return productCategoryId;
+      }
+    }
+
+    return null;
+  }
+
+  async function buildFavoritesAvailabilityMap(rows) {
+    const safeRows = Array.isArray(rows) ? rows : [];
+    const productIdsByIndex = safeRows.map((row) => collectFavoriteSnapshotProductIds(row?.item || row));
+    const allProductIds = [...new Set(productIdsByIndex.flat().filter((id) => Number.isFinite(Number(id)) && Number(id) > 0))];
+    const unavailableProductIds = new Set();
+
+    await Promise.all(
+      allProductIds.map(async (rawId) => {
+        const pid = Number(rawId);
+        if (!Number.isFinite(pid) || pid <= 0) return;
+        try {
+          await ensureProduct(pid);
+          const product = state.productCache.get(pid);
+          if (!product || !isProductAvailable(product)) {
+            unavailableProductIds.add(pid);
+          }
+        } catch (e) {
+          console.warn("Failed to resolve favorite availability product:", pid, e);
+          unavailableProductIds.add(pid);
+        }
+      })
+    );
+
+    const map = new Map();
+    productIdsByIndex.forEach((ids, idx) => {
+      const safeIds = Array.isArray(ids) ? ids : [];
+      const available =
+        safeIds.length === 0 ? true : safeIds.every((pid) => !unavailableProductIds.has(Number(pid)));
+      map.set(idx, available);
+    });
+    return map;
+  }
+
+  function applyFavoriteUnavailableView(cardEl) {
+    if (!cardEl) return;
+    cardEl.classList.add("is-unavailable");
+    const row = cardEl.querySelector(".cart-row");
+    if (row) row.classList.add("is-unavailable");
+
+    const oldPriceEls = cardEl.querySelectorAll(".cart-old");
+    oldPriceEls.forEach((el) => {
+      el.classList.add("hidden");
+      el.textContent = "";
+    });
+
+    const priceEl = cardEl.querySelector(".cart-price");
+    if (priceEl) {
+      priceEl.textContent = "Нет в наличии";
+      priceEl.classList.add("is-unavailable-label");
+    }
+  }
+
+  function applyFavoriteComboThumbGrid(itemsWrap, snapshot) {
+    if (!itemsWrap || !snapshot || typeof snapshot !== "object") return;
+    if (str(snapshot.type || "").toLowerCase() !== "combo") return;
+    const row = itemsWrap.querySelector(".cart-row--combo");
+    if (!row) return;
+
+    const grid = document.createElement("div");
+    grid.className = "cart-combo-thumb";
+
+    const photos = (Array.isArray(snapshot.selections) ? snapshot.selections : [])
+      .slice(0, 4)
+      .map((sel) => str(sel?.product_photo || "").trim());
+    const comboGridOrder = [0, 2, 3, 1];
+
+    for (let i = 0; i < 4; i += 1) {
+      const cell = document.createElement("div");
+      const photo = photos[comboGridOrder[i]] || "";
+      cell.className = "cart-combo-thumb__cell" + (photo ? "" : " cart-combo-thumb__cell--empty");
+      if (photo) {
+        const img = createOptimizedImage(photo, { type: "cart-thumb", className: "cart-thumb", alt: "" });
+        cell.appendChild(img);
+      }
+      grid.appendChild(cell);
+    }
+
+    const oldThumb = row.querySelector(".cart-thumb, .cart-combo-thumb");
+    if (oldThumb) {
+      oldThumb.replaceWith(grid);
+    } else {
+      row.insertAdjacentElement("afterbegin", grid);
+    }
+  }
+
+  async function isFavoriteSnapshotAvailableNow(snapshot) {
+    const productIds = collectFavoriteSnapshotProductIds(snapshot);
+    if (!productIds.length) return true;
+
+    for (const rawId of productIds) {
+      const pid = Number(rawId);
+      if (!Number.isFinite(pid) || pid <= 0) return false;
+      try {
+        await ensureProduct(pid);
+      } catch (e) {
+        console.warn("Failed to load favorite product availability:", pid, e);
+        return false;
+      }
+      const product = state.productCache.get(pid);
+      if (!product || !isProductAvailable(product)) return false;
+    }
+
+    return true;
+  }
+
+  async function addFavoriteSnapshotToCart(snapshot) {
+    const availableNow = await isFavoriteSnapshotAvailableNow(snapshot);
+    if (!availableNow) {
+      showToast("Нет в наличии");
+      return false;
+    }
+
+    const prefillItem = buildRepeatPrefillItem(snapshot);
+    if (!prefillItem) {
+      showToast("Не удалось добавить в корзину");
+      return false;
+    }
+
+    const previousCartSnapshot = cloneCartState(state.cart);
+    const wasEmpty = cartCountTotal() === 0;
+    const draftCart = cloneCartState(state.cart);
+
+    if (String(prefillItem.type || "") === "combo") {
+      const comboId = Number(prefillItem.combo_id || 0);
+      if (!Number.isFinite(comboId) || comboId <= 0) {
+        showToast("Не удалось добавить в корзину");
+        return false;
+      }
+
+      const safeQty = Math.max(1, Number(prefillItem.qty || 1));
+      const sourceSelections = Array.isArray(prefillItem.selections) ? prefillItem.selections : [];
+      if (!sourceSelections.length) {
+        showToast("Не удалось добавить в корзину");
+        return false;
+      }
+
+      const pricedCombo = await resolveRepeatComboSelectionsWithCatalog(comboId, sourceSelections);
+      const selections = Array.isArray(pricedCombo?.selections) && pricedCombo.selections.length
+        ? pricedCombo.selections
+        : sourceSelections;
+
+      let unitOld = Number(pricedCombo?.unitPriceBeforeDiscount || prefillItem.unit_price_before_discount || 0);
+      if (!(unitOld > 0)) {
+        const oldLineTotal = Number(snapshot?.old_line_total || 0);
+        if (oldLineTotal > 0 && safeQty > 0) {
+          unitOld = roundPrice(oldLineTotal / safeQty);
+        }
+      }
+      if (!(unitOld > 0)) {
+        unitOld = roundPrice(
+          selections.reduce((sum, sel) => {
+            const oldVal = Number(sel?.unit_price_before_discount || 0);
+            const currentVal = Number(sel?.unit_price_override || 0);
+            return sum + (oldVal > 0 ? oldVal : currentVal);
+          }, 0)
+        );
+      }
+
+      draftCart.push({
+        key: `combo-${comboId}-${Date.now()}`,
+        type: "combo",
+        combo_id: comboId,
+        combo_title: str(prefillItem.combo_title || snapshot?.name || "Комбо"),
+        qty: safeQty,
+        selections,
+        unit_price_before_discount: unitOld > 0 ? unitOld : null,
+      });
+    } else {
+      const productId = Number(prefillItem.product_id || 0);
+      if (!Number.isFinite(productId) || productId <= 0) {
+        showToast("Не удалось добавить в корзину");
+        return false;
+      }
+
+      await ensureProduct(productId);
+      const product = state.productCache.get(productId);
+      if (!product) {
+        showToast("Не удалось добавить в корзину");
+        return false;
+      }
+
+      const safeQty = Math.max(1, Number(prefillItem.qty || 1));
+      const optionItems = (Array.isArray(prefillItem.option_items) ? prefillItem.option_items : [])
+        .map((opt) => {
+          const id = Number(opt?.id || 0);
+          if (!Number.isFinite(id) || id <= 0) return null;
+          const qty = Math.max(1, Number(opt?.qty ?? opt?.quantity ?? 1));
+          return {
+            id,
+            title: str(opt?.title || opt?.name || ""),
+            price: Number(opt?.price || 0),
+            qty,
+            target_product_id: opt?.target_product_id != null ? Number(opt.target_product_id) : null,
+            product_id: opt?.product_id != null ? Number(opt.product_id) : null,
+            variant_group_id: opt?.variant_group_id != null ? Number(opt.variant_group_id) : null,
+            variant_value_index: opt?.variant_value_index != null ? Number(opt.variant_value_index) : null,
+            variant_label: str(opt?.variant_label || ""),
+            variant_price_diff: Number(opt?.variant_price_diff || 0),
+          };
+        })
+        .filter(Boolean);
+      const optionItemIds = optionItems.map((opt) => Number(opt.id));
+      const ingredients = normalizeRepeatIngredients(prefillItem.ingredients);
+
+      const variantGroupId = prefillItem.variant_group_id != null ? Number(prefillItem.variant_group_id) : null;
+      const variantValueIndex = prefillItem.variant_value_index != null ? Number(prefillItem.variant_value_index) : null;
+      const hasVariantSelection =
+        Number.isFinite(variantGroupId) &&
+        variantGroupId > 0 &&
+        Number.isFinite(variantValueIndex) &&
+        variantValueIndex >= 0;
+      const variantSelection = hasVariantSelection
+        ? { group_id: variantGroupId, value_index: variantValueIndex }
+        : null;
+
+      const baseProductPrice = Number(product.price || 0);
+      let variantUnitPrice = baseProductPrice;
+      if (hasVariantSelection) {
+        const snapshotVariants = Array.isArray(snapshot?.variants) ? snapshot.variants : [];
+        const firstVariant = snapshotVariants[0] || null;
+        const variantPriceDiff = Number(firstVariant?.price_diff);
+        if (Number.isFinite(variantPriceDiff)) {
+          variantUnitPrice = baseProductPrice + variantPriceDiff;
+        }
+      }
+
+      const optionTotal = optionItemsTotal(optionItems);
+      const snapshotUnitPrice = Number(snapshot?.price || 0);
+      const snapshotOldUnitPrice = Number(snapshot?.old_price || 0);
+      const hasApiDiscount = Boolean(product?.discount && Number(product.discount.discount_amount || product.discount.discount_value || 0) > 0);
+      let preDiscountUnitPrice =
+        Number.isFinite(snapshotUnitPrice) && snapshotUnitPrice > 0
+          ? snapshotUnitPrice
+          : roundPrice(variantUnitPrice + optionTotal);
+      if (hasApiDiscount && Number.isFinite(snapshotOldUnitPrice) && snapshotOldUnitPrice > preDiscountUnitPrice) {
+        preDiscountUnitPrice = snapshotOldUnitPrice;
+      }
+
+      let ingredientPriceDiff = preDiscountUnitPrice - variantUnitPrice - optionTotal;
+      if (!Number.isFinite(ingredientPriceDiff)) ingredientPriceDiff = 0;
+      ingredientPriceDiff = roundPrice(ingredientPriceDiff);
+
+      const nextKey = makeCartKey(productId, optionItems, ingredients, variantSelection);
+      const existing = draftCart.find((entry) => String(entry?.key || "") === String(nextKey));
+      if (existing) {
+        existing.qty = Math.max(0, Number(existing.qty || 0)) + safeQty;
+        existing.option_item_ids = optionItemIds;
+        existing.option_items = optionItems;
+        existing.ingredients = ingredients;
+        existing.ingredient_price_diff = ingredientPriceDiff;
+        existing.variant_group_id = hasVariantSelection ? variantGroupId : null;
+        existing.variant_value_index = hasVariantSelection ? variantValueIndex : null;
+        existing.variant_label = hasVariantSelection ? str(prefillItem.variant_label || "") : "";
+        existing.variant_unit_price = hasVariantSelection ? Number(variantUnitPrice || 0) : 0;
+        if (existing.auto_add == null) existing.auto_add = 0;
+        if (existing.auto_add_group_id == null) existing.auto_add_group_id = null;
+      } else {
+        draftCart.push({
+          key: nextKey,
+          product_id: productId,
+          qty: safeQty,
+          option_item_ids: optionItemIds,
+          option_items: optionItems,
+          ingredients,
+          ingredient_price_diff: ingredientPriceDiff,
+          variant_group_id: hasVariantSelection ? variantGroupId : null,
+          variant_value_index: hasVariantSelection ? variantValueIndex : null,
+          variant_label: hasVariantSelection ? str(prefillItem.variant_label || "") : "",
+          variant_unit_price: hasVariantSelection ? Number(variantUnitPrice || 0) : 0,
+          auto_add: 0,
+          auto_add_group_id: null,
+        });
+      }
+    }
+
+    try {
+      const payload = buildStockCheckItemsPayloadFromResolved(cartItemsResolved(draftCart));
+      const stockCheck = await checkStockForItemsPayload(payload, {
+        showToastOnOut: true,
+        toastMessage: "Больше нет в наличии",
+        refreshOnOut: true,
+      });
+      if (!stockCheck.available) return false;
+    } catch (e) {
+      console.warn("Failed stock check for favorite add:", e);
+      showToast("Не удалось добавить в корзину");
+      return false;
+    }
+
+    state.cart = draftCart;
+    if (wasEmpty) {
+      clearAllAutoAddDismissed();
+    }
+    applyAutoAddRules();
+    clearAutoAddDismissedIfCartEmpty();
+    saveCart();
+    renderProducts();
+    if (typeof scheduleSyncAllProductCardsFromCart === "function") {
+      scheduleSyncAllProductCardsFromCart();
+    }
+    renderCart();
+    updateCartBadge();
+    queueCartStockRecheck(previousCartSnapshot, {
+      toastMessage: "Больше нет в наличии",
+    });
+    if (window.matchMedia("(max-width: 768px)").matches) {
+      updateMobileDeliveryProgress();
+    }
+    showToast("Добавлено в корзину");
+    if (navigator.vibrate) navigator.vibrate(10);
+    return true;
+  }
+
+  function initFavoriteSwipeRow(container, content, { onRemove, onAddToCart, allowAdd = true } = {}) {
+    if (!container || !content) return;
+
+    let startX = 0;
+    let startY = 0;
+    let startTranslateX = 0;
+    let translateX = 0;
+    let isTracking = false;
+    let isHorizontal = null;
+    let moved = false;
+    let busy = false;
+    let suppressClick = false;
+    let isTouchMode = false;
+
+    const canAdd = Boolean(allowAdd && typeof onAddToCart === "function");
+    if (!canAdd) {
+      container.classList.add("is-add-disabled");
+    }
+
+    const startThreshold = 8;
+    const swipeLimitRatio = 0.82;
+    const actionThresholdRatio = 0.5;
+    const settleThresholdRatio = 0.45;
+    const fallbackRevealWidth = 68;
+
+    const rowWidth = () => Math.max(1, container.offsetWidth || 300);
+    const revealWidth = () => {
+      try {
+        const raw = getComputedStyle(container).getPropertyValue("--favorite-swipe-reveal");
+        const parsed = Number.parseFloat(raw);
+        if (Number.isFinite(parsed) && parsed > 0) return parsed;
+      } catch {}
+      return fallbackRevealWidth;
+    };
+    const actionThreshold = () => rowWidth() * actionThresholdRatio;
+    const settleThreshold = () => revealWidth() * settleThresholdRatio;
+    const maxOffset = () => Math.max(revealWidth() + 16, rowWidth() * swipeLimitRatio);
+
+    function clearSwipeState() {
+      container.classList.remove("is-swipe-right", "is-swipe-left", "is-armed-add", "is-armed-remove");
+      container.style.removeProperty("--favorite-swipe-progress");
+    }
+
+    function setOpenState(mode) {
+      container.classList.toggle("is-open-add", mode === "add");
+      container.classList.toggle("is-open-remove", mode === "remove");
+    }
+
+    function isOpen() {
+      return container.classList.contains("is-open-add") || container.classList.contains("is-open-remove");
+    }
+
+    function setTranslate(x) {
+      translateX = x;
+      content.style.transform = `translateX(${x}px)`;
+      const absX = Math.abs(x);
+      const threshold = actionThreshold();
+      container.classList.toggle("is-swipe-right", canAdd && x > 0.5);
+      container.classList.toggle("is-swipe-left", x < -0.5);
+      container.classList.toggle("is-armed-add", canAdd && x >= threshold);
+      container.classList.toggle("is-armed-remove", x <= -threshold);
+      container.style.setProperty("--favorite-swipe-progress", String(Math.min(1, absX / Math.max(threshold, 1))));
+    }
+
+    function closeRow(animate = true) {
+      if (animate) {
+        content.style.transition = "transform 0.22s ease";
+      } else {
+        content.style.transition = "";
+      }
+      setTranslate(0);
+      clearSwipeState();
+      setOpenState(null);
+
+      if (currentSwipedContainer === container) {
+        currentSwipedContainer = null;
+      }
+      suppressClick = false;
+
+      if (animate) {
+        setTimeout(() => {
+          if (!content.isConnected) return;
+          content.style.transition = "";
+        }, 240);
+      }
+    }
+
+    function openRow(mode) {
+      if (mode !== "add" && mode !== "remove") {
+        closeRow(true);
+        return;
+      }
+      if (mode === "add" && !canAdd) {
+        closeRow(true);
+        return;
+      }
+      closeCurrentSwiped(true, container);
+      const targetX = mode === "add" ? revealWidth() : -revealWidth();
+      content.style.transition = "transform 0.22s ease";
+      setTranslate(targetX);
+      clearSwipeState();
+      setOpenState(mode);
+      currentSwipedContainer = container;
+      setTimeout(() => {
+        if (!content.isConnected) return;
+        content.style.transition = "";
+      }, 240);
+    }
+
+    container.__favoriteSwipeClose = closeRow;
+
+    function beginTrack(clientX, clientY, touchMode) {
+      if (busy) return false;
+      closeCurrentSwiped(true, container);
+      isTracking = true;
+      isHorizontal = null;
+      moved = false;
+      isTouchMode = !!touchMode;
+      startX = clientX;
+      startY = clientY;
+      startTranslateX = translateX;
+      content.style.transition = "";
+      return true;
+    }
+
+    function handleMove(clientX, clientY, event) {
+      if (!isTracking || busy) return;
+      const deltaX = clientX - startX;
+      const deltaY = clientY - startY;
+
+      if (isHorizontal === null && (Math.abs(deltaX) > startThreshold || Math.abs(deltaY) > startThreshold)) {
+        isHorizontal = Math.abs(deltaX) > Math.abs(deltaY);
+      }
+
+      if (isHorizontal === false) return;
+      if (isHorizontal !== true) return;
+
+      if (!moved) {
+        clearSwipeState();
+        setOpenState(null);
+      }
+      moved = true;
+      suppressClick = true;
+      if (event && event.cancelable) {
+        event.preventDefault();
+      }
+
+      const limit = maxOffset();
+      let nextX = startTranslateX + deltaX;
+      if (!canAdd && nextX > 0) nextX = 0;
+      nextX = Math.max(-limit, Math.min(limit, nextX));
+      setTranslate(nextX);
+    }
+
+    async function runAction(direction) {
+      if (busy) return;
+      busy = true;
+      container.classList.add("is-action-busy");
+
+      const width = rowWidth();
+      const reveal = revealWidth();
+      const actionTravel = Math.min(width * 0.62, Math.max(reveal * 1.2, reveal + 18));
+      content.style.transition = "transform 0.18s ease-out";
+      setTranslate(direction === "remove" ? -actionTravel : actionTravel);
+
+      let ok = false;
+      try {
+        if (direction === "remove") {
+          ok = (await (typeof onRemove === "function" ? onRemove() : false)) === true;
+        } else {
+          if (!canAdd) {
+            ok = false;
+          } else {
+          ok = (await (typeof onAddToCart === "function" ? onAddToCart() : false)) === true;
+          }
+        }
+      } catch (e) {
+        console.warn("Favorite swipe action failed:", e);
+        ok = false;
+      } finally {
+        busy = false;
+        container.classList.remove("is-action-busy");
+      }
+
+      if (!content.isConnected) return;
+
+      if (!ok || direction !== "remove") {
+        closeRow(true);
+      }
+    }
+
+    async function finishTrack() {
+      if (!isTracking || busy) return;
+      isTracking = false;
+      if (!moved) return;
+
+      const threshold = actionThreshold();
+      const snapThreshold = settleThreshold();
+      const x = translateX;
+
+      if (canAdd && x >= threshold) {
+        if (navigator.vibrate) navigator.vibrate(10);
+        await runAction("add");
+      } else if (x <= -threshold) {
+        if (navigator.vibrate) navigator.vibrate(20);
+        await runAction("remove");
+      } else if (canAdd && x >= snapThreshold) {
+        openRow("add");
+      } else if (x <= -snapThreshold) {
+        openRow("remove");
+      } else {
+        closeRow(true);
+      }
+    }
+
+    content.addEventListener(
+      "click",
+      (event) => {
+        if (isOpen()) {
+          suppressClick = false;
+          event.preventDefault();
+          event.stopPropagation();
+          closeRow(true);
+          return;
+        }
+        if (!suppressClick) return;
+        suppressClick = false;
+        event.preventDefault();
+        event.stopPropagation();
+      },
+      true
+    );
+
+    content.addEventListener("touchstart", (event) => {
+      if (!event.touches || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      beginTrack(touch.clientX, touch.clientY, true);
+    }, { passive: true });
+
+    content.addEventListener("touchmove", (event) => {
+      if (!event.touches || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      handleMove(touch.clientX, touch.clientY, event);
+    }, { passive: false });
+
+    content.addEventListener("touchend", async () => {
+      await finishTrack();
+      isHorizontal = null;
+      moved = false;
+      isTouchMode = false;
+      startTranslateX = translateX;
+    }, { passive: true });
+
+    content.addEventListener("touchcancel", () => {
+      isTracking = false;
+      isHorizontal = null;
+      moved = false;
+      isTouchMode = false;
+      startTranslateX = translateX;
+      closeRow(true);
+    }, { passive: true });
+
+    content.addEventListener("mousedown", (event) => {
+      if (isTouchMode) return;
+      if (event.button !== 0) return;
+      beginTrack(event.clientX, event.clientY, false);
+      const onMouseMove = (moveEvent) => {
+        if (!isTracking || isTouchMode) return;
+        handleMove(moveEvent.clientX, moveEvent.clientY, moveEvent);
+      };
+      const onMouseUp = async () => {
+        window.removeEventListener("mousemove", onMouseMove);
+        window.removeEventListener("mouseup", onMouseUp);
+        if (!isTracking || isTouchMode) return;
+        await finishTrack();
+        isHorizontal = null;
+        moved = false;
+        startTranslateX = translateX;
+      };
+      window.addEventListener("mousemove", onMouseMove);
+      window.addEventListener("mouseup", onMouseUp);
+    });
+  }
+
+  async function renderFavorites({ forceReload = false } = {}) {
+    const currentSeq = ++renderSeq;
+    currentSwipedContainer = null;
+    renderMessage("Загрузка…");
+
+    if (!getCustomerToken()) {
+      if (currentSeq !== renderSeq) return;
+      renderAuthRequired();
+      return;
+    }
+
+    if (!window.shopFavoritesApi || typeof window.shopFavoritesApi.list !== "function") {
+      if (currentSeq !== renderSeq) return;
+      renderMessage("Избранное пока недоступно.");
+      return;
+    }
+
+    try {
+      const favorites = await window.shopFavoritesApi.list({ force: forceReload });
+      if (currentSeq !== renderSeq) return;
+
+      const rows = Array.isArray(favorites) ? favorites : [];
+      if (!rows.length) {
+        renderMessage("В избранном пока ничего нет.");
+        return;
+      }
+
+      const availabilityByIndex = await buildFavoritesAvailabilityMap(rows);
+
+      list.innerHTML = "";
+      const repeatItems = [];
+      const catalogCategories = getFavoritesCatalogCategories();
+      const categoriesById = new Map(
+        catalogCategories
+          .map((cat) => [Number(cat?.id || 0), cat])
+          .filter(([cid]) => Number.isFinite(cid) && cid > 0)
+      );
+      const categoriesByCode = new Map(
+        catalogCategories
+          .map((cat) => [str(cat?.code || "").toLowerCase(), Number(cat?.id || 0)])
+          .filter(([code, cid]) => code && Number.isFinite(cid) && cid > 0)
+      );
+      const lookups = buildFavoriteCategoryLookups(catalogCategories);
+      const groupedByCategoryId = new Map();
+      const uncategorizedEntries = [];
+
+      rows.forEach((fav, rowIndex) => {
+        const snapshot = fav?.item && typeof fav.item === "object" ? fav.item : null;
+        if (!snapshot) return;
+        const categoryId = resolveFavoriteCategoryId(fav, snapshot, lookups, categoriesById, categoriesByCode);
+        const entry = { fav, snapshot, rowIndex };
+        if (Number.isFinite(Number(categoryId)) && categoriesById.has(Number(categoryId))) {
+          const cid = Number(categoryId);
+          if (!groupedByCategoryId.has(cid)) groupedByCategoryId.set(cid, []);
+          groupedByCategoryId.get(cid).push(entry);
+          return;
+        }
+        uncategorizedEntries.push(entry);
+      });
+
+      const sections = [];
+      catalogCategories.forEach((cat) => {
+        const cid = Number(cat?.id || 0);
+        if (!Number.isFinite(cid) || cid <= 0) return;
+        const sectionItems = groupedByCategoryId.get(cid) || [];
+        if (!sectionItems.length) return;
+        sections.push({
+          id: cid,
+          title: str(cat?.title || "Категория"),
+          items: sectionItems,
+        });
+      });
+
+      if (uncategorizedEntries.length) {
+        sections.push({
+          id: null,
+          title: "Другое",
+          items: uncategorizedEntries,
+        });
+      }
+
+      if (!sections.length) {
+        renderMessage("В избранном пока ничего нет.");
+        return;
+      }
+
+      renderFavoriteCategoryChips(sections);
+
+      const renderFavoriteEntry = ({ fav, snapshot, rowIndex }) => {
+        const favoriteId = Number(fav?.id || 0);
+        const isAvailable = availabilityByIndex.get(rowIndex) !== false;
+        const isUnavailable = !isAvailable;
+
+        const swipeContainer = document.createElement("div");
+        swipeContainer.className = "shop-favorite-swipe-container";
+        swipeContainer.classList.toggle("is-unavailable", isUnavailable);
+
+        const addAction = document.createElement("button");
+        addAction.type = "button";
+        addAction.className = "shop-favorite-swipe-action shop-favorite-swipe-action--add";
+        addAction.setAttribute("aria-label", isUnavailable ? "Нет в наличии" : "Добавить в корзину");
+        addAction.disabled = isUnavailable;
+        addAction.setAttribute("aria-disabled", isUnavailable ? "true" : "false");
+        addAction.innerHTML = '<i class="fas fa-shopping-cart"></i>';
+        swipeContainer.appendChild(addAction);
+
+        const removeAction = document.createElement("button");
+        removeAction.type = "button";
+        removeAction.className = "shop-favorite-swipe-action shop-favorite-swipe-action--remove";
+        removeAction.setAttribute("aria-label", "Удалить из избранного");
+        removeAction.innerHTML = '<i class="fas fa-trash"></i>';
+        swipeContainer.appendChild(removeAction);
+
+        const content = document.createElement("div");
+        content.className = "shop-favorite-swipe-content";
+
+        const card = document.createElement("div");
+        card.className = "shop-profile-card shop-favorites-card";
+
+        const itemsWrap = document.createElement("div");
+        itemsWrap.className = "shop-cart-items";
+        let rowHtml = "";
+        if (typeof window.formatOrderItem === "function") {
+          try {
+            rowHtml = String(window.formatOrderItem(snapshot) || "");
+          } catch (e) {
+            console.warn("Failed to format favorite item:", e);
+          }
+        }
+        if (rowHtml) {
+          itemsWrap.innerHTML = rowHtml;
+        } else {
+          itemsWrap.appendChild(buildFallbackItemRow(snapshot));
+        }
+        applyFavoriteComboThumbGrid(itemsWrap, snapshot);
+        card.appendChild(itemsWrap);
+        if (isUnavailable) {
+          applyFavoriteUnavailableView(card);
+        }
+
+        content.appendChild(card);
+        swipeContainer.appendChild(content);
+        list.appendChild(swipeContainer);
+        repeatItems.push(snapshot);
+
+        const removeFavorite = async () => {
+          if (!Number.isFinite(favoriteId) || favoriteId <= 0) return false;
+          try {
+            await window.shopFavoritesApi.remove(favoriteId);
+            showToast("Удалено из избранного");
+            await renderFavorites({ forceReload: false });
+            return true;
+          } catch (e) {
+            console.warn("Failed to remove favorite:", e);
+            if (Number(e?.httpStatus) === 401) {
+              renderAuthRequired();
+              return false;
+            }
+            showToast("Не удалось удалить из избранного");
+            return false;
+          }
+        };
+
+        const addToCart = async () => {
+          if (isUnavailable) {
+            showToast("Нет в наличии");
+            return false;
+          }
+          return await addFavoriteSnapshotToCart(snapshot);
+        };
+
+        removeAction.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          await removeFavorite();
+        });
+
+        addAction.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          await addToCart();
+          const closeFn = swipeContainer.__favoriteSwipeClose;
+          if (typeof closeFn === "function") {
+            closeFn(true);
+          }
+        });
+
+        initFavoriteSwipeRow(swipeContainer, content, {
+          onRemove: removeFavorite,
+          onAddToCart: addToCart,
+          allowAdd: !isUnavailable,
+        });
+      };
+
+      sections.forEach((section) => {
+        const sectionItems = Array.isArray(section?.items) ? section.items : [];
+        if (!sectionItems.length) return;
+        const header = document.createElement("div");
+        header.className = "shop-category-header shop-favorites-category-header";
+        header.textContent = str(section?.title || "Категория");
+        const sectionId = Number(section?.id || 0);
+        if (Number.isFinite(sectionId) && sectionId > 0) {
+          header.setAttribute("data-cat-id", String(sectionId));
+          header.setAttribute("data-cat-title", str(section?.title || ""));
+        }
+        list.appendChild(header);
+        sectionItems.forEach((entry) => renderFavoriteEntry(entry));
+      });
+
+      if (!repeatItems.length) {
+        renderMessage("В избранном пока ничего нет.");
+        return;
+      }
+
+      const reopenFavorites = () => {
+        void openFavoritesSheet({ force: false });
+      };
+      bindRepeatOrderItemRows(list, repeatItems, { onBack: reopenFavorites });
+    } catch (e) {
+      if (currentSeq !== renderSeq) return;
+      console.warn("Failed to load favorites:", e);
+      if (Number(e?.httpStatus) === 401) {
+        if (window.shopFavoritesApi && typeof window.shopFavoritesApi.clearCache === "function") {
+          window.shopFavoritesApi.clearCache();
+        }
+        renderAuthRequired();
+        return;
+      }
+      renderMessage("Ошибка загрузки избранного");
+    }
+  }
+
+  sheetNavigationState.type = "favorites";
+  sheetNavigationState.screen = "list";
   sheetNavigationState.data = null;
 
   setAppModalMode("shop");
@@ -6201,6 +7431,9 @@ function showFavoritesPlaceholder() {
     title: "Избранное",
     content: wrap,
     onClose: () => {
+      closeCurrentSwiped(false);
+      currentSwipedContainer = null;
+      document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
       setActiveNav("menu");
       sheetNavigationState.type = null;
       sheetNavigationState.screen = null;
@@ -6210,6 +7443,8 @@ function showFavoritesPlaceholder() {
       }
     },
   });
+
+  void renderFavorites({ forceReload: force });
 
   if (typeof window.updateActiveOrdersBadge === "function") {
     setTimeout(() => {
@@ -6384,7 +7619,7 @@ function openCartSheet() {
   const clearBtn = document.createElement("button");
   clearBtn.type = "button";
   clearBtn.className = "shop-cart-clear";
-  clearBtn.textContent = "×";
+  clearBtn.textContent = "Г—";
   clearBtn.title = "Очистить корзину";
 
   const btn = document.createElement("button");
@@ -6700,7 +7935,7 @@ function applySheetAddressTitle(backMode = "cart") {
       window.updateActiveOrdersBadge();
     }
 
-    // cart mode header: вернуть ×, убрать ←/♡
+    // cart mode header: вернуть Г—, убрать в†ђ/в™Ў
     setSheetHeaderMode("cart");
 
     // Обновляем состояние навигации
@@ -7114,7 +8349,7 @@ function showSheetAddressList(backMode) {
     }, 0);
   }
 
-  function showSheetProduct(product, { cartKey } = {}) {
+  function showSheetProduct(product, { cartKey, prefillItem, onBack } = {}) {
     hideHeaderToggle();
     checkoutWrap.classList.add("hidden");
     list.classList.add("hidden");
@@ -7126,22 +8361,27 @@ function showSheetAddressList(backMode) {
     // Просмотр карточки товара — часть главной (каталог), подсвечиваем «Главная»
     if (typeof setActiveNav === "function") setActiveNav("menu");
 
-    // product mode header: ←/♡, × скрыть, title скрыть
+    // product mode header: в†ђ/в™Ў, Г— скрыть, title скрыть
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("");
     
     // Определяем куда возвращаться при закрытии карточки:
     // - Если cartKey есть (из корзины) - вернуться в корзину
     // - Если cartKey нет (из каталога) - закрыть sheet и вернуться в каталог
-    const onBack = cartKey ? showSheetCart : closeShopSheetIfOpen;
+    const resolvedOnBack = typeof onBack === "function"
+      ? onBack
+      : (cartKey ? showSheetCart : closeShopSheetIfOpen);
     
     // Обновляем состояние навигации
     sheetNavigationState.type = 'cart';
     sheetNavigationState.screen = 'product';
-    sheetNavigationState.data = { cartKey: cartKey || null };
+    sheetNavigationState.data = {
+      cartKey: cartKey || null,
+      customBackHandler: typeof onBack === "function" ? onBack : null,
+    };
     
-    setSheetHeaderMode("product", { onBack });
-    renderProductDetailsInto(productWrap, product, { onBack, cartKey });
+    setSheetHeaderMode("product", { onBack: resolvedOnBack });
+    renderProductDetailsInto(productWrap, product, { onBack: resolvedOnBack, cartKey, prefillItem });
     
     // На мобильных: скрываем ботомщит активного заказа при открытии карточки товара
     if (elActiveOrdersSheetCollapsed) {
@@ -7149,7 +8389,7 @@ function showSheetAddressList(backMode) {
     }
   }
 
-  function showSheetCombo(comboData, { cartKey } = {}) {
+  function showSheetCombo(comboData, { cartKey, prefillItem, onBack } = {}) {
     hideHeaderToggle();
     checkoutWrap.classList.add("hidden");
     list.classList.add("hidden");
@@ -7161,7 +8401,7 @@ function showSheetAddressList(backMode) {
     // Просмотр карточки комбо — часть главной (каталог), подсвечиваем «Главная»
     if (typeof setActiveNav === "function") setActiveNav("menu");
 
-    // На мобилке скрываем футер корзины (× и «Оформить»), у комбо свой футер «в корзину» внутри контента
+    // На мобилке скрываем футер корзины (Г— и «Оформить»), у комбо свой футер «в корзину» внутри контента
     const isMobileCombo = window.matchMedia("(max-width: 768px)").matches;
     if (isMobileCombo && elMobileCartActions) {
       elMobileCartActions.classList.add("hidden");
@@ -7171,15 +8411,20 @@ function showSheetAddressList(backMode) {
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("");
 
-    const onBack = cartKey ? showSheetCart : closeShopSheetIfOpen;
+    const resolvedOnBack = typeof onBack === "function"
+      ? onBack
+      : (cartKey ? showSheetCart : closeShopSheetIfOpen);
     sheetNavigationState.type = "cart";
     sheetNavigationState.screen = "combo";
-    sheetNavigationState.data = cartKey ? { cartKey } : null;
+    sheetNavigationState.data = {
+      cartKey: cartKey || null,
+      customBackHandler: typeof onBack === "function" ? onBack : null,
+    };
 
     const comboDiscount = Number(comboData.discount_percent) || 0;
     const comboBadge = comboDiscount ? `-${comboDiscount}%` : "";
-    setSheetHeaderMode("product", { onBack, discountBadge: comboBadge });
-    renderComboDetailsInto(productWrap, comboData, { onBack, cartKey });
+    setSheetHeaderMode("product", { onBack: resolvedOnBack, discountBadge: comboBadge });
+    renderComboDetailsInto(productWrap, comboData, { onBack: resolvedOnBack, cartKey, prefillItem });
 
     if (elActiveOrdersSheetCollapsed) {
       elActiveOrdersSheetCollapsed.classList.add("hidden");
@@ -7840,7 +9085,7 @@ function renderSheetAddressList() {
 
     const note = document.createElement("div");
     note.className = "shop-auth-text muted";
-    note.textContent = "Введите телефон, затем дату рождения (дд.мм.гггг).";
+    note.textContent = "Введите телефон, затем дату рождения (РґРґ.мм.гггг).";
     wrap.appendChild(note);
 
     const form = document.createElement("div");
@@ -7872,7 +9117,7 @@ function renderSheetAddressList() {
     const bday = document.createElement("input");
     bday.className = "control";
     bday.type = "text";
-    bday.placeholder = "дд.мм.гггг";
+    bday.placeholder = "РґРґ.мм.гггг";
     bday.inputMode = "numeric";
     bWrap.appendChild(bLabel);
     bWrap.appendChild(bday);
@@ -7911,7 +9156,7 @@ function renderSheetAddressList() {
     bday.addEventListener("blur", () => {
       if (!str(bday.value).trim()) return;
       if (!isValidBirthday(bday.value)) {
-        setBirthdayError("Введите дату рождения в формате дд.мм.гггг");
+        setBirthdayError("Введите дату рождения в формате РґРґ.мм.гггг");
       }
     });
 
@@ -7936,7 +9181,7 @@ function renderSheetAddressList() {
         return;
       }
       if (!isValidBirthday(bday.value)) {
-        setBirthdayError("Введите дату рождения в формате дд.мм.гггг");
+        setBirthdayError("Введите дату рождения в формате РґРґ.мм.гггг");
         return;
       }
 
@@ -8191,6 +9436,1281 @@ function renderSheetAddressList() {
     });
   }
 
+  function resetOrderDetailsTransientUi() {
+    if (elMobileProductActions) {
+      elMobileProductActions.classList.add("hidden");
+    }
+    if (elMobileCartActions) {
+      elMobileCartActions.classList.add("hidden");
+      if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
+      if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
+    }
+    if (elMobileAddressActions) {
+      elMobileAddressActions.classList.add("hidden");
+    }
+    if (elMobileAddressConfirm) {
+      elMobileAddressConfirm.classList.add("hidden");
+    }
+
+    if (elMobileAddToCartBtn && mobileProductActionsState?.onAddToCart) {
+      try {
+        elMobileAddToCartBtn.removeEventListener("click", mobileProductActionsState.onAddToCart);
+      } catch {}
+      mobileProductActionsState.onAddToCart = null;
+    }
+
+    if (typeof window._comboStepBackCallback !== "undefined") {
+      window._comboStepBackCallback = null;
+    }
+    if (openCartSheetCtx && typeof openCartSheetCtx === "object") {
+      openCartSheetCtx.comboStepBack = null;
+    }
+    openCartSheetCtx = null;
+    openProductCtx = null;
+    if (window.AppModal?.body) {
+      window.AppModal.body.classList.remove("shop-cart-sheet-body");
+    }
+  }
+
+  function hasLiveCartSheetContext() {
+    if (!openCartSheetCtx || typeof openCartSheetCtx !== "object") return false;
+    const listEl = openCartSheetCtx.listEl;
+    if (!listEl || !listEl.isConnected) return false;
+    if (window.AppModal?.body && !window.AppModal.body.contains(listEl)) return false;
+    return true;
+  }
+
+  function normalizeRepeatOptionItems(optionItems) {
+    const list = Array.isArray(optionItems) ? optionItems : [];
+    return list
+      .map((opt) => {
+        const itemId = Number(opt?.id || opt?.option_item_id || 0);
+        if (!Number.isFinite(itemId) || itemId <= 0) return null;
+        const qty = Math.max(0, Number(opt?.qty ?? opt?.quantity ?? 1)) || 1;
+        const targetProductId = Number(opt?.target_product_id || opt?.product_id || 0);
+        const variantSource =
+          opt?.variant && typeof opt.variant === "object"
+            ? opt.variant
+            : (Array.isArray(opt?.variants) ? opt.variants[0] : null);
+        const variantGroupId = Number(opt?.variant_group_id ?? variantSource?.variant_group_id);
+        const variantValueIndex = Number(opt?.variant_value_index ?? variantSource?.variant_value_index);
+        return {
+          id: itemId,
+          title: str(opt?.title || opt?.name || ""),
+          price: Number(opt?.price || 0),
+          qty,
+          target_product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
+          product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
+          variant_group_id: Number.isFinite(variantGroupId) && variantGroupId > 0 ? variantGroupId : null,
+          variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
+          variant_label: str(opt?.variant_label || variantSource?.label || variantSource?.value || ""),
+          variant_price_diff: Number(opt?.variant_price_diff || 0),
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function normalizeRepeatIngredients(ingredients) {
+    const list = Array.isArray(ingredients) ? ingredients : [];
+    return list
+      .map((ing) => {
+        const ingredientId = Number(ing?.ingredient_id || 0);
+        if (!Number.isFinite(ingredientId) || ingredientId <= 0) return null;
+        const quantityRaw = Number(ing?.quantity ?? ing?.qty ?? 0);
+        const quantity = Number.isFinite(quantityRaw) ? quantityRaw : 0;
+        return {
+          ingredient_id: ingredientId,
+          ingredient_name: str(ing?.ingredient_name || ing?.name || ""),
+          name: str(ing?.name || ing?.ingredient_name || ""),
+          quantity,
+          qty: quantity,
+          unit_id: ing?.unit_id != null && Number.isFinite(Number(ing.unit_id)) ? Number(ing.unit_id) : null,
+          unit_label: str(ing?.unit_label || ing?.unit || ""),
+          unit: str(ing?.unit || ing?.unit_label || ""),
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function buildRepeatPrefillItem(orderItem) {
+    if (!orderItem || typeof orderItem !== "object") return null;
+
+    const itemType = str(orderItem.type || "").trim().toLowerCase();
+    const hasComboPayload =
+      Number.isFinite(Number(orderItem?.combo_id || 0)) &&
+      Number(orderItem?.combo_id || 0) > 0;
+
+    if (itemType === "combo" || hasComboPayload) {
+      const comboId = Number(orderItem.combo_id || orderItem?.combo?.id || 0);
+      if (!Number.isFinite(comboId) || comboId <= 0) return null;
+      const selections = (Array.isArray(orderItem.selections) ? orderItem.selections : []).map((sel) => {
+        const productId = Number(sel?.product_id || sel?.id || sel?.product?.id || 0);
+        const selVariant =
+          sel?.variant && typeof sel.variant === "object"
+            ? sel.variant
+            : (Array.isArray(sel?.variants) ? sel.variants[0] : null);
+        const rawIngredients = Array.isArray(sel?.ingredients_display)
+          ? sel.ingredients_display
+          : (Array.isArray(sel?.ingredients) ? sel.ingredients : []);
+        const ingredientsDisplay = rawIngredients.map((ing) => {
+          const ingredientId = Number(ing?.ingredient_id || 0);
+          const quantityRaw = Number(ing?.quantity ?? ing?.qty ?? 0);
+          const quantity = Number.isFinite(quantityRaw) ? quantityRaw : 0;
+          return {
+            ingredient_id: Number.isFinite(ingredientId) && ingredientId > 0 ? ingredientId : null,
+            name: str(ing?.name || ing?.ingredient_name || ""),
+            quantity,
+            qty: quantity,
+            unit_id: ing?.unit_id != null && Number.isFinite(Number(ing.unit_id)) ? Number(ing.unit_id) : null,
+            unit: str(ing?.unit || ing?.unit_label || ""),
+          };
+        });
+        const variantGroupId = Number(sel?.variant_group_id ?? selVariant?.variant_group_id);
+        const variantValueIndex = Number(sel?.variant_value_index ?? selVariant?.variant_value_index);
+        return {
+          product_id: Number.isFinite(productId) && productId > 0 ? productId : null,
+          product_name: str(sel?.product_name || ""),
+          product_photo: str(sel?.product_photo || ""),
+          variant_label: str(sel?.variant_label || selVariant?.label || selVariant?.value || ""),
+          variant_group_id: Number.isFinite(variantGroupId) && variantGroupId > 0 ? variantGroupId : null,
+          variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
+          variant_group_title: str(sel?.variant_group_title || ""),
+          variant_unit: str(sel?.variant_unit || ""),
+          unit_id: sel?.unit_id != null && Number.isFinite(Number(sel.unit_id)) ? Number(sel.unit_id) : null,
+          ingredients_display: ingredientsDisplay,
+          unit_price_override: sel?.unit_price_override != null ? Number(sel.unit_price_override) : null,
+        };
+      });
+
+      return {
+        type: "combo",
+        combo_id: comboId,
+        combo_title: str(orderItem.combo_title || orderItem.name || "Комбо"),
+        qty: Math.max(1, Number(orderItem.qty || orderItem.quantity || 1)),
+        selections,
+        unit_price_before_discount: Number(orderItem.unit_price_before_discount || 0),
+      };
+    }
+
+    const productId = Number(orderItem.product_id || orderItem.id || orderItem?.product?.id || 0);
+    if (!Number.isFinite(productId) || productId <= 0) return null;
+
+    const optionItemsRaw = [
+      ...(Array.isArray(orderItem.options) ? orderItem.options : []),
+      ...(Array.isArray(orderItem.option_items) ? orderItem.option_items : []),
+    ];
+    const optionItems = normalizeRepeatOptionItems(optionItemsRaw);
+    const optionItemsById = new Map();
+    optionItems.forEach((opt) => {
+      const optionId = Number(opt?.id || 0);
+      if (!Number.isFinite(optionId) || optionId <= 0) return;
+      optionItemsById.set(optionId, opt);
+    });
+    const optionIds = new Set();
+    (Array.isArray(orderItem.option_item_ids) ? orderItem.option_item_ids : []).forEach((id) => {
+      const itemId = Number(id);
+      if (Number.isFinite(itemId) && itemId > 0) optionIds.add(itemId);
+    });
+    optionItemsById.forEach((_opt, id) => {
+      if (Number.isFinite(Number(id)) && Number(id) > 0) optionIds.add(Number(id));
+    });
+
+    const variantFromArray = Array.isArray(orderItem?.variants) ? orderItem.variants[0] : null;
+    const variantSource =
+      orderItem?.variant && typeof orderItem.variant === "object"
+        ? orderItem.variant
+        : (variantFromArray && typeof variantFromArray === "object" ? variantFromArray : null);
+    const variantGroupId = Number(orderItem.variant_group_id ?? variantSource?.variant_group_id);
+    const variantValueIndex = Number(orderItem.variant_value_index ?? variantSource?.variant_value_index);
+
+    return {
+      product_id: productId,
+      qty: Math.max(1, Number(orderItem.qty || orderItem.quantity || 1)),
+      option_item_ids: [...optionIds],
+      option_items: Array.from(optionItemsById.values()),
+      ingredients: normalizeRepeatIngredients(orderItem.ingredients),
+      variant_group_id: Number.isFinite(variantGroupId) && variantGroupId > 0 ? variantGroupId : null,
+      variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
+      variant_label: str(
+        orderItem.variant_label ||
+        variantSource?.variant_label ||
+        variantSource?.label ||
+        variantSource?.value ||
+        ""
+      ),
+    };
+  }
+
+  async function resolveRepeatComboSelectionsWithCatalog(comboId, rawSelections) {
+    const sourceSelections = Array.isArray(rawSelections) ? rawSelections : [];
+    if (!sourceSelections.length) {
+      return { selections: [], unitPriceBeforeDiscount: null };
+    }
+
+    const safeComboId = Number(comboId || 0);
+    let discountPercent = 0;
+    if (Number.isFinite(safeComboId) && safeComboId > 0) {
+      try {
+        const comboJson = await apiJson("/api/public/combos/" + encodeURIComponent(safeComboId));
+        discountPercent = Number(comboJson?.data?.discount_percent || 0) || 0;
+      } catch (e) {
+        console.warn("Failed to load combo for repeat pricing:", safeComboId, e);
+      }
+    }
+
+    const pricedSelections = [];
+    for (const rawSelection of sourceSelections) {
+      const selection = rawSelection && typeof rawSelection === "object" ? { ...rawSelection } : {};
+      const productId = Number(selection.product_id || 0);
+      if (!Number.isFinite(productId) || productId <= 0) {
+        pricedSelections.push({
+          ...selection,
+          product_id: null,
+          unit_price_before_discount: null,
+          unit_price_override:
+            selection?.unit_price_override != null && Number.isFinite(Number(selection.unit_price_override))
+              ? Number(selection.unit_price_override)
+              : null,
+        });
+        continue;
+      }
+
+      let resolvedSelection = null;
+      try {
+        const [product, variants, ingredients] = await Promise.all([
+          ensureProduct(productId),
+          resolveProductVariants(productId),
+          resolveProductIngredients(productId),
+        ]);
+        if (product) {
+          const variantGroup = Array.isArray(variants) && variants.length ? variants[0] : null;
+          const values = Array.isArray(variantGroup?.values) ? variantGroup.values : [];
+
+          let variantValueIndex = Number(selection.variant_value_index);
+          if (!Number.isFinite(variantValueIndex) && values.length) {
+            const wantedLabel = str(selection.variant_label || "").trim();
+            if (wantedLabel) {
+              const foundIndex = values.findIndex((value) => str(value || "").trim() === wantedLabel);
+              if (foundIndex >= 0) variantValueIndex = foundIndex;
+            }
+          }
+          if (!Number.isFinite(variantValueIndex)) {
+            variantValueIndex = variantGroup?.default_value_index != null
+              ? Number(variantGroup.default_value_index)
+              : 0;
+          }
+          if (!Number.isFinite(variantValueIndex)) variantValueIndex = 0;
+          if (values.length) {
+            variantValueIndex = Math.max(0, Math.min(variantValueIndex, values.length - 1));
+          } else {
+            variantValueIndex = 0;
+          }
+
+          const variantLabel = values[variantValueIndex] != null
+            ? str(values[variantValueIndex])
+            : str(selection.variant_label || "");
+          const variantState = {
+            selectedIndex: variantValueIndex,
+            value: values[variantValueIndex],
+            label: variantLabel,
+          };
+
+          let unitBeforeDiscount = Array.isArray(variants) && variants.length
+            ? getVariantUnitPrice(product, variants, variantState)
+            : Number(product.price || 0);
+
+          const ingredientSource = Array.isArray(selection.ingredients_display)
+            ? selection.ingredients_display
+            : (Array.isArray(selection.ingredients) ? selection.ingredients : []);
+          const ingredientQty = new Map();
+          ingredientSource.forEach((ingredient) => {
+            const ingredientId = Number(ingredient?.ingredient_id || ingredient?.id || 0);
+            if (!Number.isFinite(ingredientId) || ingredientId <= 0) return;
+            const quantity = Number(ingredient?.quantity ?? ingredient?.qty ?? 0);
+            if (!Number.isFinite(quantity)) return;
+            ingredientQty.set(ingredientId, quantity);
+          });
+
+          (Array.isArray(ingredients) ? ingredients : []).forEach((ingredient) => {
+            const ingredientId = Number(ingredient?.ingredient_id || 0);
+            if (!Number.isFinite(ingredientId) || ingredientId <= 0) return;
+            if (!ingredientQty.has(ingredientId)) {
+              ingredientQty.set(ingredientId, Number(ingredient?.quantity ?? 0));
+            }
+          });
+
+          (Array.isArray(ingredients) ? ingredients : []).forEach((ingredient) => {
+            const ingredientId = Number(ingredient?.ingredient_id || 0);
+            if (!Number.isFinite(ingredientId) || ingredientId <= 0) return;
+            const currentQty = Number(ingredientQty.get(ingredientId) ?? 0);
+            const baseQty = Number(ingredient?.quantity ?? 1);
+            const ingredientBaseQty =
+              ingredient?.ingredient_base_qty != null && Number(ingredient.ingredient_base_qty) > 0
+                ? Number(ingredient.ingredient_base_qty)
+                : 1;
+            const ingredientPrice = Number(ingredient?.ingredient_price || 0);
+            const catalogBasePrice =
+              ingredientBaseQty > 0 && ingredientPrice > 0
+                ? ingredientPrice / ingredientBaseQty
+                : (ingredientPrice > 0 ? ingredientPrice : 0);
+            const pricePerUnit =
+              ingredient?.price_override != null && Number(ingredient.price_override) >= 0
+                ? Number(ingredient.price_override)
+                : catalogBasePrice;
+            const currentQtyInBase = getQtyInBase(ingredient, currentQty);
+            const baseQtyInBase = getQtyInBase(ingredient, baseQty);
+            const diff = (currentQtyInBase != null && baseQtyInBase != null && Number.isFinite(pricePerUnit))
+              ? pricePerUnit * (currentQtyInBase - baseQtyInBase)
+              : (Number.isFinite(pricePerUnit) ? (currentQty - baseQty) * pricePerUnit : 0);
+            unitBeforeDiscount += diff;
+          });
+
+          unitBeforeDiscount = Math.max(0, unitBeforeDiscount);
+
+          const normalizedIngredientsDisplay = (Array.isArray(ingredients) ? ingredients : []).map((ingredient) => {
+            const ingredientId = Number(ingredient?.ingredient_id || 0);
+            const quantity = ingredientQty.get(ingredientId) ?? Number(ingredient?.quantity ?? 0) ?? 0;
+            const unitLabel = ingredient?.unit_short_title || ingredient?.unit_title || ingredient?.unit_code || "г";
+            return {
+              ingredient_id: Number.isFinite(ingredientId) && ingredientId > 0 ? ingredientId : null,
+              name: str(ingredient?.ingredient_name || ingredient?.name || ""),
+              quantity,
+              qty: quantity,
+              unit_id: ingredient?.unit_id != null && Number.isFinite(Number(ingredient.unit_id)) ? Number(ingredient.unit_id) : null,
+              unit: str(unitLabel),
+            };
+          });
+
+          resolvedSelection = {
+            ...selection,
+            product_id: productId,
+            product_name: str(selection.product_name || product.name || ""),
+            product_photo: str(selection.product_photo || safePhotos(product)[0] || ""),
+            variant_label: str(selection.variant_label || variantLabel || ""),
+            variant_group_id:
+              selection?.variant_group_id != null && Number.isFinite(Number(selection.variant_group_id))
+                ? Number(selection.variant_group_id)
+                : (
+                  variantGroup && (variantGroup.id || variantGroup.variant_group_id) != null
+                    ? Number(variantGroup.id || variantGroup.variant_group_id)
+                    : null
+                ),
+            variant_value_index: variantValueIndex,
+            variant_group_title: str(
+              selection.variant_group_title ||
+              (variantGroup ? (variantGroup.title || variantGroup.title_label || "") : "")
+            ),
+            variant_unit: str(
+              selection.variant_unit ||
+              (variantGroup ? (variantGroup.unit_short_title || variantGroup.unit_title || variantGroup.unit_code || "") : "")
+            ),
+            unit_id:
+              selection.unit_id != null && Number.isFinite(Number(selection.unit_id))
+                ? Number(selection.unit_id)
+                : (variantGroup?.unit_id != null ? Number(variantGroup.unit_id) : null),
+            ingredients_display: normalizedIngredientsDisplay.length ? normalizedIngredientsDisplay : ingredientSource,
+            unit_price_before_discount: roundPrice(unitBeforeDiscount),
+          };
+        }
+      } catch (e) {
+        console.warn("Failed to resolve repeat combo selection price:", productId, e);
+      }
+
+      if (!resolvedSelection) {
+        const fallbackOld = Number(selection.unit_price_before_discount || 0);
+        const fallbackCurrent = Number(selection.unit_price_override || 0);
+        resolvedSelection = {
+          ...selection,
+          product_id: productId,
+          unit_price_before_discount: fallbackOld > 0 ? roundPrice(fallbackOld) : null,
+          unit_price_override: fallbackCurrent > 0 ? roundPrice(fallbackCurrent) : null,
+        };
+      }
+
+      pricedSelections.push(resolvedSelection);
+    }
+
+    const unitPriceBeforeDiscount = roundPrice(
+      pricedSelections.reduce((sum, selection) => {
+        const oldValue = Number(selection?.unit_price_before_discount || 0);
+        const currentValue = Number(selection?.unit_price_override || 0);
+        return sum + (oldValue > 0 ? oldValue : currentValue);
+      }, 0)
+    );
+
+    if (unitPriceBeforeDiscount > 0) {
+      const unitDiscounted = roundPrice(comboDiscountedPrice(unitPriceBeforeDiscount, discountPercent));
+      let assigned = 0;
+      pricedSelections.forEach((selection, index) => {
+        if (index === pricedSelections.length - 1) {
+          selection.unit_price_override = roundPrice(unitDiscounted - assigned);
+          return;
+        }
+        const oldValue = Number(selection?.unit_price_before_discount || 0);
+        const share = unitPriceBeforeDiscount > 0 ? oldValue / unitPriceBeforeDiscount : 0;
+        const nextValue = roundPrice(unitDiscounted * share);
+        selection.unit_price_override = nextValue;
+        assigned += nextValue;
+      });
+    } else {
+      pricedSelections.forEach((selection) => {
+        const currentValue = Number(selection?.unit_price_override || 0);
+        const oldValue = Number(selection?.unit_price_before_discount || 0);
+        selection.unit_price_override = currentValue > 0
+          ? roundPrice(currentValue)
+          : (oldValue > 0 ? roundPrice(comboDiscountedPrice(oldValue, discountPercent)) : null);
+      });
+    }
+
+    return {
+      selections: pricedSelections,
+      unitPriceBeforeDiscount: unitPriceBeforeDiscount > 0 ? unitPriceBeforeDiscount : null,
+    };
+  }
+
+  function isFavoriteUnauthorizedErrorForRepeat(err) {
+    if (!err) return false;
+    if (Number(err.httpStatus || 0) === 401) return true;
+    const msg = String(err.message || "");
+    return msg === "UNAUTHORIZED" || msg.includes("UNAUTHORIZED");
+  }
+
+  function buildRepeatActionSnapshot(orderItem) {
+    const prefillItem = buildRepeatPrefillItem(orderItem);
+    if (!prefillItem) return null;
+
+    const source = orderItem && typeof orderItem === "object" ? orderItem : {};
+    const qty = Math.max(1, Number(prefillItem.qty || source.qty || source.quantity || 1));
+
+    if (String(prefillItem.type || "") === "combo") {
+      const comboId = Number(prefillItem.combo_id || 0);
+      if (!Number.isFinite(comboId) || comboId <= 0) return null;
+
+      const lineTotalRaw = Number(source.line_total);
+      let unitPrice = Number(source.price);
+      if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+        if (Number.isFinite(lineTotalRaw) && qty > 0) {
+          unitPrice = roundPrice(lineTotalRaw / qty);
+        } else {
+          unitPrice = roundPrice(
+            (Array.isArray(prefillItem.selections) ? prefillItem.selections : []).reduce(
+              (sum, sel) => sum + Number(sel?.unit_price_override || 0),
+              0
+            )
+          );
+        }
+      }
+
+      let oldLineTotal = Number(source.old_line_total || source?.discount?.original_line_total || 0);
+      if (!(oldLineTotal > 0)) {
+        const oldUnit = Number(prefillItem.unit_price_before_discount || source.unit_price_before_discount || 0);
+        if (oldUnit > 0) {
+          oldLineTotal = roundPrice(oldUnit * qty);
+        }
+      }
+
+      const directPhotos = Array.isArray(source.photos)
+        ? source.photos.map((photo) => str(photo)).filter(Boolean)
+        : [];
+      const selectionPhotos = (Array.isArray(prefillItem.selections) ? prefillItem.selections : [])
+        .map((sel) => str(sel?.product_photo || "").trim())
+        .filter(Boolean);
+
+      return {
+        type: "combo",
+        combo_id: comboId,
+        combo_title: str(prefillItem.combo_title || source.combo_title || source.name || "Комбо"),
+        name: str(source.name || prefillItem.combo_title || "Комбо"),
+        qty,
+        price: roundPrice(Number(unitPrice || 0)),
+        line_total: Number.isFinite(lineTotalRaw)
+          ? roundPrice(lineTotalRaw)
+          : roundPrice(Number(unitPrice || 0) * qty),
+        old_line_total: oldLineTotal > 0 ? roundPrice(oldLineTotal) : 0,
+        unit_price_before_discount: Number(prefillItem.unit_price_before_discount || source.unit_price_before_discount || 0),
+        photos: directPhotos.length ? directPhotos : selectionPhotos,
+        selections: Array.isArray(prefillItem.selections) ? prefillItem.selections : [],
+      };
+    }
+
+    const productId = Number(prefillItem.product_id || source.product_id || 0);
+    if (!Number.isFinite(productId) || productId <= 0) return null;
+
+    const lineTotalRaw = Number(source.line_total);
+    let unitPrice = Number(source.price);
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+      unitPrice = Number.isFinite(lineTotalRaw) && qty > 0
+        ? roundPrice(lineTotalRaw / qty)
+        : 0;
+    }
+
+    const discountOriginalLine = Number(source?.discount?.original_line_total || 0);
+    const oldPriceRaw = Number(source.old_price || 0);
+    const oldPrice = oldPriceRaw > 0
+      ? oldPriceRaw
+      : (discountOriginalLine > 0 && qty > 0 ? roundPrice(discountOriginalLine / qty) : 0);
+
+    const variantLabel = str(prefillItem.variant_label || source.variant_label || "").trim();
+    const variantGroupId = Number(prefillItem.variant_group_id);
+    const variantValueIndex = Number(prefillItem.variant_value_index);
+    const hasVariant =
+      Number.isFinite(variantGroupId) &&
+      variantGroupId > 0 &&
+      Number.isFinite(variantValueIndex) &&
+      variantValueIndex >= 0 &&
+      !!variantLabel;
+
+    return {
+      type: "product",
+      product_id: productId,
+      name: str(source.name || source.product_name || "Товар"),
+      qty,
+      price: roundPrice(Number(unitPrice || 0)),
+      line_total: Number.isFinite(lineTotalRaw)
+        ? roundPrice(lineTotalRaw)
+        : roundPrice(Number(unitPrice || 0) * qty),
+      old_price: oldPrice > 0 ? roundPrice(oldPrice) : 0,
+      photos: Array.isArray(source.photos)
+        ? source.photos.map((photo) => str(photo)).filter(Boolean)
+        : [],
+      option_item_ids: Array.isArray(prefillItem.option_item_ids) ? prefillItem.option_item_ids : [],
+      options: Array.isArray(prefillItem.option_items) ? prefillItem.option_items : [],
+      option_items: Array.isArray(prefillItem.option_items) ? prefillItem.option_items : [],
+      ingredients: Array.isArray(prefillItem.ingredients) ? prefillItem.ingredients : [],
+      variant_group_id: Number.isFinite(variantGroupId) && variantGroupId > 0 ? variantGroupId : null,
+      variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
+      variant_label: variantLabel,
+      variants: hasVariant
+        ? [{
+          variant_group_id: variantGroupId,
+          variant_value_index: variantValueIndex,
+          group_title: "",
+          value: variantLabel,
+          label: variantLabel,
+          price_diff: 0,
+        }]
+        : [],
+      discount: discountOriginalLine > 0
+        ? { original_line_total: roundPrice(discountOriginalLine) }
+        : null,
+    };
+  }
+
+  function buildSingleQtyRepeatSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return null;
+
+    const sourceQty = Math.max(1, Number(snapshot.qty || snapshot.quantity || 1));
+    const type = str(snapshot.type || "").toLowerCase();
+    const next = {
+      ...snapshot,
+      qty: 1,
+      quantity: 1,
+    };
+
+    if (type === "combo") {
+      const currentUnit = roundPrice(
+        Number(snapshot.price || 0) > 0
+          ? Number(snapshot.price || 0)
+          : Number(snapshot.line_total || 0) / sourceQty
+      );
+      const oldLineTotal = Number(snapshot.old_line_total || 0);
+      const oldUnitFromLine = oldLineTotal > 0 ? roundPrice(oldLineTotal / sourceQty) : 0;
+      const oldUnitDirect = Number(snapshot.unit_price_before_discount || 0);
+      const oldUnit = oldUnitFromLine > 0 ? oldUnitFromLine : (oldUnitDirect > 0 ? roundPrice(oldUnitDirect) : 0);
+
+      next.price = currentUnit > 0 ? currentUnit : 0;
+      next.line_total = next.price;
+      next.old_line_total = oldUnit > 0 ? oldUnit : 0;
+      next.unit_price_before_discount = oldUnit > 0 ? oldUnit : (oldUnitDirect > 0 ? oldUnitDirect : 0);
+      return next;
+    }
+
+    const unitPrice = roundPrice(
+      Number(snapshot.price || 0) > 0
+        ? Number(snapshot.price || 0)
+        : Number(snapshot.line_total || 0) / sourceQty
+    );
+    const oldPrice = Number(snapshot.old_price || 0);
+    const discountOriginalLine = Number(snapshot?.discount?.original_line_total || 0);
+    const discountOriginalUnit = discountOriginalLine > 0 ? roundPrice(discountOriginalLine / sourceQty) : 0;
+
+    next.price = unitPrice > 0 ? unitPrice : 0;
+    next.line_total = next.price;
+    next.old_price = oldPrice > 0 ? roundPrice(oldPrice) : 0;
+    next.discount = discountOriginalUnit > 0
+      ? { ...(snapshot.discount || {}), original_line_total: discountOriginalUnit }
+      : null;
+    return next;
+  }
+
+  async function addRepeatSnapshotToFavorites(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return false;
+    if (!window.shopFavoritesApi || typeof window.shopFavoritesApi.add !== "function") return false;
+
+    if (!getCustomerToken()) {
+      if (typeof promptFavoritesLogin === "function") {
+        promptFavoritesLogin();
+      } else {
+        showToast("Войдите в профиль");
+      }
+      return false;
+    }
+
+    try {
+      await window.shopFavoritesApi.add(snapshot);
+      showToast("Добавлено в избранное");
+      if (navigator.vibrate) navigator.vibrate(10);
+      return true;
+    } catch (err) {
+      if (isFavoriteUnauthorizedErrorForRepeat(err)) {
+        if (typeof promptFavoritesLogin === "function") {
+          promptFavoritesLogin();
+        } else {
+          showToast("Войдите в профиль");
+        }
+      } else {
+        console.warn("Failed to add order item to favorites:", err);
+        showToast("Не удалось добавить в избранное");
+      }
+      return false;
+    }
+  }
+
+  async function addRepeatSnapshotToCart(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return false;
+
+    const prefillItem = buildRepeatPrefillItem(snapshot);
+    if (!prefillItem) {
+      showToast("Не удалось добавить в корзину");
+      return false;
+    }
+
+    const previousCartSnapshot = cloneCartState(state.cart);
+    const wasEmpty = cartCountTotal() === 0;
+    const draftCart = cloneCartState(state.cart);
+
+    if (String(prefillItem.type || "") === "combo") {
+      const comboId = Number(prefillItem.combo_id || 0);
+      if (!Number.isFinite(comboId) || comboId <= 0) {
+        showToast("Не удалось добавить в корзину");
+        return false;
+      }
+
+      const safeQty = Math.max(1, Number(prefillItem.qty || 1));
+      const sourceSelections = Array.isArray(prefillItem.selections) ? prefillItem.selections : [];
+      if (!sourceSelections.length) {
+        showToast("Не удалось добавить в корзину");
+        return false;
+      }
+
+      const pricedCombo = await resolveRepeatComboSelectionsWithCatalog(comboId, sourceSelections);
+      const selections = Array.isArray(pricedCombo?.selections) && pricedCombo.selections.length
+        ? pricedCombo.selections
+        : sourceSelections;
+
+      let unitOld = Number(pricedCombo?.unitPriceBeforeDiscount || prefillItem.unit_price_before_discount || 0);
+      if (!(unitOld > 0)) {
+        const oldLineTotal = Number(snapshot?.old_line_total || 0);
+        if (oldLineTotal > 0 && safeQty > 0) {
+          unitOld = roundPrice(oldLineTotal / safeQty);
+        }
+      }
+      if (!(unitOld > 0)) {
+        unitOld = roundPrice(
+          selections.reduce((sum, sel) => {
+            const oldVal = Number(sel?.unit_price_before_discount || 0);
+            const currentVal = Number(sel?.unit_price_override || 0);
+            return sum + (oldVal > 0 ? oldVal : currentVal);
+          }, 0)
+        );
+      }
+
+      draftCart.push({
+        key: `combo-${comboId}-${Date.now()}`,
+        type: "combo",
+        combo_id: comboId,
+        combo_title: str(prefillItem.combo_title || snapshot?.name || "Комбо"),
+        qty: safeQty,
+        selections,
+        unit_price_before_discount: unitOld > 0 ? unitOld : null,
+      });
+    } else {
+      const productId = Number(prefillItem.product_id || 0);
+      if (!Number.isFinite(productId) || productId <= 0) {
+        showToast("Не удалось добавить в корзину");
+        return false;
+      }
+
+      await ensureProduct(productId);
+      const product = state.productCache.get(productId);
+      if (!product) {
+        showToast("Не удалось добавить в корзину");
+        return false;
+      }
+
+      const safeQty = Math.max(1, Number(prefillItem.qty || 1));
+      const optionItems = (Array.isArray(prefillItem.option_items) ? prefillItem.option_items : [])
+        .map((opt) => {
+          const id = Number(opt?.id || 0);
+          if (!Number.isFinite(id) || id <= 0) return null;
+          const qty = Math.max(1, Number(opt?.qty ?? opt?.quantity ?? 1));
+          return {
+            id,
+            title: str(opt?.title || opt?.name || ""),
+            price: Number(opt?.price || 0),
+            qty,
+            target_product_id: opt?.target_product_id != null ? Number(opt.target_product_id) : null,
+            product_id: opt?.product_id != null ? Number(opt.product_id) : null,
+            variant_group_id: opt?.variant_group_id != null ? Number(opt.variant_group_id) : null,
+            variant_value_index: opt?.variant_value_index != null ? Number(opt.variant_value_index) : null,
+            variant_label: str(opt?.variant_label || ""),
+            variant_price_diff: Number(opt?.variant_price_diff || 0),
+          };
+        })
+        .filter(Boolean);
+      const optionItemIds = optionItems.map((opt) => Number(opt.id));
+      const ingredients = normalizeRepeatIngredients(prefillItem.ingredients);
+
+      const variantGroupId = prefillItem.variant_group_id != null ? Number(prefillItem.variant_group_id) : null;
+      const variantValueIndex = prefillItem.variant_value_index != null ? Number(prefillItem.variant_value_index) : null;
+      const hasVariantSelection =
+        Number.isFinite(variantGroupId) &&
+        variantGroupId > 0 &&
+        Number.isFinite(variantValueIndex) &&
+        variantValueIndex >= 0;
+      const variantSelection = hasVariantSelection
+        ? { group_id: variantGroupId, value_index: variantValueIndex }
+        : null;
+
+      const baseProductPrice = Number(product.price || 0);
+      let variantUnitPrice = baseProductPrice;
+      if (hasVariantSelection) {
+        const snapshotVariants = Array.isArray(snapshot?.variants) ? snapshot.variants : [];
+        const firstVariant = snapshotVariants[0] || null;
+        const variantPriceDiff = Number(firstVariant?.price_diff);
+        if (Number.isFinite(variantPriceDiff)) {
+          variantUnitPrice = baseProductPrice + variantPriceDiff;
+        }
+      }
+
+      const optionTotal = optionItemsTotal(optionItems);
+      const snapshotUnitPrice = Number(snapshot?.price || 0);
+      const snapshotOldUnitPrice = Number(snapshot?.old_price || 0);
+      const hasApiDiscount = Boolean(product?.discount && Number(product.discount.discount_amount || product.discount.discount_value || 0) > 0);
+      let preDiscountUnitPrice =
+        Number.isFinite(snapshotUnitPrice) && snapshotUnitPrice > 0
+          ? snapshotUnitPrice
+          : roundPrice(variantUnitPrice + optionTotal);
+      if (hasApiDiscount && Number.isFinite(snapshotOldUnitPrice) && snapshotOldUnitPrice > preDiscountUnitPrice) {
+        preDiscountUnitPrice = snapshotOldUnitPrice;
+      }
+
+      let ingredientPriceDiff = preDiscountUnitPrice - variantUnitPrice - optionTotal;
+      if (!Number.isFinite(ingredientPriceDiff)) ingredientPriceDiff = 0;
+      ingredientPriceDiff = roundPrice(ingredientPriceDiff);
+
+      const nextKey = makeCartKey(productId, optionItems, ingredients, variantSelection);
+      const existing = draftCart.find((entry) => String(entry?.key || "") === String(nextKey));
+      if (existing) {
+        existing.qty = Math.max(0, Number(existing.qty || 0)) + safeQty;
+        existing.option_item_ids = optionItemIds;
+        existing.option_items = optionItems;
+        existing.ingredients = ingredients;
+        existing.ingredient_price_diff = ingredientPriceDiff;
+        existing.variant_group_id = hasVariantSelection ? variantGroupId : null;
+        existing.variant_value_index = hasVariantSelection ? variantValueIndex : null;
+        existing.variant_label = hasVariantSelection ? str(prefillItem.variant_label || "") : "";
+        existing.variant_unit_price = hasVariantSelection ? Number(variantUnitPrice || 0) : 0;
+        if (existing.auto_add == null) existing.auto_add = 0;
+        if (existing.auto_add_group_id == null) existing.auto_add_group_id = null;
+      } else {
+        draftCart.push({
+          key: nextKey,
+          product_id: productId,
+          qty: safeQty,
+          option_item_ids: optionItemIds,
+          option_items: optionItems,
+          ingredients,
+          ingredient_price_diff: ingredientPriceDiff,
+          variant_group_id: hasVariantSelection ? variantGroupId : null,
+          variant_value_index: hasVariantSelection ? variantValueIndex : null,
+          variant_label: hasVariantSelection ? str(prefillItem.variant_label || "") : "",
+          variant_unit_price: hasVariantSelection ? Number(variantUnitPrice || 0) : 0,
+          auto_add: 0,
+          auto_add_group_id: null,
+        });
+      }
+    }
+
+    try {
+      const payload = buildStockCheckItemsPayloadFromResolved(cartItemsResolved(draftCart));
+      const stockCheck = await checkStockForItemsPayload(payload, {
+        showToastOnOut: true,
+        toastMessage: "Нет в наличии",
+        refreshOnOut: true,
+      });
+      if (!stockCheck.available) return false;
+    } catch (e) {
+      console.warn("Failed stock check for repeat add:", e);
+      showToast("Не удалось добавить в корзину");
+      return false;
+    }
+
+    state.cart = draftCart;
+    if (wasEmpty) {
+      clearAllAutoAddDismissed();
+    }
+    applyAutoAddRules();
+    clearAutoAddDismissedIfCartEmpty();
+    saveCart();
+    renderProducts();
+    if (typeof scheduleSyncAllProductCardsFromCart === "function") {
+      scheduleSyncAllProductCardsFromCart();
+    }
+    renderCart();
+    updateCartBadge();
+    queueCartStockRecheck(previousCartSnapshot, {
+      toastMessage: "Нет в наличии",
+    });
+    if (window.matchMedia("(max-width: 768px)").matches) {
+      updateMobileDeliveryProgress();
+    }
+    showToast("Добавлено в корзину");
+    if (navigator.vibrate) navigator.vibrate(10);
+    return true;
+  }
+
+  function initRepeatOrderSwipeRow(
+    container,
+    content,
+    {
+      onAddToCart,
+      onAddToFavorites,
+      allowAddToCart = true,
+      allowAddToFavorites = true,
+      getCurrentSwiped = null,
+      setCurrentSwiped = null,
+    } = {}
+  ) {
+    if (!container || !content) return;
+
+    let startX = 0;
+    let startY = 0;
+    let startTranslateX = 0;
+    let translateX = 0;
+    let isTracking = false;
+    let isHorizontal = null;
+    let moved = false;
+    let busy = false;
+    let suppressClick = false;
+    let isTouchMode = false;
+
+    const canAddToCart = Boolean(allowAddToCart && typeof onAddToCart === "function");
+    const canAddToFavorites = Boolean(allowAddToFavorites && typeof onAddToFavorites === "function");
+
+    const startThreshold = 8;
+    const swipeLimitRatio = 0.82;
+    const actionThresholdRatio = 0.5;
+    const settleThresholdRatio = 0.45;
+    const fallbackRevealWidth = 68;
+
+    const rowWidth = () => Math.max(1, container.offsetWidth || 300);
+    const revealWidth = () => {
+      try {
+        const raw = getComputedStyle(container).getPropertyValue("--favorite-swipe-reveal");
+        const parsed = Number.parseFloat(raw);
+        if (Number.isFinite(parsed) && parsed > 0) return parsed;
+      } catch {}
+      return fallbackRevealWidth;
+    };
+    const actionThreshold = () => rowWidth() * actionThresholdRatio;
+    const settleThreshold = () => revealWidth() * settleThresholdRatio;
+    const maxOffset = () => Math.max(revealWidth() + 16, rowWidth() * swipeLimitRatio);
+
+    const closeCurrentSwiped = (animate = true, exceptContainer = null) => {
+      const active =
+        typeof getCurrentSwiped === "function"
+          ? getCurrentSwiped()
+          : null;
+      if (!active || active === exceptContainer) return;
+      const closeFn = active.__orderSwipeClose;
+      if (typeof closeFn === "function") {
+        closeFn(animate);
+      } else if (typeof setCurrentSwiped === "function") {
+        setCurrentSwiped(null);
+      }
+    };
+
+    function clearSwipeState() {
+      container.classList.remove("is-swipe-right", "is-swipe-left", "is-armed-add", "is-armed-remove");
+      container.style.removeProperty("--favorite-swipe-progress");
+    }
+
+    function setOpenState(mode) {
+      container.classList.toggle("is-open-add", mode === "add");
+      container.classList.toggle("is-open-remove", mode === "remove");
+    }
+
+    function isOpen() {
+      return container.classList.contains("is-open-add") || container.classList.contains("is-open-remove");
+    }
+
+    function setTranslate(x) {
+      translateX = x;
+      content.style.transform = `translateX(${x}px)`;
+      const absX = Math.abs(x);
+      const threshold = actionThreshold();
+      container.classList.toggle("is-swipe-right", canAddToCart && x > 0.5);
+      container.classList.toggle("is-swipe-left", canAddToFavorites && x < -0.5);
+      container.classList.toggle("is-armed-add", canAddToCart && x >= threshold);
+      container.classList.toggle("is-armed-remove", canAddToFavorites && x <= -threshold);
+      container.style.setProperty("--favorite-swipe-progress", String(Math.min(1, absX / Math.max(threshold, 1))));
+    }
+
+    function closeRow(animate = true) {
+      if (animate) {
+        content.style.transition = "transform 0.22s ease";
+      } else {
+        content.style.transition = "";
+      }
+      setTranslate(0);
+      clearSwipeState();
+      setOpenState(null);
+
+      const active =
+        typeof getCurrentSwiped === "function"
+          ? getCurrentSwiped()
+          : null;
+      if (active === container && typeof setCurrentSwiped === "function") {
+        setCurrentSwiped(null);
+      }
+      suppressClick = false;
+
+      if (animate) {
+        setTimeout(() => {
+          if (!content.isConnected) return;
+          content.style.transition = "";
+        }, 240);
+      }
+    }
+
+    function openRow(mode) {
+      if (mode !== "add" && mode !== "remove") {
+        closeRow(true);
+        return;
+      }
+      if ((mode === "add" && !canAddToCart) || (mode === "remove" && !canAddToFavorites)) {
+        closeRow(true);
+        return;
+      }
+      closeCurrentSwiped(true, container);
+      const targetX = mode === "add" ? revealWidth() : -revealWidth();
+      content.style.transition = "transform 0.22s ease";
+      setTranslate(targetX);
+      clearSwipeState();
+      setOpenState(mode);
+      if (typeof setCurrentSwiped === "function") {
+        setCurrentSwiped(container);
+      }
+      setTimeout(() => {
+        if (!content.isConnected) return;
+        content.style.transition = "";
+      }, 240);
+    }
+
+    container.__orderSwipeClose = closeRow;
+
+    function beginTrack(clientX, clientY, touchMode) {
+      if (busy) return false;
+      closeCurrentSwiped(true, container);
+      isTracking = true;
+      isHorizontal = null;
+      moved = false;
+      isTouchMode = !!touchMode;
+      startX = clientX;
+      startY = clientY;
+      startTranslateX = translateX;
+      content.style.transition = "";
+      return true;
+    }
+
+    function handleMove(clientX, clientY, event) {
+      if (!isTracking || busy) return;
+      const deltaX = clientX - startX;
+      const deltaY = clientY - startY;
+
+      if (isHorizontal === null && (Math.abs(deltaX) > startThreshold || Math.abs(deltaY) > startThreshold)) {
+        isHorizontal = Math.abs(deltaX) > Math.abs(deltaY);
+      }
+
+      if (isHorizontal === false) return;
+      if (isHorizontal !== true) return;
+
+      if (!moved) {
+        clearSwipeState();
+        setOpenState(null);
+      }
+      moved = true;
+      suppressClick = true;
+      if (event && event.cancelable) {
+        event.preventDefault();
+      }
+
+      const limit = maxOffset();
+      let nextX = startTranslateX + deltaX;
+      if (!canAddToCart && nextX > 0) nextX = 0;
+      if (!canAddToFavorites && nextX < 0) nextX = 0;
+      nextX = Math.max(-limit, Math.min(limit, nextX));
+      setTranslate(nextX);
+    }
+
+    async function runAction(direction) {
+      if (busy) return;
+      busy = true;
+      container.classList.add("is-action-busy");
+
+      const width = rowWidth();
+      const reveal = revealWidth();
+      const actionTravel = Math.min(width * 0.62, Math.max(reveal * 1.2, reveal + 18));
+      content.style.transition = "transform 0.18s ease-out";
+      setTranslate(direction === "favorite" ? -actionTravel : actionTravel);
+
+      let ok = false;
+      try {
+        if (direction === "favorite") {
+          ok = (await onAddToFavorites()) === true;
+        } else {
+          ok = (await onAddToCart()) === true;
+        }
+      } catch (e) {
+        console.warn("Order details swipe action failed:", e);
+        ok = false;
+      } finally {
+        busy = false;
+        container.classList.remove("is-action-busy");
+      }
+
+      if (!content.isConnected) return;
+      if (!ok) {
+        closeRow(true);
+        return;
+      }
+      closeRow(true);
+    }
+
+    async function finishTrack() {
+      if (!isTracking || busy) return;
+      isTracking = false;
+      if (!moved) return;
+
+      const threshold = actionThreshold();
+      const snapThreshold = settleThreshold();
+      const x = translateX;
+
+      if (canAddToCart && x >= threshold) {
+        if (navigator.vibrate) navigator.vibrate(10);
+        await runAction("cart");
+      } else if (canAddToFavorites && x <= -threshold) {
+        if (navigator.vibrate) navigator.vibrate(10);
+        await runAction("favorite");
+      } else if (canAddToCart && x >= snapThreshold) {
+        openRow("add");
+      } else if (canAddToFavorites && x <= -snapThreshold) {
+        openRow("remove");
+      } else {
+        closeRow(true);
+      }
+    }
+
+    content.addEventListener(
+      "click",
+      (event) => {
+        if (isOpen()) {
+          suppressClick = false;
+          event.preventDefault();
+          event.stopPropagation();
+          closeRow(true);
+          return;
+        }
+        if (!suppressClick) return;
+        suppressClick = false;
+        event.preventDefault();
+        event.stopPropagation();
+      },
+      true
+    );
+
+    content.addEventListener("touchstart", (event) => {
+      if (!event.touches || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      beginTrack(touch.clientX, touch.clientY, true);
+    }, { passive: true });
+
+    content.addEventListener("touchmove", (event) => {
+      if (!event.touches || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      handleMove(touch.clientX, touch.clientY, event);
+    }, { passive: false });
+
+    content.addEventListener("touchend", async () => {
+      await finishTrack();
+      isHorizontal = null;
+      moved = false;
+      isTouchMode = false;
+      startTranslateX = translateX;
+    }, { passive: true });
+
+    content.addEventListener("touchcancel", () => {
+      isTracking = false;
+      isHorizontal = null;
+      moved = false;
+      isTouchMode = false;
+      startTranslateX = translateX;
+      closeRow(true);
+    }, { passive: true });
+
+    content.addEventListener("mousedown", (event) => {
+      if (isTouchMode) return;
+      if (event.button !== 0) return;
+      beginTrack(event.clientX, event.clientY, false);
+      const onMouseMove = (moveEvent) => {
+        if (!isTracking || isTouchMode) return;
+        handleMove(moveEvent.clientX, moveEvent.clientY, moveEvent);
+      };
+      const onMouseUp = async () => {
+        window.removeEventListener("mousemove", onMouseMove);
+        window.removeEventListener("mouseup", onMouseUp);
+        if (!isTracking || isTouchMode) return;
+        await finishTrack();
+        isHorizontal = null;
+        moved = false;
+        startTranslateX = translateX;
+      };
+      window.addEventListener("mousemove", onMouseMove);
+      window.addEventListener("mouseup", onMouseUp);
+    });
+  }
+
+  async function openOrderItemForRepeat(orderItem, { onBack } = {}) {
+    const prefillItem = buildRepeatPrefillItem(orderItem);
+    if (!prefillItem) return;
+
+    if (String(prefillItem.type || "") === "combo") {
+      const comboId = Number(prefillItem.combo_id || 0);
+      if (!Number.isFinite(comboId) || comboId <= 0) return;
+      await openComboDetails(comboId, { prefillItem, onBack });
+      return;
+    }
+
+    const productId = Number(prefillItem.product_id || 0);
+    if (!Number.isFinite(productId) || productId <= 0) return;
+    await openProductDetails(productId, { prefillItem, onBack });
+  }
+
+  function bindRepeatOrderItemRows(hostEl, orderItems, { onBack, enableSwipeActions = false } = {}) {
+    if (!hostEl || !Array.isArray(orderItems) || !orderItems.length) return;
+    const rows = hostEl.querySelectorAll(".shop-cart-items .cart-row");
+    if (!rows || !rows.length) return;
+    let currentSwipedContainer = null;
+
+    rows.forEach((row, idx) => {
+      const orderItem = orderItems[idx];
+      if (!orderItem) return;
+      const prefillItem = buildRepeatPrefillItem(orderItem);
+      if (!prefillItem) return;
+      const snapshot = buildRepeatActionSnapshot(orderItem);
+      const swipeSnapshot = buildSingleQtyRepeatSnapshot(snapshot);
+
+      row.style.cursor = "pointer";
+      row.setAttribute("role", "button");
+      row.setAttribute("tabindex", "0");
+
+      const openItem = async () => {
+        try {
+          await openOrderItemForRepeat(orderItem, { onBack });
+        } catch (e) {
+          console.warn("Failed to open order item details:", e);
+        }
+      };
+
+      row.addEventListener("click", (event) => {
+        if (event.target && event.target.closest("button, a, input, select, textarea, label")) return;
+        event.preventDefault();
+        void openItem();
+      });
+
+      row.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        void openItem();
+      });
+
+      if (!enableSwipeActions || !swipeSnapshot) return;
+
+      const rowParent = row.parentElement;
+      if (!rowParent) return;
+
+      const swipeContainer = document.createElement("div");
+      swipeContainer.className = "shop-favorite-swipe-container shop-order-repeat-swipe-container";
+
+      const addCartAction = document.createElement("button");
+      addCartAction.type = "button";
+      addCartAction.className = "shop-favorite-swipe-action shop-favorite-swipe-action--add";
+      addCartAction.setAttribute("aria-label", "Добавить в корзину");
+      addCartAction.innerHTML = '<i class="fas fa-shopping-cart"></i>';
+      swipeContainer.appendChild(addCartAction);
+
+      const addFavoriteAction = document.createElement("button");
+      addFavoriteAction.type = "button";
+      addFavoriteAction.className = "shop-favorite-swipe-action shop-favorite-swipe-action--remove";
+      addFavoriteAction.setAttribute("aria-label", "Добавить в избранное");
+      addFavoriteAction.innerHTML = '<i class="fas fa-heart"></i>';
+      swipeContainer.appendChild(addFavoriteAction);
+
+      const content = document.createElement("div");
+      content.className = "shop-favorite-swipe-content";
+      swipeContainer.appendChild(content);
+
+      rowParent.insertBefore(swipeContainer, row);
+      content.appendChild(row);
+
+      const addToCart = async () => {
+        return await addRepeatSnapshotToCart(swipeSnapshot);
+      };
+
+      const addToFavorites = async () => {
+        return await addRepeatSnapshotToFavorites(swipeSnapshot);
+      };
+
+      addCartAction.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        await addToCart();
+        const closeFn = swipeContainer.__orderSwipeClose;
+        if (typeof closeFn === "function") closeFn(true);
+      });
+
+      addFavoriteAction.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        await addToFavorites();
+        const closeFn = swipeContainer.__orderSwipeClose;
+        if (typeof closeFn === "function") closeFn(true);
+      });
+
+      initRepeatOrderSwipeRow(swipeContainer, content, {
+        onAddToCart: addToCart,
+        onAddToFavorites: addToFavorites,
+        allowAddToCart: true,
+        allowAddToFavorites: true,
+        getCurrentSwiped: () => currentSwipedContainer,
+        setCurrentSwiped: (next) => {
+          currentSwipedContainer = next || null;
+        },
+      });
+    });
+  }
+
   function buildProfileContent({ host, me, onLogout, initialTab }) {
     host.innerHTML = "";
 
@@ -8334,7 +10854,7 @@ function renderSheetAddressList() {
     const tabOrders = document.createElement("button");
     tabOrders.type = "button";
     tabOrders.className = "shop-profile-tab";
-    tabOrders.textContent = "История заказов";
+    tabOrders.textContent = "Мои заказы";
     tabOrders.dataset.tab = "orders";
 
     const tabDiscounts = document.createElement("button");
@@ -8463,6 +10983,161 @@ function renderSheetAddressList() {
     const ordersList = document.createElement("div");
     ordersList.className = "shop-profile-list";
     ordersPanel.appendChild(ordersList);
+
+    const PROFILE_ORDERS_PAGE_SIZE = 10;
+    const profileOrdersSummary = { activeCount: 0, completedCount: 0 };
+    const profileOrdersState = {
+      active: { offset: 0, hasMore: false, loading: false, initialized: false, observer: null, statusFinal: 0 },
+      completed: { offset: 0, hasMore: false, loading: false, initialized: false, observer: null, statusFinal: 1 },
+    };
+
+    function createOrdersSection({ title, emptyText, collapsible = false, collapsed = false }) {
+      const root = document.createElement("div");
+      root.className = "shop-profile-orders-section";
+      root.style.marginBottom = "10px";
+
+      const header = collapsible ? document.createElement("button") : document.createElement("div");
+      if (collapsible) {
+        header.type = "button";
+        header.className = "btn";
+        header.style.width = "100%";
+        header.style.display = "flex";
+        header.style.alignItems = "center";
+        header.style.justifyContent = "space-between";
+        header.style.padding = "10px 12px";
+      } else {
+        header.style.display = "flex";
+        header.style.alignItems = "center";
+        header.style.justifyContent = "space-between";
+        header.style.padding = "4px 2px 8px";
+      }
+
+      const titleWrap = document.createElement("div");
+      titleWrap.style.display = "flex";
+      titleWrap.style.alignItems = "center";
+      titleWrap.style.gap = "6px";
+
+      const titleEl = document.createElement("div");
+      titleEl.style.fontWeight = "700";
+      titleEl.textContent = title;
+
+      const countEl = document.createElement("span");
+      countEl.className = "muted";
+
+      titleWrap.appendChild(titleEl);
+      titleWrap.appendChild(countEl);
+      header.appendChild(titleWrap);
+
+      const arrowEl = document.createElement("span");
+      arrowEl.className = "muted";
+      if (collapsible) {
+        arrowEl.textContent = collapsed ? "▸" : "▾";
+        header.appendChild(arrowEl);
+      }
+
+      const body = document.createElement("div");
+      if (collapsible && collapsed) body.classList.add("hidden");
+
+      const items = document.createElement("div");
+      items.className = "shop-profile-list";
+      body.appendChild(items);
+
+      const emptyEl = document.createElement("div");
+      emptyEl.className = "muted hidden";
+      emptyEl.style.padding = "4px 2px";
+      emptyEl.textContent = emptyText;
+      emptyEl.dataset.defaultText = emptyText;
+      body.appendChild(emptyEl);
+
+      const anchor = document.createElement("div");
+      anchor.className = "hidden";
+      anchor.style.width = "100%";
+      anchor.style.height = "1px";
+      anchor.style.marginTop = "1px";
+      body.appendChild(anchor);
+
+      const loader = document.createElement("div");
+      loader.className = "muted hidden";
+      loader.style.textAlign = "center";
+      loader.style.padding = "8px 0 4px";
+      loader.textContent = "Загрузка…";
+      body.appendChild(loader);
+
+      root.appendChild(header);
+      root.appendChild(body);
+
+      return {
+        root,
+        header,
+        titleEl,
+        countEl,
+        arrowEl,
+        body,
+        items,
+        emptyEl,
+        anchor,
+        loader,
+        collapsible,
+        collapsed,
+      };
+    }
+
+    const ordersActiveSection = createOrdersSection({
+      title: "Действующие",
+      emptyText: "Действующих заказов пока нет.",
+      collapsible: false,
+      collapsed: false,
+    });
+    const ordersCompletedSection = createOrdersSection({
+      title: "Завершенные",
+      emptyText: "Завершенных заказов пока нет.",
+      collapsible: true,
+      collapsed: true,
+    });
+    ordersList.appendChild(ordersActiveSection.root);
+    ordersList.appendChild(ordersCompletedSection.root);
+
+    function setOrdersSectionLoading(section, isLoading) {
+      section.loader.classList.toggle("hidden", !isLoading);
+    }
+
+    function setOrdersSectionAnchorVisible(section, visible) {
+      section.anchor.classList.toggle("hidden", !visible);
+    }
+
+    function setCompletedSectionCollapsed(collapsed) {
+      ordersCompletedSection.collapsed = Boolean(collapsed);
+      ordersCompletedSection.body.classList.toggle("hidden", ordersCompletedSection.collapsed);
+      if (ordersCompletedSection.arrowEl) {
+        ordersCompletedSection.arrowEl.textContent = ordersCompletedSection.collapsed ? "▸" : "▾";
+      }
+    }
+
+    function updateOrdersSectionHeaders() {
+      ordersActiveSection.countEl.textContent = `(${profileOrdersSummary.activeCount || 0})`;
+      ordersCompletedSection.countEl.textContent = `(${profileOrdersSummary.completedCount || 0})`;
+    }
+
+    function ensureOrdersSectionObserver(sectionKey) {
+      if (typeof IntersectionObserver !== "function") return;
+      const section = sectionKey === "completed" ? ordersCompletedSection : ordersActiveSection;
+      const state = profileOrdersState[sectionKey];
+      if (!section || !state || state.observer) return;
+
+      state.observer = new IntersectionObserver(
+        (entries) => {
+          if (!Array.isArray(entries) || entries.length === 0) return;
+          const entry = entries[0];
+          if (!entry?.isIntersecting) return;
+          if (currentOrdersView !== "list") return;
+          if (sectionKey === "completed" && ordersCompletedSection.collapsed) return;
+          if (state.loading || !state.hasMore) return;
+          loadOrdersSection(sectionKey, { reset: false });
+        },
+        { root: null, threshold: 0.01, rootMargin: "160px 0px 160px 0px" }
+      );
+      state.observer.observe(section.anchor);
+    }
 
     // Панель скидок
     const discountsPanel = document.createElement("div");
@@ -8791,6 +11466,7 @@ function renderSheetAddressList() {
     async function showOrderDetails(orderId) {
       currentOrdersView = "details";
       currentOrderId = orderId;
+      resetOrderDetailsTransientUi();
       
       // Скрываем верхнюю часть профиля и вкладки
       if (top) top.classList.add("hidden");
@@ -8892,6 +11568,29 @@ function renderSheetAddressList() {
       
       ordersPanel.innerHTML = html;
       bindOrderSummaryDiscountToggles(ordersPanel);
+      const reopenProfileOrderDetails = () => {
+        const isMobileProfile = window.matchMedia("(max-width: 768px)").matches;
+        if (!isMobileProfile) {
+          void showOrderDetails(orderId);
+          return;
+        }
+        if (typeof setActiveNav === "function") setActiveNav("profile");
+        const reopenedCtx = openProfileModal(me, { initialTab: "orders" });
+        setTimeout(() => {
+          const ctx =
+            reopenedCtx && typeof reopenedCtx.showOrderDetails === "function"
+              ? reopenedCtx
+              : window._profileContext;
+          if (ctx && typeof ctx.showOrderDetails === "function") {
+            ctx.showOrderDetails(orderId);
+          }
+        }, 0);
+      };
+      bindRepeatOrderItemRows(
+        ordersPanel,
+        Array.isArray(order.items) ? order.items : [],
+        { onBack: reopenProfileOrderDetails, enableSwipeActions: true }
+      );
       
       // Проверяем, открыто ли модальное окно
       const isModal = document.querySelector(".app-modal") && document.querySelector(".app-modal").getAttribute("aria-hidden") !== "true";
@@ -8986,47 +11685,196 @@ function renderSheetAddressList() {
       }
       
       // Перезагружаем список заказов
-      reloadOrders();
+      reloadOrders({ reset: true });
     }
 
-    async function reloadOrders() {
-      ordersList.innerHTML = `<div class="muted">Загрузка…</div>`;
-      try {
-        const json = await apiJson("/api/public/me/orders");
-        const list = Array.isArray(json.data) ? json.data : [];
-        if (!list.length) {
-          ordersList.innerHTML = `<div class="muted">Заказов пока нет.</div>`;
+    function collectOrderPreviewPhotos(items, maxPhotos = 40) {
+      const out = [];
+      const pushPhoto = (raw) => {
+        if (out.length >= maxPhotos) return;
+        const src = str(raw || "").trim();
+        if (!src) return;
+        out.push(src);
+      };
+
+      (Array.isArray(items) ? items : []).forEach((item) => {
+        if (out.length >= maxPhotos) return;
+        const itemType = str(item?.type || "").trim().toLowerCase();
+        const isCombo =
+          itemType === "combo" ||
+          Number(item?.combo_id || 0) > 0 ||
+          Array.isArray(item?.selections);
+
+        if (isCombo) {
+          const selections = Array.isArray(item?.selections) ? item.selections : [];
+          if (selections.length) {
+            selections.forEach((sel) => {
+              pushPhoto(sel?.product_photo || (Array.isArray(sel?.photos) ? sel.photos[0] : ""));
+            });
+          } else {
+            const comboPhotos = Array.isArray(item?.photos) ? item.photos : [];
+            comboPhotos.forEach((photo) => pushPhoto(photo));
+          }
           return;
         }
 
-        ordersList.innerHTML = "";
-        list.forEach((o) => {
-          const row = document.createElement("div");
-          row.className = "shop-profile-card";
-          row.style.cursor = "pointer";
+        const productPhotos = Array.isArray(item?.photos) ? item.photos : [];
+        if (productPhotos.length) {
+          pushPhoto(productPhotos[0]);
+          return;
+        }
+        pushPhoto(item?.product_photo || item?.photo || "");
+      });
 
-          let itemsCount = 0;
-          if (Array.isArray(o.items)) {
-            o.items.forEach(it => { itemsCount += Number(it.qty || it.quantity || 0) || 0; });
-          }
+      return out;
+    }
 
-          row.innerHTML = `
-            <div><strong>Заказ #${o.id}</strong> <span class="muted">• ${o.status_title || "—"}</span></div>
-            <div class="muted">${new Date(o.created_at).toLocaleString("ru-RU")}</div>
-            <div><strong>${money(o.total_price || 0)}</strong> <span class="muted">• позиций: ${itemsCount}</span></div>
-          `;
-          
-          // Добавляем обработчик клика
-          row.addEventListener("click", () => {
-            showOrderDetails(o.id);
-          });
-          
-          ordersList.appendChild(row);
+    function renderProfileOrderRow(o) {
+      const row = document.createElement("div");
+      row.className = "shop-profile-card";
+      row.style.cursor = "pointer";
+
+      const previewPhotos = collectOrderPreviewPhotos(o?.items, 40);
+
+      row.innerHTML = `
+        <div><strong>Заказ #${o.id}</strong> <span class="muted">• ${o.status_title || "—"}</span></div>
+        <div class="muted">${new Date(o.created_at).toLocaleString("ru-RU")}</div>
+        <div><strong>${money(o.total_price || 0)}</strong></div>
+      `;
+
+      if (previewPhotos.length) {
+        const photosRow = document.createElement("div");
+        photosRow.className = "shop-profile-order-photos";
+        previewPhotos.forEach((src) => {
+          const img = document.createElement("img");
+          img.className = "shop-profile-order-photo";
+          img.src = src;
+          img.alt = "";
+          img.loading = "lazy";
+          img.decoding = "async";
+          photosRow.appendChild(img);
         });
+        row.appendChild(photosRow);
+      }
+
+      row.addEventListener("click", () => {
+        showOrderDetails(o.id);
+      });
+      return row;
+    }
+
+    function applyOrdersSummary(summary) {
+      if (!summary || typeof summary !== "object") return;
+      const activeCount = Number(summary.active_count ?? summary.activeCount ?? profileOrdersSummary.activeCount);
+      const completedCount = Number(summary.completed_count ?? summary.completedCount ?? profileOrdersSummary.completedCount);
+      if (Number.isFinite(activeCount)) {
+        profileOrdersSummary.activeCount = Math.max(0, Math.trunc(activeCount));
+      }
+      if (Number.isFinite(completedCount)) {
+        profileOrdersSummary.completedCount = Math.max(0, Math.trunc(completedCount));
+      }
+      updateOrdersSectionHeaders();
+    }
+
+    function resetOrdersSection(sectionKey) {
+      const section = sectionKey === "completed" ? ordersCompletedSection : ordersActiveSection;
+      const state = profileOrdersState[sectionKey];
+      if (!section || !state) return;
+      state.offset = 0;
+      state.hasMore = false;
+      state.loading = false;
+      state.initialized = false;
+      section.items.innerHTML = "";
+      section.emptyEl.classList.add("hidden");
+      if (section.emptyEl?.dataset?.defaultText) {
+        section.emptyEl.textContent = section.emptyEl.dataset.defaultText;
+      }
+      setOrdersSectionAnchorVisible(section, false);
+      setOrdersSectionLoading(section, false);
+    }
+
+    async function loadOrdersSection(sectionKey, { reset = false } = {}) {
+      const section = sectionKey === "completed" ? ordersCompletedSection : ordersActiveSection;
+      const state = profileOrdersState[sectionKey];
+      if (!section || !state) return;
+      if (state.loading) return;
+      if (!reset && !state.hasMore) return;
+      if (sectionKey === "completed" && ordersCompletedSection.collapsed) return;
+
+      state.loading = true;
+      if (reset) {
+        section.items.innerHTML = "";
+        section.emptyEl.classList.add("hidden");
+        if (section.emptyEl?.dataset?.defaultText) {
+          section.emptyEl.textContent = section.emptyEl.dataset.defaultText;
+        }
+        setOrdersSectionAnchorVisible(section, false);
+      }
+      setOrdersSectionLoading(section, true);
+
+      try {
+        const json = await apiJson(
+          `/api/public/me/orders?limit=${PROFILE_ORDERS_PAGE_SIZE}&offset=${state.offset}&status_is_final=${state.statusFinal}`
+        );
+        const list = Array.isArray(json?.data) ? json.data : [];
+        const paging = json && typeof json.paging === "object" ? json.paging : null;
+        const hasMore = paging ? Boolean(paging.has_more) : list.length >= PROFILE_ORDERS_PAGE_SIZE;
+        applyOrdersSummary(json?.summary);
+
+        if (reset) section.items.innerHTML = "";
+        if (reset && !list.length) {
+          section.emptyEl.classList.remove("hidden");
+          state.hasMore = false;
+          state.initialized = true;
+          setOrdersSectionAnchorVisible(section, false);
+          return;
+        }
+
+        list.forEach((o) => {
+          section.items.appendChild(renderProfileOrderRow(o));
+        });
+
+        state.offset += list.length;
+        state.hasMore = hasMore;
+        state.initialized = true;
+
+        setOrdersSectionAnchorVisible(section, state.hasMore);
+        if (state.hasMore) {
+          ensureOrdersSectionObserver(sectionKey);
+        }
       } catch (e) {
-        ordersList.innerHTML = `<div class="muted">Ошибка загрузки заказов</div>`;
+        if (reset) {
+          section.items.innerHTML = "";
+          section.emptyEl.textContent = "Ошибка загрузки заказов";
+          section.emptyEl.classList.remove("hidden");
+        }
+        state.hasMore = false;
+        setOrdersSectionAnchorVisible(section, false);
+      } finally {
+        state.loading = false;
+        setOrdersSectionLoading(section, false);
       }
     }
+
+    async function reloadOrders({ reset = true } = {}) {
+      if (reset) {
+        resetOrdersSection("active");
+        resetOrdersSection("completed");
+        setCompletedSectionCollapsed(true);
+        profileOrdersSummary.activeCount = 0;
+        profileOrdersSummary.completedCount = 0;
+        updateOrdersSectionHeaders();
+      }
+      await loadOrdersSection("active", { reset: true });
+    }
+
+    ordersCompletedSection.header.addEventListener("click", () => {
+      const nextCollapsed = !ordersCompletedSection.collapsed;
+      setCompletedSectionCollapsed(nextCollapsed);
+      if (!nextCollapsed && !profileOrdersState.completed.initialized) {
+        void loadOrdersSection("completed", { reset: true });
+      }
+    });
 
     if (addBtn) {
       addBtn.addEventListener("click", async () => {
@@ -9271,7 +12119,7 @@ function renderSheetAddressList() {
     });
 
     reloadAddresses();
-    reloadOrders();
+    reloadOrders({ reset: true });
 
     // Устанавливаем начальную вкладку, если указана
     if (initialTab) {
@@ -9483,6 +12331,7 @@ function renderSheetAddressList() {
       onLogout: () => handleProfileLogout({ closeModal: true }),
       initialTab,
     });
+    window._profileContext = ctx;
 
     // Обновляем состояние навигации
     sheetNavigationState.type = 'profile';
@@ -9513,6 +12362,7 @@ function renderSheetAddressList() {
         window.updateActiveOrdersBadge();
       }, 100);
     }
+    return ctx;
   }
   // -----------------------------
   // Bottom nav (mobile) helpers
@@ -10841,7 +13691,7 @@ function setBottomNavActive(tab) {
     let calendarViewMonth = selectedDate.getMonth();
     let calendarOpen = false;
 
-    // Row 1: [На дату ▾] + [Другой день]  (timeSelect всегда видим, btnOtherDay только при on_date)
+    // Row 1: [На дату в–ѕ] + [Другой день]  (timeSelect всегда видим, btnOtherDay только при on_date)
     const timeRow = document.createElement("div");
     timeRow.className = "shop-checkout-date-row1";
     timeRow.appendChild(timeSelect.root);
@@ -10900,7 +13750,7 @@ function setBottomNavActive(tab) {
     calendarWrap.appendChild(calPopover);
     dateSection.appendChild(calendarWrap);
 
-    // Row 2: [На завтра / дд.мм] + [селектор времени]
+    // Row 2: [На завтра / РґРґ.мм] + [селектор времени]
     const dateRow2 = document.createElement("div");
     dateRow2.className = "shop-checkout-date-row2";
 
@@ -12040,7 +14890,7 @@ function initShopLate() {
         });
       }
       bindNavToggle(elNavProfile, "profile", () => openProfileSheet());
-      bindNavToggle(elNavFav, "favorites", showFavoritesPlaceholder);
+      bindNavToggle(elNavFav, "favorites", openFavoritesSheet);
 
       // Обработчик кнопки "назад" на Android (popstate)
       // Добавляем запись в историю при открытии bottom sheet, чтобы можно было обработать "назад"
@@ -12145,7 +14995,7 @@ function initShopLate() {
         let isAnyModalOpen = false;
       
         if (isMobile) {
-          // Проверяем, открыто ли модальное окно (профиль, корзина, категории и т.д.)
+          // Проверяем, открыто ли модальное окно (профиль, корзина, категории и С‚.Рґ.)
           if (window.AppModal && typeof window.AppModal.isOpen === "function") {
             isAnyModalOpen = window.AppModal.isOpen();
           }
@@ -12249,7 +15099,7 @@ function initShopLate() {
             window._activeOrders = [];
           }
         } catch (e) {
-          // Если ошибка (не авторизован и т.д.), скрываем бейджи
+          // Если ошибка (не авторизован и С‚.Рґ.), скрываем бейджи
           badges.forEach(badge => badge.classList.add("hidden"));
           window._activeOrders = [];
         }
@@ -12330,6 +15180,7 @@ function initShopLate() {
       // Показать список активных заказов
       function showActiveOrdersList(orders) {
         if (!window.AppModal) return;
+        resetOrderDetailsTransientUi();
       
         // Обновляем состояние навигации
         sheetNavigationState.type = 'activeOrders';
@@ -12435,6 +15286,7 @@ function initShopLate() {
           // Обновляем контент и заголовок
           window.AppModal.setTitle("Активные заказы");
           window.AppModal.setContent(wrap);
+          setSheetHeaderMode("", {});
         
           // Убираем кнопку назад из хедера, если она была
           const modalHeader = document.querySelector(".app-modal-header");
@@ -12542,11 +15394,13 @@ function initShopLate() {
             }
           },
         });
+        setSheetHeaderMode("", {});
       }
     
       // Показать детали активного заказа
       async function showActiveOrderDetails(orderId) {
         if (!window.AppModal) return;
+        resetOrderDetailsTransientUi();
       
         const wrap = document.createElement("div");
         wrap.className = "shop-active-order-details";
@@ -12577,6 +15431,7 @@ function initShopLate() {
             }
           },
         });
+        setSheetHeaderMode("", {});
       
         // Настраиваем кастомный хедер: стрелка слева, "Детали заказа" по центру, крестик справа
         const modalHeader = document.querySelector(".app-modal-header");
@@ -12776,6 +15631,14 @@ function initShopLate() {
         
           wrap.innerHTML = html;
           bindOrderSummaryDiscountToggles(wrap);
+          const reopenActiveOrderDetails = () => {
+            void showActiveOrderDetails(orderId);
+          };
+          bindRepeatOrderItemRows(
+            wrap,
+            Array.isArray(order.items) ? order.items : [],
+            { onBack: reopenActiveOrderDetails, enableSwipeActions: true }
+          );
         
           // Кнопка "Назад" уже настроена в хедере выше
         } catch (e) {

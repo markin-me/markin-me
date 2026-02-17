@@ -746,6 +746,344 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     };
   }
 
+  function toPositiveIntOrNull(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return Math.trunc(n);
+  }
+
+  function toNonNegativeIntOrNull(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return Math.trunc(n);
+  }
+
+  function toFiniteNumberOrNull(v) {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function normalizeFavoriteIngredients(rawList, maxItems = 64) {
+    const list = Array.isArray(rawList) ? rawList : [];
+    const out = [];
+    for (const raw of list) {
+      if (!raw || typeof raw !== 'object') continue;
+      const ingredientId = toPositiveIntOrNull(raw.ingredient_id || raw.product_id || raw.id);
+      if (!ingredientId) continue;
+      const quantityRaw = Number(raw.quantity ?? raw.qty ?? 0);
+      const quantity = Number.isFinite(quantityRaw) ? quantityRaw : 0;
+      out.push({
+        ingredient_id: ingredientId,
+        ingredient_name: str(raw.ingredient_name || raw.name || '').trim(),
+        name: str(raw.name || raw.ingredient_name || '').trim(),
+        quantity,
+        qty: quantity,
+        unit_id: toPositiveIntOrNull(raw.unit_id),
+        unit_label: str(raw.unit_label || raw.unit || '').trim(),
+        unit: str(raw.unit || raw.unit_label || '').trim(),
+      });
+      if (out.length >= maxItems) break;
+    }
+    return out;
+  }
+
+  function normalizeFavoriteOptionItems(rawList, maxItems = 64) {
+    const list = Array.isArray(rawList) ? rawList : [];
+    const out = [];
+    for (const raw of list) {
+      if (!raw || typeof raw !== 'object') continue;
+      const optionId = toPositiveIntOrNull(raw.id || raw.option_item_id);
+      if (!optionId) continue;
+
+      const qtyRaw = Number(raw.qty ?? raw.quantity ?? 1);
+      const qty = Number.isFinite(qtyRaw) ? Math.max(1, Math.trunc(qtyRaw)) : 1;
+      const targetProductId = toPositiveIntOrNull(raw.target_product_id || raw.product_id);
+      const variantSource =
+        raw.variant && typeof raw.variant === 'object'
+          ? raw.variant
+          : (Array.isArray(raw.variants) ? raw.variants[0] : null);
+      const variantGroupId = toPositiveIntOrNull(raw.variant_group_id ?? variantSource?.variant_group_id);
+      const variantValueIndex = toNonNegativeIntOrNull(raw.variant_value_index ?? variantSource?.variant_value_index);
+      out.push({
+        id: optionId,
+        title: str(raw.title || raw.name || '').trim(),
+        name: str(raw.name || raw.title || '').trim(),
+        price: Number(raw.price || 0),
+        qty,
+        quantity: qty,
+        target_product_id: targetProductId,
+        product_id: targetProductId,
+        variant_group_id: variantGroupId,
+        variant_value_index: variantValueIndex,
+        variant_label: str(raw.variant_label || variantSource?.label || variantSource?.value || '').trim(),
+        variant_price_diff: Number(raw.variant_price_diff || 0),
+      });
+      if (out.length >= maxItems) break;
+    }
+    return out;
+  }
+
+  function normalizeFavoriteComboSelections(rawList, maxItems = 24) {
+    const list = Array.isArray(rawList) ? rawList : [];
+    const out = [];
+    for (const raw of list) {
+      if (!raw || typeof raw !== 'object') continue;
+      const productId = toPositiveIntOrNull(raw.product_id || raw.id || raw.product?.id);
+      if (!productId) continue;
+      const variantSource =
+        raw.variant && typeof raw.variant === 'object'
+          ? raw.variant
+          : (Array.isArray(raw.variants) ? raw.variants[0] : null);
+      const rawIngredients = Array.isArray(raw.ingredients_display)
+        ? raw.ingredients_display
+        : (Array.isArray(raw.ingredients) ? raw.ingredients : []);
+      out.push({
+        product_id: productId,
+        product_name: str(raw.product_name || raw.name || '').trim(),
+        product_photo: str(raw.product_photo || raw.photo || '').trim(),
+        variant_label: str(raw.variant_label || variantSource?.label || variantSource?.value || '').trim(),
+        variant_group_id: toPositiveIntOrNull(raw.variant_group_id ?? variantSource?.variant_group_id),
+        variant_value_index: toNonNegativeIntOrNull(raw.variant_value_index ?? variantSource?.variant_value_index),
+        variant_group_title: str(raw.variant_group_title || variantSource?.group_title || '').trim(),
+        variant_unit: str(raw.variant_unit || variantSource?.unit || '').trim(),
+        unit_id: toPositiveIntOrNull(raw.unit_id),
+        unit_price_override: toFiniteNumberOrNull(raw.unit_price_override),
+        unit_price_before_discount: toFiniteNumberOrNull(raw.unit_price_before_discount),
+        ingredients_display: normalizeFavoriteIngredients(rawIngredients, 64).map((ing) => ({
+          ingredient_id: ing.ingredient_id,
+          name: str(ing.name || ing.ingredient_name || '').trim(),
+          quantity: ing.quantity,
+          qty: ing.qty,
+          unit_id: ing.unit_id,
+          unit: str(ing.unit || ing.unit_label || '').trim(),
+        })),
+      });
+      if (out.length >= maxItems) break;
+    }
+    return out;
+  }
+
+  function normalizeFavoriteItemSnapshot(rawItem) {
+    if (!rawItem || typeof rawItem !== 'object') return null;
+    const typeRaw = str(rawItem.type || '').trim().toLowerCase();
+    const hasComboId = toPositiveIntOrNull(rawItem.combo_id || rawItem.combo?.id);
+
+    if (typeRaw === 'combo' || hasComboId) {
+      const comboId = hasComboId;
+      if (!comboId) return null;
+      const qtyRaw = Number(rawItem.qty ?? rawItem.quantity ?? 1);
+      const qty = Number.isFinite(qtyRaw) ? Math.max(1, Math.trunc(qtyRaw)) : 1;
+      const selections = normalizeFavoriteComboSelections(rawItem.selections, 24);
+      const photos = safeJsonArray(rawItem.photos);
+      const derivedPhotos = selections
+        .map((sel) => str(sel.product_photo || '').trim())
+        .filter(Boolean);
+      const lineTotalRaw = Number(rawItem.line_total);
+      const priceRaw = Number(rawItem.price);
+      const unitPrice = Number.isFinite(priceRaw)
+        ? priceRaw
+        : (qty > 0 && Number.isFinite(lineTotalRaw) ? lineTotalRaw / qty : 0);
+      const lineTotal = Number.isFinite(lineTotalRaw)
+        ? lineTotalRaw
+        : Number(unitPrice * qty);
+
+      return {
+        type: 'combo',
+        combo_id: comboId,
+        combo_title: str(rawItem.combo_title || rawItem.name || '').trim() || 'Комбо',
+        name: str(rawItem.name || rawItem.combo_title || '').trim() || 'Комбо',
+        qty,
+        price: Number(unitPrice || 0),
+        line_total: Number(lineTotal || 0),
+        old_line_total: Number(rawItem.old_line_total || 0),
+        unit_price_before_discount: Number(rawItem.unit_price_before_discount || 0),
+        photos: photos.length ? photos : derivedPhotos,
+        selections,
+      };
+    }
+
+    const productId = toPositiveIntOrNull(rawItem.product_id || rawItem.id || rawItem.product?.id);
+    if (!productId) return null;
+    const qtyRaw = Number(rawItem.qty ?? rawItem.quantity ?? 1);
+    const qty = Number.isFinite(qtyRaw) ? Math.max(1, Math.trunc(qtyRaw)) : 1;
+
+    const rawOptions = [
+      ...(Array.isArray(rawItem.option_items) ? rawItem.option_items : []),
+      ...(Array.isArray(rawItem.options) ? rawItem.options : []),
+    ];
+    const options = normalizeFavoriteOptionItems(rawOptions, 64);
+    const ingredients = normalizeFavoriteIngredients(rawItem.ingredients, 64);
+
+    const variantFromArray = Array.isArray(rawItem.variants) ? rawItem.variants[0] : null;
+    const variantGroupId = toPositiveIntOrNull(rawItem.variant_group_id ?? variantFromArray?.variant_group_id);
+    const variantValueIndex = toNonNegativeIntOrNull(rawItem.variant_value_index ?? variantFromArray?.variant_value_index);
+    const variantLabel = str(
+      rawItem.variant_label ||
+      variantFromArray?.label ||
+      variantFromArray?.value ||
+      ''
+    ).trim();
+    const variantGroupTitle = str(variantFromArray?.group_title || '').trim();
+    const variantValue = str(variantFromArray?.value || variantLabel || '').trim();
+
+    const hasVariantSelection =
+      variantGroupId &&
+      variantValueIndex !== null &&
+      (variantLabel || variantValue);
+
+    const variants = hasVariantSelection
+      ? [{
+        variant_group_id: variantGroupId,
+        variant_value_index: variantValueIndex,
+        group_title: variantGroupTitle,
+        value: variantValue || variantLabel,
+        label: variantLabel || variantValue,
+        price_diff: Number(variantFromArray?.price_diff || 0),
+      }]
+      : [];
+
+    const lineTotalRaw = Number(rawItem.line_total);
+    const priceRaw = Number(rawItem.price);
+    const unitPrice = Number.isFinite(priceRaw)
+      ? priceRaw
+      : (qty > 0 && Number.isFinite(lineTotalRaw) ? lineTotalRaw / qty : 0);
+    const lineTotal = Number.isFinite(lineTotalRaw)
+      ? lineTotalRaw
+      : Number(unitPrice * qty);
+
+    return {
+      type: 'product',
+      product_id: productId,
+      name: str(rawItem.name || rawItem.product_name || '').trim() || 'Товар',
+      qty,
+      price: Number(unitPrice || 0),
+      old_price: Number(rawItem.old_price || 0),
+      line_total: Number(lineTotal || 0),
+      photos: safeJsonArray(rawItem.photos),
+      option_item_ids: options.map((opt) => opt.id),
+      options,
+      option_items: options,
+      ingredients,
+      variant_group_id: hasVariantSelection ? variantGroupId : null,
+      variant_value_index: hasVariantSelection ? variantValueIndex : null,
+      variant_label: hasVariantSelection ? variantLabel : '',
+      variants,
+      discount: rawItem.discount && typeof rawItem.discount === 'object'
+        ? {
+          original_line_total: toFiniteNumberOrNull(rawItem.discount.original_line_total),
+        }
+        : null,
+    };
+  }
+
+  function buildFavoriteSignaturePayload(item) {
+    if (!item || typeof item !== 'object') return null;
+    if (str(item.type).toLowerCase() === 'combo') {
+      const comboId = toPositiveIntOrNull(item.combo_id);
+      if (!comboId) return null;
+      const selections = (Array.isArray(item.selections) ? item.selections : []).map((sel) => {
+        const ingredients = (Array.isArray(sel.ingredients_display) ? sel.ingredients_display : [])
+          .map((ing) => ({
+            ingredient_id: toPositiveIntOrNull(ing.ingredient_id),
+            qty: Number(ing.qty ?? ing.quantity ?? 0),
+          }))
+          .filter((ing) => ing.ingredient_id)
+          .sort((a, b) => a.ingredient_id - b.ingredient_id);
+        return {
+          product_id: toPositiveIntOrNull(sel.product_id),
+          variant_group_id: toPositiveIntOrNull(sel.variant_group_id),
+          variant_value_index: toNonNegativeIntOrNull(sel.variant_value_index),
+          ingredients,
+        };
+      });
+      return {
+        type: 'combo',
+        combo_id: comboId,
+        selections,
+      };
+    }
+
+    const productId = toPositiveIntOrNull(item.product_id);
+    if (!productId) return null;
+    const options = (Array.isArray(item.option_items) ? item.option_items : [])
+      .map((opt) => ({
+        id: toPositiveIntOrNull(opt.id),
+        qty: Math.max(1, Number(opt.qty ?? opt.quantity ?? 1)),
+        target_product_id: toPositiveIntOrNull(opt.target_product_id || opt.product_id),
+        variant_group_id: toPositiveIntOrNull(opt.variant_group_id),
+        variant_value_index: toNonNegativeIntOrNull(opt.variant_value_index),
+      }))
+      .filter((opt) => opt.id)
+      .sort((a, b) => (
+        a.id - b.id ||
+        Number(a.target_product_id || 0) - Number(b.target_product_id || 0) ||
+        Number(a.variant_group_id || 0) - Number(b.variant_group_id || 0) ||
+        Number(a.variant_value_index || 0) - Number(b.variant_value_index || 0)
+      ));
+
+    const ingredients = (Array.isArray(item.ingredients) ? item.ingredients : [])
+      .map((ing) => ({
+        ingredient_id: toPositiveIntOrNull(ing.ingredient_id || ing.product_id),
+        qty: Number(ing.qty ?? ing.quantity ?? 0),
+      }))
+      .filter((ing) => ing.ingredient_id)
+      .sort((a, b) => a.ingredient_id - b.ingredient_id);
+
+    return {
+      type: 'product',
+      product_id: productId,
+      variant_group_id: toPositiveIntOrNull(item.variant_group_id),
+      variant_value_index: toNonNegativeIntOrNull(item.variant_value_index),
+      options,
+      ingredients,
+    };
+  }
+
+  function buildFavoriteSignature(item) {
+    const payload = buildFavoriteSignaturePayload(item);
+    if (!payload) return null;
+    return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  }
+
+  function extractFavoritePreview(item) {
+    const snapshot = item && typeof item === 'object' ? item : {};
+    const isCombo = str(snapshot.type || '').toLowerCase() === 'combo';
+    if (isCombo) {
+      const comboPhotos = safeJsonArray(snapshot.photos);
+      const fallbackPhoto = (Array.isArray(snapshot.selections) ? snapshot.selections : [])
+        .map((sel) => str(sel?.product_photo || '').trim())
+        .find(Boolean) || null;
+      return {
+        itemType: 'combo',
+        productId: null,
+        comboId: toPositiveIntOrNull(snapshot.combo_id),
+        title: str(snapshot.combo_title || snapshot.name || '').trim() || 'Комбо',
+        photo: comboPhotos[0] || fallbackPhoto,
+      };
+    }
+    const photos = safeJsonArray(snapshot.photos);
+    return {
+      itemType: 'product',
+      productId: toPositiveIntOrNull(snapshot.product_id),
+      comboId: null,
+      title: str(snapshot.name || '').trim() || 'Товар',
+      photo: photos[0] || null,
+    };
+  }
+
+  function parseFavoriteItemJson(rawJson) {
+    if (!rawJson) return null;
+    if (typeof rawJson === 'object') return rawJson;
+    if (typeof rawJson !== 'string') return null;
+    try {
+      const parsed = JSON.parse(rawJson);
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
 // ------------------------------
   // AUTH
   // ------------------------------
@@ -1354,7 +1692,43 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       let limit = Number(req.query.limit ?? 50);
       if (!Number.isFinite(limit) || limit <= 0) limit = 50;
       if (limit > 200) limit = 200;
+      limit = Math.floor(limit);
+
+      let offset = Number(req.query.offset ?? 0);
+      if (!Number.isFinite(offset) || offset < 0) offset = 0;
+      if (offset > 100000) offset = 100000;
+      offset = Math.floor(offset);
+
+      let statusIsFinal = null;
+      if (req.query.status_is_final !== undefined) {
+        const parsedStatusIsFinal = Number(req.query.status_is_final);
+        if (parsedStatusIsFinal === 0 || parsedStatusIsFinal === 1) {
+          statusIsFinal = parsedStatusIsFinal;
+        }
+      }
+
+      const fetchLimit = limit + 1;
       const storeTimezone = await getStoreTimezone(tenantId, storeId);
+
+      let summary = null;
+      if (statusIsFinal !== null) {
+        const [summaryRows] = await db.query(
+          `SELECT
+             SUM(CASE WHEN COALESCE(s.is_final, 0) = 1 THEN 1 ELSE 0 END) AS completed_count,
+             SUM(CASE WHEN COALESCE(s.is_final, 0) = 1 THEN 0 ELSE 1 END) AS active_count
+           FROM order_orders o
+           LEFT JOIN order_statuses s
+             ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+           WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1`,
+          [tenantId, storeId, customer.id]
+        );
+        const summaryRow = summaryRows?.[0] || {};
+        summary = {
+          active_count: Math.max(0, Number(summaryRow.active_count || 0)),
+          completed_count: Math.max(0, Number(summaryRow.completed_count || 0)),
+        };
+        summary.total_count = summary.active_count + summary.completed_count;
+      }
 
       const [rows] = await db.query(
         `SELECT
@@ -1369,12 +1743,17 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          LEFT JOIN order_payments p
            ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
          WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
+           AND (? IS NULL OR COALESCE(s.is_final, 0)=?)
          ORDER BY o.created_at DESC, o.id DESC
-         LIMIT ?`,
-        [tenantId, storeId, customer.id, limit]
+         LIMIT ?
+         OFFSET ?`,
+        [tenantId, storeId, customer.id, statusIsFinal, statusIsFinal, fetchLimit, offset]
       );
 
-      const data = rows.map(r => {
+      const hasMore = rows.length > limit;
+      const pageRows = hasMore ? rows.slice(0, limit) : rows;
+
+      const data = pageRows.map(r => {
         let items = [];
         try {
           const parsed = r.items ? JSON.parse(r.items) : [];
@@ -1394,7 +1773,17 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         };
       });
 
-      res.json({ ok: true, data });
+      res.json({
+        ok: true,
+        data,
+        ...(summary ? { summary } : {}),
+        paging: {
+          limit,
+          offset,
+          next_offset: hasMore ? offset + data.length : null,
+          has_more: hasMore,
+        },
+      });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -1435,6 +1824,204 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   // ------------------------------
   // Скидки клиента
   // ------------------------------
+  // GET /api/public/me/favorites
+  router.get('/me/favorites', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      let limit = Number(req.query.limit ?? 200);
+      if (!Number.isFinite(limit) || limit <= 0) limit = 200;
+      if (limit > 500) limit = 500;
+
+      const [rows] = await db.query(
+        `SELECT
+           id,
+           item_signature,
+           item_type,
+           product_id,
+           combo_id,
+           title,
+           photo,
+           item_json,
+           DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+           DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') AS updated_at
+         FROM cust_customer_favorites
+         WHERE tenant_id=? AND store_id=? AND customer_id=?
+         ORDER BY updated_at DESC, id DESC
+         LIMIT ?`,
+        [tenantId, storeId, customer.id, limit]
+      );
+
+      const data = rows
+        .map((row) => {
+          const item = parseFavoriteItemJson(row.item_json);
+          if (!item) return null;
+          return {
+            id: Number(row.id),
+            item_signature: row.item_signature || null,
+            item_type: row.item_type || null,
+            product_id: row.product_id != null ? Number(row.product_id) : null,
+            combo_id: row.combo_id != null ? Number(row.combo_id) : null,
+            title: row.title || null,
+            photo: row.photo || null,
+            item,
+            created_at: row.created_at || null,
+            updated_at: row.updated_at || null,
+          };
+        })
+        .filter(Boolean);
+
+      res.json({ ok: true, data });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // POST /api/public/me/favorites
+  // body: { item }
+  router.post('/me/favorites', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const rawItem =
+        (req.body && req.body.item && typeof req.body.item === 'object' ? req.body.item : null) ||
+        (req.body && typeof req.body === 'object' ? req.body : null);
+      const item = normalizeFavoriteItemSnapshot(rawItem);
+      if (!item) {
+        return res.status(400).json({ ok: false, error: 'BAD_ITEM' });
+      }
+
+      const signature = buildFavoriteSignature(item);
+      if (!signature) {
+        return res.status(400).json({ ok: false, error: 'BAD_ITEM' });
+      }
+
+      const preview = extractFavoritePreview(item);
+      const itemType = preview.itemType === 'combo' ? 'combo' : 'product';
+      const itemJson = JSON.stringify(item);
+
+      const [ins] = await db.query(
+        `INSERT INTO cust_customer_favorites
+         (tenant_id, store_id, customer_id, item_signature, item_type, product_id, combo_id, title, photo, item_json)
+         VALUES (?,?,?,?,?,?,?,?,?,?)
+         ON DUPLICATE KEY UPDATE
+           id = LAST_INSERT_ID(id),
+           item_type = VALUES(item_type),
+           product_id = VALUES(product_id),
+           combo_id = VALUES(combo_id),
+           title = VALUES(title),
+           photo = VALUES(photo),
+           item_json = VALUES(item_json),
+           updated_at = CURRENT_TIMESTAMP`,
+        [
+          tenantId,
+          storeId,
+          customer.id,
+          signature,
+          itemType,
+          preview.productId,
+          preview.comboId,
+          preview.title,
+          preview.photo,
+          itemJson,
+        ]
+      );
+
+      const favoriteId = Number(ins.insertId || 0);
+      if (!favoriteId) {
+        return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      }
+
+      const [rows] = await db.query(
+        `SELECT
+           id,
+           item_signature,
+           item_type,
+           product_id,
+           combo_id,
+           title,
+           photo,
+           item_json,
+           DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+           DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') AS updated_at
+         FROM cust_customer_favorites
+         WHERE tenant_id=? AND store_id=? AND customer_id=? AND id=?
+         LIMIT 1`,
+        [tenantId, storeId, customer.id, favoriteId]
+      );
+
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      const row = rows[0];
+      const parsedItem = parseFavoriteItemJson(row.item_json);
+      if (!parsedItem) {
+        return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      }
+
+      res.json({
+        ok: true,
+        data: {
+          id: Number(row.id),
+          item_signature: row.item_signature || null,
+          item_type: row.item_type || null,
+          product_id: row.product_id != null ? Number(row.product_id) : null,
+          combo_id: row.combo_id != null ? Number(row.combo_id) : null,
+          title: row.title || null,
+          photo: row.photo || null,
+          item: parsedItem,
+          created_at: row.created_at || null,
+          updated_at: row.updated_at || null,
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // DELETE /api/public/me/favorites/:id
+  router.delete('/me/favorites/:id', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const favoriteId = Number(req.params.id);
+      if (!Number.isFinite(favoriteId) || favoriteId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      const [del] = await db.query(
+        `DELETE FROM cust_customer_favorites
+         WHERE tenant_id=? AND store_id=? AND customer_id=? AND id=?
+         LIMIT 1`,
+        [tenantId, storeId, customer.id, favoriteId]
+      );
+
+      if (Number(del.affectedRows || 0) < 1) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/me/discounts', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
