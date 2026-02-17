@@ -642,6 +642,7 @@
   function clearCustomer() {
     setCustomerToken("");
     setCustomerCache(null);
+    resetFavoritesCache();
   }
 
   // -----------------------------
@@ -1149,6 +1150,22 @@
       // ?????: ???? ?????? ????? "????????" ? ??? ????? ? ???????? ????????????? ?????
       if (openCartSheetCtx?.comboStepBack && typeof openCartSheetCtx.comboStepBack === "function") {
         openCartSheetCtx.comboStepBack();
+        return true;
+      }
+      const customBackHandler = sheetNavigationState.data?.customBackHandler;
+      if (typeof customBackHandler === "function") {
+        if (elMobileProductActions) elMobileProductActions.classList.add("hidden");
+        if (typeof window._comboStepBackCallback !== "undefined") {
+          window._comboStepBackCallback = null;
+        }
+        if (openCartSheetCtx && typeof openCartSheetCtx === "object") {
+          openCartSheetCtx.comboStepBack = null;
+        }
+        openCartSheetCtx = null;
+        if (window.AppModal?.body) {
+          window.AppModal.body.classList.remove("shop-cart-sheet-body");
+        }
+        customBackHandler();
         return true;
       }
       // ?? ?????? ?????? - ???????????? ? ??????? ??? ????????? sheet
@@ -2952,18 +2969,213 @@
   }
 
   // ?????????????? ?????? ?????? - ???????? ? ?????????? ??????? ??? ????????????? ? bottom sheet
+  function normalizeFavoriteOptionItemsFromCart(optionItems) {
+    const items = Array.isArray(optionItems) ? optionItems : [];
+    return items
+      .map((opt) => {
+        const id = Number(opt?.id || 0);
+        if (!Number.isFinite(id) || id <= 0) return null;
+        const qty = Math.max(1, Number(opt?.qty ?? opt?.quantity ?? 1));
+        const targetProductId = toFiniteNumberOrNull(opt?.target_product_id ?? opt?.product_id);
+        return {
+          id,
+          title: str(opt?.title || opt?.name || ""),
+          name: str(opt?.name || opt?.title || ""),
+          price: Number(opt?.price || 0),
+          qty,
+          quantity: qty,
+          target_product_id: targetProductId,
+          product_id: targetProductId,
+          variant_group_id: toFiniteNumberOrNull(opt?.variant_group_id),
+          variant_value_index: toFiniteNumberOrNull(opt?.variant_value_index),
+          variant_label: str(opt?.variant_label || ""),
+          variant_price_diff: Number(opt?.variant_price_diff || 0),
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function normalizeFavoriteIngredientsFromCart(ingredients) {
+    const list = Array.isArray(ingredients) ? ingredients : [];
+    return list
+      .map((ing) => {
+        const ingredientId = Number(ing?.ingredient_id || 0);
+        if (!Number.isFinite(ingredientId) || ingredientId <= 0) return null;
+        const quantityRaw = Number(ing?.quantity ?? ing?.qty ?? 0);
+        const quantity = Number.isFinite(quantityRaw) ? quantityRaw : 0;
+        return {
+          ingredient_id: ingredientId,
+          ingredient_name: str(ing?.ingredient_name || ing?.name || ""),
+          name: str(ing?.name || ing?.ingredient_name || ""),
+          quantity,
+          qty: quantity,
+          unit_id: toFiniteNumberOrNull(ing?.unit_id),
+          unit_label: str(ing?.unit_label || ing?.unit || ""),
+          unit: str(ing?.unit || ing?.unit_label || ""),
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function buildFavoriteSnapshotFromResolvedItem(resolvedItem, { pricing = null, oldLineTotal = null } = {}) {
+    if (!resolvedItem || typeof resolvedItem !== "object") return null;
+
+    if (String(resolvedItem.type || "") === "combo") {
+      const comboId = Number(resolvedItem.combo_id || 0);
+      if (!Number.isFinite(comboId) || comboId <= 0) return null;
+      const qty = Math.max(1, Number(resolvedItem.qty || 1));
+      const unitPrice = Number(resolvedItem.unit_price_override || 0);
+      const lineTotal = roundPrice(unitPrice * qty);
+      const oldLine = oldLineTotal != null
+        ? roundPrice(Number(oldLineTotal || 0))
+        : roundPrice((Number(resolvedItem.unit_price_before_discount || 0) || unitPrice) * qty);
+      const selections = (Array.isArray(resolvedItem.selections) ? resolvedItem.selections : []).map((sel) => ({
+        product_id: toFiniteNumberOrNull(sel?.product_id),
+        product_name: str(sel?.product_name || ""),
+        product_photo: str(sel?.product_photo || ""),
+        variant_label: str(sel?.variant_label || ""),
+        variant_group_id: toFiniteNumberOrNull(sel?.variant_group_id),
+        variant_value_index: toFiniteNumberOrNull(sel?.variant_value_index),
+        variant_group_title: str(sel?.variant_group_title || ""),
+        variant_unit: str(sel?.variant_unit || ""),
+        unit_id: toFiniteNumberOrNull(sel?.unit_id),
+        unit_price_override: sel?.unit_price_override != null ? Number(sel.unit_price_override) : null,
+        unit_price_before_discount: sel?.unit_price_before_discount != null ? Number(sel.unit_price_before_discount) : null,
+        ingredients_display: (Array.isArray(sel?.ingredients_display) ? sel.ingredients_display : []).map((ing) => ({
+          ingredient_id: toFiniteNumberOrNull(ing?.ingredient_id),
+          name: str(ing?.name || ing?.ingredient_name || ""),
+          quantity: Number(ing?.quantity ?? ing?.qty ?? 0),
+          qty: Number(ing?.qty ?? ing?.quantity ?? 0),
+          unit_id: toFiniteNumberOrNull(ing?.unit_id),
+          unit: str(ing?.unit || ing?.unit_label || ""),
+        })),
+      }));
+      const photos = selections.map((sel) => str(sel.product_photo || "")).filter(Boolean);
+
+      return {
+        type: "combo",
+        combo_id: comboId,
+        combo_title: str(resolvedItem.combo_title || "Комбо"),
+        name: str(resolvedItem.combo_title || resolvedItem.name || "Комбо"),
+        qty,
+        price: Number(unitPrice || 0),
+        line_total: Number(lineTotal || 0),
+        old_line_total: oldLine > lineTotal ? Number(oldLine) : 0,
+        unit_price_before_discount: Number(resolvedItem.unit_price_before_discount || 0),
+        photos,
+        selections,
+      };
+    }
+
+    const product = resolvedItem.product || null;
+    const productId = Number(resolvedItem.product_id || product?.id || 0);
+    if (!Number.isFinite(productId) || productId <= 0) return null;
+    const qty = Math.max(1, Number(resolvedItem.qty || 1));
+    const selectedOptionItems = normalizeFavoriteOptionItemsFromCart(
+      Array.isArray(resolvedItem.option_items) ? resolvedItem.option_items : []
+    );
+    const ingredients = normalizeFavoriteIngredientsFromCart(
+      Array.isArray(resolvedItem.ingredients) ? resolvedItem.ingredients : []
+    );
+    const variantGroupId = toFiniteNumberOrNull(resolvedItem.variant_group_id);
+    const variantValueIndex = toFiniteNumberOrNull(resolvedItem.variant_value_index);
+    const variantLabel = str(resolvedItem.variant_label || "").trim();
+    const hasVariant = variantLabel || (variantGroupId != null && variantValueIndex != null);
+    const variantDiff = Number(resolvedItem.variant_unit_price || 0) - Number(product?.price || 0);
+
+    let pricingData = pricing;
+    if (!pricingData) {
+      const resolvedItems = cartItemsResolved();
+      const totals = {
+        nonAutoTotal: computeNonAutoTotal(resolvedItems),
+        autoEligibleTotal: computeAutoEligibleTotal(resolvedItems),
+      };
+      pricingData = computeItemPricing(
+        {
+          product,
+          qty,
+          option_items: selectedOptionItems,
+          ingredients,
+          ingredient_price_diff: Number(resolvedItem.ingredient_price_diff || 0),
+          variant_label: variantLabel,
+          variant_unit_price: Number(resolvedItem.variant_unit_price || 0),
+          unit_price_override:
+            resolvedItem.unit_price_override != null
+              ? Number(resolvedItem.unit_price_override)
+              : null,
+          auto_add: Number(resolvedItem.auto_add || 0),
+          auto_add_group_id: toFiniteNumberOrNull(resolvedItem.auto_add_group_id),
+        },
+        totals
+      );
+    }
+
+    const lineTotal = roundPrice(Number(pricingData?.lineTotal || 0));
+    const unitPrice = roundPrice(Number(pricingData?.unitPrice || (qty > 0 ? lineTotal / qty : 0)));
+    const oldLineFromArg = oldLineTotal != null ? roundPrice(Number(oldLineTotal || 0)) : 0;
+    const oldPricePerUnit = Number(product?.old_price || 0);
+    const oldLineFromProduct = oldPricePerUnit > 0 ? roundPrice(oldPricePerUnit * qty) : 0;
+    const originalLineTotal = oldLineFromArg > 0 ? oldLineFromArg : oldLineFromProduct;
+    const showOldLine = originalLineTotal > lineTotal;
+
+    const variantEntries = hasVariant
+      ? [{
+        variant_group_id: variantGroupId,
+        variant_value_index: variantValueIndex,
+        group_title: "",
+        value: variantLabel,
+        label: variantLabel,
+        price_diff: Number.isFinite(variantDiff) ? variantDiff : 0,
+      }]
+      : [];
+
+    return {
+      type: "product",
+      product_id: productId,
+      name: str(product?.name || resolvedItem.name || "Товар"),
+      qty,
+      price: Number(unitPrice || 0),
+      old_price: showOldLine ? roundPrice(originalLineTotal / qty) : Number(oldPricePerUnit || 0),
+      line_total: Number(lineTotal || 0),
+      photos: safePhotos(product),
+      option_item_ids: selectedOptionItems.map((opt) => Number(opt.id)),
+      options: selectedOptionItems,
+      option_items: selectedOptionItems,
+      ingredients,
+      variant_group_id: variantGroupId,
+      variant_value_index: variantValueIndex,
+      variant_label: variantLabel,
+      variants: variantEntries,
+      discount: showOldLine ? { original_line_total: Number(originalLineTotal) } : null,
+    };
+  }
+
   window.formatOrderItem = function formatOrderItem(item) {
     // ?????: ??? ?? ??????, ??? ? ??????? ? ? ??????? ? ???????? ????? ? ????????? ?????? ??? ??????? ? 0
     if (item.type === "combo") {
-      const photos = Array.isArray(item.photos) ? item.photos.filter(Boolean) : [];
-      const mainPhoto = photos[0] || "/static/img/placeholder.png";
+      const selections = Array.isArray(item.selections) ? item.selections : [];
+      const selectionPhotos = selections
+        .map((sel) => str(sel?.product_photo || "").trim())
+        .filter(Boolean);
+      const fallbackPhotos = Array.isArray(item.photos) ? item.photos.filter(Boolean) : [];
+      const photos = (selectionPhotos.length ? selectionPhotos : fallbackPhotos).slice(0, 4);
+      const comboGridOrder = [0, 2, 3, 1];
       const itemQty = Number(item.qty || item.quantity || 1);
       const itemName = `${escapeHtml(item.name || item.combo_title || "Комбо")} × ${itemQty}`;
       let html = `<div class="cart-row cart-row--combo">`;
-      html += `<img class="cart-thumb" src="${escapeHtml(mainPhoto)}" alt="" />`;
+      html += `<div class="cart-combo-thumb">`;
+      for (let i = 0; i < 4; i += 1) {
+        const photo = photos[comboGridOrder[i]] || "";
+        const cellClass = `cart-combo-thumb__cell${photo ? "" : " cart-combo-thumb__cell--empty"}`;
+        html += `<div class="${cellClass}">`;
+        if (photo) {
+          html += `<img class="cart-thumb" src="${escapeHtml(photo)}" alt="" />`;
+        }
+        html += `</div>`;
+      }
+      html += `</div>`;
       html += `<div class="cart-mid">`;
       html += `<div class="cart-title">${itemName}</div>`;
-      const selections = Array.isArray(item.selections) ? item.selections : [];
       if (selections.length) {
         html += `<div class="cart-sub-container cart-combo-details" style="margin-top: 4px; padding-left: 8px;">`;
         selections.forEach((sel) => {
@@ -3196,6 +3408,125 @@
       localStorage.setItem(FAV_KEY, JSON.stringify(Array.from(set)));
     } catch {}
   }
+
+  const favoritesCacheState = {
+    loaded: false,
+    items: [],
+    byId: new Map(),
+  };
+
+  function normalizeFavoriteApiRow(row) {
+    if (!row || typeof row !== "object") return null;
+    const id = Number(row.id || 0);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    const itemRaw = row.item && typeof row.item === "object"
+      ? row.item
+      : (row.item_json && typeof row.item_json === "object" ? row.item_json : null);
+    if (!itemRaw || typeof itemRaw !== "object") return null;
+    return {
+      id,
+      item_signature: str(row.item_signature || row.signature || ""),
+      item_type: str(row.item_type || row.type || ""),
+      product_id: toFiniteNumberOrNull(row.product_id),
+      combo_id: toFiniteNumberOrNull(row.combo_id),
+      title: str(row.title || ""),
+      photo: str(row.photo || ""),
+      item: itemRaw,
+      created_at: row.created_at || null,
+      updated_at: row.updated_at || null,
+    };
+  }
+
+  function setFavoritesCache(items) {
+    const list = Array.isArray(items) ? items : [];
+    favoritesCacheState.items = list.map(normalizeFavoriteApiRow).filter(Boolean);
+    favoritesCacheState.byId = new Map(favoritesCacheState.items.map((fav) => [Number(fav.id), fav]));
+    favoritesCacheState.loaded = true;
+  }
+
+  function resetFavoritesCache() {
+    favoritesCacheState.loaded = false;
+    favoritesCacheState.items = [];
+    favoritesCacheState.byId = new Map();
+  }
+
+  function getCachedFavorites() {
+    if (!favoritesCacheState.loaded) return [];
+    return favoritesCacheState.items.slice();
+  }
+
+  async function fetchFavoritesList({ force = false } = {}) {
+    const token = getCustomerToken();
+    if (!token) {
+      resetFavoritesCache();
+      return [];
+    }
+
+    if (!force && favoritesCacheState.loaded) {
+      return getCachedFavorites();
+    }
+
+    const json = await apiJson("/api/public/me/favorites");
+    const rows = Array.isArray(json.data) ? json.data : [];
+    setFavoritesCache(rows);
+    return getCachedFavorites();
+  }
+
+  async function addFavoriteItemSnapshot(item) {
+    const token = getCustomerToken();
+    if (!token) {
+      const err = new Error("UNAUTHORIZED");
+      err.httpStatus = 401;
+      throw err;
+    }
+    const json = await apiJson("/api/public/me/favorites", {
+      method: "POST",
+      body: { item },
+    });
+    const row = normalizeFavoriteApiRow(json?.data || null);
+    if (row) {
+      if (!favoritesCacheState.loaded) favoritesCacheState.loaded = true;
+      const prevIdx = favoritesCacheState.items.findIndex((fav) => Number(fav.id) === Number(row.id));
+      if (prevIdx >= 0) favoritesCacheState.items.splice(prevIdx, 1);
+      favoritesCacheState.items.unshift(row);
+      favoritesCacheState.byId.set(Number(row.id), row);
+    }
+    return row;
+  }
+
+  async function removeFavoriteById(favoriteId) {
+    const id = Number(favoriteId || 0);
+    if (!Number.isFinite(id) || id <= 0) return false;
+    const token = getCustomerToken();
+    if (!token) {
+      const err = new Error("UNAUTHORIZED");
+      err.httpStatus = 401;
+      throw err;
+    }
+    await apiJson(`/api/public/me/favorites/${id}`, { method: "DELETE" });
+    if (favoritesCacheState.loaded) {
+      favoritesCacheState.items = favoritesCacheState.items.filter((fav) => Number(fav.id) !== id);
+      favoritesCacheState.byId.delete(id);
+    }
+    return true;
+  }
+
+  function promptFavoritesLogin() {
+    showToast("Войдите в профиль, чтобы использовать избранное");
+    if (typeof openProfileSheet === "function") {
+      try {
+        openProfileSheet();
+      } catch {}
+    }
+  }
+
+  window.shopFavoritesApi = {
+    list: fetchFavoritesList,
+    add: addFavoriteItemSnapshot,
+    remove: removeFavoriteById,
+    clearCache: resetFavoritesCache,
+    getCached: getCachedFavorites,
+  };
 
   function loadCheckoutDraft() {
     try {
@@ -3482,7 +3813,10 @@ function setCartHeader({
   if (elCartHeaderTitle) elCartHeaderTitle.classList.toggle("is-address-title", !!addressAsTitle);
 }
 
-function setSheetHeaderMode(mode, { onBack, discountBadge } = {}) {
+function setSheetHeaderMode(
+  mode,
+  { onBack, discountBadge, favoriteBuildSnapshot, favoriteAfterToggle } = {}
+) {
   const header = document.querySelector(".app-modal-header");
   if (!header) return;
 
@@ -3529,7 +3863,7 @@ function setSheetHeaderMode(mode, { onBack, discountBadge } = {}) {
     favBtn.type = "button";
     favBtn.className = "btn btn-icon shop-sheet-fav";
     favBtn.setAttribute("aria-label", "Избранное");
-    favBtn.innerHTML = `<i class="far fa-heart"></i>`;
+    favBtn.innerHTML = `<i class="fas fa-heart"></i>`;
     header.appendChild(favBtn);
   }
 
@@ -3545,6 +3879,25 @@ function setSheetHeaderMode(mode, { onBack, discountBadge } = {}) {
   // Order: ???????? ?, ?????? ?, ???????? title
   backBtn.classList.toggle("hidden", !isProduct && !isOrder);
   favBtn.classList.toggle("hidden", !isProduct);
+
+  if (isProduct) {
+    const nextFavBtn = favBtn.cloneNode(true);
+    favBtn.replaceWith(nextFavBtn);
+    favBtn = nextFavBtn;
+    favBtn.classList.remove("is-active", "is-busy");
+    delete favBtn.dataset.favoriteId;
+
+    if (typeof favoriteBuildSnapshot === "function") {
+      bindFavoriteButtonsForCartRow(
+        [favBtn],
+        () => favoriteBuildSnapshot(),
+        {
+          afterToggle:
+            typeof favoriteAfterToggle === "function" ? favoriteAfterToggle : undefined,
+        }
+      );
+    }
+  }
 
   if (closeBtn) closeBtn.classList.toggle("hidden", isProduct || isOrder);
   if (titleEl) titleEl.classList.toggle("hidden", isProduct);
@@ -5778,6 +6131,101 @@ async function initAddresses() {
     return normal.concat(auto);
   }
 
+  function isFavoriteUnauthorizedError(err) {
+    if (!err) return false;
+    if (Number(err.httpStatus || 0) === 401) return true;
+    const msg = String(err.message || "");
+    return msg === "UNAUTHORIZED" || msg.includes("UNAUTHORIZED");
+  }
+
+  function setFavoriteButtonsActive(buttons, active) {
+    (Array.isArray(buttons) ? buttons : []).forEach((btn) => {
+      if (!btn) return;
+      btn.classList.toggle("is-active", !!active);
+    });
+  }
+
+  function setFavoriteButtonsBusy(buttons, busy) {
+    (Array.isArray(buttons) ? buttons : []).forEach((btn) => {
+      if (!btn) return;
+      btn.disabled = !!busy;
+      btn.classList.toggle("is-busy", !!busy);
+    });
+  }
+
+  function bindFavoriteButtonsForCartRow(buttons, buildSnapshot, { afterToggle } = {}) {
+    const allButtons = (Array.isArray(buttons) ? buttons : []).filter(Boolean);
+    if (!allButtons.length) return;
+
+    let favoriteId = null;
+    let isBusy = false;
+    const syncActive = () => {
+      setFavoriteButtonsActive(allButtons, !!favoriteId);
+      allButtons.forEach((btn) => {
+        if (!btn) return;
+        if (favoriteId) btn.dataset.favoriteId = String(favoriteId);
+        else delete btn.dataset.favoriteId;
+      });
+    };
+    syncActive();
+
+    const handleClick = async (event) => {
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      if (isBusy) return;
+
+      const token = getCustomerToken();
+      if (!token) {
+        promptFavoritesLogin();
+        return;
+      }
+
+      isBusy = true;
+      setFavoriteButtonsBusy(allButtons, true);
+
+      try {
+        if (favoriteId) {
+          await removeFavoriteById(favoriteId);
+          favoriteId = null;
+          syncActive();
+          showToast("Удалено из избранного");
+          if (navigator.vibrate) navigator.vibrate(10);
+          if (typeof afterToggle === "function") afterToggle({ active: false, favoriteId: null });
+          return;
+        }
+
+        const snapshot = typeof buildSnapshot === "function" ? buildSnapshot() : null;
+        if (!snapshot) {
+          showToast("Не удалось сохранить в избранное");
+          return;
+        }
+
+        const saved = await addFavoriteItemSnapshot(snapshot);
+        favoriteId = Number(saved?.id || 0) || null;
+        syncActive();
+        showToast("Добавлено в избранное");
+        if (navigator.vibrate) navigator.vibrate(10);
+        if (typeof afterToggle === "function") afterToggle({ active: true, favoriteId });
+      } catch (err) {
+        if (isFavoriteUnauthorizedError(err)) {
+          promptFavoritesLogin();
+        } else {
+          console.warn("Failed to toggle favorite:", err);
+          showToast("Не удалось обновить избранное");
+        }
+      } finally {
+        isBusy = false;
+        setFavoriteButtonsBusy(allButtons, false);
+      }
+    };
+
+    allButtons.forEach((btn) => {
+      btn.addEventListener("click", handleClick);
+    });
+  }
+
   function renderCartInto(listEl, totalEl, emptyPlaceholderEl) {
     const items = sortCartItemsForDisplay(cartItemsResolved());
     if (listEl) listEl.innerHTML = "";
@@ -5817,13 +6265,6 @@ async function initAddresses() {
         favBtn.type = "button";
         favBtn.className = "cart-swipe-btn cart-swipe-fav";
         favBtn.innerHTML = '<i class="fas fa-heart"></i>';
-        favBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          showToast("Добавлено в избранное");
-          favBtn.classList.toggle("is-active");
-          if (navigator.vibrate) navigator.vibrate(10);
-          resetSwipe(swipeContainer);
-        });
         const deleteBtn = document.createElement("button");
         deleteBtn.type = "button";
         deleteBtn.className = "cart-swipe-btn cart-swipe-delete";
@@ -5949,11 +6390,6 @@ async function initAddresses() {
         desktopFavBtn.className = "cart-desktop-btn cart-desktop-fav";
         desktopFavBtn.innerHTML = '<i class="fas fa-heart"></i>';
         desktopFavBtn.title = "В избранное";
-        desktopFavBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          showToast("Добавлено в избранное");
-          desktopFavBtn.classList.toggle("is-active");
-        });
         const desktopDeleteBtn = document.createElement("button");
         desktopDeleteBtn.type = "button";
         desktopDeleteBtn.className = "cart-desktop-btn cart-desktop-delete";
@@ -5966,7 +6402,17 @@ async function initAddresses() {
         desktopActions.appendChild(desktopFavBtn);
         desktopActions.appendChild(desktopDeleteBtn);
         right.appendChild(desktopActions);
-
+        bindFavoriteButtonsForCartRow(
+          [favBtn, desktopFavBtn],
+          () => buildFavoriteSnapshotFromResolvedItem(item, { oldLineTotal: lineTotalOld }),
+          {
+            afterToggle: () => {
+              if (swipeContainer.classList.contains("is-swiped")) {
+                resetSwipe(swipeContainer);
+              }
+            },
+          }
+        );
         const updateComboQty = () => {
           const cartItem = state.cart.find((x) => x.key === key);
           const newQty = Math.max(1, Number(cartItem?.qty || 0));
@@ -6087,17 +6533,6 @@ async function initAddresses() {
       favBtn.type = "button";
       favBtn.className = "cart-swipe-btn cart-swipe-fav";
       favBtn.innerHTML = '<i class="fas fa-heart"></i>';
-      favBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        // ???????? ??? ??????????
-        showToast("Добавлено в избранное");
-        favBtn.classList.toggle("is-active");
-        // Haptic feedback
-        if (navigator.vibrate) navigator.vibrate(10);
-        // ???????? ?????
-        resetSwipe(swipeContainer);
-      });
-
       const deleteBtn = document.createElement("button");
       deleteBtn.type = "button";
       deleteBtn.className = "cart-swipe-btn cart-swipe-delete";
@@ -6290,12 +6725,6 @@ async function initAddresses() {
       desktopFavBtn.className = "cart-desktop-btn cart-desktop-fav";
       desktopFavBtn.innerHTML = '<i class="fas fa-heart"></i>';
       desktopFavBtn.title = "В избранное";
-      desktopFavBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        showToast("Добавлено в избранное");
-        desktopFavBtn.classList.toggle("is-active");
-      });
-
       const desktopDeleteBtn = document.createElement("button");
       desktopDeleteBtn.type = "button";
       desktopDeleteBtn.className = "cart-desktop-btn cart-desktop-delete";
@@ -6315,7 +6744,21 @@ async function initAddresses() {
       desktopActions.appendChild(desktopFavBtn);
       desktopActions.appendChild(desktopDeleteBtn);
       right.appendChild(desktopActions);
-
+      bindFavoriteButtonsForCartRow(
+        [favBtn, desktopFavBtn],
+        () =>
+          buildFavoriteSnapshotFromResolvedItem(item, {
+            pricing,
+            oldLineTotal: showOld ? originalLineTotal : null,
+          }),
+        {
+          afterToggle: () => {
+            if (swipeContainer.classList.contains("is-swiped")) {
+              resetSwipe(swipeContainer);
+            }
+          },
+        }
+      );
       const bottomRow = document.createElement("div");
       bottomRow.className = "cart-bottom-row";
       bottomRow.appendChild(q);

@@ -77,6 +77,13 @@
       <div class="content-view hidden" data-view-content="production-history"><div class="info-card">История производства...</div></div>
 
     </div>
+    <div class="panel-footer hidden" id="productsBulkFooter">
+      <div class="products-bulk-footer-actions">
+        <div class="products-bulk-footer-count">Выбрано: <b id="productsBulkSelectedCount">0</b></div>
+        <button class="btn" type="button" id="productsBulkSelectAllBtn">Выделить все</button>
+        <button class="btn btn-ghost" type="button" id="productsBulkClearBtn">Снять выделение</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -371,4 +378,3 @@
     <input id="ce_sort" name="sort_order" type="hidden" />
   </form>
 </template>
-

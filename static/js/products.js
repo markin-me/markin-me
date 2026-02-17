@@ -16,6 +16,10 @@
   const productsList = $("#productsList");
   const productsEmptyHint = $("#productsEmptyHint");
   const productsScrollEl = productsList ? productsList.closest(".panel-body") : null;
+  const productsBulkFooter = $("#productsBulkFooter");
+  const productsBulkSelectedCount = $("#productsBulkSelectedCount");
+  const productsBulkSelectAllBtn = $("#productsBulkSelectAllBtn");
+  const productsBulkClearBtn = $("#productsBulkClearBtn");
   const categoriesMainList = $("#categoriesMainList");
   const categoriesEmptyHint = $("#categoriesEmptyHint");
   const optionsGroupsList = $("#optionsGroupsList");
@@ -425,6 +429,7 @@
     currentCategoryId: null,
     allCategoryId: null,
     selectedProductId: null,
+    selectedProductIds: new Set(),
     selectedCategoryId: null,
     selectedProductCategories: [], // full objects
     optionGroups: [],
@@ -1133,10 +1138,12 @@
     showView("products");
     showDetailsEmpty();
     syncActiveMenuItems();
+    syncProductsBulkFooter();
   }
 
   function enterCategoriesMode() {
     state.mode = "categories";
+    clearProductsBulkSelection();
     setToolbarTitle("Категории", "fa-th-large");
     showView("categories");
     clearProductSelection();
@@ -1146,6 +1153,7 @@
 
   function enterOptionsMode() {
     state.mode = "options";
+    clearProductsBulkSelection();
     state.optionPanel.returnTo = null;
     setToolbarTitle("Опции товара", "fa-sliders-h");
     showView("options");
@@ -1156,6 +1164,7 @@
 
   function enterVariantsMode() {
     state.mode = "variants";
+    clearProductsBulkSelection();
     state.variantPanel.returnTo = null;
     setToolbarTitle("Варианты товара", "fa-cubes");
     showView("variants");
@@ -1166,6 +1175,7 @@
 
   async function enterAutoAddMode() {
     state.mode = "auto-add";
+    clearProductsBulkSelection();
     setToolbarTitle("Автодобавления", "fa-cart-plus");
     showView("auto-add");
     clearProductSelection();
@@ -1177,6 +1187,7 @@
 
   async function enterUnitsMode() {
     state.mode = "units";
+    clearProductsBulkSelection();
     state.unitPanel.returnTo = null;
     setToolbarTitle("Единицы измерения", "fa-ruler");
     showView("units");
@@ -1190,6 +1201,7 @@
 
   async function enterComboBlocksMode() {
     state.mode = "combo-blocks";
+    clearProductsBulkSelection();
     setToolbarTitle("Блоки комбо", "fa-layer-group");
     showView("combo-blocks");
     clearProductSelection();
@@ -1380,6 +1392,7 @@
     if (!cid) return;
 
     state.productsLoading = true;
+    syncProductsBulkFooter();
     const token = productsRequestToken;
     const prevOffset = state.productsOffset;
     try {
@@ -1406,6 +1419,7 @@
     } finally {
       if (token === productsRequestToken) {
         state.productsLoading = false;
+        syncProductsBulkFooter();
         syncProductRowsSortability();
         if (state.mode === "products") {
           maybeLoadMoreProductsOnScroll();
@@ -1432,6 +1446,7 @@
   async function loadProducts(categoryId) {
     const cid = categoryId || state.currentCategoryId;
     productsRequestToken += 1;
+    clearProductsBulkSelection();
     if (!cid) {
       state.products = [];
       state.productsOffset = 0;
@@ -4045,8 +4060,78 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     return formatNumberForInput(n);
   }
 
+  function syncProductRowSelectionUI(root = productsList) {
+    if (!root) return;
+    $$(".order-row.product-row[data-id]", root).forEach((row) => {
+      const id = Number(row.dataset.id);
+      const selected = state.selectedProductIds.has(id);
+      row.classList.toggle("is-selected", selected);
+      const checkbox = row.querySelector(".product-row-select-input");
+      if (checkbox) checkbox.checked = selected;
+    });
+  }
+
+  function syncProductsBulkFooter() {
+    if (!productsBulkFooter) return;
+    const selectedCount = state.selectedProductIds.size;
+    const shouldShow = state.mode === "products" && selectedCount > 0;
+    productsBulkFooter.classList.toggle("hidden", !shouldShow);
+    if (productsBulkSelectedCount) {
+      productsBulkSelectedCount.textContent = String(selectedCount);
+    }
+    if (productsBulkSelectAllBtn) {
+      productsBulkSelectAllBtn.disabled = state.productsLoading;
+    }
+    if (productsBulkClearBtn) {
+      productsBulkClearBtn.disabled = selectedCount === 0;
+    }
+  }
+
+  function clearProductsBulkSelection() {
+    if (!state.selectedProductIds.size) {
+      syncProductsBulkFooter();
+      return;
+    }
+    state.selectedProductIds.clear();
+    syncProductRowSelectionUI(productsList);
+    syncProductsBulkFooter();
+  }
+
+  function toggleProductCardSelection(productId, forceSelected = null) {
+    const id = Number(productId);
+    if (!Number.isFinite(id)) return;
+    if (forceSelected === true) {
+      state.selectedProductIds.add(id);
+    } else if (forceSelected === false) {
+      state.selectedProductIds.delete(id);
+    } else if (state.selectedProductIds.has(id)) {
+      state.selectedProductIds.delete(id);
+    } else {
+      state.selectedProductIds.add(id);
+    }
+    syncProductRowSelectionUI(productsList);
+    syncProductsBulkFooter();
+  }
+
+  async function selectAllProductCardsInCategory() {
+    if (state.mode !== "products") return;
+    while (state.productsLoading) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    while (state.productsHasMore) {
+      await loadMoreProducts();
+    }
+    (Array.isArray(state.products) ? state.products : []).forEach((product) => {
+      const id = Number(product?.id);
+      if (Number.isFinite(id)) state.selectedProductIds.add(id);
+    });
+    syncProductRowSelectionUI(productsList);
+    syncProductsBulkFooter();
+  }
+
   function buildProductRowHtml(product, canSortProducts) {
     const active = Number(product.id) === Number(state.selectedProductId) ? "is-active" : "";
+    const selected = state.selectedProductIds.has(Number(product.id)) ? "is-selected" : "";
     const unitLabel = getProductListUnitLabel(product);
     const stockValue = toReadonlyProductFieldValue(product.stock_qty);
     const costValue = toReadonlyProductFieldValue(product.cost_price);
@@ -4058,8 +4143,11 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       : `<div class="product-avatar">${escapeHtml(initials(product.name))}</div>`;
 
     return `
-      <div class="order-row product-row ${active}" data-id="${product.id}" draggable="${canSortProducts ? "true" : "false"}">
-        ${avatar}
+      <div class="order-row product-row ${active} ${selected}" data-id="${product.id}" draggable="${canSortProducts ? "true" : "false"}">
+        <label class="product-row-photo-select" aria-label="Выбрать товар">
+          <input class="product-row-select-input" type="checkbox" ${selected ? "checked" : ""} tabindex="-1" />
+          ${avatar}
+        </label>
         <div class="product-main-head">
           <div class="product-title">${escapeHtml(product.name)}</div>
         </div>
@@ -4103,7 +4191,14 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     $$(".order-row.product-row[data-id]", root).forEach((row) => {
       if (row.dataset.boundClick === "1") return;
       row.dataset.boundClick = "1";
-      row.addEventListener("click", async () => {
+      row.addEventListener("click", async (event) => {
+        if (event.target.closest(".product-row-photo-select")) {
+          event.preventDefault();
+          event.stopPropagation();
+          const id = Number(row.dataset.id);
+          toggleProductCardSelection(id);
+          return;
+        }
         const id = Number(row.dataset.id);
         const p = state.products.find((x) => Number(x.id) === id);
         if (!p) return;
@@ -4163,6 +4258,8 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (!list.length) {
       syncProductRowsSortability();
       syncProductsListEmptyState();
+      syncProductRowSelectionUI(productsList);
+      syncProductsBulkFooter();
       return;
     }
     const canSortProducts = !state.productsHasMore && !state.productsLoading;
@@ -4178,6 +4275,8 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     bindProductRowClickHandlers(productsList);
     syncProductRowsSortability();
     syncProductsListEmptyState();
+    syncProductRowSelectionUI(productsList);
+    syncProductsBulkFooter();
   }
 
   function renderProductsList() {
@@ -4207,6 +4306,8 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     hydrateComboRowThumbs();
     syncProductRowsSortability();
     syncProductsListEmptyState();
+    syncProductRowSelectionUI(productsList);
+    syncProductsBulkFooter();
   }
 
   // ---------------- Categories main list ----------------
@@ -14104,6 +14205,18 @@ const isViewMode = state.comboPanel.mode === "view";
       productsScrollEl.addEventListener("scroll", maybeLoadMoreProductsOnScroll, { passive: true });
     }
 
+    if (productsBulkSelectAllBtn) {
+      productsBulkSelectAllBtn.addEventListener("click", async () => {
+        await selectAllProductCardsInCategory();
+      });
+    }
+
+    if (productsBulkClearBtn) {
+      productsBulkClearBtn.addEventListener("click", () => {
+        clearProductsBulkSelection();
+      });
+    }
+
     if (addCategoryBtn) {
       addCategoryBtn.addEventListener("click", () => {
         enterCategoriesMode();
@@ -14227,6 +14340,7 @@ const isViewMode = state.comboPanel.mode === "view";
         const meta = viewMeta[view];
         setToolbarTitle(meta?.title || view, meta?.icon);
         showView(view);
+        clearProductsBulkSelection();
         clearProductSelection();
         syncActiveMenuItems();
       });
@@ -15562,6 +15676,7 @@ const isViewMode = state.comboPanel.mode === "view";
   // =============================================
   async function enterStockInMode() {
     state.mode = "stock-in";
+    clearProductsBulkSelection();
     setToolbarTitle("Приход", "fa-plus-square");
     showView("stock-in");
     clearProductSelection();
@@ -15573,6 +15688,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
   async function enterStockOutMode() {
     state.mode = "stock-out";
+    clearProductsBulkSelection();
     setToolbarTitle("Списания", "fa-minus-square");
     showView("stock-out");
     clearProductSelection();
@@ -15584,6 +15700,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
   async function enterStockMovementsMode() {
     state.mode = "stock-movements";
+    clearProductsBulkSelection();
     setToolbarTitle("История", "fa-history");
     showView("stock-movements");
     clearProductSelection();

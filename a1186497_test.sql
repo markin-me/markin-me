@@ -655,7 +655,27 @@ CREATE TABLE `cust_customer_category_links` (
 
 -- --------------------------------------------------------
 
+-- --------------------------------------------------------
+
 --
+-- Структура таблицы `cust_customer_favorites`
+--
+
+CREATE TABLE `cust_customer_favorites` (
+  `id` int NOT NULL,
+  `tenant_id` int NOT NULL,
+  `store_id` int NOT NULL DEFAULT '1',
+  `customer_id` int NOT NULL,
+  `item_signature` varchar(64) COLLATE utf8mb4_general_ci NOT NULL,
+  `item_type` varchar(16) COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'product',
+  `product_id` bigint DEFAULT NULL,
+  `combo_id` bigint DEFAULT NULL,
+  `title` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `photo` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `item_json` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 -- Структура таблицы `cust_customer_sessions`
 --
 
@@ -2936,6 +2956,13 @@ ALTER TABLE `cust_customer_category_links`
   ADD KEY `fk_ccl_category` (`category_id`);
 
 --
+-- Индексы таблицы `cust_customer_favorites`
+--
+ALTER TABLE `cust_customer_favorites`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uq_cust_customer_favorites_signature` (`tenant_id`,`store_id`,`customer_id`,`item_signature`),
+  ADD KEY `idx_cust_customer_favorites_customer` (`tenant_id`,`store_id`,`customer_id`,`updated_at`),
+  ADD KEY `idx_cust_customer_favorites_fk_customer` (`tenant_id`,`customer_id`);
 -- Индексы таблицы `cust_customer_sessions`
 --
 ALTER TABLE `cust_customer_sessions`
@@ -3393,6 +3420,10 @@ ALTER TABLE `cust_customer_category_links`
   MODIFY `id` int NOT NULL AUTO_INCREMENT;
 
 --
+-- AUTO_INCREMENT для таблицы `cust_customer_favorites`
+--
+ALTER TABLE `cust_customer_favorites`
+  MODIFY `id` int NOT NULL AUTO_INCREMENT;
 -- AUTO_INCREMENT для таблицы `cust_customer_sessions`
 --
 ALTER TABLE `cust_customer_sessions`
@@ -3686,6 +3717,10 @@ ALTER TABLE `cust_customer_category_links`
   ADD CONSTRAINT `fk_ccl_customer` FOREIGN KEY (`customer_id`) REFERENCES `cust_customers` (`id`) ON DELETE CASCADE;
 
 --
+-- Ограничения внешнего ключа таблицы `cust_customer_favorites`
+--
+ALTER TABLE `cust_customer_favorites`
+  ADD CONSTRAINT `fk_cust_customer_favorites_customer` FOREIGN KEY (`tenant_id`,`customer_id`) REFERENCES `cust_customers` (`tenant_id`, `id`) ON DELETE CASCADE ON UPDATE CASCADE;
 -- Ограничения внешнего ключа таблицы `mkt_discount_customers`
 --
 ALTER TABLE `mkt_discount_customers`
