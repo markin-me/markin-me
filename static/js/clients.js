@@ -2984,6 +2984,15 @@
     });
   }
 
+  function emitOrderUpdated(order) {
+    if (!order || typeof order !== "object") return;
+    try {
+      document.dispatchEvent(new CustomEvent("dashboard:order-updated", {
+        detail: { order: { ...order } },
+      }));
+    } catch {}
+  }
+
   function updateClientOrderInState(order) {
     const id = Number(order?.id || 0);
     if (!Number.isFinite(id) || id <= 0) return;
@@ -2991,6 +3000,7 @@
       if (Number(item?.id || 0) !== id) return item;
       return { ...item, ...order };
     });
+    emitOrderUpdated(order);
   }
 
   async function selectActiveClientOrderStatus(statusId) {

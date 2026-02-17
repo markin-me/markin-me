@@ -1,9 +1,50 @@
 <div class="center-stack chat-center-stack">
   <div class="panel toolbar-island chat-header-island">
     <div class="toolbar chat-header-toolbar">
-      <div class="chat-main-order" id="chatHeaderOrder">
-        <div class="chat-main-order-title" id="chatOrderTitle">Последний заказ: —</div>
-        <span class="chat-main-order-status" id="chatOrderStatus">—</span>
+      <div class="chat-main-order order-row js-order" id="chatHeaderOrder" role="button" tabindex="0" aria-label="Открыть заказ">
+        <div class="order-col order-id chat-main-order-idcol">
+          <div class="order-id-num" id="chatOrderId">—</div>
+          <div class="order-id-time" id="chatOrderTime">—</div>
+        </div>
+
+        <div class="order-col order-indicators">
+          <span class="order-time-icon" id="chatOrderTimeIcon" aria-hidden="true">
+            <i class="fas fa-calendar-day"></i>
+          </span>
+        </div>
+
+        <div class="order-col order-client">
+          <div class="order-client-name">
+            <i class="fas fa-user"></i>
+            <span class="order-client-name-text" id="chatHeaderName">—</span>
+          </div>
+          <div class="order-client-phone muted">
+            <i class="fas fa-phone"></i>
+            <span class="order-client-phone-text" id="chatHeaderPhone">—</span>
+          </div>
+        </div>
+
+        <div class="order-col order-address">
+          <div class="order-address-line">
+            <i class="fas fa-map-marker-alt"></i>
+            <span id="chatOrderAddress">—</span>
+          </div>
+          <div class="order-address-comment muted">
+            <i class="far fa-comment"></i>
+            <span id="chatOrderComment">—</span>
+          </div>
+        </div>
+
+        <div class="order-col order-stage">
+          <span class="chat-main-order-status" id="chatOrderStatus">—</span>
+        </div>
+
+        <div class="order-col order-total">
+          <span class="order-payment-btn order-payment-cash chat-main-order-total is-empty" id="chatOrderTotal">—</span>
+        </div>
+
+        <div class="hidden" id="chatOrderTitle" aria-hidden="true"></div>
+        <div class="hidden" id="chatOrderKind" aria-hidden="true"></div>
       </div>
     </div>
   </div>
@@ -29,7 +70,7 @@
 
       <textarea
         id="chatMessageInput"
-        class="control chat-message-input"
+        class="chat-message-input"
         maxlength="2000"
         rows="1"
         wrap="soft"
@@ -56,12 +97,6 @@
     </button>
     <div class="chat-selection-count" id="chatSelectionCount">Выбрано 0 сообщений</div>
     <div class="chat-selection-actions">
-      <button type="button" class="chat-selection-action" id="chatSelectionForwardBtn" aria-label="Переслать" title="Переслать">
-        <i class="fas fa-share"></i>
-      </button>
-      <button type="button" class="chat-selection-action" id="chatSelectionDownloadBtn" aria-label="Скачать" title="Скачать">
-        <i class="fas fa-download"></i>
-      </button>
       <button type="button" class="chat-selection-action" id="chatSelectionCopyBtn" aria-label="Скопировать" title="Скопировать">
         <i class="far fa-copy"></i>
       </button>

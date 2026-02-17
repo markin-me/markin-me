@@ -6494,6 +6494,151 @@ body.page-shop .shop-company-chat-btn:hover{
   padding: 0;
 }
 
+.shop-company-chat-delete-confirm-overlay{
+  position: absolute !important;
+  inset: 0;
+  z-index: 1400 !important;
+  padding: 14px;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 23, 42, 0.36);
+  backdrop-filter: blur(2px);
+  border-radius: 0 0 34px 34px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .16s ease;
+}
+
+.shop-company-chat-delete-confirm-overlay.is-open{
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.shop-company-chat-delete-confirm-overlay .chat-delete-confirm-card{
+  width: min(92%, 372px);
+  border-radius: 20px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid color-mix(in srgb, var(--color-border), transparent 6%);
+  box-shadow: 0 20px 42px rgba(15, 23, 42, 0.24);
+  padding: 18px 18px 14px;
+  transform: translateY(8px) scale(.98);
+  transition: transform .16s ease;
+}
+
+.shop-company-chat-delete-confirm-overlay.is-open .chat-delete-confirm-card{
+  transform: translateY(0) scale(1);
+}
+
+.shop-company-chat-delete-confirm-overlay .chat-delete-confirm-title{
+  font-size: 17px;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.shop-company-chat-delete-confirm-overlay .chat-delete-confirm-text{
+  margin-top: 10px;
+  font-size: 15px;
+  line-height: 1.32;
+  color: var(--color-text);
+}
+
+.shop-company-chat-delete-confirm-overlay .chat-delete-confirm-check{
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.shop-company-chat-delete-confirm-overlay .chat-delete-confirm-checkbox{
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 2px solid color-mix(in srgb, var(--color-primary), #fff 62%);
+  background: var(--color-surface);
+  position: relative;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.shop-company-chat-delete-confirm-overlay .chat-delete-confirm-checkbox::after{
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 1px;
+  width: 5px;
+  height: 10px;
+  border-right: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(45deg) scale(0);
+  transform-origin: center;
+  transition: transform .12s ease;
+}
+
+.shop-company-chat-delete-confirm-overlay .chat-delete-confirm-checkbox:checked{
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.shop-company-chat-delete-confirm-overlay .chat-delete-confirm-checkbox:checked::after{
+  transform: rotate(45deg) scale(1);
+}
+
+.shop-company-chat-delete-confirm-overlay .chat-delete-confirm-check-text{
+  font-size: 15px;
+  line-height: 1.24;
+  color: var(--color-text);
+}
+
+.shop-company-chat-delete-confirm-overlay .chat-delete-confirm-actions{
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.shop-company-chat-delete-confirm-overlay .chat-delete-confirm-btn{
+  border: 1px solid color-mix(in srgb, var(--color-border), transparent 8%);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.shop-company-chat-delete-confirm-overlay .chat-delete-confirm-btn--cancel{
+  color: var(--color-text-muted);
+}
+
+.shop-company-chat-delete-confirm-overlay .chat-delete-confirm-btn--danger{
+  color: #ef4444;
+  border-color: color-mix(in srgb, #ef4444, transparent 70%);
+  background: color-mix(in srgb, #ef4444, transparent 92%);
+}
+
+.shop-company-chat-delete-confirm-overlay .chat-delete-confirm-btn:hover{
+  filter: brightness(.98);
+}
+
+@media (max-width: 768px){
+  .shop-company-chat-delete-confirm-overlay{
+    padding: 10px;
+  }
+
+  .shop-company-chat-delete-confirm-overlay .chat-delete-confirm-card{
+    width: min(96%, 360px);
+    border-radius: 18px;
+    padding: 16px 14px 12px;
+  }
+}
+
 .shop-company-chat-feed{
   flex: 1;
   min-height: 0;
@@ -6529,6 +6674,8 @@ body.page-shop .shop-company-chat-btn:hover{
   display: flex;
   align-items: flex-end;
   gap: 8px;
+  position: relative;
+  transition: transform .15s ease;
 }
 
 .shop-company-chat-row.is-agent{
@@ -6568,34 +6715,49 @@ body.page-shop .shop-company-chat-btn:hover{
 
 .shop-company-chat-row.is-selected .shop-company-chat-bubble{
   box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--color-primary), transparent 68%),
-    0 10px 20px rgba(15, 23, 42, 0.12);
+    0 0 0 2px rgba(34, 197, 94, .24),
+    0 2px 8px rgba(15, 23, 42, .05);
+}
+
+.shop-company-chat-row.is-selected{
+  transform: translateY(-1px);
 }
 
 .shop-company-chat-select-badge{
+  position: absolute;
+  left: -30px;
+  bottom: 8px;
   width: 22px;
   height: 22px;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--color-border), transparent 18%);
-  background: color-mix(in srgb, var(--color-surface), #fff 12%);
-  color: var(--color-text-muted);
-  display: inline-flex;
+  border: 2px solid rgba(255, 255, 255, .95);
+  background: rgba(255, 255, 255, .25);
+  color: #fff;
+  display: none;
   align-items: center;
   justify-content: center;
   font-size: 11px;
   line-height: 1;
+  pointer-events: auto;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .18);
+}
+
+.shop-company-chat-row.is-selection-mode .shop-company-chat-select-badge{
+  display: inline-flex;
+}
+
+.shop-company-chat-row.is-selection-mode .shop-company-chat-select-badge i{
   opacity: 0;
-  pointer-events: none;
-  transform: scale(.92);
-  transition: opacity var(--dur-fast) var(--ease-smooth), transform var(--dur-fast) var(--ease-smooth), color var(--dur-fast) var(--ease-smooth), background var(--dur-fast) var(--ease-smooth), border-color var(--dur-fast) var(--ease-smooth);
 }
 
 .shop-company-chat-row.is-selected .shop-company-chat-select-badge{
-  opacity: 1;
-  transform: scale(1);
-  color: #fff;
   background: #22c55e;
-  border-color: #22c55e;
+  border-color: #fff;
+}
+
+.shop-company-chat-row.is-selected .shop-company-chat-select-badge i{
+  opacity: 1;
 }
 
 .shop-company-chat-author{
@@ -6718,16 +6880,16 @@ body.page-shop .shop-company-chat-btn:hover{
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
-  height: 14px;
+  min-width: 22px;
+  height: 16px;
   line-height: 1;
   color: #a5a5ab;
-  transform: translateY(.5px);
+  transform: none;
 }
 
 .shop-company-chat-status-icon{
-  width: 18px;
-  height: 14px;
+  width: 22px;
+  height: 16px;
   display: block;
 }
 
@@ -6748,36 +6910,37 @@ body.page-shop .shop-company-chat-btn:hover{
   color: #38bdf8;
 }
 
-.shop-company-chat-row.is-user .shop-company-chat-time,
-.shop-company-chat-row.is-user .shop-company-chat-status{
+.shop-company-chat-row.is-user .shop-company-chat-time{
   color: rgba(255, 255, 255, 0.75);
 }
 
 .shop-company-chat-reaction-pill{
   margin: 0;
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  min-width: 34px;
+  padding: 0 2px;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 30px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.shop-company-chat-reactions{
   position: absolute;
   right: 8px;
   bottom: -11px;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-height: 22px;
-  min-width: 34px;
-  padding: 0 9px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--color-border), transparent 42%);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--color-surface), #fff 32%),
-      color-mix(in srgb, var(--color-surface-2), #fff 24%)
-    );
-  box-shadow:
-    0 6px 14px rgba(15, 23, 42, 0.12),
-    inset 0 1px 0 rgba(255, 255, 255, 0.55);
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: calc(100% - 16px);
 }
 
 .shop-company-chat-bubble.is-emoji-only{
@@ -6820,22 +6983,22 @@ body.page-shop .shop-company-chat-btn:hover{
 }
 
 .shop-company-chat-bubble.is-emoji-only-single .shop-company-chat-emoji-glyph--inline{
-  width: 64px;
-  height: 64px;
+  width: 76px;
+  height: 76px;
   margin: 0 1px;
   vertical-align: 0;
 }
 
 .shop-company-chat-bubble.is-emoji-only-few .shop-company-chat-emoji-glyph--inline{
-  width: 52px;
-  height: 52px;
+  width: 62px;
+  height: 62px;
   margin: 0 1px;
   vertical-align: 0;
 }
 
 .shop-company-chat-bubble.is-emoji-only-many .shop-company-chat-emoji-glyph--inline{
-  width: 42px;
-  height: 42px;
+  width: 52px;
+  height: 52px;
   margin: 0 1px;
   vertical-align: 0;
 }
@@ -6890,22 +7053,21 @@ body.page-shop .shop-company-chat-btn:hover{
 }
 
 .shop-company-chat-context-reaction{
-  width: 34px;
-  height: 34px;
-  border: 1px solid color-mix(in srgb, var(--color-border), transparent 46%);
-  background: color-mix(in srgb, var(--color-surface), #fff 32%);
-  border-radius: 999px;
+  width: 38px;
+  height: 38px;
+  border: 0;
+  background: transparent;
+  border-radius: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: transform var(--dur-fast) var(--ease-smooth), border-color var(--dur-fast) var(--ease-smooth), background var(--dur-fast) var(--ease-smooth);
+  transition: transform var(--dur-fast) var(--ease-smooth), opacity var(--dur-fast) var(--ease-smooth);
 }
 
 .shop-company-chat-context-reaction:hover{
-  transform: translateY(-1px) scale(1.06);
-  border-color: color-mix(in srgb, var(--color-primary), transparent 66%);
-  background: color-mix(in srgb, var(--color-surface-2), #fff 24%);
+  transform: scale(1.08);
+  opacity: .92;
 }
 
 .shop-company-chat-context-btn{
@@ -7004,78 +7166,60 @@ body.page-shop .shop-company-chat-btn:hover{
 }
 
 .shop-company-chat-reaction-btn{
-  width: 34px;
-  height: 34px;
-  border: 1px solid color-mix(in srgb, var(--color-border), transparent 48%);
-  background:
-    radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.75), rgba(255, 255, 255, 0) 52%),
-    color-mix(in srgb, var(--color-surface), #fff 30%);
-  border-radius: 999px;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  background: transparent;
+  border-radius: 10px;
   display: grid;
   place-items: center;
-  font-size: 22px;
+  font-size: 34px;
   line-height: 1;
   cursor: pointer;
-  box-shadow: 0 3px 8px rgba(15, 23, 42, 0.12);
+  box-shadow: none;
   transition:
-    background var(--dur-fast) var(--ease-smooth),
-    border-color var(--dur-fast) var(--ease-smooth),
-    box-shadow var(--dur-fast) var(--ease-smooth),
+    opacity var(--dur-fast) var(--ease-smooth),
     transform var(--dur-fast) var(--ease-smooth);
 }
 
 .shop-company-chat-reaction-btn:hover{
-  background:
-    radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0) 56%),
-    color-mix(in srgb, var(--color-surface-2), #fff 28%);
-  border-color: color-mix(in srgb, var(--color-primary), transparent 72%);
-  box-shadow: 0 8px 14px rgba(15, 23, 42, 0.16);
-  transform: translateY(-2px) scale(1.08);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  opacity: .92;
+  transform: scale(1.08);
 }
 
 .shop-company-chat-reaction-btn.is-active{
-  background:
-    radial-gradient(circle at 32% 18%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0) 56%),
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--color-primary), #fff 85%),
-      color-mix(in srgb, var(--color-primary), #fff 78%)
-    );
-  border-color: color-mix(in srgb, var(--color-primary), transparent 38%);
-  box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--color-primary), transparent 76%),
-    0 8px 16px rgba(249, 115, 22, 0.22);
-  transform: translateY(-1px) scale(1.04);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  transform: scale(1.1);
 }
 
 .shop-company-chat-reaction-close{
-  width: 34px;
-  height: 34px;
-  border: 1px solid color-mix(in srgb, var(--color-border), transparent 28%);
-  background:
-    radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0) 56%),
-    color-mix(in srgb, var(--color-surface-2), #fff 30%);
-  border-radius: 999px;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  background: transparent;
+  border-radius: 10px;
   display: grid;
   place-items: center;
   color: var(--color-text-muted);
   cursor: pointer;
-  box-shadow: 0 3px 8px rgba(15, 23, 42, 0.1);
+  box-shadow: none;
   transition:
-    background var(--dur-fast) var(--ease-smooth),
-    border-color var(--dur-fast) var(--ease-smooth),
-    box-shadow var(--dur-fast) var(--ease-smooth),
+    opacity var(--dur-fast) var(--ease-smooth),
     transform var(--dur-fast) var(--ease-smooth);
 }
 
 .shop-company-chat-reaction-close:hover{
   color: var(--color-text);
-  border-color: color-mix(in srgb, var(--color-primary), transparent 72%);
-  background:
-    radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0) 56%),
-    color-mix(in srgb, var(--color-surface-2), #fff 20%);
-  box-shadow: 0 7px 14px rgba(15, 23, 42, 0.14);
-  transform: translateY(-2px);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  opacity: .92;
+  transform: scale(1.08);
 }
 
 .shop-company-chat-reaction-more i{
@@ -7112,35 +7256,119 @@ body.page-shop .shop-company-chat-btn:hover{
   bottom: 46px;
   right: 0;
   left: auto;
-  width: 232px;
-  max-height: 176px;
-  overflow: auto;
+  width: 298px;
+  max-height: 352px;
+  overflow: hidden;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 12px;
   box-shadow: var(--shadow-md);
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
   padding: 8px;
   z-index: 20;
 }
 
+.shop-company-chat-emoji-categories{
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 4px;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 7px;
+}
+
+.shop-company-chat-emoji-category-btn{
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.shop-company-chat-emoji-category-btn:hover{
+  background: var(--color-surface-2);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+.shop-company-chat-emoji-category-btn.is-active{
+  background: var(--color-surface-2);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+.shop-company-chat-emoji-category-btn.is-disabled{
+  opacity: .35;
+  cursor: default;
+}
+
+.shop-company-chat-emoji-category-btn.is-disabled:hover{
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-text-muted);
+}
+
+.shop-company-chat-emoji-body{
+  margin-top: 6px;
+  min-height: 170px;
+  max-height: 272px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+
+.shop-company-chat-emoji-body::-webkit-scrollbar{
+  width: 0;
+  height: 0;
+}
+
+.shop-company-chat-emoji-title{
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+}
+
+.shop-company-chat-emoji-section + .shop-company-chat-emoji-section{
+  margin-top: 10px;
+}
+
+.shop-company-chat-emoji-grid{
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.shop-company-chat-emoji-empty{
+  min-height: 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
 .shop-company-chat-emoji-btn{
   width: 100%;
-  min-height: 30px;
+  min-height: 34px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
   cursor: pointer;
-  font-size: 18px;
+  font-size: 24px;
   line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .shop-company-chat-emoji-glyph{
   display: block;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   object-fit: contain;
   image-rendering: auto;
   pointer-events: none;
@@ -7148,52 +7376,53 @@ body.page-shop .shop-company-chat-btn:hover{
 }
 
 .shop-company-chat-emoji-glyph--picker{
-  width: 20px;
-  height: 20px;
-}
-
-.shop-company-chat-emoji-glyph--reaction{
-  width: 22px;
-  height: 22px;
-}
-
-.shop-company-chat-emoji-glyph--pill{
-  width: 18px;
-  height: 18px;
-}
-
-.shop-company-chat-emoji-glyph--composer{
   width: 24px;
   height: 24px;
 }
 
+.shop-company-chat-emoji-glyph--reaction{
+  width: 34px;
+  height: 34px;
+}
+
+.shop-company-chat-emoji-glyph--pill{
+  width: 32px;
+  height: 32px;
+}
+
+.shop-company-chat-emoji-glyph--composer{
+  width: 30px;
+  height: 30px;
+}
+
 .shop-company-chat-emoji-glyph--composer-inline{
-  width: 20px;
-  height: 20px;
+  display: inline-block;
+  width: 24px;
+  height: 24px;
   margin: 0 1px;
   vertical-align: -0.14em;
 }
 
 .shop-company-chat-emoji-glyph--input-inline{
   display: inline-block;
-  width: 1.08em;
-  height: 1.08em;
+  width: 1.22em;
+  height: 1.22em;
   margin: 0 .04em;
   vertical-align: -0.14em;
 }
 
 .shop-company-chat-emoji-glyph--preview{
   display: inline-block;
-  width: .98em;
-  height: .98em;
+  width: 1.12em;
+  height: 1.12em;
   margin: 0 .02em;
   vertical-align: -0.12em;
 }
 
 .shop-company-chat-emoji-glyph--inline{
   display: inline-block;
-  width: 1.08em;
-  height: 1.08em;
+  width: 1.22em;
+  height: 1.22em;
   margin: 0 .04em;
   vertical-align: -0.16em;
 }
@@ -7259,6 +7488,94 @@ body.page-shop .shop-company-chat-btn:hover{
   border: 1px solid var(--color-border);
   background: var(--color-surface-2);
   padding: 8px 10px;
+}
+
+.shop-company-chat-selection-toolbar{
+  margin: 0 14px 14px;
+  min-height: 58px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--color-border), transparent 5%);
+  background: color-mix(in srgb, var(--color-surface), #fff 20%);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+}
+
+.shop-company-chat-selection-close{
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.shop-company-chat-selection-close:hover{
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+
+.shop-company-chat-selection-count{
+  min-width: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shop-company-chat-selection-actions{
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shop-company-chat-selection-action{
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.shop-company-chat-selection-action:hover{
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+
+.shop-company-chat-selection-action.is-danger{
+  color: #ef4444;
+}
+
+.shop-company-chat-selection-action.is-danger:hover{
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.shop-company-chat-modal__body.is-selection-mode .shop-company-chat-composer{
+  display: none;
+}
+
+.shop-company-chat-modal__body.is-selection-mode .shop-company-chat-thread{
+  padding-left: 30px;
+}
+
+.shop-company-chat-modal__body.is-selection-mode .shop-company-chat-selection-toolbar{
+  display: flex;
 }
 
 .shop-company-chat-composer-reply{
@@ -7419,18 +7736,28 @@ body.page-shop.shop-company-chat-open{
   }
 
   .shop-company-chat-status{
-    min-width: 16px;
-    height: 12px;
+    min-width: 22px;
+    height: 16px;
   }
 
   .shop-company-chat-status-icon{
-    width: 16px;
-    height: 12px;
+    width: 22px;
+    height: 16px;
   }
 
   .shop-company-chat-composer{
     min-height: 50px;
     margin: 0 10px 10px;
+  }
+
+  .shop-company-chat-selection-toolbar{
+    margin: 0 10px 10px;
+    border-radius: 14px;
+    padding: 6px 8px;
+  }
+
+  .shop-company-chat-selection-count{
+    font-size: 15px;
   }
 
   .shop-company-chat-composer__btn{
@@ -7457,18 +7784,18 @@ body.page-shop.shop-company-chat-open{
 
   .shop-company-chat-reaction-btn,
   .shop-company-chat-reaction-close{
-    width: 30px;
-    height: 30px;
+    width: 40px;
+    height: 40px;
   }
 
   .shop-company-chat-reaction-btn{
-    font-size: 20px;
+    font-size: 30px;
   }
 
   .shop-company-chat-reaction-pill{
-    min-height: 20px;
-    min-width: 30px;
-    font-size: 14px;
+    min-height: 34px;
+    min-width: 34px;
+    font-size: 26px;
     bottom: -10px;
   }
 

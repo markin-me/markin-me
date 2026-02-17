@@ -2,10 +2,16 @@
   const openBtn = document.getElementById("shopCompanyChatOpenBtn");
   const unreadBadge = document.getElementById("shopCompanyChatUnreadBadge");
   const overlay = document.getElementById("shopCompanyChatOverlay");
+  const modalBody = overlay ? overlay.querySelector(".shop-company-chat-modal__body") : null;
   const closeBtn = document.getElementById("shopCompanyChatCloseBtn");
   const feed = document.getElementById("shopCompanyChatFeed");
   const thread = document.getElementById("shopCompanyChatThread");
   const composer = document.getElementById("shopCompanyChatComposer");
+  const selectionToolbar = document.getElementById("shopCompanyChatSelectionToolbar");
+  const selectionCloseBtn = document.getElementById("shopCompanyChatSelectionCloseBtn");
+  const selectionCountEl = document.getElementById("shopCompanyChatSelectionCount");
+  const selectionCopyBtn = document.getElementById("shopCompanyChatSelectionCopyBtn");
+  const selectionDeleteBtn = document.getElementById("shopCompanyChatSelectionDeleteBtn");
   const attachBtn = document.getElementById("shopCompanyChatAttachBtn");
   const attachInput = document.getElementById("shopCompanyChatAttachmentInput");
   const input = document.getElementById("shopCompanyChatInput");
@@ -14,20 +20,35 @@
   const scrollDownBtn = document.getElementById("shopCompanyChatScrollDownBtn");
   const reactionBar = document.getElementById("shopCompanyChatReactionBar");
 
-  if (!openBtn || !overlay || !closeBtn) return;
-  if (!feed || !thread || !composer || !attachBtn || !attachInput || !input || !emojiBtn || !emojiPopover || !scrollDownBtn || !reactionBar) return;
+  if (!openBtn || !overlay || !modalBody || !closeBtn) return;
+  if (!feed || !thread || !composer || !selectionToolbar || !selectionCloseBtn || !selectionCountEl || !selectionCopyBtn || !selectionDeleteBtn || !attachBtn || !attachInput || !input || !emojiBtn || !emojiPopover || !scrollDownBtn || !reactionBar) return;
 
   const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/img/google/64";
-  const EMOJIS = [
-    "\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F525}", "\u{1F602}", "\u{1F970}", "\u{1F64F}",
-    "\u{1F600}", "\u{1F603}", "\u{1F923}", "\u{1F60A}", "\u{1F60D}", "\u{1F618}",
-    "\u{1F917}", "\u{1F914}", "\u{1F61E}", "\u{1F622}", "\u{1F621}", "\u{1F92F}",
-    "\u{1F44E}", "\u{1F44F}", "\u{1F91D}", "\u{1FAF6}", "\u{1F44C}", "\u{1F4AA}",
-    "\u{2728}", "\u{1F389}", "\u{1F680}", "\u{2705}", "\u{274C}", "\u{1F4AF}",
-    "\u{1F4AC}", "\u{1F4E6}", "\u{1F69A}", "\u{1F37D}\u{FE0F}",
-    "\u{1FAE8}", "\u{1FAE0}", "\u{1FAE1}", "\u{1FAE2}", "\u{1FAE3}", "\u{1FAE5}",
-    "\u{1F979}", "\u{1FA77}", "\u{1FA75}",
+  const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/emoji.json";
+  const EMOJI_RECENT_STORAGE_KEY = "shop-company-chat-recent-emojis:v1";
+  const EMOJI_CATEGORY_META = [
+    { key: "recent", label: "Недавние", iconClass: "far fa-clock" },
+    { key: "people", label: "Смайлы и люди", iconClass: "far fa-smile" },
+    { key: "nature", label: "Животные и природа", iconClass: "fas fa-paw" },
+    { key: "food", label: "Еда и напитки", iconClass: "fas fa-apple-whole" },
+    { key: "activity", label: "Активности", iconClass: "far fa-futbol" },
+    { key: "travel", label: "Путешествия", iconClass: "fas fa-car-side" },
+    { key: "objects", label: "Объекты", iconClass: "far fa-lightbulb" },
+    { key: "symbols", label: "Символы", iconClass: "fas fa-at" },
+    { key: "flags", label: "Флаги", iconClass: "far fa-flag" },
   ];
+  const EMOJI_FALLBACK_CATEGORIES = {
+    people: [
+      "😀","😃","😄","😁","😆","😅","🤣","😂","🙂","🙃","😉","😊","😇","🥰","😍","😘","😗","😚","😋","😛","😜","🤪","🤨","🧐","🤓","😎","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🫡","🤭","🫢","🤫","🤥","😶","🫠","😐","🫤","😑","😬","🙄","😮‍💨","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","❤️","💔","💯","👍","👎","👏","🙌","🙏","👋","🤝","💪"
+    ],
+    nature: ["🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐮","🐷","🐸","🐵","🐔","🐧","🐦","🦆","🦅","🦉","🦇","🐺","🐗","🐴","🦄","🐝","🪲","🐞","🦋","🐌","🐢","🐍","🦎","🐙","🦑","🦞","🦀","🐬","🐳","🦈","🐊","🌵","🌲","🌳","🌴","🌷","🌸","🌹","🌺","🌻","🌼","🌿","☘️","🍀","🌱","🌈","⭐","🌙","☀️","🌧️","⛈️","❄️","🔥","🌊"],
+    food: ["🍏","🍎","🍐","🍊","🍋","🍌","🍉","🍇","🍓","🫐","🍒","🍑","🥭","🍍","🥥","🥝","🍅","🥑","🥦","🥬","🥒","🌶️","🫑","🌽","🥕","🧄","🧅","🥔","🍠","🫚","🥐","🥖","🍞","🥨","🧀","🥚","🍳","🥞","🧇","🥓","🍗","🍖","🌭","🍔","🍟","🍕","🌮","🌯","🥙","🧆","🥪","🍝","🍜","🍣","🍤","🍱","🍛","🍚","🍙","🍘","🍥","🥟","🍦","🍰","🧁","🍪","🍫","🍿","🍩","🍮","☕","🍵","🧃","🥤","🍺","🍷"],
+    activity: ["⚽","🏀","🏈","⚾","🥎","🎾","🏐","🏉","🥏","🎱","🏓","🏸","🏒","🏑","🥍","🏏","⛳","🏹","🎣","🤿","🥊","🥋","🎽","🛹","🛼","🛷","⛸️","🥌","🎯","🎳","🎮","🕹️","🎲","🧩","♟️","🎨","🎭","🎤","🎧","🎼","🎹","🥁","🎷","🎺","🎸","🎻","🎬","📷","📸","🧘","🤸","⛹️","🏋️","🚴","🏊","🏄","🧗","🤾","🤽"],
+    travel: ["🚗","🚕","🚙","🚌","🚎","🏎️","🚓","🚑","🚒","🚐","🛻","🚚","🚛","🚜","🛵","🏍️","🚲","🛴","🚨","🚔","🚍","✈️","🛫","🛬","🚁","🚂","🚆","🚇","🚊","🚉","🚢","🛳️","⛵","🚤","🗽","🗼","🏰","🏯","🏟️","🎡","🎢","⛲","⛰️","🏔️","🗻","🏝️","🏜️","🌋","🏙️","🌆","🌃","🌉","🛣️","🛤️","🌁","🗺️","🧭","⛽"],
+    objects: ["⌚","📱","💻","⌨️","🖥️","🖨️","🖱️","📷","📹","🎥","📺","📻","🎙️","🎚️","📀","💿","📼","☎️","📞","🕰️","⏰","⏱️","⏲️","🧭","📡","🔋","🔌","💡","🔦","🕯️","🪫","🧯","🧲","🧰","🛠️","🔧","🔨","⚙️","⛓️","🧱","🪜","🧪","🧬","🔬","🔭","📌","✂️","🖊️","🖋️","📎","📁","🗂️","🗃️","🗄️","📦","🧳","🎁","🛒","💳","💵","💰","🔒","🔑"],
+    symbols: ["❤️","🧡","💛","💚","💙","💜","🖤","🤍","🤎","💔","❣️","💕","💞","💓","💗","💖","💘","💝","💟","☮️","✝️","☪️","🕉️","☸️","✡️","🔯","🪯","☯️","☦️","🛐","⛎","♈","♉","♊","♋","♌","♍","♎","♏","♐","♑","♒","♓","🆔","⚛️","🉑","☢️","☣️","📴","📳","🈶","🈚","🈸","🈺","🈷️","✴️","🆚","💮","🉐","㊙️","㊗️","🈴","🈵","🈹","🈲","🅰️","🅱️","🆎","🆘","❌","⭕","🔴","🟠","🟡","🟢","🔵","🟣","⚪","⚫","▪️","▫️","◾","◽","🔶","🔷","🔸","🔹","🔺","🔻","💠","🔘","🔳","🔲"],
+    flags: ["🏳️","🏴","🏁","🚩","🏳️‍🌈","🏳️‍⚧️","🇷🇺","🇺🇸","🇬🇧","🇩🇪","🇫🇷","🇪🇸","🇮🇹","🇺🇦","🇰🇿","🇧🇾","🇦🇲","🇬🇪","🇦🇿","🇹🇷","🇨🇳","🇯🇵","🇰🇷","🇮🇳","🇧🇷","🇨🇦","🇦🇺","🇲🇽","🇦🇪","🇸🇦","🇮🇱","🇵🇱","🇳🇱","🇸🇪","🇳🇴","🇫🇮","🇨🇭","🇦🇹","🇨🇿","🇸🇰","🇷🇴","🇧🇬","🇷🇸","🇭🇷","🇸🇮","🇪🇪","🇱🇻","🇱🇹","🇵🇹","🇬🇷"]
+  };
   const QUICK_REACTIONS = [
     "\u{1F44D}",
     "\u{2764}\u{FE0F}",
@@ -48,8 +69,15 @@
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
   const CHAT_THREAD_SAVE_DEBOUNCE_MS = 140;
   const CHAT_THREAD_POLL_MS = 1800;
+  const CHAT_AUTOSCROLL_MS = 170;
+  const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
+  const CHAT_REACTION_ACTOR = "in";
 
   let emojiAssetsState = "unknown";
+  let emojiCategories = {};
+  let emojiRecentList = [];
+  let emojiActiveCategory = "people";
+  let emojiDatasetPromise = null;
 
   const QUICK_OPTIONS = [
     "Где мой заказ",
@@ -69,47 +97,13 @@
       "Я на связи. Опишите ваш вопрос, и я постараюсь помочь или переключу на оператора.",
   };
 
-  const baseEntries = [
-    { id: "h-1", type: "message", role: "user", day: "Вчера", time: "13:18", text: "Вопрос по комплектации заказа", deliveryStatus: "read" },
-    {
-      id: "h-2",
-      type: "message",
-      role: "agent",
-      day: "Вчера",
-      time: "13:18",
-      author: "Лия",
-      text: "Очень хочу помочь. Подскажите, вам положили лишний товар?",
-    },
-    { id: "h-3", type: "message", role: "user", day: "Вчера", time: "13:18", text: "Нет", deliveryStatus: "read" },
-    {
-      id: "h-4",
-      type: "message",
-      role: "agent",
-      day: "Вчера",
-      time: "13:18",
-      author: "Лия",
-      text: "Не вижу заказов. Какой у вас вопрос?",
-    },
-    {
-      id: "t-1",
-      type: "message",
-      role: "agent",
-      day: "Сегодня",
-      time: "00:17",
-      text:
-        "Привет! Я Лия, виртуальный помощник в Самокате.\n" +
-        "Если ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.",
-    },
-    {
-      id: "t-2",
-      type: "options",
-      role: "agent",
-      day: "Сегодня",
-      time: "00:17",
-      text: "Чтобы я смогла вам помочь, выберите категорию ниже:",
-      options: QUICK_OPTIONS,
-    },
-  ];
+  const VIRTUAL_ASSISTANT_NAME = "Электроник";
+  const DAILY_WELCOME_TEXT =
+    "Привет! Я виртуальный помощник, Электроник!\n" +
+    "Если ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.";
+  const DAILY_OPTIONS_TEXT = "Чтобы я смог вам помочь, выберите категорию ниже:";
+
+  const baseEntries = [];
 
   const INITIAL_BATCH = 3;
   const OLDER_BATCH = 4;
@@ -122,6 +116,7 @@
   let sharedThreadUpdatedAt = "";
   let sharedThreadPollTimer = 0;
   let sharedThreadSaveTimer = 0;
+  let feedScrollRaf = 0;
   let sharedPullInFlight = false;
   let reactionMessageId = "";
   let contextMenuMessageId = "";
@@ -184,6 +179,57 @@
     badge.textContent = value;
     badge.classList.remove("hidden");
     openBtn.setAttribute("data-unread-count", value);
+  }
+
+  function isChatTabActiveForRead() {
+    if (typeof document === "undefined") return true;
+    if (document.visibilityState && document.visibilityState !== "visible") return false;
+    if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
+    return true;
+  }
+
+  function shouldMarkAgentMessagesRead() {
+    return overlay.classList.contains("is-open") && isChatTabActiveForRead();
+  }
+
+  function applyReadReceiptsToAgentEntries(entries) {
+    const list = Array.isArray(entries) ? entries : [];
+    const shouldMarkRead = shouldMarkAgentMessagesRead();
+    const nowIso = new Date().toISOString();
+    let changed = false;
+
+    list.forEach(function (entry) {
+      if (!entry || entry.role !== "agent") return;
+
+      const rawStatus = String(entry.deliveryStatus || "").toLowerCase();
+      const isRead = entry.read === true || !!entry.readAt || rawStatus === "read";
+      const isDelivered = !!entry.deliveredAt || rawStatus === "delivered" || isRead;
+
+      if (!isDelivered) {
+        entry.deliveryStatus = "delivered";
+        entry.deliveredAt = entry.deliveredAt || nowIso;
+        changed = true;
+      }
+
+      if (!shouldMarkRead) return;
+
+      if (!isRead) {
+        entry.read = true;
+        entry.deliveryStatus = "read";
+        entry.deliveredAt = entry.deliveredAt || nowIso;
+        entry.readAt = entry.readAt || nowIso;
+        changed = true;
+        return;
+      }
+
+      if (rawStatus !== "read") {
+        entry.deliveryStatus = "read";
+        if (!entry.readAt) entry.readAt = nowIso;
+        changed = true;
+      }
+    });
+
+    return changed;
   }
 
   function getTenantId() {
@@ -272,6 +318,11 @@
   const chatClientProfile = resolveChatClientProfile();
   const localHiddenMessagesKey = "shop_company_chat_hidden_messages_t" + tenantId + "_c" + String(chatClientProfile.id || 0);
   let localHiddenMessageIds = loadLocalHiddenMessageIds();
+  let sharedThreadMeta = {
+    name: String(chatClientProfile.name || "Клиент"),
+    phone: String(chatClientProfile.phone || ""),
+    lastWelcomeDay: "",
+  };
 
   function loadLocalHiddenMessageIds() {
     try {
@@ -380,19 +431,24 @@
 
   function mapSharedMessageToEntry(message) {
     if (!message || typeof message !== "object") return null;
+    const messageId = String(message.id || "");
+    const isDailyWelcome = /^daily-welcome-\d{4}-\d{2}-\d{2}$/.test(messageId);
     const direction = String(message.direction || "").toLowerCase() === "out" ? "out" : "in";
     const createdAt = String(message.createdAt || new Date().toISOString());
     const role = direction === "in" ? "user" : "agent";
     const editedAt = String(message.editedAt || "");
+    const reactions = sanitizeReactionsMap(message.reactions);
+    const legacyReaction = String(message.reaction || "").trim();
+    if (!reactions.in && !reactions.out && legacyReaction) reactions[direction] = legacyReaction;
 
     return {
-      id: String(message.id || ""),
+      id: messageId,
       type: "message",
       role: role,
       day: formatDayLabelFromIso(createdAt),
       time: formatTimeFromIso(createdAt) + (editedAt ? " • изм." : ""),
-      text: String(message.text || ""),
-      author: role === "agent" ? "Лия" : "",
+      text: isDailyWelcome ? DAILY_WELCOME_TEXT : String(message.text || ""),
+      author: role === "agent" ? VIRTUAL_ASSISTANT_NAME : "",
       replyTo: message.replyTo && typeof message.replyTo === "object"
         ? {
             id: String(message.replyTo.id || ""),
@@ -411,7 +467,8 @@
             size: Number(message.attachment.size || 0),
           }
         : null,
-      reaction: String(message.reaction || ""),
+      reaction: String(reactions[CHAT_REACTION_ACTOR] || ""),
+      reactions: reactions,
       deliveryStatus: String(message.deliveryStatus || ""),
       createdAt: createdAt,
       editedAt: editedAt,
@@ -421,12 +478,32 @@
     };
   }
 
+  function sanitizeSharedThreadMeta(meta) {
+    const source = meta && typeof meta === "object" ? meta : {};
+    const rawLastWelcomeDay = String(source.last_welcome_day || source.lastWelcomeDay || "").trim();
+    const normalizedLastWelcomeDay = /^\d{4}-\d{2}-\d{2}$/.test(rawLastWelcomeDay) ? rawLastWelcomeDay : "";
+    return {
+      name: String(source.name || chatClientProfile.name || "Клиент"),
+      phone: String(source.phone || chatClientProfile.phone || ""),
+      lastWelcomeDay: normalizedLastWelcomeDay,
+    };
+  }
+
   function mapEntryToSharedMessage(entry) {
     if (!entry || typeof entry !== "object") return null;
     const id = String(entry.id || "").trim();
     if (!id) return null;
     const direction = entry.role === "user" ? "in" : "out";
-    const status = direction === "in" ? getOutgoingDeliveryStatus(entry) : "";
+    const status = (function resolveStatus() {
+      if (direction === "in") return getOutgoingDeliveryStatus(entry);
+      const raw = String(entry.deliveryStatus || "").toLowerCase();
+      if (entry.read === true || entry.readAt || raw === "read") return "read";
+      if (entry.deliveredAt || raw === "delivered") return "delivered";
+      if (raw === "sent") return "sent";
+      return "sent";
+    })();
+    const reactions = ensureEntryReactions(entry);
+    const senderReaction = String(reactions[direction] || "");
     return {
       id: id,
       direction: direction,
@@ -446,7 +523,11 @@
       editedAt: String(entry.editedAt || ""),
       read: entry.read === true || status === "read",
       pinned: false,
-      reaction: String(entry.reaction || ""),
+      reaction: senderReaction,
+      reactions: {
+        in: String(reactions.in || ""),
+        out: String(reactions.out || ""),
+      },
       replyTo: entry.replyTo && typeof entry.replyTo === "object"
         ? {
             id: String(entry.replyTo.id || ""),
@@ -480,6 +561,8 @@
 
   async function saveSharedThreadToServer() {
     const payload = buildSharedMessagesPayload();
+    const metaState = sanitizeSharedThreadMeta(sharedThreadMeta);
+    sharedThreadMeta = metaState;
     const json = await chatApiJson(
       CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(String(chatClientProfile.id)),
       {
@@ -487,8 +570,9 @@
         body: {
           messages: payload,
           meta: {
-            name: String(chatClientProfile.name || "Клиент"),
-            phone: String(chatClientProfile.phone || ""),
+            name: String(metaState.name || "Клиент"),
+            phone: String(metaState.phone || ""),
+            last_welcome_day: String(metaState.lastWelcomeDay || ""),
           },
         },
       }
@@ -507,45 +591,14 @@
       );
       const payload = json && json.data ? json.data : {};
       const updatedAt = String(payload.updated_at || "");
+      sharedThreadMeta = sanitizeSharedThreadMeta(payload.meta);
 
       const remoteMessages = Array.isArray(payload.messages) ? payload.messages : [];
       const mappedEntries = remoteMessages
         .map(mapSharedMessageToEntry)
         .filter(Boolean);
       pruneLocalHiddenMessageIds(baseEntries.concat(mappedEntries));
-      const shouldMarkRead = overlay.classList.contains("is-open");
-      const nowIso = new Date().toISOString();
-      let deliveryStateChanged = false;
-      mappedEntries.forEach(function (entry) {
-        if (!entry || entry.role !== "agent") return;
-
-        const rawStatus = String(entry.deliveryStatus || "").toLowerCase();
-        const isRead = entry.read === true || !!entry.readAt || rawStatus === "read";
-        const isDelivered = !!entry.deliveredAt || rawStatus === "delivered" || isRead;
-
-        if (!isDelivered) {
-          entry.deliveryStatus = "delivered";
-          entry.deliveredAt = entry.deliveredAt || nowIso;
-          deliveryStateChanged = true;
-        }
-
-        if (!shouldMarkRead) return;
-
-        if (!isRead) {
-          entry.read = true;
-          entry.deliveryStatus = "read";
-          entry.deliveredAt = entry.deliveredAt || nowIso;
-          entry.readAt = entry.readAt || nowIso;
-          deliveryStateChanged = true;
-          return;
-        }
-
-        if (rawStatus !== "read") {
-          entry.deliveryStatus = "read";
-          if (!entry.readAt) entry.readAt = nowIso;
-          deliveryStateChanged = true;
-        }
-      });
+      const deliveryStateChanged = applyReadReceiptsToAgentEntries(mappedEntries);
       renderUnreadBadge(mappedEntries);
       const sameThread = stableSerialize(liveEntries) === stableSerialize(mappedEntries);
       if (!opts.force && sameThread && sharedThreadUpdatedAt === updatedAt) {
@@ -583,6 +636,25 @@
     if (!sharedThreadPollTimer) return;
     clearInterval(sharedThreadPollTimer);
     sharedThreadPollTimer = 0;
+  }
+
+  function syncVisibleChatReadState() {
+    if (!overlay.classList.contains("is-open")) return false;
+    if (!isChatTabActiveForRead()) return false;
+    const keepBottom = shouldKeepFeedPinnedToBottom();
+    const prevTop = feed.scrollTop;
+    const changed = applyReadReceiptsToAgentEntries(liveEntries);
+    renderUnreadBadge(liveEntries);
+    if (!changed) return false;
+    renderThread();
+    if (keepBottom) {
+      scrollToBottom(false);
+    } else {
+      feed.scrollTop = prevTop;
+      updateScrollDownButton();
+    }
+    queueSharedThreadSave();
+    return true;
   }
 
   function emojiToAssetCode(emoji) {
@@ -764,11 +836,70 @@
     return false;
   }
 
+  function normalizeComposerText(text) {
+    const raw = String(text || "").replace(/\r/g, "");
+    if (!raw) return "";
+    const trimmed = raw.trim();
+    if (trimmed) return trimmed;
+    return hasEmojiInText(raw) ? raw : "";
+  }
+
   function normalizeReactionValue(value) {
     return String(value || "")
       .trim()
       .normalize("NFC")
       .replace(/\uFE0F/g, "");
+  }
+
+  function sanitizeReactionsMap(raw) {
+    const source = raw && typeof raw === "object" ? raw : {};
+    return {
+      in: String(source.in || "").trim(),
+      out: String(source.out || "").trim(),
+    };
+  }
+
+  function ensureEntryReactions(entry) {
+    if (!entry || typeof entry !== "object") return { in: "", out: "" };
+    const reactions = sanitizeReactionsMap(entry.reactions);
+    const legacy = String(entry.reaction || "").trim();
+    if (!reactions.in && !reactions.out && legacy) {
+      const fallbackActor = entry.role === "user" ? "in" : "out";
+      reactions[fallbackActor] = legacy;
+    }
+    entry.reactions = reactions;
+    entry.reaction = String(reactions[CHAT_REACTION_ACTOR] || "");
+    return reactions;
+  }
+
+  function getEntryActorReaction(entry, actor) {
+    const reactions = ensureEntryReactions(entry);
+    const actorKey = actor === "out" ? "out" : "in";
+    return String(reactions[actorKey] || "");
+  }
+
+  function setEntryActorReaction(entry, actor, reaction) {
+    if (!entry || typeof entry !== "object") return false;
+    const actorKey = actor === "out" ? "out" : "in";
+    const next = String(reaction || "").trim();
+    const reactions = ensureEntryReactions(entry);
+    const current = String(reactions[actorKey] || "");
+    const toggled = normalizeReactionValue(current) === normalizeReactionValue(next) ? "" : next;
+    if (current === toggled) return false;
+    reactions[actorKey] = toggled;
+    entry.reactions = reactions;
+    entry.reaction = String(reactions[CHAT_REACTION_ACTOR] || "");
+    return true;
+  }
+
+  function getEntryReactionItems(entry) {
+    const reactions = ensureEntryReactions(entry);
+    const items = [];
+    const outReaction = String(reactions.out || "");
+    const inReaction = String(reactions.in || "");
+    if (outReaction) items.push({ actor: "out", reaction: outReaction });
+    if (inReaction) items.push({ actor: "in", reaction: inReaction });
+    return items;
   }
 
   function getReplyPreviewText(text) {
@@ -781,7 +912,7 @@
   function getMessageSenderLabel(entry) {
     if (!entry) return "Сообщение";
     if (entry.role === "user") return "Вы";
-    return String(entry.author || "Лия");
+    return String(entry.author || VIRTUAL_ASSISTANT_NAME);
   }
 
   function isImageAttachment(attachment) {
@@ -840,7 +971,7 @@
 
     const dataUrl = await readFileAsDataUrl(file);
     if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl)) return null;
-    if (dataUrl.length > 5 * 1024 * 1024) return null;
+    if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) return null;
 
     const dimensions = await getImageSizeFromDataUrl(dataUrl);
     return {
@@ -934,11 +1065,20 @@
     overlay.setAttribute("aria-hidden", "false");
     document.body.classList.add("shop-company-chat-open");
     requestAnimationFrame(function () {
-      pullSharedThreadFromServer({ force: true }).catch(function () {});
-      startSharedThreadPolling();
-      scrollToBottom(false);
-      syncComposerRichPreview({ stickToBottom: true });
-      input.focus();
+      pullSharedThreadFromServer({ force: true })
+        .catch(function () { return false; })
+        .finally(function () {
+          const welcomeAdded = ensureDailyWelcomeMessage();
+          if (welcomeAdded) {
+            renderThread();
+            queueSharedThreadSave();
+          }
+          startSharedThreadPolling();
+          scrollToBottom(false, true);
+          syncComposerRichPreview({});
+          input.focus();
+          syncVisibleChatReadState();
+        });
     });
   }
 
@@ -946,6 +1086,7 @@
     hideContextMenu();
     hideReactionBar();
     hideEmojiPopover();
+    if (selectedMessageIds.size > 0) clearSelectionMode();
     if (pendingDeleteConfirm) closeDeleteConfirm();
     cancelEditingMessage();
     stopSharedThreadPolling();
@@ -964,7 +1105,7 @@
     visibleStart = baseEntries.length;
     loadOlderMessages(INITIAL_BATCH, false);
     renderThread();
-    scrollToBottom(false);
+    scrollToBottom(false, true);
   }
 
   function nowTime() {
@@ -974,13 +1115,110 @@
     return hh + ":" + mm;
   }
 
+  function getLocalDayKey(dateValue) {
+    const date = dateValue instanceof Date ? dateValue : new Date(dateValue || Date.now());
+    if (Number.isNaN(date.getTime())) return "";
+    const yyyy = String(date.getFullYear());
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+    return yyyy + "-" + mm + "-" + dd;
+  }
+
+  function ensureDailyWelcomeMessage() {
+    const dayKey = getLocalDayKey(new Date());
+    if (!dayKey) return false;
+
+    const metaState = sanitizeSharedThreadMeta(sharedThreadMeta);
+    if (metaState.lastWelcomeDay === dayKey) return false;
+
+    const welcomeId = "daily-welcome-" + dayKey;
+    const existsInBase = baseEntries.some(function (entry) {
+      return String(entry && entry.id || "") === welcomeId;
+    });
+    const existsInLive = liveEntries.some(function (entry) {
+      return String(entry && entry.id || "") === welcomeId;
+    });
+    if (existsInBase || existsInLive) {
+      sharedThreadMeta = {
+        name: metaState.name,
+        phone: metaState.phone,
+        lastWelcomeDay: dayKey,
+      };
+      return false;
+    }
+
+    const nowIso = new Date().toISOString();
+    liveEntries.push({
+      id: welcomeId,
+      type: "message",
+      role: "agent",
+      day: formatDayLabelFromIso(nowIso),
+      time: formatTimeFromIso(nowIso),
+      text: DAILY_WELCOME_TEXT,
+      author: VIRTUAL_ASSISTANT_NAME,
+      createdAt: nowIso,
+      editedAt: "",
+      read: true,
+      deliveryStatus: "read",
+      deliveredAt: nowIso,
+      readAt: nowIso,
+      reaction: "",
+      reactions: { in: "", out: "" },
+    });
+    sharedThreadMeta = {
+      name: metaState.name,
+      phone: metaState.phone,
+      lastWelcomeDay: dayKey,
+    };
+    renderUnreadBadge(liveEntries);
+    return true;
+  }
+
   function getAllEntries() {
-    return baseEntries
+    const rawEntries = baseEntries
       .slice(visibleStart)
       .concat(liveEntries)
       .filter(function (entry) {
         return !isMessageHiddenLocally(entry && entry.id);
       });
+
+    const hasOptionsById = new Set(
+      rawEntries
+        .filter(function (entry) { return entry && entry.type === "options"; })
+        .map(function (entry) { return String(entry && entry.id || ""); })
+        .filter(Boolean)
+    );
+
+    const withDailyPair = [];
+    rawEntries.forEach(function (entry) {
+      withDailyPair.push(entry);
+      const dayKey = getDailyWelcomeDayKey(entry);
+      if (!dayKey) return;
+
+      const optionsId = "daily-welcome-options-" + dayKey;
+      if (hasOptionsById.has(optionsId)) return;
+
+      withDailyPair.push({
+        id: optionsId,
+        type: "options",
+        role: "agent",
+        day: String(entry.day || ""),
+        time: String(entry.time || ""),
+        text: DAILY_OPTIONS_TEXT,
+        options: QUICK_OPTIONS.slice(),
+      });
+      hasOptionsById.add(optionsId);
+    });
+
+    return withDailyPair;
+  }
+
+  function getDailyWelcomeDayKey(entry) {
+    if (!entry || entry.type !== "message") return "";
+    const id = String(entry.id || "");
+    if (!id.startsWith("daily-welcome-")) return "";
+    const key = id.slice("daily-welcome-".length);
+    return /^\d{4}-\d{2}-\d{2}$/.test(key) ? key : "";
   }
 
   function getMessageEntries() {
@@ -989,6 +1227,10 @@
       .filter(function (entry) {
         if (!entry || entry.type !== "message") return false;
         return !isMessageHiddenLocally(entry.id);
+      })
+      .map(function (entry) {
+        ensureEntryReactions(entry);
+        return entry;
       });
   }
 
@@ -1092,7 +1334,7 @@
     input.focus();
     const pos = input.value.length;
     input.setSelectionRange(pos, pos);
-    syncComposerRichPreview({ stickToBottom: true });
+    syncComposerRichPreview({});
     return true;
   }
 
@@ -1100,7 +1342,7 @@
     const id = String(messageId || "");
     if (!id) return false;
 
-    const nextText = String(textValue || "").trim();
+    const nextText = normalizeComposerText(textValue);
     let target = null;
     let inLive = false;
 
@@ -1146,7 +1388,7 @@
     const id = String(messageId || "");
     if (!id) return false;
     const entry = findMessageEntry(id);
-    if (!entry || entry.role !== "user") return false;
+    if (!entry) return false;
     if (!setMessageHiddenLocally(id, true)) return false;
 
     selectedMessageIds.delete(id);
@@ -1154,7 +1396,7 @@
     if (String(editingMessageId || "") === id) {
       cancelEditingMessage();
       input.value = "";
-      syncComposerRichPreview({ stickToBottom: true });
+      syncComposerRichPreview({});
     }
     if (reactionMessageId === id) hideReactionBar();
     if (contextMenuMessageId === id) hideContextMenu();
@@ -1228,7 +1470,7 @@
     if (deleteConfirmUi && deleteConfirmUi.overlay && deleteConfirmUi.overlay.isConnected) return deleteConfirmUi;
 
     const overlay = document.createElement("div");
-    overlay.className = "chat-delete-confirm-overlay hidden";
+    overlay.className = "chat-delete-confirm-overlay shop-company-chat-delete-confirm-overlay hidden";
     overlay.innerHTML =
       '<div class="chat-delete-confirm-card" role="dialog" aria-modal="true" aria-labelledby="shopCompanyDeleteConfirmTitle">' +
         '<div class="chat-delete-confirm-title" id="shopCompanyDeleteConfirmTitle">Удалить сообщение</div>' +
@@ -1242,12 +1484,13 @@
           '<button type="button" class="chat-delete-confirm-btn chat-delete-confirm-btn--danger" id="shopCompanyDeleteConfirmDeleteBtn">УДАЛИТЬ</button>' +
         "</div>" +
       "</div>";
-    document.body.appendChild(overlay);
+    modalBody.appendChild(overlay);
 
     const ui = {
       overlay: overlay,
       title: overlay.querySelector("#shopCompanyDeleteConfirmTitle"),
       text: overlay.querySelector("#shopCompanyDeleteConfirmText"),
+      checkRow: overlay.querySelector(".chat-delete-confirm-check"),
       check: overlay.querySelector("#shopCompanyDeleteConfirmForPeer"),
       checkText: overlay.querySelector("#shopCompanyDeleteConfirmCheckText"),
       cancelBtn: overlay.querySelector("#shopCompanyDeleteConfirmCancelBtn"),
@@ -1296,6 +1539,80 @@
     return "сообщений";
   }
 
+  function getSelectedMessageEntries() {
+    if (selectedMessageIds.size === 0) return [];
+    const selectedIds = selectedMessageIds;
+    return getMessageEntries().filter(function (entry) {
+      return selectedIds.has(String(entry && entry.id || ""));
+    });
+  }
+
+  function syncSelectionUi() {
+    const count = selectedMessageIds.size;
+    const active = count > 0;
+    modalBody.classList.toggle("is-selection-mode", active);
+    selectionToolbar.classList.toggle("hidden", !active);
+    selectionCountEl.textContent = "Выбрано " + count + " " + getMessagesWord(count);
+  }
+
+  function clearSelectionMode() {
+    if (selectedMessageIds.size === 0) return;
+    selectedMessageIds.clear();
+    renderThread();
+  }
+
+  function copySelectedMessages() {
+    const selectedMessages = getSelectedMessageEntries();
+    if (!selectedMessages.length) return;
+    const text = selectedMessages
+      .map(function (msg) { return String(msg && msg.text || ""); })
+      .filter(function (value) { return value.length > 0; })
+      .join("\n");
+    if (!text) return;
+    copyToClipboard(text).catch(function () {});
+  }
+
+  function deleteSelectedMessages() {
+    const selectedMessages = getSelectedMessageEntries();
+    if (!selectedMessages.length) return;
+
+    const selectedIds = selectedMessages
+      .map(function (msg) { return String(msg && msg.id || ""); })
+      .filter(Boolean);
+    if (!selectedIds.length) return;
+
+    const selectedOwnIds = selectedMessages
+      .filter(function (msg) { return msg && msg.role === "user"; })
+      .map(function (msg) { return String(msg && msg.id || ""); })
+      .filter(Boolean);
+    const allowDeleteForPeer = selectedOwnIds.length > 0;
+
+    openDeleteConfirm({
+      count: selectedIds.length,
+      allowDeleteForPeer: allowDeleteForPeer,
+      onConfirm: function (payload) {
+        const deleteForPeer = allowDeleteForPeer && !(payload && payload.deleteForPeer === false);
+        const removedOwnIds = new Set();
+
+        if (deleteForPeer) {
+          selectedOwnIds.forEach(function (messageId) {
+            if (removeMessageById(messageId)) removedOwnIds.add(messageId);
+          });
+        }
+
+        selectedIds.forEach(function (messageId) {
+          if (removedOwnIds.has(messageId)) return;
+          hideMessageLocallyById(messageId);
+        });
+
+        if (selectedMessageIds.size > 0) {
+          selectedMessageIds.clear();
+          renderThread();
+        }
+      },
+    });
+  }
+
   function openDeleteConfirm(options) {
     const ui = ensureDeleteConfirmUi();
     if (deleteConfirmCloseTimer) {
@@ -1305,12 +1622,17 @@
 
     const opts = options || {};
     const count = Math.max(1, Number(opts.count || 1));
+    const allowDeleteForPeer = opts.allowDeleteForPeer !== false;
     if (ui.title) ui.title.textContent = "Удалить " + count + " " + getMessagesWord(count);
     if (ui.text) ui.text.textContent = count === 1
       ? "Вы точно хотите удалить это сообщение?"
       : "Вы точно хотите удалить эти сообщения?";
     if (ui.checkText) ui.checkText.textContent = "Также удалить у собеседника";
-    if (ui.check) ui.check.checked = true;
+    if (ui.checkRow) ui.checkRow.classList.toggle("hidden", !allowDeleteForPeer);
+    if (ui.check) {
+      ui.check.disabled = !allowDeleteForPeer;
+      ui.check.checked = allowDeleteForPeer;
+    }
 
     pendingDeleteConfirm = {
       onConfirm: typeof opts.onConfirm === "function" ? opts.onConfirm : null,
@@ -1346,7 +1668,7 @@
 
     const canManageOwnMessage = entry.role === "user";
     if (contextMenuEditBtn) contextMenuEditBtn.classList.toggle("hidden", !canManageOwnMessage);
-    if (contextMenuDeleteBtn) contextMenuDeleteBtn.classList.toggle("hidden", !canManageOwnMessage);
+    if (contextMenuDeleteBtn) contextMenuDeleteBtn.classList.remove("hidden");
 
     hideEmojiPopover();
     positionFloatingBox(contextMenuEl, x, y, 8);
@@ -1413,7 +1735,7 @@
     if (String(editingMessageId || "") === id) {
       cancelEditingMessage();
       input.value = "";
-      syncComposerRichPreview({ stickToBottom: true });
+      syncComposerRichPreview({});
     }
     if (reactionMessageId === id) hideReactionBar();
     if (contextMenuMessageId === id) hideContextMenu();
@@ -1449,6 +1771,7 @@
   function createMessageNode(entry) {
     const row = document.createElement("div");
     row.className = "shop-company-chat-row is-" + (entry.role || "agent");
+    if (selectedMessageIds.size > 0) row.classList.add("is-selection-mode");
     if (entry.editedAt) row.classList.add("is-edited");
     row.dataset.messageId = String(entry.id || "");
     if (selectedMessageIds.has(String(entry.id || ""))) {
@@ -1552,20 +1875,29 @@
       bubble.appendChild(meta);
     }
 
-    if (entry.reaction) {
+    const reactionItems = getEntryReactionItems(entry);
+    if (reactionItems.length) {
       bubble.classList.add("has-reaction");
-      const reaction = document.createElement("button");
-      reaction.type = "button";
-      reaction.className = "shop-company-chat-reaction-pill";
-      reaction.dataset.messageId = String(entry.id || "");
-      reaction.title = "Изменить реакцию";
-      reaction.dataset.reactionValue = String(entry.reaction);
-      reaction.setAttribute("aria-label", String(entry.reaction));
-      setEmojiGlyph(reaction, entry.reaction, "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--pill");
-      bubble.appendChild(reaction);
+      const reactionsWrap = document.createElement("div");
+      reactionsWrap.className = "shop-company-chat-reactions";
+
+      reactionItems.forEach(function (itemReaction) {
+        const reaction = document.createElement("button");
+        reaction.type = "button";
+        reaction.className = "shop-company-chat-reaction-pill";
+        reaction.dataset.messageId = String(entry.id || "");
+        reaction.dataset.reactionActor = String(itemReaction.actor || "");
+        reaction.title = itemReaction.actor === CHAT_REACTION_ACTOR ? "Изменить реакцию" : "Реакция собеседника";
+        reaction.dataset.reactionValue = String(itemReaction.reaction || "");
+        reaction.setAttribute("aria-label", String(itemReaction.reaction || ""));
+        setEmojiGlyph(reaction, itemReaction.reaction, "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--pill");
+        reactionsWrap.appendChild(reaction);
+      });
+
+      bubble.appendChild(reactionsWrap);
     }
 
-    row.appendChild(selectBadge);
+    bubble.appendChild(selectBadge);
     row.appendChild(bubble);
     return row;
   }
@@ -1650,6 +1982,7 @@
     }
 
     updateScrollDownButton();
+    syncSelectionUi();
   }
 
   function hideReactionBar() {
@@ -1664,25 +1997,329 @@
     emojiPopover.classList.add("hidden");
   }
 
+  function normalizeEmojiCategoryName(rawCategory) {
+    const value = String(rawCategory || "").trim().toLowerCase();
+    if (!value) return "";
+
+    if (
+      value.includes("smileys")
+      || value.includes("emotion")
+      || value.includes("people")
+      || value.includes("body")
+    ) return "people";
+    if (value.includes("animals") || value.includes("nature")) return "nature";
+    if (value.includes("food") || value.includes("drink")) return "food";
+    if (value.includes("activities") || value.includes("activity")) return "activity";
+    if (value.includes("travel") || value.includes("places")) return "travel";
+    if (value.includes("objects")) return "objects";
+    if (value.includes("symbols")) return "symbols";
+    if (value.includes("flags")) return "flags";
+    return "";
+  }
+
+  function unifiedToEmoji(unified) {
+    const parts = String(unified || "")
+      .trim()
+      .split("-")
+      .filter(Boolean);
+    if (!parts.length) return "";
+    try {
+      return parts
+        .map(function (part) { return Number.parseInt(part, 16); })
+        .filter(function (cp) { return Number.isFinite(cp) && cp > 0; })
+        .map(function (cp) { return String.fromCodePoint(cp); })
+        .join("");
+    } catch {
+      return "";
+    }
+  }
+
+  function normalizeEmojiList(list) {
+    const input = Array.isArray(list) ? list : [];
+    const seen = new Set();
+    const out = [];
+    input.forEach(function (item) {
+      const emoji = String(item || "").trim().normalize("NFC");
+      if (!emoji || !hasEmojiInText(emoji)) return;
+      const key = normalizeReactionValue(emoji);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      out.push(emoji);
+    });
+    return out;
+  }
+
+  function normalizeEmojiCategoryMap(input) {
+    const base = {};
+    EMOJI_CATEGORY_META.forEach(function (meta) {
+      if (meta.key !== "recent") base[meta.key] = [];
+    });
+
+    const source = input && typeof input === "object" ? input : {};
+    Object.entries(source).forEach(function (entry) {
+      const rawKey = entry[0];
+      const rawList = entry[1];
+      const normalizedKey = normalizeEmojiCategoryName(rawKey) || rawKey;
+      if (!base[normalizedKey]) return;
+      const merged = base[normalizedKey].concat(normalizeEmojiList(rawList));
+      base[normalizedKey] = normalizeEmojiList(merged);
+    });
+
+    return base;
+  }
+
+  function loadRecentEmojis() {
+    try {
+      const raw = localStorage.getItem(EMOJI_RECENT_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return normalizeEmojiList(parsed).slice(0, 42);
+    } catch {
+      return [];
+    }
+  }
+
+  function saveRecentEmojis(list) {
+    try {
+      const next = normalizeEmojiList(list).slice(0, 42);
+      localStorage.setItem(EMOJI_RECENT_STORAGE_KEY, JSON.stringify(next));
+    } catch {}
+  }
+
+  function rememberRecentEmoji(emoji) {
+    const value = String(emoji || "").trim();
+    if (!value) return;
+    const norm = normalizeReactionValue(value);
+    emojiRecentList = [value].concat(
+      emojiRecentList.filter(function (item) { return normalizeReactionValue(item) !== norm; })
+    );
+    emojiRecentList = normalizeEmojiList(emojiRecentList).slice(0, 42);
+    saveRecentEmojis(emojiRecentList);
+  }
+
+  function buildEmojiCategoriesFromDataset(entries) {
+    const categories = normalizeEmojiCategoryMap({});
+    const list = Array.isArray(entries) ? entries : [];
+
+    const pushUnified = function (target, unified) {
+      const emoji = unifiedToEmoji(unified);
+      if (emoji) categories[target].push(emoji);
+    };
+
+    list.forEach(function (entry) {
+      if (!entry || typeof entry !== "object") return;
+      if (entry.has_img_google === false) return;
+      const category = normalizeEmojiCategoryName(entry.category);
+      if (!category || !categories[category]) return;
+
+      pushUnified(category, entry.unified);
+
+      if (entry.skin_variations && typeof entry.skin_variations === "object") {
+        Object.values(entry.skin_variations).forEach(function (variant) {
+          if (!variant || typeof variant !== "object") return;
+          pushUnified(category, variant.unified);
+        });
+      }
+    });
+
+    Object.keys(categories).forEach(function (key) {
+      categories[key] = normalizeEmojiList(categories[key]);
+    });
+    return categories;
+  }
+
+  function getFirstAvailableEmojiCategory(preferred) {
+    const pref = String(preferred || "people");
+    if (pref && pref !== "recent" && (emojiCategories[pref] || []).length) return pref;
+    const found = EMOJI_CATEGORY_META
+      .map(function (meta) { return meta.key; })
+      .find(function (key) { return key !== "recent" && (emojiCategories[key] || []).length; });
+    return found || "people";
+  }
+
+  function getEmojiCategoriesForRender() {
+    const output = {};
+    EMOJI_CATEGORY_META.forEach(function (meta) {
+      if (meta.key === "recent") {
+        output[meta.key] = normalizeEmojiList(emojiRecentList).slice(0, 42);
+        return;
+      }
+      output[meta.key] = Array.isArray(emojiCategories[meta.key]) ? emojiCategories[meta.key] : [];
+    });
+    return output;
+  }
+
+  async function ensureEmojiDatasetLoaded() {
+    if (emojiDatasetPromise) return emojiDatasetPromise;
+
+    emojiDatasetPromise = (async function () {
+      try {
+        const res = await fetch(EMOJI_DATASET_URL, { cache: "force-cache" });
+        if (!res.ok) throw new Error("EMOJI_DATASET_HTTP_" + String(res.status));
+        const payload = await res.json();
+        const next = buildEmojiCategoriesFromDataset(payload);
+        const hasAny = Object.values(next).some(function (list) {
+          return Array.isArray(list) && list.length;
+        });
+        if (!hasAny) return;
+
+        emojiCategories = next;
+        if (!(getEmojiCategoriesForRender()[emojiActiveCategory] || []).length) {
+          emojiActiveCategory = getFirstAvailableEmojiCategory(emojiActiveCategory);
+        }
+
+        if (!emojiPopover.classList.contains("hidden")) {
+          renderEmojiPicker();
+        }
+      } catch (err) {
+        console.error("emoji dataset load failed", err);
+        emojiDatasetPromise = null;
+      }
+    })();
+
+    return emojiDatasetPromise;
+  }
+
+  function insertEmojiIntoInput(emoji) {
+    const value = String(emoji || "");
+    if (!value) return;
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    input.value = input.value.slice(0, start) + value + input.value.slice(end);
+    input.focus();
+    const pos = start + value.length;
+    input.setSelectionRange(pos, pos);
+    syncComposerRichPreview({});
+  }
+
   function renderEmojiPicker() {
     emojiPopover.innerHTML = "";
-    EMOJIS.forEach(function (emoji) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "shop-company-chat-emoji-btn";
-      btn.setAttribute("aria-label", emoji);
-      btn.title = emoji;
-      setEmojiGlyph(btn, emoji, "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--picker");
-      btn.addEventListener("click", function () {
-        const start = input.selectionStart ?? input.value.length;
-        const end = input.selectionEnd ?? input.value.length;
-        input.value = input.value.slice(0, start) + emoji + input.value.slice(end);
-        input.focus();
-        const pos = start + emoji.length;
-        input.setSelectionRange(pos, pos);
-        syncComposerRichPreview({ stickToBottom: true });
+
+    const categories = getEmojiCategoriesForRender();
+    const visibleCategories = EMOJI_CATEGORY_META.filter(function (category) {
+      const list = Array.isArray(categories[category.key]) ? categories[category.key] : [];
+      return list.length > 0;
+    });
+
+    if (!visibleCategories.length) {
+      const empty = document.createElement("div");
+      empty.className = "shop-company-chat-emoji-empty";
+      empty.textContent = "Нет эмодзи";
+      emojiPopover.appendChild(empty);
+      return;
+    }
+
+    if (!visibleCategories.some(function (category) { return category.key === emojiActiveCategory; })) {
+      emojiActiveCategory = visibleCategories[0].key;
+    }
+
+    const tabs = document.createElement("div");
+    tabs.className = "shop-company-chat-emoji-categories";
+    emojiPopover.appendChild(tabs);
+
+    const body = document.createElement("div");
+    body.className = "shop-company-chat-emoji-body";
+    emojiPopover.appendChild(body);
+
+    const tabByKey = new Map();
+    const sectionByKey = new Map();
+
+    const updateActiveTabUi = function (nextKey) {
+      tabByKey.forEach(function (tab, key) {
+        tab.classList.toggle("is-active", key === nextKey);
       });
-      emojiPopover.appendChild(btn);
+    };
+
+    visibleCategories.forEach(function (category) {
+      const list = Array.isArray(categories[category.key]) ? categories[category.key] : [];
+
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.className = "shop-company-chat-emoji-category-btn"
+        + (emojiActiveCategory === category.key ? " is-active" : "");
+      tab.setAttribute("aria-label", category.label);
+      tab.title = category.label;
+      tab.innerHTML = '<i class="' + category.iconClass + '" aria-hidden="true"></i>';
+      tab.addEventListener("click", function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        const section = sectionByKey.get(category.key);
+        if (!section) return;
+        emojiActiveCategory = category.key;
+        updateActiveTabUi(emojiActiveCategory);
+        body.scrollTo({
+          top: Math.max(0, section.offsetTop - 2),
+          behavior: "smooth",
+        });
+      });
+      tabByKey.set(category.key, tab);
+      tabs.appendChild(tab);
+
+      const section = document.createElement("section");
+      section.className = "shop-company-chat-emoji-section";
+      section.setAttribute("data-emoji-category", category.key);
+
+      const title = document.createElement("div");
+      title.className = "shop-company-chat-emoji-title";
+      title.textContent = category.label;
+      section.appendChild(title);
+
+      const grid = document.createElement("div");
+      grid.className = "shop-company-chat-emoji-grid";
+      list.forEach(function (emoji) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "shop-company-chat-emoji-btn";
+        btn.setAttribute("aria-label", emoji);
+        btn.title = emoji;
+        setEmojiGlyph(btn, emoji, "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--picker");
+        btn.addEventListener("click", function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          insertEmojiIntoInput(emoji);
+          rememberRecentEmoji(emoji);
+        });
+        grid.appendChild(btn);
+      });
+      section.appendChild(grid);
+      sectionByKey.set(category.key, section);
+      body.appendChild(section);
+    });
+
+    const syncActiveCategoryByScroll = function () {
+      const threshold = body.scrollTop + 12;
+      let currentKey = emojiActiveCategory;
+      visibleCategories.forEach(function (category) {
+        const section = sectionByKey.get(category.key);
+        if (!section) return;
+        if (section.offsetTop <= threshold) currentKey = category.key;
+      });
+      if (currentKey !== emojiActiveCategory) {
+        emojiActiveCategory = currentKey;
+        updateActiveTabUi(emojiActiveCategory);
+      }
+    };
+
+    body.addEventListener("scroll", syncActiveCategoryByScroll, { passive: true });
+    updateActiveTabUi(emojiActiveCategory);
+
+    requestAnimationFrame(function () {
+      const activeSection = sectionByKey.get(emojiActiveCategory);
+      if (!activeSection) return;
+      body.scrollTop = Math.max(0, activeSection.offsetTop - 2);
+      requestAnimationFrame(syncActiveCategoryByScroll);
+    });
+  }
+
+  function bindEmojiPopoverGuard() {
+    if (!emojiPopover) return;
+    if (emojiPopover.dataset.clickGuardBound === "1") return;
+    emojiPopover.dataset.clickGuardBound = "1";
+    emojiPopover.addEventListener("click", function (event) {
+      event.stopPropagation();
+    });
+    emojiPopover.addEventListener("mousedown", function (event) {
+      event.stopPropagation();
     });
   }
 
@@ -1717,7 +2354,12 @@
 
   function decorateComposerEmojiControls() {
     if (emojiBtn) {
-      setEmojiGlyph(emojiBtn, "\u{1F642}", "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--composer");
+      emojiBtn.classList.remove("has-emoji-content");
+      emojiBtn.textContent = "";
+      const smileIcon = document.createElement("i");
+      smileIcon.className = "far fa-smile";
+      smileIcon.setAttribute("aria-hidden", "true");
+      emojiBtn.appendChild(smileIcon);
       emojiBtn.setAttribute("aria-label", "Эмодзи");
       emojiBtn.title = "Эмодзи";
     }
@@ -1767,11 +2409,10 @@
 
     const sync = function (options) {
       const opts = options || {};
-      const keepPinned = shouldKeepFeedPinnedToBottom();
       const stickToBottom = opts.stickToBottom === true;
 
       const inputStyles = window.getComputedStyle(input);
-      const minHeight = parseFloat(inputStyles.minHeight) || 38;
+      const minHeight = parseFloat(inputStyles.minHeight) || 45;
       const maxHeight = parseFloat(inputStyles.maxHeight) || 160;
 
       input.style.height = "auto";
@@ -1785,7 +2426,7 @@
         preview.classList.add("hidden");
         preview.textContent = "";
         input.classList.remove("is-rich-emoji-preview");
-        if (stickToBottom || keepPinned) scrollToBottom(false);
+        if (stickToBottom) scrollToBottom(true);
         return;
       }
 
@@ -1794,12 +2435,12 @@
       renderEmojiMessageText(preview, value, "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--input-inline");
       preview.style.transform = "translate(" + (-Math.max(0, input.scrollLeft)) + "px, " + (-Math.max(0, input.scrollTop)) + "px)";
 
-      if (stickToBottom || keepPinned) scrollToBottom(false);
+      if (stickToBottom) scrollToBottom(true);
     };
 
     input.__syncEmojiPreview = sync;
     input.addEventListener("input", function () {
-      sync({ stickToBottom: true });
+      sync({});
     });
     ["scroll", "click", "keyup", "focus", "blur"].forEach(function (eventName) {
       input.addEventListener(eventName, function () {
@@ -1809,17 +2450,17 @@
     window.addEventListener("resize", function () { sync({}); });
 
     input.dataset.emojiPreviewReady = "1";
-    sync({ stickToBottom: true });
+    sync({});
   }
 
   function updateReactionBarActiveButton(messageId) {
     const entry = findMessageEntry(messageId);
-    const current = entry && entry.reaction ? String(entry.reaction) : "";
+    const current = getEntryActorReaction(entry, CHAT_REACTION_ACTOR);
     const buttons = Array.from(reactionBar.querySelectorAll("[data-reaction]"));
     buttons.forEach(function (btn) {
       const reaction = btn.getAttribute("data-reaction") || "";
       if (reaction === "__toggle_more__") return;
-      btn.classList.toggle("is-active", current === reaction);
+      btn.classList.toggle("is-active", normalizeReactionValue(current) === normalizeReactionValue(reaction));
     });
   }
 
@@ -1857,9 +2498,7 @@
 
     const next = String(reaction || "").trim();
     if (!next) return;
-    const currentNormalized = normalizeReactionValue(entry.reaction);
-    const nextNormalized = normalizeReactionValue(next);
-    entry.reaction = currentNormalized === nextNormalized ? "" : next;
+    if (!setEntryActorReaction(entry, CHAT_REACTION_ACTOR, next)) return;
 
     const prevTop = feed.scrollTop;
     renderThread();
@@ -1927,12 +2566,91 @@
     isLoadingOlder = false;
   }
 
-  function scrollToBottom(smooth) {
-    feed.scrollTo({
-      top: feed.scrollHeight,
-      behavior: smooth ? "smooth" : "auto",
+  function isMobileChatViewport() {
+    return typeof window !== "undefined"
+      && typeof window.matchMedia === "function"
+      && window.matchMedia("(max-width: 768px)").matches;
+  }
+
+  function ensureTopVisibleEntryNotClipped() {
+    if (!feed || !thread || !isMobileChatViewport()) return;
+    const feedRect = feed.getBoundingClientRect();
+    const topEdge = feedRect.top + 1;
+    const children = Array.from(thread.children || []);
+    if (!children.length) return;
+
+    const firstVisible = children.find(function (node) {
+      const rect = node.getBoundingClientRect();
+      return rect.bottom > topEdge + 1;
     });
-    updateScrollDownButton();
+    if (!firstVisible) return;
+
+    const rect = firstVisible.getBoundingClientRect();
+    const clippedBy = topEdge - rect.top;
+    if (clippedBy > 1) {
+      feed.scrollTop = Math.max(0, feed.scrollTop - Math.ceil(clippedBy));
+      updateScrollDownButton();
+    }
+  }
+
+  function stopFeedSmoothScroll() {
+    if (!feedScrollRaf) return;
+    cancelAnimationFrame(feedScrollRaf);
+    feedScrollRaf = 0;
+  }
+
+  function scrollToBottom(smooth, fixTopClip) {
+    const target = Math.max(0, feed.scrollHeight - feed.clientHeight);
+    const shouldFixTopClip = fixTopClip === true;
+
+    if (!smooth) {
+      stopFeedSmoothScroll();
+      feed.scrollTop = target;
+      updateScrollDownButton();
+      if (shouldFixTopClip) {
+        requestAnimationFrame(function () {
+          ensureTopVisibleEntryNotClipped();
+        });
+      }
+      return;
+    }
+
+    const startTop = feed.scrollTop;
+    const delta = target - startTop;
+    if (Math.abs(delta) < 1) {
+      if (shouldFixTopClip) {
+        requestAnimationFrame(function () {
+          ensureTopVisibleEntryNotClipped();
+        });
+      }
+      return;
+    }
+
+    stopFeedSmoothScroll();
+    const startedAt = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+
+    const step = function (now) {
+      const current = typeof now === "number" ? now : Date.now();
+      const progress = Math.min(1, (current - startedAt) / CHAT_AUTOSCROLL_MS);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      feed.scrollTop = startTop + (delta * eased);
+      if (progress < 1) {
+        feedScrollRaf = requestAnimationFrame(step);
+        return;
+      }
+      feedScrollRaf = 0;
+      feed.scrollTop = target;
+      updateScrollDownButton();
+      if (shouldFixTopClip) {
+        requestAnimationFrame(function () {
+          ensureTopVisibleEntryNotClipped();
+        });
+      }
+    };
+
+    feedScrollRaf = requestAnimationFrame(step);
   }
 
   function updateScrollDownButton() {
@@ -1942,7 +2660,7 @@
 
   function pushLiveMessage(role, text, options) {
     const opts = options || {};
-    const trimmed = String(text || "").trim();
+    const trimmed = normalizeComposerText(text);
     const attachment = isImageAttachment(opts.attachment) ? opts.attachment : null;
     if (!trimmed && !attachment) return;
     const replyTo = opts.replyTo && opts.replyTo.id
@@ -1965,8 +2683,10 @@
       time: formatTimeFromIso(createdAt),
       text: trimmed,
       attachment: attachment,
-      author: role === "agent" ? "Лия" : "",
+      author: role === "agent" ? VIRTUAL_ASSISTANT_NAME : "",
       replyTo: replyTo,
+      reaction: "",
+      reactions: { in: "", out: "" },
       deliveryStatus: status,
       createdAt: createdAt,
       read: role === "user" ? false : true,
@@ -1988,7 +2708,7 @@
 
   function sendUserMessage(text, options) {
     const opts = options || {};
-    const trimmed = String(text || "").trim();
+    const trimmed = normalizeComposerText(text);
     const attachment = isImageAttachment(opts.attachment) ? opts.attachment : null;
 
     if (editingMessageId) {
@@ -2053,7 +2773,19 @@
     return sent;
   }
 
+  if (!Object.keys(emojiCategories).length) {
+    emojiCategories = normalizeEmojiCategoryMap(EMOJI_FALLBACK_CATEGORIES);
+  }
+  if (!emojiRecentList.length) {
+    emojiRecentList = loadRecentEmojis();
+  }
+  if (!(emojiCategories[emojiActiveCategory] || []).length) {
+    emojiActiveCategory = getFirstAvailableEmojiCategory(emojiActiveCategory);
+  }
+
   renderEmojiPicker();
+  ensureEmojiDatasetLoaded().catch(function () {});
+  bindEmojiPopoverGuard();
   normalizeQuickReactionButtons();
   decorateComposerEmojiControls();
   setupComposerRichPreview();
@@ -2097,6 +2829,24 @@
     if (overlay.classList.contains("is-open")) {
       closeCompanyChat();
     }
+  });
+
+  function syncReadOnForeground() {
+    if (!overlay.classList.contains("is-open")) return;
+    if (!isChatTabActiveForRead()) return;
+    pullSharedThreadFromServer({ force: true })
+      .catch(function () {
+        syncVisibleChatReadState();
+      });
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState !== "visible") return;
+    syncReadOnForeground();
+  });
+
+  window.addEventListener("focus", function () {
+    syncReadOnForeground();
   });
 
   function clearTouchGesture() {
@@ -2155,14 +2905,15 @@
         startEditingMessage(messageId);
         return;
       }
-      if (action === "delete" && msg.role === "user") {
+      if (action === "delete") {
+        const allowDeleteForPeer = msg.role === "user";
         openDeleteConfirm({
           count: 1,
+          allowDeleteForPeer: allowDeleteForPeer,
           onConfirm: function (payload) {
-            const deleteForPeer = !(payload && payload.deleteForPeer === false);
+            const deleteForPeer = allowDeleteForPeer && !(payload && payload.deleteForPeer === false);
             if (deleteForPeer) {
-              removeMessageById(messageId);
-              return;
+              if (removeMessageById(messageId)) return;
             }
             hideMessageLocallyById(messageId);
           },
@@ -2176,7 +2927,7 @@
     const done = sendUserMessage(input.value);
     if (!done) return;
     input.value = "";
-    syncComposerRichPreview({ stickToBottom: true });
+    syncComposerRichPreview({});
   });
 
   input.addEventListener("keydown", function (event) {
@@ -2185,7 +2936,7 @@
       const done = sendUserMessage(input.value);
       if (!done) return;
       input.value = "";
-      syncComposerRichPreview({ stickToBottom: true });
+      syncComposerRichPreview({});
       return;
     }
 
@@ -2193,7 +2944,7 @@
       event.preventDefault();
       cancelEditingMessage();
       input.value = "";
-      syncComposerRichPreview({ stickToBottom: true });
+      syncComposerRichPreview({});
       return;
     }
 
@@ -2220,8 +2971,10 @@
     event.stopPropagation();
     hideContextMenu();
     hideReactionBar();
-    emojiPopover.classList.toggle("hidden");
-    if (!emojiPopover.classList.contains("hidden")) {
+    const willOpen = emojiPopover.classList.contains("hidden");
+    emojiPopover.classList.toggle("hidden", !willOpen);
+    if (willOpen) {
+      ensureEmojiDatasetLoaded().catch(function () {});
       input.focus();
     }
   });
@@ -2244,12 +2997,33 @@
     const reactionPill = event.target.closest(".shop-company-chat-reaction-pill");
     if (reactionPill) {
       const pillMessageId = reactionPill.dataset ? String(reactionPill.dataset.messageId || "") : "";
+      const pillActor = reactionPill.dataset ? String(reactionPill.dataset.reactionActor || "") : "";
+      if (pillActor && pillActor !== CHAT_REACTION_ACTOR) {
+        hideContextMenu();
+        hideReactionBar();
+        return;
+      }
       const pillReaction = reactionPill.dataset ? String(reactionPill.dataset.reactionValue || "") : "";
       if (pillMessageId && pillReaction) {
         toggleReaction(pillMessageId, pillReaction);
       }
       hideContextMenu();
       hideReactionBar();
+      return;
+    }
+
+    if (selectedMessageIds.size > 0) {
+      const rowTarget = event.target.closest(".shop-company-chat-row[data-message-id]");
+      const selectedId = rowTarget ? String(rowTarget.getAttribute("data-message-id") || "") : "";
+      if (!selectedId) {
+        hideContextMenu();
+        hideReactionBar();
+        return;
+      }
+      toggleSelectedMessage(selectedId);
+      hideContextMenu();
+      hideReactionBar();
+      hideEmojiPopover();
       return;
     }
 
@@ -2260,14 +3034,6 @@
     if (!anchorEl || !messageId) {
       hideContextMenu();
       hideReactionBar();
-      return;
-    }
-
-    if (selectedMessageIds.size > 0) {
-      toggleSelectedMessage(messageId);
-      hideContextMenu();
-      hideReactionBar();
-      hideEmojiPopover();
       return;
     }
 
@@ -2302,7 +3068,7 @@
     if (!entry) return;
 
     const heartReaction = "\u{2764}\u{FE0F}";
-    if (normalizeReactionValue(entry.reaction) === normalizeReactionValue(heartReaction)) {
+    if (normalizeReactionValue(getEntryActorReaction(entry, CHAT_REACTION_ACTOR)) === normalizeReactionValue(heartReaction)) {
       hideContextMenu();
       hideReactionBar();
       return;
@@ -2519,15 +3285,14 @@
     hideReactionBar();
     hideEmojiPopover();
     if (selectedMessageIds.size > 0) {
-      selectedMessageIds.clear();
-      renderThread();
+      clearSelectionMode();
       return;
     }
     if (replyDraft) clearReplyDraft();
     if (editingMessageId) {
       cancelEditingMessage();
       input.value = "";
-      syncComposerRichPreview({ stickToBottom: true });
+      syncComposerRichPreview({});
     }
   });
 
@@ -2536,6 +3301,18 @@
     hideReactionBar();
     hideEmojiPopover();
     clearTouchGesture();
+  });
+
+  selectionCloseBtn.addEventListener("click", function () {
+    clearSelectionMode();
+  });
+
+  selectionCopyBtn.addEventListener("click", function () {
+    copySelectedMessages();
+  });
+
+  selectionDeleteBtn.addEventListener("click", function () {
+    deleteSelectedMessages();
   });
 })();
 

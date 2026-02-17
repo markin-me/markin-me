@@ -5,20 +5,40 @@
 
   const CHAT_STORAGE_KEY = "dashboard:client-chat:v1";
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
+  const ORDER_UPDATED_EVENT = "dashboard:order-updated";
   const THREAD_SYNC_SAVE_DEBOUNCE_MS = 140;
   const THREAD_SYNC_ACTIVE_POLL_MS = 1800;
   const THREAD_SYNC_SUMMARY_POLL_MS = 5200;
+  const ACTIVE_ORDERS_POLL_MS = 4200;
+  const CHAT_AUTOSCROLL_MS = 170;
+  const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
+  const TEST_CHAT_IDS_TO_PRUNE = ["9997", "9998", "9999"];
   const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/img/google/64";
-  const EMOJIS = [
-    "\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F525}", "\u{1F602}", "\u{1F970}", "\u{1F64F}",
-    "\u{1F600}", "\u{1F603}", "\u{1F923}", "\u{1F60A}", "\u{1F60D}", "\u{1F618}",
-    "\u{1F917}", "\u{1F914}", "\u{1F61E}", "\u{1F622}", "\u{1F621}", "\u{1F92F}",
-    "\u{1F44E}", "\u{1F44F}", "\u{1F91D}", "\u{1FAF6}", "\u{1F44C}", "\u{1F4AA}",
-    "\u{2728}", "\u{1F389}", "\u{1F680}", "\u{2705}", "\u{274C}", "\u{1F4AF}",
-    "\u{1F4AC}", "\u{1F4E6}", "\u{1F69A}", "\u{1F37D}\u{FE0F}",
-    "\u{1FAE8}", "\u{1FAE0}", "\u{1FAE1}", "\u{1FAE2}", "\u{1FAE3}", "\u{1FAE5}",
-    "\u{1F979}", "\u{1FA77}", "\u{1FA75}",
+  const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/emoji.json";
+  const EMOJI_RECENT_STORAGE_KEY = "dashboard:chat-recent-emojis:v1";
+  const EMOJI_CATEGORY_META = [
+    { key: "recent", label: "Недавние", iconClass: "far fa-clock" },
+    { key: "people", label: "Смайлы и люди", iconClass: "far fa-smile" },
+    { key: "nature", label: "Животные и природа", iconClass: "fas fa-paw" },
+    { key: "food", label: "Еда и напитки", iconClass: "fas fa-apple-whole" },
+    { key: "activity", label: "Активности", iconClass: "far fa-futbol" },
+    { key: "travel", label: "Путешествия", iconClass: "fas fa-car-side" },
+    { key: "objects", label: "Объекты", iconClass: "far fa-lightbulb" },
+    { key: "symbols", label: "Символы", iconClass: "fas fa-at" },
+    { key: "flags", label: "Флаги", iconClass: "far fa-flag" },
   ];
+  const EMOJI_FALLBACK_CATEGORIES = {
+    people: [
+      "😀","😃","😄","😁","😆","😅","🤣","😂","🙂","🙃","😉","😊","😇","🥰","😍","😘","😗","😚","😋","😛","😜","🤪","🤨","🧐","🤓","😎","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🫡","🤭","🫢","🤫","🤥","😶","🫠","😐","🫤","😑","😬","🙄","😮‍💨","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","❤️","💔","💯","👍","👎","👏","🙌","🙏","👋","🤝","💪"
+    ],
+    nature: ["🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐮","🐷","🐸","🐵","🐔","🐧","🐦","🦆","🦅","🦉","🦇","🐺","🐗","🐴","🦄","🐝","🪲","🐞","🦋","🐌","🐢","🐍","🦎","🐙","🦑","🦞","🦀","🐬","🐳","🦈","🐊","🌵","🌲","🌳","🌴","🌷","🌸","🌹","🌺","🌻","🌼","🌿","☘️","🍀","🌱","🌈","⭐","🌙","☀️","🌧️","⛈️","❄️","🔥","🌊"],
+    food: ["🍏","🍎","🍐","🍊","🍋","🍌","🍉","🍇","🍓","🫐","🍒","🍑","🥭","🍍","🥥","🥝","🍅","🥑","🥦","🥬","🥒","🌶️","🫑","🌽","🥕","🧄","🧅","🥔","🍠","🫚","🥐","🥖","🍞","🥨","🧀","🥚","🍳","🥞","🧇","🥓","🍗","🍖","🌭","🍔","🍟","🍕","🌮","🌯","🥙","🧆","🥪","🍝","🍜","🍣","🍤","🍱","🍛","🍚","🍙","🍘","🍥","🥟","🍦","🍰","🧁","🍪","🍫","🍿","🍩","🍮","☕","🍵","🧃","🥤","🍺","🍷"],
+    activity: ["⚽","🏀","🏈","⚾","🥎","🎾","🏐","🏉","🥏","🎱","🏓","🏸","🏒","🏑","🥍","🏏","⛳","🏹","🎣","🤿","🥊","🥋","🎽","🛹","🛼","🛷","⛸️","🥌","🎯","🎳","🎮","🕹️","🎲","🧩","♟️","🎨","🎭","🎤","🎧","🎼","🎹","🥁","🎷","🎺","🎸","🎻","🎬","📷","📸","🧘","🤸","⛹️","🏋️","🚴","🏊","🏄","🧗","🤾","🤽"],
+    travel: ["🚗","🚕","🚙","🚌","🚎","🏎️","🚓","🚑","🚒","🚐","🛻","🚚","🚛","🚜","🛵","🏍️","🚲","🛴","🚨","🚔","🚍","✈️","🛫","🛬","🚁","🚂","🚆","🚇","🚊","🚉","🚢","🛳️","⛵","🚤","🗽","🗼","🏰","🏯","🏟️","🎡","🎢","⛲","⛰️","🏔️","🗻","🏝️","🏜️","🌋","🏙️","🌆","🌃","🌉","🛣️","🛤️","🌁","🗺️","🧭","⛽"],
+    objects: ["⌚","📱","💻","⌨️","🖥️","🖨️","🖱️","📷","📹","🎥","📺","📻","🎙️","🎚️","📀","💿","📼","☎️","📞","🕰️","⏰","⏱️","⏲️","🧭","📡","🔋","🔌","💡","🔦","🕯️","🪫","🧯","🧲","🧰","🛠️","🔧","🔨","⚙️","⛓️","🧱","🪜","🧪","🧬","🔬","🔭","📌","✂️","🖊️","🖋️","📎","📁","🗂️","🗃️","🗄️","📦","🧳","🎁","🛒","💳","💵","💰","🔒","🔑"],
+    symbols: ["❤️","🧡","💛","💚","💙","💜","🖤","🤍","🤎","💔","❣️","💕","💞","💓","💗","💖","💘","💝","💟","☮️","✝️","☪️","🕉️","☸️","✡️","🔯","🪯","☯️","☦️","🛐","⛎","♈","♉","♊","♋","♌","♍","♎","♏","♐","♑","♒","♓","🆔","⚛️","🉑","☢️","☣️","📴","📳","🈶","🈚","🈸","🈺","🈷️","✴️","🆚","💮","🉐","㊙️","㊗️","🈴","🈵","🈹","🈲","🅰️","🅱️","🆎","🆘","❌","⭕","🔴","🟠","🟡","🟢","🔵","🟣","⚪","⚫","▪️","▫️","◾","◽","🔶","🔷","🔸","🔹","🔺","🔻","💠","🔘","🔳","🔲"],
+    flags: ["🏳️","🏴","🏁","🚩","🏳️‍🌈","🏳️‍⚧️","🇷🇺","🇺🇸","🇬🇧","🇩🇪","🇫🇷","🇪🇸","🇮🇹","🇺🇦","🇰🇿","🇧🇾","🇦🇲","🇬🇪","🇦🇿","🇹🇷","🇨🇳","🇯🇵","🇰🇷","🇮🇳","🇧🇷","🇨🇦","🇦🇺","🇲🇽","🇦🇪","🇸🇦","🇮🇱","🇵🇱","🇳🇱","🇸🇪","🇳🇴","🇫🇮","🇨🇭","🇦🇹","🇨🇿","🇸🇰","🇷🇴","🇧🇬","🇷🇸","🇭🇷","🇸🇮","🇪🇪","🇱🇻","🇱🇹","🇵🇹","🇬🇷"]
+  };
   const QUICK_REACTIONS = [
     "\u{1F44D}",
     "\u{2764}\u{FE0F}",
@@ -36,6 +56,7 @@
     "\u{1F641}",
     "\u{1F62E}",
   ];
+  const CHAT_REACTION_ACTOR = "out";
 
   const dom = {
     left: {
@@ -45,10 +66,18 @@
     },
     center: {
       stack: $(".chat-center-stack"),
+      headerOrder: $("#chatHeaderOrder"),
       headerName: $("#chatHeaderName"),
       headerPhone: $("#chatHeaderPhone"),
       orderTitle: $("#chatOrderTitle"),
       orderStatus: $("#chatOrderStatus"),
+      orderKind: $("#chatOrderKind"),
+      orderId: $("#chatOrderId"),
+      orderTime: $("#chatOrderTime"),
+      orderTimeIcon: $("#chatOrderTimeIcon"),
+      orderAddress: $("#chatOrderAddress"),
+      orderComment: $("#chatOrderComment"),
+      orderTotal: $("#chatOrderTotal"),
       messagesWrap: $("#chatMessagesWrap"),
       messages: $("#chatMessages"),
       empty: $("#chatEmptyState"),
@@ -70,8 +99,6 @@
       selectionBar: $("#chatSelectionToolbar"),
       selectionCount: $("#chatSelectionCount"),
       selectionCloseBtn: $("#chatSelectionCloseBtn"),
-      selectionForwardBtn: $("#chatSelectionForwardBtn"),
-      selectionDownloadBtn: $("#chatSelectionDownloadBtn"),
       selectionCopyBtn: $("#chatSelectionCopyBtn"),
       selectionDeleteBtn: $("#chatSelectionDeleteBtn"),
     },
@@ -83,26 +110,39 @@
     activeClientId: null,
     activeClient: null,
     activeOrders: [],
+    activeOrdersSignature: "[]",
+    headerOrderId: 0,
     q: "",
     requestToken: 0,
     editingMessageId: null,
     contextMessageId: null,
+    contextClientId: null,
     replyDraft: null,
     deleteConfirmUi: null,
     pendingDeleteConfirm: null,
     deleteConfirmCloseTimer: 0,
+    clientContextMenu: null,
     selectionMode: false,
     selectedMessageIds: new Set(),
     store: loadStore(),
+    orderDetailsCache: new Map(),
     remoteThreadUpdatedAt: {},
     remoteSaveTimers: {},
     activeThreadPollTimer: 0,
     summariesPollTimer: 0,
+    activeOrdersPollTimer: 0,
+    activeOrdersPollInFlight: false,
+    messagesScrollRaf: 0,
   };
+
+  let emojiCategories = {};
+  let emojiRecentList = [];
+  let emojiActiveCategory = "people";
+  let emojiDatasetPromise = null;
 
   function getClientsRightApi() {
     const api = window.__clientsDashboardApi;
-    if (!api || typeof api.selectClientById !== "function") return null;
+    if (!api) return null;
     return api;
   }
 
@@ -161,6 +201,51 @@
     }
   }
 
+  function buildActiveOrdersSignature(orders) {
+    const list = Array.isArray(orders) ? orders : [];
+    const normalized = list
+      .map((order) => ({
+        id: Number(order?.id || 0),
+        customer_id: Number(order?.customer_id || order?.client_id || 0),
+        status_id: Number(order?.status_id || 0),
+        status_title: String(order?.status_title || ""),
+        status_color: String(order?.status_color || ""),
+        total_price: Number(order?.total_price ?? order?.total ?? 0),
+        payment_code: String(order?.payment_code || ""),
+        address: String(order?.address || order?.pickup_store_address || ""),
+        comment: String(order?.comment || order?.address_comment || ""),
+        method_code: String(order?.method_code || ""),
+        created_at: String(order?.created_at || ""),
+        scheduled_at: String(order?.scheduled_at || ""),
+        updated_at: String(order?.updated_at || ""),
+      }))
+      .sort((a, b) => a.id - b.id);
+    return stableSerialize(normalized);
+  }
+
+  function setActiveOrders(orders, options = {}) {
+    const incoming = Array.isArray(orders) ? orders : [];
+    const existingById = new Map(
+      (Array.isArray(state.activeOrders) ? state.activeOrders : [])
+        .map((order) => [Number(order?.id || 0), order])
+    );
+    const list = incoming.map((order) => {
+      const id = Number(order?.id || 0);
+      const prev = existingById.get(id);
+      return prev ? { ...prev, ...order } : order;
+    });
+    if (!list.length) state.headerOrderId = 0;
+    const signature = buildActiveOrdersSignature(list);
+    const changed = signature !== state.activeOrdersSignature;
+    state.activeOrders = list;
+    state.activeOrdersSignature = signature;
+
+    if (changed || options.forceRender) {
+      renderChatHeader();
+    }
+    return changed;
+  }
+
   function getClientMetaForSync(clientId) {
     const key = normalizeClientIdKey(clientId);
     if (!key) return {};
@@ -202,10 +287,13 @@
     const same = stableSerialize(prev) === stableSerialize(next);
 
     state.remoteThreadUpdatedAt[key] = String(snapshot.updatedAt || "");
+    const shouldMarkRead = Number(state.activeClientId) === Number(key)
+      && !options.skipReadMark
+      && isChatTabActiveForRead();
     let hiddenChanged = pruneHiddenMessageIds(key);
     if (same) {
       let changed = markThreadDelivered(key);
-      if (Number(state.activeClientId) === Number(key) && !options.skipReadMark) {
+      if (shouldMarkRead) {
         const readChanged = markThreadRead(key);
         changed = readChanged || changed;
         if (readChanged) renderMessages();
@@ -221,7 +309,7 @@
     markThreadDelivered(key);
 
     if (Number(state.activeClientId) === Number(key)) {
-      if (!options.skipReadMark) markThreadRead(key);
+      if (shouldMarkRead) markThreadRead(key);
       renderMessages();
     }
     applyClientFilter();
@@ -239,6 +327,15 @@
     });
     const updatedAt = String(json?.data?.updated_at || "");
     if (updatedAt) state.remoteThreadUpdatedAt[key] = updatedAt;
+  }
+
+  async function deleteRemoteThread(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}`, {
+      method: "DELETE",
+    });
+    delete state.remoteThreadUpdatedAt[key];
   }
 
   function queueThreadSaveToRemote(clientId) {
@@ -364,11 +461,26 @@
       const raw = localStorage.getItem(CHAT_STORAGE_KEY);
       if (!raw) return { threads: {}, hiddenMessageIds: {}, lastOpenClientId: null };
       const parsed = JSON.parse(raw);
-      return {
+      const nextStore = {
         threads: parsed && typeof parsed.threads === "object" ? parsed.threads : {},
         hiddenMessageIds: parsed && typeof parsed.hiddenMessageIds === "object" ? parsed.hiddenMessageIds : {},
         lastOpenClientId: Number(parsed?.lastOpenClientId || 0) || null,
       };
+      let changed = false;
+      TEST_CHAT_IDS_TO_PRUNE.forEach((id) => {
+        if (Object.prototype.hasOwnProperty.call(nextStore.threads, id)) {
+          delete nextStore.threads[id];
+          changed = true;
+        }
+        if (Object.prototype.hasOwnProperty.call(nextStore.hiddenMessageIds, id)) {
+          delete nextStore.hiddenMessageIds[id];
+          changed = true;
+        }
+      });
+      if (changed) {
+        localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(nextStore));
+      }
+      return nextStore;
     } catch {
       return { threads: {}, hiddenMessageIds: {}, lastOpenClientId: null };
     }
@@ -381,6 +493,9 @@
   function ensureThread(clientId) {
     const key = String(clientId);
     if (!Array.isArray(state.store.threads[key])) state.store.threads[key] = [];
+    state.store.threads[key].forEach((message) => {
+      ensureMessageReactions(message);
+    });
     return state.store.threads[key];
   }
 
@@ -469,6 +584,13 @@
     return !!message.deliveredAt || status === "delivered" || isMessageRead(message);
   }
 
+  function isChatTabActiveForRead() {
+    if (typeof document === "undefined") return true;
+    if (document.visibilityState && document.visibilityState !== "visible") return false;
+    if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
+    return true;
+  }
+
   function markThreadDelivered(clientId) {
     const thread = getThread(clientId);
     let changed = false;
@@ -507,8 +629,21 @@
     return changed;
   }
 
+  function syncActiveThreadReadState(options = {}) {
+    const id = Number(options.clientId || state.activeClientId || 0);
+    if (!Number.isFinite(id) || id <= 0) return false;
+    if (!isChatTabActiveForRead()) return false;
+    const changed = markThreadRead(id);
+    if (changed || options.forceRender) {
+      applyClientFilter();
+      if (Number(state.activeClientId) === id) renderMessages();
+    }
+    return changed;
+  }
+
   function pushMessage(clientId, message) {
     const thread = getThread(clientId);
+    ensureMessageReactions(message);
     thread.push(message);
     if (thread.length > 250) thread.splice(0, thread.length - 250);
     saveStore();
@@ -619,7 +754,7 @@
       const pos = dom.center.input.value.length;
       dom.center.input.setSelectionRange(pos, pos);
     }
-    syncComposerRichPreview({ stickToBottom: true });
+    syncComposerRichPreview({});
   }
 
   function scrollToMessageInThread(messageId) {
@@ -672,6 +807,7 @@
       card: $(".chat-delete-confirm-card", overlay),
       title: $("#chatDeleteConfirmTitle", overlay),
       text: $("#chatDeleteConfirmText", overlay),
+      checkRow: $(".chat-delete-confirm-check", overlay),
       check: $("#chatDeleteConfirmForClient", overlay),
       checkText: $("#chatDeleteConfirmCheckText", overlay),
       cancelBtn: $("#chatDeleteConfirmCancelBtn", overlay),
@@ -728,14 +864,23 @@
     }
 
     const count = Math.max(1, Number(options.count || 1));
-    const clientName = String(state.activeClient?.name || "клиента").trim();
-
-    if (ui.title) ui.title.textContent = `Удалить ${count} ${getMessagesWord(count)}`;
-    if (ui.text) ui.text.textContent = count === 1
+    const rawClientName = String(options.clientName || state.activeClient?.name || "клиента").trim();
+    const clientName = rawClientName || "клиента";
+    const allowDeleteForClient = options.allowDeleteForClient !== false;
+    const titleText = String(options.title || `Удалить ${count} ${getMessagesWord(count)}`);
+    const bodyText = String(options.text || (count === 1
       ? "Вы точно хотите удалить это сообщение?"
-      : "Вы точно хотите удалить эти сообщения?";
-    if (ui.checkText) ui.checkText.textContent = `Также удалить для ${clientName}`;
-    if (ui.check) ui.check.checked = true;
+      : "Вы точно хотите удалить эти сообщения?"));
+    const checkText = String(options.checkText || `Также удалить для ${clientName}`);
+
+    if (ui.title) ui.title.textContent = titleText;
+    if (ui.text) ui.text.textContent = bodyText;
+    if (ui.checkText) ui.checkText.textContent = checkText;
+    if (ui.checkRow) ui.checkRow.classList.toggle("hidden", !allowDeleteForClient);
+    if (ui.check) {
+      ui.check.disabled = !allowDeleteForClient;
+      ui.check.checked = allowDeleteForClient;
+    }
 
     state.pendingDeleteConfirm = {
       onConfirm: typeof options.onConfirm === "function" ? options.onConfirm : null,
@@ -760,6 +905,7 @@
       read: false,
       pinned: false,
       reaction: "",
+      reactions: { in: "", out: "" },
     });
     saveStore();
   }
@@ -913,6 +1059,70 @@
     return false;
   }
 
+  function normalizeComposerText(text) {
+    const raw = String(text || "").replace(/\r/g, "");
+    if (!raw) return "";
+    const trimmed = raw.trim();
+    if (trimmed) return trimmed;
+    return hasEmojiInText(raw) ? raw : "";
+  }
+
+  function normalizeReactionValue(value) {
+    return String(value || "")
+      .trim()
+      .normalize("NFC")
+      .replace(/\uFE0F/g, "");
+  }
+
+  function sanitizeReactionsMap(raw) {
+    const source = raw && typeof raw === "object" ? raw : {};
+    return {
+      in: String(source.in || "").trim(),
+      out: String(source.out || "").trim(),
+    };
+  }
+
+  function ensureMessageReactions(message) {
+    if (!message || typeof message !== "object") return { in: "", out: "" };
+    const reactions = sanitizeReactionsMap(message.reactions);
+    const legacy = String(message.reaction || "").trim();
+    if (!reactions.in && !reactions.out && legacy) {
+      const fallbackActor = String(message.direction || "").toLowerCase() === "out" ? "out" : "in";
+      reactions[fallbackActor] = legacy;
+    }
+    message.reactions = reactions;
+    return reactions;
+  }
+
+  function getMessageActorReaction(message, actor = CHAT_REACTION_ACTOR) {
+    const reactions = ensureMessageReactions(message);
+    return String(reactions[actor] || "");
+  }
+
+  function setMessageActorReaction(message, actor, reaction) {
+    if (!message || typeof message !== "object") return false;
+    const actorKey = actor === "in" ? "in" : "out";
+    const next = String(reaction || "").trim();
+    const reactions = ensureMessageReactions(message);
+    const current = String(reactions[actorKey] || "");
+    const toggled = normalizeReactionValue(current) === normalizeReactionValue(next) ? "" : next;
+    if (current === toggled) return false;
+    reactions[actorKey] = toggled;
+    message.reactions = reactions;
+    message.reaction = String(reactions[CHAT_REACTION_ACTOR] || "");
+    return true;
+  }
+
+  function getMessageReactionItems(message) {
+    const reactions = ensureMessageReactions(message);
+    const items = [];
+    const outReaction = String(reactions.out || "");
+    const inReaction = String(reactions.in || "");
+    if (outReaction) items.push({ actor: "out", reaction: outReaction });
+    if (inReaction) items.push({ actor: "in", reaction: inReaction });
+    return items;
+  }
+
   function normalizePhoneDigits(value) { return String(value || "").replace(/\D+/g, ""); }
 
   function formatPhoneDigitsToRU(phone) {
@@ -978,9 +1188,320 @@
     return date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
   }
 
+  function fmtOrderAmount(value) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return "—";
+    const rounded = Math.round(amount);
+    return `${new Intl.NumberFormat("ru-RU").format(rounded)} ₽`;
+  }
+
+  function getOrderAddressLine(order) {
+    if (!order || typeof order !== "object") return "Адрес не указан";
+    const methodCode = String(order.method_code || "").toLowerCase();
+    const pickupAddress = order.pickup_store_address
+      ? [order.pickup_store_name, order.pickup_store_address].filter(Boolean).join(", ")
+      : "";
+    const baseAddress = methodCode === "pickup"
+      ? (pickupAddress || order.address || "")
+      : (order.address || pickupAddress || "");
+    const normalized = String(baseAddress || "").replace(/\s+/g, " ").trim();
+    return normalized || "Адрес не указан";
+  }
+
+  function getOrderCommentLine(order) {
+    if (!order || typeof order !== "object") return "Нет комментария";
+    const comment = String(order.comment || order.address_comment || "").replace(/\s+/g, " ").trim();
+    return comment || "Нет комментария";
+  }
+
+  function isIconUrl(value) {
+    const val = String(value || "").trim();
+    if (!val) return false;
+    return /^https?:\/\//i.test(val) || val.startsWith("/") || val.startsWith("./") || val.startsWith("../");
+  }
+
+  function normalizeIconClass(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (raw.startsWith("fa-")) return "fas " + raw;
+    if (/^fa[srlbd]?\s+/i.test(raw)) return raw;
+    return "fas " + raw;
+  }
+
+  function fallbackTimeOptionIcon(codeValue) {
+    const code = String(codeValue || "").trim().toLowerCase();
+    if (code === "asap" || code === "urgent") return "fas fa-bolt";
+    if (code === "at_time") return "fas fa-clock";
+    if (code === "on_date") return "fas fa-calendar-day";
+    return "";
+  }
+
+  function resolveTimeOptionIcon(order) {
+    if (!order) return "";
+    const storedIcon = String(order.time_option_icon || "").trim();
+    if (storedIcon) return storedIcon;
+    return fallbackTimeOptionIcon(order.time_option_code);
+  }
+
+  function setHeaderTimeIcon(order) {
+    if (!dom.center.orderTimeIcon) return;
+
+    const iconValue = resolveTimeOptionIcon(order);
+    let iconHtml = '<i class="fas fa-calendar-day"></i>';
+    if (iconValue) {
+      if (isIconUrl(iconValue)) {
+        iconHtml = `<img src="${escapeHtml(iconValue)}" alt="" loading="lazy">`;
+      } else {
+        const iconClass = normalizeIconClass(iconValue) || "fas fa-calendar-day";
+        iconHtml = `<i class="${escapeHtml(iconClass)}"></i>`;
+      }
+    }
+
+    dom.center.orderTimeIcon.innerHTML = iconHtml;
+    const title = String(order && order.time_option_title || "").trim();
+    if (title) dom.center.orderTimeIcon.setAttribute("title", title);
+    else dom.center.orderTimeIcon.removeAttribute("title");
+  }
+
+  function paymentIcon(code) {
+    if (!code) return "fa-credit-card";
+    const c = String(code).toLowerCase();
+    if (c.includes("cash")) return "fa-money-bill-wave";
+    if (c.includes("card")) return "fa-credit-card";
+    if (c.includes("online")) return "fa-globe";
+    return "fa-credit-card";
+  }
+
   function isFinalStatus(statusTitle) {
     const title = String(statusTitle || "").toLowerCase();
     return title.includes("выполн") || title.includes("заверш") || title.includes("достав") || title.includes("отмен") || title.includes("cancel") || title.includes("done");
+  }
+
+  function getSortedOrdersForHeader(orders) {
+    return (Array.isArray(orders) ? orders : [])
+      .slice()
+      .sort((a, b) => {
+        const ta = parseDateValue(a?.created_at)?.getTime() || 0;
+        const tb = parseDateValue(b?.created_at)?.getTime() || 0;
+        if (tb !== ta) return tb - ta;
+        return Number(b?.id || 0) - Number(a?.id || 0);
+      });
+  }
+
+  function getHeaderOrderCandidate(orders) {
+    const sorted = getSortedOrdersForHeader(orders);
+    const currentOrder = sorted.find((o) => !isFinalStatus(o && o.status_title));
+    const latestOrder = sorted[0] || null;
+    return {
+      sortedOrders: sorted,
+      currentOrder: currentOrder || null,
+      latestOrder: latestOrder || null,
+      headerOrder: currentOrder || latestOrder || null,
+    };
+  }
+
+  function hasOrderHeaderDetailsPayload(order) {
+    if (!order || typeof order !== "object") return false;
+    const hasAddressField = Object.prototype.hasOwnProperty.call(order, "address")
+      || Object.prototype.hasOwnProperty.call(order, "pickup_store_address");
+    const hasCommentField = Object.prototype.hasOwnProperty.call(order, "comment")
+      || Object.prototype.hasOwnProperty.call(order, "address_comment");
+    const hasStatusColor = Object.prototype.hasOwnProperty.call(order, "status_color");
+    const hasPaymentCode = Object.prototype.hasOwnProperty.call(order, "payment_code");
+    return hasAddressField && hasCommentField && hasStatusColor && hasPaymentCode;
+  }
+
+  function mergeDetailedOrderIntoActiveList(orderId, detailedOrder) {
+    const id = Number(orderId || 0);
+    if (!Number.isFinite(id) || id <= 0) return false;
+    if (!detailedOrder || typeof detailedOrder !== "object") return false;
+    const list = Array.isArray(state.activeOrders) ? state.activeOrders : [];
+    let changed = false;
+    const nextList = list.map((order) => {
+      if (Number(order && order.id || 0) !== id) return order;
+      changed = true;
+      return { ...order, ...detailedOrder };
+    });
+    if (changed) {
+      state.activeOrders = nextList;
+      state.activeOrdersSignature = buildActiveOrdersSignature(nextList);
+    }
+    return changed;
+  }
+
+  function setHeaderOrderLinkState(orderId) {
+    if (!dom.center.headerOrder) return;
+    const id = Number(orderId || 0);
+    const canOpen = Number.isFinite(id) && id > 0;
+    if (canOpen) dom.center.headerOrder.setAttribute("data-order-id", String(id));
+    else dom.center.headerOrder.removeAttribute("data-order-id");
+    dom.center.headerOrder.classList.toggle("is-order-openable", canOpen);
+    dom.center.headerOrder.setAttribute("aria-disabled", canOpen ? "false" : "true");
+    dom.center.headerOrder.tabIndex = canOpen ? 0 : -1;
+  }
+
+  function normalizeTooltipText(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function setNativeTooltip(node, text) {
+    if (!node) return;
+    const normalized = normalizeTooltipText(text);
+    if (normalized && normalized !== "—") node.setAttribute("title", normalized);
+    else node.removeAttribute("title");
+  }
+
+  function joinTooltipParts(parts) {
+    return (Array.isArray(parts) ? parts : [])
+      .map((part) => normalizeTooltipText(part))
+      .filter(Boolean)
+      .join(" • ");
+  }
+
+  function syncHeaderTooltips() {
+    if (!dom.center.headerOrder) return;
+
+    const idText = normalizeTooltipText(dom.center.orderId?.textContent);
+    const timeText = normalizeTooltipText(dom.center.orderTime?.textContent);
+    const clientNameText = normalizeTooltipText(dom.center.headerName?.textContent);
+    const clientPhoneText = normalizeTooltipText(dom.center.headerPhone?.textContent);
+    const addressText = normalizeTooltipText(dom.center.orderAddress?.textContent);
+    const commentText = normalizeTooltipText(dom.center.orderComment?.textContent);
+    const statusText = normalizeTooltipText(dom.center.orderStatus?.textContent);
+    const totalText = normalizeTooltipText(dom.center.orderTotal?.textContent);
+    const titleText = normalizeTooltipText(dom.center.orderTitle?.textContent);
+
+    setNativeTooltip(dom.center.orderId, idText);
+    setNativeTooltip(dom.center.orderTime, timeText);
+    setNativeTooltip(dom.center.headerName, clientNameText);
+    setNativeTooltip(dom.center.headerPhone, clientPhoneText);
+    setNativeTooltip(dom.center.orderAddress, addressText);
+    setNativeTooltip(dom.center.orderComment, commentText);
+    setNativeTooltip(dom.center.orderStatus, statusText);
+    setNativeTooltip(dom.center.orderTotal, totalText);
+
+    setNativeTooltip($(".order-col.order-id", dom.center.headerOrder), joinTooltipParts([idText, timeText]));
+    setNativeTooltip($(".order-col.order-client", dom.center.headerOrder), joinTooltipParts([clientNameText, clientPhoneText]));
+    setNativeTooltip($(".order-col.order-address", dom.center.headerOrder), joinTooltipParts([addressText, commentText]));
+    setNativeTooltip($(".order-col.order-stage", dom.center.headerOrder), statusText);
+    setNativeTooltip($(".order-col.order-total", dom.center.headerOrder), totalText);
+
+    const timeIconTitle = normalizeTooltipText(dom.center.orderTimeIcon?.getAttribute("title"));
+    setNativeTooltip($(".order-col.order-indicators", dom.center.headerOrder), timeIconTitle || timeText);
+    setNativeTooltip(dom.center.headerOrder, titleText);
+  }
+
+  async function hydrateHeaderOrderDetails(requestId, clientId) {
+    const activeClientId = Number(clientId || state.activeClientId || 0);
+    if (!Number.isFinite(activeClientId) || activeClientId <= 0) return;
+
+    const candidate = getHeaderOrderCandidate(state.activeOrders);
+    const headerOrder = candidate.headerOrder;
+    const headerOrderId = Number(headerOrder && headerOrder.id || 0);
+    if (!Number.isFinite(headerOrderId) || headerOrderId <= 0) return;
+
+    if (hasOrderHeaderDetailsPayload(headerOrder)) return;
+
+    const cached = state.orderDetailsCache.get(headerOrderId);
+    if (cached && mergeDetailedOrderIntoActiveList(headerOrderId, cached)) {
+      renderChatHeader();
+      return;
+    }
+
+    try {
+      const json = await apiJson(`/api/admin/orders/${headerOrderId}`);
+      if (requestId !== state.requestToken) return;
+      if (Number(state.activeClientId || 0) !== activeClientId) return;
+
+      const detailedOrder = json && json.data ? json.data : null;
+      if (!detailedOrder || typeof detailedOrder !== "object") return;
+      state.orderDetailsCache.set(headerOrderId, detailedOrder);
+      if (!mergeDetailedOrderIntoActiveList(headerOrderId, detailedOrder)) return;
+      renderChatHeader();
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  function getOrderClientId(order) {
+    const id = Number(order?.customer_id || order?.client_id || order?.clientId || 0);
+    return Number.isFinite(id) && id > 0 ? id : 0;
+  }
+
+  function upsertActiveOrder(order) {
+    const orderId = Number(order?.id || 0);
+    if (!Number.isFinite(orderId) || orderId <= 0) return false;
+    const list = Array.isArray(state.activeOrders) ? state.activeOrders : [];
+    let found = false;
+    const nextList = list.map((item) => {
+      if (Number(item?.id || 0) !== orderId) return item;
+      found = true;
+      return { ...item, ...order };
+    });
+    if (!found) nextList.push(order);
+    return setActiveOrders(nextList);
+  }
+
+  async function refreshActiveOrdersForActiveClient(options = {}) {
+    const clientId = Number(options.clientId || state.activeClientId || 0);
+    if (!Number.isFinite(clientId) || clientId <= 0) return false;
+    if (state.activeOrdersPollInFlight && !options.force) return false;
+
+    state.activeOrdersPollInFlight = true;
+    try {
+      const ordersJson = await apiJson(`/api/admin/clients/${clientId}/orders`);
+      if (Number(state.activeClientId || 0) !== clientId) return false;
+      const nextOrders = Array.isArray(ordersJson?.data) ? ordersJson.data : [];
+      const changed = setActiveOrders(nextOrders);
+      if (changed || options.forceHydrate) {
+        hydrateHeaderOrderDetails(state.requestToken, clientId).catch(console.error);
+      }
+      return changed;
+    } catch (err) {
+      console.error(err);
+      return false;
+    } finally {
+      state.activeOrdersPollInFlight = false;
+    }
+  }
+
+  function initOrderHeaderLiveSync() {
+    if (initOrderHeaderLiveSync.bound) return;
+    initOrderHeaderLiveSync.bound = true;
+
+    document.addEventListener(ORDER_UPDATED_EVENT, (event) => {
+      const order = event?.detail?.order;
+      if (!order || typeof order !== "object") return;
+
+      const activeClientId = Number(state.activeClientId || state.activeClient?.id || 0);
+      if (!Number.isFinite(activeClientId) || activeClientId <= 0) return;
+
+      const orderId = Number(order.id || 0);
+      if (!Number.isFinite(orderId) || orderId <= 0) return;
+
+      const ownerClientId = getOrderClientId(order);
+      const existsInActive = (Array.isArray(state.activeOrders) ? state.activeOrders : [])
+        .some((item) => Number(item?.id || 0) === orderId);
+
+      if (ownerClientId > 0 && ownerClientId !== activeClientId && !existsInActive) return;
+      if (ownerClientId <= 0 && !existsInActive) return;
+
+      const changed = upsertActiveOrder(order);
+      if (changed) {
+        hydrateHeaderOrderDetails(state.requestToken, activeClientId).catch(console.error);
+      }
+    });
+
+    if (!state.activeOrdersPollTimer) {
+      state.activeOrdersPollTimer = window.setInterval(() => {
+        refreshActiveOrdersForActiveClient().catch(console.error);
+      }, ACTIVE_ORDERS_POLL_MS);
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      refreshActiveOrdersForActiveClient({ force: true, forceHydrate: true }).catch(console.error);
+    });
   }
 
   function hexToRgba(hex, alpha) {
@@ -1061,7 +1582,14 @@
       renderEmojiMessageText(previewEl, preview, "chat-emoji-glyph chat-emoji-glyph--preview");
     }
 
-    row.addEventListener("click", () => selectClient(client.id));
+    row.addEventListener("click", () => {
+      hideClientContextMenu();
+      selectClient(client.id);
+    });
+    row.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      showClientContextMenu(event.clientX, event.clientY, client.id);
+    });
     return row;
   }
 
@@ -1076,28 +1604,328 @@
     if (dom.left.empty) dom.left.empty.classList.add("hidden");
     items.forEach((client) => dom.left.list.appendChild(buildChatClientRow(client)));
   }
+
+  function normalizeEmojiCategoryName(rawCategory) {
+    const value = String(rawCategory || "").trim().toLowerCase();
+    if (!value) return "";
+
+    if (
+      value.includes("smileys")
+      || value.includes("emotion")
+      || value.includes("people")
+      || value.includes("body")
+    ) return "people";
+    if (value.includes("animals") || value.includes("nature")) return "nature";
+    if (value.includes("food") || value.includes("drink")) return "food";
+    if (value.includes("activities") || value.includes("activity")) return "activity";
+    if (value.includes("travel") || value.includes("places")) return "travel";
+    if (value.includes("objects")) return "objects";
+    if (value.includes("symbols")) return "symbols";
+    if (value.includes("flags")) return "flags";
+    return "";
+  }
+
+  function unifiedToEmoji(unified) {
+    const parts = String(unified || "")
+      .trim()
+      .split("-")
+      .filter(Boolean);
+    if (!parts.length) return "";
+    try {
+      return parts
+        .map((part) => Number.parseInt(part, 16))
+        .filter((cp) => Number.isFinite(cp) && cp > 0)
+        .map((cp) => String.fromCodePoint(cp))
+        .join("");
+    } catch {
+      return "";
+    }
+  }
+
+  function normalizeEmojiList(list) {
+    const input = Array.isArray(list) ? list : [];
+    const seen = new Set();
+    const out = [];
+    input.forEach((item) => {
+      const emoji = String(item || "").trim().normalize("NFC");
+      if (!emoji || !hasEmojiInText(emoji)) return;
+      const key = normalizeReactionValue(emoji);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      out.push(emoji);
+    });
+    return out;
+  }
+
+  function normalizeEmojiCategoryMap(input) {
+    const base = {};
+    EMOJI_CATEGORY_META.forEach(({ key }) => {
+      if (key !== "recent") base[key] = [];
+    });
+
+    const source = input && typeof input === "object" ? input : {};
+    Object.entries(source).forEach(([rawKey, rawList]) => {
+      const normalizedKey = normalizeEmojiCategoryName(rawKey) || rawKey;
+      if (!base[normalizedKey]) return;
+      const merged = base[normalizedKey].concat(normalizeEmojiList(rawList));
+      base[normalizedKey] = normalizeEmojiList(merged);
+    });
+
+    return base;
+  }
+
+  function loadRecentEmojis() {
+    try {
+      const raw = localStorage.getItem(EMOJI_RECENT_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return normalizeEmojiList(parsed).slice(0, 42);
+    } catch {
+      return [];
+    }
+  }
+
+  function saveRecentEmojis(list) {
+    try {
+      const next = normalizeEmojiList(list).slice(0, 42);
+      localStorage.setItem(EMOJI_RECENT_STORAGE_KEY, JSON.stringify(next));
+    } catch {}
+  }
+
+  function rememberRecentEmoji(emoji) {
+    const value = String(emoji || "").trim();
+    if (!value) return;
+    const norm = normalizeReactionValue(value);
+    emojiRecentList = [value].concat(
+      emojiRecentList.filter((item) => normalizeReactionValue(item) !== norm)
+    );
+    emojiRecentList = normalizeEmojiList(emojiRecentList).slice(0, 42);
+    saveRecentEmojis(emojiRecentList);
+  }
+
+  function buildEmojiCategoriesFromDataset(entries) {
+    const categories = normalizeEmojiCategoryMap({});
+    const list = Array.isArray(entries) ? entries : [];
+    const pushUnified = (target, unified) => {
+      const emoji = unifiedToEmoji(unified);
+      if (emoji) categories[target].push(emoji);
+    };
+
+    list.forEach((entry) => {
+      if (!entry || typeof entry !== "object") return;
+      if (entry.has_img_google === false) return;
+      const category = normalizeEmojiCategoryName(entry.category);
+      if (!category || !categories[category]) return;
+
+      pushUnified(category, entry.unified);
+
+      if (entry.skin_variations && typeof entry.skin_variations === "object") {
+        Object.values(entry.skin_variations).forEach((variant) => {
+          if (!variant || typeof variant !== "object") return;
+          pushUnified(category, variant.unified);
+        });
+      }
+    });
+
+    Object.keys(categories).forEach((key) => {
+      categories[key] = normalizeEmojiList(categories[key]);
+    });
+    return categories;
+  }
+
+  function getFirstAvailableEmojiCategory(preferred = "people") {
+    if (preferred && preferred !== "recent" && (emojiCategories[preferred] || []).length) return preferred;
+    const found = EMOJI_CATEGORY_META
+      .map(({ key }) => key)
+      .find((key) => key !== "recent" && (emojiCategories[key] || []).length);
+    return found || "people";
+  }
+
+  function getEmojiCategoriesForRender() {
+    const output = {};
+    EMOJI_CATEGORY_META.forEach(({ key }) => {
+      if (key === "recent") {
+        output[key] = normalizeEmojiList(emojiRecentList).slice(0, 42);
+        return;
+      }
+      output[key] = Array.isArray(emojiCategories[key]) ? emojiCategories[key] : [];
+    });
+    return output;
+  }
+
+  async function ensureEmojiDatasetLoaded() {
+    if (emojiDatasetPromise) return emojiDatasetPromise;
+
+    emojiDatasetPromise = (async () => {
+      try {
+        const res = await fetch(EMOJI_DATASET_URL, { cache: "force-cache" });
+        if (!res.ok) throw new Error(`EMOJI_DATASET_HTTP_${res.status}`);
+        const payload = await res.json();
+        const next = buildEmojiCategoriesFromDataset(payload);
+        const hasAny = Object.values(next).some((list) => Array.isArray(list) && list.length);
+        if (!hasAny) return;
+
+        emojiCategories = next;
+        if (!(getEmojiCategoriesForRender()[emojiActiveCategory] || []).length) {
+          emojiActiveCategory = getFirstAvailableEmojiCategory(emojiActiveCategory);
+        }
+
+        if (dom.center.emojiPopover && !dom.center.emojiPopover.classList.contains("hidden")) {
+          renderEmojiPicker();
+        }
+      } catch (err) {
+        console.error("emoji dataset load failed", err);
+        emojiDatasetPromise = null;
+      }
+    })();
+
+    return emojiDatasetPromise;
+  }
+
+  function insertEmojiIntoComposer(emoji) {
+    if (!dom.center.input) return;
+    const input = dom.center.input;
+    const value = String(emoji || "");
+    if (!value) return;
+
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    input.value = `${input.value.slice(0, start)}${value}${input.value.slice(end)}`;
+    input.focus();
+    const pos = start + value.length;
+    input.setSelectionRange(pos, pos);
+    syncComposerRichPreview({});
+  }
+
   function renderEmojiPicker() {
     if (!dom.center.emojiPopover) return;
-    dom.center.emojiPopover.innerHTML = "";
-    EMOJIS.forEach((emoji) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "chat-emoji-btn";
-      btn.setAttribute("aria-label", emoji);
-      btn.title = emoji;
-      setEmojiGlyph(btn, emoji, "chat-emoji-glyph chat-emoji-glyph--picker");
-      btn.addEventListener("click", () => {
-        if (!dom.center.input) return;
-        const input = dom.center.input;
-        const start = input.selectionStart ?? input.value.length;
-        const end = input.selectionEnd ?? input.value.length;
-        input.value = `${input.value.slice(0, start)}${emoji}${input.value.slice(end)}`;
-        input.focus();
-        const pos = start + emoji.length;
-        input.setSelectionRange(pos, pos);
-        syncComposerRichPreview({ stickToBottom: true });
+    const popover = dom.center.emojiPopover;
+    popover.innerHTML = "";
+
+    const categories = getEmojiCategoriesForRender();
+    const visibleCategories = EMOJI_CATEGORY_META.filter(({ key }) => {
+      const list = Array.isArray(categories[key]) ? categories[key] : [];
+      return list.length > 0;
+    });
+
+    if (!visibleCategories.length) {
+      const empty = document.createElement("div");
+      empty.className = "chat-emoji-empty";
+      empty.textContent = "Нет эмодзи";
+      popover.appendChild(empty);
+      return;
+    }
+
+    if (!visibleCategories.some(({ key }) => key === emojiActiveCategory)) {
+      emojiActiveCategory = visibleCategories[0].key;
+    }
+
+    const tabs = document.createElement("div");
+    tabs.className = "chat-emoji-categories";
+    popover.appendChild(tabs);
+
+    const body = document.createElement("div");
+    body.className = "chat-emoji-body";
+    popover.appendChild(body);
+
+    const tabByKey = new Map();
+    const sectionByKey = new Map();
+
+    const updateActiveTabUi = (nextKey) => {
+      tabByKey.forEach((tab, key) => {
+        tab.classList.toggle("is-active", key === nextKey);
       });
-      dom.center.emojiPopover.appendChild(btn);
+    };
+
+    visibleCategories.forEach((category) => {
+      const list = Array.isArray(categories[category.key]) ? categories[category.key] : [];
+
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.className = `chat-emoji-category-btn${emojiActiveCategory === category.key ? " is-active" : ""}`;
+      tab.setAttribute("aria-label", category.label);
+      tab.title = category.label;
+      tab.innerHTML = `<i class="${category.iconClass}" aria-hidden="true"></i>`;
+      tab.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const section = sectionByKey.get(category.key);
+        if (!section) return;
+        emojiActiveCategory = category.key;
+        updateActiveTabUi(emojiActiveCategory);
+        body.scrollTo({
+          top: Math.max(0, section.offsetTop - 2),
+          behavior: "smooth",
+        });
+      });
+      tabByKey.set(category.key, tab);
+      tabs.appendChild(tab);
+
+      const section = document.createElement("section");
+      section.className = "chat-emoji-section";
+      section.setAttribute("data-emoji-category", category.key);
+
+      const title = document.createElement("div");
+      title.className = "chat-emoji-title";
+      title.textContent = category.label;
+      section.appendChild(title);
+
+      const grid = document.createElement("div");
+      grid.className = "chat-emoji-grid";
+      list.forEach((emoji) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "chat-emoji-btn";
+        btn.setAttribute("aria-label", emoji);
+        btn.title = emoji;
+        setEmojiGlyph(btn, emoji, "chat-emoji-glyph chat-emoji-glyph--picker");
+        btn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          insertEmojiIntoComposer(emoji);
+          rememberRecentEmoji(emoji);
+        });
+        grid.appendChild(btn);
+      });
+      section.appendChild(grid);
+      sectionByKey.set(category.key, section);
+      body.appendChild(section);
+    });
+
+    const syncActiveCategoryByScroll = () => {
+      const threshold = body.scrollTop + 12;
+      let currentKey = emojiActiveCategory;
+      visibleCategories.forEach(({ key }) => {
+        const section = sectionByKey.get(key);
+        if (!section) return;
+        if (section.offsetTop <= threshold) currentKey = key;
+      });
+      if (currentKey !== emojiActiveCategory) {
+        emojiActiveCategory = currentKey;
+        updateActiveTabUi(emojiActiveCategory);
+      }
+    };
+
+    body.addEventListener("scroll", syncActiveCategoryByScroll, { passive: true });
+    updateActiveTabUi(emojiActiveCategory);
+
+    requestAnimationFrame(() => {
+      const activeSection = sectionByKey.get(emojiActiveCategory);
+      if (!activeSection) return;
+      body.scrollTop = Math.max(0, activeSection.offsetTop - 2);
+      requestAnimationFrame(syncActiveCategoryByScroll);
+    });
+  }
+      
+  function bindEmojiPopoverGuard() {
+    if (!dom.center.emojiPopover) return;
+    if (dom.center.emojiPopover.dataset.clickGuardBound === "1") return;
+    dom.center.emojiPopover.dataset.clickGuardBound = "1";
+    dom.center.emojiPopover.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+    dom.center.emojiPopover.addEventListener("mousedown", (event) => {
+      event.stopPropagation();
     });
   }
 
@@ -1134,7 +1962,12 @@
 
   function decorateComposerEmojiControls() {
     if (dom.center.emojiBtn) {
-      setEmojiGlyph(dom.center.emojiBtn, "\u{1F642}", "chat-emoji-glyph chat-emoji-glyph--composer");
+      dom.center.emojiBtn.classList.remove("has-emoji-content");
+      dom.center.emojiBtn.textContent = "";
+      const smileIcon = document.createElement("i");
+      smileIcon.className = "far fa-smile";
+      smileIcon.setAttribute("aria-hidden", "true");
+      dom.center.emojiBtn.appendChild(smileIcon);
       dom.center.emojiBtn.setAttribute("aria-label", "Эмодзи");
       dom.center.emojiBtn.title = "Эмодзи";
     }
@@ -1165,12 +1998,54 @@
     return (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) <= 28;
   }
 
-  function scrollMessagesToBottom() {
-    if (!dom.center.messagesWrap) return;
-    requestAnimationFrame(() => {
-      if (!dom.center.messagesWrap) return;
-      dom.center.messagesWrap.scrollTop = dom.center.messagesWrap.scrollHeight;
-    });
+  function stopMessagesSmoothScroll() {
+    if (!state.messagesScrollRaf) return;
+    cancelAnimationFrame(state.messagesScrollRaf);
+    state.messagesScrollRaf = 0;
+  }
+
+  function scrollMessagesToBottom(options = {}) {
+    const wrap = dom.center.messagesWrap;
+    if (!wrap) return;
+
+    const behavior = String(options.behavior || "auto");
+    const durationRaw = Number(options.duration);
+    const duration = Number.isFinite(durationRaw) && durationRaw > 0 ? durationRaw : CHAT_AUTOSCROLL_MS;
+    const target = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
+
+    if (behavior !== "smooth-fast") {
+      stopMessagesSmoothScroll();
+      wrap.scrollTop = target;
+      return;
+    }
+
+    const startTop = wrap.scrollTop;
+    const delta = target - startTop;
+    if (Math.abs(delta) < 1) return;
+
+    stopMessagesSmoothScroll();
+    const startedAt = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+
+    const step = (now) => {
+      if (!dom.center.messagesWrap) {
+        state.messagesScrollRaf = 0;
+        return;
+      }
+      const currentTime = typeof now === "number" ? now : Date.now();
+      const progress = Math.min(1, (currentTime - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      wrap.scrollTop = startTop + (delta * eased);
+      if (progress < 1) {
+        state.messagesScrollRaf = requestAnimationFrame(step);
+        return;
+      }
+      state.messagesScrollRaf = 0;
+      wrap.scrollTop = target;
+    };
+
+    state.messagesScrollRaf = requestAnimationFrame(step);
   }
 
   function syncComposerRichPreview(options = {}) {
@@ -1197,12 +2072,22 @@
     wrap.appendChild(preview);
 
     const sync = (options = {}) => {
-      const keepPinned = shouldKeepMessagesPinnedToBottom();
       const stickToBottom = options && options.stickToBottom === true;
 
       const inputStyles = window.getComputedStyle(input);
-      const minHeight = parseFloat(inputStyles.minHeight) || 38;
+      const minHeight = parseFloat(inputStyles.minHeight) || 45;
       const maxHeight = parseFloat(inputStyles.maxHeight) || 160;
+      const value = String(input.value || "");
+
+      if (!value) {
+        input.style.height = `${minHeight}px`;
+        input.style.overflowY = "hidden";
+        preview.classList.add("hidden");
+        preview.textContent = "";
+        input.classList.remove("is-rich-emoji-preview");
+        if (stickToBottom) scrollMessagesToBottom({ behavior: "smooth-fast" });
+        return;
+      }
 
       input.style.height = "auto";
       const fullHeight = input.scrollHeight || minHeight;
@@ -1210,12 +2095,11 @@
       input.style.height = `${nextHeight}px`;
       input.style.overflowY = fullHeight > maxHeight + 1 ? "auto" : "hidden";
 
-      const value = String(input.value || "");
       if (!value || !hasEmojiInText(value)) {
         preview.classList.add("hidden");
         preview.textContent = "";
         input.classList.remove("is-rich-emoji-preview");
-        if (stickToBottom || keepPinned) scrollMessagesToBottom();
+        if (stickToBottom) scrollMessagesToBottom({ behavior: "smooth-fast" });
         return;
       }
 
@@ -1224,18 +2108,18 @@
       renderEmojiMessageText(preview, value, "chat-emoji-glyph chat-emoji-glyph--input-inline");
       preview.style.transform = `translate(${-Math.max(0, input.scrollLeft)}px, ${-Math.max(0, input.scrollTop)}px)`;
 
-      if (stickToBottom || keepPinned) scrollMessagesToBottom();
+      if (stickToBottom) scrollMessagesToBottom({ behavior: "smooth-fast" });
     };
 
     input.__syncEmojiPreview = sync;
-    input.addEventListener("input", () => sync({ stickToBottom: true }));
+    input.addEventListener("input", () => sync({}));
     ["scroll", "click", "keyup", "focus", "blur"].forEach((eventName) => {
       input.addEventListener(eventName, () => sync());
     });
     window.addEventListener("resize", () => sync());
 
     input.dataset.emojiPreviewReady = "1";
-    sync({ stickToBottom: true });
+    sync({});
   }
 
   function setComposerEnabled(enabled) {
@@ -1347,7 +2231,7 @@
     let changed = false;
     thread.forEach((msg) => {
       const id = String(msg?.id || "");
-      if (!id || msg.direction !== "out") return;
+      if (!id) return;
       if (!ids.has(id)) return;
       if (setMessageHiddenLocally(clientId, id, true, { persist: false })) changed = true;
     });
@@ -1370,8 +2254,7 @@
   function setThreadMessageReaction(clientId, messageId, reaction) {
     const msg = findThreadMessage(clientId, messageId);
     if (!msg) return false;
-    const next = String(reaction || "").trim();
-    msg.reaction = msg.reaction === next ? "" : next;
+    if (!setMessageActorReaction(msg, CHAT_REACTION_ACTOR, reaction)) return false;
     saveStore();
     queueThreadSaveToRemote(clientId);
     return true;
@@ -1476,7 +2359,7 @@
 
     const dataUrl = await readFileAsDataUrl(file);
     if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl)) return null;
-    if (dataUrl.length > 5 * 1024 * 1024) return null;
+    if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) return null;
 
     const dimensions = await getImageSizeFromDataUrl(dataUrl);
 
@@ -1523,7 +2406,7 @@
     dom.center.input.focus();
     const pos = dom.center.input.value.length;
     dom.center.input.setSelectionRange(pos, pos);
-    syncComposerRichPreview({ stickToBottom: true });
+    syncComposerRichPreview({});
   }
 
   function hideMessageContextMenu() {
@@ -1533,6 +2416,116 @@
       setReactionBarExpanded(false);
     }
     state.contextMessageId = null;
+  }
+
+  function ensureClientContextMenu() {
+    if (state.clientContextMenu && state.clientContextMenu.isConnected) return state.clientContextMenu;
+
+    const menu = document.createElement("div");
+    menu.id = "chatClientContextMenu";
+    menu.className = "chat-message-menu hidden";
+    menu.innerHTML = `
+      <button type="button" class="chat-message-menu-btn is-danger" data-chat-client-action="clear">
+        <i class="far fa-trash-alt" aria-hidden="true"></i>
+        <span>Очистить чат</span>
+      </button>
+    `;
+    document.body.appendChild(menu);
+
+    menu.addEventListener("click", (event) => {
+      const actionBtn = event.target.closest("[data-chat-client-action]");
+      if (!actionBtn) return;
+      const action = actionBtn.getAttribute("data-chat-client-action");
+      const clientId = state.contextClientId;
+      hideClientContextMenu();
+      if (!clientId) return;
+      if (action === "clear") {
+        clearClientChat(clientId);
+      }
+    });
+
+    state.clientContextMenu = menu;
+    return menu;
+  }
+
+  function hideClientContextMenu() {
+    if (state.clientContextMenu) state.clientContextMenu.classList.add("hidden");
+    state.contextClientId = null;
+  }
+
+  function clearClientChat(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+
+    const client = state.clients.find((row) => Number(row.id) === Number(key));
+    const clientName = String(client?.name || `Клиент #${key}`);
+    const thread = getThread(key);
+    const messageIds = thread.map((msg) => String(msg?.id || "")).filter(Boolean);
+    const count = Math.max(1, messageIds.length);
+
+    openDeleteConfirm({
+      count,
+      clientName,
+      title: `Удалить чат с ${clientName}?`,
+      text: "Вы точно хотите удалить этот чат?",
+      checkText: `Удалить у ${clientName}`,
+      allowDeleteForClient: true,
+      onConfirm: ({ deleteForClient } = {}) => {
+        const removeForBoth = deleteForClient !== false;
+        const hiddenMap = ensureHiddenMessageMap();
+        if (!Array.isArray(state.store.threads[key])) state.store.threads[key] = [];
+        if (!Array.isArray(hiddenMap[key])) hiddenMap[key] = [];
+
+        if (removeForBoth) {
+          state.store.threads[key] = [];
+          hiddenMap[key] = [];
+          saveStore();
+
+          const saveTimer = state.remoteSaveTimers[key];
+          if (saveTimer) {
+            clearTimeout(saveTimer);
+            delete state.remoteSaveTimers[key];
+          }
+          delete state.remoteThreadUpdatedAt[key];
+
+          if (Number(state.activeClientId) === Number(key)) {
+            hideMessageContextMenu();
+            if (state.selectionMode || state.selectedMessageIds.size) {
+              setSelectionMode(false);
+            }
+            cancelEditingMessage();
+            clearComposerReply();
+            if (dom.center.input) {
+              dom.center.input.value = "";
+              syncComposerRichPreview({});
+            }
+            renderMessages();
+          }
+          applyClientFilter();
+          deleteRemoteThread(key).catch(console.error);
+          return;
+        }
+
+        if (!messageIds.length) return;
+        const changed = hideThreadMessagesLocally(key, messageIds);
+        if (!changed) return;
+        if (Number(state.activeClientId) === Number(key)) {
+          hideMessageContextMenu();
+          renderMessages();
+        }
+        applyClientFilter();
+      },
+    });
+    return true;
+  }
+
+  function showClientContextMenu(x, y, clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    hideMessageContextMenu();
+    const menu = ensureClientContextMenu();
+    state.contextClientId = key;
+    positionFloatingBox(menu, x, y, 8);
   }
 
   function positionFloatingBox(box, x, y, padding = 8) {
@@ -1562,11 +2555,12 @@
 
   function showReactionBarForMessage(message, menuRect) {
     if (!dom.center.reactionBar) return;
+    const ownReaction = getMessageActorReaction(message, CHAT_REACTION_ACTOR);
     setReactionBarExpanded(false);
     $$('[data-chat-reaction]', dom.center.reactionBar).forEach((btn) => {
       const value = btn.getAttribute("data-chat-reaction");
       const isAction = value === "__toggle_more__";
-      const isActive = value && !isAction && value === String(message?.reaction || "");
+      const isActive = value && !isAction && normalizeReactionValue(value) === normalizeReactionValue(ownReaction);
       btn.classList.toggle("is-active", isActive);
     });
 
@@ -1579,11 +2573,12 @@
     const message = findThreadMessage(state.activeClientId, messageId);
     if (!message) return;
 
+    hideClientContextMenu();
     state.contextMessageId = String(messageId || "");
     if (dom.center.menuPinLabel) dom.center.menuPinLabel.textContent = message.pinned ? "Открепить" : "Закрепить";
     const canManageOwnMessage = message.direction === "out";
     if (dom.center.menuEditAction) dom.center.menuEditAction.classList.toggle("hidden", !canManageOwnMessage);
-    if (dom.center.menuDeleteAction) dom.center.menuDeleteAction.classList.toggle("hidden", !canManageOwnMessage);
+    if (dom.center.menuDeleteAction) dom.center.menuDeleteAction.classList.remove("hidden");
 
     positionFloatingBox(dom.center.contextMenu, x, y, 8);
     showReactionBarForMessage(message, dom.center.contextMenu.getBoundingClientRect());
@@ -1602,12 +2597,14 @@
   function deleteMessageFromContext(messageId) {
     if (!state.activeClientId) return;
     const message = findThreadMessage(state.activeClientId, messageId);
-    if (!message || message.direction !== "out") return;
+    if (!message) return;
+    const canDeleteForClient = message.direction === "out";
 
     openDeleteConfirm({
       count: 1,
+      allowDeleteForClient: canDeleteForClient,
       onConfirm: ({ deleteForClient } = {}) => {
-        const removeForBoth = deleteForClient !== false;
+        const removeForBoth = canDeleteForClient && deleteForClient !== false;
         const changed = removeForBoth
           ? removeThreadMessage(state.activeClientId, messageId)
           : hideThreadMessagesLocally(state.activeClientId, [messageId]);
@@ -1616,7 +2613,7 @@
         if (String(state.editingMessageId || "") === String(messageId)) {
           cancelEditingMessage();
           if (dom.center.input) dom.center.input.value = "";
-          syncComposerRichPreview({ stickToBottom: true });
+          syncComposerRichPreview({});
         }
 
         if (String(state.replyDraft?.id || "") === String(messageId)) {
@@ -1665,62 +2662,50 @@
     await copyToClipboard(text);
   }
 
-  function forwardSelectedMessages() {
-    const selectedMessages = getSelectedMessages();
-    if (!selectedMessages.length) return;
-    const text = selectedMessages.map((msg) => String(msg.text || "")).join("\n");
-    closeSelectionMode();
-    focusComposer(`Переслано:\n${text}`);
-  }
-
-  function downloadSelectedMessages() {
-    const selectedMessages = getSelectedMessages();
-    if (!selectedMessages.length) return;
-
-    const lines = selectedMessages.map((msg) => {
-      const who = msg.direction === "out" ? "Вы" : "Клиент";
-      return `[${fmtTime(msg.createdAt)}] ${who}: ${String(msg.text || "")}`;
-    });
-
-    const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `chat-selected-${Date.now()}.txt`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  }
-
   function deleteSelectedMessages() {
     if (!state.activeClientId || state.selectedMessageIds.size === 0) return;
-    const selectedOwnMessages = getSelectedMessages().filter((msg) => msg.direction === "out");
-    if (!selectedOwnMessages.length) return;
-    const selectedOwnIds = new Set(selectedOwnMessages.map((msg) => String(msg.id || "")));
-    const count = selectedOwnIds.size;
+    const selectedMessages = getSelectedMessages();
+    if (!selectedMessages.length) return;
+
+    const selectedIds = new Set(selectedMessages.map((msg) => String(msg.id || "")).filter(Boolean));
+    if (!selectedIds.size) return;
+
+    const selectedOwnIds = new Set(
+      selectedMessages
+        .filter((msg) => msg.direction === "out")
+        .map((msg) => String(msg.id || ""))
+        .filter(Boolean)
+    );
+    const count = selectedIds.size;
+    const allowDeleteForClient = selectedOwnIds.size > 0;
 
     openDeleteConfirm({
       count,
+      allowDeleteForClient,
       onConfirm: ({ deleteForClient } = {}) => {
-        const removeForBoth = deleteForClient !== false;
+        const removeForBoth = allowDeleteForClient && deleteForClient !== false;
         const key = String(state.activeClientId);
         const thread = getThread(state.activeClientId);
+
         if (removeForBoth) {
           state.store.threads[key] = thread.filter((msg) => !selectedOwnIds.has(String(msg.id)));
           selectedOwnIds.forEach((id) => setMessageHiddenLocally(state.activeClientId, id, false, { persist: false }));
           pruneHiddenMessageIds(state.activeClientId);
-        } else {
-          hideThreadMessagesLocally(state.activeClientId, Array.from(selectedOwnIds));
         }
 
-        if (state.editingMessageId && selectedOwnIds.has(String(state.editingMessageId))) {
+        const localHideIds = new Set(selectedIds);
+        if (removeForBoth) {
+          selectedOwnIds.forEach((id) => localHideIds.delete(id));
+        }
+        hideThreadMessagesLocally(state.activeClientId, Array.from(localHideIds));
+
+        if (state.editingMessageId && selectedIds.has(String(state.editingMessageId))) {
           cancelEditingMessage();
           if (dom.center.input) dom.center.input.value = "";
-          syncComposerRichPreview({ stickToBottom: true });
+          syncComposerRichPreview({});
         }
 
-        if (state.replyDraft?.id && selectedOwnIds.has(String(state.replyDraft.id))) {
+        if (state.replyDraft?.id && selectedIds.has(String(state.replyDraft.id))) {
           clearComposerReply();
         }
 
@@ -1734,16 +2719,86 @@
   }
 
   function renderChatHeader() {
-    if (!state.activeClient) {
-      if (dom.center.headerName) dom.center.headerName.textContent = "Выберите клиента";
-      if (dom.center.headerPhone) dom.center.headerPhone.textContent = "Нажмите на чат в левом списке";
-      if (dom.center.orderTitle) dom.center.orderTitle.textContent = "Последний заказ: —";
-      if (dom.center.orderStatus) {
-        dom.center.orderStatus.textContent = "—";
+    const setOrderStatusView = (text, color) => {
+      if (!dom.center.orderStatus) return;
+      const safeText = String(text || "—").trim() || "—";
+      const safeColor = String(color || "").trim();
+      dom.center.orderStatus.textContent = safeText;
+      dom.center.orderStatus.classList.toggle("is-empty", safeText === "—" || safeText === "Без заказа");
+      if (!safeColor) {
         dom.center.orderStatus.style.background = "";
         dom.center.orderStatus.style.borderColor = "";
         dom.center.orderStatus.style.color = "";
+        return;
       }
+      dom.center.orderStatus.style.borderColor = hexToRgba(safeColor, 0.45) || safeColor;
+      dom.center.orderStatus.style.background = hexToRgba(safeColor, 0.12) || "";
+      dom.center.orderStatus.style.color = safeColor;
+    };
+
+    const setOrderTotalView = (totalText, paymentCode) => {
+      if (!dom.center.orderTotal) return;
+      const safeTotal = String(totalText || "—").trim() || "—";
+      const isEmpty = safeTotal === "—";
+
+      dom.center.orderTotal.classList.remove("order-payment-cash", "order-payment-card");
+      dom.center.orderTotal.classList.toggle("is-empty", isEmpty);
+      if (isEmpty) {
+        dom.center.orderTotal.textContent = "—";
+        return;
+      }
+
+      const code = String(paymentCode || "").toLowerCase();
+      const isCash = code.includes("cash");
+      dom.center.orderTotal.classList.add(isCash ? "order-payment-cash" : "order-payment-card");
+      dom.center.orderTotal.innerHTML = `<i class="fas ${escapeHtml(paymentIcon(code))}"></i> ${escapeHtml(safeTotal)}`;
+    };
+
+    const setOrderHeaderFields = ({
+      kind = "Последний заказ",
+      id = "—",
+      time = "—",
+      address = "Адрес не указан",
+      comment = "Нет комментария",
+      statusText = "Без заказа",
+      statusColor = "",
+      total = "—",
+      paymentCode = "",
+      title = "Последний заказ: —",
+      clientName = "—",
+      clientPhone = "—",
+      order = null,
+      orderId = 0,
+    } = {}) => {
+      if (dom.center.orderKind) dom.center.orderKind.textContent = kind;
+      if (dom.center.orderId) dom.center.orderId.textContent = id;
+      if (dom.center.orderTime) dom.center.orderTime.textContent = time;
+      if (dom.center.orderAddress) dom.center.orderAddress.textContent = address;
+      if (dom.center.orderComment) dom.center.orderComment.textContent = comment;
+      if (dom.center.headerName) dom.center.headerName.textContent = clientName;
+      if (dom.center.headerPhone) dom.center.headerPhone.textContent = clientPhone;
+      setHeaderTimeIcon(order);
+      setOrderTotalView(total, paymentCode);
+      if (dom.center.orderTitle) dom.center.orderTitle.textContent = title;
+      setOrderStatusView(statusText, statusColor);
+      setHeaderOrderLinkState(orderId);
+      syncHeaderTooltips();
+    };
+
+    if (!state.activeClient) {
+      setOrderHeaderFields({
+        kind: "Последний заказ",
+        id: "—",
+        time: "—",
+        address: "Адрес не указан",
+        comment: "Нет комментария",
+        statusText: "—",
+        total: "—",
+        title: "Последний заказ: —",
+        clientName: "Выберите клиента",
+        clientPhone: "Нажмите на чат в левом списке",
+        orderId: 0,
+      });
       cancelEditingMessage();
       clearComposerReply();
       if (state.pendingDeleteConfirm) closeDeleteConfirm();
@@ -1752,38 +2807,66 @@
       return;
     }
 
-    if (dom.center.headerName) dom.center.headerName.textContent = state.activeClient.name || `Клиент #${state.activeClient.id}`;
-    if (dom.center.headerPhone) dom.center.headerPhone.textContent = formatPhoneDigitsToRU(state.activeClient.phone);
-
-    const currentOrder = (state.activeOrders || []).find((o) => !isFinalStatus(o.status_title));
-    const latestOrder = (state.activeOrders || [])[0] || null;
-    const headerOrder = currentOrder || latestOrder;
+    const candidate = getHeaderOrderCandidate(state.activeOrders);
+    const currentOrder = candidate.currentOrder;
+    const pinnedHeaderOrderId = Number(state.headerOrderId || 0);
+    const pinnedHeaderOrder = (Array.isArray(candidate.sortedOrders) && pinnedHeaderOrderId > 0)
+      ? candidate.sortedOrders.find((order) => Number(order?.id || 0) === pinnedHeaderOrderId)
+      : null;
+    const headerOrder = pinnedHeaderOrder || candidate.headerOrder;
 
     if (!headerOrder) {
-      if (dom.center.orderTitle) dom.center.orderTitle.textContent = "Последний заказ: —";
-      if (dom.center.orderStatus) {
-        dom.center.orderStatus.textContent = "Без заказа";
-        dom.center.orderStatus.style.background = "";
-        dom.center.orderStatus.style.borderColor = "";
-        dom.center.orderStatus.style.color = "";
-      }
+      state.headerOrderId = 0;
+      setOrderHeaderFields({
+        kind: "Последний заказ",
+        id: "—",
+        time: "—",
+        address: "Адрес не указан",
+        comment: "Нет комментария",
+        statusText: "Без заказа",
+        total: "—",
+        title: "Последний заказ: —",
+        clientName: state.activeClient.name || `Клиент #${state.activeClient.id}`,
+        clientPhone: formatPhoneDigitsToRU(state.activeClient.phone),
+        orderId: 0,
+      });
     } else {
-      if (dom.center.orderTitle) dom.center.orderTitle.textContent = `${currentOrder ? "Текущий" : "Последний"} заказ #${headerOrder.id}`;
-      if (dom.center.orderStatus) {
-        const statusColor = headerOrder.status_color || "#64748b";
-        dom.center.orderStatus.textContent = headerOrder.status_title || "Без статуса";
-        dom.center.orderStatus.style.borderColor = statusColor;
-        dom.center.orderStatus.style.background = hexToRgba(statusColor, 0.14) || "";
-        dom.center.orderStatus.style.color = statusColor;
-      }
+      const currentOrderId = Number(currentOrder?.id || 0);
+      const headerOrderId = Number(headerOrder?.id || 0);
+      const kindTitle = currentOrderId > 0 && headerOrderId > 0 && currentOrderId === headerOrderId
+        ? "Текущий заказ"
+        : "Последний заказ";
+      const orderTime = fmtTime(headerOrder.created_at || headerOrder.scheduled_at) || "—";
+      const orderId = Number(headerOrder.id);
+      state.headerOrderId = Number.isFinite(orderId) && orderId > 0 ? orderId : 0;
+      const totalRaw = headerOrder.total_price ?? headerOrder.total;
+      setOrderHeaderFields({
+        kind: kindTitle,
+        id: Number.isFinite(orderId) && orderId > 0 ? String(orderId) : "—",
+        time: orderTime,
+        address: getOrderAddressLine(headerOrder),
+        comment: getOrderCommentLine(headerOrder),
+        statusText: headerOrder.status_title || "Без статуса",
+        statusColor: headerOrder.status_color || "#64748b",
+        total: fmtOrderAmount(totalRaw),
+        paymentCode: headerOrder.payment_code || "",
+        title: `${kindTitle} #${headerOrder.id || "—"}`,
+        clientName: state.activeClient.name || `Клиент #${state.activeClient.id}`,
+        clientPhone: formatPhoneDigitsToRU(state.activeClient.phone),
+        order: headerOrder,
+        orderId,
+      });
     }
 
     syncComposerMode();
     setComposerEnabled(true);
   }
 
-  function renderMessages() {
+  function renderMessages(options = {}) {
     if (!dom.center.messages || !dom.center.empty) return;
+    const forceScrollBottom = options.forceScrollBottom === true;
+    const smoothScroll = options.smoothScroll !== false;
+    const keepPinnedBeforeRender = shouldKeepMessagesPinnedToBottom();
 
     if (!state.activeClientId) {
       setSelectionMode(false);
@@ -1921,18 +3004,26 @@
         else bubble.classList.add("is-emoji-only-many");
       }
 
-      if (msg.reaction) {
-        if (bubble) {
+      const reactionItems = getMessageReactionItems(msg);
+      if (reactionItems.length && bubble) {
+        const reactionsWrap = document.createElement("div");
+        reactionsWrap.className = "chat-message-reactions";
+        bubble.classList.add("has-reaction");
+
+        reactionItems.forEach((itemReaction) => {
           const reactionBtn = document.createElement("button");
           reactionBtn.type = "button";
           reactionBtn.className = "chat-message-reaction-pill";
           reactionBtn.setAttribute("data-chat-msg-reaction-toggle", messageId);
-          reactionBtn.setAttribute("data-chat-reaction-value", String(msg.reaction));
-          reactionBtn.title = "Изменить реакцию";
-          reactionBtn.setAttribute("aria-label", String(msg.reaction));
-          setEmojiGlyph(reactionBtn, msg.reaction, "chat-emoji-glyph chat-emoji-glyph--pill");
-          bubble.appendChild(reactionBtn);
-        }
+          reactionBtn.setAttribute("data-chat-reaction-value", String(itemReaction.reaction || ""));
+          reactionBtn.setAttribute("data-chat-reaction-actor", String(itemReaction.actor || ""));
+          reactionBtn.title = itemReaction.actor === CHAT_REACTION_ACTOR ? "Изменить реакцию" : "Реакция собеседника";
+          reactionBtn.setAttribute("aria-label", String(itemReaction.reaction || ""));
+          setEmojiGlyph(reactionBtn, itemReaction.reaction, "chat-emoji-glyph chat-emoji-glyph--pill");
+          reactionsWrap.appendChild(reactionBtn);
+        });
+
+        bubble.appendChild(reactionsWrap);
       }
 
       dom.center.messages.appendChild(item);
@@ -1945,18 +3036,16 @@
 
     syncSelectionUi();
 
-    if (dom.center.messagesWrap) {
-      if (!state.selectionMode) {
-        requestAnimationFrame(() => {
-          dom.center.messagesWrap.scrollTop = dom.center.messagesWrap.scrollHeight;
-        });
+    if (dom.center.messagesWrap && !state.selectionMode) {
+      if (forceScrollBottom || keepPinnedBeforeRender) {
+        scrollMessagesToBottom({ behavior: smoothScroll ? "smooth-fast" : "auto" });
       }
     }
   }
 
   function sendMessage(text, options = {}) {
     if (!state.activeClientId) return false;
-    const clean = String(text || "").trim();
+    const clean = normalizeComposerText(text);
     const attachment = isImageAttachment(options.attachment) ? options.attachment : null;
     if (!clean && !attachment) return false;
 
@@ -1987,6 +3076,7 @@
       read: false,
       pinned: false,
       reaction: "",
+      reactions: { in: "", out: "" },
       replyTo: replySnapshot,
       deliveryStatus: "sent",
       deliveredAt: "",
@@ -1996,7 +3086,7 @@
     scheduleOutgoingDeliveryProgress(state.activeClientId, newMessageId);
     clearComposerReply();
     hideMessageContextMenu();
-    renderMessages();
+    renderMessages({ forceScrollBottom: true, smoothScroll: true });
     applyClientFilter();
     return true;
   }
@@ -2030,6 +3120,7 @@
         read: false,
         pinned: false,
         reaction: "",
+        reactions: { in: "", out: "" },
         replyTo: sent === 0 ? replySnapshot : null,
         deliveryStatus: "sent",
         deliveredAt: "",
@@ -2042,7 +3133,7 @@
     if (sent > 0) {
       clearComposerReply();
       hideMessageContextMenu();
-      renderMessages();
+      renderMessages({ forceScrollBottom: true, smoothScroll: true });
       applyClientFilter();
     }
     return sent;
@@ -2062,6 +3153,10 @@
       const reactionPill = event.target.closest("[data-chat-msg-reaction-toggle]");
       if (reactionPill && state.activeClientId) {
         const messageId = reactionPill.getAttribute("data-chat-msg-reaction-toggle");
+        const reactionActor = reactionPill.getAttribute("data-chat-reaction-actor") || "";
+        if (reactionActor && reactionActor !== CHAT_REACTION_ACTOR) {
+          return;
+        }
         const reactionValue = reactionPill.getAttribute("data-chat-reaction-value") || reactionPill.textContent || "";
         if (messageId) reactMessageFromContext(messageId, reactionValue);
         return;
@@ -2101,7 +3196,7 @@
       if (!message) return;
 
       const heartReaction = "\u{2764}\u{FE0F}";
-      if (String(message.reaction || "") === heartReaction) {
+      if (normalizeReactionValue(getMessageActorReaction(message, CHAT_REACTION_ACTOR)) === normalizeReactionValue(heartReaction)) {
         hideMessageContextMenu();
         return;
       }
@@ -2151,7 +3246,9 @@
       if (!dom.center.contextMenu) return;
       const insideMenu = dom.center.contextMenu.contains(event.target);
       const insideReactions = dom.center.reactionBar && dom.center.reactionBar.contains(event.target);
+      const insideClientMenu = state.clientContextMenu && state.clientContextMenu.contains(event.target);
       if (!insideMenu && !insideReactions) hideMessageContextMenu();
+      if (!insideClientMenu) hideClientContextMenu();
     });
 
     document.addEventListener("contextmenu", (event) => {
@@ -2159,16 +3256,26 @@
       const insideMenu = dom.center.contextMenu.contains(event.target);
       const insideReactions = dom.center.reactionBar && dom.center.reactionBar.contains(event.target);
       const insideMessage = event.target.closest && event.target.closest(".chat-message");
+      const insideClientMenu = state.clientContextMenu && state.clientContextMenu.contains(event.target);
+      const insideClientRow = event.target.closest && event.target.closest(".chat-client-row");
       if (!insideMenu && !insideReactions && !insideMessage) hideMessageContextMenu();
+      if (!insideClientMenu && !insideClientRow) hideClientContextMenu();
     });
 
-    window.addEventListener("resize", hideMessageContextMenu);
-    window.addEventListener("scroll", hideMessageContextMenu, true);
+    window.addEventListener("resize", () => {
+      hideMessageContextMenu();
+      hideClientContextMenu();
+    });
+    window.addEventListener("scroll", () => {
+      hideMessageContextMenu();
+      hideClientContextMenu();
+    }, true);
 
     document.addEventListener("keydown", (event) => {
       if (event.key !== "Escape") return;
       if (state.pendingDeleteConfirm) return;
       hideMessageContextMenu();
+      hideClientContextMenu();
       if (state.selectionMode) {
         setSelectionMode(false);
         renderMessages();
@@ -2181,14 +3288,6 @@
       dom.center.selectionCloseBtn.addEventListener("click", closeSelectionMode);
     }
 
-    if (dom.center.selectionForwardBtn) {
-      dom.center.selectionForwardBtn.addEventListener("click", forwardSelectedMessages);
-    }
-
-    if (dom.center.selectionDownloadBtn) {
-      dom.center.selectionDownloadBtn.addEventListener("click", downloadSelectedMessages);
-    }
-
     if (dom.center.selectionCopyBtn) {
       dom.center.selectionCopyBtn.addEventListener("click", () => {
         copySelectedMessages().catch(console.error);
@@ -2199,6 +3298,30 @@
       dom.center.selectionDeleteBtn.addEventListener("click", deleteSelectedMessages);
     }
   }
+
+  function openOrderFromHeader() {
+    const headerOrderId = Number(dom.center.headerOrder && dom.center.headerOrder.getAttribute("data-order-id") || 0);
+    if (!Number.isFinite(headerOrderId) || headerOrderId <= 0) return;
+    const clientsRightApi = getClientsRightApi();
+    if (!clientsRightApi || typeof clientsRightApi.openOrderById !== "function") return;
+    clientsRightApi.openOrderById(headerOrderId);
+  }
+
+  function initHeaderOrderOpenAction() {
+    if (!dom.center.headerOrder || dom.center.headerOrder.dataset.boundOpenOrder === "1") return;
+    dom.center.headerOrder.dataset.boundOpenOrder = "1";
+
+    dom.center.headerOrder.addEventListener("click", () => {
+      openOrderFromHeader();
+    });
+
+    dom.center.headerOrder.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openOrderFromHeader();
+    });
+  }
+
   async function loadActiveClientData(clientId, selectedFromList = null) {
     const requestId = ++state.requestToken;
     try {
@@ -2209,15 +3332,14 @@
       if (requestId !== state.requestToken) return;
 
       state.activeClient = clientJson?.data || selectedFromList;
-      state.activeOrders = Array.isArray(ordersJson?.data) ? ordersJson.data : [];
-      renderChatHeader();
+      setActiveOrders(Array.isArray(ordersJson?.data) ? ordersJson.data : [], { forceRender: true });
       renderMessages();
+      hydrateHeaderOrderDetails(requestId, clientId).catch(console.error);
     } catch (err) {
       if (requestId !== state.requestToken) return;
       console.error(err);
       state.activeClient = selectedFromList;
-      state.activeOrders = [];
-      renderChatHeader();
+      setActiveOrders([], { forceRender: true });
       renderMessages();
     }
   }
@@ -2230,26 +3352,32 @@
     clearComposerReply();
     if (state.pendingDeleteConfirm) closeDeleteConfirm();
     setSelectionMode(false);
+    hideClientContextMenu();
     hideMessageContextMenu();
-    if (dom.center.input) dom.center.input.value = "";
-    syncComposerRichPreview({ stickToBottom: true });
+    if (dom.center.input) {
+      dom.center.input.value = "";
+      dom.center.input.style.height = "45px";
+      dom.center.input.style.overflowY = "hidden";
+    }
+    syncComposerRichPreview({});
 
     state.activeClientId = id;
     state.store.lastOpenClientId = id;
     saveStore();
 
     await pullThreadFromRemote(id, { skipReadMark: true }).catch(console.error);
-    markThreadRead(id);
+    syncActiveThreadReadState({ clientId: id });
     applyClientFilter();
     renderMessages();
 
     const selectedFromList = state.clients.find((c) => Number(c.id) === id) || null;
     const clientsRightApi = getClientsRightApi();
-    if (clientsRightApi) clientsRightApi.selectClientById(id, selectedFromList?.name || "").catch(console.error);
+    if (clientsRightApi && typeof clientsRightApi.selectClientById === "function") {
+      clientsRightApi.selectClientById(id, selectedFromList?.name || "").catch(console.error);
+    }
 
     state.activeClient = selectedFromList;
-    state.activeOrders = [];
-    renderChatHeader();
+    setActiveOrders([], { forceRender: true });
 
     await loadActiveClientData(id, selectedFromList);
   }
@@ -2293,8 +3421,7 @@
       } else {
         state.activeClientId = null;
         state.activeClient = null;
-        state.activeOrders = [];
-        renderChatHeader();
+        setActiveOrders([], { forceRender: true });
         renderMessages();
       }
     } catch (err) {
@@ -2308,7 +3435,19 @@
   }
 
   function initComposer() {
+    if (!Object.keys(emojiCategories).length) {
+      emojiCategories = normalizeEmojiCategoryMap(EMOJI_FALLBACK_CATEGORIES);
+    }
+    if (!emojiRecentList.length) {
+      emojiRecentList = loadRecentEmojis();
+    }
+    if (!(emojiCategories[emojiActiveCategory] || []).length) {
+      emojiActiveCategory = getFirstAvailableEmojiCategory(emojiActiveCategory);
+    }
+
     renderEmojiPicker();
+    ensureEmojiDatasetLoaded().catch(() => {});
+    bindEmojiPopoverGuard();
     normalizeQuickReactionButtons();
     decorateComposerEmojiControls();
     ensureComposerReplyElements();
@@ -2332,7 +3471,7 @@
         if (!done) return;
         dom.center.input.value = "";
         dom.center.input.focus();
-        syncComposerRichPreview({ stickToBottom: true });
+        syncComposerRichPreview({});
       });
     }
 
@@ -2342,14 +3481,14 @@
           event.preventDefault();
           const done = sendMessage(dom.center.input.value);
           if (done) dom.center.input.value = "";
-          if (done) syncComposerRichPreview({ stickToBottom: true });
+          if (done) syncComposerRichPreview({});
           return;
         }
 
         if (event.key === "Escape" && state.editingMessageId) {
           cancelEditingMessage();
           dom.center.input.value = "";
-          syncComposerRichPreview({ stickToBottom: true });
+          syncComposerRichPreview({});
           return;
         }
 
@@ -2372,7 +3511,9 @@
     if (dom.center.emojiBtn && dom.center.emojiPopover) {
       dom.center.emojiBtn.addEventListener("click", (event) => {
         event.stopPropagation();
-        dom.center.emojiPopover.classList.toggle("hidden");
+        const willOpen = dom.center.emojiPopover.classList.contains("hidden");
+        dom.center.emojiPopover.classList.toggle("hidden", !willOpen);
+        if (willOpen) ensureEmojiDatasetLoaded().catch(() => {});
       });
 
       document.addEventListener("click", (event) => {
@@ -2397,12 +3538,30 @@
   function init() {
     initComposer();
     initSelectionToolbar();
+    initHeaderOrderOpenAction();
+    initOrderHeaderLiveSync();
     bindSearch();
     renderChatHeader();
     syncSelectionUi();
     renderMessages();
     startRemoteSyncLoops();
     loadClients().catch(console.error);
+
+    const syncReadOnForeground = () => {
+      if (!state.activeClientId) return;
+      if (!isChatTabActiveForRead()) return;
+      syncActiveThreadReadState();
+      pullThreadFromRemote(state.activeClientId, { skipReadMark: false }).catch(console.error);
+    };
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      syncReadOnForeground();
+    });
+
+    window.addEventListener("focus", () => {
+      syncReadOnForeground();
+    });
 
     document.addEventListener("tenantStoreChanged", () => {
       loadClients().catch(console.error);

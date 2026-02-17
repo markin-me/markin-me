@@ -6,6 +6,7 @@ module.exports = function makeChatTempRouter() {
   const router = express.Router();
   const storeDir = path.join(process.cwd(), "tmp", "chat-temp");
   const storeFile = path.join(storeDir, "threads.json");
+  const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
 
   function ensureStoreFile() {
     fs.mkdirSync(storeDir, { recursive: true });
@@ -65,6 +66,16 @@ module.exports = function makeChatTempRouter() {
     };
   }
 
+  function sanitizeReactions(raw) {
+    const source = raw && typeof raw === "object" ? raw : {};
+    const inReaction = String(source.in || "").slice(0, 20);
+    const outReaction = String(source.out || "").slice(0, 20);
+    return {
+      in: inReaction,
+      out: outReaction,
+    };
+  }
+
   function sanitizeAttachment(raw) {
     if (!raw || typeof raw !== "object") return null;
     const kind = String(raw.kind || "").toLowerCase();
@@ -72,7 +83,7 @@ module.exports = function makeChatTempRouter() {
 
     const dataUrl = String(raw.dataUrl || "");
     if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl)) return null;
-    if (dataUrl.length > 5 * 1024 * 1024) return null;
+    if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) return null;
 
     const mimeRaw = String(raw.mime || "").toLowerCase();
     const mime = /^image\/[a-z0-9.+-]+$/i.test(mimeRaw) ? mimeRaw : "";
@@ -103,6 +114,12 @@ module.exports = function makeChatTempRouter() {
       ? deliveryStatusRaw
       : "";
 
+    const reactions = sanitizeReactions(raw.reactions);
+    const legacyReaction = String(raw.reaction || "").slice(0, 20);
+    if (!reactions.in && !reactions.out && legacyReaction) {
+      reactions[direction] = legacyReaction;
+    }
+
     return {
       id,
       direction,
@@ -111,7 +128,8 @@ module.exports = function makeChatTempRouter() {
       editedAt: raw.editedAt ? toIsoOrNow(raw.editedAt) : "",
       read: raw.read === true,
       pinned: raw.pinned === true,
-      reaction: String(raw.reaction || "").slice(0, 20),
+      reaction: legacyReaction || reactions[direction] || "",
+      reactions,
       replyTo: sanitizeReply(raw.replyTo),
       attachment: sanitizeAttachment(raw.attachment),
       deliveryStatus,
@@ -142,10 +160,52 @@ module.exports = function makeChatTempRouter() {
 
   function sanitizeMeta(meta) {
     if (!meta || typeof meta !== "object") return {};
+    const rawLastWelcomeDay = String(meta.last_welcome_day || meta.lastWelcomeDay || "").trim();
+    const lastWelcomeDay = /^\d{4}-\d{2}-\d{2}$/.test(rawLastWelcomeDay) ? rawLastWelcomeDay : "";
     return {
       name: String(meta.name || "").slice(0, 160),
       phone: String(meta.phone || "").slice(0, 60),
+      last_welcome_day: lastWelcomeDay,
     };
+  }
+
+  function getRequestReactionActor(req) {
+    // Customer widget sends x-customer-token header, admin dashboard does not.
+    const customerToken = String(req.headers["x-customer-token"] || "").trim();
+    return customerToken ? "in" : "out";
+  }
+
+  function mergeReactionsByActor(existingMessages, nextMessages, actorKey) {
+    const actor = actorKey === "in" ? "in" : "out";
+    const peer = actor === "in" ? "out" : "in";
+    const byId = new Map();
+
+    (Array.isArray(existingMessages) ? existingMessages : []).forEach((msg) => {
+      if (!msg || typeof msg !== "object") return;
+      const id = String(msg.id || "").trim();
+      if (!id) return;
+      byId.set(id, sanitizeMessage(msg));
+    });
+
+    return (Array.isArray(nextMessages) ? nextMessages : []).map((msg) => {
+      if (!msg || typeof msg !== "object") return msg;
+      const id = String(msg.id || "").trim();
+      if (!id) return msg;
+
+      const prev = byId.get(id);
+      if (!prev) return msg;
+
+      const nextReactions = sanitizeReactions(msg.reactions);
+      const prevReactions = sanitizeReactions(prev.reactions);
+
+      // Current actor can only update own reaction; peer reaction is preserved.
+      nextReactions[peer] = prevReactions[peer];
+      msg.reactions = nextReactions;
+
+      const direction = String(msg.direction || "").toLowerCase() === "out" ? "out" : "in";
+      msg.reaction = String(nextReactions[direction] || "");
+      return msg;
+    });
   }
 
   function getTenantBucket(store, tenantId) {
@@ -228,13 +288,15 @@ module.exports = function makeChatTempRouter() {
       const clientId = normalizeClientId(req.params.clientId);
       if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
 
-      const nextMessages = sanitizeThread(req.body?.messages || req.body?.thread || []);
+      let nextMessages = sanitizeThread(req.body?.messages || req.body?.thread || []);
       const metaPatch = sanitizeMeta(req.body?.meta);
       const now = new Date().toISOString();
+      const actor = getRequestReactionActor(req);
 
       const store = readStore();
       const bucket = getTenantBucket(store, tenantId);
       const record = getThreadRecord(bucket, clientId);
+      nextMessages = mergeReactionsByActor(record.messages, nextMessages, actor);
       record.messages = nextMessages;
       record.meta = {
         ...sanitizeMeta(record.meta),
@@ -255,6 +317,27 @@ module.exports = function makeChatTempRouter() {
       });
     } catch (err) {
       console.error("chat-temp PUT /thread error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
+  router.delete("/thread/:clientId", (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const clientId = normalizeClientId(req.params.clientId);
+      if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
+
+      const store = readStore();
+      const bucket = getTenantBucket(store, tenantId);
+      const existed = !!(bucket.threads && Object.prototype.hasOwnProperty.call(bucket.threads, clientId));
+      if (existed) {
+        delete bucket.threads[clientId];
+        writeStore(store);
+      }
+
+      return res.json({ ok: true, data: { client_id: Number(clientId), deleted: existed } });
+    } catch (err) {
+      console.error("chat-temp DELETE /thread error:", err);
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
   });
