@@ -2022,6 +2022,79 @@ body.page-orders .orders-list .order-client-phone-text{
   align-self:center;
 }
 
+.product-row-photo-select{
+  position:relative;
+  width:44px;
+  height:44px;
+  display:grid;
+  place-items:center;
+  border-radius:14px;
+  cursor:pointer;
+}
+.product-row-select-input{
+  position:absolute;
+  inset:0;
+  margin:0;
+  opacity:0;
+  cursor:pointer;
+}
+.order-row.product-row.is-active{
+  border:1px solid var(--color-border);
+  box-shadow:none;
+}
+.order-row.product-row.is-active:hover{
+  border-color:var(--color-border);
+  box-shadow:none;
+  transform:none;
+}
+.order-row.product-row.is-selected{
+  border:2px solid var(--color-primary);
+  box-shadow:none;
+}
+.order-row.product-row.is-selected:hover{
+  border-color:var(--color-primary);
+  box-shadow:none;
+  transform:none;
+}
+.order-row.product-row.is-active .product-row-photo-select .product-thumb,
+.order-row.product-row.is-selected .product-row-photo-select .product-thumb,
+.order-row.product-row.is-active .product-row-photo-select .product-avatar,
+.order-row.product-row.is-selected .product-row-photo-select .product-avatar{
+  border:2px solid var(--color-primary);
+  box-shadow:none;
+}
+
+.products-bulk-footer-actions{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  width:100%;
+}
+.products-bulk-footer-count{
+  margin-right:auto;
+  font-weight:700;
+}
+#productsBulkFooter .btn{
+  min-height:36px;
+  height:36px;
+  border-radius:999px;
+  padding:0 14px;
+  font-weight:700;
+}
+#productsBulkFooter .btn:disabled{
+  opacity:.5;
+  cursor:not-allowed;
+}
+@media (max-width: 1200px){
+  .products-bulk-footer-actions{
+    flex-wrap:wrap;
+  }
+  .products-bulk-footer-count{
+    width:100%;
+    margin-right:0;
+  }
+}
+
 /* Комбо-набор в списке — одна строка, сетка 2×2 как в карточке */
 .order-row.combo-row{
   padding:8px 12px;
