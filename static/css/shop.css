@@ -7374,7 +7374,7 @@ body.page-shop .shop-company-chat-btn:hover{
 .shop-company-chat-scroll-down{
   position: absolute;
   right: 22px;
-  bottom: 94px;
+  bottom: 112px;
   width: 44px;
   height: 44px;
   border-radius: 50%;
@@ -7386,13 +7386,106 @@ body.page-shop .shop-company-chat-btn:hover{
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: opacity 180ms ease, transform 180ms ease;
+  transform: translateY(0);
+  filter: blur(0);
+  will-change: transform, opacity, filter;
+  transition:
+    opacity 260ms cubic-bezier(.22,.61,.36,1),
+    transform 280ms cubic-bezier(.22,.61,.36,1),
+    filter 260ms cubic-bezier(.22,.61,.36,1);
 }
 
 .shop-company-chat-scroll-down.hidden{
   opacity: 0;
   pointer-events: none;
-  transform: translateY(8px);
+  transform: translateY(30px) scale(.82);
+  filter: blur(2px);
+  animation: shop-company-chat-scroll-down-hide 240ms cubic-bezier(.4,0,.2,1) both;
+}
+
+.shop-company-chat-scroll-down:not(.hidden){
+  animation: shop-company-chat-scroll-down-rise 320ms cubic-bezier(.2,.8,.2,1) both;
+}
+
+@keyframes shop-company-chat-scroll-down-rise{
+  0%{
+    opacity: 0;
+    transform: translateY(34px) scale(.72);
+    filter: blur(2px);
+  }
+  70%{
+    opacity: 1;
+    transform: translateY(-4px) scale(1.06);
+    filter: blur(0);
+  }
+  100%{
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes shop-company-chat-scroll-down-hide{
+  0%{
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+  100%{
+    opacity: 0;
+    transform: translateY(30px) scale(.82);
+    filter: blur(2px);
+  }
+}
+
+.shop-company-chat-typing-row{
+  justify-content: flex-start;
+}
+
+.shop-company-chat-typing-row.is-hidden{
+  display: none;
+}
+
+.shop-company-chat-typing-indicator{
+  width: fit-content;
+  max-width: min(86%, 360px);
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  min-height: 20px;
+  padding-left: 14px;
+  padding-right: 14px;
+  display: inline-flex;
+  align-items: center;
+  pointer-events: none;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.shop-company-chat-typing-indicator::after{
+  content: "";
+  display: inline-block;
+  min-width: 1.8em;
+  margin-left: 2px;
+  text-align: left;
+  animation: shop-company-chat-typing-indicator-dots 1.1s steps(1, end) infinite;
+}
+
+.shop-company-chat-typing-row.is-hidden .shop-company-chat-typing-indicator::after{
+  content: "";
+  animation: none;
+}
+
+@keyframes shop-company-chat-typing-indicator-dots{
+  0%, 20%{ content: ""; }
+  40%{ content: "."; }
+  60%{ content: ".."; }
+  80%, 100%{ content: "..."; }
 }
 
 .shop-company-chat-scroll-down-badge{
@@ -8000,6 +8093,9 @@ body.page-shop .shop-company-chat-btn:hover{
 }
 
 .shop-company-chat-composer__input::placeholder{
+  text-align: left;
+  line-height: 1.45;
+  transform: translateY(2px);
   color: var(--color-text-muted);
 }
 
@@ -8009,15 +8105,27 @@ body.page-shop.shop-company-chat-open{
 
 @media (max-width: 768px){
   .shop-company-chat-overlay{
-    padding: 8px;
+    padding: 0;
+    justify-content: stretch;
     align-items: flex-end;
+    background: var(--overlay-bg);
   }
 
   .shop-company-chat-modal{
     width: 100%;
-    height: min(90dvh, 760px);
-    max-height: min(90vh, 760px);
-    border-radius: 24px 24px 0 0;
+    max-width: 100%;
+    height: calc(100dvh - var(--header-height) - var(--shop-sheet-top-gap));
+    max-height: calc(100dvh - var(--header-height) - var(--shop-sheet-top-gap));
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    box-shadow: var(--shadow-sm);
+    transform: translateY(110%);
+    opacity: 1;
+    transition: transform var(--dur-med) var(--ease-smooth);
+  }
+
+  .shop-company-chat-overlay.is-open .shop-company-chat-modal{
+    transform: translateY(0);
   }
 
   .shop-company-chat-modal__title{
@@ -8077,9 +8185,15 @@ body.page-shop.shop-company-chat-open{
 
   .shop-company-chat-scroll-down{
     right: 18px;
-    bottom: 76px;
+    bottom: 92px;
     width: 38px;
     height: 38px;
+  }
+
+  .shop-company-chat-typing-indicator{
+    max-width: min(86%, 340px);
+    padding-left: 12px;
+    padding-right: 12px;
   }
 
   .shop-company-chat-reaction-bar{

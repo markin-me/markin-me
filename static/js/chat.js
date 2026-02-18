@@ -6,12 +6,19 @@
   const CHAT_STORAGE_KEY = "dashboard:client-chat:v1";
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
   const ORDER_UPDATED_EVENT = "dashboard:order-updated";
+  const CHAT_UNREAD_EVENT = "dashboard:chat-unread-changed";
   const THREAD_SYNC_SAVE_DEBOUNCE_MS = 220;
-  const THREAD_SYNC_SUMMARY_POLL_MS = 5000;
+  const THREAD_SYNC_SUMMARY_POLL_MS = 15000;
+  const THREAD_SYNC_SUMMARY_WAIT_TIMEOUT_MS = 25000;
   const THREAD_SYNC_WAIT_TIMEOUT_MS = 20000;
   const THREAD_SYNC_WAIT_RETRY_MS = 1200;
+  const THREAD_SYNC_LOOP_MIN_INTERVAL_MS = 350;
   const ACTIVE_ORDERS_POLL_MS = 4200;
   const CHAT_AUTOSCROLL_MS = 170;
+  const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
+  const CHAT_TYPING_HEARTBEAT_MS = 1800;
+  const CHAT_TYPING_IDLE_STOP_MS = 2600;
+  const CHAT_TYPING_BLUR_STOP_MS = 320;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
   const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
   const IMAGE_OPTIMIZE_TARGET_BYTES = 900 * 1024;
@@ -65,6 +72,20 @@
     "\u{1F62E}",
   ];
   const CHAT_REACTION_ACTOR = "out";
+  const CHAT_TYPING_PHRASES = [
+    "печатает",
+    "набирает ответ",
+    "клацает по клавишам",
+    "стучит по клавиатуре",
+    "строчит сообщение",
+    "собирает мысли в текст",
+    "формулирует ответ",
+    "набивает текст",
+    "долбит по клавишам",
+    "подбирает слова",
+    "колдует над сообщением",
+    "нажимает клавиши",
+  ];
 
   const dom = {
     left: {
@@ -90,6 +111,7 @@
       messages: $("#chatMessages"),
       scrollDownBtn: $("#chatScrollDownBtn"),
       scrollDownBadge: $("#chatScrollDownBadge"),
+      typingIndicator: $("#chatTypingIndicator"),
       empty: $("#chatEmptyState"),
       attachInput: $("#chatAttachmentInput"),
       attachBtn: $("#chatAttachBtn"),
@@ -152,8 +174,13 @@
     remoteSaveInFlight: {},
     remoteMutationQueues: {},
     localThreadMutations: {},
+    remoteSummaryFingerprints: {},
+    remoteSummariesByClient: {},
     activeThreadWaitLoopStarted: false,
     activeThreadWaitLoopToken: 0,
+    summariesWaitLoopStarted: false,
+    summariesWaitLoopToken: 0,
+    summariesUpdatedAt: "",
     summariesPollTimer: 0,
     activeOrdersPollTimer: 0,
     activeOrdersPollInFlight: false,
@@ -161,14 +188,24 @@
     pendingScrollNewByClient: {},
     pendingScrollMessageIdsByClient: {},
     threadScrollTopByClient: {},
+    peerTypingByClient: {},
+    peerTypingUpdatedAtByClient: {},
+    peerTypingHideTimers: {},
+    localTypingHeartbeatTimer: 0,
+    localTypingStopTimer: 0,
+    localTypingClientId: "",
+    localTypingActive: false,
+    localTypingPhrase: "",
     attachPreviewItems: [],
     attachPreviewActiveIndex: 0,
   };
+  state.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.store?.ui?.threadScrollTopByClient);
 
   let emojiCategories = {};
   let emojiRecentList = [];
   let emojiActiveCategory = "people";
   let emojiDatasetPromise = null;
+  let unreadEventRaf = 0;
 
   function getClientsRightApi() {
     const api = window.__clientsDashboardApi;
@@ -206,6 +243,7 @@
     const res = await fetch(url, {
       method: opts.method || "GET",
       headers,
+      keepalive: opts.keepalive === true,
       body: opts.body
         ? (isFormDataBody ? opts.body : JSON.stringify(opts.body))
         : undefined,
@@ -251,6 +289,17 @@
     if (safeA > safeB) return 1;
     if (safeA < safeB) return -1;
     return 0;
+  }
+
+  function buildSummaryFingerprint(row) {
+    const source = row && typeof row === "object" ? row : {};
+    const messageCount = Number(source.message_count ?? source.messageCount ?? 0);
+    const unreadCount = Number(source.unread_count ?? source.unreadCount ?? 0);
+    const lastMessageAt = String(source.last_message_at ?? source.lastMessageAt ?? "");
+    const lastMessageText = String(source.last_message_text ?? source.lastMessageText ?? "");
+    const safeMessageCount = Number.isFinite(messageCount) && messageCount > 0 ? Math.trunc(messageCount) : 0;
+    const safeUnreadCount = Number.isFinite(unreadCount) && unreadCount > 0 ? Math.trunc(unreadCount) : 0;
+    return [safeMessageCount, safeUnreadCount, lastMessageAt, lastMessageText].join("|");
   }
 
   function hasPendingRemoteSave(clientId) {
@@ -329,6 +378,244 @@
       };
     }
     return {};
+  }
+
+  function getRandomTypingPhrase() {
+    if (!Array.isArray(CHAT_TYPING_PHRASES) || !CHAT_TYPING_PHRASES.length) {
+      return "печатает";
+    }
+    const idx = Math.floor(Math.random() * CHAT_TYPING_PHRASES.length);
+    const picked = String(CHAT_TYPING_PHRASES[idx] || "").trim();
+    return picked || "печатает";
+  }
+
+  function normalizePeerTypingInfo(raw) {
+    const source = raw && typeof raw === "object" ? raw : {};
+    const active = source.active === true;
+    const text = String(source.text || "").trim().slice(0, 120);
+    const updatedAt = String(source.updated_at || source.updatedAt || "");
+    const expiresAt = String(source.expires_at || source.expiresAt || "");
+    return {
+      active: active && !!text,
+      text: active ? text : "",
+      updatedAt,
+      expiresAt,
+    };
+  }
+
+  function ensurePeerTypingIndicatorNode() {
+    if (dom.center.typingIndicator && dom.center.typingIndicator.isConnected) {
+      return dom.center.typingIndicator;
+    }
+    const list = dom.center.messages;
+    if (!list) return null;
+    const existing = list.querySelector("#chatTypingIndicator");
+    if (existing) {
+      dom.center.typingIndicator = existing;
+      return existing;
+    }
+    const node = document.createElement("div");
+    node.id = "chatTypingIndicator";
+    node.className = "chat-typing-indicator is-hidden";
+    node.setAttribute("aria-live", "polite");
+    node.setAttribute("aria-atomic", "true");
+    list.appendChild(node);
+    dom.center.typingIndicator = node;
+    return node;
+  }
+
+  function renderPeerTypingIndicator() {
+    const keepBottom = shouldKeepMessagesPinnedToBottom();
+    const node = ensurePeerTypingIndicatorNode();
+    if (!node) return;
+    const activeKey = normalizeClientIdKey(state.activeClientId);
+    const info = activeKey ? state.peerTypingByClient[activeKey] : null;
+    const shouldShow = !!(info && info.active && info.text);
+    if (!shouldShow) {
+      node.textContent = "";
+      node.classList.add("is-hidden");
+      if (keepBottom) {
+        scrollMessagesToBottom({ behavior: "auto", keepPending: true });
+      } else {
+        updateMessagesScrollDownButton();
+      }
+      return;
+    }
+    node.textContent = String(info.text || "").trim();
+    node.classList.remove("is-hidden");
+    if (keepBottom) {
+      scrollMessagesToBottom({ behavior: "auto", keepPending: true });
+    } else {
+      updateMessagesScrollDownButton();
+    }
+  }
+
+  function clearPeerTypingHideTimer(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    const timer = Number(state.peerTypingHideTimers[key] || 0);
+    if (timer) window.clearTimeout(timer);
+    delete state.peerTypingHideTimers[key];
+  }
+
+  function schedulePeerTypingAutoHide(clientId, info) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    clearPeerTypingHideTimer(key);
+    const expiresAt = String(info && info.expiresAt || "");
+    if (!expiresAt) return;
+    const until = new Date(expiresAt).getTime();
+    if (!Number.isFinite(until)) return;
+    const delay = Math.max(0, until - Date.now() + 80);
+    state.peerTypingHideTimers[key] = window.setTimeout(() => {
+      delete state.peerTypingHideTimers[key];
+      const current = normalizePeerTypingInfo(state.peerTypingByClient[key]);
+      if (!current.active) return;
+      const currentUntil = new Date(String(current.expiresAt || "")).getTime();
+      if (Number.isFinite(currentUntil) && currentUntil > Date.now()) return;
+      state.peerTypingByClient[key] = {
+        active: false,
+        text: "",
+        updatedAt: current.updatedAt,
+        expiresAt: "",
+      };
+      if (Number(state.activeClientId) === Number(key)) renderPeerTypingIndicator();
+    }, delay);
+  }
+
+  function getPeerTypingUpdatedAt(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return "";
+    return String(state.peerTypingUpdatedAtByClient[key] || "");
+  }
+
+  function applyPeerTypingState(clientId, remoteTyping, options = {}) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    const opts = options || {};
+    const info = normalizePeerTypingInfo(remoteTyping);
+    const previousUpdatedAt = String(state.peerTypingUpdatedAtByClient[key] || "");
+    const nextUpdatedAt = String(info.updatedAt || previousUpdatedAt || "");
+    if (nextUpdatedAt) {
+      state.peerTypingUpdatedAtByClient[key] = nextUpdatedAt;
+    }
+
+    if (opts.forceInactive === true) {
+      state.peerTypingByClient[key] = {
+        active: false,
+        text: "",
+        updatedAt: nextUpdatedAt,
+        expiresAt: "",
+      };
+      clearPeerTypingHideTimer(key);
+      if (Number(state.activeClientId) === Number(key)) renderPeerTypingIndicator();
+      return;
+    }
+
+    state.peerTypingByClient[key] = info;
+    if (info.active) {
+      schedulePeerTypingAutoHide(key, info);
+    } else {
+      clearPeerTypingHideTimer(key);
+    }
+    if (Number(state.activeClientId) === Number(key)) renderPeerTypingIndicator();
+  }
+
+  async function pushThreadTypingState(clientId, active, phrase = "", options = {}) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    const body = active === true
+      ? { typing: true, text: String(phrase || "").trim().slice(0, 120) }
+      : { typing: false };
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}/typing`, {
+      method: "POST",
+      keepalive: options.keepalive === true,
+      body,
+    });
+    const peerTyping = json?.data?.peer_typing;
+    if (peerTyping && typeof peerTyping === "object") {
+      applyPeerTypingState(key, peerTyping);
+    }
+  }
+
+  function clearLocalTypingTimers() {
+    if (state.localTypingHeartbeatTimer) {
+      window.clearTimeout(state.localTypingHeartbeatTimer);
+      state.localTypingHeartbeatTimer = 0;
+    }
+    if (state.localTypingStopTimer) {
+      window.clearTimeout(state.localTypingStopTimer);
+      state.localTypingStopTimer = 0;
+    }
+  }
+
+  function scheduleLocalTypingHeartbeat() {
+    if (!state.localTypingActive) return;
+    const key = normalizeClientIdKey(state.localTypingClientId);
+    if (!key) return;
+    if (state.localTypingHeartbeatTimer) window.clearTimeout(state.localTypingHeartbeatTimer);
+    state.localTypingHeartbeatTimer = window.setTimeout(() => {
+      const activeKey = normalizeClientIdKey(state.localTypingClientId);
+      if (!state.localTypingActive || !activeKey || !dom.center.input) return;
+      const hasText = !!normalizeComposerText(dom.center.input.value);
+      if (!hasText || Number(state.activeClientId) !== Number(activeKey)) {
+        stopLocalTypingSession(activeKey, { flush: true });
+        return;
+      }
+      pushThreadTypingState(activeKey, true, state.localTypingPhrase).catch(console.error);
+      scheduleLocalTypingHeartbeat();
+    }, CHAT_TYPING_HEARTBEAT_MS);
+  }
+
+  function scheduleLocalTypingStop(delayMs = CHAT_TYPING_IDLE_STOP_MS) {
+    if (state.localTypingStopTimer) window.clearTimeout(state.localTypingStopTimer);
+    state.localTypingStopTimer = window.setTimeout(() => {
+      const key = normalizeClientIdKey(state.localTypingClientId || state.activeClientId);
+      stopLocalTypingSession(key, { flush: true });
+    }, Math.max(80, Number(delayMs || CHAT_TYPING_IDLE_STOP_MS)));
+  }
+
+  function stopLocalTypingSession(clientId, options = {}) {
+    const opts = options || {};
+    const key = normalizeClientIdKey(clientId || state.localTypingClientId || state.activeClientId);
+    const wasActive = state.localTypingActive === true && !!normalizeClientIdKey(state.localTypingClientId);
+    clearLocalTypingTimers();
+    state.localTypingActive = false;
+    state.localTypingPhrase = "";
+    state.localTypingClientId = "";
+
+    if (opts.flush !== false && key && (wasActive || opts.force === true)) {
+      pushThreadTypingState(key, false, "", { keepalive: opts.keepalive === true }).catch(console.error);
+    }
+  }
+
+  function handleComposerTypingActivity() {
+    if (!dom.center.input) return;
+    const key = normalizeClientIdKey(state.activeClientId);
+    if (!key) {
+      stopLocalTypingSession(state.localTypingClientId, { flush: true });
+      return;
+    }
+
+    const hasText = !!normalizeComposerText(dom.center.input.value);
+    if (!hasText) {
+      stopLocalTypingSession(key, { flush: true });
+      return;
+    }
+
+    if (state.localTypingActive && Number(state.localTypingClientId) !== Number(key)) {
+      stopLocalTypingSession(state.localTypingClientId, { flush: true });
+    }
+
+    if (!state.localTypingActive) {
+      state.localTypingActive = true;
+      state.localTypingClientId = key;
+      state.localTypingPhrase = getRandomTypingPhrase();
+      pushThreadTypingState(key, true, state.localTypingPhrase).catch(console.error);
+    }
+
+    scheduleLocalTypingHeartbeat();
+    scheduleLocalTypingStop(CHAT_TYPING_IDLE_STOP_MS);
   }
 
   async function fetchRemoteThreadSnapshot(clientId) {
@@ -411,7 +698,6 @@
     }
 
     const appendedIncomingMessageIds = (() => {
-      if (!isActiveThread) return [];
       if (options.ignoreIncomingBadge === true) return [];
       const prevIds = new Set(
         (Array.isArray(prev) ? prev : [])
@@ -428,13 +714,18 @@
     saveStore();
     pruneHiddenMessageIds(key);
     markThreadDelivered(key);
+    if (appendedIncomingMessageIds.length > 0) {
+      applyPeerTypingState(key, null, { forceInactive: true });
+      addPendingScrollMessageIds(key, appendedIncomingMessageIds);
+    }
 
     if (isActiveThread) {
-      if (appendedIncomingMessageIds.length > 0) {
-        addPendingScrollMessageIds(key, appendedIncomingMessageIds);
-      }
       if (shouldMarkRead) markThreadRead(key);
-      renderMessages({ disableAutoPin: true });
+      const hasIncomingAppended = appendedIncomingMessageIds.length > 0;
+      renderMessages({
+        disableAutoPin: !hasIncomingAppended,
+        smoothScroll: hasIncomingAppended,
+      });
     }
     applyClientFilter();
     return true;
@@ -606,18 +897,38 @@
     return isImageAttachment(attachment) ? attachment : null;
   }
 
-  async function waitThreadRemoteUpdate(clientId, sinceUpdatedAt, timeoutMs = THREAD_SYNC_WAIT_TIMEOUT_MS) {
+  async function waitThreadRemoteUpdate(
+    clientId,
+    sinceUpdatedAt,
+    typingSinceUpdatedAt = "",
+    timeoutMs = THREAD_SYNC_WAIT_TIMEOUT_MS
+  ) {
     const key = normalizeClientIdKey(clientId);
-    if (!key) return { changed: false, updatedAt: "" };
+    if (!key) {
+      return {
+        changed: false,
+        updatedAt: "",
+        timeout: true,
+        messageChanged: false,
+        typingChanged: false,
+        typing: null,
+      };
+    }
     const qs = new URLSearchParams({
       since: String(sinceUpdatedAt || ""),
+      typing_since: String(typingSinceUpdatedAt || ""),
       timeout_ms: String(Math.max(1000, Number(timeoutMs || THREAD_SYNC_WAIT_TIMEOUT_MS))),
       _ts: String(Date.now()),
     });
     const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}/wait?${qs.toString()}`);
+    const data = json?.data || {};
     return {
-      changed: json?.data?.changed === true,
-      updatedAt: String(json?.data?.updated_at || ""),
+      changed: data.changed === true,
+      updatedAt: String(data.updated_at || ""),
+      timeout: data.timeout === true,
+      messageChanged: data.message_changed === true,
+      typingChanged: data.typing_changed === true,
+      typing: data.typing && typeof data.typing === "object" ? data.typing : null,
     };
   }
 
@@ -772,17 +1083,41 @@
     return Array.from(merged.values());
   }
 
-  async function pullRemoteSummaries(clientIds) {
+  async function pullRemoteSummaries(clientIds, options = {}) {
     const ids = (Array.isArray(clientIds) ? clientIds : [])
       .map((id) => normalizeClientIdKey(id))
       .filter(Boolean);
     if (!ids.length) return false;
+    const forceThreads = options.forceThreads === true;
 
     const qs = new URLSearchParams();
     qs.set("client_ids", ids.join(","));
     qs.set("_ts", String(Date.now()));
     const json = await apiJson(`${CHAT_TEMP_API_BASE}/summaries?${qs.toString()}`);
     const rows = Array.isArray(json?.data) ? json.data : [];
+    rows.forEach((row) => {
+      const key = normalizeClientIdKey(row?.client_id ?? row?.clientId ?? row?.id);
+      if (!key) return;
+      if (!state.remoteSummariesByClient || typeof state.remoteSummariesByClient !== "object") {
+        state.remoteSummariesByClient = {};
+      }
+      state.remoteSummariesByClient[key] = row && typeof row === "object" ? { ...row } : {};
+    });
+    const latestUpdatedAt = rows.reduce((latest, row) => {
+      const updatedAt = String(
+        row?.updated_at
+        || row?.updatedAt
+        || row?.last_message_at
+        || row?.lastMessageAt
+        || ""
+      );
+      if (!updatedAt) return latest;
+      if (!latest || compareIsoDates(updatedAt, latest) > 0) return updatedAt;
+      return latest;
+    }, "");
+    if (latestUpdatedAt || state.summariesUpdatedAt) {
+      state.summariesUpdatedAt = latestUpdatedAt;
+    }
     const changedIds = rows
       .map((row) => ({
         key: normalizeClientIdKey(row?.client_id ?? row?.clientId ?? row?.id),
@@ -793,19 +1128,69 @@
           || row?.lastMessageAt
           || ""
         ),
+        summaryFingerprint: buildSummaryFingerprint(row),
       }))
       .filter((row) => row.key)
-      .filter((row) => state.remoteThreadUpdatedAt[row.key] !== row.updatedAt)
+      .filter((row) => {
+        const key = row.key;
+        const prevUpdatedAt = String(state.remoteThreadUpdatedAt[key] || "");
+        const prevFingerprint = String(state.remoteSummaryFingerprints[key] || "");
+        state.remoteSummaryFingerprints[key] = row.summaryFingerprint;
+        if (forceThreads && Number(state.activeClientId) === Number(key)) return true;
+        return prevUpdatedAt !== row.updatedAt || prevFingerprint !== row.summaryFingerprint;
+      })
       .map((row) => row.key);
 
     if (!changedIds.length) return false;
+    applyClientFilter();
+    rows.forEach((row) => {
+      const key = normalizeClientIdKey(row?.client_id ?? row?.clientId ?? row?.id);
+      if (!key) return;
+      const summaryUpdatedAt = String(row?.updated_at || row?.updatedAt || "");
+      if (summaryUpdatedAt) state.remoteThreadUpdatedAt[key] = summaryUpdatedAt;
+    });
     let changed = false;
-    for (const id of changedIds) {
+    const activeKey = normalizeClientIdKey(state.activeClientId);
+    const idsToPull = changedIds.filter((id) => id && activeKey && Number(id) === Number(activeKey));
+    for (const id of idsToPull) {
       // eslint-disable-next-line no-await-in-loop
       const pulled = await pullThreadFromRemote(id, { skipReadMark: Number(state.activeClientId) === Number(id) });
       if (pulled) changed = true;
     }
-    return changed;
+    return changed || changedIds.length > 0;
+  }
+
+  async function waitRemoteSummariesUpdate(sinceUpdatedAt, timeoutMs = THREAD_SYNC_SUMMARY_WAIT_TIMEOUT_MS) {
+    const qs = new URLSearchParams({
+      since: String(sinceUpdatedAt || ""),
+      timeout_ms: String(Math.max(1000, Number(timeoutMs || THREAD_SYNC_SUMMARY_WAIT_TIMEOUT_MS))),
+      _ts: String(Date.now()),
+    });
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/summaries/wait?${qs.toString()}`);
+    return {
+      changed: json?.data?.changed === true,
+      updatedAt: String(json?.data?.updated_at || ""),
+      timeout: json?.data?.timeout === true,
+    };
+  }
+
+  async function syncRemoteSummariesSnapshot(options = {}) {
+    const remoteClients = await loadRemoteChatClients().catch(() => []);
+    if (Array.isArray(remoteClients) && remoteClients.length) {
+      const merged = mergeRemoteClients(state.clients, remoteClients);
+      const prevFingerprint = stableSerialize(
+        (state.clients || []).map((client) => [Number(client.id), String(client.name || ""), String(client.phone || "")])
+      );
+      const nextFingerprint = stableSerialize(
+        (merged || []).map((client) => [Number(client.id), String(client.name || ""), String(client.phone || "")])
+      );
+      if (prevFingerprint !== nextFingerprint) {
+        state.clients = merged;
+        applyClientFilter();
+      }
+    }
+    const ids = (state.clients || []).map((client) => client.id);
+    await pullRemoteSummaries(ids, options).catch(console.error);
   }
 
   function sleepMs(ms) {
@@ -820,6 +1205,7 @@
 
       (async function runActiveThreadWaitLoop() {
         while (state.activeThreadWaitLoopStarted && loopToken === state.activeThreadWaitLoopToken) {
+          const loopStartedAt = Date.now();
           const activeId = normalizeClientIdKey(state.activeClientId);
           if (!activeId) {
             await sleepMs(THREAD_SYNC_WAIT_RETRY_MS);
@@ -828,16 +1214,71 @@
 
           try {
             const knownUpdatedAt = String(state.remoteThreadUpdatedAt[activeId] || "");
-            const waited = await waitThreadRemoteUpdate(activeId, knownUpdatedAt, THREAD_SYNC_WAIT_TIMEOUT_MS);
+            const knownTypingUpdatedAt = getPeerTypingUpdatedAt(activeId);
+            const waited = await waitThreadRemoteUpdate(
+              activeId,
+              knownUpdatedAt,
+              knownTypingUpdatedAt,
+              THREAD_SYNC_WAIT_TIMEOUT_MS
+            );
             if (!state.activeThreadWaitLoopStarted || loopToken !== state.activeThreadWaitLoopToken) break;
             if (normalizeClientIdKey(state.activeClientId) !== activeId) continue;
 
-            if (waited?.changed === true || (waited?.updatedAt && waited.updatedAt !== knownUpdatedAt)) {
-              await pullThreadFromRemoteIfChanged(activeId, { skipReadMark: false }).catch(console.error);
+            if (waited?.typing && typeof waited.typing === "object") {
+              applyPeerTypingState(activeId, waited.typing);
+            }
+
+            const messageChanged = waited?.messageChanged === true
+              || (
+                waited?.messageChanged !== false
+                && waited?.changed === true
+                && waited?.typingChanged !== true
+              )
+              || (waited?.updatedAt && waited.updatedAt !== knownUpdatedAt);
+
+            if (messageChanged) {
+              await pullThreadFromRemoteIfChanged(activeId, { skipReadMark: false, force: true }).catch(console.error);
             }
           } catch (err) {
             console.error(err);
             await sleepMs(THREAD_SYNC_WAIT_RETRY_MS);
+          } finally {
+            const elapsed = Date.now() - loopStartedAt;
+            if (elapsed < THREAD_SYNC_LOOP_MIN_INTERVAL_MS) {
+              await sleepMs(THREAD_SYNC_LOOP_MIN_INTERVAL_MS - elapsed);
+            }
+          }
+        }
+      })().catch(console.error);
+    }
+
+    if (!state.summariesWaitLoopStarted) {
+      state.summariesWaitLoopStarted = true;
+      state.summariesWaitLoopToken += 1;
+      const summariesLoopToken = state.summariesWaitLoopToken;
+
+      (async function runSummariesWaitLoop() {
+        while (state.summariesWaitLoopStarted && summariesLoopToken === state.summariesWaitLoopToken) {
+          const loopStartedAt = Date.now();
+          try {
+            const knownUpdatedAt = String(state.summariesUpdatedAt || "");
+            const waited = await waitRemoteSummariesUpdate(knownUpdatedAt, THREAD_SYNC_SUMMARY_WAIT_TIMEOUT_MS);
+            if (!state.summariesWaitLoopStarted || summariesLoopToken !== state.summariesWaitLoopToken) break;
+            const nextUpdatedAt = String(waited?.updatedAt || "");
+            // Always pull summaries after wait returns to prevent stale UI
+            // on installations where updated_at has second-level precision.
+            await syncRemoteSummariesSnapshot({ forceThreads: waited?.timeout !== true }).catch(console.error);
+            if (nextUpdatedAt || state.summariesUpdatedAt) {
+              state.summariesUpdatedAt = nextUpdatedAt;
+            }
+          } catch (err) {
+            console.error(err);
+            await sleepMs(THREAD_SYNC_WAIT_RETRY_MS);
+          } finally {
+            const elapsed = Date.now() - loopStartedAt;
+            if (elapsed < THREAD_SYNC_LOOP_MIN_INTERVAL_MS) {
+              await sleepMs(THREAD_SYNC_LOOP_MIN_INTERVAL_MS - elapsed);
+            }
           }
         }
       })().catch(console.error);
@@ -846,22 +1287,7 @@
     if (!state.summariesPollTimer) {
       state.summariesPollTimer = window.setInterval(async () => {
         try {
-          const remoteClients = await loadRemoteChatClients().catch(() => []);
-          if (Array.isArray(remoteClients) && remoteClients.length) {
-            const merged = mergeRemoteClients(state.clients, remoteClients);
-            const prevFingerprint = stableSerialize(
-              (state.clients || []).map((client) => [Number(client.id), String(client.name || ""), String(client.phone || "")])
-            );
-            const nextFingerprint = stableSerialize(
-              (merged || []).map((client) => [Number(client.id), String(client.name || ""), String(client.phone || "")])
-            );
-            if (prevFingerprint !== nextFingerprint) {
-              state.clients = merged;
-              applyClientFilter();
-            }
-          }
-          const ids = (state.clients || []).map((client) => client.id);
-          await pullRemoteSummaries(ids).catch(console.error);
+          await syncRemoteSummariesSnapshot();
         } catch (err) {
           console.error(err);
         }
@@ -871,13 +1297,36 @@
 
   function loadStore() {
     try {
+      const defaults = {
+        threads: {},
+        hiddenMessageIds: {},
+        lastOpenClientId: null,
+        ui: {
+          clientsListScrollTop: 0,
+          threadScrollTopByClient: {},
+        },
+      };
       const raw = localStorage.getItem(CHAT_STORAGE_KEY);
-      if (!raw) return { threads: {}, hiddenMessageIds: {}, lastOpenClientId: null };
+      if (!raw) return defaults;
       const parsed = JSON.parse(raw);
+      const parsedUi = parsed && typeof parsed.ui === "object" ? parsed.ui : {};
+      const legacyThreadScrollMap = parsed && typeof parsed.threadScrollTopByClient === "object"
+        ? parsed.threadScrollTopByClient
+        : {};
+      const uiThreadScrollMap = parsedUi && typeof parsedUi.threadScrollTopByClient === "object"
+        ? parsedUi.threadScrollTopByClient
+        : {};
+      const resolvedThreadScrollMap = Object.keys(uiThreadScrollMap).length
+        ? uiThreadScrollMap
+        : legacyThreadScrollMap;
       const nextStore = {
         threads: parsed && typeof parsed.threads === "object" ? parsed.threads : {},
         hiddenMessageIds: parsed && typeof parsed.hiddenMessageIds === "object" ? parsed.hiddenMessageIds : {},
         lastOpenClientId: Number(parsed?.lastOpenClientId || 0) || null,
+        ui: {
+          clientsListScrollTop: toStoredScrollTop(parsedUi?.clientsListScrollTop),
+          threadScrollTopByClient: sanitizeStoredThreadScrollTopByClient(resolvedThreadScrollMap),
+        },
       };
       let changed = false;
       TEST_CHAT_IDS_TO_PRUNE.forEach((id) => {
@@ -889,18 +1338,87 @@
           delete nextStore.hiddenMessageIds[id];
           changed = true;
         }
+        if (Object.prototype.hasOwnProperty.call(nextStore.ui.threadScrollTopByClient, id)) {
+          delete nextStore.ui.threadScrollTopByClient[id];
+          changed = true;
+        }
       });
       if (changed) {
         localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(nextStore));
       }
       return nextStore;
     } catch {
-      return { threads: {}, hiddenMessageIds: {}, lastOpenClientId: null };
+      return {
+        threads: {},
+        hiddenMessageIds: {},
+        lastOpenClientId: null,
+        ui: {
+          clientsListScrollTop: 0,
+          threadScrollTopByClient: {},
+        },
+      };
+    }
+  }
+
+  function toStoredScrollTop(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return n;
+  }
+
+  function sanitizeStoredThreadScrollTopByClient(rawMap) {
+    const source = rawMap && typeof rawMap === "object" ? rawMap : {};
+    const out = {};
+    Object.keys(source).forEach((key) => {
+      const id = normalizeClientIdKey(key);
+      if (!id) return;
+      const top = toStoredScrollTop(source[key]);
+      out[id] = top;
+    });
+    return out;
+  }
+
+  function ensureUiStoreState() {
+    if (!state.store || typeof state.store !== "object") {
+      state.store = {
+        threads: {},
+        hiddenMessageIds: {},
+        lastOpenClientId: null,
+      };
+    }
+    if (!state.store.ui || typeof state.store.ui !== "object") {
+      state.store.ui = {};
+    }
+    if (!state.store.ui.threadScrollTopByClient || typeof state.store.ui.threadScrollTopByClient !== "object") {
+      state.store.ui.threadScrollTopByClient = {};
+    }
+    if (!Number.isFinite(Number(state.store.ui.clientsListScrollTop))) {
+      state.store.ui.clientsListScrollTop = 0;
+    }
+    return state.store.ui;
+  }
+
+  function saveClientsListScrollPosition() {
+    if (!dom.left.list) return;
+    const ui = ensureUiStoreState();
+    ui.clientsListScrollTop = toStoredScrollTop(dom.left.list.scrollTop);
+  }
+
+  function syncUiStateIntoStore() {
+    const ui = ensureUiStoreState();
+    ui.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.threadScrollTopByClient);
+    if (dom.left.list) {
+      ui.clientsListScrollTop = toStoredScrollTop(dom.left.list.scrollTop);
+    } else {
+      ui.clientsListScrollTop = toStoredScrollTop(ui.clientsListScrollTop);
     }
   }
 
   function saveStore() {
-    try { localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(state.store)); } catch {}
+    try {
+      syncUiStateIntoStore();
+      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(state.store));
+    } catch {}
   }
 
   function ensureThread(clientId) {
@@ -976,13 +1494,76 @@
     return getThread(clientId).filter((msg) => !hidden.has(String(msg?.id || "")));
   }
 
+  function getRemoteSummaryForClient(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return null;
+    const summary = state.remoteSummariesByClient && state.remoteSummariesByClient[key];
+    return summary && typeof summary === "object" ? summary : null;
+  }
+
   function getLastMessage(clientId) {
     const thread = getVisibleThread(clientId);
-    return thread.length ? thread[thread.length - 1] : null;
+    const localLast = thread.length ? thread[thread.length - 1] : null;
+    const summary = getRemoteSummaryForClient(clientId);
+    if (!summary) return localLast;
+    const text = String(summary.last_message_text || "");
+    const createdAt = String(summary.last_message_at || summary.updated_at || "");
+    if (!text && !createdAt) return localLast;
+    const summaryLast = {
+      id: "",
+      text: text,
+      createdAt: createdAt,
+      direction: "in",
+      deliveryStatus: "",
+      attachment: null,
+    };
+    if (!localLast) return summaryLast;
+    return compareIsoDates(summaryLast.createdAt, localLast.createdAt) > 0 ? summaryLast : localLast;
   }
 
   function getUnreadCount(clientId) {
+    const summary = getRemoteSummaryForClient(clientId);
+    const unread = Number(summary?.unread_count ?? summary?.unreadCount ?? 0);
+    if (Number.isFinite(unread) && unread >= 0) return Math.trunc(unread);
     return getVisibleThread(clientId).filter((msg) => msg.direction === "in" && !isMessageRead(msg)).length;
+  }
+
+  function getTotalUnreadCount() {
+    const keys = new Set();
+    Object.keys(state.store.threads || {}).forEach((key) => {
+      const normalized = normalizeClientIdKey(key);
+      if (normalized) keys.add(normalized);
+    });
+    (state.clients || []).forEach((client) => {
+      const normalized = normalizeClientIdKey(client?.id);
+      if (normalized) keys.add(normalized);
+    });
+    Object.keys(state.remoteSummariesByClient || {}).forEach((key) => {
+      const normalized = normalizeClientIdKey(key);
+      if (normalized) keys.add(normalized);
+    });
+
+    let total = 0;
+    keys.forEach((key) => {
+      total += getUnreadCount(key);
+    });
+    return total;
+  }
+
+  function emitUnreadChangedSoon() {
+    if (unreadEventRaf) return;
+    const schedule = typeof requestAnimationFrame === "function"
+      ? requestAnimationFrame
+      : (cb) => window.setTimeout(cb, 16);
+    unreadEventRaf = schedule(() => {
+      unreadEventRaf = 0;
+      const totalUnread = getTotalUnreadCount();
+      document.dispatchEvent(
+        new CustomEvent(CHAT_UNREAD_EVENT, {
+          detail: { totalUnread },
+        })
+      );
+    });
   }
 
   function isMessageRead(message) {
@@ -1054,6 +1635,7 @@
       applyClientFilter();
       if (Number(state.activeClientId) === id) renderMessages();
     }
+    if (changed) emitUnreadChangedSoon();
     return changed;
   }
 
@@ -1962,6 +2544,7 @@
     bySearch.sort((a, b) => getClientSortTimestamp(b) - getClientSortTimestamp(a));
     state.filteredClients = bySearch;
     renderClientsList();
+    emitUnreadChangedSoon();
   }
 
   function buildChatClientRow(client) {
@@ -2022,14 +2605,22 @@
 
   function renderClientsList() {
     if (!dom.left.list) return;
+    const hadClientRows = !!dom.left.list.querySelector(".chat-client-row");
+    const previousScrollTop = toStoredScrollTop(dom.left.list.scrollTop);
     dom.left.list.innerHTML = "";
     const items = state.filteredClients || [];
     if (!items.length) {
       if (dom.left.empty) dom.left.empty.classList.remove("hidden");
+      saveClientsListScrollPosition();
       return;
     }
     if (dom.left.empty) dom.left.empty.classList.add("hidden");
     items.forEach((client) => dom.left.list.appendChild(buildChatClientRow(client)));
+    const persistedScrollTop = toStoredScrollTop(state.store?.ui?.clientsListScrollTop);
+    const targetTop = hadClientRows ? previousScrollTop : persistedScrollTop;
+    const maxTop = Math.max(0, dom.left.list.scrollHeight - dom.left.list.clientHeight);
+    dom.left.list.scrollTop = Math.max(0, Math.min(targetTop, maxTop));
+    saveClientsListScrollPosition();
   }
 
   function normalizeEmojiCategoryName(rawCategory) {
@@ -2213,12 +2804,21 @@
     const value = String(emoji || "");
     if (!value) return;
 
-    const useAttachPreviewCaption = !!(
-      dom.center.emojiPopover
-      && dom.center.emojiPopover.classList.contains("is-attach-preview")
-      && dom.center.attachPreviewOverlay
+    const attachPreviewOpen = !!(
+      dom.center.attachPreviewOverlay
       && !dom.center.attachPreviewOverlay.classList.contains("hidden")
+    );
+    const attachPreviewTargetFocused = !!(
+      dom.center.attachPreviewCaption
+      && document.activeElement === dom.center.attachPreviewCaption
+    );
+    const useAttachPreviewCaption = !!(
+      attachPreviewOpen
       && dom.center.attachPreviewCaption
+      && (
+        attachPreviewTargetFocused
+        || (dom.center.emojiPopover && dom.center.emojiPopover.classList.contains("is-attach-preview"))
+      )
     );
 
     if (useAttachPreviewCaption) {
@@ -2241,6 +2841,7 @@
     const pos = start + value.length;
     input.setSelectionRange(pos, pos);
     syncComposerRichPreview({});
+    handleComposerTypingActivity();
   }
 
   function renderEmojiPicker() {
@@ -2441,7 +3042,9 @@
   function shouldKeepMessagesPinnedToBottom() {
     if (!dom.center.messagesWrap) return false;
     const wrap = dom.center.messagesWrap;
-    return (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) <= 28;
+    // Use a strict threshold to avoid false "stick to bottom" when user
+    // is reading slightly above the latest messages.
+    return (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) <= 2;
   }
 
   function getPendingScrollMessageIdSet(clientId = state.activeClientId) {
@@ -2483,6 +3086,9 @@
     });
     if (changed) {
       state.pendingScrollNewByClient[key] = set.size;
+      if (Number(state.activeClientId) === Number(key)) {
+        syncPendingScrollCountByViewport(key);
+      }
       updateMessagesScrollDownButton();
     }
   }
@@ -2535,17 +3141,27 @@
     const key = normalizeClientIdKey(clientId);
     const wrap = dom.center.messagesWrap;
     if (!key || !wrap) return;
-    state.threadScrollTopByClient[key] = wrap.scrollTop;
+    const nextTop = toStoredScrollTop(wrap.scrollTop);
+    state.threadScrollTopByClient[key] = nextTop;
+    const ui = ensureUiStoreState();
+    ui.threadScrollTopByClient[key] = nextTop;
   }
 
   function restoreThreadScrollPosition(clientId = state.activeClientId) {
     const key = normalizeClientIdKey(clientId);
     const wrap = dom.center.messagesWrap;
     if (!key || !wrap) return false;
-    const raw = Number(state.threadScrollTopByClient[key]);
+    const fallbackTop = Number(state.store?.ui?.threadScrollTopByClient?.[key]);
+    const raw = Number.isFinite(Number(state.threadScrollTopByClient[key]))
+      ? Number(state.threadScrollTopByClient[key])
+      : fallbackTop;
     if (!Number.isFinite(raw)) return false;
     const maxTop = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
-    wrap.scrollTop = Math.max(0, Math.min(raw, maxTop));
+    const nextTop = Math.max(0, Math.min(raw, maxTop));
+    wrap.scrollTop = nextTop;
+    state.threadScrollTopByClient[key] = nextTop;
+    const ui = ensureUiStoreState();
+    ui.threadScrollTopByClient[key] = nextTop;
     return true;
   }
 
@@ -2556,7 +3172,7 @@
 
     const hiddenDistance = wrap.scrollHeight - wrap.clientHeight - wrap.scrollTop;
     const pending = getPendingScrollNewCount();
-    const shouldShow = pending > 0 || hiddenDistance >= 120;
+    const shouldShow = pending > 0 || hiddenDistance >= CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX;
     btn.classList.toggle("hidden", !shouldShow);
 
     const badge = dom.center.scrollDownBadge;
@@ -2585,6 +3201,7 @@
     if (!wrap) return;
 
     const behavior = String(options.behavior || "auto");
+    const keepPending = options.keepPending === true;
     const durationRaw = Number(options.duration);
     const duration = Number.isFinite(durationRaw) && durationRaw > 0 ? durationRaw : CHAT_AUTOSCROLL_MS;
     const target = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
@@ -2592,7 +3209,7 @@
     if (behavior !== "smooth-fast") {
       stopMessagesSmoothScroll();
       wrap.scrollTop = target;
-      clearPendingScrollNewCount();
+      if (!keepPending) clearPendingScrollNewCount();
       updateMessagesScrollDownButton();
       return;
     }
@@ -2621,7 +3238,7 @@
       }
       state.messagesScrollRaf = 0;
       wrap.scrollTop = target;
-      clearPendingScrollNewCount();
+      if (!keepPending) clearPendingScrollNewCount();
       updateMessagesScrollDownButton();
     };
 
@@ -2711,7 +3328,10 @@
       if (!el) return;
       el.disabled = !enabled;
     });
-    if (!enabled) closeAttachPreview({ focusComposer: false });
+    if (!enabled) {
+      stopLocalTypingSession(state.activeClientId, { flush: true });
+      closeAttachPreview({ focusComposer: false });
+    }
   }
 
   function syncComposerMode() {
@@ -3563,6 +4183,7 @@
     const forceScrollBottom = options.forceScrollBottom === true;
     const disableAutoPin = options.disableAutoPin === true;
     const smoothScroll = options.smoothScroll !== false;
+    const skipSaveScrollPosition = options.skipSaveScrollPosition === true;
     const keepPinnedBeforeRender = shouldKeepMessagesPinnedToBottom();
 
     if (!state.activeClientId) {
@@ -3743,8 +4364,11 @@
       }
     }
     syncPendingScrollCountByViewport(state.activeClientId);
-    saveThreadScrollPosition(state.activeClientId);
+    if (!skipSaveScrollPosition) {
+      saveThreadScrollPosition(state.activeClientId);
+    }
     updateMessagesScrollDownButton();
+    renderPeerTypingIndicator();
   }
 
   function sendMessage(text, options = {}) {
@@ -4002,6 +4626,7 @@
     }
 
     if (sent > 0) {
+      stopLocalTypingSession(state.activeClientId, { flush: true, force: true });
       clearComposerReply();
       hideMessageContextMenu();
       renderMessages({ forceScrollBottom: true, smoothScroll: true });
@@ -4308,7 +4933,7 @@
 
       state.activeClient = clientJson?.data || selectedFromList;
       setActiveOrders(Array.isArray(ordersJson?.data) ? ordersJson.data : [], { forceRender: true });
-      renderMessages({ disableAutoPin: true, smoothScroll: false });
+      renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
       restoreThreadScrollPosition(state.activeClientId);
       saveThreadScrollPosition(state.activeClientId);
       hydrateHeaderOrderDetails(requestId, clientId).catch(console.error);
@@ -4317,7 +4942,7 @@
       console.error(err);
       state.activeClient = selectedFromList;
       setActiveOrders([], { forceRender: true });
-      renderMessages({ disableAutoPin: true, smoothScroll: false });
+      renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
       restoreThreadScrollPosition(state.activeClientId);
       saveThreadScrollPosition(state.activeClientId);
     }
@@ -4327,6 +4952,7 @@
     const id = Number(clientId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
     const previousActiveClientId = state.activeClientId;
+    stopLocalTypingSession(previousActiveClientId, { flush: true });
     saveThreadScrollPosition(previousActiveClientId);
 
     closeAttachPreview({ focusComposer: false });
@@ -4350,9 +4976,10 @@
     await pullThreadFromRemote(id, { skipReadMark: true, ignoreIncomingBadge: true }).catch(console.error);
     syncActiveThreadReadState({ clientId: id });
     applyClientFilter();
-    renderMessages({ disableAutoPin: true, smoothScroll: false });
+    renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
     if (!restoreThreadScrollPosition(id)) {
-      scrollMessagesToBottom({ behavior: "auto" });
+      const hasPendingForClient = getPendingScrollNewCount(id) > 0;
+      scrollMessagesToBottom({ behavior: "auto", keepPending: hasPendingForClient });
       saveThreadScrollPosition(id);
     } else {
       syncPendingScrollCountByViewport(id);
@@ -4409,6 +5036,7 @@
       if (target) {
         await selectClient(target.id);
       } else {
+        stopLocalTypingSession(state.activeClientId, { flush: true });
         state.activeClientId = null;
         state.activeClient = null;
         setActiveOrders([], { forceRender: true });
@@ -4461,6 +5089,7 @@
         if (!dom.center.input) return;
         const done = sendMessage(dom.center.input.value);
         if (!done) return;
+        stopLocalTypingSession(state.activeClientId, { flush: true, force: true });
         dom.center.input.value = "";
         dom.center.input.focus();
         syncComposerRichPreview({});
@@ -4472,14 +5101,18 @@
         if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
           const done = sendMessage(dom.center.input.value);
-          if (done) dom.center.input.value = "";
-          if (done) syncComposerRichPreview({});
+          if (done) {
+            stopLocalTypingSession(state.activeClientId, { flush: true, force: true });
+            dom.center.input.value = "";
+            syncComposerRichPreview({});
+          }
           return;
         }
 
         if (event.key === "Escape" && state.editingMessageId) {
           cancelEditingMessage();
           dom.center.input.value = "";
+          stopLocalTypingSession(state.activeClientId, { flush: true });
           syncComposerRichPreview({});
           return;
         }
@@ -4487,6 +5120,13 @@
         if (event.key === "Escape" && state.replyDraft) {
           clearComposerReply();
         }
+      });
+
+      dom.center.input.addEventListener("input", () => {
+        handleComposerTypingActivity();
+      });
+      dom.center.input.addEventListener("blur", () => {
+        scheduleLocalTypingStop(CHAT_TYPING_BLUR_STOP_MS);
       });
     }
 
@@ -4549,6 +5189,12 @@
         scrollMessagesToBottom({ behavior: "smooth-fast" });
       });
     }
+    if (dom.left.list && dom.left.list.dataset.scrollPersistBound !== "1") {
+      dom.left.list.dataset.scrollPersistBound = "1";
+      dom.left.list.addEventListener("scroll", () => {
+        saveClientsListScrollPosition();
+      }, { passive: true });
+    }
     bindSearch();
     renderChatHeader();
     syncSelectionUi();
@@ -4563,13 +5209,29 @@
       pullThreadFromRemoteIfChanged(state.activeClientId, { skipReadMark: false, force: true }).catch(console.error);
     };
 
+    const syncChatsOnForeground = () => {
+      syncRemoteSummariesSnapshot({ forceThreads: true }).catch(console.error);
+      syncReadOnForeground();
+    };
+
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState !== "visible") return;
-      syncReadOnForeground();
+      syncChatsOnForeground();
     });
 
     window.addEventListener("focus", () => {
-      syncReadOnForeground();
+      syncChatsOnForeground();
+    });
+
+    window.addEventListener("pageshow", () => {
+      syncChatsOnForeground();
+    });
+
+    window.addEventListener("pagehide", () => {
+      stopLocalTypingSession(state.activeClientId, { flush: true, keepalive: true });
+      saveThreadScrollPosition(state.activeClientId);
+      saveClientsListScrollPosition();
+      saveStore();
     });
 
     document.addEventListener("tenantStoreChanged", () => {
