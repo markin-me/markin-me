@@ -58,6 +58,10 @@
       </div>
       <div class="chat-messages" id="chatMessages"></div>
     </div>
+    <button class="chat-scroll-down hidden" id="chatScrollDownBtn" type="button" aria-label="К последним сообщениям">
+      <i class="fas fa-chevron-down"></i>
+      <span class="chat-scroll-down-badge hidden" id="chatScrollDownBadge" aria-live="polite" aria-atomic="true"></span>
+    </button>
   </div>
 
   <div class="panel chat-footer-island">
@@ -103,6 +107,47 @@
       <button type="button" class="chat-selection-action is-danger" id="chatSelectionDeleteBtn" aria-label="Удалить" title="Удалить">
         <i class="far fa-trash-alt"></i>
       </button>
+    </div>
+  </div>
+
+  <div class="chat-attach-preview-overlay hidden" id="chatAttachPreviewOverlay" aria-hidden="true">
+    <div class="chat-attach-preview-card" role="dialog" aria-modal="true" aria-labelledby="chatAttachPreviewTitle">
+      <div class="chat-attach-preview-head">
+        <button type="button" class="chat-attach-preview-icon-btn" id="chatAttachPreviewCloseBtn" aria-label="Закрыть">
+          <i class="fas fa-times"></i>
+        </button>
+        <div class="chat-attach-preview-title" id="chatAttachPreviewTitle">1 фотография</div>
+      </div>
+
+      <div class="chat-attach-preview-media-wrap">
+        <img class="chat-attach-preview-image" id="chatAttachPreviewImage" alt="Предпросмотр изображения">
+      </div>
+
+      <div class="chat-attach-preview-thumbs hidden" id="chatAttachPreviewThumbs"></div>
+
+      <div class="chat-attach-preview-foot">
+        <button type="button" class="chat-attach-preview-icon-btn" id="chatAttachPreviewEmojiBtn" aria-label="Эмодзи">
+          <i class="far fa-smile"></i>
+        </button>
+        <input
+          type="text"
+          class="chat-attach-preview-caption"
+          id="chatAttachPreviewCaption"
+          maxlength="2000"
+          autocomplete="off"
+          placeholder="Добавить подпись..."
+        >
+        <button type="button" class="chat-attach-preview-send" id="chatAttachPreviewSendBtn">Отправить</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="chat-image-viewer-overlay hidden" id="chatImageViewerOverlay" aria-hidden="true">
+    <div class="chat-image-viewer-card" role="dialog" aria-modal="true" aria-label="Image preview">
+      <button type="button" class="chat-image-viewer-close" id="chatImageViewerCloseBtn" aria-label="Close image preview">
+        <i class="fas fa-times"></i>
+      </button>
+      <img class="chat-image-viewer-image" id="chatImageViewerImage" alt="Image preview" />
     </div>
   </div>
 </div>
@@ -157,3 +202,4 @@
   <%- include('../clients/left') %>
   <%- include('../clients/center') %>
 </div>
+

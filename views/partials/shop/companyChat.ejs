@@ -14,6 +14,7 @@
 
       <button class="shop-company-chat-scroll-down hidden" id="shopCompanyChatScrollDownBtn" type="button" aria-label="К последним сообщениям">
         <i class="fas fa-chevron-down"></i>
+        <span class="shop-company-chat-scroll-down-badge hidden" id="shopCompanyChatScrollDownBadge" aria-live="polite" aria-atomic="true"></span>
       </button>
 
       <div class="shop-company-chat-reaction-bar hidden" id="shopCompanyChatReactionBar" role="group" aria-label="Реакции">
@@ -77,6 +78,47 @@
           </button>
         </div>
       </div>
+      <div class="chat-attach-preview-overlay hidden" id="shopCompanyChatAttachPreviewOverlay" aria-hidden="true">
+        <div class="chat-attach-preview-card" role="dialog" aria-modal="true" aria-labelledby="shopCompanyChatAttachPreviewTitle">
+          <div class="chat-attach-preview-head">
+            <button type="button" class="chat-attach-preview-icon-btn" id="shopCompanyChatAttachPreviewCloseBtn" aria-label="Закрыть">
+              <i class="fas fa-times"></i>
+            </button>
+            <div class="chat-attach-preview-title" id="shopCompanyChatAttachPreviewTitle">1 фотография</div>
+          </div>
+
+          <div class="chat-attach-preview-media-wrap">
+            <img class="chat-attach-preview-image" id="shopCompanyChatAttachPreviewImage" alt="Предпросмотр изображения">
+          </div>
+
+          <div class="chat-attach-preview-thumbs hidden" id="shopCompanyChatAttachPreviewThumbs"></div>
+
+          <div class="chat-attach-preview-foot">
+            <button type="button" class="chat-attach-preview-icon-btn" id="shopCompanyChatAttachPreviewEmojiBtn" aria-label="Эмодзи">
+              <i class="far fa-smile"></i>
+            </button>
+            <input
+              type="text"
+              class="chat-attach-preview-caption"
+              id="shopCompanyChatAttachPreviewCaption"
+              maxlength="2000"
+              autocomplete="off"
+              placeholder="Добавить подпись..."
+            >
+            <button type="button" class="chat-attach-preview-send" id="shopCompanyChatAttachPreviewSendBtn">Отправить</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-image-viewer-overlay hidden" id="shopCompanyChatImageViewerOverlay" aria-hidden="true">
+        <div class="chat-image-viewer-card" role="dialog" aria-modal="true" aria-label="Image preview">
+          <button type="button" class="chat-image-viewer-close" id="shopCompanyChatImageViewerCloseBtn" aria-label="Close image preview">
+            <i class="fas fa-times"></i>
+          </button>
+          <img class="chat-image-viewer-image" id="shopCompanyChatImageViewerImage" alt="Image preview" />
+        </div>
+      </div>
     </div>
   </section>
 </div>
+

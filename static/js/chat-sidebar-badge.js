@@ -45,6 +45,14 @@
     navLink.setAttribute("data-unread-count", text);
   }
 
+  function getUnreadValue(row) {
+    if (!row || typeof row !== "object") return 0;
+    const raw = row.unread_count ?? row.unreadCount ?? row.unread ?? row.unread_messages ?? row.unreadMessages;
+    const unread = Number(raw || 0);
+    if (!Number.isFinite(unread) || unread <= 0) return 0;
+    return unread;
+  }
+
   async function pullUnreadCount() {
     if (inFlight) return;
     inFlight = true;
@@ -65,9 +73,7 @@
       if (!json || json.ok !== true || !Array.isArray(json.data)) return;
 
       const total = json.data.reduce(function (sum, row) {
-        const unread = Number(row && row.unread_count || 0);
-        if (!Number.isFinite(unread) || unread <= 0) return sum;
-        return sum + unread;
+        return sum + getUnreadValue(row);
       }, 0);
 
       showBadge(total);

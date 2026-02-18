@@ -6,12 +6,19 @@
   const CHAT_STORAGE_KEY = "dashboard:client-chat:v1";
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
   const ORDER_UPDATED_EVENT = "dashboard:order-updated";
-  const THREAD_SYNC_SAVE_DEBOUNCE_MS = 140;
-  const THREAD_SYNC_ACTIVE_POLL_MS = 1800;
-  const THREAD_SYNC_SUMMARY_POLL_MS = 5200;
+  const THREAD_SYNC_SAVE_DEBOUNCE_MS = 35;
+  const THREAD_SYNC_ACTIVE_POLL_MS = 250;
+  const THREAD_SYNC_SUMMARY_POLL_MS = 1800;
   const ACTIVE_ORDERS_POLL_MS = 4200;
   const CHAT_AUTOSCROLL_MS = 170;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
+  const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
+  const IMAGE_OPTIMIZE_TARGET_BYTES = 900 * 1024;
+  const IMAGE_OPTIMIZE_MAX_SIDE_PX = 1600;
+  const IMAGE_OPTIMIZE_MIN_SIDE_PX = 900;
+  const IMAGE_OPTIMIZE_INITIAL_QUALITY = 0.86;
+  const IMAGE_OPTIMIZE_MIN_QUALITY = 0.58;
+  const IMAGE_OPTIMIZE_SCALE_STEP = 0.84;
   const TEST_CHAT_IDS_TO_PRUNE = ["9997", "9998", "9999"];
   const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/img/google/64";
   const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/emoji.json";
@@ -80,9 +87,22 @@
       orderTotal: $("#chatOrderTotal"),
       messagesWrap: $("#chatMessagesWrap"),
       messages: $("#chatMessages"),
+      scrollDownBtn: $("#chatScrollDownBtn"),
+      scrollDownBadge: $("#chatScrollDownBadge"),
       empty: $("#chatEmptyState"),
       attachInput: $("#chatAttachmentInput"),
       attachBtn: $("#chatAttachBtn"),
+      attachPreviewOverlay: $("#chatAttachPreviewOverlay"),
+      attachPreviewCloseBtn: $("#chatAttachPreviewCloseBtn"),
+      attachPreviewTitle: $("#chatAttachPreviewTitle"),
+      attachPreviewImage: $("#chatAttachPreviewImage"),
+      attachPreviewThumbs: $("#chatAttachPreviewThumbs"),
+      attachPreviewEmojiBtn: $("#chatAttachPreviewEmojiBtn"),
+      attachPreviewCaption: $("#chatAttachPreviewCaption"),
+      attachPreviewSendBtn: $("#chatAttachPreviewSendBtn"),
+      imageViewerOverlay: $("#chatImageViewerOverlay"),
+      imageViewerCloseBtn: $("#chatImageViewerCloseBtn"),
+      imageViewerImage: $("#chatImageViewerImage"),
       emojiBtn: $("#chatEmojiBtn"),
       emojiPopover: $("#chatEmojiPopover"),
       input: $("#chatMessageInput"),
@@ -128,11 +148,19 @@
     orderDetailsCache: new Map(),
     remoteThreadUpdatedAt: {},
     remoteSaveTimers: {},
+    remoteSaveInFlight: {},
+    localThreadMutations: {},
     activeThreadPollTimer: 0,
+    activeThreadPollInFlight: false,
     summariesPollTimer: 0,
     activeOrdersPollTimer: 0,
     activeOrdersPollInFlight: false,
     messagesScrollRaf: 0,
+    pendingScrollNewByClient: {},
+    pendingScrollMessageIdsByClient: {},
+    threadScrollTopByClient: {},
+    attachPreviewItems: [],
+    attachPreviewActiveIndex: 0,
   };
 
   let emojiCategories = {};
@@ -191,6 +219,35 @@
     const n = Number(clientId);
     if (Number.isFinite(n) && n > 0) return String(Math.trunc(n));
     return "";
+  }
+
+  function getThreadMutationVersion(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return 0;
+    const value = Number(state.localThreadMutations?.[key] || 0);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
+
+  function markThreadMutated(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    state.localThreadMutations[key] = getThreadMutationVersion(key) + 1;
+  }
+
+  function compareIsoDates(a, b) {
+    const ta = a ? new Date(String(a)).getTime() : 0;
+    const tb = b ? new Date(String(b)).getTime() : 0;
+    const safeA = Number.isFinite(ta) ? ta : 0;
+    const safeB = Number.isFinite(tb) ? tb : 0;
+    if (safeA > safeB) return 1;
+    if (safeA < safeB) return -1;
+    return 0;
+  }
+
+  function hasPendingRemoteSave(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+    return !!state.remoteSaveTimers[key] || state.remoteSaveInFlight[key] === true;
   }
 
   function stableSerialize(value) {
@@ -268,13 +325,44 @@
   async function fetchRemoteThreadSnapshot(clientId) {
     const key = normalizeClientIdKey(clientId);
     if (!key) return null;
-    const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}`);
+    const qs = new URLSearchParams({ _ts: String(Date.now()) });
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}?${qs.toString()}`);
     const payload = json?.data || {};
     return {
       clientId: Number(key),
       updatedAt: String(payload.updated_at || ""),
       messages: Array.isArray(payload.messages) ? payload.messages : [],
       meta: payload.meta && typeof payload.meta === "object" ? payload.meta : {},
+    };
+  }
+
+  async function fetchRemoteThreadMeta(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return null;
+    const qs = new URLSearchParams({ _ts: String(Date.now()) });
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}/meta?${qs.toString()}`);
+    const payload = json?.data || {};
+    return {
+      clientId: Number(key),
+      updatedAt: String(payload.updated_at || ""),
+    };
+  }
+
+  async function fetchRemoteThreadDiff(clientId, sinceUpdatedAt) {
+    const key = normalizeClientIdKey(clientId);
+    const since = String(sinceUpdatedAt || "").trim();
+    if (!key || !since) return null;
+    const qs = new URLSearchParams({
+      since,
+      _ts: String(Date.now()),
+    });
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}/diff?${qs.toString()}`);
+    const payload = json?.data || {};
+    return {
+      clientId: Number(key),
+      updatedAt: String(payload.updated_at || ""),
+      messageCount: Number(payload.message_count || 0),
+      messages: Array.isArray(payload.messages) ? payload.messages : [],
     };
   }
 
@@ -285,8 +373,18 @@
     const next = Array.isArray(snapshot.messages) ? snapshot.messages : [];
     const prev = Array.isArray(state.store.threads[key]) ? state.store.threads[key] : [];
     const same = stableSerialize(prev) === stableSerialize(next);
+    const remoteUpdatedAt = String(snapshot.updatedAt || "");
+    const knownUpdatedAt = String(state.remoteThreadUpdatedAt[key] || "");
+    const remoteIsNewer = compareIsoDates(remoteUpdatedAt, knownUpdatedAt) > 0;
+    const localChangedDuringRequest = options.localChangedDuringRequest === true;
+    const isActiveThread = Number(state.activeClientId) === Number(key);
 
-    state.remoteThreadUpdatedAt[key] = String(snapshot.updatedAt || "");
+    if (!same && !options.force) {
+      if (hasPendingRemoteSave(key)) return false;
+      if (localChangedDuringRequest && !remoteIsNewer) return false;
+    }
+
+    state.remoteThreadUpdatedAt[key] = remoteUpdatedAt;
     const shouldMarkRead = Number(state.activeClientId) === Number(key)
       && !options.skipReadMark
       && isChatTabActiveForRead();
@@ -296,21 +394,38 @@
       if (shouldMarkRead) {
         const readChanged = markThreadRead(key);
         changed = readChanged || changed;
-        if (readChanged) renderMessages();
+        if (readChanged && isActiveThread) renderMessages({ disableAutoPin: true });
       }
       const finalChanged = changed || hiddenChanged;
       if (finalChanged) applyClientFilter();
       return finalChanged;
     }
 
+    const appendedIncomingMessageIds = (() => {
+      if (!isActiveThread) return [];
+      if (options.ignoreIncomingBadge === true) return [];
+      const prevIds = new Set(
+        (Array.isArray(prev) ? prev : [])
+          .map((msg) => String(msg?.id || ""))
+          .filter(Boolean)
+      );
+      return next
+        .filter((msg) => msg && String(msg.direction || "").toLowerCase() === "in")
+        .map((msg) => String(msg.id || ""))
+        .filter((id) => id && !prevIds.has(id));
+    })();
+
     state.store.threads[key] = next;
     saveStore();
     pruneHiddenMessageIds(key);
     markThreadDelivered(key);
 
-    if (Number(state.activeClientId) === Number(key)) {
+    if (isActiveThread) {
+      if (appendedIncomingMessageIds.length > 0) {
+        addPendingScrollMessageIds(key, appendedIncomingMessageIds);
+      }
       if (shouldMarkRead) markThreadRead(key);
-      renderMessages();
+      renderMessages({ disableAutoPin: true });
     }
     applyClientFilter();
     return true;
@@ -321,12 +436,17 @@
     if (!key) return;
     const thread = getThread(key);
     const meta = getClientMetaForSync(key);
-    const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}`, {
-      method: "PUT",
-      body: { messages: thread, meta },
-    });
-    const updatedAt = String(json?.data?.updated_at || "");
-    if (updatedAt) state.remoteThreadUpdatedAt[key] = updatedAt;
+    state.remoteSaveInFlight[key] = true;
+    try {
+      const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}`, {
+        method: "PUT",
+        body: { messages: thread, meta },
+      });
+      const updatedAt = String(json?.data?.updated_at || "");
+      if (updatedAt) state.remoteThreadUpdatedAt[key] = updatedAt;
+    } finally {
+      delete state.remoteSaveInFlight[key];
+    }
   }
 
   async function deleteRemoteThread(clientId) {
@@ -352,13 +472,103 @@
   async function pullThreadFromRemote(clientId, options = {}) {
     const key = normalizeClientIdKey(clientId);
     if (!key) return false;
+    const mutationVersionBefore = getThreadMutationVersion(key);
     const snapshot = await fetchRemoteThreadSnapshot(key);
     if (!snapshot) return false;
-    return applyRemoteThreadSnapshot(snapshot, options);
+    const localChangedDuringRequest = getThreadMutationVersion(key) !== mutationVersionBefore;
+    return applyRemoteThreadSnapshot(snapshot, { ...options, localChangedDuringRequest });
+  }
+
+  function applyRemoteThreadDiff(diff, options = {}) {
+    if (!diff || !Number.isFinite(Number(diff.clientId))) return null;
+    const key = normalizeClientIdKey(diff.clientId);
+    if (!key) return null;
+
+    const previousThread = Array.isArray(state.store.threads[key]) ? state.store.threads[key] : [];
+    const expectedCount = Number(diff.messageCount);
+    if (Number.isFinite(expectedCount) && expectedCount >= 0 && expectedCount < previousThread.length) {
+      return null;
+    }
+
+    const changedMessages = Array.isArray(diff.messages) ? diff.messages : [];
+    if (!changedMessages.length) {
+      if (diff.updatedAt) state.remoteThreadUpdatedAt[key] = String(diff.updatedAt);
+      return false;
+    }
+
+    const byId = new Map();
+    previousThread.forEach((msg) => {
+      const id = String(msg?.id || "");
+      if (!id) return;
+      byId.set(id, msg);
+    });
+    changedMessages.forEach((msg) => {
+      if (!msg || typeof msg !== "object") return;
+      const id = String(msg.id || "");
+      if (!id) return;
+      ensureMessageReactions(msg);
+      byId.set(id, msg);
+    });
+
+    const nextThread = Array.from(byId.values()).sort((a, b) => {
+      const ta = new Date(a?.createdAt || 0).getTime();
+      const tb = new Date(b?.createdAt || 0).getTime();
+      return ta - tb;
+    });
+
+    if (Number.isFinite(expectedCount) && expectedCount >= 0 && expectedCount !== nextThread.length) {
+      return null;
+    }
+
+    return applyRemoteThreadSnapshot(
+      {
+        clientId: Number(key),
+        updatedAt: String(diff.updatedAt || ""),
+        messages: nextThread,
+      },
+      options
+    );
+  }
+
+  async function pullThreadFromRemoteIfChanged(clientId, options = {}) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+    if (options.force === true) {
+      return pullThreadFromRemote(key, options);
+    }
+
+    try {
+      const meta = await fetchRemoteThreadMeta(key);
+      const remoteUpdatedAt = String(meta?.updatedAt || "");
+      const knownUpdatedAt = String(state.remoteThreadUpdatedAt[key] || "");
+      if (remoteUpdatedAt && knownUpdatedAt && remoteUpdatedAt === knownUpdatedAt) {
+        return false;
+      }
+      if (!remoteUpdatedAt && !knownUpdatedAt) {
+        return false;
+      }
+
+      if (knownUpdatedAt) {
+        const mutationVersionBefore = getThreadMutationVersion(key);
+        try {
+          const diff = await fetchRemoteThreadDiff(key, knownUpdatedAt);
+          if (diff) {
+            const localChangedDuringRequest = getThreadMutationVersion(key) !== mutationVersionBefore;
+            const applied = applyRemoteThreadDiff(diff, { ...options, localChangedDuringRequest });
+            if (applied !== null) return applied;
+          }
+        } catch {}
+      }
+
+      return pullThreadFromRemote(key, options);
+    } catch {
+      return pullThreadFromRemote(key, options);
+    }
   }
 
   async function loadRemoteChatClients() {
-    const json = await apiJson(`${CHAT_TEMP_API_BASE}/clients`);
+    const qs = new URLSearchParams({ _ts: String(Date.now()) });
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/clients?${qs.toString()}`);
     return Array.isArray(json?.data) ? json.data : [];
   }
 
@@ -371,13 +581,19 @@
     });
 
     (Array.isArray(remoteRows) ? remoteRows : []).forEach((remote) => {
-      const key = normalizeClientIdKey(remote?.client_id);
+      const key = normalizeClientIdKey(remote?.client_id ?? remote?.clientId ?? remote?.id);
       if (!key) return;
       const existing = merged.get(key);
       if (existing) return;
 
       const meta = remote?.meta && typeof remote.meta === "object" ? remote.meta : {};
-      const updatedAt = String(remote?.updated_at || remote?.last_message_at || "");
+      const updatedAt = String(
+        remote?.updated_at
+        || remote?.updatedAt
+        || remote?.last_message_at
+        || remote?.lastMessageAt
+        || ""
+      );
       merged.set(key, {
         id: Number(key),
         name: String(meta.name || `Клиент #${key}`),
@@ -401,12 +617,19 @@
 
     const qs = new URLSearchParams();
     qs.set("client_ids", ids.join(","));
+    qs.set("_ts", String(Date.now()));
     const json = await apiJson(`${CHAT_TEMP_API_BASE}/summaries?${qs.toString()}`);
     const rows = Array.isArray(json?.data) ? json.data : [];
     const changedIds = rows
       .map((row) => ({
-        key: normalizeClientIdKey(row?.client_id),
-        updatedAt: String(row?.updated_at || ""),
+        key: normalizeClientIdKey(row?.client_id ?? row?.clientId ?? row?.id),
+        updatedAt: String(
+          row?.updated_at
+          || row?.updatedAt
+          || row?.last_message_at
+          || row?.lastMessageAt
+          || ""
+        ),
       }))
       .filter((row) => row.key)
       .filter((row) => state.remoteThreadUpdatedAt[row.key] !== row.updatedAt)
@@ -426,7 +649,13 @@
     if (!state.activeThreadPollTimer) {
       state.activeThreadPollTimer = window.setInterval(() => {
         if (!state.activeClientId) return;
-        pullThreadFromRemote(state.activeClientId, { skipReadMark: false }).catch(console.error);
+        if (state.activeThreadPollInFlight) return;
+        state.activeThreadPollInFlight = true;
+        pullThreadFromRemoteIfChanged(state.activeClientId, { skipReadMark: false })
+          .catch(console.error)
+          .finally(() => {
+            state.activeThreadPollInFlight = false;
+          });
       }, THREAD_SYNC_ACTIVE_POLL_MS);
     }
 
@@ -603,6 +832,7 @@
       changed = true;
     });
     if (changed) {
+      markThreadMutated(clientId);
       saveStore();
       queueThreadSaveToRemote(clientId);
     }
@@ -623,6 +853,7 @@
       changed = true;
     });
     if (changed) {
+      markThreadMutated(clientId);
       saveStore();
       queueThreadSaveToRemote(clientId);
     }
@@ -646,6 +877,7 @@
     ensureMessageReactions(message);
     thread.push(message);
     if (thread.length > 250) thread.splice(0, thread.length - 250);
+    markThreadMutated(clientId);
     saveStore();
     queueThreadSaveToRemote(clientId);
   }
@@ -1783,11 +2015,30 @@
   }
 
   function insertEmojiIntoComposer(emoji) {
-    if (!dom.center.input) return;
-    const input = dom.center.input;
     const value = String(emoji || "");
     if (!value) return;
 
+    const useAttachPreviewCaption = !!(
+      dom.center.emojiPopover
+      && dom.center.emojiPopover.classList.contains("is-attach-preview")
+      && dom.center.attachPreviewOverlay
+      && !dom.center.attachPreviewOverlay.classList.contains("hidden")
+      && dom.center.attachPreviewCaption
+    );
+
+    if (useAttachPreviewCaption) {
+      const caption = dom.center.attachPreviewCaption;
+      const start = caption.selectionStart ?? caption.value.length;
+      const end = caption.selectionEnd ?? caption.value.length;
+      caption.value = `${caption.value.slice(0, start)}${value}${caption.value.slice(end)}`;
+      caption.focus();
+      const pos = start + value.length;
+      caption.setSelectionRange(pos, pos);
+      return;
+    }
+
+    if (!dom.center.input) return;
+    const input = dom.center.input;
     const start = input.selectionStart ?? input.value.length;
     const end = input.selectionEnd ?? input.value.length;
     input.value = `${input.value.slice(0, start)}${value}${input.value.slice(end)}`;
@@ -1998,6 +2249,136 @@
     return (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) <= 28;
   }
 
+  function getPendingScrollMessageIdSet(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return null;
+    if (!(state.pendingScrollMessageIdsByClient[key] instanceof Set)) {
+      state.pendingScrollMessageIdsByClient[key] = new Set();
+    }
+    return state.pendingScrollMessageIdsByClient[key];
+  }
+
+  function getPendingScrollNewCount(clientId = state.activeClientId) {
+    const set = getPendingScrollMessageIdSet(clientId);
+    if (!set) return 0;
+    return set.size;
+  }
+
+  function animateCountBadgeTick(badge) {
+    if (!badge) return;
+    badge.classList.remove("is-count-tick");
+    // Force reflow so repeated updates replay animation.
+    // eslint-disable-next-line no-unused-expressions
+    badge.offsetWidth;
+    badge.classList.add("is-count-tick");
+  }
+
+  function addPendingScrollMessageIds(clientId, messageIds) {
+    const key = normalizeClientIdKey(clientId);
+    const ids = Array.isArray(messageIds) ? messageIds : [];
+    if (!key || !ids.length) return;
+    const set = getPendingScrollMessageIdSet(key);
+    if (!set) return;
+    let changed = false;
+    ids.forEach((id) => {
+      const value = String(id || "");
+      if (!value || set.has(value)) return;
+      set.add(value);
+      changed = true;
+    });
+    if (changed) {
+      state.pendingScrollNewByClient[key] = set.size;
+      updateMessagesScrollDownButton();
+    }
+  }
+
+  function clearPendingScrollNewCount(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    const set = getPendingScrollMessageIdSet(key);
+    if (!set || set.size === 0) return;
+    set.clear();
+    state.pendingScrollNewByClient[key] = 0;
+    updateMessagesScrollDownButton();
+  }
+
+  function syncPendingScrollCountByViewport(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key || !dom.center.messagesWrap || !dom.center.messages) return;
+    const set = getPendingScrollMessageIdSet(key);
+    if (!set || set.size === 0) return;
+
+    const wrapRect = dom.center.messagesWrap.getBoundingClientRect();
+    const topEdge = wrapRect.top + 6;
+    const bottomEdge = wrapRect.bottom - 6;
+    if (bottomEdge <= topEdge) return;
+
+    const nodeById = new Map();
+    dom.center.messages.querySelectorAll(".chat-message[data-message-id]").forEach((node) => {
+      const id = String(node.getAttribute("data-message-id") || "");
+      if (!id) return;
+      nodeById.set(id, node);
+    });
+
+    let changed = false;
+    Array.from(set).forEach((id) => {
+      const node = nodeById.get(id);
+      if (!node) return;
+      const rect = node.getBoundingClientRect();
+      const isVisible = rect.bottom > topEdge && rect.top < bottomEdge;
+      if (!isVisible) return;
+      set.delete(id);
+      changed = true;
+    });
+
+    if (!changed) return;
+    state.pendingScrollNewByClient[key] = set.size;
+    updateMessagesScrollDownButton();
+  }
+
+  function saveThreadScrollPosition(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    const wrap = dom.center.messagesWrap;
+    if (!key || !wrap) return;
+    state.threadScrollTopByClient[key] = wrap.scrollTop;
+  }
+
+  function restoreThreadScrollPosition(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    const wrap = dom.center.messagesWrap;
+    if (!key || !wrap) return false;
+    const raw = Number(state.threadScrollTopByClient[key]);
+    if (!Number.isFinite(raw)) return false;
+    const maxTop = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
+    wrap.scrollTop = Math.max(0, Math.min(raw, maxTop));
+    return true;
+  }
+
+  function updateMessagesScrollDownButton() {
+    const wrap = dom.center.messagesWrap;
+    const btn = dom.center.scrollDownBtn;
+    if (!wrap || !btn) return;
+
+    const hiddenDistance = wrap.scrollHeight - wrap.clientHeight - wrap.scrollTop;
+    const pending = getPendingScrollNewCount();
+    const shouldShow = pending > 0 || hiddenDistance >= 120;
+    btn.classList.toggle("hidden", !shouldShow);
+
+    const badge = dom.center.scrollDownBadge;
+    if (!badge) return;
+    if (pending <= 0) {
+      badge.textContent = "";
+      badge.classList.add("hidden");
+      return;
+    }
+    const nextText = pending > 99 ? "99+" : String(pending);
+    if (badge.textContent !== nextText) {
+      badge.textContent = nextText;
+      animateCountBadgeTick(badge);
+    }
+    badge.classList.remove("hidden");
+  }
+
   function stopMessagesSmoothScroll() {
     if (!state.messagesScrollRaf) return;
     cancelAnimationFrame(state.messagesScrollRaf);
@@ -2016,6 +2397,8 @@
     if (behavior !== "smooth-fast") {
       stopMessagesSmoothScroll();
       wrap.scrollTop = target;
+      clearPendingScrollNewCount();
+      updateMessagesScrollDownButton();
       return;
     }
 
@@ -2043,6 +2426,8 @@
       }
       state.messagesScrollRaf = 0;
       wrap.scrollTop = target;
+      clearPendingScrollNewCount();
+      updateMessagesScrollDownButton();
     };
 
     state.messagesScrollRaf = requestAnimationFrame(step);
@@ -2127,6 +2512,11 @@
       if (!el) return;
       el.disabled = !enabled;
     });
+    [dom.center.attachPreviewCaption, dom.center.attachPreviewEmojiBtn, dom.center.attachPreviewSendBtn].forEach((el) => {
+      if (!el) return;
+      el.disabled = !enabled;
+    });
+    if (!enabled) closeAttachPreview({ focusComposer: false });
   }
 
   function syncComposerMode() {
@@ -2202,6 +2592,7 @@
     if (!msg || msg.direction !== "out") return false;
     msg.text = String(newText || "");
     msg.editedAt = new Date().toISOString();
+    markThreadMutated(clientId);
     saveStore();
     queueThreadSaveToRemote(clientId);
     return true;
@@ -2218,6 +2609,7 @@
     pruneHiddenMessageIds(clientId);
     state.selectedMessageIds.delete(String(messageId));
     if (state.selectedMessageIds.size === 0) setSelectionMode(false);
+    markThreadMutated(clientId);
     saveStore();
     queueThreadSaveToRemote(clientId);
     return true;
@@ -2238,7 +2630,10 @@
 
     ids.forEach((id) => state.selectedMessageIds.delete(id));
     if (state.selectedMessageIds.size === 0) setSelectionMode(false);
-    if (changed) saveStore();
+    if (changed) {
+      markThreadMutated(clientId);
+      saveStore();
+    }
     return changed;
   }
 
@@ -2246,6 +2641,7 @@
     const msg = findThreadMessage(clientId, messageId);
     if (!msg) return false;
     msg.pinned = !msg.pinned;
+    markThreadMutated(clientId);
     saveStore();
     queueThreadSaveToRemote(clientId);
     return true;
@@ -2255,6 +2651,7 @@
     const msg = findThreadMessage(clientId, messageId);
     if (!msg) return false;
     if (!setMessageActorReaction(msg, CHAT_REACTION_ACTOR, reaction)) return false;
+    markThreadMutated(clientId);
     saveStore();
     queueThreadSaveToRemote(clientId);
     return true;
@@ -2295,7 +2692,7 @@
     return "";
   }
 
-  function setOutgoingDeliveryStatus(clientId, messageId, nextStatus) {
+  function setOutgoingDeliveryStatus(clientId, messageId, nextStatus, options = {}) {
     const msg = findThreadMessage(clientId, messageId);
     if (!msg || msg.direction !== "out") return false;
 
@@ -2308,8 +2705,11 @@
     msg.deliveryStatus = target;
     if (target === "delivered" && !msg.deliveredAt) msg.deliveredAt = new Date().toISOString();
     if (target === "read" && !msg.readAt) msg.readAt = new Date().toISOString();
+    markThreadMutated(clientId);
     saveStore();
-    queueThreadSaveToRemote(clientId);
+    if (options.persistRemote !== false) {
+      queueThreadSaveToRemote(clientId);
+    }
 
     if (Number(state.activeClientId) === Number(clientId)) renderMessages();
     applyClientFilter();
@@ -2321,7 +2721,7 @@
     if (!id) return;
 
     window.setTimeout(() => {
-      setOutgoingDeliveryStatus(clientId, id, "delivered");
+      setOutgoingDeliveryStatus(clientId, id, "delivered", { persistRemote: false });
     }, 700);
   }
 
@@ -2336,6 +2736,105 @@
         reject(err);
       }
     });
+  }
+
+  function estimateDataUrlSizeBytes(dataUrl) {
+    const text = String(dataUrl || "");
+    const commaIdx = text.indexOf(",");
+    if (commaIdx < 0) return text.length;
+    const base64 = text.slice(commaIdx + 1);
+    return Math.floor((base64.length * 3) / 4);
+  }
+
+  function getDataUrlMime(dataUrl) {
+    const match = String(dataUrl || "").match(/^data:([^;,]+)[;,]/i);
+    return match ? String(match[1] || "").toLowerCase() : "";
+  }
+
+  function shouldSkipImageOptimization(mime, fileSizeBytes) {
+    const type = String(mime || "").toLowerCase();
+    if (!type.startsWith("image/")) return true;
+    if (type === "image/gif" || type === "image/svg+xml") return true;
+    const size = Number(fileSizeBytes || 0);
+    return Number.isFinite(size) && size > 0 && size <= IMAGE_OPTIMIZE_SKIP_BELOW_BYTES;
+  }
+
+  function loadImageFromFile(file) {
+    return new Promise((resolve, reject) => {
+      const objectUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve(img);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error("IMAGE_LOAD_FAILED"));
+      };
+      img.src = objectUrl;
+    });
+  }
+
+  function getScaledDimensions(width, height, maxSide) {
+    const w = Math.max(1, Number(width) || 1);
+    const h = Math.max(1, Number(height) || 1);
+    const limit = Math.max(1, Number(maxSide) || 1);
+    const longest = Math.max(w, h);
+    if (longest <= limit) return { width: w, height: h };
+    const ratio = limit / longest;
+    return {
+      width: Math.max(1, Math.round(w * ratio)),
+      height: Math.max(1, Math.round(h * ratio)),
+    };
+  }
+
+  function renderImageToDataUrl(image, mime, quality, maxSide) {
+    const dims = getScaledDimensions(image.naturalWidth, image.naturalHeight, maxSide);
+    const canvas = document.createElement("canvas");
+    canvas.width = dims.width;
+    canvas.height = dims.height;
+    const ctx = canvas.getContext("2d", { alpha: true });
+    if (!ctx) throw new Error("CANVAS_CONTEXT_FAILED");
+    ctx.drawImage(image, 0, 0, dims.width, dims.height);
+    const dataUrl = canvas.toDataURL(mime, quality);
+    return {
+      dataUrl: String(dataUrl || ""),
+      width: dims.width,
+      height: dims.height,
+      mime: getDataUrlMime(dataUrl) || String(mime || "").toLowerCase(),
+      size: estimateDataUrlSizeBytes(dataUrl),
+    };
+  }
+
+  async function buildOptimizedImagePayload(file, fallbackMime) {
+    const image = await loadImageFromFile(file);
+    const preferredMime = (
+      String(fallbackMime || "").toLowerCase() === "image/webp"
+        ? "image/webp"
+        : "image/jpeg"
+    );
+    let maxSide = IMAGE_OPTIMIZE_MAX_SIDE_PX;
+    let quality = IMAGE_OPTIMIZE_INITIAL_QUALITY;
+    let best = null;
+
+    for (let attempt = 0; attempt < 7; attempt += 1) {
+      const current = renderImageToDataUrl(image, preferredMime, quality, maxSide);
+      if (!best || current.size < best.size) best = current;
+
+      const fitsTarget = current.size <= IMAGE_OPTIMIZE_TARGET_BYTES;
+      const fitsHardLimit = current.dataUrl.length <= MAX_IMAGE_DATA_URL_LENGTH;
+      if (fitsTarget && fitsHardLimit) return current;
+
+      if (quality > IMAGE_OPTIMIZE_MIN_QUALITY + 0.02) {
+        quality = Math.max(IMAGE_OPTIMIZE_MIN_QUALITY, quality - 0.1);
+      } else {
+        const nextSide = Math.max(IMAGE_OPTIMIZE_MIN_SIDE_PX, Math.round(maxSide * IMAGE_OPTIMIZE_SCALE_STEP));
+        if (nextSide === maxSide) break;
+        maxSide = nextSide;
+      }
+    }
+
+    return best;
   }
 
   function getImageSizeFromDataUrl(dataUrl) {
@@ -2357,20 +2856,43 @@
     const mime = String(file.type || "").toLowerCase();
     if (!mime.startsWith("image/")) return null;
 
-    const dataUrl = await readFileAsDataUrl(file);
-    if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl)) return null;
-    if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) return null;
+    let dataUrl = "";
+    let outputMime = mime || "image/jpeg";
+    let dimensions = { width: 0, height: 0 };
+    let payloadSize = Number(file.size) || 0;
 
-    const dimensions = await getImageSizeFromDataUrl(dataUrl);
+    const skipOptimization = shouldSkipImageOptimization(mime, file.size);
+    if (!skipOptimization) {
+      const optimized = await buildOptimizedImagePayload(file, mime).catch(() => null);
+      if (optimized && /^data:image\/[a-z0-9.+-]+;base64,/i.test(optimized.dataUrl)) {
+        dataUrl = optimized.dataUrl;
+        outputMime = String(optimized.mime || outputMime || "image/jpeg");
+        dimensions = {
+          width: Number(optimized.width) || 0,
+          height: Number(optimized.height) || 0,
+        };
+        payloadSize = Number(optimized.size) || payloadSize;
+      }
+    }
+
+    if (!dataUrl) {
+      dataUrl = await readFileAsDataUrl(file);
+      if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl)) return null;
+      outputMime = getDataUrlMime(dataUrl) || outputMime;
+      dimensions = await getImageSizeFromDataUrl(dataUrl);
+      payloadSize = estimateDataUrlSizeBytes(dataUrl);
+    }
+
+    if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) return null;
 
     return {
       kind: "image",
       name: String(file.name || "image").slice(0, 160),
-      mime: mime || "image/jpeg",
+      mime: outputMime || "image/jpeg",
       dataUrl,
       width: Number.isFinite(dimensions.width) && dimensions.width > 0 ? dimensions.width : 0,
       height: Number.isFinite(dimensions.height) && dimensions.height > 0 ? dimensions.height : 0,
-      size: Number.isFinite(file.size) && file.size > 0 ? file.size : 0,
+      size: Number.isFinite(payloadSize) && payloadSize > 0 ? payloadSize : 0,
     };
   }
 
@@ -2865,6 +3387,7 @@
   function renderMessages(options = {}) {
     if (!dom.center.messages || !dom.center.empty) return;
     const forceScrollBottom = options.forceScrollBottom === true;
+    const disableAutoPin = options.disableAutoPin === true;
     const smoothScroll = options.smoothScroll !== false;
     const keepPinnedBeforeRender = shouldKeepMessagesPinnedToBottom();
 
@@ -2873,6 +3396,8 @@
       dom.center.empty.classList.remove("hidden");
       dom.center.messages.innerHTML = "";
       hideMessageContextMenu();
+      clearPendingScrollNewCount();
+      updateMessagesScrollDownButton();
       return;
     }
 
@@ -2898,6 +3423,8 @@
         </div>
       `;
       hideMessageContextMenu();
+      clearPendingScrollNewCount();
+      updateMessagesScrollDownButton();
       return;
     }
 
@@ -2953,7 +3480,7 @@
               class="chat-message-attachment-image"
               src="${escapeHtml(String(imageAttachment.dataUrl || ""))}"
               alt="${escapeHtml(String(imageAttachment.name || "Фото"))}"
-              loading="lazy"
+              loading="eager"
               decoding="async"
             />
           </div>
@@ -3037,10 +3564,13 @@
     syncSelectionUi();
 
     if (dom.center.messagesWrap && !state.selectionMode) {
-      if (forceScrollBottom || keepPinnedBeforeRender) {
+      if (forceScrollBottom || (!disableAutoPin && keepPinnedBeforeRender)) {
         scrollMessagesToBottom({ behavior: smoothScroll ? "smooth-fast" : "auto" });
       }
     }
+    syncPendingScrollCountByViewport(state.activeClientId);
+    saveThreadScrollPosition(state.activeClientId);
+    updateMessagesScrollDownButton();
   }
 
   function sendMessage(text, options = {}) {
@@ -3091,9 +3621,179 @@
     return true;
   }
 
-  async function sendImageAttachments(files) {
+  function getAttachPreviewTitle(count) {
+    const total = Number(count) || 0;
+    if (total <= 1) return "1 фотография";
+    if (total >= 2 && total <= 4) return `${total} фотографии`;
+    return `${total} фотографий`;
+  }
+
+  function closeAttachPreview(options = {}) {
+    const clearItems = options.clearItems !== false;
+    const focusComposer = options.focusComposer !== false;
+    const clearCaption = options.clearCaption !== false;
+    const overlay = dom.center.attachPreviewOverlay;
+    if (overlay) {
+      overlay.classList.add("hidden");
+      overlay.setAttribute("aria-hidden", "true");
+    }
+    if (clearItems) {
+      state.attachPreviewItems = [];
+      state.attachPreviewActiveIndex = 0;
+    }
+    if (clearCaption && dom.center.attachPreviewCaption) {
+      dom.center.attachPreviewCaption.value = "";
+    }
+    if (dom.center.attachPreviewThumbs) {
+      dom.center.attachPreviewThumbs.innerHTML = "";
+      dom.center.attachPreviewThumbs.classList.add("hidden");
+    }
+    if (
+      dom.center.emojiPopover
+      && dom.center.emojiPopover.classList.contains("is-attach-preview")
+    ) {
+      hideEmojiPopover();
+    }
+    if (dom.center.attachInput) dom.center.attachInput.value = "";
+    if (focusComposer && dom.center.input && !dom.center.input.disabled) dom.center.input.focus();
+  }
+
+  function isMessageImageViewerOpen() {
+    return !!(
+      dom.center.imageViewerOverlay
+      && !dom.center.imageViewerOverlay.classList.contains("hidden")
+    );
+  }
+
+  function closeMessageImageViewer() {
+    if (!dom.center.imageViewerOverlay) return;
+    dom.center.imageViewerOverlay.classList.add("hidden");
+    dom.center.imageViewerOverlay.setAttribute("aria-hidden", "true");
+    if (dom.center.imageViewerImage) {
+      dom.center.imageViewerImage.removeAttribute("src");
+    }
+  }
+
+  function openMessageImageViewer(imageSrc, imageAlt = "") {
+    if (!dom.center.imageViewerOverlay || !dom.center.imageViewerImage) return false;
+    const src = String(imageSrc || "").trim();
+    if (!src) return false;
+    dom.center.imageViewerImage.src = src;
+    dom.center.imageViewerImage.alt = String(imageAlt || "Image preview");
+    dom.center.imageViewerOverlay.classList.remove("hidden");
+    dom.center.imageViewerOverlay.setAttribute("aria-hidden", "false");
+    return true;
+  }
+
+  function initMessageImageViewerModal() {
+    const overlay = dom.center.imageViewerOverlay;
+    if (!overlay || overlay.dataset.bound === "1") return;
+    overlay.dataset.bound = "1";
+
+    if (dom.center.imageViewerCloseBtn) {
+      dom.center.imageViewerCloseBtn.addEventListener("click", () => {
+        closeMessageImageViewer();
+      });
+    }
+
+    overlay.addEventListener("click", (event) => {
+      if (event.target !== overlay) return;
+      closeMessageImageViewer();
+    });
+  }
+
+  function renderAttachPreview() {
+    const items = Array.isArray(state.attachPreviewItems) ? state.attachPreviewItems : [];
+    const total = items.length;
+    if (!total) {
+      closeAttachPreview({ focusComposer: false });
+      return;
+    }
+
+    const nextIndex = Math.max(0, Math.min(Number(state.attachPreviewActiveIndex) || 0, total - 1));
+    state.attachPreviewActiveIndex = nextIndex;
+    const active = items[nextIndex] || null;
+
+    if (dom.center.attachPreviewTitle) {
+      dom.center.attachPreviewTitle.textContent = getAttachPreviewTitle(total);
+    }
+    if (dom.center.attachPreviewImage && active) {
+      dom.center.attachPreviewImage.src = String(active.dataUrl || "");
+      dom.center.attachPreviewImage.alt = String(active.name || "Изображение");
+    }
+
+    if (dom.center.attachPreviewThumbs) {
+      const thumbs = dom.center.attachPreviewThumbs;
+      thumbs.innerHTML = "";
+      if (total > 1) {
+        thumbs.classList.remove("hidden");
+        items.forEach((item, idx) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "chat-attach-preview-thumb";
+          if (idx === nextIndex) btn.classList.add("is-active");
+          btn.setAttribute("data-chat-attach-preview-index", String(idx));
+
+          const img = document.createElement("img");
+          img.src = String(item.dataUrl || "");
+          img.alt = String(item.name || `Фото ${idx + 1}`);
+          img.loading = "eager";
+          img.decoding = "async";
+          img.draggable = false;
+
+          btn.appendChild(img);
+          thumbs.appendChild(btn);
+        });
+      } else {
+        thumbs.classList.add("hidden");
+      }
+    }
+  }
+
+  function openAttachPreview(attachments, options = {}) {
+    const items = Array.isArray(attachments)
+      ? attachments.filter((item) => isImageAttachment(item))
+      : [];
+    if (!items.length || !dom.center.attachPreviewOverlay) return false;
+
+    state.attachPreviewItems = items;
+    state.attachPreviewActiveIndex = 0;
+    if (dom.center.attachPreviewCaption) {
+      dom.center.attachPreviewCaption.value = String(options.caption || "");
+    }
+
+    renderAttachPreview();
+    dom.center.attachPreviewOverlay.classList.remove("hidden");
+    dom.center.attachPreviewOverlay.setAttribute("aria-hidden", "false");
+    if (dom.center.attachPreviewCaption) dom.center.attachPreviewCaption.focus();
+    return true;
+  }
+
+  function hideEmojiPopover() {
+    if (!dom.center.emojiPopover) return;
+    dom.center.emojiPopover.classList.add("hidden");
+    dom.center.emojiPopover.classList.remove("is-attach-preview");
+  }
+
+  function toggleEmojiPopover(target = "composer") {
+    if (!dom.center.emojiPopover) return;
+    const popover = dom.center.emojiPopover;
+    const normalizedTarget = target === "attach-preview" ? "attach-preview" : "composer";
+    const isPreviewTarget = normalizedTarget === "attach-preview";
+    const isOpen = !popover.classList.contains("hidden");
+    const hasSameTarget = popover.classList.contains("is-attach-preview") === isPreviewTarget;
+    const willOpen = !isOpen || !hasSameTarget;
+
+    popover.classList.toggle("is-attach-preview", isPreviewTarget);
+    popover.classList.toggle("hidden", !willOpen);
+    if (willOpen) ensureEmojiDatasetLoaded().catch(() => {});
+  }
+
+  function sendPreparedImageAttachments(attachments, options = {}) {
     if (!state.activeClientId) return 0;
-    const list = Array.isArray(files) ? files : [];
+    const list = Array.isArray(attachments)
+      ? attachments.filter((item) => isImageAttachment(item))
+      : [];
     if (!list.length) return 0;
 
     const replySnapshot = state.replyDraft && state.replyDraft.id
@@ -3104,17 +3804,14 @@
         }
       : null;
 
+    const captionText = normalizeComposerText(options.caption || "");
     let sent = 0;
-    for (const file of list) {
-      // eslint-disable-next-line no-await-in-loop
-      const attachment = await buildImageAttachmentFromFile(file).catch(() => null);
-      if (!attachment) continue;
-
+    for (const attachment of list) {
       const newMessageId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       pushMessage(state.activeClientId, {
         id: newMessageId,
         direction: "out",
-        text: "",
+        text: sent === 0 ? captionText : "",
         attachment,
         createdAt: new Date().toISOString(),
         read: false,
@@ -3139,6 +3836,92 @@
     return sent;
   }
 
+  async function sendImageAttachments(files, options = {}) {
+    const list = Array.isArray(files) ? files : [];
+    if (!list.length) return 0;
+
+    const prepared = await Promise.all(
+      list.map((file) => buildImageAttachmentFromFile(file).catch(() => null))
+    );
+    const attachments = prepared.filter(Boolean);
+
+    return sendPreparedImageAttachments(attachments, options);
+  }
+
+  async function openAttachPreviewFromFiles(files) {
+    const list = Array.isArray(files) ? files : [];
+    if (!list.length) return false;
+
+    if (state.editingMessageId) {
+      cancelEditingMessage();
+    }
+
+    const prepared = await Promise.all(
+      list.map((file) => buildImageAttachmentFromFile(file).catch(() => null))
+    );
+    const attachments = prepared.filter(Boolean);
+
+    if (!attachments.length) return false;
+    return openAttachPreview(attachments);
+  }
+
+  function initAttachPreviewModal() {
+    const overlay = dom.center.attachPreviewOverlay;
+    if (!overlay || overlay.dataset.bound === "1") return;
+    overlay.dataset.bound = "1";
+
+    if (dom.center.attachPreviewCloseBtn) {
+      dom.center.attachPreviewCloseBtn.addEventListener("click", () => {
+        closeAttachPreview();
+      });
+    }
+
+    if (dom.center.attachPreviewThumbs) {
+      dom.center.attachPreviewThumbs.addEventListener("click", (event) => {
+        const btn = event.target.closest("[data-chat-attach-preview-index]");
+        if (!btn) return;
+        const idx = Number(btn.getAttribute("data-chat-attach-preview-index") || 0);
+        if (!Number.isFinite(idx)) return;
+        state.attachPreviewActiveIndex = idx;
+        renderAttachPreview();
+      });
+    }
+
+    if (dom.center.attachPreviewEmojiBtn) {
+      dom.center.attachPreviewEmojiBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleEmojiPopover("attach-preview");
+        if (dom.center.attachPreviewCaption) dom.center.attachPreviewCaption.focus();
+      });
+    }
+
+    if (dom.center.attachPreviewSendBtn) {
+      dom.center.attachPreviewSendBtn.addEventListener("click", () => {
+        const caption = dom.center.attachPreviewCaption
+          ? String(dom.center.attachPreviewCaption.value || "")
+          : "";
+        const sent = sendPreparedImageAttachments(state.attachPreviewItems, { caption });
+        if (sent > 0) {
+          closeAttachPreview({ clearCaption: true });
+        }
+      });
+    }
+
+    if (dom.center.attachPreviewCaption) {
+      dom.center.attachPreviewCaption.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        if (dom.center.attachPreviewSendBtn) dom.center.attachPreviewSendBtn.click();
+      });
+    }
+
+    overlay.addEventListener("click", (event) => {
+      if (event.target !== overlay) return;
+      closeAttachPreview();
+    });
+  }
+
   function initMessageContextMenu() {
     if (!dom.center.messages || !dom.center.contextMenu) return;
 
@@ -3159,6 +3942,16 @@
         }
         const reactionValue = reactionPill.getAttribute("data-chat-reaction-value") || reactionPill.textContent || "";
         if (messageId) reactMessageFromContext(messageId, reactionValue);
+        return;
+      }
+
+      const attachmentImage = event.target.closest(".chat-message-attachment-image");
+      if (attachmentImage && !state.selectionMode) {
+        hideMessageContextMenu();
+        openMessageImageViewer(
+          attachmentImage.getAttribute("src") || "",
+          attachmentImage.getAttribute("alt") || "Image preview",
+        );
         return;
       }
 
@@ -3273,6 +4066,14 @@
 
     document.addEventListener("keydown", (event) => {
       if (event.key !== "Escape") return;
+      if (isMessageImageViewerOpen()) {
+        closeMessageImageViewer();
+        return;
+      }
+      if (dom.center.attachPreviewOverlay && !dom.center.attachPreviewOverlay.classList.contains("hidden")) {
+        closeAttachPreview();
+        return;
+      }
       if (state.pendingDeleteConfirm) return;
       hideMessageContextMenu();
       hideClientContextMenu();
@@ -3333,21 +4134,28 @@
 
       state.activeClient = clientJson?.data || selectedFromList;
       setActiveOrders(Array.isArray(ordersJson?.data) ? ordersJson.data : [], { forceRender: true });
-      renderMessages();
+      renderMessages({ disableAutoPin: true, smoothScroll: false });
+      restoreThreadScrollPosition(state.activeClientId);
+      saveThreadScrollPosition(state.activeClientId);
       hydrateHeaderOrderDetails(requestId, clientId).catch(console.error);
     } catch (err) {
       if (requestId !== state.requestToken) return;
       console.error(err);
       state.activeClient = selectedFromList;
       setActiveOrders([], { forceRender: true });
-      renderMessages();
+      renderMessages({ disableAutoPin: true, smoothScroll: false });
+      restoreThreadScrollPosition(state.activeClientId);
+      saveThreadScrollPosition(state.activeClientId);
     }
   }
 
   async function selectClient(clientId) {
     const id = Number(clientId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
+    const previousActiveClientId = state.activeClientId;
+    saveThreadScrollPosition(previousActiveClientId);
 
+    closeAttachPreview({ focusComposer: false });
     cancelEditingMessage();
     clearComposerReply();
     if (state.pendingDeleteConfirm) closeDeleteConfirm();
@@ -3365,10 +4173,18 @@
     state.store.lastOpenClientId = id;
     saveStore();
 
-    await pullThreadFromRemote(id, { skipReadMark: true }).catch(console.error);
+    await pullThreadFromRemote(id, { skipReadMark: true, ignoreIncomingBadge: true }).catch(console.error);
     syncActiveThreadReadState({ clientId: id });
     applyClientFilter();
-    renderMessages();
+    renderMessages({ disableAutoPin: true, smoothScroll: false });
+    if (!restoreThreadScrollPosition(id)) {
+      scrollMessagesToBottom({ behavior: "auto" });
+      saveThreadScrollPosition(id);
+    } else {
+      syncPendingScrollCountByViewport(id);
+      updateMessagesScrollDownButton();
+      saveThreadScrollPosition(id);
+    }
 
     const selectedFromList = state.clients.find((c) => Number(c.id) === id) || null;
     const clientsRightApi = getClientsRightApi();
@@ -3450,6 +4266,8 @@
     bindEmojiPopoverGuard();
     normalizeQuickReactionButtons();
     decorateComposerEmojiControls();
+    initAttachPreviewModal();
+    initMessageImageViewerModal();
     ensureComposerReplyElements();
     renderComposerReply();
     setupComposerRichPreview();
@@ -3502,25 +4320,25 @@
       dom.center.attachBtn.addEventListener("click", () => dom.center.attachInput.click());
       dom.center.attachInput.addEventListener("change", async () => {
         const files = Array.from(dom.center.attachInput.files || []);
-        await sendImageAttachments(files).catch(console.error);
+        await openAttachPreviewFromFiles(files).catch(console.error);
         dom.center.attachInput.value = "";
-        if (dom.center.input) dom.center.input.focus();
       });
     }
 
     if (dom.center.emojiBtn && dom.center.emojiPopover) {
       dom.center.emojiBtn.addEventListener("click", (event) => {
+        event.preventDefault();
         event.stopPropagation();
-        const willOpen = dom.center.emojiPopover.classList.contains("hidden");
-        dom.center.emojiPopover.classList.toggle("hidden", !willOpen);
-        if (willOpen) ensureEmojiDatasetLoaded().catch(() => {});
+        toggleEmojiPopover("composer");
+        if (dom.center.input) dom.center.input.focus();
       });
 
       document.addEventListener("click", (event) => {
         if (!dom.center.emojiPopover) return;
         const insidePopover = dom.center.emojiPopover.contains(event.target);
-        const insideBtn = dom.center.emojiBtn && dom.center.emojiBtn.contains(event.target);
-        if (!insidePopover && !insideBtn) dom.center.emojiPopover.classList.add("hidden");
+        const insideComposerBtn = dom.center.emojiBtn && dom.center.emojiBtn.contains(event.target);
+        const insideAttachPreviewBtn = dom.center.attachPreviewEmojiBtn && dom.center.attachPreviewEmojiBtn.contains(event.target);
+        if (!insidePopover && !insideComposerBtn && !insideAttachPreviewBtn) hideEmojiPopover();
       });
     }
 
@@ -3540,6 +4358,23 @@
     initSelectionToolbar();
     initHeaderOrderOpenAction();
     initOrderHeaderLiveSync();
+    if (dom.center.messagesWrap && dom.center.messagesWrap.dataset.scrollDownBound !== "1") {
+      dom.center.messagesWrap.dataset.scrollDownBound = "1";
+      dom.center.messagesWrap.addEventListener("scroll", () => {
+        saveThreadScrollPosition(state.activeClientId);
+        syncPendingScrollCountByViewport(state.activeClientId);
+        if (shouldKeepMessagesPinnedToBottom()) {
+          clearPendingScrollNewCount();
+        }
+        updateMessagesScrollDownButton();
+      });
+    }
+    if (dom.center.scrollDownBtn && dom.center.scrollDownBtn.dataset.bound !== "1") {
+      dom.center.scrollDownBtn.dataset.bound = "1";
+      dom.center.scrollDownBtn.addEventListener("click", () => {
+        scrollMessagesToBottom({ behavior: "smooth-fast" });
+      });
+    }
     bindSearch();
     renderChatHeader();
     syncSelectionUi();
@@ -3551,7 +4386,7 @@
       if (!state.activeClientId) return;
       if (!isChatTabActiveForRead()) return;
       syncActiveThreadReadState();
-      pullThreadFromRemote(state.activeClientId, { skipReadMark: false }).catch(console.error);
+      pullThreadFromRemoteIfChanged(state.activeClientId, { skipReadMark: false, force: true }).catch(console.error);
     };
 
     document.addEventListener("visibilitychange", () => {

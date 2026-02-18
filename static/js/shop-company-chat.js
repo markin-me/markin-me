@@ -14,14 +14,26 @@
   const selectionDeleteBtn = document.getElementById("shopCompanyChatSelectionDeleteBtn");
   const attachBtn = document.getElementById("shopCompanyChatAttachBtn");
   const attachInput = document.getElementById("shopCompanyChatAttachmentInput");
+  const attachPreviewOverlay = document.getElementById("shopCompanyChatAttachPreviewOverlay");
+  const attachPreviewCloseBtn = document.getElementById("shopCompanyChatAttachPreviewCloseBtn");
+  const attachPreviewTitle = document.getElementById("shopCompanyChatAttachPreviewTitle");
+  const attachPreviewImage = document.getElementById("shopCompanyChatAttachPreviewImage");
+  const attachPreviewThumbs = document.getElementById("shopCompanyChatAttachPreviewThumbs");
+  const attachPreviewEmojiBtn = document.getElementById("shopCompanyChatAttachPreviewEmojiBtn");
+  const attachPreviewCaption = document.getElementById("shopCompanyChatAttachPreviewCaption");
+  const attachPreviewSendBtn = document.getElementById("shopCompanyChatAttachPreviewSendBtn");
+  const imageViewerOverlay = document.getElementById("shopCompanyChatImageViewerOverlay");
+  const imageViewerCloseBtn = document.getElementById("shopCompanyChatImageViewerCloseBtn");
+  const imageViewerImage = document.getElementById("shopCompanyChatImageViewerImage");
   const input = document.getElementById("shopCompanyChatInput");
   const emojiBtn = document.getElementById("shopCompanyChatEmojiBtn");
   const emojiPopover = document.getElementById("shopCompanyChatEmojiPopover");
   const scrollDownBtn = document.getElementById("shopCompanyChatScrollDownBtn");
+  const scrollDownBadge = document.getElementById("shopCompanyChatScrollDownBadge");
   const reactionBar = document.getElementById("shopCompanyChatReactionBar");
 
   if (!openBtn || !overlay || !modalBody || !closeBtn) return;
-  if (!feed || !thread || !composer || !selectionToolbar || !selectionCloseBtn || !selectionCountEl || !selectionCopyBtn || !selectionDeleteBtn || !attachBtn || !attachInput || !input || !emojiBtn || !emojiPopover || !scrollDownBtn || !reactionBar) return;
+  if (!feed || !thread || !composer || !selectionToolbar || !selectionCloseBtn || !selectionCountEl || !selectionCopyBtn || !selectionDeleteBtn || !attachBtn || !attachInput || !attachPreviewOverlay || !attachPreviewCloseBtn || !attachPreviewTitle || !attachPreviewImage || !attachPreviewThumbs || !attachPreviewEmojiBtn || !attachPreviewCaption || !attachPreviewSendBtn || !imageViewerOverlay || !imageViewerCloseBtn || !imageViewerImage || !input || !emojiBtn || !emojiPopover || !scrollDownBtn || !reactionBar) return;
 
   const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/img/google/64";
   const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/emoji.json";
@@ -67,10 +79,17 @@
     "\u{1F62E}",
   ];
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
-  const CHAT_THREAD_SAVE_DEBOUNCE_MS = 140;
-  const CHAT_THREAD_POLL_MS = 1800;
+  const CHAT_THREAD_SAVE_DEBOUNCE_MS = 35;
+  const CHAT_THREAD_POLL_MS = 250;
   const CHAT_AUTOSCROLL_MS = 170;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
+  const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
+  const IMAGE_OPTIMIZE_TARGET_BYTES = 900 * 1024;
+  const IMAGE_OPTIMIZE_MAX_SIDE_PX = 1600;
+  const IMAGE_OPTIMIZE_MIN_SIDE_PX = 900;
+  const IMAGE_OPTIMIZE_INITIAL_QUALITY = 0.86;
+  const IMAGE_OPTIMIZE_MIN_QUALITY = 0.58;
+  const IMAGE_OPTIMIZE_SCALE_STEP = 0.84;
   const CHAT_REACTION_ACTOR = "in";
 
   let emojiAssetsState = "unknown";
@@ -115,7 +134,11 @@
   let messageSeq = 0;
   let sharedThreadUpdatedAt = "";
   let sharedThreadPollTimer = 0;
+  let sharedThreadMetaPollInFlight = false;
   let sharedThreadSaveTimer = 0;
+  let sharedThreadSaveInFlight = false;
+  let sharedThreadMutationVersion = 0;
+  let profileMergeInFlight = false;
   let feedScrollRaf = 0;
   let sharedPullInFlight = false;
   let reactionMessageId = "";
@@ -131,6 +154,12 @@
   let touchGesture = null;
   let replyDraft = null;
   let replyUi = null;
+  let attachPreviewItems = [];
+  let attachPreviewActiveIndex = 0;
+  let pendingFeedNewCount = 0;
+  let pendingFeedMessageIds = new Set();
+  let hasLoadedSharedThreadOnce = false;
+  let lastFeedScrollTop = null;
   const selectedMessageIds = new Set();
 
   const LONG_PRESS_MS = 430;
@@ -148,6 +177,97 @@
     node.setAttribute("aria-atomic", "true");
     openBtn.appendChild(node);
     return node;
+  }
+
+  function ensureScrollDownBadge() {
+    if (scrollDownBadge && scrollDownBadge.isConnected) return scrollDownBadge;
+    const existing = scrollDownBtn.querySelector("#shopCompanyChatScrollDownBadge");
+    if (existing) return existing;
+
+    const node = document.createElement("span");
+    node.id = "shopCompanyChatScrollDownBadge";
+    node.className = "shop-company-chat-scroll-down-badge hidden";
+    node.setAttribute("aria-live", "polite");
+    node.setAttribute("aria-atomic", "true");
+    scrollDownBtn.appendChild(node);
+    return node;
+  }
+
+  function isFeedPinnedToBottom() {
+    return (feed.scrollHeight - feed.clientHeight - feed.scrollTop) <= 28;
+  }
+
+  function animateCountBadgeTick(badge) {
+    if (!badge) return;
+    badge.classList.remove("is-count-tick");
+    // Force reflow for repeated animation on each value change.
+    // eslint-disable-next-line no-unused-expressions
+    badge.offsetWidth;
+    badge.classList.add("is-count-tick");
+  }
+
+  function addPendingFeedMessageIds(ids) {
+    const list = Array.isArray(ids) ? ids : [];
+    if (!list.length) return;
+    let changed = false;
+    list.forEach(function (id) {
+      const value = String(id || "");
+      if (!value || pendingFeedMessageIds.has(value)) return;
+      pendingFeedMessageIds.add(value);
+      changed = true;
+    });
+    if (!changed) return;
+    pendingFeedNewCount = pendingFeedMessageIds.size;
+    updateScrollDownButton();
+  }
+
+  function clearPendingFeedNewCount() {
+    if (pendingFeedMessageIds.size <= 0 && pendingFeedNewCount <= 0) return;
+    pendingFeedMessageIds.clear();
+    pendingFeedNewCount = 0;
+    updateScrollDownButton();
+  }
+
+  function syncPendingFeedCountByViewport() {
+    if (!pendingFeedMessageIds.size) return;
+    const topEdge = feed.getBoundingClientRect().top + 6;
+    const bottomEdge = feed.getBoundingClientRect().bottom - 6;
+    if (bottomEdge <= topEdge) return;
+
+    let changed = false;
+    const nodeById = new Map();
+    thread.querySelectorAll(".shop-company-chat-row[data-message-id]").forEach(function (row) {
+      const id = String(row.getAttribute("data-message-id") || "");
+      if (!id) return;
+      nodeById.set(id, row);
+    });
+
+    Array.from(pendingFeedMessageIds).forEach(function (id) {
+      const node = nodeById.get(id);
+      if (!node) return;
+      const rect = node.getBoundingClientRect();
+      const isVisible = rect.bottom > topEdge && rect.top < bottomEdge;
+      if (!isVisible) return;
+      pendingFeedMessageIds.delete(id);
+      changed = true;
+    });
+
+    if (!changed) return;
+    pendingFeedNewCount = pendingFeedMessageIds.size;
+    updateScrollDownButton();
+  }
+
+  function saveFeedScrollPosition() {
+    if (!feed) return;
+    lastFeedScrollTop = feed.scrollTop;
+  }
+
+  function restoreFeedScrollPosition() {
+    if (!Number.isFinite(lastFeedScrollTop)) return false;
+    const maxTop = Math.max(0, feed.scrollHeight - feed.clientHeight);
+    feed.scrollTop = Math.max(0, Math.min(lastFeedScrollTop, maxTop));
+    updateScrollDownButton();
+    return true;
   }
 
   function getUnreadAgentCount(entries) {
@@ -281,48 +401,201 @@
     }
   }
 
-  function resolveChatClientProfile() {
-    const customer = getCustomerCache();
-    const directId = Number(customer && customer.id);
-    if (Number.isFinite(directId) && directId > 0) {
-      return {
-        id: Math.trunc(directId),
-        name: String(customer.name || "Клиент"),
-        phone: String(customer.phone || ""),
-      };
-    }
+  function markSharedThreadMutated() {
+    sharedThreadMutationVersion += 1;
+  }
 
+  function compareIsoDates(a, b) {
+    const ta = a ? new Date(String(a)).getTime() : 0;
+    const tb = b ? new Date(String(b)).getTime() : 0;
+    const safeA = Number.isFinite(ta) ? ta : 0;
+    const safeB = Number.isFinite(tb) ? tb : 0;
+    if (safeA > safeB) return 1;
+    if (safeA < safeB) return -1;
+    return 0;
+  }
+
+  function ensureGuestChatClientId(forceNew) {
+    const rotate = forceNew === true;
+    let storedGuestId = rotate ? 0 : Number(localStorage.getItem(guestChatClientKey) || 0);
+    if (!Number.isFinite(storedGuestId) || storedGuestId <= 0) {
+      storedGuestId = 900000000 + Math.floor(Math.random() * 99999999);
+    }
+    try { localStorage.setItem(guestChatClientKey, String(storedGuestId)); } catch {}
+    return Math.trunc(storedGuestId);
+  }
+
+  function resolveChatClientProfile(options) {
+    const opts = options || {};
+    const customer = getCustomerCache();
     const token = getCustomerToken();
+    const directId = Number(customer && customer.id);
     if (token) {
+      if (Number.isFinite(directId) && directId > 0) {
+        return {
+          id: Math.trunc(directId),
+          name: String(customer.name || "Клиент"),
+          phone: String(customer.phone || ""),
+          isGuest: false,
+        };
+      }
+
       const hashed = 800000000 + (hashToStableInt(token) % 99999999);
       return {
         id: Math.trunc(hashed),
-        name: String((customer && customer.name) || "Гость"),
+        name: String((customer && customer.name) || "Клиент"),
         phone: String((customer && customer.phone) || ""),
+        isGuest: false,
       };
     }
 
-    let storedGuestId = Number(localStorage.getItem(guestChatClientKey) || 0);
-    if (!Number.isFinite(storedGuestId) || storedGuestId <= 0) {
-      storedGuestId = 900000000 + Math.floor(Math.random() * 99999999);
-      try { localStorage.setItem(guestChatClientKey, String(storedGuestId)); } catch {}
-    }
-
+    const guestId = ensureGuestChatClientId(opts.forceNewGuest === true);
     return {
-      id: Math.trunc(storedGuestId),
-      name: String((customer && customer.name) || "Гость"),
-      phone: String((customer && customer.phone) || ""),
+      id: Math.trunc(guestId),
+      name: "Гость",
+      phone: "",
+      isGuest: true,
     };
   }
 
-  const chatClientProfile = resolveChatClientProfile();
-  const localHiddenMessagesKey = "shop_company_chat_hidden_messages_t" + tenantId + "_c" + String(chatClientProfile.id || 0);
+  function buildLocalHiddenMessagesKey(clientId) {
+    const id = Number(clientId);
+    const safeId = Number.isFinite(id) && id > 0 ? Math.trunc(id) : 0;
+    return "shop_company_chat_hidden_messages_t" + tenantId + "_c" + String(safeId);
+  }
+
+  function normalizeChatClientProfile(profile) {
+    const source = profile && typeof profile === "object" ? profile : {};
+    const id = Number(source.id);
+    return {
+      id: Number.isFinite(id) && id > 0 ? Math.trunc(id) : 0,
+      name: String(source.name || "Клиент"),
+      phone: String(source.phone || ""),
+      isGuest: source.isGuest === true,
+    };
+  }
+
+  function getActiveChatClientId() {
+    return String(chatClientProfile && chatClientProfile.id || "");
+  }
+
+  function isSameChatClientProfile(left, right) {
+    return (
+      Number(left && left.id || 0) === Number(right && right.id || 0)
+      && !!(left && left.isGuest) === !!(right && right.isGuest)
+    );
+  }
+
+  let chatClientProfile = normalizeChatClientProfile(resolveChatClientProfile());
+  let localHiddenMessagesKey = buildLocalHiddenMessagesKey(chatClientProfile.id);
   let localHiddenMessageIds = loadLocalHiddenMessageIds();
   let sharedThreadMeta = {
     name: String(chatClientProfile.name || "Клиент"),
     phone: String(chatClientProfile.phone || ""),
     lastWelcomeDay: "",
   };
+
+  async function mergeGuestThreadIntoCustomerThread(guestClientId, customerClientId) {
+    const fromId = Number(guestClientId || 0);
+    const toId = Number(customerClientId || 0);
+    if (!Number.isFinite(fromId) || fromId <= 0) return false;
+    if (!Number.isFinite(toId) || toId <= 0) return false;
+    if (fromId === toId) return false;
+
+    await chatApiJson(CHAT_TEMP_API_BASE + "/thread/merge", {
+      method: "POST",
+      body: {
+        from_client_id: fromId,
+        to_client_id: toId,
+      },
+    });
+    return true;
+  }
+
+  function refreshChatClientProfileIfNeeded(options) {
+    const opts = options || {};
+    const currentProfile = normalizeChatClientProfile(chatClientProfile);
+    let nextProfile = normalizeChatClientProfile(resolveChatClientProfile());
+
+    // After logout a new guest must start with a fresh chat id.
+    if (!currentProfile.isGuest && nextProfile.isGuest) {
+      nextProfile = normalizeChatClientProfile(resolveChatClientProfile({ forceNewGuest: true }));
+    }
+
+    if (isSameChatClientProfile(currentProfile, nextProfile)) {
+      chatClientProfile = nextProfile;
+      return false;
+    }
+
+    const shouldMergeGuestIntoCustomer = (
+      currentProfile.isGuest === true
+      && nextProfile.isGuest === false
+      && Number(currentProfile.id) > 0
+      && Number(nextProfile.id) > 0
+      && Number(currentProfile.id) !== Number(nextProfile.id)
+    );
+
+    chatClientProfile = nextProfile;
+    localHiddenMessagesKey = buildLocalHiddenMessagesKey(chatClientProfile.id);
+    localHiddenMessageIds = loadLocalHiddenMessageIds();
+
+    if (sharedThreadSaveTimer) {
+      clearTimeout(sharedThreadSaveTimer);
+      sharedThreadSaveTimer = 0;
+    }
+
+    sharedThreadUpdatedAt = "";
+    sharedThreadMutationVersion = 0;
+    hasLoadedSharedThreadOnce = false;
+    sharedPullInFlight = false;
+    sharedThreadMetaPollInFlight = false;
+    lastFeedScrollTop = null;
+    clearPendingFeedNewCount();
+
+    hideContextMenu();
+    hideReactionBar();
+    hideEmojiPopover();
+    closeAttachPreview({ focusComposer: false, clearItems: true, clearCaption: true });
+
+    if (selectedMessageIds.size > 0) selectedMessageIds.clear();
+    cancelEditingMessage();
+    if (replyDraft) clearReplyDraft();
+    input.value = "";
+    syncComposerRichPreview({});
+
+    liveEntries = [];
+    visibleStart = baseEntries.length;
+    loadOlderMessages(INITIAL_BATCH, false);
+    sharedThreadMeta = {
+      name: String(chatClientProfile.name || "Клиент"),
+      phone: String(chatClientProfile.phone || ""),
+      lastWelcomeDay: "",
+    };
+
+    renderThread();
+    updateScrollDownButton();
+    renderUnreadBadge(liveEntries);
+
+    const activeClientIdAfterSwitch = String(chatClientProfile.id || "");
+    const continueWithPull = function () {
+      if (opts.pull === false) return;
+      if (String(chatClientProfile.id || "") !== activeClientIdAfterSwitch) return;
+      pullSharedThreadFromServer({ force: true }).catch(function () {});
+    };
+
+    if (shouldMergeGuestIntoCustomer) {
+      profileMergeInFlight = true;
+      mergeGuestThreadIntoCustomerThread(currentProfile.id, nextProfile.id)
+        .catch(function () {})
+        .finally(function () {
+          profileMergeInFlight = false;
+          continueWithPull();
+        });
+    } else {
+      continueWithPull();
+    }
+    return true;
+  }
 
   function loadLocalHiddenMessageIds() {
     try {
@@ -563,32 +836,99 @@
     const payload = buildSharedMessagesPayload();
     const metaState = sanitizeSharedThreadMeta(sharedThreadMeta);
     sharedThreadMeta = metaState;
-    const json = await chatApiJson(
-      CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(String(chatClientProfile.id)),
-      {
-        method: "PUT",
-        body: {
-          messages: payload,
-          meta: {
-            name: String(metaState.name || "Клиент"),
-            phone: String(metaState.phone || ""),
-            last_welcome_day: String(metaState.lastWelcomeDay || ""),
+    const requestClientId = getActiveChatClientId();
+    if (!requestClientId) return;
+    sharedThreadSaveInFlight = true;
+    try {
+      const json = await chatApiJson(
+        CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId),
+        {
+          method: "PUT",
+          body: {
+            messages: payload,
+            meta: {
+              name: String(metaState.name || "Клиент"),
+              phone: String(metaState.phone || ""),
+              last_welcome_day: String(metaState.lastWelcomeDay || ""),
+            },
           },
-        },
-      }
+        }
+      );
+      if (requestClientId !== getActiveChatClientId()) return;
+      const updatedAt = String(json && json.data && json.data.updated_at || "");
+      if (updatedAt) sharedThreadUpdatedAt = updatedAt;
+    } finally {
+      sharedThreadSaveInFlight = false;
+    }
+  }
+
+  function applySharedRemoteEntries(mappedEntries, updatedAt, options) {
+    const opts = options || {};
+    const entries = Array.isArray(mappedEntries) ? mappedEntries : [];
+    const remoteUpdatedAt = String(updatedAt || "");
+
+    pruneLocalHiddenMessageIds(baseEntries.concat(entries));
+    const deliveryStateChanged = applyReadReceiptsToAgentEntries(entries);
+    renderUnreadBadge(entries);
+    const sameThread = stableSerialize(liveEntries) === stableSerialize(entries);
+    const hasPendingLocalSave = !!sharedThreadSaveTimer || sharedThreadSaveInFlight;
+    const localChangedDuringRequest = opts.localChangedDuringRequest === true;
+    const remoteIsNewer = compareIsoDates(remoteUpdatedAt, sharedThreadUpdatedAt) > 0;
+
+    if (!opts.force && !sameThread) {
+      if (hasPendingLocalSave) return false;
+      if (localChangedDuringRequest && !remoteIsNewer) return false;
+    }
+
+    if (!opts.force && sameThread && sharedThreadUpdatedAt === remoteUpdatedAt) {
+      if (deliveryStateChanged) queueSharedThreadSave();
+      return false;
+    }
+
+    const previousMessageIds = new Set(
+      (Array.isArray(liveEntries) ? liveEntries : [])
+        .filter(function (entry) { return entry && entry.type === "message"; })
+        .map(function (entry) { return String(entry.id || ""); })
+        .filter(Boolean)
     );
-    const updatedAt = String(json && json.data && json.data.updated_at || "");
-    if (updatedAt) sharedThreadUpdatedAt = updatedAt;
+    const appendedAgentMessageIds = entries
+      .filter(function (entry) {
+        return entry && entry.type === "message" && entry.role === "agent";
+      })
+      .map(function (entry) {
+        return String(entry.id || "");
+      })
+      .filter(function (id) {
+        return id && !previousMessageIds.has(id);
+      });
+
+    const prevTop = feed.scrollTop;
+    liveEntries = entries;
+    sharedThreadUpdatedAt = remoteUpdatedAt;
+    renderThread();
+    feed.scrollTop = prevTop;
+    updateScrollDownButton();
+    if (hasLoadedSharedThreadOnce && appendedAgentMessageIds.length > 0) {
+      addPendingFeedMessageIds(appendedAgentMessageIds);
+    }
+    hasLoadedSharedThreadOnce = true;
+    if (deliveryStateChanged) queueSharedThreadSave();
+    return true;
   }
 
   async function pullSharedThreadFromServer(options) {
+    if (profileMergeInFlight) return false;
     if (sharedPullInFlight) return false;
+    const localMutationVersionBeforePull = sharedThreadMutationVersion;
+    const requestClientId = getActiveChatClientId();
+    if (!requestClientId) return false;
     sharedPullInFlight = true;
     try {
       const opts = options || {};
       const json = await chatApiJson(
-        CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(String(chatClientProfile.id))
+        CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId) + "?_ts=" + Date.now()
       );
+      if (requestClientId !== getActiveChatClientId()) return false;
       const payload = json && json.data ? json.data : {};
       const updatedAt = String(payload.updated_at || "");
       sharedThreadMeta = sanitizeSharedThreadMeta(payload.meta);
@@ -597,38 +937,139 @@
       const mappedEntries = remoteMessages
         .map(mapSharedMessageToEntry)
         .filter(Boolean);
-      pruneLocalHiddenMessageIds(baseEntries.concat(mappedEntries));
-      const deliveryStateChanged = applyReadReceiptsToAgentEntries(mappedEntries);
-      renderUnreadBadge(mappedEntries);
-      const sameThread = stableSerialize(liveEntries) === stableSerialize(mappedEntries);
-      if (!opts.force && sameThread && sharedThreadUpdatedAt === updatedAt) {
-        if (deliveryStateChanged) queueSharedThreadSave();
+      const localChangedDuringRequest = sharedThreadMutationVersion !== localMutationVersionBeforePull;
+      return applySharedRemoteEntries(mappedEntries, updatedAt, { ...opts, localChangedDuringRequest });
+    } finally {
+      sharedPullInFlight = false;
+    }
+  }
+
+  async function fetchSharedThreadMetaFromServer() {
+    const requestClientId = getActiveChatClientId();
+    if (!requestClientId) return null;
+    const json = await chatApiJson(
+      CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId) + "/meta?_ts=" + Date.now()
+    );
+    if (requestClientId !== getActiveChatClientId()) return null;
+    const payload = json && json.data ? json.data : {};
+    return {
+      clientId: requestClientId,
+      updatedAt: String(payload.updated_at || ""),
+    };
+  }
+
+  async function fetchSharedThreadDiffFromServer(sinceUpdatedAt) {
+    const since = String(sinceUpdatedAt || "").trim();
+    if (!since) return null;
+    const requestClientId = getActiveChatClientId();
+    if (!requestClientId) return null;
+    const json = await chatApiJson(
+      CHAT_TEMP_API_BASE
+      + "/thread/" + encodeURIComponent(requestClientId)
+      + "/diff?since=" + encodeURIComponent(since)
+      + "&_ts=" + Date.now()
+    );
+    if (requestClientId !== getActiveChatClientId()) return null;
+    const payload = json && json.data ? json.data : {};
+    return {
+      clientId: requestClientId,
+      updatedAt: String(payload.updated_at || ""),
+      messageCount: Number(payload.message_count || 0),
+      messages: Array.isArray(payload.messages) ? payload.messages : [],
+    };
+  }
+
+  function applySharedThreadDiff(diff, options) {
+    const opts = options || {};
+    if (!diff || typeof diff !== "object") return null;
+
+    const previousMessages = (Array.isArray(liveEntries) ? liveEntries : [])
+      .filter(function (entry) { return entry && entry.type === "message"; });
+    const expectedCount = Number(diff.messageCount);
+    if (Number.isFinite(expectedCount) && expectedCount >= 0 && expectedCount < previousMessages.length) {
+      return null;
+    }
+
+    const changedMessages = Array.isArray(diff.messages) ? diff.messages : [];
+    if (!changedMessages.length) {
+      if (diff.updatedAt) sharedThreadUpdatedAt = String(diff.updatedAt);
+      return false;
+    }
+
+    const byId = new Map();
+    previousMessages.forEach(function (entry) {
+      const id = String(entry && entry.id || "");
+      if (!id) return;
+      byId.set(id, entry);
+    });
+    changedMessages.forEach(function (rawMessage) {
+      const mapped = mapSharedMessageToEntry(rawMessage);
+      if (!mapped) return;
+      const id = String(mapped.id || "");
+      if (!id) return;
+      byId.set(id, mapped);
+    });
+
+    const mergedEntries = Array.from(byId.values()).sort(function (a, b) {
+      return new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
+    });
+
+    if (Number.isFinite(expectedCount) && expectedCount >= 0 && expectedCount !== mergedEntries.length) {
+      return null;
+    }
+
+    return applySharedRemoteEntries(mergedEntries, String(diff.updatedAt || ""), opts);
+  }
+
+  async function pullSharedThreadFromServerIfChanged(options) {
+    const opts = options || {};
+    if (profileMergeInFlight) return false;
+    if (opts.force === true) {
+      return pullSharedThreadFromServer(opts);
+    }
+
+    try {
+      const meta = await fetchSharedThreadMetaFromServer();
+      if (!meta || meta.clientId !== getActiveChatClientId()) return false;
+      const remoteUpdatedAt = String(meta && meta.updatedAt || "");
+      const knownUpdatedAt = String(sharedThreadUpdatedAt || "");
+      if (remoteUpdatedAt && knownUpdatedAt && remoteUpdatedAt === knownUpdatedAt) {
+        return false;
+      }
+      if (!remoteUpdatedAt && !knownUpdatedAt) {
         return false;
       }
 
-      const prevTop = feed.scrollTop;
-      const keepBottom = shouldKeepFeedPinnedToBottom();
-      liveEntries = mappedEntries;
-      sharedThreadUpdatedAt = updatedAt;
-      renderThread();
-
-      if (keepBottom) {
-        scrollToBottom(false);
-      } else {
-        feed.scrollTop = prevTop;
-        updateScrollDownButton();
+      if (knownUpdatedAt) {
+        const mutationVersionBefore = sharedThreadMutationVersion;
+        try {
+          const diff = await fetchSharedThreadDiffFromServer(knownUpdatedAt);
+          if (diff) {
+            if (diff.clientId !== getActiveChatClientId()) return false;
+            const localChangedDuringRequest = sharedThreadMutationVersion !== mutationVersionBefore;
+            const applied = applySharedThreadDiff(diff, { ...opts, localChangedDuringRequest });
+            if (applied !== null) return applied;
+          }
+        } catch {}
       }
-      if (deliveryStateChanged) queueSharedThreadSave();
-      return true;
-    } finally {
-      sharedPullInFlight = false;
+
+      return pullSharedThreadFromServer(opts);
+    } catch {
+      return pullSharedThreadFromServer(opts);
     }
   }
 
   function startSharedThreadPolling() {
     if (sharedThreadPollTimer) return;
     sharedThreadPollTimer = window.setInterval(function () {
-      pullSharedThreadFromServer({ force: false }).catch(function () {});
+      refreshChatClientProfileIfNeeded({ pull: false });
+      if (sharedThreadMetaPollInFlight) return;
+      sharedThreadMetaPollInFlight = true;
+      pullSharedThreadFromServerIfChanged({ force: false })
+        .catch(function () {})
+        .finally(function () {
+          sharedThreadMetaPollInFlight = false;
+        });
     }, CHAT_THREAD_POLL_MS);
   }
 
@@ -646,6 +1087,7 @@
     const changed = applyReadReceiptsToAgentEntries(liveEntries);
     renderUnreadBadge(liveEntries);
     if (!changed) return false;
+    markSharedThreadMutated();
     renderThread();
     if (keepBottom) {
       scrollToBottom(false);
@@ -948,6 +1390,105 @@
     });
   }
 
+  function estimateDataUrlSizeBytes(dataUrl) {
+    const text = String(dataUrl || "");
+    const commaIdx = text.indexOf(",");
+    if (commaIdx < 0) return text.length;
+    const base64 = text.slice(commaIdx + 1);
+    return Math.floor((base64.length * 3) / 4);
+  }
+
+  function getDataUrlMime(dataUrl) {
+    const match = String(dataUrl || "").match(/^data:([^;,]+)[;,]/i);
+    return match ? String(match[1] || "").toLowerCase() : "";
+  }
+
+  function shouldSkipImageOptimization(mime, fileSizeBytes) {
+    const type = String(mime || "").toLowerCase();
+    if (!type.startsWith("image/")) return true;
+    if (type === "image/gif" || type === "image/svg+xml") return true;
+    const size = Number(fileSizeBytes || 0);
+    return Number.isFinite(size) && size > 0 && size <= IMAGE_OPTIMIZE_SKIP_BELOW_BYTES;
+  }
+
+  function loadImageFromFile(file) {
+    return new Promise(function (resolve, reject) {
+      const objectUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = function () {
+        URL.revokeObjectURL(objectUrl);
+        resolve(img);
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error("IMAGE_LOAD_FAILED"));
+      };
+      img.src = objectUrl;
+    });
+  }
+
+  function getScaledDimensions(width, height, maxSide) {
+    const w = Math.max(1, Number(width) || 1);
+    const h = Math.max(1, Number(height) || 1);
+    const limit = Math.max(1, Number(maxSide) || 1);
+    const longest = Math.max(w, h);
+    if (longest <= limit) return { width: w, height: h };
+    const ratio = limit / longest;
+    return {
+      width: Math.max(1, Math.round(w * ratio)),
+      height: Math.max(1, Math.round(h * ratio)),
+    };
+  }
+
+  function renderImageToDataUrl(image, mime, quality, maxSide) {
+    const dims = getScaledDimensions(image.naturalWidth, image.naturalHeight, maxSide);
+    const canvas = document.createElement("canvas");
+    canvas.width = dims.width;
+    canvas.height = dims.height;
+    const ctx = canvas.getContext("2d", { alpha: true });
+    if (!ctx) throw new Error("CANVAS_CONTEXT_FAILED");
+    ctx.drawImage(image, 0, 0, dims.width, dims.height);
+    const dataUrl = canvas.toDataURL(mime, quality);
+    return {
+      dataUrl: String(dataUrl || ""),
+      width: dims.width,
+      height: dims.height,
+      mime: getDataUrlMime(dataUrl) || String(mime || "").toLowerCase(),
+      size: estimateDataUrlSizeBytes(dataUrl),
+    };
+  }
+
+  async function buildOptimizedImagePayload(file, fallbackMime) {
+    const image = await loadImageFromFile(file);
+    const preferredMime = (
+      String(fallbackMime || "").toLowerCase() === "image/webp"
+        ? "image/webp"
+        : "image/jpeg"
+    );
+    let maxSide = IMAGE_OPTIMIZE_MAX_SIDE_PX;
+    let quality = IMAGE_OPTIMIZE_INITIAL_QUALITY;
+    let best = null;
+
+    for (let attempt = 0; attempt < 7; attempt += 1) {
+      const current = renderImageToDataUrl(image, preferredMime, quality, maxSide);
+      if (!best || current.size < best.size) best = current;
+
+      const fitsTarget = current.size <= IMAGE_OPTIMIZE_TARGET_BYTES;
+      const fitsHardLimit = current.dataUrl.length <= MAX_IMAGE_DATA_URL_LENGTH;
+      if (fitsTarget && fitsHardLimit) return current;
+
+      if (quality > IMAGE_OPTIMIZE_MIN_QUALITY + 0.02) {
+        quality = Math.max(IMAGE_OPTIMIZE_MIN_QUALITY, quality - 0.1);
+      } else {
+        const nextSide = Math.max(IMAGE_OPTIMIZE_MIN_SIDE_PX, Math.round(maxSide * IMAGE_OPTIMIZE_SCALE_STEP));
+        if (nextSide === maxSide) break;
+        maxSide = nextSide;
+      }
+    }
+
+    return best;
+  }
+
   function getImageSizeFromDataUrl(dataUrl) {
     return new Promise(function (resolve) {
       const img = new Image();
@@ -969,19 +1510,42 @@
     const mime = String(file.type || "").toLowerCase();
     if (!mime.startsWith("image/")) return null;
 
-    const dataUrl = await readFileAsDataUrl(file);
-    if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl)) return null;
-    if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) return null;
+    let dataUrl = "";
+    let outputMime = mime || "image/jpeg";
+    let dimensions = { width: 0, height: 0 };
+    let payloadSize = Number(file.size) || 0;
 
-    const dimensions = await getImageSizeFromDataUrl(dataUrl);
+    const skipOptimization = shouldSkipImageOptimization(mime, file.size);
+    if (!skipOptimization) {
+      const optimized = await buildOptimizedImagePayload(file, mime).catch(function () { return null; });
+      if (optimized && /^data:image\/[a-z0-9.+-]+;base64,/i.test(optimized.dataUrl)) {
+        dataUrl = optimized.dataUrl;
+        outputMime = String(optimized.mime || outputMime || "image/jpeg");
+        dimensions = {
+          width: Number(optimized.width) || 0,
+          height: Number(optimized.height) || 0,
+        };
+        payloadSize = Number(optimized.size) || payloadSize;
+      }
+    }
+
+    if (!dataUrl) {
+      dataUrl = await readFileAsDataUrl(file);
+      if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl)) return null;
+      outputMime = getDataUrlMime(dataUrl) || outputMime;
+      dimensions = await getImageSizeFromDataUrl(dataUrl);
+      payloadSize = estimateDataUrlSizeBytes(dataUrl);
+    }
+
+    if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) return null;
     return {
       kind: "image",
       name: String(file.name || "image").slice(0, 160),
-      mime: mime || "image/jpeg",
+      mime: outputMime || "image/jpeg",
       dataUrl: dataUrl,
       width: Number.isFinite(dimensions.width) && dimensions.width > 0 ? dimensions.width : 0,
       height: Number.isFinite(dimensions.height) && dimensions.height > 0 ? dimensions.height : 0,
-      size: Number.isFinite(file.size) && file.size > 0 ? file.size : 0,
+      size: Number.isFinite(payloadSize) && payloadSize > 0 ? payloadSize : 0,
     };
   }
 
@@ -1056,10 +1620,12 @@
   }
 
   function openCompanyChat() {
+    refreshChatClientProfileIfNeeded({ pull: false });
     if (!initialized) {
       resetConversation();
       initialized = true;
     }
+    closeAttachPreview({ focusComposer: false });
     hideEmojiPopover();
     overlay.classList.add("is-open");
     overlay.setAttribute("aria-hidden", "false");
@@ -1074,7 +1640,13 @@
             queueSharedThreadSave();
           }
           startSharedThreadPolling();
-          scrollToBottom(false, true);
+          const restored = restoreFeedScrollPosition();
+          if (!restored) {
+            scrollToBottom(false, true);
+          } else {
+            syncPendingFeedCountByViewport();
+            updateScrollDownButton();
+          }
           syncComposerRichPreview({});
           input.focus();
           syncVisibleChatReadState();
@@ -1083,13 +1655,14 @@
   }
 
   function closeCompanyChat() {
+    saveFeedScrollPosition();
+    closeAttachPreview({ focusComposer: false });
     hideContextMenu();
     hideReactionBar();
     hideEmojiPopover();
     if (selectedMessageIds.size > 0) clearSelectionMode();
     if (pendingDeleteConfirm) closeDeleteConfirm();
     cancelEditingMessage();
-    stopSharedThreadPolling();
     overlay.classList.remove("is-open");
     overlay.setAttribute("aria-hidden", "true");
     document.body.classList.remove("shop-company-chat-open");
@@ -1165,6 +1738,7 @@
       reaction: "",
       reactions: { in: "", out: "" },
     });
+    markSharedThreadMutated();
     sharedThreadMeta = {
       name: metaState.name,
       phone: metaState.phone,
@@ -1370,6 +1944,7 @@
     target.text = nextText;
     target.editedAt = new Date().toISOString();
     target.time = formatTimeFromIso(target.createdAt || target.editedAt) + " • изм.";
+    if (inLive) markSharedThreadMutated();
 
     const prevTop = feed.scrollTop;
     const keepBottom = shouldKeepFeedPinnedToBottom();
@@ -1728,6 +2303,7 @@
     }
 
     if (!removed) return false;
+    if (removedFromLive) markSharedThreadMutated();
 
     setMessageHiddenLocally(id, false, { persist: false });
     selectedMessageIds.delete(id);
@@ -1830,7 +2406,7 @@
       img.className = "shop-company-chat-attachment-image";
       img.src = String(imageAttachment.dataUrl || "");
       img.alt = String(imageAttachment.name || "Фото");
-      img.loading = "lazy";
+      img.loading = "eager";
       img.decoding = "async";
       attachmentWrap.appendChild(img);
       bubble.appendChild(attachmentWrap);
@@ -1981,6 +2557,8 @@
       }
     }
 
+    syncPendingFeedCountByViewport();
+    saveFeedScrollPosition();
     updateScrollDownButton();
     syncSelectionUi();
   }
@@ -1995,6 +2573,19 @@
 
   function hideEmojiPopover() {
     emojiPopover.classList.add("hidden");
+    emojiPopover.classList.remove("is-attach-preview");
+  }
+
+  function toggleEmojiPopover(target) {
+    const normalizedTarget = target === "attach-preview" ? "attach-preview" : "composer";
+    const isPreviewTarget = normalizedTarget === "attach-preview";
+    const isOpen = !emojiPopover.classList.contains("hidden");
+    const hasSameTarget = emojiPopover.classList.contains("is-attach-preview") === isPreviewTarget;
+    const willOpen = !isOpen || !hasSameTarget;
+
+    emojiPopover.classList.toggle("is-attach-preview", isPreviewTarget);
+    emojiPopover.classList.toggle("hidden", !willOpen);
+    if (willOpen) ensureEmojiDatasetLoaded().catch(function () {});
   }
 
   function normalizeEmojiCategoryName(rawCategory) {
@@ -2183,6 +2774,24 @@
   function insertEmojiIntoInput(emoji) {
     const value = String(emoji || "");
     if (!value) return;
+
+    const useAttachPreviewCaption = (
+      emojiPopover.classList.contains("is-attach-preview")
+      && !attachPreviewOverlay.classList.contains("hidden")
+    );
+    if (useAttachPreviewCaption) {
+      const startPreview = attachPreviewCaption.selectionStart ?? attachPreviewCaption.value.length;
+      const endPreview = attachPreviewCaption.selectionEnd ?? attachPreviewCaption.value.length;
+      attachPreviewCaption.value =
+        attachPreviewCaption.value.slice(0, startPreview) +
+        value +
+        attachPreviewCaption.value.slice(endPreview);
+      attachPreviewCaption.focus();
+      const nextPreviewPos = startPreview + value.length;
+      attachPreviewCaption.setSelectionRange(nextPreviewPos, nextPreviewPos);
+      return;
+    }
+
     const start = input.selectionStart ?? input.value.length;
     const end = input.selectionEnd ?? input.value.length;
     input.value = input.value.slice(0, start) + value + input.value.slice(end);
@@ -2499,6 +3108,7 @@
     const next = String(reaction || "").trim();
     if (!next) return;
     if (!setEntryActorReaction(entry, CHAT_REACTION_ACTOR, next)) return;
+    markSharedThreadMutated();
 
     const prevTop = feed.scrollTop;
     renderThread();
@@ -2509,7 +3119,8 @@
     }
   }
 
-  function setMessageDeliveryStatus(messageId, nextStatus) {
+  function setMessageDeliveryStatus(messageId, nextStatus, options) {
+    const opts = options || {};
     const entry = findMessageEntry(messageId);
     if (!entry || entry.role !== "user") return false;
 
@@ -2522,6 +3133,7 @@
     entry.deliveryStatus = target;
     if (target === "delivered" && !entry.deliveredAt) entry.deliveredAt = new Date().toISOString();
     if (target === "read" && !entry.readAt) entry.readAt = new Date().toISOString();
+    markSharedThreadMutated();
 
     const prevTop = feed.scrollTop;
     const wasNearBottom = feed.scrollHeight - feed.clientHeight - feed.scrollTop < 40;
@@ -2532,7 +3144,7 @@
       feed.scrollTop = prevTop;
       updateScrollDownButton();
     }
-    if (liveEntries.some(function (item) { return String(item.id || "") === String(messageId || ""); })) {
+    if (opts.persistRemote !== false && liveEntries.some(function (item) { return String(item.id || "") === String(messageId || ""); })) {
       queueSharedThreadSave();
     }
     return true;
@@ -2543,7 +3155,7 @@
     if (!id) return;
 
     window.setTimeout(function () {
-      setMessageDeliveryStatus(id, "delivered");
+      setMessageDeliveryStatus(id, "delivered", { persistRemote: false });
     }, 700);
   }
 
@@ -2606,6 +3218,8 @@
     if (!smooth) {
       stopFeedSmoothScroll();
       feed.scrollTop = target;
+      clearPendingFeedNewCount();
+      saveFeedScrollPosition();
       updateScrollDownButton();
       if (shouldFixTopClip) {
         requestAnimationFrame(function () {
@@ -2642,6 +3256,8 @@
       }
       feedScrollRaf = 0;
       feed.scrollTop = target;
+      clearPendingFeedNewCount();
+      saveFeedScrollPosition();
       updateScrollDownButton();
       if (shouldFixTopClip) {
         requestAnimationFrame(function () {
@@ -2655,7 +3271,24 @@
 
   function updateScrollDownButton() {
     const hiddenDistance = feed.scrollHeight - feed.clientHeight - feed.scrollTop;
-    scrollDownBtn.classList.toggle("hidden", hiddenDistance < 120);
+    const hasPending = pendingFeedNewCount > 0;
+    const shouldShow = hasPending || hiddenDistance >= 120;
+    scrollDownBtn.classList.toggle("hidden", !shouldShow);
+
+    const badge = ensureScrollDownBadge();
+    if (!badge) return;
+    if (!hasPending) {
+      badge.textContent = "";
+      badge.classList.add("hidden");
+      return;
+    }
+
+    const nextText = pendingFeedNewCount > 99 ? "99+" : String(pendingFeedNewCount);
+    if (badge.textContent !== nextText) {
+      badge.textContent = nextText;
+      animateCountBadgeTick(badge);
+    }
+    badge.classList.remove("hidden");
   }
 
   function pushLiveMessage(role, text, options) {
@@ -2696,6 +3329,7 @@
     };
 
     liveEntries.push(message);
+    markSharedThreadMutated();
 
     renderThread();
     scrollToBottom(true);
@@ -2739,8 +3373,137 @@
     return true;
   }
 
-  async function sendImageAttachments(files) {
-    const list = Array.isArray(files) ? files : [];
+  function getAttachPreviewTitle(count) {
+    const total = Number(count) || 0;
+    if (total <= 1) return "1 фотография";
+    if (total >= 2 && total <= 4) return String(total) + " фотографии";
+    return String(total) + " фотографий";
+  }
+
+  function closeAttachPreview(options) {
+    const opts = options || {};
+    const clearItems = opts.clearItems !== false;
+    const focusComposer = opts.focusComposer !== false;
+    const clearCaption = opts.clearCaption !== false;
+
+    attachPreviewOverlay.classList.add("hidden");
+    attachPreviewOverlay.setAttribute("aria-hidden", "true");
+
+    if (clearItems) {
+      attachPreviewItems = [];
+      attachPreviewActiveIndex = 0;
+    }
+    if (clearCaption) {
+      attachPreviewCaption.value = "";
+    }
+
+    attachPreviewThumbs.innerHTML = "";
+    attachPreviewThumbs.classList.add("hidden");
+    if (emojiPopover.classList.contains("is-attach-preview")) hideEmojiPopover();
+    attachInput.value = "";
+    if (focusComposer && !input.disabled) input.focus();
+  }
+
+  function isMessageImageViewerOpen() {
+    return !imageViewerOverlay.classList.contains("hidden");
+  }
+
+  function closeMessageImageViewer() {
+    imageViewerOverlay.classList.add("hidden");
+    imageViewerOverlay.setAttribute("aria-hidden", "true");
+    imageViewerImage.removeAttribute("src");
+  }
+
+  function openMessageImageViewer(imageSrc, imageAlt) {
+    const src = String(imageSrc || "").trim();
+    if (!src) return false;
+    imageViewerImage.src = src;
+    imageViewerImage.alt = String(imageAlt || "Image preview");
+    imageViewerOverlay.classList.remove("hidden");
+    imageViewerOverlay.setAttribute("aria-hidden", "false");
+    return true;
+  }
+
+  function initMessageImageViewerModal() {
+    if (imageViewerOverlay.dataset.bound === "1") return;
+    imageViewerOverlay.dataset.bound = "1";
+
+    imageViewerCloseBtn.addEventListener("click", function () {
+      closeMessageImageViewer();
+    });
+
+    imageViewerOverlay.addEventListener("click", function (event) {
+      if (event.target !== imageViewerOverlay) return;
+      closeMessageImageViewer();
+    });
+  }
+
+  function renderAttachPreview() {
+    const list = Array.isArray(attachPreviewItems) ? attachPreviewItems : [];
+    const total = list.length;
+    if (!total) {
+      closeAttachPreview({ focusComposer: false });
+      return;
+    }
+
+    const index = Math.max(0, Math.min(Number(attachPreviewActiveIndex) || 0, total - 1));
+    attachPreviewActiveIndex = index;
+    const active = list[index] || null;
+
+    attachPreviewTitle.textContent = getAttachPreviewTitle(total);
+    if (active) {
+      attachPreviewImage.src = String(active.dataUrl || "");
+      attachPreviewImage.alt = String(active.name || "Изображение");
+    }
+
+    attachPreviewThumbs.innerHTML = "";
+    if (total > 1) {
+      attachPreviewThumbs.classList.remove("hidden");
+      list.forEach(function (item, idx) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "chat-attach-preview-thumb";
+        if (idx === index) btn.classList.add("is-active");
+        btn.setAttribute("data-chat-attach-preview-index", String(idx));
+
+        const img = document.createElement("img");
+        img.src = String(item.dataUrl || "");
+        img.alt = String(item.name || ("Фото " + String(idx + 1)));
+        img.loading = "eager";
+        img.decoding = "async";
+        img.draggable = false;
+
+        btn.appendChild(img);
+        attachPreviewThumbs.appendChild(btn);
+      });
+    } else {
+      attachPreviewThumbs.classList.add("hidden");
+    }
+  }
+
+  function openAttachPreview(attachments, options) {
+    const opts = options || {};
+    const list = Array.isArray(attachments)
+      ? attachments.filter(function (item) { return isImageAttachment(item); })
+      : [];
+    if (!list.length) return false;
+
+    attachPreviewItems = list;
+    attachPreviewActiveIndex = 0;
+    attachPreviewCaption.value = String(opts.caption || "");
+
+    renderAttachPreview();
+    attachPreviewOverlay.classList.remove("hidden");
+    attachPreviewOverlay.setAttribute("aria-hidden", "false");
+    attachPreviewCaption.focus();
+    return true;
+  }
+
+  function sendPreparedImageAttachments(attachments, options) {
+    const opts = options || {};
+    const list = Array.isArray(attachments)
+      ? attachments.filter(function (item) { return isImageAttachment(item); })
+      : [];
     if (!list.length) return 0;
     if (editingMessageId) cancelEditingMessage();
 
@@ -2752,17 +3515,15 @@
         }
       : null;
 
+    const captionText = normalizeComposerText(opts.caption || "");
     let sent = 0;
-    for (const file of list) {
-      // eslint-disable-next-line no-await-in-loop
-      const attachment = await buildImageAttachmentFromFile(file).catch(function () { return null; });
-      if (!attachment) continue;
-      pushLiveMessage("user", "", {
+    list.forEach(function (attachment) {
+      pushLiveMessage("user", sent === 0 ? captionText : "", {
         replyTo: sent === 0 ? replySnapshot : null,
         attachment: attachment,
       });
       sent += 1;
-    }
+    });
 
     if (sent > 0) {
       hideContextMenu();
@@ -2771,6 +3532,79 @@
       clearReplyDraft();
     }
     return sent;
+  }
+
+  async function sendImageAttachments(files, options) {
+    const list = Array.isArray(files) ? files : [];
+    if (!list.length) return 0;
+
+    const prepared = await Promise.all(
+      list.map(function (file) {
+        return buildImageAttachmentFromFile(file).catch(function () { return null; });
+      })
+    );
+    const attachments = prepared.filter(function (item) { return !!item; });
+
+    return sendPreparedImageAttachments(attachments, options);
+  }
+
+  async function openAttachPreviewFromFiles(files) {
+    const list = Array.isArray(files) ? files : [];
+    if (!list.length) return false;
+    if (editingMessageId) cancelEditingMessage();
+
+    const prepared = await Promise.all(
+      list.map(function (file) {
+        return buildImageAttachmentFromFile(file).catch(function () { return null; });
+      })
+    );
+    const attachments = prepared.filter(function (item) { return !!item; });
+    if (!attachments.length) return false;
+    return openAttachPreview(attachments);
+  }
+
+  function initAttachPreviewModal() {
+    if (attachPreviewOverlay.dataset.bound === "1") return;
+    attachPreviewOverlay.dataset.bound = "1";
+
+    attachPreviewCloseBtn.addEventListener("click", function () {
+      closeAttachPreview();
+    });
+
+    attachPreviewThumbs.addEventListener("click", function (event) {
+      const btn = event.target.closest("[data-chat-attach-preview-index]");
+      if (!btn) return;
+      const idx = Number(btn.getAttribute("data-chat-attach-preview-index") || 0);
+      if (!Number.isFinite(idx)) return;
+      attachPreviewActiveIndex = idx;
+      renderAttachPreview();
+    });
+
+    attachPreviewEmojiBtn.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleEmojiPopover("attach-preview");
+      attachPreviewCaption.focus();
+    });
+
+    attachPreviewSendBtn.addEventListener("click", function () {
+      const caption = String(attachPreviewCaption.value || "");
+      const sent = sendPreparedImageAttachments(attachPreviewItems, { caption: caption });
+      if (sent > 0) {
+        closeAttachPreview({ clearCaption: true });
+      }
+    });
+
+    attachPreviewCaption.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      attachPreviewSendBtn.click();
+    });
+
+    attachPreviewOverlay.addEventListener("click", function (event) {
+      if (event.target !== attachPreviewOverlay) return;
+      closeAttachPreview();
+    });
   }
 
   if (!Object.keys(emojiCategories).length) {
@@ -2788,9 +3622,12 @@
   bindEmojiPopoverGuard();
   normalizeQuickReactionButtons();
   decorateComposerEmojiControls();
+  initAttachPreviewModal();
+  initMessageImageViewerModal();
   setupComposerRichPreview();
   probeEmojiAssetsAvailability();
   renderUnreadBadge(liveEntries);
+  refreshChatClientProfileIfNeeded({ pull: false });
   pullSharedThreadFromServer({ force: true }).catch(function () {});
   startSharedThreadPolling();
 
@@ -2813,6 +3650,14 @@
 
   document.addEventListener("keydown", function (event) {
     if (event.key !== "Escape") return;
+    if (isMessageImageViewerOpen()) {
+      closeMessageImageViewer();
+      return;
+    }
+    if (!attachPreviewOverlay.classList.contains("hidden")) {
+      closeAttachPreview();
+      return;
+    }
     if (contextMenuEl && !contextMenuEl.classList.contains("hidden")) {
       hideContextMenu();
       hideReactionBar();
@@ -2846,7 +3691,14 @@
   });
 
   window.addEventListener("focus", function () {
+    refreshChatClientProfileIfNeeded({ pull: false });
     syncReadOnForeground();
+  });
+
+  window.addEventListener("storage", function (event) {
+    const key = String(event && event.key || "");
+    if (key && key !== customerTokenKey && key !== customerCacheKey && key !== guestChatClientKey) return;
+    refreshChatClientProfileIfNeeded({ pull: true });
   });
 
   function clearTouchGesture() {
@@ -2961,9 +3813,8 @@
 
   attachInput.addEventListener("change", async function () {
     const files = Array.from(attachInput.files || []);
-    await sendImageAttachments(files).catch(function () {});
+    await openAttachPreviewFromFiles(files).catch(function () {});
     attachInput.value = "";
-    input.focus();
   });
 
   emojiBtn.addEventListener("click", function (event) {
@@ -2971,12 +3822,8 @@
     event.stopPropagation();
     hideContextMenu();
     hideReactionBar();
-    const willOpen = emojiPopover.classList.contains("hidden");
-    emojiPopover.classList.toggle("hidden", !willOpen);
-    if (willOpen) {
-      ensureEmojiDatasetLoaded().catch(function () {});
-      input.focus();
-    }
+    toggleEmojiPopover("composer");
+    input.focus();
   });
 
   thread.addEventListener("click", function (event) {
@@ -3024,6 +3871,18 @@
       hideContextMenu();
       hideReactionBar();
       hideEmojiPopover();
+      return;
+    }
+
+    const attachmentImage = event.target.closest(".shop-company-chat-attachment-image");
+    if (attachmentImage) {
+      hideContextMenu();
+      hideReactionBar();
+      hideEmojiPopover();
+      openMessageImageViewer(
+        attachmentImage.getAttribute("src") || "",
+        attachmentImage.getAttribute("alt") || "Image preview"
+      );
       return;
     }
 
@@ -3215,6 +4074,8 @@
   });
 
   feed.addEventListener("scroll", function () {
+    saveFeedScrollPosition();
+    syncPendingFeedCountByViewport();
     hideContextMenu();
     if (!reactionBar.classList.contains("hidden")) {
       hideReactionBar();
@@ -3223,6 +4084,9 @@
       hideEmojiPopover();
     }
     updateScrollDownButton();
+    if (isFeedPinnedToBottom()) {
+      clearPendingFeedNewCount();
+    }
     if (feed.scrollTop <= 28) {
       loadOlderMessages(OLDER_BATCH, true);
     }
@@ -3276,6 +4140,11 @@
 
   document.addEventListener("keydown", function (event) {
     if (event.key !== "Escape") return;
+    if (isMessageImageViewerOpen()) {
+      event.preventDefault();
+      closeMessageImageViewer();
+      return;
+    }
     if (pendingDeleteConfirm) {
       event.preventDefault();
       closeDeleteConfirm();
