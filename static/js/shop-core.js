@@ -7714,11 +7714,19 @@ function updateCartBadge() {
     const card = document.createElement("div");
     card.className = "cart-upsell-card";
     card.dataset.productId = String(p.id);
+
+    // Формируем подпись с названием варианта если есть
+    var descText = "";
+    if (p.default_variant && p.default_variant.variant_label) {
+      descText = escapeHtml(p.default_variant.variant_label);
+    }
+
     card.innerHTML =
       '<div class="cart-upsell-photo">' +
         (thumb ? '<img src="' + escapeHtml(thumb) + '" alt="" loading="lazy" />' : '<div class="cart-upsell-no-photo"></div>') +
       '</div>' +
       '<div class="cart-upsell-name">' + escapeHtml(p.name || "") + '</div>' +
+      (descText ? '<div class="cart-upsell-desc">' + descText + '</div>' : '') +
       '<button class="cart-upsell-btn" type="button">' + money(price) + '</button>';
     card.addEventListener("click", function() {
       if (p.has_options) {

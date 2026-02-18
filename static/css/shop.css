@@ -14236,3 +14236,79 @@ body.page-shop .sidebar-open-tab{display:none}
 @media (max-width:768px){
   .page-shop .logo-city-wrapper{display:none!important}
 }
+
+/* ===== Cart Upsell Block ===== */
+.shop-cart-upsell{
+  padding: 12px 12px 0;
+}
+.shop-cart-upsell-title{
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  color: var(--color-text);
+}
+.shop-cart-upsell-scroll{
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 12px;
+  scrollbar-width: none;
+}
+.shop-cart-upsell-scroll::-webkit-scrollbar{display:none}
+
+.cart-upsell-card{
+  flex: 0 0 110px;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--shop-radius, 14px);
+  overflow: hidden;
+}
+.cart-upsell-photo{
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+}
+.cart-upsell-photo img{
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.cart-upsell-no-photo{
+  width: 100%;
+  height: 100%;
+  background: var(--color-surface-2);
+}
+.cart-upsell-name{
+  font-size: 11px;
+  line-height: 1.3;
+  padding: 5px 7px 6px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--color-text);
+  flex: 1;
+}
+.cart-upsell-desc{
+  font-size: 9px;
+  line-height: 1.2;
+  padding: 0 7px 5px;
+  color: var(--color-text-muted);
+}
+.cart-upsell-btn{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 7px 8px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--color-surface-2);
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--color-text);
+  white-space: nowrap;
+}
