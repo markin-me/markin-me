@@ -300,7 +300,7 @@
     }
     clientTabs.innerHTML = tabsState.tabs.map((tab) => {
       const isActive = tab.key === tabsState.activeKey;
-      const fallbackTitle = tab.type === 'order' ? `#${tab.id}` : 'Client';
+      const fallbackTitle = tab.type === 'order' ? `#${tab.id}` : 'Клиент';
       return `
         <div class="product-tab ${isActive ? "is-active" : ""}" data-tab-key="${tab.key}">
           <span class="product-tab-title">${escapeHtml(tab.title || fallbackTitle)}</span>
@@ -2984,6 +2984,15 @@
     });
   }
 
+  function emitOrderUpdated(order) {
+    if (!order || typeof order !== "object") return;
+    try {
+      document.dispatchEvent(new CustomEvent("dashboard:order-updated", {
+        detail: { order: { ...order } },
+      }));
+    } catch {}
+  }
+
   function updateClientOrderInState(order) {
     const id = Number(order?.id || 0);
     if (!Number.isFinite(id) || id <= 0) return;
@@ -2991,6 +3000,7 @@
       if (Number(item?.id || 0) !== id) return item;
       return { ...item, ...order };
     });
+    emitOrderUpdated(order);
   }
 
   async function selectActiveClientOrderStatus(statusId) {
@@ -3094,7 +3104,18 @@
     if (row) row.classList.add("is-active");
 
     const json = await apiJson(`/api/admin/clients/${state.activeClientId}`);
-    setClient(json.data);
+    const loadedClient = json?.data || null;
+    setClient(loadedClient);
+
+    // Ensure right-side tab title is the client name (not #id fallback).
+    const activeTab = tabsState.tabs.find((t) => t.key === tabsState.activeKey);
+    if (activeTab && activeTab.type === "client" && Number(activeTab.id) === Number(state.activeClientId)) {
+      const nextTitle = String(loadedClient?.name || "").trim() || "Клиент";
+      if (activeTab.title !== nextTitle) {
+        activeTab.title = nextTitle;
+        renderTabs();
+      }
+    }
     hideEmptyState();
 
     // Reset content tab to addresses and order detail view
@@ -3108,12 +3129,13 @@
     if (addrToggleBtn) addrToggleBtn.textContent = "+ Новый адрес";
   }
 
-  async function selectClient(id) {
+  async function selectClient(id, preferredTitle = "") {
     const clientId = Number(id) || null;
     if (!clientId) return;
 
     const clientData = state.clients.find((x) => Number(x.id) === clientId);
-    const title = clientData ? (clientData.name || `#${clientId}`) : `#${clientId}`;
+    const hintedTitle = String(preferredTitle || "").trim();
+    const title = String(clientData?.name || "").trim() || hintedTitle || "Клиент";
 
     ensureTab({
       type: 'client',
@@ -3609,5 +3631,19 @@
     loadClients().catch(console.error);
     loadDiscounts().catch(console.error);
   });
+  window.__clientsDashboardApi = {
+    selectClientById(id, preferredTitle = "") {
+      return selectClient(id, preferredTitle);
+    },
+    refreshClients() {
+      return loadClients();
+    },
+    refreshDiscounts() {
+      return loadDiscounts();
+    },
+    openOrderById(orderId) {
+      return openOrderTab(orderId);
+    },
+  };
 })();
 

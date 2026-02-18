@@ -1,0 +1,205 @@
+<div class="center-stack chat-center-stack">
+  <div class="panel toolbar-island chat-header-island">
+    <div class="toolbar chat-header-toolbar">
+      <div class="chat-main-order order-row js-order" id="chatHeaderOrder" role="button" tabindex="0" aria-label="Открыть заказ">
+        <div class="order-col order-id chat-main-order-idcol">
+          <div class="order-id-num" id="chatOrderId">—</div>
+          <div class="order-id-time" id="chatOrderTime">—</div>
+        </div>
+
+        <div class="order-col order-indicators">
+          <span class="order-time-icon" id="chatOrderTimeIcon" aria-hidden="true">
+            <i class="fas fa-calendar-day"></i>
+          </span>
+        </div>
+
+        <div class="order-col order-client">
+          <div class="order-client-name">
+            <i class="fas fa-user"></i>
+            <span class="order-client-name-text" id="chatHeaderName">—</span>
+          </div>
+          <div class="order-client-phone muted">
+            <i class="fas fa-phone"></i>
+            <span class="order-client-phone-text" id="chatHeaderPhone">—</span>
+          </div>
+        </div>
+
+        <div class="order-col order-address">
+          <div class="order-address-line">
+            <i class="fas fa-map-marker-alt"></i>
+            <span id="chatOrderAddress">—</span>
+          </div>
+          <div class="order-address-comment muted">
+            <i class="far fa-comment"></i>
+            <span id="chatOrderComment">—</span>
+          </div>
+        </div>
+
+        <div class="order-col order-stage">
+          <span class="chat-main-order-status" id="chatOrderStatus">—</span>
+        </div>
+
+        <div class="order-col order-total">
+          <span class="order-payment-btn order-payment-cash chat-main-order-total is-empty" id="chatOrderTotal">—</span>
+        </div>
+
+        <div class="hidden" id="chatOrderTitle" aria-hidden="true"></div>
+        <div class="hidden" id="chatOrderKind" aria-hidden="true"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel chat-main-panel">
+    <div class="panel-body chat-main-body no-scrollbar" id="chatMessagesWrap">
+      <div class="empty-state chat-empty-state" id="chatEmptyState">
+        <div class="empty-icon"><i class="fas fa-comments"></i></div>
+        <div class="empty-title">Чат не выбран</div>
+        <div class="empty-text">Выберите клиента в левой колонке, чтобы открыть переписку</div>
+      </div>
+      <div class="chat-messages" id="chatMessages"></div>
+    </div>
+    <button class="chat-scroll-down hidden" id="chatScrollDownBtn" type="button" aria-label="К последним сообщениям">
+      <i class="fas fa-chevron-down"></i>
+      <span class="chat-scroll-down-badge hidden" id="chatScrollDownBadge" aria-live="polite" aria-atomic="true"></span>
+    </button>
+  </div>
+
+  <div class="panel chat-footer-island">
+    <input id="chatAttachmentInput" type="file" class="hidden" accept="image/*" multiple />
+
+    <div class="chat-main-composer">
+      <button type="button" class="icon-btn chat-composer-btn" id="chatAttachBtn" aria-label="Прикрепить файл" title="Прикрепить файл">
+        <i class="fas fa-paperclip"></i>
+      </button>
+
+      <textarea
+        id="chatMessageInput"
+        class="chat-message-input"
+        maxlength="2000"
+        rows="1"
+        wrap="soft"
+        placeholder="Введите сообщение"
+        autocomplete="off"
+      ></textarea>
+
+      <div class="chat-emoji-wrap">
+        <button type="button" class="icon-btn chat-composer-btn" id="chatEmojiBtn" aria-label="Эмодзи" title="Эмодзи">
+          <i class="far fa-smile"></i>
+        </button>
+        <div class="chat-emoji-popover hidden" id="chatEmojiPopover"></div>
+      </div>
+
+      <button type="button" class="btn btn-primary btn-sm chat-send-btn" id="chatSendBtn">
+        <i class="fas fa-paper-plane"></i>
+      </button>
+    </div>
+  </div>
+
+  <div class="chat-selection-toolbar hidden" id="chatSelectionToolbar" aria-live="polite">
+    <button type="button" class="chat-selection-close" id="chatSelectionCloseBtn" aria-label="Отменить выбор" title="Отменить выбор">
+      <i class="fas fa-times"></i>
+    </button>
+    <div class="chat-selection-count" id="chatSelectionCount">Выбрано 0 сообщений</div>
+    <div class="chat-selection-actions">
+      <button type="button" class="chat-selection-action" id="chatSelectionCopyBtn" aria-label="Скопировать" title="Скопировать">
+        <i class="far fa-copy"></i>
+      </button>
+      <button type="button" class="chat-selection-action is-danger" id="chatSelectionDeleteBtn" aria-label="Удалить" title="Удалить">
+        <i class="far fa-trash-alt"></i>
+      </button>
+    </div>
+  </div>
+
+  <div class="chat-attach-preview-overlay hidden" id="chatAttachPreviewOverlay" aria-hidden="true">
+    <div class="chat-attach-preview-card" role="dialog" aria-modal="true" aria-labelledby="chatAttachPreviewTitle">
+      <div class="chat-attach-preview-head">
+        <button type="button" class="chat-attach-preview-icon-btn" id="chatAttachPreviewCloseBtn" aria-label="Закрыть">
+          <i class="fas fa-times"></i>
+        </button>
+        <div class="chat-attach-preview-title" id="chatAttachPreviewTitle">1 фотография</div>
+      </div>
+
+      <div class="chat-attach-preview-media-wrap">
+        <img class="chat-attach-preview-image" id="chatAttachPreviewImage" alt="Предпросмотр изображения">
+      </div>
+
+      <div class="chat-attach-preview-thumbs hidden" id="chatAttachPreviewThumbs"></div>
+
+      <div class="chat-attach-preview-foot">
+        <button type="button" class="chat-attach-preview-icon-btn" id="chatAttachPreviewEmojiBtn" aria-label="Эмодзи">
+          <i class="far fa-smile"></i>
+        </button>
+        <input
+          type="text"
+          class="chat-attach-preview-caption"
+          id="chatAttachPreviewCaption"
+          maxlength="2000"
+          autocomplete="off"
+          placeholder="Добавить подпись..."
+        >
+        <button type="button" class="chat-attach-preview-send" id="chatAttachPreviewSendBtn">Отправить</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="chat-image-viewer-overlay hidden" id="chatImageViewerOverlay" aria-hidden="true">
+    <div class="chat-image-viewer-card" role="dialog" aria-modal="true" aria-label="Image preview">
+      <button type="button" class="chat-image-viewer-close" id="chatImageViewerCloseBtn" aria-label="Close image preview">
+        <i class="fas fa-times"></i>
+      </button>
+      <img class="chat-image-viewer-image" id="chatImageViewerImage" alt="Image preview" />
+    </div>
+  </div>
+</div>
+
+<div class="chat-reaction-bar hidden" id="chatMessageReactionBar" role="group" aria-label="Реакции">
+  <button type="button" class="chat-reaction-btn" data-chat-reaction-slot="quick" data-chat-reaction="🥰">🥰</button>
+  <button type="button" class="chat-reaction-btn" data-chat-reaction-slot="quick" data-chat-reaction="👍">👍</button>
+  <button type="button" class="chat-reaction-btn" data-chat-reaction-slot="quick" data-chat-reaction="🔥">🔥</button>
+  <button type="button" class="chat-reaction-btn" data-chat-reaction-slot="quick" data-chat-reaction="❤️">❤️</button>
+  <button type="button" class="chat-reaction-btn" data-chat-reaction-slot="quick" data-chat-reaction="👎">👎</button>
+  <button type="button" class="chat-reaction-btn" data-chat-reaction-slot="quick" data-chat-reaction="👏">👏</button>
+  <button type="button" class="chat-reaction-btn" data-chat-reaction-slot="quick" data-chat-reaction="😃">😃</button>
+
+  <button type="button" class="chat-reaction-btn chat-reaction-extra" data-chat-reaction-slot="extra" data-chat-reaction="😢">😢</button>
+  <button type="button" class="chat-reaction-btn chat-reaction-extra" data-chat-reaction-slot="extra" data-chat-reaction="😕">😕</button>
+  <button type="button" class="chat-reaction-btn chat-reaction-extra" data-chat-reaction-slot="extra" data-chat-reaction="😞">😞</button>
+  <button type="button" class="chat-reaction-btn chat-reaction-extra" data-chat-reaction-slot="extra" data-chat-reaction="😟">😟</button>
+  <button type="button" class="chat-reaction-btn chat-reaction-extra" data-chat-reaction-slot="extra" data-chat-reaction="🙁">🙁</button>
+  <button type="button" class="chat-reaction-btn chat-reaction-extra" data-chat-reaction-slot="extra" data-chat-reaction="😮">😮</button>
+
+  <button type="button" class="chat-reaction-close chat-reaction-more" data-chat-reaction="__toggle_more__" aria-label="Показать ещё реакции" aria-expanded="false">
+    <i class="fas fa-chevron-down"></i>
+  </button>
+</div>
+
+<div class="chat-message-menu hidden" id="chatMessageContextMenu" role="menu" aria-label="Действия с сообщением">
+  <button type="button" class="chat-message-menu-btn" data-chat-msg-action="reply">
+    <i class="fas fa-reply"></i>
+    <span>Ответить</span>
+  </button>
+  <button type="button" class="chat-message-menu-btn" data-chat-msg-action="copy">
+    <i class="fas fa-copy"></i>
+    <span>Скопировать</span>
+  </button>
+  <button type="button" class="chat-message-menu-btn" data-chat-msg-action="edit" id="chatMenuEditAction">
+    <i class="fas fa-pen"></i>
+    <span>Изменить</span>
+  </button>
+  <button type="button" class="chat-message-menu-btn is-danger" data-chat-msg-action="delete">
+    <i class="fas fa-trash"></i>
+    <span>Удалить</span>
+  </button>
+  <div class="chat-message-menu-divider"></div>
+  <button type="button" class="chat-message-menu-btn" data-chat-msg-action="select">
+    <i class="far fa-circle-check"></i>
+    <span>Выбрать</span>
+  </button>
+</div>
+
+<!-- Hidden scaffold so clients.js can run its original logic for the right column -->
+<div class="hidden" aria-hidden="true">
+  <%- include('../clients/left') %>
+  <%- include('../clients/center') %>
+</div>
+

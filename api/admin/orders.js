@@ -88,6 +88,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
         s.code AS statusCode,
         s.title AS statusTitle,
+        s.color AS statusColor,
 
         p.code AS paymentCode,
         p.title AS paymentTitle,
@@ -175,6 +176,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
 
       status_code: r.statusCode ?? null,
       status_title: r.statusTitle ?? null,
+      status_color: r.statusColor ?? null,
 
       payment_code: r.paymentCode ?? null,
       payment_title: r.paymentTitle ?? null,

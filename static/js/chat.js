@@ -1,0 +1,4407 @@
+﻿
+(function () {
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+  const CHAT_STORAGE_KEY = "dashboard:client-chat:v1";
+  const CHAT_TEMP_API_BASE = "/api/chat-temp";
+  const ORDER_UPDATED_EVENT = "dashboard:order-updated";
+  const THREAD_SYNC_SAVE_DEBOUNCE_MS = 35;
+  const THREAD_SYNC_ACTIVE_POLL_MS = 250;
+  const THREAD_SYNC_SUMMARY_POLL_MS = 1800;
+  const ACTIVE_ORDERS_POLL_MS = 4200;
+  const CHAT_AUTOSCROLL_MS = 170;
+  const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
+  const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
+  const IMAGE_OPTIMIZE_TARGET_BYTES = 900 * 1024;
+  const IMAGE_OPTIMIZE_MAX_SIDE_PX = 1600;
+  const IMAGE_OPTIMIZE_MIN_SIDE_PX = 900;
+  const IMAGE_OPTIMIZE_INITIAL_QUALITY = 0.86;
+  const IMAGE_OPTIMIZE_MIN_QUALITY = 0.58;
+  const IMAGE_OPTIMIZE_SCALE_STEP = 0.84;
+  const TEST_CHAT_IDS_TO_PRUNE = ["9997", "9998", "9999"];
+  const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/img/google/64";
+  const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/emoji.json";
+  const EMOJI_RECENT_STORAGE_KEY = "dashboard:chat-recent-emojis:v1";
+  const EMOJI_CATEGORY_META = [
+    { key: "recent", label: "Недавние", iconClass: "far fa-clock" },
+    { key: "people", label: "Смайлы и люди", iconClass: "far fa-smile" },
+    { key: "nature", label: "Животные и природа", iconClass: "fas fa-paw" },
+    { key: "food", label: "Еда и напитки", iconClass: "fas fa-apple-whole" },
+    { key: "activity", label: "Активности", iconClass: "far fa-futbol" },
+    { key: "travel", label: "Путешествия", iconClass: "fas fa-car-side" },
+    { key: "objects", label: "Объекты", iconClass: "far fa-lightbulb" },
+    { key: "symbols", label: "Символы", iconClass: "fas fa-at" },
+    { key: "flags", label: "Флаги", iconClass: "far fa-flag" },
+  ];
+  const EMOJI_FALLBACK_CATEGORIES = {
+    people: [
+      "😀","😃","😄","😁","😆","😅","🤣","😂","🙂","🙃","😉","😊","😇","🥰","😍","😘","😗","😚","😋","😛","😜","🤪","🤨","🧐","🤓","😎","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🫡","🤭","🫢","🤫","🤥","😶","🫠","😐","🫤","😑","😬","🙄","😮‍💨","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","❤️","💔","💯","👍","👎","👏","🙌","🙏","👋","🤝","💪"
+    ],
+    nature: ["🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐮","🐷","🐸","🐵","🐔","🐧","🐦","🦆","🦅","🦉","🦇","🐺","🐗","🐴","🦄","🐝","🪲","🐞","🦋","🐌","🐢","🐍","🦎","🐙","🦑","🦞","🦀","🐬","🐳","🦈","🐊","🌵","🌲","🌳","🌴","🌷","🌸","🌹","🌺","🌻","🌼","🌿","☘️","🍀","🌱","🌈","⭐","🌙","☀️","🌧️","⛈️","❄️","🔥","🌊"],
+    food: ["🍏","🍎","🍐","🍊","🍋","🍌","🍉","🍇","🍓","🫐","🍒","🍑","🥭","🍍","🥥","🥝","🍅","🥑","🥦","🥬","🥒","🌶️","🫑","🌽","🥕","🧄","🧅","🥔","🍠","🫚","🥐","🥖","🍞","🥨","🧀","🥚","🍳","🥞","🧇","🥓","🍗","🍖","🌭","🍔","🍟","🍕","🌮","🌯","🥙","🧆","🥪","🍝","🍜","🍣","🍤","🍱","🍛","🍚","🍙","🍘","🍥","🥟","🍦","🍰","🧁","🍪","🍫","🍿","🍩","🍮","☕","🍵","🧃","🥤","🍺","🍷"],
+    activity: ["⚽","🏀","🏈","⚾","🥎","🎾","🏐","🏉","🥏","🎱","🏓","🏸","🏒","🏑","🥍","🏏","⛳","🏹","🎣","🤿","🥊","🥋","🎽","🛹","🛼","🛷","⛸️","🥌","🎯","🎳","🎮","🕹️","🎲","🧩","♟️","🎨","🎭","🎤","🎧","🎼","🎹","🥁","🎷","🎺","🎸","🎻","🎬","📷","📸","🧘","🤸","⛹️","🏋️","🚴","🏊","🏄","🧗","🤾","🤽"],
+    travel: ["🚗","🚕","🚙","🚌","🚎","🏎️","🚓","🚑","🚒","🚐","🛻","🚚","🚛","🚜","🛵","🏍️","🚲","🛴","🚨","🚔","🚍","✈️","🛫","🛬","🚁","🚂","🚆","🚇","🚊","🚉","🚢","🛳️","⛵","🚤","🗽","🗼","🏰","🏯","🏟️","🎡","🎢","⛲","⛰️","🏔️","🗻","🏝️","🏜️","🌋","🏙️","🌆","🌃","🌉","🛣️","🛤️","🌁","🗺️","🧭","⛽"],
+    objects: ["⌚","📱","💻","⌨️","🖥️","🖨️","🖱️","📷","📹","🎥","📺","📻","🎙️","🎚️","📀","💿","📼","☎️","📞","🕰️","⏰","⏱️","⏲️","🧭","📡","🔋","🔌","💡","🔦","🕯️","🪫","🧯","🧲","🧰","🛠️","🔧","🔨","⚙️","⛓️","🧱","🪜","🧪","🧬","🔬","🔭","📌","✂️","🖊️","🖋️","📎","📁","🗂️","🗃️","🗄️","📦","🧳","🎁","🛒","💳","💵","💰","🔒","🔑"],
+    symbols: ["❤️","🧡","💛","💚","💙","💜","🖤","🤍","🤎","💔","❣️","💕","💞","💓","💗","💖","💘","💝","💟","☮️","✝️","☪️","🕉️","☸️","✡️","🔯","🪯","☯️","☦️","🛐","⛎","♈","♉","♊","♋","♌","♍","♎","♏","♐","♑","♒","♓","🆔","⚛️","🉑","☢️","☣️","📴","📳","🈶","🈚","🈸","🈺","🈷️","✴️","🆚","💮","🉐","㊙️","㊗️","🈴","🈵","🈹","🈲","🅰️","🅱️","🆎","🆘","❌","⭕","🔴","🟠","🟡","🟢","🔵","🟣","⚪","⚫","▪️","▫️","◾","◽","🔶","🔷","🔸","🔹","🔺","🔻","💠","🔘","🔳","🔲"],
+    flags: ["🏳️","🏴","🏁","🚩","🏳️‍🌈","🏳️‍⚧️","🇷🇺","🇺🇸","🇬🇧","🇩🇪","🇫🇷","🇪🇸","🇮🇹","🇺🇦","🇰🇿","🇧🇾","🇦🇲","🇬🇪","🇦🇿","🇹🇷","🇨🇳","🇯🇵","🇰🇷","🇮🇳","🇧🇷","🇨🇦","🇦🇺","🇲🇽","🇦🇪","🇸🇦","🇮🇱","🇵🇱","🇳🇱","🇸🇪","🇳🇴","🇫🇮","🇨🇭","🇦🇹","🇨🇿","🇸🇰","🇷🇴","🇧🇬","🇷🇸","🇭🇷","🇸🇮","🇪🇪","🇱🇻","🇱🇹","🇵🇹","🇬🇷"]
+  };
+  const QUICK_REACTIONS = [
+    "\u{1F44D}",
+    "\u{2764}\u{FE0F}",
+    "\u{1F525}",
+    "\u{1F602}",
+    "\u{1F970}",
+    "\u{1F64F}",
+    "\u{1FAE8}",
+  ];
+  const EXTRA_REACTIONS = [
+    "\u{1F622}",
+    "\u{1F615}",
+    "\u{1F61E}",
+    "\u{1F61F}",
+    "\u{1F641}",
+    "\u{1F62E}",
+  ];
+  const CHAT_REACTION_ACTOR = "out";
+
+  const dom = {
+    left: {
+      search: $("#chatClientsSearch"),
+      list: $("#chatClientsList"),
+      empty: $("#chatClientsEmpty"),
+    },
+    center: {
+      stack: $(".chat-center-stack"),
+      headerOrder: $("#chatHeaderOrder"),
+      headerName: $("#chatHeaderName"),
+      headerPhone: $("#chatHeaderPhone"),
+      orderTitle: $("#chatOrderTitle"),
+      orderStatus: $("#chatOrderStatus"),
+      orderKind: $("#chatOrderKind"),
+      orderId: $("#chatOrderId"),
+      orderTime: $("#chatOrderTime"),
+      orderTimeIcon: $("#chatOrderTimeIcon"),
+      orderAddress: $("#chatOrderAddress"),
+      orderComment: $("#chatOrderComment"),
+      orderTotal: $("#chatOrderTotal"),
+      messagesWrap: $("#chatMessagesWrap"),
+      messages: $("#chatMessages"),
+      scrollDownBtn: $("#chatScrollDownBtn"),
+      scrollDownBadge: $("#chatScrollDownBadge"),
+      empty: $("#chatEmptyState"),
+      attachInput: $("#chatAttachmentInput"),
+      attachBtn: $("#chatAttachBtn"),
+      attachPreviewOverlay: $("#chatAttachPreviewOverlay"),
+      attachPreviewCloseBtn: $("#chatAttachPreviewCloseBtn"),
+      attachPreviewTitle: $("#chatAttachPreviewTitle"),
+      attachPreviewImage: $("#chatAttachPreviewImage"),
+      attachPreviewThumbs: $("#chatAttachPreviewThumbs"),
+      attachPreviewEmojiBtn: $("#chatAttachPreviewEmojiBtn"),
+      attachPreviewCaption: $("#chatAttachPreviewCaption"),
+      attachPreviewSendBtn: $("#chatAttachPreviewSendBtn"),
+      imageViewerOverlay: $("#chatImageViewerOverlay"),
+      imageViewerCloseBtn: $("#chatImageViewerCloseBtn"),
+      imageViewerImage: $("#chatImageViewerImage"),
+      emojiBtn: $("#chatEmojiBtn"),
+      emojiPopover: $("#chatEmojiPopover"),
+      input: $("#chatMessageInput"),
+      sendBtn: $("#chatSendBtn"),
+      replyBox: $("#chatComposerReply"),
+      replyName: $("#chatComposerReplyName"),
+      replyText: $("#chatComposerReplyText"),
+      replyCloseBtn: $("#chatComposerReplyClose"),
+      contextMenu: $("#chatMessageContextMenu"),
+      reactionBar: $("#chatMessageReactionBar"),
+      menuPinLabel: $("[data-chat-pin-label]"),
+      menuEditAction: $("#chatMenuEditAction"),
+      menuDeleteAction: $('[data-chat-msg-action="delete"]'),
+      selectionBar: $("#chatSelectionToolbar"),
+      selectionCount: $("#chatSelectionCount"),
+      selectionCloseBtn: $("#chatSelectionCloseBtn"),
+      selectionCopyBtn: $("#chatSelectionCopyBtn"),
+      selectionDeleteBtn: $("#chatSelectionDeleteBtn"),
+    },
+  };
+
+  const state = {
+    clients: [],
+    filteredClients: [],
+    activeClientId: null,
+    activeClient: null,
+    activeOrders: [],
+    activeOrdersSignature: "[]",
+    headerOrderId: 0,
+    q: "",
+    requestToken: 0,
+    editingMessageId: null,
+    contextMessageId: null,
+    contextClientId: null,
+    replyDraft: null,
+    deleteConfirmUi: null,
+    pendingDeleteConfirm: null,
+    deleteConfirmCloseTimer: 0,
+    clientContextMenu: null,
+    selectionMode: false,
+    selectedMessageIds: new Set(),
+    store: loadStore(),
+    orderDetailsCache: new Map(),
+    remoteThreadUpdatedAt: {},
+    remoteSaveTimers: {},
+    remoteSaveInFlight: {},
+    localThreadMutations: {},
+    activeThreadPollTimer: 0,
+    activeThreadPollInFlight: false,
+    summariesPollTimer: 0,
+    activeOrdersPollTimer: 0,
+    activeOrdersPollInFlight: false,
+    messagesScrollRaf: 0,
+    pendingScrollNewByClient: {},
+    pendingScrollMessageIdsByClient: {},
+    threadScrollTopByClient: {},
+    attachPreviewItems: [],
+    attachPreviewActiveIndex: 0,
+  };
+
+  let emojiCategories = {};
+  let emojiRecentList = [];
+  let emojiActiveCategory = "people";
+  let emojiDatasetPromise = null;
+
+  function getClientsRightApi() {
+    const api = window.__clientsDashboardApi;
+    if (!api) return null;
+    return api;
+  }
+
+  function getTenantId() {
+    const meta = document.querySelector('meta[name="tenant_id"]');
+    if (meta && meta.content) {
+      const n = Number(meta.content);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return 1;
+  }
+
+  async function apiJson(url, opts = {}) {
+    const tenantId = getTenantId();
+    const token = localStorage.getItem("authToken");
+    const storeId = localStorage.getItem("activeStoreId") || "1";
+    const headers = {
+      "x-tenant-id": String(tenantId),
+      "x-store-id": storeId,
+      ...(opts.body ? { "Content-Type": "application/json" } : {}),
+      ...(opts.headers || {}),
+    };
+
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const res = await fetch(url, {
+      method: opts.method || "GET",
+      headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+
+    if (res.status === 401) {
+      localStorage.removeItem("authToken");
+      localStorage.removeItem("user");
+      localStorage.removeItem("tenant");
+      window.location.href = "/login";
+      throw new Error("UNAUTHORIZED");
+    }
+
+    const json = await res.json().catch(() => null);
+    if (!json || json.ok !== true) throw new Error(json?.error || `API_ERROR (${res.status})`);
+    return json;
+  }
+
+  function normalizeClientIdKey(clientId) {
+    const n = Number(clientId);
+    if (Number.isFinite(n) && n > 0) return String(Math.trunc(n));
+    return "";
+  }
+
+  function getThreadMutationVersion(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return 0;
+    const value = Number(state.localThreadMutations?.[key] || 0);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
+
+  function markThreadMutated(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    state.localThreadMutations[key] = getThreadMutationVersion(key) + 1;
+  }
+
+  function compareIsoDates(a, b) {
+    const ta = a ? new Date(String(a)).getTime() : 0;
+    const tb = b ? new Date(String(b)).getTime() : 0;
+    const safeA = Number.isFinite(ta) ? ta : 0;
+    const safeB = Number.isFinite(tb) ? tb : 0;
+    if (safeA > safeB) return 1;
+    if (safeA < safeB) return -1;
+    return 0;
+  }
+
+  function hasPendingRemoteSave(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+    return !!state.remoteSaveTimers[key] || state.remoteSaveInFlight[key] === true;
+  }
+
+  function stableSerialize(value) {
+    try {
+      return JSON.stringify(value || []);
+    } catch {
+      return "[]";
+    }
+  }
+
+  function buildActiveOrdersSignature(orders) {
+    const list = Array.isArray(orders) ? orders : [];
+    const normalized = list
+      .map((order) => ({
+        id: Number(order?.id || 0),
+        customer_id: Number(order?.customer_id || order?.client_id || 0),
+        status_id: Number(order?.status_id || 0),
+        status_title: String(order?.status_title || ""),
+        status_color: String(order?.status_color || ""),
+        total_price: Number(order?.total_price ?? order?.total ?? 0),
+        payment_code: String(order?.payment_code || ""),
+        address: String(order?.address || order?.pickup_store_address || ""),
+        comment: String(order?.comment || order?.address_comment || ""),
+        method_code: String(order?.method_code || ""),
+        created_at: String(order?.created_at || ""),
+        scheduled_at: String(order?.scheduled_at || ""),
+        updated_at: String(order?.updated_at || ""),
+      }))
+      .sort((a, b) => a.id - b.id);
+    return stableSerialize(normalized);
+  }
+
+  function setActiveOrders(orders, options = {}) {
+    const incoming = Array.isArray(orders) ? orders : [];
+    const existingById = new Map(
+      (Array.isArray(state.activeOrders) ? state.activeOrders : [])
+        .map((order) => [Number(order?.id || 0), order])
+    );
+    const list = incoming.map((order) => {
+      const id = Number(order?.id || 0);
+      const prev = existingById.get(id);
+      return prev ? { ...prev, ...order } : order;
+    });
+    if (!list.length) state.headerOrderId = 0;
+    const signature = buildActiveOrdersSignature(list);
+    const changed = signature !== state.activeOrdersSignature;
+    state.activeOrders = list;
+    state.activeOrdersSignature = signature;
+
+    if (changed || options.forceRender) {
+      renderChatHeader();
+    }
+    return changed;
+  }
+
+  function getClientMetaForSync(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return {};
+    const fromList = state.clients.find((client) => Number(client.id) === Number(key));
+    if (fromList) {
+      return {
+        name: String(fromList.name || ""),
+        phone: String(fromList.phone || ""),
+      };
+    }
+    if (state.activeClient && Number(state.activeClient.id) === Number(key)) {
+      return {
+        name: String(state.activeClient.name || ""),
+        phone: String(state.activeClient.phone || ""),
+      };
+    }
+    return {};
+  }
+
+  async function fetchRemoteThreadSnapshot(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return null;
+    const qs = new URLSearchParams({ _ts: String(Date.now()) });
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}?${qs.toString()}`);
+    const payload = json?.data || {};
+    return {
+      clientId: Number(key),
+      updatedAt: String(payload.updated_at || ""),
+      messages: Array.isArray(payload.messages) ? payload.messages : [],
+      meta: payload.meta && typeof payload.meta === "object" ? payload.meta : {},
+    };
+  }
+
+  async function fetchRemoteThreadMeta(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return null;
+    const qs = new URLSearchParams({ _ts: String(Date.now()) });
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}/meta?${qs.toString()}`);
+    const payload = json?.data || {};
+    return {
+      clientId: Number(key),
+      updatedAt: String(payload.updated_at || ""),
+    };
+  }
+
+  async function fetchRemoteThreadDiff(clientId, sinceUpdatedAt) {
+    const key = normalizeClientIdKey(clientId);
+    const since = String(sinceUpdatedAt || "").trim();
+    if (!key || !since) return null;
+    const qs = new URLSearchParams({
+      since,
+      _ts: String(Date.now()),
+    });
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}/diff?${qs.toString()}`);
+    const payload = json?.data || {};
+    return {
+      clientId: Number(key),
+      updatedAt: String(payload.updated_at || ""),
+      messageCount: Number(payload.message_count || 0),
+      messages: Array.isArray(payload.messages) ? payload.messages : [],
+    };
+  }
+
+  function applyRemoteThreadSnapshot(snapshot, options = {}) {
+    if (!snapshot || !Number.isFinite(Number(snapshot.clientId))) return false;
+    const key = normalizeClientIdKey(snapshot.clientId);
+    if (!key) return false;
+    const next = Array.isArray(snapshot.messages) ? snapshot.messages : [];
+    const prev = Array.isArray(state.store.threads[key]) ? state.store.threads[key] : [];
+    const same = stableSerialize(prev) === stableSerialize(next);
+    const remoteUpdatedAt = String(snapshot.updatedAt || "");
+    const knownUpdatedAt = String(state.remoteThreadUpdatedAt[key] || "");
+    const remoteIsNewer = compareIsoDates(remoteUpdatedAt, knownUpdatedAt) > 0;
+    const localChangedDuringRequest = options.localChangedDuringRequest === true;
+    const isActiveThread = Number(state.activeClientId) === Number(key);
+
+    if (!same && !options.force) {
+      if (hasPendingRemoteSave(key)) return false;
+      if (localChangedDuringRequest && !remoteIsNewer) return false;
+    }
+
+    state.remoteThreadUpdatedAt[key] = remoteUpdatedAt;
+    const shouldMarkRead = Number(state.activeClientId) === Number(key)
+      && !options.skipReadMark
+      && isChatTabActiveForRead();
+    let hiddenChanged = pruneHiddenMessageIds(key);
+    if (same) {
+      let changed = markThreadDelivered(key);
+      if (shouldMarkRead) {
+        const readChanged = markThreadRead(key);
+        changed = readChanged || changed;
+        if (readChanged && isActiveThread) renderMessages({ disableAutoPin: true });
+      }
+      const finalChanged = changed || hiddenChanged;
+      if (finalChanged) applyClientFilter();
+      return finalChanged;
+    }
+
+    const appendedIncomingMessageIds = (() => {
+      if (!isActiveThread) return [];
+      if (options.ignoreIncomingBadge === true) return [];
+      const prevIds = new Set(
+        (Array.isArray(prev) ? prev : [])
+          .map((msg) => String(msg?.id || ""))
+          .filter(Boolean)
+      );
+      return next
+        .filter((msg) => msg && String(msg.direction || "").toLowerCase() === "in")
+        .map((msg) => String(msg.id || ""))
+        .filter((id) => id && !prevIds.has(id));
+    })();
+
+    state.store.threads[key] = next;
+    saveStore();
+    pruneHiddenMessageIds(key);
+    markThreadDelivered(key);
+
+    if (isActiveThread) {
+      if (appendedIncomingMessageIds.length > 0) {
+        addPendingScrollMessageIds(key, appendedIncomingMessageIds);
+      }
+      if (shouldMarkRead) markThreadRead(key);
+      renderMessages({ disableAutoPin: true });
+    }
+    applyClientFilter();
+    return true;
+  }
+
+  async function pushThreadToRemote(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    const thread = getThread(key);
+    const meta = getClientMetaForSync(key);
+    state.remoteSaveInFlight[key] = true;
+    try {
+      const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}`, {
+        method: "PUT",
+        body: { messages: thread, meta },
+      });
+      const updatedAt = String(json?.data?.updated_at || "");
+      if (updatedAt) state.remoteThreadUpdatedAt[key] = updatedAt;
+    } finally {
+      delete state.remoteSaveInFlight[key];
+    }
+  }
+
+  async function deleteRemoteThread(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}`, {
+      method: "DELETE",
+    });
+    delete state.remoteThreadUpdatedAt[key];
+  }
+
+  function queueThreadSaveToRemote(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    const prev = state.remoteSaveTimers[key];
+    if (prev) clearTimeout(prev);
+    state.remoteSaveTimers[key] = window.setTimeout(() => {
+      delete state.remoteSaveTimers[key];
+      pushThreadToRemote(key).catch(console.error);
+    }, THREAD_SYNC_SAVE_DEBOUNCE_MS);
+  }
+
+  async function pullThreadFromRemote(clientId, options = {}) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+    const mutationVersionBefore = getThreadMutationVersion(key);
+    const snapshot = await fetchRemoteThreadSnapshot(key);
+    if (!snapshot) return false;
+    const localChangedDuringRequest = getThreadMutationVersion(key) !== mutationVersionBefore;
+    return applyRemoteThreadSnapshot(snapshot, { ...options, localChangedDuringRequest });
+  }
+
+  function applyRemoteThreadDiff(diff, options = {}) {
+    if (!diff || !Number.isFinite(Number(diff.clientId))) return null;
+    const key = normalizeClientIdKey(diff.clientId);
+    if (!key) return null;
+
+    const previousThread = Array.isArray(state.store.threads[key]) ? state.store.threads[key] : [];
+    const expectedCount = Number(diff.messageCount);
+    if (Number.isFinite(expectedCount) && expectedCount >= 0 && expectedCount < previousThread.length) {
+      return null;
+    }
+
+    const changedMessages = Array.isArray(diff.messages) ? diff.messages : [];
+    if (!changedMessages.length) {
+      if (diff.updatedAt) state.remoteThreadUpdatedAt[key] = String(diff.updatedAt);
+      return false;
+    }
+
+    const byId = new Map();
+    previousThread.forEach((msg) => {
+      const id = String(msg?.id || "");
+      if (!id) return;
+      byId.set(id, msg);
+    });
+    changedMessages.forEach((msg) => {
+      if (!msg || typeof msg !== "object") return;
+      const id = String(msg.id || "");
+      if (!id) return;
+      ensureMessageReactions(msg);
+      byId.set(id, msg);
+    });
+
+    const nextThread = Array.from(byId.values()).sort((a, b) => {
+      const ta = new Date(a?.createdAt || 0).getTime();
+      const tb = new Date(b?.createdAt || 0).getTime();
+      return ta - tb;
+    });
+
+    if (Number.isFinite(expectedCount) && expectedCount >= 0 && expectedCount !== nextThread.length) {
+      return null;
+    }
+
+    return applyRemoteThreadSnapshot(
+      {
+        clientId: Number(key),
+        updatedAt: String(diff.updatedAt || ""),
+        messages: nextThread,
+      },
+      options
+    );
+  }
+
+  async function pullThreadFromRemoteIfChanged(clientId, options = {}) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+    if (options.force === true) {
+      return pullThreadFromRemote(key, options);
+    }
+
+    try {
+      const meta = await fetchRemoteThreadMeta(key);
+      const remoteUpdatedAt = String(meta?.updatedAt || "");
+      const knownUpdatedAt = String(state.remoteThreadUpdatedAt[key] || "");
+      if (remoteUpdatedAt && knownUpdatedAt && remoteUpdatedAt === knownUpdatedAt) {
+        return false;
+      }
+      if (!remoteUpdatedAt && !knownUpdatedAt) {
+        return false;
+      }
+
+      if (knownUpdatedAt) {
+        const mutationVersionBefore = getThreadMutationVersion(key);
+        try {
+          const diff = await fetchRemoteThreadDiff(key, knownUpdatedAt);
+          if (diff) {
+            const localChangedDuringRequest = getThreadMutationVersion(key) !== mutationVersionBefore;
+            const applied = applyRemoteThreadDiff(diff, { ...options, localChangedDuringRequest });
+            if (applied !== null) return applied;
+          }
+        } catch {}
+      }
+
+      return pullThreadFromRemote(key, options);
+    } catch {
+      return pullThreadFromRemote(key, options);
+    }
+  }
+
+  async function loadRemoteChatClients() {
+    const qs = new URLSearchParams({ _ts: String(Date.now()) });
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/clients?${qs.toString()}`);
+    return Array.isArray(json?.data) ? json.data : [];
+  }
+
+  function mergeRemoteClients(localRows, remoteRows) {
+    const merged = new Map();
+    (Array.isArray(localRows) ? localRows : []).forEach((row) => {
+      const key = normalizeClientIdKey(row?.id);
+      if (!key) return;
+      merged.set(key, { ...row });
+    });
+
+    (Array.isArray(remoteRows) ? remoteRows : []).forEach((remote) => {
+      const key = normalizeClientIdKey(remote?.client_id ?? remote?.clientId ?? remote?.id);
+      if (!key) return;
+      const existing = merged.get(key);
+      if (existing) return;
+
+      const meta = remote?.meta && typeof remote.meta === "object" ? remote.meta : {};
+      const updatedAt = String(
+        remote?.updated_at
+        || remote?.updatedAt
+        || remote?.last_message_at
+        || remote?.lastMessageAt
+        || ""
+      );
+      merged.set(key, {
+        id: Number(key),
+        name: String(meta.name || `Клиент #${key}`),
+        phone: String(meta.phone || ""),
+        total_orders: 0,
+        created_at: updatedAt || new Date().toISOString(),
+        updated_at: updatedAt || new Date().toISOString(),
+        last_order_date: updatedAt || null,
+        _isVirtualChatClient: true,
+      });
+    });
+
+    return Array.from(merged.values());
+  }
+
+  async function pullRemoteSummaries(clientIds) {
+    const ids = (Array.isArray(clientIds) ? clientIds : [])
+      .map((id) => normalizeClientIdKey(id))
+      .filter(Boolean);
+    if (!ids.length) return false;
+
+    const qs = new URLSearchParams();
+    qs.set("client_ids", ids.join(","));
+    qs.set("_ts", String(Date.now()));
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/summaries?${qs.toString()}`);
+    const rows = Array.isArray(json?.data) ? json.data : [];
+    const changedIds = rows
+      .map((row) => ({
+        key: normalizeClientIdKey(row?.client_id ?? row?.clientId ?? row?.id),
+        updatedAt: String(
+          row?.updated_at
+          || row?.updatedAt
+          || row?.last_message_at
+          || row?.lastMessageAt
+          || ""
+        ),
+      }))
+      .filter((row) => row.key)
+      .filter((row) => state.remoteThreadUpdatedAt[row.key] !== row.updatedAt)
+      .map((row) => row.key);
+
+    if (!changedIds.length) return false;
+    let changed = false;
+    for (const id of changedIds) {
+      // eslint-disable-next-line no-await-in-loop
+      const pulled = await pullThreadFromRemote(id, { skipReadMark: Number(state.activeClientId) === Number(id) });
+      if (pulled) changed = true;
+    }
+    return changed;
+  }
+
+  function startRemoteSyncLoops() {
+    if (!state.activeThreadPollTimer) {
+      state.activeThreadPollTimer = window.setInterval(() => {
+        if (!state.activeClientId) return;
+        if (state.activeThreadPollInFlight) return;
+        state.activeThreadPollInFlight = true;
+        pullThreadFromRemoteIfChanged(state.activeClientId, { skipReadMark: false })
+          .catch(console.error)
+          .finally(() => {
+            state.activeThreadPollInFlight = false;
+          });
+      }, THREAD_SYNC_ACTIVE_POLL_MS);
+    }
+
+    if (!state.summariesPollTimer) {
+      state.summariesPollTimer = window.setInterval(async () => {
+        try {
+          const remoteClients = await loadRemoteChatClients().catch(() => []);
+          if (Array.isArray(remoteClients) && remoteClients.length) {
+            const merged = mergeRemoteClients(state.clients, remoteClients);
+            const prevFingerprint = stableSerialize(
+              (state.clients || []).map((client) => [Number(client.id), String(client.name || ""), String(client.phone || "")])
+            );
+            const nextFingerprint = stableSerialize(
+              (merged || []).map((client) => [Number(client.id), String(client.name || ""), String(client.phone || "")])
+            );
+            if (prevFingerprint !== nextFingerprint) {
+              state.clients = merged;
+              applyClientFilter();
+            }
+          }
+          const ids = (state.clients || []).map((client) => client.id);
+          await pullRemoteSummaries(ids).catch(console.error);
+        } catch (err) {
+          console.error(err);
+        }
+      }, THREAD_SYNC_SUMMARY_POLL_MS);
+    }
+  }
+
+  function loadStore() {
+    try {
+      const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+      if (!raw) return { threads: {}, hiddenMessageIds: {}, lastOpenClientId: null };
+      const parsed = JSON.parse(raw);
+      const nextStore = {
+        threads: parsed && typeof parsed.threads === "object" ? parsed.threads : {},
+        hiddenMessageIds: parsed && typeof parsed.hiddenMessageIds === "object" ? parsed.hiddenMessageIds : {},
+        lastOpenClientId: Number(parsed?.lastOpenClientId || 0) || null,
+      };
+      let changed = false;
+      TEST_CHAT_IDS_TO_PRUNE.forEach((id) => {
+        if (Object.prototype.hasOwnProperty.call(nextStore.threads, id)) {
+          delete nextStore.threads[id];
+          changed = true;
+        }
+        if (Object.prototype.hasOwnProperty.call(nextStore.hiddenMessageIds, id)) {
+          delete nextStore.hiddenMessageIds[id];
+          changed = true;
+        }
+      });
+      if (changed) {
+        localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(nextStore));
+      }
+      return nextStore;
+    } catch {
+      return { threads: {}, hiddenMessageIds: {}, lastOpenClientId: null };
+    }
+  }
+
+  function saveStore() {
+    try { localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(state.store)); } catch {}
+  }
+
+  function ensureThread(clientId) {
+    const key = String(clientId);
+    if (!Array.isArray(state.store.threads[key])) state.store.threads[key] = [];
+    state.store.threads[key].forEach((message) => {
+      ensureMessageReactions(message);
+    });
+    return state.store.threads[key];
+  }
+
+  function getThread(clientId) { return clientId ? ensureThread(clientId) : []; }
+
+  function ensureHiddenMessageMap() {
+    if (!state.store.hiddenMessageIds || typeof state.store.hiddenMessageIds !== "object") {
+      state.store.hiddenMessageIds = {};
+    }
+    return state.store.hiddenMessageIds;
+  }
+
+  function ensureHiddenMessageList(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return [];
+    const map = ensureHiddenMessageMap();
+    if (!Array.isArray(map[key])) map[key] = [];
+    return map[key];
+  }
+
+  function isMessageHiddenLocally(clientId, messageId) {
+    const id = String(messageId || "");
+    if (!id) return false;
+    return ensureHiddenMessageList(clientId).includes(id);
+  }
+
+  function setMessageHiddenLocally(clientId, messageId, hidden, options = {}) {
+    const id = String(messageId || "");
+    if (!id) return false;
+    const list = ensureHiddenMessageList(clientId);
+    const idx = list.indexOf(id);
+    const wantHidden = hidden === true;
+    let changed = false;
+
+    if (wantHidden && idx < 0) {
+      list.push(id);
+      changed = true;
+    } else if (!wantHidden && idx >= 0) {
+      list.splice(idx, 1);
+      changed = true;
+    }
+
+    if (changed && options.persist !== false) saveStore();
+    return changed;
+  }
+
+  function pruneHiddenMessageIds(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+    const map = ensureHiddenMessageMap();
+    const list = Array.isArray(map[key]) ? map[key] : [];
+    if (!list.length) return false;
+
+    const existing = new Set(getThread(clientId).map((msg) => String(msg?.id || "")));
+    const next = list.filter((id) => existing.has(String(id || "")));
+    if (next.length === list.length) return false;
+    map[key] = next;
+    saveStore();
+    return true;
+  }
+
+  function getVisibleThread(clientId) {
+    const hidden = new Set(ensureHiddenMessageList(clientId).map(String));
+    if (!hidden.size) return getThread(clientId);
+    return getThread(clientId).filter((msg) => !hidden.has(String(msg?.id || "")));
+  }
+
+  function getLastMessage(clientId) {
+    const thread = getVisibleThread(clientId);
+    return thread.length ? thread[thread.length - 1] : null;
+  }
+
+  function getUnreadCount(clientId) {
+    return getVisibleThread(clientId).filter((msg) => msg.direction === "in" && !isMessageRead(msg)).length;
+  }
+
+  function isMessageRead(message) {
+    if (!message || typeof message !== "object") return false;
+    const status = String(message.deliveryStatus || "").toLowerCase();
+    return message.read === true || !!message.readAt || status === "read";
+  }
+
+  function isMessageDelivered(message) {
+    if (!message || typeof message !== "object") return false;
+    const status = String(message.deliveryStatus || "").toLowerCase();
+    return !!message.deliveredAt || status === "delivered" || isMessageRead(message);
+  }
+
+  function isChatTabActiveForRead() {
+    if (typeof document === "undefined") return true;
+    if (document.visibilityState && document.visibilityState !== "visible") return false;
+    if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
+    return true;
+  }
+
+  function markThreadDelivered(clientId) {
+    const thread = getThread(clientId);
+    let changed = false;
+    const nowIso = new Date().toISOString();
+    thread.forEach((msg) => {
+      if (!msg || msg.direction !== "in") return;
+      if (isMessageDelivered(msg)) return;
+      msg.deliveryStatus = "delivered";
+      msg.deliveredAt = msg.deliveredAt || nowIso;
+      changed = true;
+    });
+    if (changed) {
+      markThreadMutated(clientId);
+      saveStore();
+      queueThreadSaveToRemote(clientId);
+    }
+    return changed;
+  }
+
+  function markThreadRead(clientId) {
+    const thread = getThread(clientId);
+    let changed = false;
+    const nowIso = new Date().toISOString();
+    thread.forEach((msg) => {
+      if (!msg || msg.direction !== "in") return;
+      if (isMessageRead(msg)) return;
+      msg.read = true;
+      msg.deliveryStatus = "read";
+      msg.deliveredAt = msg.deliveredAt || nowIso;
+      msg.readAt = msg.readAt || nowIso;
+      changed = true;
+    });
+    if (changed) {
+      markThreadMutated(clientId);
+      saveStore();
+      queueThreadSaveToRemote(clientId);
+    }
+    return changed;
+  }
+
+  function syncActiveThreadReadState(options = {}) {
+    const id = Number(options.clientId || state.activeClientId || 0);
+    if (!Number.isFinite(id) || id <= 0) return false;
+    if (!isChatTabActiveForRead()) return false;
+    const changed = markThreadRead(id);
+    if (changed || options.forceRender) {
+      applyClientFilter();
+      if (Number(state.activeClientId) === id) renderMessages();
+    }
+    return changed;
+  }
+
+  function pushMessage(clientId, message) {
+    const thread = getThread(clientId);
+    ensureMessageReactions(message);
+    thread.push(message);
+    if (thread.length > 250) thread.splice(0, thread.length - 250);
+    markThreadMutated(clientId);
+    saveStore();
+    queueThreadSaveToRemote(clientId);
+  }
+
+  function getMessageAuthorName(message) {
+    if (!message) return "";
+    if (message.direction === "out") return "Вы";
+    return String(state.activeClient?.name || "Клиент");
+  }
+
+  function isImageAttachment(attachment) {
+    if (!attachment || typeof attachment !== "object") return false;
+    const kind = String(attachment.kind || "").toLowerCase();
+    const dataUrl = String(attachment.dataUrl || "");
+    if (kind !== "image") return false;
+    return /^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl);
+  }
+
+  function getMessageImageAttachment(message) {
+    if (!message || typeof message !== "object") return null;
+    const attachment = message.attachment;
+    return isImageAttachment(attachment) ? attachment : null;
+  }
+
+  function getMessagePreviewText(message) {
+    if (!message || typeof message !== "object") return "";
+    const text = String(message.text || "").replace(/\s+/g, " ").trim();
+    if (text) return text;
+    return getMessageImageAttachment(message) ? "Фото" : "";
+  }
+
+  function getReplyPreviewText(value) {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    if (!text) return "Сообщение";
+    return text.length > 160 ? `${text.slice(0, 160)}...` : text;
+  }
+
+  function ensureComposerReplyElements() {
+    const root = dom.center.stack || document;
+    const composer = $(".chat-main-composer", root);
+    if (!composer) return;
+
+    let replyBox = $("#chatComposerReply", composer);
+    if (!replyBox) {
+      replyBox = document.createElement("div");
+      replyBox.id = "chatComposerReply";
+      replyBox.className = "chat-composer-reply hidden";
+      replyBox.innerHTML = `
+        <span class="chat-composer-reply-bar" aria-hidden="true"></span>
+        <div class="chat-composer-reply-content">
+          <div class="chat-composer-reply-name" id="chatComposerReplyName"></div>
+          <div class="chat-composer-reply-text" id="chatComposerReplyText"></div>
+        </div>
+        <button type="button" class="chat-composer-reply-close" id="chatComposerReplyClose" aria-label="Отменить ответ" title="Отменить ответ">
+          <i class="fas fa-times"></i>
+        </button>
+      `;
+      composer.insertBefore(replyBox, composer.firstChild);
+    }
+
+    dom.center.replyBox = replyBox;
+    dom.center.replyName = $("#chatComposerReplyName", replyBox);
+    dom.center.replyText = $("#chatComposerReplyText", replyBox);
+    dom.center.replyCloseBtn = $("#chatComposerReplyClose", replyBox);
+  }
+
+  function renderComposerReply() {
+    ensureComposerReplyElements();
+    if (!dom.center.replyBox || !dom.center.replyName || !dom.center.replyText) return;
+
+    const reply = state.replyDraft;
+    if (!reply || !reply.id) {
+      dom.center.replyBox.classList.add("hidden");
+      return;
+    }
+
+    dom.center.replyName.textContent = String(reply.sender || "Сообщение");
+    renderEmojiMessageText(
+      dom.center.replyText,
+      getReplyPreviewText(reply.text || ""),
+      "chat-emoji-glyph chat-emoji-glyph--preview"
+    );
+    dom.center.replyBox.classList.remove("hidden");
+  }
+
+  function clearComposerReply() {
+    if (!state.replyDraft) return;
+    state.replyDraft = null;
+    renderComposerReply();
+  }
+
+  function setComposerReplyByMessage(messageId) {
+    if (!state.activeClientId) return;
+    const msg = findThreadMessage(state.activeClientId, messageId);
+    if (!msg) return;
+
+    state.replyDraft = {
+      id: String(msg.id || ""),
+      sender: getMessageAuthorName(msg),
+      text: getMessagePreviewText(msg),
+    };
+    renderComposerReply();
+
+    if (dom.center.input) {
+      dom.center.input.focus();
+      const pos = dom.center.input.value.length;
+      dom.center.input.setSelectionRange(pos, pos);
+    }
+    syncComposerRichPreview({});
+  }
+
+  function scrollToMessageInThread(messageId) {
+    if (!dom.center.messages || !dom.center.messagesWrap) return;
+    const key = String(messageId || "");
+    if (!key) return;
+
+    const wrap = dom.center.messagesWrap;
+    const target = $$(".chat-message", dom.center.messages)
+      .find((node) => String(node.getAttribute("data-message-id") || "") === key);
+    if (!target) return;
+
+    const wrapRect = wrap.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const offsetTop = targetRect.top - wrapRect.top;
+    const centeredTop = wrap.scrollTop + offsetTop - ((wrap.clientHeight - targetRect.height) / 2);
+    const nextTop = Math.max(0, centeredTop);
+
+    wrap.scrollTo({ top: nextTop, behavior: "smooth" });
+    target.classList.add("is-jump-highlight");
+    if (target.__jumpTimer) clearTimeout(target.__jumpTimer);
+    target.__jumpTimer = window.setTimeout(() => {
+      target.classList.remove("is-jump-highlight");
+    }, 1200);
+  }
+
+  function ensureDeleteConfirmUi() {
+    if (state.deleteConfirmUi && state.deleteConfirmUi.overlay) return state.deleteConfirmUi;
+
+    const overlay = document.createElement("div");
+    overlay.className = "chat-delete-confirm-overlay hidden";
+    overlay.innerHTML = `
+      <div class="chat-delete-confirm-card" role="dialog" aria-modal="true" aria-labelledby="chatDeleteConfirmTitle">
+        <div class="chat-delete-confirm-title" id="chatDeleteConfirmTitle">Удалить сообщение</div>
+        <div class="chat-delete-confirm-text" id="chatDeleteConfirmText">Вы точно хотите удалить это сообщение?</div>
+        <label class="chat-delete-confirm-check" for="chatDeleteConfirmForClient">
+          <input class="chat-delete-confirm-checkbox" id="chatDeleteConfirmForClient" type="checkbox" checked />
+          <span class="chat-delete-confirm-check-text" id="chatDeleteConfirmCheckText">Также удалить для клиента</span>
+        </label>
+        <div class="chat-delete-confirm-actions">
+          <button type="button" class="chat-delete-confirm-btn chat-delete-confirm-btn--cancel" id="chatDeleteConfirmCancelBtn">ОТМЕНА</button>
+          <button type="button" class="chat-delete-confirm-btn chat-delete-confirm-btn--danger" id="chatDeleteConfirmDeleteBtn">УДАЛИТЬ</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const ui = {
+      overlay,
+      card: $(".chat-delete-confirm-card", overlay),
+      title: $("#chatDeleteConfirmTitle", overlay),
+      text: $("#chatDeleteConfirmText", overlay),
+      checkRow: $(".chat-delete-confirm-check", overlay),
+      check: $("#chatDeleteConfirmForClient", overlay),
+      checkText: $("#chatDeleteConfirmCheckText", overlay),
+      cancelBtn: $("#chatDeleteConfirmCancelBtn", overlay),
+      deleteBtn: $("#chatDeleteConfirmDeleteBtn", overlay),
+    };
+
+    overlay.addEventListener("click", (event) => {
+      if (event.target !== overlay) return;
+      closeDeleteConfirm();
+    });
+
+    if (ui.cancelBtn) ui.cancelBtn.addEventListener("click", () => closeDeleteConfirm());
+
+    if (ui.deleteBtn) {
+      ui.deleteBtn.addEventListener("click", () => {
+        const pending = state.pendingDeleteConfirm;
+        const deleteForClient = !!ui.check?.checked;
+        closeDeleteConfirm();
+        if (!pending || typeof pending.onConfirm !== "function") return;
+        pending.onConfirm({ deleteForClient });
+      });
+    }
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      if (!state.pendingDeleteConfirm) return;
+      event.preventDefault();
+      closeDeleteConfirm();
+    });
+
+    state.deleteConfirmUi = ui;
+    return ui;
+  }
+
+  function closeDeleteConfirm() {
+    const ui = ensureDeleteConfirmUi();
+    state.pendingDeleteConfirm = null;
+    if (state.deleteConfirmCloseTimer) {
+      clearTimeout(state.deleteConfirmCloseTimer);
+      state.deleteConfirmCloseTimer = 0;
+    }
+    ui.overlay.classList.remove("is-open");
+    state.deleteConfirmCloseTimer = window.setTimeout(() => {
+      ui.overlay.classList.add("hidden");
+      state.deleteConfirmCloseTimer = 0;
+    }, 140);
+  }
+
+  function openDeleteConfirm(options = {}) {
+    const ui = ensureDeleteConfirmUi();
+    if (state.deleteConfirmCloseTimer) {
+      clearTimeout(state.deleteConfirmCloseTimer);
+      state.deleteConfirmCloseTimer = 0;
+    }
+
+    const count = Math.max(1, Number(options.count || 1));
+    const rawClientName = String(options.clientName || state.activeClient?.name || "клиента").trim();
+    const clientName = rawClientName || "клиента";
+    const allowDeleteForClient = options.allowDeleteForClient !== false;
+    const titleText = String(options.title || `Удалить ${count} ${getMessagesWord(count)}`);
+    const bodyText = String(options.text || (count === 1
+      ? "Вы точно хотите удалить это сообщение?"
+      : "Вы точно хотите удалить эти сообщения?"));
+    const checkText = String(options.checkText || `Также удалить для ${clientName}`);
+
+    if (ui.title) ui.title.textContent = titleText;
+    if (ui.text) ui.text.textContent = bodyText;
+    if (ui.checkText) ui.checkText.textContent = checkText;
+    if (ui.checkRow) ui.checkRow.classList.toggle("hidden", !allowDeleteForClient);
+    if (ui.check) {
+      ui.check.disabled = !allowDeleteForClient;
+      ui.check.checked = allowDeleteForClient;
+    }
+
+    state.pendingDeleteConfirm = {
+      onConfirm: typeof options.onConfirm === "function" ? options.onConfirm : null,
+    };
+
+    ui.overlay.classList.remove("hidden");
+    requestAnimationFrame(() => {
+      ui.overlay.classList.add("is-open");
+      if (ui.deleteBtn) ui.deleteBtn.focus();
+    });
+  }
+
+  function seedThread(client) {
+    if (!client || !client.id) return;
+    const thread = getThread(client.id);
+    if (thread.length || Number(client.total_orders || 0) <= 0) return;
+    thread.push({
+      id: `seed-${client.id}`,
+      direction: "in",
+      text: "Здравствуйте, подскажите статус моего заказа?",
+      createdAt: client.last_order_date || client.created_at || new Date().toISOString(),
+      read: false,
+      pinned: false,
+      reaction: "",
+      reactions: { in: "", out: "" },
+    });
+    saveStore();
+  }
+
+  function escapeHtml(str) {
+    return String(str ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function emojiToAssetCode(emoji) {
+    return Array.from(String(emoji || ""))
+      .map((char) => char.codePointAt(0))
+      .filter((cp) => Number.isFinite(cp) && cp > 0)
+      .map((cp) => cp.toString(16).toLowerCase())
+      .join("-");
+  }
+
+  function getEmojiAssetUrl(emoji) {
+    const code = emojiToAssetCode(emoji);
+    return code ? `${EMOJI_ASSET_BASE_URL}/${code}.png` : "";
+  }
+
+  function setEmojiGlyph(target, emoji, glyphClassName) {
+    if (!target) return;
+    const value = String(emoji || "");
+    const src = getEmojiAssetUrl(value);
+    target.textContent = "";
+    if (!src) {
+      target.textContent = value;
+      return;
+    }
+
+    const img = document.createElement("img");
+    img.className = glyphClassName;
+    img.src = src;
+    img.alt = value;
+    img.decoding = "async";
+    img.loading = "lazy";
+    img.draggable = false;
+    img.setAttribute("aria-hidden", "true");
+    img.addEventListener("error", () => {
+      target.textContent = value;
+    }, { once: true });
+    target.appendChild(img);
+  }
+
+  const emojiGraphemeSegmenter = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
+    ? new Intl.Segmenter("ru", { granularity: "grapheme" })
+    : null;
+
+  function segmentGraphemes(value) {
+    const text = String(value || "");
+    if (!text) return [];
+    if (!emojiGraphemeSegmenter) return Array.from(text);
+    return Array.from(emojiGraphemeSegmenter.segment(text), (part) => part.segment);
+  }
+
+  function isEmojiGrapheme(segment) {
+    const chars = Array.from(String(segment || ""));
+    if (!chars.length) return false;
+    const codePoints = chars
+      .map((ch) => ch.codePointAt(0))
+      .filter((cp) => Number.isFinite(cp) && cp > 0);
+    if (!codePoints.length) return false;
+
+    const hasKeycapMarker = codePoints.includes(0x20e3);
+    let hasEmojiBase = false;
+
+    for (const cp of codePoints) {
+      const isEmojiBase = (cp >= 0x1f300 && cp <= 0x1faff) || (cp >= 0x2600 && cp <= 0x27bf);
+      const isJoinOrVariation = cp === 0x200d || cp === 0xfe0f || cp === 0x20e3;
+      const isKeycapBase = hasKeycapMarker && ((cp >= 0x30 && cp <= 0x39) || cp === 0x23 || cp === 0x2a);
+
+      if (isEmojiBase || isKeycapBase) {
+        hasEmojiBase = true;
+        continue;
+      }
+      if (isJoinOrVariation) continue;
+      return false;
+    }
+
+    return hasEmojiBase;
+  }
+
+  function renderEmojiMessageText(target, text, glyphClassName) {
+    if (!target) return;
+    target.textContent = "";
+    const lines = String(text || "").split("\n");
+
+    lines.forEach((line, lineIndex) => {
+      const segments = segmentGraphemes(line);
+      segments.forEach((segment) => {
+        if (isEmojiGrapheme(segment)) {
+          const src = getEmojiAssetUrl(segment);
+          if (src) {
+            const img = document.createElement("img");
+            img.className = glyphClassName;
+            img.src = src;
+            img.alt = segment;
+            img.decoding = "async";
+            img.loading = "lazy";
+            img.draggable = false;
+            img.setAttribute("aria-hidden", "true");
+            img.addEventListener("error", () => {
+              img.replaceWith(document.createTextNode(segment));
+            }, { once: true });
+            target.appendChild(img);
+            return;
+          }
+        }
+
+        target.appendChild(document.createTextNode(segment));
+      });
+
+      if (lineIndex < lines.length - 1) target.appendChild(document.createElement("br"));
+    });
+  }
+
+  function getEmojiOnlyInfo(text) {
+    const lines = String(text || "").split("\n");
+    let emojiCount = 0;
+    let hasVisibleChars = false;
+
+    for (const line of lines) {
+      const segments = segmentGraphemes(line);
+      for (const segment of segments) {
+        if (!String(segment).trim()) continue;
+        hasVisibleChars = true;
+        if (!isEmojiGrapheme(segment)) return { isEmojiOnly: false, count: 0 };
+        emojiCount += 1;
+      }
+    }
+
+    return hasVisibleChars
+      ? { isEmojiOnly: true, count: emojiCount }
+      : { isEmojiOnly: false, count: 0 };
+  }
+
+  function hasEmojiInText(text) {
+    const lines = String(text || "").split("\n");
+    for (const line of lines) {
+      const segments = segmentGraphemes(line);
+      for (const segment of segments) {
+        if (isEmojiGrapheme(segment)) return true;
+      }
+    }
+    return false;
+  }
+
+  function normalizeComposerText(text) {
+    const raw = String(text || "").replace(/\r/g, "");
+    if (!raw) return "";
+    const trimmed = raw.trim();
+    if (trimmed) return trimmed;
+    return hasEmojiInText(raw) ? raw : "";
+  }
+
+  function normalizeReactionValue(value) {
+    return String(value || "")
+      .trim()
+      .normalize("NFC")
+      .replace(/\uFE0F/g, "");
+  }
+
+  function sanitizeReactionsMap(raw) {
+    const source = raw && typeof raw === "object" ? raw : {};
+    return {
+      in: String(source.in || "").trim(),
+      out: String(source.out || "").trim(),
+    };
+  }
+
+  function ensureMessageReactions(message) {
+    if (!message || typeof message !== "object") return { in: "", out: "" };
+    const reactions = sanitizeReactionsMap(message.reactions);
+    const legacy = String(message.reaction || "").trim();
+    if (!reactions.in && !reactions.out && legacy) {
+      const fallbackActor = String(message.direction || "").toLowerCase() === "out" ? "out" : "in";
+      reactions[fallbackActor] = legacy;
+    }
+    message.reactions = reactions;
+    return reactions;
+  }
+
+  function getMessageActorReaction(message, actor = CHAT_REACTION_ACTOR) {
+    const reactions = ensureMessageReactions(message);
+    return String(reactions[actor] || "");
+  }
+
+  function setMessageActorReaction(message, actor, reaction) {
+    if (!message || typeof message !== "object") return false;
+    const actorKey = actor === "in" ? "in" : "out";
+    const next = String(reaction || "").trim();
+    const reactions = ensureMessageReactions(message);
+    const current = String(reactions[actorKey] || "");
+    const toggled = normalizeReactionValue(current) === normalizeReactionValue(next) ? "" : next;
+    if (current === toggled) return false;
+    reactions[actorKey] = toggled;
+    message.reactions = reactions;
+    message.reaction = String(reactions[CHAT_REACTION_ACTOR] || "");
+    return true;
+  }
+
+  function getMessageReactionItems(message) {
+    const reactions = ensureMessageReactions(message);
+    const items = [];
+    const outReaction = String(reactions.out || "");
+    const inReaction = String(reactions.in || "");
+    if (outReaction) items.push({ actor: "out", reaction: outReaction });
+    if (inReaction) items.push({ actor: "in", reaction: inReaction });
+    return items;
+  }
+
+  function normalizePhoneDigits(value) { return String(value || "").replace(/\D+/g, ""); }
+
+  function formatPhoneDigitsToRU(phone) {
+    const digits = normalizePhoneDigits(phone);
+    if (!digits) return "—";
+    let d = digits;
+    if (d.length === 11 && d.startsWith("8")) d = `7${d.slice(1)}`;
+    if (d.length === 10) d = `7${d}`;
+    if (d.length !== 11) return `+${d}`;
+    return `+${d[0]} (${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7, 9)}-${d.slice(9, 11)}`;
+  }
+
+  function parseDateValue(value) {
+    if (!value) return null;
+    const date = new Date(String(value).replace(" ", "T"));
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function getDayKey(value) {
+    const date = parseDateValue(value);
+    if (!date) return "";
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  function getDayDiffFromToday(value) {
+    const date = parseDateValue(value);
+    if (!date) return null;
+    const now = new Date();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const from = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const to = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    return Math.round((from - to) / dayMs);
+  }
+
+  function fmtDayLabel(value) {
+    const date = parseDateValue(value);
+    if (!date) return "";
+    const diff = getDayDiffFromToday(value);
+    if (diff === 0) return "Сегодня";
+    if (diff === 1) return "Вчера";
+    const hasSameYear = date.getFullYear() === new Date().getFullYear();
+    const options = hasSameYear
+      ? { day: "numeric", month: "short" }
+      : { day: "numeric", month: "short", year: "numeric" };
+    return date.toLocaleDateString("ru-RU", options).replace(/\.$/, "");
+  }
+
+  function fmtClientRowTime(value) {
+    const date = parseDateValue(value);
+    if (!date) return "";
+    const diff = getDayDiffFromToday(value);
+    if (diff === 0) return "Сегодня";
+    if (diff === 1) return "Вчера";
+    return date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
+  }
+
+  function fmtTime(value) {
+    const date = parseDateValue(value);
+    if (!date) return "";
+    return date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function fmtOrderAmount(value) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return "—";
+    const rounded = Math.round(amount);
+    return `${new Intl.NumberFormat("ru-RU").format(rounded)} ₽`;
+  }
+
+  function getOrderAddressLine(order) {
+    if (!order || typeof order !== "object") return "Адрес не указан";
+    const methodCode = String(order.method_code || "").toLowerCase();
+    const pickupAddress = order.pickup_store_address
+      ? [order.pickup_store_name, order.pickup_store_address].filter(Boolean).join(", ")
+      : "";
+    const baseAddress = methodCode === "pickup"
+      ? (pickupAddress || order.address || "")
+      : (order.address || pickupAddress || "");
+    const normalized = String(baseAddress || "").replace(/\s+/g, " ").trim();
+    return normalized || "Адрес не указан";
+  }
+
+  function getOrderCommentLine(order) {
+    if (!order || typeof order !== "object") return "Нет комментария";
+    const comment = String(order.comment || order.address_comment || "").replace(/\s+/g, " ").trim();
+    return comment || "Нет комментария";
+  }
+
+  function isIconUrl(value) {
+    const val = String(value || "").trim();
+    if (!val) return false;
+    return /^https?:\/\//i.test(val) || val.startsWith("/") || val.startsWith("./") || val.startsWith("../");
+  }
+
+  function normalizeIconClass(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (raw.startsWith("fa-")) return "fas " + raw;
+    if (/^fa[srlbd]?\s+/i.test(raw)) return raw;
+    return "fas " + raw;
+  }
+
+  function fallbackTimeOptionIcon(codeValue) {
+    const code = String(codeValue || "").trim().toLowerCase();
+    if (code === "asap" || code === "urgent") return "fas fa-bolt";
+    if (code === "at_time") return "fas fa-clock";
+    if (code === "on_date") return "fas fa-calendar-day";
+    return "";
+  }
+
+  function resolveTimeOptionIcon(order) {
+    if (!order) return "";
+    const storedIcon = String(order.time_option_icon || "").trim();
+    if (storedIcon) return storedIcon;
+    return fallbackTimeOptionIcon(order.time_option_code);
+  }
+
+  function setHeaderTimeIcon(order) {
+    if (!dom.center.orderTimeIcon) return;
+
+    const iconValue = resolveTimeOptionIcon(order);
+    let iconHtml = '<i class="fas fa-calendar-day"></i>';
+    if (iconValue) {
+      if (isIconUrl(iconValue)) {
+        iconHtml = `<img src="${escapeHtml(iconValue)}" alt="" loading="lazy">`;
+      } else {
+        const iconClass = normalizeIconClass(iconValue) || "fas fa-calendar-day";
+        iconHtml = `<i class="${escapeHtml(iconClass)}"></i>`;
+      }
+    }
+
+    dom.center.orderTimeIcon.innerHTML = iconHtml;
+    const title = String(order && order.time_option_title || "").trim();
+    if (title) dom.center.orderTimeIcon.setAttribute("title", title);
+    else dom.center.orderTimeIcon.removeAttribute("title");
+  }
+
+  function paymentIcon(code) {
+    if (!code) return "fa-credit-card";
+    const c = String(code).toLowerCase();
+    if (c.includes("cash")) return "fa-money-bill-wave";
+    if (c.includes("card")) return "fa-credit-card";
+    if (c.includes("online")) return "fa-globe";
+    return "fa-credit-card";
+  }
+
+  function isFinalStatus(statusTitle) {
+    const title = String(statusTitle || "").toLowerCase();
+    return title.includes("выполн") || title.includes("заверш") || title.includes("достав") || title.includes("отмен") || title.includes("cancel") || title.includes("done");
+  }
+
+  function getSortedOrdersForHeader(orders) {
+    return (Array.isArray(orders) ? orders : [])
+      .slice()
+      .sort((a, b) => {
+        const ta = parseDateValue(a?.created_at)?.getTime() || 0;
+        const tb = parseDateValue(b?.created_at)?.getTime() || 0;
+        if (tb !== ta) return tb - ta;
+        return Number(b?.id || 0) - Number(a?.id || 0);
+      });
+  }
+
+  function getHeaderOrderCandidate(orders) {
+    const sorted = getSortedOrdersForHeader(orders);
+    const currentOrder = sorted.find((o) => !isFinalStatus(o && o.status_title));
+    const latestOrder = sorted[0] || null;
+    return {
+      sortedOrders: sorted,
+      currentOrder: currentOrder || null,
+      latestOrder: latestOrder || null,
+      headerOrder: currentOrder || latestOrder || null,
+    };
+  }
+
+  function hasOrderHeaderDetailsPayload(order) {
+    if (!order || typeof order !== "object") return false;
+    const hasAddressField = Object.prototype.hasOwnProperty.call(order, "address")
+      || Object.prototype.hasOwnProperty.call(order, "pickup_store_address");
+    const hasCommentField = Object.prototype.hasOwnProperty.call(order, "comment")
+      || Object.prototype.hasOwnProperty.call(order, "address_comment");
+    const hasStatusColor = Object.prototype.hasOwnProperty.call(order, "status_color");
+    const hasPaymentCode = Object.prototype.hasOwnProperty.call(order, "payment_code");
+    return hasAddressField && hasCommentField && hasStatusColor && hasPaymentCode;
+  }
+
+  function mergeDetailedOrderIntoActiveList(orderId, detailedOrder) {
+    const id = Number(orderId || 0);
+    if (!Number.isFinite(id) || id <= 0) return false;
+    if (!detailedOrder || typeof detailedOrder !== "object") return false;
+    const list = Array.isArray(state.activeOrders) ? state.activeOrders : [];
+    let changed = false;
+    const nextList = list.map((order) => {
+      if (Number(order && order.id || 0) !== id) return order;
+      changed = true;
+      return { ...order, ...detailedOrder };
+    });
+    if (changed) {
+      state.activeOrders = nextList;
+      state.activeOrdersSignature = buildActiveOrdersSignature(nextList);
+    }
+    return changed;
+  }
+
+  function setHeaderOrderLinkState(orderId) {
+    if (!dom.center.headerOrder) return;
+    const id = Number(orderId || 0);
+    const canOpen = Number.isFinite(id) && id > 0;
+    if (canOpen) dom.center.headerOrder.setAttribute("data-order-id", String(id));
+    else dom.center.headerOrder.removeAttribute("data-order-id");
+    dom.center.headerOrder.classList.toggle("is-order-openable", canOpen);
+    dom.center.headerOrder.setAttribute("aria-disabled", canOpen ? "false" : "true");
+    dom.center.headerOrder.tabIndex = canOpen ? 0 : -1;
+  }
+
+  function normalizeTooltipText(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function setNativeTooltip(node, text) {
+    if (!node) return;
+    const normalized = normalizeTooltipText(text);
+    if (normalized && normalized !== "—") node.setAttribute("title", normalized);
+    else node.removeAttribute("title");
+  }
+
+  function joinTooltipParts(parts) {
+    return (Array.isArray(parts) ? parts : [])
+      .map((part) => normalizeTooltipText(part))
+      .filter(Boolean)
+      .join(" • ");
+  }
+
+  function syncHeaderTooltips() {
+    if (!dom.center.headerOrder) return;
+
+    const idText = normalizeTooltipText(dom.center.orderId?.textContent);
+    const timeText = normalizeTooltipText(dom.center.orderTime?.textContent);
+    const clientNameText = normalizeTooltipText(dom.center.headerName?.textContent);
+    const clientPhoneText = normalizeTooltipText(dom.center.headerPhone?.textContent);
+    const addressText = normalizeTooltipText(dom.center.orderAddress?.textContent);
+    const commentText = normalizeTooltipText(dom.center.orderComment?.textContent);
+    const statusText = normalizeTooltipText(dom.center.orderStatus?.textContent);
+    const totalText = normalizeTooltipText(dom.center.orderTotal?.textContent);
+    const titleText = normalizeTooltipText(dom.center.orderTitle?.textContent);
+
+    setNativeTooltip(dom.center.orderId, idText);
+    setNativeTooltip(dom.center.orderTime, timeText);
+    setNativeTooltip(dom.center.headerName, clientNameText);
+    setNativeTooltip(dom.center.headerPhone, clientPhoneText);
+    setNativeTooltip(dom.center.orderAddress, addressText);
+    setNativeTooltip(dom.center.orderComment, commentText);
+    setNativeTooltip(dom.center.orderStatus, statusText);
+    setNativeTooltip(dom.center.orderTotal, totalText);
+
+    setNativeTooltip($(".order-col.order-id", dom.center.headerOrder), joinTooltipParts([idText, timeText]));
+    setNativeTooltip($(".order-col.order-client", dom.center.headerOrder), joinTooltipParts([clientNameText, clientPhoneText]));
+    setNativeTooltip($(".order-col.order-address", dom.center.headerOrder), joinTooltipParts([addressText, commentText]));
+    setNativeTooltip($(".order-col.order-stage", dom.center.headerOrder), statusText);
+    setNativeTooltip($(".order-col.order-total", dom.center.headerOrder), totalText);
+
+    const timeIconTitle = normalizeTooltipText(dom.center.orderTimeIcon?.getAttribute("title"));
+    setNativeTooltip($(".order-col.order-indicators", dom.center.headerOrder), timeIconTitle || timeText);
+    setNativeTooltip(dom.center.headerOrder, titleText);
+  }
+
+  async function hydrateHeaderOrderDetails(requestId, clientId) {
+    const activeClientId = Number(clientId || state.activeClientId || 0);
+    if (!Number.isFinite(activeClientId) || activeClientId <= 0) return;
+
+    const candidate = getHeaderOrderCandidate(state.activeOrders);
+    const headerOrder = candidate.headerOrder;
+    const headerOrderId = Number(headerOrder && headerOrder.id || 0);
+    if (!Number.isFinite(headerOrderId) || headerOrderId <= 0) return;
+
+    if (hasOrderHeaderDetailsPayload(headerOrder)) return;
+
+    const cached = state.orderDetailsCache.get(headerOrderId);
+    if (cached && mergeDetailedOrderIntoActiveList(headerOrderId, cached)) {
+      renderChatHeader();
+      return;
+    }
+
+    try {
+      const json = await apiJson(`/api/admin/orders/${headerOrderId}`);
+      if (requestId !== state.requestToken) return;
+      if (Number(state.activeClientId || 0) !== activeClientId) return;
+
+      const detailedOrder = json && json.data ? json.data : null;
+      if (!detailedOrder || typeof detailedOrder !== "object") return;
+      state.orderDetailsCache.set(headerOrderId, detailedOrder);
+      if (!mergeDetailedOrderIntoActiveList(headerOrderId, detailedOrder)) return;
+      renderChatHeader();
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  function getOrderClientId(order) {
+    const id = Number(order?.customer_id || order?.client_id || order?.clientId || 0);
+    return Number.isFinite(id) && id > 0 ? id : 0;
+  }
+
+  function upsertActiveOrder(order) {
+    const orderId = Number(order?.id || 0);
+    if (!Number.isFinite(orderId) || orderId <= 0) return false;
+    const list = Array.isArray(state.activeOrders) ? state.activeOrders : [];
+    let found = false;
+    const nextList = list.map((item) => {
+      if (Number(item?.id || 0) !== orderId) return item;
+      found = true;
+      return { ...item, ...order };
+    });
+    if (!found) nextList.push(order);
+    return setActiveOrders(nextList);
+  }
+
+  async function refreshActiveOrdersForActiveClient(options = {}) {
+    const clientId = Number(options.clientId || state.activeClientId || 0);
+    if (!Number.isFinite(clientId) || clientId <= 0) return false;
+    if (state.activeOrdersPollInFlight && !options.force) return false;
+
+    state.activeOrdersPollInFlight = true;
+    try {
+      const ordersJson = await apiJson(`/api/admin/clients/${clientId}/orders`);
+      if (Number(state.activeClientId || 0) !== clientId) return false;
+      const nextOrders = Array.isArray(ordersJson?.data) ? ordersJson.data : [];
+      const changed = setActiveOrders(nextOrders);
+      if (changed || options.forceHydrate) {
+        hydrateHeaderOrderDetails(state.requestToken, clientId).catch(console.error);
+      }
+      return changed;
+    } catch (err) {
+      console.error(err);
+      return false;
+    } finally {
+      state.activeOrdersPollInFlight = false;
+    }
+  }
+
+  function initOrderHeaderLiveSync() {
+    if (initOrderHeaderLiveSync.bound) return;
+    initOrderHeaderLiveSync.bound = true;
+
+    document.addEventListener(ORDER_UPDATED_EVENT, (event) => {
+      const order = event?.detail?.order;
+      if (!order || typeof order !== "object") return;
+
+      const activeClientId = Number(state.activeClientId || state.activeClient?.id || 0);
+      if (!Number.isFinite(activeClientId) || activeClientId <= 0) return;
+
+      const orderId = Number(order.id || 0);
+      if (!Number.isFinite(orderId) || orderId <= 0) return;
+
+      const ownerClientId = getOrderClientId(order);
+      const existsInActive = (Array.isArray(state.activeOrders) ? state.activeOrders : [])
+        .some((item) => Number(item?.id || 0) === orderId);
+
+      if (ownerClientId > 0 && ownerClientId !== activeClientId && !existsInActive) return;
+      if (ownerClientId <= 0 && !existsInActive) return;
+
+      const changed = upsertActiveOrder(order);
+      if (changed) {
+        hydrateHeaderOrderDetails(state.requestToken, activeClientId).catch(console.error);
+      }
+    });
+
+    if (!state.activeOrdersPollTimer) {
+      state.activeOrdersPollTimer = window.setInterval(() => {
+        refreshActiveOrdersForActiveClient().catch(console.error);
+      }, ACTIVE_ORDERS_POLL_MS);
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      refreshActiveOrdersForActiveClient({ force: true, forceHydrate: true }).catch(console.error);
+    });
+  }
+
+  function hexToRgba(hex, alpha) {
+    if (!hex || typeof hex !== "string") return "";
+    const clean = hex.trim().replace("#", "");
+    if (!(clean.length === 3 || clean.length === 6)) return "";
+    const full = clean.length === 3 ? clean.split("").map((ch) => ch + ch).join("") : clean;
+    const r = parseInt(full.slice(0, 2), 16);
+    const g = parseInt(full.slice(2, 4), 16);
+    const b = parseInt(full.slice(4, 6), 16);
+    if (![r, g, b].every(Number.isFinite)) return "";
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  function getClientSortTimestamp(client) {
+    const fromThread = getLastMessage(client.id)?.createdAt;
+    const src = fromThread || client.last_order_date || client.updated_at || client.created_at;
+    if (!src) return 0;
+    const date = new Date(String(src).replace(" ", "T"));
+    return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+  }
+
+  function applyClientFilter() {
+    const q = String(state.q || "").trim().toLowerCase();
+    const bySearch = !q ? state.clients.slice() : state.clients.filter((client) => {
+      const name = String(client.name || "").toLowerCase();
+      const phone = normalizePhoneDigits(client.phone);
+      const qDigits = normalizePhoneDigits(q);
+      return name.includes(q) || (qDigits && phone.includes(qDigits));
+    });
+    bySearch.sort((a, b) => getClientSortTimestamp(b) - getClientSortTimestamp(a));
+    state.filteredClients = bySearch;
+    renderClientsList();
+  }
+
+  function buildChatClientRow(client) {
+    const active = Number(state.activeClientId) === Number(client.id);
+    const unread = getUnreadCount(client.id);
+    const lastMsg = getLastMessage(client.id);
+    const preview = getMessagePreviewText(lastMsg) || "Нет сообщений";
+    const timeText = lastMsg?.createdAt ? fmtClientRowTime(lastMsg.createdAt) : "";
+    const status = lastMsg?.direction === "out" ? getOutgoingDeliveryStatus(lastMsg) : "";
+    const statusTitle = status === "read"
+      ? "Прочитано"
+      : status === "delivered"
+        ? "Доставлено"
+        : status === "sent"
+          ? "Отправлено"
+          : "";
+    const unreadText = unread > 99 ? "99+" : String(unread);
+
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `chat-client-row${active ? " is-active" : ""}`;
+    row.setAttribute("data-client-id", String(client.id));
+    row.innerHTML = `
+      <span class="chat-client-main">
+        <span class="chat-client-top">
+          <span class="chat-client-name">${escapeHtml(client.name || `Клиент #${client.id}`)}</span>
+          ${status || timeText
+            ? `<span class="chat-client-time-wrap">
+                ${status
+                  ? `<span class="chat-client-status chat-client-status--${escapeHtml(status)}" title="${escapeHtml(statusTitle)}" aria-label="${escapeHtml(statusTitle)}">${getOutgoingStatusIconMarkup(status)}</span>`
+                  : ""}
+                ${timeText ? `<span class="chat-client-time">${escapeHtml(timeText)}</span>` : ""}
+              </span>`
+            : ""}
+        </span>
+        <span class="chat-client-bottom">
+          <span class="chat-client-preview">${escapeHtml(preview)}</span>
+          ${unread > 0 ? `<span class="chat-client-unread">${escapeHtml(unreadText)}</span>` : ""}
+        </span>
+      </span>
+    `;
+
+    const previewEl = $(".chat-client-preview", row);
+    if (previewEl && hasEmojiInText(preview)) {
+      renderEmojiMessageText(previewEl, preview, "chat-emoji-glyph chat-emoji-glyph--preview");
+    }
+
+    row.addEventListener("click", () => {
+      hideClientContextMenu();
+      selectClient(client.id);
+    });
+    row.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      showClientContextMenu(event.clientX, event.clientY, client.id);
+    });
+    return row;
+  }
+
+  function renderClientsList() {
+    if (!dom.left.list) return;
+    dom.left.list.innerHTML = "";
+    const items = state.filteredClients || [];
+    if (!items.length) {
+      if (dom.left.empty) dom.left.empty.classList.remove("hidden");
+      return;
+    }
+    if (dom.left.empty) dom.left.empty.classList.add("hidden");
+    items.forEach((client) => dom.left.list.appendChild(buildChatClientRow(client)));
+  }
+
+  function normalizeEmojiCategoryName(rawCategory) {
+    const value = String(rawCategory || "").trim().toLowerCase();
+    if (!value) return "";
+
+    if (
+      value.includes("smileys")
+      || value.includes("emotion")
+      || value.includes("people")
+      || value.includes("body")
+    ) return "people";
+    if (value.includes("animals") || value.includes("nature")) return "nature";
+    if (value.includes("food") || value.includes("drink")) return "food";
+    if (value.includes("activities") || value.includes("activity")) return "activity";
+    if (value.includes("travel") || value.includes("places")) return "travel";
+    if (value.includes("objects")) return "objects";
+    if (value.includes("symbols")) return "symbols";
+    if (value.includes("flags")) return "flags";
+    return "";
+  }
+
+  function unifiedToEmoji(unified) {
+    const parts = String(unified || "")
+      .trim()
+      .split("-")
+      .filter(Boolean);
+    if (!parts.length) return "";
+    try {
+      return parts
+        .map((part) => Number.parseInt(part, 16))
+        .filter((cp) => Number.isFinite(cp) && cp > 0)
+        .map((cp) => String.fromCodePoint(cp))
+        .join("");
+    } catch {
+      return "";
+    }
+  }
+
+  function normalizeEmojiList(list) {
+    const input = Array.isArray(list) ? list : [];
+    const seen = new Set();
+    const out = [];
+    input.forEach((item) => {
+      const emoji = String(item || "").trim().normalize("NFC");
+      if (!emoji || !hasEmojiInText(emoji)) return;
+      const key = normalizeReactionValue(emoji);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      out.push(emoji);
+    });
+    return out;
+  }
+
+  function normalizeEmojiCategoryMap(input) {
+    const base = {};
+    EMOJI_CATEGORY_META.forEach(({ key }) => {
+      if (key !== "recent") base[key] = [];
+    });
+
+    const source = input && typeof input === "object" ? input : {};
+    Object.entries(source).forEach(([rawKey, rawList]) => {
+      const normalizedKey = normalizeEmojiCategoryName(rawKey) || rawKey;
+      if (!base[normalizedKey]) return;
+      const merged = base[normalizedKey].concat(normalizeEmojiList(rawList));
+      base[normalizedKey] = normalizeEmojiList(merged);
+    });
+
+    return base;
+  }
+
+  function loadRecentEmojis() {
+    try {
+      const raw = localStorage.getItem(EMOJI_RECENT_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return normalizeEmojiList(parsed).slice(0, 42);
+    } catch {
+      return [];
+    }
+  }
+
+  function saveRecentEmojis(list) {
+    try {
+      const next = normalizeEmojiList(list).slice(0, 42);
+      localStorage.setItem(EMOJI_RECENT_STORAGE_KEY, JSON.stringify(next));
+    } catch {}
+  }
+
+  function rememberRecentEmoji(emoji) {
+    const value = String(emoji || "").trim();
+    if (!value) return;
+    const norm = normalizeReactionValue(value);
+    emojiRecentList = [value].concat(
+      emojiRecentList.filter((item) => normalizeReactionValue(item) !== norm)
+    );
+    emojiRecentList = normalizeEmojiList(emojiRecentList).slice(0, 42);
+    saveRecentEmojis(emojiRecentList);
+  }
+
+  function buildEmojiCategoriesFromDataset(entries) {
+    const categories = normalizeEmojiCategoryMap({});
+    const list = Array.isArray(entries) ? entries : [];
+    const pushUnified = (target, unified) => {
+      const emoji = unifiedToEmoji(unified);
+      if (emoji) categories[target].push(emoji);
+    };
+
+    list.forEach((entry) => {
+      if (!entry || typeof entry !== "object") return;
+      if (entry.has_img_google === false) return;
+      const category = normalizeEmojiCategoryName(entry.category);
+      if (!category || !categories[category]) return;
+
+      pushUnified(category, entry.unified);
+
+      if (entry.skin_variations && typeof entry.skin_variations === "object") {
+        Object.values(entry.skin_variations).forEach((variant) => {
+          if (!variant || typeof variant !== "object") return;
+          pushUnified(category, variant.unified);
+        });
+      }
+    });
+
+    Object.keys(categories).forEach((key) => {
+      categories[key] = normalizeEmojiList(categories[key]);
+    });
+    return categories;
+  }
+
+  function getFirstAvailableEmojiCategory(preferred = "people") {
+    if (preferred && preferred !== "recent" && (emojiCategories[preferred] || []).length) return preferred;
+    const found = EMOJI_CATEGORY_META
+      .map(({ key }) => key)
+      .find((key) => key !== "recent" && (emojiCategories[key] || []).length);
+    return found || "people";
+  }
+
+  function getEmojiCategoriesForRender() {
+    const output = {};
+    EMOJI_CATEGORY_META.forEach(({ key }) => {
+      if (key === "recent") {
+        output[key] = normalizeEmojiList(emojiRecentList).slice(0, 42);
+        return;
+      }
+      output[key] = Array.isArray(emojiCategories[key]) ? emojiCategories[key] : [];
+    });
+    return output;
+  }
+
+  async function ensureEmojiDatasetLoaded() {
+    if (emojiDatasetPromise) return emojiDatasetPromise;
+
+    emojiDatasetPromise = (async () => {
+      try {
+        const res = await fetch(EMOJI_DATASET_URL, { cache: "force-cache" });
+        if (!res.ok) throw new Error(`EMOJI_DATASET_HTTP_${res.status}`);
+        const payload = await res.json();
+        const next = buildEmojiCategoriesFromDataset(payload);
+        const hasAny = Object.values(next).some((list) => Array.isArray(list) && list.length);
+        if (!hasAny) return;
+
+        emojiCategories = next;
+        if (!(getEmojiCategoriesForRender()[emojiActiveCategory] || []).length) {
+          emojiActiveCategory = getFirstAvailableEmojiCategory(emojiActiveCategory);
+        }
+
+        if (dom.center.emojiPopover && !dom.center.emojiPopover.classList.contains("hidden")) {
+          renderEmojiPicker();
+        }
+      } catch (err) {
+        console.error("emoji dataset load failed", err);
+        emojiDatasetPromise = null;
+      }
+    })();
+
+    return emojiDatasetPromise;
+  }
+
+  function insertEmojiIntoComposer(emoji) {
+    const value = String(emoji || "");
+    if (!value) return;
+
+    const useAttachPreviewCaption = !!(
+      dom.center.emojiPopover
+      && dom.center.emojiPopover.classList.contains("is-attach-preview")
+      && dom.center.attachPreviewOverlay
+      && !dom.center.attachPreviewOverlay.classList.contains("hidden")
+      && dom.center.attachPreviewCaption
+    );
+
+    if (useAttachPreviewCaption) {
+      const caption = dom.center.attachPreviewCaption;
+      const start = caption.selectionStart ?? caption.value.length;
+      const end = caption.selectionEnd ?? caption.value.length;
+      caption.value = `${caption.value.slice(0, start)}${value}${caption.value.slice(end)}`;
+      caption.focus();
+      const pos = start + value.length;
+      caption.setSelectionRange(pos, pos);
+      return;
+    }
+
+    if (!dom.center.input) return;
+    const input = dom.center.input;
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    input.value = `${input.value.slice(0, start)}${value}${input.value.slice(end)}`;
+    input.focus();
+    const pos = start + value.length;
+    input.setSelectionRange(pos, pos);
+    syncComposerRichPreview({});
+  }
+
+  function renderEmojiPicker() {
+    if (!dom.center.emojiPopover) return;
+    const popover = dom.center.emojiPopover;
+    popover.innerHTML = "";
+
+    const categories = getEmojiCategoriesForRender();
+    const visibleCategories = EMOJI_CATEGORY_META.filter(({ key }) => {
+      const list = Array.isArray(categories[key]) ? categories[key] : [];
+      return list.length > 0;
+    });
+
+    if (!visibleCategories.length) {
+      const empty = document.createElement("div");
+      empty.className = "chat-emoji-empty";
+      empty.textContent = "Нет эмодзи";
+      popover.appendChild(empty);
+      return;
+    }
+
+    if (!visibleCategories.some(({ key }) => key === emojiActiveCategory)) {
+      emojiActiveCategory = visibleCategories[0].key;
+    }
+
+    const tabs = document.createElement("div");
+    tabs.className = "chat-emoji-categories";
+    popover.appendChild(tabs);
+
+    const body = document.createElement("div");
+    body.className = "chat-emoji-body";
+    popover.appendChild(body);
+
+    const tabByKey = new Map();
+    const sectionByKey = new Map();
+
+    const updateActiveTabUi = (nextKey) => {
+      tabByKey.forEach((tab, key) => {
+        tab.classList.toggle("is-active", key === nextKey);
+      });
+    };
+
+    visibleCategories.forEach((category) => {
+      const list = Array.isArray(categories[category.key]) ? categories[category.key] : [];
+
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.className = `chat-emoji-category-btn${emojiActiveCategory === category.key ? " is-active" : ""}`;
+      tab.setAttribute("aria-label", category.label);
+      tab.title = category.label;
+      tab.innerHTML = `<i class="${category.iconClass}" aria-hidden="true"></i>`;
+      tab.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const section = sectionByKey.get(category.key);
+        if (!section) return;
+        emojiActiveCategory = category.key;
+        updateActiveTabUi(emojiActiveCategory);
+        body.scrollTo({
+          top: Math.max(0, section.offsetTop - 2),
+          behavior: "smooth",
+        });
+      });
+      tabByKey.set(category.key, tab);
+      tabs.appendChild(tab);
+
+      const section = document.createElement("section");
+      section.className = "chat-emoji-section";
+      section.setAttribute("data-emoji-category", category.key);
+
+      const title = document.createElement("div");
+      title.className = "chat-emoji-title";
+      title.textContent = category.label;
+      section.appendChild(title);
+
+      const grid = document.createElement("div");
+      grid.className = "chat-emoji-grid";
+      list.forEach((emoji) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "chat-emoji-btn";
+        btn.setAttribute("aria-label", emoji);
+        btn.title = emoji;
+        setEmojiGlyph(btn, emoji, "chat-emoji-glyph chat-emoji-glyph--picker");
+        btn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          insertEmojiIntoComposer(emoji);
+          rememberRecentEmoji(emoji);
+        });
+        grid.appendChild(btn);
+      });
+      section.appendChild(grid);
+      sectionByKey.set(category.key, section);
+      body.appendChild(section);
+    });
+
+    const syncActiveCategoryByScroll = () => {
+      const threshold = body.scrollTop + 12;
+      let currentKey = emojiActiveCategory;
+      visibleCategories.forEach(({ key }) => {
+        const section = sectionByKey.get(key);
+        if (!section) return;
+        if (section.offsetTop <= threshold) currentKey = key;
+      });
+      if (currentKey !== emojiActiveCategory) {
+        emojiActiveCategory = currentKey;
+        updateActiveTabUi(emojiActiveCategory);
+      }
+    };
+
+    body.addEventListener("scroll", syncActiveCategoryByScroll, { passive: true });
+    updateActiveTabUi(emojiActiveCategory);
+
+    requestAnimationFrame(() => {
+      const activeSection = sectionByKey.get(emojiActiveCategory);
+      if (!activeSection) return;
+      body.scrollTop = Math.max(0, activeSection.offsetTop - 2);
+      requestAnimationFrame(syncActiveCategoryByScroll);
+    });
+  }
+      
+  function bindEmojiPopoverGuard() {
+    if (!dom.center.emojiPopover) return;
+    if (dom.center.emojiPopover.dataset.clickGuardBound === "1") return;
+    dom.center.emojiPopover.dataset.clickGuardBound = "1";
+    dom.center.emojiPopover.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+    dom.center.emojiPopover.addEventListener("mousedown", (event) => {
+      event.stopPropagation();
+    });
+  }
+
+  function normalizeQuickReactionButtons() {
+    if (!dom.center.reactionBar) return;
+    const quickBtns = $$('[data-chat-reaction-slot="quick"]', dom.center.reactionBar);
+    quickBtns.forEach((btn, index) => {
+      const emoji = QUICK_REACTIONS[index] || QUICK_REACTIONS[QUICK_REACTIONS.length - 1];
+      btn.setAttribute("data-chat-reaction", emoji);
+      btn.setAttribute("aria-label", emoji);
+      btn.title = emoji;
+      setEmojiGlyph(btn, emoji, "chat-emoji-glyph chat-emoji-glyph--reaction");
+    });
+
+    const extraBtns = $$('[data-chat-reaction-slot="extra"]', dom.center.reactionBar);
+    extraBtns.forEach((btn, index) => {
+      const emoji = EXTRA_REACTIONS[index] || EXTRA_REACTIONS[EXTRA_REACTIONS.length - 1];
+      btn.setAttribute("data-chat-reaction", emoji);
+      btn.setAttribute("aria-label", emoji);
+      btn.title = emoji;
+      setEmojiGlyph(btn, emoji, "chat-emoji-glyph chat-emoji-glyph--reaction");
+    });
+  }
+
+  function setReactionBarExpanded(expanded) {
+    if (!dom.center.reactionBar) return;
+    const isExpanded = !!expanded;
+    dom.center.reactionBar.classList.toggle("is-expanded", isExpanded);
+    const toggleBtn = $('[data-chat-reaction="__toggle_more__"]', dom.center.reactionBar);
+    if (!toggleBtn) return;
+    toggleBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+    toggleBtn.setAttribute("aria-label", isExpanded ? "Скрыть дополнительные реакции" : "Показать ещё реакции");
+  }
+
+  function decorateComposerEmojiControls() {
+    if (dom.center.emojiBtn) {
+      dom.center.emojiBtn.classList.remove("has-emoji-content");
+      dom.center.emojiBtn.textContent = "";
+      const smileIcon = document.createElement("i");
+      smileIcon.className = "far fa-smile";
+      smileIcon.setAttribute("aria-hidden", "true");
+      dom.center.emojiBtn.appendChild(smileIcon);
+      dom.center.emojiBtn.setAttribute("aria-label", "Эмодзи");
+      dom.center.emojiBtn.title = "Эмодзи";
+    }
+
+    const composerRoot = dom.center.stack || document;
+    $$("button", composerRoot)
+      .filter((btn) => btn.closest(".chat-main-composer"))
+      .forEach((btn) => {
+        if (btn === dom.center.emojiBtn) return;
+        const raw = String(btn.getAttribute("data-emoji") || btn.textContent || "").trim();
+        if (!raw) return;
+        const emojiOnlyInfo = getEmojiOnlyInfo(raw);
+        if (!emojiOnlyInfo.isEmojiOnly) return;
+        btn.classList.add("has-emoji-content");
+        if (emojiOnlyInfo.count === 1) {
+          setEmojiGlyph(btn, raw, "chat-emoji-glyph chat-emoji-glyph--composer");
+        } else {
+          renderEmojiMessageText(btn, raw, "chat-emoji-glyph chat-emoji-glyph--composer-inline");
+        }
+        btn.setAttribute("aria-label", raw);
+        if (!btn.title) btn.title = raw;
+      });
+  }
+
+  function shouldKeepMessagesPinnedToBottom() {
+    if (!dom.center.messagesWrap) return false;
+    const wrap = dom.center.messagesWrap;
+    return (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) <= 28;
+  }
+
+  function getPendingScrollMessageIdSet(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return null;
+    if (!(state.pendingScrollMessageIdsByClient[key] instanceof Set)) {
+      state.pendingScrollMessageIdsByClient[key] = new Set();
+    }
+    return state.pendingScrollMessageIdsByClient[key];
+  }
+
+  function getPendingScrollNewCount(clientId = state.activeClientId) {
+    const set = getPendingScrollMessageIdSet(clientId);
+    if (!set) return 0;
+    return set.size;
+  }
+
+  function animateCountBadgeTick(badge) {
+    if (!badge) return;
+    badge.classList.remove("is-count-tick");
+    // Force reflow so repeated updates replay animation.
+    // eslint-disable-next-line no-unused-expressions
+    badge.offsetWidth;
+    badge.classList.add("is-count-tick");
+  }
+
+  function addPendingScrollMessageIds(clientId, messageIds) {
+    const key = normalizeClientIdKey(clientId);
+    const ids = Array.isArray(messageIds) ? messageIds : [];
+    if (!key || !ids.length) return;
+    const set = getPendingScrollMessageIdSet(key);
+    if (!set) return;
+    let changed = false;
+    ids.forEach((id) => {
+      const value = String(id || "");
+      if (!value || set.has(value)) return;
+      set.add(value);
+      changed = true;
+    });
+    if (changed) {
+      state.pendingScrollNewByClient[key] = set.size;
+      updateMessagesScrollDownButton();
+    }
+  }
+
+  function clearPendingScrollNewCount(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    const set = getPendingScrollMessageIdSet(key);
+    if (!set || set.size === 0) return;
+    set.clear();
+    state.pendingScrollNewByClient[key] = 0;
+    updateMessagesScrollDownButton();
+  }
+
+  function syncPendingScrollCountByViewport(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key || !dom.center.messagesWrap || !dom.center.messages) return;
+    const set = getPendingScrollMessageIdSet(key);
+    if (!set || set.size === 0) return;
+
+    const wrapRect = dom.center.messagesWrap.getBoundingClientRect();
+    const topEdge = wrapRect.top + 6;
+    const bottomEdge = wrapRect.bottom - 6;
+    if (bottomEdge <= topEdge) return;
+
+    const nodeById = new Map();
+    dom.center.messages.querySelectorAll(".chat-message[data-message-id]").forEach((node) => {
+      const id = String(node.getAttribute("data-message-id") || "");
+      if (!id) return;
+      nodeById.set(id, node);
+    });
+
+    let changed = false;
+    Array.from(set).forEach((id) => {
+      const node = nodeById.get(id);
+      if (!node) return;
+      const rect = node.getBoundingClientRect();
+      const isVisible = rect.bottom > topEdge && rect.top < bottomEdge;
+      if (!isVisible) return;
+      set.delete(id);
+      changed = true;
+    });
+
+    if (!changed) return;
+    state.pendingScrollNewByClient[key] = set.size;
+    updateMessagesScrollDownButton();
+  }
+
+  function saveThreadScrollPosition(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    const wrap = dom.center.messagesWrap;
+    if (!key || !wrap) return;
+    state.threadScrollTopByClient[key] = wrap.scrollTop;
+  }
+
+  function restoreThreadScrollPosition(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    const wrap = dom.center.messagesWrap;
+    if (!key || !wrap) return false;
+    const raw = Number(state.threadScrollTopByClient[key]);
+    if (!Number.isFinite(raw)) return false;
+    const maxTop = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
+    wrap.scrollTop = Math.max(0, Math.min(raw, maxTop));
+    return true;
+  }
+
+  function updateMessagesScrollDownButton() {
+    const wrap = dom.center.messagesWrap;
+    const btn = dom.center.scrollDownBtn;
+    if (!wrap || !btn) return;
+
+    const hiddenDistance = wrap.scrollHeight - wrap.clientHeight - wrap.scrollTop;
+    const pending = getPendingScrollNewCount();
+    const shouldShow = pending > 0 || hiddenDistance >= 120;
+    btn.classList.toggle("hidden", !shouldShow);
+
+    const badge = dom.center.scrollDownBadge;
+    if (!badge) return;
+    if (pending <= 0) {
+      badge.textContent = "";
+      badge.classList.add("hidden");
+      return;
+    }
+    const nextText = pending > 99 ? "99+" : String(pending);
+    if (badge.textContent !== nextText) {
+      badge.textContent = nextText;
+      animateCountBadgeTick(badge);
+    }
+    badge.classList.remove("hidden");
+  }
+
+  function stopMessagesSmoothScroll() {
+    if (!state.messagesScrollRaf) return;
+    cancelAnimationFrame(state.messagesScrollRaf);
+    state.messagesScrollRaf = 0;
+  }
+
+  function scrollMessagesToBottom(options = {}) {
+    const wrap = dom.center.messagesWrap;
+    if (!wrap) return;
+
+    const behavior = String(options.behavior || "auto");
+    const durationRaw = Number(options.duration);
+    const duration = Number.isFinite(durationRaw) && durationRaw > 0 ? durationRaw : CHAT_AUTOSCROLL_MS;
+    const target = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
+
+    if (behavior !== "smooth-fast") {
+      stopMessagesSmoothScroll();
+      wrap.scrollTop = target;
+      clearPendingScrollNewCount();
+      updateMessagesScrollDownButton();
+      return;
+    }
+
+    const startTop = wrap.scrollTop;
+    const delta = target - startTop;
+    if (Math.abs(delta) < 1) return;
+
+    stopMessagesSmoothScroll();
+    const startedAt = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+
+    const step = (now) => {
+      if (!dom.center.messagesWrap) {
+        state.messagesScrollRaf = 0;
+        return;
+      }
+      const currentTime = typeof now === "number" ? now : Date.now();
+      const progress = Math.min(1, (currentTime - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      wrap.scrollTop = startTop + (delta * eased);
+      if (progress < 1) {
+        state.messagesScrollRaf = requestAnimationFrame(step);
+        return;
+      }
+      state.messagesScrollRaf = 0;
+      wrap.scrollTop = target;
+      clearPendingScrollNewCount();
+      updateMessagesScrollDownButton();
+    };
+
+    state.messagesScrollRaf = requestAnimationFrame(step);
+  }
+
+  function syncComposerRichPreview(options = {}) {
+    const input = dom.center.input;
+    if (!input || typeof input.__syncEmojiPreview !== "function") return;
+    input.__syncEmojiPreview(options);
+  }
+
+  function setupComposerRichPreview() {
+    if (!dom.center.input) return;
+    const input = dom.center.input;
+    if (input.dataset.emojiPreviewReady === "1") return;
+    const parent = input.parentElement;
+    if (!parent) return;
+
+    const wrap = document.createElement("div");
+    wrap.className = "chat-input-rich-wrap";
+    parent.insertBefore(wrap, input);
+    wrap.appendChild(input);
+
+    const preview = document.createElement("div");
+    preview.className = "chat-input-rich-preview hidden";
+    preview.setAttribute("aria-hidden", "true");
+    wrap.appendChild(preview);
+
+    const sync = (options = {}) => {
+      const stickToBottom = options && options.stickToBottom === true;
+
+      const inputStyles = window.getComputedStyle(input);
+      const minHeight = parseFloat(inputStyles.minHeight) || 45;
+      const maxHeight = parseFloat(inputStyles.maxHeight) || 160;
+      const value = String(input.value || "");
+
+      if (!value) {
+        input.style.height = `${minHeight}px`;
+        input.style.overflowY = "hidden";
+        preview.classList.add("hidden");
+        preview.textContent = "";
+        input.classList.remove("is-rich-emoji-preview");
+        if (stickToBottom) scrollMessagesToBottom({ behavior: "smooth-fast" });
+        return;
+      }
+
+      input.style.height = "auto";
+      const fullHeight = input.scrollHeight || minHeight;
+      const nextHeight = Math.max(minHeight, Math.min(maxHeight, fullHeight));
+      input.style.height = `${nextHeight}px`;
+      input.style.overflowY = fullHeight > maxHeight + 1 ? "auto" : "hidden";
+
+      if (!value || !hasEmojiInText(value)) {
+        preview.classList.add("hidden");
+        preview.textContent = "";
+        input.classList.remove("is-rich-emoji-preview");
+        if (stickToBottom) scrollMessagesToBottom({ behavior: "smooth-fast" });
+        return;
+      }
+
+      preview.classList.remove("hidden");
+      input.classList.add("is-rich-emoji-preview");
+      renderEmojiMessageText(preview, value, "chat-emoji-glyph chat-emoji-glyph--input-inline");
+      preview.style.transform = `translate(${-Math.max(0, input.scrollLeft)}px, ${-Math.max(0, input.scrollTop)}px)`;
+
+      if (stickToBottom) scrollMessagesToBottom({ behavior: "smooth-fast" });
+    };
+
+    input.__syncEmojiPreview = sync;
+    input.addEventListener("input", () => sync({}));
+    ["scroll", "click", "keyup", "focus", "blur"].forEach((eventName) => {
+      input.addEventListener(eventName, () => sync());
+    });
+    window.addEventListener("resize", () => sync());
+
+    input.dataset.emojiPreviewReady = "1";
+    sync({});
+  }
+
+  function setComposerEnabled(enabled) {
+    [dom.center.input, dom.center.attachBtn, dom.center.emojiBtn, dom.center.sendBtn].forEach((el) => {
+      if (!el) return;
+      el.disabled = !enabled;
+    });
+    [dom.center.attachPreviewCaption, dom.center.attachPreviewEmojiBtn, dom.center.attachPreviewSendBtn].forEach((el) => {
+      if (!el) return;
+      el.disabled = !enabled;
+    });
+    if (!enabled) closeAttachPreview({ focusComposer: false });
+  }
+
+  function syncComposerMode() {
+    if (!dom.center.sendBtn || !dom.center.input) return;
+    const isEditing = !!state.editingMessageId;
+    dom.center.sendBtn.classList.toggle("is-editing", isEditing);
+    dom.center.sendBtn.title = isEditing ? "Сохранить изменения" : "Отправить";
+    dom.center.sendBtn.setAttribute("aria-label", isEditing ? "Сохранить изменения" : "Отправить");
+    dom.center.sendBtn.innerHTML = isEditing ? '<i class="fas fa-check"></i>' : '<i class="fas fa-paper-plane"></i>';
+    dom.center.input.placeholder = isEditing ? "Измените сообщение" : "Введите сообщение";
+  }
+
+  function cancelEditingMessage() {
+    state.editingMessageId = null;
+    syncComposerMode();
+  }
+
+  function getMessagesWord(count) {
+    const n = Math.abs(Number(count || 0)) % 100;
+    const n1 = n % 10;
+    if (n > 10 && n < 20) return "сообщений";
+    if (n1 > 1 && n1 < 5) return "сообщения";
+    if (n1 === 1) return "сообщение";
+    return "сообщений";
+  }
+
+  function getSelectedMessages() {
+    if (!state.activeClientId) return [];
+    const selected = state.selectedMessageIds;
+    return getVisibleThread(state.activeClientId).filter((msg) => selected.has(String(msg.id)));
+  }
+
+  function syncSelectionUi() {
+    const count = state.selectedMessageIds.size;
+    const active = state.selectionMode && count > 0;
+
+    if (dom.center.stack) dom.center.stack.classList.toggle("is-selection-mode", active);
+    if (dom.center.messagesWrap) dom.center.messagesWrap.classList.toggle("is-selection-mode", active);
+    if (dom.center.selectionBar) dom.center.selectionBar.classList.toggle("hidden", !active);
+
+    if (dom.center.selectionCount) {
+      dom.center.selectionCount.textContent = `Выбрано ${count} ${getMessagesWord(count)}`;
+    }
+  }
+
+  function setSelectionMode(enabled) {
+    const on = !!enabled;
+    state.selectionMode = on;
+    if (!on) state.selectedMessageIds.clear();
+    if (on) hideMessageContextMenu();
+    syncSelectionUi();
+  }
+
+  function toggleMessageSelection(messageId) {
+    const key = String(messageId || "");
+    if (!key) return;
+    if (!state.selectionMode) setSelectionMode(true);
+    if (state.selectedMessageIds.has(key)) {
+      state.selectedMessageIds.delete(key);
+    } else {
+      state.selectedMessageIds.add(key);
+    }
+    if (state.selectedMessageIds.size === 0) setSelectionMode(false);
+  }
+
+  function findThreadMessage(clientId, messageId) {
+    const thread = getThread(clientId);
+    return thread.find((msg) => String(msg.id) === String(messageId)) || null;
+  }
+
+  function updateThreadMessage(clientId, messageId, newText) {
+    const msg = findThreadMessage(clientId, messageId);
+    if (!msg || msg.direction !== "out") return false;
+    msg.text = String(newText || "");
+    msg.editedAt = new Date().toISOString();
+    markThreadMutated(clientId);
+    saveStore();
+    queueThreadSaveToRemote(clientId);
+    return true;
+  }
+
+  function removeThreadMessage(clientId, messageId) {
+    const thread = getThread(clientId);
+    const idx = thread.findIndex((msg) => String(msg.id) === String(messageId));
+    if (idx < 0) return false;
+    const msg = thread[idx];
+    if (!msg || msg.direction !== "out") return false;
+    thread.splice(idx, 1);
+    setMessageHiddenLocally(clientId, messageId, false, { persist: false });
+    pruneHiddenMessageIds(clientId);
+    state.selectedMessageIds.delete(String(messageId));
+    if (state.selectedMessageIds.size === 0) setSelectionMode(false);
+    markThreadMutated(clientId);
+    saveStore();
+    queueThreadSaveToRemote(clientId);
+    return true;
+  }
+
+  function hideThreadMessagesLocally(clientId, messageIds) {
+    const ids = new Set((Array.isArray(messageIds) ? messageIds : []).map((id) => String(id || "")).filter(Boolean));
+    if (!ids.size) return false;
+
+    const thread = getThread(clientId);
+    let changed = false;
+    thread.forEach((msg) => {
+      const id = String(msg?.id || "");
+      if (!id) return;
+      if (!ids.has(id)) return;
+      if (setMessageHiddenLocally(clientId, id, true, { persist: false })) changed = true;
+    });
+
+    ids.forEach((id) => state.selectedMessageIds.delete(id));
+    if (state.selectedMessageIds.size === 0) setSelectionMode(false);
+    if (changed) {
+      markThreadMutated(clientId);
+      saveStore();
+    }
+    return changed;
+  }
+
+  function toggleThreadMessagePinned(clientId, messageId) {
+    const msg = findThreadMessage(clientId, messageId);
+    if (!msg) return false;
+    msg.pinned = !msg.pinned;
+    markThreadMutated(clientId);
+    saveStore();
+    queueThreadSaveToRemote(clientId);
+    return true;
+  }
+
+  function setThreadMessageReaction(clientId, messageId, reaction) {
+    const msg = findThreadMessage(clientId, messageId);
+    if (!msg) return false;
+    if (!setMessageActorReaction(msg, CHAT_REACTION_ACTOR, reaction)) return false;
+    markThreadMutated(clientId);
+    saveStore();
+    queueThreadSaveToRemote(clientId);
+    return true;
+  }
+
+  function getOutgoingDeliveryStatus(message) {
+    if (!message || message.direction !== "out") return "";
+    const status = String(message.deliveryStatus || "").toLowerCase();
+    if (message.readAt || message.readByClient === true || message.read === true || status === "read") return "read";
+    if (message.deliveredAt || status === "delivered") return "delivered";
+    if (status === "sent") return "sent";
+    return "sent";
+  }
+
+  function getDeliveryStatusRank(status) {
+    if (status === "sent") return 1;
+    if (status === "delivered") return 2;
+    if (status === "read") return 3;
+    return 0;
+  }
+
+  function getOutgoingStatusIconMarkup(status) {
+    if (status === "sent") {
+      return `
+        <svg class="chat-message-status-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <path d="M2.8 8.4L5.7 11.3L13.3 3.7"></path>
+        </svg>
+      `;
+    }
+    if (status === "delivered" || status === "read") {
+      return `
+        <svg class="chat-message-status-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <path d="M1.1 8.4L3.9 11.2L9.6 5.5"></path>
+          <path d="M6.1 8.4L8.9 11.2L14.6 5.5"></path>
+        </svg>
+      `;
+    }
+    return "";
+  }
+
+  function setOutgoingDeliveryStatus(clientId, messageId, nextStatus, options = {}) {
+    const msg = findThreadMessage(clientId, messageId);
+    if (!msg || msg.direction !== "out") return false;
+
+    const target = String(nextStatus || "").toLowerCase();
+    if (!["sent", "delivered", "read"].includes(target)) return false;
+
+    const current = getOutgoingDeliveryStatus(msg);
+    if (getDeliveryStatusRank(target) <= getDeliveryStatusRank(current)) return false;
+
+    msg.deliveryStatus = target;
+    if (target === "delivered" && !msg.deliveredAt) msg.deliveredAt = new Date().toISOString();
+    if (target === "read" && !msg.readAt) msg.readAt = new Date().toISOString();
+    markThreadMutated(clientId);
+    saveStore();
+    if (options.persistRemote !== false) {
+      queueThreadSaveToRemote(clientId);
+    }
+
+    if (Number(state.activeClientId) === Number(clientId)) renderMessages();
+    applyClientFilter();
+    return true;
+  }
+
+  function scheduleOutgoingDeliveryProgress(clientId, messageId) {
+    const id = String(messageId || "");
+    if (!id) return;
+
+    window.setTimeout(() => {
+      setOutgoingDeliveryStatus(clientId, id, "delivered", { persistRemote: false });
+    }, 700);
+  }
+
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      try {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("READ_FILE_FAILED"));
+        reader.readAsDataURL(file);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  function estimateDataUrlSizeBytes(dataUrl) {
+    const text = String(dataUrl || "");
+    const commaIdx = text.indexOf(",");
+    if (commaIdx < 0) return text.length;
+    const base64 = text.slice(commaIdx + 1);
+    return Math.floor((base64.length * 3) / 4);
+  }
+
+  function getDataUrlMime(dataUrl) {
+    const match = String(dataUrl || "").match(/^data:([^;,]+)[;,]/i);
+    return match ? String(match[1] || "").toLowerCase() : "";
+  }
+
+  function shouldSkipImageOptimization(mime, fileSizeBytes) {
+    const type = String(mime || "").toLowerCase();
+    if (!type.startsWith("image/")) return true;
+    if (type === "image/gif" || type === "image/svg+xml") return true;
+    const size = Number(fileSizeBytes || 0);
+    return Number.isFinite(size) && size > 0 && size <= IMAGE_OPTIMIZE_SKIP_BELOW_BYTES;
+  }
+
+  function loadImageFromFile(file) {
+    return new Promise((resolve, reject) => {
+      const objectUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve(img);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error("IMAGE_LOAD_FAILED"));
+      };
+      img.src = objectUrl;
+    });
+  }
+
+  function getScaledDimensions(width, height, maxSide) {
+    const w = Math.max(1, Number(width) || 1);
+    const h = Math.max(1, Number(height) || 1);
+    const limit = Math.max(1, Number(maxSide) || 1);
+    const longest = Math.max(w, h);
+    if (longest <= limit) return { width: w, height: h };
+    const ratio = limit / longest;
+    return {
+      width: Math.max(1, Math.round(w * ratio)),
+      height: Math.max(1, Math.round(h * ratio)),
+    };
+  }
+
+  function renderImageToDataUrl(image, mime, quality, maxSide) {
+    const dims = getScaledDimensions(image.naturalWidth, image.naturalHeight, maxSide);
+    const canvas = document.createElement("canvas");
+    canvas.width = dims.width;
+    canvas.height = dims.height;
+    const ctx = canvas.getContext("2d", { alpha: true });
+    if (!ctx) throw new Error("CANVAS_CONTEXT_FAILED");
+    ctx.drawImage(image, 0, 0, dims.width, dims.height);
+    const dataUrl = canvas.toDataURL(mime, quality);
+    return {
+      dataUrl: String(dataUrl || ""),
+      width: dims.width,
+      height: dims.height,
+      mime: getDataUrlMime(dataUrl) || String(mime || "").toLowerCase(),
+      size: estimateDataUrlSizeBytes(dataUrl),
+    };
+  }
+
+  async function buildOptimizedImagePayload(file, fallbackMime) {
+    const image = await loadImageFromFile(file);
+    const preferredMime = (
+      String(fallbackMime || "").toLowerCase() === "image/webp"
+        ? "image/webp"
+        : "image/jpeg"
+    );
+    let maxSide = IMAGE_OPTIMIZE_MAX_SIDE_PX;
+    let quality = IMAGE_OPTIMIZE_INITIAL_QUALITY;
+    let best = null;
+
+    for (let attempt = 0; attempt < 7; attempt += 1) {
+      const current = renderImageToDataUrl(image, preferredMime, quality, maxSide);
+      if (!best || current.size < best.size) best = current;
+
+      const fitsTarget = current.size <= IMAGE_OPTIMIZE_TARGET_BYTES;
+      const fitsHardLimit = current.dataUrl.length <= MAX_IMAGE_DATA_URL_LENGTH;
+      if (fitsTarget && fitsHardLimit) return current;
+
+      if (quality > IMAGE_OPTIMIZE_MIN_QUALITY + 0.02) {
+        quality = Math.max(IMAGE_OPTIMIZE_MIN_QUALITY, quality - 0.1);
+      } else {
+        const nextSide = Math.max(IMAGE_OPTIMIZE_MIN_SIDE_PX, Math.round(maxSide * IMAGE_OPTIMIZE_SCALE_STEP));
+        if (nextSide === maxSide) break;
+        maxSide = nextSide;
+      }
+    }
+
+    return best;
+  }
+
+  function getImageSizeFromDataUrl(dataUrl) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        resolve({
+          width: Number.isFinite(img.naturalWidth) ? img.naturalWidth : 0,
+          height: Number.isFinite(img.naturalHeight) ? img.naturalHeight : 0,
+        });
+      };
+      img.onerror = () => resolve({ width: 0, height: 0 });
+      img.src = dataUrl;
+    });
+  }
+
+  async function buildImageAttachmentFromFile(file) {
+    if (!(file instanceof File)) return null;
+    const mime = String(file.type || "").toLowerCase();
+    if (!mime.startsWith("image/")) return null;
+
+    let dataUrl = "";
+    let outputMime = mime || "image/jpeg";
+    let dimensions = { width: 0, height: 0 };
+    let payloadSize = Number(file.size) || 0;
+
+    const skipOptimization = shouldSkipImageOptimization(mime, file.size);
+    if (!skipOptimization) {
+      const optimized = await buildOptimizedImagePayload(file, mime).catch(() => null);
+      if (optimized && /^data:image\/[a-z0-9.+-]+;base64,/i.test(optimized.dataUrl)) {
+        dataUrl = optimized.dataUrl;
+        outputMime = String(optimized.mime || outputMime || "image/jpeg");
+        dimensions = {
+          width: Number(optimized.width) || 0,
+          height: Number(optimized.height) || 0,
+        };
+        payloadSize = Number(optimized.size) || payloadSize;
+      }
+    }
+
+    if (!dataUrl) {
+      dataUrl = await readFileAsDataUrl(file);
+      if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl)) return null;
+      outputMime = getDataUrlMime(dataUrl) || outputMime;
+      dimensions = await getImageSizeFromDataUrl(dataUrl);
+      payloadSize = estimateDataUrlSizeBytes(dataUrl);
+    }
+
+    if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) return null;
+
+    return {
+      kind: "image",
+      name: String(file.name || "image").slice(0, 160),
+      mime: outputMime || "image/jpeg",
+      dataUrl,
+      width: Number.isFinite(dimensions.width) && dimensions.width > 0 ? dimensions.width : 0,
+      height: Number.isFinite(dimensions.height) && dimensions.height > 0 ? dimensions.height : 0,
+      size: Number.isFinite(payloadSize) && payloadSize > 0 ? payloadSize : 0,
+    };
+  }
+
+  async function copyToClipboard(value) {
+    const text = String(value ?? "");
+    if (!text) return false;
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {}
+
+    try {
+      const el = document.createElement("textarea");
+      el.value = text;
+      el.setAttribute("readonly", "true");
+      el.style.position = "fixed";
+      el.style.left = "-9999px";
+      document.body.appendChild(el);
+      el.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(el);
+      return !!ok;
+    } catch {
+      return false;
+    }
+  }
+
+  function focusComposer(text) {
+    if (!dom.center.input) return;
+    dom.center.input.value = String(text || "");
+    dom.center.input.focus();
+    const pos = dom.center.input.value.length;
+    dom.center.input.setSelectionRange(pos, pos);
+    syncComposerRichPreview({});
+  }
+
+  function hideMessageContextMenu() {
+    if (dom.center.contextMenu) dom.center.contextMenu.classList.add("hidden");
+    if (dom.center.reactionBar) {
+      dom.center.reactionBar.classList.add("hidden");
+      setReactionBarExpanded(false);
+    }
+    state.contextMessageId = null;
+  }
+
+  function ensureClientContextMenu() {
+    if (state.clientContextMenu && state.clientContextMenu.isConnected) return state.clientContextMenu;
+
+    const menu = document.createElement("div");
+    menu.id = "chatClientContextMenu";
+    menu.className = "chat-message-menu hidden";
+    menu.innerHTML = `
+      <button type="button" class="chat-message-menu-btn is-danger" data-chat-client-action="clear">
+        <i class="far fa-trash-alt" aria-hidden="true"></i>
+        <span>Очистить чат</span>
+      </button>
+    `;
+    document.body.appendChild(menu);
+
+    menu.addEventListener("click", (event) => {
+      const actionBtn = event.target.closest("[data-chat-client-action]");
+      if (!actionBtn) return;
+      const action = actionBtn.getAttribute("data-chat-client-action");
+      const clientId = state.contextClientId;
+      hideClientContextMenu();
+      if (!clientId) return;
+      if (action === "clear") {
+        clearClientChat(clientId);
+      }
+    });
+
+    state.clientContextMenu = menu;
+    return menu;
+  }
+
+  function hideClientContextMenu() {
+    if (state.clientContextMenu) state.clientContextMenu.classList.add("hidden");
+    state.contextClientId = null;
+  }
+
+  function clearClientChat(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+
+    const client = state.clients.find((row) => Number(row.id) === Number(key));
+    const clientName = String(client?.name || `Клиент #${key}`);
+    const thread = getThread(key);
+    const messageIds = thread.map((msg) => String(msg?.id || "")).filter(Boolean);
+    const count = Math.max(1, messageIds.length);
+
+    openDeleteConfirm({
+      count,
+      clientName,
+      title: `Удалить чат с ${clientName}?`,
+      text: "Вы точно хотите удалить этот чат?",
+      checkText: `Удалить у ${clientName}`,
+      allowDeleteForClient: true,
+      onConfirm: ({ deleteForClient } = {}) => {
+        const removeForBoth = deleteForClient !== false;
+        const hiddenMap = ensureHiddenMessageMap();
+        if (!Array.isArray(state.store.threads[key])) state.store.threads[key] = [];
+        if (!Array.isArray(hiddenMap[key])) hiddenMap[key] = [];
+
+        if (removeForBoth) {
+          state.store.threads[key] = [];
+          hiddenMap[key] = [];
+          saveStore();
+
+          const saveTimer = state.remoteSaveTimers[key];
+          if (saveTimer) {
+            clearTimeout(saveTimer);
+            delete state.remoteSaveTimers[key];
+          }
+          delete state.remoteThreadUpdatedAt[key];
+
+          if (Number(state.activeClientId) === Number(key)) {
+            hideMessageContextMenu();
+            if (state.selectionMode || state.selectedMessageIds.size) {
+              setSelectionMode(false);
+            }
+            cancelEditingMessage();
+            clearComposerReply();
+            if (dom.center.input) {
+              dom.center.input.value = "";
+              syncComposerRichPreview({});
+            }
+            renderMessages();
+          }
+          applyClientFilter();
+          deleteRemoteThread(key).catch(console.error);
+          return;
+        }
+
+        if (!messageIds.length) return;
+        const changed = hideThreadMessagesLocally(key, messageIds);
+        if (!changed) return;
+        if (Number(state.activeClientId) === Number(key)) {
+          hideMessageContextMenu();
+          renderMessages();
+        }
+        applyClientFilter();
+      },
+    });
+    return true;
+  }
+
+  function showClientContextMenu(x, y, clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    hideMessageContextMenu();
+    const menu = ensureClientContextMenu();
+    state.contextClientId = key;
+    positionFloatingBox(menu, x, y, 8);
+  }
+
+  function positionFloatingBox(box, x, y, padding = 8) {
+    box.classList.remove("hidden");
+    const rect = box.getBoundingClientRect();
+    const maxLeft = Math.max(padding, window.innerWidth - rect.width - padding);
+    const maxTop = Math.max(padding, window.innerHeight - rect.height - padding);
+    const left = Math.min(Math.max(padding, x), maxLeft);
+    const top = Math.min(Math.max(padding, y), maxTop);
+    box.style.left = `${left}px`;
+    box.style.top = `${top}px`;
+  }
+
+  function positionReactionBar(menuRect) {
+    if (!dom.center.reactionBar || !menuRect) return;
+    const barRect = dom.center.reactionBar.getBoundingClientRect();
+    const padding = 8;
+    const left = Math.min(Math.max(padding, menuRect.left), Math.max(padding, window.innerWidth - barRect.width - padding));
+    const preferTop = menuRect.top - barRect.height - 8;
+    const top = preferTop >= padding
+      ? preferTop
+      : Math.min(Math.max(padding, menuRect.bottom + 8), Math.max(padding, window.innerHeight - barRect.height - padding));
+
+    dom.center.reactionBar.style.left = `${left}px`;
+    dom.center.reactionBar.style.top = `${top}px`;
+  }
+
+  function showReactionBarForMessage(message, menuRect) {
+    if (!dom.center.reactionBar) return;
+    const ownReaction = getMessageActorReaction(message, CHAT_REACTION_ACTOR);
+    setReactionBarExpanded(false);
+    $$('[data-chat-reaction]', dom.center.reactionBar).forEach((btn) => {
+      const value = btn.getAttribute("data-chat-reaction");
+      const isAction = value === "__toggle_more__";
+      const isActive = value && !isAction && normalizeReactionValue(value) === normalizeReactionValue(ownReaction);
+      btn.classList.toggle("is-active", isActive);
+    });
+
+    dom.center.reactionBar.classList.remove("hidden");
+    positionReactionBar(menuRect);
+  }
+
+  function showMessageContextMenu(x, y, messageId) {
+    if (!state.activeClientId || !dom.center.contextMenu) return;
+    const message = findThreadMessage(state.activeClientId, messageId);
+    if (!message) return;
+
+    hideClientContextMenu();
+    state.contextMessageId = String(messageId || "");
+    if (dom.center.menuPinLabel) dom.center.menuPinLabel.textContent = message.pinned ? "Открепить" : "Закрепить";
+    const canManageOwnMessage = message.direction === "out";
+    if (dom.center.menuEditAction) dom.center.menuEditAction.classList.toggle("hidden", !canManageOwnMessage);
+    if (dom.center.menuDeleteAction) dom.center.menuDeleteAction.classList.remove("hidden");
+
+    positionFloatingBox(dom.center.contextMenu, x, y, 8);
+    showReactionBarForMessage(message, dom.center.contextMenu.getBoundingClientRect());
+  }
+
+  function startEditingMessage(messageId) {
+    if (!state.activeClientId || !dom.center.input) return;
+    const msg = findThreadMessage(state.activeClientId, messageId);
+    if (!msg || msg.direction !== "out") return;
+    clearComposerReply();
+    state.editingMessageId = String(messageId);
+    focusComposer(msg.text || "");
+    syncComposerMode();
+  }
+
+  function deleteMessageFromContext(messageId) {
+    if (!state.activeClientId) return;
+    const message = findThreadMessage(state.activeClientId, messageId);
+    if (!message) return;
+    const canDeleteForClient = message.direction === "out";
+
+    openDeleteConfirm({
+      count: 1,
+      allowDeleteForClient: canDeleteForClient,
+      onConfirm: ({ deleteForClient } = {}) => {
+        const removeForBoth = canDeleteForClient && deleteForClient !== false;
+        const changed = removeForBoth
+          ? removeThreadMessage(state.activeClientId, messageId)
+          : hideThreadMessagesLocally(state.activeClientId, [messageId]);
+        if (!changed) return;
+
+        if (String(state.editingMessageId || "") === String(messageId)) {
+          cancelEditingMessage();
+          if (dom.center.input) dom.center.input.value = "";
+          syncComposerRichPreview({});
+        }
+
+        if (String(state.replyDraft?.id || "") === String(messageId)) {
+          clearComposerReply();
+        }
+
+        renderMessages();
+        applyClientFilter();
+      },
+    });
+  }
+
+  function replyToMessageFromContext(messageId) {
+    if (!state.activeClientId || !dom.center.input) return;
+    setComposerReplyByMessage(messageId);
+  }
+
+  async function copyMessageFromContext(messageId) {
+    if (!state.activeClientId) return;
+    const msg = findThreadMessage(state.activeClientId, messageId);
+    if (!msg) return;
+    await copyToClipboard(msg.text || "");
+  }
+
+  function selectMessageFromContext(messageId) {
+    toggleMessageSelection(messageId);
+    renderMessages();
+  }
+
+  function reactMessageFromContext(messageId, reaction) {
+    if (!state.activeClientId) return;
+    if (!setThreadMessageReaction(state.activeClientId, messageId, reaction)) return;
+    renderMessages();
+  }
+
+  function closeSelectionMode() {
+    if (!state.selectionMode && state.selectedMessageIds.size === 0) return;
+    setSelectionMode(false);
+    renderMessages();
+  }
+
+  async function copySelectedMessages() {
+    const selectedMessages = getSelectedMessages();
+    if (!selectedMessages.length) return;
+    const text = selectedMessages.map((msg) => String(msg.text || "")).join("\n");
+    await copyToClipboard(text);
+  }
+
+  function deleteSelectedMessages() {
+    if (!state.activeClientId || state.selectedMessageIds.size === 0) return;
+    const selectedMessages = getSelectedMessages();
+    if (!selectedMessages.length) return;
+
+    const selectedIds = new Set(selectedMessages.map((msg) => String(msg.id || "")).filter(Boolean));
+    if (!selectedIds.size) return;
+
+    const selectedOwnIds = new Set(
+      selectedMessages
+        .filter((msg) => msg.direction === "out")
+        .map((msg) => String(msg.id || ""))
+        .filter(Boolean)
+    );
+    const count = selectedIds.size;
+    const allowDeleteForClient = selectedOwnIds.size > 0;
+
+    openDeleteConfirm({
+      count,
+      allowDeleteForClient,
+      onConfirm: ({ deleteForClient } = {}) => {
+        const removeForBoth = allowDeleteForClient && deleteForClient !== false;
+        const key = String(state.activeClientId);
+        const thread = getThread(state.activeClientId);
+
+        if (removeForBoth) {
+          state.store.threads[key] = thread.filter((msg) => !selectedOwnIds.has(String(msg.id)));
+          selectedOwnIds.forEach((id) => setMessageHiddenLocally(state.activeClientId, id, false, { persist: false }));
+          pruneHiddenMessageIds(state.activeClientId);
+        }
+
+        const localHideIds = new Set(selectedIds);
+        if (removeForBoth) {
+          selectedOwnIds.forEach((id) => localHideIds.delete(id));
+        }
+        hideThreadMessagesLocally(state.activeClientId, Array.from(localHideIds));
+
+        if (state.editingMessageId && selectedIds.has(String(state.editingMessageId))) {
+          cancelEditingMessage();
+          if (dom.center.input) dom.center.input.value = "";
+          syncComposerRichPreview({});
+        }
+
+        if (state.replyDraft?.id && selectedIds.has(String(state.replyDraft.id))) {
+          clearComposerReply();
+        }
+
+        setSelectionMode(false);
+        saveStore();
+        if (removeForBoth) queueThreadSaveToRemote(state.activeClientId);
+        renderMessages();
+        applyClientFilter();
+      },
+    });
+  }
+
+  function renderChatHeader() {
+    const setOrderStatusView = (text, color) => {
+      if (!dom.center.orderStatus) return;
+      const safeText = String(text || "—").trim() || "—";
+      const safeColor = String(color || "").trim();
+      dom.center.orderStatus.textContent = safeText;
+      dom.center.orderStatus.classList.toggle("is-empty", safeText === "—" || safeText === "Без заказа");
+      if (!safeColor) {
+        dom.center.orderStatus.style.background = "";
+        dom.center.orderStatus.style.borderColor = "";
+        dom.center.orderStatus.style.color = "";
+        return;
+      }
+      dom.center.orderStatus.style.borderColor = hexToRgba(safeColor, 0.45) || safeColor;
+      dom.center.orderStatus.style.background = hexToRgba(safeColor, 0.12) || "";
+      dom.center.orderStatus.style.color = safeColor;
+    };
+
+    const setOrderTotalView = (totalText, paymentCode) => {
+      if (!dom.center.orderTotal) return;
+      const safeTotal = String(totalText || "—").trim() || "—";
+      const isEmpty = safeTotal === "—";
+
+      dom.center.orderTotal.classList.remove("order-payment-cash", "order-payment-card");
+      dom.center.orderTotal.classList.toggle("is-empty", isEmpty);
+      if (isEmpty) {
+        dom.center.orderTotal.textContent = "—";
+        return;
+      }
+
+      const code = String(paymentCode || "").toLowerCase();
+      const isCash = code.includes("cash");
+      dom.center.orderTotal.classList.add(isCash ? "order-payment-cash" : "order-payment-card");
+      dom.center.orderTotal.innerHTML = `<i class="fas ${escapeHtml(paymentIcon(code))}"></i> ${escapeHtml(safeTotal)}`;
+    };
+
+    const setOrderHeaderFields = ({
+      kind = "Последний заказ",
+      id = "—",
+      time = "—",
+      address = "Адрес не указан",
+      comment = "Нет комментария",
+      statusText = "Без заказа",
+      statusColor = "",
+      total = "—",
+      paymentCode = "",
+      title = "Последний заказ: —",
+      clientName = "—",
+      clientPhone = "—",
+      order = null,
+      orderId = 0,
+    } = {}) => {
+      if (dom.center.orderKind) dom.center.orderKind.textContent = kind;
+      if (dom.center.orderId) dom.center.orderId.textContent = id;
+      if (dom.center.orderTime) dom.center.orderTime.textContent = time;
+      if (dom.center.orderAddress) dom.center.orderAddress.textContent = address;
+      if (dom.center.orderComment) dom.center.orderComment.textContent = comment;
+      if (dom.center.headerName) dom.center.headerName.textContent = clientName;
+      if (dom.center.headerPhone) dom.center.headerPhone.textContent = clientPhone;
+      setHeaderTimeIcon(order);
+      setOrderTotalView(total, paymentCode);
+      if (dom.center.orderTitle) dom.center.orderTitle.textContent = title;
+      setOrderStatusView(statusText, statusColor);
+      setHeaderOrderLinkState(orderId);
+      syncHeaderTooltips();
+    };
+
+    if (!state.activeClient) {
+      setOrderHeaderFields({
+        kind: "Последний заказ",
+        id: "—",
+        time: "—",
+        address: "Адрес не указан",
+        comment: "Нет комментария",
+        statusText: "—",
+        total: "—",
+        title: "Последний заказ: —",
+        clientName: "Выберите клиента",
+        clientPhone: "Нажмите на чат в левом списке",
+        orderId: 0,
+      });
+      cancelEditingMessage();
+      clearComposerReply();
+      if (state.pendingDeleteConfirm) closeDeleteConfirm();
+      hideMessageContextMenu();
+      setComposerEnabled(false);
+      return;
+    }
+
+    const candidate = getHeaderOrderCandidate(state.activeOrders);
+    const currentOrder = candidate.currentOrder;
+    const pinnedHeaderOrderId = Number(state.headerOrderId || 0);
+    const pinnedHeaderOrder = (Array.isArray(candidate.sortedOrders) && pinnedHeaderOrderId > 0)
+      ? candidate.sortedOrders.find((order) => Number(order?.id || 0) === pinnedHeaderOrderId)
+      : null;
+    const headerOrder = pinnedHeaderOrder || candidate.headerOrder;
+
+    if (!headerOrder) {
+      state.headerOrderId = 0;
+      setOrderHeaderFields({
+        kind: "Последний заказ",
+        id: "—",
+        time: "—",
+        address: "Адрес не указан",
+        comment: "Нет комментария",
+        statusText: "Без заказа",
+        total: "—",
+        title: "Последний заказ: —",
+        clientName: state.activeClient.name || `Клиент #${state.activeClient.id}`,
+        clientPhone: formatPhoneDigitsToRU(state.activeClient.phone),
+        orderId: 0,
+      });
+    } else {
+      const currentOrderId = Number(currentOrder?.id || 0);
+      const headerOrderId = Number(headerOrder?.id || 0);
+      const kindTitle = currentOrderId > 0 && headerOrderId > 0 && currentOrderId === headerOrderId
+        ? "Текущий заказ"
+        : "Последний заказ";
+      const orderTime = fmtTime(headerOrder.created_at || headerOrder.scheduled_at) || "—";
+      const orderId = Number(headerOrder.id);
+      state.headerOrderId = Number.isFinite(orderId) && orderId > 0 ? orderId : 0;
+      const totalRaw = headerOrder.total_price ?? headerOrder.total;
+      setOrderHeaderFields({
+        kind: kindTitle,
+        id: Number.isFinite(orderId) && orderId > 0 ? String(orderId) : "—",
+        time: orderTime,
+        address: getOrderAddressLine(headerOrder),
+        comment: getOrderCommentLine(headerOrder),
+        statusText: headerOrder.status_title || "Без статуса",
+        statusColor: headerOrder.status_color || "#64748b",
+        total: fmtOrderAmount(totalRaw),
+        paymentCode: headerOrder.payment_code || "",
+        title: `${kindTitle} #${headerOrder.id || "—"}`,
+        clientName: state.activeClient.name || `Клиент #${state.activeClient.id}`,
+        clientPhone: formatPhoneDigitsToRU(state.activeClient.phone),
+        order: headerOrder,
+        orderId,
+      });
+    }
+
+    syncComposerMode();
+    setComposerEnabled(true);
+  }
+
+  function renderMessages(options = {}) {
+    if (!dom.center.messages || !dom.center.empty) return;
+    const forceScrollBottom = options.forceScrollBottom === true;
+    const disableAutoPin = options.disableAutoPin === true;
+    const smoothScroll = options.smoothScroll !== false;
+    const keepPinnedBeforeRender = shouldKeepMessagesPinnedToBottom();
+
+    if (!state.activeClientId) {
+      setSelectionMode(false);
+      dom.center.empty.classList.remove("hidden");
+      dom.center.messages.innerHTML = "";
+      hideMessageContextMenu();
+      clearPendingScrollNewCount();
+      updateMessagesScrollDownButton();
+      return;
+    }
+
+    const thread = getVisibleThread(state.activeClientId);
+    const validIds = new Set(thread.map((msg) => String(msg.id)));
+    Array.from(state.selectedMessageIds).forEach((id) => {
+      if (!validIds.has(id)) state.selectedMessageIds.delete(id);
+    });
+    if (state.replyDraft && state.replyDraft.id && !validIds.has(String(state.replyDraft.id))) {
+      clearComposerReply();
+    }
+    if (state.selectedMessageIds.size === 0) state.selectionMode = false;
+
+    dom.center.empty.classList.add("hidden");
+    dom.center.messages.innerHTML = "";
+
+    if (!thread.length) {
+      setSelectionMode(false);
+      dom.center.messages.innerHTML = `
+        <div class="chat-local-empty">
+          <i class="fas fa-comment-dots"></i>
+          <span>История переписки пока пустая. Напишите первое сообщение.</span>
+        </div>
+      `;
+      hideMessageContextMenu();
+      clearPendingScrollNewCount();
+      updateMessagesScrollDownButton();
+      return;
+    }
+
+    let prevDayKey = "";
+    thread.forEach((msg) => {
+      const dayKey = getDayKey(msg.createdAt);
+      if (dayKey && dayKey !== prevDayKey) {
+        const dayNode = document.createElement("div");
+        dayNode.className = "chat-day-separator";
+        dayNode.textContent = fmtDayLabel(msg.createdAt);
+        dom.center.messages.appendChild(dayNode);
+        prevDayKey = dayKey;
+      }
+
+      const messageId = String(msg.id || "");
+      const time = `${fmtTime(msg.createdAt) || ""}${msg.editedAt ? " • изм." : ""}`;
+      const outgoingStatus = msg.direction === "out" ? getOutgoingDeliveryStatus(msg) : "";
+      const outgoingStatusTitle = outgoingStatus === "read"
+        ? "Прочитано"
+        : outgoingStatus === "delivered"
+          ? "Доставлено"
+          : outgoingStatus === "sent"
+            ? "Отправлено"
+            : "";
+      const classes = [
+        "chat-message",
+        `chat-message--${msg.direction === "out" ? "out" : "in"}`,
+        msg.editedAt ? "is-edited" : "",
+        state.selectionMode ? "is-selection-mode" : "",
+        state.selectedMessageIds.has(messageId) ? "is-selected" : "",
+      ].filter(Boolean).join(" ");
+
+      const item = document.createElement("div");
+      item.className = classes;
+      item.setAttribute("data-message-id", messageId);
+      const emojiOnlyInfo = getEmojiOnlyInfo(msg.text || "");
+      const imageAttachment = getMessageImageAttachment(msg);
+      const hasImageAttachment = !!imageAttachment;
+      const hasText = String(msg.text || "").trim().length > 0;
+      const reply = msg.replyTo && typeof msg.replyTo === "object" ? msg.replyTo : null;
+      const replyMarkup = reply
+        ? `
+          <div class="chat-message-reply-snippet"${reply.id ? ` data-chat-scroll-to-message="${escapeHtml(reply.id)}"` : ""}>
+            <div class="chat-message-reply-name">${escapeHtml(reply.sender || "Сообщение")}</div>
+            <div class="chat-message-reply-line">${escapeHtml(getReplyPreviewText(reply.text || ""))}</div>
+          </div>
+        `
+        : "";
+      const attachmentMarkup = hasImageAttachment
+        ? `
+          <div class="chat-message-attachment">
+            <img
+              class="chat-message-attachment-image"
+              src="${escapeHtml(String(imageAttachment.dataUrl || ""))}"
+              alt="${escapeHtml(String(imageAttachment.name || "Фото"))}"
+              loading="eager"
+              decoding="async"
+            />
+          </div>
+        `
+        : "";
+      const textMarkup = hasText
+        ? `<div class="chat-message-text">${escapeHtml(msg.text || "").replace(/\n/g, "<br>")}</div>`
+        : "";
+      item.innerHTML = `
+        <span class="chat-message-select-badge" aria-hidden="true"><i class="fas fa-check"></i></span>
+        <div class="chat-message-bubble">
+          ${replyMarkup}
+          ${attachmentMarkup}
+          ${textMarkup}
+          <div class="chat-message-meta">
+            <span class="chat-message-time">${escapeHtml(time)}</span>
+            ${outgoingStatus
+              ? `<span class="chat-message-status chat-message-status--${escapeHtml(outgoingStatus)}" title="${escapeHtml(outgoingStatusTitle)}" aria-label="${escapeHtml(outgoingStatusTitle)}">${getOutgoingStatusIconMarkup(outgoingStatus)}</span>`
+              : ""}
+            ${msg.pinned ? '<span class="chat-message-pin" title="Закреплено"><i class="fas fa-thumbtack"></i></span>' : ""}
+          </div>
+        </div>
+      `;
+
+      const bubble = $(".chat-message-bubble", item);
+      const messageTextNode = $(".chat-message-text", item);
+      if (messageTextNode) {
+        renderEmojiMessageText(messageTextNode, msg.text || "", "chat-emoji-glyph chat-emoji-glyph--inline");
+      }
+      if (bubble && hasImageAttachment) {
+        bubble.classList.add("has-attachment");
+        if (!hasText) bubble.classList.add("has-attachment-only");
+      }
+      if (reply) {
+        const replyLineNode = $(".chat-message-reply-line", item);
+        if (replyLineNode) {
+          renderEmojiMessageText(
+            replyLineNode,
+            getReplyPreviewText(reply.text || ""),
+            "chat-emoji-glyph chat-emoji-glyph--preview"
+          );
+        }
+      }
+      if (bubble && emojiOnlyInfo.isEmojiOnly && !reply && !hasImageAttachment) {
+        bubble.classList.add("is-emoji-only");
+        if (emojiOnlyInfo.count <= 1) bubble.classList.add("is-emoji-only-single");
+        else if (emojiOnlyInfo.count <= 3) bubble.classList.add("is-emoji-only-few");
+        else bubble.classList.add("is-emoji-only-many");
+      }
+
+      const reactionItems = getMessageReactionItems(msg);
+      if (reactionItems.length && bubble) {
+        const reactionsWrap = document.createElement("div");
+        reactionsWrap.className = "chat-message-reactions";
+        bubble.classList.add("has-reaction");
+
+        reactionItems.forEach((itemReaction) => {
+          const reactionBtn = document.createElement("button");
+          reactionBtn.type = "button";
+          reactionBtn.className = "chat-message-reaction-pill";
+          reactionBtn.setAttribute("data-chat-msg-reaction-toggle", messageId);
+          reactionBtn.setAttribute("data-chat-reaction-value", String(itemReaction.reaction || ""));
+          reactionBtn.setAttribute("data-chat-reaction-actor", String(itemReaction.actor || ""));
+          reactionBtn.title = itemReaction.actor === CHAT_REACTION_ACTOR ? "Изменить реакцию" : "Реакция собеседника";
+          reactionBtn.setAttribute("aria-label", String(itemReaction.reaction || ""));
+          setEmojiGlyph(reactionBtn, itemReaction.reaction, "chat-emoji-glyph chat-emoji-glyph--pill");
+          reactionsWrap.appendChild(reactionBtn);
+        });
+
+        bubble.appendChild(reactionsWrap);
+      }
+
+      dom.center.messages.appendChild(item);
+    });
+
+    if (state.contextMessageId) {
+      const exists = thread.some((msg) => String(msg.id) === String(state.contextMessageId));
+      if (!exists) hideMessageContextMenu();
+    }
+
+    syncSelectionUi();
+
+    if (dom.center.messagesWrap && !state.selectionMode) {
+      if (forceScrollBottom || (!disableAutoPin && keepPinnedBeforeRender)) {
+        scrollMessagesToBottom({ behavior: smoothScroll ? "smooth-fast" : "auto" });
+      }
+    }
+    syncPendingScrollCountByViewport(state.activeClientId);
+    saveThreadScrollPosition(state.activeClientId);
+    updateMessagesScrollDownButton();
+  }
+
+  function sendMessage(text, options = {}) {
+    if (!state.activeClientId) return false;
+    const clean = normalizeComposerText(text);
+    const attachment = isImageAttachment(options.attachment) ? options.attachment : null;
+    if (!clean && !attachment) return false;
+
+    if (state.editingMessageId) {
+      const ok = updateThreadMessage(state.activeClientId, state.editingMessageId, clean);
+      cancelEditingMessage();
+      if (!ok) return false;
+      renderMessages();
+      applyClientFilter();
+      return true;
+    }
+
+    const newMessageId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const replySnapshot = state.replyDraft && state.replyDraft.id
+      ? {
+          id: String(state.replyDraft.id),
+          sender: String(state.replyDraft.sender || ""),
+          text: String(state.replyDraft.text || ""),
+        }
+      : null;
+
+    pushMessage(state.activeClientId, {
+      id: newMessageId,
+      direction: "out",
+      text: clean,
+      attachment,
+      createdAt: new Date().toISOString(),
+      read: false,
+      pinned: false,
+      reaction: "",
+      reactions: { in: "", out: "" },
+      replyTo: replySnapshot,
+      deliveryStatus: "sent",
+      deliveredAt: "",
+      readAt: "",
+    });
+
+    scheduleOutgoingDeliveryProgress(state.activeClientId, newMessageId);
+    clearComposerReply();
+    hideMessageContextMenu();
+    renderMessages({ forceScrollBottom: true, smoothScroll: true });
+    applyClientFilter();
+    return true;
+  }
+
+  function getAttachPreviewTitle(count) {
+    const total = Number(count) || 0;
+    if (total <= 1) return "1 фотография";
+    if (total >= 2 && total <= 4) return `${total} фотографии`;
+    return `${total} фотографий`;
+  }
+
+  function closeAttachPreview(options = {}) {
+    const clearItems = options.clearItems !== false;
+    const focusComposer = options.focusComposer !== false;
+    const clearCaption = options.clearCaption !== false;
+    const overlay = dom.center.attachPreviewOverlay;
+    if (overlay) {
+      overlay.classList.add("hidden");
+      overlay.setAttribute("aria-hidden", "true");
+    }
+    if (clearItems) {
+      state.attachPreviewItems = [];
+      state.attachPreviewActiveIndex = 0;
+    }
+    if (clearCaption && dom.center.attachPreviewCaption) {
+      dom.center.attachPreviewCaption.value = "";
+    }
+    if (dom.center.attachPreviewThumbs) {
+      dom.center.attachPreviewThumbs.innerHTML = "";
+      dom.center.attachPreviewThumbs.classList.add("hidden");
+    }
+    if (
+      dom.center.emojiPopover
+      && dom.center.emojiPopover.classList.contains("is-attach-preview")
+    ) {
+      hideEmojiPopover();
+    }
+    if (dom.center.attachInput) dom.center.attachInput.value = "";
+    if (focusComposer && dom.center.input && !dom.center.input.disabled) dom.center.input.focus();
+  }
+
+  function isMessageImageViewerOpen() {
+    return !!(
+      dom.center.imageViewerOverlay
+      && !dom.center.imageViewerOverlay.classList.contains("hidden")
+    );
+  }
+
+  function closeMessageImageViewer() {
+    if (!dom.center.imageViewerOverlay) return;
+    dom.center.imageViewerOverlay.classList.add("hidden");
+    dom.center.imageViewerOverlay.setAttribute("aria-hidden", "true");
+    if (dom.center.imageViewerImage) {
+      dom.center.imageViewerImage.removeAttribute("src");
+    }
+  }
+
+  function openMessageImageViewer(imageSrc, imageAlt = "") {
+    if (!dom.center.imageViewerOverlay || !dom.center.imageViewerImage) return false;
+    const src = String(imageSrc || "").trim();
+    if (!src) return false;
+    dom.center.imageViewerImage.src = src;
+    dom.center.imageViewerImage.alt = String(imageAlt || "Image preview");
+    dom.center.imageViewerOverlay.classList.remove("hidden");
+    dom.center.imageViewerOverlay.setAttribute("aria-hidden", "false");
+    return true;
+  }
+
+  function initMessageImageViewerModal() {
+    const overlay = dom.center.imageViewerOverlay;
+    if (!overlay || overlay.dataset.bound === "1") return;
+    overlay.dataset.bound = "1";
+
+    if (dom.center.imageViewerCloseBtn) {
+      dom.center.imageViewerCloseBtn.addEventListener("click", () => {
+        closeMessageImageViewer();
+      });
+    }
+
+    overlay.addEventListener("click", (event) => {
+      if (event.target !== overlay) return;
+      closeMessageImageViewer();
+    });
+  }
+
+  function renderAttachPreview() {
+    const items = Array.isArray(state.attachPreviewItems) ? state.attachPreviewItems : [];
+    const total = items.length;
+    if (!total) {
+      closeAttachPreview({ focusComposer: false });
+      return;
+    }
+
+    const nextIndex = Math.max(0, Math.min(Number(state.attachPreviewActiveIndex) || 0, total - 1));
+    state.attachPreviewActiveIndex = nextIndex;
+    const active = items[nextIndex] || null;
+
+    if (dom.center.attachPreviewTitle) {
+      dom.center.attachPreviewTitle.textContent = getAttachPreviewTitle(total);
+    }
+    if (dom.center.attachPreviewImage && active) {
+      dom.center.attachPreviewImage.src = String(active.dataUrl || "");
+      dom.center.attachPreviewImage.alt = String(active.name || "Изображение");
+    }
+
+    if (dom.center.attachPreviewThumbs) {
+      const thumbs = dom.center.attachPreviewThumbs;
+      thumbs.innerHTML = "";
+      if (total > 1) {
+        thumbs.classList.remove("hidden");
+        items.forEach((item, idx) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "chat-attach-preview-thumb";
+          if (idx === nextIndex) btn.classList.add("is-active");
+          btn.setAttribute("data-chat-attach-preview-index", String(idx));
+
+          const img = document.createElement("img");
+          img.src = String(item.dataUrl || "");
+          img.alt = String(item.name || `Фото ${idx + 1}`);
+          img.loading = "eager";
+          img.decoding = "async";
+          img.draggable = false;
+
+          btn.appendChild(img);
+          thumbs.appendChild(btn);
+        });
+      } else {
+        thumbs.classList.add("hidden");
+      }
+    }
+  }
+
+  function openAttachPreview(attachments, options = {}) {
+    const items = Array.isArray(attachments)
+      ? attachments.filter((item) => isImageAttachment(item))
+      : [];
+    if (!items.length || !dom.center.attachPreviewOverlay) return false;
+
+    state.attachPreviewItems = items;
+    state.attachPreviewActiveIndex = 0;
+    if (dom.center.attachPreviewCaption) {
+      dom.center.attachPreviewCaption.value = String(options.caption || "");
+    }
+
+    renderAttachPreview();
+    dom.center.attachPreviewOverlay.classList.remove("hidden");
+    dom.center.attachPreviewOverlay.setAttribute("aria-hidden", "false");
+    if (dom.center.attachPreviewCaption) dom.center.attachPreviewCaption.focus();
+    return true;
+  }
+
+  function hideEmojiPopover() {
+    if (!dom.center.emojiPopover) return;
+    dom.center.emojiPopover.classList.add("hidden");
+    dom.center.emojiPopover.classList.remove("is-attach-preview");
+  }
+
+  function toggleEmojiPopover(target = "composer") {
+    if (!dom.center.emojiPopover) return;
+    const popover = dom.center.emojiPopover;
+    const normalizedTarget = target === "attach-preview" ? "attach-preview" : "composer";
+    const isPreviewTarget = normalizedTarget === "attach-preview";
+    const isOpen = !popover.classList.contains("hidden");
+    const hasSameTarget = popover.classList.contains("is-attach-preview") === isPreviewTarget;
+    const willOpen = !isOpen || !hasSameTarget;
+
+    popover.classList.toggle("is-attach-preview", isPreviewTarget);
+    popover.classList.toggle("hidden", !willOpen);
+    if (willOpen) ensureEmojiDatasetLoaded().catch(() => {});
+  }
+
+  function sendPreparedImageAttachments(attachments, options = {}) {
+    if (!state.activeClientId) return 0;
+    const list = Array.isArray(attachments)
+      ? attachments.filter((item) => isImageAttachment(item))
+      : [];
+    if (!list.length) return 0;
+
+    const replySnapshot = state.replyDraft && state.replyDraft.id
+      ? {
+          id: String(state.replyDraft.id),
+          sender: String(state.replyDraft.sender || ""),
+          text: String(state.replyDraft.text || ""),
+        }
+      : null;
+
+    const captionText = normalizeComposerText(options.caption || "");
+    let sent = 0;
+    for (const attachment of list) {
+      const newMessageId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      pushMessage(state.activeClientId, {
+        id: newMessageId,
+        direction: "out",
+        text: sent === 0 ? captionText : "",
+        attachment,
+        createdAt: new Date().toISOString(),
+        read: false,
+        pinned: false,
+        reaction: "",
+        reactions: { in: "", out: "" },
+        replyTo: sent === 0 ? replySnapshot : null,
+        deliveryStatus: "sent",
+        deliveredAt: "",
+        readAt: "",
+      });
+      scheduleOutgoingDeliveryProgress(state.activeClientId, newMessageId);
+      sent += 1;
+    }
+
+    if (sent > 0) {
+      clearComposerReply();
+      hideMessageContextMenu();
+      renderMessages({ forceScrollBottom: true, smoothScroll: true });
+      applyClientFilter();
+    }
+    return sent;
+  }
+
+  async function sendImageAttachments(files, options = {}) {
+    const list = Array.isArray(files) ? files : [];
+    if (!list.length) return 0;
+
+    const prepared = await Promise.all(
+      list.map((file) => buildImageAttachmentFromFile(file).catch(() => null))
+    );
+    const attachments = prepared.filter(Boolean);
+
+    return sendPreparedImageAttachments(attachments, options);
+  }
+
+  async function openAttachPreviewFromFiles(files) {
+    const list = Array.isArray(files) ? files : [];
+    if (!list.length) return false;
+
+    if (state.editingMessageId) {
+      cancelEditingMessage();
+    }
+
+    const prepared = await Promise.all(
+      list.map((file) => buildImageAttachmentFromFile(file).catch(() => null))
+    );
+    const attachments = prepared.filter(Boolean);
+
+    if (!attachments.length) return false;
+    return openAttachPreview(attachments);
+  }
+
+  function initAttachPreviewModal() {
+    const overlay = dom.center.attachPreviewOverlay;
+    if (!overlay || overlay.dataset.bound === "1") return;
+    overlay.dataset.bound = "1";
+
+    if (dom.center.attachPreviewCloseBtn) {
+      dom.center.attachPreviewCloseBtn.addEventListener("click", () => {
+        closeAttachPreview();
+      });
+    }
+
+    if (dom.center.attachPreviewThumbs) {
+      dom.center.attachPreviewThumbs.addEventListener("click", (event) => {
+        const btn = event.target.closest("[data-chat-attach-preview-index]");
+        if (!btn) return;
+        const idx = Number(btn.getAttribute("data-chat-attach-preview-index") || 0);
+        if (!Number.isFinite(idx)) return;
+        state.attachPreviewActiveIndex = idx;
+        renderAttachPreview();
+      });
+    }
+
+    if (dom.center.attachPreviewEmojiBtn) {
+      dom.center.attachPreviewEmojiBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleEmojiPopover("attach-preview");
+        if (dom.center.attachPreviewCaption) dom.center.attachPreviewCaption.focus();
+      });
+    }
+
+    if (dom.center.attachPreviewSendBtn) {
+      dom.center.attachPreviewSendBtn.addEventListener("click", () => {
+        const caption = dom.center.attachPreviewCaption
+          ? String(dom.center.attachPreviewCaption.value || "")
+          : "";
+        const sent = sendPreparedImageAttachments(state.attachPreviewItems, { caption });
+        if (sent > 0) {
+          closeAttachPreview({ clearCaption: true });
+        }
+      });
+    }
+
+    if (dom.center.attachPreviewCaption) {
+      dom.center.attachPreviewCaption.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        if (dom.center.attachPreviewSendBtn) dom.center.attachPreviewSendBtn.click();
+      });
+    }
+
+    overlay.addEventListener("click", (event) => {
+      if (event.target !== overlay) return;
+      closeAttachPreview();
+    });
+  }
+
+  function initMessageContextMenu() {
+    if (!dom.center.messages || !dom.center.contextMenu) return;
+
+    dom.center.messages.addEventListener("click", (event) => {
+      const replyJump = event.target.closest("[data-chat-scroll-to-message]");
+      if (replyJump) {
+        const targetId = replyJump.getAttribute("data-chat-scroll-to-message");
+        if (targetId) scrollToMessageInThread(targetId);
+        return;
+      }
+
+      const reactionPill = event.target.closest("[data-chat-msg-reaction-toggle]");
+      if (reactionPill && state.activeClientId) {
+        const messageId = reactionPill.getAttribute("data-chat-msg-reaction-toggle");
+        const reactionActor = reactionPill.getAttribute("data-chat-reaction-actor") || "";
+        if (reactionActor && reactionActor !== CHAT_REACTION_ACTOR) {
+          return;
+        }
+        const reactionValue = reactionPill.getAttribute("data-chat-reaction-value") || reactionPill.textContent || "";
+        if (messageId) reactMessageFromContext(messageId, reactionValue);
+        return;
+      }
+
+      const attachmentImage = event.target.closest(".chat-message-attachment-image");
+      if (attachmentImage && !state.selectionMode) {
+        hideMessageContextMenu();
+        openMessageImageViewer(
+          attachmentImage.getAttribute("src") || "",
+          attachmentImage.getAttribute("alt") || "Image preview",
+        );
+        return;
+      }
+
+      if (!state.selectionMode) return;
+      const messageEl = event.target.closest(".chat-message");
+      if (!messageEl) return;
+      const messageId = messageEl.getAttribute("data-message-id");
+      if (!messageId) return;
+      toggleMessageSelection(messageId);
+      renderMessages();
+    });
+
+    dom.center.messages.addEventListener("contextmenu", (event) => {
+      const messageEl = event.target.closest(".chat-message");
+      if (!messageEl || !state.activeClientId) return;
+      const messageId = messageEl.getAttribute("data-message-id");
+      if (!messageId) return;
+      if (state.selectionMode) {
+        event.preventDefault();
+        toggleMessageSelection(messageId);
+        renderMessages();
+        return;
+      }
+      event.preventDefault();
+      showMessageContextMenu(event.clientX, event.clientY, messageId);
+    });
+
+    dom.center.messages.addEventListener("dblclick", (event) => {
+      const messageEl = event.target.closest(".chat-message");
+      if (!messageEl || !state.activeClientId) return;
+      const messageId = messageEl.getAttribute("data-message-id");
+      if (!messageId) return;
+
+      const message = findThreadMessage(state.activeClientId, messageId);
+      if (!message) return;
+
+      const heartReaction = "\u{2764}\u{FE0F}";
+      if (normalizeReactionValue(getMessageActorReaction(message, CHAT_REACTION_ACTOR)) === normalizeReactionValue(heartReaction)) {
+        hideMessageContextMenu();
+        return;
+      }
+
+      if (!setThreadMessageReaction(state.activeClientId, messageId, heartReaction)) return;
+      hideMessageContextMenu();
+      renderMessages();
+    });
+
+    dom.center.contextMenu.addEventListener("click", (event) => {
+      const actionBtn = event.target.closest("[data-chat-msg-action]");
+      if (!actionBtn) return;
+      const action = actionBtn.getAttribute("data-chat-msg-action");
+      const messageId = state.contextMessageId;
+      hideMessageContextMenu();
+      if (!messageId) return;
+
+      if (action === "reply") return replyToMessageFromContext(messageId);
+      if (action === "copy") return copyMessageFromContext(messageId).catch(console.error);
+      if (action === "select") return selectMessageFromContext(messageId);
+      if (action === "edit") return startEditingMessage(messageId);
+      if (action === "delete") deleteMessageFromContext(messageId);
+    });
+
+    if (dom.center.reactionBar) {
+      dom.center.reactionBar.addEventListener("click", (event) => {
+        const btn = event.target.closest("[data-chat-reaction]");
+        if (!btn) return;
+        const reaction = btn.getAttribute("data-chat-reaction");
+        const messageId = state.contextMessageId;
+        if (!reaction) return;
+        if (reaction === "__toggle_more__") {
+          const nextExpanded = !dom.center.reactionBar.classList.contains("is-expanded");
+          setReactionBarExpanded(nextExpanded);
+          if (dom.center.contextMenu && !dom.center.contextMenu.classList.contains("hidden")) {
+            positionReactionBar(dom.center.contextMenu.getBoundingClientRect());
+          }
+          return;
+        }
+        if (!messageId) return hideMessageContextMenu();
+        reactMessageFromContext(messageId, reaction);
+        hideMessageContextMenu();
+      });
+    }
+
+    document.addEventListener("click", (event) => {
+      if (!dom.center.contextMenu) return;
+      const insideMenu = dom.center.contextMenu.contains(event.target);
+      const insideReactions = dom.center.reactionBar && dom.center.reactionBar.contains(event.target);
+      const insideClientMenu = state.clientContextMenu && state.clientContextMenu.contains(event.target);
+      if (!insideMenu && !insideReactions) hideMessageContextMenu();
+      if (!insideClientMenu) hideClientContextMenu();
+    });
+
+    document.addEventListener("contextmenu", (event) => {
+      if (!dom.center.contextMenu) return;
+      const insideMenu = dom.center.contextMenu.contains(event.target);
+      const insideReactions = dom.center.reactionBar && dom.center.reactionBar.contains(event.target);
+      const insideMessage = event.target.closest && event.target.closest(".chat-message");
+      const insideClientMenu = state.clientContextMenu && state.clientContextMenu.contains(event.target);
+      const insideClientRow = event.target.closest && event.target.closest(".chat-client-row");
+      if (!insideMenu && !insideReactions && !insideMessage) hideMessageContextMenu();
+      if (!insideClientMenu && !insideClientRow) hideClientContextMenu();
+    });
+
+    window.addEventListener("resize", () => {
+      hideMessageContextMenu();
+      hideClientContextMenu();
+    });
+    window.addEventListener("scroll", () => {
+      hideMessageContextMenu();
+      hideClientContextMenu();
+    }, true);
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      if (isMessageImageViewerOpen()) {
+        closeMessageImageViewer();
+        return;
+      }
+      if (dom.center.attachPreviewOverlay && !dom.center.attachPreviewOverlay.classList.contains("hidden")) {
+        closeAttachPreview();
+        return;
+      }
+      if (state.pendingDeleteConfirm) return;
+      hideMessageContextMenu();
+      hideClientContextMenu();
+      if (state.selectionMode) {
+        setSelectionMode(false);
+        renderMessages();
+      }
+    });
+  }
+
+  function initSelectionToolbar() {
+    if (dom.center.selectionCloseBtn) {
+      dom.center.selectionCloseBtn.addEventListener("click", closeSelectionMode);
+    }
+
+    if (dom.center.selectionCopyBtn) {
+      dom.center.selectionCopyBtn.addEventListener("click", () => {
+        copySelectedMessages().catch(console.error);
+      });
+    }
+
+    if (dom.center.selectionDeleteBtn) {
+      dom.center.selectionDeleteBtn.addEventListener("click", deleteSelectedMessages);
+    }
+  }
+
+  function openOrderFromHeader() {
+    const headerOrderId = Number(dom.center.headerOrder && dom.center.headerOrder.getAttribute("data-order-id") || 0);
+    if (!Number.isFinite(headerOrderId) || headerOrderId <= 0) return;
+    const clientsRightApi = getClientsRightApi();
+    if (!clientsRightApi || typeof clientsRightApi.openOrderById !== "function") return;
+    clientsRightApi.openOrderById(headerOrderId);
+  }
+
+  function initHeaderOrderOpenAction() {
+    if (!dom.center.headerOrder || dom.center.headerOrder.dataset.boundOpenOrder === "1") return;
+    dom.center.headerOrder.dataset.boundOpenOrder = "1";
+
+    dom.center.headerOrder.addEventListener("click", () => {
+      openOrderFromHeader();
+    });
+
+    dom.center.headerOrder.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openOrderFromHeader();
+    });
+  }
+
+  async function loadActiveClientData(clientId, selectedFromList = null) {
+    const requestId = ++state.requestToken;
+    try {
+      const [clientJson, ordersJson] = await Promise.all([
+        apiJson(`/api/admin/clients/${clientId}`),
+        apiJson(`/api/admin/clients/${clientId}/orders`),
+      ]);
+      if (requestId !== state.requestToken) return;
+
+      state.activeClient = clientJson?.data || selectedFromList;
+      setActiveOrders(Array.isArray(ordersJson?.data) ? ordersJson.data : [], { forceRender: true });
+      renderMessages({ disableAutoPin: true, smoothScroll: false });
+      restoreThreadScrollPosition(state.activeClientId);
+      saveThreadScrollPosition(state.activeClientId);
+      hydrateHeaderOrderDetails(requestId, clientId).catch(console.error);
+    } catch (err) {
+      if (requestId !== state.requestToken) return;
+      console.error(err);
+      state.activeClient = selectedFromList;
+      setActiveOrders([], { forceRender: true });
+      renderMessages({ disableAutoPin: true, smoothScroll: false });
+      restoreThreadScrollPosition(state.activeClientId);
+      saveThreadScrollPosition(state.activeClientId);
+    }
+  }
+
+  async function selectClient(clientId) {
+    const id = Number(clientId || 0);
+    if (!Number.isFinite(id) || id <= 0) return;
+    const previousActiveClientId = state.activeClientId;
+    saveThreadScrollPosition(previousActiveClientId);
+
+    closeAttachPreview({ focusComposer: false });
+    cancelEditingMessage();
+    clearComposerReply();
+    if (state.pendingDeleteConfirm) closeDeleteConfirm();
+    setSelectionMode(false);
+    hideClientContextMenu();
+    hideMessageContextMenu();
+    if (dom.center.input) {
+      dom.center.input.value = "";
+      dom.center.input.style.height = "45px";
+      dom.center.input.style.overflowY = "hidden";
+    }
+    syncComposerRichPreview({});
+
+    state.activeClientId = id;
+    state.store.lastOpenClientId = id;
+    saveStore();
+
+    await pullThreadFromRemote(id, { skipReadMark: true, ignoreIncomingBadge: true }).catch(console.error);
+    syncActiveThreadReadState({ clientId: id });
+    applyClientFilter();
+    renderMessages({ disableAutoPin: true, smoothScroll: false });
+    if (!restoreThreadScrollPosition(id)) {
+      scrollMessagesToBottom({ behavior: "auto" });
+      saveThreadScrollPosition(id);
+    } else {
+      syncPendingScrollCountByViewport(id);
+      updateMessagesScrollDownButton();
+      saveThreadScrollPosition(id);
+    }
+
+    const selectedFromList = state.clients.find((c) => Number(c.id) === id) || null;
+    const clientsRightApi = getClientsRightApi();
+    if (clientsRightApi && typeof clientsRightApi.selectClientById === "function") {
+      clientsRightApi.selectClientById(id, selectedFromList?.name || "").catch(console.error);
+    }
+
+    state.activeClient = selectedFromList;
+    setActiveOrders([], { forceRender: true });
+
+    await loadActiveClientData(id, selectedFromList);
+  }
+
+  async function loadClients() {
+    if (!dom.left.list) return;
+    dom.left.list.innerHTML = '<div class="muted" style="padding:8px;">Загрузка чатов…</div>';
+
+    try {
+      const qs = new URLSearchParams();
+      qs.set("limit", "250");
+      qs.set("offset", "0");
+      qs.set("sort", "last_desc");
+
+      const [json, remoteClients] = await Promise.all([
+        apiJson(`/api/admin/clients?${qs.toString()}`),
+        loadRemoteChatClients().catch(() => []),
+      ]);
+      const rows = mergeRemoteClients(Array.isArray(json?.data) ? json.data : [], remoteClients);
+
+      const existingThreadIds = new Set(Object.keys(state.store.threads).map((k) => Number(k)));
+      const openChatClients = rows.filter(
+        (c) =>
+          existingThreadIds.has(Number(c.id)) ||
+          Number(c.total_orders || 0) > 0 ||
+          c._isVirtualChatClient === true
+      );
+      const prepared = openChatClients.length ? openChatClients : rows;
+
+      prepared.slice(0, 40).forEach((client) => seedThread(client));
+
+      state.clients = prepared;
+      applyClientFilter();
+      await pullRemoteSummaries(state.clients.map((client) => client.id)).catch(console.error);
+      applyClientFilter();
+
+      const persisted = Number(state.store.lastOpenClientId || 0);
+      const target = state.filteredClients.find((c) => Number(c.id) === persisted) || state.filteredClients[0];
+      if (target) {
+        await selectClient(target.id);
+      } else {
+        state.activeClientId = null;
+        state.activeClient = null;
+        setActiveOrders([], { forceRender: true });
+        renderMessages();
+      }
+    } catch (err) {
+      console.error(err);
+      dom.left.list.innerHTML = "";
+      if (dom.left.empty) {
+        dom.left.empty.textContent = "Не удалось загрузить чаты";
+        dom.left.empty.classList.remove("hidden");
+      }
+    }
+  }
+
+  function initComposer() {
+    if (!Object.keys(emojiCategories).length) {
+      emojiCategories = normalizeEmojiCategoryMap(EMOJI_FALLBACK_CATEGORIES);
+    }
+    if (!emojiRecentList.length) {
+      emojiRecentList = loadRecentEmojis();
+    }
+    if (!(emojiCategories[emojiActiveCategory] || []).length) {
+      emojiActiveCategory = getFirstAvailableEmojiCategory(emojiActiveCategory);
+    }
+
+    renderEmojiPicker();
+    ensureEmojiDatasetLoaded().catch(() => {});
+    bindEmojiPopoverGuard();
+    normalizeQuickReactionButtons();
+    decorateComposerEmojiControls();
+    initAttachPreviewModal();
+    initMessageImageViewerModal();
+    ensureComposerReplyElements();
+    renderComposerReply();
+    setupComposerRichPreview();
+    setComposerEnabled(false);
+    syncComposerMode();
+
+    if (dom.center.replyCloseBtn && dom.center.replyCloseBtn.dataset.bound !== "1") {
+      dom.center.replyCloseBtn.dataset.bound = "1";
+      dom.center.replyCloseBtn.addEventListener("click", () => {
+        clearComposerReply();
+        if (dom.center.input) dom.center.input.focus();
+      });
+    }
+
+    if (dom.center.sendBtn) {
+      dom.center.sendBtn.addEventListener("click", () => {
+        if (!dom.center.input) return;
+        const done = sendMessage(dom.center.input.value);
+        if (!done) return;
+        dom.center.input.value = "";
+        dom.center.input.focus();
+        syncComposerRichPreview({});
+      });
+    }
+
+    if (dom.center.input) {
+      dom.center.input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          const done = sendMessage(dom.center.input.value);
+          if (done) dom.center.input.value = "";
+          if (done) syncComposerRichPreview({});
+          return;
+        }
+
+        if (event.key === "Escape" && state.editingMessageId) {
+          cancelEditingMessage();
+          dom.center.input.value = "";
+          syncComposerRichPreview({});
+          return;
+        }
+
+        if (event.key === "Escape" && state.replyDraft) {
+          clearComposerReply();
+        }
+      });
+    }
+
+    if (dom.center.attachBtn && dom.center.attachInput) {
+      dom.center.attachBtn.addEventListener("click", () => dom.center.attachInput.click());
+      dom.center.attachInput.addEventListener("change", async () => {
+        const files = Array.from(dom.center.attachInput.files || []);
+        await openAttachPreviewFromFiles(files).catch(console.error);
+        dom.center.attachInput.value = "";
+      });
+    }
+
+    if (dom.center.emojiBtn && dom.center.emojiPopover) {
+      dom.center.emojiBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleEmojiPopover("composer");
+        if (dom.center.input) dom.center.input.focus();
+      });
+
+      document.addEventListener("click", (event) => {
+        if (!dom.center.emojiPopover) return;
+        const insidePopover = dom.center.emojiPopover.contains(event.target);
+        const insideComposerBtn = dom.center.emojiBtn && dom.center.emojiBtn.contains(event.target);
+        const insideAttachPreviewBtn = dom.center.attachPreviewEmojiBtn && dom.center.attachPreviewEmojiBtn.contains(event.target);
+        if (!insidePopover && !insideComposerBtn && !insideAttachPreviewBtn) hideEmojiPopover();
+      });
+    }
+
+    initMessageContextMenu();
+  }
+
+  function bindSearch() {
+    if (!dom.left.search) return;
+    dom.left.search.addEventListener("input", () => {
+      state.q = dom.left.search.value || "";
+      applyClientFilter();
+    });
+  }
+
+  function init() {
+    initComposer();
+    initSelectionToolbar();
+    initHeaderOrderOpenAction();
+    initOrderHeaderLiveSync();
+    if (dom.center.messagesWrap && dom.center.messagesWrap.dataset.scrollDownBound !== "1") {
+      dom.center.messagesWrap.dataset.scrollDownBound = "1";
+      dom.center.messagesWrap.addEventListener("scroll", () => {
+        saveThreadScrollPosition(state.activeClientId);
+        syncPendingScrollCountByViewport(state.activeClientId);
+        if (shouldKeepMessagesPinnedToBottom()) {
+          clearPendingScrollNewCount();
+        }
+        updateMessagesScrollDownButton();
+      });
+    }
+    if (dom.center.scrollDownBtn && dom.center.scrollDownBtn.dataset.bound !== "1") {
+      dom.center.scrollDownBtn.dataset.bound = "1";
+      dom.center.scrollDownBtn.addEventListener("click", () => {
+        scrollMessagesToBottom({ behavior: "smooth-fast" });
+      });
+    }
+    bindSearch();
+    renderChatHeader();
+    syncSelectionUi();
+    renderMessages();
+    startRemoteSyncLoops();
+    loadClients().catch(console.error);
+
+    const syncReadOnForeground = () => {
+      if (!state.activeClientId) return;
+      if (!isChatTabActiveForRead()) return;
+      syncActiveThreadReadState();
+      pullThreadFromRemoteIfChanged(state.activeClientId, { skipReadMark: false, force: true }).catch(console.error);
+    };
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      syncReadOnForeground();
+    });
+
+    window.addEventListener("focus", () => {
+      syncReadOnForeground();
+    });
+
+    document.addEventListener("tenantStoreChanged", () => {
+      loadClients().catch(console.error);
+    });
+  }
+
+  init();
+})();

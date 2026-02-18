@@ -19,6 +19,7 @@ const makeAdminTenantRouter = require('./api/admin/tenant');
 const makeAdminStockRouter = require('./api/admin/stock');
 const makePublicShopRouter = require('./api/public/shop');
 const makePrintApiRouter = require('./api/print');
+const makeChatTempRouter = require('./api/chatTemp');
 
 // middleware
 const { authMiddleware } = require('./api/middleware/auth');
@@ -37,8 +38,8 @@ try {
 }
 
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '60mb' }));
+app.use(express.urlencoded({ extended: true, limit: '60mb' }));
 app.use(cookieParser());
 
 // Статика: долгий кэш для изображений, короткий/по умолчанию — для остального
@@ -283,6 +284,7 @@ app.get('/dashboard/cash', (req, res) => res.render('pages/cash'));
 app.get('/dashboard/products', (req, res) => res.render('pages/products'));
 app.get('/dashboard/orders', (req, res) => res.render('pages/orders'));
 app.get('/dashboard/clients', (req, res) => res.render('pages/clients', { activePage: 'clients' }));
+app.get('/dashboard/chat', (req, res) => res.render('pages/chat', { activePage: 'chat' }));
 app.get('/dashboard/team', (req, res) => res.render('pages/home', { activePage: 'team' }));
 app.get('/dashboard/settings', (req, res) =>
   res.render('pages/home', {
@@ -315,6 +317,7 @@ app.post('/api/telegram/webhook', (req, res) => {
 // ------------------------------
 app.use('/api/public', makePublicShopRouter({ db, helpers, ordersEvents }));
 app.use('/api/print', makePrintApiRouter({ db, helpers }));
+app.use('/api/chat-temp', makeChatTempRouter());
 
 // ------------------------------
 // API: Admin (требуют авторизации)
