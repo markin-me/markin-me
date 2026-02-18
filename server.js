@@ -58,6 +58,14 @@ app.use('/static', express.static(path.join(__dirname, 'static'), {
   }
 }));
 
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+  setHeaders(res) {
+    if (!res.getHeader('Cache-Control')) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+  }
+}));
+
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 

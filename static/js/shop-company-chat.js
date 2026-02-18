@@ -79,8 +79,8 @@
     "\u{1F62E}",
   ];
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
-  const CHAT_THREAD_SAVE_DEBOUNCE_MS = 35;
-  const CHAT_THREAD_POLL_MS = 250;
+  const CHAT_THREAD_WAIT_TIMEOUT_MS = 20000;
+  const CHAT_THREAD_WAIT_RETRY_MS = 1200;
   const CHAT_AUTOSCROLL_MS = 170;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
   const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
@@ -133,10 +133,10 @@
   let liveEntries = [];
   let messageSeq = 0;
   let sharedThreadUpdatedAt = "";
-  let sharedThreadPollTimer = 0;
-  let sharedThreadMetaPollInFlight = false;
-  let sharedThreadSaveTimer = 0;
-  let sharedThreadSaveInFlight = false;
+  let sharedThreadWaitLoopStarted = false;
+  let sharedThreadWaitLoopToken = 0;
+  let sharedMutationQueue = Promise.resolve();
+  let sharedMutationPendingCount = 0;
   let sharedThreadMutationVersion = 0;
   let profileMergeInFlight = false;
   let feedScrollRaf = 0;
@@ -317,6 +317,7 @@
     const shouldMarkRead = shouldMarkAgentMessagesRead();
     const nowIso = new Date().toISOString();
     let changed = false;
+    const readIds = [];
 
     list.forEach(function (entry) {
       if (!entry || entry.role !== "agent") return;
@@ -334,10 +335,12 @@
       if (!shouldMarkRead) return;
 
       if (!isRead) {
+        const messageId = String(entry.id || "");
         entry.read = true;
         entry.deliveryStatus = "read";
         entry.deliveredAt = entry.deliveredAt || nowIso;
         entry.readAt = entry.readAt || nowIso;
+        if (messageId) readIds.push(messageId);
         changed = true;
         return;
       }
@@ -349,7 +352,7 @@
       }
     });
 
-    return changed;
+    return { changed, readIds };
   }
 
   function getTenantId() {
@@ -539,16 +542,12 @@
     localHiddenMessagesKey = buildLocalHiddenMessagesKey(chatClientProfile.id);
     localHiddenMessageIds = loadLocalHiddenMessageIds();
 
-    if (sharedThreadSaveTimer) {
-      clearTimeout(sharedThreadSaveTimer);
-      sharedThreadSaveTimer = 0;
-    }
-
     sharedThreadUpdatedAt = "";
     sharedThreadMutationVersion = 0;
     hasLoadedSharedThreadOnce = false;
     sharedPullInFlight = false;
-    sharedThreadMetaPollInFlight = false;
+    sharedMutationQueue = Promise.resolve();
+    sharedMutationPendingCount = 0;
     lastFeedScrollTop = null;
     clearPendingFeedNewCount();
 
@@ -654,10 +653,14 @@
 
   async function chatApiJson(url, opts) {
     const options = opts || {};
+    const isFormDataBody = (
+      typeof FormData !== "undefined"
+      && options.body instanceof FormData
+    );
     const headers = {
       "x-tenant-id": String(tenantId),
       "x-store-id": String(getActiveStoreId()),
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.body && !isFormDataBody ? { "Content-Type": "application/json" } : {}),
       ...(options.headers || {}),
     };
     const customerToken = getCustomerToken();
@@ -666,7 +669,9 @@
     const res = await fetch(url, {
       method: options.method || "GET",
       headers: headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
+      body: options.body
+        ? (isFormDataBody ? options.body : JSON.stringify(options.body))
+        : undefined,
     });
 
     const json = await res.json().catch(function () { return null; });
@@ -735,6 +740,7 @@
             name: String(message.attachment.name || ""),
             mime: String(message.attachment.mime || ""),
             dataUrl: String(message.attachment.dataUrl || ""),
+            url: String(message.attachment.url || ""),
             width: Number(message.attachment.width || 0),
             height: Number(message.attachment.height || 0),
             size: Number(message.attachment.size || 0),
@@ -787,6 +793,7 @@
             name: String(entry.attachment.name || ""),
             mime: String(entry.attachment.mime || ""),
             dataUrl: String(entry.attachment.dataUrl || ""),
+            url: String(entry.attachment.url || ""),
             width: Number(entry.attachment.width || 0),
             height: Number(entry.attachment.height || 0),
             size: Number(entry.attachment.size || 0),
@@ -824,42 +831,141 @@
       });
   }
 
-  function queueSharedThreadSave() {
-    if (sharedThreadSaveTimer) clearTimeout(sharedThreadSaveTimer);
-    sharedThreadSaveTimer = window.setTimeout(function () {
-      sharedThreadSaveTimer = 0;
-      saveSharedThreadToServer().catch(function () {});
-    }, CHAT_THREAD_SAVE_DEBOUNCE_MS);
+  function sleepMs(ms) {
+    return new Promise(function (resolve) {
+      window.setTimeout(resolve, Math.max(0, Number(ms || 0)));
+    });
   }
 
-  async function saveSharedThreadToServer() {
-    const payload = buildSharedMessagesPayload();
+  function enqueueSharedMutation(mutator) {
+    if (typeof mutator !== "function") return Promise.resolve();
+    sharedMutationPendingCount += 1;
+    sharedMutationQueue = sharedMutationQueue
+      .catch(function () {})
+      .then(function () { return mutator(); })
+      .catch(function (err) { console.error(err); })
+      .finally(function () {
+        sharedMutationPendingCount = Math.max(0, sharedMutationPendingCount - 1);
+      });
+    return sharedMutationQueue;
+  }
+
+  async function remoteCreateSharedMessage(entry) {
+    const requestClientId = getActiveChatClientId();
+    if (!requestClientId || !entry) return;
+    const payload = mapEntryToSharedMessage(entry);
+    if (!payload || !payload.id) return;
     const metaState = sanitizeSharedThreadMeta(sharedThreadMeta);
-    sharedThreadMeta = metaState;
+    const json = await chatApiJson(
+      CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId) + "/messages",
+      {
+        method: "POST",
+        body: {
+          message: payload,
+          meta: {
+            name: String(metaState.name || "Клиент"),
+            phone: String(metaState.phone || ""),
+            last_welcome_day: String(metaState.lastWelcomeDay || ""),
+          },
+        },
+      }
+    );
+    const updatedAt = String(json && json.data && json.data.updated_at || "");
+    if (updatedAt) sharedThreadUpdatedAt = updatedAt;
+  }
+
+  async function remotePatchSharedMessage(messageId, patch) {
+    const requestClientId = getActiveChatClientId();
+    const id = String(messageId || "").trim();
+    if (!requestClientId || !id || !patch || typeof patch !== "object") return;
+    const metaState = sanitizeSharedThreadMeta(sharedThreadMeta);
+    const json = await chatApiJson(
+      CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId) + "/messages/" + encodeURIComponent(id),
+      {
+        method: "PATCH",
+        body: {
+          patch: patch,
+          meta: {
+            name: String(metaState.name || "Клиент"),
+            phone: String(metaState.phone || ""),
+            last_welcome_day: String(metaState.lastWelcomeDay || ""),
+          },
+        },
+      }
+    );
+    const updatedAt = String(json && json.data && json.data.updated_at || "");
+    if (updatedAt) sharedThreadUpdatedAt = updatedAt;
+  }
+
+  async function remoteDeleteSharedMessage(messageId) {
+    const requestClientId = getActiveChatClientId();
+    const id = String(messageId || "").trim();
+    if (!requestClientId || !id) return;
+    const json = await chatApiJson(
+      CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId) + "/messages/" + encodeURIComponent(id),
+      {
+        method: "DELETE",
+      }
+    );
+    const updatedAt = String(json && json.data && json.data.updated_at || "");
+    if (updatedAt) sharedThreadUpdatedAt = updatedAt;
+  }
+
+  async function remoteMarkSharedMessagesRead(messageIds) {
     const requestClientId = getActiveChatClientId();
     if (!requestClientId) return;
-    sharedThreadSaveInFlight = true;
-    try {
-      const json = await chatApiJson(
-        CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId),
-        {
-          method: "PUT",
-          body: {
-            messages: payload,
-            meta: {
-              name: String(metaState.name || "Клиент"),
-              phone: String(metaState.phone || ""),
-              last_welcome_day: String(metaState.lastWelcomeDay || ""),
-            },
+    const ids = (Array.isArray(messageIds) ? messageIds : [])
+      .map(function (id) { return String(id || "").trim(); })
+      .filter(Boolean);
+    const metaState = sanitizeSharedThreadMeta(sharedThreadMeta);
+    const json = await chatApiJson(
+      CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId) + "/messages/read",
+      {
+        method: "POST",
+        body: {
+          message_ids: ids,
+          meta: {
+            name: String(metaState.name || "Клиент"),
+            phone: String(metaState.phone || ""),
+            last_welcome_day: String(metaState.lastWelcomeDay || ""),
           },
-        }
-      );
-      if (requestClientId !== getActiveChatClientId()) return;
-      const updatedAt = String(json && json.data && json.data.updated_at || "");
-      if (updatedAt) sharedThreadUpdatedAt = updatedAt;
-    } finally {
-      sharedThreadSaveInFlight = false;
-    }
+        },
+      }
+    );
+    const updatedAt = String(json && json.data && json.data.updated_at || "");
+    if (updatedAt) sharedThreadUpdatedAt = updatedAt;
+  }
+
+  async function uploadSharedImageAttachment(file) {
+    const requestClientId = getActiveChatClientId();
+    if (!requestClientId || !(file instanceof File)) return null;
+    const fd = new FormData();
+    fd.append("client_id", String(requestClientId));
+    fd.append("file", file);
+    const json = await chatApiJson(CHAT_TEMP_API_BASE + "/attachment", {
+      method: "POST",
+      body: fd,
+    });
+    const attachment = json && json.data ? json.data.attachment : null;
+    return isImageAttachment(attachment) ? attachment : null;
+  }
+
+  async function waitSharedThreadUpdate(sinceUpdatedAt, timeoutMs) {
+    const requestClientId = getActiveChatClientId();
+    if (!requestClientId) return { changed: false, updatedAt: "" };
+    const qs = new URLSearchParams({
+      since: String(sinceUpdatedAt || ""),
+      timeout_ms: String(Math.max(1000, Number(timeoutMs || CHAT_THREAD_WAIT_TIMEOUT_MS))),
+      _ts: String(Date.now()),
+    });
+    const json = await chatApiJson(
+      CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId) + "/wait?" + qs.toString()
+    );
+    const data = json && json.data ? json.data : {};
+    return {
+      changed: data.changed === true,
+      updatedAt: String(data.updated_at || ""),
+    };
   }
 
   function applySharedRemoteEntries(mappedEntries, updatedAt, options) {
@@ -868,10 +974,14 @@
     const remoteUpdatedAt = String(updatedAt || "");
 
     pruneLocalHiddenMessageIds(baseEntries.concat(entries));
-    const deliveryStateChanged = applyReadReceiptsToAgentEntries(entries);
+    const readReceiptState = applyReadReceiptsToAgentEntries(entries);
+    const deliveryStateChanged = !!(readReceiptState && readReceiptState.changed);
+    const readChangedIds = Array.isArray(readReceiptState && readReceiptState.readIds)
+      ? readReceiptState.readIds
+      : [];
     renderUnreadBadge(entries);
     const sameThread = stableSerialize(liveEntries) === stableSerialize(entries);
-    const hasPendingLocalSave = !!sharedThreadSaveTimer || sharedThreadSaveInFlight;
+    const hasPendingLocalSave = sharedMutationPendingCount > 0;
     const localChangedDuringRequest = opts.localChangedDuringRequest === true;
     const remoteIsNewer = compareIsoDates(remoteUpdatedAt, sharedThreadUpdatedAt) > 0;
 
@@ -881,7 +991,9 @@
     }
 
     if (!opts.force && sameThread && sharedThreadUpdatedAt === remoteUpdatedAt) {
-      if (deliveryStateChanged) queueSharedThreadSave();
+      if (readChangedIds.length) {
+        enqueueSharedMutation(function () { return remoteMarkSharedMessagesRead(readChangedIds); });
+      }
       return false;
     }
 
@@ -912,7 +1024,9 @@
       addPendingFeedMessageIds(appendedAgentMessageIds);
     }
     hasLoadedSharedThreadOnce = true;
-    if (deliveryStateChanged) queueSharedThreadSave();
+    if (readChangedIds.length) {
+      enqueueSharedMutation(function () { return remoteMarkSharedMessagesRead(readChangedIds); });
+    }
     return true;
   }
 
@@ -1060,23 +1174,40 @@
   }
 
   function startSharedThreadPolling() {
-    if (sharedThreadPollTimer) return;
-    sharedThreadPollTimer = window.setInterval(function () {
-      refreshChatClientProfileIfNeeded({ pull: false });
-      if (sharedThreadMetaPollInFlight) return;
-      sharedThreadMetaPollInFlight = true;
-      pullSharedThreadFromServerIfChanged({ force: false })
-        .catch(function () {})
-        .finally(function () {
-          sharedThreadMetaPollInFlight = false;
-        });
-    }, CHAT_THREAD_POLL_MS);
+    if (sharedThreadWaitLoopStarted) return;
+    sharedThreadWaitLoopStarted = true;
+    sharedThreadWaitLoopToken += 1;
+    const loopToken = sharedThreadWaitLoopToken;
+
+    (async function runSharedThreadWaitLoop() {
+      while (sharedThreadWaitLoopStarted && loopToken === sharedThreadWaitLoopToken) {
+        refreshChatClientProfileIfNeeded({ pull: false });
+        const activeClientId = getActiveChatClientId();
+        if (!activeClientId || profileMergeInFlight) {
+          await sleepMs(CHAT_THREAD_WAIT_RETRY_MS);
+          continue;
+        }
+
+        try {
+          const knownUpdatedAt = String(sharedThreadUpdatedAt || "");
+          const waited = await waitSharedThreadUpdate(knownUpdatedAt, CHAT_THREAD_WAIT_TIMEOUT_MS);
+          if (!sharedThreadWaitLoopStarted || loopToken !== sharedThreadWaitLoopToken) break;
+          if (profileMergeInFlight) continue;
+          if (String(activeClientId) !== String(getActiveChatClientId())) continue;
+          if (waited.changed || (waited.updatedAt && waited.updatedAt !== knownUpdatedAt)) {
+            await pullSharedThreadFromServerIfChanged({ force: false }).catch(function () {});
+          }
+        } catch {
+          await sleepMs(CHAT_THREAD_WAIT_RETRY_MS);
+        }
+      }
+    })().catch(function () {});
   }
 
   function stopSharedThreadPolling() {
-    if (!sharedThreadPollTimer) return;
-    clearInterval(sharedThreadPollTimer);
-    sharedThreadPollTimer = 0;
+    if (!sharedThreadWaitLoopStarted) return;
+    sharedThreadWaitLoopStarted = false;
+    sharedThreadWaitLoopToken += 1;
   }
 
   function syncVisibleChatReadState() {
@@ -1084,7 +1215,9 @@
     if (!isChatTabActiveForRead()) return false;
     const keepBottom = shouldKeepFeedPinnedToBottom();
     const prevTop = feed.scrollTop;
-    const changed = applyReadReceiptsToAgentEntries(liveEntries);
+    const readState = applyReadReceiptsToAgentEntries(liveEntries);
+    const changed = !!(readState && readState.changed);
+    const readIds = Array.isArray(readState && readState.readIds) ? readState.readIds : [];
     renderUnreadBadge(liveEntries);
     if (!changed) return false;
     markSharedThreadMutated();
@@ -1095,7 +1228,11 @@
       feed.scrollTop = prevTop;
       updateScrollDownButton();
     }
-    queueSharedThreadSave();
+    if (readIds.length) {
+      enqueueSharedMutation(function () {
+        return remoteMarkSharedMessagesRead(readIds);
+      });
+    }
     return true;
   }
 
@@ -1360,9 +1497,19 @@
   function isImageAttachment(attachment) {
     if (!attachment || typeof attachment !== "object") return false;
     const kind = String(attachment.kind || "").toLowerCase();
-    const dataUrl = String(attachment.dataUrl || "");
     if (kind !== "image") return false;
-    return /^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl);
+    const dataUrl = String(attachment.dataUrl || "");
+    const url = String(attachment.url || attachment.src || "");
+    const hasDataUrl = /^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl);
+    const hasUrl = /^\/uploads\/chat\//i.test(url) || /^https?:\/\//i.test(url);
+    return hasDataUrl || hasUrl;
+  }
+
+  function getAttachmentImageSrc(attachment) {
+    if (!isImageAttachment(attachment)) return "";
+    const dataUrl = String(attachment.dataUrl || "").trim();
+    if (dataUrl) return dataUrl;
+    return String(attachment.url || attachment.src || "").trim();
   }
 
   function getEntryImageAttachment(entry) {
@@ -1509,44 +1656,7 @@
     if (!(file instanceof File)) return null;
     const mime = String(file.type || "").toLowerCase();
     if (!mime.startsWith("image/")) return null;
-
-    let dataUrl = "";
-    let outputMime = mime || "image/jpeg";
-    let dimensions = { width: 0, height: 0 };
-    let payloadSize = Number(file.size) || 0;
-
-    const skipOptimization = shouldSkipImageOptimization(mime, file.size);
-    if (!skipOptimization) {
-      const optimized = await buildOptimizedImagePayload(file, mime).catch(function () { return null; });
-      if (optimized && /^data:image\/[a-z0-9.+-]+;base64,/i.test(optimized.dataUrl)) {
-        dataUrl = optimized.dataUrl;
-        outputMime = String(optimized.mime || outputMime || "image/jpeg");
-        dimensions = {
-          width: Number(optimized.width) || 0,
-          height: Number(optimized.height) || 0,
-        };
-        payloadSize = Number(optimized.size) || payloadSize;
-      }
-    }
-
-    if (!dataUrl) {
-      dataUrl = await readFileAsDataUrl(file);
-      if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl)) return null;
-      outputMime = getDataUrlMime(dataUrl) || outputMime;
-      dimensions = await getImageSizeFromDataUrl(dataUrl);
-      payloadSize = estimateDataUrlSizeBytes(dataUrl);
-    }
-
-    if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) return null;
-    return {
-      kind: "image",
-      name: String(file.name || "image").slice(0, 160),
-      mime: outputMime || "image/jpeg",
-      dataUrl: dataUrl,
-      width: Number.isFinite(dimensions.width) && dimensions.width > 0 ? dimensions.width : 0,
-      height: Number.isFinite(dimensions.height) && dimensions.height > 0 ? dimensions.height : 0,
-      size: Number.isFinite(payloadSize) && payloadSize > 0 ? payloadSize : 0,
-    };
+    return uploadSharedImageAttachment(file).catch(function () { return null; });
   }
 
   function cssEscape(value) {
@@ -1634,10 +1744,12 @@
       pullSharedThreadFromServer({ force: true })
         .catch(function () { return false; })
         .finally(function () {
-          const welcomeAdded = ensureDailyWelcomeMessage();
-          if (welcomeAdded) {
+          const welcomeMessage = ensureDailyWelcomeMessage();
+          if (welcomeMessage) {
             renderThread();
-            queueSharedThreadSave();
+            enqueueSharedMutation(function () {
+              return remoteCreateSharedMessage(welcomeMessage);
+            });
           }
           startSharedThreadPolling();
           const restored = restoreFeedScrollPosition();
@@ -1699,10 +1811,10 @@
 
   function ensureDailyWelcomeMessage() {
     const dayKey = getLocalDayKey(new Date());
-    if (!dayKey) return false;
+    if (!dayKey) return null;
 
     const metaState = sanitizeSharedThreadMeta(sharedThreadMeta);
-    if (metaState.lastWelcomeDay === dayKey) return false;
+    if (metaState.lastWelcomeDay === dayKey) return null;
 
     const welcomeId = "daily-welcome-" + dayKey;
     const existsInBase = baseEntries.some(function (entry) {
@@ -1717,11 +1829,11 @@
         phone: metaState.phone,
         lastWelcomeDay: dayKey,
       };
-      return false;
+      return null;
     }
 
     const nowIso = new Date().toISOString();
-    liveEntries.push({
+    const message = {
       id: welcomeId,
       type: "message",
       role: "agent",
@@ -1737,7 +1849,8 @@
       readAt: nowIso,
       reaction: "",
       reactions: { in: "", out: "" },
-    });
+    };
+    liveEntries.push(message);
     markSharedThreadMutated();
     sharedThreadMeta = {
       name: metaState.name,
@@ -1745,7 +1858,7 @@
       lastWelcomeDay: dayKey,
     };
     renderUnreadBadge(liveEntries);
-    return true;
+    return message;
   }
 
   function getAllEntries() {
@@ -1955,7 +2068,15 @@
       updateScrollDownButton();
     }
 
-    if (inLive) queueSharedThreadSave();
+    if (inLive) {
+      const messageId = String(target.id || id);
+      enqueueSharedMutation(function () {
+        return remotePatchSharedMessage(messageId, {
+          text: String(target.text || ""),
+          editedAt: String(target.editedAt || ""),
+        });
+      });
+    }
     return true;
   }
 
@@ -2325,7 +2446,11 @@
       feed.scrollTop = prevTop;
       updateScrollDownButton();
     }
-    if (removedFromLive) queueSharedThreadSave();
+    if (removedFromLive) {
+      enqueueSharedMutation(function () {
+        return remoteDeleteSharedMessage(id);
+      });
+    }
     saveLocalHiddenMessageIds();
     return true;
   }
@@ -2404,7 +2529,7 @@
       attachmentWrap.className = "shop-company-chat-attachment";
       const img = document.createElement("img");
       img.className = "shop-company-chat-attachment-image";
-      img.src = String(imageAttachment.dataUrl || "");
+      img.src = getAttachmentImageSrc(imageAttachment);
       img.alt = String(imageAttachment.name || "Фото");
       img.loading = "eager";
       img.decoding = "async";
@@ -3115,7 +3240,13 @@
     feed.scrollTop = prevTop;
     updateScrollDownButton();
     if (liveEntries.some(function (item) { return String(item.id || "") === String(messageId || ""); })) {
-      queueSharedThreadSave();
+      const messageIdStr = String(messageId || "");
+      enqueueSharedMutation(function () {
+        return remotePatchSharedMessage(messageIdStr, {
+          reaction: String(getEntryActorReaction(entry, CHAT_REACTION_ACTOR) || ""),
+          reactions: ensureEntryReactions(entry),
+        });
+      });
     }
   }
 
@@ -3145,7 +3276,14 @@
       updateScrollDownButton();
     }
     if (opts.persistRemote !== false && liveEntries.some(function (item) { return String(item.id || "") === String(messageId || ""); })) {
-      queueSharedThreadSave();
+      const messageIdStr = String(messageId || "");
+      enqueueSharedMutation(function () {
+        return remotePatchSharedMessage(messageIdStr, {
+          deliveryStatus: String(entry.deliveryStatus || ""),
+          deliveredAt: String(entry.deliveredAt || ""),
+          readAt: String(entry.readAt || ""),
+        });
+      });
     }
     return true;
   }
@@ -3333,7 +3471,9 @@
 
     renderThread();
     scrollToBottom(true);
-    queueSharedThreadSave();
+    enqueueSharedMutation(function () {
+      return remoteCreateSharedMessage(message);
+    });
 
     if (role === "user") {
       scheduleOutgoingDeliveryProgress(message.id);
@@ -3452,7 +3592,7 @@
 
     attachPreviewTitle.textContent = getAttachPreviewTitle(total);
     if (active) {
-      attachPreviewImage.src = String(active.dataUrl || "");
+      attachPreviewImage.src = getAttachmentImageSrc(active);
       attachPreviewImage.alt = String(active.name || "Изображение");
     }
 
@@ -3467,7 +3607,7 @@
         btn.setAttribute("data-chat-attach-preview-index", String(idx));
 
         const img = document.createElement("img");
-        img.src = String(item.dataUrl || "");
+        img.src = getAttachmentImageSrc(item);
         img.alt = String(item.name || ("Фото " + String(idx + 1)));
         img.loading = "eager";
         img.decoding = "async";

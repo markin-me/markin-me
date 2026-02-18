@@ -6,9 +6,10 @@
   const CHAT_STORAGE_KEY = "dashboard:client-chat:v1";
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
   const ORDER_UPDATED_EVENT = "dashboard:order-updated";
-  const THREAD_SYNC_SAVE_DEBOUNCE_MS = 35;
-  const THREAD_SYNC_ACTIVE_POLL_MS = 250;
-  const THREAD_SYNC_SUMMARY_POLL_MS = 1800;
+  const THREAD_SYNC_SAVE_DEBOUNCE_MS = 220;
+  const THREAD_SYNC_SUMMARY_POLL_MS = 5000;
+  const THREAD_SYNC_WAIT_TIMEOUT_MS = 20000;
+  const THREAD_SYNC_WAIT_RETRY_MS = 1200;
   const ACTIVE_ORDERS_POLL_MS = 4200;
   const CHAT_AUTOSCROLL_MS = 170;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
@@ -149,9 +150,10 @@
     remoteThreadUpdatedAt: {},
     remoteSaveTimers: {},
     remoteSaveInFlight: {},
+    remoteMutationQueues: {},
     localThreadMutations: {},
-    activeThreadPollTimer: 0,
-    activeThreadPollInFlight: false,
+    activeThreadWaitLoopStarted: false,
+    activeThreadWaitLoopToken: 0,
     summariesPollTimer: 0,
     activeOrdersPollTimer: 0,
     activeOrdersPollInFlight: false,
@@ -187,10 +189,15 @@
     const tenantId = getTenantId();
     const token = localStorage.getItem("authToken");
     const storeId = localStorage.getItem("activeStoreId") || "1";
+    const isFormDataBody = (
+      typeof FormData !== "undefined"
+      && opts.body instanceof FormData
+    );
+
     const headers = {
       "x-tenant-id": String(tenantId),
       "x-store-id": storeId,
-      ...(opts.body ? { "Content-Type": "application/json" } : {}),
+      ...(opts.body && !isFormDataBody ? { "Content-Type": "application/json" } : {}),
       ...(opts.headers || {}),
     };
 
@@ -199,7 +206,9 @@
     const res = await fetch(url, {
       method: opts.method || "GET",
       headers,
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      body: opts.body
+        ? (isFormDataBody ? opts.body : JSON.stringify(opts.body))
+        : undefined,
     });
 
     if (res.status === 401) {
@@ -458,6 +467,160 @@
     delete state.remoteThreadUpdatedAt[key];
   }
 
+  function buildRemoteMessagePayload(message) {
+    if (!message || typeof message !== "object") return null;
+    const reactions = ensureMessageReactions(message);
+    const payload = {
+      id: String(message.id || ""),
+      direction: String(message.direction || "").toLowerCase() === "out" ? "out" : "in",
+      text: String(message.text || ""),
+      createdAt: String(message.createdAt || new Date().toISOString()),
+      editedAt: String(message.editedAt || ""),
+      read: message.read === true,
+      pinned: message.pinned === true,
+      reaction: String(message.reaction || ""),
+      reactions: {
+        in: String(reactions.in || ""),
+        out: String(reactions.out || ""),
+      },
+      replyTo: message.replyTo && typeof message.replyTo === "object"
+        ? {
+            id: String(message.replyTo.id || ""),
+            sender: String(message.replyTo.sender || ""),
+            text: String(message.replyTo.text || ""),
+          }
+        : null,
+      attachment: isImageAttachment(message.attachment)
+        ? {
+            kind: "image",
+            name: String(message.attachment.name || ""),
+            mime: String(message.attachment.mime || ""),
+            dataUrl: String(message.attachment.dataUrl || ""),
+            url: String(message.attachment.url || ""),
+            width: Number(message.attachment.width || 0),
+            height: Number(message.attachment.height || 0),
+            size: Number(message.attachment.size || 0),
+          }
+        : null,
+      deliveryStatus: String(message.deliveryStatus || ""),
+      deliveredAt: String(message.deliveredAt || ""),
+      readAt: String(message.readAt || ""),
+    };
+    return payload;
+  }
+
+  function enqueueRemoteMutation(clientId, mutator) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key || typeof mutator !== "function") return Promise.resolve();
+    const prev = state.remoteMutationQueues[key] || Promise.resolve();
+    const next = prev
+      .catch(() => {})
+      .then(async () => {
+        const result = await mutator();
+        return result;
+      })
+      .catch((err) => {
+        console.error(err);
+      });
+    state.remoteMutationQueues[key] = next;
+    return next;
+  }
+
+  async function remoteCreateMessage(clientId, message) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    const payloadMessage = buildRemoteMessagePayload(message);
+    if (!payloadMessage || !payloadMessage.id) return;
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}/messages`, {
+      method: "POST",
+      body: {
+        message: payloadMessage,
+        meta: getClientMetaForSync(key),
+      },
+    });
+    const updatedAt = String(json?.data?.updated_at || "");
+    if (updatedAt) state.remoteThreadUpdatedAt[key] = updatedAt;
+  }
+
+  async function remotePatchMessage(clientId, messageId, patch) {
+    const key = normalizeClientIdKey(clientId);
+    const msgId = String(messageId || "").trim();
+    if (!key || !msgId || !patch || typeof patch !== "object") return;
+    const json = await apiJson(
+      `${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}/messages/${encodeURIComponent(msgId)}`,
+      {
+        method: "PATCH",
+        body: {
+          patch,
+          meta: getClientMetaForSync(key),
+        },
+      }
+    );
+    const updatedAt = String(json?.data?.updated_at || "");
+    if (updatedAt) state.remoteThreadUpdatedAt[key] = updatedAt;
+  }
+
+  async function remoteDeleteMessage(clientId, messageId) {
+    const key = normalizeClientIdKey(clientId);
+    const msgId = String(messageId || "").trim();
+    if (!key || !msgId) return;
+    const json = await apiJson(
+      `${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}/messages/${encodeURIComponent(msgId)}`,
+      { method: "DELETE" }
+    );
+    const updatedAt = String(json?.data?.updated_at || "");
+    if (updatedAt) state.remoteThreadUpdatedAt[key] = updatedAt;
+  }
+
+  async function remoteMarkMessagesRead(clientId, messageIds = []) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    const ids = (Array.isArray(messageIds) ? messageIds : [])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean);
+    const json = await apiJson(
+      `${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}/messages/read`,
+      {
+        method: "POST",
+        body: {
+          message_ids: ids,
+          meta: getClientMetaForSync(key),
+        },
+      }
+    );
+    const updatedAt = String(json?.data?.updated_at || "");
+    if (updatedAt) state.remoteThreadUpdatedAt[key] = updatedAt;
+  }
+
+  async function uploadChatImageAttachment(clientId, file) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key || !file) return null;
+    const fd = new FormData();
+    fd.append("client_id", String(key));
+    fd.append("file", file);
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/attachment`, {
+      method: "POST",
+      body: fd,
+    });
+    const attachment = json?.data?.attachment;
+    return isImageAttachment(attachment) ? attachment : null;
+  }
+
+  async function waitThreadRemoteUpdate(clientId, sinceUpdatedAt, timeoutMs = THREAD_SYNC_WAIT_TIMEOUT_MS) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return { changed: false, updatedAt: "" };
+    const qs = new URLSearchParams({
+      since: String(sinceUpdatedAt || ""),
+      timeout_ms: String(Math.max(1000, Number(timeoutMs || THREAD_SYNC_WAIT_TIMEOUT_MS))),
+      _ts: String(Date.now()),
+    });
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}/wait?${qs.toString()}`);
+    return {
+      changed: json?.data?.changed === true,
+      updatedAt: String(json?.data?.updated_at || ""),
+    };
+  }
+
   function queueThreadSaveToRemote(clientId) {
     const key = normalizeClientIdKey(clientId);
     if (!key) return;
@@ -645,18 +808,39 @@
     return changed;
   }
 
+  function sleepMs(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, Number(ms || 0))));
+  }
+
   function startRemoteSyncLoops() {
-    if (!state.activeThreadPollTimer) {
-      state.activeThreadPollTimer = window.setInterval(() => {
-        if (!state.activeClientId) return;
-        if (state.activeThreadPollInFlight) return;
-        state.activeThreadPollInFlight = true;
-        pullThreadFromRemoteIfChanged(state.activeClientId, { skipReadMark: false })
-          .catch(console.error)
-          .finally(() => {
-            state.activeThreadPollInFlight = false;
-          });
-      }, THREAD_SYNC_ACTIVE_POLL_MS);
+    if (!state.activeThreadWaitLoopStarted) {
+      state.activeThreadWaitLoopStarted = true;
+      state.activeThreadWaitLoopToken += 1;
+      const loopToken = state.activeThreadWaitLoopToken;
+
+      (async function runActiveThreadWaitLoop() {
+        while (state.activeThreadWaitLoopStarted && loopToken === state.activeThreadWaitLoopToken) {
+          const activeId = normalizeClientIdKey(state.activeClientId);
+          if (!activeId) {
+            await sleepMs(THREAD_SYNC_WAIT_RETRY_MS);
+            continue;
+          }
+
+          try {
+            const knownUpdatedAt = String(state.remoteThreadUpdatedAt[activeId] || "");
+            const waited = await waitThreadRemoteUpdate(activeId, knownUpdatedAt, THREAD_SYNC_WAIT_TIMEOUT_MS);
+            if (!state.activeThreadWaitLoopStarted || loopToken !== state.activeThreadWaitLoopToken) break;
+            if (normalizeClientIdKey(state.activeClientId) !== activeId) continue;
+
+            if (waited?.changed === true || (waited?.updatedAt && waited.updatedAt !== knownUpdatedAt)) {
+              await pullThreadFromRemoteIfChanged(activeId, { skipReadMark: false }).catch(console.error);
+            }
+          } catch (err) {
+            console.error(err);
+            await sleepMs(THREAD_SYNC_WAIT_RETRY_MS);
+          }
+        }
+      })().catch(console.error);
     }
 
     if (!state.summariesPollTimer) {
@@ -834,7 +1018,6 @@
     if (changed) {
       markThreadMutated(clientId);
       saveStore();
-      queueThreadSaveToRemote(clientId);
     }
     return changed;
   }
@@ -842,6 +1025,7 @@
   function markThreadRead(clientId) {
     const thread = getThread(clientId);
     let changed = false;
+    const changedIds = [];
     const nowIso = new Date().toISOString();
     thread.forEach((msg) => {
       if (!msg || msg.direction !== "in") return;
@@ -850,12 +1034,13 @@
       msg.deliveryStatus = "read";
       msg.deliveredAt = msg.deliveredAt || nowIso;
       msg.readAt = msg.readAt || nowIso;
+      changedIds.push(String(msg.id || ""));
       changed = true;
     });
     if (changed) {
       markThreadMutated(clientId);
       saveStore();
-      queueThreadSaveToRemote(clientId);
+      enqueueRemoteMutation(clientId, () => remoteMarkMessagesRead(clientId, changedIds));
     }
     return changed;
   }
@@ -879,7 +1064,7 @@
     if (thread.length > 250) thread.splice(0, thread.length - 250);
     markThreadMutated(clientId);
     saveStore();
-    queueThreadSaveToRemote(clientId);
+    enqueueRemoteMutation(clientId, () => remoteCreateMessage(clientId, message));
   }
 
   function getMessageAuthorName(message) {
@@ -891,9 +1076,19 @@
   function isImageAttachment(attachment) {
     if (!attachment || typeof attachment !== "object") return false;
     const kind = String(attachment.kind || "").toLowerCase();
-    const dataUrl = String(attachment.dataUrl || "");
     if (kind !== "image") return false;
-    return /^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl);
+    const dataUrl = String(attachment.dataUrl || "");
+    const url = String(attachment.url || attachment.src || "");
+    const hasDataUrl = /^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl);
+    const hasUrl = /^\/uploads\/chat\//i.test(url) || /^https?:\/\//i.test(url);
+    return hasDataUrl || hasUrl;
+  }
+
+  function getAttachmentImageSrc(attachment) {
+    if (!isImageAttachment(attachment)) return "";
+    const dataUrl = String(attachment.dataUrl || "").trim();
+    if (dataUrl) return dataUrl;
+    return String(attachment.url || attachment.src || "").trim();
   }
 
   function getMessageImageAttachment(message) {
@@ -2594,7 +2789,10 @@
     msg.editedAt = new Date().toISOString();
     markThreadMutated(clientId);
     saveStore();
-    queueThreadSaveToRemote(clientId);
+    enqueueRemoteMutation(clientId, () => remotePatchMessage(clientId, messageId, {
+      text: msg.text,
+      editedAt: msg.editedAt,
+    }));
     return true;
   }
 
@@ -2611,7 +2809,7 @@
     if (state.selectedMessageIds.size === 0) setSelectionMode(false);
     markThreadMutated(clientId);
     saveStore();
-    queueThreadSaveToRemote(clientId);
+    enqueueRemoteMutation(clientId, () => remoteDeleteMessage(clientId, messageId));
     return true;
   }
 
@@ -2643,7 +2841,9 @@
     msg.pinned = !msg.pinned;
     markThreadMutated(clientId);
     saveStore();
-    queueThreadSaveToRemote(clientId);
+    enqueueRemoteMutation(clientId, () => remotePatchMessage(clientId, messageId, {
+      pinned: msg.pinned === true,
+    }));
     return true;
   }
 
@@ -2653,7 +2853,10 @@
     if (!setMessageActorReaction(msg, CHAT_REACTION_ACTOR, reaction)) return false;
     markThreadMutated(clientId);
     saveStore();
-    queueThreadSaveToRemote(clientId);
+    enqueueRemoteMutation(clientId, () => remotePatchMessage(clientId, messageId, {
+      reaction: String(getMessageActorReaction(msg, CHAT_REACTION_ACTOR) || ""),
+      reactions: ensureMessageReactions(msg),
+    }));
     return true;
   }
 
@@ -2708,7 +2911,11 @@
     markThreadMutated(clientId);
     saveStore();
     if (options.persistRemote !== false) {
-      queueThreadSaveToRemote(clientId);
+      enqueueRemoteMutation(clientId, () => remotePatchMessage(clientId, messageId, {
+        deliveryStatus: msg.deliveryStatus,
+        deliveredAt: msg.deliveredAt || "",
+        readAt: msg.readAt || "",
+      }));
     }
 
     if (Number(state.activeClientId) === Number(clientId)) renderMessages();
@@ -2855,45 +3062,8 @@
     if (!(file instanceof File)) return null;
     const mime = String(file.type || "").toLowerCase();
     if (!mime.startsWith("image/")) return null;
-
-    let dataUrl = "";
-    let outputMime = mime || "image/jpeg";
-    let dimensions = { width: 0, height: 0 };
-    let payloadSize = Number(file.size) || 0;
-
-    const skipOptimization = shouldSkipImageOptimization(mime, file.size);
-    if (!skipOptimization) {
-      const optimized = await buildOptimizedImagePayload(file, mime).catch(() => null);
-      if (optimized && /^data:image\/[a-z0-9.+-]+;base64,/i.test(optimized.dataUrl)) {
-        dataUrl = optimized.dataUrl;
-        outputMime = String(optimized.mime || outputMime || "image/jpeg");
-        dimensions = {
-          width: Number(optimized.width) || 0,
-          height: Number(optimized.height) || 0,
-        };
-        payloadSize = Number(optimized.size) || payloadSize;
-      }
-    }
-
-    if (!dataUrl) {
-      dataUrl = await readFileAsDataUrl(file);
-      if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl)) return null;
-      outputMime = getDataUrlMime(dataUrl) || outputMime;
-      dimensions = await getImageSizeFromDataUrl(dataUrl);
-      payloadSize = estimateDataUrlSizeBytes(dataUrl);
-    }
-
-    if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) return null;
-
-    return {
-      kind: "image",
-      name: String(file.name || "image").slice(0, 160),
-      mime: outputMime || "image/jpeg",
-      dataUrl,
-      width: Number.isFinite(dimensions.width) && dimensions.width > 0 ? dimensions.width : 0,
-      height: Number.isFinite(dimensions.height) && dimensions.height > 0 ? dimensions.height : 0,
-      size: Number.isFinite(payloadSize) && payloadSize > 0 ? payloadSize : 0,
-    };
+    if (!state.activeClientId) return null;
+    return uploadChatImageAttachment(state.activeClientId, file).catch(() => null);
   }
 
   async function copyToClipboard(value) {
@@ -3233,7 +3403,11 @@
 
         setSelectionMode(false);
         saveStore();
-        if (removeForBoth) queueThreadSaveToRemote(state.activeClientId);
+        if (removeForBoth) {
+          Array.from(selectedOwnIds).forEach((id) => {
+            enqueueRemoteMutation(state.activeClientId, () => remoteDeleteMessage(state.activeClientId, id));
+          });
+        }
         renderMessages();
         applyClientFilter();
       },
@@ -3478,7 +3652,7 @@
           <div class="chat-message-attachment">
             <img
               class="chat-message-attachment-image"
-              src="${escapeHtml(String(imageAttachment.dataUrl || ""))}"
+              src="${escapeHtml(getAttachmentImageSrc(imageAttachment))}"
               alt="${escapeHtml(String(imageAttachment.name || "Фото"))}"
               loading="eager"
               decoding="async"
@@ -3718,7 +3892,7 @@
       dom.center.attachPreviewTitle.textContent = getAttachPreviewTitle(total);
     }
     if (dom.center.attachPreviewImage && active) {
-      dom.center.attachPreviewImage.src = String(active.dataUrl || "");
+      dom.center.attachPreviewImage.src = getAttachmentImageSrc(active);
       dom.center.attachPreviewImage.alt = String(active.name || "Изображение");
     }
 
@@ -3735,7 +3909,7 @@
           btn.setAttribute("data-chat-attach-preview-index", String(idx));
 
           const img = document.createElement("img");
-          img.src = String(item.dataUrl || "");
+          img.src = getAttachmentImageSrc(item);
           img.alt = String(item.name || `Фото ${idx + 1}`);
           img.loading = "eager";
           img.decoding = "async";

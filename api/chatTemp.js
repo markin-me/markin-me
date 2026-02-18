@@ -1,8 +1,38 @@
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const multer = require("multer");
+const sharp = require("sharp");
 const db = require("../db");
 
 const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
 const MAX_MESSAGES_PER_THREAD = 1000;
+const CHAT_LONG_POLL_MAX_TIMEOUT_MS = 25000;
+const CHAT_LONG_POLL_MIN_TIMEOUT_MS = 1000;
+const CHAT_UPLOAD_MAX_FILE_BYTES = 20 * 1024 * 1024;
+const CHAT_UPLOAD_RELATIVE_DIR = path.join("uploads", "chat");
+const CHAT_UPLOAD_ABSOLUTE_DIR = path.join(__dirname, "..", CHAT_UPLOAD_RELATIVE_DIR);
+const CHAT_ALLOWED_IMAGE_MIME = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/avif",
+  "image/heic",
+  "image/heif",
+]);
+
+try {
+  fs.mkdirSync(CHAT_UPLOAD_ABSOLUTE_DIR, { recursive: true });
+} catch {}
+
+const attachmentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: CHAT_UPLOAD_MAX_FILE_BYTES },
+});
+
+const threadWaiters = new Map();
 
 function getTenantId(req) {
   const fromHeader = Number(req.headers["x-tenant-id"]);
@@ -78,8 +108,11 @@ function sanitizeAttachment(raw) {
   if (kind !== "image") return null;
 
   const dataUrl = String(raw.dataUrl || "");
-  if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl)) return null;
-  if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) return null;
+  const url = String(raw.url || raw.src || "").trim();
+  const hasDataUrl = /^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl);
+  const hasUrl = /^\/uploads\/chat\//i.test(url) || /^https?:\/\//i.test(url);
+  if (!hasDataUrl && !hasUrl) return null;
+  if (hasDataUrl && dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) return null;
 
   const mimeRaw = String(raw.mime || "").toLowerCase();
   const mime = /^image\/[a-z0-9.+-]+$/i.test(mimeRaw) ? mimeRaw : "";
@@ -92,7 +125,8 @@ function sanitizeAttachment(raw) {
     kind: "image",
     name: String(raw.name || "").slice(0, 160),
     mime,
-    dataUrl,
+    dataUrl: hasDataUrl ? dataUrl : "",
+    url: hasUrl ? url : "",
     width: Number.isFinite(width) && width > 0 ? Math.min(10000, Math.round(width)) : 0,
     height: Number.isFinite(height) && height > 0 ? Math.min(10000, Math.round(height)) : 0,
     size: Number.isFinite(size) && size > 0 ? Math.min(50 * 1024 * 1024, Math.round(size)) : 0,
@@ -173,6 +207,53 @@ function sanitizeMetaFromDbRow(row) {
     name: row.meta_name,
     phone: row.meta_phone,
     last_welcome_day: row.meta_last_welcome_day,
+  });
+}
+
+function normalizeMessageId(value) {
+  const id = String(value || "").trim().slice(0, 120);
+  return id || null;
+}
+
+function getThreadKey(tenantId, clientId) {
+  const tenant = normalizeClientId(tenantId);
+  const client = normalizeClientId(clientId);
+  if (!tenant || !client) return "";
+  return `${tenant}:${client}`;
+}
+
+function notifyThreadChange(tenantId, clientId, updatedAt = "") {
+  const key = getThreadKey(tenantId, clientId);
+  if (!key) return;
+  const set = threadWaiters.get(key);
+  if (!set || !set.size) return;
+  const payload = { updatedAt: String(updatedAt || "") };
+  Array.from(set).forEach((resolve) => {
+    try { resolve(payload); } catch {}
+  });
+}
+
+function waitForThreadChange(tenantId, clientId, timeoutMs) {
+  const key = getThreadKey(tenantId, clientId);
+  if (!key) return Promise.resolve({ timeout: true });
+  const timeout = Math.min(
+    CHAT_LONG_POLL_MAX_TIMEOUT_MS,
+    Math.max(CHAT_LONG_POLL_MIN_TIMEOUT_MS, Number(timeoutMs || 0) || 20000)
+  );
+  return new Promise((resolve) => {
+    const waitSet = threadWaiters.get(key) || new Set();
+    let done = false;
+    const complete = (payload) => {
+      if (done) return;
+      done = true;
+      waitSet.delete(complete);
+      if (!waitSet.size) threadWaiters.delete(key);
+      clearTimeout(timer);
+      resolve(payload || { timeout: true });
+    };
+    waitSet.add(complete);
+    threadWaiters.set(key, waitSet);
+    const timer = setTimeout(() => complete({ timeout: true }), timeout);
   });
 }
 
@@ -266,6 +347,80 @@ function mapSummaryRow(row) {
   };
 }
 
+function ensureAttachmentDir(tenantId, clientId) {
+  const tenant = normalizeClientId(tenantId) || "1";
+  const client = normalizeClientId(clientId) || "0";
+  const now = new Date();
+  const y = String(now.getFullYear());
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const dir = path.join(CHAT_UPLOAD_ABSOLUTE_DIR, tenant, client, y, m);
+  fs.mkdirSync(dir, { recursive: true });
+  return { absDir: dir, relDir: path.join(CHAT_UPLOAD_RELATIVE_DIR, tenant, client, y, m) };
+}
+
+function extByMime(mime) {
+  const type = String(mime || "").toLowerCase();
+  if (type === "image/png") return "png";
+  if (type === "image/webp") return "webp";
+  if (type === "image/gif") return "gif";
+  if (type === "image/avif") return "avif";
+  return "jpg";
+}
+
+async function storeChatAttachmentImage({ file, tenantId, clientId }) {
+  const sourceBuffer = file && file.buffer;
+  if (!sourceBuffer || !Buffer.isBuffer(sourceBuffer) || !sourceBuffer.length) {
+    throw new Error("FILE_REQUIRED");
+  }
+  const sourceMime = String(file.mimetype || "").toLowerCase();
+  if (!CHAT_ALLOWED_IMAGE_MIME.has(sourceMime)) {
+    throw new Error("UNSUPPORTED_FILE_TYPE");
+  }
+
+  const { absDir, relDir } = ensureAttachmentDir(tenantId, clientId);
+  const fileId = `${Date.now()}_${crypto.randomBytes(5).toString("hex")}`;
+
+  try {
+    const pipeline = sharp(sourceBuffer, { failOnError: false }).rotate().resize({
+      width: 1800,
+      height: 1800,
+      fit: "inside",
+      withoutEnlargement: true,
+    }).webp({ quality: 82 });
+
+    const meta = await pipeline.metadata();
+    const fileName = `${fileId}.webp`;
+    const absPath = path.join(absDir, fileName);
+    await pipeline.toFile(absPath);
+    const stat = fs.statSync(absPath);
+    const relUrlPath = `/${path.join(relDir, fileName).replace(/\\/g, "/")}`;
+
+    return sanitizeAttachment({
+      kind: "image",
+      name: String(file.originalname || "image"),
+      mime: "image/webp",
+      url: relUrlPath,
+      width: Number(meta?.width || 0),
+      height: Number(meta?.height || 0),
+      size: Number(stat?.size || 0),
+    });
+  } catch {
+    const ext = extByMime(sourceMime);
+    const fileName = `${fileId}.${ext}`;
+    const absPath = path.join(absDir, fileName);
+    fs.writeFileSync(absPath, sourceBuffer);
+    const stat = fs.statSync(absPath);
+    const relUrlPath = `/${path.join(relDir, fileName).replace(/\\/g, "/")}`;
+    return sanitizeAttachment({
+      kind: "image",
+      name: String(file.originalname || "image"),
+      mime: sourceMime || "image/jpeg",
+      url: relUrlPath,
+      size: Number(stat?.size || 0),
+    });
+  }
+}
+
 async function readThreadMeta(tenantId, clientId, conn = db) {
   const [rows] = await conn.query(
     `SELECT tenant_id, client_id, updated_at, meta_name, meta_phone, meta_last_welcome_day
@@ -348,6 +503,180 @@ async function upsertThreadMeta(conn, tenantId, clientId, meta, updatedAt) {
       String(safeMeta.last_welcome_day || ""),
     ]
   );
+}
+
+async function touchThreadUpdatedAt(conn, tenantId, clientId, updatedAt) {
+  await conn.query(
+    `UPDATE chat_threads
+        SET updated_at = ?
+      WHERE tenant_id = ? AND client_id = ?`,
+    [updatedAt, tenantId, clientId]
+  );
+}
+
+async function ensureThreadRow(conn, tenantId, clientId, options = {}) {
+  const currentMeta = await readThreadMeta(tenantId, clientId, conn);
+  const metaPatch = sanitizeMeta(options.meta || {});
+  const nextMeta = {
+    ...sanitizeMetaFromDbRow(currentMeta),
+    ...metaPatch,
+  };
+  const updatedAt = options.updatedAt || new Date();
+  await upsertThreadMeta(conn, tenantId, clientId, nextMeta, updatedAt);
+  return { meta: nextMeta, updatedAt };
+}
+
+function mapApiMessageToDbRow(tenantId, clientId, msg) {
+  const message = sanitizeMessage(msg);
+  if (!message) return null;
+  const reactions = sanitizeReactions(message.reactions);
+  const safeReply = sanitizeReply(message.replyTo);
+  const safeAttachment = sanitizeAttachment(message.attachment);
+
+  return {
+    messageId: String(message.id || "").slice(0, 120),
+    direction: String(message.direction || "").toLowerCase() === "out" ? "out" : "in",
+    text: String(message.text || "").slice(0, 5000),
+    createdAt: toDbDateOrNull(message.createdAt, true),
+    editedAt: toDbDateOrNull(message.editedAt, false),
+    isRead: message.read === true ? 1 : 0,
+    isPinned: message.pinned === true ? 1 : 0,
+    reactionLegacy: String(message.reaction || "").slice(0, 20),
+    reactionIn: String(reactions.in || "").slice(0, 20),
+    reactionOut: String(reactions.out || "").slice(0, 20),
+    replyToJson: safeReply ? JSON.stringify(safeReply) : null,
+    attachmentJson: safeAttachment ? JSON.stringify(safeAttachment) : null,
+    deliveryStatus: String(message.deliveryStatus || "").toLowerCase().slice(0, 16),
+    deliveredAt: toDbDateOrNull(message.deliveredAt, false),
+    readAt: toDbDateOrNull(message.readAt, false),
+    tenantId,
+    clientId,
+  };
+}
+
+async function upsertSingleThreadMessage(conn, tenantId, clientId, msg) {
+  const row = mapApiMessageToDbRow(tenantId, clientId, msg);
+  if (!row) throw new Error("MESSAGE_INVALID");
+
+  await conn.query(
+    `INSERT INTO chat_messages (
+      tenant_id, client_id, message_id, direction, text, created_at, edited_at,
+      is_read, is_pinned, reaction_legacy, reaction_in, reaction_out,
+      reply_to_json, attachment_json, delivery_status, delivered_at, read_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      direction = VALUES(direction),
+      text = VALUES(text),
+      created_at = VALUES(created_at),
+      edited_at = VALUES(edited_at),
+      is_read = VALUES(is_read),
+      is_pinned = VALUES(is_pinned),
+      reaction_legacy = VALUES(reaction_legacy),
+      reaction_in = VALUES(reaction_in),
+      reaction_out = VALUES(reaction_out),
+      reply_to_json = VALUES(reply_to_json),
+      attachment_json = VALUES(attachment_json),
+      delivery_status = VALUES(delivery_status),
+      delivered_at = VALUES(delivered_at),
+      read_at = VALUES(read_at)`,
+    [
+      row.tenantId,
+      row.clientId,
+      row.messageId,
+      row.direction,
+      row.text,
+      row.createdAt,
+      row.editedAt,
+      row.isRead,
+      row.isPinned,
+      row.reactionLegacy,
+      row.reactionIn,
+      row.reactionOut,
+      row.replyToJson,
+      row.attachmentJson,
+      row.deliveryStatus,
+      row.deliveredAt,
+      row.readAt,
+    ]
+  );
+
+  return row;
+}
+
+async function readSingleMessageRow(tenantId, clientId, messageId, conn = db) {
+  const [rows] = await conn.query(
+    `SELECT message_id, direction, text, created_at, edited_at, is_read, is_pinned,
+            reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json,
+            delivery_status, delivered_at, read_at
+       FROM chat_messages
+      WHERE tenant_id = ? AND client_id = ? AND message_id = ?
+      LIMIT 1`,
+    [tenantId, clientId, messageId]
+  );
+  return rows[0] || null;
+}
+
+function applyMessagePatch(existingMessage, patchInput, actorKey = "out") {
+  const base = sanitizeMessage(existingMessage);
+  if (!base) return null;
+  const patch = patchInput && typeof patchInput === "object" ? patchInput : {};
+  const next = { ...base };
+
+  if (Object.prototype.hasOwnProperty.call(patch, "text")) {
+    next.text = String(patch.text || "").slice(0, 5000);
+    next.editedAt = toIsoOrNow(patch.editedAt || new Date().toISOString());
+  } else if (patch.editedAt) {
+    next.editedAt = toIsoOrNow(patch.editedAt);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, "read")) {
+    next.read = patch.read === true;
+    if (next.read) {
+      next.deliveryStatus = "read";
+      next.readAt = toIsoOrNow(patch.readAt || next.readAt || new Date().toISOString());
+      next.deliveredAt = toIsoOrNow(patch.deliveredAt || next.deliveredAt || next.readAt);
+    } else {
+      next.readAt = "";
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, "pinned")) {
+    next.pinned = patch.pinned === true;
+  }
+
+  const deliveryPatch = String(patch.deliveryStatus || "").toLowerCase();
+  if (deliveryPatch === "sent" || deliveryPatch === "delivered" || deliveryPatch === "read") {
+    next.deliveryStatus = deliveryPatch;
+    if (deliveryPatch === "delivered") {
+      next.deliveredAt = toIsoOrNow(patch.deliveredAt || next.deliveredAt || new Date().toISOString());
+    }
+    if (deliveryPatch === "read") {
+      next.read = true;
+      next.readAt = toIsoOrNow(patch.readAt || next.readAt || new Date().toISOString());
+      next.deliveredAt = toIsoOrNow(patch.deliveredAt || next.deliveredAt || next.readAt);
+    }
+  }
+
+  const existingReactions = sanitizeReactions(next.reactions);
+  const peerKey = actorKey === "in" ? "out" : "in";
+  if (patch.reactions && typeof patch.reactions === "object") {
+    const raw = sanitizeReactions(patch.reactions);
+    existingReactions[actorKey] = String(raw[actorKey] || "").slice(0, 20);
+  } else if (Object.prototype.hasOwnProperty.call(patch, "reaction")) {
+    existingReactions[actorKey] = String(patch.reaction || "").slice(0, 20);
+  }
+  existingReactions[peerKey] = String(existingReactions[peerKey] || "").slice(0, 20);
+  next.reactions = existingReactions;
+  next.reaction = String(existingReactions[next.direction] || "");
+
+  if (Object.prototype.hasOwnProperty.call(patch, "replyTo")) {
+    next.replyTo = sanitizeReply(patch.replyTo);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "attachment")) {
+    next.attachment = sanitizeAttachment(patch.attachment);
+  }
+
+  return sanitizeMessage(next);
 }
 
 async function replaceThreadMessages(conn, tenantId, clientId, messages) {
@@ -639,6 +968,8 @@ module.exports = function makeChatTempRouter() {
       await conn.commit();
       conn.release();
       conn = null;
+      notifyThreadChange(tenantId, toClientId, merged?.updated_at || "");
+      notifyThreadChange(tenantId, fromClientId, merged?.updated_at || "");
       return res.json({ ok: true, data: merged });
     } catch (err) {
       if (conn) {
@@ -646,6 +977,297 @@ module.exports = function makeChatTempRouter() {
         conn.release();
       }
       console.error("chat-temp POST /thread/merge error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
+  router.post("/attachment", attachmentUpload.single("file"), async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const clientId = normalizeClientId(req.body?.client_id || req.query?.client_id || 0) || "0";
+      if (!req.file) return res.status(400).json({ ok: false, error: "FILE_REQUIRED" });
+      const attachment = await storeChatAttachmentImage({
+        file: req.file,
+        tenantId,
+        clientId,
+      });
+      if (!attachment) return res.status(400).json({ ok: false, error: "ATTACHMENT_INVALID" });
+      return res.json({ ok: true, data: { attachment } });
+    } catch (err) {
+      console.error("chat-temp POST /attachment error:", err);
+      const msg = String(err?.message || "");
+      if (msg === "UNSUPPORTED_FILE_TYPE") return res.status(415).json({ ok: false, error: msg });
+      if (msg === "FILE_REQUIRED") return res.status(400).json({ ok: false, error: msg });
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
+  router.get("/thread/:clientId/wait", async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const clientId = normalizeClientId(req.params.clientId);
+      if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
+
+      const since = String(req.query.since || "").trim();
+      const timeoutMs = Number(req.query.timeout_ms || req.query.timeout || 20000);
+
+      const currentMeta = await readThreadMeta(tenantId, clientId);
+      const currentUpdatedAt = toIsoOrEmpty(currentMeta?.updated_at);
+      if (!since || (currentUpdatedAt && currentUpdatedAt !== since)) {
+        return res.json({
+          ok: true,
+          data: {
+            client_id: Number(clientId),
+            changed: true,
+            updated_at: currentUpdatedAt,
+          },
+        });
+      }
+
+      const waitResult = await waitForThreadChange(tenantId, clientId, timeoutMs);
+      const nextMeta = await readThreadMeta(tenantId, clientId);
+      const nextUpdatedAt = toIsoOrEmpty(nextMeta?.updated_at);
+      const changed = String(nextUpdatedAt || "") !== String(since || "");
+
+      return res.json({
+        ok: true,
+        data: {
+          client_id: Number(clientId),
+          changed,
+          updated_at: nextUpdatedAt,
+        },
+      });
+    } catch (err) {
+      console.error("chat-temp GET /thread/:clientId/wait error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
+  router.post("/thread/:clientId/messages", async (req, res) => {
+    const tenantId = getTenantId(req);
+    const clientId = normalizeClientId(req.params.clientId);
+    if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
+
+    const message = sanitizeMessage(req.body?.message || req.body || {});
+    if (!message || !normalizeMessageId(message.id)) {
+      return res.status(400).json({ ok: false, error: "MESSAGE_INVALID" });
+    }
+
+    let conn;
+    try {
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+      const updatedAt = new Date();
+
+      await ensureThreadRow(conn, tenantId, clientId, {
+        meta: sanitizeMeta(req.body?.meta || {}),
+        updatedAt,
+      });
+      await upsertSingleThreadMessage(conn, tenantId, clientId, message);
+      await touchThreadUpdatedAt(conn, tenantId, clientId, updatedAt);
+
+      const row = await readSingleMessageRow(tenantId, clientId, message.id, conn);
+      await conn.commit();
+      conn.release();
+      conn = null;
+      notifyThreadChange(tenantId, clientId, updatedAt.toISOString());
+
+      return res.json({
+        ok: true,
+        data: {
+          client_id: Number(clientId),
+          updated_at: updatedAt.toISOString(),
+          message: row ? mapDbMessageRowToApi(row) : message,
+        },
+      });
+    } catch (err) {
+      if (conn) {
+        try { await conn.rollback(); } catch {}
+        conn.release();
+      }
+      console.error("chat-temp POST /thread/:clientId/messages error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
+  router.patch("/thread/:clientId/messages/:messageId", async (req, res) => {
+    const tenantId = getTenantId(req);
+    const clientId = normalizeClientId(req.params.clientId);
+    const messageId = normalizeMessageId(req.params.messageId);
+    if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
+    if (!messageId) return res.status(400).json({ ok: false, error: "MESSAGE_ID_REQUIRED" });
+
+    const actorKey = getRequestReactionActor(req);
+    const patch = req.body?.patch && typeof req.body.patch === "object"
+      ? req.body.patch
+      : (req.body && typeof req.body === "object" ? req.body : {});
+
+    let conn;
+    try {
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+
+      const existingRow = await readSingleMessageRow(tenantId, clientId, messageId, conn);
+      if (!existingRow) {
+        await conn.rollback();
+        conn.release();
+        conn = null;
+        return res.status(404).json({ ok: false, error: "MESSAGE_NOT_FOUND" });
+      }
+
+      const existingMessage = mapDbMessageRowToApi(existingRow);
+      const nextMessage = applyMessagePatch(existingMessage, patch, actorKey);
+      if (!nextMessage) {
+        await conn.rollback();
+        conn.release();
+        conn = null;
+        return res.status(400).json({ ok: false, error: "PATCH_INVALID" });
+      }
+
+      const updatedAt = new Date();
+      await ensureThreadRow(conn, tenantId, clientId, {
+        meta: sanitizeMeta(req.body?.meta || {}),
+        updatedAt,
+      });
+      await upsertSingleThreadMessage(conn, tenantId, clientId, nextMessage);
+      await touchThreadUpdatedAt(conn, tenantId, clientId, updatedAt);
+
+      const row = await readSingleMessageRow(tenantId, clientId, messageId, conn);
+      await conn.commit();
+      conn.release();
+      conn = null;
+      notifyThreadChange(tenantId, clientId, updatedAt.toISOString());
+
+      return res.json({
+        ok: true,
+        data: {
+          client_id: Number(clientId),
+          updated_at: updatedAt.toISOString(),
+          message: row ? mapDbMessageRowToApi(row) : nextMessage,
+        },
+      });
+    } catch (err) {
+      if (conn) {
+        try { await conn.rollback(); } catch {}
+        conn.release();
+      }
+      console.error("chat-temp PATCH /thread/:clientId/messages/:messageId error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
+  router.post("/thread/:clientId/messages/read", async (req, res) => {
+    const tenantId = getTenantId(req);
+    const clientId = normalizeClientId(req.params.clientId);
+    if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
+
+    const ids = (Array.isArray(req.body?.message_ids) ? req.body.message_ids : [])
+      .map((id) => normalizeMessageId(id))
+      .filter(Boolean);
+    const hasFilterIds = ids.length > 0;
+
+    let conn;
+    try {
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+
+      const updatedAt = new Date();
+      const readAt = new Date();
+
+      let query = `
+        UPDATE chat_messages
+           SET is_read = 1,
+               delivery_status = 'read',
+               delivered_at = COALESCE(delivered_at, ?),
+               read_at = COALESCE(read_at, ?)
+         WHERE tenant_id = ? AND client_id = ? AND direction = 'in' AND is_read = 0
+      `;
+      const params = [readAt, readAt, tenantId, clientId];
+      if (hasFilterIds) {
+        query += ` AND message_id IN (${ids.map(() => "?").join(",")})`;
+        params.push(...ids);
+      }
+      const [result] = await conn.query(query, params);
+      const changed = Number(result?.affectedRows || 0) > 0;
+
+      if (changed) {
+        await ensureThreadRow(conn, tenantId, clientId, {
+          meta: sanitizeMeta(req.body?.meta || {}),
+          updatedAt,
+        });
+        await touchThreadUpdatedAt(conn, tenantId, clientId, updatedAt);
+      }
+
+      await conn.commit();
+      conn.release();
+      conn = null;
+      if (changed) notifyThreadChange(tenantId, clientId, updatedAt.toISOString());
+
+      return res.json({
+        ok: true,
+        data: {
+          client_id: Number(clientId),
+          changed,
+          updated_at: changed ? updatedAt.toISOString() : "",
+        },
+      });
+    } catch (err) {
+      if (conn) {
+        try { await conn.rollback(); } catch {}
+        conn.release();
+      }
+      console.error("chat-temp POST /thread/:clientId/messages/read error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
+  router.delete("/thread/:clientId/messages/:messageId", async (req, res) => {
+    const tenantId = getTenantId(req);
+    const clientId = normalizeClientId(req.params.clientId);
+    const messageId = normalizeMessageId(req.params.messageId);
+    if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
+    if (!messageId) return res.status(400).json({ ok: false, error: "MESSAGE_ID_REQUIRED" });
+
+    let conn;
+    try {
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+      const updatedAt = new Date();
+
+      const [result] = await conn.query(
+        `DELETE FROM chat_messages
+          WHERE tenant_id = ? AND client_id = ? AND message_id = ?`,
+        [tenantId, clientId, messageId]
+      );
+      const changed = Number(result?.affectedRows || 0) > 0;
+      if (changed) {
+        await ensureThreadRow(conn, tenantId, clientId, {
+          meta: sanitizeMeta(req.body?.meta || {}),
+          updatedAt,
+        });
+        await touchThreadUpdatedAt(conn, tenantId, clientId, updatedAt);
+      }
+
+      await conn.commit();
+      conn.release();
+      conn = null;
+      if (changed) notifyThreadChange(tenantId, clientId, updatedAt.toISOString());
+
+      return res.json({
+        ok: true,
+        data: {
+          client_id: Number(clientId),
+          message_id: messageId,
+          deleted: changed,
+          updated_at: changed ? updatedAt.toISOString() : "",
+        },
+      });
+    } catch (err) {
+      if (conn) {
+        try { await conn.rollback(); } catch {}
+        conn.release();
+      }
+      console.error("chat-temp DELETE /thread/:clientId/messages/:messageId error:", err);
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
   });
@@ -681,9 +1303,8 @@ module.exports = function makeChatTempRouter() {
       const since = new Date(sinceRaw);
       if (Number.isNaN(since.getTime())) return res.status(400).json({ ok: false, error: "SINCE_INVALID" });
 
-      const [metaRow, messageCount, changedRows] = await Promise.all([
+      const [metaRow, changedRows] = await Promise.all([
         readThreadMeta(tenantId, clientId),
-        readThreadMessageCount(tenantId, clientId),
         readThreadMessagesSince(tenantId, clientId, since),
       ]);
 
@@ -692,7 +1313,7 @@ module.exports = function makeChatTempRouter() {
         data: {
           client_id: Number(clientId),
           updated_at: toIsoOrEmpty(metaRow?.updated_at),
-          message_count: Number(messageCount || 0),
+          message_count: -1,
           messages: sanitizeThread(changedRows.map(mapDbMessageRowToApi)),
         },
       });
@@ -763,6 +1384,7 @@ module.exports = function makeChatTempRouter() {
       await conn.commit();
       conn.release();
       conn = null;
+      notifyThreadChange(tenantId, clientId, updatedAt.toISOString());
 
       return res.json({
         ok: true,
@@ -795,6 +1417,7 @@ module.exports = function makeChatTempRouter() {
         [tenantId, clientId]
       );
       const deleted = Number(result?.affectedRows || 0) > 0;
+      if (deleted) notifyThreadChange(tenantId, clientId, new Date().toISOString());
 
       return res.json({ ok: true, data: { client_id: Number(clientId), deleted } });
     } catch (err) {
