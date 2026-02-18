@@ -336,33 +336,32 @@ header{
 
 /* burger */
 .icon-btn{
-  border:1px solid var(--color-border);
-  background:var(--color-surface);
-  color:var(--color-text);
-  border-radius:10px;
+  border:0;
+  background:var(--color-surface-2);
+  color:var(--color-text-muted);
+  border-radius:50%;
   width:40px;height:40px;
   display:inline-flex;align-items:center;justify-content:center;
   cursor:pointer;
   transition:background var(--dur-fast) var(--ease-smooth), transform var(--dur-fast) var(--ease-smooth);
 }
-.icon-btn:hover{background:var(--color-surface-2);transform:translateY(-1px)}
+.icon-btn:hover{background:var(--color-surface-2);color:var(--color-text);transform:translateY(-1px)}
 
 /* ✅ вернули “как раньше” для темы/профиля */
 .header-btn{
   width:40px;height:40px;
-  border-radius:10px;
-  border:1px solid var(--color-border);
-  background:var(--color-surface);
-  color:var(--color-text);
+  border-radius:50%;
+  border:0;
+  background:var(--color-surface-2);
+  color:var(--color-text-muted);
   display:inline-flex;align-items:center;justify-content:center;
   cursor:pointer;
   text-decoration:none;
   transition:background var(--dur-fast) var(--ease-smooth), transform var(--dur-fast) var(--ease-smooth);
 }
-.header-btn:hover{background:var(--color-surface-2);transform:translateY(-1px)}
+.header-btn:hover{background:var(--color-surface-2);color:var(--color-text);transform:translateY(-1px)}
 .header-btn.is-active{
   background: var(--primary-12);
-  border-color: var(--primary-45);
   color: var(--color-primary);
 }
 
@@ -1088,7 +1087,8 @@ body.page-home .page-col-right .panel{
 .btn:hover{background:var(--color-surface-2);transform:translateY(-1px)}
 .btn-primary{background:var(--color-primary);border-color:transparent;color:var(--on-primary)}
 .btn-primary:hover{background:var(--color-primary-hover)}
-.btn-icon{width:40px;padding:0;justify-content:center}
+.btn-icon{width:40px;padding:0;justify-content:center;border-radius:50%;border:0;background:var(--color-surface-2);color:var(--color-text-muted)}
+.btn-icon:hover{color:var(--color-text)}
 .btn-danger{
   border-color:var(--color-primary);
   color:var(--color-primary);
@@ -10548,19 +10548,18 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 .shop-pd-fav{
-  width: 52px;
-  height: 52px;
-  border-radius: 16px;
-  border: 1px solid var(--color-border);
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 0;
   background: var(--color-surface-2);
-  color: var(--color-text);
+  color: var(--color-text-muted);
   display: grid;
   place-items: center;
   cursor: pointer;
 }
 
 .shop-pd-fav.is-active{
-  border-color: var(--color-border);
   box-shadow: none;
 }
 
@@ -11694,9 +11693,10 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 .shop-address-action-icon{
   width: 32px;
   height: 32px;
-  border-radius: 10px;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
+  border-radius: 50%;
+  border: 0;
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
   display: grid;
   place-items: center;
   cursor: pointer;
@@ -11723,11 +11723,11 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   width: auto;
   min-width: 32px;
   padding: 0 8px;
+  border-radius: 999px;
   font-size: 12px;
   font-weight: 700;
   color: var(--color-danger, var(--shop-danger));
-  border-color: var(--color-danger, var(--shop-danger));
-  background: var(--color-surface);
+  background: var(--color-surface-2);
 }
 
 .shop-profile-address-toggle{
@@ -12812,9 +12812,10 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 .shop-cart-fav{
   width:40px;
   height:40px;
-  border:1px solid var(--shop-border);
-  background:var(--shop-white);
-  border-radius:12px;
+  border:0;
+  background:var(--color-surface-2);
+  color:var(--color-text-muted);
+  border-radius:50%;
   display:inline-flex;
   align-items:center;
   justify-content:center;
@@ -13741,7 +13742,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 .shop-active-orders-badge {
   background: var(--color-primary);
   color: var(--color-white);
-  border-radius: 10px;
+  border-radius: 999px;
   padding: 0 16px;
   height: 40px;
   min-width: 245px;
@@ -13754,6 +13755,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   align-items: center;
   justify-content: center;
   gap: 4px;
+  border: 0;
   transition: background var(--dur-fast) var(--ease-smooth), transform var(--dur-fast) var(--ease-smooth), box-shadow var(--dur-fast) var(--ease-smooth);
   border: 1px solid transparent;
 }
