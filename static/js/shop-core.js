@@ -2240,6 +2240,7 @@
         const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
         if (tspan) tspan.textContent = money(total);
       }
+      appendUpsellToList(openCartSheetCtx.listEl);
     }
     if (window.matchMedia("(max-width: 768px)").matches) updateMobileDeliveryProgress();
   }
@@ -2395,6 +2396,7 @@
         const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
         if (tspan) tspan.textContent = money(total);
       }
+      appendUpsellToList(openCartSheetCtx.listEl);
     }
     if (window.matchMedia("(max-width: 768px)").matches) updateMobileDeliveryProgress();
   }
@@ -7219,6 +7221,10 @@ async function initAddresses() {
         if (items.length === 0 && openCartSheetCtx.listEl) {
           openCartSheetCtx.listEl.innerHTML = '<div class="shop-cart-empty-sheet">В корзине пусто</div>';
         }
+        // Перестраиваем апселл: удалённый товар должен снова появиться в списке
+        if (openCartSheetCtx.listEl) {
+          appendUpsellToList(openCartSheetCtx.listEl);
+        }
       }
 
       // ???????: ???????? ?????? В корзине пусто???? ???????? (????? ? ????????)
@@ -7364,6 +7370,7 @@ async function initAddresses() {
       if (totalSpan) totalSpan.textContent = money(total);
     }
     updateMobileDeliveryProgress();
+    appendUpsellToList(elCartList);
   }
 
 function updateCartBadge() {
@@ -7406,6 +7413,7 @@ function updateCartBadge() {
       const { items } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
       if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
       if (openCartSheetCtx.checkoutBtn) openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
+      appendUpsellToList(openCartSheetCtx.listEl);
     }
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
@@ -7578,6 +7586,7 @@ function updateCartBadge() {
         const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
         if (tspan) tspan.textContent = money(total);
       }
+      appendUpsellToList(openCartSheetCtx.listEl);
       if (window.matchMedia("(max-width: 768px)").matches) updateMobileDeliveryProgress();
     }
 
@@ -7686,6 +7695,193 @@ function updateCartBadge() {
       state.autoAdd.items = [];
       state.autoAdd.byProductId = new Map();
       state.autoAdd.byGroupId = new Map();
+    }
+  }
+
+  async function loadUpsellProducts() {
+    try {
+      const json = await apiJson(`/api/public/cart-upsell`);
+      state.upsellProducts = Array.isArray(json.data) ? json.data : [];
+    } catch (e) {
+      console.warn("Failed to load upsell products", e);
+      state.upsellProducts = [];
+    }
+  }
+
+  function _createUpsellCard(p, scrollEl, upsellEl, listEl) {
+    const price = p.display_price != null ? p.display_price : (p.price || 0);
+    const thumb = p.thumb || (Array.isArray(p.photos) && p.photos[0]) || "";
+    const card = document.createElement("div");
+    card.className = "cart-upsell-card";
+    card.dataset.productId = String(p.id);
+    card.innerHTML =
+      '<div class="cart-upsell-photo">' +
+        (thumb ? '<img src="' + escapeHtml(thumb) + '" alt="" loading="lazy" />' : '<div class="cart-upsell-no-photo"></div>') +
+      '</div>' +
+      '<div class="cart-upsell-name">' + escapeHtml(p.name || "") + '</div>' +
+      '<button class="cart-upsell-btn" type="button">' + money(price) + '</button>';
+    card.addEventListener("click", function() {
+      if (p.has_options) {
+        openProductDetails(p.id);
+      } else {
+        card.remove();
+        _syncUpsellVisibility(scrollEl, upsellEl);
+        addUpsellToCart(p, listEl);
+      }
+    });
+    return card;
+  }
+
+  function _syncUpsellVisibility(scrollEl, upsellEl) {
+    var titleEl = upsellEl.querySelector(".shop-cart-upsell-title");
+    var hasCards = scrollEl && scrollEl.querySelector(".cart-upsell-card");
+    if (titleEl) titleEl.style.display = hasCards ? "" : "none";
+    if (scrollEl) scrollEl.style.display = hasCards ? "" : "none";
+  }
+
+  function appendUpsellToList(listEl) {
+    if (!listEl) return;
+    var allProducts = state.upsellProducts || [];
+    if (allProducts.length === 0) {
+      var old = listEl.querySelector(".shop-cart-upsell");
+      if (old) old.remove();
+      return;
+    }
+
+    var cartProductIds = new Set(
+      (state.cart || []).map(function(ci) { return Number(ci.product_id); }).filter(Boolean)
+    );
+    var visibleIds = new Set(
+      allProducts.filter(function(p) { return !cartProductIds.has(Number(p.id)); }).map(function(p) { return Number(p.id); })
+    );
+
+    var upsellEl = listEl.querySelector(".shop-cart-upsell");
+    var scrollEl;
+
+    if (!upsellEl) {
+      // Создаём блок с нуля
+      upsellEl = document.createElement("div");
+      upsellEl.className = "shop-cart-upsell";
+      var titleEl = document.createElement("div");
+      titleEl.className = "shop-cart-upsell-title";
+      titleEl.textContent = "Добавить к заказу?";
+      scrollEl = document.createElement("div");
+      scrollEl.className = "shop-cart-upsell-scroll";
+      upsellEl.appendChild(titleEl);
+      upsellEl.appendChild(scrollEl);
+      listEl.appendChild(upsellEl);
+    } else {
+      scrollEl = upsellEl.querySelector(".shop-cart-upsell-scroll");
+      if (!scrollEl) {
+        scrollEl = document.createElement("div");
+        scrollEl.className = "shop-cart-upsell-scroll";
+        upsellEl.appendChild(scrollEl);
+      }
+      // Убеждаемся что блок в конце listEl
+      if (upsellEl.parentNode === listEl && upsellEl !== listEl.lastElementChild) {
+        listEl.appendChild(upsellEl);
+      }
+    }
+
+    // Синхронизируем карточки: убираем лишние, добавляем недостающие
+    var existingCards = scrollEl.querySelectorAll(".cart-upsell-card");
+    var presentIds = new Set();
+    existingCards.forEach(function(card) {
+      var pid = Number(card.dataset.productId);
+      if (!visibleIds.has(pid)) {
+        card.remove();
+      } else {
+        presentIds.add(pid);
+      }
+    });
+
+    // Добавляем недостающие карточки
+    allProducts.forEach(function(p) {
+      var pid = Number(p.id);
+      if (visibleIds.has(pid) && !presentIds.has(pid)) {
+        scrollEl.appendChild(_createUpsellCard(p, scrollEl, upsellEl, listEl));
+      }
+    });
+
+    _syncUpsellVisibility(scrollEl, upsellEl);
+  }
+
+  function addUpsellToCart(p, listEl) {
+    const pid = Number(p.id);
+    if (!Number.isFinite(pid)) return;
+
+    // Подготавливаем вариант из default_variant если есть
+    var variantSelection = null;
+    var variantGroupId = null;
+    var variantValueIndex = null;
+    var variantLabel = "";
+    var variantUnitPrice = 0;
+
+    if (p.default_variant) {
+      variantGroupId = Number(p.default_variant.variant_group_id) || null;
+      variantValueIndex = Number(p.default_variant.variant_value_index);
+      variantLabel = String(p.default_variant.variant_label || "");
+      variantUnitPrice = Number(p.default_variant.variant_unit_price) || 0;
+
+      if (Number.isFinite(variantGroupId) && Number.isFinite(variantValueIndex)) {
+        variantSelection = {
+          group_id: variantGroupId,
+          value_index: variantValueIndex
+        };
+      }
+    }
+
+    const key = makeCartKey(pid, [], [], variantSelection);
+    const existing = getCartItemByKey(key);
+    if (existing) {
+      existing.qty += 1;
+    } else {
+      state.cart.push({
+        key: key,
+        product_id: pid,
+        qty: 1,
+        option_item_ids: [],
+        option_items: [],
+        ingredients: [],
+        ingredient_price_diff: 0,
+        variant_group_id: variantGroupId,
+        variant_value_index: variantValueIndex,
+        variant_label: variantLabel,
+        variant_unit_price: variantUnitPrice,
+        auto_add: 0,
+        auto_add_group_id: null,
+      });
+    }
+    saveCart();
+    renderCart();
+    if (openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
+      // Отсоединяем блок апселла перед перерисовкой чтобы renderCartInto его не уничтожил
+      var upsellBlock = openCartSheetCtx.listEl.querySelector(".shop-cart-upsell");
+      if (upsellBlock) upsellBlock.remove();
+
+      const { items, total } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
+      if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
+      if (openCartSheetCtx.checkoutBtn) {
+        openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
+        const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
+        if (tspan) tspan.textContent = money(total);
+      }
+      // Обновляем мобильные плавающие кнопки (кнопка "Оформить" снаружи шита)
+      const isMobileUpsell = window.matchMedia("(max-width: 768px)").matches;
+      if (isMobileUpsell && elMobileCartActions) {
+        elMobileCartActionsCart?.classList.toggle("hidden", items.length === 0);
+        updateMobileDeliveryProgress();
+      }
+
+      // Возвращаем блок апселла и обновляем карточки инкрементально
+      if (upsellBlock) openCartSheetCtx.listEl.appendChild(upsellBlock);
+      appendUpsellToList(openCartSheetCtx.listEl);
+
+      // Скроллим чтобы блок апселла оставался в зоне видимости
+      var upsellAfter = openCartSheetCtx.listEl.querySelector(".shop-cart-upsell");
+      if (upsellAfter) {
+        upsellAfter.scrollIntoView({ block: "nearest", behavior: "instant" });
+      }
     }
   }
 
@@ -7854,6 +8050,7 @@ function updateCartBadge() {
           const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
           if (tspan) tspan.textContent = money(total);
         }
+        appendUpsellToList(openCartSheetCtx.listEl);
       }
     }
   }
