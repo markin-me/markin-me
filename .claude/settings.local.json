@@ -6,7 +6,9 @@
       "Bash(node:*)",
       "Bash(mysql:*)",
       "Bash(dir:*)",
-      "Bash(test:*)"
+      "Bash(test:*)",
+      "Bash(xxd:*)",
+      "Bash(python:*)"
     ]
   }
 }

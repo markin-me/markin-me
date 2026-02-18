@@ -265,6 +265,13 @@ header{
   font-size:1.2rem;
   flex-shrink:0;
 }
+.header-address-content{
+  display:flex;
+  flex-direction:column;
+  gap:1px;
+  min-width:0;
+  overflow:visible;
+}
 .header-address-text{
   overflow:hidden;
   text-overflow:ellipsis;
@@ -280,7 +287,7 @@ header{
   flex-shrink:0;
 }
 
-/* Статус «Мы закрыты» в хедере — только на мобилке */
+/* Статус времени работы — подстрока под адресом */
 .header-store-status{
   display:none;
 }
@@ -303,17 +310,25 @@ header{
     min-width:0;
     margin-left:.35rem;
   }
+  .header-address-content{
+    position:relative;
+  }
   .logo-text{
     margin-right:0;
   }
   .header-store-status:not(.hidden){
+    position:absolute;
+    top:100%;
+    left:0;
+    right:0;
     display:block;
-    width:100%;
-    margin-top:0.25rem;
-    font-size:0.8rem;
+    font-size:0.75rem;
+    font-weight:500;
     color:var(--color-text-muted);
-    text-align:right;
-    line-height:1.2;
+    line-height:1.15;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
   }
 }
 
@@ -345,6 +360,11 @@ header{
   transition:background var(--dur-fast) var(--ease-smooth), transform var(--dur-fast) var(--ease-smooth);
 }
 .header-btn:hover{background:var(--color-surface-2);transform:translateY(-1px)}
+.header-btn.is-active{
+  background: var(--primary-12);
+  border-color: var(--primary-45);
+  color: var(--color-primary);
+}
 
 /* ================= User Menu Dropdown ================= */
 .user-menu-wrapper {
@@ -6582,7 +6602,8 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
     overflow: visible;
   }
 
-  body.page-shop #shopProfileBtn{
+  body.page-shop #shopProfileBtn,
+  body.page-shop #shopHeaderFavBtn{
     display: none;
   }
 }
@@ -8355,17 +8376,28 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   margin-left: 6px;
   flex-shrink: 0;
 }
-.shop-cart-delivery-progress{
-  display: none !important;
-}
-/* Десктоп: шкала и футер — один блок (общая рамка сверху), увеличенный шрифт */
+/* Десктоп: шкала доставки — во всю ширину, верх закруглённый */
 @media (min-width: 769px){
+  .shop-cart-delivery-progress{
+    border-radius: 12px 12px 0 0;
+    padding: 10px 16px 8px;
+    font-size: 13px;
+  }
+  .shop-cart-delivery-progress-label{
+    font-size: 13px;
+  }
   .shop-cart-footer{
     border-top: 1px solid var(--color-border) !important;
   }
   .shop-cart-footer .shop-checkout-total{
     font-size: calc(1em + 2pt);
     font-weight: 700;
+  }
+}
+/* Мобилка: шкалу десктопа скрываем (используется мобильная версия) */
+@media (max-width: 768px){
+  .shop-cart-delivery-progress{
+    display: none !important;
   }
 }
 /* Не показывать шкалу доставки при просмотре товара, комбо или профиля */
@@ -9698,6 +9730,12 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   display: none;
 }
 
+@media (min-width: 769px){
+  #shopProfileSettingsBtn{
+    display: none !important;
+  }
+}
+
 .shop-profile-menu{
   position: absolute;
   top: calc(100% + 8px);
@@ -11023,16 +11061,66 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
    ========================================================================== */
 
 .shop-cart-header.is-address-title #shopCartHeaderTitle{
-  flex: 0 1 auto;
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
   text-align: left;
   font-weight: 700;
   font-size: 16px;
   line-height: 1.2;
-  max-width: 350px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: normal;
+  cursor: pointer;
+}
+
+.shop-cart-header-title-main{
+  min-width: 0;
+  flex: 1 1 auto;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shop-cart-header-mode-icon{
+  flex: 0 0 auto;
+  font-size: 20px;
+  color: var(--color-primary);
+  line-height: 1;
+}
+
+.shop-cart-header-title-text-row{
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.shop-cart-header-title-text{
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  cursor: pointer;
+}
+
+.shop-cart-header-title-sub{
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.15;
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
+.shop-cart-header-title-arrow{
+  flex: 0 0 auto;
+  font-size: 11px;
+  opacity: .6;
+  margin-left: 2px;
 }
 
 /* пустое состояние — можно чуть приглушить, если хочешь */
@@ -11043,6 +11131,12 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 /* в этом режиме chip справа не показываем вообще */
 .shop-cart-header.is-address-title .shop-address-chip{
   display: none !important;
+}
+
+@media (max-width: 768px){
+  .shop-cart-header-title-sub{
+    display: none !important;
+  }
 }
 /* Cart sheet (AppModal): address in title */
 
@@ -11649,10 +11743,119 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   overflow-wrap: anywhere;
 }
 
+.shop-order-details .shop-cart-items .cart-row.cart-row--repeat-desktop-actions {
+  grid-template-columns: 92px minmax(0, 1fr);
+  grid-template-areas:
+    "thumb mid"
+    "actions right";
+}
+
+.shop-order-details .shop-cart-items .cart-row.cart-row--repeat-desktop-actions .shop-order-repeat-desktop-actions {
+  grid-area: actions;
+  align-self: end;
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 8px;
+}
+
+.shop-order-repeat-desktop-action {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-faint);
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.shop-order-repeat-desktop-action i {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.shop-order-repeat-desktop-action:hover {
+  color: var(--shop-buy);
+}
+
+.shop-order-repeat-desktop-action:active {
+  transform: scale(.96);
+}
+
+/* Favorites desktop actions: static buttons under thumbnail (left-bottom) */
+.shop-favorite-desktop-actions {
+  display: none;
+}
+
+.shop-favorite-desktop-action {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-faint);
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.shop-favorite-desktop-action i {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.shop-favorite-desktop-action:hover {
+  color: var(--shop-buy);
+}
+
+.shop-favorite-desktop-action:active {
+  transform: scale(.96);
+}
+
+.shop-favorite-desktop-action:disabled,
+.shop-favorite-desktop-action[aria-disabled="true"] {
+  opacity: .45;
+  cursor: default;
+  color: var(--color-text-faint);
+}
+
+.shop-favorite-desktop-action:disabled:hover,
+.shop-favorite-desktop-action[aria-disabled="true"]:hover {
+  color: var(--color-text-faint);
+}
+
+@media (min-width: 769px) {
+  .shop-favorites-list .shop-cart-items .cart-row.cart-row--favorite-desktop-actions {
+    grid-template-columns: 92px minmax(0, 1fr);
+    grid-template-areas:
+      "thumb mid"
+      "actions right";
+  }
+
+  .shop-favorites-list .shop-cart-items .cart-row.cart-row--favorite-desktop-actions .shop-favorite-desktop-actions {
+    grid-area: actions;
+    align-self: end;
+    justify-self: start;
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 8px;
+  }
+}
+
 @media (max-width: 768px) {
   .shop-order-details .shop-order-details-section .shop-cart-items {
     margin-left: -12px;
     margin-right: -12px;
+  }
+
+  .shop-order-details .shop-cart-items .cart-row.cart-row--repeat-desktop-actions .shop-order-repeat-desktop-actions {
+    display: none;
   }
 }
 
@@ -11743,12 +11946,16 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 /* Скрытие скроллбаров но сохранение прокрутки */
 .shop-order-details,
 .shop-profile-panel,
+.shop-profile-content,
+#shopProfileContent,
 .app-modal-body {
   scrollbar-width: none; /* Firefox */
   -ms-overflow-style: none; /* IE/Edge */
 }
 .shop-order-details::-webkit-scrollbar,
 .shop-profile-panel::-webkit-scrollbar,
+.shop-profile-content::-webkit-scrollbar,
+#shopProfileContent::-webkit-scrollbar,
 .app-modal-body::-webkit-scrollbar {
   display: none; /* Chrome/Safari */
 }
@@ -11972,6 +12179,9 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     width: auto;
     padding: 0 12px;
     border-radius: 999px;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1;
   }
   
   .shop-mobile-cart-actions .shop-checkout-btn {

@@ -4204,12 +4204,17 @@ optionGroups.forEach((group) => {
     }
   });
 
-  openProductCtx = { productId: product.id };
+  openProductCtx = {
+    productId: product.id,
+    onBack: typeof onBack === "function" ? onBack : null,
+  };
 }
 
   async function openProductDetails(productId, { cartKey, prefillItem, onBack } = {}) {
     const p = await ensureProduct(productId);
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    const hasCustomOnBack = typeof onBack === "function";
+    const resolvedOnBack = hasCustomOnBack ? onBack : showCartView;
 
     if (isMobile) {
       if (!hasLiveCartSheetContext()) {
@@ -4217,13 +4222,17 @@ optionGroups.forEach((group) => {
         openCartSheet();
       }
       if (openCartSheetCtx?.showSheetProduct) {
-        openCartSheetCtx.showSheetProduct(p, { cartKey, prefillItem, onBack });
+        const sheetArgs = { cartKey, prefillItem };
+        if (hasCustomOnBack) {
+          sheetArgs.onBack = resolvedOnBack;
+        }
+        openCartSheetCtx.showSheetProduct(p, sheetArgs);
       }
       return;
     }
 
     showProductView(p.name);
-    await renderProductDetailsInto(elProductContent, p, { onBack, cartKey, prefillItem });
+    await renderProductDetailsInto(elProductContent, p, { onBack: resolvedOnBack, cartKey, prefillItem });
   }
 
   function comboDiscountedPrice(price, discountPercent) {
@@ -4844,8 +4853,8 @@ optionGroups.forEach((group) => {
       const payload = buildStockCheckItemsPayloadFromResolved(cartItemsResolved(draftCart));
       const check = await checkStockForItemsPayload(payload, {
         showToastOnOut,
-        toastMessage: "Больше нет в наличии",
-        refreshOnOut: true,
+        toastMessage: "\u041d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
+      refreshOnOut: true,
       });
       return check.available;
     }
@@ -5381,8 +5390,8 @@ optionGroups.forEach((group) => {
             const payload = buildStockCheckItemsPayloadFromResolved(cartItemsResolved(draftCart));
             const draftCheck = await checkStockForItemsPayload(payload, {
               showToastOnOut: true,
-              toastMessage: "\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
-              refreshOnOut: true,
+              toastMessage: "\u041d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
+      refreshOnOut: true,
             });
             if (!draftCheck.available) return;
           } catch (e) {
@@ -6080,8 +6089,8 @@ optionGroups.forEach((group) => {
             const payload = buildStockCheckItemsPayloadFromResolved(cartItemsResolved(draftCart));
             const draftCheck = await checkStockForItemsPayload(payload, {
               showToastOnOut: true,
-              toastMessage: "\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
-              refreshOnOut: true,
+              toastMessage: "\u041d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
+      refreshOnOut: true,
             });
             if (!draftCheck.available) return;
           } catch (e) {
@@ -6158,6 +6167,7 @@ optionGroups.forEach((group) => {
 
   async function openComboDetails(comboId, { cartKey, prefillItem, onBack } = {}) {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    const hasCustomOnBack = typeof onBack === "function";
     let json;
     try {
       json = await apiJson("/api/public/combos/" + encodeURIComponent(comboId));
@@ -6183,13 +6193,23 @@ optionGroups.forEach((group) => {
         openCartSheet();
       }
       if (openCartSheetCtx?.showSheetCombo) {
-        openCartSheetCtx.showSheetCombo(data, { cartKey, prefillItem, onBack });
+        const sheetArgs = { cartKey, prefillItem };
+        if (hasCustomOnBack) {
+          sheetArgs.onBack = onBack;
+        }
+        openCartSheetCtx.showSheetCombo(data, sheetArgs);
       }
       return;
     }
 
+    const resolvedOnBack = hasCustomOnBack ? onBack : showCartView;
     showProductView(data.title || "Комбо");
-    renderComboDetailsInto(elProductContent, data, { onBack: onBack || showCartView, cartKey, prefillItem });
+    openProductCtx = {
+      comboId: Number(data.id || comboId || 0),
+      type: "combo",
+      onBack: resolvedOnBack,
+    };
+    renderComboDetailsInto(elProductContent, data, { onBack: resolvedOnBack, cartKey, prefillItem });
   }
 
   // -----------------------------
@@ -6320,8 +6340,12 @@ function openCategoriesSheet() {
   }
 }
 
-function openFavoritesSheet({ force = true } = {}) {
-  if (!window.AppModal) return;
+function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
+  const isMobileSheet = window.matchMedia("(max-width: 1100px)").matches;
+  if (isMobileSheet && !window.AppModal) return;
+  const isAnySheetOpen =
+    Boolean(window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen());
+  const currentSheetType = str(sheetNavigationState?.type || "");
 
   const wrap = document.createElement("div");
   wrap.className = "shop-sheet-content shop-favorites-sheet";
@@ -6339,6 +6363,7 @@ function openFavoritesSheet({ force = true } = {}) {
 
   let renderSeq = 0;
   let currentSwipedContainer = null;
+  const favoritesUseSwipe = window.matchMedia("(max-width: 1100px)").matches;
 
   function closeCurrentSwiped(animate = true, exceptContainer = null) {
     if (!currentSwipedContainer || currentSwipedContainer === exceptContainer) return;
@@ -6355,7 +6380,9 @@ function openFavoritesSheet({ force = true } = {}) {
     if (currentSwipedContainer.contains(event.target)) return;
     closeCurrentSwiped(true);
   };
-  document.addEventListener("pointerdown", handleOutsidePointerDown, true);
+  if (favoritesUseSwipe) {
+    document.addEventListener("pointerdown", handleOutsidePointerDown, true);
+  }
 
   function hideCategoryChips() {
     chips.innerHTML = "";
@@ -6698,211 +6725,7 @@ function openFavoritesSheet({ force = true } = {}) {
   }
 
   async function addFavoriteSnapshotToCart(snapshot) {
-    const availableNow = await isFavoriteSnapshotAvailableNow(snapshot);
-    if (!availableNow) {
-      showToast("Нет в наличии");
-      return false;
-    }
-
-    const prefillItem = buildRepeatPrefillItem(snapshot);
-    if (!prefillItem) {
-      showToast("Не удалось добавить в корзину");
-      return false;
-    }
-
-    const previousCartSnapshot = cloneCartState(state.cart);
-    const wasEmpty = cartCountTotal() === 0;
-    const draftCart = cloneCartState(state.cart);
-
-    if (String(prefillItem.type || "") === "combo") {
-      const comboId = Number(prefillItem.combo_id || 0);
-      if (!Number.isFinite(comboId) || comboId <= 0) {
-        showToast("Не удалось добавить в корзину");
-        return false;
-      }
-
-      const safeQty = Math.max(1, Number(prefillItem.qty || 1));
-      const sourceSelections = Array.isArray(prefillItem.selections) ? prefillItem.selections : [];
-      if (!sourceSelections.length) {
-        showToast("Не удалось добавить в корзину");
-        return false;
-      }
-
-      const pricedCombo = await resolveRepeatComboSelectionsWithCatalog(comboId, sourceSelections);
-      const selections = Array.isArray(pricedCombo?.selections) && pricedCombo.selections.length
-        ? pricedCombo.selections
-        : sourceSelections;
-
-      let unitOld = Number(pricedCombo?.unitPriceBeforeDiscount || prefillItem.unit_price_before_discount || 0);
-      if (!(unitOld > 0)) {
-        const oldLineTotal = Number(snapshot?.old_line_total || 0);
-        if (oldLineTotal > 0 && safeQty > 0) {
-          unitOld = roundPrice(oldLineTotal / safeQty);
-        }
-      }
-      if (!(unitOld > 0)) {
-        unitOld = roundPrice(
-          selections.reduce((sum, sel) => {
-            const oldVal = Number(sel?.unit_price_before_discount || 0);
-            const currentVal = Number(sel?.unit_price_override || 0);
-            return sum + (oldVal > 0 ? oldVal : currentVal);
-          }, 0)
-        );
-      }
-
-      draftCart.push({
-        key: `combo-${comboId}-${Date.now()}`,
-        type: "combo",
-        combo_id: comboId,
-        combo_title: str(prefillItem.combo_title || snapshot?.name || "Комбо"),
-        qty: safeQty,
-        selections,
-        unit_price_before_discount: unitOld > 0 ? unitOld : null,
-      });
-    } else {
-      const productId = Number(prefillItem.product_id || 0);
-      if (!Number.isFinite(productId) || productId <= 0) {
-        showToast("Не удалось добавить в корзину");
-        return false;
-      }
-
-      await ensureProduct(productId);
-      const product = state.productCache.get(productId);
-      if (!product) {
-        showToast("Не удалось добавить в корзину");
-        return false;
-      }
-
-      const safeQty = Math.max(1, Number(prefillItem.qty || 1));
-      const optionItems = (Array.isArray(prefillItem.option_items) ? prefillItem.option_items : [])
-        .map((opt) => {
-          const id = Number(opt?.id || 0);
-          if (!Number.isFinite(id) || id <= 0) return null;
-          const qty = Math.max(1, Number(opt?.qty ?? opt?.quantity ?? 1));
-          return {
-            id,
-            title: str(opt?.title || opt?.name || ""),
-            price: Number(opt?.price || 0),
-            qty,
-            target_product_id: opt?.target_product_id != null ? Number(opt.target_product_id) : null,
-            product_id: opt?.product_id != null ? Number(opt.product_id) : null,
-            variant_group_id: opt?.variant_group_id != null ? Number(opt.variant_group_id) : null,
-            variant_value_index: opt?.variant_value_index != null ? Number(opt.variant_value_index) : null,
-            variant_label: str(opt?.variant_label || ""),
-            variant_price_diff: Number(opt?.variant_price_diff || 0),
-          };
-        })
-        .filter(Boolean);
-      const optionItemIds = optionItems.map((opt) => Number(opt.id));
-      const ingredients = normalizeRepeatIngredients(prefillItem.ingredients);
-
-      const variantGroupId = prefillItem.variant_group_id != null ? Number(prefillItem.variant_group_id) : null;
-      const variantValueIndex = prefillItem.variant_value_index != null ? Number(prefillItem.variant_value_index) : null;
-      const hasVariantSelection =
-        Number.isFinite(variantGroupId) &&
-        variantGroupId > 0 &&
-        Number.isFinite(variantValueIndex) &&
-        variantValueIndex >= 0;
-      const variantSelection = hasVariantSelection
-        ? { group_id: variantGroupId, value_index: variantValueIndex }
-        : null;
-
-      const baseProductPrice = Number(product.price || 0);
-      let variantUnitPrice = baseProductPrice;
-      if (hasVariantSelection) {
-        const snapshotVariants = Array.isArray(snapshot?.variants) ? snapshot.variants : [];
-        const firstVariant = snapshotVariants[0] || null;
-        const variantPriceDiff = Number(firstVariant?.price_diff);
-        if (Number.isFinite(variantPriceDiff)) {
-          variantUnitPrice = baseProductPrice + variantPriceDiff;
-        }
-      }
-
-      const optionTotal = optionItemsTotal(optionItems);
-      const snapshotUnitPrice = Number(snapshot?.price || 0);
-      const snapshotOldUnitPrice = Number(snapshot?.old_price || 0);
-      const hasApiDiscount = Boolean(product?.discount && Number(product.discount.discount_amount || product.discount.discount_value || 0) > 0);
-      let preDiscountUnitPrice =
-        Number.isFinite(snapshotUnitPrice) && snapshotUnitPrice > 0
-          ? snapshotUnitPrice
-          : roundPrice(variantUnitPrice + optionTotal);
-      if (hasApiDiscount && Number.isFinite(snapshotOldUnitPrice) && snapshotOldUnitPrice > preDiscountUnitPrice) {
-        preDiscountUnitPrice = snapshotOldUnitPrice;
-      }
-
-      let ingredientPriceDiff = preDiscountUnitPrice - variantUnitPrice - optionTotal;
-      if (!Number.isFinite(ingredientPriceDiff)) ingredientPriceDiff = 0;
-      ingredientPriceDiff = roundPrice(ingredientPriceDiff);
-
-      const nextKey = makeCartKey(productId, optionItems, ingredients, variantSelection);
-      const existing = draftCart.find((entry) => String(entry?.key || "") === String(nextKey));
-      if (existing) {
-        existing.qty = Math.max(0, Number(existing.qty || 0)) + safeQty;
-        existing.option_item_ids = optionItemIds;
-        existing.option_items = optionItems;
-        existing.ingredients = ingredients;
-        existing.ingredient_price_diff = ingredientPriceDiff;
-        existing.variant_group_id = hasVariantSelection ? variantGroupId : null;
-        existing.variant_value_index = hasVariantSelection ? variantValueIndex : null;
-        existing.variant_label = hasVariantSelection ? str(prefillItem.variant_label || "") : "";
-        existing.variant_unit_price = hasVariantSelection ? Number(variantUnitPrice || 0) : 0;
-        if (existing.auto_add == null) existing.auto_add = 0;
-        if (existing.auto_add_group_id == null) existing.auto_add_group_id = null;
-      } else {
-        draftCart.push({
-          key: nextKey,
-          product_id: productId,
-          qty: safeQty,
-          option_item_ids: optionItemIds,
-          option_items: optionItems,
-          ingredients,
-          ingredient_price_diff: ingredientPriceDiff,
-          variant_group_id: hasVariantSelection ? variantGroupId : null,
-          variant_value_index: hasVariantSelection ? variantValueIndex : null,
-          variant_label: hasVariantSelection ? str(prefillItem.variant_label || "") : "",
-          variant_unit_price: hasVariantSelection ? Number(variantUnitPrice || 0) : 0,
-          auto_add: 0,
-          auto_add_group_id: null,
-        });
-      }
-    }
-
-    try {
-      const payload = buildStockCheckItemsPayloadFromResolved(cartItemsResolved(draftCart));
-      const stockCheck = await checkStockForItemsPayload(payload, {
-        showToastOnOut: true,
-        toastMessage: "Больше нет в наличии",
-        refreshOnOut: true,
-      });
-      if (!stockCheck.available) return false;
-    } catch (e) {
-      console.warn("Failed stock check for favorite add:", e);
-      showToast("Не удалось добавить в корзину");
-      return false;
-    }
-
-    state.cart = draftCart;
-    if (wasEmpty) {
-      clearAllAutoAddDismissed();
-    }
-    applyAutoAddRules();
-    clearAutoAddDismissedIfCartEmpty();
-    saveCart();
-    renderProducts();
-    if (typeof scheduleSyncAllProductCardsFromCart === "function") {
-      scheduleSyncAllProductCardsFromCart();
-    }
-    renderCart();
-    updateCartBadge();
-    queueCartStockRecheck(previousCartSnapshot, {
-      toastMessage: "Больше нет в наличии",
-    });
-    if (window.matchMedia("(max-width: 768px)").matches) {
-      updateMobileDeliveryProgress();
-    }
-    showToast("Добавлено в корзину");
-    if (navigator.vibrate) navigator.vibrate(10);
-    return true;
+    return addRepeatSnapshotToCartLocal(snapshot);
   }
 
   function initFavoriteSwipeRow(container, content, { onRemove, onAddToCart, allowAdd = true } = {}) {
@@ -7286,21 +7109,25 @@ function openFavoritesSheet({ force = true } = {}) {
         swipeContainer.className = "shop-favorite-swipe-container";
         swipeContainer.classList.toggle("is-unavailable", isUnavailable);
 
-        const addAction = document.createElement("button");
-        addAction.type = "button";
-        addAction.className = "shop-favorite-swipe-action shop-favorite-swipe-action--add";
-        addAction.setAttribute("aria-label", isUnavailable ? "Нет в наличии" : "Добавить в корзину");
-        addAction.disabled = isUnavailable;
-        addAction.setAttribute("aria-disabled", isUnavailable ? "true" : "false");
-        addAction.innerHTML = '<i class="fas fa-shopping-cart"></i>';
-        swipeContainer.appendChild(addAction);
+        let addAction = null;
+        let removeAction = null;
+        if (favoritesUseSwipe) {
+          addAction = document.createElement("button");
+          addAction.type = "button";
+          addAction.className = "shop-favorite-swipe-action shop-favorite-swipe-action--add";
+          addAction.setAttribute("aria-label", isUnavailable ? "Нет в наличии" : "Добавить в корзину");
+          addAction.disabled = isUnavailable;
+          addAction.setAttribute("aria-disabled", isUnavailable ? "true" : "false");
+          addAction.innerHTML = '<i class="fas fa-shopping-cart"></i>';
+          swipeContainer.appendChild(addAction);
 
-        const removeAction = document.createElement("button");
-        removeAction.type = "button";
-        removeAction.className = "shop-favorite-swipe-action shop-favorite-swipe-action--remove";
-        removeAction.setAttribute("aria-label", "Удалить из избранного");
-        removeAction.innerHTML = '<i class="fas fa-trash"></i>';
-        swipeContainer.appendChild(removeAction);
+          removeAction = document.createElement("button");
+          removeAction.type = "button";
+          removeAction.className = "shop-favorite-swipe-action shop-favorite-swipe-action--remove";
+          removeAction.setAttribute("aria-label", "Удалить из избранного");
+          removeAction.innerHTML = '<i class="fas fa-trash"></i>';
+          swipeContainer.appendChild(removeAction);
+        }
 
         const content = document.createElement("div");
         content.className = "shop-favorite-swipe-content";
@@ -7360,21 +7187,68 @@ function openFavoritesSheet({ force = true } = {}) {
           return await addFavoriteSnapshotToCart(snapshot);
         };
 
-        removeAction.addEventListener("click", async (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          await removeFavorite();
-        });
+        if (!favoritesUseSwipe) {
+          const row = itemsWrap.querySelector(".cart-row");
+          if (row) {
+            row.classList.add("cart-row--favorite-desktop-actions");
 
-        addAction.addEventListener("click", async (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          await addToCart();
-          const closeFn = swipeContainer.__favoriteSwipeClose;
-          if (typeof closeFn === "function") {
-            closeFn(true);
+            const actions = document.createElement("div");
+            actions.className = "shop-favorite-desktop-actions";
+
+            const addDesktopBtn = document.createElement("button");
+            addDesktopBtn.type = "button";
+            addDesktopBtn.className = "shop-favorite-desktop-action";
+            addDesktopBtn.setAttribute("aria-label", isUnavailable ? "Нет в наличии" : "Добавить в корзину");
+            addDesktopBtn.innerHTML = '<i class="fas fa-shopping-cart"></i>';
+            if (isUnavailable) {
+              addDesktopBtn.disabled = true;
+              addDesktopBtn.setAttribute("aria-disabled", "true");
+            }
+
+            const removeDesktopBtn = document.createElement("button");
+            removeDesktopBtn.type = "button";
+            removeDesktopBtn.className = "shop-favorite-desktop-action";
+            removeDesktopBtn.setAttribute("aria-label", "Удалить из избранного");
+            removeDesktopBtn.innerHTML = '<i class="fas fa-trash"></i>';
+
+            addDesktopBtn.addEventListener("click", async (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              await addToCart();
+            });
+
+            removeDesktopBtn.addEventListener("click", async (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              await removeFavorite();
+            });
+
+            actions.appendChild(addDesktopBtn);
+            actions.appendChild(removeDesktopBtn);
+            row.appendChild(actions);
           }
-        });
+          return;
+        }
+
+        if (removeAction) {
+          removeAction.addEventListener("click", async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            await removeFavorite();
+          });
+        }
+
+        if (addAction) {
+          addAction.addEventListener("click", async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            await addToCart();
+            const closeFn = swipeContainer.__favoriteSwipeClose;
+            if (typeof closeFn === "function") {
+              closeFn(true);
+            }
+          });
+        }
 
         initFavoriteSwipeRow(swipeContainer, content, {
           onRemove: removeFavorite,
@@ -7404,7 +7278,7 @@ function openFavoritesSheet({ force = true } = {}) {
       }
 
       const reopenFavorites = () => {
-        void openFavoritesSheet({ force: false });
+        void openFavoritesSheet({ force: false, forceOpen: true });
       };
       bindRepeatOrderItemRows(list, repeatItems, { onBack: reopenFavorites });
     } catch (e) {
@@ -7421,11 +7295,98 @@ function openFavoritesSheet({ force = true } = {}) {
     }
   }
 
+  if (!isMobileSheet) {
+    if (typeof closeShopSheetIfOpen === "function") closeShopSheetIfOpen();
+
+    if (!forceOpen && cartViewMode === "favorites") {
+      if (typeof restorePreviousPanel === "function") {
+        void restorePreviousPanel();
+      } else if (typeof showCartView === "function") {
+        showCartView();
+      }
+      return;
+    }
+
+    if (!forceOpen && typeof rememberPreviousPanel === "function") {
+      rememberPreviousPanel();
+    }
+
+    if (typeof showProfileView === "function") {
+      showProfileView();
+    }
+    cartViewMode = "favorites";
+    openProductCtx = null;
+
+    if (typeof setHeaderFavoritesButtonActive === "function") {
+      setHeaderFavoritesButtonActive(true);
+    }
+
+    if (elProfileContent) {
+      elProfileContent.innerHTML = "";
+      elProfileContent.appendChild(wrap);
+    }
+
+    const closeDesktopFavorites = () => {
+      const cleanupFn = window.__shopDesktopFavoritesCleanup;
+      if (typeof cleanupFn === "function") {
+        window.__shopDesktopFavoritesCleanup = null;
+        try {
+          cleanupFn();
+        } catch {}
+      }
+
+      if (previousPanelMode === "favorites" && typeof showCartView === "function") {
+        showCartView();
+        return;
+      }
+
+      if (typeof restorePreviousPanel === "function") {
+        void restorePreviousPanel();
+      } else if (typeof showCartView === "function") {
+        showCartView();
+      }
+    };
+
+    if (typeof setCartHeader === "function") {
+      setCartHeader({
+        title: "Избранное",
+        showAddressChip: false,
+        showProfileActions: false,
+        showBack: false,
+        showFav: false,
+        showClose: true,
+        onClose: closeDesktopFavorites,
+      });
+    }
+
+    window.__shopDesktopFavoritesCleanup = () => {
+      closeCurrentSwiped(false);
+      currentSwipedContainer = null;
+      document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
+      if (typeof setHeaderFavoritesButtonActive === "function") {
+        setHeaderFavoritesButtonActive(false);
+      }
+    };
+
+    void renderFavorites({ forceReload: force });
+    return;
+  }
+
+  if (isAnySheetOpen && currentSheetType && currentSheetType !== "favorites") {
+    closeShopSheetIfOpen();
+  }
+
+  // В режиме избранного не используем контекст корзины, чтобы переключение
+  // в "Корзину" не пыталось переиспользовать старый showSheetCart.
+  openCartSheetCtx = null;
+  openProductCtx = null;
+
   sheetNavigationState.type = "favorites";
   sheetNavigationState.screen = "list";
   sheetNavigationState.data = null;
 
   setAppModalMode("shop");
+  setSheetHeaderMode("");
   setActiveNav("fav");
   window.AppModal.open({
     title: "Избранное",
@@ -7438,11 +7399,17 @@ function openFavoritesSheet({ force = true } = {}) {
       sheetNavigationState.type = null;
       sheetNavigationState.screen = null;
       sheetNavigationState.data = null;
+      openCartSheetCtx = null;
+      openProductCtx = null;
+      setSheetHeaderMode("");
       if (typeof window.updateActiveOrdersBadge === "function") {
         window.updateActiveOrdersBadge();
       }
     },
   });
+
+  // Если до этого был product/combo режим, возвращаем стандартный хедер списка.
+  setSheetHeaderMode("");
 
   void renderFavorites({ forceReload: force });
 
@@ -9085,7 +9052,7 @@ function renderSheetAddressList() {
 
     const note = document.createElement("div");
     note.className = "shop-auth-text muted";
-    note.textContent = "Введите телефон, затем дату рождения (РґРґ.мм.гггг).";
+    note.textContent = "Введите телефон, затем дату рождения (дд.мм.гггг).";
     wrap.appendChild(note);
 
     const form = document.createElement("div");
@@ -9117,7 +9084,7 @@ function renderSheetAddressList() {
     const bday = document.createElement("input");
     bday.className = "control";
     bday.type = "text";
-    bday.placeholder = "РґРґ.мм.гггг";
+    bday.placeholder = "дд.мм.гггг";
     bday.inputMode = "numeric";
     bWrap.appendChild(bLabel);
     bWrap.appendChild(bday);
@@ -9156,7 +9123,7 @@ function renderSheetAddressList() {
     bday.addEventListener("blur", () => {
       if (!str(bday.value).trim()) return;
       if (!isValidBirthday(bday.value)) {
-        setBirthdayError("Введите дату рождения в формате РґРґ.мм.гггг");
+        setBirthdayError("Введите дату рождения в формате дд.мм.гггг");
       }
     });
 
@@ -9181,7 +9148,7 @@ function renderSheetAddressList() {
         return;
       }
       if (!isValidBirthday(bday.value)) {
-        setBirthdayError("Введите дату рождения в формате РґРґ.мм.гггг");
+        setBirthdayError("Введите дату рождения в формате дд.мм.гггг");
         return;
       }
 
@@ -9480,6 +9447,18 @@ function renderSheetAddressList() {
     return true;
   }
 
+  function buildRepeatVariantLabel(rawLabel, rawGroupTitle) {
+    const value = str(rawLabel || "").trim();
+    const groupTitle = str(rawGroupTitle || "").trim();
+    if (!value) return "";
+    if (!groupTitle) return value;
+    if (value.includes(":")) return value;
+    const valueLc = value.toLowerCase();
+    const groupLc = groupTitle.toLowerCase();
+    if (valueLc.includes(groupLc)) return value;
+    return `${groupTitle}: ${value}`;
+  }
+
   function normalizeRepeatOptionItems(optionItems) {
     const list = Array.isArray(optionItems) ? optionItems : [];
     return list
@@ -9494,6 +9473,17 @@ function renderSheetAddressList() {
             : (Array.isArray(opt?.variants) ? opt.variants[0] : null);
         const variantGroupId = Number(opt?.variant_group_id ?? variantSource?.variant_group_id);
         const variantValueIndex = Number(opt?.variant_value_index ?? variantSource?.variant_value_index);
+        const variantGroupTitle = str(
+          opt?.variant_group_title ||
+          variantSource?.group_title ||
+          variantSource?.variant_group_title ||
+          variantSource?.title ||
+          ""
+        );
+        const variantLabel = buildRepeatVariantLabel(
+          opt?.variant_label || variantSource?.label || variantSource?.value || "",
+          variantGroupTitle
+        );
         return {
           id: itemId,
           title: str(opt?.title || opt?.name || ""),
@@ -9503,7 +9493,7 @@ function renderSheetAddressList() {
           product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
           variant_group_id: Number.isFinite(variantGroupId) && variantGroupId > 0 ? variantGroupId : null,
           variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
-          variant_label: str(opt?.variant_label || variantSource?.label || variantSource?.value || ""),
+          variant_label: variantLabel,
           variant_price_diff: Number(opt?.variant_price_diff || 0),
         };
       })
@@ -9518,10 +9508,17 @@ function renderSheetAddressList() {
         if (!Number.isFinite(ingredientId) || ingredientId <= 0) return null;
         const quantityRaw = Number(ing?.quantity ?? ing?.qty ?? 0);
         const quantity = Number.isFinite(quantityRaw) ? quantityRaw : 0;
+        const ingredientName = str(
+          ing?.ingredient_name ||
+          ing?.name ||
+          ing?.title ||
+          ing?.product_name ||
+          ""
+        );
         return {
           ingredient_id: ingredientId,
-          ingredient_name: str(ing?.ingredient_name || ing?.name || ""),
-          name: str(ing?.name || ing?.ingredient_name || ""),
+          ingredient_name: ingredientName,
+          name: ingredientName,
           quantity,
           qty: quantity,
           unit_id: ing?.unit_id != null && Number.isFinite(Number(ing.unit_id)) ? Number(ing.unit_id) : null,
@@ -9622,6 +9619,21 @@ function renderSheetAddressList() {
         : (variantFromArray && typeof variantFromArray === "object" ? variantFromArray : null);
     const variantGroupId = Number(orderItem.variant_group_id ?? variantSource?.variant_group_id);
     const variantValueIndex = Number(orderItem.variant_value_index ?? variantSource?.variant_value_index);
+    const variantGroupTitle = str(
+      orderItem.variant_group_title ||
+      variantSource?.group_title ||
+      variantSource?.variant_group_title ||
+      variantSource?.title ||
+      ""
+    );
+    const variantLabel = buildRepeatVariantLabel(
+      orderItem.variant_label ||
+      variantSource?.variant_label ||
+      variantSource?.label ||
+      variantSource?.value ||
+      "",
+      variantGroupTitle
+    );
 
     return {
       product_id: productId,
@@ -9631,13 +9643,7 @@ function renderSheetAddressList() {
       ingredients: normalizeRepeatIngredients(orderItem.ingredients),
       variant_group_id: Number.isFinite(variantGroupId) && variantGroupId > 0 ? variantGroupId : null,
       variant_value_index: Number.isFinite(variantValueIndex) && variantValueIndex >= 0 ? variantValueIndex : null,
-      variant_label: str(
-        orderItem.variant_label ||
-        variantSource?.variant_label ||
-        variantSource?.label ||
-        variantSource?.value ||
-        ""
-      ),
+      variant_label: variantLabel,
     };
   }
 
@@ -9868,6 +9874,44 @@ function renderSheetAddressList() {
     };
   }
 
+  async function resolveRepeatVariantLabelFromCatalog(productId, variantGroupId, variantValueIndex, fallbackLabel) {
+    const safeProductId = Number(productId || 0);
+    const safeGroupId = Number(variantGroupId);
+    const safeValueIndex = Number(variantValueIndex);
+    const fallback = str(fallbackLabel || "").trim();
+    const hasVariantSelection =
+      Number.isFinite(safeProductId) &&
+      safeProductId > 0 &&
+      Number.isFinite(safeGroupId) &&
+      safeGroupId > 0 &&
+      Number.isFinite(safeValueIndex) &&
+      safeValueIndex >= 0;
+    if (!hasVariantSelection) return "";
+
+    try {
+      const variants = await resolveProductVariants(safeProductId);
+      const groups = Array.isArray(variants) ? variants : [];
+      const matchedGroup = groups.find(
+        (group) => Number(group?.id || group?.variant_group_id || 0) === safeGroupId
+      );
+      const fallbackGroup = !matchedGroup && groups.length === 1 ? groups[0] : null;
+      const resolvedGroup = matchedGroup || fallbackGroup;
+      const groupTitle = str(resolvedGroup?.title || resolvedGroup?.title_label || "");
+      const values = Array.isArray(resolvedGroup?.values) ? resolvedGroup.values : [];
+      const catalogValue =
+        Number.isFinite(safeValueIndex) &&
+        safeValueIndex >= 0 &&
+        safeValueIndex < values.length
+          ? str(values[safeValueIndex] || "")
+          : "";
+      const label = buildRepeatVariantLabel(catalogValue || fallback, groupTitle);
+      return str(label || fallback).trim();
+    } catch (e) {
+      console.warn("Failed to resolve repeat variant label from catalog:", safeProductId, e);
+      return fallback;
+    }
+  }
+
   function isFavoriteUnauthorizedErrorForRepeat(err) {
     if (!err) return false;
     if (Number(err.httpStatus || 0) === 401) return true;
@@ -9887,18 +9931,16 @@ function renderSheetAddressList() {
       if (!Number.isFinite(comboId) || comboId <= 0) return null;
 
       const lineTotalRaw = Number(source.line_total);
-      let unitPrice = Number(source.price);
+      let unitPrice = Number.isFinite(lineTotalRaw) && qty > 0
+        ? roundPrice(lineTotalRaw / qty)
+        : Number(source.price);
       if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
-        if (Number.isFinite(lineTotalRaw) && qty > 0) {
-          unitPrice = roundPrice(lineTotalRaw / qty);
-        } else {
-          unitPrice = roundPrice(
-            (Array.isArray(prefillItem.selections) ? prefillItem.selections : []).reduce(
-              (sum, sel) => sum + Number(sel?.unit_price_override || 0),
-              0
-            )
-          );
-        }
+        unitPrice = roundPrice(
+          (Array.isArray(prefillItem.selections) ? prefillItem.selections : []).reduce(
+            (sum, sel) => sum + Number(sel?.unit_price_override || 0),
+            0
+          )
+        );
       }
 
       let oldLineTotal = Number(source.old_line_total || source?.discount?.original_line_total || 0);
@@ -9937,11 +9979,11 @@ function renderSheetAddressList() {
     if (!Number.isFinite(productId) || productId <= 0) return null;
 
     const lineTotalRaw = Number(source.line_total);
-    let unitPrice = Number(source.price);
+    let unitPrice = Number.isFinite(lineTotalRaw) && qty > 0
+      ? roundPrice(lineTotalRaw / qty)
+      : Number(source.price);
     if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
-      unitPrice = Number.isFinite(lineTotalRaw) && qty > 0
-        ? roundPrice(lineTotalRaw / qty)
-        : 0;
+      unitPrice = 0;
     }
 
     const discountOriginalLine = Number(source?.discount?.original_line_total || 0);
@@ -10058,7 +10100,7 @@ function renderSheetAddressList() {
 
     try {
       await window.shopFavoritesApi.add(snapshot);
-      showToast("Добавлено в избранное");
+      showToast("\u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e \u0432 \u0438\u0437\u0431\u0440\u0430\u043d\u043d\u043e\u0435");
       if (navigator.vibrate) navigator.vibrate(10);
       return true;
     } catch (err) {
@@ -10076,12 +10118,99 @@ function renderSheetAddressList() {
     }
   }
 
-  async function addRepeatSnapshotToCart(snapshot) {
+  function collectRepeatPrefillProductIds(prefillItem) {
+    const ids = new Set();
+    const item = prefillItem && typeof prefillItem === "object" ? prefillItem : null;
+    if (!item) return [];
+
+    if (String(item.type || "") === "combo") {
+      const selections = Array.isArray(item.selections) ? item.selections : [];
+      selections.forEach((sel) => {
+        const pid = Number(sel?.product_id || 0);
+        if (Number.isFinite(pid) && pid > 0) ids.add(pid);
+      });
+      return [...ids];
+    }
+
+    const baseProductId = Number(item.product_id || 0);
+    if (Number.isFinite(baseProductId) && baseProductId > 0) ids.add(baseProductId);
+
+    const optionItems = Array.isArray(item.option_items) ? item.option_items : [];
+    optionItems.forEach((opt) => {
+      const pid = Number(opt?.target_product_id || opt?.product_id || 0);
+      if (Number.isFinite(pid) && pid > 0) ids.add(pid);
+    });
+
+    return [...ids];
+  }
+
+  function isProductIdAvailableLocally(productId) {
+    const pid = Number(productId || 0);
+    if (!Number.isFinite(pid) || pid <= 0) return true;
+
+    const cachedProduct = state.productCache.get(pid);
+    if (cachedProduct) return isProductAvailable(cachedProduct);
+
+    if (typeof getStockLevelEntry === "function") {
+      const stockEntry = getStockLevelEntry(pid);
+      if (stockEntry) {
+        if (stockEntry.isAvailable !== undefined && stockEntry.isAvailable !== null) {
+          return !!stockEntry.isAvailable;
+        }
+        if (stockEntry.qty !== undefined && stockEntry.qty !== null) {
+          return Number(stockEntry.qty) > 0;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  function hasUnavailableRepeatPrefillProducts(prefillItem) {
+    const ids = collectRepeatPrefillProductIds(prefillItem);
+    if (!ids.length) return false;
+    return ids.some((pid) => !isProductIdAvailableLocally(pid));
+  }
+
+  function normalizeRepeatComboSelectionsLocal(sourceSelections) {
+    const list = Array.isArray(sourceSelections) ? sourceSelections : [];
+    return list.map((rawSelection) => {
+      const selection = rawSelection && typeof rawSelection === "object"
+        ? { ...rawSelection }
+        : {};
+
+      const productId = Number(selection.product_id || 0);
+      if (Number.isFinite(productId) && productId > 0) {
+        const cachedProduct = state.productCache.get(productId);
+        if (cachedProduct) {
+          if (!str(selection.product_name || "").trim()) {
+            selection.product_name = str(cachedProduct.name || "");
+          }
+          if (!str(selection.product_photo || "").trim()) {
+            selection.product_photo = str(safePhotos(cachedProduct)[0] || "");
+          }
+        }
+      }
+
+      const oldUnit = Number(selection.unit_price_before_discount || 0);
+      const currentUnit = Number(selection.unit_price_override || 0);
+      selection.unit_price_before_discount = oldUnit > 0 ? roundPrice(oldUnit) : null;
+      selection.unit_price_override = currentUnit > 0 ? roundPrice(currentUnit) : null;
+      return selection;
+    });
+  }
+
+  async function addRepeatSnapshotToCartLocal(snapshot) {
     if (!snapshot || typeof snapshot !== "object") return false;
 
     const prefillItem = buildRepeatPrefillItem(snapshot);
     if (!prefillItem) {
-      showToast("Не удалось добавить в корзину");
+      showToast("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u043e\u0440\u0437\u0438\u043d\u0443");
+      return false;
+    }
+
+    if (hasUnavailableRepeatPrefillProducts(prefillItem)) {
+      showToast("\u041d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
       return false;
     }
 
@@ -10092,25 +10221,23 @@ function renderSheetAddressList() {
     if (String(prefillItem.type || "") === "combo") {
       const comboId = Number(prefillItem.combo_id || 0);
       if (!Number.isFinite(comboId) || comboId <= 0) {
-        showToast("Не удалось добавить в корзину");
+        showToast("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u043e\u0440\u0437\u0438\u043d\u0443");
         return false;
       }
 
       const safeQty = Math.max(1, Number(prefillItem.qty || 1));
       const sourceSelections = Array.isArray(prefillItem.selections) ? prefillItem.selections : [];
       if (!sourceSelections.length) {
-        showToast("Не удалось добавить в корзину");
+        showToast("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u043e\u0440\u0437\u0438\u043d\u0443");
         return false;
       }
 
-      const pricedCombo = await resolveRepeatComboSelectionsWithCatalog(comboId, sourceSelections);
-      const selections = Array.isArray(pricedCombo?.selections) && pricedCombo.selections.length
-        ? pricedCombo.selections
-        : sourceSelections;
-
-      let unitOld = Number(pricedCombo?.unitPriceBeforeDiscount || prefillItem.unit_price_before_discount || 0);
+      const selections = normalizeRepeatComboSelectionsLocal(sourceSelections);
+      let unitOld = Number(prefillItem.unit_price_before_discount || 0);
       if (!(unitOld > 0)) {
-        const oldLineTotal = Number(snapshot?.old_line_total || 0);
+        const oldLineTotal =
+          Number(snapshot?.old_line_total || 0) ||
+          Number(snapshot?.discount?.original_line_total || 0);
         if (oldLineTotal > 0 && safeQty > 0) {
           unitOld = roundPrice(oldLineTotal / safeQty);
         }
@@ -10129,7 +10256,7 @@ function renderSheetAddressList() {
         key: `combo-${comboId}-${Date.now()}`,
         type: "combo",
         combo_id: comboId,
-        combo_title: str(prefillItem.combo_title || snapshot?.name || "Комбо"),
+        combo_title: str(prefillItem.combo_title || snapshot?.name || "\u041a\u043e\u043c\u0431\u043e"),
         qty: safeQty,
         selections,
         unit_price_before_discount: unitOld > 0 ? unitOld : null,
@@ -10137,17 +10264,11 @@ function renderSheetAddressList() {
     } else {
       const productId = Number(prefillItem.product_id || 0);
       if (!Number.isFinite(productId) || productId <= 0) {
-        showToast("Не удалось добавить в корзину");
+        showToast("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u043e\u0440\u0437\u0438\u043d\u0443");
         return false;
       }
 
-      await ensureProduct(productId);
-      const product = state.productCache.get(productId);
-      if (!product) {
-        showToast("Не удалось добавить в корзину");
-        return false;
-      }
-
+      const product = state.productCache.get(productId) || null;
       const safeQty = Math.max(1, Number(prefillItem.qty || 1));
       const optionItems = (Array.isArray(prefillItem.option_items) ? prefillItem.option_items : [])
         .map((opt) => {
@@ -10181,20 +10302,30 @@ function renderSheetAddressList() {
       const variantSelection = hasVariantSelection
         ? { group_id: variantGroupId, value_index: variantValueIndex }
         : null;
+      const resolvedVariantLabel = hasVariantSelection ? str(prefillItem.variant_label || "") : "";
 
-      const baseProductPrice = Number(product.price || 0);
+      const baseProductPrice = Number(product?.price || 0);
       let variantUnitPrice = baseProductPrice;
       if (hasVariantSelection) {
         const snapshotVariants = Array.isArray(snapshot?.variants) ? snapshot.variants : [];
         const firstVariant = snapshotVariants[0] || null;
-        const variantPriceDiff = Number(firstVariant?.price_diff);
+        const variantPriceDiff = Number(firstVariant?.price_diff ?? prefillItem?.variant_price_diff ?? 0);
         if (Number.isFinite(variantPriceDiff)) {
           variantUnitPrice = baseProductPrice + variantPriceDiff;
         }
       }
+      if (!(variantUnitPrice > 0) && hasVariantSelection) {
+        const fallbackVariantUnit = Number(prefillItem?.variant_unit_price || 0);
+        if (Number.isFinite(fallbackVariantUnit) && fallbackVariantUnit > 0) {
+          variantUnitPrice = fallbackVariantUnit;
+        }
+      }
 
       const optionTotal = optionItemsTotal(optionItems);
-      const snapshotUnitPrice = Number(snapshot?.price || 0);
+      const snapshotLineTotal = Number(snapshot?.line_total || 0);
+      const snapshotUnitPrice = Number.isFinite(snapshotLineTotal) && snapshotLineTotal > 0 && safeQty > 0
+        ? roundPrice(snapshotLineTotal / safeQty)
+        : Number(snapshot?.price || 0);
       const snapshotOldUnitPrice = Number(snapshot?.old_price || 0);
       const hasApiDiscount = Boolean(product?.discount && Number(product.discount.discount_amount || product.discount.discount_value || 0) > 0);
       let preDiscountUnitPrice =
@@ -10219,7 +10350,7 @@ function renderSheetAddressList() {
         existing.ingredient_price_diff = ingredientPriceDiff;
         existing.variant_group_id = hasVariantSelection ? variantGroupId : null;
         existing.variant_value_index = hasVariantSelection ? variantValueIndex : null;
-        existing.variant_label = hasVariantSelection ? str(prefillItem.variant_label || "") : "";
+        existing.variant_label = hasVariantSelection ? str(resolvedVariantLabel || "") : "";
         existing.variant_unit_price = hasVariantSelection ? Number(variantUnitPrice || 0) : 0;
         if (existing.auto_add == null) existing.auto_add = 0;
         if (existing.auto_add_group_id == null) existing.auto_add_group_id = null;
@@ -10234,26 +10365,12 @@ function renderSheetAddressList() {
           ingredient_price_diff: ingredientPriceDiff,
           variant_group_id: hasVariantSelection ? variantGroupId : null,
           variant_value_index: hasVariantSelection ? variantValueIndex : null,
-          variant_label: hasVariantSelection ? str(prefillItem.variant_label || "") : "",
+          variant_label: hasVariantSelection ? str(resolvedVariantLabel || "") : "",
           variant_unit_price: hasVariantSelection ? Number(variantUnitPrice || 0) : 0,
           auto_add: 0,
           auto_add_group_id: null,
         });
       }
-    }
-
-    try {
-      const payload = buildStockCheckItemsPayloadFromResolved(cartItemsResolved(draftCart));
-      const stockCheck = await checkStockForItemsPayload(payload, {
-        showToastOnOut: true,
-        toastMessage: "Нет в наличии",
-        refreshOnOut: true,
-      });
-      if (!stockCheck.available) return false;
-    } catch (e) {
-      console.warn("Failed stock check for repeat add:", e);
-      showToast("Не удалось добавить в корзину");
-      return false;
     }
 
     state.cart = draftCart;
@@ -10270,14 +10387,19 @@ function renderSheetAddressList() {
     renderCart();
     updateCartBadge();
     queueCartStockRecheck(previousCartSnapshot, {
-      toastMessage: "Нет в наличии",
+      toastMessage: "\u041d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
+      refreshOnOut: true,
     });
     if (window.matchMedia("(max-width: 768px)").matches) {
       updateMobileDeliveryProgress();
     }
-    showToast("Добавлено в корзину");
+    showToast("\u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e \u0432 \u043a\u043e\u0440\u0437\u0438\u043d\u0443");
     if (navigator.vibrate) navigator.vibrate(10);
     return true;
+  }
+
+  async function addRepeatSnapshotToCart(snapshot) {
+    return addRepeatSnapshotToCartLocal(snapshot);
   }
 
   function initRepeatOrderSwipeRow(
@@ -10612,6 +10734,7 @@ function renderSheetAddressList() {
     const rows = hostEl.querySelectorAll(".shop-cart-items .cart-row");
     if (!rows || !rows.length) return;
     let currentSwipedContainer = null;
+    const isMobileViewport = window.matchMedia("(max-width: 768px)").matches;
 
     rows.forEach((row, idx) => {
       const orderItem = orderItems[idx];
@@ -10647,6 +10770,52 @@ function renderSheetAddressList() {
 
       if (!enableSwipeActions || !swipeSnapshot) return;
 
+      const addToCart = async () => {
+        return await addRepeatSnapshotToCart(swipeSnapshot);
+      };
+
+      const addToFavorites = async () => {
+        return await addRepeatSnapshotToFavorites(swipeSnapshot);
+      };
+
+      if (!isMobileViewport) {
+        row.classList.add("cart-row--repeat-desktop-actions");
+        const existingActions = row.querySelector(".shop-order-repeat-desktop-actions");
+        if (existingActions) existingActions.remove();
+
+        const actions = document.createElement("div");
+        actions.className = "shop-order-repeat-desktop-actions";
+
+        const addCartAction = document.createElement("button");
+        addCartAction.type = "button";
+        addCartAction.className = "shop-order-repeat-desktop-action";
+        addCartAction.setAttribute("aria-label", "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u043e\u0440\u0437\u0438\u043d\u0443");
+        addCartAction.innerHTML = '<i class="fas fa-shopping-cart"></i>';
+
+        const addFavoriteAction = document.createElement("button");
+        addFavoriteAction.type = "button";
+        addFavoriteAction.className = "shop-order-repeat-desktop-action";
+        addFavoriteAction.setAttribute("aria-label", "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u0438\u0437\u0431\u0440\u0430\u043d\u043d\u043e\u0435");
+        addFavoriteAction.innerHTML = '<i class="fas fa-heart"></i>';
+
+        addCartAction.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          await addToCart();
+        });
+
+        addFavoriteAction.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          await addToFavorites();
+        });
+
+        actions.appendChild(addCartAction);
+        actions.appendChild(addFavoriteAction);
+        row.appendChild(actions);
+        return;
+      }
+
       const rowParent = row.parentElement;
       if (!rowParent) return;
 
@@ -10673,14 +10842,6 @@ function renderSheetAddressList() {
 
       rowParent.insertBefore(swipeContainer, row);
       content.appendChild(row);
-
-      const addToCart = async () => {
-        return await addRepeatSnapshotToCart(swipeSnapshot);
-      };
-
-      const addToFavorites = async () => {
-        return await addRepeatSnapshotToFavorites(swipeSnapshot);
-      };
 
       addCartAction.addEventListener("click", async (event) => {
         event.preventDefault();
@@ -11467,6 +11628,10 @@ function renderSheetAddressList() {
       currentOrdersView = "details";
       currentOrderId = orderId;
       resetOrderDetailsTransientUi();
+      const isModalOrderDetails = document.querySelector(".app-modal") && document.querySelector(".app-modal").getAttribute("aria-hidden") !== "true";
+      if (!isModalOrderDetails && typeof showProfileView === "function") {
+        showProfileView();
+      }
       
       // Скрываем верхнюю часть профиля и вкладки
       if (top) top.classList.add("hidden");
@@ -11593,7 +11758,7 @@ function renderSheetAddressList() {
       );
       
       // Проверяем, открыто ли модальное окно
-      const isModal = document.querySelector(".app-modal") && document.querySelector(".app-modal").getAttribute("aria-hidden") !== "true";
+      const isModal = isModalOrderDetails;
       
       // Добавляем пустое поле 200px внизу для скролла в модальном окне
       if (isModal) {
@@ -11641,6 +11806,7 @@ function renderSheetAddressList() {
     function showOrdersList() {
       currentOrdersView = "list";
       currentOrderId = null;
+      resetOrderDetailsTransientUi();
       
       // Сбрасываем флаги для кнопки "Назад"
       window._isViewingOrderDetails = false;
@@ -11659,6 +11825,9 @@ function renderSheetAddressList() {
       
       // Проверяем, открыто ли модальное окно
       const isModal = document.querySelector(".app-modal") && document.querySelector(".app-modal").getAttribute("aria-hidden") !== "true";
+      if (!isModal && typeof showProfileView === "function") {
+        showProfileView();
+      }
       
       if (isModal) {
         // Модальное окно: восстанавливаем заголовок и скрываем кнопку "Назад"
@@ -11735,10 +11904,19 @@ function renderSheetAddressList() {
       row.style.cursor = "pointer";
 
       const previewPhotos = collectOrderPreviewPhotos(o?.items, 40);
+      const orderDate = new Date(o.created_at);
+      const orderDateText = Number.isFinite(orderDate.getTime())
+        ? orderDate.toLocaleString("ru-RU", {
+            day: "2-digit",
+            month: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : "—";
 
       row.innerHTML = `
         <div><strong>Заказ #${o.id}</strong> <span class="muted">• ${o.status_title || "—"}</span></div>
-        <div class="muted">${new Date(o.created_at).toLocaleString("ru-RU")}</div>
+        <div class="muted">${orderDateText}</div>
         <div><strong>${money(o.total_price || 0)}</strong></div>
       `;
 
@@ -13750,7 +13928,7 @@ function setBottomNavActive(tab) {
     calendarWrap.appendChild(calPopover);
     dateSection.appendChild(calendarWrap);
 
-    // Row 2: [На завтра / РґРґ.мм] + [селектор времени]
+    // Row 2: [На завтра / дд.мм] + [селектор времени]
     const dateRow2 = document.createElement("div");
     dateRow2.className = "shop-checkout-date-row2";
 
@@ -14631,8 +14809,8 @@ function setBottomNavActive(tab) {
         const stockCheckItems = buildStockCheckItemsPayloadFromResolved(resolvedItems);
         const stockCheck = await checkStockForItemsPayload(stockCheckItems, {
           showToastOnOut: true,
-          toastMessage: "Некоторые товары уже закончились",
-          refreshOnOut: true,
+          toastMessage: "\u041d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
+      refreshOnOut: true,
         });
         if (!stockCheck.available) {
           alert("Некоторые товары уже закончились. Корзина обновлена.");
@@ -14838,6 +15016,11 @@ function initShopLate() {
             window._comboStepBackCallback();
             return;
           }
+          // Товар/комбо, открытый из контекста (например, из деталей заказа): возвращаемся в тот же контекст
+          if (cartViewMode === "product" && openProductCtx && typeof openProductCtx.onBack === "function") {
+            openProductCtx.onBack();
+            return;
+          }
           // Режим просмотра деталей заказа
           if (window._isViewingOrderDetails && typeof window._showOrdersListCallback === "function") {
             window._showOrdersListCallback();
@@ -14873,7 +15056,12 @@ function initShopLate() {
       if (elNavCart) {
         elNavCart.addEventListener("click", () => {
           const sheetOpen = window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen();
-          const notOnCart = sheetOpen && openCartSheetCtx && sheetNavigationState.screen && sheetNavigationState.screen !== "cart";
+          const notOnCart =
+            sheetOpen &&
+            sheetNavigationState.type === "cart" &&
+            openCartSheetCtx &&
+            sheetNavigationState.screen &&
+            sheetNavigationState.screen !== "cart";
           if (notOnCart) {
             const showCart = openCartSheetCtx?.showSheetCart;
             if (typeof showCart === "function") showCart();
@@ -14967,6 +15155,15 @@ function initShopLate() {
 
       if (elCartOpenDesktop) elCartOpenDesktop.addEventListener("click", openCartSheet);
 
+      if (elHeaderFavoritesBtn) {
+        elHeaderFavoritesBtn.addEventListener("click", (e) => {
+          if (isShopPage()) {
+            e.preventDefault();
+            openFavoritesSheet({ force: false });
+          }
+        });
+      }
+
       // Header profile: не уходим на /auth, открываем модалку
       if (elHeaderProfileBtn) {
         elHeaderProfileBtn.addEventListener("click", (e) => {
@@ -14995,7 +15192,7 @@ function initShopLate() {
         let isAnyModalOpen = false;
       
         if (isMobile) {
-          // Проверяем, открыто ли модальное окно (профиль, корзина, категории и С‚.Рґ.)
+          // Проверяем, открыто ли модальное окно (профиль, корзина, категории и т.д.)
           if (window.AppModal && typeof window.AppModal.isOpen === "function") {
             isAnyModalOpen = window.AppModal.isOpen();
           }
@@ -15099,7 +15296,7 @@ function initShopLate() {
             window._activeOrders = [];
           }
         } catch (e) {
-          // Если ошибка (не авторизован и С‚.Рґ.), скрываем бейджи
+          // Если ошибка (не авторизован и т.д.), скрываем бейджи
           badges.forEach(badge => badge.classList.add("hidden"));
           window._activeOrders = [];
         }
@@ -15702,3 +15899,5 @@ function initShopLate() {
     console.error(e);
   }
 }
+
+

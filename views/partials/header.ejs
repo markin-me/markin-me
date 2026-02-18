@@ -9,11 +9,13 @@
         <div class="logo-text" id="headerBrandName">По щам</div>
         <% const hasCitySelector = (typeof showCitySelector !== 'undefined' && showCitySelector === true); %>
         <% if (hasCitySelector) { %>
-          <span class="header-store-status hidden" id="shopMobileHeaderStatus" aria-live="polite"></span>
           <div class="header-address-widget" id="headerAddressWidget">
             <button type="button" class="header-address-button" id="headerAddressButton">
               <i class="fas fa-location-dot header-address-icon" aria-hidden="true"></i>
-              <span class="header-address-text is-placeholder" id="headerAddressText">Укажите адрес доставки</span>
+              <span class="header-address-content">
+                <span class="header-address-text is-placeholder" id="headerAddressText">Укажите адрес доставки</span>
+                <span class="header-store-status hidden" id="shopMobileHeaderStatus" aria-live="polite"></span>
+              </span>
               <i class="fas fa-chevron-down header-address-chevron" aria-hidden="true"></i>
             </button>
           </div>
@@ -33,6 +35,11 @@
             <span class="shop-active-orders-text">Активный заказ</span>
             <span class="shop-active-orders-count"></span>
           </div>
+          <% if (hasCitySelector) { %>
+            <button class="header-btn" id="shopHeaderFavBtn" type="button" aria-label="Избранное">
+              <i class="far fa-heart"></i>
+            </button>
+          <% } %>
           <button class="header-btn" id="shopProfileBtn" type="button" aria-label="Профиль">
             <i class="fas fa-user"></i>
           </button>

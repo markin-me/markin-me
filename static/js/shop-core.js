@@ -234,6 +234,7 @@
   const elCartOpenDesktop = $("#shopCartOpenDesktopBtn");
 
   // header profile (? header.ejs ???? id)
+  const elHeaderFavoritesBtn = $("#shopHeaderFavBtn");
   const elHeaderProfileBtn = $("#shopProfileBtn");
   const elActiveOrdersBadge = $("#shopActiveOrdersBadge");
   const elActiveOrdersBadgeMobile = $("#shopActiveOrdersBadgeMobile");
@@ -3647,6 +3648,151 @@
     return getSelectedAddressLine();
   }
 
+  let cartHeaderStoresLoadPromise = null;
+
+  function ensureStoresForHeaderStatus() {
+    const cachedStores = window._pickupStores;
+    if (Array.isArray(cachedStores) && cachedStores.length) {
+      return Promise.resolve(cachedStores);
+    }
+    if (cartHeaderStoresLoadPromise) {
+      return cartHeaderStoresLoadPromise;
+    }
+    cartHeaderStoresLoadPromise = (async () => {
+      try {
+        const resp = await fetch(`/api/public/tenant/stores?tenant_id=${tenantId}`);
+        const data = await resp.json().catch(() => null);
+        if (resp.ok && data?.ok && Array.isArray(data.stores)) {
+          window._pickupStores = data.stores;
+          return data.stores;
+        }
+      } catch (e) {
+        console.warn("Failed to load stores for cart header status:", e);
+      }
+      return Array.isArray(window._pickupStores) ? window._pickupStores : [];
+    })().finally(() => {
+      cartHeaderStoresLoadPromise = null;
+    });
+    return cartHeaderStoresLoadPromise;
+  }
+
+  function getHeaderDeliveryStore() {
+    const stores = Array.isArray(window._pickupStores) ? window._pickupStores : [];
+    if (!stores.length) return null;
+
+    const address = state.selectedAddress || null;
+    const candidateIds = [
+      Number(address?.store_id || 0),
+      Number(address?.delivery_store_id || 0),
+      Number(getActiveStoreId() || 0),
+    ].filter((id) => Number.isFinite(id) && id > 0);
+
+    for (const id of candidateIds) {
+      const byId = stores.find((s) => Number(s?.id) === id);
+      if (byId) return byId;
+    }
+
+    const addressCity = str(address?.city || "").trim().toLowerCase();
+    if (addressCity) {
+      const byCity = stores.filter((s) => str(s?.city || "").trim().toLowerCase() === addressCity);
+      if (byCity.length === 1) return byCity[0];
+      if (byCity.length > 1) {
+        const activeId = Number(getActiveStoreId() || 0);
+        return byCity.find((s) => Number(s?.id) === activeId) || byCity[0];
+      }
+    }
+
+    return null;
+  }
+
+  function getCartHeaderStatusStore() {
+    if (window._deliveryMode === "pickup") {
+      return getHeaderPickupStore();
+    }
+    return getHeaderDeliveryStore();
+  }
+
+  function getHeaderStoreStatusText() {
+    if (!getCartHeaderAddressLine()) return "";
+    const store = getCartHeaderStatusStore();
+    if (!store) return "";
+
+    const statusInfo = getStoreStatusInfoForList(store);
+    if (statusInfo && str(statusInfo.text).trim()) {
+      return str(statusInfo.text).trim();
+    }
+
+    const hoursRange = getStoreTodayHoursRangeForList(store.storeHours, store.timezone);
+    return str(hoursRange || "").trim();
+  }
+
+  function getCartHeaderStoreStatusText() {
+    if (!isDesktopViewport()) return "";
+    return getHeaderStoreStatusText();
+  }
+
+  function getCartHeaderModeIconClass() {
+    return window._deliveryMode === "pickup" ? "fa-store" : "fa-location-dot";
+  }
+
+  function renderCartHeaderAddressTitle(titleText) {
+    if (!elCartHeaderTitle) return;
+    elCartHeaderTitle.innerHTML = `
+      <i class="fas ${getCartHeaderModeIconClass()} shop-cart-header-mode-icon" aria-hidden="true"></i>
+      <span class="shop-cart-header-title-main">
+        <span class="shop-cart-header-title-text-row">
+          <span class="shop-cart-header-title-text"></span>
+          <i class="fas fa-chevron-right shop-cart-header-title-arrow" aria-hidden="true"></i>
+        </span>
+        <span class="shop-cart-header-title-sub hidden"></span>
+      </span>
+    `;
+    const textEl = elCartHeaderTitle.querySelector(".shop-cart-header-title-text");
+    if (textEl) textEl.textContent = str(titleText || "");
+  }
+
+  function setCartHeaderStatusLine(statusText) {
+    if (!elCartHeaderTitle) return;
+    const subEl = elCartHeaderTitle.querySelector(".shop-cart-header-title-sub");
+    if (!subEl) return;
+    const text = str(statusText || "").trim();
+    const show = Boolean(text) && isDesktopViewport();
+    subEl.textContent = show ? text : "";
+    subEl.classList.toggle("hidden", !show);
+  }
+
+  function updateCartHeaderStoreStatus({ ensureStores = false } = {}) {
+    const statusText = getCartHeaderStoreStatusText();
+    setCartHeaderStatusLine(statusText);
+    if (statusText || !ensureStores || !isDesktopViewport()) return;
+
+    ensureStoresForHeaderStatus()
+      .then(() => {
+        setCartHeaderStatusLine(getCartHeaderStoreStatusText());
+      })
+      .catch(() => {});
+  }
+
+  function setMobileHeaderStatusLine(statusText) {
+    const statusEl = document.getElementById("shopMobileHeaderStatus");
+    if (!statusEl) return;
+    const text = str(statusText || "").trim();
+    statusEl.textContent = text;
+    statusEl.classList.toggle("hidden", !text);
+  }
+
+  function updateMobileHeaderStoreStatus({ ensureStores = false } = {}) {
+    const statusText = getHeaderStoreStatusText();
+    setMobileHeaderStatusLine(statusText);
+    if (statusText || !ensureStores) return;
+
+    ensureStoresForHeaderStatus()
+      .then(() => {
+        setMobileHeaderStatusLine(getHeaderStoreStatusText());
+      })
+      .catch(() => {});
+  }
+
   function syncSelectedAddressToCheckoutDraft() {
     const line = getSelectedAddressLine();
     const addressComment = (state.selectedAddress && state.selectedAddress.comment)
@@ -3678,15 +3824,11 @@ function updateAddressChip() {
   if (isCartLike && isAddrTitle && elCartHeaderTitle) {
     // ?????: ?? ?????? textContent, ? ?????? + ????????
     const t = line || "Укажите адрес";
-    elCartHeaderTitle.innerHTML = `
-      <span class="shop-cart-header-title-text"></span>
-      <i class="fas fa-chevron-right shop-cart-header-title-arrow" aria-hidden="true"></i>
-    `;
-    const textEl = elCartHeaderTitle.querySelector(".shop-cart-header-title-text");
-    if (textEl) textEl.textContent = t;
+    renderCartHeaderAddressTitle(t);
 
     elCartHeaderTitle.classList.toggle("is-empty-address", !line);
     elCartHeaderTitle.classList.add("is-clickable-address-title");
+    updateCartHeaderStoreStatus({ ensureStores: true });
   }
 }
 
@@ -3695,39 +3837,46 @@ function updateHeaderAddressWidget() {
   const iconEl = document.querySelector(".header-address-icon");
   if (!textEl) return;
 
+  let hasAddressText = false;
+
   // Pickup mode
   if (window._deliveryMode === "pickup" && window._selectedPickupStoreId) {
     const stores = window._pickupStores || [];
-    const store = stores.find(s => Number(s.id) === Number(window._selectedPickupStoreId));
+    const store = stores.find((s) => Number(s.id) === Number(window._selectedPickupStoreId));
     if (store) {
       textEl.textContent = store.address || store.name || "Самовывоз";
       textEl.classList.remove("is-placeholder");
+      hasAddressText = true;
       if (iconEl) {
         iconEl.classList.remove("fa-location-dot");
         iconEl.classList.add("fa-store");
       }
-      return;
     }
   }
 
   // Delivery mode (default)
-  if (iconEl) {
-    iconEl.classList.remove("fa-store");
-    iconEl.classList.add("fa-location-dot");
+  if (!hasAddressText) {
+    if (iconEl) {
+      iconEl.classList.remove("fa-store");
+      iconEl.classList.add("fa-location-dot");
+    }
+    const a = state.selectedAddress;
+    if (a) {
+      const parts = [];
+      const street = str(a.street).trim();
+      const house = str(a.house).trim();
+      if (street || house) parts.push([street, house].filter(Boolean).join(" "));
+      if (a.apartment) parts.push("кв " + str(a.apartment).trim());
+      textEl.textContent = parts.join(", ");
+      textEl.classList.remove("is-placeholder");
+      hasAddressText = true;
+    } else {
+      textEl.textContent = "Укажите адрес доставки";
+      textEl.classList.add("is-placeholder");
+    }
   }
-  const a = state.selectedAddress;
-  if (a) {
-    const parts = [];
-    const street = str(a.street).trim();
-    const house = str(a.house).trim();
-    if (street || house) parts.push([street, house].filter(Boolean).join(" "));
-    if (a.apartment) parts.push("кв " + str(a.apartment).trim());
-    textEl.textContent = parts.join(", ");
-    textEl.classList.remove("is-placeholder");
-  } else {
-    textEl.textContent = "Укажите адрес доставки";
-    textEl.classList.add("is-placeholder");
-  }
+
+  updateMobileHeaderStoreStatus({ ensureStores: hasAddressText });
 }
 
 function setCartHeader({
@@ -3771,13 +3920,8 @@ function setCartHeader({
   // --- title render ---
   if (elCartHeaderTitle && typeof title === "string") {
     if (addressAsTitle) {
-      // ?????? + ????????
-      elCartHeaderTitle.innerHTML = `
-        <span class="shop-cart-header-title-text"></span>
-        <i class="fas fa-chevron-right shop-cart-header-title-arrow" aria-hidden="true"></i>
-      `;
-      const textEl = elCartHeaderTitle.querySelector(".shop-cart-header-title-text");
-      if (textEl) textEl.textContent = title;
+      renderCartHeaderAddressTitle(title);
+      updateCartHeaderStoreStatus({ ensureStores: true });
 
       elCartHeaderTitle.classList.add("is-clickable-address-title");
     } else {
@@ -3935,6 +4079,26 @@ function setSheetHeaderMode(
     return document.documentElement.getAttribute("data-theme") || "light";
   }
 
+  function setHeaderFavoritesButtonActive(isActive = false) {
+    if (!elHeaderFavoritesBtn) return;
+    const active = Boolean(isActive);
+    elHeaderFavoritesBtn.classList.toggle("is-active", active);
+    elHeaderFavoritesBtn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+
+  function cleanupDesktopFavoritesPanelIfNeeded() {
+    const cleanupFn = window.__shopDesktopFavoritesCleanup;
+    if (typeof cleanupFn !== "function") return;
+    window.__shopDesktopFavoritesCleanup = null;
+    try {
+      cleanupFn();
+    } catch (e) {
+      console.warn("Failed to cleanup desktop favorites panel:", e);
+    }
+  }
+
+  window.setHeaderFavoritesButtonActive = setHeaderFavoritesButtonActive;
+
   function setSelectedAddress(addr) {
     state.selectedAddress = addr || null;
     updateAddressChip();
@@ -3955,6 +4119,8 @@ function setSheetHeaderMode(
   }
 
 function showCartView() {
+  cleanupDesktopFavoritesPanelIfNeeded();
+  setHeaderFavoritesButtonActive(false);
   cartViewMode = "cart";
   openProductCtx = null;
   if (typeof window._comboStepBackCallback !== "undefined") window._comboStepBackCallback = null;
@@ -3989,6 +4155,8 @@ function showCartView() {
 }
 
 function showCheckoutView() {
+  cleanupDesktopFavoritesPanelIfNeeded();
+  setHeaderFavoritesButtonActive(false);
   cartViewMode = "checkout";
   openProductCtx = null;
 
@@ -4023,6 +4191,8 @@ function showCheckoutView() {
 function showAddressListView(backMode = "cart", opts = {}) {
   if (!elAddressContent || !elAddressListView || !elAddressFormView) return;
 
+  cleanupDesktopFavoritesPanelIfNeeded();
+  setHeaderFavoritesButtonActive(false);
   cartViewMode = "address";
   openProductCtx = null;
   state._addressListBackMode = backMode;
@@ -4062,6 +4232,8 @@ function showAddressListView(backMode = "cart", opts = {}) {
 async function showAddressFormView(prefill, editingId, backMode) {
   if (!elAddressContent || !elAddressFormView || !elAddressListView) return;
 
+  cleanupDesktopFavoritesPanelIfNeeded();
+  setHeaderFavoritesButtonActive(false);
   state.addressEditingId = editingId ? Number(editingId) : null;
   state._addressFormBackMode = backMode || (state.selectedAddress ? "list" : "cart");
   cartViewMode = "address";
@@ -4126,6 +4298,8 @@ function showPickupListView(backMode = "checkout") {
 }
 
   function showProfileView() {
+    cleanupDesktopFavoritesPanelIfNeeded();
+    setHeaderFavoritesButtonActive(false);
     cartViewMode = "profile";
     openProductCtx = null;
     if (elCartContent) elCartContent.classList.add("hidden");
@@ -4144,6 +4318,10 @@ function showPickupListView(backMode = "checkout") {
   }
 
   async function restorePreviousPanel() {
+    if (previousPanelMode === "favorites" && typeof openFavoritesSheet === "function") {
+      await openFavoritesSheet({ force: false, forceOpen: true });
+      return;
+    }
     if (previousPanelMode === "product" && previousPanelProductId) {
       await openProductDetails(previousPanelProductId);
       return;
@@ -4167,6 +4345,8 @@ function showPickupListView(backMode = "checkout") {
   }
 
 function showProductView() {
+  cleanupDesktopFavoritesPanelIfNeeded();
+  setHeaderFavoritesButtonActive(false);
   cartViewMode = "product";
 
   if (elCartContent) elCartContent.classList.add("hidden");
@@ -7844,4 +8024,5 @@ if (__shopHasRequiredDom) initCore();
 
 // Late-loaded on shop-late.js. Core keeps a safe no-op to avoid ReferenceError during first paint.
 function updateMobileDeliveryProgress() {}
+
 
