@@ -31,6 +31,7 @@
   const input = document.getElementById("shopCompanyChatInput");
   const emojiBtn = document.getElementById("shopCompanyChatEmojiBtn");
   const emojiPopover = document.getElementById("shopCompanyChatEmojiPopover");
+  const emojiPopoverHomeParent = emojiPopover ? emojiPopover.parentElement : null;
   const scrollDownBtn = document.getElementById("shopCompanyChatScrollDownBtn");
   const scrollDownBadge = document.getElementById("shopCompanyChatScrollDownBadge");
   let typingIndicator = document.getElementById("shopCompanyChatTypingIndicator");
@@ -3292,7 +3293,22 @@
     reactionMessageId = "";
   }
 
+  function remountEmojiPopover(target) {
+    if (!emojiPopover) return;
+    const normalizedTarget = target === "attach-preview" ? "attach-preview" : "composer";
+    const canMountToAttachPreview = (
+      normalizedTarget === "attach-preview"
+      && attachPreviewOverlay
+      && !attachPreviewOverlay.classList.contains("hidden")
+    );
+    const desiredParent = canMountToAttachPreview ? attachPreviewOverlay : emojiPopoverHomeParent;
+    if (!desiredParent) return;
+    if (emojiPopover.parentElement === desiredParent) return;
+    desiredParent.appendChild(emojiPopover);
+  }
+
   function hideEmojiPopover() {
+    remountEmojiPopover("composer");
     emojiPopover.classList.add("hidden");
     emojiPopover.classList.remove("is-attach-preview");
   }
@@ -3304,8 +3320,10 @@
     const hasSameTarget = emojiPopover.classList.contains("is-attach-preview") === isPreviewTarget;
     const willOpen = !isOpen || !hasSameTarget;
 
+    remountEmojiPopover(normalizedTarget);
     emojiPopover.classList.toggle("is-attach-preview", isPreviewTarget);
     emojiPopover.classList.toggle("hidden", !willOpen);
+    if (!willOpen) remountEmojiPopover("composer");
     if (willOpen) ensureEmojiDatasetLoaded().catch(function () {});
   }
 

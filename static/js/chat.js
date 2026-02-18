@@ -4569,8 +4569,27 @@
 
   function hideEmojiPopover() {
     if (!dom.center.emojiPopover) return;
+    remountEmojiPopover("composer");
     dom.center.emojiPopover.classList.add("hidden");
     dom.center.emojiPopover.classList.remove("is-attach-preview");
+  }
+
+  function remountEmojiPopover(target = "composer") {
+    if (!dom.center.emojiPopover) return;
+    const popover = dom.center.emojiPopover;
+    if (!popover.__homeParent) {
+      popover.__homeParent = popover.parentElement || null;
+    }
+    const normalizedTarget = target === "attach-preview" ? "attach-preview" : "composer";
+    const canMountToAttachPreview = (
+      normalizedTarget === "attach-preview"
+      && dom.center.attachPreviewOverlay
+      && !dom.center.attachPreviewOverlay.classList.contains("hidden")
+    );
+    const desiredParent = canMountToAttachPreview ? dom.center.attachPreviewOverlay : popover.__homeParent;
+    if (!desiredParent) return;
+    if (popover.parentElement === desiredParent) return;
+    desiredParent.appendChild(popover);
   }
 
   function toggleEmojiPopover(target = "composer") {
@@ -4582,8 +4601,10 @@
     const hasSameTarget = popover.classList.contains("is-attach-preview") === isPreviewTarget;
     const willOpen = !isOpen || !hasSameTarget;
 
+    remountEmojiPopover(normalizedTarget);
     popover.classList.toggle("is-attach-preview", isPreviewTarget);
     popover.classList.toggle("hidden", !willOpen);
+    if (!willOpen) remountEmojiPopover("composer");
     if (willOpen) ensureEmojiDatasetLoaded().catch(() => {});
   }
 

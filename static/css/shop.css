@@ -6472,7 +6472,7 @@ body.page-shop .shop-company-chat-btn:hover{
   align-items: center;
   justify-content: center;
   position: relative;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 0;
 }
 
 .shop-company-chat-modal__title{
@@ -7665,7 +7665,7 @@ body.page-shop .shop-company-chat-btn:hover{
   right: auto;
   bottom: 22px;
   transform: translateX(-50%);
-  z-index: 1460;
+  z-index: 1700;
 }
 
 .shop-company-chat-emoji-categories{
@@ -7883,7 +7883,7 @@ body.page-shop .shop-company-chat-btn:hover{
   margin: 0 14px 14px;
   min-height: 58px;
   border-radius: 14px;
-  border: 1px solid var(--color-border);
+  border: 0;
   background: var(--color-surface-2);
   padding: 8px 10px;
 }
