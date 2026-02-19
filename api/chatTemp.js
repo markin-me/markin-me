@@ -10,6 +10,8 @@ const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
 const MAX_MESSAGES_PER_THREAD = 1000;
 const CHAT_LONG_POLL_MAX_TIMEOUT_MS = 25000;
 const CHAT_LONG_POLL_MIN_TIMEOUT_MS = 1000;
+const CHAT_TYPING_TTL_MS = 7000;
+const CHAT_TYPING_TEXT_MAX_LENGTH = 120;
 const CHAT_UPLOAD_MAX_FILE_BYTES = 20 * 1024 * 1024;
 const CHAT_UPLOAD_RELATIVE_DIR = path.join("uploads", "chat");
 const CHAT_UPLOAD_ABSOLUTE_DIR = path.join(__dirname, "..", CHAT_UPLOAD_RELATIVE_DIR);
@@ -33,6 +35,8 @@ const attachmentUpload = multer({
 });
 
 const threadWaiters = new Map();
+const tenantWaiters = new Map();
+const threadTypingState = new Map();
 
 function getTenantId(req) {
   const fromHeader = Number(req.headers["x-tenant-id"]);
@@ -222,15 +226,136 @@ function getThreadKey(tenantId, clientId) {
   return `${tenant}:${client}`;
 }
 
-function notifyThreadChange(tenantId, clientId, updatedAt = "") {
+function getTenantKey(tenantId) {
+  const tenant = normalizeClientId(tenantId);
+  return tenant || "";
+}
+
+function sanitizeTypingText(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  return raw.slice(0, CHAT_TYPING_TEXT_MAX_LENGTH);
+}
+
+function getEmptyTypingActorState(actor) {
+  return {
+    actor: actor === "in" ? "in" : "out",
+    active: false,
+    text: "",
+    updated_at: "",
+    expires_at: "",
+  };
+}
+
+function getThreadTypingEntry(tenantId, clientId, create = false) {
+  const key = getThreadKey(tenantId, clientId);
+  if (!key) return null;
+  let entry = threadTypingState.get(key);
+  if ((!entry || typeof entry !== "object") && create === true) {
+    entry = {
+      in: { active: false, text: "", updatedAt: "", expiresAtMs: 0 },
+      out: { active: false, text: "", updatedAt: "", expiresAtMs: 0 },
+    };
+    threadTypingState.set(key, entry);
+  }
+  return entry;
+}
+
+function getPeerTypingForActor(tenantId, clientId, actorKey) {
+  const actor = actorKey === "in" ? "in" : "out";
+  const peer = actor === "in" ? "out" : "in";
+  const entry = getThreadTypingEntry(tenantId, clientId);
+  if (!entry || !entry[peer]) return getEmptyTypingActorState(peer);
+
+  const nowMs = Date.now();
+  const source = entry[peer];
+  const expiresAtMs = Number(source.expiresAtMs || 0);
+  const isActive = source.active === true && expiresAtMs > nowMs;
+  const expiresAt = isActive ? new Date(expiresAtMs).toISOString() : "";
+
+  return {
+    actor: peer,
+    active: isActive,
+    text: isActive ? sanitizeTypingText(source.text) : "",
+    updated_at: String(source.updatedAt || ""),
+    expires_at: expiresAt,
+  };
+}
+
+function setThreadTypingForActor(tenantId, clientId, actorKey, active, text) {
+  const actor = actorKey === "in" ? "in" : "out";
+  const entry = getThreadTypingEntry(tenantId, clientId, true);
+  if (!entry) return getEmptyTypingActorState(actor);
+
+  const nowIso = new Date().toISOString();
+  const isActive = active === true;
+  if (isActive) {
+    const expiresAtMs = Date.now() + CHAT_TYPING_TTL_MS;
+    entry[actor] = {
+      active: true,
+      text: sanitizeTypingText(text),
+      updatedAt: nowIso,
+      expiresAtMs,
+    };
+    return {
+      actor,
+      active: true,
+      text: sanitizeTypingText(text),
+      updated_at: nowIso,
+      expires_at: new Date(expiresAtMs).toISOString(),
+    };
+  }
+
+  entry[actor] = {
+    active: false,
+    text: "",
+    updatedAt: nowIso,
+    expiresAtMs: 0,
+  };
+  return {
+    actor,
+    active: false,
+    text: "",
+    updated_at: nowIso,
+    expires_at: "",
+  };
+}
+
+function clearThreadTypingState(tenantId, clientId) {
   const key = getThreadKey(tenantId, clientId);
   if (!key) return;
-  const set = threadWaiters.get(key);
+  threadTypingState.delete(key);
+}
+
+function notifyTenantChange(tenantId, updatedAt = "") {
+  const key = getTenantKey(tenantId);
+  if (!key) return;
+  const set = tenantWaiters.get(key);
   if (!set || !set.size) return;
   const payload = { updatedAt: String(updatedAt || "") };
   Array.from(set).forEach((resolve) => {
     try { resolve(payload); } catch {}
   });
+}
+
+function notifyThreadChange(tenantId, clientId, updatedAt = "", options = {}) {
+  const messageChanged = options?.messageChanged !== false;
+  const typingChanged = options?.typingChanged === true;
+  const key = getThreadKey(tenantId, clientId);
+  if (key) {
+    const set = threadWaiters.get(key);
+    if (set && set.size) {
+      const payload = {
+        updatedAt: String(updatedAt || ""),
+        messageChanged,
+        typingChanged,
+      };
+      Array.from(set).forEach((resolve) => {
+        try { resolve(payload); } catch {}
+      });
+    }
+  }
+  if (messageChanged) notifyTenantChange(tenantId, updatedAt);
 }
 
 function waitForThreadChange(tenantId, clientId, timeoutMs) {
@@ -257,7 +382,36 @@ function waitForThreadChange(tenantId, clientId, timeoutMs) {
   });
 }
 
+function waitForTenantChange(tenantId, timeoutMs) {
+  const key = getTenantKey(tenantId);
+  if (!key) return Promise.resolve({ timeout: true });
+  const timeout = Math.min(
+    CHAT_LONG_POLL_MAX_TIMEOUT_MS,
+    Math.max(CHAT_LONG_POLL_MIN_TIMEOUT_MS, Number(timeoutMs || 0) || 20000)
+  );
+  return new Promise((resolve) => {
+    const waitSet = tenantWaiters.get(key) || new Set();
+    let done = false;
+    const complete = (payload) => {
+      if (done) return;
+      done = true;
+      waitSet.delete(complete);
+      if (!waitSet.size) tenantWaiters.delete(key);
+      clearTimeout(timer);
+      resolve(payload || { timeout: true });
+    };
+    waitSet.add(complete);
+    tenantWaiters.set(key, waitSet);
+    const timer = setTimeout(() => complete({ timeout: true }), timeout);
+  });
+}
+
 function getRequestReactionActor(req) {
+  const explicitActor = String(req.headers["x-chat-actor"] || req.headers["x-chat-role"] || "")
+    .trim()
+    .toLowerCase();
+  if (explicitActor === "in" || explicitActor === "customer" || explicitActor === "client") return "in";
+  if (explicitActor === "out" || explicitActor === "admin" || explicitActor === "operator") return "out";
   const customerToken = String(req.headers["x-customer-token"] || "").trim();
   return customerToken ? "in" : "out";
 }
@@ -936,6 +1090,16 @@ async function listSummaries(tenantId, selectedClientIds = []) {
   });
 }
 
+async function readTenantUpdatedAt(tenantId) {
+  const [rows] = await db.query(
+    `SELECT MAX(updated_at) AS updated_at
+       FROM chat_threads
+      WHERE tenant_id = ?`,
+    [tenantId]
+  );
+  return toIsoOrEmpty(rows?.[0]?.updated_at);
+}
+
 module.exports = function makeChatTempRouter() {
   const router = express.Router();
 
@@ -968,6 +1132,8 @@ module.exports = function makeChatTempRouter() {
       await conn.commit();
       conn.release();
       conn = null;
+      clearThreadTypingState(tenantId, toClientId);
+      clearThreadTypingState(tenantId, fromClientId);
       notifyThreadChange(tenantId, toClientId, merged?.updated_at || "");
       notifyThreadChange(tenantId, fromClientId, merged?.updated_at || "");
       return res.json({ ok: true, data: merged });
@@ -1002,6 +1168,48 @@ module.exports = function makeChatTempRouter() {
     }
   });
 
+  router.post("/thread/:clientId/typing", async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const clientId = normalizeClientId(req.params.clientId);
+      if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
+
+      const actorKey = getRequestReactionActor(req);
+      const requestedActive = req.body?.typing === true || req.body?.active === true;
+      const requestedText = sanitizeTypingText(
+        req.body?.text
+        || req.body?.phrase
+        || req.body?.label
+        || ""
+      );
+
+      const selfTyping = setThreadTypingForActor(
+        tenantId,
+        clientId,
+        actorKey,
+        requestedActive,
+        requestedText
+      );
+      const peerTyping = getPeerTypingForActor(tenantId, clientId, actorKey);
+      notifyThreadChange(tenantId, clientId, "", {
+        messageChanged: false,
+        typingChanged: true,
+      });
+
+      return res.json({
+        ok: true,
+        data: {
+          client_id: Number(clientId),
+          self_typing: selfTyping,
+          peer_typing: peerTyping,
+        },
+      });
+    } catch (err) {
+      console.error("chat-temp POST /thread/:clientId/typing error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
   router.get("/thread/:clientId/wait", async (req, res) => {
     try {
       const tenantId = getTenantId(req);
@@ -1009,17 +1217,31 @@ module.exports = function makeChatTempRouter() {
       if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
 
       const since = String(req.query.since || "").trim();
+      const actorKey = getRequestReactionActor(req);
+      const typingSince = String(req.query.typing_since || "").trim();
       const timeoutMs = Number(req.query.timeout_ms || req.query.timeout || 20000);
 
       const currentMeta = await readThreadMeta(tenantId, clientId);
       const currentUpdatedAt = toIsoOrEmpty(currentMeta?.updated_at);
-      if (!since || (currentUpdatedAt && currentUpdatedAt !== since)) {
+      const currentTyping = getPeerTypingForActor(tenantId, clientId, actorKey);
+      const currentTypingUpdatedAt = String(currentTyping?.updated_at || "");
+
+      const messageChangedNow = (!since && !!currentUpdatedAt)
+        || (!!since && String(currentUpdatedAt || "") !== since);
+      const typingChangedNow = !!currentTypingUpdatedAt
+        && String(currentTypingUpdatedAt || "") !== String(typingSince || "");
+
+      if (messageChangedNow || typingChangedNow) {
         return res.json({
           ok: true,
           data: {
             client_id: Number(clientId),
             changed: true,
+            message_changed: messageChangedNow,
+            typing_changed: typingChangedNow,
             updated_at: currentUpdatedAt,
+            typing: currentTyping,
+            timeout: false,
           },
         });
       }
@@ -1027,14 +1249,25 @@ module.exports = function makeChatTempRouter() {
       const waitResult = await waitForThreadChange(tenantId, clientId, timeoutMs);
       const nextMeta = await readThreadMeta(tenantId, clientId);
       const nextUpdatedAt = toIsoOrEmpty(nextMeta?.updated_at);
-      const changed = String(nextUpdatedAt || "") !== String(since || "");
+      const nextTyping = getPeerTypingForActor(tenantId, clientId, actorKey);
+      const nextTypingUpdatedAt = String(nextTyping?.updated_at || "");
+
+      const messageChanged = waitResult?.messageChanged === true
+        || String(nextUpdatedAt || "") !== String(since || "");
+      const typingChanged = waitResult?.typingChanged === true
+        || String(nextTypingUpdatedAt || "") !== String(typingSince || "");
+      const changed = messageChanged || typingChanged;
 
       return res.json({
         ok: true,
         data: {
           client_id: Number(clientId),
           changed,
+          message_changed: messageChanged,
+          typing_changed: typingChanged,
           updated_at: nextUpdatedAt,
+          typing: nextTyping,
+          timeout: waitResult?.timeout === true,
         },
       });
     } catch (err) {
@@ -1047,6 +1280,7 @@ module.exports = function makeChatTempRouter() {
     const tenantId = getTenantId(req);
     const clientId = normalizeClientId(req.params.clientId);
     if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
+    const actorKey = getRequestReactionActor(req);
 
     const message = sanitizeMessage(req.body?.message || req.body || {});
     if (!message || !normalizeMessageId(message.id)) {
@@ -1070,7 +1304,11 @@ module.exports = function makeChatTempRouter() {
       await conn.commit();
       conn.release();
       conn = null;
-      notifyThreadChange(tenantId, clientId, updatedAt.toISOString());
+      setThreadTypingForActor(tenantId, clientId, actorKey, false, "");
+      notifyThreadChange(tenantId, clientId, updatedAt.toISOString(), {
+        messageChanged: true,
+        typingChanged: true,
+      });
 
       return res.json({
         ok: true,
@@ -1166,6 +1404,9 @@ module.exports = function makeChatTempRouter() {
       .filter(Boolean);
     const hasFilterIds = ids.length > 0;
 
+    const actorKey = getRequestReactionActor(req);
+    const unreadDirection = actorKey === "in" ? "out" : "in";
+
     let conn;
     try {
       conn = await db.getConnection();
@@ -1180,9 +1421,9 @@ module.exports = function makeChatTempRouter() {
                delivery_status = 'read',
                delivered_at = COALESCE(delivered_at, ?),
                read_at = COALESCE(read_at, ?)
-         WHERE tenant_id = ? AND client_id = ? AND direction = 'in' AND is_read = 0
+         WHERE tenant_id = ? AND client_id = ? AND direction = ? AND is_read = 0
       `;
-      const params = [readAt, readAt, tenantId, clientId];
+      const params = [readAt, readAt, tenantId, clientId, unreadDirection];
       if (hasFilterIds) {
         query += ` AND message_id IN (${ids.map(() => "?").join(",")})`;
         params.push(...ids);
@@ -1417,11 +1658,64 @@ module.exports = function makeChatTempRouter() {
         [tenantId, clientId]
       );
       const deleted = Number(result?.affectedRows || 0) > 0;
-      if (deleted) notifyThreadChange(tenantId, clientId, new Date().toISOString());
+      if (deleted) {
+        clearThreadTypingState(tenantId, clientId);
+        notifyThreadChange(tenantId, clientId, new Date().toISOString());
+      }
 
       return res.json({ ok: true, data: { client_id: Number(clientId), deleted } });
     } catch (err) {
       console.error("chat-temp DELETE /thread error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
+  router.get("/summaries/wait", async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const since = String(req.query.since || "").trim();
+      const timeoutMs = Number(req.query.timeout_ms || req.query.timeout || 20000);
+
+      const currentUpdatedAt = await readTenantUpdatedAt(tenantId);
+      if (!since) {
+        if (!currentUpdatedAt) {
+          // Nothing to report yet; keep long-poll open until a new thread/message appears.
+        } else {
+          return res.json({
+            ok: true,
+            data: {
+              changed: true,
+              updated_at: currentUpdatedAt,
+              timeout: false,
+            },
+          });
+        }
+      } else if (String(currentUpdatedAt || "") !== since) {
+        return res.json({
+          ok: true,
+          data: {
+            changed: true,
+            updated_at: currentUpdatedAt,
+            timeout: false,
+          },
+        });
+      }
+
+      const waitResult = await waitForTenantChange(tenantId, timeoutMs);
+      const nextUpdatedAt = await readTenantUpdatedAt(tenantId);
+      const changed = waitResult?.timeout !== true
+        || String(nextUpdatedAt || "") !== String(since || "");
+
+      return res.json({
+        ok: true,
+        data: {
+          changed,
+          updated_at: nextUpdatedAt,
+          timeout: waitResult?.timeout === true,
+        },
+      });
+    } catch (err) {
+      console.error("chat-temp GET /summaries/wait error:", err);
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
   });

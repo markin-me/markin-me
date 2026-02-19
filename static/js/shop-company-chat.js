@@ -25,15 +25,20 @@
   const imageViewerOverlay = document.getElementById("shopCompanyChatImageViewerOverlay");
   const imageViewerCloseBtn = document.getElementById("shopCompanyChatImageViewerCloseBtn");
   const imageViewerImage = document.getElementById("shopCompanyChatImageViewerImage");
+  const imageViewerCard = imageViewerOverlay
+    ? imageViewerOverlay.querySelector(".chat-image-viewer-card")
+    : null;
   const input = document.getElementById("shopCompanyChatInput");
   const emojiBtn = document.getElementById("shopCompanyChatEmojiBtn");
   const emojiPopover = document.getElementById("shopCompanyChatEmojiPopover");
+  const emojiPopoverHomeParent = emojiPopover ? emojiPopover.parentElement : null;
   const scrollDownBtn = document.getElementById("shopCompanyChatScrollDownBtn");
   const scrollDownBadge = document.getElementById("shopCompanyChatScrollDownBadge");
+  let typingIndicator = document.getElementById("shopCompanyChatTypingIndicator");
   const reactionBar = document.getElementById("shopCompanyChatReactionBar");
 
   if (!openBtn || !overlay || !modalBody || !closeBtn) return;
-  if (!feed || !thread || !composer || !selectionToolbar || !selectionCloseBtn || !selectionCountEl || !selectionCopyBtn || !selectionDeleteBtn || !attachBtn || !attachInput || !attachPreviewOverlay || !attachPreviewCloseBtn || !attachPreviewTitle || !attachPreviewImage || !attachPreviewThumbs || !attachPreviewEmojiBtn || !attachPreviewCaption || !attachPreviewSendBtn || !imageViewerOverlay || !imageViewerCloseBtn || !imageViewerImage || !input || !emojiBtn || !emojiPopover || !scrollDownBtn || !reactionBar) return;
+  if (!feed || !thread || !composer || !selectionToolbar || !selectionCloseBtn || !selectionCountEl || !selectionCopyBtn || !selectionDeleteBtn || !attachBtn || !attachInput || !attachPreviewOverlay || !attachPreviewCloseBtn || !attachPreviewTitle || !attachPreviewImage || !attachPreviewThumbs || !attachPreviewEmojiBtn || !attachPreviewCaption || !attachPreviewSendBtn || !imageViewerOverlay || !imageViewerCloseBtn || !imageViewerImage || !imageViewerCard || !input || !emojiBtn || !emojiPopover || !scrollDownBtn || !reactionBar) return;
 
   const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/img/google/64";
   const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/emoji.json";
@@ -82,6 +87,10 @@
   const CHAT_THREAD_WAIT_TIMEOUT_MS = 20000;
   const CHAT_THREAD_WAIT_RETRY_MS = 1200;
   const CHAT_AUTOSCROLL_MS = 170;
+  const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
+  const CHAT_TYPING_HEARTBEAT_MS = 1800;
+  const CHAT_TYPING_IDLE_STOP_MS = 2600;
+  const CHAT_TYPING_BLUR_STOP_MS = 320;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
   const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
   const IMAGE_OPTIMIZE_TARGET_BYTES = 900 * 1024;
@@ -91,6 +100,20 @@
   const IMAGE_OPTIMIZE_MIN_QUALITY = 0.58;
   const IMAGE_OPTIMIZE_SCALE_STEP = 0.84;
   const CHAT_REACTION_ACTOR = "in";
+  const CHAT_TYPING_PHRASES = [
+    "печатает",
+    "набирает ответ",
+    "клацает по клавишам",
+    "стучит по клавиатуре",
+    "строчит сообщение",
+    "собирает мысли в текст",
+    "формулирует ответ",
+    "набивает текст",
+    "долбит по клавишам",
+    "подбирает слова",
+    "колдует над сообщением",
+    "нажимает клавиши",
+  ];
 
   let emojiAssetsState = "unknown";
   let emojiCategories = {};
@@ -99,13 +122,15 @@
   let emojiDatasetPromise = null;
 
   const QUICK_OPTIONS = [
-    "Где мой заказ",
+    "Где мой заказ?",
     "Вопрос по качеству товара",
     "Вопрос по комплектации заказа",
     "Другой вопрос",
   ];
 
   const QUICK_REPLIES = {
+    "где мой заказ?":
+      "Проверяю статус заказа. Если курьер задерживается из-за погоды, мы обязательно обновим время доставки.",
     "где мой заказ":
       "Проверяю статус заказа. Если курьер задерживается из-за погоды, мы обязательно обновим время доставки.",
     "вопрос по качеству товара":
@@ -116,9 +141,9 @@
       "Я на связи. Опишите ваш вопрос, и я постараюсь помочь или переключу на оператора.",
   };
 
-  const VIRTUAL_ASSISTANT_NAME = "Электроник";
+  const VIRTUAL_ASSISTANT_NAME = "Ням-Ням";
   const DAILY_WELCOME_TEXT =
-    "Привет! Я виртуальный помощник, Электроник!\n" +
+    "Привет! Я виртуальный помощник Ням-Ням!\n" +
     "Если ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.";
   const DAILY_OPTIONS_TEXT = "Чтобы я смог вам помочь, выберите категорию ниже:";
 
@@ -160,6 +185,15 @@
   let pendingFeedMessageIds = new Set();
   let hasLoadedSharedThreadOnce = false;
   let lastFeedScrollTop = null;
+  let lastFeedViewportState = null;
+  let pendingFeedRestoreState = null;
+  let peerTypingState = { active: false, text: "", updatedAt: "", expiresAt: "" };
+  let peerTypingUpdatedAt = "";
+  let peerTypingHideTimer = 0;
+  let localTypingHeartbeatTimer = 0;
+  let localTypingStopTimer = 0;
+  let localTypingActive = false;
+  let localTypingPhrase = "";
   const selectedMessageIds = new Set();
 
   const LONG_PRESS_MS = 430;
@@ -206,6 +240,211 @@
     badge.classList.add("is-count-tick");
   }
 
+  function getRandomTypingPhrase() {
+    if (!Array.isArray(CHAT_TYPING_PHRASES) || !CHAT_TYPING_PHRASES.length) {
+      return "печатает";
+    }
+    const idx = Math.floor(Math.random() * CHAT_TYPING_PHRASES.length);
+    const phrase = String(CHAT_TYPING_PHRASES[idx] || "").trim();
+    return phrase || "печатает";
+  }
+
+  function normalizePeerTypingInfo(raw) {
+    const source = raw && typeof raw === "object" ? raw : {};
+    const active = source.active === true;
+    const text = String(source.text || "").trim().slice(0, 120);
+    const updatedAt = String(source.updated_at || source.updatedAt || "");
+    const expiresAt = String(source.expires_at || source.expiresAt || "");
+    return {
+      active: active && !!text,
+      text: active ? text : "",
+      updatedAt: updatedAt,
+      expiresAt: expiresAt,
+    };
+  }
+
+  function ensureTypingIndicatorNode() {
+    if (typingIndicator && typingIndicator.isConnected) return typingIndicator;
+    const existing = thread.querySelector("#shopCompanyChatTypingIndicator");
+    if (existing) {
+      typingIndicator = existing;
+      return typingIndicator;
+    }
+    const row = document.createElement("div");
+    row.id = "shopCompanyChatTypingIndicator";
+    row.className = "shop-company-chat-row is-agent shop-company-chat-typing-row is-hidden";
+    row.setAttribute("aria-live", "polite");
+    row.setAttribute("aria-atomic", "true");
+
+    const textNode = document.createElement("div");
+    textNode.className = "shop-company-chat-typing-indicator";
+    row.appendChild(textNode);
+    thread.appendChild(row);
+
+    typingIndicator = row;
+    return typingIndicator;
+  }
+
+  function renderTypingIndicator() {
+    const keepBottom = shouldKeepFeedPinnedToBottom();
+    const node = ensureTypingIndicatorNode();
+    if (!node) return;
+    const canShow = overlay.classList.contains("is-open") && peerTypingState.active && peerTypingState.text;
+    const textNode = node.querySelector(".shop-company-chat-typing-indicator");
+    if (!canShow) {
+      if (textNode) textNode.textContent = "";
+      node.classList.add("is-hidden");
+      if (keepBottom) {
+        scrollToBottom(false);
+      } else {
+        updateScrollDownButton();
+      }
+      return;
+    }
+    if (textNode) textNode.textContent = String(peerTypingState.text || "").trim();
+    node.classList.remove("is-hidden");
+    if (keepBottom) {
+      scrollToBottom(false);
+    } else {
+      updateScrollDownButton();
+    }
+  }
+
+  function clearPeerTypingHideTimer() {
+    if (!peerTypingHideTimer) return;
+    window.clearTimeout(peerTypingHideTimer);
+    peerTypingHideTimer = 0;
+  }
+
+  function schedulePeerTypingAutoHide() {
+    clearPeerTypingHideTimer();
+    const expiresAt = String(peerTypingState.expiresAt || "");
+    if (!expiresAt) return;
+    const until = new Date(expiresAt).getTime();
+    if (!Number.isFinite(until)) return;
+    const delay = Math.max(0, until - Date.now() + 80);
+    peerTypingHideTimer = window.setTimeout(function () {
+      peerTypingHideTimer = 0;
+      const currentUntil = new Date(String(peerTypingState.expiresAt || "")).getTime();
+      if (Number.isFinite(currentUntil) && currentUntil > Date.now()) return;
+      peerTypingState = {
+        active: false,
+        text: "",
+        updatedAt: String(peerTypingState.updatedAt || ""),
+        expiresAt: "",
+      };
+      renderTypingIndicator();
+    }, delay);
+  }
+
+  function applyPeerTypingState(rawTyping, options) {
+    const opts = options || {};
+    const info = normalizePeerTypingInfo(rawTyping);
+    const nextUpdatedAt = String(info.updatedAt || peerTypingUpdatedAt || "");
+    if (nextUpdatedAt) peerTypingUpdatedAt = nextUpdatedAt;
+    if (opts.forceInactive === true) {
+      peerTypingState = {
+        active: false,
+        text: "",
+        updatedAt: nextUpdatedAt,
+        expiresAt: "",
+      };
+      clearPeerTypingHideTimer();
+      renderTypingIndicator();
+      return;
+    }
+
+    peerTypingState = info;
+    if (info.active) schedulePeerTypingAutoHide();
+    else clearPeerTypingHideTimer();
+    renderTypingIndicator();
+  }
+
+  function clearLocalTypingTimers() {
+    if (localTypingHeartbeatTimer) {
+      window.clearTimeout(localTypingHeartbeatTimer);
+      localTypingHeartbeatTimer = 0;
+    }
+    if (localTypingStopTimer) {
+      window.clearTimeout(localTypingStopTimer);
+      localTypingStopTimer = 0;
+    }
+  }
+
+  async function remoteSetTypingState(active, phrase, options) {
+    const requestClientId = getActiveChatClientId();
+    if (!requestClientId) return;
+    const opts = options || {};
+    const payload = active === true
+      ? { typing: true, text: String(phrase || "").trim().slice(0, 120) }
+      : { typing: false };
+    const json = await chatApiJson(
+      CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId) + "/typing",
+      {
+        method: "POST",
+        keepalive: opts.keepalive === true,
+        body: payload,
+      }
+    );
+    const peerTyping = json && json.data ? json.data.peer_typing : null;
+    if (peerTyping && typeof peerTyping === "object") {
+      applyPeerTypingState(peerTyping);
+    }
+  }
+
+  function scheduleLocalTypingHeartbeat() {
+    if (!localTypingActive) return;
+    if (localTypingHeartbeatTimer) window.clearTimeout(localTypingHeartbeatTimer);
+    localTypingHeartbeatTimer = window.setTimeout(function () {
+      if (!localTypingActive) return;
+      if (!overlay.classList.contains("is-open")) {
+        stopLocalTypingSession({ flush: true });
+        return;
+      }
+      if (!normalizeComposerText(input.value)) {
+        stopLocalTypingSession({ flush: true });
+        return;
+      }
+      remoteSetTypingState(true, localTypingPhrase).catch(function () {});
+      scheduleLocalTypingHeartbeat();
+    }, CHAT_TYPING_HEARTBEAT_MS);
+  }
+
+  function scheduleLocalTypingStop(delayMs) {
+    if (localTypingStopTimer) window.clearTimeout(localTypingStopTimer);
+    const timeout = Math.max(80, Number(delayMs || CHAT_TYPING_IDLE_STOP_MS));
+    localTypingStopTimer = window.setTimeout(function () {
+      stopLocalTypingSession({ flush: true });
+    }, timeout);
+  }
+
+  function stopLocalTypingSession(options) {
+    const opts = options || {};
+    const wasActive = localTypingActive === true;
+    clearLocalTypingTimers();
+    localTypingActive = false;
+    localTypingPhrase = "";
+    if (opts.flush !== false && wasActive) {
+      remoteSetTypingState(false, "", { keepalive: opts.keepalive === true }).catch(function () {});
+    }
+  }
+
+  function handleComposerTypingActivity() {
+    if (!overlay.classList.contains("is-open")) return;
+    const hasText = !!normalizeComposerText(input.value);
+    if (!hasText) {
+      stopLocalTypingSession({ flush: true });
+      return;
+    }
+    if (!localTypingActive) {
+      localTypingActive = true;
+      localTypingPhrase = getRandomTypingPhrase();
+      remoteSetTypingState(true, localTypingPhrase).catch(function () {});
+    }
+    scheduleLocalTypingHeartbeat();
+    scheduleLocalTypingStop(CHAT_TYPING_IDLE_STOP_MS);
+  }
+
   function addPendingFeedMessageIds(ids) {
     const list = Array.isArray(ids) ? ids : [];
     if (!list.length) return;
@@ -218,7 +457,9 @@
     });
     if (!changed) return;
     pendingFeedNewCount = pendingFeedMessageIds.size;
+    syncPendingFeedCountByViewport();
     updateScrollDownButton();
+    renderUnreadBadge(liveEntries);
   }
 
   function clearPendingFeedNewCount() {
@@ -226,6 +467,7 @@
     pendingFeedMessageIds.clear();
     pendingFeedNewCount = 0;
     updateScrollDownButton();
+    renderUnreadBadge(liveEntries);
   }
 
   function syncPendingFeedCountByViewport() {
@@ -255,18 +497,208 @@
     if (!changed) return;
     pendingFeedNewCount = pendingFeedMessageIds.size;
     updateScrollDownButton();
+    renderUnreadBadge(liveEntries);
   }
 
-  function saveFeedScrollPosition() {
-    if (!feed) return;
-    lastFeedScrollTop = feed.scrollTop;
+  function getFeedViewportStateSnapshot() {
+    if (!feed) return null;
+    const top = Math.max(0, Number(feed.scrollTop || 0));
+    if (!Number.isFinite(top)) return null;
+    const snapshot = {
+      top: top,
+      anchorId: "",
+      anchorOffset: 0,
+    };
+    if (!thread) return snapshot;
+    const feedRect = feed.getBoundingClientRect();
+    const topEdge = feedRect.top + 1;
+    const rows = thread.querySelectorAll(".shop-company-chat-row[data-message-id]");
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      const rect = row.getBoundingClientRect();
+      if (rect.bottom <= topEdge) continue;
+      const id = String(row.getAttribute("data-message-id") || "");
+      if (!id) break;
+      snapshot.anchorId = id;
+      snapshot.anchorOffset = rect.top - feedRect.top;
+      break;
+    }
+    return snapshot;
   }
 
-  function restoreFeedScrollPosition() {
-    if (!Number.isFinite(lastFeedScrollTop)) return false;
+  function clampFeedScrollTop(value) {
     const maxTop = Math.max(0, feed.scrollHeight - feed.clientHeight);
-    feed.scrollTop = Math.max(0, Math.min(lastFeedScrollTop, maxTop));
+    return Math.max(0, Math.min(Number(value || 0), maxTop));
+  }
+
+  function applyFeedViewportStateSnapshot(snapshot) {
+    if (!feed || !snapshot || typeof snapshot !== "object") return false;
+    const rawTop = Number(snapshot.top);
+    if (!Number.isFinite(rawTop)) return false;
+
+    feed.scrollTop = clampFeedScrollTop(rawTop);
+
+    const anchorId = String(snapshot.anchorId || "");
+    if (anchorId && thread) {
+      const anchorNode = thread.querySelector(
+        '.shop-company-chat-row[data-message-id="' + cssEscape(anchorId) + '"]'
+      );
+      if (anchorNode) {
+        const feedRect = feed.getBoundingClientRect();
+        const rect = anchorNode.getBoundingClientRect();
+        const targetOffset = Number(snapshot.anchorOffset);
+        const safeTargetOffset = Number.isFinite(targetOffset) ? targetOffset : 0;
+        const delta = (rect.top - feedRect.top) - safeTargetOffset;
+        if (Math.abs(delta) > 0.5) {
+          feed.scrollTop = clampFeedScrollTop(feed.scrollTop + delta);
+        }
+      }
+    }
+
+    const appliedTop = clampFeedScrollTop(feed.scrollTop);
+    feed.scrollTop = appliedTop;
+    lastFeedScrollTop = appliedTop;
+    lastFeedViewportState = {
+      top: appliedTop,
+      anchorId: anchorId,
+      anchorOffset: Number(snapshot.anchorOffset) || 0,
+    };
     updateScrollDownButton();
+    return true;
+  }
+
+  function scheduleFeedViewportRestoreStabilization(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return;
+    const stableSnapshot = {
+      top: Number(snapshot.top) || 0,
+      anchorId: String(snapshot.anchorId || ""),
+      anchorOffset: Number(snapshot.anchorOffset) || 0,
+    };
+
+    window.setTimeout(function () {
+      if (!overlay.classList.contains("is-open")) return;
+      applyFeedViewportStateSnapshot(stableSnapshot);
+    }, 120);
+
+    const attachmentImages = Array.from(
+      thread.querySelectorAll(".shop-company-chat-attachment-image")
+    ).filter(function (img) {
+      return !(img && img.complete);
+    });
+    if (!attachmentImages.length) return;
+
+    let left = attachmentImages.length;
+    let done = false;
+    const finish = function () {
+      if (done) return;
+      done = true;
+      if (!overlay.classList.contains("is-open")) return;
+      applyFeedViewportStateSnapshot(stableSnapshot);
+    };
+    const timer = window.setTimeout(finish, 1000);
+    const onImgDone = function () {
+      if (done) return;
+      left -= 1;
+      if (left <= 0) {
+        clearTimeout(timer);
+        finish();
+      }
+    };
+    attachmentImages.forEach(function (img) {
+      img.addEventListener("load", onImgDone, { once: true });
+      img.addEventListener("error", onImgDone, { once: true });
+    });
+  }
+
+  function isFeedViewportRestoreSatisfied(snapshot) {
+    if (!snapshot || typeof snapshot !== "object" || !feed) return true;
+
+    const desiredTop = Number(snapshot.top);
+    if (Number.isFinite(desiredTop)) {
+      const maxTop = Math.max(0, feed.scrollHeight - feed.clientHeight);
+      if (desiredTop > maxTop + 2) return false;
+    }
+
+    const anchorId = String(snapshot.anchorId || "");
+    if (!anchorId || !thread) return true;
+    const anchorNode = thread.querySelector(
+      '.shop-company-chat-row[data-message-id="' + cssEscape(anchorId) + '"]'
+    );
+    if (!anchorNode) return false;
+
+    const feedRect = feed.getBoundingClientRect();
+    const rect = anchorNode.getBoundingClientRect();
+    const expectedOffset = Number(snapshot.anchorOffset);
+    const targetOffset = Number.isFinite(expectedOffset) ? expectedOffset : 0;
+    const delta = (rect.top - feedRect.top) - targetOffset;
+    return Math.abs(delta) <= 3;
+  }
+
+  function tryApplyPendingFeedRestoreState() {
+    if (!overlay.classList.contains("is-open")) return false;
+    if (!pendingFeedRestoreState || typeof pendingFeedRestoreState !== "object") return false;
+    applyFeedViewportStateSnapshot(pendingFeedRestoreState);
+    if (!isFeedViewportRestoreSatisfied(pendingFeedRestoreState)) return false;
+    pendingFeedRestoreState = null;
+    return true;
+  }
+
+  function saveFeedScrollPosition(options) {
+    const opts = options || {};
+    const isOpen = overlay.classList.contains("is-open");
+    if (!isOpen && opts.force !== true) return;
+    if (!feed) return;
+    const nextTop = Math.max(0, Number(feed.scrollTop || 0));
+    lastFeedScrollTop = nextTop;
+
+    if (!lastFeedViewportState || typeof lastFeedViewportState !== "object") {
+      lastFeedViewportState = { top: nextTop, anchorId: "", anchorOffset: 0 };
+    } else {
+      lastFeedViewportState.top = nextTop;
+    }
+
+    if (opts.persist === true) {
+      const clientId = String(opts.clientId || getActiveChatClientId() || "");
+      const snapshot = getFeedViewportStateSnapshot() || {
+        top: nextTop,
+        anchorId: "",
+        anchorOffset: 0,
+      };
+      lastFeedViewportState = snapshot;
+      if (clientId) savePersistedFeedViewportState(clientId, snapshot);
+    }
+  }
+
+  function restoreFeedScrollPosition(options) {
+    const opts = options || {};
+    const clientId = String(opts.clientId || getActiveChatClientId() || "");
+
+    let snapshot = lastFeedViewportState && typeof lastFeedViewportState === "object"
+      ? { ...lastFeedViewportState }
+      : null;
+
+    if (opts.preferPersisted === true || !snapshot || !Number.isFinite(Number(snapshot.top))) {
+      const persistedState = loadPersistedFeedViewportState(clientId);
+      if (persistedState) snapshot = persistedState;
+    }
+
+    if (!snapshot || !Number.isFinite(Number(snapshot.top))) {
+      const fallbackTop = Number(lastFeedScrollTop);
+      if (!Number.isFinite(fallbackTop)) return false;
+      snapshot = {
+        top: fallbackTop,
+        anchorId: "",
+        anchorOffset: 0,
+      };
+    }
+
+    pendingFeedRestoreState = { ...snapshot };
+    const applied = applyFeedViewportStateSnapshot(snapshot);
+    if (!applied) return false;
+    scheduleFeedViewportRestoreStabilization(snapshot);
+    if (isFeedViewportRestoreSatisfied(snapshot)) {
+      pendingFeedRestoreState = null;
+    }
     return true;
   }
 
@@ -288,14 +720,18 @@
     if (!badge) return;
 
     const unreadCount = getUnreadAgentCount(entries);
-    if (unreadCount <= 0) {
+    const pendingCount = Math.max(0, Number(pendingFeedNewCount || 0));
+    const isOpen = overlay.classList.contains("is-open");
+    const displayCount = isOpen ? pendingCount : unreadCount;
+
+    if (displayCount <= 0) {
       badge.textContent = "";
       badge.classList.add("hidden");
       openBtn.removeAttribute("data-unread-count");
       return;
     }
 
-    const value = unreadCount > 99 ? "99+" : String(unreadCount);
+    const value = displayCount > 99 ? "99+" : String(displayCount);
     badge.textContent = value;
     badge.classList.remove("hidden");
     openBtn.setAttribute("data-unread-count", value);
@@ -304,17 +740,18 @@
   function isChatTabActiveForRead() {
     if (typeof document === "undefined") return true;
     if (document.visibilityState && document.visibilityState !== "visible") return false;
-    if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
     return true;
   }
 
-  function shouldMarkAgentMessagesRead() {
+  function shouldMarkAgentMessagesRead(options) {
+    const opts = options || {};
+    if (opts.force === true) return true;
     return overlay.classList.contains("is-open") && isChatTabActiveForRead();
   }
 
-  function applyReadReceiptsToAgentEntries(entries) {
+  function applyReadReceiptsToAgentEntries(entries, options) {
     const list = Array.isArray(entries) ? entries : [];
-    const shouldMarkRead = shouldMarkAgentMessagesRead();
+    const shouldMarkRead = shouldMarkAgentMessagesRead(options);
     const nowIso = new Date().toISOString();
     let changed = false;
     const readIds = [];
@@ -373,6 +810,7 @@
   const customerTokenKey = "shop_customer_token_t" + tenantId;
   const customerCacheKey = "shop_customer_cache_t" + tenantId;
   const guestChatClientKey = "shop_company_chat_guest_id_t" + tenantId;
+  const customerChatClientIdByTokenPrefix = "shop_company_chat_customer_id_for_token_t" + tenantId + "_";
 
   function getCustomerToken() {
     try { return String(localStorage.getItem(customerTokenKey) || ""); } catch { return ""; }
@@ -394,6 +832,27 @@
       hash = ((hash * 31) + str.charCodeAt(i)) >>> 0;
     }
     return hash;
+  }
+
+  function getStableCustomerChatClientId(token, directIdCandidate) {
+    const tokenHash = hashToStableInt(token);
+    const mappingKey = customerChatClientIdByTokenPrefix + String(tokenHash);
+    const directId = Number(directIdCandidate || 0);
+
+    try {
+      const stored = Number(localStorage.getItem(mappingKey) || 0);
+      if (Number.isFinite(stored) && stored > 0) return Math.trunc(stored);
+    } catch {}
+
+    let resolved = 0;
+    if (Number.isFinite(directId) && directId > 0) {
+      resolved = Math.trunc(directId);
+    } else {
+      resolved = Math.trunc(800000000 + (tokenHash % 99999999));
+    }
+
+    try { localStorage.setItem(mappingKey, String(resolved)); } catch {}
+    return resolved;
   }
 
   function stableSerialize(value) {
@@ -434,18 +893,9 @@
     const token = getCustomerToken();
     const directId = Number(customer && customer.id);
     if (token) {
-      if (Number.isFinite(directId) && directId > 0) {
-        return {
-          id: Math.trunc(directId),
-          name: String(customer.name || "Клиент"),
-          phone: String(customer.phone || ""),
-          isGuest: false,
-        };
-      }
-
-      const hashed = 800000000 + (hashToStableInt(token) % 99999999);
+      const stableCustomerId = getStableCustomerChatClientId(token, directId);
       return {
-        id: Math.trunc(hashed),
+        id: Math.trunc(stableCustomerId),
         name: String((customer && customer.name) || "Клиент"),
         phone: String((customer && customer.phone) || ""),
         isGuest: false,
@@ -465,6 +915,65 @@
     const id = Number(clientId);
     const safeId = Number.isFinite(id) && id > 0 ? Math.trunc(id) : 0;
     return "shop_company_chat_hidden_messages_t" + tenantId + "_c" + String(safeId);
+  }
+
+  function buildFeedScrollTopStorageKey(clientId) {
+    const id = Number(clientId);
+    const safeId = Number.isFinite(id) && id > 0 ? Math.trunc(id) : 0;
+    return "shop_company_chat_feed_scroll_t" + tenantId + "_c" + String(safeId);
+  }
+
+  function normalizeFeedViewportState(rawState) {
+    if (!rawState || typeof rawState !== "object") return null;
+    const top = Number(rawState.top);
+    if (!Number.isFinite(top) || top < 0) return null;
+    return {
+      top: top,
+      anchorId: String(rawState.anchorId || ""),
+      anchorOffset: Number(rawState.anchorOffset) || 0,
+    };
+  }
+
+  function loadPersistedFeedViewportState(clientId) {
+    const key = buildFeedScrollTopStorageKey(clientId);
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return null;
+      const parsedObj = JSON.parse(raw);
+      const normalizedObj = normalizeFeedViewportState(parsedObj);
+      if (normalizedObj) return normalizedObj;
+    } catch {
+      // noop
+    }
+    try {
+      const rawNumber = Number(localStorage.getItem(key));
+      if (!Number.isFinite(rawNumber) || rawNumber < 0) return null;
+      return {
+        top: rawNumber,
+        anchorId: "",
+        anchorOffset: 0,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function savePersistedFeedViewportState(clientId, snapshot) {
+    const key = buildFeedScrollTopStorageKey(clientId);
+    const normalized = normalizeFeedViewportState(snapshot);
+    if (!normalized) return;
+    try { localStorage.setItem(key, JSON.stringify(normalized)); } catch {}
+  }
+
+  function persistFeedScrollPositionSnapshot(clientId) {
+    const activeId = String(clientId || getActiveChatClientId() || "");
+    if (!activeId) return;
+    let snapshot = normalizeFeedViewportState(lastFeedViewportState);
+    if (!snapshot) snapshot = getFeedViewportStateSnapshot();
+    if (!snapshot) return;
+    lastFeedViewportState = snapshot;
+    lastFeedScrollTop = Number(snapshot.top);
+    savePersistedFeedViewportState(activeId, snapshot);
   }
 
   function normalizeChatClientProfile(profile) {
@@ -492,6 +1001,8 @@
   let chatClientProfile = normalizeChatClientProfile(resolveChatClientProfile());
   let localHiddenMessagesKey = buildLocalHiddenMessagesKey(chatClientProfile.id);
   let localHiddenMessageIds = loadLocalHiddenMessageIds();
+  lastFeedViewportState = loadPersistedFeedViewportState(chatClientProfile.id);
+  lastFeedScrollTop = Number(lastFeedViewportState && lastFeedViewportState.top);
   let sharedThreadMeta = {
     name: String(chatClientProfile.name || "Клиент"),
     phone: String(chatClientProfile.phone || ""),
@@ -538,6 +1049,12 @@
       && Number(currentProfile.id) !== Number(nextProfile.id)
     );
 
+    stopLocalTypingSession({ flush: true });
+    clearPeerTypingHideTimer();
+    peerTypingState = { active: false, text: "", updatedAt: "", expiresAt: "" };
+    peerTypingUpdatedAt = "";
+    renderTypingIndicator();
+
     chatClientProfile = nextProfile;
     localHiddenMessagesKey = buildLocalHiddenMessagesKey(chatClientProfile.id);
     localHiddenMessageIds = loadLocalHiddenMessageIds();
@@ -545,10 +1062,12 @@
     sharedThreadUpdatedAt = "";
     sharedThreadMutationVersion = 0;
     hasLoadedSharedThreadOnce = false;
+    pendingFeedRestoreState = null;
     sharedPullInFlight = false;
     sharedMutationQueue = Promise.resolve();
     sharedMutationPendingCount = 0;
-    lastFeedScrollTop = null;
+    lastFeedViewportState = loadPersistedFeedViewportState(nextProfile.id);
+    lastFeedScrollTop = Number(lastFeedViewportState && lastFeedViewportState.top);
     clearPendingFeedNewCount();
 
     hideContextMenu();
@@ -660,6 +1179,7 @@
     const headers = {
       "x-tenant-id": String(tenantId),
       "x-store-id": String(getActiveStoreId()),
+      "x-chat-actor": "in",
       ...(options.body && !isFormDataBody ? { "Content-Type": "application/json" } : {}),
       ...(options.headers || {}),
     };
@@ -669,6 +1189,7 @@
     const res = await fetch(url, {
       method: options.method || "GET",
       headers: headers,
+      keepalive: options.keepalive === true,
       body: options.body
         ? (isFormDataBody ? options.body : JSON.stringify(options.body))
         : undefined,
@@ -911,17 +1432,19 @@
     if (updatedAt) sharedThreadUpdatedAt = updatedAt;
   }
 
-  async function remoteMarkSharedMessagesRead(messageIds) {
+  async function remoteMarkSharedMessagesRead(messageIds, options) {
     const requestClientId = getActiveChatClientId();
     if (!requestClientId) return;
     const ids = (Array.isArray(messageIds) ? messageIds : [])
       .map(function (id) { return String(id || "").trim(); })
       .filter(Boolean);
+    const opts = options || {};
     const metaState = sanitizeSharedThreadMeta(sharedThreadMeta);
     const json = await chatApiJson(
       CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId) + "/messages/read",
       {
         method: "POST",
+        keepalive: opts.keepalive === true,
         body: {
           message_ids: ids,
           meta: {
@@ -950,11 +1473,21 @@
     return isImageAttachment(attachment) ? attachment : null;
   }
 
-  async function waitSharedThreadUpdate(sinceUpdatedAt, timeoutMs) {
+  async function waitSharedThreadUpdate(sinceUpdatedAt, typingSinceUpdatedAt, timeoutMs) {
     const requestClientId = getActiveChatClientId();
-    if (!requestClientId) return { changed: false, updatedAt: "" };
+    if (!requestClientId) {
+      return {
+        changed: false,
+        updatedAt: "",
+        timeout: true,
+        messageChanged: false,
+        typingChanged: false,
+        typing: null,
+      };
+    }
     const qs = new URLSearchParams({
       since: String(sinceUpdatedAt || ""),
+      typing_since: String(typingSinceUpdatedAt || ""),
       timeout_ms: String(Math.max(1000, Number(timeoutMs || CHAT_THREAD_WAIT_TIMEOUT_MS))),
       _ts: String(Date.now()),
     });
@@ -965,6 +1498,10 @@
     return {
       changed: data.changed === true,
       updatedAt: String(data.updated_at || ""),
+      timeout: data.timeout === true,
+      messageChanged: data.message_changed === true,
+      typingChanged: data.typing_changed === true,
+      typing: data.typing && typeof data.typing === "object" ? data.typing : null,
     };
   }
 
@@ -1015,13 +1552,30 @@
       });
 
     const prevTop = feed.scrollTop;
+    const isChatOpen = overlay.classList.contains("is-open");
+    const hiddenDistanceBefore = feed.scrollHeight - feed.clientHeight - feed.scrollTop;
+    const hadScrollDownButton = isChatOpen && (
+      pendingFeedNewCount > 0
+      || hiddenDistanceBefore >= CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX
+    );
     liveEntries = entries;
     sharedThreadUpdatedAt = remoteUpdatedAt;
     renderThread();
-    feed.scrollTop = prevTop;
-    updateScrollDownButton();
-    if (hasLoadedSharedThreadOnce && appendedAgentMessageIds.length > 0) {
-      addPendingFeedMessageIds(appendedAgentMessageIds);
+    const hasIncomingAgentMessages = hasLoadedSharedThreadOnce && appendedAgentMessageIds.length > 0;
+    if (hasIncomingAgentMessages) {
+      applyPeerTypingState(null, { forceInactive: true });
+    }
+    const shouldAutoScrollIncoming = isChatOpen && hasIncomingAgentMessages && !hadScrollDownButton;
+
+    if (shouldAutoScrollIncoming) {
+      scrollToBottom(false);
+    } else {
+      feed.scrollTop = prevTop;
+      tryApplyPendingFeedRestoreState();
+      updateScrollDownButton();
+      if (isChatOpen && hasIncomingAgentMessages) {
+        addPendingFeedMessageIds(appendedAgentMessageIds);
+      }
     }
     hasLoadedSharedThreadOnce = true;
     if (readChangedIds.length) {
@@ -1190,12 +1744,28 @@
 
         try {
           const knownUpdatedAt = String(sharedThreadUpdatedAt || "");
-          const waited = await waitSharedThreadUpdate(knownUpdatedAt, CHAT_THREAD_WAIT_TIMEOUT_MS);
+          const knownTypingUpdatedAt = String(peerTypingUpdatedAt || "");
+          const waited = await waitSharedThreadUpdate(
+            knownUpdatedAt,
+            knownTypingUpdatedAt,
+            CHAT_THREAD_WAIT_TIMEOUT_MS
+          );
           if (!sharedThreadWaitLoopStarted || loopToken !== sharedThreadWaitLoopToken) break;
           if (profileMergeInFlight) continue;
           if (String(activeClientId) !== String(getActiveChatClientId())) continue;
-          if (waited.changed || (waited.updatedAt && waited.updatedAt !== knownUpdatedAt)) {
-            await pullSharedThreadFromServerIfChanged({ force: false }).catch(function () {});
+          if (waited.typing && typeof waited.typing === "object") {
+            applyPeerTypingState(waited.typing);
+          }
+          const messageChanged = waited.messageChanged === true
+            || (
+              waited.messageChanged !== false
+              && waited.changed === true
+              && waited.typingChanged !== true
+            )
+            || (waited.updatedAt && waited.updatedAt !== knownUpdatedAt);
+          const shouldPullThread = messageChanged || (waited.timeout !== true && waited.typingChanged !== true);
+          if (shouldPullThread) {
+            await pullSharedThreadFromServerIfChanged({ force: true }).catch(function () {});
           }
         } catch {
           await sleepMs(CHAT_THREAD_WAIT_RETRY_MS);
@@ -1210,14 +1780,17 @@
     sharedThreadWaitLoopToken += 1;
   }
 
-  function syncVisibleChatReadState() {
-    if (!overlay.classList.contains("is-open")) return false;
-    if (!isChatTabActiveForRead()) return false;
-    const keepBottom = shouldKeepFeedPinnedToBottom();
+  function syncVisibleChatReadState(options) {
+    const opts = options || {};
+    const forceRead = opts.force === true;
+    if (!forceRead && !overlay.classList.contains("is-open")) return false;
+    if (!forceRead && !isChatTabActiveForRead()) return false;
+    const keepBottom = opts.preserveViewport === true ? false : shouldKeepFeedPinnedToBottom();
     const prevTop = feed.scrollTop;
-    const readState = applyReadReceiptsToAgentEntries(liveEntries);
+    const readState = applyReadReceiptsToAgentEntries(liveEntries, { force: forceRead });
     const changed = !!(readState && readState.changed);
     const readIds = Array.isArray(readState && readState.readIds) ? readState.readIds : [];
+    const immediateRemote = opts.flushRemote === true;
     renderUnreadBadge(liveEntries);
     if (!changed) return false;
     markSharedThreadMutated();
@@ -1226,12 +1799,21 @@
       scrollToBottom(false);
     } else {
       feed.scrollTop = prevTop;
+      saveFeedScrollPosition({ force: true });
       updateScrollDownButton();
     }
     if (readIds.length) {
-      enqueueSharedMutation(function () {
-        return remoteMarkSharedMessagesRead(readIds);
-      });
+      if (immediateRemote) {
+        remoteMarkSharedMessagesRead(readIds, { keepalive: true }).catch(function () {
+          enqueueSharedMutation(function () {
+            return remoteMarkSharedMessagesRead(readIds);
+          });
+        });
+      } else {
+        enqueueSharedMutation(function () {
+          return remoteMarkSharedMessagesRead(readIds);
+        });
+      }
     }
     return true;
   }
@@ -1731,6 +2313,7 @@
 
   function openCompanyChat() {
     refreshChatClientProfileIfNeeded({ pull: false });
+    pendingFeedRestoreState = loadPersistedFeedViewportState(getActiveChatClientId());
     if (!initialized) {
       resetConversation();
       initialized = true;
@@ -1740,6 +2323,7 @@
     overlay.classList.add("is-open");
     overlay.setAttribute("aria-hidden", "false");
     document.body.classList.add("shop-company-chat-open");
+    renderTypingIndicator();
     requestAnimationFrame(function () {
       pullSharedThreadFromServer({ force: true })
         .catch(function () { return false; })
@@ -1752,13 +2336,19 @@
             });
           }
           startSharedThreadPolling();
-          const restored = restoreFeedScrollPosition();
+          const restored = restoreFeedScrollPosition({ preferPersisted: true });
           if (!restored) {
             scrollToBottom(false, true);
           } else {
             syncPendingFeedCountByViewport();
             updateScrollDownButton();
           }
+          window.setTimeout(function () {
+            tryApplyPendingFeedRestoreState();
+          }, 0);
+          window.setTimeout(function () {
+            tryApplyPendingFeedRestoreState();
+          }, 220);
           syncComposerRichPreview({});
           input.focus();
           syncVisibleChatReadState();
@@ -1767,7 +2357,9 @@
   }
 
   function closeCompanyChat() {
-    saveFeedScrollPosition();
+    stopLocalTypingSession({ flush: true });
+    saveFeedScrollPosition({ persist: true });
+    syncVisibleChatReadState({ force: true, flushRemote: true, preserveViewport: true });
     closeAttachPreview({ focusComposer: false });
     hideContextMenu();
     hideReactionBar();
@@ -1778,6 +2370,10 @@
     overlay.classList.remove("is-open");
     overlay.setAttribute("aria-hidden", "true");
     document.body.classList.remove("shop-company-chat-open");
+    persistFeedScrollPositionSnapshot();
+    pendingFeedRestoreState = null;
+    renderUnreadBadge(liveEntries);
+    renderTypingIndicator();
   }
 
   function resetConversation() {
@@ -2686,6 +3282,7 @@
     saveFeedScrollPosition();
     updateScrollDownButton();
     syncSelectionUi();
+    renderTypingIndicator();
   }
 
   function hideReactionBar() {
@@ -2696,7 +3293,22 @@
     reactionMessageId = "";
   }
 
+  function remountEmojiPopover(target) {
+    if (!emojiPopover) return;
+    const normalizedTarget = target === "attach-preview" ? "attach-preview" : "composer";
+    const canMountToAttachPreview = (
+      normalizedTarget === "attach-preview"
+      && attachPreviewOverlay
+      && !attachPreviewOverlay.classList.contains("hidden")
+    );
+    const desiredParent = canMountToAttachPreview ? attachPreviewOverlay : emojiPopoverHomeParent;
+    if (!desiredParent) return;
+    if (emojiPopover.parentElement === desiredParent) return;
+    desiredParent.appendChild(emojiPopover);
+  }
+
   function hideEmojiPopover() {
+    remountEmojiPopover("composer");
     emojiPopover.classList.add("hidden");
     emojiPopover.classList.remove("is-attach-preview");
   }
@@ -2708,8 +3320,10 @@
     const hasSameTarget = emojiPopover.classList.contains("is-attach-preview") === isPreviewTarget;
     const willOpen = !isOpen || !hasSameTarget;
 
+    remountEmojiPopover(normalizedTarget);
     emojiPopover.classList.toggle("is-attach-preview", isPreviewTarget);
     emojiPopover.classList.toggle("hidden", !willOpen);
+    if (!willOpen) remountEmojiPopover("composer");
     if (willOpen) ensureEmojiDatasetLoaded().catch(function () {});
   }
 
@@ -2900,9 +3514,14 @@
     const value = String(emoji || "");
     if (!value) return;
 
+    const attachPreviewOpen = !attachPreviewOverlay.classList.contains("hidden");
+    const attachPreviewTargetFocused = document.activeElement === attachPreviewCaption;
     const useAttachPreviewCaption = (
-      emojiPopover.classList.contains("is-attach-preview")
-      && !attachPreviewOverlay.classList.contains("hidden")
+      attachPreviewOpen
+      && (
+        attachPreviewTargetFocused
+        || emojiPopover.classList.contains("is-attach-preview")
+      )
     );
     if (useAttachPreviewCaption) {
       const startPreview = attachPreviewCaption.selectionStart ?? attachPreviewCaption.value.length;
@@ -2924,6 +3543,7 @@
     const pos = start + value.length;
     input.setSelectionRange(pos, pos);
     syncComposerRichPreview({});
+    handleComposerTypingActivity();
   }
 
   function renderEmojiPicker() {
@@ -3410,7 +4030,7 @@
   function updateScrollDownButton() {
     const hiddenDistance = feed.scrollHeight - feed.clientHeight - feed.scrollTop;
     const hasPending = pendingFeedNewCount > 0;
-    const shouldShow = hasPending || hiddenDistance >= 120;
+    const shouldShow = hasPending || hiddenDistance >= CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX;
     scrollDownBtn.classList.toggle("hidden", !shouldShow);
 
     const badge = ensureScrollDownBadge();
@@ -3509,6 +4129,7 @@
     hideReactionBar();
     hideEmojiPopover();
     pushLiveMessage("user", trimmed, { replyTo: replySnapshot, attachment: attachment });
+    stopLocalTypingSession({ flush: true });
     clearReplyDraft();
     return true;
   }
@@ -3548,19 +4169,62 @@
     return !imageViewerOverlay.classList.contains("hidden");
   }
 
+  function clearMessageImageViewerLayout() {
+    imageViewerOverlay.style.removeProperty("--chat-image-viewer-max-width");
+    imageViewerOverlay.style.removeProperty("--chat-image-viewer-max-height");
+    imageViewerOverlay.style.removeProperty("--chat-image-viewer-target-width");
+    imageViewerOverlay.style.removeProperty("--chat-image-viewer-target-height");
+  }
+
+  function updateMessageImageViewerLayout() {
+    if (!isMessageImageViewerOpen()) return;
+    const naturalWidth = Number(imageViewerImage.naturalWidth || 0);
+    const naturalHeight = Number(imageViewerImage.naturalHeight || 0);
+    if (!Number.isFinite(naturalWidth) || !Number.isFinite(naturalHeight) || naturalWidth <= 0 || naturalHeight <= 0) return;
+
+    const viewportWidth = Math.max(
+      Number(window.innerWidth || 0),
+      Number(document.documentElement && document.documentElement.clientWidth || 0)
+    );
+    const viewportHeight = Math.max(
+      Number(window.innerHeight || 0),
+      Number(document.documentElement && document.documentElement.clientHeight || 0)
+    );
+    if (!viewportWidth || !viewportHeight) return;
+
+    const compact = viewportWidth <= 640;
+    const padding = compact ? 12 : 18;
+    const closeButtonReserve = compact ? 18 : 24;
+    const maxWidth = Math.max(220, viewportWidth - padding * 2);
+    const maxHeight = Math.max(180, viewportHeight - padding * 2 - closeButtonReserve);
+    const scale = Math.min(maxWidth / naturalWidth, maxHeight / naturalHeight, 1);
+    const targetWidth = Math.max(160, Math.round(naturalWidth * scale));
+    const targetHeight = Math.max(120, Math.round(naturalHeight * scale));
+
+    imageViewerOverlay.style.setProperty("--chat-image-viewer-max-width", maxWidth + "px");
+    imageViewerOverlay.style.setProperty("--chat-image-viewer-max-height", maxHeight + "px");
+    imageViewerOverlay.style.setProperty("--chat-image-viewer-target-width", targetWidth + "px");
+    imageViewerOverlay.style.setProperty("--chat-image-viewer-target-height", targetHeight + "px");
+  }
+
   function closeMessageImageViewer() {
     imageViewerOverlay.classList.add("hidden");
     imageViewerOverlay.setAttribute("aria-hidden", "true");
     imageViewerImage.removeAttribute("src");
+    clearMessageImageViewerLayout();
   }
 
   function openMessageImageViewer(imageSrc, imageAlt) {
     const src = String(imageSrc || "").trim();
     if (!src) return false;
+    clearMessageImageViewerLayout();
     imageViewerImage.src = src;
     imageViewerImage.alt = String(imageAlt || "Image preview");
     imageViewerOverlay.classList.remove("hidden");
     imageViewerOverlay.setAttribute("aria-hidden", "false");
+    if (imageViewerImage.complete) {
+      updateMessageImageViewerLayout();
+    }
     return true;
   }
 
@@ -3575,6 +4239,10 @@
     imageViewerOverlay.addEventListener("click", function (event) {
       if (event.target !== imageViewerOverlay) return;
       closeMessageImageViewer();
+    });
+
+    imageViewerImage.addEventListener("load", function () {
+      updateMessageImageViewerLayout();
     });
   }
 
@@ -3666,6 +4334,7 @@
     });
 
     if (sent > 0) {
+      stopLocalTypingSession({ flush: true });
       hideContextMenu();
       hideReactionBar();
       hideEmojiPopover();
@@ -3779,6 +4448,7 @@
 
   closeBtn.addEventListener("click", function (event) {
     event.preventDefault();
+    event.stopPropagation();
     closeCompanyChat();
   });
 
@@ -3833,6 +4503,26 @@
   window.addEventListener("focus", function () {
     refreshChatClientProfileIfNeeded({ pull: false });
     syncReadOnForeground();
+  });
+
+  window.addEventListener("pagehide", function () {
+    stopLocalTypingSession({ flush: true, keepalive: true });
+    if (overlay.classList.contains("is-open")) {
+      saveFeedScrollPosition({ persist: true });
+    } else {
+      persistFeedScrollPositionSnapshot();
+    }
+    if (!overlay.classList.contains("is-open")) return;
+    syncVisibleChatReadState({ force: true, flushRemote: true, preserveViewport: true });
+  });
+
+  window.addEventListener("beforeunload", function () {
+    stopLocalTypingSession({ flush: true, keepalive: true });
+    if (overlay.classList.contains("is-open")) {
+      saveFeedScrollPosition({ persist: true });
+    } else {
+      persistFeedScrollPositionSnapshot();
+    }
   });
 
   window.addEventListener("storage", function (event) {
@@ -3918,6 +4608,7 @@
     event.preventDefault();
     const done = sendUserMessage(input.value);
     if (!done) return;
+    stopLocalTypingSession({ flush: true });
     input.value = "";
     syncComposerRichPreview({});
   });
@@ -3927,6 +4618,7 @@
       event.preventDefault();
       const done = sendUserMessage(input.value);
       if (!done) return;
+      stopLocalTypingSession({ flush: true });
       input.value = "";
       syncComposerRichPreview({});
       return;
@@ -3936,6 +4628,7 @@
       event.preventDefault();
       cancelEditingMessage();
       input.value = "";
+      stopLocalTypingSession({ flush: true });
       syncComposerRichPreview({});
       return;
     }
@@ -3944,6 +4637,14 @@
       event.preventDefault();
       clearReplyDraft();
     }
+  });
+
+  input.addEventListener("input", function () {
+    handleComposerTypingActivity();
+  });
+
+  input.addEventListener("blur", function () {
+    scheduleLocalTypingStop(CHAT_TYPING_BLUR_STOP_MS);
   });
 
   attachBtn.addEventListener("click", function (event) {
@@ -4310,6 +5011,7 @@
     hideReactionBar();
     hideEmojiPopover();
     clearTouchGesture();
+    if (isMessageImageViewerOpen()) updateMessageImageViewerLayout();
   });
 
   selectionCloseBtn.addEventListener("click", function () {
