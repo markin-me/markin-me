@@ -9006,16 +9006,26 @@ function renderSheetAddressList() {
   // Profile: login + cabinet
   // -----------------------------
   function enforcePhonePrefix(inp) {
+    const selStart = inp.selectionStart;
     const v = str(inp.value);
-    if (!v.startsWith("+7")) {
-      const digits = v.replace(/[^\d]/g, "");
-      // если пользователь вставил 8..., превратим в +7...
-      let d = digits;
-      if (d.startsWith("8")) d = "7" + d.slice(1);
-      if (!d.startsWith("7")) d = "7" + d;
-      inp.value = "+7" + (d.length > 1 ? d.slice(1) : "");
+    let digits = v.replace(/[^\d]/g, "");
+    if (digits.startsWith("8")) digits = "7" + digits.slice(1);
+    if (!digits.startsWith("7")) digits = "7" + digits;
+    digits = digits.slice(0, 11);
+
+    let mask = "+7";
+    const rest = digits.slice(1); // без ведущей 7
+    if (rest.length > 0) mask += " (" + rest.slice(0, 3);
+    if (rest.length >= 3) mask += ") " + rest.slice(3, 6);
+    if (rest.length >= 6) mask += "-" + rest.slice(6, 8);
+    if (rest.length >= 8) mask += "-" + rest.slice(8, 10);
+
+    inp.value = mask;
+
+    // восстановим курсор в конец если он был в конце
+    if (selStart >= v.length) {
+      inp.selectionStart = inp.selectionEnd = mask.length;
     }
-    if (inp.value === "+7") inp.value = "+7 ";
   }
 
   function normalizeBirthdayInput(raw) {
@@ -9102,7 +9112,8 @@ function renderSheetAddressList() {
     const phone = document.createElement("input");
     phone.className = "control";
     phone.type = "tel";
-    phone.value = "+7 ";
+    phone.value = "+7";
+    phone.placeholder = "+7 (999) 999-99-99";
     form.appendChild(phoneLabel);
     form.appendChild(phone);
 
@@ -9115,6 +9126,7 @@ function renderSheetAddressList() {
 
     const bWrap = document.createElement("div");
     bWrap.style.display = "none";
+    bWrap.style.gap = "16px";
 
     const bLabel = document.createElement("label");
     bLabel.className = "field-label";
@@ -12403,7 +12415,7 @@ function renderSheetAddressList() {
     const ctx = buildProfileContent({
       host: elProfileContent,
       me,
-      onLogout: () => handleProfileLogout(),
+      onLogout: async () => { await handleProfileLogout(); await openProfilePanel(null, { forceOpen: true }); },
       initialTab,
     });
 

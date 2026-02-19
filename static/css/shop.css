@@ -11202,21 +11202,53 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 
 .shop-auth{
   display: grid;
-  gap: 10px;
+  gap: 16px;
+  max-width: 320px;
+  margin: 40px auto 0;
+  text-align: center;
 }
 
 .shop-auth-title{
-  font-weight: 900;
+  font-weight: 700;
+  font-size: 20px;
   color: var(--color-text);
+}
+
+.shop-auth-text{
+  font-size: 14px;
 }
 
 .shop-auth-form{
   display: grid;
-  gap: 10px;
+  gap: 16px;
 }
 .shop-auth-error{
   color: var(--color-danger, var(--shop-danger));
   font-size: 12px;
+}
+.shop-auth .field-label{
+  display: none;
+}
+.shop-auth .control{
+  border-radius: 999px;
+  padding-left: 24px;
+  padding-right: 24px;
+  height: 52px;
+  font-size: 22px;
+  font-weight: 700;
+  text-align: left;
+  letter-spacing: 3px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.shop-auth .btn{
+  border-radius: 999px;
+  height: 52px;
+  font-size: 18px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .shop-auth .control.is-invalid{
   border-color: var(--color-danger, var(--shop-danger));
