@@ -2311,7 +2311,16 @@
     return "";
   }
 
+  var emojiPickerInitialized = false;
   function openCompanyChat() {
+    if (!emojiPickerInitialized) {
+      emojiPickerInitialized = true;
+      probeEmojiAssetsAvailability();
+      normalizeQuickReactionButtons();
+      decorateComposerEmojiControls();
+      renderEmojiPicker();
+      ensureEmojiDatasetLoaded().catch(function () {});
+    }
     refreshChatClientProfileIfNeeded({ pull: false });
     pendingFeedRestoreState = loadPersistedFeedViewportState(getActiveChatClientId());
     if (!initialized) {
@@ -4426,15 +4435,11 @@
     emojiActiveCategory = getFirstAvailableEmojiCategory(emojiActiveCategory);
   }
 
-  renderEmojiPicker();
-  ensureEmojiDatasetLoaded().catch(function () {});
   bindEmojiPopoverGuard();
-  normalizeQuickReactionButtons();
-  decorateComposerEmojiControls();
   initAttachPreviewModal();
   initMessageImageViewerModal();
   setupComposerRichPreview();
-  probeEmojiAssetsAvailability();
+  // probeEmojiAssetsAvailability — отложено до первого открытия чата
   renderUnreadBadge(liveEntries);
   refreshChatClientProfileIfNeeded({ pull: false });
   pullSharedThreadFromServer({ force: true }).catch(function () {});

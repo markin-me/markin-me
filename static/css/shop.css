@@ -1,5 +1,5 @@
 :root{
-  --font-main:'Inter',sans-serif;
+  --font-main:-apple-system,BlinkMacSystemFont,'Roboto',system-ui,sans-serif;
 
   --color-bg:#F9FAFB;
   --color-surface:#fff;
@@ -718,7 +718,7 @@ body.page-home .page-col-right .panel{
   align-items:center;
   justify-content:space-between;
 }
-.panel-title{font-weight:800;color:var(--color-text)}
+.panel-title{font-weight:700;color:var(--color-text)}
 
 .panel-body{
   padding:12px;
@@ -2895,7 +2895,7 @@ body.page-orders #clientAddresses .shop-address-actions{
   justify-content:space-between;
   gap:12px;
 }
-.sheet-title{font-weight:900}
+.sheet-title{font-weight:700}
 .sheet-body{
   padding:12px;
   overflow-y:auto;
@@ -8550,7 +8550,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 
 .shop-cat-text{ min-width: 0; }
 .shop-cat-title{
-  font-weight: 900;
+  font-weight: 700;
   color: var(--color-text);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -8733,7 +8733,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 }
 
 .sp-title{
-  font-weight: 900;
+  font-weight: 700;
   color: var(--color-text);
   line-height: 1.15;
   font-size: var(--sp-title-size);
@@ -9630,7 +9630,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   gap: 8px;
 
   text-align: center;
-  font-weight: 900;
+  font-weight: 700;
   font-size: 14px;
   white-space: nowrap;
   padding: 0 10px;

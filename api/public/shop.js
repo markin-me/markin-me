@@ -2749,6 +2749,151 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  // Батч-загрузка продуктов по нескольким категориям за один запрос
+  router.post('/products/batch/categories', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+
+      const rawIds = Array.isArray(req.body?.category_ids) ? req.body.category_ids : [];
+      const categoryIds = rawIds.map(Number).filter(n => Number.isFinite(n) && n > 0);
+      if (!categoryIds.length) return res.json({ ok: true, data: {} });
+      if (categoryIds.length > 50) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+
+      // Определяем "all"-категорию
+      const [allRows] = await db.query(
+        `SELECT id FROM prod_categories WHERE tenant_id=? AND code='all' LIMIT 1`,
+        [tenantId]
+      );
+      const allCategoryId = allRows.length ? Number(allRows[0].id) : null;
+
+      // Разделяем: обычные категории и "all"
+      const normalIds = categoryIds.filter(id => id !== allCategoryId);
+      const hasAll = allCategoryId && categoryIds.includes(allCategoryId);
+
+      const productIsAvailableSql = getProductIsAvailableSql('p', 's');
+      const allProducts = []; // { ...product, _category_id }
+
+      // Загружаем продукты обычных категорий одним запросом
+      if (normalIds.length) {
+        const ph = normalIds.map(() => '?').join(',');
+        const [rows] = await db.query(
+          `SELECT p.*, pc.category_id AS _category_id, pc.sort_order AS link_sort_order,
+            s.qty AS stock_qty,
+            CASE
+              WHEN (s.qty IS NULL OR s.qty > 0) AND NOT EXISTS (
+                SELECT 1 FROM prod_product_ingredients i
+                JOIN prod_product_stocks si ON si.tenant_id=i.tenant_id AND si.store_id=? AND si.product_id=i.ingredient_id
+                WHERE i.tenant_id=p.tenant_id AND i.product_id=p.id AND si.qty IS NOT NULL AND si.qty <= 0
+              ) AND NOT EXISTS (
+                SELECT 1 FROM prod_option_assignments oa
+                JOIN prod_option_groups og ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
+                WHERE oa.tenant_id=p.tenant_id AND oa.assign_type='product' AND oa.assign_id=p.id
+                  AND oa.is_active=1 AND og.is_active=1 AND COALESCE(og.out_of_stock_action,1)=0
+                  AND NOT EXISTS (
+                    SELECT 1 FROM prod_option_items oi
+                    JOIN prod_products op ON op.tenant_id=oi.tenant_id AND op.id=oi.target_product_id
+                    LEFT JOIN prod_product_stocks ops ON ops.tenant_id=op.tenant_id AND ops.store_id=? AND ops.product_id=op.id
+                    WHERE oi.tenant_id=oa.tenant_id AND oi.group_id=oa.group_id
+                      AND oi.target_type='product' AND oi.is_active=1 AND op.is_active=1 AND op.site_visibility=1
+                      AND (ops.qty IS NULL OR ops.qty > 0)
+                      AND NOT EXISTS (
+                        SELECT 1 FROM prod_product_ingredients ip
+                        JOIN prod_product_stocks ips ON ips.tenant_id=ip.tenant_id AND ips.store_id=? AND ips.product_id=ip.ingredient_id
+                        WHERE ip.tenant_id=op.tenant_id AND ip.product_id=op.id AND ips.qty IS NOT NULL AND ips.qty <= 0
+                      )
+                  )
+              )
+              THEN 1 ELSE 0
+            END AS is_available
+           FROM prod_product_categories pc
+           JOIN prod_products p ON p.tenant_id=pc.tenant_id AND p.id=pc.product_id
+           LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+           WHERE pc.tenant_id=? AND pc.category_id IN (${ph})
+             AND p.is_active=1 AND p.site_visibility=1
+           ORDER BY pc.category_id ASC, pc.sort_order ASC, pc.id ASC`,
+          [storeId, storeId, storeId, storeId, tenantId, ...normalIds]
+        );
+        for (const r of rows) {
+          r.photos = safeJsonArray(r.photos_json);
+          r.is_available = Number(r.is_available || 0) === 1;
+          attachProductThumbs(r);
+          allProducts.push(r);
+        }
+      }
+
+      // Загружаем продукты "all"-категории
+      if (hasAll) {
+        const [rows] = await db.query(
+          `SELECT p.*, ? AS _category_id, pc.sort_order AS link_sort_order,
+            s.qty AS stock_qty,
+            CASE
+              WHEN (s.qty IS NULL OR s.qty > 0) AND NOT EXISTS (
+                SELECT 1 FROM prod_product_ingredients i
+                JOIN prod_product_stocks si ON si.tenant_id=i.tenant_id AND si.store_id=? AND si.product_id=i.ingredient_id
+                WHERE i.tenant_id=p.tenant_id AND i.product_id=p.id AND si.qty IS NOT NULL AND si.qty <= 0
+              ) AND NOT EXISTS (
+                SELECT 1 FROM prod_option_assignments oa
+                JOIN prod_option_groups og ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
+                WHERE oa.tenant_id=p.tenant_id AND oa.assign_type='product' AND oa.assign_id=p.id
+                  AND oa.is_active=1 AND og.is_active=1 AND COALESCE(og.out_of_stock_action,1)=0
+                  AND NOT EXISTS (
+                    SELECT 1 FROM prod_option_items oi
+                    JOIN prod_products op ON op.tenant_id=oi.tenant_id AND op.id=oi.target_product_id
+                    LEFT JOIN prod_product_stocks ops ON ops.tenant_id=op.tenant_id AND ops.store_id=? AND ops.product_id=op.id
+                    WHERE oi.tenant_id=oa.tenant_id AND oi.group_id=oa.group_id
+                      AND oi.target_type='product' AND oi.is_active=1 AND op.is_active=1 AND op.site_visibility=1
+                      AND (ops.qty IS NULL OR ops.qty > 0)
+                      AND NOT EXISTS (
+                        SELECT 1 FROM prod_product_ingredients ip
+                        JOIN prod_product_stocks ips ON ips.tenant_id=ip.tenant_id AND ips.store_id=? AND ips.product_id=ip.ingredient_id
+                        WHERE ip.tenant_id=op.tenant_id AND ip.product_id=op.id AND ips.qty IS NOT NULL AND ips.qty <= 0
+                      )
+                  )
+              )
+              THEN 1 ELSE 0
+            END AS is_available
+           FROM prod_products p
+           LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+           LEFT JOIN prod_product_categories pc ON pc.tenant_id=p.tenant_id AND pc.product_id=p.id AND pc.category_id=?
+           WHERE p.tenant_id=? AND p.is_active=1 AND p.site_visibility=1
+           ORDER BY COALESCE(pc.sort_order, 999999) ASC, p.id ASC`,
+          [allCategoryId, storeId, storeId, storeId, storeId, allCategoryId, tenantId]
+        );
+        for (const r of rows) {
+          r.photos = safeJsonArray(r.photos_json);
+          r.is_available = Number(r.is_available || 0) === 1;
+          attachProductThumbs(r);
+          allProducts.push(r);
+        }
+      }
+
+      // Обогащаем все продукты за один проход
+      await enrichProductsWithDisplayPrice(allProducts, tenantId);
+      await enrichProductsWithDiscounts(allProducts, tenantId, storeId);
+
+      // Группируем по category_id
+      const productsByCategory = {};
+      for (const id of categoryIds) productsByCategory[id] = [];
+      for (const p of allProducts) {
+        const cid = Number(p._category_id);
+        if (productsByCategory[cid]) productsByCategory[cid].push(p);
+      }
+
+      // Загружаем комбо для всех категорий параллельно
+      const combosResults = await Promise.all(
+        categoryIds.map(id => getCombosForCategory(tenantId, storeId, id).then(c => [id, c]).catch(() => [id, []]))
+      );
+      const combosByCategory = {};
+      for (const [id, combos] of combosResults) combosByCategory[id] = combos;
+
+      res.json({ ok: true, data: productsByCategory, combos: combosByCategory });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/products/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -2882,6 +3027,73 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
 
       res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // Batch ingredients for multiple products in one request
+  router.post('/products/batch/ingredients', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
+      if (!ids.length) return res.json({ ok: true, data: {} });
+      if (ids.length > 200) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+
+      const [pcsRows] = await db.query(
+        `SELECT id FROM prod_units WHERE tenant_id=? AND code='pcs' LIMIT 1`,
+        [tenantId]
+      );
+      const pcsUnitId = pcsRows.length ? Number(pcsRows[0].id) : null;
+
+      const placeholders = ids.map(() => '?').join(',');
+      const [rows] = await db.query(
+        `SELECT
+           i.product_id,
+           i.id,
+           i.ingredient_id,
+           i.quantity,
+           i.unit_id,
+           i.quantity_min,
+           i.quantity_max,
+           i.quantity_step,
+           i.price_override,
+           i.is_variable,
+           i.sort_order,
+           p.name AS ingredient_name,
+           p.price AS ingredient_price,
+           p.base_unit_id AS ingredient_base_unit_id,
+           p.base_qty AS ingredient_base_qty,
+           p.unit_id AS ingredient_unit_id,
+           p.photos_json AS ingredient_photos,
+           u.code AS unit_code,
+           u.title AS unit_title,
+           u.short_title AS unit_short_title,
+           pul.factor AS ingredient_pcs_factor
+         FROM prod_product_ingredients i
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+         JOIN prod_units u ON u.id=i.unit_id
+         LEFT JOIN prod_product_unit_links pul
+           ON pul.tenant_id=i.tenant_id
+          AND pul.product_id=i.ingredient_id
+          AND pul.base_unit_id=p.base_unit_id
+          AND pul.unit_id=?
+         WHERE i.tenant_id=? AND i.product_id IN (${placeholders})
+           AND (i.is_variable = 1 OR i.is_variable IS NULL)
+         ORDER BY i.product_id ASC, i.sort_order ASC, i.id ASC`,
+        [pcsUnitId || 0, tenantId, ...ids]
+      );
+
+      const result = {};
+      for (const r of rows) {
+        r.ingredient_photos = safeJsonArray(r.ingredient_photos);
+        const pid = Number(r.product_id);
+        if (!result[pid]) result[pid] = [];
+        result[pid].push(r);
+      }
+
+      res.json({ ok: true, data: result });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });

@@ -2016,12 +2016,50 @@
     return promise;
   }
 
+  async function batchLoadIngredientRequirements(productIds) {
+    const ids = [];
+    for (const rawId of productIds) {
+      const pid = Number(rawId || 0);
+      if (!Number.isFinite(pid) || pid <= 0) continue;
+      const cached = productIngredientRequirementsCache.get(pid);
+      if (cached?.status === "ready" || cached?.status === "error") continue;
+      ids.push(pid);
+    }
+    if (!ids.length) return;
+
+    try {
+      const json = await apiJson('/api/public/products/batch/ingredients', {
+        method: 'POST',
+        body: { ids },
+      });
+      const data = json?.data || {};
+      for (const pid of ids) {
+        const rows = Array.isArray(data[pid]) ? data[pid] : [];
+        const requirements = new Map();
+        for (const ing of rows) {
+          const depPid = Number(ing?.ingredient_id || 0);
+          if (!Number.isFinite(depPid) || depPid <= 0) continue;
+          const amount = normalizeIngredientRequirementInBase(ing);
+          if (!(amount > 0)) continue;
+          requirements.set(depPid, Number(requirements.get(depPid) || 0) + amount);
+        }
+        productIngredientRequirementsCache.set(pid, { status: "ready", requirements });
+      }
+    } catch (err) {
+      for (const pid of ids) {
+        if (!productIngredientRequirementsCache.has(pid) || productIngredientRequirementsCache.get(pid)?.status === "pending") {
+          productIngredientRequirementsCache.set(pid, { status: "error", requirements: new Map() });
+        }
+      }
+    }
+    scheduleSyncAllProductCardsFromCart();
+  }
+
   function getProductIngredientRequirementsSync(productId) {
     const pid = Number(productId || 0);
     if (!Number.isFinite(pid) || pid <= 0) return new Map();
     const cached = productIngredientRequirementsCache.get(pid);
     if (!cached) {
-      ensureProductIngredientRequirements(pid).catch(() => {});
       return null;
     }
     if (cached.status === "pending") return null;
@@ -8043,27 +8081,47 @@ function updateCartBadge() {
 
   async function loadProductsByCategory() {
     const categories = getVisibleCategories();
-    const entries = await Promise.all(
-      categories.map(async (c) => {
-        try {
-          const json = await apiJson(`/api/public/products?category_id=${encodeURIComponent(c.id)}`);
-          const list = Array.isArray(json.data) ? json.data : [];
-          for (const p of list) {
-            if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
-            cacheStockFromProductPayload(p, "products_by_category");
-            p.is_available = isProductAvailable(p);
-            state.productCache.set(Number(p.id), p);
+    const categoryIds = categories.map(c => Number(c.id));
+
+    let productsByCategory = {};
+    let combosByCategory = {};
+
+    try {
+      const json = await apiJson('/api/public/products/batch/categories', {
+        method: 'POST',
+        body: { category_ids: categoryIds },
+      });
+      productsByCategory = json.data || {};
+      combosByCategory = json.combos || {};
+    } catch (e) {
+      console.warn("loadProductsByCategory: batch failed, falling back", e);
+      // fallback: загружаем по одному
+      const entries = await Promise.all(
+        categories.map(async (c) => {
+          try {
+            const json = await apiJson(`/api/public/products?category_id=${encodeURIComponent(c.id)}`);
+            combosByCategory[c.id] = Array.isArray(json.combos) ? json.combos : [];
+            return [Number(c.id), Array.isArray(json.data) ? json.data : []];
+          } catch (e2) {
+            combosByCategory[c.id] = [];
+            return [Number(c.id), []];
           }
-          const combos = Array.isArray(json.combos) ? json.combos : [];
-          state.combosByCategory.set(Number(c.id), combos);
-          return [Number(c.id), list];
-        } catch (e) {
-          console.warn("loadProductsByCategory: failed for category", c.id, e);
-          state.combosByCategory.set(Number(c.id), []);
-          return [Number(c.id), []];
-        }
-      })
-    );
+        })
+      );
+      for (const [id, list] of entries) productsByCategory[id] = list;
+    }
+
+    const entries = categoryIds.map(id => {
+      const list = Array.isArray(productsByCategory[id]) ? productsByCategory[id] : [];
+      for (const p of list) {
+        if (!Array.isArray(p.photos)) p.photos = safePhotos(p);
+        cacheStockFromProductPayload(p, "products_by_category");
+        p.is_available = isProductAvailable(p);
+        state.productCache.set(Number(p.id), p);
+      }
+      state.combosByCategory.set(id, Array.isArray(combosByCategory[id]) ? combosByCategory[id] : []);
+      return [id, list];
+    });
 
     state.productsByCategory = new Map(entries);
     if (pruneUnavailableCartItems()) {
@@ -8222,9 +8280,29 @@ async function initCore() {
 
     renderProducts();
     prioritizeAboveFoldCardImages();
+
+    // Убираем loader — контент готов
+    var splashEl = document.getElementById("shopSplash");
+    if (splashEl) {
+      splashEl.classList.add("is-done");
+      setTimeout(function() { splashEl.remove(); }, 350);
+    }
+
+    // Batch-загрузка ингредиентов для всех товаров одним запросом
+    const allProductIds = [];
+    if (state.productsByCategory instanceof Map) {
+      state.productsByCategory.forEach(function(products) {
+        for (var i = 0; i < products.length; i++) {
+          var pid = Number(products[i]?.id);
+          if (Number.isFinite(pid) && pid > 0) allProductIds.push(pid);
+        }
+      });
+    }
+    if (allProductIds.length) batchLoadIngredientRequirements(allProductIds).catch(function() {});
+
     await addressPromise;
 
-    // Перед первым “боевым” рендером корзины прогреваем товары из корзины,
+    // Перед первым "боевым" рендером корзины прогреваем товары из корзины,
     // чтобы сразу использовать тот же путь и те же данные, что и при
     // последующих обновлениях (после любых действий пользователя).
     await warmupCartProducts();

@@ -1,5 +1,5 @@
 :root{
-  --font-main:'Inter',sans-serif;
+  --font-main:-apple-system,BlinkMacSystemFont,'Roboto',system-ui,sans-serif;
 
   --color-bg:#F9FAFB;
   --color-surface:#fff;
