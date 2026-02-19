@@ -145,6 +145,7 @@
   const categoryIconPlaceholder = $("#categoryIconPlaceholder");
   const categoryStatus = $("#categoryStatus");
   const categoryVisibility = $("#categoryVisibility");
+  const categoryCartVisibility = $("#categoryCartVisibility");
 
   const optionLevelGroup = $("#optionLevelGroup");
   const optionLevelPicker = $("#optionLevelPicker");
@@ -4803,6 +4804,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
     if (categoryStatus) categoryStatus.textContent = cat.is_active ? "Активна" : "Выключена";
     if (categoryVisibility) categoryVisibility.textContent = cat.site_visibility ? "Показывается" : "Скрыта";
+    if (categoryCartVisibility) categoryCartVisibility.textContent = cat.cart_visibility ? "Показывается" : "Скрыта";
     renderCategoryPreview(cat.icon);
 
     productEmpty && productEmpty.classList.add("hidden");
@@ -13679,13 +13681,15 @@ const isViewMode = state.comboPanel.mode === "view";
       const sortInput = form.querySelector("#ce_sort");
       const activeInput = form.querySelector("input[name='is_active']");
       const visibilityInput = form.querySelector("input[name='site_visibility']");
-      
+      const cartVisibilityInput = form.querySelector("input[name='cart_visibility']");
+
       if (titleInput) titleInput.value = cat.title || "";
       if (codeInput) codeInput.value = cat.code || "";
       if (iconInput) iconInput.value = cat.icon || "";
       if (sortInput) sortInput.value = cat.sort_order != null ? String(cat.sort_order) : "";
       if (activeInput) activeInput.checked = Boolean(cat.is_active);
       if (visibilityInput) visibilityInput.checked = Boolean(cat.site_visibility);
+      if (cartVisibilityInput) cartVisibilityInput.checked = Boolean(cat.cart_visibility);
     }
 
     function renderIconPreview(value) {
@@ -13764,7 +13768,8 @@ const isViewMode = state.comboPanel.mode === "view";
         const sortInput = form.querySelector("#ce_sort");
         const activeInput = form.querySelector("input[name='is_active']");
         const visibilityInput = form.querySelector("input[name='site_visibility']");
-        
+        const cartVisibilityInput = form.querySelector("input[name='cart_visibility']");
+
         let iconValue = String(form.querySelector("#ce_icon")?.value || "").trim();
         if (draft.iconFile) {
           iconValue = await apiUploadCategoryIcon(draft.iconFile);
@@ -13778,6 +13783,7 @@ const isViewMode = state.comboPanel.mode === "view";
           sort_order: sortInput?.value === "" ? null : Number(sortInput?.value),
           is_active: activeInput?.checked ? 1 : 0,
           site_visibility: visibilityInput?.checked ? 1 : 0,
+          cart_visibility: cartVisibilityInput?.checked ? 1 : 0,
         };
 
         if (!payload.title) {

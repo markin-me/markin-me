@@ -40,6 +40,7 @@
           const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
           if (tspan) tspan.textContent = money(total);
         }
+        appendUpsellToList(openCartSheetCtx.listEl);
       }
     }
     return p;
@@ -4037,6 +4038,19 @@ optionGroups.forEach((group) => {
     });
   }
 
+  // Привязка избранного к десктопной кнопке в хедере правой панели
+  const desktopFavBtn = document.getElementById("shopCartFavBtn");
+  if (desktopFavBtn) {
+    const freshBtn = desktopFavBtn.cloneNode(true);
+    desktopFavBtn.replaceWith(freshBtn);
+    freshBtn.classList.remove("is-active", "is-busy");
+    delete freshBtn.dataset.favoriteId;
+    bindFavoriteButtonsForCartRow(
+      [freshBtn],
+      () => buildCurrentProductFavoriteSnapshot()
+    );
+  }
+
   container.appendChild(wrap);
 
   actionBtn.addEventListener("click", async () => {
@@ -4173,6 +4187,7 @@ optionGroups.forEach((group) => {
         const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
         if (tspan) tspan.textContent = money(total);
       }
+      appendUpsellToList(openCartSheetCtx.listEl);
     }
 
     queueCartStockRecheck(previousCartSnapshot, {
@@ -5248,6 +5263,18 @@ optionGroups.forEach((group) => {
       } else {
         // Десктоп: кнопка «Назад» снова закрывает панель комбо
         window._comboStepBackCallback = null;
+        // Привязка избранного к десктопной кнопке
+        const dFavBtn = document.getElementById("shopCartFavBtn");
+        if (dFavBtn) {
+          const fb = dFavBtn.cloneNode(true);
+          dFavBtn.replaceWith(fb);
+          fb.classList.remove("is-active", "is-busy");
+          delete fb.dataset.favoriteId;
+          bindFavoriteButtonsForCartRow(
+            [fb],
+            () => buildCurrentComboFavoriteSnapshot()
+          );
+        }
       }
       container.innerHTML = "";
       const wrap = document.createElement("div");
@@ -7619,6 +7646,7 @@ function openCartSheet() {
 
   const totalSpan = $(".shop-sheet-checkout-total", btn);
   const { items, total } = renderCartInto(list, totalSpan, null);
+  appendUpsellToList(list);
 
   footer.classList.toggle("hidden", items.length === 0);
   btn.disabled = items.length === 0;
@@ -7721,7 +7749,7 @@ function applySheetAddressTitle(backMode = "cart") {
 
   setAppModalMode("shop");
   window.AppModal.open({
-    title: "Введите адрес",
+    title: "Корзина",
     content: wrap,
     onClose: () => {
       // Remove delivery toggle from header
@@ -7855,6 +7883,16 @@ function applySheetAddressTitle(backMode = "cart") {
     productWrap.classList.add("hidden");
     pickupSheetWrap.classList.add("hidden");
 
+    // Перерисовываем список корзины и апселл при возврате в вид корзины
+    if (openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
+      const { items, total } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
+      appendUpsellToList(openCartSheetCtx.listEl);
+      if (openCartSheetCtx.checkoutBtn) {
+        const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
+        if (tspan) tspan.textContent = money(total);
+      }
+    }
+
     window._checkoutMethodCode = null;
     const hasItems = cartItemsResolved().length > 0;
     setCartSheetFooterMode(openCartSheetCtx, hasItems ? "cart" : "hidden");
@@ -7866,7 +7904,7 @@ function applySheetAddressTitle(backMode = "cart") {
     }
 
     clearSheetAddressTitleMode();
-    if (window.AppModal?.setTitle) window.AppModal.setTitle("");
+    if (window.AppModal?.setTitle) window.AppModal.setTitle("Корзина");
 
     // На мобильных: скрываем мобильные кнопки товара, показываем кнопки корзины
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
@@ -14973,6 +15011,7 @@ function initShopLate() {
       try {
         await loadUnitConversions();
         await loadAutoAdd();
+        await loadUpsellProducts();
         if (applyAutoAddRules()) {
           saveCart();
           if (typeof syncAllProductCardsFromCart === "function") syncAllProductCardsFromCart();
@@ -15159,7 +15198,7 @@ function initShopLate() {
         elHeaderFavoritesBtn.addEventListener("click", (e) => {
           if (isShopPage()) {
             e.preventDefault();
-            openFavoritesSheet({ force: false });
+            openFavoritesSheet({ force: true });
           }
         });
       }

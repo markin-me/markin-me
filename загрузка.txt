@@ -1,0 +1,29 @@
+Порядок загрузки на странице магазина:
+
+HEAD
+Meta-теги (charset, viewport, title, favicon, manifest, theme-color)
+Inline скрипт — инициализация темы (data-theme="light")
+Inline скрипт — запись tenant данных в localStorage
+Preconnect (cdnjs, fonts.googleapis, fonts.gstatic)
+CSS — Google Fonts Inter (preload → async)
+CSS — /static/css/shop.css (preload → async)
+CSS — Font Awesome 6.4.0 (preload → async)
+BODY — HTML-контент
+partials/header.ejs — шапка
+Connection banner (офлайн/онлайн)
+partials/shop/left.ejs — левая колонка
+partials/shop/center.ejs — центр (товары)
+partials/shop/right.ejs — правая колонка (корзина десктоп)
+partials/shop/companyChat.ejs — чат
+partials/modal.ejs — модалка
+partials/shop/mobileNav.ejs — мобильная навигация
+BODY — скрипты (все defer, выполняются по порядку после DOM)
+Inline — window.__shopLateUrl = "/static/js/shop-late.js"
+/static/js/theme.js (defer)
+/static/js/appModal.js (defer)
+/static/js/shop-core.js (defer)
+/static/js/shop-company-chat.js (defer)
+Inline — регистрация Service Worker
+Inline — обработчик offline/online для баннера
+Динамически загружается из shop-core.js:
+/static/js/shop-late.js — загружается программно через window.__shopLateUrl

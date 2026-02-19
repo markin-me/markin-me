@@ -2440,6 +2440,91 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return result;
   }
 
+  router.get('/cart-upsell', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+
+      const [rows] = await db.query(
+        `SELECT p.id, p.tenant_id, p.name, p.price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json,
+                s.qty AS stock_qty,
+                EXISTS(
+                  SELECT 1
+                  FROM prod_option_assignments oa
+                  JOIN prod_option_groups og ON og.tenant_id = oa.tenant_id AND og.id = oa.group_id
+                  WHERE oa.tenant_id = p.tenant_id
+                    AND oa.assign_type = 'product' AND oa.assign_id = p.id
+                    AND oa.is_active = 1 AND og.is_active = 1
+                  LIMIT 1
+                ) AS has_options
+         FROM prod_categories c
+         JOIN prod_product_categories pc ON pc.tenant_id = c.tenant_id AND pc.category_id = c.id
+         JOIN prod_products p ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
+         LEFT JOIN prod_product_stocks s
+           ON s.tenant_id = p.tenant_id AND s.store_id = ? AND s.product_id = p.id
+         WHERE c.tenant_id = ? AND c.cart_visibility = 1 AND c.is_active = 1
+           AND p.is_active = 1 AND p.site_visibility = 1
+         GROUP BY p.id
+         ORDER BY c.sort_order ASC, pc.sort_order ASC, p.id ASC
+         LIMIT 30`,
+        [storeId, tenantId]
+      );
+
+      for (const r of rows) {
+        r.photos = safeJsonArray(r.photos_json);
+        r.is_available = (r.stock_qty == null || Number(r.stock_qty) > 0);
+        attachProductThumbs(r);
+      }
+      await enrichProductsWithDisplayPrice(rows, tenantId);
+      await enrichProductsWithDiscounts(rows, tenantId, storeId);
+
+      // Добавляем данные дефолтного варианта для корректного добавления в корзину
+      const upsellProductIds = rows.map(r => Number(r.id)).filter(Boolean);
+      if (upsellProductIds.length) {
+        const phUpsell = upsellProductIds.map(() => '?').join(',');
+        const [vaUpsellRows] = await db.query(
+          `SELECT va.product_id, va.variant_group_id,
+                  COALESCE(va.default_value_index, vg.default_value_index) AS default_value_index,
+                  vg.unit_id, vg.values,
+                  u.short_title AS unit_short_title
+           FROM prod_variant_assignments va
+           JOIN prod_variant_groups vg ON vg.id = va.variant_group_id AND vg.tenant_id = va.tenant_id
+           LEFT JOIN prod_units u ON u.id = vg.unit_id
+           WHERE va.tenant_id = ? AND va.product_id IN (${phUpsell})
+             AND va.is_active = 1 AND vg.is_active = 1
+           ORDER BY va.sort_order ASC, vg.sort_order ASC`,
+          [tenantId, ...upsellProductIds]
+        );
+        const variantMap = new Map();
+        for (const r of vaUpsellRows) {
+          const pid = Number(r.product_id);
+          if (variantMap.has(pid)) continue;
+          const values = safeJsonArray(r.values);
+          if (!values.length) continue;
+          const defaultIdx = r.default_value_index != null ? Number(r.default_value_index) : 0;
+          const idx = defaultIdx >= 0 && defaultIdx < values.length ? defaultIdx : 0;
+          variantMap.set(pid, {
+            variant_group_id: Number(r.variant_group_id),
+            variant_value_index: idx,
+            variant_label: String(values[idx]) + (r.unit_short_title ? ' ' + r.unit_short_title : ''),
+          });
+        }
+        for (const row of rows) {
+          const v = variantMap.get(Number(row.id));
+          if (v) {
+            v.variant_unit_price = row.display_price;
+            row.default_variant = v;
+          }
+        }
+      }
+
+      res.json({ ok: true, data: rows });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/products', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);

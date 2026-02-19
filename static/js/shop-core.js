@@ -5748,12 +5748,23 @@ async function initAddresses() {
     }
   }
 
+  function loadShopChat() {
+    if (window.__shopChatLoaded) return;
+    window.__shopChatLoaded = true;
+    var url = window.__shopChatUrl || '/static/js/shop-company-chat.js';
+    var sc = document.createElement('script');
+    sc.src = url;
+    sc.defer = true;
+    document.head.appendChild(sc);
+  }
+
   let __shopLatePromise = null;
   function ensureShopLateLoaded() {
     if (__shopLatePromise) return __shopLatePromise;
     __shopLatePromise = new Promise((resolve) => {
       if (window.__shopLateLoaded) {
         resolve();
+        loadShopChat();
         return;
       }
       const existing = document.querySelector('script[data-shop-late]');
@@ -5765,8 +5776,9 @@ async function initAddresses() {
             initShopLate();
           }
           resolve();
+          loadShopChat();
         });
-        existing.addEventListener('error', () => resolve());
+        existing.addEventListener('error', () => { resolve(); loadShopChat(); });
         return;
       }
       const s = document.createElement('script');
@@ -5780,8 +5792,9 @@ async function initAddresses() {
           initShopLate();
         }
         resolve();
+        loadShopChat();
       };
-      s.onerror = () => resolve();
+      s.onerror = () => { resolve(); loadShopChat(); };
       document.head.appendChild(s);
     });
     return __shopLatePromise;
@@ -6414,7 +6427,7 @@ async function initAddresses() {
 
     if (!items.length) {
       if (emptyPlaceholderEl) emptyPlaceholderEl.classList.remove("hidden");
-      else if (listEl) listEl.innerHTML = `<div class="shop-cart-empty-sheet">В корзине пусто</div>`;
+      else if (listEl) listEl.innerHTML = '<div class="shop-cart-empty-sheet"><div class="empty-state"><div class="empty-icon"><i class="fas fa-shopping-cart"></i></div><div class="empty-title">Корзина пуста</div><div class="empty-text">Добавьте товары из каталога</div></div></div>';
       if (totalEl) totalEl.textContent = money(0);
       return { items, total: 0 };
     }
@@ -7219,7 +7232,7 @@ async function initAddresses() {
         }
         // ???В корзине пусто - ???????? ?????????
         if (items.length === 0 && openCartSheetCtx.listEl) {
-          openCartSheetCtx.listEl.innerHTML = '<div class="shop-cart-empty-sheet">В корзине пусто</div>';
+          openCartSheetCtx.listEl.innerHTML = '<div class="shop-cart-empty-sheet"><div class="empty-state"><div class="empty-icon"><i class="fas fa-shopping-cart"></i></div><div class="empty-title">Корзина пуста</div><div class="empty-text">Добавьте товары из каталога</div></div></div>';
         }
         // Перестраиваем апселл: удалённый товар должен снова появиться в списке
         if (openCartSheetCtx.listEl) {
@@ -7775,6 +7788,12 @@ function updateCartBadge() {
       titleEl.textContent = "Добавить к заказу?";
       scrollEl = document.createElement("div");
       scrollEl.className = "shop-cart-upsell-scroll";
+      scrollEl.addEventListener("wheel", function(e) {
+        if (scrollEl.scrollWidth > scrollEl.clientWidth) {
+          e.preventDefault();
+          scrollEl.scrollLeft += e.deltaY;
+        }
+      }, { passive: false });
       upsellEl.appendChild(titleEl);
       upsellEl.appendChild(scrollEl);
       listEl.appendChild(upsellEl);
@@ -8187,6 +8206,11 @@ async function initCore() {
       if (elCategoryTitle) elCategoryTitle.textContent = state.activeCategoryTitle;
     }
 
+    // Загружаем адрес параллельно с товарами, чтобы хедер обновился как можно раньше
+    const addressPromise = refreshAddressState().then(() => {
+      updateAddressChip();
+    }).catch(() => {});
+
     // ????? ?????? ??В корзине пусто???? (?????? + ?????),
     // ????? ??????? ??? ????????? ????? ??? ?????????.
     if (visibleCategories.length) {
@@ -8198,6 +8222,7 @@ async function initCore() {
 
     renderProducts();
     prioritizeAboveFoldCardImages();
+    await addressPromise;
 
     // Перед первым “боевым” рендером корзины прогреваем товары из корзины,
     // чтобы сразу использовать тот же путь и те же данные, что и при

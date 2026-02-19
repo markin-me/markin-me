@@ -126,14 +126,15 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+      const cart_visibility = helpers.toBool(req.body.cart_visibility, false) ? 1 : 0;
 
       const sort_order =
         helpers.numOrNull(req.body.sort_order) ??
         (await helpers.nextSortOrderForCategories(db, tenantId, 10));
 
       const [result] = await db.query(
-        'INSERT INTO prod_categories (tenant_id, code, title, icon, site_visibility, is_active, sort_order) VALUES (?,?,?,?,?,?,?)',
-        [tenantId, code, title, icon, site_visibility, is_active, sort_order]
+        'INSERT INTO prod_categories (tenant_id, code, title, icon, site_visibility, is_active, cart_visibility, sort_order) VALUES (?,?,?,?,?,?,?,?)',
+        [tenantId, code, title, icon, site_visibility, is_active, cart_visibility, sort_order]
       );
 
       res.json({ ok: true, id: result.insertId });
@@ -156,13 +157,14 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const icon = helpers.strOrNull(req.body.icon);
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
+      const cart_visibility = helpers.toBool(req.body.cart_visibility, false) ? 1 : 0;
       const sort_order = helpers.numOrNull(req.body.sort_order);
 
       await db.query(
         `UPDATE prod_categories
-         SET code=?, title=?, icon=?, site_visibility=?, is_active=?, sort_order=COALESCE(?, sort_order)
+         SET code=?, title=?, icon=?, site_visibility=?, is_active=?, cart_visibility=?, sort_order=COALESCE(?, sort_order)
          WHERE tenant_id=? AND id=?`,
-        [code, title, icon, site_visibility, is_active, sort_order, tenantId, id]
+        [code, title, icon, site_visibility, is_active, cart_visibility, sort_order, tenantId, id]
       );
 
       res.json({ ok: true });

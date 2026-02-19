@@ -8506,7 +8506,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   text-align: left;
   border: 1px solid var(--color-border);
   background: var(--color-surface);
-  border-radius: 14px;
+  border-radius: 18px;
   padding: 10px 12px;
   display: grid;
   grid-template-columns: 40px 1fr;
@@ -10128,10 +10128,12 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 
 /* пустая корзина в шите */
 .shop-cart-empty-sheet{
-  padding: 16px;
+  padding: 32px 16px;
   text-align: center;
-  color: var(--color-text-muted);
-  font-weight: 700;
+}
+.shop-cart-empty-sheet .empty-state{
+  min-height: auto;
+  gap: 6px;
 }
 
 .shop-cart-sheet{

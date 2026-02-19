@@ -8,7 +8,10 @@
       "Bash(dir:*)",
       "Bash(test:*)",
       "Bash(xxd:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(find:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
