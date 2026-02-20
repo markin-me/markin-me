@@ -367,8 +367,15 @@ async function ensureWebpVariant(originalPath, opts = {}) {
 
     const ext = (path.extname(originalPath) || '').toLowerCase();
 
-    // Уже WebP — ничего делать не нужно
+    // WebP на входе — пережимаем с нужным качеством (на месте)
     if (ext === '.webp') {
+      if (opts.recompress) {
+        const tmpPath = originalPath + '.tmp';
+        await sharp(originalPath)
+          .webp({ quality })
+          .toFile(tmpPath);
+        fs.renameSync(tmpPath, originalPath);
+      }
       return originalPath;
     }
 

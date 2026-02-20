@@ -1,10 +1,30 @@
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
+const fs = require('fs');
 const multer = require('multer');
 
 module.exports = function makeAdminProductsRouter({ db, helpers }) {
   const router = express.Router();
+
+  // Удаляет файлы фото с диска (оригинал + .webp + thumb)
+  function deletePhotoFiles(urls) {
+    const staticRoot = path.join(__dirname, '..', '..');
+    for (const url of urls) {
+      if (!url || !url.startsWith('/static/uploads/products/')) continue;
+      const filePath = path.join(staticRoot, url);
+      // Удаляем сам файл (webp)
+      fs.unlink(filePath, () => {});
+      // Удаляем thumb-вариант (-thumb.webp)
+      const thumbPath = filePath.replace(/\.webp$/, '-thumb.webp');
+      fs.unlink(thumbPath, () => {});
+      // Удаляем оригинал (если webp — ищем jpg/png рядом)
+      const origBase = filePath.replace(/\.webp$/, '');
+      for (const ext of ['.jpg', '.jpeg', '.png', '.gif']) {
+        fs.unlink(origBase + ext, () => {});
+      }
+    }
+  }
 
   // ------------------------------
   // Upload: product images (up to 10)
@@ -37,11 +57,24 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     try {
       const tenantId = helpers.getTenantId(req);
       const files = req.files || [];
+
+      // Читаем настройки конвертации из tenant
+      const [tenantRows] = await db.query(
+        'SELECT img_webp_quality, img_thumb_quality, img_thumb_width, img_delete_original FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+      const imgSettings = tenantRows[0] || {};
+      const webpQuality = imgSettings.img_webp_quality ?? 82;
+      const thumbQuality = imgSettings.img_thumb_quality ?? 72;
+      const thumbWidth = imgSettings.img_thumb_width ?? 480;
+      const deleteOriginal = imgSettings.img_delete_original ?? 1;
+
       // Гарантируем наличие WebP-варианта для каждого файла
       const webpPaths = await Promise.all(
         files.map((f) =>
           helpers.ensureWebpVariant(
-            f.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'products', String(tenantId), f.filename)
+            f.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'products', String(tenantId), f.filename),
+            { quality: webpQuality, recompress: true }
           )
         )
       );
@@ -49,12 +82,30 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       await Promise.all(
         webpPaths
           .filter(Boolean)
-          .map((p) => helpers.ensureThumbVariant(p, { width: 480, quality: 70 }))
+          .map((p) => helpers.ensureThumbVariant(p, { width: thumbWidth, quality: thumbQuality }))
       );
-      // Отдаём и сохраняем в БД URL на .webp — по нему и отдаём картинку (оригинал остаётся на диске как fallback)
+
+      // Удаляем оригиналы (jpg/png/gif) если включена настройка
+      if (deleteOriginal) {
+        for (const f of files) {
+          const ext = (path.extname(f.filename) || '').toLowerCase();
+          if (ext !== '.webp') {
+            const origPath = f.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'products', String(tenantId), f.filename);
+            fs.unlink(origPath, () => {});
+          }
+        }
+      }
+
       const webpName = (name) => name.replace(/\.(jpe?g|png|gif)$/i, '.webp');
+      const staticRoot = path.join(__dirname, '..', '..');
       const urls = files.map((f) => `/static/uploads/products/${tenantId}/${webpName(f.filename)}`);
-      res.json({ ok: true, urls });
+
+      // Собираем размеры итоговых файлов
+      const sizes = urls.map((url) => {
+        try { return fs.statSync(path.join(staticRoot, url)).size; } catch { return 0; }
+      });
+
+      res.json({ ok: true, urls, sizes });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'UPLOAD_ERROR' });
@@ -542,6 +593,18 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const photosArr = helpers.safeJsonArray(req.body.photos_json || req.body.photos);
       const photos_json = photosArr.length ? JSON.stringify(photosArr.slice(0, 10)) : null;
 
+      // Удаляем файлы фото, которые были удалены пользователем
+      const [oldRows] = await db.query(
+        'SELECT photos_json FROM prod_products WHERE tenant_id=? AND id=? LIMIT 1',
+        [tenantId, id]
+      );
+      if (oldRows.length) {
+        const oldPhotos = helpers.safeJsonArray(oldRows[0].photos_json);
+        const newSet = new Set(photosArr);
+        const removed = oldPhotos.filter((u) => !newSet.has(u));
+        if (removed.length) deletePhotoFiles(removed);
+      }
+
       await db.query(
         `UPDATE prod_products
          SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, cost_price=?, unit_id=?, base_unit_id=?, base_qty=?, photos_json=?, is_active=?, site_visibility=?
@@ -615,7 +678,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       await conn.beginTransaction();
 
       const [rows] = await conn.query(
-        'SELECT id FROM prod_products WHERE tenant_id=? AND id=? LIMIT 1',
+        'SELECT id, photos_json FROM prod_products WHERE tenant_id=? AND id=? LIMIT 1',
         [tenantId, id]
       );
       if (!rows.length) {
@@ -623,6 +686,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         conn.release();
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
+
+      // Удаляем файлы фото с диска
+      const photos = helpers.safeJsonArray(rows[0].photos_json);
+      if (photos.length) deletePhotoFiles(photos);
 
       // Remove this product where it is used as ingredient in other products (FK has no ON DELETE)
       await conn.query(

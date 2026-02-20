@@ -31,17 +31,6 @@
             </div>
           </button>
 
-          <button class="order-row product-row settings-card" id="settingsSiteCard" type="button">
-            <div class="product-avatar"><i class="fas fa-globe"></i></div>
-            <div class="order-col">
-              <div class="product-title">Данные сайта</div>
-              <div class="muted">Название, описание, домен</div>
-            </div>
-            <div class="order-col">
-              <span class="badge">Открыть</span>
-            </div>
-          </button>
-
           <button class="order-row product-row settings-card" id="settingsBrandCard" type="button">
             <div class="product-avatar"><i class="fas fa-id-card"></i></div>
             <div class="order-col">
@@ -119,6 +108,17 @@
             </div>
           </button>
 
+          <button class="order-row product-row settings-card" id="settingsImagesCard" type="button">
+            <div class="product-avatar"><i class="fas fa-image"></i></div>
+            <div class="order-col">
+              <div class="product-title">Фото товаров</div>
+              <div class="muted">Качество, размер и конвертация</div>
+            </div>
+            <div class="order-col">
+              <span class="badge">Открыть</span>
+            </div>
+          </button>
+
           <button class="order-row product-row settings-card" id="settingsPrintApiCard" type="button">
             <div class="product-avatar"><i class="fas fa-plug"></i></div>
             <div class="order-col">
@@ -157,6 +157,45 @@
           <div class="empty-icon"><i class="fas fa-truck"></i></div>
           <div class="empty-title">Нет настроек доставки</div>
           <div class="empty-text">Создайте настройку доставки и привяжите филиалы.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel site-panel hidden" id="sitePanel">
+      <div class="panel-body no-scrollbar">
+        <div class="orders-list settings-cards" id="sitePanelCards">
+          <button class="order-row product-row settings-card" id="settingsSiteCard" type="button">
+            <div class="product-avatar"><i class="fas fa-globe"></i></div>
+            <div class="order-col">
+              <div class="product-title">Данные сайта</div>
+              <div class="muted">Название, описание, домен</div>
+            </div>
+            <div class="order-col">
+              <span class="badge">Открыть</span>
+            </div>
+          </button>
+
+          <button class="order-row product-row settings-card" id="settingsDomainCard" type="button">
+            <div class="product-avatar"><i class="fas fa-link"></i></div>
+            <div class="order-col">
+              <div class="product-title">Домен</div>
+              <div class="muted">Подключить свой домен</div>
+            </div>
+            <div class="order-col">
+              <span class="badge">Открыть</span>
+            </div>
+          </button>
+
+          <button class="order-row product-row settings-card" id="settingsTelegramAppCard" type="button">
+            <div class="product-avatar"><i class="fab fa-telegram"></i></div>
+            <div class="order-col">
+              <div class="product-title">Мини-приложение Telegram</div>
+              <div class="muted">Ссылка для Telegram-бота</div>
+            </div>
+            <div class="order-col">
+              <span class="badge">Открыть</span>
+            </div>
+          </button>
         </div>
       </div>
     </div>

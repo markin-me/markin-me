@@ -619,7 +619,7 @@
     }
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) throw new Error((data && data.error) || `HTTP_${res.status}`);
-    return data.urls || [];
+    return { urls: data.urls || [], sizes: data.sizes || [] };
   }
 
   async function apiUploadCategoryIcon(file) {
@@ -10292,9 +10292,12 @@ const isViewMode = state.comboPanel.mode === "view";
           // сначала грузим новые фото (если есть)
           const newFiles = draft.photos.filter((x) => x.kind === "file").map((x) => x.file);
           let newUrls = [];
+          let newSizes = [];
           if (newFiles.length) {
             try {
-              newUrls = await apiUploadImages(newFiles);
+              const uploadResult = await apiUploadImages(newFiles);
+              newUrls = uploadResult.urls;
+              newSizes = uploadResult.sizes;
             } catch (e) {
               console.error('Failed to upload images', e);
               alert('Ошибка при загрузке фотографий');
@@ -10749,6 +10752,14 @@ const isViewMode = state.comboPanel.mode === "view";
       photoPrev: $("#pePhotoPrev", wrapper),
       photoNext: $("#pePhotoNext", wrapper),
       photoDots: $("#pePhotoDots", wrapper),
+      photoSizeBadge: (() => {
+        const badge = document.createElement("span");
+        badge.className = "photo-size-badge";
+        badge.textContent = "...";
+        const container = $("#pePhotoMainContainer", wrapper);
+        if (container) container.appendChild(badge);
+        return badge;
+      })(),
       baseUnitSelect: $("#pe_base_unit_id", wrapper),
       baseQtyInput: $("#pe_base_qty", wrapper),
       pcsLinkWrap: $("#pePcsLinkWrap", wrapper),
@@ -11965,6 +11976,37 @@ const isViewMode = state.comboPanel.mode === "view";
       refreshOpenAccordions();
     }
 
+    function formatFileSize(bytes) {
+      if (!bytes || bytes <= 0) return "";
+      if (bytes < 1024) return bytes + " B";
+      const kb = bytes / 1024;
+      if (kb < 1024) return kb.toFixed(kb < 10 ? 1 : 0) + " KB";
+      return (kb / 1024).toFixed(1) + " MB";
+    }
+
+    const photoSizeCache = {};
+    async function fetchPhotoSize(url) {
+      if (photoSizeCache[url] !== undefined) return photoSizeCache[url];
+      try {
+        // HEAD может не вернуть content-length из кэша — fallback на blob
+        let size = 0;
+        const headRes = await fetch(url, { method: "HEAD" });
+        const cl = headRes.headers.get("content-length");
+        if (cl && Number(cl) > 0) {
+          size = Number(cl);
+        } else {
+          const blobRes = await fetch(url);
+          const blob = await blobRes.blob();
+          size = blob.size;
+        }
+        photoSizeCache[url] = size;
+        return size;
+      } catch {
+        photoSizeCache[url] = 0;
+        return 0;
+      }
+    }
+
     function renderPhotos() {
       const total = draft.photos.length;
       if (ui.counter) ui.counter.textContent = `${total}/10`;
@@ -11991,6 +12033,12 @@ const isViewMode = state.comboPanel.mode === "view";
         `;
       }).join("");
 
+      function showFileSize(text) {
+        if (!ui.photoSizeBadge) return;
+        ui.photoSizeBadge.textContent = text;
+        ui.photoSizeBadge.style.display = total ? "" : "none";
+      }
+
       // Главное фото
       if (!total) {
         ui.photoMain.src = "";
@@ -11999,13 +12047,31 @@ const isViewMode = state.comboPanel.mode === "view";
         if (ui.photoPrev) ui.photoPrev.classList.add("hidden");
         if (ui.photoNext) ui.photoNext.classList.add("hidden");
         if (ui.photoDots) ui.photoDots.classList.add("hidden");
+        showFileSize("");
       } else {
         const active = draft.photos[draft.activePhotoIdx] || draft.photos[0];
         const src = active.kind === "url" ? active.url : active.preview;
         ui.photoPlaceholder.classList.add("hidden");
         ui.photoMain.classList.remove("hidden");
         ui.photoMain.src = src;
-        
+
+        // Размер файла
+        if (active.fileSize) {
+          showFileSize(formatFileSize(active.fileSize));
+        } else if (active.kind === "url" && active.url) {
+          showFileSize("...");
+          fetchPhotoSize(active.url).then((size) => {
+            if (size && draft.photos[draft.activePhotoIdx] === active) {
+              active.fileSize = size;
+              showFileSize(formatFileSize(size));
+            }
+          });
+        } else if (active.kind === "file" && active.file) {
+          showFileSize(formatFileSize(active.file.size || 0));
+        } else {
+          showFileSize("...");
+        }
+
         // Показываем стрелки если фото больше 1
         const showNav = total > 1;
         if (ui.photoPrev) ui.photoPrev.classList.toggle("hidden", !showNav);
@@ -12170,7 +12236,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
       for (const f of take) {
         const preview = URL.createObjectURL(f);
-        draft.photos.push({ kind: "file", file: f, preview });
+        draft.photos.push({ kind: "file", file: f, preview, fileSize: f.size });
       }
       // Устанавливаем активное фото на первое, если его не было
       if (draft.photos.length && draft.activePhotoIdx < 0) {
@@ -15170,9 +15236,9 @@ const isViewMode = state.comboPanel.mode === "view";
         const toAdd = files.slice(0, space).filter((f) => /^image\//.test(f.type || ""));
         if (!toAdd.length) return;
         try {
-          const urls = await apiUploadImages(toAdd);
-          urls.forEach((url) => photos.push({ kind: "url", url }));
-          state.comboSetPanel.activePhotoIdx = photos.length - urls.length;
+          const uploadResult = await apiUploadImages(toAdd);
+          uploadResult.urls.forEach((url) => photos.push({ kind: "url", url }));
+          state.comboSetPanel.activePhotoIdx = photos.length - uploadResult.urls.length;
           if (state.comboSetPanel.activePhotoIdx < 0) state.comboSetPanel.activePhotoIdx = 0;
           renderComboSetPhotos();
         } catch (err) {
@@ -15193,9 +15259,9 @@ const isViewMode = state.comboPanel.mode === "view";
         const toAdd = files.slice(0, space);
         if (!toAdd.length) return;
         try {
-          const urls = await apiUploadImages(toAdd);
-          urls.forEach((url) => photos.push({ kind: "url", url }));
-          state.comboSetPanel.activePhotoIdx = photos.length - urls.length;
+          const uploadResult = await apiUploadImages(toAdd);
+          uploadResult.urls.forEach((url) => photos.push({ kind: "url", url }));
+          state.comboSetPanel.activePhotoIdx = photos.length - uploadResult.urls.length;
           if (state.comboSetPanel.activePhotoIdx < 0) state.comboSetPanel.activePhotoIdx = 0;
           renderComboSetPhotos();
         } catch (err) {

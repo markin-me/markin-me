@@ -242,11 +242,19 @@ app.get('/sw.js', (req, res) => {
   res.send(serviceWorkerScript);
 });
 
-app.use((req, res, next) => {
-  const sub = getSubdomain(req.hostname);
-  if (!sub) return next();
+app.use(async (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/static') || req.path === '/manifest.json' || req.path === '/sw.js') return next();
-  return renderShop(req, res);
+  const sub = getSubdomain(req.hostname);
+  if (sub) return renderShop(req, res);
+  // Проверка custom_domain — если домен привязан к тенанту, показываем витрину
+  const host = String(req.hostname || '').toLowerCase();
+  if (host) {
+    try {
+      const [rows] = await db.query('SELECT id FROM ten_tenants WHERE custom_domain=? LIMIT 1', [host]);
+      if (rows.length) return renderShop(req, res);
+    } catch (e) { /* ignore */ }
+  }
+  return next();
 });
 
 app.get('/', (req, res) => res.render('pages/saas'));

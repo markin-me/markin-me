@@ -262,7 +262,20 @@
         <div class="settings-site-form">
           <div class="settings-site-field">
             <label class="field-label">НАЗВАНИЕ САЙТА</label>
-            <input class="control" type="text" placeholder="Например: По щам" data-tenant-input="site_name" data-site-input="site_name" />
+            <div class="site-name-row">
+              <div class="site-favicon-box" id="siteFaviconBox">
+                <button class="site-favicon-btn" type="button" id="siteFaviconUploadBtn">
+                  <img class="site-favicon-preview hidden" id="siteFaviconPreview" alt="" />
+                  <span class="site-favicon-plus">+</span>
+                </button>
+                <button class="site-favicon-delete hidden" type="button" id="siteFaviconDeleteBtn" title="Удалить">
+                  <i class="fas fa-times"></i>
+                </button>
+                <input class="hidden" type="file" accept="image/*" id="siteFaviconFileInput" />
+                <span class="site-favicon-label">Фавикон</span>
+              </div>
+              <input class="control" type="text" placeholder="Например: По щам" data-tenant-input="site_name" data-site-input="site_name" />
+            </div>
           </div>
           <div class="settings-site-field">
             <label class="field-label">ОПИСАНИЕ САЙТА</label>
@@ -270,21 +283,94 @@
           </div>
           <div class="settings-site-field">
             <label class="field-label">СУБДОМЕН</label>
-            <input class="control" type="text" placeholder="myshop" data-tenant-input="subdomain" data-site-input="subdomain" />
-            <div class="settings-site-link">
-              <span class="field-hint">Ссылка на магазин:</span>
-              <a class="settings-site-link-url" id="siteSubdomainLink" href="#" target="_blank" rel="noopener">—</a>
+            <div class="control-subdomain-wrap">
+              <span class="control-subdomain-prefix" id="subdomainPrefix"></span>
+              <input class="control-subdomain-input" type="text" placeholder="myshop" data-tenant-input="subdomain" data-site-input="subdomain" id="subdomainInput" />
+              <span class="control-subdomain-suffix" id="subdomainSuffix"></span>
+            </div>
+            <a class="settings-subdomain-link" id="siteSubdomainLink" href="#" target="_blank" rel="noopener"></a>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsTelegramAppPanel">
+        <div class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">ССЫЛКА ДЛЯ TELEGRAM MINI APP</label>
+            <span class="field-hint">Используйте эту ссылку в настройках бота:</span>
+            <div class="control-with-action">
+              <input class="control" type="text" id="tenantTelegramMiniAppInput" readonly />
+              <button class="control-inline-btn" type="button" id="tenantTelegramMiniAppCopyBtn" title="Скопировать">
+                <i class="fas fa-copy"></i>
+              </button>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsDomainPanel">
+        <div class="settings-site-form">
           <div class="settings-site-field">
-            <label class="field-label">ПОДКЛЮЧИТЬ СВОЙ ДОМЕН</label>
-            <input class="control" type="text" placeholder="example.com" data-tenant-input="custom_domain" data-site-input="custom_domain" />
+            <label class="field-label">ВАШ ДОМЕН</label>
+            <input class="control" type="text" placeholder="example.com" data-tenant-input="custom_domain" data-site-input="custom_domain" id="domainInput" />
           </div>
+
           <div class="settings-site-field">
-            <label class="field-label">Ссылка для Telegram mini app</label>
-            <div class="settings-site-link">
-              <span class="field-hint">Используйте эту ссылку в настройках бота:</span>
-              <a class="settings-site-link-url" id="tenantTelegramMiniAppLink" href="#" target="_blank" rel="noopener">—</a>
+            <label class="field-label">ВАРИАНТ 1: NS-СЕРВЕРЫ</label>
+            <div class="domain-instructions">
+              <p class="domain-dns-hint">Зайдите в панель управления регистратора вашего домена и укажите следующие NS-серверы:</p>
+              <div class="domain-ns-list">
+                <div class="domain-ns-item">
+                  <span class="domain-ns-value" id="domainNs1">ns1.sprinthost.ru</span>
+                  <button class="control-inline-btn" type="button" data-copy-ns="ns1" title="Скопировать"><i class="fas fa-copy"></i></button>
+                </div>
+                <div class="domain-ns-item">
+                  <span class="domain-ns-value" id="domainNs2">ns2.sprinthost.ru</span>
+                  <button class="control-inline-btn" type="button" data-copy-ns="ns2" title="Скопировать"><i class="fas fa-copy"></i></button>
+                </div>
+              </div>
+              <p class="domain-dns-hint muted">Полное делегирование домена. Изменение NS может занять до 24 часов.</p>
+            </div>
+          </div>
+
+          <div class="settings-site-field">
+            <label class="field-label">ВАРИАНТ 2: A-ЗАПИСЬ</label>
+            <div class="domain-instructions">
+              <p class="domain-dns-hint">Если не хотите менять NS-серверы, создайте A-запись у регистратора домена:</p>
+              <div class="domain-ns-list">
+                <div class="domain-ns-item">
+                  <span class="domain-ns-value" id="domainARecord">141.8.192.15</span>
+                  <button class="control-inline-btn" type="button" data-copy-ns="a-record" title="Скопировать"><i class="fas fa-copy"></i></button>
+                </div>
+              </div>
+              <p class="domain-dns-hint muted">Укажите тип записи A, имя @ (или пустое), значение — IP-адрес выше.</p>
+            </div>
+          </div>
+
+          <div class="settings-site-field">
+            <button class="btn btn-primary btn-sm" type="button" id="domainCheckBtn">
+              <i class="fas fa-sync-alt"></i> Проверить подключение
+            </button>
+          </div>
+
+          <div class="settings-site-field" id="domainCheckResults">
+            <label class="field-label">СТАТУС ПОДКЛЮЧЕНИЯ</label>
+            <div class="domain-check-list">
+              <div class="domain-check-item" id="domainCheckDns">
+                <span class="domain-check-icon"><i class="fas fa-circle"></i></span>
+                <span class="domain-check-text">DNS-записи</span>
+                <span class="domain-check-status" id="domainCheckDnsStatus"></span>
+              </div>
+              <div class="domain-check-item" id="domainCheckHttp">
+                <span class="domain-check-icon"><i class="fas fa-circle"></i></span>
+                <span class="domain-check-text">Доступность сайта</span>
+                <span class="domain-check-status" id="domainCheckHttpStatus"></span>
+              </div>
+              <div class="domain-check-item" id="domainCheckSsl">
+                <span class="domain-check-icon"><i class="fas fa-circle"></i></span>
+                <span class="domain-check-text">SSL-сертификат</span>
+                <span class="domain-check-status" id="domainCheckSslStatus"></span>
+              </div>
             </div>
           </div>
         </div>
@@ -416,6 +502,48 @@
             <label class="field-label">ПОДКЛЮЧЕННЫЙ ПРИНТЕР</label>
             <input class="control" type="text" id="settingsPrintApiPrinterName" readonly />
           </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsImagesPanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">Фото товаров</div>
+          <div class="settings-list-subtitle">Настройки конвертации и сжатия фото при загрузке.</div>
+        </div>
+        <div class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">КАЧЕСТВО ФОТО (WebP)</label>
+            <input class="control" type="range" id="settingsImgWebpQuality" min="1" max="100" step="1" data-tenant-input="img_webp_quality" />
+            <div class="settings-range-labels">
+              <span class="muted">Меньше вес</span>
+              <span class="settings-range-value" id="settingsImgWebpQualityValue">82</span>
+              <span class="muted">Лучше качество</span>
+            </div>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">КАЧЕСТВО ПРЕВЬЮ</label>
+            <input class="control" type="range" id="settingsImgThumbQuality" min="1" max="100" step="1" data-tenant-input="img_thumb_quality" />
+            <div class="settings-range-labels">
+              <span class="muted">Меньше вес</span>
+              <span class="settings-range-value" id="settingsImgThumbQualityValue">72</span>
+              <span class="muted">Лучше качество</span>
+            </div>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ШИРИНА ПРЕВЬЮ (PX)</label>
+            <input class="control" type="number" id="settingsImgThumbWidth" min="100" max="2000" step="10" data-tenant-input="img_thumb_width" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">УДАЛЯТЬ ОРИГИНАЛ ПОСЛЕ КОНВЕРТАЦИИ</label>
+            <label class="switch">
+              <input class="switch-input" type="checkbox" id="settingsImgDeleteOriginal" checked />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Удалять оригинал (экономия места)</span>
+            </label>
+          </div>
+        </div>
+        <div class="stores-form-actions">
+          <button class="btn btn-primary btn-sm" type="button" id="settingsImagesSaveBtn">Сохранить</button>
         </div>
       </div>
 

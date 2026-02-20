@@ -159,26 +159,18 @@
     const linkEl = document.getElementById("siteSubdomainLink");
     if (!linkEl) return;
     const subdomain = tenant && tenant.subdomain ? String(tenant.subdomain).trim() : "";
-    const customDomain = tenant && tenant.custom_domain ? String(tenant.custom_domain).trim() : "";
     const protocol = window.location.protocol || "http:";
     const hostname = String(window.location.hostname || "");
     const isLocal = hostname.endsWith("localhost");
-    const port = window.location.port ? `:${window.location.port}` : "";
+    const port = isLocal && window.location.port ? `:${window.location.port}` : "";
 
-    let host = "";
-    if (customDomain) {
-      host = customDomain;
-    } else if (subdomain) {
-      host = `${subdomain}.${hostname}`;
-    }
-
-    if (!host) {
-      linkEl.textContent = "—";
+    if (!subdomain) {
+      linkEl.textContent = "";
       linkEl.setAttribute("href", "#");
       return;
     }
 
-    const url = `${protocol}//${host}${isLocal ? port : ""}`;
+    const url = `${protocol}//${subdomain}.${hostname}${port}`;
     linkEl.textContent = url;
     linkEl.setAttribute("href", url);
   }
@@ -239,6 +231,23 @@
     }
   }
 
+  function updateSiteFavicon(url) {
+    const preview = document.getElementById("siteFaviconPreview");
+    const delBtn = document.getElementById("siteFaviconDeleteBtn");
+    const uploadBtn = document.getElementById("siteFaviconUploadBtn");
+    if (preview) {
+      if (url) {
+        preview.src = url;
+        preview.classList.remove("hidden");
+      } else {
+        preview.removeAttribute("src");
+        preview.classList.add("hidden");
+      }
+    }
+    if (delBtn) delBtn.classList.toggle("hidden", !url);
+    if (uploadBtn) uploadBtn.style.borderStyle = url ? "solid" : "dashed";
+  }
+
   function setSoundPreview(key, url) {
     const label = document.querySelector(`[data-sound-label=\"${key}\"]`);
     const playBtn = document.querySelector(`[data-sound-play=\"${key}\"]`);
@@ -260,6 +269,7 @@
       updateTenantCache(tenant);
       applyBrandFromTenant(tenant);
       updateShopLink(tenant);
+
 
       const fields = document.querySelectorAll("[data-tenant-field]");
       fields.forEach((el) => {
@@ -301,10 +311,17 @@
       fillTimezoneSelect(tenant.timezone, "brandTimezoneSelect");
 
       // Telegram mini app link
-      const tgMiniAppLink = document.getElementById("tenantTelegramMiniAppLink");
-      if (tgMiniAppLink && tenant.telegram_mini_app_url) {
-        tgMiniAppLink.href = tenant.telegram_mini_app_url;
-        tgMiniAppLink.textContent = tenant.telegram_mini_app_url;
+      const tgMiniAppInput = document.getElementById("tenantTelegramMiniAppInput");
+      if (tgMiniAppInput && tenant.telegram_mini_app_url) {
+        tgMiniAppInput.value = tenant.telegram_mini_app_url;
+      }
+
+      // Фавикон в панели «Данные сайта»
+      updateSiteFavicon(tenant.favicon_light_url);
+
+      // Фото товаров — заполнить настройки конвертации
+      if (typeof window.__applyImagesSettings === "function") {
+        window.__applyImagesSettings(tenant);
       }
     } catch (err) {
       console.error("Не удалось загрузить профиль tenant:", err);
@@ -359,6 +376,7 @@
     const settingsTenantCards = document.getElementById("settingsTenantCards");
     const settingsStoresEmpty = document.getElementById("settingsStoresEmpty");
     const settingsCardsPanel = document.getElementById("settingsCardsPanel");
+    const siteSectionPanel = document.getElementById("sitePanel");
     const storesPanel = document.getElementById("storesPanel");
     const storesList = document.getElementById("storesList");
     const storesEmpty = document.getElementById("storesEmpty");
@@ -370,17 +388,19 @@
         const section = btn.getAttribute("data-settings-section") || "";
         document.body.setAttribute("data-settings-section", section);
         const isStores = section === "stores";
+        const isSite = section === "site";
         if (settingsCenterTitle) {
-          settingsCenterTitle.textContent = isStores ? "Филиалы" : "Компания";
+          settingsCenterTitle.textContent = isStores ? "Филиалы" : isSite ? "Сайт" : "Компания";
         }
         if (settingsCenterSubtitle) {
           settingsCenterSubtitle.textContent = isStores ? "Загрузка..." : "";
         }
-        if (settingsTenantCards) settingsTenantCards.classList.toggle("hidden", isStores);
+        if (settingsTenantCards) settingsTenantCards.classList.toggle("hidden", isStores || isSite);
         if (settingsStoresEmpty) settingsStoresEmpty.classList.add("hidden");
-        if (settingsCardsPanel) settingsCardsPanel.classList.toggle("hidden", isStores);
+        if (settingsCardsPanel) settingsCardsPanel.classList.toggle("hidden", isStores || isSite);
         if (storesPanel) storesPanel.classList.toggle("hidden", !isStores);
-        if (settingsAddOrderBtn) settingsAddOrderBtn.classList.remove("hidden");
+        if (siteSectionPanel) siteSectionPanel.classList.toggle("hidden", !isSite);
+        if (settingsAddOrderBtn) settingsAddOrderBtn.classList.toggle("hidden", isSite);
 
         if (isStores) {
           const hasStoreTab = rightTabs && rightTabs.querySelector("[data-right-tab^=\"store-\"]");
@@ -413,16 +433,21 @@
     const orderTimeOptionsCard = document.getElementById("settingsOrderTimeOptionsCard");
     const soundsCard = document.getElementById("settingsSoundsCard");
     const notificationsCard = document.getElementById("settingsNotificationsCard");
+    const imagesCard = document.getElementById("settingsImagesCard");
     const printApiCard = document.getElementById("settingsPrintApiCard");
+    const telegramAppCard = document.getElementById("settingsTelegramAppCard");
     const rightDefault = document.getElementById("settingsRightDefault");
     const logoPanel = document.getElementById("settingsLogoPanel");
     const sitePanel = document.getElementById("settingsSitePanel");
+    const domainPanel = document.getElementById("settingsDomainPanel");
+    const telegramAppPanel = document.getElementById("settingsTelegramAppPanel");
     const brandPanel = document.getElementById("settingsBrandPanel");
     const orderStatusesPanel = document.getElementById("settingsOrderStatusesPanel");
     const orderPaymentsPanel = document.getElementById("settingsOrderPaymentsPanel");
     const orderDeliveryPanel = document.getElementById("settingsOrderDeliveryPanel");
     const orderTimeOptionsPanel = document.getElementById("settingsOrderTimeOptionsPanel");
     const soundsPanel = document.getElementById("settingsSoundsPanel");
+    const imagesPanel = document.getElementById("settingsImagesPanel");
     const printApiPanel = document.getElementById("settingsPrintApiPanel");
     const settingsNotificationsPanel = document.getElementById("settingsNotificationsPanel");
     const globalTelegramBindings = document.getElementById("globalTelegramBindings");
@@ -829,6 +854,8 @@
       if (rightDefault) rightDefault.classList.toggle("hidden", tabId !== "" || isDeliverySection);
       if (logoPanel) logoPanel.classList.toggle("hidden", tabId !== "logo");
       if (sitePanel) sitePanel.classList.toggle("hidden", tabId !== "site");
+      if (domainPanel) domainPanel.classList.toggle("hidden", tabId !== "domain");
+      if (telegramAppPanel) telegramAppPanel.classList.toggle("hidden", tabId !== "telegram-app");
       if (brandPanel) brandPanel.classList.toggle("hidden", tabId !== "brand");
       if (orderStatusesPanel) orderStatusesPanel.classList.toggle("hidden", tabId !== "order-statuses");
       if (orderPaymentsPanel) orderPaymentsPanel.classList.toggle("hidden", tabId !== "order-payments");
@@ -836,6 +863,7 @@
       if (orderTimeOptionsPanel) orderTimeOptionsPanel.classList.toggle("hidden", tabId !== "order-time-options");
       if (soundsPanel) soundsPanel.classList.toggle("hidden", tabId !== "sounds");
       if (settingsNotificationsPanel) settingsNotificationsPanel.classList.toggle("hidden", tabId !== "notifications");
+      if (imagesPanel) imagesPanel.classList.toggle("hidden", tabId !== "images");
       if (printApiPanel) printApiPanel.classList.toggle("hidden", tabId !== "print-api");
       if (settingsDeliveryPanel) settingsDeliveryPanel.classList.toggle("hidden", tabId !== DELIVERY_TAB_ID);
       if (settingsStorePanel) settingsStorePanel.classList.toggle("hidden", !tabId.startsWith("store-"));
@@ -900,6 +928,7 @@
           setActiveRightTab("");
           if (tabId === "logo" && logoCard) logoCard.classList.remove("is-active");
           if (tabId === "site" && siteCard) siteCard.classList.remove("is-active");
+          if (tabId === "domain" && domainCard) domainCard.classList.remove("is-active");
           if (tabId === "brand" && brandCard) brandCard.classList.remove("is-active");
           if (tabId === "order-statuses" && orderStatusesCard) orderStatusesCard.classList.remove("is-active");
           if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.remove("is-active");
@@ -907,6 +936,7 @@
           if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.remove("is-active");
           if (tabId === "sounds" && soundsCard) soundsCard.classList.remove("is-active");
           if (tabId === "notifications" && notificationsCard) notificationsCard.classList.remove("is-active");
+          if (tabId === "images" && imagesCard) imagesCard.classList.remove("is-active");
           if (tabId === "print-api" && printApiCard) printApiCard.classList.remove("is-active");
           if (tabId === DELIVERY_TAB_ID) {
             deliverySettingsState.selectedId = null;
@@ -943,6 +973,8 @@
       setActiveRightTab(tabId);
       if (tabId === "logo" && logoCard) logoCard.classList.add("is-active");
       if (tabId === "site" && siteCard) siteCard.classList.add("is-active");
+      if (tabId === "domain" && domainCard) domainCard.classList.add("is-active");
+      if (tabId === "telegram-app" && telegramAppCard) telegramAppCard.classList.add("is-active");
       if (tabId === "brand" && brandCard) brandCard.classList.add("is-active");
       if (tabId === "order-statuses" && orderStatusesCard) orderStatusesCard.classList.add("is-active");
       if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.add("is-active");
@@ -950,6 +982,7 @@
       if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.add("is-active");
       if (tabId === "sounds" && soundsCard) soundsCard.classList.add("is-active");
       if (tabId === "notifications" && notificationsCard) notificationsCard.classList.add("is-active");
+      if (tabId === "images" && imagesCard) imagesCard.classList.add("is-active");
       if (tabId === "print-api" && printApiCard) printApiCard.classList.add("is-active");
     }
 
@@ -964,6 +997,119 @@
         ensureTab("site", "Данные сайта");
       });
     }
+
+    const domainCard = document.getElementById("settingsDomainCard");
+    if (domainCard) {
+      domainCard.addEventListener("click", () => {
+        ensureTab("domain", "Домен");
+      });
+    }
+
+    if (telegramAppCard) {
+      telegramAppCard.addEventListener("click", () => {
+        ensureTab("telegram-app", "Мини-приложение Telegram");
+      });
+    }
+
+    // Копирование ссылки Telegram mini app
+    const tgMiniAppCopyBtn = document.getElementById("tenantTelegramMiniAppCopyBtn");
+    const tgMiniAppCopyInput = document.getElementById("tenantTelegramMiniAppInput");
+    if (tgMiniAppCopyBtn && tgMiniAppCopyInput) {
+      tgMiniAppCopyBtn.addEventListener("click", () => {
+        navigator.clipboard.writeText(tgMiniAppCopyInput.value).then(() => {
+          const icon = tgMiniAppCopyBtn.querySelector("i");
+          if (icon) {
+            icon.className = "fas fa-check";
+            setTimeout(() => { icon.className = "fas fa-copy"; }, 1500);
+          }
+        });
+      });
+    }
+
+    // Заполняем префикс/суффикс субдомена
+    (function () {
+      var suffix = document.getElementById("subdomainSuffix");
+      var prefix = document.getElementById("subdomainPrefix");
+      var input = document.getElementById("subdomainInput");
+      var wrap = input ? input.closest(".control-subdomain-wrap") : null;
+      var hostname = location.hostname || "localhost";
+      var isLocal = hostname.endsWith("localhost");
+      var port = isLocal && location.port ? ":" + location.port : "";
+      if (prefix) prefix.textContent = location.protocol + "//";
+      if (suffix) suffix.textContent = "." + hostname + port;
+      if (wrap && input) wrap.addEventListener("click", function () { input.focus(); });
+    })();
+
+    // NS copy buttons
+    document.querySelectorAll("[data-copy-ns]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var nsEl = btn.previousElementSibling;
+        if (!nsEl) return;
+        navigator.clipboard.writeText(nsEl.textContent.trim()).then(function () {
+          var icon = btn.querySelector("i");
+          if (icon) {
+            icon.className = "fas fa-check";
+            setTimeout(function () { icon.className = "fas fa-copy"; }, 1500);
+          }
+        });
+      });
+    });
+
+    // Domain check button
+    (function () {
+      var checkBtn = document.getElementById("domainCheckBtn");
+      var resultsBlock = document.getElementById("domainCheckResults");
+      var domainInput = document.getElementById("domainInput");
+      if (!checkBtn || !resultsBlock || !domainInput) return;
+
+      function setCheckState(id, state, statusText) {
+        var item = document.getElementById(id);
+        if (!item) return;
+        var icon = item.querySelector(".domain-check-icon");
+        var status = item.querySelector(".domain-check-status");
+        if (icon) { icon.className = "domain-check-icon is-" + state; }
+        if (status) { status.textContent = statusText || ""; }
+      }
+
+      checkBtn.addEventListener("click", async function () {
+        var domain = domainInput.value.trim();
+        if (!domain) return;
+
+        resultsBlock.classList.remove("hidden");
+        setCheckState("domainCheckDns", "pending", "Проверяем...");
+        setCheckState("domainCheckHttp", "pending", "Проверяем...");
+        setCheckState("domainCheckSsl", "pending", "Проверяем...");
+        checkBtn.disabled = true;
+        var btnIcon = checkBtn.querySelector("i");
+        if (btnIcon) btnIcon.className = "fas fa-spinner fa-spin";
+
+        try {
+          var token = typeof getAuthToken === "function" ? getAuthToken() : null;
+          var res = await fetch("/api/admin/tenant/check-domain", {
+            method: "POST",
+            headers: Object.assign({ "Content-Type": "application/json" }, token ? { Authorization: "Bearer " + token } : {}),
+            body: JSON.stringify({ domain: domain })
+          });
+          var data = await res.json();
+          if (data.ok && data.result) {
+            var r = data.result;
+            setCheckState("domainCheckDns", r.dns ? "ok" : "fail", r.dns ? r.dns_detail : r.dns_detail);
+            setCheckState("domainCheckHttp", r.http ? "ok" : "fail", r.http_detail);
+            setCheckState("domainCheckSsl", r.ssl ? "ok" : "fail", r.ssl_detail);
+          } else {
+            setCheckState("domainCheckDns", "fail", "Ошибка проверки");
+            setCheckState("domainCheckHttp", "fail", "Ошибка проверки");
+            setCheckState("domainCheckSsl", "fail", "Ошибка проверки");
+          }
+        } catch (e) {
+          setCheckState("domainCheckDns", "fail", "Ошибка сети");
+          setCheckState("domainCheckHttp", "fail", "Ошибка сети");
+          setCheckState("domainCheckSsl", "fail", "Ошибка сети");
+        }
+        checkBtn.disabled = false;
+        if (btnIcon) btnIcon.className = "fas fa-sync-alt";
+      });
+    })();
 
     if (brandCard) {
       brandCard.addEventListener("click", () => {
@@ -1004,6 +1150,12 @@
     if (notificationsCard) {
       notificationsCard.addEventListener("click", () => {
         ensureTab("notifications", "Уведомления");
+      });
+    }
+
+    if (imagesCard) {
+      imagesCard.addEventListener("click", () => {
+        ensureTab("images", "Фото товаров");
       });
     }
 
@@ -1195,7 +1347,6 @@
     if (initialSectionBtn) {
       initialSectionBtn.click();
     }
-
 
     const settingsListsState = {
       "order-statuses": { loaded: false, items: [] },
@@ -2384,6 +2535,35 @@
       });
     });
 
+    // Фавикон в панели «Данные сайта»
+    (function () {
+      var uploadBtn = document.getElementById("siteFaviconUploadBtn");
+      var fileInput = document.getElementById("siteFaviconFileInput");
+      var deleteBtn = document.getElementById("siteFaviconDeleteBtn");
+      if (uploadBtn && fileInput) {
+        uploadBtn.addEventListener("click", function () { fileInput.click(); });
+        fileInput.addEventListener("change", async function () {
+          if (!fileInput.files || !fileInput.files.length) return;
+          var res = await uploadTenantAsset("favicon_light_url", fileInput.files[0]);
+          if (res && res.url) {
+            updateSiteFavicon(res.url);
+            setPreviewFromValue("favicon_light_url", res.url);
+            if (res.tenant) { updateTenantCache(res.tenant); applyBrandFromTenant(res.tenant); }
+          }
+          fileInput.value = "";
+        });
+      }
+      if (deleteBtn) {
+        deleteBtn.addEventListener("click", async function () {
+          var payload = { favicon_light_url: null };
+          var data = await updateTenantFields(payload);
+          updateSiteFavicon("");
+          setPreviewFromValue("favicon_light_url", "");
+          if (data && data.tenant) { updateTenantCache(data.tenant); applyBrandFromTenant(data.tenant); }
+        });
+      }
+    })();
+
     document.querySelectorAll("[data-sound-box], [data-sound-upload]").forEach((el) => {
       el.addEventListener("click", () => {
         const key = el.getAttribute("data-sound-box") || el.getAttribute("data-sound-upload");
@@ -2920,10 +3100,11 @@
         if (settingsCenterSubtitle && isDelivery) {
           settingsCenterSubtitle.textContent = "Загрузка...";
         }
-        if (settingsTenantCards) settingsTenantCards.classList.toggle("hidden", isDelivery || section === "stores");
-        if (settingsCardsPanel) settingsCardsPanel.classList.toggle("hidden", isDelivery || section === "stores");
+        if (settingsTenantCards) settingsTenantCards.classList.toggle("hidden", isDelivery || section === "stores" || section === "site");
+        if (settingsCardsPanel) settingsCardsPanel.classList.toggle("hidden", isDelivery || section === "stores" || section === "site");
         if (deliveryPanel) deliveryPanel.classList.toggle("hidden", !isDelivery);
         if (storesPanel) storesPanel.classList.toggle("hidden", section !== "stores");
+        if (siteSectionPanel) siteSectionPanel.classList.toggle("hidden", section !== "site");
 
         if (isDelivery) {
           if (rightDefault) rightDefault.classList.add("hidden");
@@ -3032,6 +3213,56 @@
         deliverySettingsState.snapshot = null;
         setActiveRightTab("");
         await loadDeliverySettings();
+      });
+    }
+
+    // --- Фото товаров (images settings) ---
+    const imgWebpQualityInput = document.getElementById("settingsImgWebpQuality");
+    const imgWebpQualityValue = document.getElementById("settingsImgWebpQualityValue");
+    const imgThumbQualityInput = document.getElementById("settingsImgThumbQuality");
+    const imgThumbQualityValue = document.getElementById("settingsImgThumbQualityValue");
+    const imgThumbWidthInput = document.getElementById("settingsImgThumbWidth");
+    const imgDeleteOriginalInput = document.getElementById("settingsImgDeleteOriginal");
+    const imagesSaveBtn = document.getElementById("settingsImagesSaveBtn");
+
+    function syncRangeDisplay(input, display) {
+      if (input && display) {
+        display.textContent = input.value;
+        input.addEventListener("input", () => { display.textContent = input.value; });
+      }
+    }
+    syncRangeDisplay(imgWebpQualityInput, imgWebpQualityValue);
+    syncRangeDisplay(imgThumbQualityInput, imgThumbQualityValue);
+
+    window.__applyImagesSettings = function(tenant) {
+      if (imgWebpQualityInput) {
+        imgWebpQualityInput.value = tenant.img_webp_quality ?? 82;
+        if (imgWebpQualityValue) imgWebpQualityValue.textContent = imgWebpQualityInput.value;
+      }
+      if (imgThumbQualityInput) {
+        imgThumbQualityInput.value = tenant.img_thumb_quality ?? 72;
+        if (imgThumbQualityValue) imgThumbQualityValue.textContent = imgThumbQualityInput.value;
+      }
+      if (imgThumbWidthInput) imgThumbWidthInput.value = tenant.img_thumb_width ?? 480;
+      if (imgDeleteOriginalInput) imgDeleteOriginalInput.checked = (tenant.img_delete_original ?? 1) == 1;
+    };
+
+    if (imagesSaveBtn) {
+      imagesSaveBtn.addEventListener("click", async () => {
+        const payload = {};
+        if (imgWebpQualityInput) payload.img_webp_quality = Number(imgWebpQualityInput.value);
+        if (imgThumbQualityInput) payload.img_thumb_quality = Number(imgThumbQualityInput.value);
+        if (imgThumbWidthInput) payload.img_thumb_width = Number(imgThumbWidthInput.value);
+        if (imgDeleteOriginalInput) payload.img_delete_original = imgDeleteOriginalInput.checked;
+
+        imagesSaveBtn.disabled = true;
+        imagesSaveBtn.textContent = "Сохранение...";
+        const data = await updateTenantFields(payload);
+        imagesSaveBtn.disabled = false;
+        imagesSaveBtn.textContent = "Сохранить";
+        if (data && data.ok && data.tenant) {
+          updateTenantCache(data.tenant);
+        }
       });
     }
   });

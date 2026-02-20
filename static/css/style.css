@@ -2310,6 +2310,43 @@ body.page-orders .orders-list .order-client-phone-text{
 .settings-site-link-url{color:var(--color-primary);text-decoration:none;font-weight:600}
 .settings-site-link-url:hover{text-decoration:underline}
 .field-hint{font-size:12px;color:var(--color-text-muted)}
+.control-with-action{position:relative;margin-top:6px}
+.control-with-action .control{width:100%;padding-right:36px}
+.control-inline-btn{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:28px;height:28px;border:none;border-radius:var(--radius-sm);background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--color-text-muted);transition:color .15s,background .15s}
+.control-inline-btn:hover{color:var(--color-primary);background:var(--color-bg-hover)}
+.site-name-row{display:flex;align-items:flex-start;gap:10px}
+.site-name-row .control{flex:1}
+.site-favicon-box{position:relative;display:flex;flex-direction:column;align-items:center;flex:0 0 auto}
+.site-favicon-btn{width:40px;height:40px;border:1px dashed var(--color-border);border-radius:8px;background:var(--color-surface-2);display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;padding:0;transition:border-color var(--dur-fast)}
+.site-favicon-btn:hover{border-color:var(--color-primary)}
+.site-favicon-preview{width:100%;height:100%;object-fit:cover;border-radius:7px}
+.site-favicon-preview:not(.hidden)~.site-favicon-plus{display:none}
+.site-favicon-plus{font-size:18px;color:var(--color-text-muted);line-height:1}
+.site-favicon-delete{position:absolute;top:-5px;right:-5px;width:16px;height:16px;border-radius:50%;border:none;background:var(--color-danger,#e74c3c);color:#fff;font-size:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;line-height:1;opacity:0;transition:opacity .15s}
+.site-favicon-box:hover .site-favicon-delete:not(.hidden){opacity:1}
+.site-favicon-label{font-size:10px;color:var(--color-text-muted);margin-top:2px;text-align:center}
+.control-subdomain-wrap{display:flex;align-items:center;border:1px solid var(--color-border);border-radius:10px;background:var(--color-surface-2);padding:0 12px;height:40px;cursor:text;overflow:hidden;transition:border-color var(--dur-fast) var(--ease-smooth),box-shadow var(--dur-fast) var(--ease-smooth)}
+.control-subdomain-wrap:focus-within{border-color:var(--primary-45);box-shadow:0 0 0 4px var(--primary-12)}
+.control-subdomain-prefix,.control-subdomain-suffix{font-size:inherit;color:var(--color-text-muted);white-space:nowrap;user-select:none;pointer-events:none;flex:0 0 auto}
+.control-subdomain-input{border:none;outline:none;background:transparent;color:var(--color-text);padding:0;flex:1 1 auto;min-width:40px;font:inherit}
+.settings-subdomain-link{display:inline-block;margin-top:6px;font-size:12px;color:var(--color-primary);text-decoration:none}
+.settings-subdomain-link:hover{text-decoration:underline}
+.settings-subdomain-link:empty{display:none}
+.domain-instructions{background:var(--color-surface-2);border-radius:10px;padding:12px 14px}
+.domain-instructions .domain-dns-hint{font-size:13px;color:var(--color-text-muted);line-height:1.5;margin:0}
+.domain-instructions .domain-dns-hint.muted{margin-top:8px;font-size:12px}
+.domain-ns-list{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.domain-ns-item{display:flex;align-items:center;gap:8px;background:var(--color-bg);border:1px solid var(--color-border);border-radius:8px;padding:6px 10px}
+.domain-ns-value{font-size:13px;font-weight:600;color:var(--color-text);flex:1}
+.domain-ns-item .control-inline-btn{position:static;transform:none;width:24px;height:24px;flex:0 0 auto}
+.domain-check-list{display:flex;flex-direction:column;gap:6px}
+.domain-check-item{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--color-surface-2);border-radius:8px}
+.domain-check-icon{font-size:8px;flex:0 0 auto;color:var(--color-text-muted)}
+.domain-check-icon.is-ok{color:var(--color-success,#27ae60)}
+.domain-check-icon.is-fail{color:var(--color-danger,#e74c3c)}
+.domain-check-icon.is-pending{color:var(--color-warning,#f39c12)}
+.domain-check-text{font-size:13px;color:var(--color-text);flex:1}
+.domain-check-status{font-size:12px;color:var(--color-text-muted);flex:0 0 auto}
 
 .empty-state{
   height:100%;

@@ -413,6 +413,11 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const soundCancelled = req.body.sound_order_cancelled_url !== undefined ? helpers.strOrNull(req.body.sound_order_cancelled_url) : undefined;
       const soundNewMessage = req.body.sound_new_message_url !== undefined ? helpers.strOrNull(req.body.sound_new_message_url) : undefined;
 
+      const imgWebpQuality = req.body.img_webp_quality !== undefined ? helpers.numOrNull(req.body.img_webp_quality) : undefined;
+      const imgThumbQuality = req.body.img_thumb_quality !== undefined ? helpers.numOrNull(req.body.img_thumb_quality) : undefined;
+      const imgThumbWidth = req.body.img_thumb_width !== undefined ? helpers.numOrNull(req.body.img_thumb_width) : undefined;
+      const imgDeleteOriginal = req.body.img_delete_original !== undefined ? (helpers.toBool(req.body.img_delete_original, true) ? 1 : 0) : undefined;
+
       if (!tenantId) {
         return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       }
@@ -532,6 +537,12 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const nextEmail = email !== undefined ? email : current.email;
       const nextPhone = phone !== undefined ? phone : current.phone;
 
+      const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+      const nextImgWebpQuality = imgWebpQuality !== undefined ? clamp(imgWebpQuality ?? 82, 1, 100) : (current.img_webp_quality ?? 82);
+      const nextImgThumbQuality = imgThumbQuality !== undefined ? clamp(imgThumbQuality ?? 72, 1, 100) : (current.img_thumb_quality ?? 72);
+      const nextImgThumbWidth = imgThumbWidth !== undefined ? clamp(imgThumbWidth ?? 480, 100, 2000) : (current.img_thumb_width ?? 480);
+      const nextImgDeleteOriginal = imgDeleteOriginal !== undefined ? imgDeleteOriginal : (current.img_delete_original ?? 1);
+
       if (email !== undefined && email && email !== current.email) {
         const [existsEmail] = await db.query(
           'SELECT id FROM ten_tenants WHERE email=? AND id<>? LIMIT 1',
@@ -543,8 +554,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_delete_original=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgDeleteOriginal, tenantId]
       );
 
       const [rows] = await db.query(
@@ -1847,6 +1858,80 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
     } catch (err) {
       console.error('Tenant telegram stores update:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // ───────── Проверка подключения домена ─────────
+  router.post('/check-domain', async (req, res) => {
+    try {
+      const domain = req.body.domain ? String(req.body.domain).trim().toLowerCase() : '';
+      if (!domain) return res.json({ ok: false, error: 'NO_DOMAIN' });
+
+      const dns = require('dns').promises;
+      const http = require('http');
+      const https = require('https');
+
+      const result = { dns: false, http: false, ssl: false, dns_detail: '', http_detail: '', ssl_detail: '' };
+
+      // 1. DNS check — resolve domain
+      try {
+        const addresses = await dns.resolve4(domain);
+        if (addresses && addresses.length) {
+          result.dns = true;
+          result.dns_detail = addresses.join(', ');
+        }
+      } catch (e) {
+        result.dns_detail = e.code === 'ENOTFOUND' ? 'Домен не найден' : (e.message || 'Ошибка DNS');
+      }
+
+      // 2. HTTP check — try to reach the domain
+      if (result.dns) {
+        try {
+          await new Promise((resolve, reject) => {
+            const req2 = http.get({ hostname: domain, port: 80, path: '/', timeout: 5000 }, (resp) => {
+              resolve(resp.statusCode);
+            });
+            req2.on('error', reject);
+            req2.on('timeout', () => { req2.destroy(); reject(new Error('timeout')); });
+          });
+          result.http = true;
+          result.http_detail = 'Сайт доступен';
+        } catch (e) {
+          result.http_detail = 'Сайт недоступен';
+        }
+      } else {
+        result.http_detail = 'DNS не настроен';
+      }
+
+      // 3. SSL check — try HTTPS connection
+      if (result.dns) {
+        try {
+          await new Promise((resolve, reject) => {
+            const req2 = https.get({ hostname: domain, port: 443, path: '/', timeout: 5000, rejectUnauthorized: true }, (resp) => {
+              resolve(resp.statusCode);
+            });
+            req2.on('error', reject);
+            req2.on('timeout', () => { req2.destroy(); reject(new Error('timeout')); });
+          });
+          result.ssl = true;
+          result.ssl_detail = 'Сертификат действителен';
+        } catch (e) {
+          if (e.code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' || e.code === 'CERT_HAS_EXPIRED' || e.code === 'ERR_TLS_CERT_ALTNAME_INVALID') {
+            result.ssl_detail = 'Сертификат недействителен';
+          } else if (e.message === 'timeout') {
+            result.ssl_detail = 'Таймаут соединения';
+          } else {
+            result.ssl_detail = 'SSL не настроен';
+          }
+        }
+      } else {
+        result.ssl_detail = 'DNS не настроен';
+      }
+
+      res.json({ ok: true, result });
+    } catch (err) {
+      console.error('check-domain error:', err);
+      res.status(500).json({ ok: false, error: 'CHECK_FAILED' });
     }
   });
 
