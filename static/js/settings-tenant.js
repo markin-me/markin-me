@@ -155,24 +155,15 @@
     }
   }
 
+  var _shopUrl = "";
+
   function updateShopLink(tenant) {
-    const linkEl = document.getElementById("siteSubdomainLink");
-    if (!linkEl) return;
     const subdomain = tenant && tenant.subdomain ? String(tenant.subdomain).trim() : "";
     const protocol = window.location.protocol || "http:";
     const hostname = String(window.location.hostname || "");
     const isLocal = hostname.endsWith("localhost");
     const port = isLocal && window.location.port ? `:${window.location.port}` : "";
-
-    if (!subdomain) {
-      linkEl.textContent = "";
-      linkEl.setAttribute("href", "#");
-      return;
-    }
-
-    const url = `${protocol}//${subdomain}.${hostname}${port}`;
-    linkEl.textContent = url;
-    linkEl.setAttribute("href", url);
+    _shopUrl = subdomain ? `${protocol}//${subdomain}.${hostname}${port}` : "";
   }
 
   async function updateTenantFields(payload) {
@@ -309,6 +300,16 @@
 
       fillTimezoneSelect(tenant.timezone, "tenantTimezoneSelect");
       fillTimezoneSelect(tenant.timezone, "brandTimezoneSelect");
+
+      // Telegram bot fields
+      const tgBotUsernameInput = document.getElementById("tenantTelegramBotUsername");
+      const tgBotTokenInput = document.getElementById("tenantTelegramBotToken");
+      if (tgBotUsernameInput) {
+        tgBotUsernameInput.value = tenant.telegram_bot_username || "";
+      }
+      if (tgBotTokenInput) {
+        tgBotTokenInput.value = tenant.telegram_bot_token || "";
+      }
 
       // Telegram mini app link
       const tgMiniAppInput = document.getElementById("tenantTelegramMiniAppInput");
@@ -1011,16 +1012,58 @@
       });
     }
 
-    // Копирование ссылки Telegram mini app
-    const tgMiniAppCopyBtn = document.getElementById("tenantTelegramMiniAppCopyBtn");
-    const tgMiniAppCopyInput = document.getElementById("tenantTelegramMiniAppInput");
-    if (tgMiniAppCopyBtn && tgMiniAppCopyInput) {
-      tgMiniAppCopyBtn.addEventListener("click", () => {
-        navigator.clipboard.writeText(tgMiniAppCopyInput.value).then(() => {
-          const icon = tgMiniAppCopyBtn.querySelector("i");
+    // Telegram bot username — save on change
+    const tgBotUsernameEl = document.getElementById("tenantTelegramBotUsername");
+    const tgBotUsernameLinkBtn = document.getElementById("tenantTelegramBotUsernameLink");
+    const tgBotTokenEl = document.getElementById("tenantTelegramBotToken");
+    const tgBotTokenCopyBtn = document.getElementById("tenantTelegramBotTokenCopyBtn");
+
+    if (tgBotUsernameEl) {
+      tgBotUsernameEl.addEventListener("change", function () {
+        var val = tgBotUsernameEl.value.trim().replace(/^@/, "");
+        tgBotUsernameEl.value = val;
+        updateTenantFields({ telegram_bot_username: val || null });
+      });
+    }
+
+    if (tgBotUsernameLinkBtn && tgBotUsernameEl) {
+      tgBotUsernameLinkBtn.addEventListener("click", function () {
+        var u = tgBotUsernameEl.value.trim();
+        if (u) window.open("https://t.me/" + u, "_blank");
+      });
+    }
+
+    // Telegram bot token — save on blur
+    if (tgBotTokenEl) {
+      tgBotTokenEl.addEventListener("change", function () {
+        var val = tgBotTokenEl.value.trim();
+        updateTenantFields({ telegram_bot_token: val || null });
+      });
+    }
+
+    // Copy token
+    if (tgBotTokenCopyBtn && tgBotTokenEl) {
+      tgBotTokenCopyBtn.addEventListener("click", function () {
+        navigator.clipboard.writeText(tgBotTokenEl.value).then(function () {
+          var icon = tgBotTokenCopyBtn.querySelector("i");
           if (icon) {
             icon.className = "fas fa-check";
-            setTimeout(() => { icon.className = "fas fa-copy"; }, 1500);
+            setTimeout(function () { icon.className = "fas fa-copy"; }, 1500);
+          }
+        });
+      });
+    }
+
+    // Копирование ссылки Telegram mini app
+    var tgMiniAppCopyBtn = document.getElementById("tenantTelegramMiniAppCopyBtn");
+    var tgMiniAppCopyInput = document.getElementById("tenantTelegramMiniAppInput");
+    if (tgMiniAppCopyBtn && tgMiniAppCopyInput) {
+      tgMiniAppCopyBtn.addEventListener("click", function () {
+        navigator.clipboard.writeText(tgMiniAppCopyInput.value).then(function () {
+          var icon = tgMiniAppCopyBtn.querySelector("i");
+          if (icon) {
+            icon.className = "fas fa-check";
+            setTimeout(function () { icon.className = "fas fa-copy"; }, 1500);
           }
         });
       });
@@ -1039,6 +1082,27 @@
       if (suffix) suffix.textContent = "." + hostname + port;
       if (wrap && input) wrap.addEventListener("click", function () { input.focus(); });
     })();
+
+    // Subdomain actions: go to site & copy link
+    var subdomainGoBtn = document.getElementById("subdomainGoBtn");
+    var subdomainCopyLinkBtn = document.getElementById("subdomainCopyLinkBtn");
+    if (subdomainGoBtn) {
+      subdomainGoBtn.addEventListener("click", function () {
+        if (_shopUrl) window.open(_shopUrl, "_blank");
+      });
+    }
+    if (subdomainCopyLinkBtn) {
+      subdomainCopyLinkBtn.addEventListener("click", function () {
+        if (!_shopUrl) return;
+        navigator.clipboard.writeText(_shopUrl).then(function () {
+          var icon = subdomainCopyLinkBtn.querySelector("i");
+          if (icon) {
+            icon.className = "fas fa-check";
+            setTimeout(function () { icon.className = "fas fa-copy"; }, 1500);
+          }
+        });
+      });
+    }
 
     // NS copy buttons
     document.querySelectorAll("[data-copy-ns]").forEach(function (btn) {

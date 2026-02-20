@@ -979,17 +979,11 @@ function buildProductDetailsContent(
           card.style.position = "relative";
           if (hasVariants) {
             card.classList.add("has-variants");
-            card.style.flexDirection = "column";
-            card.style.alignItems = "stretch";
           }
 
           // Основной контент карточки
           const cardContent = document.createElement("div");
           cardContent.className = "shop-pd-option-card-content";
-          cardContent.style.display = "flex";
-          cardContent.style.alignItems = "center";
-          cardContent.style.width = "100%";
-          cardContent.style.gap = "8px";
 
           const thumb = document.createElement(
             selected?.photo ? "img" : "div"
@@ -1007,16 +1001,10 @@ function buildProductDetailsContent(
           // Первая строка: вариант + название
           const firstLine = document.createElement("div");
           firstLine.className = "shop-pd-option-name";
-          firstLine.style.display = "flex";
-          firstLine.style.alignItems = "center";
-          firstLine.style.gap = "4px";
           
           let variantLabelEl = null;
           if (selected && hasVariants) {
             variantLabelEl = document.createElement("span");
-            variantLabelEl.style.fontSize = "inherit";
-            variantLabelEl.style.fontWeight = "inherit";
-            variantLabelEl.style.color = "inherit";
             const savedVariant = groupState.variantByItemId.get(selectedId);
             if (savedVariant && savedVariant.variant_label) {
               variantLabelEl.textContent = savedVariant.variant_label + " ";
@@ -1208,65 +1196,26 @@ function buildProductDetailsContent(
           let variantAccordion = null;
           let accordionOpen = false;
 
-          const gearIcon = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
-          const checkIcon = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>`;
-
           const setGearState = (open) => {
             accordionOpen = !!open;
             if (!gearBtn || !variantAccordion) return;
             variantAccordion.style.display = accordionOpen ? "block" : "none";
-            gearBtn.innerHTML = accordionOpen ? checkIcon : gearIcon;
             gearBtn.classList.toggle("is-open", accordionOpen);
-            gearBtn.style.color = accordionOpen ? "var(--accent-color, #ff7a00)" : "var(--text-muted, #888)";
           };
 
           if (hasVariants) {
             gearBtn = document.createElement("button");
             gearBtn.type = "button";
             gearBtn.className = "shop-pd-option-gear-btn";
-            gearBtn.innerHTML = gearIcon;
-            gearBtn.style.cssText = `
-              background: none;
-              border: none;
-              padding: 4px;
-              cursor: pointer;
-              color: var(--text-muted, #888);
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              flex-shrink: 0;
-              transition: color 0.2s, transform 0.2s;
-            `;
+            gearBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
             gearBtn.addEventListener("click", (e) => {
               e.stopPropagation();
               if (accordionOpen) {
-                // Галочка: подтверждаем выбор варианта, выбираем товар и закрываем оба аккордеона
-                const currentVariant = groupState.variantByItemId.get(itemId);
-                if (currentVariant) {
-                  // Выбираем товар с выбранным вариантом
-                  groupState.selectedId = itemId;
-                  // Закрываем аккордеон с вариантами
-                  setGearState(false);
-                  // Закрываем список товаров
-                  closeList();
-                  // Обновляем отображение
-                  renderSlot();
-                  // Уведомляем об изменении
-                  if (typeof onSelectionChange === "function") onSelectionChange();
-                } else {
-                  // Если вариант не выбран, просто закрываем аккордеон
-                  setGearState(false);
-                }
+                setGearState(false);
               } else {
-                // Шестерёнка: открываем аккордеон с вариантами.
-                // Перед этим закрываем остальные аккордеоны в этой группе,
-                // чтобы одновременно был открыт только один.
                 singleVariantControllers.forEach((ctrl) => {
                   if (ctrl.itemId !== itemId) ctrl.setOpen(false);
                 });
-                // Дефолтный вариант, который уже подсвечен, сразу считаем выбранным:
-                // фиксируем его в состоянии и делаем этот товар текущей опцией группы,
-                // чтобы «В корзину» без клика по варианту добавляло именно его.
                 if (typeof setDefaultVariantForOptionItem === "function") {
                   setDefaultVariantForOptionItem(item, groupState.variantByItemId);
                 }
@@ -1278,13 +1227,6 @@ function buildProductDetailsContent(
 
             variantAccordion = document.createElement("div");
             variantAccordion.className = "shop-pd-option-variant-accordion";
-            variantAccordion.style.cssText = `
-              display: none;
-              width: 100%;
-              padding: 8px 0 0 0;
-              margin-top: 8px;
-              border-top: 1px solid var(--border-color, #eee);
-            `;
 
             const variantScroll = document.createElement("div");
             variantScroll.className = "shop-pd-option-variant-scroll";
@@ -1540,8 +1482,6 @@ function buildProductDetailsContent(
           card.classList.toggle("is-unavailable", !isSelected && isOptionUnavailableNow());
           if (hasVariants) {
             card.classList.add("has-variants");
-            card.style.flexDirection = "column";
-            card.style.alignItems = "stretch";
           }
           
           // Функция для расчёта цены с учётом варианта
@@ -1554,11 +1494,9 @@ function buildProductDetailsContent(
             return basePrice;
           };
           
-          const checkbox = document.createElement("input");
-          checkbox.type = "checkbox";
+          const checkbox = document.createElement("span");
+          checkbox.className = "shop-pd-option-radio" + (isSelected ? " is-checked" : "");
           checkbox.checked = isSelected;
-          checkbox.style.marginRight = "8px";
-          checkbox.style.flexShrink = "0";
           
           // Элементы для обновления
           let priceEl = null;
@@ -1571,6 +1509,7 @@ function buildProductDetailsContent(
             card.classList.toggle("is-unavailable", unavailable);
             card.style.display = unavailable ? "none" : "";
             checkbox.checked = newIsSelected;
+            checkbox.classList.toggle("is-checked", newIsSelected);
             if (priceEl) {
               priceEl.textContent = money(getPriceWithVariant());
             }
@@ -1584,50 +1523,9 @@ function buildProductDetailsContent(
             }
           };
           
-          checkbox.addEventListener("click", async (e) => {
-            e.stopPropagation();
-            const { count } = updateSelectedCount();
-            const maxReached = maxSelect != null && count >= maxSelect && !checkbox.checked;
-
-            if (maxReached) {
-              checkbox.checked = false;
-              return;
-            }
-
-            if (checkbox.checked) {
-              if (isOptionUnavailableNow()) {
-                checkbox.checked = false;
-                showToast("\u0411\u043e\u043b\u044c\u0448\u0435 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
-                return;
-              }
-              const applied = runGuardedMutation(() => {
-                groupState.selectedIds.add(itemId);
-                if (hasVariants && typeof setDefaultVariantForOptionItem === "function") {
-                  setDefaultVariantForOptionItem(item, groupState.variantByItemId);
-                }
-              }, { showToastOnOut: true });
-              if (!applied) {
-                checkbox.checked = false;
-                updateCard();
-                return;
-              }
-            } else {
-              groupState.selectedIds.delete(itemId);
-            }
-
-            updateCard();
-            if (onSelectionChange) onSelectionChange();
-          });
-
           // Основной контент карточки
           const cardContent = document.createElement("div");
           cardContent.className = "shop-pd-option-card-content";
-          cardContent.style.display = "flex";
-          cardContent.style.alignItems = "center";
-          cardContent.style.width = "100%";
-          cardContent.style.gap = "8px";
-
-          cardContent.appendChild(checkbox);
 
           // Фото
           if (item.photo) {
@@ -1647,21 +1545,13 @@ function buildProductDetailsContent(
           // Информация
           const infoWrap = document.createElement("div");
           infoWrap.className = "shop-pd-option-info";
-          infoWrap.style.flex = "1";
-          infoWrap.style.minWidth = "0";
 
           // Первая строка: вариант + название
           const firstLine = document.createElement("div");
           firstLine.className = "shop-pd-option-name";
-          firstLine.style.display = "flex";
-          firstLine.style.alignItems = "center";
-          firstLine.style.gap = "4px";
           
           if (hasVariants) {
             variantLabelEl = document.createElement("span");
-            variantLabelEl.style.fontSize = "inherit";
-            variantLabelEl.style.fontWeight = "inherit";
-            variantLabelEl.style.color = "inherit";
             const savedVariant = groupState.variantByItemId.get(itemId);
             if (savedVariant && savedVariant.variant_label) {
               variantLabelEl.textContent = savedVariant.variant_label + " ";
@@ -1694,43 +1584,15 @@ function buildProductDetailsContent(
             gearBtn.type = "button";
             gearBtn.className = "shop-pd-option-gear-btn";
             gearBtn.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
-            gearBtn.style.cssText = `
-              background: none;
-              border: none;
-              padding: 4px;
-              cursor: pointer;
-              color: var(--text-muted, #888);
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              flex-shrink: 0;
-              transition: color 0.2s, transform 0.2s;
-            `;
             cardContent.appendChild(gearBtn);
+            cardContent.appendChild(checkbox);
 
             // Аккордеон с вариантами
             variantAccordion = document.createElement("div");
             variantAccordion.className = "shop-pd-option-variant-accordion";
-            variantAccordion.style.cssText = `
-              display: none;
-              width: 100%;
-              padding: 8px 0 0 0;
-              margin-top: 8px;
-              border-top: 1px solid var(--border-color, #eee);
-            `;
 
             const variantScroll = document.createElement("div");
             variantScroll.className = "shop-pd-option-variant-scroll";
-            variantScroll.style.cssText = `
-              display: flex;
-              gap: 8px;
-              overflow-x: auto;
-              overflow-y: hidden;
-              padding-bottom: 4px;
-              -webkit-overflow-scrolling: touch;
-              scrollbar-width: none;
-              cursor: grab;
-            `;
 
             // Drag-to-scroll
             let isDown = false;
@@ -1812,24 +1674,6 @@ function buildProductDetailsContent(
               variantBtn.textContent = formatValueLabel(value);
               variantBtn.dataset.variantIndex = String(idx);
               optionVariantAvailabilityCtrl.registerButton(idx, variantBtn);
-              variantBtn.style.cssText = `
-                flex-shrink: 0;
-                padding: 6px 12px;
-                border: 1px solid var(--border-color, #ddd);
-                border-radius: 16px;
-                background: var(--bg-secondary, #f5f5f5);
-                color: var(--text-primary, #333);
-                font-size: 13px;
-                cursor: pointer;
-                transition: all 0.2s;
-                white-space: nowrap;
-              `;
-              
-              if (selectedIdx === idx) {
-                variantBtn.style.background = "var(--accent-color, #ff7a00)";
-                variantBtn.style.color = "#fff";
-                variantBtn.style.borderColor = "var(--accent-color, #ff7a00)";
-              }
 
               variantBtn.addEventListener("click", async (e) => {
                 e.stopPropagation();
@@ -1856,17 +1700,7 @@ function buildProductDetailsContent(
 
                 variantScroll.querySelectorAll(".shop-pd-option-variant-btn").forEach((btn) => {
                   const btnIdx = Number(btn.dataset.variantIndex);
-                  const isSelected = btnIdx === idx;
-                  btn.classList.toggle("is-selected", isSelected);
-                  if (isSelected) {
-                    btn.style.background = "var(--accent-color, #ff7a00)";
-                    btn.style.color = "#fff";
-                    btn.style.borderColor = "var(--accent-color, #ff7a00)";
-                  } else {
-                    btn.style.background = "var(--bg-secondary, #f5f5f5)";
-                    btn.style.color = "var(--text-primary, #333)";
-                    btn.style.borderColor = "var(--border-color, #ddd)";
-                  }
+                  btn.classList.toggle("is-selected", btnIdx === idx);
                   optionVariantAvailabilityCtrl.applyButtonState(btnIdx);
                 });
 
@@ -1881,10 +1715,7 @@ function buildProductDetailsContent(
 
             variantAccordion.appendChild(variantScroll);
 
-            const gearIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
-            const checkIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>`;
             let accordionOpen = false;
-            gearBtn.innerHTML = gearIcon;
             gearBtn.addEventListener("click", (e) => {
               e.stopPropagation();
               accordionOpen = !accordionOpen;
@@ -1893,28 +1724,19 @@ function buildProductDetailsContent(
                 multiVariantControllers.forEach((ctrl) => {
                   if (ctrl.itemId !== itemId) ctrl.close();
                 });
-                // Дефолтный подсвеченный вариант сразу считаем выбранным для этого товара
+                // Дефолтный подсвеченный вариант
                 if (typeof setDefaultVariantForOptionItem === "function") {
                   setDefaultVariantForOptionItem(item, groupState.variantByItemId);
                 }
-                if (typeof onSelectionChange === "function") onSelectionChange();
                 variantAccordion.style.display = "block";
-                gearBtn.innerHTML = checkIcon;
                 gearBtn.classList.add("is-open");
-                gearBtn.style.color = "var(--accent-color, #ff7a00)";
               } else {
                 variantAccordion.style.display = "none";
-                gearBtn.innerHTML = gearIcon;
                 gearBtn.classList.remove("is-open");
-                gearBtn.style.color = "var(--text-muted, #888)";
               }
+              updateCard();
+              if (typeof onSelectionChange === "function") onSelectionChange();
             });
-          }
-
-          card.appendChild(cardContent);
-          
-          if (variantAccordion) {
-            card.appendChild(variantAccordion);
 
             // Регистрируем контроллер, чтобы можно было закрыть этот аккордеон при открытии другого
             multiVariantControllers.push({
@@ -1922,11 +1744,20 @@ function buildProductDetailsContent(
               close: () => {
                 accordionOpen = false;
                 variantAccordion.style.display = "none";
-                gearBtn.innerHTML = gearIcon;
                 gearBtn.classList.remove("is-open");
-                gearBtn.style.color = "var(--text-muted, #888)";
               },
             });
+          }
+
+          // Если нет вариантов — чекбокс добавляем после инфо (справа)
+          if (!hasVariants) {
+            cardContent.appendChild(checkbox);
+          }
+
+          card.appendChild(cardContent);
+
+          if (variantAccordion) {
+            card.appendChild(variantAccordion);
           }
 
           card.addEventListener("click", async (e) => {
@@ -1934,7 +1765,7 @@ function buildProductDetailsContent(
             if (e.target.closest(".shop-pd-option-gear-btn") || e.target.closest(".shop-pd-option-variant-accordion")) {
               return;
             }
-            
+
             const { count } = updateSelectedCount();
             const currentlySelected = groupState.selectedIds.has(itemId);
             const maxReached = maxSelect != null && count >= maxSelect && !currentlySelected;
@@ -1952,10 +1783,13 @@ function buildProductDetailsContent(
               }
               const applied = runGuardedMutation(() => {
                 groupState.selectedIds.add(itemId);
+                if (hasVariants && typeof setDefaultVariantForOptionItem === "function") {
+                  setDefaultVariantForOptionItem(item, groupState.variantByItemId);
+                }
               }, { showToastOnOut: true });
               if (!applied) return;
             }
-            
+
             updateCard();
             if (onSelectionChange) onSelectionChange();
           });
@@ -2168,15 +2002,10 @@ function buildProductDetailsContent(
           // Информация (название, вариант, цена)
           const infoWrap = document.createElement("div");
           infoWrap.className = "shop-pd-option-info";
-          infoWrap.style.flex = "1";
-          infoWrap.style.minWidth = "0";
 
           // Первая строка: вариант + название
           const firstLine = document.createElement("div");
           firstLine.className = "shop-pd-option-name";
-          firstLine.style.display = "flex";
-          firstLine.style.alignItems = "center";
-          firstLine.style.gap = "4px";
           
           variantLabelEl = document.createElement("span");
           variantLabelEl.style.fontSize = "inherit";
@@ -2212,45 +2041,14 @@ function buildProductDetailsContent(
             gearBtn = document.createElement("button");
             gearBtn.type = "button";
             gearBtn.className = "shop-pd-option-gear-btn";
-            gearBtn.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
-            gearBtn.style.cssText = `
-              background: none;
-              border: none;
-              padding: 4px;
-              cursor: pointer;
-              color: var(--text-muted, #888);
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              flex-shrink: 0;
-              transition: color 0.2s, transform 0.2s;
-            `;
-            
+            gearBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
+
             // Аккордеон с вариантами
             variantAccordion = document.createElement("div");
             variantAccordion.className = "shop-pd-option-variant-accordion";
-            variantAccordion.style.cssText = `
-              display: none;
-              width: 100%;
-              padding: 8px 0 0 0;
-              margin-top: 8px;
-              border-top: 1px solid var(--border-color, #eee);
-            `;
 
-            // Горизонтальный скролл с вариантами
             const variantScroll = document.createElement("div");
             variantScroll.className = "shop-pd-option-variant-scroll";
-            variantScroll.style.cssText = `
-              display: flex;
-              gap: 8px;
-              overflow-x: auto;
-              overflow-y: hidden;
-              padding-bottom: 4px;
-              -webkit-overflow-scrolling: touch;
-              scrollbar-width: none;
-              cursor: grab;
-            `;
-            variantScroll.style.setProperty("-ms-overflow-style", "none");
 
             // Drag-to-scroll для мыши
             let isDown = false;
@@ -2335,24 +2133,6 @@ function buildProductDetailsContent(
               variantBtn.textContent = formatValueLabel(value);
               variantBtn.dataset.variantIndex = String(idx);
               optionVariantAvailabilityCtrl.registerButton(idx, variantBtn);
-              variantBtn.style.cssText = `
-                flex-shrink: 0;
-                padding: 6px 12px;
-                border: 1px solid var(--border-color, #ddd);
-                border-radius: 16px;
-                background: var(--bg-secondary, #f5f5f5);
-                color: var(--text-primary, #333);
-                font-size: 13px;
-                cursor: pointer;
-                transition: all 0.2s;
-                white-space: nowrap;
-              `;
-              
-              if (selectedIdx === idx) {
-                variantBtn.style.background = "var(--accent-color, #ff7a00)";
-                variantBtn.style.color = "#fff";
-                variantBtn.style.borderColor = "var(--accent-color, #ff7a00)";
-              }
 
               variantBtn.addEventListener("click", async (e) => {
                 e.stopPropagation();
@@ -2382,17 +2162,7 @@ function buildProductDetailsContent(
                 // Обновляем UI всех кнопок вариантов
                 variantScroll.querySelectorAll(".shop-pd-option-variant-btn").forEach((btn) => {
                   const btnIdx = Number(btn.dataset.variantIndex);
-                  const isSelected = btnIdx === idx;
-                  btn.classList.toggle("is-selected", isSelected);
-                  if (isSelected) {
-                    btn.style.background = "var(--accent-color, #ff7a00)";
-                    btn.style.color = "#fff";
-                    btn.style.borderColor = "var(--accent-color, #ff7a00)";
-                  } else {
-                    btn.style.background = "var(--bg-secondary, #f5f5f5)";
-                    btn.style.color = "var(--text-primary, #333)";
-                    btn.style.borderColor = "var(--border-color, #ddd)";
-                  }
+                  btn.classList.toggle("is-selected", btnIdx === idx);
                   optionVariantAvailabilityCtrl.applyButtonState(btnIdx);
                 });
 
@@ -2408,25 +2178,18 @@ function buildProductDetailsContent(
 
             variantAccordion.appendChild(variantScroll);
 
-            // Обработчик клика на шестерёнку (⚙️ ↔ ✓)
-            const gearIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
-            const checkIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>`;
             let accordionOpen = false;
-            gearBtn.innerHTML = gearIcon;
             gearBtn.addEventListener("click", (e) => {
               e.stopPropagation();
               accordionOpen = !accordionOpen;
               if (accordionOpen) {
-                // Дефолтный подсвеченный вариант сразу считаем выбранным
                 if (typeof setDefaultVariantForOptionItem === "function") {
                   setDefaultVariantForOptionItem(item, groupState.variantByItemId);
                 }
                 if (typeof onSelectionChange === "function") onSelectionChange();
               }
               variantAccordion.style.display = accordionOpen ? "block" : "none";
-              gearBtn.innerHTML = accordionOpen ? checkIcon : gearIcon;
               gearBtn.classList.toggle("is-open", accordionOpen);
-              gearBtn.style.color = accordionOpen ? "var(--accent-color, #ff7a00)" : "var(--text-muted, #888)";
             });
 
             cardContent.appendChild(gearBtn);
@@ -2440,10 +2203,8 @@ function buildProductDetailsContent(
             card.appendChild(variantAccordion);
           }
 
-          // Стиль карточки для flex-direction: column когда есть аккордеон
           if (hasVariants) {
-            card.style.flexDirection = "column";
-            card.style.alignItems = "stretch";
+            card.classList.add("has-variants");
           }
 
           itemsWrap.appendChild(card);
@@ -4274,6 +4035,8 @@ optionGroups.forEach((group) => {
     });
     const selectionStateByBlock = blocks.map(() => makeEmptyComboBlockState());
     let expandedPickerProductIndex = null;
+    let comboPickerRenderTimer = null;
+    const COMBO_PICKER_GEAR_ROTATE_MS = 300;
     const comboProductPreviewCache = new Map();
 
     const selectedIndexByBlock = blocks.map((block) => {
@@ -5360,26 +5123,22 @@ optionGroups.forEach((group) => {
         });
         bottom.appendChild(replaceBtn);
 
-        mid.appendChild(bottom);
-        row.appendChild(mid);
-
-        const right = document.createElement("div");
-        right.className = "shop-combo-right";
         const oldPrice = state.unit_price_before_discount != null && Number.isFinite(state.unit_price_before_discount)
           ? Number(state.unit_price_before_discount)
           : Number(prod.price) || 0;
         if (oldPrice > displayPrice) {
-          const oldEl = document.createElement("div");
+          const oldEl = document.createElement("span");
           oldEl.className = "shop-combo-old";
           oldEl.textContent = moneyNoSign(oldPrice) + " ₽";
-          right.appendChild(oldEl);
+          bottom.appendChild(oldEl);
         }
-        const pr = document.createElement("div");
+        const pr = document.createElement("span");
         pr.className = "shop-combo-price";
         pr.textContent = moneyNoSign(displayPrice) + " ₽";
-        right.appendChild(pr);
+        bottom.appendChild(pr);
 
-        row.appendChild(right);
+        mid.appendChild(bottom);
+        row.appendChild(mid);
         list.appendChild(row);
       });
 
@@ -5585,9 +5344,9 @@ optionGroups.forEach((group) => {
 
         const gearBtn = document.createElement("button");
         gearBtn.type = "button";
-        gearBtn.className = "shop-combo-picker-gear";
+        gearBtn.className = "shop-combo-picker-gear" + (expandedPickerProductIndex === idx ? " is-open" : "");
         gearBtn.title = "Настройка состава и вариантов";
-        gearBtn.innerHTML = "<i class=\"fas fa-cog\"></i>";
+        gearBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
         gearBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
           e.preventDefault();
@@ -5629,7 +5388,15 @@ optionGroups.forEach((group) => {
             if (!applied) return;
           }
           expandedPickerProductIndex = expandedPickerProductIndex === idx ? null : idx;
-          renderBlockPicker(blockIndex, savedScroll);
+          gearBtn.classList.toggle("is-open", expandedPickerProductIndex === idx);
+          if (comboPickerRenderTimer) {
+            clearTimeout(comboPickerRenderTimer);
+            comboPickerRenderTimer = null;
+          }
+          comboPickerRenderTimer = setTimeout(() => {
+            comboPickerRenderTimer = null;
+            renderBlockPicker(blockIndex, savedScroll);
+          }, COMBO_PICKER_GEAR_ROTATE_MS);
         });
         actionsWrap.appendChild(gearBtn);
 
@@ -8921,6 +8688,8 @@ function renderSheetAddressList() {
 
   // events
   btn.addEventListener("click", async () => {
+    const authorized = await requireAuthForCheckout({ isSheet: true });
+    if (!authorized) return;
     await refreshAddressState();
     // pickup mode — go directly to checkout (no delivery address needed)
     if (window._deliveryMode === "pickup" && window._selectedPickupStoreId) {
@@ -9093,14 +8862,9 @@ function renderSheetAddressList() {
     const wrap = document.createElement("div");
     wrap.className = "shop-auth";
 
-    const title = document.createElement("div");
-    title.className = "shop-auth-title";
-    title.textContent = "Вход";
-    wrap.appendChild(title);
-
     const note = document.createElement("div");
     note.className = "shop-auth-text muted";
-    note.textContent = "Введите телефон, затем дату рождения (дд.мм.гггг).";
+    note.textContent = "Введите телефон.";
     wrap.appendChild(note);
 
     const form = document.createElement("div");
@@ -9131,13 +8895,26 @@ function renderSheetAddressList() {
     const bLabel = document.createElement("label");
     bLabel.className = "field-label";
     bLabel.textContent = "Дата рождения";
+    const bdayInputWrap = document.createElement("div");
+    bdayInputWrap.className = "shop-auth-bday-input-wrap";
     const bday = document.createElement("input");
     bday.className = "control";
     bday.type = "text";
     bday.placeholder = "дд.мм.гггг";
     bday.inputMode = "numeric";
+    const bdayInfoBtn = document.createElement("button");
+    bdayInfoBtn.type = "button";
+    bdayInfoBtn.className = "shop-auth-bday-info-btn";
+    bdayInfoBtn.setAttribute("aria-label", "Подсказка по дате рождения");
+    bdayInfoBtn.innerHTML = '<i class="fas fa-info"></i>';
+    const bdayInfoHint = document.createElement("div");
+    bdayInfoHint.className = "shop-auth-bday-info-hint hidden";
+    bdayInfoHint.textContent = "Дата рождения используется как пароль для входа в учетную запись.";
+    bdayInputWrap.appendChild(bday);
+    bdayInputWrap.appendChild(bdayInfoBtn);
+    bdayInputWrap.appendChild(bdayInfoHint);
     bWrap.appendChild(bLabel);
-    bWrap.appendChild(bday);
+    bWrap.appendChild(bdayInputWrap);
 
 
     const bdayError = document.createElement("div");
@@ -9187,7 +8964,17 @@ function renderSheetAddressList() {
       nextBtn.disabled = true;
       nextBtn.style.display = "none";
       bWrap.style.display = "grid";
+      note.textContent = "Введите дату рождения (дд.мм.гггг).";
       bday.focus();
+    });
+
+    bdayInfoBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      bdayInfoHint.classList.toggle("hidden");
+    });
+    document.addEventListener("click", (e) => {
+      if (!bdayInputWrap.contains(e.target)) bdayInfoHint.classList.add("hidden");
     });
 
     loginBtn.addEventListener("click", async () => {
@@ -9235,18 +9022,30 @@ function renderSheetAddressList() {
     return wrap;
   }
 
-  function openLoginSheet({ onSuccess } = {}) {
+  function openLoginSheet({ onSuccess, fromCheckout = false } = {}) {
     if (!window.AppModal) return;
     const wrap = buildLoginContent({ onSuccess });
     setAppModalMode("shop");
+    if (fromCheckout && openCartSheetCtx) {
+      setCartSheetFooterMode(openCartSheetCtx, "hidden");
+    }
+    if (fromCheckout && elMobileCartActions) {
+      elMobileCartActions.classList.add("hidden");
+      if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
+      if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
+    }
     // Помечаем как профильный шит, чтобы работали повторный клик и Android Back
     sheetNavigationState.type = 'profile';
     sheetNavigationState.screen = null;
     sheetNavigationState.data = null;
     window.AppModal.open({
-      title: "Профиль",
+      title: "Вход",
       content: wrap,
       onClose: () => {
+        if (fromCheckout && openCartSheetCtx) {
+          const hasItems = cartItemsResolved().length > 0;
+          setCartSheetFooterMode(openCartSheetCtx, hasItems ? "cart" : "hidden");
+        }
         sheetNavigationState.type = null;
         sheetNavigationState.screen = null;
         sheetNavigationState.data = null;
@@ -12389,7 +12188,7 @@ function renderSheetAddressList() {
     if (closeModal && window.AppModal) window.AppModal.close("sheet");
   }
 
-  async function openProfilePanel(meOverride, { forceOpen = false, initialTab } = {}) {
+  async function openProfilePanel(meOverride, { forceOpen = false, initialTab, onLoginSuccess } = {}) {
     if (!forceOpen && cartViewMode === "profile") {
       await restorePreviousPanel();
       return;
@@ -12402,13 +12201,17 @@ function renderSheetAddressList() {
     if (!me) {
       const loginWrap = buildLoginContent({
         onSuccess: (me2) => {
+          if (typeof onLoginSuccess === "function") {
+            onLoginSuccess(me2);
+            return;
+          }
           openProfilePanel(me2, { forceOpen: true });
         },
       });
       elProfileContent.innerHTML = "";
       elProfileContent.appendChild(loginWrap);
       if (elProfileHeaderActions) elProfileHeaderActions.classList.add("hidden");
-      setCartHeader({ title: "Профиль", showAddressChip: false, showProfileActions: false });
+      setCartHeader({ title: "Вход", showAddressChip: false, showProfileActions: false });
       return;
     }
 
@@ -12528,10 +12331,10 @@ function renderSheetAddressList() {
     };
   }
 
-  async function openProfileSheet({ initialTab } = {}) {
+  async function openProfileSheet({ initialTab, onLoginSuccess } = {}) {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (!isMobile) {
-      await openProfilePanel(null, { initialTab });
+      await openProfilePanel(null, { initialTab, onLoginSuccess });
       return;
     }
 
@@ -12540,7 +12343,13 @@ function renderSheetAddressList() {
     const me = await fetchMeSafe();
     if (!me) {
       openLoginSheet({
-        onSuccess: (me2) => openProfileModal(me2),
+        onSuccess: (me2) => {
+          if (typeof onLoginSuccess === "function") {
+            onLoginSuccess(me2);
+            return;
+          }
+          openProfileModal(me2);
+        },
       });
       return;
     }
@@ -12591,6 +12400,61 @@ function renderSheetAddressList() {
       }, 100);
     }
     return ctx;
+  }
+
+  async function requireAuthForCheckout({ isSheet }) {
+    const me = await fetchMeSafe();
+    if (me) return true;
+
+    const continueToCheckout = async () => {
+      await refreshAddressState();
+      if (isSheet) {
+        const resolveShowCheckout = () => {
+          if (!openCartSheetCtx) return null;
+          if (typeof openCartSheetCtx.showSheetCheckout !== "function") return null;
+          return openCartSheetCtx.showSheetCheckout;
+        };
+
+        let showSheetCheckoutFn = resolveShowCheckout();
+        if (!showSheetCheckoutFn || !openCartSheetCtx?.listEl?.isConnected) {
+          openCartSheet();
+        }
+        showSheetCheckoutFn = resolveShowCheckout();
+        if (!showSheetCheckoutFn) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          showSheetCheckoutFn = resolveShowCheckout();
+        }
+        if (showSheetCheckoutFn) {
+          await showSheetCheckoutFn();
+          if (sheetNavigationState.screen !== "checkout") {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            await showSheetCheckoutFn();
+          }
+        }
+        return;
+      }
+      if (!elCheckoutContent) return;
+      showCheckoutView();
+      await openCheckoutView({
+        container: elCheckoutContent,
+        onBack: showCartView,
+        hasAddressEditor: true,
+        isSheet: false,
+        actions: { submitBtn: elCheckoutSubmitBtn, backBtn: elCheckoutBackBtn },
+      });
+    };
+
+    if (isSheet) {
+      openLoginSheet({
+        onSuccess: async () => {
+          await continueToCheckout();
+        },
+        fromCheckout: true,
+      });
+    } else {
+      await openProfilePanel(null, { forceOpen: true, onLoginSuccess: () => { continueToCheckout(); } });
+    }
+    return false;
   }
   // -----------------------------
   // Bottom nav (mobile) helpers
@@ -15048,6 +14912,8 @@ function initShopLate() {
       }
       if (elCheckoutBtn) {
         elCheckoutBtn.addEventListener("click", async () => {
+          const authorized = await requireAuthForCheckout({ isSheet: false });
+          if (!authorized) return;
           if (!elCheckoutContent) return;
           showCheckoutView();
           await openCheckoutView({
@@ -15950,5 +15816,3 @@ function initShopLate() {
     console.error(e);
   }
 }
-
-

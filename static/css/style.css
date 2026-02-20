@@ -2329,9 +2329,8 @@ body.page-orders .orders-list .order-client-phone-text{
 .control-subdomain-wrap:focus-within{border-color:var(--primary-45);box-shadow:0 0 0 4px var(--primary-12)}
 .control-subdomain-prefix,.control-subdomain-suffix{font-size:inherit;color:var(--color-text-muted);white-space:nowrap;user-select:none;pointer-events:none;flex:0 0 auto}
 .control-subdomain-input{border:none;outline:none;background:transparent;color:var(--color-text);padding:0;flex:1 1 auto;min-width:40px;font:inherit}
-.settings-subdomain-link{display:inline-block;margin-top:6px;font-size:12px;color:var(--color-primary);text-decoration:none}
-.settings-subdomain-link:hover{text-decoration:underline}
-.settings-subdomain-link:empty{display:none}
+.settings-subdomain-actions{display:flex;gap:6px;margin-top:6px}
+.settings-subdomain-actions:empty{display:none}
 .domain-instructions{background:var(--color-surface-2);border-radius:10px;padding:12px 14px}
 .domain-instructions .domain-dns-hint{font-size:13px;color:var(--color-text-muted);line-height:1.5;margin:0}
 .domain-instructions .domain-dns-hint.muted{margin-top:8px;font-size:12px}

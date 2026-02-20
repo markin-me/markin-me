@@ -8957,13 +8957,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   grid-template-columns: 92px 1fr; /* убираем колонку для цены */
 }
 .shop-combo-row .shop-combo-mid{
-  padding-right: 80px; /* место для цены справа */
-}
-.shop-combo-row .shop-combo-right{
-  position: absolute;
-  right: 12px;
-  bottom: 12px;
-  text-align: right;
+  padding-right: 0;
 }
 
 .shop-combo-row .cart-title{
@@ -8975,8 +8969,6 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-right: -80px; /* выходим за padding контейнера */
-  padding-right: 12px; /* отступ от края карточки */
 }
 .shop-combo-picker-row .cart-title{
   white-space: normal;
@@ -9009,7 +9001,8 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   padding-top: 8px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  flex-wrap: nowrap;
 }
 
 .shop-combo-replace{
@@ -9025,24 +9018,22 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 }
 .shop-combo-replace:hover{ background: var(--shop-hover-dark); }
 
-.shop-combo-right{
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  justify-content: flex-end;
-  gap: 4px;
-  min-width: 86px;
-  align-self: end;
-}
 .shop-combo-old{
   font-size: 13px;
   color: var(--color-text-muted);
   text-decoration: line-through;
+  margin-left: auto;
+  white-space: nowrap;
 }
 .shop-combo-price{
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 900;
   color: var(--color-text);
+  white-space: nowrap;
+  margin-left: auto;
+}
+.shop-combo-old + .shop-combo-price{
+  margin-left: 0;
 }
 
 /* Футер комбо — прижат к низу панели, не скроллится */
@@ -9112,13 +9103,22 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   cursor: pointer;
   display: grid;
   place-items: center;
-  font-size: 16px;
   flex-shrink: 0;
-  transition: background var(--dur-fast) var(--ease-smooth), color var(--dur-fast) var(--ease-smooth);
+  padding: 0;
+  transition: background var(--dur-fast) var(--ease-smooth), color var(--dur-fast) var(--ease-smooth), transform 0.3s ease;
 }
 .shop-combo-picker-gear:hover{
   background: var(--shop-hover-dark);
   color: var(--color-text);
+}
+.shop-combo-picker-gear svg{
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+.shop-combo-picker-gear.is-open{
+  color: var(--color-primary);
+  transform: rotate(180deg);
 }
 .shop-combo-picker-actions{
   display: flex;
@@ -9902,9 +9902,9 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 .cart-thumb{
-  width: 92px;
-  height: 92px;
-  border-radius: 18px;
+  width: 70px;
+  height: 70px;
+  border-radius: 14px;
   object-fit: cover;
   border: 1px solid var(--color-border);
   background: var(--color-surface-2);
@@ -9913,9 +9913,9 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 
 /* Комбо в корзине: сетка 2x2 вместо одного фото */
 .cart-combo-thumb{
-  width: 92px;
-  height: 92px;
-  border-radius: 18px;
+  width: 70px;
+  height: 70px;
+  border-radius: 14px;
   overflow: hidden;
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -10104,7 +10104,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 .shop-cart-sheet .cart-row,
 #shopCartContent .cart-row,
 .shop-cart-content .cart-row{
-  grid-template-columns: 92px 1fr;
+  grid-template-columns: 70px 1fr;
 }
 .cart-bottom-row{
   display: flex;
@@ -10118,8 +10118,20 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   align-self: center;
 }
 
+/* компактный фиксированный qty-pill в корзине */
+.cart-bottom-row .qty-pill{
+  --qty-pill-h: 28px;
+  --qty-pill-side: 32px;
+}
+.cart-bottom-row .qty-pill__center{
+  min-width: 24px;
+  width: 24px;
+  padding: 0;
+  font-size: 13px;
+}
+
 .cart-old{
-  font-size: 12px;
+  font-size: 11px;
   color: var(--color-text-muted);
   text-decoration: line-through;
 }
@@ -10128,6 +10140,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 
 .cart-price{
   font-weight: 900;
+  font-size: 13px;
   color: var(--color-text);
   white-space: nowrap;
 }
@@ -10822,6 +10835,10 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   color: inherit;
   text-align: left;
 }
+.shop-pd-option-card.has-variants{
+  flex-direction: column;
+  align-items: stretch;
+}
 .shop-pd-option-card.is-clickable{
   cursor: pointer;
 }
@@ -10837,6 +10854,36 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   opacity: 1;
   cursor: default;
 }
+
+/* Кастомный круглый радио-чекбокс для опций (как в комбо) */
+.shop-pd-option-radio{
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid var(--overlay-bg);
+  background: transparent;
+  display: grid;
+  place-items: center;
+  position: relative;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+.shop-pd-option-radio.is-checked{
+  border-color: var(--shop-buy);
+  background: var(--shop-buy);
+}
+.shop-pd-option-radio.is-checked::after{
+  content: "✓";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--shop-buy-text);
+  font-size: 18px;
+  font-weight: 700;
+}
+
 .shop-pd-option-thumb{
   width: 40px;
   height: 40px;
@@ -10867,6 +10914,9 @@ div.shop-pd-option-thumb{
   font-weight: 500;
   font-size: 13px;
   color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 .shop-pd-option-price{
   font-size: 12px;
@@ -11213,6 +11263,11 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   margin: 40px auto 0;
   text-align: center;
 }
+@media (max-width: 768px){
+  .app-modal-body .shop-auth{
+    margin-top: 196px;
+  }
+}
 
 .shop-auth-title{
   font-weight: 700;
@@ -11259,6 +11314,56 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 .shop-auth .control.is-invalid{
   border-color: var(--color-danger, var(--shop-danger));
   box-shadow: 0 0 0 2px var(--primary-14);
+}
+.shop-auth-bday-input-wrap{
+  position: relative;
+}
+.shop-auth-bday-input-wrap .control{
+  padding-right: 40px;
+}
+.shop-auth-bday-info-btn{
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+  z-index: 2;
+}
+.shop-auth-bday-info-btn i{
+  font-size: 11px;
+}
+.shop-auth-bday-info-btn:hover{
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.shop-auth-bday-info-btn:focus-visible{
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.shop-auth-bday-info-hint{
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  max-width: min(280px, calc(100vw - 48px));
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.3;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+  z-index: 5;
+  text-align: left;
 }
 .shop-address-chip{
   cursor:pointer;
@@ -12873,6 +12978,17 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   display: block !important;
   height: 0 !important;
 }
+@media (min-width: 769px){
+  body.page-shop .shop-cart-content,
+  body.page-shop .shop-cart-sheet .shop-cart-list{
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  body.page-shop .shop-cart-content::-webkit-scrollbar,
+  body.page-shop .shop-cart-sheet .shop-cart-list::-webkit-scrollbar{
+    display: none;
+  }
+}
 @media (max-width: 768px){
   .shop-cart-sheet-footer,
   .shop-cart-footer{
@@ -13085,33 +13201,33 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 
 /* ===== OPTION ITEM VARIANTS ===== */
 
-/* Шестерёнка для вариантов опции */
-.shop-pd-option-gear-btn {
-  background: none;
+/* Шестерёнка для вариантов опции (как в комбо) */
+.shop-pd-option-gear-btn{
+  width: 36px;
+  height: 36px;
   border: none;
-  padding: 4px;
+  border-radius: 50%;
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
   cursor: pointer;
-  color: var(--text-muted, var(--color-text-faint));
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  line-height: 0;
-  transition: color 0.2s;
+  padding: 0;
+  transition: background 0.2s, color 0.2s, transform 0.3s ease;
 }
-
-.shop-pd-option-gear-btn:hover {
+.shop-pd-option-gear-btn:hover{
+  background: var(--shop-hover-dark);
+  color: var(--color-text);
+}
+.shop-pd-option-gear-btn.is-open{
   color: var(--color-primary);
+  transform: rotate(180deg);
 }
-
-.shop-pd-option-gear-btn.is-open {
-  color: var(--color-primary);
-}
-
-.shop-pd-option-gear-btn svg {
+.shop-pd-option-gear-btn svg{
   display: block;
+  width: 18px;
+  height: 18px;
 }
 
 /* Аккордеон с вариантами */

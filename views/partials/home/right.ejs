@@ -288,13 +288,40 @@
               <input class="control-subdomain-input" type="text" placeholder="myshop" data-tenant-input="subdomain" data-site-input="subdomain" id="subdomainInput" />
               <span class="control-subdomain-suffix" id="subdomainSuffix"></span>
             </div>
-            <a class="settings-subdomain-link" id="siteSubdomainLink" href="#" target="_blank" rel="noopener"></a>
+            <div class="settings-subdomain-actions" id="subdomainActions">
+              <button class="btn btn-sm btn-secondary" type="button" id="subdomainGoBtn">Перейти на сайт</button>
+              <button class="btn btn-sm btn-icon btn-secondary" type="button" id="subdomainCopyLinkBtn" title="Скопировать ссылку">
+                <i class="fas fa-copy"></i>
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
       <div class="info-card settings-right-panel hidden" id="settingsTelegramAppPanel">
         <div class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">ИМЯ БОТА</label>
+            <span class="field-hint">Имя вашего Telegram-бота (без @)</span>
+            <div class="control-with-action">
+              <input class="control" type="text" id="tenantTelegramBotUsername" placeholder="username_bot" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              <button class="control-inline-btn" type="button" id="tenantTelegramBotUsernameLink" title="Открыть бота">
+                <i class="fab fa-telegram"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-site-field">
+            <label class="field-label">ТОКЕН БОТА</label>
+            <span class="field-hint">Токен от @BotFather</span>
+            <div class="control-with-action">
+              <input class="control" type="text" id="tenantTelegramBotToken" placeholder="123456:ABC-DEF..." autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              <button class="control-inline-btn" type="button" id="tenantTelegramBotTokenCopyBtn" title="Скопировать">
+                <i class="fas fa-copy"></i>
+              </button>
+            </div>
+          </div>
+
           <div class="settings-site-field">
             <label class="field-label">ССЫЛКА ДЛЯ TELEGRAM MINI APP</label>
             <span class="field-hint">Используйте эту ссылку в настройках бота:</span>

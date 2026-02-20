@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Хост: 10.0.231.119
--- Время создания: Фев 18 2026 г., 13:39
+-- Время создания: Фев 20 2026 г., 15:28
 -- Версия сервера: 8.0.37-29
 -- Версия PHP: 7.2.34
 
@@ -201,44 +201,30 @@ CREATE TABLE `chat_messages` (
 --
 
 INSERT INTO `chat_messages` (`id`, `tenant_id`, `client_id`, `message_id`, `direction`, `text`, `created_at`, `edited_at`, `is_read`, `is_pinned`, `reaction_legacy`, `reaction_in`, `reaction_out`, `reply_to_json`, `attachment_json`, `delivery_status`, `delivered_at`, `read_at`, `created_row_at`, `updated_row_at`) VALUES
-(13344, 1, 4, 'daily-welcome-2026-02-18', 'out', 'Привет! Я виртуальный помощник, Электроник!\nЕсли ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.', '2026-02-18 14:45:47.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 14:45:47.000', '2026-02-18 14:45:47.000', '2026-02-18 10:51:15.636', '2026-02-18 10:51:15.636'),
-(13345, 1, 4, '1771401073206-1lavjb', 'out', 'ияваяаопаьач', '2026-02-18 14:51:13.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 14:51:14.702', '2026-02-18 14:51:14.702', '2026-02-18 10:51:15.636', '2026-02-18 10:51:15.636'),
-(13361, 1, 4, '1771407666033-nxil9c', 'out', 'куку', '2026-02-18 16:41:06.033', NULL, 0, 0, '', '', '', NULL, NULL, 'sent', NULL, NULL, '2026-02-18 12:41:06.579', '2026-02-18 12:41:06.579'),
-(13362, 1, 4, '1771407671922-1-8eja8', 'in', 'пввпаап', '2026-02-18 16:41:11.922', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 16:41:22.944', '2026-02-18 16:41:22.944', '2026-02-18 12:41:12.446', '2026-02-18 12:41:23.178'),
-(13363, 1, 4, '1771407674319-2-isu4x', 'in', 'оаповапо', '2026-02-18 16:41:14.319', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 16:41:22.944', '2026-02-18 16:41:22.944', '2026-02-18 12:41:14.840', '2026-02-18 12:41:23.178'),
-(13364, 1, 4, '1771407676001-3-eltfy', 'in', 'апоап', '2026-02-18 16:41:16.001', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 16:41:22.944', '2026-02-18 16:41:22.944', '2026-02-18 12:41:16.506', '2026-02-18 12:41:23.178'),
-(13365, 1, 4, '1771407677448-4-yxwyj', 'in', 'апопапл', '2026-02-18 16:41:17.447', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 16:41:22.944', '2026-02-18 16:41:22.944', '2026-02-18 12:41:17.986', '2026-02-18 12:41:23.178'),
-(13366, 1, 4, '1771407678291-5-qggut', 'in', 'рпрлрп', '2026-02-18 16:41:18.290', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 16:41:22.944', '2026-02-18 16:41:22.944', '2026-02-18 12:41:18.810', '2026-02-18 12:41:23.178'),
-(13367, 1, 4, '1771407678995-6-tsrlh', 'in', 'рппрлпр', '2026-02-18 16:41:18.995', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 16:41:22.944', '2026-02-18 16:41:22.944', '2026-02-18 12:41:19.518', '2026-02-18 12:41:23.178'),
-(13368, 1, 4, '1771407679616-7-2dr8r', 'in', 'рплплп', '2026-02-18 16:41:19.616', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 16:41:23.498', '2026-02-18 16:41:23.498', '2026-02-18 12:41:20.181', '2026-02-18 12:41:23.732'),
-(13369, 1, 4, '1771407680249-8-6kvko', 'in', 'прлпрлп', '2026-02-18 16:41:20.249', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 16:41:23.498', '2026-02-18 16:41:23.498', '2026-02-18 12:41:20.887', '2026-02-18 12:41:23.732'),
-(13370, 1, 4, '1771407680806-9-bjdrt', 'in', 'прлпрл', '2026-02-18 16:41:20.806', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 16:41:23.498', '2026-02-18 16:41:23.498', '2026-02-18 12:41:21.568', '2026-02-18 12:41:23.732'),
-(13371, 1, 4, '1771407681370-10-44i1o', 'in', 'прлпрл', '2026-02-18 16:41:21.370', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 16:41:23.498', '2026-02-18 16:41:23.498', '2026-02-18 12:41:22.227', '2026-02-18 12:41:23.732'),
-(13372, 1, 4, '1771407690263-pdhs8c', 'out', 'ерваервапопа', '2026-02-18 16:41:30.263', NULL, 0, 0, '', '', '', NULL, NULL, 'sent', NULL, NULL, '2026-02-18 12:41:30.814', '2026-02-18 12:41:30.814'),
-(13373, 1, 4, '1771407690841-tcch1k', 'out', 'оаповапова', '2026-02-18 16:41:30.841', NULL, 0, 0, '', '', '', NULL, NULL, 'sent', NULL, NULL, '2026-02-18 12:41:31.646', '2026-02-18 12:41:31.646'),
-(13374, 1, 4, '1771407691455-cbr0ea', 'out', 'аповаовао', '2026-02-18 16:41:31.455', NULL, 0, 0, '', '', '', NULL, NULL, 'sent', NULL, NULL, '2026-02-18 12:41:32.350', '2026-02-18 12:41:32.350'),
-(13375, 1, 4, '1771407692054-gpa2bm', 'out', 'аповапова', '2026-02-18 16:41:32.054', NULL, 0, 0, '', '', '', NULL, NULL, 'sent', NULL, NULL, '2026-02-18 12:41:33.049', '2026-02-18 12:41:33.049'),
-(13376, 1, 4, '1771407692626-p1l7yp', 'out', 'опаовапьв', '2026-02-18 16:41:32.626', NULL, 0, 0, '', '', '', NULL, NULL, 'sent', NULL, NULL, '2026-02-18 12:41:33.724', '2026-02-18 12:41:33.724'),
-(13377, 1, 4, '1771407693219-cfj88w', 'out', 'рьпрь', '2026-02-18 16:41:33.219', NULL, 0, 0, '', '', '', NULL, NULL, 'sent', NULL, NULL, '2026-02-18 12:41:34.403', '2026-02-18 12:41:34.403'),
-(13378, 1, 4, '1771407693756-g8fdj7', 'out', 'пьпьпр', '2026-02-18 16:41:33.756', NULL, 0, 0, '', '', '', NULL, NULL, 'delivered', '2026-02-18 16:41:34.466', NULL, '2026-02-18 12:41:35.175', '2026-02-18 12:41:35.175'),
-(13379, 1, 4, '1771407701589-11-lt0ip', 'in', '😃', '2026-02-18 16:41:41.589', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 16:41:43.206', '2026-02-18 16:41:43.206', '2026-02-18 12:41:42.106', '2026-02-18 12:41:43.441'),
-(13380, 1, 4, '1771407714014-12-uet11', 'in', '', '2026-02-18 16:41:54.014', NULL, 1, 0, '', '', '', NULL, '{\"kind\":\"image\",\"name\":\"ÐÐ¸Ð·Ð¸ÑÐºÐ¸.jpg\",\"mime\":\"image/webp\",\"dataUrl\":\"\",\"url\":\"/uploads/chat/1/4/2026/02/1771407710377_0eb6712bb8.webp\",\"width\":1064,\"height\":591,\"size\":66188}', 'read', '2026-02-18 16:42:01.132', '2026-02-18 16:42:01.132', '2026-02-18 12:41:54.534', '2026-02-18 12:42:01.368'),
-(13390, 1, 1, 'daily-welcome-2026-02-18', 'out', 'Привет! Я виртуальный помощник, Электроник!\nЕсли ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.', '2026-02-18 15:00:48.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 15:00:48.000', '2026-02-18 15:00:48.000', '2026-02-18 12:52:33.465', '2026-02-18 12:52:33.465'),
-(13391, 1, 1, '1771401890254-r81hj7', 'out', 'ку', '2026-02-18 15:04:50.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 16:06:49.000', '2026-02-18 16:06:49.000', '2026-02-18 12:52:33.465', '2026-02-18 12:52:33.465'),
-(13392, 1, 1, '1771405651663-1-p52l3', 'in', 'Где мой заказ', '2026-02-18 16:07:31.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 16:08:07.000', '2026-02-18 16:08:08.000', '2026-02-18 12:52:33.465', '2026-02-18 12:52:33.465'),
-(13393, 1, 1, '1771407652057-6p5p3u', 'out', 'куку', '2026-02-18 16:40:52.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-18 16:47:21.000', '2026-02-18 16:47:25.000', '2026-02-18 12:52:33.465', '2026-02-18 12:52:33.465'),
-(13394, 1, 1, '1771408348017-1-lo6lk', 'in', 'Где мой заказ', '2026-02-18 16:52:28.000', NULL, 1, 0, '', '', '❤️', NULL, NULL, 'read', '2026-02-18 16:52:33.000', '2026-02-18 16:52:33.000', '2026-02-18 12:52:33.465', '2026-02-18 12:52:53.013'),
-(13396, 1, 1, '1771408391449-z68v1a', 'out', '678', '2026-02-18 16:53:11.450', NULL, 0, 0, '', '', '', NULL, NULL, 'sent', NULL, NULL, '2026-02-18 12:53:11.026', '2026-02-18 12:53:11.026'),
-(13397, 1, 1, '1771408412629-fgzuhh', 'out', '78', '2026-02-18 16:53:32.629', NULL, 0, 0, '', '', '', NULL, NULL, 'sent', NULL, NULL, '2026-02-18 12:53:32.180', '2026-02-18 12:53:32.180'),
-(13398, 1, 4, '1771410335721-bt3t4j', 'out', 'лбнг', '2026-02-18 17:25:35.721', NULL, 0, 0, '', '', '', NULL, NULL, 'sent', NULL, NULL, '2026-02-18 13:25:36.830', '2026-02-18 13:25:36.830'),
-(13399, 1, 4, '1771410336549-fq82s1', 'out', 'дьнгнгд', '2026-02-18 17:25:36.549', NULL, 0, 0, '', '', '', NULL, NULL, 'sent', NULL, NULL, '2026-02-18 13:25:37.852', '2026-02-18 13:25:37.852'),
-(13400, 1, 4, '1771410337195-wpy2ga', 'out', 'гньгл', '2026-02-18 17:25:37.195', NULL, 0, 0, '', '', '', NULL, NULL, 'delivered', '2026-02-18 17:25:37.896', NULL, '2026-02-18 13:25:39.227', '2026-02-18 13:25:39.227'),
-(13401, 1, 4, '1771410338042-48iq0w', 'out', 'гьлбн', '2026-02-18 17:25:38.042', NULL, 0, 0, '', '', '', NULL, NULL, 'delivered', '2026-02-18 17:25:38.744', NULL, '2026-02-18 13:25:40.506', '2026-02-18 13:25:40.506'),
-(13402, 1, 4, '1771410338788-aw9yxl', 'out', 'юшдюш', '2026-02-18 17:25:38.788', NULL, 0, 0, '', '', '', NULL, NULL, 'delivered', '2026-02-18 17:25:39.490', NULL, '2026-02-18 13:25:41.546', '2026-02-18 13:25:41.546'),
-(13403, 1, 4, '1771410339717-k30fgy', 'out', 'нгбоь', '2026-02-18 17:25:39.717', NULL, 0, 0, '', '', '', NULL, NULL, 'delivered', '2026-02-18 17:25:40.421', NULL, '2026-02-18 13:25:42.708', '2026-02-18 13:25:42.708'),
-(13404, 1, 4, '1771410340538-0ot8ij', 'out', 'гььщ7ш', '2026-02-18 17:25:40.538', NULL, 0, 0, '', '', '', NULL, NULL, 'delivered', '2026-02-18 17:25:41.239', NULL, '2026-02-18 13:25:43.568', '2026-02-18 13:25:43.568'),
-(13405, 1, 4, '1771410358740-r9ql61', 'out', 'гьггшьг', '2026-02-18 17:25:58.740', NULL, 0, 0, '', '', '', NULL, NULL, 'sent', NULL, NULL, '2026-02-18 13:25:59.379', '2026-02-18 13:25:59.379'),
-(13406, 1, 4, '1771410778647-5dahvh', 'out', 'доддтод', '2026-02-18 17:32:58.647', NULL, 0, 0, '', '', '', NULL, NULL, 'sent', NULL, NULL, '2026-02-18 13:32:59.409', '2026-02-18 13:32:59.409');
+(13689, 1, 4, 'daily-welcome-2026-02-19', 'out', 'Привет! Я виртуальный помощник Ням-Ням!\nЕсли ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.', '2026-02-19 01:27:07.833', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 01:27:07.833', '2026-02-19 01:27:07.833', '2026-02-18 21:27:08.134', '2026-02-18 21:27:08.134'),
+(13690, 1, 4, '1771439569232-1-q9wml', 'in', 'Где мой заказ?', '2026-02-19 01:32:49.231', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 01:32:55.239', '2026-02-19 01:32:55.239', '2026-02-18 21:32:49.547', '2026-02-18 21:32:55.227'),
+(13694, 1, 4, '1771512028521-1-be2q6', 'in', 'Где мой заказ?', '2026-02-19 21:40:28.521', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 21:41:00.544', '2026-02-19 21:41:00.544', '2026-02-19 17:40:42.470', '2026-02-19 17:40:59.793'),
+(13695, 1, 1, 'daily-welcome-2026-02-19', 'out', 'Привет! Я виртуальный помощник Ням-Ням!\nЕсли ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.', '2026-02-19 11:24:41.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 11:24:41.000', '2026-02-19 11:24:41.000', '2026-02-19 18:07:02.605', '2026-02-19 18:07:02.605'),
+(13696, 1, 1, '1771475122884-1-pfv6n', 'in', 'Где мой заказ?', '2026-02-19 11:25:22.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 11:25:32.000', '2026-02-19 11:25:32.000', '2026-02-19 18:07:02.605', '2026-02-19 18:07:02.605'),
+(13698, 1, 850932991, 'daily-welcome-2026-02-19', 'out', 'Привет! Я виртуальный помощник Ням-Ням!\nЕсли ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.', '2026-02-19 22:07:53.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 22:07:53.000', '2026-02-19 22:07:53.000', '2026-02-19 18:08:20.318', '2026-02-19 18:08:20.318'),
+(13699, 1, 850932991, '1771513731426-1-13hkh', 'in', 'Другой вопрос', '2026-02-19 22:08:51.426', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 22:10:22.994', '2026-02-19 22:10:22.994', '2026-02-19 18:08:51.015', '2026-02-19 18:10:22.292'),
+(13700, 1, 1, '1771513851695-5daxj3', 'out', 'Ты тут?', '2026-02-19 22:10:51.695', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 22:11:59.677', '2026-02-19 22:11:59.677', '2026-02-19 18:10:51.354', '2026-02-19 18:11:58.571'),
+(13701, 1, 1, '1771513928386-1-5f5db', 'in', 'да', '2026-02-19 22:12:08.386', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 22:12:14.034', '2026-02-19 22:12:14.034', '2026-02-19 18:12:08.008', '2026-02-19 18:12:13.560'),
+(13702, 1, 1, '1771513940724-ll9m9r', 'out', 'просто проверяю чат', '2026-02-19 22:12:20.724', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 22:12:30.253', '2026-02-19 22:12:30.253', '2026-02-19 18:12:20.388', '2026-02-19 18:12:29.134'),
+(13703, 1, 1, '1771513963701-n1hji1', 'out', 'пришло фото?', '2026-02-19 22:12:43.701', NULL, 1, 0, '', '', '', NULL, '{\"kind\":\"image\",\"name\":\"ÐºÐ°ÑÑÐ¾ÑÐºÐ°.png\",\"mime\":\"image/webp\",\"dataUrl\":\"\",\"url\":\"/uploads/chat/1/1/2026/02/1771513954914_c23a24f0db.webp\",\"width\":3119,\"height\":3108,\"size\":118336}', 'read', '2026-02-19 22:12:54.682', '2026-02-19 22:12:54.682', '2026-02-19 18:12:43.400', '2026-02-19 18:12:53.563'),
+(13704, 1, 1, '1771513973834-2-3z065', 'in', 'Я понял, у меня не подсвечивалось что пришло сообщение я просто открыл чат', '2026-02-19 22:12:53.834', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 22:13:05.729', '2026-02-19 22:13:05.729', '2026-02-19 18:12:53.019', '2026-02-19 18:13:05.024'),
+(13705, 1, 1, '1771513988577-3-8bd81', 'in', 'нет', '2026-02-19 22:13:08.577', NULL, 1, 0, '', '', '', '{\"id\":\"1771513963701-n1hji1\",\"sender\":\"Ням-Ням\",\"text\":\"пришло фото?\"}', NULL, 'read', '2026-02-19 22:13:19.187', '2026-02-19 22:13:19.187', '2026-02-19 18:13:08.132', '2026-02-19 18:13:18.483'),
+(13706, 1, 1, '1771514006140-x2xikz', 'out', 'понятно', '2026-02-19 22:13:26.140', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 22:13:30.726', '2026-02-19 22:13:30.726', '2026-02-19 18:13:25.795', '2026-02-19 18:13:29.604'),
+(13707, 1, 1, '1771514034273-kdkgb6', 'out', 'попробуй мне отправить фото', '2026-02-19 22:13:54.273', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 22:14:06.922', '2026-02-19 22:14:06.922', '2026-02-19 18:13:53.952', '2026-02-19 18:14:05.799'),
+(13708, 1, 1, '1771514052099-4-q4tzk', 'in', 'может из-за локального хоста, то что оно у тебя в папке сохранено', '2026-02-19 22:14:12.099', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 22:14:16.090', '2026-02-19 22:14:16.090', '2026-02-19 18:14:11.352', '2026-02-19 18:14:15.388'),
+(13709, 1, 1, '1771514058154-5-87676', 'in', '', '2026-02-19 22:14:18.154', NULL, 1, 0, '', '', '', NULL, '{\"kind\":\"image\",\"name\":\"cc3d5680c613a5c597a6472ecdfac683.jpg\",\"mime\":\"image/webp\",\"dataUrl\":\"\",\"url\":\"/uploads/chat/1/1/2026/02/1771514055840_870888af66.webp\",\"width\":1202,\"height\":1328,\"size\":27024}', 'read', '2026-02-19 22:14:30.176', '2026-02-19 22:14:30.176', '2026-02-19 18:14:17.356', '2026-02-19 18:14:29.474'),
+(13710, 1, 1, '1771514063210-6-0dq46', 'in', 'отправил', '2026-02-19 22:14:23.210', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 22:14:30.176', '2026-02-19 22:14:30.176', '2026-02-19 18:14:22.412', '2026-02-19 18:14:29.474'),
+(13711, 1, 1, '1771514071714-uglhk3', 'out', 'хз', '2026-02-19 22:14:31.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 22:14:44.000', '2026-02-19 22:14:44.000', '2026-02-19 18:14:31.371', '2026-02-19 18:16:49.968'),
+(13716, 1, 1, '1771514893311-7-72tzb', 'in', 'у тебя когда фото отправляется оно сохраняется и доступно по ссылке или как путь?', '2026-02-19 22:28:13.311', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 23:49:42.364', '2026-02-19 23:49:42.364', '2026-02-19 18:28:12.498', '2026-02-19 19:49:41.271'),
+(13717, 1, 1, '1771514915995-8-0pufr', 'in', 'должно быть как ссылка', '2026-02-19 22:28:35.995', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-19 23:49:42.364', '2026-02-19 23:49:42.364', '2026-02-19 18:28:35.178', '2026-02-19 19:49:41.271'),
+(13718, 1, 850932991, 'daily-welcome-2026-02-20', 'out', 'Привет! Я виртуальный помощник Ням-Ням!\nЕсли ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.', '2026-02-20 12:21:26.034', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-20 12:21:26.034', '2026-02-20 12:21:26.034', '2026-02-20 08:21:24.484', '2026-02-20 08:21:24.484'),
+(13719, 1, 905266871, 'daily-welcome-2026-02-20', 'out', 'Привет! Я виртуальный помощник Ням-Ням!\nЕсли ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.', '2026-02-20 16:54:48.025', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-20 16:54:48.025', '2026-02-20 16:54:48.025', '2026-02-20 12:54:48.380', '2026-02-20 12:54:48.380'),
+(13720, 1, 875603896, 'daily-welcome-2026-02-20', 'out', 'Привет! Я виртуальный помощник Ням-Ням!\nЕсли ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.', '2026-02-20 19:10:32.506', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-20 19:10:32.506', '2026-02-20 19:10:32.506', '2026-02-20 15:10:32.871', '2026-02-20 15:10:32.871');
 
 -- --------------------------------------------------------
 
@@ -262,8 +248,12 @@ CREATE TABLE `chat_threads` (
 --
 
 INSERT INTO `chat_threads` (`id`, `tenant_id`, `client_id`, `meta_name`, `meta_phone`, `meta_last_welcome_day`, `updated_at`, `created_at`) VALUES
-(1, 1, 4, 'Александр', '79835549121', '', '2026-02-18 17:32:58.916', '2026-02-17 18:18:50.528'),
-(553, 1, 1, 'Максим', '79021461966', '', '2026-02-18 16:53:32.726', '2026-02-18 11:00:48.486');
+(614, 1, 370, '', '', '', '2026-02-18 17:59:34.943', '2026-02-18 13:59:20.182'),
+(846, 1, 4, 'Александр', '79835549121', '', '2026-02-19 21:41:00.544', '2026-02-18 21:27:08.022'),
+(849, 1, 1, 'Максим', '79021461966', '', '2026-02-19 23:49:42.364', '2026-02-19 07:24:40.921'),
+(857, 1, 850932991, 'Гость', '79835549121', '2026-02-20', '2026-02-20 12:21:26.109', '2026-02-19 18:08:20.107'),
+(891, 1, 905266871, 'Гость', '', '2026-02-20', '2026-02-20 16:54:48.146', '2026-02-20 12:54:48.282'),
+(892, 1, 875603896, 'Максим', '79021461966', '2026-02-20', '2026-02-20 19:10:32.660', '2026-02-20 15:10:32.778');
 
 -- --------------------------------------------------------
 
@@ -779,13 +769,10 @@ CREATE TABLE `cust_customer_favorites` (
 
 INSERT INTO `cust_customer_favorites` (`id`, `tenant_id`, `store_id`, `customer_id`, `item_signature`, `item_type`, `product_id`, `combo_id`, `title`, `photo`, `item_json`, `created_at`, `updated_at`) VALUES
 (1, 1, 1, 1, 'a7eea3f79ede65682f45960a4836a0cafff90d632c37fcb96846f6fadbeef47f', 'product', 13, NULL, 'Куринная котлета', '/static/uploads/products/1/fe6e72ac1ce743c145b235225287a820.webp', '{\"type\":\"product\",\"product_id\":13,\"name\":\"Куринная котлета\",\"qty\":1,\"price\":179,\"old_price\":0,\"line_total\":179,\"photos\":[\"/static/uploads/products/1/fe6e72ac1ce743c145b235225287a820.webp\"],\"option_item_ids\":[],\"options\":[],\"option_items\":[],\"ingredients\":[],\"variant_group_id\":5,\"variant_value_index\":0,\"variant_label\":\"Горячего (Штук): 1 шт\",\"variants\":[{\"variant_group_id\":5,\"variant_value_index\":0,\"group_title\":\"\",\"value\":\"Горячего (Штук): 1 шт\",\"label\":\"Горячего (Штук): 1 шт\",\"price_diff\":16.30000000000001}],\"discount\":null}', '2026-02-17 06:33:36', '2026-02-17 06:33:36'),
-(4, 1, 1, 1, '470c194b38572f94a75fa8e5d5965715ab05968cd3a83938cddc6d19f437f808', 'product', 8, NULL, 'Макароны с тефтелями', '/static/uploads/products/1/0a0cffd9cdb7b3d3cf244c96f1404460.webp', '{\"type\":\"product\",\"product_id\":8,\"name\":\"Макароны с тефтелями\",\"qty\":1,\"price\":328,\"old_price\":0,\"line_total\":328,\"photos\":[\"/static/uploads/products/1/0a0cffd9cdb7b3d3cf244c96f1404460.webp\"],\"option_item_ids\":[],\"options\":[],\"option_items\":[],\"ingredients\":[{\"ingredient_id\":23,\"ingredient_name\":\"Макароны\",\"name\":\"Макароны\",\"quantity\":150,\"qty\":150,\"unit_id\":null,\"unit_label\":\"г\",\"unit\":\"г\"},{\"ingredient_id\":7,\"ingredient_name\":\"Тефтели с рисом\",\"name\":\"Тефтели с рисом\",\"quantity\":2,\"qty\":2,\"unit_id\":null,\"unit_label\":\"шт\",\"unit\":\"шт\"}],\"variant_group_id\":null,\"variant_value_index\":null,\"variant_label\":\"\",\"variants\":[],\"discount\":null}', '2026-02-17 08:59:42', '2026-02-17 08:59:42'),
-(5, 1, 1, 1, 'a545df6a58551004ca3c18aede21723ae9115021ed1709b64fb2f9e2066abb8b', 'combo', NULL, 9, 'Второе+суп+напиток', '/static/uploads/products/1/45f7062aac0d155bbbce22f54d129177.webp', '{\"type\":\"combo\",\"combo_id\":9,\"combo_title\":\"Второе+суп+напиток\",\"name\":\"Второе+суп+напиток\",\"qty\":1,\"price\":505,\"line_total\":505,\"old_line_total\":532,\"unit_price_before_discount\":532,\"photos\":[\"/static/uploads/products/1/45f7062aac0d155bbbce22f54d129177.webp\",\"/static/uploads/products/1/8d6be0b537ce739d15c0f7128d212731.webp\",\"/static/uploads/products/1/40617d9e12e86588994e9d3d101eda7b.webp\"],\"selections\":[{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/45f7062aac0d155bbbce22f54d129177.webp\",\"variant_label\":\"\",\"variant_group_id\":null,\"variant_value_index\":0,\"variant_group_title\":\"\",\"variant_unit\":\"\",\"unit_id\":null,\"unit_price_override\":225,\"unit_price_before_discount\":null,\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit_id\":3,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":1,\"qty\":1,\"unit_id\":1,\"unit\":\"шт\"}]},{\"product_id\":38,\"product_name\":\"Гороховый с копченостями\",\"product_photo\":\"/static/uploads/products/1/8d6be0b537ce739d15c0f7128d212731.webp\",\"variant_label\":\"250\",\"variant_group_id\":8,\"variant_value_index\":0,\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"unit_id\":3,\"unit_price_override\":185,\"unit_price_before_discount\":null,\"ingredients_display\":[]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/40617d9e12e86588994e9d3d101eda7b.webp\",\"variant_label\":\"500\",\"variant_group_id\":14,\"variant_value_index\":0,\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"unit_id\":5,\"unit_price_override\":95,\"unit_price_before_discount\":null,\"ingredients_display\":[]}]}', '2026-02-17 09:59:26', '2026-02-17 10:06:04'),
-(8, 1, 1, 1, 'ea798c547b51eaabdbd62a7858e3dee6ced0af9061a747c9d514a16863cf3645', 'product', 43, NULL, 'Котлета по-киевски с пюре', '/static/uploads/products/1/09cd5b0d1aed7a48097d4dc409448df0.png', '{\"type\":\"product\",\"product_id\":43,\"name\":\"Котлета по-киевски с пюре\",\"qty\":1,\"price\":364,\"old_price\":0,\"line_total\":1111,\"photos\":[\"/static/uploads/products/1/09cd5b0d1aed7a48097d4dc409448df0.png\"],\"option_item_ids\":[],\"options\":[],\"option_items\":[],\"ingredients\":[{\"ingredient_id\":12,\"ingredient_name\":\"Картофельное пюре\",\"name\":\"Картофельное пюре\",\"quantity\":150,\"qty\":150,\"unit_id\":3,\"unit_label\":\"г\",\"unit\":\"г\"},{\"ingredient_id\":27,\"ingredient_name\":\"Котлета по-киевски\",\"name\":\"Котлета по-киевски\",\"quantity\":4,\"qty\":4,\"unit_id\":1,\"unit_label\":\"шт\",\"unit\":\"шт\"}],\"variant_group_id\":null,\"variant_value_index\":null,\"variant_label\":\"\",\"variants\":[],\"discount\":null}', '2026-02-17 10:49:52', '2026-02-17 10:49:52'),
+(4, 1, 1, 1, '470c194b38572f94a75fa8e5d5965715ab05968cd3a83938cddc6d19f437f808', 'product', 8, NULL, 'Макароны с тефтелями', '/static/uploads/products/1/0a0cffd9cdb7b3d3cf244c96f1404460.webp', '{\"type\":\"product\",\"product_id\":8,\"name\":\"Макароны с тефтелями\",\"qty\":1,\"price\":328,\"old_price\":0,\"line_total\":328,\"photos\":[\"/static/uploads/products/1/0a0cffd9cdb7b3d3cf244c96f1404460.webp\"],\"option_item_ids\":[],\"options\":[],\"option_items\":[],\"ingredients\":[{\"ingredient_id\":23,\"ingredient_name\":\"Макароны\",\"name\":\"Макароны\",\"quantity\":150,\"qty\":150,\"unit_id\":null,\"unit_label\":\"г\",\"unit\":\"г\"},{\"ingredient_id\":7,\"ingredient_name\":\"Тефтели с рисом\",\"name\":\"Тефтели с рисом\",\"quantity\":2,\"qty\":2,\"unit_id\":null,\"unit_label\":\"шт\",\"unit\":\"шт\"}],\"variant_group_id\":null,\"variant_value_index\":null,\"variant_label\":\"\",\"variants\":[],\"discount\":null}', '2026-02-17 08:59:42', '2026-02-19 06:06:42'),
+(5, 1, 1, 1, 'a545df6a58551004ca3c18aede21723ae9115021ed1709b64fb2f9e2066abb8b', 'combo', NULL, 9, 'Второе+суп+напиток', '/static/uploads/products/1/45f7062aac0d155bbbce22f54d129177.webp', '{\"type\":\"combo\",\"combo_id\":9,\"combo_title\":\"Второе+суп+напиток\",\"name\":\"Второе+суп+напиток\",\"qty\":1,\"price\":505,\"line_total\":505,\"old_line_total\":532,\"unit_price_before_discount\":532,\"photos\":[\"/static/uploads/products/1/45f7062aac0d155bbbce22f54d129177.webp\",\"/static/uploads/products/1/8d6be0b537ce739d15c0f7128d212731.webp\",\"/static/uploads/products/1/40617d9e12e86588994e9d3d101eda7b.webp\"],\"selections\":[{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/45f7062aac0d155bbbce22f54d129177.webp\",\"variant_label\":\"\",\"variant_group_id\":null,\"variant_value_index\":0,\"variant_group_title\":\"\",\"variant_unit\":\"\",\"unit_id\":null,\"unit_price_override\":225,\"unit_price_before_discount\":null,\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit_id\":3,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":1,\"qty\":1,\"unit_id\":1,\"unit\":\"шт\"}]},{\"product_id\":38,\"product_name\":\"Гороховый с копченостями\",\"product_photo\":\"/static/uploads/products/1/8d6be0b537ce739d15c0f7128d212731.webp\",\"variant_label\":\"250\",\"variant_group_id\":8,\"variant_value_index\":0,\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"unit_id\":3,\"unit_price_override\":185,\"unit_price_before_discount\":null,\"ingredients_display\":[]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/40617d9e12e86588994e9d3d101eda7b.webp\",\"variant_label\":\"500\",\"variant_group_id\":14,\"variant_value_index\":0,\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"unit_id\":5,\"unit_price_override\":95,\"unit_price_before_discount\":null,\"ingredients_display\":[]}]}', '2026-02-17 09:59:26', '2026-02-19 06:06:39'),
 (9, 1, 1, 1, 'c992d90a417b89ce612097d2734abb5c5dac92bf7599ed10f510c0c6323fc80c', 'product', 3, NULL, 'Пюре с сосисками', '/static/uploads/products/1/3105bfeaa3f875031200f231baed7066.webp', '{\"type\":\"product\",\"product_id\":3,\"name\":\"Пюре с сосисками\",\"qty\":1,\"price\":313,\"old_price\":0,\"line_total\":313,\"photos\":[\"/static/uploads/products/1/3105bfeaa3f875031200f231baed7066.webp\"],\"option_item_ids\":[],\"options\":[],\"option_items\":[],\"ingredients\":[{\"ingredient_id\":12,\"ingredient_name\":\"Картофельное пюре\",\"name\":\"Картофельное пюре\",\"quantity\":150,\"qty\":150,\"unit_id\":3,\"unit_label\":\"г\",\"unit\":\"г\"},{\"ingredient_id\":28,\"ingredient_name\":\"Сосиски жареные\",\"name\":\"Сосиски жареные\",\"quantity\":2,\"qty\":2,\"unit_id\":1,\"unit_label\":\"шт\",\"unit\":\"шт\"}],\"variant_group_id\":null,\"variant_value_index\":null,\"variant_label\":\"\",\"variants\":[],\"discount\":null}', '2026-02-17 10:50:09', '2026-02-18 07:22:37'),
-(10, 1, 1, 1, '579e82e3e1ffca1c4b8adffc65ff4310c96f159b87b400fc10af7db3ad60ae27', 'combo', NULL, 9, 'Второе+суп+напиток', '/static/uploads/products/1/dbdaec8d6696e654a6d6abdf7408e089.png', '{\"type\":\"combo\",\"combo_id\":9,\"combo_title\":\"Второе+суп+напиток\",\"name\":\"Второе+суп+напиток\",\"qty\":1,\"price\":656,\"line_total\":656,\"old_line_total\":691,\"unit_price_before_discount\":691,\"photos\":[\"/static/uploads/products/1/dbdaec8d6696e654a6d6abdf7408e089.png\",\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\"],\"selections\":[{\"product_id\":46,\"product_name\":\"Котлета по-киевски с гречкой\",\"product_photo\":\"/static/uploads/products/1/dbdaec8d6696e654a6d6abdf7408e089.png\",\"variant_label\":\"\",\"variant_group_id\":null,\"variant_value_index\":0,\"variant_group_title\":\"\",\"variant_unit\":\"\",\"unit_id\":null,\"unit_price_override\":null,\"unit_price_before_discount\":null,\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit_id\":3,\"unit\":\"г\"},{\"ingredient_id\":27,\"name\":\"Котлета по-киевски\",\"quantity\":1,\"qty\":1,\"unit_id\":1,\"unit\":\"шт\"}]},{\"product_id\":38,\"product_name\":\"Гороховый с копченостями\",\"product_photo\":\"/static/uploads/products/1/e890061b5c382a1199525afb7b2cfcdf.jpg\",\"variant_label\":\"250\",\"variant_group_id\":8,\"variant_value_index\":0,\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"unit_id\":null,\"unit_price_override\":null,\"unit_price_before_discount\":null,\"ingredients_display\":[]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/982378c58c89cbeee716a8e782a77987.jpg\",\"variant_label\":\"500\",\"variant_group_id\":14,\"variant_value_index\":0,\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"unit_id\":null,\"unit_price_override\":null,\"unit_price_before_discount\":null,\"ingredients_display\":[]}]}', '2026-02-17 11:33:59', '2026-02-18 10:37:54'),
 (11, 1, 1, 1, '31280e67e171c7691428a687dfacb5aee42b5de4a594155cfec3d307ee0b0d47', 'combo', NULL, 9, 'Второе+суп+напиток', '/static/uploads/products/1/0a4cf805e0a90b6fdec73539e1104d7c.jpg', '{\"type\":\"combo\",\"combo_id\":9,\"combo_title\":\"Второе+суп+напиток\",\"name\":\"Второе+суп+напиток\",\"qty\":1,\"price\":563,\"line_total\":563,\"old_line_total\":593,\"unit_price_before_discount\":593,\"photos\":[\"/static/uploads/products/1/0a4cf805e0a90b6fdec73539e1104d7c.jpg\",\"/static/uploads/products/1/8d6be0b537ce739d15c0f7128d212731.webp\",\"/static/uploads/products/1/40617d9e12e86588994e9d3d101eda7b.webp\"],\"selections\":[{\"product_id\":52,\"product_name\":\"Картофельная запеканка\",\"product_photo\":\"/static/uploads/products/1/0a4cf805e0a90b6fdec73539e1104d7c.jpg\",\"variant_label\":\"\",\"variant_group_id\":null,\"variant_value_index\":0,\"variant_group_title\":\"\",\"variant_unit\":\"\",\"unit_id\":null,\"unit_price_override\":null,\"unit_price_before_discount\":null,\"ingredients_display\":[]},{\"product_id\":38,\"product_name\":\"Гороховый с копченостями\",\"product_photo\":\"/static/uploads/products/1/8d6be0b537ce739d15c0f7128d212731.webp\",\"variant_label\":\"250\",\"variant_group_id\":8,\"variant_value_index\":0,\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"unit_id\":null,\"unit_price_override\":null,\"unit_price_before_discount\":null,\"ingredients_display\":[]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/40617d9e12e86588994e9d3d101eda7b.webp\",\"variant_label\":\"500\",\"variant_group_id\":14,\"variant_value_index\":0,\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"unit_id\":null,\"unit_price_override\":null,\"unit_price_before_discount\":null,\"ingredients_display\":[]}]}', '2026-02-17 14:55:16', '2026-02-17 14:55:16'),
-(13, 1, 1, 1, 'e357381b5978d37295f594b1fcfa686cb26dd0935471dc5f600b5d4dd1a1470f', 'product', 3, NULL, 'Пюре с сосисками', '/static/uploads/products/1/3105bfeaa3f875031200f231baed7066.webp', '{\"type\":\"product\",\"product_id\":3,\"name\":\"Пюре с сосисками\",\"qty\":1,\"price\":214,\"old_price\":0,\"line_total\":214,\"photos\":[\"/static/uploads/products/1/3105bfeaa3f875031200f231baed7066.webp\"],\"option_item_ids\":[],\"options\":[],\"option_items\":[],\"ingredients\":[{\"ingredient_id\":12,\"ingredient_name\":\"Картофельное пюре\",\"name\":\"Картофельное пюре\",\"quantity\":150,\"qty\":150,\"unit_id\":null,\"unit_label\":\"г\",\"unit\":\"г\"},{\"ingredient_id\":28,\"ingredient_name\":\"Сосиски жареные\",\"name\":\"Сосиски жареные\",\"quantity\":1,\"qty\":1,\"unit_id\":null,\"unit_label\":\"шт\",\"unit\":\"шт\"}],\"variant_group_id\":null,\"variant_value_index\":null,\"variant_label\":\"\",\"variants\":[],\"discount\":null}', '2026-02-17 17:06:36', '2026-02-17 17:06:36'),
 (14, 1, 1, 1, 'c0aa9766f1378ec2bb21fd05a3f404ced6a3261029f350a1fdde60cd2e8cf666', 'product', 39, NULL, 'Тефтели с пюре', '/static/uploads/products/1/2a7680b181c74678afdbbb5c6bc047ef.webp', '{\"type\":\"product\",\"product_id\":39,\"name\":\"Тефтели с пюре\",\"qty\":1,\"price\":293,\"old_price\":0,\"line_total\":293,\"photos\":[\"/static/uploads/products/1/2a7680b181c74678afdbbb5c6bc047ef.webp\"],\"option_item_ids\":[],\"options\":[],\"option_items\":[],\"ingredients\":[{\"ingredient_id\":12,\"ingredient_name\":\"Картофельное пюре\",\"name\":\"Картофельное пюре\",\"quantity\":150,\"qty\":150,\"unit_id\":null,\"unit_label\":\"г\",\"unit\":\"г\"},{\"ingredient_id\":7,\"ingredient_name\":\"Тефтели с рисом\",\"name\":\"Тефтели с рисом\",\"quantity\":2,\"qty\":2,\"unit_id\":null,\"unit_label\":\"шт\",\"unit\":\"шт\"}],\"variant_group_id\":null,\"variant_value_index\":null,\"variant_label\":\"\",\"variants\":[],\"discount\":null}', '2026-02-18 06:05:34', '2026-02-18 06:05:34'),
 (18, 1, 1, 1, '795cab48c8f6841e1858b20bc67d9e24842ca200d98adcea0fc51c6c9b3c9b67', 'product', 14, NULL, 'Пюре с куриной котлетой', '/static/uploads/products/1/4bd61c168ac6eb5185b9253aa29a6242.webp', '{\"type\":\"product\",\"product_id\":14,\"name\":\"Пюре с куриной котлетой\",\"qty\":1,\"price\":595,\"old_price\":0,\"line_total\":595,\"photos\":[\"/static/uploads/products/1/4bd61c168ac6eb5185b9253aa29a6242.webp\"],\"option_item_ids\":[],\"options\":[],\"option_items\":[],\"ingredients\":[{\"ingredient_id\":12,\"ingredient_name\":\"Картофельное пюре\",\"name\":\"Картофельное пюре\",\"quantity\":350,\"qty\":350,\"unit_id\":null,\"unit_label\":\"г\",\"unit\":\"г\"},{\"ingredient_id\":13,\"ingredient_name\":\"Куринная котлета\",\"name\":\"Куринная котлета\",\"quantity\":2,\"qty\":2,\"unit_id\":null,\"unit_label\":\"шт\",\"unit\":\"шт\"}],\"variant_group_id\":null,\"variant_value_index\":null,\"variant_label\":\"\",\"variants\":[],\"discount\":null}', '2026-02-18 07:25:27', '2026-02-18 07:25:27'),
 (19, 1, 1, 1, 'f2364ed2469e03e9201b7e3f29d112b565af6b51f358112fb1d4abcd85c88e0f', 'product', 14, NULL, 'Пюре с куриной котлетой', '/static/uploads/products/1/4bd61c168ac6eb5185b9253aa29a6242.webp', '{\"type\":\"product\",\"product_id\":14,\"name\":\"Пюре с куриной котлетой\",\"qty\":1,\"price\":278,\"old_price\":0,\"line_total\":278,\"photos\":[\"/static/uploads/products/1/4bd61c168ac6eb5185b9253aa29a6242.webp\"],\"option_item_ids\":[],\"options\":[],\"option_items\":[],\"ingredients\":[{\"ingredient_id\":12,\"ingredient_name\":\"Картофельное пюре\",\"name\":\"Картофельное пюре\",\"quantity\":150,\"qty\":150,\"unit_id\":null,\"unit_label\":\"г\",\"unit\":\"г\"},{\"ingredient_id\":13,\"ingredient_name\":\"Куринная котлета\",\"name\":\"Куринная котлета\",\"quantity\":1,\"qty\":1,\"unit_id\":null,\"unit_label\":\"шт\",\"unit\":\"шт\"}],\"variant_group_id\":null,\"variant_value_index\":null,\"variant_label\":\"\",\"variants\":[],\"discount\":null}', '2026-02-18 10:35:35', '2026-02-18 10:35:35');
@@ -864,8 +851,18 @@ INSERT INTO `cust_customer_sessions` (`id`, `tenant_id`, `store_id`, `customer_i
 (50, 1, 1, 4, 'fea7b65ad4174a0e9ae27fb976870afd', '2026-02-17 22:41:03', '2026-03-19 22:41:03', 0),
 (51, 1, 1, 4, '2308ee661eeb4bd8bd49b1494f0bc4be', '2026-02-17 23:18:23', '2026-03-19 23:18:23', 0),
 (52, 1, 1, 1, '592d1c09a2fe4ad692ed4a8b29c9a680', '2026-02-18 10:38:19', '2026-03-20 10:38:19', 0),
-(53, 1, 1, 1, 'ee89616669304c70b5250f420d466289', '2026-02-18 10:38:55', '2026-03-20 10:38:55', 1),
-(54, 1, 1, 4, '97d4f9102d9f4753bf7037047f140650', '2026-02-18 10:44:17', '2026-03-20 10:44:17', 1);
+(53, 1, 1, 1, 'ee89616669304c70b5250f420d466289', '2026-02-18 10:38:55', '2026-03-20 10:38:55', 0),
+(54, 1, 1, 4, '97d4f9102d9f4753bf7037047f140650', '2026-02-18 10:44:17', '2026-03-20 10:44:17', 0),
+(55, 1, 1, 4, '212045e137f64984a2ff8691d58090b7', '2026-02-18 17:01:56', '2026-03-20 17:01:56', 0),
+(56, 1, 1, 4, '9a6d507d3d324a3cafd0bb3d44548412', '2026-02-18 17:05:31', '2026-03-20 17:05:31', 0),
+(57, 1, 1, 1, '047ee5a86d854a13bd9b54b1dfa620fa', '2026-02-19 17:25:49', '2026-03-21 17:25:49', 0),
+(58, 1, 1, 1, 'b03cf13030b7460ba6c84c38e735708f', '2026-02-19 17:26:11', '2026-03-21 17:26:11', 0),
+(59, 1, 1, 1, 'def5a7a05e4e4b60ad2d1de2148b710f', '2026-02-19 17:26:44', '2026-03-21 17:26:44', 0),
+(60, 1, 1, 1, '6f11c694fddc4ae4a085f495e37c8a84', '2026-02-19 17:47:50', '2026-03-21 17:47:50', 0),
+(61, 1, 1, 1, 'b0bf5f32a7f34c56a7302bc7ee8abbe2', '2026-02-19 18:06:45', '2026-03-21 18:06:45', 0),
+(62, 1, 1, 4, '898b0e0fa2df4419a5c94fd44e43be74', '2026-02-19 18:08:19', '2026-03-21 18:08:19', 1),
+(63, 1, 1, 1, '5d760aaeb41c4f4abea0daef7584d6bd', '2026-02-20 10:34:43', '2026-03-22 10:34:43', 0),
+(64, 1, 1, 1, '5a45249a1da047f882aca665291f9e67', '2026-02-20 11:26:06', '2026-03-22 11:26:06', 1);
 
 -- --------------------------------------------------------
 
@@ -1508,27 +1505,28 @@ CREATE TABLE `prod_categories` (
   `is_active` tinyint(1) NOT NULL DEFAULT '1',
   `sort_order` int NOT NULL DEFAULT '0',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `cart_visibility` tinyint(1) NOT NULL DEFAULT '0'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
 -- Дамп данных таблицы `prod_categories`
 --
 
-INSERT INTO `prod_categories` (`id`, `tenant_id`, `code`, `title`, `icon`, `site_visibility`, `is_active`, `sort_order`, `created_at`, `updated_at`) VALUES
-(1, 1, 'all', 'Все товары', '/static/uploads/categories/91156401f285b03bed37f9561f1b2fe4.jpg', 1, 1, 0, '2026-01-03 07:37:51', '2026-02-01 13:33:35'),
-(2, 1, 'burgers', 'Салаты', '/static/uploads/categories/887417257c45dc1bd3fd5de970168993.jpg', 1, 1, 60, '2026-01-03 07:37:51', '2026-02-02 13:46:04'),
-(3, 1, 'drinks', 'Закуски', '/static/uploads/categories/43b5da1647bd1900bca78cb0f3cb4f84.jpg', 1, 1, 70, '2026-01-03 07:37:51', '2026-02-02 13:46:12'),
-(4, 1, 'cat-mk239ojm', 'Горячее', '/static/uploads/categories/53c6650bd9db23a988886c53c50751ad.jpg', 1, 1, 50, '2026-01-06 04:27:59', '2026-02-02 13:46:04'),
-(5, 1, 'cat-mk2a0iyv', 'Гарнир', '/static/uploads/categories/3663ec08dafff609f21e780ac206741a.jpg', 1, 1, 40, '2026-01-06 07:36:49', '2026-02-02 13:46:04'),
-(6, 1, 'cat-mk2nkp4p', 'Супы', '/static/uploads/categories/05aee622a14776d699ab77bb592237f8.jpg', 1, 1, 30, '2026-01-06 13:56:26', '2026-02-02 13:46:04'),
-(7, 1, 'cat-mk57sj5q', 'Вторые блюда', '/static/uploads/categories/fb33b457cb3ce9aaa9933358cc2c200c.jpg', 1, 1, 20, '2026-01-08 08:57:56', '2026-02-02 13:46:04'),
-(8, 1, 'cat-mkgtrfi2', 'Продукты', '/static/uploads/categories/1c1701f8a4e90f2cf1ff4658c979054c.jpg', 0, 1, 110, '2026-01-16 11:58:24', '2026-02-02 13:46:12'),
-(9, 1, 'cat-ml0f74l8', 'Упаковка', '/static/uploads/categories/9e53e3abcb5b7277987201dc695eea54.jpg', 0, 1, 120, '2026-01-30 05:06:05', '2026-02-02 13:46:12'),
-(10, 1, 'cat-ml1571gc', 'Полуфабрикаты', '/static/uploads/categories/5eeb0ff37c3ebe08b2915228a6bd8d16.jpg', 0, 1, 100, '2026-01-30 17:13:50', '2026-02-02 13:46:12'),
-(11, 1, 'cat-ml3cdrkt', 'Добавки', '/static/uploads/categories/4fcd1ca6979a2e7c69567b5c529c398f.jpg', 1, 1, 90, '2026-02-01 06:10:35', '2026-02-02 13:46:12'),
-(12, 1, 'cat-ml3kiwci', 'Напитки', '/static/uploads/categories/cc3d5680c613a5c597a6472ecdfac683.jpg', 1, 1, 80, '2026-02-01 09:58:30', '2026-02-02 13:46:12'),
-(13, 1, 'cat-ml5837lr', 'Комбо обеды', '/static/uploads/categories/1780ce6a60e0245c74a8e84967292bbd.png', 1, 1, 10, '2026-02-02 13:45:56', '2026-02-02 13:46:11');
+INSERT INTO `prod_categories` (`id`, `tenant_id`, `code`, `title`, `icon`, `site_visibility`, `is_active`, `sort_order`, `created_at`, `updated_at`, `cart_visibility`) VALUES
+(1, 1, 'all', 'Все товары', '/static/uploads/categories/91156401f285b03bed37f9561f1b2fe4.jpg', 0, 1, 0, '2026-01-03 07:37:51', '2026-02-18 11:38:31', 0),
+(2, 1, 'burgers', 'Салаты', '/static/uploads/categories/887417257c45dc1bd3fd5de970168993.jpg', 1, 1, 60, '2026-01-03 07:37:51', '2026-02-02 13:46:04', 0),
+(3, 1, 'drinks', 'Закуски', '/static/uploads/categories/43b5da1647bd1900bca78cb0f3cb4f84.jpg', 1, 1, 70, '2026-01-03 07:37:51', '2026-02-02 13:46:12', 0),
+(4, 1, 'cat-mk239ojm', 'Горячее', '/static/uploads/categories/53c6650bd9db23a988886c53c50751ad.jpg', 1, 1, 50, '2026-01-06 04:27:59', '2026-02-02 13:46:04', 0),
+(5, 1, 'cat-mk2a0iyv', 'Гарнир', '/static/uploads/categories/3663ec08dafff609f21e780ac206741a.jpg', 1, 1, 40, '2026-01-06 07:36:49', '2026-02-02 13:46:04', 0),
+(6, 1, 'cat-mk2nkp4p', 'Супы', '/static/uploads/categories/05aee622a14776d699ab77bb592237f8.jpg', 1, 1, 30, '2026-01-06 13:56:26', '2026-02-02 13:46:04', 0),
+(7, 1, 'cat-mk57sj5q', 'Вторые блюда', '/static/uploads/categories/fb33b457cb3ce9aaa9933358cc2c200c.jpg', 1, 1, 20, '2026-01-08 08:57:56', '2026-02-02 13:46:04', 0),
+(8, 1, 'cat-mkgtrfi2', 'Продукты', '/static/uploads/categories/1c1701f8a4e90f2cf1ff4658c979054c.jpg', 0, 1, 110, '2026-01-16 11:58:24', '2026-02-02 13:46:12', 0),
+(9, 1, 'cat-ml0f74l8', 'Упаковка', '/static/uploads/categories/9e53e3abcb5b7277987201dc695eea54.jpg', 0, 1, 120, '2026-01-30 05:06:05', '2026-02-02 13:46:12', 0),
+(10, 1, 'cat-ml1571gc', 'Полуфабрикаты', '/static/uploads/categories/5eeb0ff37c3ebe08b2915228a6bd8d16.jpg', 0, 1, 100, '2026-01-30 17:13:50', '2026-02-02 13:46:12', 0),
+(11, 1, 'cat-ml3cdrkt', 'Добавки', '/static/uploads/categories/4fcd1ca6979a2e7c69567b5c529c398f.jpg', 1, 1, 90, '2026-02-01 06:10:35', '2026-02-19 05:24:36', 1),
+(12, 1, 'cat-ml3kiwci', 'Напитки', '/static/uploads/categories/cc3d5680c613a5c597a6472ecdfac683.jpg', 1, 1, 80, '2026-02-01 09:58:30', '2026-02-02 13:46:12', 0),
+(13, 1, 'cat-ml5837lr', 'Комбо обеды', '/static/uploads/categories/1780ce6a60e0245c74a8e84967292bbd.png', 1, 1, 10, '2026-02-02 13:45:56', '2026-02-02 13:46:11', 0);
 
 -- --------------------------------------------------------
 
@@ -1868,7 +1866,7 @@ CREATE TABLE `prod_products` (
 --
 
 INSERT INTO `prod_products` (`id`, `tenant_id`, `name`, `sku`, `description_short`, `description`, `price`, `old_price`, `cost_price`, `unit_id`, `photos_json`, `is_active`, `site_visibility`, `created_at`, `updated_at`, `base_unit_id`, `base_qty`) VALUES
-(3, 1, 'Пюре с сосисками', NULL, NULL, NULL, 313.34, NULL, 76.21, 6, '[\"/static/uploads/products/1/3105bfeaa3f875031200f231baed7066.webp\"]', 1, 1, '2026-01-05 15:54:34', '2026-02-14 17:13:56', 6, NULL),
+(3, 1, 'Пюре с сосисками', NULL, NULL, NULL, 313.34, NULL, 76.21, 6, '[\"/static/uploads/products/1/7c2c0deac21e47c44adbda6a04861d4c.webp\"]', 1, 1, '2026-01-05 15:54:34', '2026-02-19 16:15:25', 6, NULL),
 (4, 1, 'Минтай в кляре', NULL, NULL, NULL, 149.00, 179.00, 0.00, 1, '[\"/static/uploads/products/1/446502b1bce3809a4303e8c7f4345d51.jpg\"]', 1, 0, '2026-01-06 04:28:49', '2026-02-15 11:10:59', 1, NULL),
 (6, 1, 'Рис с овощами', NULL, NULL, NULL, 800.00, NULL, 0.00, 2, '[\"/static/uploads/products/1/b7d5215763b1e8b3a3a05564c83352f0.jpg\"]', 1, 1, '2026-01-06 07:37:17', '2026-02-01 14:26:48', 2, NULL),
 (7, 1, 'Тефтели с рисом', NULL, NULL, NULL, 89.00, NULL, 0.00, 1, '[\"/static/uploads/products/1/09c238e8cea082a8ce2a57359b649b7d.jpg\"]', 1, 1, '2026-01-06 13:56:46', '2026-02-01 14:27:01', 1, NULL),
@@ -1878,7 +1876,7 @@ INSERT INTO `prod_products` (`id`, `tenant_id`, `name`, `sku`, `description_shor
 (11, 1, 'Фрикадельки с пюрешкой', NULL, '', '', 599.00, 768.00, 100.00, 6, '[\"/static/uploads/products/1/c7ee582d4fddf82778bdf23b8ab25754.jpg\"]', 0, 0, '2026-01-08 08:58:54', '2026-01-30 17:05:58', 6, NULL),
 (12, 1, 'Картофельное пюре', NULL, NULL, NULL, 1009.63, NULL, 141.93, 3, '[\"/static/uploads/products/1/9fdc3cffd1457f84af2705bfc55c33a2.webp\"]', 1, 1, '2026-01-16 10:32:24', '2026-02-02 07:28:30', 3, 1313.000),
 (13, 1, 'Куринная котлета', NULL, NULL, NULL, 163.00, NULL, 55.00, 1, '[\"/static/uploads/products/1/fe6e72ac1ce743c145b235225287a820.webp\"]', 1, 1, '2026-01-16 10:33:13', '2026-01-31 07:11:39', 1, NULL),
-(14, 1, 'Пюре с куриной котлетой', NULL, NULL, NULL, 278.34, NULL, 71.21, 3, '[\"/static/uploads/products/1/4bd61c168ac6eb5185b9253aa29a6242.webp\"]', 1, 1, '2026-01-16 10:34:30', '2026-02-14 17:14:41', 3, 230.000),
+(14, 1, 'Пюре с куриной котлетой', NULL, NULL, NULL, 278.34, NULL, 71.21, 3, '[\"/static/uploads/products/1/d7619481316a235377b2af14a0dc2214.webp\"]', 1, 1, '2026-01-16 10:34:30', '2026-02-19 16:27:40', 3, 230.000),
 (15, 1, 'Картофель', NULL, NULL, NULL, 800.00, NULL, 100.00, 2, '[\"/static/uploads/products/1/6ec0482c5b64bc892b95d4d799d278b3.webp\"]', 1, 0, '2026-01-16 11:58:13', '2026-02-02 07:28:25', 2, 1.000),
 (16, 1, 'Масло сливочное', NULL, NULL, NULL, 300.00, NULL, 60.00, 1, '[\"/static/uploads/products/1/fd170c1d0a9402b11b304e7090e1ee7c.webp\"]', 1, 0, '2026-01-16 12:01:19', '2026-02-15 10:19:17', 1, 1.000),
 (17, 1, 'Молоко', NULL, NULL, NULL, 500.00, NULL, 100.00, 2, '[\"/static/uploads/products/1/6e18cdc9e15ef0c2622e9a619b1c3725.webp\"]', 1, 0, '2026-01-16 12:02:03', '2026-01-31 06:49:43', 2, NULL),
@@ -1913,7 +1911,7 @@ INSERT INTO `prod_products` (`id`, `tenant_id`, `name`, `sku`, `description_shor
 (47, 1, 'Вареники с картошкой', NULL, NULL, NULL, 15.00, NULL, 0.00, 1, '[\"/static/uploads/products/1/bfc21614af87135437c0610179da3978.jpg\"]', 1, 1, '2026-01-30 04:15:13', '2026-01-31 00:54:34', 1, NULL),
 (48, 1, 'Гуляш с гречкой', NULL, NULL, NULL, 284.33, NULL, 0.00, 6, '[\"/static/uploads/products/1/428a06fdcda49526849c7850e7b8b3d0.jpg\"]', 1, 1, '2026-01-30 04:17:25', '2026-01-30 04:17:25', 6, NULL),
 (49, 1, 'Сосиски с макаронами', NULL, NULL, NULL, 348.00, NULL, 0.00, 6, '[\"/static/uploads/products/1/a9de0b28320bebd41869cfba80a52580.jpg\"]', 1, 1, '2026-01-30 04:18:29', '2026-01-30 04:18:47', 6, NULL),
-(50, 1, 'Котлета по-домашнему с макаронами', NULL, NULL, NULL, 299.00, NULL, 0.00, 1, '[\"/static/uploads/products/1/29016460b03c5583754ab1c4e0cf17b3.jpg\"]', 1, 1, '2026-01-30 04:19:40', '2026-01-30 04:19:40', 1, NULL),
+(50, 1, 'Котлета по-домашнему с макаронами', NULL, NULL, NULL, 299.00, NULL, 0.00, 1, '[\"/static/uploads/products/1/07804da2ed1a7de7038ca17a6f044376.webp\"]', 1, 1, '2026-01-30 04:19:40', '2026-02-19 16:37:20', 1, NULL),
 (51, 1, 'Куриная отбивная под грибами и сыром с пюре', NULL, NULL, NULL, 414.34, NULL, 16.21, 6, '[\"/static/uploads/products/1/2cb08d751796be51255796d4e3bcd314.webp\"]', 1, 1, '2026-01-30 04:20:59', '2026-02-02 07:29:05', 6, NULL),
 (52, 1, 'Картофельная запеканка', NULL, NULL, NULL, 299.00, NULL, 0.00, 6, '[\"/static/uploads/products/1/0a4cf805e0a90b6fdec73539e1104d7c.jpg\"]', 1, 1, '2026-01-30 04:21:29', '2026-01-30 04:21:29', 6, NULL),
 (53, 1, 'Блины', NULL, NULL, NULL, 49.00, NULL, 0.00, 1, '[\"/static/uploads/products/1/c0c9947e944f3029a3430b9c00685d0f.png\"]', 1, 1, '2026-01-30 04:44:16', '2026-01-31 00:56:51', 1, 1.000),
@@ -3060,15 +3058,19 @@ CREATE TABLE `ten_tenants` (
   `sound_order_cancelled_url` varchar(512) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `sound_new_message_url` varchar(512) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `order_stock_deduct_mode` enum('on_create','on_status') COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'on_create' COMMENT 'When to deduct stock: on order creation or on selected status',
-  `order_stock_deduct_status_id` int UNSIGNED DEFAULT NULL COMMENT 'Order status id that triggers stock deduction when mode=on_status'
+  `order_stock_deduct_status_id` int UNSIGNED DEFAULT NULL COMMENT 'Order status id that triggers stock deduction when mode=on_status',
+  `img_webp_quality` tinyint UNSIGNED NOT NULL DEFAULT '82' COMMENT 'WebP quality for product photos (1-100)',
+  `img_thumb_quality` tinyint UNSIGNED NOT NULL DEFAULT '72' COMMENT 'WebP quality for thumbnail (1-100)',
+  `img_thumb_width` smallint UNSIGNED NOT NULL DEFAULT '480' COMMENT 'Thumbnail max width in px',
+  `img_delete_original` tinyint(1) NOT NULL DEFAULT '1' COMMENT 'Delete original file after WebP conversion'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
 -- Дамп данных таблицы `ten_tenants`
 --
 
-INSERT INTO `ten_tenants` (`id`, `store_id`, `name`, `slug`, `subdomain`, `email`, `password_hash`, `phone`, `is_active`, `created_at`, `updated_at`, `logo_light_url`, `logo_dark_url`, `favicon_light_url`, `favicon_dark_url`, `apple_touch_icon_url`, `android_icon_url`, `price_rounding_mode`, `price_rounding_precision`, `timezone`, `site_name`, `site_description`, `custom_domain`, `sound_new_order_url`, `sound_order_cancelled_url`, `sound_new_message_url`, `order_stock_deduct_mode`, `order_stock_deduct_status_id`) VALUES
-(1, 1, 'По щам - домашняя еда с доставкой', NULL, 'posham', 'admin@test.ru', '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', 'admin@test.ru', 1, '2026-01-21 13:07:16', '2026-02-12 16:02:55', '/static/uploads/tenants/1/2bcab539a2056f905b05b2fe1e6175ca.png', '/static/uploads/tenants/1/1c30d7740e24c5295301e5190bb9a8a1.png', '/static/uploads/tenants/1/87a8ced908be6c4daaed371594cfde4c.png', '/static/uploads/tenants/1/ae6927d41ab198580ec4c62af9f32e14.png', '/static/uploads/tenants/1/0a831832a7329001b3146abea34abf26.png', '/static/uploads/tenants/1/92b6768e0ba0233bdbdf6b5a9723e8bd.png', 'down', 0, NULL, 'По щам', NULL, NULL, '/static/uploads/tenants/1/sounds/3cded567d63fabaed72171f6093a0c1e.mp3', '/static/uploads/tenants/1/sounds/e0b30de53ccb7cdd20fa32c0fbb800db.mp3', '/static/uploads/tenants/1/sounds/fb3304169927ffa0144d4967880f0873.mp3', 'on_create', 5);
+INSERT INTO `ten_tenants` (`id`, `store_id`, `name`, `slug`, `subdomain`, `email`, `password_hash`, `phone`, `is_active`, `created_at`, `updated_at`, `logo_light_url`, `logo_dark_url`, `favicon_light_url`, `favicon_dark_url`, `apple_touch_icon_url`, `android_icon_url`, `price_rounding_mode`, `price_rounding_precision`, `timezone`, `site_name`, `site_description`, `custom_domain`, `sound_new_order_url`, `sound_order_cancelled_url`, `sound_new_message_url`, `order_stock_deduct_mode`, `order_stock_deduct_status_id`, `img_webp_quality`, `img_thumb_quality`, `img_thumb_width`, `img_delete_original`) VALUES
+(1, 1, 'По щам - домашняя еда с доставкой', NULL, 'posham', 'admin@test.ru', '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', 'admin@test.ru', 1, '2026-01-21 13:07:16', '2026-02-20 12:16:37', '/static/uploads/tenants/1/128bd8ff18d813eac1b7c6dfe944074b.webp', '/static/uploads/tenants/1/023858f4f5eaa98ba91ecc7bb443b3e8.webp', '/static/uploads/tenants/1/657d60ffee6820cb6c732d17a74b15a0.webp', NULL, '/static/uploads/tenants/1/f7b74205208c529a5b5e50359dc568f7.webp', '/static/uploads/tenants/1/6ecaea8b1114bc2ab3bc466d30502b77.webp', 'down', 0, NULL, 'По щам', NULL, 'пощам-нвл.рф', '/static/uploads/tenants/1/sounds/3cded567d63fabaed72171f6093a0c1e.mp3', '/static/uploads/tenants/1/sounds/e0b30de53ccb7cdd20fa32c0fbb800db.mp3', '/static/uploads/tenants/1/sounds/fb3304169927ffa0144d4967880f0873.mp3', 'on_create', 5, 50, 50, 280, 1);
 
 -- --------------------------------------------------------
 
@@ -3619,13 +3621,13 @@ ALTER TABLE `app_users`
 -- AUTO_INCREMENT для таблицы `chat_messages`
 --
 ALTER TABLE `chat_messages`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13407;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13721;
 
 --
 -- AUTO_INCREMENT для таблицы `chat_threads`
 --
 ALTER TABLE `chat_threads`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=600;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=893;
 
 --
 -- AUTO_INCREMENT для таблицы `cust_categories`
@@ -3655,13 +3657,13 @@ ALTER TABLE `cust_customer_category_links`
 -- AUTO_INCREMENT для таблицы `cust_customer_favorites`
 --
 ALTER TABLE `cust_customer_favorites`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=22;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=24;
 
 --
 -- AUTO_INCREMENT для таблицы `cust_customer_sessions`
 --
 ALTER TABLE `cust_customer_sessions`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=55;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=65;
 
 --
 -- AUTO_INCREMENT для таблицы `cust_statuses`
@@ -3835,7 +3837,7 @@ ALTER TABLE `prod_product_ingredients`
 -- AUTO_INCREMENT для таблицы `prod_product_stocks`
 --
 ALTER TABLE `prod_product_stocks`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=328;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=340;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_product_unit_links`

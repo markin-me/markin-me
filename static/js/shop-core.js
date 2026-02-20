@@ -4215,7 +4215,7 @@ function showCheckoutView() {
     hideTitle: false,
     showAddressChip: false,
     showProfileActions: false,
-    showBack: true,
+    showBack: false,
     showFav: false,
     addressAsTitle: true,
     showClose: false,
@@ -8332,5 +8332,4 @@ if (__shopHasRequiredDom) initCore();
 
 // Late-loaded on shop-late.js. Core keeps a safe no-op to avoid ReferenceError during first paint.
 function updateMobileDeliveryProgress() {}
-
 

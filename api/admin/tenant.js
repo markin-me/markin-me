@@ -418,6 +418,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const imgThumbWidth = req.body.img_thumb_width !== undefined ? helpers.numOrNull(req.body.img_thumb_width) : undefined;
       const imgDeleteOriginal = req.body.img_delete_original !== undefined ? (helpers.toBool(req.body.img_delete_original, true) ? 1 : 0) : undefined;
 
+      const telegramBotUsername = req.body.telegram_bot_username !== undefined ? helpers.strOrNull(req.body.telegram_bot_username) : undefined;
+      const telegramBotToken = req.body.telegram_bot_token !== undefined ? helpers.strOrNull(req.body.telegram_bot_token) : undefined;
+
       if (!tenantId) {
         return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       }
@@ -543,6 +546,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const nextImgThumbWidth = imgThumbWidth !== undefined ? clamp(imgThumbWidth ?? 480, 100, 2000) : (current.img_thumb_width ?? 480);
       const nextImgDeleteOriginal = imgDeleteOriginal !== undefined ? imgDeleteOriginal : (current.img_delete_original ?? 1);
 
+      const nextTelegramBotUsername = telegramBotUsername !== undefined ? telegramBotUsername : (current.telegram_bot_username ?? null);
+      const nextTelegramBotToken = telegramBotToken !== undefined ? telegramBotToken : (current.telegram_bot_token ?? null);
+
       if (email !== undefined && email && email !== current.email) {
         const [existsEmail] = await db.query(
           'SELECT id FROM ten_tenants WHERE email=? AND id<>? LIMIT 1',
@@ -554,8 +560,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_delete_original=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgDeleteOriginal, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_delete_original=?, telegram_bot_username=?, telegram_bot_token=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgDeleteOriginal, nextTelegramBotUsername, nextTelegramBotToken, tenantId]
       );
 
       const [rows] = await db.query(
