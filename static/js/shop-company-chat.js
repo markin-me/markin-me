@@ -1,4 +1,4 @@
-﻿(function () {
+(function () {
   const openBtn = document.getElementById("shopCompanyChatOpenBtn");
   const unreadBadge = document.getElementById("shopCompanyChatUnreadBadge");
   const overlay = document.getElementById("shopCompanyChatOverlay");
@@ -92,6 +92,7 @@
   const CHAT_TYPING_IDLE_STOP_MS = 2600;
   const CHAT_TYPING_BLUR_STOP_MS = 320;
   const CHAT_MESSAGE_ALERT_COOLDOWN_MS = 900;
+  const CHAT_PUSH_SYNC_DEBOUNCE_MS = 180;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
   const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
   const IMAGE_OPTIMIZE_TARGET_BYTES = 900 * 1024;
@@ -198,6 +199,15 @@
   let messageAlertAudioCtx = null;
   let messageAlertAudioUnlocked = false;
   let messageAlertLastAt = 0;
+  let webPushPublicKeyCache = "";
+  let webPushPublicKeyFetched = false;
+  let webPushSyncTimer = 0;
+  let webPushSyncInFlight = false;
+  let webPushSyncedFingerprint = "";
+  let webPushSubscriptionVapidKey = "";
+  let webPushSyncRequestedWithPermission = false;
+  let webPushSyncForceRequested = false;
+  let webPushSyncQueuedClientId = "";
   const selectedMessageIds = new Set();
 
   const LONG_PRESS_MS = 430;
@@ -919,13 +929,19 @@
     try {
       const n = new Notification(String(title || "Новое сообщение"), {
         body: String(body || "Откройте чат, чтобы ответить."),
-        silent: true,
+        silent: false,
       });
       n.onclick = function () {
         window.focus();
         n.close();
       };
     } catch {}
+  }
+
+  function shouldSuppressLocalBrowserNotification() {
+    if (!isWebPushSupported() || !isWebPushSecureContext()) return false;
+    if (Notification.permission !== "granted") return false;
+    return !!String(webPushSyncedFingerprint || "").trim();
   }
 
   function maybeNotifyIncomingAgentMessage(entry) {
@@ -943,6 +959,7 @@
 
     playMessageAlertSound();
     if (!tabActive || !isOpen) {
+      if (shouldSuppressLocalBrowserNotification()) return;
       showIncomingMessageBrowserNotification(
         "Новое сообщение от компании",
         getEntryPreviewText(entry) || "Откройте чат, чтобы ответить."
@@ -951,9 +968,279 @@
   }
 
   function initMessageAlerts() {
-    document.addEventListener("click", unlockMessageAlertsOnce, { once: true, passive: true });
-    document.addEventListener("touchstart", unlockMessageAlertsOnce, { once: true, passive: true });
+    document.addEventListener("click", unlockMessageAlertsOnce, { once: true, passive: true, capture: true });
+    document.addEventListener("touchstart", unlockMessageAlertsOnce, { once: true, passive: true, capture: true });
     document.addEventListener("keydown", unlockMessageAlertsOnce, { once: true });
+  }
+
+  function isWebPushSupported() {
+    if (typeof window === "undefined") return false;
+    if (!("serviceWorker" in navigator)) return false;
+    if (!("PushManager" in window)) return false;
+    if (!("Notification" in window)) return false;
+    return true;
+  }
+
+  function isWebPushSecureContext() {
+    if (window.isSecureContext === true) return true;
+    const host = String(window.location && window.location.hostname || "").toLowerCase();
+    if (host === "localhost" || host.endsWith(".localhost")) return true;
+    if (host === "127.0.0.1" || host === "[::1]") return true;
+    if (/^127(?:\.\d{1,3}){3}$/.test(host)) return true;
+    return false;
+  }
+
+  function webPushArrayBufferToBase64(raw) {
+    if (!raw) return "";
+    try {
+      const bytes = new Uint8Array(raw);
+      let binary = "";
+      for (let i = 0; i < bytes.byteLength; i += 1) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return window.btoa(binary);
+    } catch {
+      return "";
+    }
+  }
+
+  function webPushUrlBase64ToUint8Array(base64String) {
+    const value = String(base64String || "").trim();
+    if (!value) return new Uint8Array();
+    const padding = "=".repeat((4 - (value.length % 4)) % 4);
+    const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const binary = window.atob(base64);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      out[i] = binary.charCodeAt(i);
+    }
+    return out;
+  }
+
+  function normalizeWebPushSubscriptionForApi(subscription) {
+    if (!subscription) return null;
+    const source = typeof subscription.toJSON === "function"
+      ? subscription.toJSON()
+      : subscription;
+    const endpoint = String(source && source.endpoint || "").trim();
+    if (!endpoint) return null;
+
+    let p256dh = "";
+    let auth = "";
+    if (source && source.keys && typeof source.keys === "object") {
+      p256dh = String(source.keys.p256dh || "").trim();
+      auth = String(source.keys.auth || "").trim();
+    }
+
+    if ((!p256dh || !auth) && typeof subscription.getKey === "function") {
+      p256dh = p256dh || webPushArrayBufferToBase64(subscription.getKey("p256dh"));
+      auth = auth || webPushArrayBufferToBase64(subscription.getKey("auth"));
+    }
+
+    if (!p256dh || !auth) return null;
+    return {
+      endpoint: endpoint,
+      keys: {
+        p256dh: p256dh,
+        auth: auth,
+      },
+    };
+  }
+
+  function buildWebPushSubscriptionFingerprint(clientId, normalizedSubscription) {
+    const payload = normalizedSubscription && typeof normalizedSubscription === "object"
+      ? normalizedSubscription
+      : {};
+    const endpoint = String(payload.endpoint || "").trim();
+    const keys = payload.keys && typeof payload.keys === "object" ? payload.keys : {};
+    const p256dh = String(keys.p256dh || "");
+    const auth = String(keys.auth || "");
+    const safeClientId = String(clientId || "").trim();
+    return [safeClientId, endpoint, p256dh, auth].join("|");
+  }
+
+  async function getWebPushServiceWorkerRegistration() {
+    if (!isWebPushSupported()) return null;
+    try {
+      const byScope = await navigator.serviceWorker.getRegistration("/");
+      if (byScope && byScope.active) return byScope;
+      if (byScope) {
+        try {
+          const ready = await Promise.race([
+            navigator.serviceWorker.ready,
+            new Promise(function (resolve) { window.setTimeout(function () { resolve(null); }, 2400); }),
+          ]);
+          return ready || byScope;
+        } catch {
+          return byScope;
+        }
+      }
+    } catch {}
+    try {
+      const fallback = await navigator.serviceWorker.getRegistration();
+      if (fallback && fallback.active) return fallback;
+      if (fallback) return fallback;
+    } catch {}
+    try {
+      const registered = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      if (registered && registered.active) return registered;
+      try {
+        const ready = await Promise.race([
+          navigator.serviceWorker.ready,
+          new Promise(function (resolve) { window.setTimeout(function () { resolve(null); }, 2600); }),
+        ]);
+        return ready || registered || null;
+      } catch {
+        return registered || null;
+      }
+    } catch {}
+    return null;
+  }
+
+  async function fetchWebPushPublicKey(options) {
+    const opts = options || {};
+    if (!opts.forceRefresh && webPushPublicKeyFetched) {
+      return webPushPublicKeyCache;
+    }
+    const json = await chatApiJson(CHAT_TEMP_API_BASE + "/push/public-key");
+    const data = json && json.data ? json.data : {};
+    const enabled = data.enabled === true;
+    const key = enabled ? String(data.public_key || "").trim() : "";
+    webPushPublicKeyFetched = true;
+    webPushPublicKeyCache = key;
+    return webPushPublicKeyCache;
+  }
+
+  async function remoteUnsubscribeWebPushByEndpoint(endpoint) {
+    const safeEndpoint = String(endpoint || "").trim();
+    if (!safeEndpoint) return;
+    await chatApiJson(CHAT_TEMP_API_BASE + "/push/unsubscribe", {
+      method: "POST",
+      body: {
+        endpoint: safeEndpoint,
+      },
+    }).catch(function () {});
+  }
+
+  function queueWebPushSubscriptionSync(options) {
+    const opts = options || {};
+    if (opts.requestPermission === true) webPushSyncRequestedWithPermission = true;
+    if (opts.force === true) webPushSyncForceRequested = true;
+    const nextClientId = String(opts.clientId || "");
+    if (nextClientId) webPushSyncQueuedClientId = nextClientId;
+
+    if (webPushSyncTimer) {
+      window.clearTimeout(webPushSyncTimer);
+      webPushSyncTimer = 0;
+    }
+    const delay = opts.immediate === true ? 0 : CHAT_PUSH_SYNC_DEBOUNCE_MS;
+    webPushSyncTimer = window.setTimeout(function () {
+      webPushSyncTimer = 0;
+      const runOptions = {
+        requestPermission: webPushSyncRequestedWithPermission === true,
+        force: webPushSyncForceRequested === true,
+        clientId: String(webPushSyncQueuedClientId || ""),
+      };
+      webPushSyncRequestedWithPermission = false;
+      webPushSyncForceRequested = false;
+      webPushSyncQueuedClientId = "";
+      syncWebPushSubscription(runOptions).catch(function () {});
+    }, delay);
+  }
+
+  async function syncWebPushSubscription(options) {
+    const opts = options || {};
+    const requestClientId = String(opts.clientId || getActiveChatClientId() || "").trim();
+    if (!requestClientId) {
+      webPushSyncedFingerprint = "";
+      return;
+    }
+
+    if (!isWebPushSupported()) return;
+    if (!isWebPushSecureContext()) return;
+    if (webPushSyncInFlight) {
+      queueWebPushSubscriptionSync(opts);
+      return;
+    }
+
+    webPushSyncInFlight = true;
+    try {
+      const registration = await getWebPushServiceWorkerRegistration();
+      if (!registration || !registration.pushManager) return;
+
+      const publicKey = await fetchWebPushPublicKey();
+      if (!publicKey) {
+        webPushSyncedFingerprint = "";
+        webPushSubscriptionVapidKey = "";
+        try { localStorage.removeItem(webPushVapidStorageKey); } catch {}
+        return;
+      }
+
+      let permission = String(Notification.permission || "default");
+      if (permission === "default" && opts.requestPermission === true) {
+        try {
+          permission = String(await Notification.requestPermission());
+        } catch {
+          permission = String(Notification.permission || "default");
+        }
+      }
+
+      let subscription = await registration.pushManager.getSubscription().catch(function () { return null; });
+
+      if (permission !== "granted") {
+        const staleEndpoint = String(subscription && subscription.endpoint || "");
+        if (staleEndpoint) {
+          await remoteUnsubscribeWebPushByEndpoint(staleEndpoint);
+        }
+        webPushSyncedFingerprint = "";
+        return;
+      }
+
+      if (
+        subscription
+        && (!webPushSubscriptionVapidKey || webPushSubscriptionVapidKey !== publicKey)
+      ) {
+        const staleEndpoint = String(subscription.endpoint || "");
+        try { await subscription.unsubscribe(); } catch {}
+        if (staleEndpoint) {
+          await remoteUnsubscribeWebPushByEndpoint(staleEndpoint);
+        }
+        subscription = null;
+        webPushSyncedFingerprint = "";
+      }
+
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: webPushUrlBase64ToUint8Array(publicKey),
+        });
+      }
+
+      const normalizedSubscription = normalizeWebPushSubscriptionForApi(subscription);
+      if (!normalizedSubscription) return;
+
+      const fingerprint = buildWebPushSubscriptionFingerprint(requestClientId, normalizedSubscription);
+      if (!opts.force && fingerprint === webPushSyncedFingerprint) {
+        webPushSubscriptionVapidKey = publicKey;
+        try { localStorage.setItem(webPushVapidStorageKey, publicKey); } catch {}
+        return;
+      }
+
+      await chatApiJson(CHAT_TEMP_API_BASE + "/push/subscribe", {
+        method: "POST",
+        body: {
+          client_id: Number(requestClientId),
+          subscription: normalizedSubscription,
+        },
+      });
+      webPushSyncedFingerprint = fingerprint;
+      webPushSubscriptionVapidKey = publicKey;
+      try { localStorage.setItem(webPushVapidStorageKey, publicKey); } catch {}
+    } catch {
+      // noop
+    } finally {
+      webPushSyncInFlight = false;
+    }
   }
 
   function shouldMarkAgentMessagesRead(options) {
@@ -1011,6 +1298,14 @@
       const n = Number(meta.content);
       if (Number.isFinite(n) && n > 0) return n;
     }
+    try {
+      const raw = localStorage.getItem("tenant");
+      if (raw) {
+        const tenant = JSON.parse(raw);
+        const id = Number(tenant && tenant.id);
+        if (Number.isFinite(id) && id > 0) return Math.trunc(id);
+      }
+    } catch {}
     return 1;
   }
 
@@ -1025,6 +1320,13 @@
   const guestChatClientKey = "shop_company_chat_guest_id_t" + tenantId;
   const customerChatClientIdByTokenPrefix = "shop_company_chat_customer_id_for_token_t" + tenantId + "_";
   const customerChatClientIdByIdentityPrefix = "shop_company_chat_customer_id_for_identity_t" + tenantId + "_";
+  const webPushVapidStorageKey = "shop_company_chat_push_vapid_t" + tenantId;
+
+  try {
+    webPushSubscriptionVapidKey = String(localStorage.getItem(webPushVapidStorageKey) || "");
+  } catch {
+    webPushSubscriptionVapidKey = "";
+  }
 
   function getCustomerToken() {
     try { return String(localStorage.getItem(customerTokenKey) || ""); } catch { return ""; }
@@ -1278,6 +1580,9 @@
 
     if (isSameChatClientProfile(currentProfile, nextProfile)) {
       chatClientProfile = nextProfile;
+      queueWebPushSubscriptionSync({
+        clientId: String(nextProfile.id || ""),
+      });
       return false;
     }
 
@@ -1346,6 +1651,11 @@
     renderUnreadBadge(liveEntries);
 
     const activeClientIdAfterSwitch = String(chatClientProfile.id || "");
+    queueWebPushSubscriptionSync({
+      clientId: activeClientIdAfterSwitch,
+      force: true,
+      immediate: true,
+    });
     const continueWithPull = function () {
       if (opts.pull === false) return;
       if (String(chatClientProfile.id || "") !== activeClientIdAfterSwitch) return;
@@ -2587,9 +2897,18 @@
       ensureEmojiDatasetLoaded().catch(function () {});
     }
     refreshChatClientProfileIfNeeded({ pull: false });
+    queueWebPushSubscriptionSync({
+      clientId: getActiveChatClientId(),
+      requestPermission: true,
+      immediate: true,
+    });
     pendingFeedRestoreState = loadPersistedFeedViewportState(getActiveChatClientId());
     if (!initialized) {
-      resetConversation();
+      // Keep preloaded thread state from startup sync.
+      // Reset only when there is no local snapshot yet.
+      if (!Array.isArray(liveEntries) || liveEntries.length <= 0) {
+        resetConversation();
+      }
       initialized = true;
     }
     closeAttachPreview({ focusComposer: false });
@@ -2663,6 +2982,7 @@
     clearReplyDraft();
     selectedMessageIds.clear();
     liveEntries = [];
+    hasLoadedSharedThreadOnce = false;
     visibleStart = baseEntries.length;
     loadOlderMessages(INITIAL_BATCH, false);
     renderThread();
@@ -4725,12 +5045,28 @@
   // probeEmojiAssetsAvailability — отложено до первого открытия чата
   renderUnreadBadge(liveEntries);
   refreshChatClientProfileIfNeeded({ pull: false });
+  queueWebPushSubscriptionSync({
+    clientId: getActiveChatClientId(),
+    immediate: true,
+  });
   pullSharedThreadFromServer({ force: true }).catch(function () {});
   startSharedThreadPolling();
+
+  if ("serviceWorker" in navigator && navigator.serviceWorker.ready) {
+    navigator.serviceWorker.ready
+      .then(function () {
+        queueWebPushSubscriptionSync({
+          clientId: getActiveChatClientId(),
+          immediate: true,
+        });
+      })
+      .catch(function () {});
+  }
 
   openBtn.addEventListener("click", function (event) {
     event.preventDefault();
     event.stopPropagation();
+    requestMessageAlertNotificationPermission();
     openCompanyChat();
   });
 
@@ -4790,6 +5126,10 @@
 
   window.addEventListener("focus", function () {
     refreshChatClientProfileIfNeeded({ pull: false });
+    queueWebPushSubscriptionSync({
+      clientId: getActiveChatClientId(),
+      immediate: true,
+    });
     syncReadOnForeground();
   });
 

@@ -58,10 +58,18 @@
   <script src="<%= assetUrl('/static/js/theme.js') %>"></script>
   <script src="<%= assetUrl('/static/js/sidebar.js') %>"></script>
   <script src="<%= assetUrl('/static/js/chat-sidebar-badge.js') %>"></script>
-  <script src="<%= assetUrl('/static/js/orders-sidebar-badge.js') %>"></script>
 
   <!-- ✅ Модалка -->
   <script src="<%= assetUrl('/static/js/appModal.js') %>"></script>
+  <script>
+    (function () {
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {});
+        });
+      }
+    })();
+  </script>
 
   <!-- Кнопка профиля / выхода -->
   <script>

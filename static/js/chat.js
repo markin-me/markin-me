@@ -1,4 +1,4 @@
-﻿
+
 (function () {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -20,6 +20,8 @@
   const CHAT_TYPING_IDLE_STOP_MS = 2600;
   const CHAT_TYPING_BLUR_STOP_MS = 320;
   const CHAT_MESSAGE_ALERT_COOLDOWN_MS = 900;
+  const CHAT_PUSH_SYNC_DEBOUNCE_MS = 180;
+  const CHAT_PUSH_SUBSCRIPTION_CLIENT_ID = 0;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
   const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
   const IMAGE_OPTIMIZE_TARGET_BYTES = 900 * 1024;
@@ -211,6 +213,22 @@
   let messageAlertAudioUnlocked = false;
   let messageAlertLastAt = 0;
   let messageAlertSummariesPrimed = false;
+  let suppressMessageAlertUntil = 0;
+  let webPushPublicKeyCache = "";
+  let webPushPublicKeyFetched = false;
+  let webPushSyncTimer = 0;
+  let webPushSyncInFlight = false;
+  let webPushSyncedFingerprint = "";
+  let webPushSubscriptionVapidKey = "";
+  let webPushSyncRequestedWithPermission = false;
+  let webPushSyncForceRequested = false;
+  const adminPushVapidStorageKey = "dashboard_chat_push_vapid_t" + String(getTenantId());
+
+  try {
+    webPushSubscriptionVapidKey = String(localStorage.getItem(adminPushVapidStorageKey) || "");
+  } catch {
+    webPushSubscriptionVapidKey = "";
+  }
 
   function getClientsRightApi() {
     const api = window.__clientsDashboardApi;
@@ -224,6 +242,14 @@
       const n = Number(meta.content);
       if (Number.isFinite(n) && n > 0) return n;
     }
+    try {
+      const raw = localStorage.getItem("tenant");
+      if (raw) {
+        const tenant = JSON.parse(raw);
+        const id = Number(tenant && tenant.id);
+        if (Number.isFinite(id) && id > 0) return Math.trunc(id);
+      }
+    } catch {}
     return 1;
   }
 
@@ -1711,6 +1737,10 @@
       }
     }
     requestMessageAlertNotificationPermission();
+    queueWebPushSubscriptionSync({
+      requestPermission: true,
+      immediate: true,
+    });
   }
 
   function playFallbackMessageAlertTone() {
@@ -1756,7 +1786,7 @@
     try {
       const n = new Notification(String(title || "Новое сообщение"), {
         body: String(body || "Откройте чат, чтобы ответить."),
-        silent: true,
+        silent: false,
       });
       n.onclick = () => {
         window.focus();
@@ -1765,8 +1795,15 @@
     } catch {}
   }
 
+  function shouldSuppressLocalBrowserNotification() {
+    if (!isWebPushSupported() || !isWebPushSecureContext()) return false;
+    if (Notification.permission !== "granted") return false;
+    return !!String(webPushSyncedFingerprint || "").trim();
+  }
+
   function maybeNotifyIncomingMessage(options = {}) {
     const opts = options || {};
+    if (Date.now() < Number(suppressMessageAlertUntil || 0)) return;
     const tabActive = isChatTabActiveForRead();
     if (tabActive && opts.allowWhenActive !== true) return;
 
@@ -1776,14 +1813,268 @@
 
     playMessageAlertSound();
     if (!tabActive) {
+      if (shouldSuppressLocalBrowserNotification()) return;
       showIncomingMessageBrowserNotification(opts.title, opts.body);
     }
   }
 
   function initMessageAlerts() {
-    document.addEventListener("click", unlockMessageAlertsOnce, { once: true, passive: true });
-    document.addEventListener("touchstart", unlockMessageAlertsOnce, { once: true, passive: true });
+    document.addEventListener("click", unlockMessageAlertsOnce, { once: true, passive: true, capture: true });
+    document.addEventListener("touchstart", unlockMessageAlertsOnce, { once: true, passive: true, capture: true });
     document.addEventListener("keydown", unlockMessageAlertsOnce, { once: true });
+    queueWebPushSubscriptionSync({ immediate: true });
+  }
+
+  function isWebPushSupported() {
+    if (typeof window === "undefined") return false;
+    if (!("serviceWorker" in navigator)) return false;
+    if (!("PushManager" in window)) return false;
+    if (!("Notification" in window)) return false;
+    return true;
+  }
+
+  function isWebPushSecureContext() {
+    if (window.isSecureContext === true) return true;
+    const host = String(window.location && window.location.hostname || "").toLowerCase();
+    if (host === "localhost" || host.endsWith(".localhost")) return true;
+    if (host === "127.0.0.1" || host === "[::1]") return true;
+    if (/^127(?:\.\d{1,3}){3}$/.test(host)) return true;
+    return false;
+  }
+
+  function webPushArrayBufferToBase64(raw) {
+    if (!raw) return "";
+    try {
+      const bytes = new Uint8Array(raw);
+      let binary = "";
+      for (let i = 0; i < bytes.byteLength; i += 1) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return window.btoa(binary);
+    } catch {
+      return "";
+    }
+  }
+
+  function webPushUrlBase64ToUint8Array(base64String) {
+    const value = String(base64String || "").trim();
+    if (!value) return new Uint8Array();
+    const padding = "=".repeat((4 - (value.length % 4)) % 4);
+    const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const binary = window.atob(base64);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      out[i] = binary.charCodeAt(i);
+    }
+    return out;
+  }
+
+  function normalizeWebPushSubscriptionForApi(subscription) {
+    if (!subscription) return null;
+    const source = typeof subscription.toJSON === "function"
+      ? subscription.toJSON()
+      : subscription;
+    const endpoint = String(source && source.endpoint || "").trim();
+    if (!endpoint) return null;
+
+    let p256dh = "";
+    let auth = "";
+    if (source && source.keys && typeof source.keys === "object") {
+      p256dh = String(source.keys.p256dh || "").trim();
+      auth = String(source.keys.auth || "").trim();
+    }
+    if ((!p256dh || !auth) && typeof subscription.getKey === "function") {
+      p256dh = p256dh || webPushArrayBufferToBase64(subscription.getKey("p256dh"));
+      auth = auth || webPushArrayBufferToBase64(subscription.getKey("auth"));
+    }
+    if (!p256dh || !auth) return null;
+
+    return {
+      endpoint: endpoint,
+      keys: {
+        p256dh: p256dh,
+        auth: auth,
+      },
+    };
+  }
+
+  function buildWebPushSubscriptionFingerprint(clientId, normalizedSubscription) {
+    const payload = normalizedSubscription && typeof normalizedSubscription === "object"
+      ? normalizedSubscription
+      : {};
+    const endpoint = String(payload.endpoint || "").trim();
+    const keys = payload.keys && typeof payload.keys === "object" ? payload.keys : {};
+    const p256dh = String(keys.p256dh || "");
+    const auth = String(keys.auth || "");
+    return [String(clientId || ""), endpoint, p256dh, auth].join("|");
+  }
+
+  async function getWebPushServiceWorkerRegistration() {
+    if (!isWebPushSupported()) return null;
+    try {
+      const byScope = await navigator.serviceWorker.getRegistration("/");
+      if (byScope && byScope.active) return byScope;
+      if (byScope) {
+        try {
+          const ready = await Promise.race([
+            navigator.serviceWorker.ready,
+            new Promise((resolve) => window.setTimeout(() => resolve(null), 2400)),
+          ]);
+          return ready || byScope;
+        } catch {
+          return byScope;
+        }
+      }
+    } catch {}
+    try {
+      const fallback = await navigator.serviceWorker.getRegistration();
+      if (fallback && fallback.active) return fallback;
+      if (fallback) return fallback;
+    } catch {}
+    try {
+      const registered = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      if (registered && registered.active) return registered;
+      try {
+        const ready = await Promise.race([
+          navigator.serviceWorker.ready,
+          new Promise((resolve) => window.setTimeout(() => resolve(null), 2600)),
+        ]);
+        return ready || registered || null;
+      } catch {
+        return registered || null;
+      }
+    } catch {}
+    return null;
+  }
+
+  async function fetchWebPushPublicKey(options = {}) {
+    if (!options.forceRefresh && webPushPublicKeyFetched) {
+      return webPushPublicKeyCache;
+    }
+    const json = await apiJson(CHAT_TEMP_API_BASE + "/push/public-key");
+    const data = json && json.data ? json.data : {};
+    const enabled = data.enabled === true;
+    const key = enabled ? String(data.public_key || "").trim() : "";
+    webPushPublicKeyFetched = true;
+    webPushPublicKeyCache = key;
+    return key;
+  }
+
+  async function remoteUnsubscribeWebPushByEndpoint(endpoint) {
+    const safeEndpoint = String(endpoint || "").trim();
+    if (!safeEndpoint) return;
+    await apiJson(CHAT_TEMP_API_BASE + "/push/unsubscribe", {
+      method: "POST",
+      headers: { "x-chat-actor": "out" },
+      body: { endpoint: safeEndpoint },
+    }).catch(() => {});
+  }
+
+  function queueWebPushSubscriptionSync(options = {}) {
+    if (options.requestPermission === true) webPushSyncRequestedWithPermission = true;
+    if (options.force === true) webPushSyncForceRequested = true;
+    if (webPushSyncTimer) {
+      window.clearTimeout(webPushSyncTimer);
+      webPushSyncTimer = 0;
+    }
+    const delay = options.immediate === true ? 0 : CHAT_PUSH_SYNC_DEBOUNCE_MS;
+    webPushSyncTimer = window.setTimeout(() => {
+      webPushSyncTimer = 0;
+      const runOptions = {
+        requestPermission: webPushSyncRequestedWithPermission === true,
+        force: webPushSyncForceRequested === true,
+      };
+      webPushSyncRequestedWithPermission = false;
+      webPushSyncForceRequested = false;
+      syncWebPushSubscription(runOptions).catch(() => {});
+    }, delay);
+  }
+
+  async function syncWebPushSubscription(options = {}) {
+    if (!isWebPushSupported()) return;
+    if (!isWebPushSecureContext()) return;
+    if (webPushSyncInFlight) {
+      queueWebPushSubscriptionSync(options);
+      return;
+    }
+
+    webPushSyncInFlight = true;
+    try {
+      const registration = await getWebPushServiceWorkerRegistration();
+      if (!registration || !registration.pushManager) return;
+
+      const publicKey = await fetchWebPushPublicKey();
+      if (!publicKey) {
+        webPushSyncedFingerprint = "";
+        webPushSubscriptionVapidKey = "";
+        try { localStorage.removeItem(adminPushVapidStorageKey); } catch {}
+        return;
+      }
+
+      let permission = String(Notification.permission || "default");
+      if (permission === "default" && options.requestPermission === true) {
+        try {
+          permission = String(await Notification.requestPermission());
+        } catch {
+          permission = String(Notification.permission || "default");
+        }
+      }
+
+      let subscription = await registration.pushManager.getSubscription().catch(() => null);
+      if (permission !== "granted") {
+        const staleEndpoint = String(subscription && subscription.endpoint || "");
+        if (staleEndpoint) await remoteUnsubscribeWebPushByEndpoint(staleEndpoint);
+        webPushSyncedFingerprint = "";
+        return;
+      }
+
+      if (
+        subscription
+        && (!webPushSubscriptionVapidKey || webPushSubscriptionVapidKey !== publicKey)
+      ) {
+        const staleEndpoint = String(subscription.endpoint || "");
+        try { await subscription.unsubscribe(); } catch {}
+        if (staleEndpoint) await remoteUnsubscribeWebPushByEndpoint(staleEndpoint);
+        subscription = null;
+        webPushSyncedFingerprint = "";
+      }
+
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: webPushUrlBase64ToUint8Array(publicKey),
+        });
+      }
+
+      const normalizedSubscription = normalizeWebPushSubscriptionForApi(subscription);
+      if (!normalizedSubscription) return;
+
+      const fingerprint = buildWebPushSubscriptionFingerprint(
+        CHAT_PUSH_SUBSCRIPTION_CLIENT_ID,
+        normalizedSubscription
+      );
+      if (!options.force && fingerprint === webPushSyncedFingerprint) {
+        webPushSubscriptionVapidKey = publicKey;
+        try { localStorage.setItem(adminPushVapidStorageKey, publicKey); } catch {}
+        return;
+      }
+
+      await apiJson(CHAT_TEMP_API_BASE + "/push/subscribe", {
+        method: "POST",
+        headers: { "x-chat-actor": "out" },
+        body: {
+          client_id: CHAT_PUSH_SUBSCRIPTION_CLIENT_ID,
+          subscription: normalizedSubscription,
+        },
+      });
+      webPushSyncedFingerprint = fingerprint;
+      webPushSubscriptionVapidKey = publicKey;
+      try { localStorage.setItem(adminPushVapidStorageKey, publicKey); } catch {}
+    } catch {
+      // noop
+    } finally {
+      webPushSyncInFlight = false;
+    }
   }
 
   function markThreadDelivered(clientId) {
@@ -5173,6 +5464,7 @@
   async function selectClient(clientId) {
     const id = Number(clientId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
+    suppressMessageAlertUntil = Date.now() + 3000;
     const previousActiveClientId = state.activeClientId;
     stopLocalTypingSession(previousActiveClientId, { flush: true });
     saveThreadScrollPosition(previousActiveClientId);
@@ -5433,6 +5725,7 @@
     };
 
     const syncChatsOnForeground = () => {
+      queueWebPushSubscriptionSync({ immediate: true });
       syncRemoteSummariesSnapshot({ forceThreads: true }).catch(console.error);
       syncReadOnForeground();
     };

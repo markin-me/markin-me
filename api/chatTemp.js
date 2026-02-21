@@ -4,6 +4,7 @@ const path = require("path");
 const crypto = require("crypto");
 const multer = require("multer");
 const sharp = require("sharp");
+const webPush = require("web-push");
 const db = require("../db");
 
 const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
@@ -13,6 +14,7 @@ const CHAT_LONG_POLL_MIN_TIMEOUT_MS = 1000;
 const CHAT_TYPING_TTL_MS = 7000;
 const CHAT_TYPING_TEXT_MAX_LENGTH = 120;
 const CHAT_UPLOAD_MAX_FILE_BYTES = 20 * 1024 * 1024;
+const CHAT_PUSH_ENDPOINT_MAX_LENGTH = 1024;
 const CHAT_UPLOAD_RELATIVE_DIR = path.join("static", "uploads", "chat");
 const CHAT_UPLOAD_ABSOLUTE_DIR = path.join(__dirname, "..", CHAT_UPLOAD_RELATIVE_DIR);
 const CHAT_ALLOWED_IMAGE_MIME = new Set([
@@ -24,6 +26,32 @@ const CHAT_ALLOWED_IMAGE_MIME = new Set([
   "image/heic",
   "image/heif",
 ]);
+const WEB_PUSH_VAPID_PUBLIC_KEY = String(process.env.WEB_PUSH_VAPID_PUBLIC_KEY || "").trim();
+const WEB_PUSH_VAPID_PRIVATE_KEY = String(process.env.WEB_PUSH_VAPID_PRIVATE_KEY || "").trim();
+const WEB_PUSH_SUBJECT_LOCAL_DEFAULT = "mailto:push@markin-me.local";
+const WEB_PUSH_SUBJECT_PROD_DEFAULT = "mailto:push@markin-me.ru";
+const WEB_PUSH_SUBJECT_LOCAL = String(
+  process.env.WEB_PUSH_SUBJECT_LOCAL || WEB_PUSH_SUBJECT_LOCAL_DEFAULT
+).trim();
+const WEB_PUSH_SUBJECT_PROD = String(
+  process.env.WEB_PUSH_SUBJECT_PROD || WEB_PUSH_SUBJECT_PROD_DEFAULT
+).trim();
+const WEB_PUSH_SUBJECT = String(
+  String(process.env.NODE_ENV || "").toLowerCase() === "production"
+    ? (process.env.WEB_PUSH_SUBJECT || WEB_PUSH_SUBJECT_PROD)
+    : (process.env.WEB_PUSH_SUBJECT_LOCAL || process.env.WEB_PUSH_SUBJECT || WEB_PUSH_SUBJECT_LOCAL)
+).trim();
+let webPushEnabled = false;
+
+if (WEB_PUSH_VAPID_PUBLIC_KEY && WEB_PUSH_VAPID_PRIVATE_KEY) {
+  try {
+    webPush.setVapidDetails(WEB_PUSH_SUBJECT, WEB_PUSH_VAPID_PUBLIC_KEY, WEB_PUSH_VAPID_PRIVATE_KEY);
+    webPushEnabled = true;
+  } catch (err) {
+    webPushEnabled = false;
+    console.error("web-push VAPID init failed:", err);
+  }
+}
 
 try {
   fs.mkdirSync(CHAT_UPLOAD_ABSOLUTE_DIR, { recursive: true });
@@ -37,6 +65,255 @@ const attachmentUpload = multer({
 const threadWaiters = new Map();
 const tenantWaiters = new Map();
 const threadTypingState = new Map();
+let ensurePushSubscriptionsTablePromise = null;
+const CHAT_PUSH_UNIQUE_INDEX_LEGACY = "ux_chat_push_subscriptions_tenant_endpoint";
+const CHAT_PUSH_UNIQUE_INDEX_V2 = "ux_chat_push_subscriptions_tenant_actor_client_endpoint";
+
+async function ensurePushSubscriptionsIndexes() {
+  const [indexRows] = await db.query("SHOW INDEX FROM chat_push_subscriptions");
+  const indexes = Array.isArray(indexRows) ? indexRows : [];
+  const hasLegacyUnique = indexes.some((row) => String(row?.Key_name || "") === CHAT_PUSH_UNIQUE_INDEX_LEGACY);
+  const hasV2Unique = indexes.some((row) => String(row?.Key_name || "") === CHAT_PUSH_UNIQUE_INDEX_V2);
+
+  if (hasLegacyUnique && !hasV2Unique) {
+    await db.query(`
+      ALTER TABLE chat_push_subscriptions
+      DROP INDEX ${CHAT_PUSH_UNIQUE_INDEX_LEGACY},
+      ADD UNIQUE KEY ${CHAT_PUSH_UNIQUE_INDEX_V2} (tenant_id, actor, client_id, endpoint_hash)
+    `);
+    return;
+  }
+
+  if (!hasV2Unique) {
+    await db.query(`
+      ALTER TABLE chat_push_subscriptions
+      ADD UNIQUE KEY ${CHAT_PUSH_UNIQUE_INDEX_V2} (tenant_id, actor, client_id, endpoint_hash)
+    `);
+  }
+}
+
+function ensurePushSubscriptionsTable() {
+  if (ensurePushSubscriptionsTablePromise) return ensurePushSubscriptionsTablePromise;
+  ensurePushSubscriptionsTablePromise = db.query(`
+    CREATE TABLE IF NOT EXISTS chat_push_subscriptions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      tenant_id BIGINT UNSIGNED NOT NULL,
+      client_id BIGINT UNSIGNED NOT NULL,
+      actor ENUM('in','out') NOT NULL DEFAULT 'in',
+      endpoint_hash CHAR(64) NOT NULL,
+      endpoint VARCHAR(1024) NOT NULL,
+      p256dh VARCHAR(255) NOT NULL,
+      auth VARCHAR(255) NOT NULL,
+      user_agent VARCHAR(255) NOT NULL DEFAULT '',
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+      PRIMARY KEY (id),
+      UNIQUE KEY ${CHAT_PUSH_UNIQUE_INDEX_V2} (tenant_id, actor, client_id, endpoint_hash),
+      KEY idx_chat_push_subscriptions_thread (tenant_id, client_id, actor)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `)
+    .then(() => ensurePushSubscriptionsIndexes())
+    .then(() => true)
+    .catch((err) => {
+      ensurePushSubscriptionsTablePromise = null;
+      throw err;
+    });
+  return ensurePushSubscriptionsTablePromise;
+}
+
+function hashPushEndpoint(endpoint) {
+  return crypto.createHash("sha256").update(String(endpoint || "")).digest("hex");
+}
+
+function sanitizePushSubscription(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const endpoint = String(source.endpoint || "").trim().slice(0, CHAT_PUSH_ENDPOINT_MAX_LENGTH);
+  if (!endpoint) return null;
+  const keys = source.keys && typeof source.keys === "object" ? source.keys : {};
+  const p256dh = String(keys.p256dh || "").trim().slice(0, 255);
+  const auth = String(keys.auth || "").trim().slice(0, 255);
+  if (!p256dh || !auth) return null;
+  // Typical Web Push key sizes: p256dh >= ~87 chars, auth >= ~22 chars.
+  if (p256dh.length < 80 || auth.length < 16) return null;
+  return { endpoint, p256dh, auth };
+}
+
+async function upsertPushSubscription(tenantId, clientId, actorKey, subscription, userAgent) {
+  await ensurePushSubscriptionsTable();
+  const actor = actorKey === "in" ? "in" : "out";
+  const endpoint = String(subscription.endpoint || "");
+  const endpointHash = hashPushEndpoint(endpoint);
+  const normalizedUserAgent = String(userAgent || "").slice(0, 255);
+
+  // For customer chat subscriptions keep one active endpoint per browser profile.
+  // This prevents duplicate notifications when stale endpoints remain valid.
+  if (actor === "in" && normalizedUserAgent) {
+    await db.query(
+      `DELETE FROM chat_push_subscriptions
+        WHERE tenant_id = ? AND client_id = ? AND actor = 'in'
+          AND user_agent = ? AND endpoint_hash <> ?`,
+      [Number(tenantId), Number(clientId), normalizedUserAgent, endpointHash]
+    );
+  }
+
+  await db.query(
+    `INSERT INTO chat_push_subscriptions
+      (tenant_id, client_id, actor, endpoint_hash, endpoint, p256dh, auth, user_agent)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+      client_id = VALUES(client_id),
+      actor = VALUES(actor),
+      endpoint = VALUES(endpoint),
+      p256dh = VALUES(p256dh),
+      auth = VALUES(auth),
+      user_agent = VALUES(user_agent),
+      updated_at = CURRENT_TIMESTAMP(3)`,
+    [
+      Number(tenantId),
+      Number(clientId),
+      actor,
+      endpointHash,
+      endpoint,
+      String(subscription.p256dh || ""),
+      String(subscription.auth || ""),
+      normalizedUserAgent,
+    ]
+  );
+}
+
+async function deletePushSubscriptionByEndpoint(tenantId, endpoint, actorKey = "") {
+  await ensurePushSubscriptionsTable();
+  const endpointHash = hashPushEndpoint(endpoint);
+  const actor = actorKey === "in" || actorKey === "out" ? actorKey : "";
+  if (actor) {
+    await db.query(
+      `DELETE FROM chat_push_subscriptions
+        WHERE tenant_id = ? AND endpoint_hash = ? AND actor = ?`,
+      [Number(tenantId), endpointHash, actor]
+    );
+    return;
+  }
+  await db.query(
+    `DELETE FROM chat_push_subscriptions
+      WHERE tenant_id = ? AND endpoint_hash = ?`,
+    [Number(tenantId), endpointHash]
+  );
+}
+
+async function deletePushSubscriptionsByIds(ids) {
+  const list = (Array.isArray(ids) ? ids : [])
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!list.length) return;
+  await db.query(
+    `DELETE FROM chat_push_subscriptions
+      WHERE id IN (${list.map(() => "?").join(",")})`,
+    list
+  );
+}
+
+async function deletePushSubscriptionsForThread(tenantId, clientId) {
+  await ensurePushSubscriptionsTable();
+  await db.query(
+    `DELETE FROM chat_push_subscriptions
+      WHERE tenant_id = ? AND client_id = ?`,
+    [Number(tenantId), Number(clientId)]
+  );
+}
+
+async function listPushSubscriptionsForThread(tenantId, clientId, actorKey) {
+  await ensurePushSubscriptionsTable();
+  const actor = actorKey === "in" ? "in" : "out";
+  let rows = [];
+  if (actor === "out") {
+    const [outRows] = await db.query(
+      `SELECT id, endpoint, p256dh, auth
+         FROM chat_push_subscriptions
+        WHERE tenant_id = ? AND actor = 'out' AND (client_id = ? OR client_id = 0)`,
+      [Number(tenantId), Number(clientId)]
+    );
+    rows = outRows;
+  } else {
+    const [inRows] = await db.query(
+      `SELECT id, endpoint, p256dh, auth
+         FROM chat_push_subscriptions
+        WHERE tenant_id = ? AND client_id = ? AND actor = 'in'`,
+      [Number(tenantId), Number(clientId)]
+    );
+    rows = inRows;
+  }
+  return Array.isArray(rows) ? rows : [];
+}
+
+function getPushPreviewText(message) {
+  const msg = message && typeof message === "object" ? message : {};
+  const text = String(msg.text || "").replace(/\s+/g, " ").trim();
+  if (text) return text.slice(0, 200);
+  const attachment = msg.attachment && typeof msg.attachment === "object" ? msg.attachment : null;
+  if (attachment && String(attachment.kind || "").toLowerCase() === "image") return "\u0424\u043e\u0442\u043e";
+  return "\u041d\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435";
+}
+
+async function sendPushToSubscriptions(subscriptions, payload) {
+  if (!webPushEnabled) return;
+  const rows = Array.isArray(subscriptions) ? subscriptions : [];
+  if (!rows.length) return;
+  const body = JSON.stringify(payload || {});
+  const invalidIds = [];
+  for (const row of rows) {
+    const endpoint = String(row && row.endpoint || "");
+    const p256dh = String(row && row.p256dh || "");
+    const auth = String(row && row.auth || "");
+    const id = Number(row && row.id || 0);
+    if (!endpoint || !p256dh || !auth) {
+      if (id > 0) invalidIds.push(id);
+      continue;
+    }
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await webPush.sendNotification(
+        { endpoint, keys: { p256dh, auth } },
+        body,
+        { TTL: 120, urgency: "high" }
+      );
+    } catch (err) {
+      const statusCode = Number(err && (err.statusCode || err.status_code) || 0);
+      if ((statusCode === 404 || statusCode === 410) && id > 0) {
+        invalidIds.push(id);
+      }
+      if (statusCode !== 404 && statusCode !== 410) {
+        console.error("web-push send failed:", err && err.message ? err.message : err);
+      }
+    }
+  }
+  if (invalidIds.length) {
+    await deletePushSubscriptionsByIds(invalidIds).catch(() => {});
+  }
+}
+
+async function notifyPushPeerAboutMessage(tenantId, clientId, senderActor, message) {
+  if (!webPushEnabled) return;
+  const peerActor = senderActor === "in" ? "out" : "in";
+  const subscriptions = await listPushSubscriptionsForThread(tenantId, clientId, peerActor);
+  if (!subscriptions.length) return;
+  const messageIdRaw = String(message && message.id ? message.id : "").trim();
+  const safeMessageId = messageIdRaw.replace(/[^a-zA-Z0-9_-]+/g, "").slice(0, 80);
+  const tagSuffix = safeMessageId || String(Date.now());
+  const preview = getPushPreviewText(message);
+  const title = peerActor === "in"
+    ? "\u041d\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u043e\u0442 \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438"
+    : "\u041d\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u043e\u0442 \u043a\u043b\u0438\u0435\u043d\u0442\u0430";
+  const url = peerActor === "in" ? "/shop" : "/dashboard/chat";
+  await sendPushToSubscriptions(subscriptions, {
+    type: "chat_message",
+    tenant_id: Number(tenantId),
+    client_id: Number(clientId),
+    title,
+    body: preview,
+    url,
+    tag: `chat-${tenantId}-${clientId}-${peerActor}-${tagSuffix}`,
+  });
+}
 
 function getTenantId(req) {
   const fromHeader = Number(req.headers["x-tenant-id"]);
@@ -52,6 +329,19 @@ function normalizeClientId(value) {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return null;
   return String(Math.trunc(n));
+}
+
+function normalizePushClientId(value, actorKey) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return actorKey === "out" ? "0" : null;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  const id = Math.trunc(n);
+  if (id > 0) return String(id);
+  if (id === 0 && actorKey === "out") return "0";
+  return null;
 }
 
 function parseJsonObject(value) {
@@ -1276,6 +1566,67 @@ module.exports = function makeChatTempRouter() {
     }
   });
 
+  router.get("/push/public-key", async (req, res) => {
+    return res.json({
+      ok: true,
+      data: {
+        enabled: webPushEnabled,
+        public_key: webPushEnabled ? WEB_PUSH_VAPID_PUBLIC_KEY : "",
+      },
+    });
+  });
+
+  router.post("/push/subscribe", async (req, res) => {
+    try {
+      if (!webPushEnabled) {
+        return res.status(503).json({ ok: false, error: "PUSH_DISABLED" });
+      }
+      const tenantId = getTenantId(req);
+      const actorKey = getRequestReactionActor(req);
+      const clientIdRaw = req.body?.client_id ?? req.body?.clientId ?? req.query?.client_id ?? "";
+      const clientId = normalizePushClientId(
+        clientIdRaw,
+        actorKey
+      );
+      if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
+      const subscription = sanitizePushSubscription(req.body?.subscription || req.body || {});
+      if (!subscription) return res.status(400).json({ ok: false, error: "SUBSCRIPTION_INVALID" });
+      await upsertPushSubscription(
+        tenantId,
+        clientId,
+        actorKey,
+        subscription,
+        String(req.headers["user-agent"] || "")
+      );
+      return res.json({
+        ok: true,
+        data: {
+          client_id: Number(clientId),
+          actor: actorKey === "in" ? "in" : "out",
+          enabled: webPushEnabled,
+        },
+      });
+    } catch (err) {
+      console.error("chat-temp POST /push/subscribe error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
+  router.post("/push/unsubscribe", async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const actorKey = getRequestReactionActor(req);
+      const subscription = sanitizePushSubscription(req.body?.subscription || req.body || {});
+      const endpoint = subscription ? subscription.endpoint : String(req.body?.endpoint || "").trim();
+      if (!endpoint) return res.status(400).json({ ok: false, error: "ENDPOINT_REQUIRED" });
+      await deletePushSubscriptionByEndpoint(tenantId, endpoint, actorKey);
+      return res.json({ ok: true, data: { unsubscribed: true } });
+    } catch (err) {
+      console.error("chat-temp POST /push/unsubscribe error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
   router.post("/thread/:clientId/messages", async (req, res) => {
     const tenantId = getTenantId(req);
     const clientId = normalizeClientId(req.params.clientId);
@@ -1309,13 +1660,17 @@ module.exports = function makeChatTempRouter() {
         messageChanged: true,
         typingChanged: true,
       });
+      const responseMessage = row ? mapDbMessageRowToApi(row) : message;
+      notifyPushPeerAboutMessage(tenantId, clientId, actorKey, responseMessage).catch((err) => {
+        console.error("chat-temp push notify error:", err && err.message ? err.message : err);
+      });
 
       return res.json({
         ok: true,
         data: {
           client_id: Number(clientId),
           updated_at: updatedAt.toISOString(),
-          message: row ? mapDbMessageRowToApi(row) : message,
+          message: responseMessage,
         },
       });
     } catch (err) {
@@ -1659,6 +2014,7 @@ module.exports = function makeChatTempRouter() {
       );
       const deleted = Number(result?.affectedRows || 0) > 0;
       if (deleted) {
+        await deletePushSubscriptionsForThread(tenantId, clientId).catch(() => {});
         clearThreadTypingState(tenantId, clientId);
         notifyThreadChange(tenantId, clientId, new Date().toISOString());
       }
