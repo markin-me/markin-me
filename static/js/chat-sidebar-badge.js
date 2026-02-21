@@ -8,12 +8,18 @@
   const FALLBACK_POLL_MS = 4000;
   const WAIT_TIMEOUT_MS = 25000;
   const WAIT_RETRY_MS = 1200;
+  const MESSAGE_ALERT_COOLDOWN_MS = 900;
   let timerId = 0;
   let inFlight = false;
   let waitLoopStarted = false;
   let waitLoopToken = 0;
   let waitSupported = true;
   let summariesUpdatedAt = "";
+  let unreadTotal = 0;
+  let unreadPrimed = false;
+  let messageAlertLastAt = 0;
+  let messageAlertAudioCtx = null;
+  let messageAlertAudioUnlocked = false;
 
   function getTenantId() {
     const meta = document.querySelector('meta[name="tenant_id"]');
@@ -85,6 +91,169 @@
     return 0;
   }
 
+  function isTabForegroundActive() {
+    if (document.visibilityState && document.visibilityState !== "visible") return false;
+    if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
+    return true;
+  }
+
+  function getTenantMessageSoundUrl() {
+    try {
+      const raw = localStorage.getItem("tenant");
+      if (!raw) return "";
+      const tenant = JSON.parse(raw);
+      return String(tenant && tenant.sound_new_message_url || "").trim();
+    } catch {
+      return "";
+    }
+  }
+
+  function ensureAlertAudioContext() {
+    if (messageAlertAudioCtx) return messageAlertAudioCtx;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    try {
+      messageAlertAudioCtx = new Ctx();
+    } catch {
+      messageAlertAudioCtx = null;
+    }
+    return messageAlertAudioCtx;
+  }
+
+  function requestNotificationPermissionSafe() {
+    if (!("Notification" in window)) return;
+    if (Notification.permission !== "default") return;
+    try {
+      const result = Notification.requestPermission();
+      if (result && typeof result.then === "function") result.catch(function () {});
+    } catch {}
+  }
+
+  function unlockAlertsOnce() {
+    const soundUrl = getTenantMessageSoundUrl();
+    if (soundUrl) {
+      try {
+        const audio = new Audio(soundUrl);
+        audio.volume = 0.001;
+        const unlockPromise = audio.play();
+        if (unlockPromise && typeof unlockPromise.then === "function") {
+          unlockPromise.then(function () {
+            messageAlertAudioUnlocked = true;
+            try {
+              audio.pause();
+              audio.currentTime = 0;
+            } catch {}
+          }).catch(function () {});
+        }
+      } catch {}
+    }
+    const ctx = ensureAlertAudioContext();
+    if (ctx) {
+      if (ctx.state === "running") {
+        messageAlertAudioUnlocked = true;
+      } else {
+        ctx.resume().then(function () {
+          messageAlertAudioUnlocked = true;
+        }).catch(function () {});
+      }
+    }
+    requestNotificationPermissionSafe();
+  }
+
+  function playFallbackAlertTone() {
+    const ctx = ensureAlertAudioContext();
+    if (!ctx || !messageAlertAudioUnlocked) return;
+    if (ctx.state !== "running") return;
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(920, now);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.07, now + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.16);
+    } catch {}
+  }
+
+  function playMessageAlertSound() {
+    const soundUrl = getTenantMessageSoundUrl();
+    if (soundUrl) {
+      try {
+        const audio = new Audio(soundUrl);
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.catch === "function") {
+          playPromise.catch(function () {
+            playFallbackAlertTone();
+          });
+        }
+        return;
+      } catch {}
+    }
+    playFallbackAlertTone();
+  }
+
+  function showMessageNotification(title, body) {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    try {
+      const n = new Notification(String(title || "Новое сообщение"), {
+        body: String(body || "Откройте чаты, чтобы ответить."),
+        silent: true,
+      });
+      n.onclick = function () {
+        window.focus();
+        n.close();
+      };
+    } catch {}
+  }
+
+  function pickLatestUnreadRow(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    return list
+      .filter(function (row) {
+        return getUnreadValue(row) > 0;
+      })
+      .sort(function (a, b) {
+        const ua = String(a && (a.updated_at || a.updatedAt || a.last_message_at || a.lastMessageAt) || "");
+        const ub = String(b && (b.updated_at || b.updatedAt || b.last_message_at || b.lastMessageAt) || "");
+        return compareIsoDates(ub, ua);
+      })[0] || null;
+  }
+
+  function maybeNotifyUnreadIncrease(nextTotal, rows) {
+    if (!unreadPrimed) return;
+    if (!Number.isFinite(nextTotal) || nextTotal <= unreadTotal) return;
+    if (isChatPageActive()) return;
+
+    const now = Date.now();
+    if (now - messageAlertLastAt < MESSAGE_ALERT_COOLDOWN_MS) return;
+    messageAlertLastAt = now;
+
+    playMessageAlertSound();
+
+    if (!isTabForegroundActive()) {
+      const latestRow = pickLatestUnreadRow(rows);
+      const clientName = String(
+        latestRow
+        && latestRow.meta
+        && typeof latestRow.meta === "object"
+        && latestRow.meta.name
+        || "Клиент"
+      ).trim() || "Клиент";
+      const preview = String(
+        latestRow && (latestRow.last_message_text || latestRow.lastMessageText) || ""
+      ).replace(/\s+/g, " ").trim();
+      showMessageNotification(
+        "Новое сообщение: " + clientName,
+        preview || "Откройте чаты, чтобы ответить."
+      );
+    }
+  }
+
   function getLatestUpdatedAt(rows) {
     const list = Array.isArray(rows) ? rows : [];
     let latest = "";
@@ -126,6 +295,9 @@
       const total = json.data.reduce(function (sum, row) {
         return sum + getUnreadValue(row);
       }, 0);
+      maybeNotifyUnreadIncrease(total, json.data);
+      unreadTotal = Number.isFinite(total) && total > 0 ? total : 0;
+      unreadPrimed = true;
 
       showBadge(total);
       const latestUpdatedAt = getLatestUpdatedAt(json.data);
@@ -244,6 +416,9 @@
   }
 
   startPolling();
+  document.addEventListener("click", unlockAlertsOnce, { once: true, passive: true });
+  document.addEventListener("touchstart", unlockAlertsOnce, { once: true, passive: true });
+  document.addEventListener("keydown", unlockAlertsOnce, { once: true });
 
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState === "visible") {
