@@ -7425,7 +7425,7 @@ function openCartSheet() {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "shop-checkout-btn";
-  btn.innerHTML = `Оформить <span class="shop-sheet-checkout-total">0 ₽</span>`;
+  btn.innerHTML = `Оформить · <span class="shop-sheet-checkout-total">0 ₽</span>`;
 
   cartActions.appendChild(clearBtn);
   cartActions.appendChild(btn);
@@ -7630,6 +7630,7 @@ function applySheetAddressTitle(backMode = "cart") {
   let sheetEditingId = null;
 
   async function showSheetCheckout() {
+    __forceHideCheckoutDeliveryProgress = true;
     hideHeaderToggle();
     checkoutWrap.classList.remove("hidden");
     list.classList.add("hidden");
@@ -7682,6 +7683,7 @@ function applySheetAddressTitle(backMode = "cart") {
   }
 
   function showSheetCart() {
+    __forceHideCheckoutDeliveryProgress = false;
     hideHeaderToggle();
     checkoutWrap.classList.add("hidden");
     list.classList.remove("hidden");
@@ -12616,9 +12618,16 @@ function setBottomNavActive(tab) {
    * Обновляет полоску прогресса до бесплатной доставки и сумму в кнопке «Оформить» (мобилка и десктоп).
    * В кнопке: сумма корзины + стоимость доставки, если доставка платная; при достижении порога — только сумма корзины.
    */
+  let __forceHideCheckoutDeliveryProgress = false;
+
   async function updateMobileDeliveryProgress() {
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     const isDesktop = !isMobile;
+    if (__forceHideCheckoutDeliveryProgress) {
+      if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
+      if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
+      return;
+    }
     if (window._checkoutMethodCode != null && window._checkoutMethodCode !== "delivery") {
       if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
       if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
@@ -13296,6 +13305,7 @@ function setBottomNavActive(tab) {
   }
 
   async function openCheckoutView({ container, onBack, hasAddressEditor, isSheet, actions, onEditAddress, onEditPickup }) {
+    __forceHideCheckoutDeliveryProgress = true;
     if (!container) return;
 
     const items = cartItemsResolved();
@@ -13447,12 +13457,18 @@ function setBottomNavActive(tab) {
 
     // Итог товаров после всех скидок (включая клиентскую скидку)
     const orderTotal = roundPrice(Math.max(0, baseOrderTotal - customerOrderDiscountAmount));
+    const checkoutTotalWithDelivery = orderTotal + getDeliveryCostForTotal(orderTotal);
+    function setCheckoutSubmitLabel() {
+      const label = `Заказать · ${money(checkoutTotalWithDelivery)}`;
+      if (actions?.submitBtn) actions.submitBtn.textContent = label;
+      if (elMobileCheckoutSubmitBtn) elMobileCheckoutSubmitBtn.textContent = label;
+    }
 
     container.innerHTML = "";
 
     if (actions?.submitBtn) {
       actions.submitBtn.disabled = false;
-      actions.submitBtn.textContent = "Заказать";
+      setCheckoutSubmitLabel();
     }
     if (actions?.backBtn) actions.backBtn.classList.remove("hidden");
     const footerEl = actions?.backBtn?.parentElement;
@@ -13463,9 +13479,11 @@ function setBottomNavActive(tab) {
       elMobileCheckoutBackBtn.parentElement?.classList.remove("is-order-success");
     }
     if (elMobileCheckoutSubmitBtn) {
-      elMobileCheckoutSubmitBtn.textContent = "Заказать";
+      setCheckoutSubmitLabel();
       if (actions?.submitBtn) elMobileCheckoutSubmitBtn.onclick = () => actions.submitBtn.click();
     }
+    if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
+    if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
 
     const wrap = document.createElement("div");
     wrap.className = "shop-checkout";
@@ -14564,6 +14582,31 @@ function setBottomNavActive(tab) {
     const resultWrap = document.createElement("div");
     resultWrap.className = "shop-order-result hidden";
     container.appendChild(resultWrap);
+    let checkoutSendingOverlay = null;
+
+    function ensureCheckoutSendingOverlay() {
+      if (checkoutSendingOverlay) return checkoutSendingOverlay;
+      const overlay = document.createElement("div");
+      overlay.className = "shop-checkout-sending-overlay hidden";
+      overlay.innerHTML = `
+        <div class="shop-checkout-sending-card">
+          <div class="shop-checkout-sending-spinner" aria-hidden="true"></div>
+          <div class="shop-checkout-sending-text">Подождите, отправляем заказ...</div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      checkoutSendingOverlay = overlay;
+      return overlay;
+    }
+    if (elMobileDeliveryProgressWrap) elMobileDeliveryProgressWrap.classList.add("hidden");
+    if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
+
+    function setCheckoutSubmitting(isSubmitting) {
+      if (actions?.submitBtn) actions.submitBtn.disabled = !!isSubmitting;
+      if (elMobileCheckoutSubmitBtn) elMobileCheckoutSubmitBtn.disabled = !!isSubmitting;
+      const overlay = ensureCheckoutSendingOverlay();
+      overlay.classList.toggle("hidden", !isSubmitting);
+    }
 
     function showOrderSuccess(orderId, publicId, totalPrice) {
       resultWrap.innerHTML = `
@@ -14577,11 +14620,21 @@ function setBottomNavActive(tab) {
       wrap.classList.add("hidden");
 
       const goToMain = async () => {
+        __forceHideCheckoutDeliveryProgress = false;
         clearCartAll();
         saveCheckoutDraft({});
-        if (typeof window.updateActiveOrdersBadge === "function") await window.updateActiveOrdersBadge();
-        if (isSheet && window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen()) window.AppModal.close("sheet");
-        window.location.href = getShopBasePath();
+        if (typeof window.updateActiveOrdersBadge === "function") { Promise.resolve(window.updateActiveOrdersBadge()).catch(() => {}); }
+        if (isSheet && window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen()) {
+          window.AppModal.close("sheet");
+        } else if (typeof showCartView === "function") {
+          showCartView();
+        }
+        if (typeof setActiveNav === "function") setActiveNav("menu");
+        try {
+          const scroller = document.querySelector(".shop-products-panel .panel-body");
+          if (scroller && typeof scroller.scrollTo === "function") scroller.scrollTo({ top: 0, behavior: "smooth" });
+          else window.scrollTo({ top: 0, behavior: "smooth" });
+        } catch {}
       };
 
       if (actions?.backBtn) {
@@ -14778,20 +14831,9 @@ function setBottomNavActive(tab) {
         }
       }
 
-      try {
-        const stockCheckItems = buildStockCheckItemsPayloadFromResolved(resolvedItems);
-        const stockCheck = await checkStockForItemsPayload(stockCheckItems, {
-          showToastOnOut: true,
-          toastMessage: "\u041d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
-      refreshOnOut: true,
-        });
-        if (!stockCheck.available) {
-          alert("Некоторые товары уже закончились. Корзина обновлена.");
-          return;
-        }
-      } catch (stockErr) {
-        console.warn("Stock check before submit failed:", stockErr);
-      }
+      setCheckoutSubmitting(true);
+
+      
 
       saveCheckoutDraft({
         promo_code: payload.promo_code,
@@ -14809,8 +14851,7 @@ function setBottomNavActive(tab) {
         change_from: payload.change_from,
       });
 
-      actions.submitBtn.disabled = true;
-      actions.submitBtn.textContent = "Отправляем…";
+      setCheckoutSubmitting(true);
 
       const orderTotalWithDelivery = orderTotal + getDeliveryCostForTotal(orderTotal);
 
@@ -14818,8 +14859,8 @@ function setBottomNavActive(tab) {
         const res = await apiJson("/api/public/orders", { method: "POST", body: payload });
 
         if (res.data && res.data.duplicate && res.data.needConfirmation && res.data.existingOrder) {
-          actions.submitBtn.disabled = false;
-          actions.submitBtn.textContent = "Заказать";
+          setCheckoutSubmitting(false);
+          setCheckoutSubmitLabel();
           showOrderConflict(res.data.existingOrder, async () => {
             payload.force_new = true;
             const btnNewAgain = resultWrap.querySelector("[data-action=\"order-conflict-new\"]");
@@ -14833,6 +14874,7 @@ function setBottomNavActive(tab) {
                 localStorage.setItem(LAST_ORDER_KEY, String(res2.data.public_id));
                 clearCartAll();
                 saveCheckoutDraft({});
+                setCheckoutSubmitting(false);
                 showOrderSuccess(res2.data.id, res2.data.public_id, orderTotalWithDelivery);
               } else {
                 alert("Не удалось создать заказ.");
@@ -14850,8 +14892,8 @@ function setBottomNavActive(tab) {
               }
             }
           }, () => {
-            actions.submitBtn.disabled = false;
-            actions.submitBtn.textContent = "Заказать";
+            setCheckoutSubmitting(false);
+            setCheckoutSubmitLabel();
           });
           return;
         }
@@ -14860,23 +14902,24 @@ function setBottomNavActive(tab) {
           localStorage.setItem(LAST_ORDER_KEY, String(res.data.public_id));
           clearCartAll();
           saveCheckoutDraft({});
-          if (typeof window.updateActiveOrdersBadge === "function") await window.updateActiveOrdersBadge();
+          if (typeof window.updateActiveOrdersBadge === "function") { Promise.resolve(window.updateActiveOrdersBadge()).catch(() => {}); }
+          setCheckoutSubmitting(false);
           showOrderSuccess(res.data.id, res.data.public_id, orderTotalWithDelivery);
         } else {
-          actions.submitBtn.disabled = false;
-          actions.submitBtn.textContent = "Заказать";
+          setCheckoutSubmitting(false);
+          setCheckoutSubmitLabel();
         }
       } catch (e) {
         console.error(e);
         if (e.message === "MIN_ORDER" && deliveryRules.minOrder > 0) {
           alert(`Минимальная сумма заказа ${money(deliveryRules.minOrder)}.`);
-          actions.submitBtn.disabled = false;
-          actions.submitBtn.textContent = "Заказать";
+          setCheckoutSubmitting(false);
+          setCheckoutSubmitLabel();
           return;
         }
         alert("Ошибка оформления заказа: " + (e.message || "UNKNOWN"));
-        actions.submitBtn.disabled = false;
-        actions.submitBtn.textContent = "Заказать";
+        setCheckoutSubmitting(false);
+        setCheckoutSubmitLabel();
       }
       };
     }
@@ -15059,18 +15102,34 @@ function initShopLate() {
       // Обработчик кнопки "назад" на Android (popstate)
       // Добавляем запись в историю при открытии bottom sheet, чтобы можно было обработать "назад"
       let originalOpen = window.AppModal?.open;
+      let originalClose = window.AppModal?.close;
       let isOpeningSheet = false;
+      let hasSheetHistoryEntry = false;
+      const ensureSheetHistoryEntry = () => {
+        if (hasSheetHistoryEntry) return;
+        window.history.pushState({ sheet: true, shopBack: true }, '', window.location.href);
+        hasSheetHistoryEntry = true;
+      };
       if (originalOpen && typeof originalOpen === 'function') {
         window.AppModal.open = function(opts) {
           // Добавляем запись в историю перед открытием только если sheet еще не открыт
           if (!isOpeningSheet && (!window.AppModal.isOpen || !window.AppModal.isOpen())) {
             isOpeningSheet = true;
-            window.history.pushState({ sheet: true }, '', window.location.href);
+            ensureSheetHistoryEntry();
             setTimeout(() => {
               isOpeningSheet = false;
             }, 100);
           }
           return originalOpen.call(this, opts);
+        };
+      }
+      if (originalClose && typeof originalClose === "function") {
+        window.AppModal.close = function(type) {
+          const result = originalClose.call(this, type);
+          if (!window.AppModal.isOpen || !window.AppModal.isOpen()) {
+            hasSheetHistoryEntry = false;
+          }
+          return result;
         };
       }
 
@@ -15086,10 +15145,13 @@ function initShopLate() {
           e.stopPropagation();
           // Добавляем запись обратно в историю, чтобы можно было снова нажать "назад"
           isHandlingBackButton = true;
-          window.history.pushState({ sheet: true }, '', window.location.href);
+          window.history.pushState({ sheet: true, shopBack: true }, '', window.location.href);
+          hasSheetHistoryEntry = true;
           setTimeout(() => {
             isHandlingBackButton = false;
           }, 0);
+        } else if (!window.AppModal || !window.AppModal.isOpen || !window.AppModal.isOpen()) {
+          hasSheetHistoryEntry = false;
         }
       });
 

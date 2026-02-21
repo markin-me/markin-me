@@ -425,17 +425,6 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     }
   });
 
-
-  // ---------------------------
-  // SSE
-  // ---------------------------
-  // GET /api/admin/orders/events
-  router.get("/events", (req, res) => {
-    const tenantId = helpers.getTenantId(req);
-    const storeId = helpers.getStoreId(req);
-    ordersEvents.attach(req, res, tenantId, storeId);
-  });
-
   // GET /api/admin/orders/changes?since=cursor
   router.get("/changes", (req, res) => {
     try {
@@ -443,7 +432,68 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const storeId = helpers.getStoreId(req);
       const since = req.query.since;
       const data = ordersEvents.getChanges(tenantId, storeId, since);
-      res.json({ ok: true, data });
+      const cursor = ordersEvents.getCurrentCursor(tenantId, storeId);
+      res.json({ ok: true, data, cursor });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // GET /api/admin/orders/changes/wait?since=cursor&timeout_ms=20000
+  router.get("/changes/wait", async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const since = Number(req.query.since || 0);
+      const timeoutMs = Number(req.query.timeout_ms || req.query.timeout || 20000);
+      const cursorNow = ordersEvents.getCurrentCursor(tenantId, storeId);
+
+      if (Number.isFinite(since) && since > 0 && cursorNow > since) {
+        return res.json({ ok: true, data: { changed: true, timeout: false, cursor: cursorNow } });
+      }
+      if ((!Number.isFinite(since) || since <= 0) && cursorNow > 0) {
+        return res.json({ ok: true, data: { changed: true, timeout: false, cursor: cursorNow } });
+      }
+
+      const waitResult = await ordersEvents.waitForChanges(tenantId, storeId, timeoutMs);
+      const cursor = Number(waitResult?.cursor || ordersEvents.getCurrentCursor(tenantId, storeId) || 0);
+      const changed = Number.isFinite(cursor) && cursor > (Number.isFinite(since) ? since : 0);
+
+      return res.json({
+        ok: true,
+        data: {
+          changed,
+          timeout: waitResult?.timeout === true,
+          cursor,
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // GET /api/admin/orders/new-count
+  router.get("/new-count", async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const [rows] = await db.query(
+        `SELECT COUNT(*) AS cnt
+         FROM order_orders o
+         LEFT JOIN order_statuses s
+           ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+         WHERE o.tenant_id=? AND o.store_id=? AND o.is_active=1
+           AND COALESCE(s.is_final, 0)=0
+           AND (
+             LOWER(COALESCE(s.code, ''))='new'
+             OR LOWER(COALESCE(s.title, '')) LIKE 'нов%'
+           )`,
+        [tenantId, storeId]
+      );
+      const total = Math.max(0, Number(rows?.[0]?.cnt || 0));
+      res.json({ ok: true, data: { total } });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: "DB_ERROR" });

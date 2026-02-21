@@ -15,8 +15,9 @@
       </li>
 
       <li>
-        <a href="/dashboard/orders" class="nav-item <%= activePage === 'orders' ? 'active-nav' : '' %>">
+        <a href="/dashboard/orders" id="sidebarOrdersNavLink" class="nav-item nav-item--chat nav-item--orders <%= activePage === 'orders' ? 'active-nav' : '' %>">
           <i class="fas fa-shopping-cart nav-icon"></i>
+          <span class="sidebar-chat-unread hidden" id="sidebarOrdersUnreadBadge" aria-live="polite" aria-atomic="true"></span>
           <span class="nav-text">Заказы</span>
         </a>
       </li>

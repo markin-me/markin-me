@@ -1,13 +1,9 @@
 function createOrdersEventsHub() {
   const channels = new Map();
+  const waiters = new Map();
   const MAX_EVENTS = 500;
-  const HEARTBEAT_MS = 20000;
-
-  function log(level, msg, meta = {}) {
-    const ts = new Date().toISOString();
-    const metaStr = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : "";
-    console.log(`[SSE ${ts}] [${level}] ${msg}${metaStr}`);
-  }
+  const LONG_POLL_MIN_TIMEOUT_MS = 1000;
+  const LONG_POLL_MAX_TIMEOUT_MS = 25000;
 
   function getKey(tenantId, storeId) {
     return `${tenantId}:${storeId}`;
@@ -16,20 +12,9 @@ function createOrdersEventsHub() {
   function getChannel(tenantId, storeId) {
     const key = getKey(tenantId, storeId);
     if (!channels.has(key)) {
-      channels.set(key, { clients: new Set(), log: [], seq: 0 });
+      channels.set(key, { log: [], seq: 0 });
     }
     return channels.get(key);
-  }
-
-  function sendEvent(res, evt) {
-    try {
-      res.write(`id: ${evt.id}\n`);
-      res.write(`event: ${evt.event}\n`);
-      res.write(`data: ${JSON.stringify(evt.data)}\n\n`);
-    } catch (err) {
-      log("ERROR", "sendEvent failed", { error: err.message });
-      throw err;
-    }
   }
 
   function publish(tenantId, storeId, event, data) {
@@ -45,21 +30,11 @@ function createOrdersEventsHub() {
     channel.log.push(payload);
     if (channel.log.length > MAX_EVENTS) channel.log.shift();
 
-    let sendErrors = 0;
-    channel.clients.forEach((res) => {
-      try {
-        sendEvent(res, payload);
-      } catch (err) {
-        sendErrors += 1;
-      }
-    });
-    if (sendErrors > 0) {
-      log("WARN", "publish: failed to send to some clients", {
-        tenantId,
-        storeId,
-        event,
-        sendErrors,
-        totalClients: channel.clients.size,
+    const key = getKey(tenantId, storeId);
+    const set = waiters.get(key);
+    if (set && set.size) {
+      Array.from(set).forEach((resolveWaiter) => {
+        try { resolveWaiter({ timeout: false, cursor: payload.id }); } catch {}
       });
     }
   }
@@ -71,41 +46,38 @@ function createOrdersEventsHub() {
     return channel.log.filter((evt) => evt.id > lastId);
   }
 
-  function attach(req, res, tenantId, storeId) {
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders?.();
-
+  function getCurrentCursor(tenantId, storeId) {
     const channel = getChannel(tenantId, storeId);
+    return Number(channel.seq || 0);
+  }
 
-    const lastEventId = req.headers["last-event-id"];
-    if (lastEventId) {
-      const missed = getChanges(tenantId, storeId, lastEventId);
-      missed.forEach((evt) => sendEvent(res, evt));
-    }
+  function waitForChanges(tenantId, storeId, timeoutMs) {
+    const key = getKey(tenantId, storeId);
+    const timeout = Math.min(
+      LONG_POLL_MAX_TIMEOUT_MS,
+      Math.max(LONG_POLL_MIN_TIMEOUT_MS, Number(timeoutMs || 0) || 20000)
+    );
 
-    channel.clients.add(res);
-    const heartbeat = setInterval(() => {
-      try {
-        res.write(": ping\n\n");
-      } catch (err) {
-        log("WARN", "heartbeat write failed", { tenantId, storeId, error: err.message });
-      }
-    }, HEARTBEAT_MS);
+    return new Promise((resolve) => {
+      const set = waiters.get(key) || new Set();
+      let done = false;
 
-    res.on("close", () => {
-      clearInterval(heartbeat);
-      channel.clients.delete(res);
-      log("INFO", "SSE client disconnected", {
-        tenantId,
-        storeId,
-        clientCount: channel.clients.size,
-      });
+      const complete = (payload) => {
+        if (done) return;
+        done = true;
+        set.delete(complete);
+        if (!set.size) waiters.delete(key);
+        clearTimeout(timer);
+        resolve(payload || { timeout: true, cursor: getCurrentCursor(tenantId, storeId) });
+      };
+
+      set.add(complete);
+      waiters.set(key, set);
+      const timer = setTimeout(() => complete({ timeout: true, cursor: getCurrentCursor(tenantId, storeId) }), timeout);
     });
   }
 
-  return { publish, getChanges, attach };
+  return { publish, getChanges, getCurrentCursor, waitForChanges };
 }
 
 module.exports = { createOrdersEventsHub };

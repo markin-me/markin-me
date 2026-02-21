@@ -2514,11 +2514,60 @@
     showNewOrderNotification(orders && orders.length ? orders : null);
   }
 
+  function extractOrderStatusId(order) {
+    if (!order || typeof order !== "object") return null;
+    const raw =
+      order.status_id ??
+      order.statusId ??
+      order.status?.id ??
+      order.status?.status_id ??
+      null;
+    const id = Number(raw);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  }
+
+  function applyStageCountersDelta(prevOrder, nextOrder) {
+    if (!Array.isArray(state.statuses) || !state.statuses.length) return false;
+
+    const prevStatusId = extractOrderStatusId(prevOrder);
+    const nextStatusId = extractOrderStatusId(nextOrder);
+
+    if (!nextStatusId && !prevStatusId) return false;
+    if (prevStatusId && !nextStatusId) return false;
+    if (prevStatusId && nextStatusId && prevStatusId === nextStatusId) return false;
+
+    let changed = false;
+
+    if (prevStatusId) {
+      const prevStatus = state.statuses.find((s) => Number(s?.id) === prevStatusId);
+      if (prevStatus) {
+        const prevCount = Math.max(0, Number(prevStatus.count || 0));
+        const nextCount = Math.max(0, prevCount - 1);
+        if (nextCount !== prevCount) {
+          prevStatus.count = nextCount;
+          changed = true;
+        }
+      }
+    }
+
+    if (nextStatusId) {
+      const nextStatus = state.statuses.find((s) => Number(s?.id) === nextStatusId);
+      if (nextStatus) {
+        const prevCount = Math.max(0, Number(nextStatus.count || 0));
+        nextStatus.count = prevCount + 1;
+        changed = true;
+      }
+    }
+
+    return changed;
+  }
+
   function handleOrderEvent(order) {
     if (!order || !order.id) return;
 
     const idx = state.orders.findIndex((o) => Number(o.id) === Number(order.id));
     const wasExisting = idx >= 0;
+    const prevOrder = wasExisting ? state.orders[idx] : null;
     if (wasExisting) {
       state.orders[idx] = { ...state.orders[idx], ...order };
     } else {
@@ -2540,6 +2589,9 @@
       setInfo(order);
     }
 
+    if (applyStageCountersDelta(prevOrder, order)) {
+      renderStages();
+    }
     scheduleStageRefresh();
 
     const statusCode = (order.status_code || "").toLowerCase();
@@ -2551,17 +2603,18 @@
 
   async function fetchChanges() {
     if (!state.lastEventId) {
-      const prevIds = new Set(state.orders.map((o) => Number(o.id)));
-      await loadAndRenderOrders(true);
-      const newOrders = state.orders.filter((o) => !prevIds.has(Number(o.id)));
-      if (newOrders.length) {
-        notifyNewOrders(newOrders);
-      }
+      const bootstrap = await apiJson("/api/admin/orders/changes?since=0");
+      const cursor = Number(bootstrap?.cursor || 0);
+      state.lastEventId = Number.isFinite(cursor) && cursor > 0 ? cursor : null;
       return;
     }
 
     try {
       const json = await apiJson(`/api/admin/orders/changes?since=${state.lastEventId}`);
+      const cursor = Number(json?.cursor || 0);
+      if (Number.isFinite(cursor) && cursor > 0) {
+        state.lastEventId = Math.max(Number(state.lastEventId || 0), cursor);
+      }
       const changes = Array.isArray(json.data) ? json.data : [];
       if (!changes.length) return;
       changes.forEach((evt) => {
@@ -2588,6 +2641,7 @@
   // При возврате на вкладку вызываем pollOrdersList сразу (visibilitychange).
   const ORDERS_POLL_INTERVAL_MS = 15000; // 15 сек
   let ordersPollTimer = null;
+  let ordersChangesPollTimer = null;
 
   async function pollOrdersList() {
     try {
@@ -2595,6 +2649,11 @@
       await loadOrders();
       const newOrders = state.orders.filter((o) => !prevIds.has(Number(o.id)));
       if (newOrders.length) {
+        for (const nextOrder of newOrders) {
+          applyStageCountersDelta(null, nextOrder);
+        }
+        renderStages();
+        scheduleStageRefresh();
         notifyNewOrders(newOrders);
       }
       renderOrders();
@@ -2629,74 +2688,66 @@
     ordersPollTimer = null;
   }
 
-  let sseEventSource = null;
-  let sseReconnectTimeout = null;
-  let sseReconnectAttempts = 0;
-  const SSE_RECONNECT_DELAY_MS = 3000;
-  const SSE_MAX_RECONNECT_DELAY_MS = 60000;
+  // Long-poll mode.
+  function startOrdersPolling() {
+    if (!ordersChangesPollTimer) {
+      const tickChanges = async () => {
+        if (!ordersChangesPollTimer) return;
+        try {
+          if (!state.lastEventId) {
+            await fetchChanges();
+          }
 
-  function initSse() {
-    if (typeof EventSource === "undefined") return;
+          const waited = await waitOrdersChanges(state.lastEventId || 0, 20000);
+          if (!ordersChangesPollTimer) return;
 
-    if (sseReconnectTimeout) {
-      clearTimeout(sseReconnectTimeout);
-      sseReconnectTimeout = null;
+          if (waited.changed) {
+            await fetchChanges();
+          } else if (Number.isFinite(waited.cursor) && waited.cursor > 0 && !state.lastEventId) {
+            state.lastEventId = waited.cursor;
+          }
+        } catch (e) {
+          console.error(e);
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        } finally {
+          if (!ordersChangesPollTimer) return;
+          setTimeout(tickChanges, 0);
+        }
+      };
+      ordersChangesPollTimer = true;
+      void tickChanges();
     }
 
-    if (sseEventSource) {
-      sseEventSource.close();
-      sseEventSource = null;
+    if (ordersPollTimer) return;
+    ordersPollTimer = true;
+    scheduleNextPoll();
+  }
+
+  async function waitOrdersChanges(since, timeoutMs = 20000) {
+    const qs = new URLSearchParams({
+      since: String(Number(since || 0)),
+      timeout_ms: String(Math.max(1000, Number(timeoutMs || 20000))),
+      _ts: String(Date.now()),
+    });
+    const json = await apiJson(`/api/admin/orders/changes/wait?${qs.toString()}`);
+    const data = json?.data || {};
+    return {
+      changed: data.changed === true,
+      timeout: data.timeout === true,
+      cursor: Number(data.cursor || 0),
+    };
+  }
+
+  function stopOrdersPolling() {
+    if (ordersPollTimer != null && typeof ordersPollTimer === "number") {
+      clearTimeout(ordersPollTimer);
     }
+    ordersPollTimer = null;
 
-    // EventSource не поддерживает кастомные заголовки — передаём токен и store_id через query
-    const token = localStorage.getItem('authToken');
-    const storeId = localStorage.getItem('activeStoreId') || '1';
-    const params = new URLSearchParams();
-    if (token) params.set('token', token);
-    params.set('store_id', storeId);
-    const url = `/api/admin/orders/events?${params.toString()}`;
-
-    sseEventSource = new EventSource(url);
-
-    sseEventSource.addEventListener("open", () => {
-      sseReconnectAttempts = 0;
-    });
-
-    sseEventSource.addEventListener("order.created", (e) => {
-      if (e.lastEventId) state.lastEventId = e.lastEventId;
-      try {
-        const data = JSON.parse(e.data || "{}");
-        handleOrderEvent(data);
-        notifyNewOrders([data]);
-      } catch (err) {
-        console.error(err);
-      }
-    });
-
-    sseEventSource.addEventListener("order.updated", (e) => {
-      if (e.lastEventId) state.lastEventId = e.lastEventId;
-      try {
-        const data = JSON.parse(e.data || "{}");
-        handleOrderEvent(data);
-      } catch (err) {
-        console.error(err);
-      }
-    });
-
-    sseEventSource.addEventListener("error", () => {
-      fetchChanges().catch(console.error);
-      sseEventSource.close();
-      sseEventSource = null;
-      const delay = Math.min(
-        SSE_RECONNECT_DELAY_MS * Math.pow(2, sseReconnectAttempts),
-        SSE_MAX_RECONNECT_DELAY_MS
-      );
-      sseReconnectAttempts += 1;
-      sseReconnectTimeout = setTimeout(() => {
-        sseReconnectTimeout = null;
-        initSse();
-      }, delay);
-    });
+    if (ordersChangesPollTimer != null && typeof ordersChangesPollTimer === "number") {
+      clearTimeout(ordersChangesPollTimer);
+    }
+    ordersChangesPollTimer = null;
   }
 
   document.addEventListener("visibilitychange", () => {
@@ -3498,7 +3549,7 @@
       document.addEventListener("click", unlockAudioOnce, { once: true });
       document.addEventListener("keydown", unlockAudioOnce, { once: true });
 
-      initSse();
+      stopOrdersPolling();
       startOrdersPolling();
     } catch (e) {
       console.error(e);
@@ -3511,8 +3562,9 @@
   document.addEventListener('tenantStoreChanged', (event) => {
     console.log('Филиал изменен:', event.detail.store);
     state.clientsCache.clear();
+    state.lastEventId = null;
     loadAndRenderOrders(false);
-    initSse();
+    stopOrdersPolling();
     startOrdersPolling();
   });
 })();

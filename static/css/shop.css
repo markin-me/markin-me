@@ -10520,6 +10520,14 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   border-color: var(--shop-buy-hover);
 }
 
+/* Cart footer checkout button should be one line: "Оформить · 1 234 ₽" */
+.shop-cart-footer-actions .shop-checkout-btn,
+.shop-mobile-cart-actions .shop-checkout-btn{
+  flex-direction: row;
+  gap: 6px;
+  white-space: nowrap;
+}
+
 .shop-checkout-back{
   width: 52px;
   height: 52px;
@@ -10554,6 +10562,54 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 .shop-checkout-submit-btn:hover{
   background: var(--shop-buy-hover);
   border-color: var(--shop-buy-hover);
+}
+
+.shop-checkout-sending-overlay{
+  position: fixed;
+  inset: 0;
+  z-index: 10020;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 23, 42, 0.32);
+  backdrop-filter: blur(1px);
+}
+
+.shop-checkout-sending-overlay.hidden{
+  display: none !important;
+}
+
+.shop-checkout-sending-card{
+  min-width: 260px;
+  max-width: min(92vw, 360px);
+  border-radius: 16px;
+  background: #fff;
+  border: 1px solid var(--color-border, #e2e8f0);
+  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.18);
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.shop-checkout-sending-spinner{
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 3px solid rgba(249, 115, 22, 0.25);
+  border-top-color: #f97316;
+  animation: shopCheckoutSpin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+
+.shop-checkout-sending-text{
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1.25;
+  color: var(--color-text, #0f172a);
+}
+
+@keyframes shopCheckoutSpin{
+  to{ transform: rotate(360deg); }
 }
 
 /* ==========================================================================
@@ -11785,6 +11841,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   border-radius:10px;
   display:grid;
   place-items:center;
+  white-space: nowrap;
 }
 .shop-checkout-address input[readonly]{
   background:var(--color-surface-2);

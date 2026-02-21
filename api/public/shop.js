@@ -95,19 +95,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   function str(v) {
     return v === undefined || v === null ? '' : String(v);
   }
-
-  // ---------------------------
-  // Public SSE (shop sync)
-  // ---------------------------
-  router.get('/events', (req, res) => {
-    if (!ordersEvents || typeof ordersEvents.attach !== 'function') {
-      return res.status(503).json({ ok: false, error: 'EVENTS_UNAVAILABLE' });
-    }
-    const tenantId = helpers.getTenantId(req);
-    const storeId = helpers.getStoreId(req);
-    ordersEvents.attach(req, res, tenantId, storeId);
-  });
-
   router.get('/changes', (req, res) => {
     try {
       if (!ordersEvents || typeof ordersEvents.getChanges !== 'function') {
@@ -118,6 +105,47 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const since = req.query.since;
       const data = ordersEvents.getChanges(tenantId, storeId, since);
       return res.json({ ok: true, data });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/changes/wait', async (req, res) => {
+    try {
+      if (!ordersEvents || typeof ordersEvents.waitForChanges !== 'function') {
+        return res.status(503).json({ ok: false, error: 'EVENTS_UNAVAILABLE' });
+      }
+
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const since = Number(req.query.since || 0);
+      const timeoutMs = Number(req.query.timeout_ms || req.query.timeout || 20000);
+      const cursorNow = ordersEvents.getCurrentCursor(tenantId, storeId);
+
+      if (Number.isFinite(since) && since > 0 && cursorNow > since) {
+        return res.json({ ok: true, data: { changed: true, timeout: false, cursor: cursorNow } });
+      }
+      if ((!Number.isFinite(since) || since <= 0) && cursorNow > 0) {
+        return res.json({ ok: true, data: { changed: true, timeout: false, cursor: cursorNow } });
+      }
+
+      const waitResult = await ordersEvents.waitForChanges(tenantId, storeId, timeoutMs);
+      const cursor = Number(waitResult?.cursor || ordersEvents.getCurrentCursor(tenantId, storeId) || 0);
+      const changed = Number.isFinite(cursor) && cursor > (Number.isFinite(since) ? since : 0);
+
+      return res.json({
+        ok: true,
+        data: {
+          changed,
+          timeout: waitResult?.timeout === true,
+          cursor,
+        },
+      });
     } catch (e) {
       console.error(e);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -2329,40 +2357,45 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       let minPriceSum = 0;
       const gridPhotos = [];
       let comboIsAvailable = true;
+      const blockIds = setBlocks.map((sb) => Number(sb.block_id)).filter((id) => Number.isFinite(id) && id > 0);
+      if (!blockIds.length) continue;
 
-      for (const sb of setBlocks) {
-        const minSelect = Math.max(1, Number(sb.min_select) || 1);
-        // Все доступные товары блока (с base_unit_id, base_qty для расчёта цены вариантов)
-        const [blockProductsRaw] = await db.query(
-          `SELECT p.id, p.price, p.photos_json, p.base_unit_id, p.base_qty, p.unit_id
-           FROM prod_combo_block_products bp
-           JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
-           LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
-           WHERE bp.tenant_id=? AND bp.block_id=? AND p.is_active=1 AND p.site_visibility=1
-             AND ${productIsAvailableSql}
-           ORDER BY bp.sort_order ASC, bp.id ASC`,
-          [storeId, tenantId, sb.block_id, storeId, storeId, storeId]
-        );
-        if (!blockProductsRaw.length) {
-          comboIsAvailable = false;
-          break;
-        }
+      const [allBlockProductsRaw] = await db.query(
+        `SELECT bp.block_id, p.id, p.price, p.photos_json, p.base_unit_id, p.base_qty, p.unit_id
+         FROM prod_combo_block_products bp
+         JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
+         LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+         WHERE bp.tenant_id=? AND bp.block_id IN (${blockIds.map(() => '?').join(',')})
+           AND p.is_active=1 AND p.site_visibility=1
+           AND ${productIsAvailableSql}
+         ORDER BY bp.block_id ASC, bp.sort_order ASC, bp.id ASC`,
+        [storeId, tenantId, ...blockIds, storeId, storeId, storeId]
+      );
 
-        const blockProductIds = blockProductsRaw.map((r) => Number(r.id)).filter(Boolean);
+      const blockProductsById = new Map();
+      for (const row of allBlockProductsRaw) {
+        const bid = Number(row.block_id);
+        if (!blockProductsById.has(bid)) blockProductsById.set(bid, []);
+        blockProductsById.get(bid).push(row);
+      }
+
+      const allProductIds = [...new Set(allBlockProductsRaw.map((r) => Number(r.id)).filter(Boolean))];
+      let variantByProductId = new Map();
+      if (allProductIds.length) {
         const [vaRows] = await db.query(
           `SELECT va.product_id, va.variant_group_id,
                   COALESCE(va.default_value_index, vg.default_value_index) AS default_value_index,
                   vg.unit_id, vg.values, vg.sort_order
            FROM prod_variant_assignments va
            JOIN prod_variant_groups vg ON vg.id = va.variant_group_id AND vg.tenant_id = va.tenant_id
-           WHERE va.tenant_id=? AND va.product_id IN (${blockProductIds.map(() => '?').join(',')})
+           WHERE va.tenant_id=? AND va.product_id IN (${allProductIds.map(() => '?').join(',')})
              AND va.is_active=1 AND vg.is_active=1
            ORDER BY va.sort_order ASC, vg.sort_order ASC`,
-          [tenantId, ...blockProductIds]
+          [tenantId, ...allProductIds]
         );
 
         const variantGroupIds = [...new Set(vaRows.map((r) => Number(r.variant_group_id)).filter(Boolean))];
-        let tiersByGroup = new Map();
+        const tiersByGroup = new Map();
         if (variantGroupIds.length) {
           const [tierRows] = await db.query(
             `SELECT variant_group_id, min_quantity, discount_percent, sort_order
@@ -2382,7 +2415,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           }
         }
 
-        const variantByProductId = new Map();
+        variantByProductId = new Map();
         for (const r of vaRows) {
           const pid = Number(r.product_id);
           if (variantByProductId.has(pid)) continue;
@@ -2394,6 +2427,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
             default_value_index: r.default_value_index != null ? Number(r.default_value_index) : 0,
             discount_tiers: tiersByGroup.get(Number(r.variant_group_id)) || [],
           });
+        }
+      }
+
+      for (const sb of setBlocks) {
+        const minSelect = Math.max(1, Number(sb.min_select) || 1);
+        const blockProductsRaw = blockProductsById.get(Number(sb.block_id)) || [];
+        if (!blockProductsRaw.length) {
+          comboIsAvailable = false;
+          break;
         }
 
         const productsWithMinPrice = await Promise.all(
@@ -2438,6 +2480,55 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
 
     return result;
+  }
+
+  const COMBOS_CACHE_TTL_MS = 15000;
+  const combosByCategoryCache = new Map();
+  const combosByCategoryInflight = new Map();
+
+  function getCombosCacheKey(tenantId, storeId, categoryId) {
+    return `${Number(tenantId) || 0}:${Number(storeId) || 0}:${Number(categoryId) || 0}`;
+  }
+
+  async function getCombosForCategoryCached(tenantId, storeId, categoryId) {
+    const key = getCombosCacheKey(tenantId, storeId, categoryId);
+    const now = Date.now();
+    const cached = combosByCategoryCache.get(key);
+    if (cached && cached.expiresAt > now) return cached.data;
+
+    const inflight = combosByCategoryInflight.get(key);
+    if (inflight) return inflight;
+
+    const p = (async () => {
+      const data = await getCombosForCategory(tenantId, storeId, categoryId);
+      combosByCategoryCache.set(key, {
+        data,
+        expiresAt: Date.now() + COMBOS_CACHE_TTL_MS,
+      });
+      return data;
+    })().finally(() => {
+      combosByCategoryInflight.delete(key);
+    });
+
+    combosByCategoryInflight.set(key, p);
+    return p;
+  }
+
+  async function mapWithConcurrency(items, limit, mapper) {
+    const list = Array.isArray(items) ? items : [];
+    const cap = Math.max(1, Number(limit) || 1);
+    const results = new Array(list.length);
+    let index = 0;
+
+    const workers = Array.from({ length: Math.min(cap, list.length) }, async () => {
+      while (true) {
+        const i = index++;
+        if (i >= list.length) break;
+        results[i] = await mapper(list[i], i);
+      }
+    });
+    await Promise.all(workers);
+    return results;
   }
 
   router.get('/cart-upsell', async (req, res) => {
@@ -2673,7 +2764,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         }
         await enrichProductsWithDisplayPrice(rows, tenantId);
         await enrichProductsWithDiscounts(rows, tenantId, storeId);
-        const combos = await getCombosForCategory(tenantId, storeId, categoryId);
+        const combos = await getCombosForCategoryCached(tenantId, storeId, categoryId);
         return res.json({ ok: true, data: rows, combos, category_id: categoryId });
       }
 
@@ -2741,7 +2832,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
       await enrichProductsWithDisplayPrice(rows, tenantId);
       await enrichProductsWithDiscounts(rows, tenantId, storeId);
-      const combos = await getCombosForCategory(tenantId, storeId, categoryId);
+      const combos = await getCombosForCategoryCached(tenantId, storeId, categoryId);
       res.json({ ok: true, data: rows, combos, category_id: categoryId });
     } catch (e) {
       console.error(e);
@@ -2881,9 +2972,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
 
       // Загружаем комбо для всех категорий параллельно
-      const combosResults = await Promise.all(
-        categoryIds.map(id => getCombosForCategory(tenantId, storeId, id).then(c => [id, c]).catch(() => [id, []]))
-      );
+      const combosResults = await mapWithConcurrency(categoryIds, 4, async (id) => {
+        try {
+          const combos = await getCombosForCategoryCached(tenantId, storeId, id);
+          return [id, combos];
+        } catch {
+          return [id, []];
+        }
+      });
       const combosByCategory = {};
       for (const [id, combos] of combosResults) combosByCategory[id] = combos;
 
@@ -4721,45 +4817,54 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       conn.release();
 
       // Записываем использование скидок
-      for (const appliedDiscount of appliedDiscounts) {
-        try {
-          await discountHelpers.recordDiscountUsage(
-            db,
-            tenantId,
-            appliedDiscount.discount_id,
-            orderId,
-            customerId,
-            appliedDiscount.discount_amount
-          );
-        } catch (discountErr) {
-          console.error('Failed to record discount usage:', discountErr);
-        }
-      }
-
-      const payload = await fetchOrderPayload(tenantId, orderStoreId, orderId, { storeTimezone });
-
-      if (payload) {
-        if (ordersEvents && typeof ordersEvents.publish === 'function') {
-          ordersEvents.publish(tenantId, orderStoreId, 'order.created', payload);
-        }
-        const botToken = process.env.TELEGRAM_BOT_TOKEN;
-        if (botToken) {
-          sendNewOrderNotification(tenantId, orderStoreId, payload, { db, botToken }).catch((err) =>
-            console.error('Telegram new order notify:', err)
-          );
-        }
-        sendOrderToPrintBot({ db, order: payload, tenantId, storeId: orderStoreId }).catch(() => {});
-      }
-
-      if (stockChangedProductIds.length) {
-        publishStockChanged(tenantId, orderStoreId, {
-          source: 'order.create',
-          order_id: orderId,
-          product_ids: stockChangedProductIds,
-        });
-      }
-
       res.json({ ok: true, data: { id: orderId, public_id: publicId } });
+
+      // Heavy post-actions run in background, response is already sent.
+      setImmediate(async () => {
+        try {
+          for (const appliedDiscount of appliedDiscounts) {
+            try {
+              await discountHelpers.recordDiscountUsage(
+                db,
+                tenantId,
+                appliedDiscount.discount_id,
+                orderId,
+                customerId,
+                appliedDiscount.discount_amount
+              );
+            } catch (discountErr) {
+              console.error('Failed to record discount usage:', discountErr);
+            }
+          }
+
+          const payload = await fetchOrderPayload(tenantId, orderStoreId, orderId, { storeTimezone });
+
+          if (payload) {
+            if (ordersEvents && typeof ordersEvents.publish === 'function') {
+              ordersEvents.publish(tenantId, orderStoreId, 'order.created', payload);
+            }
+            const botToken = process.env.TELEGRAM_BOT_TOKEN;
+            if (botToken) {
+              sendNewOrderNotification(tenantId, orderStoreId, payload, { db, botToken }).catch((err) =>
+                console.error('Telegram new order notify:', err)
+              );
+            }
+            sendOrderToPrintBot({ db, order: payload, tenantId, storeId: orderStoreId }).catch(() => {});
+          }
+
+          if (stockChangedProductIds.length) {
+            publishStockChanged(tenantId, orderStoreId, {
+              source: 'order.create',
+              order_id: orderId,
+              product_ids: stockChangedProductIds,
+            });
+          }
+        } catch (postErr) {
+          console.error('Order post-actions error:', postErr);
+        }
+      });
+
+      return;
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });

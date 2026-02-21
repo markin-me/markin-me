@@ -897,14 +897,6 @@
     stockEventsStoreId = null;
   }
 
-  function buildPublicStockEventsUrl() {
-    const params = new URLSearchParams({
-      tenant_id: String(tenantId),
-      store_id: String(getActiveStoreId()),
-    });
-    return `/api/public/events?${params.toString()}`;
-  }
-
   function queueStockAvailabilityRefresh(reason = "stock_sync", delayMs = 250) {
     const delay = Math.max(0, Number(delayMs || 0));
     if (stockRefreshDebounceTimer) clearTimeout(stockRefreshDebounceTimer);
@@ -957,60 +949,8 @@
 
   function ensurePublicStockEventsConnection() {
     const currentStoreId = Number(getActiveStoreId() || 0) || 1;
-    if (
-      stockEventsSource &&
-      stockEventsStoreId === currentStoreId
-    ) {
-      return;
-    }
-
-    closeStockEventsSource();
-    if (typeof EventSource === "undefined") return;
-
     stockEventsStoreId = currentStoreId;
-    const url = buildPublicStockEventsUrl();
-    try {
-      const es = new EventSource(url);
-      stockEventsSource = es;
-
-      es.addEventListener("stock.changed", (event) => {
-        const changedIds = extractStockEventProductIds(event);
-        if (changedIds.length) {
-          void refreshProductsByIds(changedIds)
-            .catch(() => {})
-            .finally(() => {
-              queueStockAvailabilityRefresh("sse_stock_changed", 120);
-            });
-          return;
-        }
-        queueStockAvailabilityRefresh("sse_stock_changed", 150);
-      });
-
-      es.addEventListener("order.created", (event) => {
-        const changedIds = extractStockEventProductIds(event);
-        if (changedIds.length) {
-          void refreshProductsByIds(changedIds)
-            .catch(() => {})
-            .finally(() => {
-              queueStockAvailabilityRefresh("sse_order_created", 180);
-            });
-          return;
-        }
-        queueStockAvailabilityRefresh("sse_order_created", 250);
-      });
-
-      es.addEventListener("error", () => {
-        if (stockEventsSource !== es) return;
-        closeStockEventsSource();
-        if (stockEventsReconnectTimer) return;
-        stockEventsReconnectTimer = setTimeout(() => {
-          stockEventsReconnectTimer = null;
-          ensurePublicStockEventsConnection();
-        }, 5000);
-      });
-    } catch (e) {
-      console.warn("Unable to connect public stock events:", e);
-    }
+    // Long-poll mode.
   }
 
   function bindStockSyncWakeupHandlers() {
@@ -3202,7 +3142,8 @@
       const photos = (selectionPhotos.length ? selectionPhotos : fallbackPhotos).slice(0, 4);
       const comboGridOrder = [0, 2, 3, 1];
       const itemQty = Number(item.qty || item.quantity || 1);
-      const itemName = `${escapeHtml(item.name || item.combo_title || "Комбо")} × ${itemQty}`;
+      const comboQtySuffix = itemQty > 1 ? ` × ${itemQty}` : "";
+      const itemName = `${escapeHtml(item.name || item.combo_title || "Комбо")}${comboQtySuffix}`;
       let html = `<div class="cart-row cart-row--combo">`;
       html += `<div class="cart-combo-thumb">`;
       for (let i = 0; i < 4; i += 1) {
@@ -3341,7 +3282,8 @@
     
     // ???????? ?????? ? ??????????? (? ?????, ??? ? ???????)
     const itemQty = Number(item.qty || item.quantity || 1);
-    const itemName = `${escapeHtml(item.name || "Товар")} × ${itemQty}`;
+    const itemQtySuffix = itemQty > 1 ? ` × ${itemQty}` : "";
+    const itemName = `${escapeHtml(item.name || "Товар")}${itemQtySuffix}`;
     html += `<div class="cart-title">${itemName}</div>`;
     
     // ?????? (????????? ?????)
@@ -6819,7 +6761,7 @@ async function initAddresses() {
 
       const t = document.createElement("div");
       t.className = "cart-title";
-      t.textContent = `${str(product.name)} × ${qty}`;
+      t.textContent = `${str(product.name)}${qty > 1 ? ` × ${qty}` : ""}`;
       mid.appendChild(t);
 
       // ????????? ???????? ? ?????????? ???????: ???????? ? ??????????? ? ?????
@@ -7246,7 +7188,7 @@ async function initAddresses() {
       applyAutoAddRules();
       clearAutoAddDismissedIfCartEmpty();
       saveCart();
-      renderProducts();
+      scheduleSyncAllProductCardsFromCart();
       updateCartBadge();
 
       // ????????? footer ? ?????? ??????????
@@ -7455,7 +7397,7 @@ function updateCartBadge() {
     clearAllAutoAddDismissed();
     applyAutoAddRules();
     saveCart();
-    renderProducts();
+    scheduleSyncAllProductCardsFromCart();
     prioritizeAboveFoldCardImages();
     renderCart();
     updateCartBadge();
@@ -8332,4 +8274,3 @@ if (__shopHasRequiredDom) initCore();
 
 // Late-loaded on shop-late.js. Core keeps a safe no-op to avoid ReferenceError during first paint.
 function updateMobileDeliveryProgress() {}
-
