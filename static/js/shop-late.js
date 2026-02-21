@@ -8817,6 +8817,13 @@ function renderSheetAddressList() {
     const selStart = inp.selectionStart;
     const v = str(inp.value);
     let digits = v.replace(/[^\d]/g, "");
+    if (!digits.length) {
+      inp.value = "+7";
+      if (typeof inp.setSelectionRange === "function") {
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+      }
+      return;
+    }
     if (digits.startsWith("8")) digits = "7" + digits.slice(1);
     if (!digits.startsWith("7")) digits = "7" + digits;
     digits = digits.slice(0, 11);
@@ -8824,9 +8831,9 @@ function renderSheetAddressList() {
     let mask = "+7";
     const rest = digits.slice(1); // без ведущей 7
     if (rest.length > 0) mask += " (" + rest.slice(0, 3);
-    if (rest.length >= 3) mask += ") " + rest.slice(3, 6);
-    if (rest.length >= 6) mask += "-" + rest.slice(6, 8);
-    if (rest.length >= 8) mask += "-" + rest.slice(8, 10);
+    if (rest.length >= 4) mask += ") " + rest.slice(3, 6);
+    if (rest.length >= 7) mask += "-" + rest.slice(6, 8);
+    if (rest.length >= 9) mask += "-" + rest.slice(8, 10);
 
     inp.value = mask;
 
@@ -8970,7 +8977,19 @@ function renderSheetAddressList() {
     form.appendChild(bWrap);
     wrap.appendChild(form);
 
-    phone.addEventListener("input", () => enforcePhonePrefix(phone));
+    const revealBirthdayStep = () => {
+      if (nextBtn.disabled || nextBtn.style.display === "none") return;
+      nextBtn.disabled = true;
+      nextBtn.style.display = "none";
+      bWrap.style.display = "grid";
+      note.textContent = "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0434\u0430\u0442\u0443 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f (\u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433).";
+      bday.focus();
+    };
+    phone.addEventListener("input", () => {
+      enforcePhonePrefix(phone);
+      const n = normalizePhone(phone.value);
+      if (n && n.length === 11 && n.startsWith("7")) revealBirthdayStep();
+    });
     phone.addEventListener("focus", () => enforcePhonePrefix(phone));
 
     const setBirthdayError = (msg) => {
@@ -8986,6 +9005,11 @@ function renderSheetAddressList() {
 
     bday.addEventListener("input", normalizeBirthdayField);
     bday.addEventListener("change", normalizeBirthdayField);
+    bday.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      if (!loginBtn.disabled) loginBtn.click();
+    });
     bday.addEventListener("blur", () => {
       if (!str(bday.value).trim()) return;
       if (!isValidBirthday(bday.value)) {
@@ -9000,11 +9024,7 @@ function renderSheetAddressList() {
         alert("Введите телефон (РФ): +7XXXXXXXXXX");
         return;
       }
-      nextBtn.disabled = true;
-      nextBtn.style.display = "none";
-      bWrap.style.display = "grid";
-      note.textContent = "Введите дату рождения (дд.мм.гггг).";
-      bday.focus();
+      revealBirthdayStep();
     });
 
     bdayInfoBtn.addEventListener("click", (e) => {

@@ -309,26 +309,41 @@ header{
     align-items:center;
     min-width:0;
     margin-left:.35rem;
+    margin-top:6px;
+  }
+  .header-address-button{
+    align-items:center;
   }
   .header-address-content{
-    position:relative;
+    position:static;
+    display:flex;
+    flex-direction:column;
+    gap:1px;
+    min-width:0;
+    margin-top:12px;
+    align-items:flex-start;
+  }
+  .header-address-text{
+    line-height:1.1;
+    text-align:left;
+    align-self:flex-start;
+  }
+  .header-address-chevron{
+    margin-top:0;
   }
   .logo-text{
     margin-right:0;
   }
   .header-store-status:not(.hidden){
-    position:absolute;
-    top:100%;
-    left:0;
-    right:0;
+    position:static;
     display:block;
     font-size:0.75rem;
     font-weight:500;
     color:var(--color-text-muted);
     line-height:1.15;
-    white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis;
+    white-space:normal;
+    overflow:visible;
+    text-overflow:initial;
   }
 }
 
@@ -9200,7 +9215,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   background: var(--shop-buy);
 }
 .shop-combo-radio.is-selected::after{
-  content: "вњ“";
+  content: "\2713";
   position: absolute;
   inset: 0;
   display: grid;
@@ -10925,7 +10940,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   background: var(--shop-buy);
 }
 .shop-pd-option-radio.is-checked::after{
-  content: "вњ“";
+  content: "\2713";
   position: absolute;
   inset: 0;
   display: grid;
