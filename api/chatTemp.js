@@ -13,7 +13,7 @@ const CHAT_LONG_POLL_MIN_TIMEOUT_MS = 1000;
 const CHAT_TYPING_TTL_MS = 7000;
 const CHAT_TYPING_TEXT_MAX_LENGTH = 120;
 const CHAT_UPLOAD_MAX_FILE_BYTES = 20 * 1024 * 1024;
-const CHAT_UPLOAD_RELATIVE_DIR = path.join("uploads", "chat");
+const CHAT_UPLOAD_RELATIVE_DIR = path.join("static", "uploads", "chat");
 const CHAT_UPLOAD_ABSOLUTE_DIR = path.join(__dirname, "..", CHAT_UPLOAD_RELATIVE_DIR);
 const CHAT_ALLOWED_IMAGE_MIME = new Set([
   "image/jpeg",
@@ -114,7 +114,7 @@ function sanitizeAttachment(raw) {
   const dataUrl = String(raw.dataUrl || "");
   const url = String(raw.url || raw.src || "").trim();
   const hasDataUrl = /^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl);
-  const hasUrl = /^\/uploads\/chat\//i.test(url) || /^https?:\/\//i.test(url);
+  const hasUrl = /^(?:\/uploads\/chat\/|\/static\/uploads\/chat\/)/i.test(url) || /^https?:\/\//i.test(url);
   if (!hasDataUrl && !hasUrl) return null;
   if (hasDataUrl && dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) return null;
 

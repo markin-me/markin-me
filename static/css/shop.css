@@ -6887,6 +6887,7 @@ body.page-shop .shop-company-chat-btn:hover{
   overflow-y: auto;
   overflow-x: hidden;
   padding: 10px 16px 14px;
+  scroll-padding-top: 12px;
   scrollbar-gutter: stable;
 }
 
@@ -8138,6 +8139,10 @@ body.page-shop.shop-company-chat-open{
     font-size: 18px;
   }
 
+  .shop-company-chat-feed{
+    padding-top: 14px;
+  }
+
   .shop-company-chat-text{
     font-size: 15px;
   }
@@ -8406,7 +8411,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
     overflow: hidden;
   }
 
-  body.page-shop header{
+  body.page-shop > header{
     position: fixed;
     top: 0;
     left: 0;

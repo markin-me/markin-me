@@ -1662,7 +1662,7 @@
     const dataUrl = String(attachment.dataUrl || "");
     const url = String(attachment.url || attachment.src || "");
     const hasDataUrl = /^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl);
-    const hasUrl = /^\/uploads\/chat\//i.test(url) || /^https?:\/\//i.test(url);
+    const hasUrl = /^(?:\/uploads\/chat\/|\/static\/uploads\/chat\/)/i.test(url) || /^https?:\/\//i.test(url);
     return hasDataUrl || hasUrl;
   }
 

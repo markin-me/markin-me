@@ -502,7 +502,7 @@
 
   function getFeedViewportStateSnapshot() {
     if (!feed) return null;
-    const top = Math.max(0, Number(feed.scrollTop || 0));
+    const top = normalizePersistedFeedTop(Number(feed.scrollTop || 0));
     if (!Number.isFinite(top)) return null;
     const snapshot = {
       top: top,
@@ -531,12 +531,19 @@
     return Math.max(0, Math.min(Number(value || 0), maxTop));
   }
 
+  function normalizePersistedFeedTop(value) {
+    const top = Number(value || 0);
+    if (!Number.isFinite(top) || top <= 0) return 0;
+    if (isMobileChatViewport() && top <= 24) return 0;
+    return top;
+  }
+
   function applyFeedViewportStateSnapshot(snapshot) {
     if (!feed || !snapshot || typeof snapshot !== "object") return false;
     const rawTop = Number(snapshot.top);
     if (!Number.isFinite(rawTop)) return false;
 
-    feed.scrollTop = clampFeedScrollTop(rawTop);
+    feed.scrollTop = clampFeedScrollTop(normalizePersistedFeedTop(rawTop));
 
     const anchorId = String(snapshot.anchorId || "");
     if (anchorId && thread) {
@@ -640,6 +647,9 @@
     applyFeedViewportStateSnapshot(pendingFeedRestoreState);
     if (!isFeedViewportRestoreSatisfied(pendingFeedRestoreState)) return false;
     pendingFeedRestoreState = null;
+    requestAnimationFrame(function () {
+      ensureTopVisibleEntryNotClipped();
+    });
     return true;
   }
 
@@ -648,7 +658,7 @@
     const isOpen = overlay.classList.contains("is-open");
     if (!isOpen && opts.force !== true) return;
     if (!feed) return;
-    const nextTop = Math.max(0, Number(feed.scrollTop || 0));
+    const nextTop = normalizePersistedFeedTop(Number(feed.scrollTop || 0));
     lastFeedScrollTop = nextTop;
 
     if (!lastFeedViewportState || typeof lastFeedViewportState !== "object") {
@@ -672,6 +682,7 @@
   function restoreFeedScrollPosition(options) {
     const opts = options || {};
     const clientId = String(opts.clientId || getActiveChatClientId() || "");
+    let normalizedTopSnapshot = false;
 
     let snapshot = lastFeedViewportState && typeof lastFeedViewportState === "object"
       ? { ...lastFeedViewportState }
@@ -692,10 +703,60 @@
       };
     }
 
+    if (isMobileChatViewport() && thread && snapshot) {
+      const firstRow = thread.querySelector(".shop-company-chat-row[data-message-id]");
+      const firstRowId = String(firstRow && firstRow.getAttribute("data-message-id") || "");
+      const snapshotAnchorId = String(snapshot.anchorId || "");
+      const snapshotTop = Number(snapshot.top || 0);
+      if (
+        firstRowId
+        && snapshotAnchorId
+        && firstRowId === snapshotAnchorId
+        && Number.isFinite(snapshotTop)
+        && snapshotTop <= 220
+      ) {
+        snapshot = {
+          ...snapshot,
+          top: 0,
+          anchorId: "",
+          anchorOffset: 0,
+        };
+        normalizedTopSnapshot = true;
+      }
+    }
+
+    if (normalizedTopSnapshot && clientId) {
+      savePersistedFeedViewportState(clientId, snapshot);
+    }
+
     pendingFeedRestoreState = { ...snapshot };
     const applied = applyFeedViewportStateSnapshot(snapshot);
     if (!applied) return false;
     scheduleFeedViewportRestoreStabilization(snapshot);
+    if (isMobileChatViewport() && Number(snapshot.top) <= 4) {
+      const normalizeTopSnapshot = function () {
+        if (!feed || !thread) return;
+        const currentTop = Math.max(0, Number(feed.scrollTop || 0));
+        if (currentTop > 140) return;
+        const children = Array.from(thread.children || []);
+        if (!children.length) return;
+        const feedRect = feed.getBoundingClientRect();
+        const topEdge = feedRect.top + 1;
+        const firstRect = children[0].getBoundingClientRect();
+        const firstItemClipped = firstRect.top < (topEdge - 1) || firstRect.bottom <= (topEdge + 1);
+        if (!firstItemClipped && currentTop > 0) return;
+        feed.scrollTop = 0;
+        updateScrollDownButton();
+      };
+      requestAnimationFrame(normalizeTopSnapshot);
+      window.setTimeout(normalizeTopSnapshot, 220);
+    }
+    requestAnimationFrame(function () {
+      ensureTopVisibleEntryNotClipped();
+    });
+    window.setTimeout(function () {
+      ensureTopVisibleEntryNotClipped();
+    }, 160);
     if (isFeedViewportRestoreSatisfied(snapshot)) {
       pendingFeedRestoreState = null;
     }
@@ -811,6 +872,7 @@
   const customerCacheKey = "shop_customer_cache_t" + tenantId;
   const guestChatClientKey = "shop_company_chat_guest_id_t" + tenantId;
   const customerChatClientIdByTokenPrefix = "shop_company_chat_customer_id_for_token_t" + tenantId + "_";
+  const customerChatClientIdByIdentityPrefix = "shop_company_chat_customer_id_for_identity_t" + tenantId + "_";
 
   function getCustomerToken() {
     try { return String(localStorage.getItem(customerTokenKey) || ""); } catch { return ""; }
@@ -834,24 +896,50 @@
     return hash;
   }
 
-  function getStableCustomerChatClientId(token, directIdCandidate) {
+  function normalizePhoneIdentity(value) {
+    const digits = String(value || "").replace(/\D+/g, "");
+    return digits.length >= 10 ? digits : "";
+  }
+
+  function getStableCustomerChatClientId(token, directIdCandidate, customerCandidate) {
     const tokenHash = hashToStableInt(token);
     const mappingKey = customerChatClientIdByTokenPrefix + String(tokenHash);
     const directId = Number(directIdCandidate || 0);
+    const customer = customerCandidate && typeof customerCandidate === "object"
+      ? customerCandidate
+      : null;
+    const identityPhone = normalizePhoneIdentity(customer && customer.phone);
+    const identityKey = identityPhone
+      ? (customerChatClientIdByIdentityPrefix + String(hashToStableInt(identityPhone)))
+      : "";
+    let storedToken = 0;
+    let storedIdentity = 0;
 
     try {
-      const stored = Number(localStorage.getItem(mappingKey) || 0);
-      if (Number.isFinite(stored) && stored > 0) return Math.trunc(stored);
+      storedToken = Number(localStorage.getItem(mappingKey) || 0);
     } catch {}
+    if (identityKey) {
+      try {
+        storedIdentity = Number(localStorage.getItem(identityKey) || 0);
+      } catch {}
+    }
 
     let resolved = 0;
     if (Number.isFinite(directId) && directId > 0) {
       resolved = Math.trunc(directId);
+    } else if (Number.isFinite(storedIdentity) && storedIdentity > 0) {
+      resolved = Math.trunc(storedIdentity);
+    } else if (Number.isFinite(storedToken) && storedToken > 0) {
+      resolved = Math.trunc(storedToken);
     } else {
-      resolved = Math.trunc(800000000 + (tokenHash % 99999999));
+      const identityHash = identityPhone ? hashToStableInt(identityPhone) : tokenHash;
+      resolved = Math.trunc(800000000 + (identityHash % 99999999));
     }
 
     try { localStorage.setItem(mappingKey, String(resolved)); } catch {}
+    if (identityKey) {
+      try { localStorage.setItem(identityKey, String(resolved)); } catch {}
+    }
     return resolved;
   }
 
@@ -893,7 +981,7 @@
     const token = getCustomerToken();
     const directId = Number(customer && customer.id);
     if (token) {
-      const stableCustomerId = getStableCustomerChatClientId(token, directId);
+      const stableCustomerId = getStableCustomerChatClientId(token, directId, customer);
       return {
         id: Math.trunc(stableCustomerId),
         name: String((customer && customer.name) || "Клиент"),
@@ -925,7 +1013,7 @@
 
   function normalizeFeedViewportState(rawState) {
     if (!rawState || typeof rawState !== "object") return null;
-    const top = Number(rawState.top);
+    const top = normalizePersistedFeedTop(Number(rawState.top));
     if (!Number.isFinite(top) || top < 0) return null;
     return {
       top: top,
@@ -1048,6 +1136,17 @@
       && Number(nextProfile.id) > 0
       && Number(currentProfile.id) !== Number(nextProfile.id)
     );
+    const currentPhoneIdentity = normalizePhoneIdentity(currentProfile.phone);
+    const nextPhoneIdentity = normalizePhoneIdentity(nextProfile.phone);
+    const shouldMergeCustomerAliasIntoCustomer = (
+      currentProfile.isGuest === false
+      && nextProfile.isGuest === false
+      && Number(currentProfile.id) > 0
+      && Number(nextProfile.id) > 0
+      && Number(currentProfile.id) !== Number(nextProfile.id)
+      && !!currentPhoneIdentity
+      && currentPhoneIdentity === nextPhoneIdentity
+    );
 
     stopLocalTypingSession({ flush: true });
     clearPeerTypingHideTimer();
@@ -1101,7 +1200,7 @@
       pullSharedThreadFromServer({ force: true }).catch(function () {});
     };
 
-    if (shouldMergeGuestIntoCustomer) {
+    if (shouldMergeGuestIntoCustomer || shouldMergeCustomerAliasIntoCustomer) {
       profileMergeInFlight = true;
       mergeGuestThreadIntoCustomerThread(currentProfile.id, nextProfile.id)
         .catch(function () {})
@@ -2083,7 +2182,7 @@
     const dataUrl = String(attachment.dataUrl || "");
     const url = String(attachment.url || attachment.src || "");
     const hasDataUrl = /^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl);
-    const hasUrl = /^\/uploads\/chat\//i.test(url) || /^https?:\/\//i.test(url);
+    const hasUrl = /^(?:\/uploads\/chat\/|\/static\/uploads\/chat\/)/i.test(url) || /^https?:\/\//i.test(url);
     return hasDataUrl || hasUrl;
   }
 
@@ -2361,6 +2460,12 @@
           syncComposerRichPreview({});
           input.focus();
           syncVisibleChatReadState();
+          window.setTimeout(function () {
+            ensureTopVisibleEntryNotClipped();
+          }, 0);
+          window.setTimeout(function () {
+            ensureTopVisibleEntryNotClipped();
+          }, 220);
         });
     });
   }
@@ -3957,6 +4062,17 @@
     const topEdge = feedRect.top + 1;
     const children = Array.from(thread.children || []);
     if (!children.length) return;
+
+    const currentTop = Math.max(0, Number(feed.scrollTop || 0));
+    if (currentTop <= 56) {
+      const firstRect = children[0].getBoundingClientRect();
+      const firstItemClipped = firstRect.top < (topEdge - 1) || firstRect.bottom <= (topEdge + 1);
+      if (firstItemClipped) {
+        feed.scrollTop = 0;
+        updateScrollDownButton();
+        return;
+      }
+    }
 
     const firstVisible = children.find(function (node) {
       const rect = node.getBoundingClientRect();
