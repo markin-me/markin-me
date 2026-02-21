@@ -8701,11 +8701,14 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 }
 
 .sp-media{
-  width: 100%;
+  width: calc(100% - 16px);
   aspect-ratio: 1 / 1;
   background: #fff;
   position: relative;
   overflow: hidden;
+  border-radius: 14px;
+  margin: 8px 8px 0;
+  align-self: center;
 }
 
 .sp-img{

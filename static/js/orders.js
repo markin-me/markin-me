@@ -2510,8 +2510,9 @@
   }
 
   function notifyNewOrders(orders) {
-    playNewOrderSound();
-    showNewOrderNotification(orders && orders.length ? orders : null);
+    // Глобальные уведомления/звук обрабатываются в orders-sidebar-badge.js
+    // чтобы не было дублей на странице заказов.
+    void orders;
   }
 
   function extractOrderStatusId(order) {

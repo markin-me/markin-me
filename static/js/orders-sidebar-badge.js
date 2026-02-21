@@ -17,6 +17,15 @@
   let currentNewCount = 0;
   let audioUnlocked = false;
 
+  function money(value) {
+    const n = Number(value || 0);
+    const safe = Number.isFinite(n) ? n : 0;
+    return new Intl.NumberFormat("ru-RU", {
+      maximumFractionDigits: 0,
+      minimumFractionDigits: 0,
+    }).format(safe) + " ₽";
+  }
+
   function getTenantId() {
     const meta = document.querySelector('meta[name="tenant_id"]');
     if (meta && meta.content) {
@@ -97,11 +106,17 @@
     } catch {}
   }
 
-  function showNewOrderNotification(increaseBy) {
+  function showNewOrderNotification(orders) {
     if (!("Notification" in window) || Notification.permission !== "granted") return;
-    const inc = Math.max(1, Number(increaseBy || 1));
+    if (!Array.isArray(orders) || orders.length <= 0) return;
+    const inc = Math.max(1, Number(orders.length || 1));
+    const first = orders[0] || {};
+    const orderId = Number(first.id || first.order_id || 0);
+    const total = Number(first.total_price || first.total || 0);
     const title = "Новый заказ";
-    const body = inc === 1 ? "Поступил новый заказ" : `Поступило новых заказов: ${inc}`;
+    const body = inc === 1
+      ? (orderId > 0 ? `Заказ #${orderId} — ${money(total)}` : "Поступил новый заказ")
+      : `${inc} новых заказов`;
     try {
       const n = new Notification(title, { body, silent: true });
       n.onclick = function () {
@@ -111,17 +126,12 @@
     } catch {}
   }
 
-  function maybeNotifyNewOrders(nextCount) {
+  function updateNewOrdersCount(nextCount) {
     const n = Math.max(0, Number(nextCount || 0));
     if (!unreadPrimed) {
       unreadPrimed = true;
       currentNewCount = n;
       return;
-    }
-    if (n > currentNewCount) {
-      const diff = n - currentNewCount;
-      playNewOrderSound();
-      showNewOrderNotification(diff);
     }
     currentNewCount = n;
   }
@@ -166,7 +176,7 @@
       }
       const json = await res.json().catch(() => null);
       const total = Number(json?.data?.total || 0);
-      maybeNotifyNewOrders(total);
+      updateNewOrdersCount(total);
       showBadge(total);
     } catch {
       // keep last state on transient errors
@@ -207,6 +217,26 @@
     };
   }
 
+  async function fetchCreatedOrdersSince(sinceCursor) {
+    const since = Number(sinceCursor || 0);
+    const qs = new URLSearchParams({
+      since: String(Number.isFinite(since) && since > 0 ? since : 0),
+      _ts: String(Date.now()),
+    });
+    const res = await fetch(API_BASE + "/changes?" + qs.toString(), {
+      method: "GET",
+      headers: getHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) return [];
+    const json = await res.json().catch(() => null);
+    const events = Array.isArray(json?.data) ? json.data : [];
+    return events
+      .filter((evt) => String(evt?.event || "").toLowerCase() === "order.created")
+      .map((evt) => evt?.data)
+      .filter(Boolean);
+  }
+
   function startWaitLoop() {
     if (waitLoopStarted) return;
     waitLoopStarted = true;
@@ -214,16 +244,38 @@
     const token = waitLoopToken;
 
     (async function runWaitLoop() {
+      if (!Number.isFinite(cursor) || cursor <= 0) {
+        try {
+          const bootstrap = await fetch(API_BASE + "/changes?since=0&_ts=" + Date.now(), {
+            method: "GET",
+            headers: getHeaders(),
+            cache: "no-store",
+          });
+          if (bootstrap.ok) {
+            const json = await bootstrap.json().catch(() => null);
+            const bootCursor = Number(json?.cursor || 0);
+            if (Number.isFinite(bootCursor) && bootCursor > 0) cursor = bootCursor;
+          }
+        } catch {}
+      }
       while (waitLoopStarted && token === waitLoopToken) {
         if (!waitSupported) {
           await sleepMs(FALLBACK_POLL_MS);
           continue;
         }
         try {
+          const prevCursor = Number(cursor || 0);
           const waited = await waitForOrdersChange();
           if (!waitLoopStarted || token !== waitLoopToken) break;
           cursor = Number(waited.cursor || cursor || 0);
           if (waited.changed) {
+            try {
+              const createdOrders = await fetchCreatedOrdersSince(prevCursor);
+              if (createdOrders.length) {
+                playNewOrderSound();
+                showNewOrderNotification(createdOrders);
+              }
+            } catch {}
             await pullNewOrdersCount();
           }
         } catch {

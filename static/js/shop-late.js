@@ -12508,6 +12508,10 @@ function renderSheetAddressList() {
     if (isSheet) {
       openLoginSheet({
         onSuccess: async () => {
+          // После логина из сценария "Оформить" на мобилке
+          // принудительно продолжаем именно checkout-flow.
+          closeShopSheetIfOpen();
+          setActiveNav("cart");
           await continueToCheckout();
         },
         fromCheckout: true,
