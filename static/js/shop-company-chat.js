@@ -91,6 +91,7 @@
   const CHAT_TYPING_HEARTBEAT_MS = 1800;
   const CHAT_TYPING_IDLE_STOP_MS = 2600;
   const CHAT_TYPING_BLUR_STOP_MS = 320;
+  const CHAT_MESSAGE_ALERT_COOLDOWN_MS = 900;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
   const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
   const IMAGE_OPTIMIZE_TARGET_BYTES = 900 * 1024;
@@ -194,6 +195,9 @@
   let localTypingStopTimer = 0;
   let localTypingActive = false;
   let localTypingPhrase = "";
+  let messageAlertAudioCtx = null;
+  let messageAlertAudioUnlocked = false;
+  let messageAlertLastAt = 0;
   const selectedMessageIds = new Set();
 
   const LONG_PRESS_MS = 430;
@@ -802,6 +806,154 @@
     if (typeof document === "undefined") return true;
     if (document.visibilityState && document.visibilityState !== "visible") return false;
     return true;
+  }
+
+  function ensureMessageAlertAudioContext() {
+    if (messageAlertAudioCtx) return messageAlertAudioCtx;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    try {
+      messageAlertAudioCtx = new Ctx();
+    } catch {
+      messageAlertAudioCtx = null;
+    }
+    return messageAlertAudioCtx;
+  }
+
+  function getTenantMessageSoundUrl() {
+    try {
+      const raw = localStorage.getItem("tenant");
+      if (!raw) return "";
+      const tenant = JSON.parse(raw);
+      const url = String(tenant && tenant.sound_new_message_url || "").trim();
+      return url || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function requestMessageAlertNotificationPermission() {
+    if (!("Notification" in window)) return;
+    if (Notification.permission !== "default") return;
+    try {
+      const result = Notification.requestPermission();
+      if (result && typeof result.then === "function") {
+        result.catch(function () {});
+      }
+    } catch {}
+  }
+
+  function unlockMessageAlertsOnce() {
+    const soundUrl = getTenantMessageSoundUrl();
+    if (soundUrl) {
+      try {
+        const audio = new Audio(soundUrl);
+        audio.volume = 0.001;
+        const unlockPromise = audio.play();
+        if (unlockPromise && typeof unlockPromise.then === "function") {
+          unlockPromise
+            .then(function () {
+              messageAlertAudioUnlocked = true;
+              try {
+                audio.pause();
+                audio.currentTime = 0;
+              } catch {}
+            })
+            .catch(function () {});
+        }
+      } catch {}
+    }
+    const ctx = ensureMessageAlertAudioContext();
+    if (ctx) {
+      if (ctx.state === "running") {
+        messageAlertAudioUnlocked = true;
+      } else {
+        ctx.resume()
+          .then(function () { messageAlertAudioUnlocked = true; })
+          .catch(function () {});
+      }
+    }
+    requestMessageAlertNotificationPermission();
+  }
+
+  function playFallbackMessageAlertTone() {
+    const ctx = ensureMessageAlertAudioContext();
+    if (!ctx || !messageAlertAudioUnlocked) return;
+    if (ctx.state !== "running") return;
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(920, now);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.07, now + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.16);
+    } catch {}
+  }
+
+  function playMessageAlertSound() {
+    const soundUrl = getTenantMessageSoundUrl();
+    if (soundUrl) {
+      try {
+        const audio = new Audio(soundUrl);
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.catch === "function") {
+          playPromise.catch(function () {
+            playFallbackMessageAlertTone();
+          });
+        }
+        return;
+      } catch {}
+    }
+    playFallbackMessageAlertTone();
+  }
+
+  function showIncomingMessageBrowserNotification(title, body) {
+    if (!("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+    try {
+      const n = new Notification(String(title || "Новое сообщение"), {
+        body: String(body || "Откройте чат, чтобы ответить."),
+        silent: true,
+      });
+      n.onclick = function () {
+        window.focus();
+        n.close();
+      };
+    } catch {}
+  }
+
+  function maybeNotifyIncomingAgentMessage(entry) {
+    const isOpen = overlay.classList.contains("is-open");
+    const tabVisible = isChatTabActiveForRead();
+    const tabFocused = typeof document.hasFocus !== "function" || document.hasFocus();
+    const tabActive = tabVisible && tabFocused;
+    const keepBottom = isOpen ? shouldKeepFeedPinnedToBottom() : false;
+    const isMessageVisibleNow = isOpen && tabActive && keepBottom;
+    if (isMessageVisibleNow) return;
+
+    const now = Date.now();
+    if (now - messageAlertLastAt < CHAT_MESSAGE_ALERT_COOLDOWN_MS) return;
+    messageAlertLastAt = now;
+
+    playMessageAlertSound();
+    if (!tabActive || !isOpen) {
+      showIncomingMessageBrowserNotification(
+        "Новое сообщение от компании",
+        getEntryPreviewText(entry) || "Откройте чат, чтобы ответить."
+      );
+    }
+  }
+
+  function initMessageAlerts() {
+    document.addEventListener("click", unlockMessageAlertsOnce, { once: true, passive: true });
+    document.addEventListener("touchstart", unlockMessageAlertsOnce, { once: true, passive: true });
+    document.addEventListener("keydown", unlockMessageAlertsOnce, { once: true });
   }
 
   function shouldMarkAgentMessagesRead(options) {
@@ -1627,6 +1779,7 @@
     }
 
     if (!opts.force && sameThread && sharedThreadUpdatedAt === remoteUpdatedAt) {
+      hasLoadedSharedThreadOnce = true;
       if (readChangedIds.length) {
         enqueueSharedMutation(function () { return remoteMarkSharedMessagesRead(readChangedIds); });
       }
@@ -1649,6 +1802,18 @@
       .filter(function (id) {
         return id && !previousMessageIds.has(id);
       });
+    const appendedAgentIdSet = new Set(appendedAgentMessageIds);
+    const latestIncomingAgentEntry = appendedAgentMessageIds.length
+      ? entries
+        .slice()
+        .reverse()
+        .find(function (entry) {
+          return entry
+            && entry.type === "message"
+            && entry.role === "agent"
+            && appendedAgentIdSet.has(String(entry.id || ""));
+        }) || null
+      : null;
 
     const prevTop = feed.scrollTop;
     const isChatOpen = overlay.classList.contains("is-open");
@@ -1663,6 +1828,7 @@
     const hasIncomingAgentMessages = hasLoadedSharedThreadOnce && appendedAgentMessageIds.length > 0;
     if (hasIncomingAgentMessages) {
       applyPeerTypingState(null, { forceInactive: true });
+      maybeNotifyIncomingAgentMessage(latestIncomingAgentEntry);
     }
     const shouldAutoScrollIncoming = isChatOpen && hasIncomingAgentMessages && !hadScrollDownButton;
 
@@ -4551,6 +4717,7 @@
     emojiActiveCategory = getFirstAvailableEmojiCategory(emojiActiveCategory);
   }
 
+  initMessageAlerts();
   bindEmojiPopoverGuard();
   initAttachPreviewModal();
   initMessageImageViewerModal();

@@ -19,6 +19,7 @@
   const CHAT_TYPING_HEARTBEAT_MS = 1800;
   const CHAT_TYPING_IDLE_STOP_MS = 2600;
   const CHAT_TYPING_BLUR_STOP_MS = 320;
+  const CHAT_MESSAGE_ALERT_COOLDOWN_MS = 900;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
   const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
   const IMAGE_OPTIMIZE_TARGET_BYTES = 900 * 1024;
@@ -206,6 +207,10 @@
   let emojiActiveCategory = "people";
   let emojiDatasetPromise = null;
   let unreadEventRaf = 0;
+  let messageAlertAudioCtx = null;
+  let messageAlertAudioUnlocked = false;
+  let messageAlertLastAt = 0;
+  let messageAlertSummariesPrimed = false;
 
   function getClientsRightApi() {
     const api = window.__clientsDashboardApi;
@@ -674,6 +679,7 @@
     const remoteIsNewer = compareIsoDates(remoteUpdatedAt, knownUpdatedAt) > 0;
     const localChangedDuringRequest = options.localChangedDuringRequest === true;
     const isActiveThread = Number(state.activeClientId) === Number(key);
+    const wasPinnedToBottom = isActiveThread ? shouldKeepMessagesPinnedToBottom() : false;
 
     if (!same && !options.force) {
       if (hasPendingRemoteSave(key)) return false;
@@ -717,6 +723,16 @@
     if (appendedIncomingMessageIds.length > 0) {
       applyPeerTypingState(key, null, { forceInactive: true });
       addPendingScrollMessageIds(key, appendedIncomingMessageIds);
+      const appendedIdSet = new Set(appendedIncomingMessageIds);
+      const latestIncoming = next
+        .slice()
+        .reverse()
+        .find((msg) => msg && appendedIdSet.has(String(msg.id || "")));
+      maybeNotifyIncomingMessage({
+        title: `Новое сообщение: ${getClientDisplayName(key)}`,
+        body: getMessagePreviewText(latestIncoming) || "Откройте чат, чтобы ответить.",
+        allowWhenActive: !isActiveThread || !wasPinnedToBottom,
+      });
     }
 
     if (isActiveThread) {
@@ -1095,14 +1111,46 @@
     qs.set("_ts", String(Date.now()));
     const json = await apiJson(`${CHAT_TEMP_API_BASE}/summaries?${qs.toString()}`);
     const rows = Array.isArray(json?.data) ? json.data : [];
+    const previousUnreadByClient = {};
+    const summaryAlerts = [];
+    const hadSummaryBaseline = messageAlertSummariesPrimed;
     rows.forEach((row) => {
       const key = normalizeClientIdKey(row?.client_id ?? row?.clientId ?? row?.id);
       if (!key) return;
+      const previousSummary = state.remoteSummariesByClient && state.remoteSummariesByClient[key];
+      const prevUnreadRaw = Number(previousSummary?.unread_count ?? previousSummary?.unreadCount ?? 0);
+      const prevUnread = Number.isFinite(prevUnreadRaw) && prevUnreadRaw > 0 ? Math.trunc(prevUnreadRaw) : 0;
+      previousUnreadByClient[key] = prevUnread;
       if (!state.remoteSummariesByClient || typeof state.remoteSummariesByClient !== "object") {
         state.remoteSummariesByClient = {};
       }
       state.remoteSummariesByClient[key] = row && typeof row === "object" ? { ...row } : {};
     });
+    rows.forEach((row) => {
+      const key = normalizeClientIdKey(row?.client_id ?? row?.clientId ?? row?.id);
+      if (!key) return;
+      if (Number(key) === Number(state.activeClientId)) return;
+      const nextUnreadRaw = Number(row?.unread_count ?? row?.unreadCount ?? 0);
+      const nextUnread = Number.isFinite(nextUnreadRaw) && nextUnreadRaw > 0 ? Math.trunc(nextUnreadRaw) : 0;
+      const prevUnread = Number(previousUnreadByClient[key] || 0);
+      if (!hadSummaryBaseline || nextUnread <= prevUnread) return;
+      summaryAlerts.push({
+        clientId: key,
+        unread: nextUnread,
+        updatedAt: String(row?.updated_at || row?.updatedAt || row?.last_message_at || row?.lastMessageAt || ""),
+        preview: String(row?.last_message_text || row?.lastMessageText || "").replace(/\s+/g, " ").trim(),
+      });
+    });
+    messageAlertSummariesPrimed = true;
+    if (summaryAlerts.length > 0) {
+      summaryAlerts.sort((a, b) => compareIsoDates(b.updatedAt, a.updatedAt));
+      const newestAlert = summaryAlerts[0];
+      maybeNotifyIncomingMessage({
+        title: `Новое сообщение: ${getClientDisplayName(newestAlert.clientId)}`,
+        body: newestAlert.preview || `Непрочитанных: ${newestAlert.unread}`,
+        allowWhenActive: true,
+      });
+    }
     const latestUpdatedAt = rows.reduce((latest, row) => {
       const updatedAt = String(
         row?.updated_at
@@ -1583,6 +1631,159 @@
     if (document.visibilityState && document.visibilityState !== "visible") return false;
     if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
     return true;
+  }
+
+  function getClientDisplayName(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return "Клиент";
+    const fromList = (state.clients || []).find((client) => Number(client?.id) === Number(key));
+    if (fromList && String(fromList.name || "").trim()) return String(fromList.name || "").trim();
+    if (state.activeClient && Number(state.activeClient.id) === Number(key)) {
+      const activeName = String(state.activeClient.name || "").trim();
+      if (activeName) return activeName;
+    }
+    return `Клиент #${key}`;
+  }
+
+  function ensureMessageAlertAudioContext() {
+    if (messageAlertAudioCtx) return messageAlertAudioCtx;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    try {
+      messageAlertAudioCtx = new Ctx();
+    } catch {
+      messageAlertAudioCtx = null;
+    }
+    return messageAlertAudioCtx;
+  }
+
+  function getTenantMessageSoundUrl() {
+    try {
+      const raw = localStorage.getItem("tenant");
+      if (!raw) return "";
+      const tenant = JSON.parse(raw);
+      const url = String(tenant && tenant.sound_new_message_url || "").trim();
+      return url || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function requestMessageAlertNotificationPermission() {
+    if (!("Notification" in window)) return;
+    if (Notification.permission !== "default") return;
+    try {
+      const result = Notification.requestPermission();
+      if (result && typeof result.then === "function") {
+        result.catch(() => {});
+      }
+    } catch {}
+  }
+
+  function unlockMessageAlertsOnce() {
+    const soundUrl = getTenantMessageSoundUrl();
+    if (soundUrl) {
+      try {
+        const audio = new Audio(soundUrl);
+        audio.volume = 0.001;
+        const unlockPromise = audio.play();
+        if (unlockPromise && typeof unlockPromise.then === "function") {
+          unlockPromise
+            .then(() => {
+              messageAlertAudioUnlocked = true;
+              try {
+                audio.pause();
+                audio.currentTime = 0;
+              } catch {}
+            })
+            .catch(() => {});
+        }
+      } catch {}
+    }
+    const ctx = ensureMessageAlertAudioContext();
+    if (ctx) {
+      if (ctx.state === "running") {
+        messageAlertAudioUnlocked = true;
+      } else {
+        ctx.resume()
+          .then(() => { messageAlertAudioUnlocked = true; })
+          .catch(() => {});
+      }
+    }
+    requestMessageAlertNotificationPermission();
+  }
+
+  function playFallbackMessageAlertTone() {
+    const ctx = ensureMessageAlertAudioContext();
+    if (!ctx || !messageAlertAudioUnlocked) return;
+    if (ctx.state !== "running") return;
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(920, now);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.07, now + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.16);
+    } catch {}
+  }
+
+  function playMessageAlertSound() {
+    const soundUrl = getTenantMessageSoundUrl();
+    if (soundUrl) {
+      try {
+        const audio = new Audio(soundUrl);
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.catch === "function") {
+          playPromise.catch(() => {
+            playFallbackMessageAlertTone();
+          });
+        }
+        return;
+      } catch {}
+    }
+    playFallbackMessageAlertTone();
+  }
+
+  function showIncomingMessageBrowserNotification(title, body) {
+    if (!("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+    try {
+      const n = new Notification(String(title || "Новое сообщение"), {
+        body: String(body || "Откройте чат, чтобы ответить."),
+        silent: true,
+      });
+      n.onclick = () => {
+        window.focus();
+        n.close();
+      };
+    } catch {}
+  }
+
+  function maybeNotifyIncomingMessage(options = {}) {
+    const opts = options || {};
+    const tabActive = isChatTabActiveForRead();
+    if (tabActive && opts.allowWhenActive !== true) return;
+
+    const now = Date.now();
+    if (now - messageAlertLastAt < CHAT_MESSAGE_ALERT_COOLDOWN_MS) return;
+    messageAlertLastAt = now;
+
+    playMessageAlertSound();
+    if (!tabActive) {
+      showIncomingMessageBrowserNotification(opts.title, opts.body);
+    }
+  }
+
+  function initMessageAlerts() {
+    document.addEventListener("click", unlockMessageAlertsOnce, { once: true, passive: true });
+    document.addEventListener("touchstart", unlockMessageAlertsOnce, { once: true, passive: true });
+    document.addEventListener("keydown", unlockMessageAlertsOnce, { once: true });
   }
 
   function markThreadDelivered(clientId) {
@@ -5189,6 +5390,7 @@
   }
 
   function init() {
+    initMessageAlerts();
     initComposer();
     initSelectionToolbar();
     initHeaderOrderOpenAction();
