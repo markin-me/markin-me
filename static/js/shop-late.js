@@ -205,13 +205,28 @@
     return selectedItems;
   }
 
+const comboProductIngredientsCache = new Map();
+const comboProductVariantsCache = new Map();
+
 async function resolveProductIngredients(productId) {
-  try {
-    const res = await fetch(`/api/public/products/${productId}/ingredients`);
+  const pid = Number(productId || 0);
+  if (!Number.isFinite(pid) || pid <= 0) return [];
+  if (comboProductIngredientsCache.has(pid)) {
+    return comboProductIngredientsCache.get(pid);
+  }
+
+  const request = (async () => {
+    const res = await fetch(`/api/public/products/${pid}/ingredients`);
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) return [];
     return Array.isArray(data.data) ? data.data : [];
+  })();
+  comboProductIngredientsCache.set(pid, request);
+
+  try {
+    return await request;
   } catch (e) {
+    comboProductIngredientsCache.delete(pid);
     console.error("Failed to load ingredients", e);
     return [];
   }
@@ -292,8 +307,14 @@ async function resolveProductOptionGroups(productId) {
 }
 
 async function resolveProductVariants(productId) {
-  try {
-    const res = await apiJson(`/api/public/products/${productId}/variants`);
+  const pid = Number(productId || 0);
+  if (!Number.isFinite(pid) || pid <= 0) return [];
+  if (comboProductVariantsCache.has(pid)) {
+    return comboProductVariantsCache.get(pid);
+  }
+
+  const request = (async () => {
+    const res = await apiJson(`/api/public/products/${pid}/variants`);
     const variants = Array.isArray(res.data) ? res.data : [];
     return variants.map((v) => ({
       id: Number(v.id),
@@ -306,7 +327,13 @@ async function resolveProductVariants(productId) {
       discount_tiers: Array.isArray(v.discount_tiers) ? v.discount_tiers : [],
       default_value_index: v.default_value_index != null ? Number(v.default_value_index) : null,
     }));
+  })();
+  comboProductVariantsCache.set(pid, request);
+
+  try {
+    return await request;
   } catch (e) {
+    comboProductVariantsCache.delete(pid);
     console.error("Failed to load product variants:", e);
     return [];
   }
@@ -5242,6 +5269,18 @@ optionGroups.forEach((group) => {
     function renderBlockPicker(blockIndex, scrollToRestore) {
       const block = blocks[blockIndex];
       if (!block || !block.products || !block.products.length) return;
+      const prefetchComboPickerBlockConfig = (products) => {
+        const ids = new Set();
+        (Array.isArray(products) ? products : []).forEach((prod) => {
+          const pid = Number(prod?.product_id || 0);
+          if (Number.isFinite(pid) && pid > 0) ids.add(pid);
+        });
+        ids.forEach((pid) => {
+          resolveProductVariants(pid).catch(() => {});
+          resolveProductIngredients(pid).catch(() => {});
+        });
+      };
+      prefetchComboPickerBlockConfig(block.products);
 
       // Десктоп: кнопка «Назад» возвращает на шаг назад (в основное представление комбо), а не закрывает панель
       if (!openCartSheetCtx) {

@@ -1,4 +1,4 @@
-:root{
+﻿:root{
   --font-main:-apple-system,BlinkMacSystemFont,'Roboto',system-ui,sans-serif;
 
   --color-bg:#F9FAFB;
@@ -51,7 +51,7 @@
 
   --header-height:50px;
 
-  /* ✅ единые имена (как у тебя в layout+js) */
+  /* вњ… РµРґРёРЅС‹Рµ РёРјРµРЅР° (РєР°Рє Сѓ С‚РµР±СЏ РІ layout+js) */
   --sidebar-width:200px;
   --sidebar-collapsed:60px;
 
@@ -62,7 +62,7 @@
   --column-scroll-pad:200px;
   --column-bottom-gap:32px;
 
-  /* ✅ Switch vars */
+  /* вњ… Switch vars */
   --switch-w:40px;
   --switch-h:25px;
   --switch-pad:3px;
@@ -287,7 +287,7 @@ header{
   flex-shrink:0;
 }
 
-/* Статус времени работы — подстрока под адресом */
+/* РЎС‚Р°С‚СѓСЃ РІСЂРµРјРµРЅРё СЂР°Р±РѕС‚С‹ вЂ” РїРѕРґСЃС‚СЂРѕРєР° РїРѕРґ Р°РґСЂРµСЃРѕРј */
 .header-store-status{
   display:none;
 }
@@ -347,7 +347,7 @@ header{
 }
 .icon-btn:hover{background:var(--color-surface-2);color:var(--color-text);transform:translateY(-1px)}
 
-/* ✅ вернули “как раньше” для темы/профиля */
+/* вњ… РІРµСЂРЅСѓР»Рё вЂњРєР°Рє СЂР°РЅСЊС€РµвЂќ РґР»СЏ С‚РµРјС‹/РїСЂРѕС„РёР»СЏ */
 .header-btn{
   width:40px;height:40px;
   border-radius:50%;
@@ -851,7 +851,7 @@ body.page-home .page-col-right .panel{
   border-color:var(--color-primary-hover);
 }
 
-/* Меню «три точки» в футере — только по высоте контента */
+/* РњРµРЅСЋ В«С‚СЂРё С‚РѕС‡РєРёВ» РІ С„СѓС‚РµСЂРµ вЂ” С‚РѕР»СЊРєРѕ РїРѕ РІС‹СЃРѕС‚Рµ РєРѕРЅС‚РµРЅС‚Р° */
 .product-footer-more-dropdown{
   position:fixed;
   z-index:1000;
@@ -888,7 +888,7 @@ body.page-home .page-col-right .panel{
   flex-shrink:0;
 }
 
-/* Выпадающее меню «+»: Товар / Комбо-набор (как user-menu) */
+/* Р’С‹РїР°РґР°СЋС‰РµРµ РјРµРЅСЋ В«+В»: РўРѕРІР°СЂ / РљРѕРјР±Рѕ-РЅР°Р±РѕСЂ (РєР°Рє user-menu) */
 .add-main-wrapper{
   position:relative;
 }
@@ -1155,7 +1155,7 @@ body.page-home .page-col-right .panel{
   will-change:transform,width;
 }
 
-/* Круглая оранжевая кнопка свернуть/развернуть — на границе между первым и вторым пунктами */
+/* РљСЂСѓРіР»Р°СЏ РѕСЂР°РЅР¶РµРІР°СЏ РєРЅРѕРїРєР° СЃРІРµСЂРЅСѓС‚СЊ/СЂР°Р·РІРµСЂРЅСѓС‚СЊ вЂ” РЅР° РіСЂР°РЅРёС†Рµ РјРµР¶РґСѓ РїРµСЂРІС‹Рј Рё РІС‚РѕСЂС‹Рј РїСѓРЅРєС‚Р°РјРё */
 .sidebar-edge-toggle{
   position:absolute;
   top:31px;
@@ -1191,7 +1191,7 @@ body.page-home .page-col-right .panel{
 html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-collapsed{display:block}
 html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{display:none}
 
-/* Вкладка "Открыть меню" на мобильных, когда сайдбар закрыт */
+/* Р’РєР»Р°РґРєР° "РћС‚РєСЂС‹С‚СЊ РјРµРЅСЋ" РЅР° РјРѕР±РёР»СЊРЅС‹С…, РєРѕРіРґР° СЃР°Р№РґР±Р°СЂ Р·Р°РєСЂС‹С‚ */
 .sidebar-open-tab{
   display:none;
   position:fixed;
@@ -1283,7 +1283,7 @@ html[data-sidebar-collapsed="1"] .sidebar-edge-toggle .sidebar-edge-expanded{dis
 }
 .active-nav{font-weight:600}
 
-/* collapsed desktop (ровные иконки) */
+/* collapsed desktop (СЂРѕРІРЅС‹Рµ РёРєРѕРЅРєРё) */
 @media (min-width:769px){
   html[data-sidebar-collapsed="1"] .app-sidebar{width:var(--sidebar-collapsed)}
   html[data-sidebar-collapsed="1"] .app-sidebar-nav{padding:8px}
@@ -1517,7 +1517,7 @@ body.page-orders .orders-list .order-row.js-order{
   gap:6px;
 }
 
-/* Cash receipt preview (right column) — отступы как у товаров */
+/* Cash receipt preview (right column) вЂ” РѕС‚СЃС‚СѓРїС‹ РєР°Рє Сѓ С‚РѕРІР°СЂРѕРІ */
 .cash-info.panel .panel-body{
   padding:8px;
 }
@@ -1591,7 +1591,7 @@ body.page-orders .orders-list .order-row.js-order{
   color:var(--color-black);
 }
 
-/* Стили как в печатном чеке (orders.js) */
+/* РЎС‚РёР»Рё РєР°Рє РІ РїРµС‡Р°С‚РЅРѕРј С‡РµРєРµ (orders.js) */
 .receipt-header{
   text-align:center;
   font-weight:bold;
@@ -2012,7 +2012,7 @@ body.page-orders .orders-list .order-client-phone-text{
 
 .product-row{grid-template-columns:56px 1fr auto}
 
-/* Комбо-набор в списке — одна строка, сетка 2×2 как в карточке */
+/* РљРѕРјР±Рѕ-РЅР°Р±РѕСЂ РІ СЃРїРёСЃРєРµ вЂ” РѕРґРЅР° СЃС‚СЂРѕРєР°, СЃРµС‚РєР° 2Г—2 РєР°Рє РІ РєР°СЂС‚РѕС‡РєРµ */
 .order-row.combo-row{
   padding:8px 12px;
   grid-template-columns:52px 1fr auto;
@@ -2107,8 +2107,8 @@ body.page-orders .orders-list .order-client-phone-text{
   display:grid;
   gap:8px;
 }
-/* В редакторе блока комбо список товаров визуально входит в основной контейнер,
-   поэтому убираем дополнительную карточку-обертку */
+/* Р’ СЂРµРґР°РєС‚РѕСЂРµ Р±Р»РѕРєР° РєРѕРјР±Рѕ СЃРїРёСЃРѕРє С‚РѕРІР°СЂРѕРІ РІРёР·СѓР°Р»СЊРЅРѕ РІС…РѕРґРёС‚ РІ РѕСЃРЅРѕРІРЅРѕР№ РєРѕРЅС‚РµР№РЅРµСЂ,
+   РїРѕСЌС‚РѕРјСѓ СѓР±РёСЂР°РµРј РґРѕРїРѕР»РЅРёС‚РµР»СЊРЅСѓСЋ РєР°СЂС‚РѕС‡РєСѓ-РѕР±РµСЂС‚РєСѓ */
 #comboInfo .info-card.info-accordion{
   border:none;
   border-radius:0;
@@ -2645,7 +2645,7 @@ body.page-orders #clientAddresses .shop-address-actions{
   .order-item-composition{font-size:12px}
 }
 
-/* Фото товаров в заказе */
+/* Р¤РѕС‚Рѕ С‚РѕРІР°СЂРѕРІ РІ Р·Р°РєР°Р·Рµ */
 .order-item-photos{
   display:grid;
   gap:8px;
@@ -2789,16 +2789,16 @@ body.page-orders #clientAddresses .shop-address-actions{
 }
 /* ================= Products accordion helpers ================= */
 
-/* Отступы между аккордеонами */
+/* РћС‚СЃС‚СѓРїС‹ РјРµР¶РґСѓ Р°РєРєРѕСЂРґРµРѕРЅР°РјРё */
 .products-accordion {
   display: flex;
   flex-direction: column;
-  gap: 7px; /* 6-8px среднее значение */
+  gap: 7px; /* 6-8px СЃСЂРµРґРЅРµРµ Р·РЅР°С‡РµРЅРёРµ */
 }
 
 .products-accordion .stage-item{min-height:52px}
 
-/* Выделение цветом заголовков аккордеонов */
+/* Р’С‹РґРµР»РµРЅРёРµ С†РІРµС‚РѕРј Р·Р°РіРѕР»РѕРІРєРѕРІ Р°РєРєРѕСЂРґРµРѕРЅРѕРІ */
 .products-accordion .acc-trigger {
   background: var(--primary-14);
   border-color: var(--primary-25);
@@ -2813,7 +2813,7 @@ body.page-orders #clientAddresses .shop-address-actions{
   background: var(--primary-18);
 }
 
-/* Убрать подписи (small) из всех пунктов меню */
+/* РЈР±СЂР°С‚СЊ РїРѕРґРїРёСЃРё (small) РёР· РІСЃРµС… РїСѓРЅРєС‚РѕРІ РјРµРЅСЋ */
 .products-accordion .stage-text small {
   display: none;
 }
@@ -2824,19 +2824,19 @@ body.page-orders #clientAddresses .shop-address-actions{
   transition:max-height var(--dur-med) var(--ease-smooth);
 }
 
-/* В редакторе блока комбо секция "Товары в блоке" всегда раскрыта,
-   поэтому панель не должна схлопываться */
+/* Р’ СЂРµРґР°РєС‚РѕСЂРµ Р±Р»РѕРєР° РєРѕРјР±Рѕ СЃРµРєС†РёСЏ "РўРѕРІР°СЂС‹ РІ Р±Р»РѕРєРµ" РІСЃРµРіРґР° СЂР°СЃРєСЂС‹С‚Р°,
+   РїРѕСЌС‚РѕРјСѓ РїР°РЅРµР»СЊ РЅРµ РґРѕР»Р¶РЅР° СЃС…Р»РѕРїС‹РІР°С‚СЊСЃСЏ */
 #comboInfo .acc-panel{
   max-height:none;
   overflow:visible;
 }
 
-/* Отступы между пунктами меню внутри аккордеона */
+/* РћС‚СЃС‚СѓРїС‹ РјРµР¶РґСѓ РїСѓРЅРєС‚Р°РјРё РјРµРЅСЋ РІРЅСѓС‚СЂРё Р°РєРєРѕСЂРґРµРѕРЅР° */
 .acc-panel-inner{
   margin-top:10px;
   display: flex;
   flex-direction: column;
-  gap: 5px; /* 4-6px среднее значение - отступ между stage-item */
+  gap: 5px; /* 4-6px СЃСЂРµРґРЅРµРµ Р·РЅР°С‡РµРЅРёРµ - РѕС‚СЃС‚СѓРї РјРµР¶РґСѓ stage-item */
 }
 
 .acc-header{
@@ -3004,7 +3004,7 @@ body.page-orders #clientAddresses .shop-address-actions{
   left:50%;
   width:500px;
   max-width:calc(100vw - 24px);
-  /* фиксируем формат: 500×1000 на десктопе, но не выходим за пределы экрана */
+  /* С„РёРєСЃРёСЂСѓРµРј С„РѕСЂРјР°С‚: 500Г—1000 РЅР° РґРµСЃРєС‚РѕРїРµ, РЅРѕ РЅРµ РІС‹С…РѕРґРёРј Р·Р° РїСЂРµРґРµР»С‹ СЌРєСЂР°РЅР° */
   height:min(1000px, calc(100vh - 90px));
   max-height:calc(100vh - 90px);
   transform:translate(-50%,-46%) scale(.98);
@@ -3096,7 +3096,7 @@ body.page-orders #clientAddresses .shop-address-actions{
 
 .field-label{font-size:12px;color:var(--color-text-muted);margin-bottom:6px;display:block}
 
-/* Подпись на границе инпута (как в составе: Кол-во, Ед., Цена, Себест.) */
+/* РџРѕРґРїРёСЃСЊ РЅР° РіСЂР°РЅРёС†Рµ РёРЅРїСѓС‚Р° (РєР°Рє РІ СЃРѕСЃС‚Р°РІРµ: РљРѕР»-РІРѕ, Р•Рґ., Р¦РµРЅР°, РЎРµР±РµСЃС‚.) */
 .field-wrap{position:relative}
 .field-wrap .field-label{
   position:absolute;
@@ -3238,7 +3238,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   background:var(--color-surface-2);
 }
 
-/* ================= Inline modal (категории внутри модалки) ================= */
+/* ================= Inline modal (РєР°С‚РµРіРѕСЂРёРё РІРЅСѓС‚СЂРё РјРѕРґР°Р»РєРё) ================= */
 .inline-backdrop{
   position:fixed;
   inset:0;
@@ -4051,7 +4051,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 }
 .picker-title{font-weight:900}
 
-/* ================= Switch (Apple, ровный) ================= */
+/* ================= Switch (Apple, СЂРѕРІРЅС‹Р№) ================= */
 .switch{
   position:relative;
   display:inline-flex;
@@ -4237,7 +4237,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   padding:10px;
 }
 
-/* В этом месте (под 150x150) миниатюры поменьше */
+/* Р’ СЌС‚РѕРј РјРµСЃС‚Рµ (РїРѕРґ 150x150) РјРёРЅРёР°С‚СЋСЂС‹ РїРѕРјРµРЅСЊС€Рµ */
 .product-photo-thumbs-wrapper{
   margin-top:8px;
   display:flex;
@@ -4266,7 +4266,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   border-radius:2px;
 }
 
-/* JS рисует .img-thumb — делаем их 40x40 только в этом контейнере */
+/* JS СЂРёСЃСѓРµС‚ .img-thumb вЂ” РґРµР»Р°РµРј РёС… 40x40 С‚РѕР»СЊРєРѕ РІ СЌС‚РѕРј РєРѕРЅС‚РµР№РЅРµСЂРµ */
 .img-thumb-wrapper{
   position:relative;
   cursor:move;
@@ -4385,7 +4385,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   cursor:grabbing;
 }
 
-/* верхние кнопки фото */
+/* РІРµСЂС…РЅРёРµ РєРЅРѕРїРєРё С„РѕС‚Рѕ */
 .product-photo-tools{
   display:flex;
   align-items:center;
@@ -4409,7 +4409,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   cursor:default;
 }
 
-/* правая часть в топе */
+/* РїСЂР°РІР°СЏ С‡Р°СЃС‚СЊ РІ С‚РѕРїРµ */
 .product-editor-meta{
   min-width:0;
   display:flex;
@@ -4417,7 +4417,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   gap:12px;
 }
 
-/* Для img main используем существующий класс, но в этом месте он должен быть 150x150 */
+/* Р”Р»СЏ img main РёСЃРїРѕР»СЊР·СѓРµРј СЃСѓС‰РµСЃС‚РІСѓСЋС‰РёР№ РєР»Р°СЃСЃ, РЅРѕ РІ СЌС‚РѕРј РјРµСЃС‚Рµ РѕРЅ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ 150x150 */
 .product-photo-main .img-main{
   width:100%;
   height:100%;
@@ -4427,7 +4427,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 .img-main.hidden{display:none}
 .photo-size-badge{position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,.55);color:#fff;font-size:10px;font-weight:600;padding:2px 6px;border-radius:5px;pointer-events:none;z-index:10;line-height:1.3}
 
-/* Стрелки навигации фото */
+/* РЎС‚СЂРµР»РєРё РЅР°РІРёРіР°С†РёРё С„РѕС‚Рѕ */
 .photo-nav-btn{
   position:absolute;
   top:50%;
@@ -4467,7 +4467,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   display:none;
 }
 
-/* Точки-индикаторы */
+/* РўРѕС‡РєРё-РёРЅРґРёРєР°С‚РѕСЂС‹ */
 .photo-dots{
   position:absolute;
   bottom:8px;
@@ -4501,14 +4501,14 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   display:none;
 }
 
-/* мобилка: в колонку */
+/* РјРѕР±РёР»РєР°: РІ РєРѕР»РѕРЅРєСѓ */
 @media (max-width:520px){
   .product-editor-top{
     grid-template-columns:1fr;
   }
 }
 /* ================= Fix: product photo in list ================= */
-/* Фото в списке товаров всегда маленькое (как аватар), не влияет на высоту строки */
+/* Р¤РѕС‚Рѕ РІ СЃРїРёСЃРєРµ С‚РѕРІР°СЂРѕРІ РІСЃРµРіРґР° РјР°Р»РµРЅСЊРєРѕРµ (РєР°Рє Р°РІР°С‚Р°СЂ), РЅРµ РІР»РёСЏРµС‚ РЅР° РІС‹СЃРѕС‚Сѓ СЃС‚СЂРѕРєРё */
 .product-thumb{
   width:44px;
   height:44px;
@@ -4519,7 +4519,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   border:1px solid var(--primary-25);
 }
 
-/* Блок комбо: строка товара с фото, шеврон слева, звезда и крестик справа */
+/* Р‘Р»РѕРє РєРѕРјР±Рѕ: СЃС‚СЂРѕРєР° С‚РѕРІР°СЂР° СЃ С„РѕС‚Рѕ, С€РµРІСЂРѕРЅ СЃР»РµРІР°, Р·РІРµР·РґР° Рё РєСЂРµСЃС‚РёРє СЃРїСЂР°РІР° */
 .combo-block-product-row-wrapper{
   display:flex;
   flex-direction:column;
@@ -4583,18 +4583,18 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 .option-item-actions .fa-star.is-default{
   color:var(--primary);
 }
-/* Область списка товаров в блоке комбо: скролл и отступ снизу, чтобы раскрытый контент не уходил под футер */
+/* РћР±Р»Р°СЃС‚СЊ СЃРїРёСЃРєР° С‚РѕРІР°СЂРѕРІ РІ Р±Р»РѕРєРµ РєРѕРјР±Рѕ: СЃРєСЂРѕР»Р» Рё РѕС‚СЃС‚СѓРї СЃРЅРёР·Сѓ, С‡С‚РѕР±С‹ СЂР°СЃРєСЂС‹С‚С‹Р№ РєРѕРЅС‚РµРЅС‚ РЅРµ СѓС…РѕРґРёР» РїРѕРґ С„СѓС‚РµСЂ */
 .combo-block-products-panel-inner{
   max-height:min(55vh, 480px);
   overflow-y:auto;
   padding-bottom:80px;
-  /* общий контейнер со скроллом, но без видимого скроллбара */
+  /* РѕР±С‰РёР№ РєРѕРЅС‚РµР№РЅРµСЂ СЃРѕ СЃРєСЂРѕР»Р»РѕРј, РЅРѕ Р±РµР· РІРёРґРёРјРѕРіРѕ СЃРєСЂРѕР»Р»Р±Р°СЂР° */
   scrollbar-width:none; /* Firefox */
 }
 .combo-block-products-panel-inner::-webkit-scrollbar{
   display:none; /* WebKit */
 }
-/* Внутри блока комбо убираем "рамку" вокруг товаров — остаётся общий контейнер */
+/* Р’РЅСѓС‚СЂРё Р±Р»РѕРєР° РєРѕРјР±Рѕ СѓР±РёСЂР°РµРј "СЂР°РјРєСѓ" РІРѕРєСЂСѓРі С‚РѕРІР°СЂРѕРІ вЂ” РѕСЃС‚Р°С‘С‚СЃСЏ РѕР±С‰РёР№ РєРѕРЅС‚РµР№РЅРµСЂ */
 .combo-block-products-panel-inner .option-item-row.combo-block-product-row{
   background:transparent;
   border:none;
@@ -4712,7 +4712,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   text-align:center;
 }
 
-/* на всякий случай: если где-то попадёт img в row без класса */
+/* РЅР° РІСЃСЏРєРёР№ СЃР»СѓС‡Р°Р№: РµСЃР»Рё РіРґРµ-С‚Рѕ РїРѕРїР°РґС‘С‚ img РІ row Р±РµР· РєР»Р°СЃСЃР° */
 .order-row img{
   max-width:100%;
   height:auto;
@@ -4740,7 +4740,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 }
 
 .product-header-title{
-  max-width:300px;           /* как ты просил */
+  max-width:300px;           /* РєР°Рє С‚С‹ РїСЂРѕСЃРёР» */
   white-space:nowrap;
   overflow:hidden;
   text-overflow:ellipsis;
@@ -4771,7 +4771,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   flex-direction:column;
 }
 
-/* если у тебя эти классы уже есть — этот блок просто “перебьёт” */
+/* РµСЃР»Рё Сѓ С‚РµР±СЏ СЌС‚Рё РєР»Р°СЃСЃС‹ СѓР¶Рµ РµСЃС‚СЊ вЂ” СЌС‚РѕС‚ Р±Р»РѕРє РїСЂРѕСЃС‚Рѕ вЂњРїРµСЂРµР±СЊС‘С‚вЂќ */
 .product-photo-main{
   width:150px;
   height:150px;
@@ -4791,7 +4791,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   display:block;
 }
 
-/* Сетка 4 фото из первых блоков комбо (когда своих фото нет) */
+/* РЎРµС‚РєР° 4 С„РѕС‚Рѕ РёР· РїРµСЂРІС‹С… Р±Р»РѕРєРѕРІ РєРѕРјР±Рѕ (РєРѕРіРґР° СЃРІРѕРёС… С„РѕС‚Рѕ РЅРµС‚) */
 .combo-set-photo-grid{
   display:grid;
   grid-template-columns:1fr 1fr;
@@ -4824,7 +4824,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   text-align:center;
 }
 
-/* поддержка двух вариантов миниатюр (если JS рисует img-thumb или product-photo-thumb) */
+/* РїРѕРґРґРµСЂР¶РєР° РґРІСѓС… РІР°СЂРёР°РЅС‚РѕРІ РјРёРЅРёР°С‚СЋСЂ (РµСЃР»Рё JS СЂРёСЃСѓРµС‚ img-thumb РёР»Рё product-photo-thumb) */
 #infoPhotoThumbs .img-thumb,
 #infoPhotoThumbs .product-photo-thumb{
   width:40px;
@@ -4848,7 +4848,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   .product-info-top{ grid-template-columns:1fr; }
 }
 /* ================= Fix: Center column main panel should stretch and scroll ================= */
-/* center-stack содержит 2 панели: toolbar + контент. Контентная панель должна занимать остаток высоты. */
+/* center-stack СЃРѕРґРµСЂР¶РёС‚ 2 РїР°РЅРµР»Рё: toolbar + РєРѕРЅС‚РµРЅС‚. РљРѕРЅС‚РµРЅС‚РЅР°СЏ РїР°РЅРµР»СЊ РґРѕР»Р¶РЅР° Р·Р°РЅРёРјР°С‚СЊ РѕСЃС‚Р°С‚РѕРє РІС‹СЃРѕС‚С‹. */
 .center-stack{
   flex: 1;
   min-height: 0;
@@ -4860,18 +4860,18 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   min-height: 0;
 }
 
-/* верхняя панель (toolbar) — по контенту */
+/* РІРµСЂС…РЅСЏСЏ РїР°РЅРµР»СЊ (toolbar) вЂ” РїРѕ РєРѕРЅС‚РµРЅС‚Сѓ */
 .center-stack > .panel:first-child{
   flex: 0 0 auto;
 }
 
-/* нижняя панель (основной контент) — заполняет всё оставшееся */
+/* РЅРёР¶РЅСЏСЏ РїР°РЅРµР»СЊ (РѕСЃРЅРѕРІРЅРѕР№ РєРѕРЅС‚РµРЅС‚) вЂ” Р·Р°РїРѕР»РЅСЏРµС‚ РІСЃС‘ РѕСЃС‚Р°РІС€РµРµСЃСЏ */
 .center-stack > .panel:last-child{
   flex: 1 1 auto;
   min-height: 0;
 }
 
-/* panel-body внутри нижней панели — скроллится */
+/* panel-body РІРЅСѓС‚СЂРё РЅРёР¶РЅРµР№ РїР°РЅРµР»Рё вЂ” СЃРєСЂРѕР»Р»РёС‚СЃСЏ */
 .center-stack > .panel:last-child > .panel-body{
   flex: 1 1 auto;
   min-height: 0;
@@ -4879,7 +4879,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 }
 
 /* ================= Fix: Hide product info header when nothing selected ================= */
-/* Работает автоматически через :has() (Chrome/Edge/Safari). */
+/* Р Р°Р±РѕС‚Р°РµС‚ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё С‡РµСЂРµР· :has() (Chrome/Edge/Safari). */
 #productInfoPanel:has(#productEmpty:not(.hidden)) .product-info-header,
 #productInfoPanel:has(#categoryEmpty:not(.hidden)) .product-info-header,
 #productInfoPanel:has(#optionEmpty:not(.hidden)) .product-info-header{
@@ -4891,7 +4891,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   display: flex !important;
 }
 
-/* подсказки (используется в админке и витрине) */
+/* РїРѕРґСЃРєР°Р·РєРё (РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РІ Р°РґРјРёРЅРєРµ Рё РІРёС‚СЂРёРЅРµ) */
 .empty-hint{
   margin-top:10px;
   padding:12px;
@@ -4903,7 +4903,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   font-weight:600;
 }
 
-/* Picker overlay - перекрывает header */
+/* Picker overlay - РїРµСЂРµРєСЂС‹РІР°РµС‚ header */
 .picker-overlay {
   position: absolute;
   top: 0;
@@ -4943,12 +4943,12 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   padding-bottom: 200px;
 }
 
-/* Footer закреплен внизу */
+/* Footer Р·Р°РєСЂРµРїР»РµРЅ РІРЅРёР·Сѓ */
 #productInfoPanel {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  position: relative; /* Для позиционирования .picker-overlay внутри панели */
+  position: relative; /* Р”Р»СЏ РїРѕР·РёС†РёРѕРЅРёСЂРѕРІР°РЅРёСЏ .picker-overlay РІРЅСѓС‚СЂРё РїР°РЅРµР»Рё */
 }
 
 #productInfoPanel .panel-body {
@@ -4957,7 +4957,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   overflow-y: auto;
 }
 
-/* Когда открыт комбо или форма товара — контент с самого верха, без пустого поля сверху */
+/* РљРѕРіРґР° РѕС‚РєСЂС‹С‚ РєРѕРјР±Рѕ РёР»Рё С„РѕСЂРјР° С‚РѕРІР°СЂР° вЂ” РєРѕРЅС‚РµРЅС‚ СЃ СЃР°РјРѕРіРѕ РІРµСЂС…Р°, Р±РµР· РїСѓСЃС‚РѕРіРѕ РїРѕР»СЏ СЃРІРµСЂС…Сѓ */
 #productInfoPanel:has(#comboSetInfo:not(.hidden)) .panel-body,
 #productInfoPanel:has(.product-editor-wrapper) .panel-body {
   padding-top: 0;
@@ -4979,22 +4979,22 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   margin-top: 0;
   background: var(--color-white);
 }
-/* Когда открыт комбо — показываем только #comboSetInfo, остальные дети body скрыты (убирает пустое место сверху) */
+/* РљРѕРіРґР° РѕС‚РєСЂС‹С‚ РєРѕРјР±Рѕ вЂ” РїРѕРєР°Р·С‹РІР°РµРј С‚РѕР»СЊРєРѕ #comboSetInfo, РѕСЃС‚Р°Р»СЊРЅС‹Рµ РґРµС‚Рё body СЃРєСЂС‹С‚С‹ (СѓР±РёСЂР°РµС‚ РїСѓСЃС‚РѕРµ РјРµСЃС‚Рѕ СЃРІРµСЂС…Сѓ) */
 #productInfoPanel:has(#comboSetInfo:not(.hidden)) #productInfoBody > *:not(#comboSetInfo) {
   display: none !important;
 }
 
-/* Просмотр товара/категории: отступы */
+/* РџСЂРѕСЃРјРѕС‚СЂ С‚РѕРІР°СЂР°/РєР°С‚РµРіРѕСЂРёРё: РѕС‚СЃС‚СѓРїС‹ */
 #productInfoPanel #productInfo:not(.hidden),
 #productInfoPanel #categoryInfo:not(.hidden) {
   padding: 12px 1px;
 }
 
-/* Комбо-набор: минимальные отступы по периметру, ближе к краям */
+/* РљРѕРјР±Рѕ-РЅР°Р±РѕСЂ: РјРёРЅРёРјР°Р»СЊРЅС‹Рµ РѕС‚СЃС‚СѓРїС‹ РїРѕ РїРµСЂРёРјРµС‚СЂСѓ, Р±Р»РёР¶Рµ Рє РєСЂР°СЏРј */
 #productInfoPanel #comboSetInfo:not(.hidden) {
   padding: 6px 4px;
 }
-/* Режим просмотра комбо: скрыть кнопки добавления и удаления */
+/* Р РµР¶РёРј РїСЂРѕСЃРјРѕС‚СЂР° РєРѕРјР±Рѕ: СЃРєСЂС‹С‚СЊ РєРЅРѕРїРєРё РґРѕР±Р°РІР»РµРЅРёСЏ Рё СѓРґР°Р»РµРЅРёСЏ */
 #comboSetInfo.combo-set-view-mode #comboSetCategoryChipPlus,
 #comboSetInfo.combo-set-view-mode .chip-remove,
 #comboSetInfo.combo-set-view-mode #comboSetBlocksAddBtn,
@@ -5015,7 +5015,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   gap: 12px;
   margin-bottom: 10px;
 }
-/* Карточка заголовка секции «Блоки в наборе»: белый фон, рамка, скругления, шеврон справа по образцу */
+/* РљР°СЂС‚РѕС‡РєР° Р·Р°РіРѕР»РѕРІРєР° СЃРµРєС†РёРё В«Р‘Р»РѕРєРё РІ РЅР°Р±РѕСЂРµВ»: Р±РµР»С‹Р№ С„РѕРЅ, СЂР°РјРєР°, СЃРєСЂСѓРіР»РµРЅРёСЏ, С€РµРІСЂРѕРЅ СЃРїСЂР°РІР° РїРѕ РѕР±СЂР°Р·С†Сѓ */
 .combo-set-blocks-header-card {
   flex: 1;
   min-width: 0;
@@ -5044,7 +5044,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   line-height: 1.35;
   margin-top: 0;
 }
-/* Строка блока в наборе: карточка как на образце — белый фон, рамка, шеврон справа, крестик внутри */
+/* РЎС‚СЂРѕРєР° Р±Р»РѕРєР° РІ РЅР°Р±РѕСЂРµ: РєР°СЂС‚РѕС‡РєР° РєР°Рє РЅР° РѕР±СЂР°Р·С†Рµ вЂ” Р±РµР»С‹Р№ С„РѕРЅ, СЂР°РјРєР°, С€РµРІСЂРѕРЅ СЃРїСЂР°РІР°, РєСЂРµСЃС‚РёРє РІРЅСѓС‚СЂРё */
 #comboSetBlocksList .combo-set-block-acc-item .combo-set-block-acc-header {
   display: flex;
   align-items: center;
@@ -5126,7 +5126,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 #comboSetBlocksList .combo-set-block-acc-item + .combo-set-block-acc-item {
   margin-top: 8px;
 }
-/* Список товаров — ровно друг под другом, без смещения */
+/* РЎРїРёСЃРѕРє С‚РѕРІР°СЂРѕРІ вЂ” СЂРѕРІРЅРѕ РґСЂСѓРі РїРѕРґ РґСЂСѓРіРѕРј, Р±РµР· СЃРјРµС‰РµРЅРёСЏ */
 #comboSetBlocksList .combo-set-block-panel-inner .combo-set-block-products-list {
   display: flex;
   flex-direction: column;
@@ -5148,7 +5148,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   box-shadow: none;
   flex-shrink: 0;
 }
-/* Фиксированная сетка — шеврон, фото, название, цена (старая/новая) ровно друг под другом */
+/* Р¤РёРєСЃРёСЂРѕРІР°РЅРЅР°СЏ СЃРµС‚РєР° вЂ” С€РµРІСЂРѕРЅ, С„РѕС‚Рѕ, РЅР°Р·РІР°РЅРёРµ, С†РµРЅР° (СЃС‚Р°СЂР°СЏ/РЅРѕРІР°СЏ) СЂРѕРІРЅРѕ РґСЂСѓРі РїРѕРґ РґСЂСѓРіРѕРј */
 #comboSetBlocksList .combo-set-block-panel-inner .option-item-row.combo-block-product-row {
   display: grid;
   grid-template-columns: 32px 44px minmax(0, 1fr) minmax(90px, auto);
@@ -5635,7 +5635,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   font-weight:700;font-size:16px;
 }
 
-/* ── Clients toolbar: expandable search ── */
+/* в”Ђв”Ђ Clients toolbar: expandable search в”Ђв”Ђ */
 .cl-search-wrap{
   display:flex;
   align-items:center;
@@ -5673,7 +5673,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 .cl-search-input:focus{border-color:var(--color-primary);}
 .cl-search-input::placeholder{color:var(--color-text-muted);opacity:.6;}
 
-/* ── Clients toolbar: sort dropdown ── */
+/* в”Ђв”Ђ Clients toolbar: sort dropdown в”Ђв”Ђ */
 .cl-sort-wrap{position:relative;}
 #clientsSortToggle{
   display:flex;
@@ -5720,7 +5720,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   background:var(--primary-12);
 }
 
-/* ── Clients accordion ── */
+/* в”Ђв”Ђ Clients accordion в”Ђв”Ђ */
 .clients-accordion{
   display:flex;
   flex-direction:column;
@@ -5757,7 +5757,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   margin-left:auto;
 }
 
-/* ── Filter Editor Form ── */
+/* в”Ђв”Ђ Filter Editor Form в”Ђв”Ђ */
 #filterEditorForm .control{
   appearance:none;
   -webkit-appearance:none;
@@ -5827,7 +5827,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   margin-left:auto;
 }
 
-/* ── Custom Select Component (modern dropdown style) ── */
+/* в”Ђв”Ђ Custom Select Component (modern dropdown style) в”Ђв”Ђ */
 .custom-select{
   position:relative;
   display:inline-flex;
@@ -5920,7 +5920,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   height:40px;
 }
 
-/* ── Filter category row (compact single line) ── */
+/* в”Ђв”Ђ Filter category row (compact single line) в”Ђв”Ђ */
 .filter-category-row{
   display:flex;
   align-items:center;
@@ -5961,7 +5961,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   border-radius:12px;
 }
 
-/* ── Discount Editor Form ── */
+/* в”Ђв”Ђ Discount Editor Form в”Ђв”Ђ */
 #discountEditorForm .control{
   appearance:none;
   -webkit-appearance:none;
@@ -6006,7 +6006,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   margin-top:4px;
 }
 
-/* ── Discount Info Panel ── */
+/* в”Ђв”Ђ Discount Info Panel в”Ђв”Ђ */
 .discount-info-header{
   display:flex;
   align-items:center;
@@ -6088,7 +6088,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   color:var(--color-text);
 }
 
-/* ── Discount row (list item) ── */
+/* в”Ђв”Ђ Discount row (list item) в”Ђв”Ђ */
 .discount-row{
   display:flex;
   align-items:center;
@@ -6152,7 +6152,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   background:var(--color-text-muted);
 }
 
-/* История применения скидки: одна строка на запись */
+/* РСЃС‚РѕСЂРёСЏ РїСЂРёРјРµРЅРµРЅРёСЏ СЃРєРёРґРєРё: РѕРґРЅР° СЃС‚СЂРѕРєР° РЅР° Р·Р°РїРёСЃСЊ */
 .clients-panel .order-row.discount-order-row{
   grid-template-columns: minmax(0, 1fr) auto !important;
   gap: 12px;
@@ -6195,7 +6195,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   font-size: 12px;
 }
 
-/* ── Discount chips (product/customer selection) ── */
+/* в”Ђв”Ђ Discount chips (product/customer selection) в”Ђв”Ђ */
 .discount-chips-wrap{
   display:flex;
   flex-wrap:wrap;
@@ -6256,7 +6256,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   font-style:italic;
 }
 
-/* ── Discount info sections ── */
+/* в”Ђв”Ђ Discount info sections в”Ђв”Ђ */
 .discount-info-section{
   margin-top:16px;
 }
@@ -6267,7 +6267,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   color:var(--color-text);
 }
 
-/* ── Order item old price (strikethrough) ── */
+/* в”Ђв”Ђ Order item old price (strikethrough) в”Ђв”Ђ */
 .order-item-old-price{
   text-decoration:line-through;
   color:var(--color-text-muted, var(--color-text-faint));
@@ -6294,39 +6294,39 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 .stock-item-field .control-sm{height:32px;font-size:13px;padding:4px 8px}
 
 /* ==========================================================================
-   SHOP LAYER (витрина) — специфичные правила
+   SHOP LAYER (РІРёС‚СЂРёРЅР°) вЂ” СЃРїРµС†РёС„РёС‡РЅС‹Рµ РїСЂР°РІРёР»Р°
    ========================================================================== */
 
 /* ==========================================================================
-   SHOP (витрина) — отдельные стили
-   Самодостаточный файл витрины (включает базовые стили)
+   SHOP (РІРёС‚СЂРёРЅР°) вЂ” РѕС‚РґРµР»СЊРЅС‹Рµ СЃС‚РёР»Рё
+   РЎР°РјРѕРґРѕСЃС‚Р°С‚РѕС‡РЅС‹Р№ С„Р°Р№Р» РІРёС‚СЂРёРЅС‹ (РІРєР»СЋС‡Р°РµС‚ Р±Р°Р·РѕРІС‹Рµ СЃС‚РёР»Рё)
    ========================================================================== */
 
 :root{
   /* ==========================================================================
-     SHOP (витрина) — токены (переменные)
-     Все цвета вынесены сюда. Комментарии — по назначению.
+     SHOP (РІРёС‚СЂРёРЅР°) вЂ” С‚РѕРєРµРЅС‹ (РїРµСЂРµРјРµРЅРЅС‹Рµ)
+     Р’СЃРµ С†РІРµС‚Р° РІС‹РЅРµСЃРµРЅС‹ СЃСЋРґР°. РљРѕРјРјРµРЅС‚Р°СЂРёРё вЂ” РїРѕ РЅР°Р·РЅР°С‡РµРЅРёСЋ.
      ========================================================================== */
 
-  /* ===== Бренд (оранжевый) ===== */
-  --shop-buy: #f97316;            /* основной акцент: кнопки "Добавить/Оформить", бейджи */
-  --shop-buy-hover: #ea580c;      /* hover для акцента */
-  --shop-buy-text: #ffffff;       /* текст на акцентных кнопках */
-  --shop-buy-glow: rgba(249,115,22,.18); /* мягкая подсветка акцента (ring/glow) */
+  /* ===== Р‘СЂРµРЅРґ (РѕСЂР°РЅР¶РµРІС‹Р№) ===== */
+  --shop-buy: #f97316;            /* РѕСЃРЅРѕРІРЅРѕР№ Р°РєС†РµРЅС‚: РєРЅРѕРїРєРё "Р”РѕР±Р°РІРёС‚СЊ/РћС„РѕСЂРјРёС‚СЊ", Р±РµР№РґР¶Рё */
+  --shop-buy-hover: #ea580c;      /* hover РґР»СЏ Р°РєС†РµРЅС‚Р° */
+  --shop-buy-text: #ffffff;       /* С‚РµРєСЃС‚ РЅР° Р°РєС†РµРЅС‚РЅС‹С… РєРЅРѕРїРєР°С… */
+  --shop-buy-glow: rgba(249,115,22,.18); /* РјСЏРіРєР°СЏ РїРѕРґСЃРІРµС‚РєР° Р°РєС†РµРЅС‚Р° (ring/glow) */
 
-  /* ===== Базовые нейтрали (используются локально в shop.css) ===== */
-  --shop-white: #ffffff;          /* белый (иконки/текст на фото, фон кнопок) */
-  --shop-border: #e5e7eb;        /* локальная рамка для иконок в хедере */
-  --shop-gray-400: #9ca3af;       /* нейтральные иконки/звёзды "не активно" */
-  --shop-amber-500: #f59e0b;      /* звезда "основной адрес" */
-  --shop-danger: #ef4444;         /* опасные действия/ошибки (fallback) */
+  /* ===== Р‘Р°Р·РѕРІС‹Рµ РЅРµР№С‚СЂР°Р»Рё (РёСЃРїРѕР»СЊР·СѓСЋС‚СЃСЏ Р»РѕРєР°Р»СЊРЅРѕ РІ shop.css) ===== */
+  --shop-white: #ffffff;          /* Р±РµР»С‹Р№ (РёРєРѕРЅРєРё/С‚РµРєСЃС‚ РЅР° С„РѕС‚Рѕ, С„РѕРЅ РєРЅРѕРїРѕРє) */
+  --shop-border: #e5e7eb;        /* Р»РѕРєР°Р»СЊРЅР°СЏ СЂР°РјРєР° РґР»СЏ РёРєРѕРЅРѕРє РІ С…РµРґРµСЂРµ */
+  --shop-gray-400: #9ca3af;       /* РЅРµР№С‚СЂР°Р»СЊРЅС‹Рµ РёРєРѕРЅРєРё/Р·РІС‘Р·РґС‹ "РЅРµ Р°РєС‚РёРІРЅРѕ" */
+  --shop-amber-500: #f59e0b;      /* Р·РІРµР·РґР° "РѕСЃРЅРѕРІРЅРѕР№ Р°РґСЂРµСЃ" */
+  --shop-danger: #ef4444;         /* РѕРїР°СЃРЅС‹Рµ РґРµР№СЃС‚РІРёСЏ/РѕС€РёР±РєРё (fallback) */
 
-  /* ===== Полупрозрачные (для hover/текста на фото) ===== */
-  --shop-shadow-text: rgba(0,0,0,.55);   /* тень текста на фото */
-  --shop-hover-dark: rgba(0,0,0,.06);    /* hover на светлой теме */
-  --shop-hover-light: rgba(255,255,255,.08); /* hover на тёмной теме */
+  /* ===== РџРѕР»СѓРїСЂРѕР·СЂР°С‡РЅС‹Рµ (РґР»СЏ hover/С‚РµРєСЃС‚Р° РЅР° С„РѕС‚Рѕ) ===== */
+  --shop-shadow-text: rgba(0,0,0,.55);   /* С‚РµРЅСЊ С‚РµРєСЃС‚Р° РЅР° С„РѕС‚Рѕ */
+  --shop-hover-dark: rgba(0,0,0,.06);    /* hover РЅР° СЃРІРµС‚Р»РѕР№ С‚РµРјРµ */
+  --shop-hover-light: rgba(255,255,255,.08); /* hover РЅР° С‚С‘РјРЅРѕР№ С‚РµРјРµ */
 
-  /* ===== Геометрия / размеры ===== */
+  /* ===== Р“РµРѕРјРµС‚СЂРёСЏ / СЂР°Р·РјРµСЂС‹ ===== */
   --shop-radius: 18px;
   --shop-gap: 14px;
   --shop-bottomnav-h: 50px;
@@ -6334,7 +6334,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   --shop-sheet-scroll-pad: 200px;
   --shop-footer-height:64px;
 
-  /* ===== Масштабирование UI карточек (container queries) ===== */
+  /* ===== РњР°СЃС€С‚Р°Р±РёСЂРѕРІР°РЅРёРµ UI РєР°СЂС‚РѕС‡РµРє (container queries) ===== */
   --sp-pad: 12px;
   --sp-title-size: 14px;
   --sp-sub-size: 12px;
@@ -6342,7 +6342,7 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   --sp-pill-h: 32px;
   --sp-pill-side: 44px;
 
-  /* ===== Контрол количества (общие размеры) ===== */
+  /* ===== РљРѕРЅС‚СЂРѕР» РєРѕР»РёС‡РµСЃС‚РІР° (РѕР±С‰РёРµ СЂР°Р·РјРµСЂС‹) ===== */
   --qty-pill-h: var(--sp-pill-h);
   --qty-pill-side: var(--sp-pill-side);
 }
@@ -6352,9 +6352,9 @@ html[data-theme="dark"]{
   --shop-buy-hover: var(--color-primary);
 }
 
-/* Тёмная тема витрины: более контрастные подписи категорий */
+/* РўС‘РјРЅР°СЏ С‚РµРјР° РІРёС‚СЂРёРЅС‹: Р±РѕР»РµРµ РєРѕРЅС‚СЂР°СЃС‚РЅС‹Рµ РїРѕРґРїРёСЃРё РєР°С‚РµРіРѕСЂРёР№ */
 html[data-theme="dark"] body.page-shop{
-  /* можно переиспользовать в будущих местах */
+  /* РјРѕР¶РЅРѕ РїРµСЂРµРёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РІ Р±СѓРґСѓС‰РёС… РјРµСЃС‚Р°С… */
   --shop-category-title-color: var(--color-text);
 }
 
@@ -6362,7 +6362,7 @@ html[data-theme="dark"] body.page-shop .shop-cat-title{
   color: var(--shop-category-title-color, var(--color-text));
 }
 
-/* Чипы категорий под хедером (мобильный вид) в тёмной теме */
+/* Р§РёРїС‹ РєР°С‚РµРіРѕСЂРёР№ РїРѕРґ С…РµРґРµСЂРѕРј (РјРѕР±РёР»СЊРЅС‹Р№ РІРёРґ) РІ С‚С‘РјРЅРѕР№ С‚РµРјРµ */
 html[data-theme="dark"] body.page-shop .shop-cat-chip{
   background: var(--color-surface);
   border-color: var(--color-border);
@@ -8279,7 +8279,7 @@ body.page-shop .shop-toolbar-cart{
   display: none;
 }
 
-/* Баннер онлайн/офлайн (витрина) */
+/* Р‘Р°РЅРЅРµСЂ РѕРЅР»Р°Р№РЅ/РѕС„Р»Р°Р№РЅ (РІРёС‚СЂРёРЅР°) */
 .shop-connection-banner{
   position: fixed;
   left: 0;
@@ -8359,7 +8359,7 @@ body.page-shop .shop-toolbar-cart{
   background: linear-gradient(270deg, var(--color-surface) 0%, transparent 100%);
 }
 
-/* Подхедер (toolbar) только на главной странице витрины */
+/* РџРѕРґС…РµРґРµСЂ (toolbar) С‚РѕР»СЊРєРѕ РЅР° РіР»Р°РІРЅРѕР№ СЃС‚СЂР°РЅРёС†Рµ РІРёС‚СЂРёРЅС‹ */
 body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   display: none;
 }
@@ -8367,7 +8367,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 .shop-grid{
   height: 100%;
   display: grid;
-  /* правая колонка фиксированная 500px */
+  /* РїСЂР°РІР°СЏ РєРѕР»РѕРЅРєР° С„РёРєСЃРёСЂРѕРІР°РЅРЅР°СЏ 500px */
   grid-template-columns: 260px 1fr 500px;
   gap: var(--shop-gap);
   align-items: stretch;
@@ -8386,14 +8386,14 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   overflow: auto;
 }
 
-/* чтобы в products-panel можно было масштабировать элементы через container queries */
+/* С‡С‚РѕР±С‹ РІ products-panel РјРѕР¶РЅРѕ Р±С‹Р»Рѕ РјР°СЃС€С‚Р°Р±РёСЂРѕРІР°С‚СЊ СЌР»РµРјРµРЅС‚С‹ С‡РµСЂРµР· container queries */
 .shop-col-products .panel-body{
   container-type: inline-size;
   padding-bottom: 400px;
 }
 
 
-/* мобилка: показываем только товары, категории/корзина через нижнее меню */
+/* РјРѕР±РёР»РєР°: РїРѕРєР°Р·С‹РІР°РµРј С‚РѕР»СЊРєРѕ С‚РѕРІР°СЂС‹, РєР°С‚РµРіРѕСЂРёРё/РєРѕСЂР·РёРЅР° С‡РµСЂРµР· РЅРёР¶РЅРµРµ РјРµРЅСЋ */
 @media (max-width: 768px){
   body.page-shop{
     overflow-y: auto;
@@ -8460,7 +8460,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
     grid-template-columns: 1fr;
   }
 
-  /* Панель товаров на всю ширину экрана */
+  /* РџР°РЅРµР»СЊ С‚РѕРІР°СЂРѕРІ РЅР° РІСЃСЋ С€РёСЂРёРЅСѓ СЌРєСЂР°РЅР° */
   body.page-shop .shop-products-panel{
     width: 100%;
     max-width: 100vw;
@@ -8479,7 +8479,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
     display: none;
   }
 
-  /* чтобы контент не уезжал под нижний таббар */
+  /* С‡С‚РѕР±С‹ РєРѕРЅС‚РµРЅС‚ РЅРµ СѓРµР·Р¶Р°Р» РїРѕРґ РЅРёР¶РЅРёР№ С‚Р°Р±Р±Р°СЂ */
   .shop-col-products .panel-body{
     padding-bottom: 400px;
     overflow: visible;
@@ -8565,43 +8565,92 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 
 /* ==========================================================================
    Products grid & cards
-   Требование: на десктопе 2..5 карточек в ряд, без пустот.
-   Карточка и контент внутри "масштабируются" вместе.
+   РўСЂРµР±РѕРІР°РЅРёРµ: РЅР° РґРµСЃРєС‚РѕРїРµ 2..5 РєР°СЂС‚РѕС‡РµРє РІ СЂСЏРґ, Р±РµР· РїСѓСЃС‚РѕС‚.
+   РљР°СЂС‚РѕС‡РєР° Рё РєРѕРЅС‚РµРЅС‚ РІРЅСѓС‚СЂРё "РјР°СЃС€С‚Р°Р±РёСЂСѓСЋС‚СЃСЏ" РІРјРµСЃС‚Рµ.
    ========================================================================== */
 
 .shop-products-grid{
   display: grid;
   gap: 12px;
 
-  /* по умолчанию: 5 карточек в ряд на десктопе */
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  /* РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ: 4 РєР°СЂС‚РѕС‡РєРё РІ СЂСЏРґ РЅР° РґРµСЃРєС‚РѕРїРµ */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   justify-content: stretch;
   align-items: stretch;
 }
 
-/* уменьшение ширины экрана — уменьшаем количество колонок по порядку */
-@media (max-width: 1200px){
-  .shop-products-grid{ grid-template-columns: repeat(4, minmax(0, 1fr)); }
-}
-@media (max-width: 980px){
-  .shop-products-grid{ grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-@media (max-width: 820px){
-  .shop-products-grid{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (min-width: 1920px){
+  .shop-products-grid{
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
 }
 
-/* мобилка оставляем как есть */
+/* РїР»Р°РЅС€РµС‚ */
+@media (max-width: 1024px){
+  .shop-products-grid{ grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+/* РјРѕР±РёР»РєР° */
 @media (max-width: 768px){
   .shop-products-grid{
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-/* --- "масштабирование" размеров UI в карточке от ширины контейнера (без JS) --- */
-/* базовые значения будут меняться плавно, чтобы при 5 в ряд всё было компактнее,
-   при 2-3 в ряд — чуть крупнее. */
-/* container query: ширина панели товаров */
-/* карточка */
+/* РєРѕРјРїР°РєС‚РЅС‹Р№ РґРµСЃРєС‚РѕРї/РїР»Р°РЅС€РµС‚: СЃСѓР¶Р°РµРј Р±РѕРєРѕРІС‹Рµ РєРѕР»РѕРЅРєРё, С†РµРЅС‚СЂ РґРµСЂР¶РёС‚ 5 РєР°СЂС‚РѕС‡РµРє */
+@media (min-width: 769px) and (max-width: 1366px){
+  body.page-shop .main-container{
+    padding: 10px;
+  }
+  .shop-grid{
+    grid-template-columns: 210px 1fr 360px;
+    gap: 10px;
+  }
+  .shop-products-grid{
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* РїР»Р°РЅС€РµС‚: РєР°С‚РµРіРѕСЂРёРё РІ chips СЃРІРµСЂС…Сѓ, Р±РµР· Р»РµРІРѕР№ РєРѕР»РѕРЅРєРё */
+@media (min-width: 769px) and (max-width: 1199px){
+  body.page-shop .app-grid{
+    grid-template-columns: 1fr 420px !important;
+  }
+  body.page-shop .page-col-left{
+    display: none !important;
+  }
+  body.page-shop .page-col-center{
+    display: flex !important;
+    min-width: 0;
+  }
+  body.page-shop .page-col-right{
+    display: flex !important;
+    min-width: 0;
+  }
+  .shop-col-cats{
+    display: none !important;
+  }
+  .shop-grid{
+    grid-template-columns: 1fr 420px;
+  }
+  .shop-col-products{
+    grid-column: 1;
+  }
+  .shop-col-cart{
+    grid-column: 2;
+  }
+  body.page-shop .page-col-center .center-stack > .panel:first-child .toolbar-title{
+    display: none !important;
+  }
+  body.page-shop .page-col-center #shopCatChipsWrap{
+    display: block !important;
+  }
+}
+
+/* --- "РјР°СЃС€С‚Р°Р±РёСЂРѕРІР°РЅРёРµ" СЂР°Р·РјРµСЂРѕРІ UI РІ РєР°СЂС‚РѕС‡РєРµ РѕС‚ С€РёСЂРёРЅС‹ РєРѕРЅС‚РµР№РЅРµСЂР° (Р±РµР· JS) --- */
+/* Р±Р°Р·РѕРІС‹Рµ Р·РЅР°С‡РµРЅРёСЏ Р±СѓРґСѓС‚ РјРµРЅСЏС‚СЊСЃСЏ РїР»Р°РІРЅРѕ, С‡С‚РѕР±С‹ РїСЂРё 5 РІ СЂСЏРґ РІСЃС‘ Р±С‹Р»Рѕ РєРѕРјРїР°РєС‚РЅРµРµ,
+   РїСЂРё 2-3 РІ СЂСЏРґ вЂ” С‡СѓС‚СЊ РєСЂСѓРїРЅРµРµ. */
+/* container query: С€РёСЂРёРЅР° РїР°РЅРµР»Рё С‚РѕРІР°СЂРѕРІ */
+/* РєР°СЂС‚РѕС‡РєР° */
 .sp-card{
   border: 1px solid var(--color-border);
   background: var(--color-surface);
@@ -8609,10 +8658,11 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  aspect-ratio: 9 / 16;
   min-width: 0;
 
-  /* фиксируем визуальную "геометрию" без зависимости от текста:
-     высота определяется структурой: квадратное фото + фикс блоки текста + кнопка снизу */
+  /* С„РёРєСЃРёСЂСѓРµРј РІРёР·СѓР°Р»СЊРЅСѓСЋ "РіРµРѕРјРµС‚СЂРёСЋ" Р±РµР· Р·Р°РІРёСЃРёРјРѕСЃС‚Рё РѕС‚ С‚РµРєСЃС‚Р°:
+     РІС‹СЃРѕС‚Р° РѕРїСЂРµРґРµР»СЏРµС‚СЃСЏ СЃС‚СЂСѓРєС‚СѓСЂРѕР№: РєРІР°РґСЂР°С‚РЅРѕРµ С„РѕС‚Рѕ + С„РёРєСЃ Р±Р»РѕРєРё С‚РµРєСЃС‚Р° + РєРЅРѕРїРєР° СЃРЅРёР·Сѓ */
   cursor: pointer;
   transition: transform var(--dur-fast) var(--ease-smooth), background var(--dur-fast) var(--ease-smooth);
 }
@@ -8633,7 +8683,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 .sp-media{
   width: 100%;
   aspect-ratio: 1 / 1;
-  background: var(--color-surface-2);
+  background: #fff;
   position: relative;
   overflow: hidden;
 }
@@ -8641,11 +8691,11 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 .sp-img{
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
 }
 
-/* Полноразмерное изображение может быть в <picture> (WebP) — не ломаем сетку */
+/* РџРѕР»РЅРѕСЂР°Р·РјРµСЂРЅРѕРµ РёР·РѕР±СЂР°Р¶РµРЅРёРµ РјРѕР¶РµС‚ Р±С‹С‚СЊ РІ <picture> (WebP) вЂ” РЅРµ Р»РѕРјР°РµРј СЃРµС‚РєСѓ */
 .sp-media > picture{
   position: absolute;
   inset: 0;
@@ -8658,10 +8708,10 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
-/* LQIP-превью и основное изображение в карточке товара */
+/* LQIP-РїСЂРµРІСЊСЋ Рё РѕСЃРЅРѕРІРЅРѕРµ РёР·РѕР±СЂР°Р¶РµРЅРёРµ РІ РєР°СЂС‚РѕС‡РєРµ С‚РѕРІР°СЂР° */
 .sp-img-lqip,
 .sp-img-full{
   position: absolute;
@@ -8687,7 +8737,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   opacity: 0;
 }
 
-/* затемнение при добавлении */
+/* Р·Р°С‚РµРјРЅРµРЅРёРµ РїСЂРё РґРѕР±Р°РІР»РµРЅРёРё */
 .sp-media.is-dim .sp-img{
   filter: brightness(.62);
 }
@@ -8718,7 +8768,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   position: relative;
 }
 
-/* для анимации цифр */
+/* РґР»СЏ Р°РЅРёРјР°С†РёРё С†РёС„СЂ */
 .qty-num{
   position: absolute;
   inset: 0;
@@ -8746,10 +8796,11 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   min-width: 0;
 
   display: -webkit-box;
-  -webkit-line-clamp: 2;             /* 2 строки */
+  -webkit-line-clamp: 2;             /* 2 СЃС‚СЂРѕРєРё */
   line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  min-height: 2.3em;
 }
 
 .sp-sub{
@@ -8761,11 +8812,11 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   text-overflow: ellipsis;
   white-space: nowrap;
 
-  /* даже если описания нет — место резервируем, чтобы карточка не прыгала */
+  /* РґР°Р¶Рµ РµСЃР»Рё РѕРїРёСЃР°РЅРёСЏ РЅРµС‚ вЂ” РјРµСЃС‚Рѕ СЂРµР·РµСЂРІРёСЂСѓРµРј, С‡С‚РѕР±С‹ РєР°СЂС‚РѕС‡РєР° РЅРµ РїСЂС‹РіР°Р»Р° */
   min-height: 14px;
 }
 
-/* Комбо-карточка в каталоге */
+/* РљРѕРјР±Рѕ-РєР°СЂС‚РѕС‡РєР° РІ РєР°С‚Р°Р»РѕРіРµ */
 .sp-card--combo .sp-media--combo{ position: relative; }
 .sp-combo-grid{
   display: grid;
@@ -8804,7 +8855,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   object-fit: cover;
 }
 
-/* Плавное появление изображений в сетке комбо */
+/* РџР»Р°РІРЅРѕРµ РїРѕСЏРІР»РµРЅРёРµ РёР·РѕР±СЂР°Р¶РµРЅРёР№ РІ СЃРµС‚РєРµ РєРѕРјР±Рѕ */
 .sp-combo-grid__cell.is-loaded .sp-img-full{
   opacity: 1;
 }
@@ -8854,7 +8905,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 .sp-combo-btn:hover{ background: var(--shop-buy-hover); }
 .sp-combo-btn__arrow{ font-size: 1.1em; }
 
-/* Экран детали комбо (правая панель / sheet) */
+/* Р­РєСЂР°РЅ РґРµС‚Р°Р»Рё РєРѕРјР±Рѕ (РїСЂР°РІР°СЏ РїР°РЅРµР»СЊ / sheet) */
 .shop-combo-detail{
   padding: var(--sp-pad);
   display: flex;
@@ -8913,7 +8964,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 }
 .shop-combo-detail-products li{ padding: 2px 0; }
 
-/* Обёртка экрана комбо: скролл + футер внизу */
+/* РћР±С‘СЂС‚РєР° СЌРєСЂР°РЅР° РєРѕРјР±Рѕ: СЃРєСЂРѕР»Р» + С„СѓС‚РµСЂ РІРЅРёР·Сѓ */
 .shop-combo-view{
   display: flex;
   flex-direction: column;
@@ -8928,7 +8979,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   padding: var(--sp-pad);
 }
 
-/* Мобилка: уменьшаем горизонтальные отступы на экранах комбо (чтобы контейнер был шире) */
+/* РњРѕР±РёР»РєР°: СѓРјРµРЅСЊС€Р°РµРј РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅС‹Рµ РѕС‚СЃС‚СѓРїС‹ РЅР° СЌРєСЂР°РЅР°С… РєРѕРјР±Рѕ (С‡С‚РѕР±С‹ РєРѕРЅС‚РµР№РЅРµСЂ Р±С‹Р» С€РёСЂРµ) */
 @media (max-width: 768px){
   .shop-product-content .shop-combo-detail-scroll{
     padding-left: 0;
@@ -8936,7 +8987,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   }
 }
 
-/* Новый экран комбо (как корзина) */
+/* РќРѕРІС‹Р№ СЌРєСЂР°РЅ РєРѕРјР±Рѕ (РєР°Рє РєРѕСЂР·РёРЅР°) */
 .shop-combo-detail-caption{
   font-size: 14px;
   color: var(--color-text-muted);
@@ -8954,7 +9005,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   margin-bottom: 0;
   cursor: default;
   position: relative;
-  grid-template-columns: 92px 1fr; /* убираем колонку для цены */
+  grid-template-columns: 92px 1fr; /* СѓР±РёСЂР°РµРј РєРѕР»РѕРЅРєСѓ РґР»СЏ С†РµРЅС‹ */
 }
 .shop-combo-row .shop-combo-mid{
   padding-right: 0;
@@ -9036,7 +9087,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   margin-left: 0;
 }
 
-/* Футер комбо — прижат к низу панели, не скроллится */
+/* Р¤СѓС‚РµСЂ РєРѕРјР±Рѕ вЂ” РїСЂРёР¶Р°С‚ Рє РЅРёР·Сѓ РїР°РЅРµР»Рё, РЅРµ СЃРєСЂРѕР»Р»РёС‚СЃСЏ */
 .shop-combo-footer{
   flex-shrink: 0;
   background: var(--color-surface);
@@ -9046,7 +9097,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   gap: 10px;
 }
 
-/* Выбор внутри блока */
+/* Р’С‹Р±РѕСЂ РІРЅСѓС‚СЂРё Р±Р»РѕРєР° */
 .shop-combo-picker-list{
   display: flex;
   flex-direction: column;
@@ -9149,7 +9200,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   background: var(--shop-buy);
 }
 .shop-combo-radio.is-selected::after{
-  content: "✓";
+  content: "вњ“";
   position: absolute;
   inset: 0;
   display: grid;
@@ -9159,7 +9210,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   font-weight: 900;
 }
 
-/* Расширение самой карточки: варианты и состав внутри; разграничитель по низу фото/строки с ценой */
+/* Р Р°СЃС€РёСЂРµРЅРёРµ СЃР°РјРѕР№ РєР°СЂС‚РѕС‡РєРё: РІР°СЂРёР°РЅС‚С‹ Рё СЃРѕСЃС‚Р°РІ РІРЅСѓС‚СЂРё; СЂР°Р·РіСЂР°РЅРёС‡РёС‚РµР»СЊ РїРѕ РЅРёР·Сѓ С„РѕС‚Рѕ/СЃС‚СЂРѕРєРё СЃ С†РµРЅРѕР№ */
 .shop-combo-picker-expand{
   margin-top: 0;
   border-top: 1px solid var(--color-border);
@@ -9278,7 +9329,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-   /* чтобы не сжимались и шли в одну линию */
+   /* С‡С‚РѕР±С‹ РЅРµ СЃР¶РёРјР°Р»РёСЃСЊ Рё С€Р»Рё РІ РѕРґРЅСѓ Р»РёРЅРёСЋ */
   flex: 0 0 auto;
   transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
@@ -9361,7 +9412,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   border-color: var(--color-text-muted);
 }
 
-/* Полный экран комбо: карточки + заменить + добавить */
+/* РџРѕР»РЅС‹Р№ СЌРєСЂР°РЅ РєРѕРјР±Рѕ: РєР°СЂС‚РѕС‡РєРё + Р·Р°РјРµРЅРёС‚СЊ + РґРѕР±Р°РІРёС‚СЊ */
 .shop-combo-detail-discount-bar{
   padding: 10px 14px;
   border-radius: 12px;
@@ -9460,7 +9511,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 }
 .shop-combo-detail-add:hover{ background: var(--shop-buy-hover); }
 
-/* Экран выбора товара в блоке (Заменить) */
+/* Р­РєСЂР°РЅ РІС‹Р±РѕСЂР° С‚РѕРІР°СЂР° РІ Р±Р»РѕРєРµ (Р—Р°РјРµРЅРёС‚СЊ) */
 .shop-combo-detail--picker .shop-combo-detail-title{ display: none; }
 .shop-combo-detail--picker{ padding-top: 0; }
 .shop-combo-picker-list{
@@ -9563,23 +9614,23 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   justify-content: flex-start;
   gap: 10px;
 
-  /* кнопка всегда внизу */
+  /* РєРЅРѕРїРєР° РІСЃРµРіРґР° РІРЅРёР·Сѓ */
   margin-top: auto;
 }
 
 /* ========================================================================
-   Единый контрол количества/покупки (каталог / корзина / модалка)
-   Требования:
-   - без внутренних полосок/разделителей
-   - одинаковая ширина +/- (hit-area)
-   - кнопка в карточке снизу слева
-   - ширина пилюли растёт вправо под контент (old, price, +/-)
-   - старая цена слева внутри кнопки (когда qty=0)
-   - при добавлении старая цена исчезает и появляется "—"
+   Р•РґРёРЅС‹Р№ РєРѕРЅС‚СЂРѕР» РєРѕР»РёС‡РµСЃС‚РІР°/РїРѕРєСѓРїРєРё (РєР°С‚Р°Р»РѕРі / РєРѕСЂР·РёРЅР° / РјРѕРґР°Р»РєР°)
+   РўСЂРµР±РѕРІР°РЅРёСЏ:
+   - Р±РµР· РІРЅСѓС‚СЂРµРЅРЅРёС… РїРѕР»РѕСЃРѕРє/СЂР°Р·РґРµР»РёС‚РµР»РµР№
+   - РѕРґРёРЅР°РєРѕРІР°СЏ С€РёСЂРёРЅР° +/- (hit-area)
+   - РєРЅРѕРїРєР° РІ РєР°СЂС‚РѕС‡РєРµ СЃРЅРёР·Сѓ СЃР»РµРІР°
+   - С€РёСЂРёРЅР° РїРёР»СЋР»Рё СЂР°СЃС‚С‘С‚ РІРїСЂР°РІРѕ РїРѕРґ РєРѕРЅС‚РµРЅС‚ (old, price, +/-)
+   - СЃС‚Р°СЂР°СЏ С†РµРЅР° СЃР»РµРІР° РІРЅСѓС‚СЂРё РєРЅРѕРїРєРё (РєРѕРіРґР° qty=0)
+   - РїСЂРё РґРѕР±Р°РІР»РµРЅРёРё СЃС‚Р°СЂР°СЏ С†РµРЅР° РёСЃС‡РµР·Р°РµС‚ Рё РїРѕСЏРІР»СЏРµС‚СЃСЏ "вЂ”"
    ======================================================================== */
 
-/* общие размеры через переменные (подхватывают container query выше) */
-/* базовый pill */
+/* РѕР±С‰РёРµ СЂР°Р·РјРµСЂС‹ С‡РµСЂРµР· РїРµСЂРµРјРµРЅРЅС‹Рµ (РїРѕРґС…РІР°С‚С‹РІР°СЋС‚ container query РІС‹С€Рµ) */
+/* Р±Р°Р·РѕРІС‹Р№ pill */
 .qty-pill{
   height: var(--qty-pill-h);
   border-radius: 999px;
@@ -9589,7 +9640,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   display: inline-flex;
   align-items: center;
 
-  /* растём вправо под контент */
+  /* СЂР°СЃС‚С‘Рј РІРїСЂР°РІРѕ РїРѕРґ РєРѕРЅС‚РµРЅС‚ */
   width: max-content;
   max-width: 100%;
 
@@ -9597,7 +9648,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   user-select: none;
 }
 
-/* никаких внутренних разделителей */
+/* РЅРёРєР°РєРёС… РІРЅСѓС‚СЂРµРЅРЅРёС… СЂР°Р·РґРµР»РёС‚РµР»РµР№ */
 .qty-pill, .qty-pill *{
   border: 0;
   outline: none;
@@ -9607,7 +9658,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 
 .qty-pill:hover{ background: var(--shop-buy-hover); }
 
-/* кнопки +/- одинаковой ширины */
+/* РєРЅРѕРїРєРё +/- РѕРґРёРЅР°РєРѕРІРѕР№ С€РёСЂРёРЅС‹ */
 .qty-pill__btn{
   width: var(--qty-pill-side);
   height: 100%;
@@ -9628,7 +9679,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   pointer-events: none;
 }
 
-/* центр */
+/* С†РµРЅС‚СЂ */
 .qty-pill__center{
   display: inline-flex;
   align-items: center;
@@ -9642,13 +9693,13 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   padding: 0 10px;
 }
 
-/* старая цена внутри кнопки слева от текущей */
+/* СЃС‚Р°СЂР°СЏ С†РµРЅР° РІРЅСѓС‚СЂРё РєРЅРѕРїРєРё СЃР»РµРІР° РѕС‚ С‚РµРєСѓС‰РµР№ */
 .qty-pill__center .old{
   text-decoration: line-through;
   opacity: .85;
 }
 
-/* Стили скидок */
+/* РЎС‚РёР»Рё СЃРєРёРґРѕРє */
 .sp-discount-badge{
   display: inline-block;
   background: var(--color-primary);
@@ -9674,12 +9725,12 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   margin-right: 4px;
 }
 
-/* когда корзина пустая — прячем "минус", показываем old (если есть) */
+/* РєРѕРіРґР° РєРѕСЂР·РёРЅР° РїСѓСЃС‚Р°СЏ вЂ” РїСЂСЏС‡РµРј "РјРёРЅСѓСЃ", РїРѕРєР°Р·С‹РІР°РµРј old (РµСЃР»Рё РµСЃС‚СЊ) */
 .qty-pill.is-empty .qty-pill__btn--minus{
   display: none;
 }
 
-/* когда товар добавлен — old скрываем (JS может добавлять класс .has-qty) */
+/* РєРѕРіРґР° С‚РѕРІР°СЂ РґРѕР±Р°РІР»РµРЅ вЂ” old СЃРєСЂС‹РІР°РµРј (JS РјРѕР¶РµС‚ РґРѕР±Р°РІР»СЏС‚СЊ РєР»Р°СЃСЃ .has-qty) */
 .qty-pill.has-qty .qty-pill__center .old{
   display: none;
 }
@@ -9690,7 +9741,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   display: none;
 }
 
-/* вариант для корзины (серый) */
+/* РІР°СЂРёР°РЅС‚ РґР»СЏ РєРѕСЂР·РёРЅС‹ (СЃРµСЂС‹Р№) */
 .qty-pill--muted{
   background: var(--color-surface-2);
   color: var(--color-text);
@@ -9704,7 +9755,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   background: var(--shop-hover-dark);
 }
 
-/* крупнее в деталке товара */
+/* РєСЂСѓРїРЅРµРµ РІ РґРµС‚Р°Р»РєРµ С‚РѕРІР°СЂР° */
 .qty-pill--big{
   --qty-pill-h: 44px;
   --qty-pill-side: 48px;
@@ -9715,7 +9766,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
    Cart (desktop panel + sheet)
    ========================================================================== */
 
-/* ========== Свайп для карточек корзины ========== */
+/* ========== РЎРІР°Р№Рї РґР»СЏ РєР°СЂС‚РѕС‡РµРє РєРѕСЂР·РёРЅС‹ ========== */
 .cart-swipe-container {
   position: relative;
   overflow: hidden;
@@ -9789,7 +9840,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   margin-bottom: 0;
 }
 
-/* ========== Десктопные кнопки действий в корзине ========== */
+/* ========== Р”РµСЃРєС‚РѕРїРЅС‹Рµ РєРЅРѕРїРєРё РґРµР№СЃС‚РІРёР№ РІ РєРѕСЂР·РёРЅРµ ========== */
 .cart-desktop-actions {
   display: none;
   align-items: center;
@@ -9802,7 +9853,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
     display: flex;
   }
   
-  /* Скрываем свайп-кнопки на десктопе */
+  /* РЎРєСЂС‹РІР°РµРј СЃРІР°Р№Рї-РєРЅРѕРїРєРё РЅР° РґРµСЃРєС‚РѕРїРµ */
   .cart-swipe-actions {
     display: none !important;
   }
@@ -9876,7 +9927,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   transform: translateX(-50%) translateY(0);
 }
 
-/* ========== Карточка корзины ========== */
+/* ========== РљР°СЂС‚РѕС‡РєР° РєРѕСЂР·РёРЅС‹ ========== */
 .cart-row{
   border: 1px solid var(--color-border);
   background: var(--color-surface);
@@ -9911,7 +9962,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   flex-shrink: 0;
 }
 
-/* Комбо в корзине: сетка 2x2 вместо одного фото */
+/* РљРѕРјР±Рѕ РІ РєРѕСЂР·РёРЅРµ: СЃРµС‚РєР° 2x2 РІРјРµСЃС‚Рѕ РѕРґРЅРѕРіРѕ С„РѕС‚Рѕ */
 .cart-combo-thumb{
   width: 70px;
   height: 70px;
@@ -9976,10 +10027,10 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   color: var(--color-text);
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap; /* 1 строка */
+  white-space: nowrap; /* 1 СЃС‚СЂРѕРєР° */
 }
 
-/* Корзина (панель + sheet): заголовок товара/комбо — 2 строки и ellipsis */
+/* РљРѕСЂР·РёРЅР° (РїР°РЅРµР»СЊ + sheet): Р·Р°РіРѕР»РѕРІРѕРє С‚РѕРІР°СЂР°/РєРѕРјР±Рѕ вЂ” 2 СЃС‚СЂРѕРєРё Рё ellipsis */
 .shop-cart-content .cart-title,
 .shop-cart-sheet .cart-title,
 #shopCartContent .cart-title,
@@ -9998,7 +10049,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   overflow-wrap: break-word;
 }
 
-/* Комбо в заказах/корзине: на всякий случай дублируем правило по селектору строки */
+/* РљРѕРјР±Рѕ РІ Р·Р°РєР°Р·Р°С…/РєРѕСЂР·РёРЅРµ: РЅР° РІСЃСЏРєРёР№ СЃР»СѓС‡Р°Р№ РґСѓР±Р»РёСЂСѓРµРј РїСЂР°РІРёР»Рѕ РїРѕ СЃРµР»РµРєС‚РѕСЂСѓ СЃС‚СЂРѕРєРё */
 .cart-row--combo .cart-title{
   white-space: normal;
   display: -webkit-box;
@@ -10014,7 +10065,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   color: var(--color-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap; /* 1 строка */
+  white-space: nowrap; /* 1 СЃС‚СЂРѕРєР° */
   min-height: 1.2em;
 }
 
@@ -10100,7 +10151,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   align-self: end;
 }
 
-/* Нижняя строка корзины: qty, цена и иконки в одну линию (мобилка + десктоп) */
+/* РќРёР¶РЅСЏСЏ СЃС‚СЂРѕРєР° РєРѕСЂР·РёРЅС‹: qty, С†РµРЅР° Рё РёРєРѕРЅРєРё РІ РѕРґРЅСѓ Р»РёРЅРёСЋ (РјРѕР±РёР»РєР° + РґРµСЃРєС‚РѕРї) */
 .shop-cart-sheet .cart-row,
 #shopCartContent .cart-row,
 .shop-cart-content .cart-row{
@@ -10118,7 +10169,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   align-self: center;
 }
 
-/* компактный фиксированный qty-pill в корзине */
+/* РєРѕРјРїР°РєС‚РЅС‹Р№ С„РёРєСЃРёСЂРѕРІР°РЅРЅС‹Р№ qty-pill РІ РєРѕСЂР·РёРЅРµ */
 .cart-bottom-row .qty-pill{
   --qty-pill-h: 28px;
   --qty-pill-side: 32px;
@@ -10145,7 +10196,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   white-space: nowrap;
 }
 
-/* пустая корзина в шите */
+/* РїСѓСЃС‚Р°СЏ РєРѕСЂР·РёРЅР° РІ С€РёС‚Рµ */
 .shop-cart-empty-sheet{
   padding: 32px 16px;
   text-align: center;
@@ -10169,7 +10220,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   min-height: 0;
   overflow: auto;
   padding: 12px;
-  /* Добавляем padding-bottom чтобы контент не перекрывался футером */
+  /* Р”РѕР±Р°РІР»СЏРµРј padding-bottom С‡С‚РѕР±С‹ РєРѕРЅС‚РµРЅС‚ РЅРµ РїРµСЂРµРєСЂС‹РІР°Р»СЃСЏ С„СѓС‚РµСЂРѕРј */
   padding-bottom: calc(12px + 70px + env(safe-area-inset-bottom));
 }
 
@@ -10201,7 +10252,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   bottom: auto;
 }
 
-/* Комбо-экран в шите (мобильный) */
+/* РљРѕРјР±Рѕ-СЌРєСЂР°РЅ РІ С€РёС‚Рµ (РјРѕР±РёР»СЊРЅС‹Р№) */
 .shop-cart-sheet .shop-product-content .shop-combo-view{
   flex: 1;
   min-height: 0;
@@ -10215,12 +10266,12 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   padding-bottom: calc(12px + var(--shop-bottomnav-h) + env(safe-area-inset-bottom));
 }
 
-/* футер корзины в панели/шите — фиксируется внизу колонки через flex */
+/* С„СѓС‚РµСЂ РєРѕСЂР·РёРЅС‹ РІ РїР°РЅРµР»Рё/С€РёС‚Рµ вЂ” С„РёРєСЃРёСЂСѓРµС‚СЃСЏ РІРЅРёР·Сѓ РєРѕР»РѕРЅРєРё С‡РµСЂРµР· flex */
 .shop-cart-footer,
 .shop-cart-sheet-footer{
   position: relative;
   bottom: auto;
-  margin-top: auto; /* важно: чтобы футер прижимался вниз в колонке */
+  margin-top: auto; /* РІР°Р¶РЅРѕ: С‡С‚РѕР±С‹ С„СѓС‚РµСЂ РїСЂРёР¶РёРјР°Р»СЃСЏ РІРЅРёР· РІ РєРѕР»РѕРЅРєРµ */
   flex: 0 0 auto;
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--color-border);
@@ -10233,7 +10284,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   box-shadow: none;
 }
 
-/* Шкала доставки на десктопе — один блок с кнопкой «Оформить» */
+/* РЁРєР°Р»Р° РґРѕСЃС‚Р°РІРєРё РЅР° РґРµСЃРєС‚РѕРїРµ вЂ” РѕРґРёРЅ Р±Р»РѕРє СЃ РєРЅРѕРїРєРѕР№ В«РћС„РѕСЂРјРёС‚СЊВ» */
 .shop-cart-delivery-progress{
   padding: 10px 12px 6px;
   background: var(--color-surface);
@@ -10279,7 +10330,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   margin-left: 6px;
   flex-shrink: 0;
 }
-/* Десктоп: шкала доставки — во всю ширину, верх закруглённый */
+/* Р”РµСЃРєС‚РѕРї: С€РєР°Р»Р° РґРѕСЃС‚Р°РІРєРё вЂ” РІРѕ РІСЃСЋ С€РёСЂРёРЅСѓ, РІРµСЂС… Р·Р°РєСЂСѓРіР»С‘РЅРЅС‹Р№ */
 @media (min-width: 769px){
   .shop-cart-delivery-progress{
     border-radius: 12px 12px 0 0;
@@ -10297,13 +10348,13 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
     font-weight: 700;
   }
 }
-/* Мобилка: шкалу десктопа скрываем (используется мобильная версия) */
+/* РњРѕР±РёР»РєР°: С€РєР°Р»Сѓ РґРµСЃРєС‚РѕРїР° СЃРєСЂС‹РІР°РµРј (РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РјРѕР±РёР»СЊРЅР°СЏ РІРµСЂСЃРёСЏ) */
 @media (max-width: 768px){
   .shop-cart-delivery-progress{
     display: none !important;
   }
 }
-/* Не показывать шкалу доставки при просмотре товара, комбо или профиля */
+/* РќРµ РїРѕРєР°Р·С‹РІР°С‚СЊ С€РєР°Р»Сѓ РґРѕСЃС‚Р°РІРєРё РїСЂРё РїСЂРѕСЃРјРѕС‚СЂРµ С‚РѕРІР°СЂР°, РєРѕРјР±Рѕ РёР»Рё РїСЂРѕС„РёР»СЏ */
 @media (min-width: 769px){
   .shop-cart-body:has(.shop-product-content:not(.hidden)) .shop-cart-delivery-progress,
   .shop-cart-body:has(.shop-profile-content:not(.hidden)) .shop-cart-delivery-progress{
@@ -10311,7 +10362,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   }
 }
 @media (max-width: 768px){
-  /* Скрываем footer в sheet на мобильных, используем единый блок внизу */
+  /* РЎРєСЂС‹РІР°РµРј footer РІ sheet РЅР° РјРѕР±РёР»СЊРЅС‹С…, РёСЃРїРѕР»СЊР·СѓРµРј РµРґРёРЅС‹Р№ Р±Р»РѕРє РІРЅРёР·Сѓ */
   .shop-cart-sheet-footer {
     display: none !important;
   }
@@ -10320,7 +10371,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
     bottom: calc(var(--shop-bottomnav-h) + 8px + env(safe-area-inset-bottom));
   }
   
-  /* На мобильных увеличиваем padding-bottom контента с учетом нижней навигации */
+  /* РќР° РјРѕР±РёР»СЊРЅС‹С… СѓРІРµР»РёС‡РёРІР°РµРј padding-bottom РєРѕРЅС‚РµРЅС‚Р° СЃ СѓС‡РµС‚РѕРј РЅРёР¶РЅРµР№ РЅР°РІРёРіР°С†РёРё */
   .shop-cart-sheet .shop-cart-list,
   .shop-cart-sheet .shop-checkout-content,
   .shop-cart-sheet .shop-address-content{
@@ -10429,7 +10480,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   gap: 2px;
 }
 
-/* Цены в кнопке действия комбо: старая + новая в одну строку */
+/* Р¦РµРЅС‹ РІ РєРЅРѕРїРєРµ РґРµР№СЃС‚РІРёСЏ РєРѕРјР±Рѕ: СЃС‚Р°СЂР°СЏ + РЅРѕРІР°СЏ РІ РѕРґРЅСѓ СЃС‚СЂРѕРєСѓ */
 .shop-pd-action-prices{
   display: inline-flex;
   align-items: baseline;
@@ -10486,7 +10537,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 }
 
 /* ==========================================================================
-   Bottom nav (mobile) — pill style (50px / padding 8px / tab 34px)
+   Bottom nav (mobile) вЂ” pill style (50px / padding 8px / tab 34px)
    ========================================================================== */
 
 .shop-nav,
@@ -10507,7 +10558,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   box-shadow: 0 10px 22px var(--overlay-bg);
 }
 
-/* показываем только на мобилке */
+/* РїРѕРєР°Р·С‹РІР°РµРј С‚РѕР»СЊРєРѕ РЅР° РјРѕР±РёР»РєРµ */
 @media (max-width: 768px){
   .shop-nav,
   .shop-bottom-nav{ display: grid; }
@@ -10540,7 +10591,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   color: inherit;
 }
 
-/* active: фон-плашка + оранжевая иконка, текст остаётся серым */
+/* active: С„РѕРЅ-РїР»Р°С€РєР° + РѕСЂР°РЅР¶РµРІР°СЏ РёРєРѕРЅРєР°, С‚РµРєСЃС‚ РѕСЃС‚Р°С‘С‚СЃСЏ СЃРµСЂС‹Рј */
 .shop-nav-btn.is-active{
   background: var(--primary-14);
 }
@@ -10568,7 +10619,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 
 .shop-nav-badge.hidden{ display: none; }
 
-/* корзина: подпрыгивание + flash при добавлении */
+/* РєРѕСЂР·РёРЅР°: РїРѕРґРїСЂС‹РіРёРІР°РЅРёРµ + flash РїСЂРё РґРѕР±Р°РІР»РµРЅРёРё */
 @keyframes shopNavBounce{
   0%   { transform: translateY(0); }
   30%  { transform: translateY(-4px); }
@@ -10678,7 +10729,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 
 @media (max-width: 768px){
   .shop-pd-footer{
-    display: none; /* Скрываем на мобильных, используем единый блок внизу (товары и комбо — shopMobileProductActions) */
+    display: none; /* РЎРєСЂС‹РІР°РµРј РЅР° РјРѕР±РёР»СЊРЅС‹С…, РёСЃРїРѕР»СЊР·СѓРµРј РµРґРёРЅС‹Р№ Р±Р»РѕРє РІРЅРёР·Сѓ (С‚РѕРІР°СЂС‹ Рё РєРѕРјР±Рѕ вЂ” shopMobileProductActions) */
   }
 }
 
@@ -10747,7 +10798,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   white-space: nowrap;
 }
 
-/* базовая цена товара под названием (не зависит от опций) */
+/* Р±Р°Р·РѕРІР°СЏ С†РµРЅР° С‚РѕРІР°СЂР° РїРѕРґ РЅР°Р·РІР°РЅРёРµРј (РЅРµ Р·Р°РІРёСЃРёС‚ РѕС‚ РѕРїС†РёР№) */
 .shop-pd-baseprice{
   font-weight: 900;
   font-size: 22px;
@@ -10755,7 +10806,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   color: var(--color-text);
 }
 
-/* короткое описание под ценой */
+/* РєРѕСЂРѕС‚РєРѕРµ РѕРїРёСЃР°РЅРёРµ РїРѕРґ С†РµРЅРѕР№ */
 .shop-pd-short{
   font-size: 12px;
   line-height: 1.25;
@@ -10855,7 +10906,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   cursor: default;
 }
 
-/* Кастомный круглый радио-чекбокс для опций (как в комбо) */
+/* РљР°СЃС‚РѕРјРЅС‹Р№ РєСЂСѓРіР»С‹Р№ СЂР°РґРёРѕ-С‡РµРєР±РѕРєСЃ РґР»СЏ РѕРїС†РёР№ (РєР°Рє РІ РєРѕРјР±Рѕ) */
 .shop-pd-option-radio{
   width: 36px;
   height: 36px;
@@ -10874,7 +10925,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   background: var(--shop-buy);
 }
 .shop-pd-option-radio.is-checked::after{
-  content: "✓";
+  content: "вњ“";
   position: absolute;
   inset: 0;
   display: grid;
@@ -10894,7 +10945,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   background: var(--color-bg);
   flex: 0 0 auto;
 }
-/* placeholder "—" когда нет фото: центрируем текст */
+/* placeholder "вЂ”" РєРѕРіРґР° РЅРµС‚ С„РѕС‚Рѕ: С†РµРЅС‚СЂРёСЂСѓРµРј С‚РµРєСЃС‚ */
 div.shop-pd-option-thumb{
   display: flex;
   align-items: center;
@@ -10987,7 +11038,7 @@ div.shop-pd-option-thumb{
   padding-left: 18px;
 }
 
-/* Зачёркнутая старая цена (комбо) */
+/* Р—Р°С‡С‘СЂРєРЅСѓС‚Р°СЏ СЃС‚Р°СЂР°СЏ С†РµРЅР° (РєРѕРјР±Рѕ) */
 .shop-pd-action .shop-pd-action-old{
   font-size: 12px;
   color: var(--color-text-muted);
@@ -10995,7 +11046,7 @@ div.shop-pd-option-thumb{
   line-height: 1.2;
 }
 
-/* Цена сверху */
+/* Р¦РµРЅР° СЃРІРµСЂС…Сѓ */
 .shop-pd-action .shop-pd-action-price,
 .shop-pd-action .shop-checkout-total{
   font-weight: 900;
@@ -11003,7 +11054,7 @@ div.shop-pd-option-thumb{
   line-height: 1.2;
 }
 
-/* Текст "в корзину" снизу */
+/* РўРµРєСЃС‚ "РІ РєРѕСЂР·РёРЅСѓ" СЃРЅРёР·Сѓ */
 .shop-pd-action .shop-pd-action-label{
   font-size: 12px;
   font-weight: 600;
@@ -11162,12 +11213,12 @@ div.shop-pd-option-thumb{
   height: 100%;
   max-width: 100%;
   max-height: 100%;
-  object-fit: contain !important;   /* ключевое */
+  object-fit: contain !important;   /* РєР»СЋС‡РµРІРѕРµ */
   object-position: center;
   display: block;
 }
 
-/* стрелки (desktop) */
+/* СЃС‚СЂРµР»РєРё (desktop) */
 .shop-product-hero-arrow{
   position: absolute;
   top: 50%;
@@ -11220,7 +11271,7 @@ html[data-theme="dark"] .shop-product-hero-arrow{
 }
 
 .shop-product-hero-dot.is-active{
-  width: 18px;             /* активная точка шире */
+  width: 18px;             /* Р°РєС‚РёРІРЅР°СЏ С‚РѕС‡РєР° С€РёСЂРµ */
   background: var(--on-primary);
 }
 
@@ -11232,7 +11283,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   background: var(--on-primary);
 }
 
-/* мобильная: стрелки скрываем */
+/* РјРѕР±РёР»СЊРЅР°СЏ: СЃС‚СЂРµР»РєРё СЃРєСЂС‹РІР°РµРј */
 @media (max-width: 768px){
   .shop-product-hero-arrow{
     display: none;
@@ -12195,7 +12246,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 }
 
 .shop-checkout-select::after{
-  content: "▾";
+  content: "\25BE";
   font-size: 12px;
   color: var(--color-text-muted);
 }
@@ -12222,9 +12273,9 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   display: grid;
 }
 
-/* Убираем overflow у родителей когда dropdown или time wheel открыт — чтобы список не обрезался.
-   Ограничиваем это поведение десктопом: на мобилке изменение overflow дергает bottom sheet
-   и уводит пользователя в начало формы. */
+/* РЈР±РёСЂР°РµРј overflow Сѓ СЂРѕРґРёС‚РµР»РµР№ РєРѕРіРґР° dropdown РёР»Рё time wheel РѕС‚РєСЂС‹С‚ вЂ” С‡С‚РѕР±С‹ СЃРїРёСЃРѕРє РЅРµ РѕР±СЂРµР·Р°Р»СЃСЏ.
+   РћРіСЂР°РЅРёС‡РёРІР°РµРј СЌС‚Рѕ РїРѕРІРµРґРµРЅРёРµ РґРµСЃРєС‚РѕРїРѕРј: РЅР° РјРѕР±РёР»РєРµ РёР·РјРµРЅРµРЅРёРµ overflow РґРµСЂРіР°РµС‚ bottom sheet
+   Рё СѓРІРѕРґРёС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РІ РЅР°С‡Р°Р»Рѕ С„РѕСЂРјС‹. */
 @media (min-width: 769px){
   .shop-checkout-content:has(.shop-checkout-dropdown.is-open),
   .shop-checkout-content:has(.shop-checkout-time-wheel-panel.is-open),
@@ -12293,8 +12344,8 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   margin-top:0;
 }
 
-/* === "На дату" date selector === */
-/* Row 1: [На дату ▾] + [Другой день] или [Ко времени ▾] + [19:00 ▾] */
+/* === "РќР° РґР°С‚Сѓ" date selector === */
+/* Row 1: [РќР° РґР°С‚Сѓ в–ѕ] + [Р”СЂСѓРіРѕР№ РґРµРЅСЊ] РёР»Рё [РљРѕ РІСЂРµРјРµРЅРё в–ѕ] + [19:00 в–ѕ] */
 .shop-checkout-date-row1{
   display:grid;
   grid-template-columns:1fr 1fr;
@@ -12319,7 +12370,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 .shop-checkout-date-toggle:hover{
   background:var(--color-surface-2);
 }
-/* Секция под первым рядом */
+/* РЎРµРєС†РёСЏ РїРѕРґ РїРµСЂРІС‹Рј СЂСЏРґРѕРј */
 .shop-checkout-time-input--ondate{
   margin-top:8px;
 }
@@ -12334,19 +12385,19 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   right:0;
   width:100%;
 }
-/* Row 2: [дата] + [слоты времени] — 50/50 */
+/* Row 2: [РґР°С‚Р°] + [СЃР»РѕС‚С‹ РІСЂРµРјРµРЅРё] вЂ” 50/50 */
 .shop-checkout-date-row2{
   display:grid;
   grid-template-columns:1fr 1fr;
   gap:8px;
   align-items:center;
 }
-/* dateDisplay стилизуется через .shop-checkout-select, убираем стрелку */
+/* dateDisplay СЃС‚РёР»РёР·СѓРµС‚СЃСЏ С‡РµСЂРµР· .shop-checkout-select, СѓР±РёСЂР°РµРј СЃС‚СЂРµР»РєСѓ */
 .shop-checkout-date-display.shop-checkout-select::after{
   content:none;
 }
 
-/* === Time wheel (Apple-style): поверх контента, значение по центру === */
+/* === Time wheel (Apple-style): РїРѕРІРµСЂС… РєРѕРЅС‚РµРЅС‚Р°, Р·РЅР°С‡РµРЅРёРµ РїРѕ С†РµРЅС‚СЂСѓ === */
 .shop-checkout-time-wheel-wrap{
   position: relative;
   width: 100%;
@@ -12354,7 +12405,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 .shop-checkout-time-wheel-trigger{
   width: 100%;
 }
-/* Панель раскрывается в обе стороны: центр (серая полоса) на месте кнопки */
+/* РџР°РЅРµР»СЊ СЂР°СЃРєСЂС‹РІР°РµС‚СЃСЏ РІ РѕР±Рµ СЃС‚РѕСЂРѕРЅС‹: С†РµРЅС‚СЂ (СЃРµСЂР°СЏ РїРѕР»РѕСЃР°) РЅР° РјРµСЃС‚Рµ РєРЅРѕРїРєРё */
 .shop-checkout-time-wheel-panel{
   position: absolute;
   top: 50%;
@@ -12377,12 +12428,12 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   opacity: 1;
   pointer-events: auto;
 }
-/* Обёртка: полоса выделения сзади, контент спереди — значение видно по центру */
+/* РћР±С‘СЂС‚РєР°: РїРѕР»РѕСЃР° РІС‹РґРµР»РµРЅРёСЏ СЃР·Р°РґРё, РєРѕРЅС‚РµРЅС‚ СЃРїРµСЂРµРґРё вЂ” Р·РЅР°С‡РµРЅРёРµ РІРёРґРЅРѕ РїРѕ С†РµРЅС‚СЂСѓ */
 .shop-checkout-time-wheel-panel-inner{
   position: relative;
   height: 220px;
 }
-/* Полоса выделения ЗА контентом (z-index 0), чтобы цифры были поверх и по центру */
+/* РџРѕР»РѕСЃР° РІС‹РґРµР»РµРЅРёСЏ Р—Рђ РєРѕРЅС‚РµРЅС‚РѕРј (z-index 0), С‡С‚РѕР±С‹ С†РёС„СЂС‹ Р±С‹Р»Рё РїРѕРІРµСЂС… Рё РїРѕ С†РµРЅС‚СЂСѓ */
 .shop-checkout-time-wheel-panel-inner::before{
   content: "";
   position: absolute;
@@ -12443,7 +12494,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   background: transparent;
 }
 
-/* Серый qty-pill в карточке товара на мобильных */
+/* РЎРµСЂС‹Р№ qty-pill РІ РєР°СЂС‚РѕС‡РєРµ С‚РѕРІР°СЂР° РЅР° РјРѕР±РёР»СЊРЅС‹С… */
 @media (max-width: 768px) {
   .shop-mobile-product-actions .qty-pill {
     background: var(--color-surface-2) !important;
@@ -12860,7 +12911,7 @@ body.page-shop .app-modal-body::after{
   justify-items: center;
 }
 
-/* Стили карточки скидки в профиле */
+/* РЎС‚РёР»Рё РєР°СЂС‚РѕС‡РєРё СЃРєРёРґРєРё РІ РїСЂРѕС„РёР»Рµ */
 .shop-profile-discount-card{
   margin-bottom: 10px;
 }
@@ -12947,7 +12998,7 @@ body.page-shop .app-modal-body::after{
 }
 
 /* ==========================================================================
-   Невидимые скроллбары на странице магазина (десктоп и мобилка, прокрутка сохраняется)
+   РќРµРІРёРґРёРјС‹Рµ СЃРєСЂРѕР»Р»Р±Р°СЂС‹ РЅР° СЃС‚СЂР°РЅРёС†Рµ РјР°РіР°Р·РёРЅР° (РґРµСЃРєС‚РѕРї Рё РјРѕР±РёР»РєР°, РїСЂРѕРєСЂСѓС‚РєР° СЃРѕС…СЂР°РЅСЏРµС‚СЃСЏ)
    ========================================================================== */
 body.page-shop .shop-col .panel-body,
 body.page-shop .shop-combo-detail-scroll,
@@ -12970,7 +13021,7 @@ body.page-shop .shop-cart-sheet .shop-product-content .shop-combo-detail-scroll:
 }
 
 /* ==========================================================================
-   Utilities / мелкие фиксы
+   Utilities / РјРµР»РєРёРµ С„РёРєСЃС‹
    ========================================================================== */
 
 body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
@@ -13004,7 +13055,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 }
 
 /* ==========================================================================
-   Header (desktop panel) — режим "Товар": ← слева, ♡ справа
+   Header (desktop panel) вЂ” СЂРµР¶РёРј "РўРѕРІР°СЂ": в†ђ СЃР»РµРІР°, в™Ў СЃРїСЂР°РІР°
    ========================================================================== */
 
 .shop-cart-header{
@@ -13162,12 +13213,12 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   margin-left: 2px;
 }
 
-/* пустое состояние — можно чуть приглушить, если хочешь */
+/* РїСѓСЃС‚РѕРµ СЃРѕСЃС‚РѕСЏРЅРёРµ вЂ” РјРѕР¶РЅРѕ С‡СѓС‚СЊ РїСЂРёРіР»СѓС€РёС‚СЊ, РµСЃР»Рё С…РѕС‡РµС€СЊ */
 .shop-cart-header.is-address-title #shopCartHeaderTitle.is-empty-address{
   opacity: .9;
 }
 
-/* в этом режиме chip справа не показываем вообще */
+/* РІ СЌС‚РѕРј СЂРµР¶РёРјРµ chip СЃРїСЂР°РІР° РЅРµ РїРѕРєР°Р·С‹РІР°РµРј РІРѕРѕР±С‰Рµ */
 .shop-cart-header.is-address-title .shop-address-chip{
   display: none !important;
 }
@@ -13192,7 +13243,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   white-space: nowrap;
 }
 
-/* пустой адрес */
+/* РїСѓСЃС‚РѕР№ Р°РґСЂРµСЃ */
 .app-modal-header .app-modal-title.is-empty-address,
 .app-modal-header .modal-title.is-empty-address,
 .app-modal-header [data-modal-title].is-empty-address{
@@ -13201,7 +13252,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 
 /* ===== OPTION ITEM VARIANTS ===== */
 
-/* Шестерёнка для вариантов опции (как в комбо) */
+/* РЁРµСЃС‚РµСЂС‘РЅРєР° РґР»СЏ РІР°СЂРёР°РЅС‚РѕРІ РѕРїС†РёРё (РєР°Рє РІ РєРѕРјР±Рѕ) */
 .shop-pd-option-gear-btn{
   width: 36px;
   height: 36px;
@@ -13230,7 +13281,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   height: 18px;
 }
 
-/* Аккордеон с вариантами */
+/* РђРєРєРѕСЂРґРµРѕРЅ СЃ РІР°СЂРёР°РЅС‚Р°РјРё */
 .shop-pd-option-variant-accordion {
   display: none;
   width: 100%;
@@ -13243,7 +13294,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   display: block;
 }
 
-/* Горизонтальный скролл с вариантами */
+/* Р“РѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅС‹Р№ СЃРєСЂРѕР»Р» СЃ РІР°СЂРёР°РЅС‚Р°РјРё */
 .shop-pd-option-variant-scroll {
   display: flex;
   gap: 8px;
@@ -13263,7 +13314,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   cursor: grabbing;
 }
 
-/* Кнопка варианта */
+/* РљРЅРѕРїРєР° РІР°СЂРёР°РЅС‚Р° */
 .shop-pd-option-variant-btn {
   flex-shrink: 0;
   padding: 6px 12px;
@@ -13298,14 +13349,14 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   cursor: default;
 }
 
-/* Лейбл выбранного варианта под названием опции */
+/* Р›РµР№Р±Р» РІС‹Р±СЂР°РЅРЅРѕРіРѕ РІР°СЂРёР°РЅС‚Р° РїРѕРґ РЅР°Р·РІР°РЅРёРµРј РѕРїС†РёРё */
 .shop-pd-option-variant-label {
   font-size: 11px;
   color: var(--text-muted, var(--color-text-faint));
   margin-top: 2px;
 }
 
-/* Карточка опции с вариантами - flex-direction: column */
+/* РљР°СЂС‚РѕС‡РєР° РѕРїС†РёРё СЃ РІР°СЂРёР°РЅС‚Р°РјРё - flex-direction: column */
 .shop-pd-option-card.has-variants {
   flex-direction: column;
   align-items: stretch;
@@ -13319,7 +13370,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 }
 
 /* ==========================================================================
-   Детали заказа (профиль)
+   Р”РµС‚Р°Р»Рё Р·Р°РєР°Р·Р° (РїСЂРѕС„РёР»СЊ)
    ========================================================================== */
 
 .shop-order-details {
@@ -13502,7 +13553,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   color: var(--shop-buy);
 }
 
-/* Нормализованный блок «Суммы» в деталях заказа */
+/* РќРѕСЂРјР°Р»РёР·РѕРІР°РЅРЅС‹Р№ Р±Р»РѕРє В«РЎСѓРјРјС‹В» РІ РґРµС‚Р°Р»СЏС… Р·Р°РєР°Р·Р° */
 .shop-order-summary {
   display: flex;
   flex-direction: column;
@@ -13643,7 +13694,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   }
 }
 
-/* Экран результата заказа (успех / конфликт) */
+/* Р­РєСЂР°РЅ СЂРµР·СѓР»СЊС‚Р°С‚Р° Р·Р°РєР°Р·Р° (СѓСЃРїРµС… / РєРѕРЅС„Р»РёРєС‚) */
 .shop-order-result.hidden {
   display: none;
 }
@@ -13723,7 +13774,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   line-height: 1.3;
 }
 
-/* В корзине у комбо состав может занимать место под правым блоком (цена/кол-во) */
+/* Р’ РєРѕСЂР·РёРЅРµ Сѓ РєРѕРјР±Рѕ СЃРѕСЃС‚Р°РІ РјРѕР¶РµС‚ Р·Р°РЅРёРјР°С‚СЊ РјРµСЃС‚Рѕ РїРѕРґ РїСЂР°РІС‹Рј Р±Р»РѕРєРѕРј (С†РµРЅР°/РєРѕР»-РІРѕ) */
 .cart-row--combo .cart-combo-details{
   margin-right: -120px;
   padding-right: 12px;
@@ -13899,7 +13950,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 }
 
 /* ==========================================================================
-   Выбор точки самовывоза (новый view в правой панели)
+   Р’С‹Р±РѕСЂ С‚РѕС‡РєРё СЃР°РјРѕРІС‹РІРѕР·Р° (РЅРѕРІС‹Р№ view РІ РїСЂР°РІРѕР№ РїР°РЅРµР»Рё)
    ========================================================================== */
 
 .shop-pickup-content {
@@ -13920,7 +13971,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   padding: 16px;
 }
 
-/* Используем те же классы что и для адресов для единообразия */
+/* РСЃРїРѕР»СЊР·СѓРµРј С‚Рµ Р¶Рµ РєР»Р°СЃСЃС‹ С‡С‚Рѕ Рё РґР»СЏ Р°РґСЂРµСЃРѕРІ РґР»СЏ РµРґРёРЅРѕРѕР±СЂР°Р·РёСЏ */
 .shop-pickup-list .shop-address-row {
   border:1px solid var(--color-border);
   border-radius:14px;
@@ -13935,7 +13986,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 
 .shop-pickup-list .shop-address-card {
   position: relative;
-  padding-right: 40px; /* место для галочки */
+  padding-right: 40px; /* РјРµСЃС‚Рѕ РґР»СЏ РіР°Р»РѕС‡РєРё */
 }
 
 .shop-pickup-list .shop-address-row.is-selected .shop-address-card {
@@ -13982,7 +14033,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   }
 }
 
-/* Скрытие скроллбаров но сохранение прокрутки */
+/* РЎРєСЂС‹С‚РёРµ СЃРєСЂРѕР»Р»Р±Р°СЂРѕРІ РЅРѕ СЃРѕС…СЂР°РЅРµРЅРёРµ РїСЂРѕРєСЂСѓС‚РєРё */
 .shop-order-details,
 .shop-profile-panel,
 .shop-profile-content,
@@ -14040,17 +14091,17 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   display: none !important;
 }
 
-/* Мобильный бейдж активных заказов - скрыт на десктопе */
+/* РњРѕР±РёР»СЊРЅС‹Р№ Р±РµР№РґР¶ Р°РєС‚РёРІРЅС‹С… Р·Р°РєР°Р·РѕРІ - СЃРєСЂС‹С‚ РЅР° РґРµСЃРєС‚РѕРїРµ */
 .shop-mobile-active-orders-wrapper {
   display: none;
 }
 
-/* Единый контейнер для мобильной навигации, кнопок и ботомщита */
+/* Р•РґРёРЅС‹Р№ РєРѕРЅС‚РµР№РЅРµСЂ РґР»СЏ РјРѕР±РёР»СЊРЅРѕР№ РЅР°РІРёРіР°С†РёРё, РєРЅРѕРїРѕРє Рё Р±РѕС‚РѕРјС‰РёС‚Р° */
 .shop-mobile-bottom-container {
   display: none;
 }
 
-/* На мобильных: скрываем header бейдж, показываем мобильный */
+/* РќР° РјРѕР±РёР»СЊРЅС‹С…: СЃРєСЂС‹РІР°РµРј header Р±РµР№РґР¶, РїРѕРєР°Р·С‹РІР°РµРј РјРѕР±РёР»СЊРЅС‹Р№ */
 @media (max-width: 768px) {
   .header-profile-wrapper .shop-active-orders-badge {
     display: none !important;
@@ -14060,7 +14111,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     display: none !important;
   }
   
-  /* Единый контейнер внизу экрана */
+  /* Р•РґРёРЅС‹Р№ РєРѕРЅС‚РµР№РЅРµСЂ РІРЅРёР·Сѓ СЌРєСЂР°РЅР° */
   .shop-mobile-bottom-container {
     display: flex;
     flex-direction: column;
@@ -14075,7 +14126,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   }
   
   
-  /* Кнопки добавления в корзину - прилипают к навигации */
+  /* РљРЅРѕРїРєРё РґРѕР±Р°РІР»РµРЅРёСЏ РІ РєРѕСЂР·РёРЅСѓ - РїСЂРёР»РёРїР°СЋС‚ Рє РЅР°РІРёРіР°С†РёРё */
   .shop-mobile-product-actions {
     display: flex;
     align-items: center;
@@ -14094,7 +14145,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     margin-bottom: 0;
   }
   
-  /* Кнопки корзины (Оформить/Заказать) - прилипают к навигации */
+  /* РљРЅРѕРїРєРё РєРѕСЂР·РёРЅС‹ (РћС„РѕСЂРјРёС‚СЊ/Р—Р°РєР°Р·Р°С‚СЊ) - РїСЂРёР»РёРїР°СЋС‚ Рє РЅР°РІРёРіР°С†РёРё */
   .shop-mobile-cart-actions {
     display: flex;
     flex-direction: column;
@@ -14114,7 +14165,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     margin-bottom: 0;
   }
   
-  /* Полоска прогресса до бесплатной доставки */
+  /* РџРѕР»РѕСЃРєР° РїСЂРѕРіСЂРµСЃСЃР° РґРѕ Р±РµСЃРїР»Р°С‚РЅРѕР№ РґРѕСЃС‚Р°РІРєРё */
   .shop-mobile-delivery-progress-wrap {
     width: 100%;
     flex-shrink: 0;
@@ -14300,13 +14351,13 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     min-width: 0;
   }
   
-  /* Серый qty-pill в мобильных кнопках (как muted вариант) */
+  /* РЎРµСЂС‹Р№ qty-pill РІ РјРѕР±РёР»СЊРЅС‹С… РєРЅРѕРїРєР°С… (РєР°Рє muted РІР°СЂРёР°РЅС‚) */
   .shop-mobile-product-actions .qty-pill {
     --qty-pill-h: var(--shop-mobile-action-h);
     --qty-pill-side: var(--shop-mobile-action-h);
   }
   
-  /* Ботомщит активного заказа - прилипает к навигации */
+  /* Р‘РѕС‚РѕРјС‰РёС‚ Р°РєС‚РёРІРЅРѕРіРѕ Р·Р°РєР°Р·Р° - РїСЂРёР»РёРїР°РµС‚ Рє РЅР°РІРёРіР°С†РёРё */
   .shop-active-orders-sheet-collapsed {
     pointer-events: auto;
     width: 100%;
@@ -14329,7 +14380,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     display: none;
   }
 
-  /* Скрываем активный заказ, когда открыт любой модал/боттом-щит */
+  /* РЎРєСЂС‹РІР°РµРј Р°РєС‚РёРІРЅС‹Р№ Р·Р°РєР°Р·, РєРѕРіРґР° РѕС‚РєСЂС‹С‚ Р»СЋР±РѕР№ РјРѕРґР°Р»/Р±РѕС‚С‚РѕРј-С‰РёС‚ */
   body.modal-open .shop-active-orders-sheet-collapsed {
     display: none;
   }
@@ -14339,7 +14390,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     box-shadow: 0 -6px 24px var(--overlay-bg);
   }
   
-  /* Навигация прилипает к ботомщиту - единый блок */
+  /* РќР°РІРёРіР°С†РёСЏ РїСЂРёР»РёРїР°РµС‚ Рє Р±РѕС‚РѕРјС‰РёС‚Сѓ - РµРґРёРЅС‹Р№ Р±Р»РѕРє */
   .shop-mobile-bottom-container .shop-nav {
     border-radius: 0 0 16px 16px;
     margin-top: 0;
@@ -14347,7 +14398,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     box-shadow: 0 10px 22px var(--overlay-bg);
   }
 
-  /* Когда активный заказ свернут, навигация и карточка сливаются в один блок */
+  /* РљРѕРіРґР° Р°РєС‚РёРІРЅС‹Р№ Р·Р°РєР°Р· СЃРІРµСЂРЅСѓС‚, РЅР°РІРёРіР°С†РёСЏ Рё РєР°СЂС‚РѕС‡РєР° СЃР»РёРІР°СЋС‚СЃСЏ РІ РѕРґРёРЅ Р±Р»РѕРє */
   .shop-mobile-bottom-container .shop-active-orders-sheet-collapsed:not(.hidden) + .shop-nav,
   .shop-mobile-bottom-container .shop-mobile-product-actions:not(.hidden) + .shop-mobile-cart-actions.hidden + .shop-mobile-address-actions.hidden + .shop-mobile-address-confirm.hidden + .shop-active-orders-sheet-collapsed + .shop-nav,
   .shop-mobile-bottom-container .shop-mobile-product-actions:not(.hidden) + .shop-mobile-cart-actions.hidden + .shop-mobile-address-actions.hidden + .shop-mobile-address-confirm.hidden + .shop-nav,
@@ -14415,7 +14466,7 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   font-weight: 700;
 }
 
-/* Доскролл в списке активных заказов (bottom sheet), чтобы последняя карточка не упиралась в нижнее меню */
+/* Р”РѕСЃРєСЂРѕР»Р» РІ СЃРїРёСЃРєРµ Р°РєС‚РёРІРЅС‹С… Р·Р°РєР°Р·РѕРІ (bottom sheet), С‡С‚РѕР±С‹ РїРѕСЃР»РµРґРЅСЏСЏ РєР°СЂС‚РѕС‡РєР° РЅРµ СѓРїРёСЂР°Р»Р°СЃСЊ РІ РЅРёР¶РЅРµРµ РјРµРЅСЋ */
 .shop-active-orders-list {
   padding-bottom: 200px;
 }
@@ -14438,11 +14489,11 @@ body.page-shop .app-grid{
   grid-template-columns:250px 1fr 500px !important;
 }
 
-/* На витрине бургер не нужен */
+/* РќР° РІРёС‚СЂРёРЅРµ Р±СѓСЂРіРµСЂ РЅРµ РЅСѓР¶РµРЅ */
 body.page-shop #sidebar-edge-toggle{display:none}
 body.page-shop .sidebar-open-tab{display:none}
 
-/* Mobile footer (только витрина) */
+/* Mobile footer (С‚РѕР»СЊРєРѕ РІРёС‚СЂРёРЅР°) */
 .shop-footer{display:none}
 
 @media (max-width:768px){
@@ -14582,3 +14633,4 @@ body.page-shop .sidebar-open-tab{display:none}
   color: var(--color-text);
   white-space: nowrap;
 }
+
