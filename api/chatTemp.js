@@ -14,6 +14,10 @@ const CHAT_LONG_POLL_MIN_TIMEOUT_MS = 1000;
 const CHAT_TYPING_TTL_MS = 7000;
 const CHAT_TYPING_TEXT_MAX_LENGTH = 120;
 const CHAT_UPLOAD_MAX_FILE_BYTES = 20 * 1024 * 1024;
+const CHAT_SUMMARIES_PAGE_DEFAULT_LIMIT = 50;
+const CHAT_SUMMARIES_PAGE_MAX_LIMIT = 200;
+const CHAT_THREAD_PAGE_DEFAULT_LIMIT = 60;
+const CHAT_THREAD_PAGE_MAX_LIMIT = 200;
 const CHAT_PUSH_ENDPOINT_MAX_LENGTH = 1024;
 const CHAT_UPLOAD_RELATIVE_DIR = path.join("static", "uploads", "chat");
 const CHAT_UPLOAD_ABSOLUTE_DIR = path.join(__dirname, "..", CHAT_UPLOAD_RELATIVE_DIR);
@@ -342,6 +346,15 @@ function normalizePushClientId(value, actorKey) {
   if (id > 0) return String(id);
   if (id === 0 && actorKey === "out") return "0";
   return null;
+}
+
+function parsePositiveInt(value, fallback, min = 1, max = Number.MAX_SAFE_INTEGER) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return Math.trunc(fallback);
+  const whole = Math.trunc(n);
+  if (whole < min) return Math.trunc(fallback);
+  if (whole > max) return Math.trunc(max);
+  return whole;
 }
 
 function parseJsonObject(value) {
@@ -889,6 +902,54 @@ async function readThreadMessages(tenantId, clientId, conn = db) {
   return rows || [];
 }
 
+async function readThreadMessagesPage(
+  tenantId,
+  clientId,
+  { limit = CHAT_THREAD_PAGE_DEFAULT_LIMIT, beforeId = null } = {},
+  conn = db
+) {
+  const safeLimit = parsePositiveInt(
+    limit,
+    CHAT_THREAD_PAGE_DEFAULT_LIMIT,
+    1,
+    CHAT_THREAD_PAGE_MAX_LIMIT
+  );
+  const safeBeforeId = Number.isFinite(Number(beforeId)) && Number(beforeId) > 0
+    ? Math.trunc(Number(beforeId))
+    : 0;
+
+  const whereBefore = safeBeforeId > 0 ? " AND id < ?" : "";
+  const params = safeBeforeId > 0
+    ? [tenantId, clientId, safeBeforeId, safeLimit + 1]
+    : [tenantId, clientId, safeLimit + 1];
+
+  const [rawRows] = await conn.query(
+    `SELECT id AS row_id, message_id, direction, text, created_at, edited_at, is_read, is_pinned,
+            reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json,
+            delivery_status, delivered_at, read_at
+       FROM chat_messages
+      WHERE tenant_id = ? AND client_id = ?${whereBefore}
+      ORDER BY id DESC
+      LIMIT ?`,
+    params
+  );
+
+  const rows = Array.isArray(rawRows) ? rawRows : [];
+  const hasMore = rows.length > safeLimit;
+  const pageRows = hasMore ? rows.slice(0, safeLimit) : rows;
+  const nextBeforeId = pageRows.length
+    ? Math.trunc(Number(pageRows[pageRows.length - 1]?.row_id || 0))
+    : 0;
+
+  return {
+    messages: sanitizeThread(pageRows.slice().reverse().map(mapDbMessageRowToApi)),
+    hasMore,
+    nextBeforeId: nextBeforeId > 0 ? nextBeforeId : null,
+    limit: safeLimit,
+    beforeId: safeBeforeId > 0 ? safeBeforeId : null,
+  };
+}
+
 async function readThreadMessagesSince(tenantId, clientId, sinceDate, conn = db) {
   const since = sinceDate instanceof Date && !Number.isNaN(sinceDate.getTime())
     ? new Date(Math.max(0, sinceDate.getTime() - 1500))
@@ -1310,14 +1371,28 @@ async function mergeThreadIntoClient(conn, tenantId, fromClientId, toClientId) {
   };
 }
 
-async function listSummaries(tenantId, selectedClientIds = []) {
+async function querySummaryRows(
+  tenantId,
+  selectedClientIds = [],
+  { limit = null, offset = null } = {}
+) {
   const ids = (Array.isArray(selectedClientIds) ? selectedClientIds : [])
     .map((id) => normalizeClientId(id))
     .filter(Boolean);
   const idsClause = ids.length ? ` AND t.client_id IN (${ids.map(() => "?").join(",")})` : "";
+  const hasPagination = !ids.length
+    && Number.isFinite(Number(limit))
+    && Number.isFinite(Number(offset));
+  const paginationClause = hasPagination ? " LIMIT ? OFFSET ?" : "";
 
   const params = [tenantId, tenantId];
   if (ids.length) params.push(...ids);
+  if (hasPagination) {
+    params.push(
+      parsePositiveInt(limit, CHAT_SUMMARIES_PAGE_DEFAULT_LIMIT, 1, CHAT_SUMMARIES_PAGE_MAX_LIMIT),
+      Math.max(0, Math.trunc(Number(offset) || 0))
+    );
+  }
 
   const [rows] = await db.query(
     `
@@ -1354,11 +1429,20 @@ async function listSummaries(tenantId, selectedClientIds = []) {
         )
       WHERE t.tenant_id = ?${idsClause}
       ORDER BY t.updated_at DESC, t.client_id DESC
+      ${paginationClause}
     `,
     params
   );
+  return rows || [];
+}
 
-  const parsedRows = (rows || [])
+async function listSummaries(tenantId, selectedClientIds = []) {
+  const ids = (Array.isArray(selectedClientIds) ? selectedClientIds : [])
+    .map((id) => normalizeClientId(id))
+    .filter(Boolean);
+  const rows = await querySummaryRows(tenantId, ids);
+
+  const parsedRows = rows
     .map(mapSummaryRow)
     .filter((row) => Number.isFinite(Number(row.client_id)) && Number(row.client_id) > 0);
 
@@ -1378,6 +1462,39 @@ async function listSummaries(tenantId, selectedClientIds = []) {
       meta: {},
     };
   });
+}
+
+async function listSummariesPage(tenantId, { limit, offset } = {}) {
+  const safeLimit = parsePositiveInt(
+    limit,
+    CHAT_SUMMARIES_PAGE_DEFAULT_LIMIT,
+    1,
+    CHAT_SUMMARIES_PAGE_MAX_LIMIT
+  );
+  const safeOffset = Math.max(0, Math.trunc(Number(offset) || 0));
+
+  const [rows, countRows] = await Promise.all([
+    querySummaryRows(tenantId, [], { limit: safeLimit, offset: safeOffset }),
+    db.query(
+      `SELECT COUNT(*) AS total
+         FROM chat_threads
+        WHERE tenant_id = ?`,
+      [tenantId]
+    ),
+  ]);
+
+  const total = Number(countRows?.[0]?.[0]?.total || countRows?.[0]?.total || 0);
+  const mappedRows = (Array.isArray(rows) ? rows : [])
+    .map(mapSummaryRow)
+    .filter((row) => Number.isFinite(Number(row.client_id)) && Number(row.client_id) > 0);
+
+  return {
+    rows: mappedRows,
+    total,
+    limit: safeLimit,
+    offset: safeOffset,
+    hasMore: safeOffset + mappedRows.length < total,
+  };
 }
 
 async function readTenantUpdatedAt(tenantId) {
@@ -1925,12 +2042,24 @@ module.exports = function makeChatTempRouter() {
       const clientId = normalizeClientId(req.params.clientId);
       if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
 
-      const [metaRow, messageRows] = await Promise.all([
+      const pageLimit = parsePositiveInt(
+        req.query.limit,
+        CHAT_THREAD_PAGE_DEFAULT_LIMIT,
+        1,
+        CHAT_THREAD_PAGE_MAX_LIMIT
+      );
+      const pageBeforeId = Number.isFinite(Number(req.query.before_id)) && Number(req.query.before_id) > 0
+        ? Math.trunc(Number(req.query.before_id))
+        : null;
+
+      const [metaRow, page] = await Promise.all([
         readThreadMeta(tenantId, clientId),
-        readThreadMessages(tenantId, clientId),
+        readThreadMessagesPage(tenantId, clientId, {
+          limit: pageLimit,
+          beforeId: pageBeforeId,
+        }),
       ]);
 
-      const messages = sanitizeThread(messageRows.map(mapDbMessageRowToApi));
       const updatedAt = toIsoOrEmpty(metaRow?.updated_at);
       const meta = sanitizeMetaFromDbRow(metaRow);
 
@@ -1940,7 +2069,13 @@ module.exports = function makeChatTempRouter() {
           client_id: Number(clientId),
           updated_at: updatedAt,
           meta,
-          messages,
+          messages: Array.isArray(page?.messages) ? page.messages : [],
+          page: {
+            limit: Number(page?.limit || pageLimit),
+            before_id: page?.beforeId ? Number(page.beforeId) : null,
+            next_before_id: page?.nextBeforeId ? Number(page.nextBeforeId) : null,
+            has_more: page?.hasMore === true,
+          },
         },
       });
     } catch (err) {
@@ -2084,6 +2219,21 @@ module.exports = function makeChatTempRouter() {
         ? idsRaw.split(",").map((part) => normalizeClientId(part)).filter(Boolean)
         : [];
 
+      if (!selectedIds.length && (req.query.limit !== undefined || req.query.offset !== undefined)) {
+        const page = await listSummariesPage(tenantId, {
+          limit: req.query.limit,
+          offset: req.query.offset,
+        });
+        return res.json({
+          ok: true,
+          data: page.rows,
+          total: page.total,
+          limit: page.limit,
+          offset: page.offset,
+          has_more: page.hasMore,
+        });
+      }
+
       const summaries = await listSummaries(tenantId, selectedIds);
       return res.json({ ok: true, data: summaries });
     } catch (err) {
@@ -2095,8 +2245,18 @@ module.exports = function makeChatTempRouter() {
   router.get("/clients", async (req, res) => {
     try {
       const tenantId = getTenantId(req);
-      const rows = await listSummaries(tenantId, []);
-      return res.json({ ok: true, data: rows });
+      const page = await listSummariesPage(tenantId, {
+        limit: req.query.limit,
+        offset: req.query.offset,
+      });
+      return res.json({
+        ok: true,
+        data: page.rows,
+        total: page.total,
+        limit: page.limit,
+        offset: page.offset,
+        has_more: page.hasMore,
+      });
     } catch (err) {
       console.error("chat-temp GET /clients error:", err);
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });

@@ -22,6 +22,10 @@
   const CHAT_MESSAGE_ALERT_COOLDOWN_MS = 900;
   const CHAT_PUSH_SYNC_DEBOUNCE_MS = 180;
   const CHAT_PUSH_SUBSCRIPTION_CLIENT_ID = 0;
+  const CHAT_CLIENTS_PAGE_SIZE = 50;
+  const CHAT_CLIENTS_LOAD_MORE_THRESHOLD_PX = 140;
+  const CHAT_THREAD_PAGE_SIZE = 60;
+  const CHAT_THREAD_LOAD_MORE_THRESHOLD_PX = 20;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
   const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
   const IMAGE_OPTIMIZE_TARGET_BYTES = 900 * 1024;
@@ -201,8 +205,11 @@
     localTypingPhrase: "",
     attachPreviewItems: [],
     attachPreviewActiveIndex: 0,
+    clientsPager: null,
+    threadHistoryByClient: {},
   };
   state.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.store?.ui?.threadScrollTopByClient);
+  state.clientsPager = createDefaultClientsPager();
 
   let emojiCategories = {};
   let emojiRecentList = [];
@@ -228,6 +235,59 @@
     webPushSubscriptionVapidKey = String(localStorage.getItem(adminPushVapidStorageKey) || "");
   } catch {
     webPushSubscriptionVapidKey = "";
+  }
+
+  function createDefaultClientsPager() {
+    return {
+      pageSize: CHAT_CLIENTS_PAGE_SIZE,
+      adminOffset: 0,
+      adminTotal: 0,
+      remoteOffset: 0,
+      remoteTotal: 0,
+      hasMore: true,
+      loading: false,
+      initialized: false,
+    };
+  }
+
+  function resetClientsPager() {
+    state.clientsPager = createDefaultClientsPager();
+  }
+
+  function ensureClientsPager() {
+    if (!state.clientsPager || typeof state.clientsPager !== "object") {
+      resetClientsPager();
+    }
+    return state.clientsPager;
+  }
+
+  function ensureThreadHistoryState(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return null;
+    if (!state.threadHistoryByClient || typeof state.threadHistoryByClient !== "object") {
+      state.threadHistoryByClient = {};
+    }
+    if (!state.threadHistoryByClient[key] || typeof state.threadHistoryByClient[key] !== "object") {
+      state.threadHistoryByClient[key] = {
+        hasMore: false,
+        nextBeforeId: null,
+        loading: false,
+      };
+    }
+    return state.threadHistoryByClient[key];
+  }
+
+  function updateThreadHistoryFromSnapshot(clientId, snapshot) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    const page = snapshot && snapshot.page && typeof snapshot.page === "object"
+      ? snapshot.page
+      : {};
+    const history = ensureThreadHistoryState(key);
+    if (!history) return;
+    history.hasMore = page.hasMore === true;
+    const nextBeforeId = Number(page.nextBeforeId || 0);
+    history.nextBeforeId = Number.isFinite(nextBeforeId) && nextBeforeId > 0 ? Math.trunc(nextBeforeId) : null;
   }
 
   function getClientsRightApi() {
@@ -649,17 +709,37 @@
     scheduleLocalTypingStop(CHAT_TYPING_IDLE_STOP_MS);
   }
 
-  async function fetchRemoteThreadSnapshot(clientId) {
+  async function fetchRemoteThreadSnapshot(clientId, options = {}) {
     const key = normalizeClientIdKey(clientId);
     if (!key) return null;
-    const qs = new URLSearchParams({ _ts: String(Date.now()) });
+    const limitRaw = Number(options.limit ?? CHAT_THREAD_PAGE_SIZE);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0
+      ? Math.max(1, Math.min(200, Math.trunc(limitRaw)))
+      : CHAT_THREAD_PAGE_SIZE;
+    const beforeIdRaw = Number(options.beforeId || 0);
+    const beforeId = Number.isFinite(beforeIdRaw) && beforeIdRaw > 0
+      ? Math.trunc(beforeIdRaw)
+      : 0;
+    const qs = new URLSearchParams({
+      _ts: String(Date.now()),
+      limit: String(limit),
+    });
+    if (beforeId > 0) qs.set("before_id", String(beforeId));
     const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}?${qs.toString()}`);
     const payload = json?.data || {};
+    const page = payload.page && typeof payload.page === "object" ? payload.page : {};
+    const nextBeforeIdRaw = Number(page.next_before_id || payload.next_before_id || 0);
     return {
       clientId: Number(key),
       updatedAt: String(payload.updated_at || ""),
       messages: Array.isArray(payload.messages) ? payload.messages : [],
       meta: payload.meta && typeof payload.meta === "object" ? payload.meta : {},
+      page: {
+        hasMore: page.has_more === true || payload.has_more === true,
+        nextBeforeId: Number.isFinite(nextBeforeIdRaw) && nextBeforeIdRaw > 0
+          ? Math.trunc(nextBeforeIdRaw)
+          : null,
+      },
     };
   }
 
@@ -697,8 +777,15 @@
     if (!snapshot || !Number.isFinite(Number(snapshot.clientId))) return false;
     const key = normalizeClientIdKey(snapshot.clientId);
     if (!key) return false;
-    const next = Array.isArray(snapshot.messages) ? snapshot.messages : [];
+    const appendOlder = options.appendOlder === true;
+    const preserveHistory = options.preserveHistory === true && !appendOlder;
+    const incomingNext = Array.isArray(snapshot.messages) ? snapshot.messages : [];
     const prev = Array.isArray(state.store.threads[key]) ? state.store.threads[key] : [];
+    const next = appendOlder
+      ? sanitizeThread(incomingNext.concat(prev))
+      : preserveHistory
+        ? sanitizeThread(prev.concat(incomingNext))
+        : incomingNext;
     const same = stableSerialize(prev) === stableSerialize(next);
     const remoteUpdatedAt = String(snapshot.updatedAt || "");
     const knownUpdatedAt = String(state.remoteThreadUpdatedAt[key] || "");
@@ -713,6 +800,9 @@
     }
 
     state.remoteThreadUpdatedAt[key] = remoteUpdatedAt;
+    if (appendOlder || !preserveHistory) {
+      updateThreadHistoryFromSnapshot(key, snapshot);
+    }
     const shouldMarkRead = Number(state.activeClientId) === Number(key)
       && !options.skipReadMark
       && isChatTabActiveForRead();
@@ -730,6 +820,7 @@
     }
 
     const appendedIncomingMessageIds = (() => {
+      if (appendOlder) return [];
       if (options.ignoreIncomingBadge === true) return [];
       const prevIds = new Set(
         (Array.isArray(prev) ? prev : [])
@@ -765,8 +856,8 @@
       if (shouldMarkRead) markThreadRead(key);
       const hasIncomingAppended = appendedIncomingMessageIds.length > 0;
       renderMessages({
-        disableAutoPin: !hasIncomingAppended,
-        smoothScroll: hasIncomingAppended,
+        disableAutoPin: appendOlder || !hasIncomingAppended,
+        smoothScroll: !appendOlder && hasIncomingAppended,
       });
     }
     applyClientFilter();
@@ -989,10 +1080,48 @@
     const key = normalizeClientIdKey(clientId);
     if (!key) return false;
     const mutationVersionBefore = getThreadMutationVersion(key);
-    const snapshot = await fetchRemoteThreadSnapshot(key);
+    const snapshot = await fetchRemoteThreadSnapshot(key, {
+      limit: CHAT_THREAD_PAGE_SIZE,
+    });
     if (!snapshot) return false;
     const localChangedDuringRequest = getThreadMutationVersion(key) !== mutationVersionBefore;
     return applyRemoteThreadSnapshot(snapshot, { ...options, localChangedDuringRequest });
+  }
+
+  async function loadOlderMessages(clientId, options = {}) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+    const history = ensureThreadHistoryState(key);
+    if (!history || history.loading || history.hasMore !== true) return false;
+
+    history.loading = true;
+    const wrap = dom.center.messagesWrap;
+    const prevTop = wrap ? wrap.scrollTop : 0;
+    const prevHeight = wrap ? wrap.scrollHeight : 0;
+
+    try {
+      const snapshot = await fetchRemoteThreadSnapshot(key, {
+        limit: CHAT_THREAD_PAGE_SIZE,
+        beforeId: history.nextBeforeId,
+      });
+      if (!snapshot) return false;
+      const changed = applyRemoteThreadSnapshot(snapshot, {
+        ...options,
+        appendOlder: true,
+        skipReadMark: true,
+        ignoreIncomingBadge: true,
+      });
+
+      if (changed && wrap && Number(state.activeClientId) === Number(key)) {
+        const nextHeight = wrap.scrollHeight;
+        const delta = nextHeight - prevHeight;
+        wrap.scrollTop = Math.max(0, prevTop + delta);
+        saveThreadScrollPosition(key);
+      }
+      return changed;
+    } finally {
+      history.loading = false;
+    }
   }
 
   function applyRemoteThreadDiff(diff, options = {}) {
@@ -1050,7 +1179,7 @@
     const key = normalizeClientIdKey(clientId);
     if (!key) return false;
     if (options.force === true) {
-      return pullThreadFromRemote(key, options);
+      return pullThreadFromRemote(key, { ...options, preserveHistory: true });
     }
 
     try {
@@ -1082,10 +1211,30 @@
     }
   }
 
-  async function loadRemoteChatClients() {
-    const qs = new URLSearchParams({ _ts: String(Date.now()) });
+  async function loadRemoteChatClientsPage(options = {}) {
+    const limitRaw = Number(options.limit ?? CHAT_CLIENTS_PAGE_SIZE);
+    const offsetRaw = Number(options.offset || 0);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0
+      ? Math.max(1, Math.min(200, Math.trunc(limitRaw)))
+      : CHAT_CLIENTS_PAGE_SIZE;
+    const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? Math.trunc(offsetRaw) : 0;
+    const qs = new URLSearchParams({
+      _ts: String(Date.now()),
+      limit: String(limit),
+      offset: String(offset),
+    });
     const json = await apiJson(`${CHAT_TEMP_API_BASE}/clients?${qs.toString()}`);
-    return Array.isArray(json?.data) ? json.data : [];
+    const rows = Array.isArray(json?.data) ? json.data : [];
+    const totalRaw = Number(json?.total);
+    const total = Number.isFinite(totalRaw) && totalRaw >= 0 ? Math.trunc(totalRaw) : 0;
+    const hasMore = json?.has_more === true || (total > 0 && (offset + rows.length) < total);
+    return {
+      rows,
+      total,
+      limit,
+      offset,
+      hasMore,
+    };
   }
 
   function mergeRemoteClients(localRows, remoteRows) {
@@ -1249,9 +1398,14 @@
   }
 
   async function syncRemoteSummariesSnapshot(options = {}) {
-    const remoteClients = await loadRemoteChatClients().catch(() => []);
-    if (Array.isArray(remoteClients) && remoteClients.length) {
-      const merged = mergeRemoteClients(state.clients, remoteClients);
+    const pager = ensureClientsPager();
+    const remotePage = await loadRemoteChatClientsPage({
+      limit: pager.pageSize || CHAT_CLIENTS_PAGE_SIZE,
+      offset: 0,
+    }).catch(() => null);
+    const remoteClients = Array.isArray(remotePage?.rows) ? remotePage.rows : [];
+    if (remoteClients.length) {
+      const merged = filterOpenChatClients(mergeRemoteClients(state.clients, remoteClients));
       const prevFingerprint = stableSerialize(
         (state.clients || []).map((client) => [Number(client.id), String(client.name || ""), String(client.phone || "")])
       );
@@ -1505,6 +1659,40 @@
   }
 
   function getThread(clientId) { return clientId ? ensureThread(clientId) : []; }
+
+  function sanitizeThread(messages) {
+    const list = Array.isArray(messages) ? messages : [];
+    const out = [];
+    const indexById = new Map();
+
+    list.forEach((message) => {
+      if (!message || typeof message !== "object") return;
+      const id = String(message.id || "").trim();
+      if (!id) return;
+
+      ensureMessageReactions(message);
+      if (!message.createdAt) message.createdAt = new Date().toISOString();
+
+      if (indexById.has(id)) {
+        out[indexById.get(id)] = message;
+        return;
+      }
+      indexById.set(id, out.length);
+      out.push(message);
+    });
+
+    out.sort((a, b) => {
+      const ta = new Date(a?.createdAt || 0).getTime();
+      const tb = new Date(b?.createdAt || 0).getTime();
+      if (ta !== tb) return ta - tb;
+      const ia = String(a?.id || "");
+      const ib = String(b?.id || "");
+      if (ia === ib) return 0;
+      return ia < ib ? -1 : 1;
+    });
+
+    return out;
+  }
 
   function ensureHiddenMessageMap() {
     if (!state.store.hiddenMessageIds || typeof state.store.hiddenMessageIds !== "object") {
@@ -2123,6 +2311,13 @@
     if (!Number.isFinite(id) || id <= 0) return false;
     if (!isChatTabActiveForRead()) return false;
     const changed = markThreadRead(id);
+    if (!changed) {
+      const summary = getRemoteSummaryForClient(id);
+      const unread = Number(summary?.unread_count ?? summary?.unreadCount ?? 0);
+      if (Number.isFinite(unread) && unread > 0) {
+        enqueueRemoteMutation(id, () => remoteMarkMessagesRead(id, []));
+      }
+    }
     if (changed || options.forceRender) {
       applyClientFilter();
       if (Number(state.activeClientId) === id) renderMessages();
@@ -2135,7 +2330,7 @@
     const thread = getThread(clientId);
     ensureMessageReactions(message);
     thread.push(message);
-    if (thread.length > 250) thread.splice(0, thread.length - 250);
+    if (thread.length > 2000) thread.splice(0, thread.length - 2000);
     markThreadMutated(clientId);
     saveStore();
     enqueueRemoteMutation(clientId, () => remoteCreateMessage(clientId, message));
@@ -3113,6 +3308,7 @@
     const maxTop = Math.max(0, dom.left.list.scrollHeight - dom.left.list.clientHeight);
     dom.left.list.scrollTop = Math.max(0, Math.min(targetTop, maxTop));
     saveClientsListScrollPosition();
+    maybeLoadMoreClientsByScroll();
   }
 
   function normalizeEmojiCategoryName(rawCategory) {
@@ -5513,54 +5709,155 @@
     await loadActiveClientData(id, selectedFromList);
   }
 
+  function mergeClientsIntoState(rows, { reset = false } = {}) {
+    const incoming = Array.isArray(rows) ? rows : [];
+    const byId = new Map();
+    if (!reset) {
+      (Array.isArray(state.clients) ? state.clients : []).forEach((row) => {
+        const key = normalizeClientIdKey(row?.id);
+        if (!key) return;
+        byId.set(key, row);
+      });
+    }
+    incoming.forEach((row) => {
+      const key = normalizeClientIdKey(row?.id);
+      if (!key) return;
+      const prev = byId.get(key);
+      byId.set(key, prev && typeof prev === "object" ? { ...prev, ...row } : row);
+    });
+    state.clients = Array.from(byId.values());
+  }
+
+  function filterOpenChatClients(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    const existingThreadIds = new Set(Object.keys(state.store.threads || {}).map((k) => Number(k)));
+    const filtered = list.filter(
+      (client) =>
+        existingThreadIds.has(Number(client.id))
+        || Number(client.total_orders || 0) > 0
+        || client._isVirtualChatClient === true
+    );
+    return filtered.length ? filtered : list;
+  }
+
+  async function loadClientsPage(options = {}) {
+    const reset = options.reset === true;
+    const ensureSelection = options.ensureSelection === true;
+    const pager = ensureClientsPager();
+    if (pager.loading) return false;
+
+    if (reset) {
+      resetClientsPager();
+      state.clients = [];
+      state.filteredClients = [];
+      applyClientFilter();
+      if (dom.left.list) {
+        dom.left.list.innerHTML = '<div class="muted" style="padding:8px;">\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u0447\u0430\u0442\u043e\u0432\u2026</div>';
+      }
+    }
+
+    const activePager = ensureClientsPager();
+    if (!activePager.hasMore && !reset) return false;
+
+    activePager.loading = true;
+    try {
+      const pageSize = activePager.pageSize || CHAT_CLIENTS_PAGE_SIZE;
+      const adminQs = new URLSearchParams();
+      adminQs.set("limit", String(pageSize));
+      adminQs.set("offset", String(activePager.adminOffset || 0));
+      adminQs.set("sort", "last_desc");
+
+      const [adminJson, remotePage] = await Promise.all([
+        apiJson("/api/admin/clients?" + adminQs.toString()),
+        loadRemoteChatClientsPage({
+          limit: pageSize,
+          offset: activePager.remoteOffset || 0,
+        }).catch(() => ({
+          rows: [],
+          total: activePager.remoteTotal || 0,
+          hasMore: false,
+        })),
+      ]);
+
+      const adminRows = Array.isArray(adminJson?.data) ? adminJson.data : [];
+      const adminTotalRaw = Number(adminJson?.total);
+      const adminTotal = Number.isFinite(adminTotalRaw) && adminTotalRaw >= 0 ? Math.trunc(adminTotalRaw) : 0;
+
+      const remoteRows = Array.isArray(remotePage?.rows) ? remotePage.rows : [];
+      const remoteTotalRaw = Number(remotePage?.total);
+      const remoteTotal = Number.isFinite(remoteTotalRaw) && remoteTotalRaw >= 0 ? Math.trunc(remoteTotalRaw) : 0;
+      const remoteHasMoreFlag = remotePage?.hasMore === true;
+
+      activePager.adminOffset += adminRows.length;
+      activePager.remoteOffset += remoteRows.length;
+      activePager.adminTotal = adminTotal;
+      activePager.remoteTotal = remoteTotal;
+      activePager.hasMore = activePager.adminOffset < activePager.adminTotal
+        || activePager.remoteOffset < activePager.remoteTotal
+        || remoteHasMoreFlag;
+      activePager.initialized = true;
+
+      const mergedRows = mergeRemoteClients(adminRows, remoteRows);
+      const preparedRows = filterOpenChatClients(mergedRows);
+      preparedRows.forEach((client) => seedThread(client));
+
+      const prevIds = new Set(
+        (state.clients || [])
+          .map((client) => normalizeClientIdKey(client?.id))
+          .filter(Boolean)
+      );
+      mergeClientsIntoState(preparedRows, { reset });
+      applyClientFilter();
+
+      const summaryIds = (state.clients || [])
+        .map((client) => normalizeClientIdKey(client?.id))
+        .filter(Boolean)
+        .filter((id) => reset || !prevIds.has(id));
+      if (summaryIds.length) {
+        await pullRemoteSummaries(summaryIds).catch(console.error);
+        applyClientFilter();
+      }
+
+      if (ensureSelection) {
+        const persisted = Number(state.store.lastOpenClientId || 0);
+        const target = state.filteredClients.find((c) => Number(c.id) === persisted) || state.filteredClients[0];
+        if (target) {
+          if (Number(state.activeClientId) !== Number(target.id)) {
+            await selectClient(target.id);
+          }
+        } else {
+          stopLocalTypingSession(state.activeClientId, { flush: true });
+          state.activeClientId = null;
+          state.activeClient = null;
+          setActiveOrders([], { forceRender: true });
+          renderMessages();
+        }
+      }
+
+      return preparedRows.length > 0;
+    } finally {
+      activePager.loading = false;
+    }
+  }
+
+  function maybeLoadMoreClientsByScroll() {
+    if (!dom.left.list) return;
+    const pager = ensureClientsPager();
+    if (!pager.hasMore || pager.loading) return;
+    const remaining = dom.left.list.scrollHeight - dom.left.list.scrollTop - dom.left.list.clientHeight;
+    if (remaining > CHAT_CLIENTS_LOAD_MORE_THRESHOLD_PX) return;
+    loadClientsPage({ reset: false, ensureSelection: false }).catch(console.error);
+  }
+
   async function loadClients() {
     if (!dom.left.list) return;
-    dom.left.list.innerHTML = '<div class="muted" style="padding:8px;">Загрузка чатов…</div>';
-
     try {
-      const qs = new URLSearchParams();
-      qs.set("limit", "250");
-      qs.set("offset", "0");
-      qs.set("sort", "last_desc");
-
-      const [json, remoteClients] = await Promise.all([
-        apiJson(`/api/admin/clients?${qs.toString()}`),
-        loadRemoteChatClients().catch(() => []),
-      ]);
-      const rows = mergeRemoteClients(Array.isArray(json?.data) ? json.data : [], remoteClients);
-
-      const existingThreadIds = new Set(Object.keys(state.store.threads).map((k) => Number(k)));
-      const openChatClients = rows.filter(
-        (c) =>
-          existingThreadIds.has(Number(c.id)) ||
-          Number(c.total_orders || 0) > 0 ||
-          c._isVirtualChatClient === true
-      );
-      const prepared = openChatClients.length ? openChatClients : rows;
-
-      prepared.slice(0, 40).forEach((client) => seedThread(client));
-
-      state.clients = prepared;
-      applyClientFilter();
-      await pullRemoteSummaries(state.clients.map((client) => client.id)).catch(console.error);
-      applyClientFilter();
-
-      const persisted = Number(state.store.lastOpenClientId || 0);
-      const target = state.filteredClients.find((c) => Number(c.id) === persisted) || state.filteredClients[0];
-      if (target) {
-        await selectClient(target.id);
-      } else {
-        stopLocalTypingSession(state.activeClientId, { flush: true });
-        state.activeClientId = null;
-        state.activeClient = null;
-        setActiveOrders([], { forceRender: true });
-        renderMessages();
-      }
+      await loadClientsPage({ reset: true, ensureSelection: true });
     } catch (err) {
       console.error(err);
       dom.left.list.innerHTML = "";
       if (dom.left.empty) {
-        dom.left.empty.textContent = "Не удалось загрузить чаты";
+        dom.left.empty.textContent = "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0447\u0430\u0442\u044b";
         dom.left.empty.classList.remove("hidden");
       }
     }
@@ -5691,6 +5988,9 @@
       dom.center.messagesWrap.dataset.scrollDownBound = "1";
       dom.center.messagesWrap.addEventListener("scroll", () => {
         saveThreadScrollPosition(state.activeClientId);
+        if (dom.center.messagesWrap && dom.center.messagesWrap.scrollTop <= CHAT_THREAD_LOAD_MORE_THRESHOLD_PX) {
+          loadOlderMessages(state.activeClientId).catch(console.error);
+        }
         syncPendingScrollCountByViewport(state.activeClientId);
         if (shouldKeepMessagesPinnedToBottom()) {
           clearPendingScrollNewCount();
@@ -5708,6 +6008,7 @@
       dom.left.list.dataset.scrollPersistBound = "1";
       dom.left.list.addEventListener("scroll", () => {
         saveClientsListScrollPosition();
+        maybeLoadMoreClientsByScroll();
       }, { passive: true });
     }
     bindSearch();
