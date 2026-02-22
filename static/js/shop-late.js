@@ -8321,7 +8321,8 @@ function renderSheetAddressList() {
     btnEdit.innerHTML = `<i class="fas fa-pen"></i>`;
     btnEdit.addEventListener("click", (e) => {
       e.stopPropagation();
-      showSheetAddressForm(a, token ? a.id : null, "cart");
+      const backMode = openCartSheetCtx?.addressBackMode || "cart";
+      showSheetAddressForm(a, token ? a.id : null, backMode);
     });
     actions.appendChild(btnEdit);
 
@@ -8329,10 +8330,9 @@ function renderSheetAddressList() {
     const btnDel = document.createElement("button");
     btnDel.type = "button";
     btnDel.className = "shop-address-action-icon is-danger";
+    btnDel.title = "Удалить";
     btnDel.innerHTML = `<i class="fas fa-times"></i>`;
-    btnDel.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      if (!window.confirm("Удалить адрес?")) return;
+    attachDoubleDelete(btnDel, async () => {
       if (token && a.id) {
         try {
           await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
@@ -8744,7 +8744,10 @@ function renderSheetAddressList() {
 
   backBtn.addEventListener("click", () => showSheetCart());
 
-  addressNewBtn.addEventListener("click", () => showSheetAddressForm(null, null, "cart"));
+  addressNewBtn.addEventListener("click", () => {
+    const backMode = openCartSheetCtx?.addressBackMode || "cart";
+    showSheetAddressForm(null, null, backMode);
+  });
 
   const formGet = (k) => addressFormView.querySelector(`[data-a="${k}"]`);
   const saveBtn = formGet("save");
@@ -8794,8 +8797,13 @@ function renderSheetAddressList() {
 
       syncSelectedAddressToCheckoutDraft();
       updateAddressChip();
-      if (openCartSheetCtx?.addressBackMode === "profile") {
+      const backMode = openCartSheetCtx?.addressBackMode || "cart";
+      if (backMode === "profile") {
         returnToProfileFromSheet();
+      } else if (backMode === "checkout") {
+        showSheetCheckout();
+      } else if (backMode === "header") {
+        showSheetAddressList("header");
       } else {
         showSheetCart();
       }
@@ -9313,6 +9321,121 @@ function renderSheetAddressList() {
     });
   }
 
+  function hideMobileOrderDetailsActions() {
+    if (window.__shopOrderRepeatOutsideHandler) {
+      document.removeEventListener("pointerdown", window.__shopOrderRepeatOutsideHandler, true);
+      window.__shopOrderRepeatOutsideHandler = null;
+    }
+    if (elMobileOrderDetailsActions) {
+      elMobileOrderDetailsActions.classList.add("hidden");
+    }
+    if (elMobileOrderRepeatBtn) {
+      elMobileOrderRepeatBtn.classList.remove("is-expanded");
+      elMobileOrderRepeatBtn.onclick = null;
+    }
+    if (elMobileOrderTotalBtn) {
+      elMobileOrderTotalBtn.onclick = null;
+    }
+  }
+
+  function showMobileOrderDetailsActions(order) {
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (!isMobile || !elMobileOrderDetailsActions) {
+      hideMobileOrderDetailsActions();
+      return;
+    }
+    const summary = buildOrderSummaryData(order);
+    const repeatItems = Array.isArray(order?.items) ? order.items : [];
+    if (elMobileOrderTotalValue) {
+      elMobileOrderTotalValue.textContent = money(summary.orderTotal || 0);
+    }
+    if (elMobileOrderRepeatBtn) {
+      elMobileOrderRepeatBtn.classList.remove("is-expanded");
+      elMobileOrderRepeatBtn.onclick = async (event) => {
+        if (event) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        if (!elMobileOrderRepeatBtn.classList.contains("is-expanded")) {
+          elMobileOrderRepeatBtn.classList.add("is-expanded");
+          return;
+        }
+        if (!repeatItems.length) {
+          showToast("\u0412 \u0437\u0430\u043a\u0430\u0437\u0435 \u043d\u0435\u0442 \u0442\u043e\u0432\u0430\u0440\u043e\u0432");
+          return;
+        }
+        if (elMobileOrderRepeatBtn.disabled) return;
+        elMobileOrderRepeatBtn.disabled = true;
+        try {
+          await repeatOrderItemsToCart(repeatItems);
+        } finally {
+          elMobileOrderRepeatBtn.disabled = false;
+        }
+      };
+
+      if (window.__shopOrderRepeatOutsideHandler) {
+        document.removeEventListener("pointerdown", window.__shopOrderRepeatOutsideHandler, true);
+      }
+      window.__shopOrderRepeatOutsideHandler = (event) => {
+        if (!elMobileOrderRepeatBtn || !event) return;
+        const target = event.target;
+        if (target instanceof Node && elMobileOrderRepeatBtn.contains(target)) return;
+        elMobileOrderRepeatBtn.classList.remove("is-expanded");
+      };
+      document.addEventListener("pointerdown", window.__shopOrderRepeatOutsideHandler, true);
+    }
+    if (elMobileOrderTotalBtn) {
+      elMobileOrderTotalBtn.onclick = () => {};
+    }
+    elMobileOrderDetailsActions.classList.remove("hidden");
+  }
+
+  function bindDesktopOrderDetailsFooter(order) {
+    if (window.matchMedia("(max-width: 768px)").matches) return;
+    const summary = buildOrderSummaryData(order);
+    if (elOrderDetailsTotalValue) {
+      elOrderDetailsTotalValue.textContent = money(summary.orderTotal || 0);
+    }
+    if (elOrderDetailsTotalBtn) {
+      elOrderDetailsTotalBtn.onclick = () => {};
+    }
+    if (elOrderDetailsRepeatBtn) {
+      elOrderDetailsRepeatBtn.onclick = async (event) => {
+        if (event) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        if (!elOrderDetailsRepeatBtn.classList.contains("is-expanded")) {
+          elOrderDetailsRepeatBtn.classList.add("is-expanded");
+          return;
+        }
+        const items = Array.isArray(order?.items) ? order.items : [];
+        if (!items.length) {
+          showToast("\u0412 \u0437\u0430\u043a\u0430\u0437\u0435 \u043d\u0435\u0442 \u0442\u043e\u0432\u0430\u0440\u043e\u0432");
+          return;
+        }
+        if (elOrderDetailsRepeatBtn.disabled) return;
+        elOrderDetailsRepeatBtn.disabled = true;
+        try {
+          await repeatOrderItemsToCart(items);
+        } finally {
+          elOrderDetailsRepeatBtn.disabled = false;
+        }
+      };
+    }
+    if (window.__shopDesktopOrderRepeatOutsideHandler) {
+      document.removeEventListener("pointerdown", window.__shopDesktopOrderRepeatOutsideHandler, true);
+    }
+    window.__shopDesktopOrderRepeatOutsideHandler = (event) => {
+      if (!elOrderDetailsRepeatBtn || !event) return;
+      const target = event.target;
+      if (target instanceof Node && elOrderDetailsRepeatBtn.contains(target)) return;
+      elOrderDetailsRepeatBtn.classList.remove("is-expanded");
+    };
+    document.addEventListener("pointerdown", window.__shopDesktopOrderRepeatOutsideHandler, true);
+    setCartFooterMode("order-details");
+  }
+
   function resetOrderDetailsTransientUi() {
     if (elMobileProductActions) {
       elMobileProductActions.classList.add("hidden");
@@ -9328,6 +9451,7 @@ function renderSheetAddressList() {
     if (elMobileAddressConfirm) {
       elMobileAddressConfirm.classList.add("hidden");
     }
+    hideMobileOrderDetailsActions();
 
     if (elMobileAddToCartBtn && mobileProductActionsState?.onAddToCart) {
       try {
@@ -9342,11 +9466,26 @@ function renderSheetAddressList() {
     if (openCartSheetCtx && typeof openCartSheetCtx === "object") {
       openCartSheetCtx.comboStepBack = null;
     }
-    openCartSheetCtx = null;
-    openProductCtx = null;
-    if (window.AppModal?.body) {
-      window.AppModal.body.classList.remove("shop-cart-sheet-body");
-    }
+      openCartSheetCtx = null;
+      openProductCtx = null;
+      if (elOrderDetailsRepeatBtn) {
+        elOrderDetailsRepeatBtn.disabled = false;
+        elOrderDetailsRepeatBtn.classList.remove("is-expanded");
+        elOrderDetailsRepeatBtn.onclick = null;
+      }
+      if (elOrderDetailsTotalBtn) {
+        elOrderDetailsTotalBtn.onclick = null;
+      }
+      if (window.__shopDesktopOrderRepeatOutsideHandler) {
+        document.removeEventListener("pointerdown", window.__shopDesktopOrderRepeatOutsideHandler, true);
+        window.__shopDesktopOrderRepeatOutsideHandler = null;
+      }
+      if (!window.matchMedia("(max-width: 768px)").matches) {
+        setCartFooterMode("hidden");
+      }
+      if (window.AppModal?.body) {
+        window.AppModal.body.classList.remove("shop-cart-sheet-body");
+      }
   }
 
   function hasLiveCartSheetContext() {
@@ -10110,36 +10249,74 @@ function renderSheetAddressList() {
     });
   }
 
-  async function addRepeatSnapshotToCartLocal(snapshot) {
-    if (!snapshot || typeof snapshot !== "object") return false;
+  async function normalizeRepeatSnapshotForCart(snapshot) {
+    const source = snapshot && typeof snapshot === "object" ? snapshot : null;
+    if (!source) return snapshot;
 
+    const type = str(source.type || "").trim().toLowerCase();
+    if (type !== "combo") return source;
+
+    const comboId = Number(source.combo_id || 0);
+    const selections = Array.isArray(source.selections) ? source.selections : [];
+    if (!selections.length || !Number.isFinite(comboId) || comboId <= 0) return source;
+
+    const hasCurrentPricing = selections.some((sel) => Number(sel?.unit_price_override || 0) > 0);
+    const hasOldPricing = selections.some((sel) => Number(sel?.unit_price_before_discount || 0) > 0);
+    if (hasCurrentPricing && hasOldPricing) return source;
+
+    try {
+      const resolved = await resolveRepeatComboSelectionsWithCatalog(comboId, selections);
+      const resolvedSelections = Array.isArray(resolved?.selections) ? resolved.selections : [];
+      if (!resolvedSelections.length) return source;
+
+      const qty = Math.max(1, Number(source.qty || source.quantity || 1));
+      const next = { ...source, selections: resolvedSelections };
+      const currentUnit = roundPrice(
+        resolvedSelections.reduce((sum, sel) => sum + Number(sel?.unit_price_override || 0), 0)
+      );
+      const oldUnit = Number(resolved?.unitPriceBeforeDiscount || 0);
+
+      if (!(Number(next.price || 0) > 0) && currentUnit > 0) {
+        next.price = currentUnit;
+      }
+      if (!(Number(next.line_total || 0) > 0) && Number(next.price || 0) > 0) {
+        next.line_total = roundPrice(Number(next.price || 0) * qty);
+      }
+      if (!(Number(next.unit_price_before_discount || 0) > 0) && oldUnit > 0) {
+        next.unit_price_before_discount = roundPrice(oldUnit);
+      }
+      if (!(Number(next.old_line_total || 0) > 0) && oldUnit > 0) {
+        next.old_line_total = roundPrice(oldUnit * qty);
+      }
+      return next;
+    } catch (e) {
+      console.warn("Failed to normalize repeat combo snapshot pricing:", comboId, e);
+      return source;
+    }
+  }
+
+  function applyRepeatSnapshotToDraftCart(snapshot, draftCart) {
+    if (!snapshot || typeof snapshot !== "object" || !Array.isArray(draftCart)) {
+      return { ok: false, reason: "invalid" };
+    }
     const prefillItem = buildRepeatPrefillItem(snapshot);
     if (!prefillItem) {
-      showToast("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u043e\u0440\u0437\u0438\u043d\u0443");
-      return false;
+      return { ok: false, reason: "invalid" };
     }
-
     if (hasUnavailableRepeatPrefillProducts(prefillItem)) {
-      showToast("\u041d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
-      return false;
+      return { ok: false, reason: "unavailable" };
     }
-
-    const previousCartSnapshot = cloneCartState(state.cart);
-    const wasEmpty = cartCountTotal() === 0;
-    const draftCart = cloneCartState(state.cart);
 
     if (String(prefillItem.type || "") === "combo") {
       const comboId = Number(prefillItem.combo_id || 0);
       if (!Number.isFinite(comboId) || comboId <= 0) {
-        showToast("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u043e\u0440\u0437\u0438\u043d\u0443");
-        return false;
+        return { ok: false, reason: "invalid" };
       }
 
       const safeQty = Math.max(1, Number(prefillItem.qty || 1));
       const sourceSelections = Array.isArray(prefillItem.selections) ? prefillItem.selections : [];
       if (!sourceSelections.length) {
-        showToast("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u043e\u0440\u0437\u0438\u043d\u0443");
-        return false;
+        return { ok: false, reason: "invalid" };
       }
 
       const selections = normalizeRepeatComboSelectionsLocal(sourceSelections);
@@ -10171,11 +10348,11 @@ function renderSheetAddressList() {
         selections,
         unit_price_before_discount: unitOld > 0 ? unitOld : null,
       });
+      return { ok: true, reason: "added" };
     } else {
       const productId = Number(prefillItem.product_id || 0);
       if (!Number.isFinite(productId) || productId <= 0) {
-        showToast("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u043e\u0440\u0437\u0438\u043d\u0443");
-        return false;
+        return { ok: false, reason: "invalid" };
       }
 
       const product = state.productCache.get(productId) || null;
@@ -10281,8 +10458,25 @@ function renderSheetAddressList() {
           auto_add_group_id: null,
         });
       }
+      return { ok: true, reason: "added" };
     }
+  }
 
+  async function addRepeatSnapshotToCartLocal(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return false;
+    const normalizedSnapshot = await normalizeRepeatSnapshotForCart(snapshot);
+    const previousCartSnapshot = cloneCartState(state.cart);
+    const wasEmpty = cartCountTotal() === 0;
+    const draftCart = cloneCartState(state.cart);
+    const applyResult = applyRepeatSnapshotToDraftCart(normalizedSnapshot, draftCart);
+    if (!applyResult?.ok) {
+      if (applyResult?.reason === "unavailable") {
+        showToast("\u041d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+      } else {
+        showToast("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u043e\u0440\u0437\u0438\u043d\u0443");
+      }
+      return false;
+    }
     state.cart = draftCart;
     if (wasEmpty) {
       clearAllAutoAddDismissed();
@@ -10310,6 +10504,74 @@ function renderSheetAddressList() {
 
   async function addRepeatSnapshotToCart(snapshot) {
     return addRepeatSnapshotToCartLocal(snapshot);
+  }
+
+  async function repeatOrderItemsToCart(orderItems) {
+    const list = Array.isArray(orderItems) ? orderItems : [];
+    if (!list.length) return false;
+
+    const previousCartSnapshot = cloneCartState(state.cart);
+    const wasEmpty = cartCountTotal() === 0;
+    const draftCart = cloneCartState(state.cart);
+
+    let addedCount = 0;
+    let unavailableCount = 0;
+    let failedCount = 0;
+
+    for (const orderItem of list) {
+      const snapshot = buildRepeatActionSnapshot(orderItem);
+      if (!snapshot) {
+        failedCount += 1;
+        continue;
+      }
+      const normalizedSnapshot = await normalizeRepeatSnapshotForCart(snapshot);
+      const applyResult = applyRepeatSnapshotToDraftCart(normalizedSnapshot, draftCart);
+      if (applyResult?.ok) {
+        addedCount += 1;
+      } else if (applyResult?.reason === "unavailable") {
+        unavailableCount += 1;
+      } else {
+        failedCount += 1;
+      }
+    }
+
+    if (addedCount <= 0) {
+      if (unavailableCount > 0) {
+        showToast("\u041d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+      } else {
+        showToast("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u043e\u0440\u0437\u0438\u043d\u0443");
+      }
+      return false;
+    }
+
+    state.cart = draftCart;
+    if (wasEmpty) {
+      clearAllAutoAddDismissed();
+    }
+    applyAutoAddRules();
+    clearAutoAddDismissedIfCartEmpty();
+    saveCart();
+    renderProducts();
+    if (typeof scheduleSyncAllProductCardsFromCart === "function") {
+      scheduleSyncAllProductCardsFromCart();
+    }
+    renderCart();
+    updateCartBadge();
+    queueCartStockRecheck(previousCartSnapshot, {
+      toastMessage: "\u041d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
+      refreshOnOut: true,
+    });
+    if (window.matchMedia("(max-width: 768px)").matches) {
+      updateMobileDeliveryProgress();
+    }
+
+    if (unavailableCount > 0 || failedCount > 0) {
+      showToast("\u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e \u0432 \u043a\u043e\u0440\u0437\u0438\u043d\u0443. \u0427\u0430\u0441\u0442\u044c \u0442\u043e\u0432\u0430\u0440\u043e\u0432 \u043d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438");
+    } else {
+      showToast("\u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e \u0432 \u043a\u043e\u0440\u0437\u0438\u043d\u0443");
+    }
+    if (navigator.vibrate) navigator.vibrate(10);
+    return true;
   }
 
   function initRepeatOrderSwipeRow(
@@ -10916,6 +11178,25 @@ function renderSheetAddressList() {
     const tabs = document.createElement("div");
     tabs.className = "shop-profile-tabs";
 
+    const bindProfileTabsWheelScroll = () => {
+      if (!tabs || tabs.dataset.wheelBound === "1") return;
+      const onWheel = (event) => {
+        const maxScrollLeft = Math.max(0, tabs.scrollWidth - tabs.clientWidth);
+        if (maxScrollLeft <= 0) return;
+        const deltaX = Number(event.deltaX || 0);
+        const deltaY = Number(event.deltaY || 0);
+        const primaryDelta = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
+        if (!primaryDelta) return;
+        const current = tabs.scrollLeft || 0;
+        const next = Math.max(0, Math.min(maxScrollLeft, current + primaryDelta));
+        if (Math.abs(next - current) < 0.5) return;
+        event.preventDefault();
+        tabs.scrollLeft = next;
+      };
+      tabs.addEventListener("wheel", onWheel, { passive: false });
+      tabs.dataset.wheelBound = "1";
+    };
+
     const tabAddresses = document.createElement("button");
     tabAddresses.type = "button";
     tabAddresses.className = "shop-profile-tab is-active";
@@ -10944,6 +11225,7 @@ function renderSheetAddressList() {
     tabs.appendChild(tabOrders);
     tabs.appendChild(tabDiscounts);
     tabs.appendChild(tabSettings);
+    bindProfileTabsWheelScroll();
     wrap.appendChild(tabs);
 
     const addressesPanel = document.createElement("div");
@@ -11057,6 +11339,23 @@ function renderSheetAddressList() {
 
     const PROFILE_ORDERS_PAGE_SIZE = 10;
     const profileOrdersSummary = { activeCount: 0, completedCount: 0 };
+    let currentProfileOrderSwipedContainer = null;
+    if (window.__shopProfileOrderSwipeOutsideHandler) {
+      document.removeEventListener("pointerdown", window.__shopProfileOrderSwipeOutsideHandler, true);
+      window.__shopProfileOrderSwipeOutsideHandler = null;
+    }
+    window.__shopProfileOrderSwipeOutsideHandler = (event) => {
+      const active = currentProfileOrderSwipedContainer;
+      if (!active) return;
+      if (active.contains(event.target)) return;
+      const closeFn = active.__orderSwipeClose;
+      if (typeof closeFn === "function") {
+        closeFn(true);
+      } else {
+        currentProfileOrderSwipedContainer = null;
+      }
+    };
+    document.addEventListener("pointerdown", window.__shopProfileOrderSwipeOutsideHandler, true);
     const profileOrdersState = {
       active: { offset: 0, hasMore: false, loading: false, initialized: false, observer: null, statusFinal: 0 },
       completed: { offset: 0, hasMore: false, loading: false, initialized: false, observer: null, statusFinal: 1 },
@@ -11666,6 +11965,7 @@ function renderSheetAddressList() {
         Array.isArray(order.items) ? order.items : [],
         { onBack: reopenProfileOrderDetails, enableSwipeActions: true }
       );
+      showMobileOrderDetailsActions(order);
       
       // Проверяем, открыто ли модальное окно
       const isModal = isModalOrderDetails;
@@ -11710,6 +12010,7 @@ function renderSheetAddressList() {
           window._isViewingOrderDetails = true;
           window._showOrdersListCallback = showOrdersList;
         }
+        bindDesktopOrderDetailsFooter(order);
       }
     }
 
@@ -11848,7 +12149,56 @@ function renderSheetAddressList() {
       row.addEventListener("click", () => {
         showOrderDetails(o.id);
       });
-      return row;
+
+      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      const canRepeat = isMobile && Array.isArray(o?.items) && o.items.length > 0;
+      if (!canRepeat) return row;
+
+      const swipeContainer = document.createElement("div");
+      swipeContainer.className = "shop-favorite-swipe-container shop-order-repeat-swipe-container shop-profile-order-swipe-container";
+
+      const repeatAction = document.createElement("button");
+      repeatAction.type = "button";
+      repeatAction.className = "shop-favorite-swipe-action shop-favorite-swipe-action--add";
+      repeatAction.setAttribute("aria-label", "\u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c \u0437\u0430\u043a\u0430\u0437");
+      repeatAction.innerHTML = '<i class="fas fa-rotate-right"></i>';
+      swipeContainer.appendChild(repeatAction);
+
+      const content = document.createElement("div");
+      content.className = "shop-favorite-swipe-content";
+      swipeContainer.appendChild(content);
+      content.appendChild(row);
+
+      const repeatOrder = async () => {
+        if (repeatAction.disabled) return false;
+        repeatAction.disabled = true;
+        try {
+          return await repeatOrderItemsToCart(Array.isArray(o?.items) ? o.items : []);
+        } finally {
+          repeatAction.disabled = false;
+        }
+      };
+
+      repeatAction.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        await repeatOrder();
+        const closeFn = swipeContainer.__orderSwipeClose;
+        if (typeof closeFn === "function") closeFn(true);
+      });
+
+      initRepeatOrderSwipeRow(swipeContainer, content, {
+        onAddToCart: repeatOrder,
+        onAddToFavorites: null,
+        allowAddToCart: true,
+        allowAddToFavorites: false,
+        getCurrentSwiped: () => currentProfileOrderSwipedContainer,
+        setCurrentSwiped: (next) => {
+          currentProfileOrderSwipedContainer = next || null;
+        },
+      });
+
+      return swipeContainer;
     }
 
     function applyOrdersSummary(summary) {
@@ -12552,6 +12902,7 @@ function setActiveNav(key) {
   if (key !== "menu" && elMobileProductActions) {
     elMobileProductActions.classList.add("hidden");
   }
+  if (key !== "profile") hideMobileOrderDetailsActions();
   
   // Обновляем бейдж активных заказов при смене вкладки
   if (typeof window.updateActiveOrdersBadge === "function") {
@@ -13497,14 +13848,22 @@ function setBottomNavActive(tab) {
     title.textContent = "Ваш заказ:";
     wrap.appendChild(title);
 
-    // Поля имя и телефон только для неавторизованных
+    const isPlaceholderCustomerName = (rawName) => {
+      const value = str(rawName || "").trim().toLowerCase();
+      return value === "клиент";
+    };
+    // Имя обязательно для новых клиентов после входа, даже если пользователь уже авторизован.
+    const needsNameCompletion = !!me && (
+      !str(me?.name || "").trim() || isPlaceholderCustomerName(me?.name)
+    );
+    // Поля имя и телефон для неавторизованных; для авторизованных без имени — только имя.
     let name = { value: me ? str(me.name || "") : "" };
     let phone = { value: me ? (me.phone || "") : "" };
 
-    if (!me) {
+    if (!me || needsNameCompletion) {
       const emptyNote = document.createElement("div");
       emptyNote.className = "shop-checkout-note muted";
-      emptyNote.textContent = "Поля обязательные: имя и телефон.";
+      emptyNote.textContent = !me ? "Поля обязательные: имя и телефон." : "Укажите имя для оформления заказа.";
       wrap.appendChild(emptyNote);
 
       const nameRow = document.createElement("div");
@@ -13517,28 +13876,38 @@ function setBottomNavActive(tab) {
       const nameInput = document.createElement("input");
       nameInput.className = "control shop-checkout-name";
       nameInput.type = "text";
-      nameInput.value = draft.customer_name || "";
+      const meName = str(me?.name || "");
+      const draftName = str(draft.customer_name || "");
+      nameInput.value = isPlaceholderCustomerName(draftName)
+        ? ""
+        : (draftName || (isPlaceholderCustomerName(meName) ? "" : meName));
+      nameInput.addEventListener("input", () => {
+        if (str(nameInput.value).trim()) {
+          nameInput.classList.remove("is-invalid");
+        }
+      });
       nameWrap.appendChild(nameLabel);
       nameWrap.appendChild(nameInput);
       name = nameInput;
 
-      const phoneWrap = document.createElement("div");
-      const phoneLabel = document.createElement("label");
-      phoneLabel.className = "field-label";
-      phoneLabel.textContent = "Телефон";
-      const phoneInput = document.createElement("input");
-      phoneInput.className = "control shop-checkout-phone";
-      phoneInput.type = "tel";
-      phoneInput.placeholder = "+7 (999) 000-00-00";
-      phoneInput.value = draft.customer_phone || "";
-      phoneInput.addEventListener("input", () => enforcePhonePrefix(phoneInput));
-      phoneInput.addEventListener("focus", () => enforcePhonePrefix(phoneInput));
-      phoneWrap.appendChild(phoneLabel);
-      phoneWrap.appendChild(phoneInput);
-      phone = phoneInput;
-
       nameRow.appendChild(nameWrap);
-      nameRow.appendChild(phoneWrap);
+      if (!me) {
+        const phoneWrap = document.createElement("div");
+        const phoneLabel = document.createElement("label");
+        phoneLabel.className = "field-label";
+        phoneLabel.textContent = "Телефон";
+        const phoneInput = document.createElement("input");
+        phoneInput.className = "control shop-checkout-phone";
+        phoneInput.type = "tel";
+        phoneInput.placeholder = "+7 (999) 000-00-00";
+        phoneInput.value = draft.customer_phone || "";
+        phoneInput.addEventListener("input", () => enforcePhonePrefix(phoneInput));
+        phoneInput.addEventListener("focus", () => enforcePhonePrefix(phoneInput));
+        phoneWrap.appendChild(phoneLabel);
+        phoneWrap.appendChild(phoneInput);
+        phone = phoneInput;
+        nameRow.appendChild(phoneWrap);
+      }
       wrap.appendChild(nameRow);
     }
 
@@ -14790,12 +15159,19 @@ function setBottomNavActive(tab) {
 
       const isAuthed = !!(getCustomerToken() && me);
 
-      if (!payload.customer_name) {
-        if (isAuthed) payload.customer_name = "Клиент";
-        else {
-          alert("Введите имя");
-          return;
+      if (!payload.customer_name || isPlaceholderCustomerName(payload.customer_name)) {
+        if (typeof showToast === "function") showToast("Введите имя");
+        if (name && typeof name.classList?.add === "function") {
+          name.classList.add("is-invalid");
         }
+        if (name && typeof name.focus === "function") {
+          name.focus();
+          if (typeof name.select === "function") name.select();
+          if (typeof name.scrollIntoView === "function") {
+            name.scrollIntoView({ block: "center", behavior: "smooth" });
+          }
+        }
+        return;
       }
 
       if (!isAuthed) {
@@ -14836,6 +15212,14 @@ function setBottomNavActive(tab) {
       }
 
       setCheckoutSubmitting(true);
+
+      if (isAuthed && needsNameCompletion) {
+        try {
+          await apiJson("/api/public/me", { method: "PUT", body: { name: payload.customer_name } });
+        } catch (e) {
+          console.warn("Failed to persist customer name before checkout submit:", e);
+        }
+      }
 
       
 

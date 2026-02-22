@@ -260,6 +260,10 @@
   const elMobileDeliveryProgressBar = document.querySelector(".shop-mobile-delivery-progress-bar");
   const elMobileCheckoutBackBtn = $("#shopMobileCheckoutBackBtn");
   const elMobileCheckoutSubmitBtn = $("#shopMobileCheckoutSubmitBtn");
+  const elMobileOrderDetailsActions = $("#shopMobileOrderDetailsActions");
+  const elMobileOrderRepeatBtn = $("#shopMobileOrderRepeatBtn");
+  const elMobileOrderTotalBtn = $("#shopMobileOrderTotalBtn");
+  const elMobileOrderTotalValue = $("#shopMobileOrderTotalValue");
   const elMobileAddressActions = $("#shopMobileAddressActions");
   const elMobileAddressSaveBtn = $("#shopMobileAddressSaveBtn");
   const elMobileAddressCancelBtn = $("#shopMobileAddressCancelBtn");
@@ -280,6 +284,10 @@
   const elDesktopDeliveryProgressFill = $("#shopCartDeliveryProgressFill");
   const elDesktopDeliveryProgressLabel = $("#shopCartDeliveryProgressLabel");
   const elCheckoutFooterActions = $("#shopCheckoutFooterActions");
+  const elOrderDetailsFooterActions = $("#shopOrderDetailsFooterActions");
+  const elOrderDetailsRepeatBtn = $("#shopOrderDetailsRepeatBtn");
+  const elOrderDetailsTotalBtn = $("#shopOrderDetailsTotalBtn");
+  const elOrderDetailsTotalValue = $("#shopOrderDetailsTotalValue");
   const elCheckoutBtn = $("#shopCheckoutBtn");
   const elCartClearBtn = $("#shopCartClearBtn");
   const elCheckoutBackBtn = $("#shopCheckoutBackBtn");
@@ -4043,6 +4051,10 @@ function setSheetHeaderMode(
     elCartFooter.classList.toggle("hidden", isHidden);
     if (elCartFooterActions) elCartFooterActions.classList.toggle("hidden", mode !== "cart");
     if (elCheckoutFooterActions) elCheckoutFooterActions.classList.toggle("hidden", mode !== "checkout");
+    if (elOrderDetailsFooterActions) elOrderDetailsFooterActions.classList.toggle("hidden", mode !== "order-details");
+    if (elDesktopDeliveryProgressWrap && mode === "order-details") {
+      elDesktopDeliveryProgressWrap.classList.add("hidden");
+    }
   }
 
   function applyTheme(nextTheme) {
@@ -4189,6 +4201,7 @@ function showAddressListView(backMode = "cart", opts = {}) {
   elAddressContent.classList.remove("hidden");
   elAddressListView.classList.remove("hidden");
   elAddressFormView.classList.add("hidden");
+  if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
 
   setCartHeader({
     title: "",
@@ -4251,6 +4264,7 @@ async function showAddressFormView(prefill, editingId, backMode) {
   elAddressContent.classList.remove("hidden");
   elAddressFormView.classList.remove("hidden");
   elAddressListView.classList.add("hidden");
+  if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
 
   const line = getSelectedAddressLine();
   const t = line || "Укажите адрес";
@@ -4276,6 +4290,7 @@ async function showAddressFormView(prefill, editingId, backMode) {
 }
 
 function showPickupListView(backMode = "checkout") {
+  if (elDesktopDeliveryProgressWrap) elDesktopDeliveryProgressWrap.classList.add("hidden");
   showAddressListView(backMode, { preferredMode: "pickup" });
 }
 
@@ -4429,6 +4444,21 @@ function showProductView() {
     const originalHtml = btn.innerHTML;
     const originalTitle = btn.title || "";
     let timer = null;
+    const mobileCheckoutLabel = "\u041E\u0444\u043E\u0440\u043C\u0438\u0442\u044C";
+
+    const setMobileCheckoutCompact = (compact) => {
+      if (!elMobileCheckoutBtn || !elMobileCartTotal) return;
+      if (compact) {
+        elMobileCheckoutBtn.dataset.compactSumOnly = "1";
+        elMobileCheckoutBtn.textContent = "";
+        elMobileCheckoutBtn.appendChild(elMobileCartTotal);
+        return;
+      }
+      if (elMobileCheckoutBtn.dataset.compactSumOnly !== "1") return;
+      delete elMobileCheckoutBtn.dataset.compactSumOnly;
+      elMobileCheckoutBtn.textContent = `${mobileCheckoutLabel} \u00B7 `;
+      elMobileCheckoutBtn.appendChild(elMobileCartTotal);
+    };
 
     const reset = () => {
       btn.classList.remove("is-confirm");
@@ -5542,6 +5572,32 @@ async function initAddresses() {
 
     if (elCatChipsWrap) elCatChipsWrap.classList.remove("hidden");
     scrollChipsToCategory(state.activeCategoryId);
+    bindCategoryChipsWheelScroll();
+  }
+
+  function bindCategoryChipsWheelScroll() {
+    if (!elCatChips || elCatChips.dataset.wheelBound === "1") return;
+    const tabletMq = window.matchMedia("(min-width: 769px) and (max-width: 1199px)");
+    const onWheel = (event) => {
+      if (!tabletMq.matches) return;
+      const scroller = elCatChips;
+      const maxScrollLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+      if (maxScrollLeft <= 0) return;
+
+      const deltaX = Number(event.deltaX || 0);
+      const deltaY = Number(event.deltaY || 0);
+      const primaryDelta = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
+      if (!primaryDelta) return;
+
+      const current = scroller.scrollLeft || 0;
+      const next = Math.max(0, Math.min(maxScrollLeft, current + primaryDelta));
+      if (Math.abs(next - current) < 0.5) return;
+
+      event.preventDefault();
+      scroller.scrollLeft = next;
+    };
+    elCatChips.addEventListener("wheel", onWheel, { passive: false });
+    elCatChips.dataset.wheelBound = "1";
   }
 
   // -----------------------------
@@ -7422,6 +7478,21 @@ function updateCartBadge() {
     if (!btn) return;
     let armed = false;
     let timer = null;
+    const mobileCheckoutLabel = "\u041E\u0444\u043E\u0440\u043C\u0438\u0442\u044C";
+
+    const setMobileCheckoutCompact = (compact) => {
+      if (!elMobileCheckoutBtn || !elMobileCartTotal) return;
+      if (compact) {
+        elMobileCheckoutBtn.dataset.compactSumOnly = "1";
+        elMobileCheckoutBtn.textContent = "";
+        elMobileCheckoutBtn.appendChild(elMobileCartTotal);
+        return;
+      }
+      if (elMobileCheckoutBtn.dataset.compactSumOnly !== "1") return;
+      delete elMobileCheckoutBtn.dataset.compactSumOnly;
+      elMobileCheckoutBtn.textContent = `${mobileCheckoutLabel} \u00B7 `;
+      elMobileCheckoutBtn.appendChild(elMobileCartTotal);
+    };
 
     const reset = () => {
       armed = false;
@@ -7431,6 +7502,7 @@ function updateCartBadge() {
       btn.setAttribute("aria-label", "Очистить корзину");
       if (timer) clearTimeout(timer);
       timer = null;
+      setMobileCheckoutCompact(false);
     };
 
     const arm = () => {
@@ -7441,6 +7513,7 @@ function updateCartBadge() {
       btn.setAttribute("aria-label", "Очистить корзину");
       if (timer) clearTimeout(timer);
       timer = setTimeout(reset, 6500);
+      setMobileCheckoutCompact(true);
     };
 
     btn.addEventListener("click", (e) => {

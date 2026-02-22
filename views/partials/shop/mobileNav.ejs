@@ -35,6 +35,18 @@
   </div>
 
   <!-- Ботомщит активного заказа (показывается когда есть активный заказ) -->
+  <div class="shop-mobile-order-details-actions hidden" id="shopMobileOrderDetailsActions">
+    <div class="shop-mobile-order-details-actions-row">
+      <button class="shop-mobile-order-repeat-btn" id="shopMobileOrderRepeatBtn" type="button" aria-label="Повторить заказ">
+        <i class="fas fa-rotate-right" aria-hidden="true"></i>
+        <span class="shop-mobile-order-repeat-text">Повторить заказ</span>
+      </button>
+      <button class="shop-checkout-btn shop-mobile-order-total-btn" id="shopMobileOrderTotalBtn" type="button">
+        <span class="shop-checkout-total" id="shopMobileOrderTotalValue">0 ₽</span>
+      </button>
+    </div>
+  </div>
+
   <div class="shop-mobile-address-actions hidden" id="shopMobileAddressActions">
     <button class="shop-checkout-btn shop-mobile-address-save" id="shopMobileAddressSaveBtn" type="button">Сохранить</button>
     <button class="shop-mobile-address-cancel" id="shopMobileAddressCancelBtn" type="button">Отмена</button>
