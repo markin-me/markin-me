@@ -86,6 +86,8 @@
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
   const CHAT_THREAD_WAIT_TIMEOUT_MS = 20000;
   const CHAT_THREAD_WAIT_RETRY_MS = 1200;
+  const CHAT_THREAD_PAGE_SIZE = 60;
+  const CHAT_THREAD_PAGE_MAX_SIZE = 200;
   const CHAT_AUTOSCROLL_MS = 170;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
   const CHAT_TYPING_HEARTBEAT_MS = 1800;
@@ -168,6 +170,9 @@
   let profileMergeInFlight = false;
   let feedScrollRaf = 0;
   let sharedPullInFlight = false;
+  let sharedHistoryHasMore = false;
+  let sharedHistoryNextBeforeId = null;
+  let sharedHistoryLoading = false;
   let reactionMessageId = "";
   let contextMenuMessageId = "";
   let contextMenuEl = null;
@@ -1618,6 +1623,9 @@
     sharedThreadUpdatedAt = "";
     sharedThreadMutationVersion = 0;
     hasLoadedSharedThreadOnce = false;
+    sharedHistoryHasMore = false;
+    sharedHistoryNextBeforeId = null;
+    sharedHistoryLoading = false;
     pendingFeedRestoreState = null;
     sharedPullInFlight = false;
     sharedMutationQueue = Promise.resolve();
@@ -2066,10 +2074,104 @@
     };
   }
 
+  function mergeSharedEntryLists(olderEntries, newerEntries) {
+    const out = [];
+    const indexById = new Map();
+
+    const appendEntry = function (entry, replaceExisting) {
+      if (!entry || typeof entry !== "object") return;
+      const id = String(entry.id || "").trim();
+      if (!id) return;
+      if (indexById.has(id)) {
+        if (replaceExisting === true) {
+          out[indexById.get(id)] = entry;
+        }
+        return;
+      }
+      indexById.set(id, out.length);
+      out.push(entry);
+    };
+
+    (Array.isArray(olderEntries) ? olderEntries : []).forEach(function (entry) {
+      appendEntry(entry, false);
+    });
+    (Array.isArray(newerEntries) ? newerEntries : []).forEach(function (entry) {
+      appendEntry(entry, true);
+    });
+
+    return out;
+  }
+
+  function updateSharedHistoryStateFromPage(rawPage) {
+    if (!rawPage || typeof rawPage !== "object") return;
+    if (Object.prototype.hasOwnProperty.call(rawPage, "hasMore")) {
+      sharedHistoryHasMore = rawPage.hasMore === true;
+    }
+    if (Object.prototype.hasOwnProperty.call(rawPage, "nextBeforeId")) {
+      const nextBeforeIdRaw = Number(rawPage.nextBeforeId || 0);
+      sharedHistoryNextBeforeId = Number.isFinite(nextBeforeIdRaw) && nextBeforeIdRaw > 0
+        ? Math.trunc(nextBeforeIdRaw)
+        : null;
+    }
+  }
+
+  function toSharedThreadPageLimit(rawValue) {
+    const n = Number(rawValue);
+    if (!Number.isFinite(n) || n <= 0) return CHAT_THREAD_PAGE_SIZE;
+    return Math.max(1, Math.min(CHAT_THREAD_PAGE_MAX_SIZE, Math.trunc(n)));
+  }
+
+  async function fetchSharedThreadPageFromServer(options) {
+    const requestClientId = getActiveChatClientId();
+    if (!requestClientId) return null;
+    const opts = options || {};
+    const limit = toSharedThreadPageLimit(opts.limit);
+    const beforeIdRaw = Number(opts.beforeId || 0);
+    const beforeId = Number.isFinite(beforeIdRaw) && beforeIdRaw > 0 ? Math.trunc(beforeIdRaw) : 0;
+    const qs = new URLSearchParams({
+      _ts: String(Date.now()),
+      limit: String(limit),
+    });
+    if (beforeId > 0) qs.set("before_id", String(beforeId));
+
+    const json = await chatApiJson(
+      CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId) + "?" + qs.toString()
+    );
+    if (requestClientId !== getActiveChatClientId()) return null;
+
+    const payload = json && json.data ? json.data : {};
+    const page = payload.page && typeof payload.page === "object" ? payload.page : {};
+    const nextBeforeIdRaw = Number(page.next_before_id || payload.next_before_id || 0);
+
+    return {
+      clientId: requestClientId,
+      updatedAt: String(payload.updated_at || ""),
+      meta: sanitizeSharedThreadMeta(payload.meta),
+      messages: Array.isArray(payload.messages) ? payload.messages : [],
+      page: {
+        hasMore: page.has_more === true || payload.has_more === true,
+        nextBeforeId: Number.isFinite(nextBeforeIdRaw) && nextBeforeIdRaw > 0
+          ? Math.trunc(nextBeforeIdRaw)
+          : null,
+      },
+    };
+  }
+
   function applySharedRemoteEntries(mappedEntries, updatedAt, options) {
     const opts = options || {};
-    const entries = Array.isArray(mappedEntries) ? mappedEntries : [];
+    const appendOlder = opts.appendOlder === true;
+    const preserveHistory = opts.preserveHistory === true && !appendOlder;
+    const incomingEntries = Array.isArray(mappedEntries) ? mappedEntries : [];
+    const currentEntries = Array.isArray(liveEntries) ? liveEntries : [];
+    const entries = appendOlder
+      ? mergeSharedEntryLists(incomingEntries, currentEntries)
+      : preserveHistory
+        ? mergeSharedEntryLists(currentEntries, incomingEntries)
+        : incomingEntries;
     const remoteUpdatedAt = String(updatedAt || "");
+    if (appendOlder || !preserveHistory) {
+      updateSharedHistoryStateFromPage(opts.page);
+    }
 
     pruneLocalHiddenMessageIds(baseEntries.concat(entries));
     const readReceiptState = applyReadReceiptsToAgentEntries(entries);
@@ -2078,7 +2180,7 @@
       ? readReceiptState.readIds
       : [];
     renderUnreadBadge(entries);
-    const sameThread = stableSerialize(liveEntries) === stableSerialize(entries);
+    const sameThread = stableSerialize(currentEntries) === stableSerialize(entries);
     const hasPendingLocalSave = sharedMutationPendingCount > 0;
     const localChangedDuringRequest = opts.localChangedDuringRequest === true;
     const remoteIsNewer = compareIsoDates(remoteUpdatedAt, sharedThreadUpdatedAt) > 0;
@@ -2102,16 +2204,18 @@
         .map(function (entry) { return String(entry.id || ""); })
         .filter(Boolean)
     );
-    const appendedAgentMessageIds = entries
-      .filter(function (entry) {
-        return entry && entry.type === "message" && entry.role === "agent";
-      })
-      .map(function (entry) {
-        return String(entry.id || "");
-      })
-      .filter(function (id) {
-        return id && !previousMessageIds.has(id);
-      });
+    const appendedAgentMessageIds = appendOlder || opts.skipIncomingNotify === true
+      ? []
+      : entries
+        .filter(function (entry) {
+          return entry && entry.type === "message" && entry.role === "agent";
+        })
+        .map(function (entry) {
+          return String(entry.id || "");
+        })
+        .filter(function (id) {
+          return id && !previousMessageIds.has(id);
+        });
     const appendedAgentIdSet = new Set(appendedAgentMessageIds);
     const latestIncomingAgentEntry = appendedAgentMessageIds.length
       ? entries
@@ -2162,28 +2266,67 @@
   async function pullSharedThreadFromServer(options) {
     if (profileMergeInFlight) return false;
     if (sharedPullInFlight) return false;
+    if (sharedHistoryLoading) return false;
     const localMutationVersionBeforePull = sharedThreadMutationVersion;
     const requestClientId = getActiveChatClientId();
     if (!requestClientId) return false;
     sharedPullInFlight = true;
     try {
       const opts = options || {};
-      const json = await chatApiJson(
-        CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId) + "?_ts=" + Date.now()
-      );
-      if (requestClientId !== getActiveChatClientId()) return false;
-      const payload = json && json.data ? json.data : {};
-      const updatedAt = String(payload.updated_at || "");
-      sharedThreadMeta = sanitizeSharedThreadMeta(payload.meta);
+      const snapshot = await fetchSharedThreadPageFromServer({
+        limit: opts.limit,
+      });
+      if (!snapshot || requestClientId !== getActiveChatClientId()) return false;
+      const updatedAt = String(snapshot.updatedAt || "");
+      sharedThreadMeta = sanitizeSharedThreadMeta(snapshot.meta);
 
-      const remoteMessages = Array.isArray(payload.messages) ? payload.messages : [];
+      const remoteMessages = Array.isArray(snapshot.messages) ? snapshot.messages : [];
       const mappedEntries = remoteMessages
         .map(mapSharedMessageToEntry)
         .filter(Boolean);
       const localChangedDuringRequest = sharedThreadMutationVersion !== localMutationVersionBeforePull;
-      return applySharedRemoteEntries(mappedEntries, updatedAt, { ...opts, localChangedDuringRequest });
+      const preserveHistory = opts.preserveHistory !== false && Array.isArray(liveEntries) && liveEntries.length > 0;
+      return applySharedRemoteEntries(mappedEntries, updatedAt, {
+        ...opts,
+        localChangedDuringRequest,
+        preserveHistory,
+        page: snapshot.page,
+      });
     } finally {
       sharedPullInFlight = false;
+    }
+  }
+
+  async function loadOlderSharedMessagesFromServer(options) {
+    if (profileMergeInFlight) return false;
+    if (sharedPullInFlight) return false;
+    if (sharedHistoryLoading) return false;
+    if (sharedHistoryHasMore !== true) return false;
+
+    const beforeId = Number(sharedHistoryNextBeforeId || 0);
+    if (!Number.isFinite(beforeId) || beforeId <= 0) return false;
+
+    sharedHistoryLoading = true;
+    try {
+      const opts = options || {};
+      const snapshot = await fetchSharedThreadPageFromServer({
+        limit: opts.limit,
+        beforeId: beforeId,
+      });
+      if (!snapshot) return false;
+      const mappedEntries = (Array.isArray(snapshot.messages) ? snapshot.messages : [])
+        .map(mapSharedMessageToEntry)
+        .filter(Boolean);
+      sharedThreadMeta = sanitizeSharedThreadMeta(snapshot.meta);
+      return applySharedRemoteEntries(mappedEntries, String(snapshot.updatedAt || ""), {
+        ...opts,
+        appendOlder: true,
+        force: true,
+        skipIncomingNotify: true,
+        page: snapshot.page,
+      });
+    } finally {
+      sharedHistoryLoading = false;
     }
   }
 
@@ -2983,6 +3126,9 @@
     selectedMessageIds.clear();
     liveEntries = [];
     hasLoadedSharedThreadOnce = false;
+    sharedHistoryHasMore = false;
+    sharedHistoryNextBeforeId = null;
+    sharedHistoryLoading = false;
     visibleStart = baseEntries.length;
     loadOlderMessages(INITIAL_BATCH, false);
     renderThread();
@@ -4518,22 +4664,43 @@
   }
 
   function loadOlderMessages(batchSize, keepScrollPosition) {
-    if (isLoadingOlder || visibleStart === 0) return;
+    if (isLoadingOlder) return;
+
+    if (visibleStart > 0) {
+      isLoadingOlder = true;
+      const prevHeight = feed.scrollHeight;
+      const prevTop = feed.scrollTop;
+      const nextStart = Math.max(0, visibleStart - batchSize);
+      visibleStart = nextStart;
+      renderThread();
+      if (keepScrollPosition) {
+        const nextHeight = feed.scrollHeight;
+        feed.scrollTop = prevTop + (nextHeight - prevHeight);
+      }
+      isLoadingOlder = false;
+      return;
+    }
+
+    if (sharedHistoryHasMore !== true || sharedHistoryLoading) return;
 
     isLoadingOlder = true;
     const prevHeight = feed.scrollHeight;
     const prevTop = feed.scrollTop;
-
-    const nextStart = Math.max(0, visibleStart - batchSize);
-    visibleStart = nextStart;
-    renderThread();
-
-    if (keepScrollPosition) {
-      const nextHeight = feed.scrollHeight;
-      feed.scrollTop = prevTop + (nextHeight - prevHeight);
-    }
-
-    isLoadingOlder = false;
+    loadOlderSharedMessagesFromServer({
+      limit: CHAT_THREAD_PAGE_SIZE,
+      preserveHistory: true,
+    })
+      .then(function (changed) {
+        if (!changed || keepScrollPosition !== true) return;
+        const nextHeight = feed.scrollHeight;
+        feed.scrollTop = Math.max(0, prevTop + (nextHeight - prevHeight));
+        saveFeedScrollPosition({ force: true });
+        updateScrollDownButton();
+      })
+      .catch(function () {})
+      .finally(function () {
+        isLoadingOlder = false;
+      });
   }
 
   function isMobileChatViewport() {
