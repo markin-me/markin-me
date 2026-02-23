@@ -18,6 +18,7 @@ const {
   applyStockDeductionForOrderItems,
   checkStockAvailabilityForOrderItems,
 } = require('../helpers/orderStock');
+const TELEGRAM_API = 'https://api.telegram.org/bot';
 
 module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
@@ -80,6 +81,39 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     );
     if (!rows.length) return false;
     return Number(rows[0].max_login_enabled || 0) === 1;
+  }
+
+  async function isTenantTgLoginEnabled(tenantId) {
+    const [rows] = await db.query(
+      'SELECT tg_login_enabled FROM ten_tenants WHERE id=? LIMIT 1',
+      [tenantId]
+    );
+    if (!rows.length) return false;
+    return Number(rows[0].tg_login_enabled || 0) === 1;
+  }
+
+  async function sendTenantTelegramText({ tenantId, telegramUserId, text }) {
+    const [rows] = await db.query(
+      'SELECT telegram_bot_token FROM ten_tenants WHERE id=? LIMIT 1',
+      [tenantId]
+    );
+    const botToken = String(rows[0]?.telegram_bot_token || '').trim();
+    if (!botToken) throw new Error('TG_BOT_NOT_CONFIGURED');
+    if (!telegramUserId) throw new Error('TG_USER_NOT_LINKED');
+
+    const res = await fetch(`${TELEGRAM_API}${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: String(telegramUserId),
+        text: String(text || ''),
+      }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.ok === false) {
+      throw new Error(`TG_SEND_FAILED:${data?.description || `HTTP_${res.status}`}`);
+    }
+    return true;
   }
 
   function attachProductThumbs(row) {
@@ -324,8 +358,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   }
 
   /**
-   * Минимальная возможная цена товара с учётом вариантов (порций/объёмов).
-   * Если у товара есть варианты — перебираем все значения и возвращаем минимум; иначе — базовую цену.
+   * РњРёРЅРёРјР°Р»СЊРЅР°СЏ РІРѕР·РјРѕР¶РЅР°СЏ С†РµРЅР° С‚РѕРІР°СЂР° СЃ СѓС‡С‘С‚РѕРј РІР°СЂРёР°РЅС‚РѕРІ (РїРѕСЂС†РёР№/РѕР±СЉС‘РјРѕРІ).
+   * Р•СЃР»Рё Сѓ С‚РѕРІР°СЂР° РµСЃС‚СЊ РІР°СЂРёР°РЅС‚С‹ вЂ” РїРµСЂРµР±РёСЂР°РµРј РІСЃРµ Р·РЅР°С‡РµРЅРёСЏ Рё РІРѕР·РІСЂР°С‰Р°РµРј РјРёРЅРёРјСѓРј; РёРЅР°С‡Рµ вЂ” Р±Р°Р·РѕРІСѓСЋ С†РµРЅСѓ.
    */
   async function computeMinPriceForProduct(product, variant, getConversionFactor, roundPrice) {
     const basePrice = Number(product.price || 0);
@@ -446,8 +480,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   }
 
   /**
-   * Обогатить товары информацией о скидках
-   * @param {Object[]} rows - массив товаров
+   * РћР±РѕРіР°С‚РёС‚СЊ С‚РѕРІР°СЂС‹ РёРЅС„РѕСЂРјР°С†РёРµР№ Рѕ СЃРєРёРґРєР°С…
+   * @param {Object[]} rows - РјР°СЃСЃРёРІ С‚РѕРІР°СЂРѕРІ
    * @param {number} tenantId
    * @param {number} storeId
    */
@@ -457,7 +491,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     const productIds = rows.map(r => Number(r.id)).filter(Boolean);
     if (!productIds.length) return;
 
-    // Получаем категории для каждого товара
+    // РџРѕР»СѓС‡Р°РµРј РєР°С‚РµРіРѕСЂРёРё РґР»СЏ РєР°Р¶РґРѕРіРѕ С‚РѕРІР°СЂР°
     const placeholders = productIds.map(() => '?').join(',');
     const [catRows] = await db.query(
       `SELECT product_id, category_id FROM prod_product_categories
@@ -472,7 +506,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       catByProduct.get(pid).push(Number(r.category_id));
     }
 
-    // Получаем все активные скидки на товары и категории
+    // РџРѕР»СѓС‡Р°РµРј РІСЃРµ Р°РєС‚РёРІРЅС‹Рµ СЃРєРёРґРєРё РЅР° С‚РѕРІР°СЂС‹ Рё РєР°С‚РµРіРѕСЂРёРё
     const [discountRows] = await db.query(
       `SELECT d.*, dp.product_id, dp.category_id, dp.combo_id
        FROM mkt_discounts d
@@ -482,7 +516,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       [tenantId, storeId, ...productIds]
     );
 
-    // Группируем скидки по товарам и категориям
+    // Р“СЂСѓРїРїРёСЂСѓРµРј СЃРєРёРґРєРё РїРѕ С‚РѕРІР°СЂР°Рј Рё РєР°С‚РµРіРѕСЂРёСЏРј
     const discountsByProduct = new Map();
     const discountsByCategory = new Map();
 
@@ -499,13 +533,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
     }
 
-    // Применяем скидки к каждому товару
+    // РџСЂРёРјРµРЅСЏРµРј СЃРєРёРґРєРё Рє РєР°Р¶РґРѕРјСѓ С‚РѕРІР°СЂСѓ
     for (const row of rows) {
       const pid = Number(row.id);
       const discounts = [];
       const seenIds = new Set();
 
-      // Прямые скидки на товар
+      // РџСЂСЏРјС‹Рµ СЃРєРёРґРєРё РЅР° С‚РѕРІР°СЂ
       const directDiscounts = discountsByProduct.get(pid) || [];
       for (const d of directDiscounts) {
         if (!seenIds.has(d.id) && discountHelpers.isDiscountActive(d)) {
@@ -514,7 +548,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         }
       }
 
-      // Скидки по категориям товара
+      // РЎРєРёРґРєРё РїРѕ РєР°С‚РµРіРѕСЂРёСЏРј С‚РѕРІР°СЂР°
       const cats = catByProduct.get(pid) || [];
       for (const catId of cats) {
         const catDiscounts = discountsByCategory.get(catId) || [];
@@ -527,7 +561,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
 
       if (discounts.length > 0) {
-        // Сортируем по приоритету
+        // РЎРѕСЂС‚РёСЂСѓРµРј РїРѕ РїСЂРёРѕСЂРёС‚РµС‚Сѓ
         discounts.sort((a, b) => (b.priority || 0) - (a.priority || 0));
         const best = discounts[0];
         const price = Number(row.display_price || row.price || 0);
@@ -580,7 +614,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   }
 
   function makeToken32() {
-    // session/public id – 32 hex or uuid without dashes
+    // session/public id вЂ“ 32 hex or uuid without dashes
     if (crypto.randomUUID) return crypto.randomUUID().replaceAll('-', '');
     return crypto.randomBytes(16).toString('hex');
   }
@@ -593,7 +627,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   }
 
   async function getActiveStatusIdDefault(tenantId, storeId) {
-    // пробуем "new", если нет — первый активный по sort
+    // РїСЂРѕР±СѓРµРј "new", РµСЃР»Рё РЅРµС‚ вЂ” РїРµСЂРІС‹Р№ Р°РєС‚РёРІРЅС‹Р№ РїРѕ sort
     const [r1] = await db.query(
       `SELECT id FROM order_statuses WHERE tenant_id=? AND store_id=? AND code='new' AND is_active=1 LIMIT 1`,
       [tenantId, storeId]
@@ -964,8 +998,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       return {
         type: 'combo',
         combo_id: comboId,
-        combo_title: str(rawItem.combo_title || rawItem.name || '').trim() || 'Комбо',
-        name: str(rawItem.name || rawItem.combo_title || '').trim() || 'Комбо',
+        combo_title: str(rawItem.combo_title || rawItem.name || '').trim() || 'РљРѕРјР±Рѕ',
+        name: str(rawItem.name || rawItem.combo_title || '').trim() || 'РљРѕРјР±Рѕ',
         qty,
         price: Number(unitPrice || 0),
         line_total: Number(lineTotal || 0),
@@ -1028,7 +1062,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return {
       type: 'product',
       product_id: productId,
-      name: str(rawItem.name || rawItem.product_name || '').trim() || 'Товар',
+      name: str(rawItem.name || rawItem.product_name || '').trim() || 'РўРѕРІР°СЂ',
       qty,
       price: Number(unitPrice || 0),
       old_price: Number(rawItem.old_price || 0),
@@ -1131,7 +1165,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         itemType: 'combo',
         productId: null,
         comboId: toPositiveIntOrNull(snapshot.combo_id),
-        title: str(snapshot.combo_title || snapshot.name || '').trim() || 'Комбо',
+        title: str(snapshot.combo_title || snapshot.name || '').trim() || 'РљРѕРјР±Рѕ',
         photo: comboPhotos[0] || fallbackPhoto,
       };
     }
@@ -1140,7 +1174,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       itemType: 'product',
       productId: toPositiveIntOrNull(snapshot.product_id),
       comboId: null,
-      title: str(snapshot.name || '').trim() || 'Товар',
+      title: str(snapshot.name || '').trim() || 'РўРѕРІР°СЂ',
       photo: photos[0] || null,
     };
   }
@@ -1179,7 +1213,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         return res.status(400).json({ ok: false, error: 'BIRTHDAY_REQUIRED' });
       }
 
-      // ищем клиента
+      // РёС‰РµРј РєР»РёРµРЅС‚Р°
       const [ex] = await db.query(
         `SELECT id, name, phone, DATE_FORMAT(birthday, '%Y-%m-%d') AS birthday, is_active
          FROM cust_customers
@@ -1191,12 +1225,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       let customerId = null;
 
       if (!ex.length) {
-        // создаём нового клиента
+        // СЃРѕР·РґР°С‘Рј РЅРѕРІРѕРіРѕ РєР»РёРµРЅС‚Р°
         const [ins] = await db.query(
           `INSERT INTO cust_customers
            (tenant_id, name, phone, birthday, is_active, registration_date)
            VALUES (?,?,?,?,1, CURDATE())`,
-          [tenantId, 'Клиент', phone, birthday]
+          [tenantId, 'РљР»РёРµРЅС‚', phone, birthday]
         );
         customerId = Number(ins.insertId);
       } else {
@@ -1207,12 +1241,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
         customerId = Number(c.id);
 
-        // если birthday уже есть — проверяем
+        // РµСЃР»Рё birthday СѓР¶Рµ РµСЃС‚СЊ вЂ” РїСЂРѕРІРµСЂСЏРµРј
         if (c.birthday && String(c.birthday) !== String(birthday)) {
           return res.status(401).json({ ok: false, error: 'WRONG_BIRTHDAY' });
         }
 
-        // если birthday был NULL — запишем (первый вход)
+        // РµСЃР»Рё birthday Р±С‹Р» NULL вЂ” Р·Р°РїРёС€РµРј (РїРµСЂРІС‹Р№ РІС…РѕРґ)
         if (!c.birthday) {
           await db.query(
             `UPDATE cust_customers SET birthday=? WHERE tenant_id=? AND id=?`,
@@ -1221,10 +1255,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         }
       }
 
-      // создаём сессию
+      // СЃРѕР·РґР°С‘Рј СЃРµСЃСЃРёСЋ
       const token = makeToken32();
 
-      // срок 30 дней
+      // СЃСЂРѕРє 30 РґРЅРµР№
       await db.query(
         `INSERT INTO cust_customer_sessions
          (tenant_id, customer_id, token, expires_at, is_active)
@@ -1292,13 +1326,56 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  // POST /api/public/tg/link-token
+  // headers: x-customer-token
+  router.post('/tg/link-token', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const sessionToken = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, sessionToken);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const [rows] = await db.query(
+        'SELECT telegram_bot_username, telegram_bot_token FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+      const row = rows[0] || {};
+      const username = String(row.telegram_bot_username || '').trim().replace(/^@/, '');
+      const token = String(row.telegram_bot_token || '').trim();
+      if (!username || !token) {
+        return res.status(409).json({ ok: false, error: 'TG_BOT_NOT_CONFIGURED' });
+      }
+
+      const linkToken = makeLinkToken();
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+      await db.query(
+        `INSERT INTO cust_customer_tg_link_tokens
+         (tenant_id, customer_id, link_token, expires_at)
+         VALUES (?, ?, ?, ?)`,
+        [tenantId, Number(customer.id), linkToken, expiresAt]
+      );
+
+      const link = `https://t.me/${encodeURIComponent(username)}?start=${encodeURIComponent(linkToken)}`;
+      res.json({
+        ok: true,
+        token: linkToken,
+        link,
+        expires_at: expiresAt.toISOString(),
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   // GET /api/public/max/auth-link
   // Public link for "Login via MAX" (without existing customer session)
   router.get('/max/auth-link', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
       if (!(await isTenantMaxLoginEnabled(tenantId))) {
-        return res.status(403).json({ ok: false, error: 'MAX_LOGIN_DISABLED' });
+        return res.json({ ok: true, link: null, disabled: true });
       }
       const tenantBotId = await getTenantMaxBotId(db, tenantId);
       const tenantBotToken = await getTenantMaxBotToken(db, tenantId);
@@ -1313,10 +1390,39 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  // GET /api/public/tg/auth-link
+  // Public link for "Login via Telegram" (without existing customer session)
+  router.get('/tg/auth-link', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      if (!(await isTenantTgLoginEnabled(tenantId))) {
+        return res.json({ ok: true, link: null, disabled: true });
+      }
+
+      const [rows] = await db.query(
+        'SELECT telegram_bot_username, telegram_bot_token FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+      const row = rows[0] || {};
+      const username = String(row.telegram_bot_username || '').trim().replace(/^@/, '');
+      const token = String(row.telegram_bot_token || '').trim();
+      if (!username || !token) {
+        return res.status(409).json({ ok: false, error: 'TG_BOT_NOT_CONFIGURED' });
+      }
+
+      const link = `https://t.me/${encodeURIComponent(username)}?start=login`;
+      return res.json({ ok: true, link });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   // GET /api/public/max/finish-login?token=...
-  // One-time MAX login token exchange -> customer session + redirect to /shop
+  // One-time MAX login token exchange -> customer session + redirect to site/miniapp
   router.get('/max/finish-login', async (req, res) => {
     const loginToken = str(req.query.token);
+    const target = str(req.query.target).toLowerCase() === 'miniapp' ? 'miniapp' : 'site';
     if (!loginToken) return res.status(400).send('TOKEN_REQUIRED');
 
     const conn = await db.getConnection();
@@ -1381,7 +1487,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       await conn.commit();
 
-      const redirectUrl = `/shop?tenant_id=${tenantId}&max_login=1`;
+      const redirectUrl = target === 'miniapp'
+        ? `/max-app?tenant_id=${tenantId}&max_login=1`
+        : `/shop?tenant_id=${tenantId}&max_login=1`;
       const html = `<!doctype html>
 <html lang="ru">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
@@ -1400,6 +1508,110 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       await conn.rollback();
       console.error('MAX_FINISH_LOGIN_ERROR:', e);
       return res.status(500).send('DB_ERROR');
+    } finally {
+      conn.release();
+    }
+  });
+
+  // GET /api/public/tg/finish-login?token=...
+  // One-time Telegram login token exchange -> customer session + redirect to site/miniapp
+  router.get('/tg/finish-login', async (req, res) => {
+    const loginToken = str(req.query.token);
+    const target = str(req.query.target).toLowerCase() === 'miniapp' ? 'miniapp' : 'site';
+    if (!loginToken) return res.status(400).send('TOKEN_REQUIRED');
+
+    const conn = await db.getConnection();
+    try {
+      const [tenantRows] = await conn.query(
+        `SELECT t.tg_login_enabled
+         FROM cust_customer_tg_login_tokens lt
+         JOIN ten_tenants t ON t.id = lt.tenant_id
+         WHERE lt.login_token=?
+         LIMIT 1`,
+        [loginToken]
+      );
+      if (!tenantRows.length || Number(tenantRows[0].tg_login_enabled || 0) !== 1) {
+        return res.status(403).send('TG_LOGIN_DISABLED');
+      }
+
+      await conn.beginTransaction();
+
+      const [rows] = await conn.query(
+        `SELECT id, tenant_id, customer_id
+         FROM cust_customer_tg_login_tokens
+         WHERE login_token=? AND used_at IS NULL AND expires_at > NOW()
+         LIMIT 1
+         FOR UPDATE`,
+        [loginToken]
+      );
+      if (!rows.length) {
+        await conn.rollback();
+        return res.status(400).send('TOKEN_INVALID_OR_EXPIRED');
+      }
+
+      const tokenRow = rows[0];
+      const tenantId = Number(tokenRow.tenant_id);
+      const customerId = Number(tokenRow.customer_id);
+
+      const [customerRows] = await conn.query(
+        `SELECT id, is_active
+         FROM cust_customers
+         WHERE tenant_id=? AND id=?
+         LIMIT 1
+         FOR UPDATE`,
+        [tenantId, customerId]
+      );
+      if (!customerRows.length || Number(customerRows[0].is_active || 0) !== 1) {
+        await conn.rollback();
+        return res.status(404).send('CUSTOMER_NOT_FOUND');
+      }
+
+      const sessionToken = makeLinkToken();
+      const sessionExpiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+
+      await conn.query(
+        `INSERT INTO cust_customer_sessions
+         (tenant_id, customer_id, token, user_agent, ip_address, is_active, expires_at)
+         VALUES (?, ?, ?, ?, ?, 1, ?)`,
+        [
+          tenantId,
+          customerId,
+          sessionToken,
+          String(req.headers['user-agent'] || '').slice(0, 500),
+          String(req.ip || req.connection?.remoteAddress || '').slice(0, 64),
+          sessionExpiresAt,
+        ]
+      );
+
+      await conn.query(
+        `UPDATE cust_customer_tg_login_tokens
+         SET used_at=NOW()
+         WHERE id=?`,
+        [Number(tokenRow.id)]
+      );
+
+      await conn.commit();
+
+      const redirectUrl = target === 'miniapp'
+        ? `/tg-app?tenant_id=${tenantId}&tg_login=1`
+        : `/shop?tenant_id=${tenantId}&tg_login=1`;
+      const html = `<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body>
+<script>
+try {
+  localStorage.setItem('shop_customer_token', ${JSON.stringify(sessionToken)});
+} catch (e) {}
+window.location.replace(${JSON.stringify(redirectUrl)});
+</script>
+</body>
+</html>`;
+      return res.set('content-type', 'text/html; charset=utf-8').send(html);
+    } catch (e) {
+      try { await conn.rollback(); } catch {}
+      console.error('TG finish login error:', e);
+      return res.status(500).send('SERVER_ERROR');
     } finally {
       conn.release();
     }
@@ -1431,6 +1643,47 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         linked: true,
         data: {
           max_user_id: rows[0].max_user_id,
+          phone: rows[0].phone,
+          linked_at: rows[0].updated_at,
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // GET /api/public/tg/link-status
+  // headers: x-customer-token
+  router.get('/tg/link-status', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const sessionToken = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, sessionToken);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const [rows] = await db.query(
+        `SELECT telegram_user_id, phone, updated_at
+         FROM cust_customers
+         WHERE tenant_id=? AND id=?
+         LIMIT 1`,
+        [tenantId, Number(customer.id)]
+      );
+
+      if (!rows.length) {
+        return res.json({ ok: true, linked: false, data: null });
+      }
+
+      const tgUserId = String(rows[0].telegram_user_id || '').trim();
+      if (!tgUserId) {
+        return res.json({ ok: true, linked: false, data: null });
+      }
+
+      return res.json({
+        ok: true,
+        linked: true,
+        data: {
+          telegram_user_id: tgUserId,
           phone: rows[0].phone,
           linked_at: rows[0].updated_at,
         },
@@ -1519,7 +1772,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
       const [rows] = await db.query(
-        `SELECT id, max_user_id
+        `SELECT id, max_user_id, telegram_user_id
          FROM cust_customers
          WHERE tenant_id=? AND id=? AND is_active=1
          LIMIT 1`,
@@ -1527,7 +1780,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       );
       const row = rows[0];
       if (!row) return res.status(404).json({ ok: false, error: 'CUSTOMER_NOT_FOUND' });
-      if (!row.max_user_id) return res.status(409).json({ ok: false, error: 'MAX_NOT_LINKED' });
 
       const code = String(Math.floor(1000 + Math.random() * 9000));
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
@@ -1539,14 +1791,37 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [code, expiresAt, tenantId, Number(customer.id)]
       );
 
-      await sendMaxMessage({
-        db,
-        tenantId,
-        maxUserId: row.max_user_id,
-        text: `Код подтверждения номера: ${code}. Срок действия: 24 часа.`,
-      });
+      const messageText = `\u041a\u043e\u0434 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u044f \u043d\u043e\u043c\u0435\u0440\u0430: ${code}. \u0421\u0440\u043e\u043a \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u044f: 24 \u0447\u0430\u0441\u0430.`;
+      let sentVia = '';
 
-      return res.json({ ok: true, data: { expires_at: expiresAt.toISOString() } });
+      try {
+        await sendTenantTelegramText({
+          tenantId,
+          telegramUserId: row.telegram_user_id,
+          text: messageText,
+        });
+        sentVia = 'telegram';
+      } catch {
+        if (!row.max_user_id) {
+          return res.status(409).json({ ok: false, error: 'TG_NOT_LINKED_AND_MAX_NOT_LINKED' });
+        }
+
+        await sendMaxMessage({
+          db,
+          tenantId,
+          maxUserId: row.max_user_id,
+          text: messageText,
+        });
+        sentVia = 'max';
+      }
+
+      return res.json({
+        ok: true,
+        data: {
+          expires_at: expiresAt.toISOString(),
+          sent_via: sentVia,
+        },
+      });
     } catch (e) {
       console.error('PHONE_VERIFY_SEND_ERROR:', e);
       return res.status(500).json({ ok: false, error: 'SEND_FAILED' });
@@ -1649,7 +1924,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId]
       );
 
-      // Для каждого филиала загружаем часы работы и проверяем статус
+      // Р”Р»СЏ РєР°Р¶РґРѕРіРѕ С„РёР»РёР°Р»Р° Р·Р°РіСЂСѓР¶Р°РµРј С‡Р°СЃС‹ СЂР°Р±РѕС‚С‹ Рё РїСЂРѕРІРµСЂСЏРµРј СЃС‚Р°С‚СѓСЃ
       const storesWithHours = await Promise.all(rows.map(async (store) => {
         const [storeHours] = await db.query(
           `SELECT day_of_week, opens_at, closes_at, is_closed
@@ -1671,7 +1946,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       res.json({ ok: true, stores: storesWithHours });
     } catch (err) {
-      console.error('Ошибка получения точек продаж:', err);
+      console.error('РћС€РёР±РєР° РїРѕР»СѓС‡РµРЅРёСЏ С‚РѕС‡РµРє РїСЂРѕРґР°Р¶:', err);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
@@ -1787,7 +2062,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         if (!file) return res.status(400).json({ ok: false, error: 'PHOTO_REQUIRED' });
 
-        // Создаём WebP-вариант аватара (оригинал остаётся как fallback)
+        // РЎРѕР·РґР°С‘Рј WebP-РІР°СЂРёР°РЅС‚ Р°РІР°С‚Р°СЂР° (РѕСЂРёРіРёРЅР°Р» РѕСЃС‚Р°С‘С‚СЃСЏ РєР°Рє fallback)
         await helpers.ensureWebpVariant(file.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'avatars', file.filename));
 
         const photoUrl = `/static/uploads/avatars/${file.filename.replace(/\.(jpe?g|png|gif)$/i, '.webp')}`;
@@ -2235,7 +2510,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
 
-      // Проверяем, что заказ принадлежит клиенту
+      // РџСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ Р·Р°РєР°Р· РїСЂРёРЅР°РґР»РµР¶РёС‚ РєР»РёРµРЅС‚Сѓ
       if (Number(payload.customer_id) !== Number(customer.id)) {
         return res.status(403).json({ ok: false, error: 'FORBIDDEN' });
       }
@@ -2248,7 +2523,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   });
 
   // ------------------------------
-  // Скидки клиента
+  // РЎРєРёРґРєРё РєР»РёРµРЅС‚Р°
   // ------------------------------
   // GET /api/public/me/favorites
   router.get('/me/favorites', async (req, res) => {
@@ -2458,8 +2733,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const customerId = customer.id;
 
-      // Получаем скидки, привязанные напрямую к клиенту
-      // store_id = 0 или совпадает с текущим store_id - скидка применима
+      // РџРѕР»СѓС‡Р°РµРј СЃРєРёРґРєРё, РїСЂРёРІСЏР·Р°РЅРЅС‹Рµ РЅР°РїСЂСЏРјСѓСЋ Рє РєР»РёРµРЅС‚Сѓ
+      // store_id = 0 РёР»Рё СЃРѕРІРїР°РґР°РµС‚ СЃ С‚РµРєСѓС‰РёРј store_id - СЃРєРёРґРєР° РїСЂРёРјРµРЅРёРјР°
       const [directDiscounts] = await db.query(
         `SELECT d.id, d.store_id, d.title, d.description, d.discount_type, d.discount_value,
                 d.apply_to, d.min_order_amount, d.max_discount_amount, d.is_stackable,
@@ -2473,7 +2748,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId, storeId, customerId]
       );
 
-      // Получаем категории клиента из таблицы связей (если таблица существует)
+      // РџРѕР»СѓС‡Р°РµРј РєР°С‚РµРіРѕСЂРёРё РєР»РёРµРЅС‚Р° РёР· С‚Р°Р±Р»РёС†С‹ СЃРІСЏР·РµР№ (РµСЃР»Рё С‚Р°Р±Р»РёС†Р° СЃСѓС‰РµСЃС‚РІСѓРµС‚)
       let categoryIds = [];
       try {
         const [customerCats] = await db.query(
@@ -2482,11 +2757,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         );
         categoryIds = customerCats.map(c => Number(c.category_id));
       } catch (catErr) {
-        // Таблица может не существовать - пропускаем
-        console.warn('cust_customer_category_links не найдена, пропускаем:', catErr.code);
+        // РўР°Р±Р»РёС†Р° РјРѕР¶РµС‚ РЅРµ СЃСѓС‰РµСЃС‚РІРѕРІР°С‚СЊ - РїСЂРѕРїСѓСЃРєР°РµРј
+        console.warn('cust_customer_category_links РЅРµ РЅР°Р№РґРµРЅР°, РїСЂРѕРїСѓСЃРєР°РµРј:', catErr.code);
       }
 
-      // Получаем скидки по категориям клиента
+      // РџРѕР»СѓС‡Р°РµРј СЃРєРёРґРєРё РїРѕ РєР°С‚РµРіРѕСЂРёСЏРј РєР»РёРµРЅС‚Р°
       let categoryDiscounts = [];
       if (categoryIds.length > 0) {
         const [catDisc] = await db.query(
@@ -2504,14 +2779,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         categoryDiscounts = catDisc;
       }
 
-      // Объединяем и удаляем дубликаты
+      // РћР±СЉРµРґРёРЅСЏРµРј Рё СѓРґР°Р»СЏРµРј РґСѓР±Р»РёРєР°С‚С‹
       const allDiscounts = [...directDiscounts, ...categoryDiscounts];
       const uniqueDiscounts = [];
       const seenIds = new Set();
 
       for (const discount of allDiscounts) {
         if (!seenIds.has(discount.id)) {
-          // Добавляем флаг активности для отображения на фронтенде
+          // Р”РѕР±Р°РІР»СЏРµРј С„Р»Р°Рі Р°РєС‚РёРІРЅРѕСЃС‚Рё РґР»СЏ РѕС‚РѕР±СЂР°Р¶РµРЅРёСЏ РЅР° С„СЂРѕРЅС‚РµРЅРґРµ
           discount.is_currently_active = discountHelpers.isDiscountActive(discount);
           uniqueDiscounts.push(discount);
           seenIds.add(discount.id);
@@ -2550,9 +2825,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   });
 
   /**
-   * Комбо-блоки для клиента: только блоки и только товары, доступные на сайте
-   * (is_active=1, site_visibility=1). Товары с остатком 0 / выключенные в блоке остаются,
-   * но в ответ не попадают — клиент их не видит.
+   * РљРѕРјР±Рѕ-Р±Р»РѕРєРё РґР»СЏ РєР»РёРµРЅС‚Р°: С‚РѕР»СЊРєРѕ Р±Р»РѕРєРё Рё С‚РѕР»СЊРєРѕ С‚РѕРІР°СЂС‹, РґРѕСЃС‚СѓРїРЅС‹Рµ РЅР° СЃР°Р№С‚Рµ
+   * (is_active=1, site_visibility=1). РўРѕРІР°СЂС‹ СЃ РѕСЃС‚Р°С‚РєРѕРј 0 / РІС‹РєР»СЋС‡РµРЅРЅС‹Рµ РІ Р±Р»РѕРєРµ РѕСЃС‚Р°СЋС‚СЃСЏ,
+   * РЅРѕ РІ РѕС‚РІРµС‚ РЅРµ РїРѕРїР°РґР°СЋС‚ вЂ” РєР»РёРµРЅС‚ РёС… РЅРµ РІРёРґРёС‚.
    */
   router.get('/combo-blocks', async (req, res) => {
     try {
@@ -2606,7 +2881,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   });
 
   /**
-   * Один комбо-набор для магазина: данные комбо + блоки с товарами (для экрана выбора).
+   * РћРґРёРЅ РєРѕРјР±Рѕ-РЅР°Р±РѕСЂ РґР»СЏ РјР°РіР°Р·РёРЅР°: РґР°РЅРЅС‹Рµ РєРѕРјР±Рѕ + Р±Р»РѕРєРё СЃ С‚РѕРІР°СЂР°РјРё (РґР»СЏ СЌРєСЂР°РЅР° РІС‹Р±РѕСЂР°).
    */
   router.get('/combos/:id', async (req, res) => {
     try {
@@ -2713,9 +2988,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   }
 
   /**
-   * Комбо-наборы для каталога: по категории (category_code), с min_price и фото для 2x2 сетки.
-   * Самая низкая цена «От X Р»: по каждому блоку берём min_select товаров с наименьшей возможной ценой
-   * (с учётом вариантов/порций — берётся минимум по всем вариантам товара), суммируем, применяем скидку комбо.
+   * РљРѕРјР±Рѕ-РЅР°Р±РѕСЂС‹ РґР»СЏ РєР°С‚Р°Р»РѕРіР°: РїРѕ РєР°С‚РµРіРѕСЂРёРё (category_code), СЃ min_price Рё С„РѕС‚Рѕ РґР»СЏ 2x2 СЃРµС‚РєРё.
+   * РЎР°РјР°СЏ РЅРёР·РєР°СЏ С†РµРЅР° В«РћС‚ X Р В»: РїРѕ РєР°Р¶РґРѕРјСѓ Р±Р»РѕРєСѓ Р±РµСЂС‘Рј min_select С‚РѕРІР°СЂРѕРІ СЃ РЅР°РёРјРµРЅСЊС€РµР№ РІРѕР·РјРѕР¶РЅРѕР№ С†РµРЅРѕР№
+   * (СЃ СѓС‡С‘С‚РѕРј РІР°СЂРёР°РЅС‚РѕРІ/РїРѕСЂС†РёР№ вЂ” Р±РµСЂС‘С‚СЃСЏ РјРёРЅРёРјСѓРј РїРѕ РІСЃРµРј РІР°СЂРёР°РЅС‚Р°Рј С‚РѕРІР°СЂР°), СЃСѓРјРјРёСЂСѓРµРј, РїСЂРёРјРµРЅСЏРµРј СЃРєРёРґРєСѓ РєРѕРјР±Рѕ.
    */
   async function getCombosForCategory(tenantId, storeId, categoryId) {
     const [[catRow]] = await db.query(
@@ -2967,7 +3242,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       await enrichProductsWithDisplayPrice(rows, tenantId);
       await enrichProductsWithDiscounts(rows, tenantId, storeId);
 
-      // Добавляем данные дефолтного варианта для корректного добавления в корзину
+      // Р”РѕР±Р°РІР»СЏРµРј РґР°РЅРЅС‹Рµ РґРµС„РѕР»С‚РЅРѕРіРѕ РІР°СЂРёР°РЅС‚Р° РґР»СЏ РєРѕСЂСЂРµРєС‚РЅРѕРіРѕ РґРѕР±Р°РІР»РµРЅРёСЏ РІ РєРѕСЂР·РёРЅСѓ
       const upsellProductIds = rows.map(r => Number(r.id)).filter(Boolean);
       if (upsellProductIds.length) {
         const phUpsell = upsellProductIds.map(() => '?').join(',');
@@ -3024,11 +3299,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.status(400).json({ ok: false, error: 'BAD_CATEGORY_ID' });
       }
 
-      // Быстрый "lite" режим для первого экрана витрины:
-      // - минимальный набор полей
-      // - упрощённая доступность (только по stock_qty)
-      // - ограничение количества
-      // Нужен, чтобы LCP-картинка начинала грузиться сразу, а не после тяжёлых подзапросов.
+      // Р‘С‹СЃС‚СЂС‹Р№ "lite" СЂРµР¶РёРј РґР»СЏ РїРµСЂРІРѕРіРѕ СЌРєСЂР°РЅР° РІРёС‚СЂРёРЅС‹:
+      // - РјРёРЅРёРјР°Р»СЊРЅС‹Р№ РЅР°Р±РѕСЂ РїРѕР»РµР№
+      // - СѓРїСЂРѕС‰С‘РЅРЅР°СЏ РґРѕСЃС‚СѓРїРЅРѕСЃС‚СЊ (С‚РѕР»СЊРєРѕ РїРѕ stock_qty)
+      // - РѕРіСЂР°РЅРёС‡РµРЅРёРµ РєРѕР»РёС‡РµСЃС‚РІР°
+      // РќСѓР¶РµРЅ, С‡С‚РѕР±С‹ LCP-РєР°СЂС‚РёРЅРєР° РЅР°С‡РёРЅР°Р»Р° РіСЂСѓР·РёС‚СЊСЃСЏ СЃСЂР°Р·Сѓ, Р° РЅРµ РїРѕСЃР»Рµ С‚СЏР¶С‘Р»С‹С… РїРѕРґР·Р°РїСЂРѕСЃРѕРІ.
       const lite = helpers.toBool(req.query.lite, false);
       const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 0)) || 0;
       if (lite) {
@@ -3238,7 +3513,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     }
   });
 
-  // Батч-загрузка продуктов по нескольким категориям за один запрос
+  // Р‘Р°С‚С‡-Р·Р°РіСЂСѓР·РєР° РїСЂРѕРґСѓРєС‚РѕРІ РїРѕ РЅРµСЃРєРѕР»СЊРєРёРј РєР°С‚РµРіРѕСЂРёСЏРј Р·Р° РѕРґРёРЅ Р·Р°РїСЂРѕСЃ
   router.post('/products/batch/categories', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -3249,21 +3524,21 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!categoryIds.length) return res.json({ ok: true, data: {} });
       if (categoryIds.length > 50) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
 
-      // Определяем "all"-категорию
+      // РћРїСЂРµРґРµР»СЏРµРј "all"-РєР°С‚РµРіРѕСЂРёСЋ
       const [allRows] = await db.query(
         `SELECT id FROM prod_categories WHERE tenant_id=? AND code='all' LIMIT 1`,
         [tenantId]
       );
       const allCategoryId = allRows.length ? Number(allRows[0].id) : null;
 
-      // Разделяем: обычные категории и "all"
+      // Р Р°Р·РґРµР»СЏРµРј: РѕР±С‹С‡РЅС‹Рµ РєР°С‚РµРіРѕСЂРёРё Рё "all"
       const normalIds = categoryIds.filter(id => id !== allCategoryId);
       const hasAll = allCategoryId && categoryIds.includes(allCategoryId);
 
       const productIsAvailableSql = getProductIsAvailableSql('p', 's');
       const allProducts = []; // { ...product, _category_id }
 
-      // Загружаем продукты обычных категорий одним запросом
+      // Р—Р°РіСЂСѓР¶Р°РµРј РїСЂРѕРґСѓРєС‚С‹ РѕР±С‹С‡РЅС‹С… РєР°С‚РµРіРѕСЂРёР№ РѕРґРЅРёРј Р·Р°РїСЂРѕСЃРѕРј
       if (normalIds.length) {
         const ph = normalIds.map(() => '?').join(',');
         const [rows] = await db.query(
@@ -3311,7 +3586,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
       }
 
-      // Загружаем продукты "all"-категории
+      // Р—Р°РіСЂСѓР¶Р°РµРј РїСЂРѕРґСѓРєС‚С‹ "all"-РєР°С‚РµРіРѕСЂРёРё
       if (hasAll) {
         const [rows] = await db.query(
           `SELECT p.*, ? AS _category_id, pc.sort_order AS link_sort_order,
@@ -3357,11 +3632,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
       }
 
-      // Обогащаем все продукты за один проход
+      // РћР±РѕРіР°С‰Р°РµРј РІСЃРµ РїСЂРѕРґСѓРєС‚С‹ Р·Р° РѕРґРёРЅ РїСЂРѕС…РѕРґ
       await enrichProductsWithDisplayPrice(allProducts, tenantId);
       await enrichProductsWithDiscounts(allProducts, tenantId, storeId);
 
-      // Группируем по category_id
+      // Р“СЂСѓРїРїРёСЂСѓРµРј РїРѕ category_id
       const productsByCategory = {};
       for (const id of categoryIds) productsByCategory[id] = [];
       for (const p of allProducts) {
@@ -3369,7 +3644,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if (productsByCategory[cid]) productsByCategory[cid].push(p);
       }
 
-      // Загружаем комбо для всех категорий параллельно
+      // Р—Р°РіСЂСѓР¶Р°РµРј РєРѕРјР±Рѕ РґР»СЏ РІСЃРµС… РєР°С‚РµРіРѕСЂРёР№ РїР°СЂР°Р»Р»РµР»СЊРЅРѕ
       const combosResults = await mapWithConcurrency(categoryIds, 4, async (id) => {
         try {
           const combos = await getCombosForCategoryCached(tenantId, storeId, id);
@@ -3603,7 +3878,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
-      // Проверяем, что товар активен и виден на сайте
+      // РџСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ С‚РѕРІР°СЂ Р°РєС‚РёРІРµРЅ Рё РІРёРґРµРЅ РЅР° СЃР°Р№С‚Рµ
       const [productCheck] = await db.query(
         `SELECT id FROM prod_products 
          WHERE tenant_id=? AND id=? AND is_active=1 AND site_visibility=1 
@@ -3614,7 +3889,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
 
-      // Получаем активные назначения опций для товара
+      // РџРѕР»СѓС‡Р°РµРј Р°РєС‚РёРІРЅС‹Рµ РЅР°Р·РЅР°С‡РµРЅРёСЏ РѕРїС†РёР№ РґР»СЏ С‚РѕРІР°СЂР°
       const [rows] = await db.query(
         `SELECT 
            a.id AS assignment_id, 
@@ -3642,7 +3917,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId, productId]
       );
 
-      // Нормализуем данные: используем значения из назначения, если заданы, иначе из группы
+      // РќРѕСЂРјР°Р»РёР·СѓРµРј РґР°РЅРЅС‹Рµ: РёСЃРїРѕР»СЊР·СѓРµРј Р·РЅР°С‡РµРЅРёСЏ РёР· РЅР°Р·РЅР°С‡РµРЅРёСЏ, РµСЃР»Рё Р·Р°РґР°РЅС‹, РёРЅР°С‡Рµ РёР· РіСЂСѓРїРїС‹
       const assignments = rows.map((r) => ({
         assignment_id: Number(r.assignment_id),
         group_id: Number(r.group_id),
@@ -3673,7 +3948,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
-      // Получаем группу опций
+      // РџРѕР»СѓС‡Р°РµРј РіСЂСѓРїРїСѓ РѕРїС†РёР№
       let group;
       try {
         const [rows] = await db.query(
@@ -3686,7 +3961,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       } catch (dbError) {
         console.error('DB query error in /options/groups/:id:', dbError);
         if (dbError.code === 'ETIMEDOUT' || dbError.code === 'ECONNREFUSED') {
-          return res.status(503).json({ ok: false, error: 'DB_CONNECTION_ERROR', message: 'Не удалось подключиться к базе данных' });
+          return res.status(503).json({ ok: false, error: 'DB_CONNECTION_ERROR', message: 'РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ Рє Р±Р°Р·Рµ РґР°РЅРЅС‹С…' });
         }
         throw dbError;
       }
@@ -3695,7 +3970,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
 
-      // Получаем элементы опции (только активные товары)
+      // РџРѕР»СѓС‡Р°РµРј СЌР»РµРјРµРЅС‚С‹ РѕРїС†РёРё (С‚РѕР»СЊРєРѕ Р°РєС‚РёРІРЅС‹Рµ С‚РѕРІР°СЂС‹)
       const [items] = await db.query(
         `SELECT 
            i.id,
@@ -3767,10 +4042,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [storeId, tenantId, id, storeId, storeId, storeId]
       );
 
-      // Собираем все product_id для загрузки вариантов
+      // РЎРѕР±РёСЂР°РµРј РІСЃРµ product_id РґР»СЏ Р·Р°РіСЂСѓР·РєРё РІР°СЂРёР°РЅС‚РѕРІ
       const productIds = items.map(item => Number(item.target_product_id)).filter(Number.isFinite);
       
-      // Загружаем варианты для всех товаров-опций одним запросом
+      // Р—Р°РіСЂСѓР¶Р°РµРј РІР°СЂРёР°РЅС‚С‹ РґР»СЏ РІСЃРµС… С‚РѕРІР°СЂРѕРІ-РѕРїС†РёР№ РѕРґРЅРёРј Р·Р°РїСЂРѕСЃРѕРј
       let variantsByProductId = new Map();
       let tiersByGroupId = new Map();
       if (productIds.length > 0) {
@@ -3797,7 +4072,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           [tenantId, ...productIds]
         );
 
-        // Собираем все id групп вариантов, чтобы подтянуть скидки/надбавки
+        // РЎРѕР±РёСЂР°РµРј РІСЃРµ id РіСЂСѓРїРї РІР°СЂРёР°РЅС‚РѕРІ, С‡С‚РѕР±С‹ РїРѕРґС‚СЏРЅСѓС‚СЊ СЃРєРёРґРєРё/РЅР°РґР±Р°РІРєРё
         const variantGroupIds = Array.from(
           new Set(variantAssignments.map((va) => Number(va.variant_group_id)).filter(Number.isFinite))
         );
@@ -3820,7 +4095,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
         }
         
-        // Группируем варианты по product_id
+        // Р“СЂСѓРїРїРёСЂСѓРµРј РІР°СЂРёР°РЅС‚С‹ РїРѕ product_id
         for (const va of variantAssignments) {
           const pid = Number(va.product_id);
           if (!variantsByProductId.has(pid)) {
@@ -3828,7 +4103,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
           const groupDefaultIdx = va.group_default_value_index != null ? Number(va.group_default_value_index) : null;
           const assignmentDefaultIdx = va.assignment_default_value_index != null ? Number(va.assignment_default_value_index) : null;
-          // Определяем дефолтный индекс: сначала из привязки, потом из группы
+          // РћРїСЂРµРґРµР»СЏРµРј РґРµС„РѕР»С‚РЅС‹Р№ РёРЅРґРµРєСЃ: СЃРЅР°С‡Р°Р»Р° РёР· РїСЂРёРІСЏР·РєРё, РїРѕС‚РѕРј РёР· РіСЂСѓРїРїС‹
           const defaultIdx = assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx;
           const groupId = Number(va.variant_group_id);
           variantsByProductId.get(pid).push({
@@ -3845,7 +4120,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
       }
 
-      // Нормализуем элементы
+      // РќРѕСЂРјР°Р»РёР·СѓРµРј СЌР»РµРјРµРЅС‚С‹
       const normalizedItems = items.map((item) => {
         const photos = safeJsonArray(item.product_photos_json);
         const productId = Number(item.target_product_id);
@@ -3864,7 +4139,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           qty_max: Number(item.qty_max ?? 1),
           is_active: Number(item.is_active || 0) === 1,
           sort_order: Number(item.sort_order || 0),
-          // Варианты товара-опции
+          // Р’Р°СЂРёР°РЅС‚С‹ С‚РѕРІР°СЂР°-РѕРїС†РёРё
           variants: variants,
         };
       });
@@ -3996,8 +4271,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   }
 
   // ------------------------------
-  // order-config (для оформления)
-  // ВАЖНО: твой фронт ждёт methods / payments / timeOptions
+  // order-config (РґР»СЏ РѕС„РѕСЂРјР»РµРЅРёСЏ)
+  // Р’РђР–РќРћ: С‚РІРѕР№ С„СЂРѕРЅС‚ Р¶РґС‘С‚ methods / payments / timeOptions
   // ------------------------------
   router.get('/order-config', async (req, res) => {
     try {
@@ -4020,7 +4295,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId, storeId]
       );
 
-      // ПЕРЕИМЕНОВАНО: order_delivery_types (бывшая order_methods)
+      // РџР•Р Р•РРњР•РќРћР’РђРќРћ: order_delivery_types (Р±С‹РІС€Р°СЏ order_methods)
       const [methods] = await db.query(
         `SELECT id, code, title, icon, sort, is_default
          FROM order_delivery_types
@@ -4211,11 +4486,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       let customerPhone = helpers.normalizePhone(req.body.customer_phone);
 
       if (authCustomer) {
-        customerPhone = authCustomer.phone; // телефон не меняем
-        if (!customerName) customerName = authCustomer.name || 'Клиент';
+        customerPhone = authCustomer.phone; // С‚РµР»РµС„РѕРЅ РЅРµ РјРµРЅСЏРµРј
+        if (!customerName) customerName = authCustomer.name || 'РљР»РёРµРЅС‚';
       } else {
         if (!customerPhone) return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
-        if (!customerName) customerName = 'Клиент';
+        if (!customerName) customerName = 'РљР»РёРµРЅС‚';
       }
 
       // ensure customer exists if not authed
@@ -4226,7 +4501,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         );
         if (ex.length) {
           customerId = Number(ex[0].id);
-          // обновим имя если пришло
+          // РѕР±РЅРѕРІРёРј РёРјСЏ РµСЃР»Рё РїСЂРёС€Р»Рѕ
           if (customerName) {
             await db.query(
               `UPDATE cust_customers SET name=? WHERE tenant_id=? AND id=?`,
@@ -4244,7 +4519,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
       }
 
-      // product_ids только у обычных товаров; комбо приходят с type === 'combo'
+      // product_ids С‚РѕР»СЊРєРѕ Сѓ РѕР±С‹С‡РЅС‹С… С‚РѕРІР°СЂРѕРІ; РєРѕРјР±Рѕ РїСЂРёС…РѕРґСЏС‚ СЃ type === 'combo'
       const ids = items
         .filter(it => it.type !== 'combo')
         .map(it => Number(it.product_id))
@@ -4252,7 +4527,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const hasCombos = items.some(it => it.type === 'combo');
       if (!ids.length && !hasCombos) return res.status(400).json({ ok: false, error: 'BAD_ITEMS' });
 
-      // availability check for products (stock + ingredients) — только если в заказе есть обычные товары
+      // availability check for products (stock + ingredients) вЂ” С‚РѕР»СЊРєРѕ РµСЃР»Рё РІ Р·Р°РєР°Р·Рµ РµСЃС‚СЊ РѕР±С‹С‡РЅС‹Рµ С‚РѕРІР°СЂС‹
       if (ids.length) {
         const [availability] = await db.query(
           `SELECT p.id,
@@ -4371,12 +4646,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         nonAutoItemsTotal += lineTotal;
       }
 
-      // ============ РАСЧЕТ СКИДОК ============
-      // Получаем скидки клиента (привязанные напрямую или через категории)
+      // ============ Р РђРЎР§Р•Рў РЎРљРР”РћРљ ============
+      // РџРѕР»СѓС‡Р°РµРј СЃРєРёРґРєРё РєР»РёРµРЅС‚Р° (РїСЂРёРІСЏР·Р°РЅРЅС‹Рµ РЅР°РїСЂСЏРјСѓСЋ РёР»Рё С‡РµСЂРµР· РєР°С‚РµРіРѕСЂРёРё)
       let orderDiscountAmount = 0;
       const appliedDiscounts = [];
       
-      // Получаем категории товаров для проверки скидок
+      // РџРѕР»СѓС‡Р°РµРј РєР°С‚РµРіРѕСЂРёРё С‚РѕРІР°СЂРѕРІ РґР»СЏ РїСЂРѕРІРµСЂРєРё СЃРєРёРґРѕРє
       const productCategoriesMap = new Map();
       if (ids.length) {
         const catPlaceholders = ids.map(() => '?').join(',');
@@ -4392,19 +4667,19 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
       }
 
-      // Получаем активные скидки для клиента и товаров
+      // РџРѕР»СѓС‡Р°РµРј Р°РєС‚РёРІРЅС‹Рµ СЃРєРёРґРєРё РґР»СЏ РєР»РёРµРЅС‚Р° Рё С‚РѕРІР°СЂРѕРІ
       const customerDiscounts = await discountHelpers.getActiveDiscountsForCustomer(db, tenantId, storeId, customerId);
       
-      // Мапа скидок для товаров (product_id -> discount)
+      // РњР°РїР° СЃРєРёРґРѕРє РґР»СЏ С‚РѕРІР°СЂРѕРІ (product_id -> discount)
       const productDiscountMap = new Map();
       
-      // Для каждого товара проверяем применимые скидки
+      // Р”Р»СЏ РєР°Р¶РґРѕРіРѕ С‚РѕРІР°СЂР° РїСЂРѕРІРµСЂСЏРµРј РїСЂРёРјРµРЅРёРјС‹Рµ СЃРєРёРґРєРё
       for (const pid of ids) {
         const categoryIds = productCategoriesMap.get(pid) || [];
         const productDiscounts = await discountHelpers.getActiveDiscountsForProduct(db, tenantId, storeId, pid, categoryIds);
         
         if (productDiscounts.length > 0) {
-          // Берем лучшую скидку (с наивысшим приоритетом)
+          // Р‘РµСЂРµРј Р»СѓС‡С€СѓСЋ СЃРєРёРґРєСѓ (СЃ РЅР°РёРІС‹СЃС€РёРј РїСЂРёРѕСЂРёС‚РµС‚РѕРј)
           const bestDiscount = productDiscounts[0];
           productDiscountMap.set(pid, bestDiscount);
         }
@@ -4413,7 +4688,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const normItems = [];
       let total = 0;
 
-      // Собираем все option_item_ids для получения информации из БД
+      // РЎРѕР±РёСЂР°РµРј РІСЃРµ option_item_ids РґР»СЏ РїРѕР»СѓС‡РµРЅРёСЏ РёРЅС„РѕСЂРјР°С†РёРё РёР· Р‘Р”
       const allOptionItemIds = [];
       for (const it of items) {
         const optionIds = Array.isArray(it.option_item_ids) ? it.option_item_ids : [];
@@ -4425,7 +4700,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         });
       }
 
-      // Получаем информацию об опциях из БД
+      // РџРѕР»СѓС‡Р°РµРј РёРЅС„РѕСЂРјР°С†РёСЋ РѕР± РѕРїС†РёСЏС… РёР· Р‘Р”
       const optionItemsMap = new Map();
       if (allOptionItemIds.length) {
         const placeholders = allOptionItemIds.map(() => '?').join(',');
@@ -4531,7 +4806,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           normItems.push({
             type: 'combo',
             combo_id: it.combo_id,
-            name: it.combo_title || 'Комбо',
+            name: it.combo_title || 'РљРѕРјР±Рѕ',
             qty,
             price: qty > 0 ? roundPrice(lineTotal / qty) : 0,
             old_price: oldLineTotalFromRequest > 0 && qty > 0 ? roundPrice(oldLineTotalFromRequest / qty) : 0,
@@ -4573,28 +4848,28 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const basePrice = Number(p.price || 0);
         const oldPrice = Number(p.old_price || 0);
 
-        // ВАЖНО: используем line_total из запроса (уже посчитан на фронте)
-        // Не пересчитываем цену заново, чтобы избежать двойного подсчета базовой цены
+        // Р’РђР–РќРћ: РёСЃРїРѕР»СЊР·СѓРµРј line_total РёР· Р·Р°РїСЂРѕСЃР° (СѓР¶Рµ РїРѕСЃС‡РёС‚Р°РЅ РЅР° С„СЂРѕРЅС‚Рµ)
+        // РќРµ РїРµСЂРµСЃС‡РёС‚С‹РІР°РµРј С†РµРЅСѓ Р·Р°РЅРѕРІРѕ, С‡С‚РѕР±С‹ РёР·Р±РµР¶Р°С‚СЊ РґРІРѕР№РЅРѕРіРѕ РїРѕРґСЃС‡РµС‚Р° Р±Р°Р·РѕРІРѕР№ С†РµРЅС‹
         const lineTotalFromRequest = Number(it.line_total);
         const useLineTotalFromRequest = Number.isFinite(lineTotalFromRequest) && lineTotalFromRequest >= 0;
 
-        // Обрабатываем опции (только для сохранения состава, не для пересчета цены)
+        // РћР±СЂР°Р±Р°С‚С‹РІР°РµРј РѕРїС†РёРё (С‚РѕР»СЊРєРѕ РґР»СЏ СЃРѕС…СЂР°РЅРµРЅРёСЏ СЃРѕСЃС‚Р°РІР°, РЅРµ РґР»СЏ РїРµСЂРµСЃС‡РµС‚Р° С†РµРЅС‹)
         const options = [];
         
-        // Собираем опции: используем option_items из запроса (с qty), если есть, иначе option_item_ids
+        // РЎРѕР±РёСЂР°РµРј РѕРїС†РёРё: РёСЃРїРѕР»СЊР·СѓРµРј option_items РёР· Р·Р°РїСЂРѕСЃР° (СЃ qty), РµСЃР»Рё РµСЃС‚СЊ, РёРЅР°С‡Рµ option_item_ids
         const optionItemsFromRequest = Array.isArray(it.option_items) && it.option_items.length > 0
           ? it.option_items
           : [];
         const optionIdsFromRequest = Array.isArray(it.option_item_ids) ? it.option_item_ids : [];
         
-        // Создаем map для быстрого поиска qty и вариантов из запроса
+        // РЎРѕР·РґР°РµРј map РґР»СЏ Р±С‹СЃС‚СЂРѕРіРѕ РїРѕРёСЃРєР° qty Рё РІР°СЂРёР°РЅС‚РѕРІ РёР· Р·Р°РїСЂРѕСЃР°
         const qtyMap = new Map();
-        const optionVariantsMap = new Map(); // Варианты для каждой опции
+        const optionVariantsMap = new Map(); // Р’Р°СЂРёР°РЅС‚С‹ РґР»СЏ РєР°Р¶РґРѕР№ РѕРїС†РёРё
         optionItemsFromRequest.forEach(opt => {
           const id = Number(opt.id);
           if (Number.isFinite(id) && id > 0) {
             qtyMap.set(id, Math.max(1, Number(opt.qty || opt.quantity || 1)));
-            // Сохраняем данные о варианте опции, если есть
+            // РЎРѕС…СЂР°РЅСЏРµРј РґР°РЅРЅС‹Рµ Рѕ РІР°СЂРёР°РЅС‚Рµ РѕРїС†РёРё, РµСЃР»Рё РµСЃС‚СЊ
             if (opt.variant_group_id != null && opt.variant_value_index != null) {
               optionVariantsMap.set(id, {
                 variant_group_id: Number(opt.variant_group_id),
@@ -4606,7 +4881,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
         });
 
-        // Обрабатываем опции: используем option_item_ids как основной список
+        // РћР±СЂР°Р±Р°С‚С‹РІР°РµРј РѕРїС†РёРё: РёСЃРїРѕР»СЊР·СѓРµРј option_item_ids РєР°Рє РѕСЃРЅРѕРІРЅРѕР№ СЃРїРёСЃРѕРє
         const allOptionIds = new Set();
         optionItemsFromRequest.forEach(opt => {
           const id = Number(opt.id);
@@ -4619,11 +4894,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         for (const optId of allOptionIds) {
           const optInfo = optionItemsMap.get(optId);
-          if (!optInfo) continue; // Пропускаем опции, которых нет в БД
+          if (!optInfo) continue; // РџСЂРѕРїСѓСЃРєР°РµРј РѕРїС†РёРё, РєРѕС‚РѕСЂС‹С… РЅРµС‚ РІ Р‘Р”
 
-          const optQty = qtyMap.get(optId) || 1; // Количество из запроса или 1 по умолчанию
-          const optPrice = optInfo.price; // Цена всегда из БД
-          // НЕ добавляем к optionsTotal - цена уже учтена в line_total
+          const optQty = qtyMap.get(optId) || 1; // РљРѕР»РёС‡РµСЃС‚РІРѕ РёР· Р·Р°РїСЂРѕСЃР° РёР»Рё 1 РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ
+          const optPrice = optInfo.price; // Р¦РµРЅР° РІСЃРµРіРґР° РёР· Р‘Р”
+          // РќР• РґРѕР±Р°РІР»СЏРµРј Рє optionsTotal - С†РµРЅР° СѓР¶Рµ СѓС‡С‚РµРЅР° РІ line_total
 
           const optionEntry = {
             id: optId,
@@ -4633,7 +4908,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             target_product_id: optInfo.target_product_id || undefined,
           };
           
-          // Добавляем данные о варианте опции, если есть
+          // Р”РѕР±Р°РІР»СЏРµРј РґР°РЅРЅС‹Рµ Рѕ РІР°СЂРёР°РЅС‚Рµ РѕРїС†РёРё, РµСЃР»Рё РµСЃС‚СЊ
           const optVariant = optionVariantsMap.get(optId);
           if (optVariant) {
             optionEntry.variant_group_id = optVariant.variant_group_id;
@@ -4645,12 +4920,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           options.push(optionEntry);
         }
 
-        // Обрабатываем ингредиенты (только для сохранения состава, не для пересчета цены)
+        // РћР±СЂР°Р±Р°С‚С‹РІР°РµРј РёРЅРіСЂРµРґРёРµРЅС‚С‹ (С‚РѕР»СЊРєРѕ РґР»СЏ СЃРѕС…СЂР°РЅРµРЅРёСЏ СЃРѕСЃС‚Р°РІР°, РЅРµ РґР»СЏ РїРµСЂРµСЃС‡РµС‚Р° С†РµРЅС‹)
         const ingredients = [];
         
         const cartIngredients = Array.isArray(it.ingredients) ? it.ingredients : [];
         if (cartIngredients.length) {
-          // Получаем информацию об ингредиентах из БД
+          // РџРѕР»СѓС‡Р°РµРј РёРЅС„РѕСЂРјР°С†РёСЋ РѕР± РёРЅРіСЂРµРґРёРµРЅС‚Р°С… РёР· Р‘Р”
           const ingIds = cartIngredients.map(ci => Number(ci.ingredient_id)).filter(n => Number.isFinite(n) && n > 0);
           if (ingIds.length) {
             const [ingRows] = await db.query(
@@ -4675,11 +4950,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
             const ingMap = new Map(ingRows.map(r => [Number(r.ingredient_id), r]));
             
-            // Функция для получения фактора конвертации между единицами
+            // Р¤СѓРЅРєС†РёСЏ РґР»СЏ РїРѕР»СѓС‡РµРЅРёСЏ С„Р°РєС‚РѕСЂР° РєРѕРЅРІРµСЂС‚Р°С†РёРё РјРµР¶РґСѓ РµРґРёРЅРёС†Р°РјРё
             async function getConversionFactor(fromUnitId, toUnitId, productIdForPul = null) {
               if (!fromUnitId || !toUnitId || Number(fromUnitId) === Number(toUnitId)) return 1;
               
-              // Прямая конвертация из prod_unit_conversions
+              // РџСЂСЏРјР°СЏ РєРѕРЅРІРµСЂС‚Р°С†РёСЏ РёР· prod_unit_conversions
               const [direct] = await db.query(
                 `SELECT factor FROM prod_unit_conversions 
                  WHERE tenant_id=? AND from_unit_id=? AND to_unit_id=? AND is_active=1 LIMIT 1`,
@@ -4687,7 +4962,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               );
               if (direct.length && direct[0].factor) return Number(direct[0].factor);
               
-              // Обратная конвертация
+              // РћР±СЂР°С‚РЅР°СЏ РєРѕРЅРІРµСЂС‚Р°С†РёСЏ
               const [inverse] = await db.query(
                 `SELECT factor FROM prod_unit_conversions 
                  WHERE tenant_id=? AND from_unit_id=? AND to_unit_id=? AND is_active=1 LIMIT 1`,
@@ -4695,7 +4970,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               );
               if (inverse.length && inverse[0].factor) return 1 / Number(inverse[0].factor);
               
-              // Конвертация через prod_product_unit_links (если указан product_id)
+              // РљРѕРЅРІРµСЂС‚Р°С†РёСЏ С‡РµСЂРµР· prod_product_unit_links (РµСЃР»Рё СѓРєР°Р·Р°РЅ product_id)
               if (productIdForPul) {
                 const [pul] = await db.query(
                   `SELECT factor FROM prod_product_unit_links
@@ -4714,7 +4989,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               const ingInfo = ingMap.get(ingId);
               if (!ingInfo) continue;
 
-              // Переводим quantity в базовую единицу измерения
+              // РџРµСЂРµРІРѕРґРёРј quantity РІ Р±Р°Р·РѕРІСѓСЋ РµРґРёРЅРёС†Сѓ РёР·РјРµСЂРµРЅРёСЏ
               let qtyInBase = ingQty;
               const ingredientBaseQty = ingInfo.ingredient_base_qty != null && Number(ingInfo.ingredient_base_qty) > 0 
                 ? Number(ingInfo.ingredient_base_qty) 
@@ -4722,7 +4997,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               const ingredientUnitId = Number(ingInfo.unit_id || 0);
               const ingredientBaseUnitId = Number(ingInfo.ingredient_base_unit_id || 0);
               
-              // Если единица измерения ингредиента отличается от базовой, конвертируем
+              // Р•СЃР»Рё РµРґРёРЅРёС†Р° РёР·РјРµСЂРµРЅРёСЏ РёРЅРіСЂРµРґРёРµРЅС‚Р° РѕС‚Р»РёС‡Р°РµС‚СЃСЏ РѕС‚ Р±Р°Р·РѕРІРѕР№, РєРѕРЅРІРµСЂС‚РёСЂСѓРµРј
               if (ingredientUnitId && ingredientBaseUnitId && ingredientUnitId !== ingredientBaseUnitId) {
                 const factor = await getConversionFactor(ingredientUnitId, ingredientBaseUnitId, ingId);
                 if (factor != null && factor > 0) {
@@ -4730,49 +5005,49 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 }
               }
 
-              // Рассчитываем цену с учетом base_qty
+              // Р Р°СЃСЃС‡РёС‚С‹РІР°РµРј С†РµРЅСѓ СЃ СѓС‡РµС‚РѕРј base_qty
               let ingPricePerUnit = 0;
               
               if (ingInfo.price_override != null) {
-                // Если есть price_override - используем его как цену за единицу в базовой единице измерения
+                // Р•СЃР»Рё РµСЃС‚СЊ price_override - РёСЃРїРѕР»СЊР·СѓРµРј РµРіРѕ РєР°Рє С†РµРЅСѓ Р·Р° РµРґРёРЅРёС†Сѓ РІ Р±Р°Р·РѕРІРѕР№ РµРґРёРЅРёС†Рµ РёР·РјРµСЂРµРЅРёСЏ
                 ingPricePerUnit = Number(ingInfo.price_override);
               } else {
-                // Рассчитываем цену за единицу из base_qty
+                // Р Р°СЃСЃС‡РёС‚С‹РІР°РµРј С†РµРЅСѓ Р·Р° РµРґРёРЅРёС†Сѓ РёР· base_qty
                 const ingredientPrice = Number(ingInfo.ingredient_price || 0);
                 
                 if (ingredientBaseQty > 0 && ingredientPrice > 0) {
-                  // Цена за единицу (в базовой единице) = цена товара / base_qty
+                  // Р¦РµРЅР° Р·Р° РµРґРёРЅРёС†Сѓ (РІ Р±Р°Р·РѕРІРѕР№ РµРґРёРЅРёС†Рµ) = С†РµРЅР° С‚РѕРІР°СЂР° / base_qty
                   ingPricePerUnit = ingredientPrice / ingredientBaseQty;
                 } else if (ingredientPrice > 0) {
                   ingPricePerUnit = ingredientPrice;
                 }
               }
               
-              // Итоговая цена ингредиента = цена за единицу * количество (в базовой единице)
-              // НЕ добавляем к ingredientsTotal - цена уже учтена в line_total
+              // РС‚РѕРіРѕРІР°СЏ С†РµРЅР° РёРЅРіСЂРµРґРёРµРЅС‚Р° = С†РµРЅР° Р·Р° РµРґРёРЅРёС†Сѓ * РєРѕР»РёС‡РµСЃС‚РІРѕ (РІ Р±Р°Р·РѕРІРѕР№ РµРґРёРЅРёС†Рµ)
+              // РќР• РґРѕР±Р°РІР»СЏРµРј Рє ingredientsTotal - С†РµРЅР° СѓР¶Рµ СѓС‡С‚РµРЅР° РІ line_total
               const ingTotal = ingPricePerUnit * qtyInBase;
 
-              // Для сохранения: price должна быть ценой за единицу в той единице измерения, в которой указано quantity
-              // ingPricePerUnit - это цена за единицу в базовой единице (base_unit_id)
-              // quantity (ingQty) указано в unit_id
-              // Нужно пересчитать цену за единицу для unit_id
+              // Р”Р»СЏ СЃРѕС…СЂР°РЅРµРЅРёСЏ: price РґРѕР»Р¶РЅР° Р±С‹С‚СЊ С†РµРЅРѕР№ Р·Р° РµРґРёРЅРёС†Сѓ РІ С‚РѕР№ РµРґРёРЅРёС†Рµ РёР·РјРµСЂРµРЅРёСЏ, РІ РєРѕС‚РѕСЂРѕР№ СѓРєР°Р·Р°РЅРѕ quantity
+              // ingPricePerUnit - СЌС‚Рѕ С†РµРЅР° Р·Р° РµРґРёРЅРёС†Сѓ РІ Р±Р°Р·РѕРІРѕР№ РµРґРёРЅРёС†Рµ (base_unit_id)
+              // quantity (ingQty) СѓРєР°Р·Р°РЅРѕ РІ unit_id
+              // РќСѓР¶РЅРѕ РїРµСЂРµСЃС‡РёС‚Р°С‚СЊ С†РµРЅСѓ Р·Р° РµРґРёРЅРёС†Сѓ РґР»СЏ unit_id
               let priceForDisplay = ingPricePerUnit;
               
-              // Если quantity в той же единице, что и базовая, price уже правильный
+              // Р•СЃР»Рё quantity РІ С‚РѕР№ Р¶Рµ РµРґРёРЅРёС†Рµ, С‡С‚Рѕ Рё Р±Р°Р·РѕРІР°СЏ, price СѓР¶Рµ РїСЂР°РІРёР»СЊРЅС‹Р№
               if (ingredientUnitId && ingredientBaseUnitId && ingredientUnitId !== ingredientBaseUnitId && ingQty > 0) {
-                // Если единицы разные, пересчитываем цену за единицу в unit_id
+                // Р•СЃР»Рё РµРґРёРЅРёС†С‹ СЂР°Р·РЅС‹Рµ, РїРµСЂРµСЃС‡РёС‚С‹РІР°РµРј С†РµРЅСѓ Р·Р° РµРґРёРЅРёС†Сѓ РІ unit_id
                 const factor = await getConversionFactor(ingredientUnitId, ingredientBaseUnitId, ingId);
                 if (factor != null && factor > 0) {
-                  // priceForDisplay = цена за единицу в unit_id
-                  // Если quantity в unit_id, а цена за единицу в base_unit_id = ingPricePerUnit,
-                  // то цена за unit_id = ingPricePerUnit * factor
-                  // (потому что 1 unit_id = factor * base_unit_id)
+                  // priceForDisplay = С†РµРЅР° Р·Р° РµРґРёРЅРёС†Сѓ РІ unit_id
+                  // Р•СЃР»Рё quantity РІ unit_id, Р° С†РµРЅР° Р·Р° РµРґРёРЅРёС†Сѓ РІ base_unit_id = ingPricePerUnit,
+                  // С‚Рѕ С†РµРЅР° Р·Р° unit_id = ingPricePerUnit * factor
+                  // (РїРѕС‚РѕРјСѓ С‡С‚Рѕ 1 unit_id = factor * base_unit_id)
                   priceForDisplay = ingPricePerUnit * factor;
                 }
               }
 
-              // Альтернативный расчет: если total уже посчитан, можно использовать его
-              // priceForDisplay = ingTotal / ingQty (если ingQty > 0)
+              // РђР»СЊС‚РµСЂРЅР°С‚РёРІРЅС‹Р№ СЂР°СЃС‡РµС‚: РµСЃР»Рё total СѓР¶Рµ РїРѕСЃС‡РёС‚Р°РЅ, РјРѕР¶РЅРѕ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РµРіРѕ
+              // priceForDisplay = ingTotal / ingQty (РµСЃР»Рё ingQty > 0)
               if (ingQty > 0 && ingTotal > 0) {
                 priceForDisplay = ingTotal / ingQty;
               }
@@ -4790,14 +5065,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
         }
 
-        // Обрабатываем варианты (только для сохранения состава, не для пересчета цены)
+        // РћР±СЂР°Р±Р°С‚С‹РІР°РµРј РІР°СЂРёР°РЅС‚С‹ (С‚РѕР»СЊРєРѕ РґР»СЏ СЃРѕС…СЂР°РЅРµРЅРёСЏ СЃРѕСЃС‚Р°РІР°, РЅРµ РґР»СЏ РїРµСЂРµСЃС‡РµС‚Р° С†РµРЅС‹)
         let variantData = null;
         const variantGroupId = Number(it.variant_group_id);
         const variantValueIndex = Number(it.variant_value_index);
         const variantLabel = str(it.variant_label || "");
         
         if (variantGroupId && Number.isFinite(variantValueIndex)) {
-          // Получаем информацию о группе вариантов из БД
+          // РџРѕР»СѓС‡Р°РµРј РёРЅС„РѕСЂРјР°С†РёСЋ Рѕ РіСЂСѓРїРїРµ РІР°СЂРёР°РЅС‚РѕРІ РёР· Р‘Р”
           const [variantGroupRows] = await db.query(
             `SELECT id, title, unit_id
              FROM prod_variant_groups
@@ -4810,7 +5085,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             const vg = variantGroupRows[0];
             const groupTitle = str(vg.title || "");
             
-            // Получаем значение варианта
+            // РџРѕР»СѓС‡Р°РµРј Р·РЅР°С‡РµРЅРёРµ РІР°СЂРёР°РЅС‚Р°
             const [variantValuesRows] = await db.query(
               `SELECT \`values\`
                FROM prod_variant_groups
@@ -4829,7 +5104,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               } catch {}
             }
             
-            // Если variant_label содержит "Название: значение", извлекаем значение
+            // Р•СЃР»Рё variant_label СЃРѕРґРµСЂР¶РёС‚ "РќР°Р·РІР°РЅРёРµ: Р·РЅР°С‡РµРЅРёРµ", РёР·РІР»РµРєР°РµРј Р·РЅР°С‡РµРЅРёРµ
             if (variantLabel.includes(":")) {
               const parts = variantLabel.split(":");
               if (parts.length > 1) {
@@ -4837,22 +5112,22 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               }
             }
             
-            // Варианты не добавляют доплату - они пересчитывают цену пропорционально количеству
-            // variant_unit_price уже учтена в line_total, поэтому price_diff всегда 0
+            // Р’Р°СЂРёР°РЅС‚С‹ РЅРµ РґРѕР±Р°РІР»СЏСЋС‚ РґРѕРїР»Р°С‚Сѓ - РѕРЅРё РїРµСЂРµСЃС‡РёС‚С‹РІР°СЋС‚ С†РµРЅСѓ РїСЂРѕРїРѕСЂС†РёРѕРЅР°Р»СЊРЅРѕ РєРѕР»РёС‡РµСЃС‚РІСѓ
+            // variant_unit_price СѓР¶Рµ СѓС‡С‚РµРЅР° РІ line_total, РїРѕСЌС‚РѕРјСѓ price_diff РІСЃРµРіРґР° 0
             variantData = {
               variant_group_id: variantGroupId,
               variant_value_index: variantValueIndex,
               group_title: groupTitle,
               unit_id: Number(vg.unit_id || 0) || undefined,
               value: variantValue,
-              label: variantValue, // Для отображения
-              price_diff: 0, // Варианты не имеют доплаты, цена уже учтена в variant_unit_price
+              label: variantValue, // Р”Р»СЏ РѕС‚РѕР±СЂР°Р¶РµРЅРёСЏ
+              price_diff: 0, // Р’Р°СЂРёР°РЅС‚С‹ РЅРµ РёРјРµСЋС‚ РґРѕРїР»Р°С‚С‹, С†РµРЅР° СѓР¶Рµ СѓС‡С‚РµРЅР° РІ variant_unit_price
             };
           }
         }
 
-        // Используем line_total из запроса (уже посчитан на фронте)
-        // Если line_total не передан, используем базовую цену товара (для товаров без опций/вариантов/состава)
+        // РСЃРїРѕР»СЊР·СѓРµРј line_total РёР· Р·Р°РїСЂРѕСЃР° (СѓР¶Рµ РїРѕСЃС‡РёС‚Р°РЅ РЅР° С„СЂРѕРЅС‚Рµ)
+        // Р•СЃР»Рё line_total РЅРµ РїРµСЂРµРґР°РЅ, РёСЃРїРѕР»СЊР·СѓРµРј Р±Р°Р·РѕРІСѓСЋ С†РµРЅСѓ С‚РѕРІР°СЂР° (РґР»СЏ С‚РѕРІР°СЂРѕРІ Р±РµР· РѕРїС†РёР№/РІР°СЂРёР°РЅС‚РѕРІ/СЃРѕСЃС‚Р°РІР°)
         const autoRule = autoRulesByProduct.get(pid);
         let unitPrice = basePrice;
         let paidQty = qty;
@@ -4871,10 +5146,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           lineTotal = roundPrice(useLineTotalFromRequest ? lineTotalFromRequest : unitPrice * paidQty);
         }
 
-        // Расчет скидки для товара
-        // НЕ применяем скидку если:
-        // - line_total уже передан с фронта (скидка уже учтена в цене)
-        // - это auto-add товар
+        // Р Р°СЃС‡РµС‚ СЃРєРёРґРєРё РґР»СЏ С‚РѕРІР°СЂР°
+        // РќР• РїСЂРёРјРµРЅСЏРµРј СЃРєРёРґРєСѓ РµСЃР»Рё:
+        // - line_total СѓР¶Рµ РїРµСЂРµРґР°РЅ СЃ С„СЂРѕРЅС‚Р° (СЃРєРёРґРєР° СѓР¶Рµ СѓС‡С‚РµРЅР° РІ С†РµРЅРµ)
+        // - СЌС‚Рѕ auto-add С‚РѕРІР°СЂ
         let itemDiscountAmount = 0;
         let itemAppliedDiscount = null;
         const productDiscount = productDiscountMap.get(pid);
@@ -4899,10 +5174,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             appliedDiscounts.push(itemAppliedDiscount);
           }
         } else if (productDiscount && !autoRule && useLineTotalFromRequest) {
-          // Если line_total передан с фронта, но есть скидка — сохраняем информацию о скидке
-          // без повторного расчёта (скидка уже учтена в line_total)
+          // Р•СЃР»Рё line_total РїРµСЂРµРґР°РЅ СЃ С„СЂРѕРЅС‚Р°, РЅРѕ РµСЃС‚СЊ СЃРєРёРґРєР° вЂ” СЃРѕС…СЂР°РЅСЏРµРј РёРЅС„РѕСЂРјР°С†РёСЋ Рѕ СЃРєРёРґРєРµ
+          // Р±РµР· РїРѕРІС‚РѕСЂРЅРѕРіРѕ СЂР°СЃС‡С‘С‚Р° (СЃРєРёРґРєР° СѓР¶Рµ СѓС‡С‚РµРЅР° РІ line_total)
           const estimatedDiscount = discountHelpers.calculateDiscount(
-            unitPrice * paidQty, // Цена без скидки
+            unitPrice * paidQty, // Р¦РµРЅР° Р±РµР· СЃРєРёРґРєРё
             productDiscount.discount_type,
             Number(productDiscount.discount_value),
             productDiscount.max_discount_amount ? Number(productDiscount.max_discount_amount) : null
@@ -4923,12 +5198,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
         }
         
-        // Если line_total передан с фронта - используем его как есть (скидка уже применена)
-        // Иначе - вычитаем скидку
+        // Р•СЃР»Рё line_total РїРµСЂРµРґР°РЅ СЃ С„СЂРѕРЅС‚Р° - РёСЃРїРѕР»СЊР·СѓРµРј РµРіРѕ РєР°Рє РµСЃС‚СЊ (СЃРєРёРґРєР° СѓР¶Рµ РїСЂРёРјРµРЅРµРЅР°)
+        // РРЅР°С‡Рµ - РІС‹С‡РёС‚Р°РµРј СЃРєРёРґРєСѓ
         const lineTotalAfterDiscount = useLineTotalFromRequest ? lineTotal : roundPrice(lineTotal - itemDiscountAmount);
         total += lineTotalAfterDiscount;
 
-        // Получаем фото товара для сохранения в заказе
+        // РџРѕР»СѓС‡Р°РµРј С„РѕС‚Рѕ С‚РѕРІР°СЂР° РґР»СЏ СЃРѕС…СЂР°РЅРµРЅРёСЏ РІ Р·Р°РєР°Р·Рµ
         let photos = [];
         try {
           if (p.photos_json) {
@@ -4944,17 +5219,17 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           price: unitPrice,
           old_price: oldPrice,
           line_total: lineTotalAfterDiscount,
-          photos, // Сохраняем фото для отчетов
-          options: options.length > 0 ? options : undefined, // Сохраняем опции только если они есть
-          ingredients: ingredients.length > 0 ? ingredients : undefined, // Сохраняем ингредиенты только если они есть
-          variants: variantData ? [variantData] : undefined, // Сохраняем варианты только если они есть
-          auto_add: Number(it.auto_add || 0) === 1 ? 1 : 0, // Для сортировки: автодобавления (приборы) в конец списка
+          photos, // РЎРѕС…СЂР°РЅСЏРµРј С„РѕС‚Рѕ РґР»СЏ РѕС‚С‡РµС‚РѕРІ
+          options: options.length > 0 ? options : undefined, // РЎРѕС…СЂР°РЅСЏРµРј РѕРїС†РёРё С‚РѕР»СЊРєРѕ РµСЃР»Рё РѕРЅРё РµСЃС‚СЊ
+          ingredients: ingredients.length > 0 ? ingredients : undefined, // РЎРѕС…СЂР°РЅСЏРµРј РёРЅРіСЂРµРґРёРµРЅС‚С‹ С‚РѕР»СЊРєРѕ РµСЃР»Рё РѕРЅРё РµСЃС‚СЊ
+          variants: variantData ? [variantData] : undefined, // РЎРѕС…СЂР°РЅСЏРµРј РІР°СЂРёР°РЅС‚С‹ С‚РѕР»СЊРєРѕ РµСЃР»Рё РѕРЅРё РµСЃС‚СЊ
+          auto_add: Number(it.auto_add || 0) === 1 ? 1 : 0, // Р”Р»СЏ СЃРѕСЂС‚РёСЂРѕРІРєРё: Р°РІС‚РѕРґРѕР±Р°РІР»РµРЅРёСЏ (РїСЂРёР±РѕСЂС‹) РІ РєРѕРЅРµС† СЃРїРёСЃРєР°
         };
         
-        // Добавляем информацию о скидке если есть
+        // Р”РѕР±Р°РІР»СЏРµРј РёРЅС„РѕСЂРјР°С†РёСЋ Рѕ СЃРєРёРґРєРµ РµСЃР»Рё РµСЃС‚СЊ
         if (itemAppliedDiscount) {
-          // original_line_total - цена до скидки
-          // Используем переданный original_line_total, если есть (с учётом варианта)
+          // original_line_total - С†РµРЅР° РґРѕ СЃРєРёРґРєРё
+          // РСЃРїРѕР»СЊР·СѓРµРј РїРµСЂРµРґР°РЅРЅС‹Р№ original_line_total, РµСЃР»Рё РµСЃС‚СЊ (СЃ СѓС‡С‘С‚РѕРј РІР°СЂРёР°РЅС‚Р°)
           const originalLineTotalFromRequest = Number(it.original_line_total) || 0;
           const originalLineTotal = originalLineTotalFromRequest > 0
             ? roundPrice(originalLineTotalFromRequest)
@@ -4974,10 +5249,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       if (!normItems.length) return res.status(400).json({ ok: false, error: 'NO_PRODUCTS' });
 
-      // Применяем скидки клиента на весь заказ (если есть)
+      // РџСЂРёРјРµРЅСЏРµРј СЃРєРёРґРєРё РєР»РёРµРЅС‚Р° РЅР° РІРµСЃСЊ Р·Р°РєР°Р· (РµСЃР»Рё РµСЃС‚СЊ)
       const orderDiscountsForCustomer = await discountHelpers.getOrderDiscounts(db, tenantId, storeId, customerId, total);
       if (orderDiscountsForCustomer.length > 0) {
-        // Применяем скидки с учетом is_stackable
+        // РџСЂРёРјРµРЅСЏРµРј СЃРєРёРґРєРё СЃ СѓС‡РµС‚РѕРј is_stackable
         const { totalDiscount, appliedDiscounts: orderApplied } = discountHelpers.applyBestDiscounts(orderDiscountsForCustomer, total);
         if (totalDiscount > 0) {
           orderDiscountAmount += totalDiscount;
@@ -5034,17 +5309,17 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         total += deliveryCost;
       }
 
-      // Timezone филиала, к которому привязан заказ (orderStoreId)
+      // Timezone С„РёР»РёР°Р»Р°, Рє РєРѕС‚РѕСЂРѕРјСѓ РїСЂРёРІСЏР·Р°РЅ Р·Р°РєР°Р· (orderStoreId)
       const storeTimezone = await getStoreTimezone(tenantId, orderStoreId);
 
-      // Адрес и точка самовывоза нужны для проверки дубля (читаем до неё)
+      // РђРґСЂРµСЃ Рё С‚РѕС‡РєР° СЃР°РјРѕРІС‹РІРѕР·Р° РЅСѓР¶РЅС‹ РґР»СЏ РїСЂРѕРІРµСЂРєРё РґСѓР±Р»СЏ (С‡РёС‚Р°РµРј РґРѕ РЅРµС‘)
       const deliveryAddress = helpers.strOrNull(req.body.delivery_address);
       const pickupStoreId = Number.isFinite(Number(req.body.pickup_store_id)) ? Number(req.body.pickup_store_id) : null;
       const addrForDup = (deliveryAddress && String(deliveryAddress).trim()) ? String(deliveryAddress).trim() : '';
       const pickupIdForDup = (pickupStoreId && Number.isFinite(pickupStoreId)) ? pickupStoreId : 0;
 
-      // Серверная защита от дублей (двойная отправка / повтор запроса). Окно 60 сек.
-      // created_at в БД хранится в UTC — сравниваем тоже в UTC.
+      // РЎРµСЂРІРµСЂРЅР°СЏ Р·Р°С‰РёС‚Р° РѕС‚ РґСѓР±Р»РµР№ (РґРІРѕР№РЅР°СЏ РѕС‚РїСЂР°РІРєР° / РїРѕРІС‚РѕСЂ Р·Р°РїСЂРѕСЃР°). РћРєРЅРѕ 60 СЃРµРє.
+      // created_at РІ Р‘Р” С…СЂР°РЅРёС‚СЃСЏ РІ UTC вЂ” СЃСЂР°РІРЅРёРІР°РµРј С‚РѕР¶Рµ РІ UTC.
       const forceNew = req.body.force_new === true || req.body.force_new === 'true';
       if (!forceNew) {
         const dupThresholdStr = helpers.formatUtcDateTime(Date.now() - 60000);
@@ -5096,7 +5371,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const publicId = makeUuid36();
 
-      // created_at в БД сохраняем только в UTC.
+      // created_at РІ Р‘Р” СЃРѕС…СЂР°РЅСЏРµРј С‚РѕР»СЊРєРѕ РІ UTC.
       const createdAt = helpers.formatUtcDateTime(Date.now());
       let stockDeductedAt = null;
       let stockDocumentId = null;
@@ -5140,7 +5415,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
         }
 
-        // ВАЖНО: никаких updated_at тут нет (в твоей таблице order_orders его нет)
+        // Р’РђР–РќРћ: РЅРёРєР°РєРёС… updated_at С‚СѓС‚ РЅРµС‚ (РІ С‚РІРѕРµР№ С‚Р°Р±Р»РёС†Рµ order_orders РµРіРѕ РЅРµС‚)
         const [r] = await conn.query(
           `INSERT INTO order_orders
            (tenant_id, store_id, customer_id, customer_name, customer_phone, promo_code,
@@ -5191,7 +5466,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
              WHERE tenant_id=? AND store_id=? AND id=?`,
             [
               `ORD-${orderId}`,
-              `Автосписание по заказу #${orderId} (${publicId})`,
+              `РђРІС‚РѕСЃРїРёСЃР°РЅРёРµ РїРѕ Р·Р°РєР°Р·Сѓ #${orderId} (${publicId})`,
               tenantId,
               orderStoreId,
               stockDocumentId,
@@ -5214,7 +5489,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       }
       conn.release();
 
-      // Записываем использование скидок
+      // Р—Р°РїРёСЃС‹РІР°РµРј РёСЃРїРѕР»СЊР·РѕРІР°РЅРёРµ СЃРєРёРґРѕРє
       res.json({ ok: true, data: { id: orderId, public_id: publicId } });
 
       // Heavy post-actions run in background, response is already sent.
@@ -5322,12 +5597,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [storeId, tenantId]
       );
 
-      // Собираем продукты для расчёта display_price
+      // РЎРѕР±РёСЂР°РµРј РїСЂРѕРґСѓРєС‚С‹ РґР»СЏ СЂР°СЃС‡С‘С‚Р° display_price
       const productIds = [...new Set(rows.map(r => Number(r.product_id)).filter(Boolean))];
       const displayPriceMap = new Map();
 
       if (productIds.length > 0) {
-        // Формируем массив продуктов для enrichProductsWithDisplayPrice
+        // Р¤РѕСЂРјРёСЂСѓРµРј РјР°СЃСЃРёРІ РїСЂРѕРґСѓРєС‚РѕРІ РґР»СЏ enrichProductsWithDisplayPrice
         const productsForEnrich = rows.map(r => ({
           id: Number(r.product_id),
           price: Number(r.product_price || 0),
@@ -5336,7 +5611,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           base_qty: r.product_base_qty,
         }));
 
-        // Удаляем дубликаты по id
+        // РЈРґР°Р»СЏРµРј РґСѓР±Р»РёРєР°С‚С‹ РїРѕ id
         const uniqueProducts = [];
         const seenIds = new Set();
         for (const p of productsForEnrich) {
@@ -5386,14 +5661,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
   /**
    * GET /api/public/delivery-settings
-   * Возвращает настройки доставки для текущего филиала
+   * Р’РѕР·РІСЂР°С‰Р°РµС‚ РЅР°СЃС‚СЂРѕР№РєРё РґРѕСЃС‚Р°РІРєРё РґР»СЏ С‚РµРєСѓС‰РµРіРѕ С„РёР»РёР°Р»Р°
    */
   router.get('/delivery-settings', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
 
-      // Ищем настройку доставки, привязанную к текущему филиалу
+      // РС‰РµРј РЅР°СЃС‚СЂРѕР№РєСѓ РґРѕСЃС‚Р°РІРєРё, РїСЂРёРІСЏР·Р°РЅРЅСѓСЋ Рє С‚РµРєСѓС‰РµРјСѓ С„РёР»РёР°Р»Сѓ
       const [settings] = await db.query(
         `SELECT ds.id, ds.name, ds.delivery_cost, ds.min_order_amount, ds.free_delivery_from, ds.is_active
          FROM ten_delivery_settings ds
@@ -5404,7 +5679,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       );
 
       if (!settings.length) {
-        // Нет настроек - доставка бесплатная, без ограничений
+        // РќРµС‚ РЅР°СЃС‚СЂРѕРµРє - РґРѕСЃС‚Р°РІРєР° Р±РµСЃРїР»Р°С‚РЅР°СЏ, Р±РµР· РѕРіСЂР°РЅРёС‡РµРЅРёР№
         return res.json({
           ok: true,
           data: {
@@ -5434,3 +5709,4 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
   return router;
 };
+

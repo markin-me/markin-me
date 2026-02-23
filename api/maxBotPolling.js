@@ -178,29 +178,34 @@ async function cleanupPending(db) {
 async function getTenantReturnLinks(db, tenantId) {
   const tId = Number(tenantId);
   if (!Number.isFinite(tId) || tId <= 0) return { siteUrl: null, miniAppUrl: null };
-  const overrideSiteUrl = String(process.env.MAX_RETURN_SITE_URL || '').trim();
-  if (overrideSiteUrl) {
-    const normalized = overrideSiteUrl.replace(/\/+$/, '');
-    const botIdOverride = await getTenantMaxBotId(db, tId);
-    const miniAppUrlOverride = botIdOverride ? `https://max.ru/${encodeURIComponent(botIdOverride)}?startapp=shop` : null;
-    return { siteUrl: normalized, miniAppUrl: miniAppUrlOverride };
-  }
 
-  const [rows] = await db.query(
-    `SELECT custom_domain, subdomain
+  const [tenantRows] = await db.query(
+    `SELECT custom_domain, subdomain, max_mini_app_enabled
      FROM ten_tenants
      WHERE id=?
      LIMIT 1`,
     [tId]
   );
-  const row = rows[0] || {};
+  const row = tenantRows[0] || {};
+  const maxMiniAppEnabled = Number(row.max_mini_app_enabled ?? 1) === 1;
+
+  const overrideSiteUrl = String(process.env.MAX_RETURN_SITE_URL || '').trim();
+  if (overrideSiteUrl) {
+    const normalized = overrideSiteUrl.replace(/\/+$/, '');
+    const botIdOverride = maxMiniAppEnabled ? await getTenantMaxBotId(db, tId) : null;
+    const miniAppUrlOverride = botIdOverride
+      ? `https://max.ru/${encodeURIComponent(botIdOverride)}?startapp=shop`
+      : null;
+    return { siteUrl: normalized, miniAppUrl: miniAppUrlOverride };
+  }
+
   const baseDomain = String(process.env.TENANT_BASE_DOMAIN || 'markin-me.ru').trim();
   const host = row.custom_domain
     ? String(row.custom_domain).trim()
     : (row.subdomain ? `${String(row.subdomain).trim()}.${baseDomain}` : baseDomain);
   const siteUrl = host ? `https://${host}/shop` : null;
 
-  const botId = await getTenantMaxBotId(db, tId);
+  const botId = maxMiniAppEnabled ? await getTenantMaxBotId(db, tId) : null;
   const miniAppUrl = botId ? `https://max.ru/${encodeURIComponent(botId)}?startapp=shop` : null;
   return { siteUrl, miniAppUrl };
 }
@@ -239,6 +244,80 @@ async function issueOneTimeLoginToken(db, tenantId, customerId) {
     [Number(tenantId), Number(customerId), token]
   );
   return token;
+}
+
+async function findKnownCustomerForAuth(db, helpers, tenantId, maxUserId, phone) {
+  const tId = Number(tenantId);
+  const uId = String(maxUserId || '').trim();
+  const normalizedPhone = helpers && typeof helpers.normalizePhone === 'function'
+    ? helpers.normalizePhone(phone)
+    : String(phone || '').trim();
+  if (!tId || !uId) return null;
+
+  const [byMax] = await db.query(
+    `SELECT id
+     FROM cust_customers
+     WHERE tenant_id=? AND is_active=1 AND max_user_id=?
+     LIMIT 1`,
+    [tId, uId]
+  );
+  if (byMax.length) return Number(byMax[0].id);
+
+  if (!normalizedPhone) return null;
+
+  const [byPhone] = await db.query(
+    `SELECT id, max_user_id
+     FROM cust_customers
+     WHERE tenant_id=? AND is_active=1 AND phone=?
+     LIMIT 1`,
+    [tId, normalizedPhone]
+  );
+  if (!byPhone.length) return null;
+
+  const row = byPhone[0];
+  const currentMaxUserId = String(row.max_user_id || '').trim();
+  if (currentMaxUserId && currentMaxUserId !== uId) return null;
+
+  await db.query(
+    `UPDATE cust_customers
+     SET max_user_id=?,
+         phone_verified_at=COALESCE(phone_verified_at, NOW()),
+         updated_at=NOW()
+     WHERE tenant_id=? AND id=?`,
+    [uId, tId, Number(row.id)]
+  );
+  return Number(row.id);
+}
+
+async function buildLoginMessage(db, tenantId, customerId, okText) {
+  let text = String(okText || 'MAX успешно подключен к вашему аккаунту.');
+  let extraPayload = null;
+  const links = await getTenantReturnLinks(db, tenantId);
+  const loginToken = await issueOneTimeLoginToken(db, tenantId, Number(customerId));
+  const finishSiteUrl = buildFinishLoginUrl(links.siteUrl, loginToken, 'site');
+  const finishMiniAppUrl = links.miniAppUrl || null;
+  const buttons = [];
+  if (finishSiteUrl && isHttpsUrl(finishSiteUrl)) {
+    buttons.push([{ type: 'link', text: 'Открыть сайт', url: finishSiteUrl }]);
+  } else if (finishSiteUrl) {
+    text += `\nСайт: ${finishSiteUrl}`;
+  }
+  if (finishMiniAppUrl && isHttpsUrl(finishMiniAppUrl)) {
+    buttons.push([{ type: 'link', text: 'Открыть мини-приложение', url: finishMiniAppUrl }]);
+  } else if (finishMiniAppUrl) {
+    text += `\nМини-приложение: ${finishMiniAppUrl}`;
+  }
+  if (buttons.length) {
+    extraPayload = {
+      attachments: [
+        {
+          type: 'inline_keyboard',
+          payload: { buttons },
+        },
+      ],
+    };
+  }
+  return { text, extraPayload };
 }
 
 async function bindByPhoneDirect(db, helpers, tenantId, maxUserId, phone, senderName) {
@@ -363,6 +442,30 @@ function startMaxPolling(db, helpers) {
           if (!isGenericLinkPayload(startToken)) {
             await rememberPendingToken(db, tenantId, parsed.userId, startToken);
           }
+          const knownCustomerId = await findKnownCustomerForAuth(
+            db,
+            helpers,
+            tenantId,
+            parsed.userId,
+            parsed.phone
+          );
+          if (knownCustomerId) {
+            const loginMessage = await buildLoginMessage(
+              db,
+              tenantId,
+              knownCustomerId,
+              'Мы узнали ваш аккаунт. Выберите, куда перейти:'
+            );
+            await sendMaxMessage({
+              db,
+              tenantId,
+              botToken: token,
+              maxUserId: parsed.userId,
+              text: loginMessage.text,
+              extraPayload: loginMessage.extraPayload || undefined,
+            });
+            continue;
+          }
           const contactButtonAttachment = {
             attachments: [
               {
@@ -462,7 +565,7 @@ function startMaxPolling(db, helpers) {
             const links = await getTenantReturnLinks(db, tenantId);
             const loginToken = await issueOneTimeLoginToken(db, tenantId, Number(result.customerId));
             const finishSiteUrl = buildFinishLoginUrl(links.siteUrl, loginToken, 'site');
-            const finishMiniAppUrl = buildFinishLoginUrl(links.siteUrl, loginToken, 'miniapp');
+            const finishMiniAppUrl = links.miniAppUrl || null;
             const buttons = [];
             if (finishSiteUrl && isHttpsUrl(finishSiteUrl)) {
               buttons.push([{ type: 'link', text: 'Открыть сайт', url: finishSiteUrl }]);

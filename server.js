@@ -9,6 +9,7 @@ const helpers = require('./api/helpers');
 const { createOrdersEventsHub } = require('./api/ordersEvents');
 const { startPolling: startTelegramPolling, handleWebhookUpdate, setWebhook } = require('./api/telegramBot');
 const { startMaxPolling } = require('./api/maxBotPolling');
+const { startTenantTelegramAuthPolling } = require('./api/tgAuthBotPolling');
 
 // routers
 const makeAuthRouter = require('./api/auth');
@@ -438,6 +439,12 @@ app.listen(PORT, () => {
     startMaxPolling(db, helpers);
   } catch (e) {
     console.error('MAX bot start error:', e.message || e);
+  }
+
+  try {
+    startTenantTelegramAuthPolling(db, helpers);
+  } catch (e) {
+    console.error('TG auth polling start error:', e.message || e);
   }
 }).on('error', (err) => {
   console.error('Ошибка запуска сервера:', err);

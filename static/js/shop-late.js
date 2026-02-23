@@ -8953,6 +8953,15 @@ function renderSheetAddressList() {
     maxLoginBtn.textContent = "Войти через MAX";
     form.appendChild(maxLoginBtn);
 
+    const tgLoginBtn = document.createElement("button");
+    tgLoginBtn.type = "button";
+    tgLoginBtn.className = "btn";
+    tgLoginBtn.style.width = "100%";
+    tgLoginBtn.style.marginTop = "10px";
+    tgLoginBtn.style.display = "none";
+    tgLoginBtn.textContent = "\u0412\u043e\u0439\u0442\u0438 \u0447\u0435\u0440\u0435\u0437 Telegram";
+    form.appendChild(tgLoginBtn);
+
     (async function syncMaxLoginButtonVisibility() {
       try {
         const probe = await apiJson("/api/public/max/auth-link");
@@ -8960,6 +8969,16 @@ function renderSheetAddressList() {
         maxLoginBtn.style.display = hasLink ? "" : "none";
       } catch {
         maxLoginBtn.style.display = "none";
+      }
+    })();
+
+    (async function syncTgLoginButtonVisibility() {
+      try {
+        const probe = await apiJson("/api/public/tg/auth-link");
+        const hasLink = !!(probe && probe.ok !== false && probe.link);
+        tgLoginBtn.style.display = hasLink ? "" : "none";
+      } catch {
+        tgLoginBtn.style.display = "none";
       }
     })();
 
@@ -9011,6 +9030,8 @@ function renderSheetAddressList() {
       nextBtn.disabled = true;
       nextBtn.style.display = "none";
       bWrap.style.display = "grid";
+      bWrap.appendChild(maxLoginBtn);
+      bWrap.appendChild(tgLoginBtn);
       note.textContent = "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0434\u0430\u0442\u0443 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f (\u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433).";
       bday.focus();
     };
@@ -9080,6 +9101,31 @@ function renderSheetAddressList() {
       } finally {
         maxLoginBtn.disabled = false;
         maxLoginBtn.textContent = prev;
+      }
+    });
+
+    tgLoginBtn.addEventListener("click", async () => {
+      tgLoginBtn.disabled = true;
+      const prev = tgLoginBtn.textContent;
+      tgLoginBtn.textContent = "\u2026";
+      try {
+        const json = await apiJson("/api/public/tg/auth-link");
+        if (!json || json.ok === false || !json.link) {
+          const errCode = json && json.error ? String(json.error) : "";
+          if (errCode === "TG_BOT_NOT_CONFIGURED") {
+            alert("\u0411\u043e\u0442 Telegram \u043d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d \u0434\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0441\u0430\u0439\u0442\u0430");
+          } else {
+            alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0432\u0445\u043e\u0434 \u0447\u0435\u0440\u0435\u0437 Telegram");
+          }
+          return;
+        }
+        const opened = window.open(String(json.link), "_blank", "noopener,noreferrer");
+        if (!opened) return;
+      } catch {
+        alert("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u043e\u0442\u043a\u0440\u044b\u0442\u0438\u0438 Telegram");
+      } finally {
+        tgLoginBtn.disabled = false;
+        tgLoginBtn.textContent = prev;
       }
     });
 
@@ -11723,6 +11769,103 @@ function renderSheetAddressList() {
     maxLinkRow.appendChild(maxLinkBtn);
     settingsWrap.appendChild(maxLinkRow);
 
+    const tgLinkRow = document.createElement("div");
+    tgLinkRow.className = "shop-profile-settings-row";
+    const tgLinkLeft = document.createElement("div");
+    tgLinkLeft.style.display = "grid";
+    tgLinkLeft.style.gap = "2px";
+    const tgLinkTitle = document.createElement("div");
+    tgLinkTitle.className = "shop-profile-settings-title";
+    tgLinkTitle.textContent = "\u041f\u0440\u0438\u0432\u044f\u0437\u0430\u0442\u044c Telegram";
+    const tgLinkHint = document.createElement("div");
+    tgLinkHint.className = "muted";
+    tgLinkHint.textContent = "\u041d\u0435 \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d";
+    tgLinkLeft.appendChild(tgLinkTitle);
+    tgLinkLeft.appendChild(tgLinkHint);
+
+    const tgLinkBtn = document.createElement("button");
+    tgLinkBtn.type = "button";
+    tgLinkBtn.className = "btn btn-sm";
+    tgLinkBtn.textContent = "\u041f\u0440\u0438\u0432\u044f\u0437\u0430\u0442\u044c";
+
+    let tgLinkBusy = false;
+    let tgLinkPollTimer = null;
+
+    function setTgLinkUi(state) {
+      const linked = Boolean(state && state.linked);
+      const tgUserId = state && state.tgUserId ? String(state.tgUserId) : "";
+      if (linked) {
+        tgLinkBtn.disabled = false;
+        tgLinkBtn.textContent = "\u041f\u0435\u0440\u0435\u043f\u0440\u0438\u0432\u044f\u0437\u0430\u0442\u044c";
+        tgLinkHint.textContent = `ID: ${tgUserId}`;
+        return;
+      }
+      tgLinkBtn.disabled = Boolean(tgLinkBusy);
+      tgLinkBtn.textContent = tgLinkBusy ? "\u2026" : "\u041f\u0440\u0438\u0432\u044f\u0437\u0430\u0442\u044c";
+      if (!tgLinkBusy) tgLinkHint.textContent = "\u041d\u0435 \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d";
+    }
+
+    async function loadTgLinkStatus() {
+      try {
+        const json = await apiJson("/api/public/tg/link-status");
+        if (!json || json.ok === false) return false;
+        if (json.linked && json.data && json.data.telegram_user_id) {
+          setTgLinkUi({ linked: true, tgUserId: json.data.telegram_user_id });
+          return true;
+        }
+        setTgLinkUi({ linked: false });
+        return false;
+      } catch {
+        return false;
+      }
+    }
+
+    tgLinkBtn.addEventListener("click", async () => {
+      if (tgLinkBusy) return;
+      tgLinkBusy = true;
+      tgLinkHint.textContent = "\u041f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0430 \u0441\u0441\u044b\u043b\u043a\u0438\u2026";
+      setTgLinkUi({ linked: false });
+      try {
+        const json = await apiJson("/api/public/tg/link-token", { method: "POST", body: {} });
+        if (!json || json.ok === false || !json.link) {
+          const errCode = json && json.error ? String(json.error) : "";
+          if (errCode === "TG_BOT_NOT_CONFIGURED") {
+            alert("\u0411\u043e\u0442 Telegram \u043d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d \u0434\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0441\u0430\u0439\u0442\u0430");
+          } else {
+            alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0437\u0434\u0430\u0442\u044c \u0441\u0441\u044b\u043b\u043a\u0443 \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0438");
+          }
+          return;
+        }
+
+        const link = String(json.link);
+        try {
+          const opened = window.open(link, "_blank", "noopener,noreferrer");
+          if (!opened) return;
+        } catch {
+          alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u043d\u043e\u0432\u0443\u044e \u0432\u043a\u043b\u0430\u0434\u043a\u0443. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430.");
+        }
+
+        tgLinkHint.textContent = "\u041e\u0436\u0438\u0434\u0430\u0435\u043c \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0443\u2026";
+        if (tgLinkPollTimer) clearInterval(tgLinkPollTimer);
+        tgLinkPollTimer = setInterval(async () => {
+          const linked = await loadTgLinkStatus();
+          if (linked && tgLinkPollTimer) {
+            clearInterval(tgLinkPollTimer);
+            tgLinkPollTimer = null;
+          }
+        }, 4000);
+      } catch {
+        alert("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0435 Telegram");
+      } finally {
+        tgLinkBusy = false;
+        setTgLinkUi({ linked: false });
+      }
+    });
+
+    tgLinkRow.appendChild(tgLinkLeft);
+    tgLinkRow.appendChild(tgLinkBtn);
+    settingsWrap.appendChild(tgLinkRow);
+
     const phoneVerifyRow = document.createElement("div");
     phoneVerifyRow.className = "shop-profile-settings-row";
     const phoneVerifyLeft = document.createElement("div");
@@ -12004,6 +12147,7 @@ function renderSheetAddressList() {
       }
       if (tab === "settings") {
         loadMaxLinkStatus();
+        loadTgLinkStatus();
         loadPhoneVerifyStatus();
       }
     }
