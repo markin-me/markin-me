@@ -2,7 +2,17 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-  const TENANT_ID = 1;
+  const TENANT_ID = (() => {
+    const fromMeta = Number(document.querySelector('meta[name="tenant_id"]')?.content || 0);
+    if (Number.isFinite(fromMeta) && fromMeta > 0) return fromMeta;
+    try {
+      const raw = localStorage.getItem("tenant");
+      const parsed = raw ? JSON.parse(raw) : null;
+      const fromStorage = Number(parsed?.id || 0);
+      if (Number.isFinite(fromStorage) && fromStorage > 0) return fromStorage;
+    } catch {}
+    return 1;
+  })();
 
   // left
   const categoriesNav = $("#categoriesNav");
@@ -10226,6 +10236,8 @@ const isViewMode = state.comboPanel.mode === "view";
 
     // Обработчик клавиатуры для навигации фото
     let keyboardHandler = null;
+    let globalPhotoDropHandlers = null;
+    let globalPhotoPasteHandler = null;
 
     // Clone template content
     const template = document.querySelector("#tplProductEditor");
@@ -10624,6 +10636,16 @@ const isViewMode = state.comboPanel.mode === "view";
           document.removeEventListener("keydown", keyboardHandler);
           keyboardHandler = null;
         }
+        if (globalPhotoDropHandlers) {
+          document.removeEventListener("dragover", globalPhotoDropHandlers.docDragOver);
+          document.removeEventListener("drop", globalPhotoDropHandlers.docDrop);
+          globalPhotoDropHandlers = null;
+        }
+        if (globalPhotoPasteHandler) {
+          document.removeEventListener("paste", globalPhotoPasteHandler);
+          globalPhotoPasteHandler = null;
+        }
+        closeProductPhotoModal();
       }
     };
     
@@ -12229,10 +12251,22 @@ const isViewMode = state.comboPanel.mode === "view";
       renderPhotos();
     }
 
+    function isLikelyImageFile(file) {
+      if (!file) return false;
+      const mime = String(file.type || "").toLowerCase();
+      if (mime.startsWith("image/")) return true;
+      const name = String(file.name || "").toLowerCase();
+      return /\.(jpe?g|png|webp|gif|bmp|svg|heic|heif|avif)$/i.test(name);
+    }
+
+    function pickImageFiles(input) {
+      return Array.from(input || []).filter((f) => isLikelyImageFile(f));
+    }
+
     function addFiles(files) {
       const existingCount = draft.photos.length;
       const canAdd = Math.max(0, 10 - existingCount);
-      const take = Array.from(files).slice(0, canAdd);
+      const take = pickImageFiles(files).slice(0, canAdd);
 
       for (const f of take) {
         const preview = URL.createObjectURL(f);
@@ -12245,13 +12279,373 @@ const isViewMode = state.comboPanel.mode === "view";
       renderPhotos();
     }
 
+    let photoUploadSeq = 0;
+    async function addFilesAndUploadNow(files) {
+      const existingCount = draft.photos.length;
+      const canAdd = Math.max(0, 10 - existingCount);
+      const selected = pickImageFiles(files).slice(0, canAdd);
+      if (!selected.length) return;
+
+      const placeholders = selected.map((f) => {
+        const preview = URL.createObjectURL(f);
+        return {
+          kind: "file",
+          file: f,
+          preview,
+          fileSize: f.size,
+          __uploading: true,
+          __uploadKey: `up_${Date.now()}_${photoUploadSeq++}`
+        };
+      });
+      placeholders.forEach((ph) => draft.photos.push(ph));
+      if (draft.photos.length && draft.activePhotoIdx < 0) draft.activePhotoIdx = 0;
+      renderPhotos();
+
+      try {
+        const uploadResult = await apiUploadImages(selected);
+        const urls = Array.isArray(uploadResult?.urls) ? uploadResult.urls : [];
+        const sizes = Array.isArray(uploadResult?.sizes) ? uploadResult.sizes : [];
+
+        placeholders.forEach((ph, idx) => {
+          const at = draft.photos.findIndex((x) => x && x.__uploadKey === ph.__uploadKey);
+          if (at < 0) return;
+          const url = urls[idx];
+          if (!url) {
+            draft.photos.splice(at, 1);
+            try { URL.revokeObjectURL(ph.preview); } catch {}
+            return;
+          }
+          draft.photos[at] = {
+            kind: "url",
+            url,
+            fileSize: Number(sizes[idx]) > 0 ? Number(sizes[idx]) : (ph.fileSize || 0)
+          };
+          try { URL.revokeObjectURL(ph.preview); } catch {}
+        });
+
+        if (!draft.photos.length) {
+          draft.activePhotoIdx = -1;
+        } else if (draft.activePhotoIdx < 0 || draft.activePhotoIdx >= draft.photos.length) {
+          draft.activePhotoIdx = 0;
+        }
+        renderPhotos();
+      } catch (err) {
+        placeholders.forEach((ph) => {
+          const at = draft.photos.findIndex((x) => x && x.__uploadKey === ph.__uploadKey);
+          if (at >= 0) draft.photos.splice(at, 1);
+          try { URL.revokeObjectURL(ph.preview); } catch {}
+        });
+        if (!draft.photos.length) draft.activePhotoIdx = -1;
+        renderPhotos();
+        alert('Ошибка загрузки фотографий');
+      }
+    }
+
+    let productPhotoModalEscHandler = null;
+    function closeProductPhotoModal() {
+      const open = document.querySelectorAll(".product-photo-grid-modal-overlay[data-product-photo-modal='1']");
+      open.forEach((el) => el.remove());
+      if (productPhotoModalEscHandler) {
+        document.removeEventListener("keydown", productPhotoModalEscHandler);
+        productPhotoModalEscHandler = null;
+      }
+    }
+
+    function openProductPhotoGridModal() {
+      closeProductPhotoModal();
+      const overlay = document.createElement("div");
+      overlay.className = "product-photo-grid-modal-overlay";
+      overlay.setAttribute("data-product-photo-modal", "1");
+      const card = document.createElement("div");
+      card.className = "product-photo-grid-modal-card";
+      card.innerHTML = `
+        <div class="product-photo-grid-modal-head">
+          <div class="product-photo-grid-modal-title">\u0424\u043e\u0442\u043e\u0433\u0440\u0430\u0444\u0438\u0438 \u0442\u043e\u0432\u0430\u0440\u0430</div>
+          <button type="button" class="product-photo-grid-modal-close" aria-label="\u0417\u0430\u043a\u0440\u044b\u0442\u044c"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="product-photo-grid-modal-body">
+          <div class="product-photo-grid-modal-grid"></div>
+        </div>
+        <div class="product-photo-grid-modal-foot">
+          <button type="button" class="btn" data-role="close">\u0417\u0430\u043a\u0440\u044b\u0442\u044c</button>
+        </div>
+      `;
+      const grid = card.querySelector(".product-photo-grid-modal-grid");
+      const renderGrid = () => {
+        if (!grid) return;
+        draft.photos.forEach((ph) => {
+          if (!ph || ph.kind !== "url" || !ph.url || Number(ph.fileSize) > 0) return;
+          fetchPhotoSize(ph.url).then((size) => {
+            if (!size || Number(ph.fileSize) === Number(size)) return;
+            ph.fileSize = Number(size);
+            if (document.body.contains(card)) renderGrid();
+          });
+        });
+        const photosHtml = draft.photos.map((ph, idx) => {
+          const src = ph && ph.kind === "file" ? ph.preview : ph?.url;
+          if (!src) return `<div class="product-photo-grid-modal-tile is-empty"></div>`;
+          const localSize = ph && ph.kind === "file" && ph.file && Number(ph.file.size) > 0 ? Number(ph.file.size) : 0;
+          const resolvedSize = Number(ph?.fileSize) > 0 ? Number(ph.fileSize) : localSize;
+          const sizeLabel = resolvedSize > 0 ? formatFileSize(resolvedSize) : "";
+          const removeBtn = isView
+            ? ""
+            : `<button type="button" class="product-photo-grid-modal-remove" data-role="remove-photo" data-photo-idx="${idx}" aria-label="\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0444\u043e\u0442\u043e"><i class="fas fa-times"></i></button>`;
+          const dragAttr = isView ? "" : ` draggable="true"`;
+          return `
+            <div class="product-photo-grid-modal-item" data-photo-idx="${idx}"${dragAttr}>
+              <div class="product-photo-grid-modal-tile">
+                <img src="${escapeHtml(String(src))}" alt="">
+                ${removeBtn}
+              </div>
+              <div class="product-photo-grid-modal-size">${escapeHtml(sizeLabel)}</div>
+            </div>
+          `;
+        }).join("");
+        const addTileHtml = isView
+          ? ""
+          : `<button type="button" class="product-photo-grid-modal-tile product-photo-grid-modal-tile--add" data-role="add-photo" aria-label="\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0444\u043e\u0442\u043e"><i class="fas fa-plus"></i></button>`;
+        grid.innerHTML = photosHtml + addTileHtml;
+      };
+
+      const onClose = () => closeProductPhotoModal();
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+      renderGrid();
+      card.querySelector(".product-photo-grid-modal-close")?.addEventListener("click", onClose);
+      card.querySelector('[data-role="close"]')?.addEventListener("click", onClose);
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) onClose(); });
+      if (!isView) {
+        const onFileDragOver = (e) => {
+          e.preventDefault();
+        };
+        const onFileDrop = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          try {
+            const files = await extractImagesFromDataTransfer(e.dataTransfer);
+            if (!files.length) return;
+            await addFilesAndUploadNow(files);
+            renderGrid();
+          } catch {}
+        };
+        overlay.addEventListener("dragover", onFileDragOver);
+        card.addEventListener("dragover", onFileDragOver);
+        overlay.addEventListener("drop", onFileDrop);
+        card.addEventListener("drop", onFileDrop);
+      }
+      if (!isView && grid) {
+        let dragPhotoIdx = -1;
+        grid.addEventListener("dragstart", (e) => {
+          const item = e.target.closest?.(".product-photo-grid-modal-item[data-photo-idx]");
+          if (!item) return;
+          const idx = Number(item.getAttribute("data-photo-idx"));
+          if (!Number.isFinite(idx) || idx < 0) return;
+          dragPhotoIdx = idx;
+          item.classList.add("is-dragging");
+          if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", String(idx));
+          }
+        });
+        grid.addEventListener("dragover", (e) => {
+          if (dragPhotoIdx < 0) {
+            const hasExternalPayload =
+              (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) ||
+              (e.dataTransfer && e.dataTransfer.types && (
+                Array.from(e.dataTransfer.types).includes("Files") ||
+                Array.from(e.dataTransfer.types).includes("text/uri-list") ||
+                Array.from(e.dataTransfer.types).includes("text/html") ||
+                Array.from(e.dataTransfer.types).includes("text/plain")
+              ));
+            if (hasExternalPayload) {
+              e.preventDefault();
+            }
+            return;
+          }
+          const item = e.target.closest?.(".product-photo-grid-modal-item[data-photo-idx]");
+          if (!item) return;
+          const idx = Number(item.getAttribute("data-photo-idx"));
+          if (!Number.isFinite(idx) || idx < 0 || idx === dragPhotoIdx) return;
+          e.preventDefault();
+          item.classList.add("is-drop-target");
+        });
+        grid.addEventListener("dragleave", (e) => {
+          const item = e.target.closest?.(".product-photo-grid-modal-item[data-photo-idx]");
+          if (!item) return;
+          item.classList.remove("is-drop-target");
+        });
+        grid.addEventListener("drop", async (e) => {
+          if (dragPhotoIdx < 0) {
+            e.preventDefault();
+            e.stopPropagation();
+            try {
+              const files = await extractImagesFromDataTransfer(e.dataTransfer);
+              if (!files.length) return;
+              await addFilesAndUploadNow(files);
+              renderGrid();
+            } catch {}
+            return;
+          }
+          const item = e.target.closest?.(".product-photo-grid-modal-item[data-photo-idx]");
+          if (!item) return;
+          const dropIdx = Number(item.getAttribute("data-photo-idx"));
+          item.classList.remove("is-drop-target");
+          if (!Number.isFinite(dragPhotoIdx) || dragPhotoIdx < 0 || !Number.isFinite(dropIdx) || dropIdx < 0 || dropIdx === dragPhotoIdx) return;
+          e.preventDefault();
+          const [moved] = draft.photos.splice(dragPhotoIdx, 1);
+          draft.photos.splice(dropIdx, 0, moved);
+          if (draft.activePhotoIdx === dragPhotoIdx) {
+            draft.activePhotoIdx = dropIdx;
+          } else if (draft.activePhotoIdx === dropIdx) {
+            draft.activePhotoIdx = dragPhotoIdx;
+          } else if (dragPhotoIdx < draft.activePhotoIdx && dropIdx >= draft.activePhotoIdx) {
+            draft.activePhotoIdx--;
+          } else if (dragPhotoIdx > draft.activePhotoIdx && dropIdx <= draft.activePhotoIdx) {
+            draft.activePhotoIdx++;
+          }
+          dragPhotoIdx = -1;
+          renderPhotos();
+          renderGrid();
+        });
+        grid.addEventListener("dragend", () => {
+          dragPhotoIdx = -1;
+          grid.querySelectorAll(".product-photo-grid-modal-item.is-dragging").forEach((el) => el.classList.remove("is-dragging"));
+          grid.querySelectorAll(".product-photo-grid-modal-item.is-drop-target").forEach((el) => el.classList.remove("is-drop-target"));
+        });
+      }
+      card.addEventListener("click", (e) => {
+        if (isView) return;
+        const removeBtn = e.target.closest?.('[data-role="remove-photo"]');
+        if (removeBtn) {
+          const idx = Number(removeBtn.getAttribute("data-photo-idx"));
+          if (Number.isFinite(idx) && idx >= 0 && idx < draft.photos.length) {
+            const removed = draft.photos.splice(idx, 1);
+            if (removed[0] && removed[0].kind === "file") {
+              try { URL.revokeObjectURL(removed[0].preview); } catch {}
+            }
+            draft.activePhotoIdx = draft.photos.length ? 0 : -1;
+            renderPhotos();
+            renderGrid();
+          }
+          return;
+        }
+        if (e.target.closest?.('[data-role="add-photo"]') && ui.photosInput) {
+          ui.photosInput.click();
+        }
+      });
+      productPhotoModalEscHandler = (e) => { if (e.key === "Escape") onClose(); };
+      document.addEventListener("keydown", productPhotoModalEscHandler);
+    }
+
     // Загрузка фото через кнопку
     if (!isView) {
+      const isEditorActive = () => {
+        if (!document.body.contains(wrapper)) return false;
+        if (wrapper.getClientRects().length === 0) return false;
+        return true;
+      };
+      const parseImageUrlsFromText = (text) => {
+        if (!text || typeof text !== "string") return [];
+        const result = [];
+        const seen = new Set();
+        const push = (value) => {
+          if (!value) return;
+          const raw = String(value).trim();
+          if (!raw || seen.has(raw)) return;
+          const low = raw.toLowerCase();
+          const isDataImage = low.startsWith("data:image/");
+          const isHttp = low.startsWith("http://") || low.startsWith("https://");
+          if (!(isDataImage || isHttp)) return;
+          seen.add(raw);
+          result.push(raw);
+        };
+        text.split(/\r?\n/).forEach(push);
+        const imgSrcRe = /<img[^>]+src=["']([^"']+)["']/gi;
+        let m;
+        while ((m = imgSrcRe.exec(text)) !== null) push(m[1]);
+        return result;
+      };
+      const fetchImageAsFile = async (url, idx = 0) => {
+        try {
+          const res = await fetch(url, { credentials: "omit", mode: "cors" });
+          if (!res.ok) return null;
+          const blob = await res.blob();
+          if (!isLikelyImageFile({ type: blob.type || "" })) return null;
+          const lowType = String(blob.type || "").toLowerCase();
+          const ext = lowType.includes("png")
+            ? "png"
+            : lowType.includes("webp")
+              ? "webp"
+              : lowType.includes("gif")
+                ? "gif"
+                : "jpg";
+          return new File([blob], `drop-${Date.now()}-${idx}.${ext}`, { type: blob.type || "image/jpeg" });
+        } catch {
+          return null;
+        }
+      };
+      const fileFromItemEntry = (item) => new Promise((resolve) => {
+        try {
+          if (!item || typeof item.webkitGetAsEntry !== "function") return resolve(null);
+          const entry = item.webkitGetAsEntry();
+          if (!entry || !entry.isFile || typeof entry.file !== "function") return resolve(null);
+          entry.file(
+            (file) => resolve(file || null),
+            () => resolve(null)
+          );
+        } catch {
+          resolve(null);
+        }
+      });
+      const extractImagesFromDataTransfer = async (dt) => {
+        try {
+          if (!dt) return [];
+          const direct = pickImageFiles(dt.files || []);
+          if (direct.length) return direct;
+          const items = Array.from(dt.items || []);
+          const itemFiles = items.map((it) => it && it.getAsFile && it.getAsFile()).filter((f) => isLikelyImageFile(f));
+          if (itemFiles.length) return itemFiles;
+          const entryFiles = (await Promise.all(items.map((it) => fileFromItemEntry(it)))).filter((f) => isLikelyImageFile(f));
+          if (entryFiles.length) return entryFiles;
+          const payload = [];
+          const uriList = dt.getData && dt.getData("text/uri-list");
+          const plain = dt.getData && dt.getData("text/plain");
+          const html = dt.getData && dt.getData("text/html");
+          if (uriList) payload.push(uriList);
+          if (plain) payload.push(plain);
+          if (html) payload.push(html);
+          const urls = parseImageUrlsFromText(payload.join("\n"));
+          if (!urls.length) return [];
+          const fetched = await Promise.all(urls.slice(0, 6).map((u, idx) => fetchImageAsFile(u, idx)));
+          return fetched.filter((f) => isLikelyImageFile(f));
+        } catch {
+          return [];
+        }
+      };
+      const extractImagesFromClipboard = (cb) => {
+        try {
+          if (!cb) return [];
+          const direct = pickImageFiles(cb.files || []);
+          if (direct.length) return direct;
+          const items = Array.from(cb.items || []);
+          return items.map((it) => it && it.getAsFile && it.getAsFile()).filter((f) => isLikelyImageFile(f));
+        } catch {
+          return [];
+        }
+      };
+
       if (ui.addPhotosBtn) ui.addPhotosBtn.addEventListener("click", () => ui.photosInput.click());
       if (ui.photosInput) {
-        ui.photosInput.addEventListener("change", () => {
-          if (ui.photosInput.files && ui.photosInput.files.length) addFiles(ui.photosInput.files);
+        ui.photosInput.addEventListener("change", async () => {
+          if (ui.photosInput.files && ui.photosInput.files.length) {
+            try {
+              await addFilesAndUploadNow(ui.photosInput.files);
+            } catch {}
+          }
           ui.photosInput.value = "";
+          if (document.querySelector(".product-photo-grid-modal-overlay[data-product-photo-modal='1']")) {
+            openProductPhotoGridModal();
+          }
         });
       }
 
@@ -12267,17 +12661,52 @@ const isViewMode = state.comboPanel.mode === "view";
           ui.photoMainContainer.classList.remove("drag-over");
         });
 
-        ui.photoMainContainer.addEventListener("drop", (e) => {
+        ui.photoMainContainer.addEventListener("drop", async (e) => {
           e.preventDefault();
           e.stopPropagation();
           ui.photoMainContainer.classList.remove("drag-over");
           
-          const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
+          const files = await extractImagesFromDataTransfer(e.dataTransfer);
           if (files.length) {
-            addFiles(files);
+            void addFilesAndUploadNow(files).catch(() => {});
           }
         });
       }
+
+      const docDragOver = (e) => {
+        if (!isEditorActive()) return;
+        e.preventDefault();
+      };
+      const docDrop = async (e) => {
+        if (!isEditorActive()) return;
+        if (e.defaultPrevented) return;
+        e.preventDefault();
+        try {
+          const files = await extractImagesFromDataTransfer(e.dataTransfer);
+          if (!files.length) return;
+          void addFilesAndUploadNow(files).then(() => {
+            if (document.querySelector(".product-photo-grid-modal-overlay[data-product-photo-modal='1']")) {
+              openProductPhotoGridModal();
+            }
+          }).catch(() => {});
+        } catch {}
+      };
+      globalPhotoDropHandlers = { docDragOver, docDrop };
+      document.addEventListener("dragover", docDragOver);
+      document.addEventListener("drop", docDrop);
+
+      globalPhotoPasteHandler = (e) => {
+        if (!isEditorActive()) return;
+        const files = extractImagesFromClipboard(e.clipboardData);
+        if (!files.length) return;
+        e.preventDefault();
+        void addFilesAndUploadNow(files).then(() => {
+          if (document.querySelector(".product-photo-grid-modal-overlay[data-product-photo-modal='1']")) {
+            openProductPhotoGridModal();
+          }
+        }).catch(() => {});
+      };
+      document.addEventListener("paste", globalPhotoPasteHandler);
     }
 
     // Навигация стрелками
@@ -12286,6 +12715,12 @@ const isViewMode = state.comboPanel.mode === "view";
     }
     if (ui.photoNext) {
       ui.photoNext.addEventListener("click", () => navigatePhoto("next"));
+    }
+    if (ui.photoMainContainer) {
+      ui.photoMainContainer.addEventListener("click", (e) => {
+        if (e.target.closest("#pePhotoPrev, #pePhotoNext, .photo-dot")) return;
+        openProductPhotoGridModal();
+      });
     }
 
     // Навигация клавиатурой

@@ -48,7 +48,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     storage: uploadStorage,
     limits: { files: 10, fileSize: 5 * 1024 * 1024 },
     fileFilter(req, file, cb) {
-      const ok = /^image\/(jpeg|png|webp|gif)$/.test(file.mimetype);
+      const mime = String(file.mimetype || '').toLowerCase();
+      const name = String(file.originalname || '').toLowerCase();
+      const okByMime = /^image\//.test(mime);
+      const okByExt = /\.(jpe?g|png|webp|gif|bmp|svg|heic|heif|avif)$/i.test(name);
+      const ok = okByMime || okByExt;
       cb(ok ? null : new Error('ONLY_IMAGES'), ok);
     }
   });
@@ -60,13 +64,15 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
 
       // Читаем настройки конвертации из tenant
       const [tenantRows] = await db.query(
-        'SELECT img_webp_quality, img_thumb_quality, img_thumb_width, img_delete_original FROM ten_tenants WHERE id=? LIMIT 1',
+        'SELECT img_webp_quality, img_thumb_quality, img_thumb_width, img_main_width, img_webp_aggressive, img_delete_original FROM ten_tenants WHERE id=? LIMIT 1',
         [tenantId]
       );
       const imgSettings = tenantRows[0] || {};
       const webpQuality = imgSettings.img_webp_quality ?? 82;
       const thumbQuality = imgSettings.img_thumb_quality ?? 72;
       const thumbWidth = imgSettings.img_thumb_width ?? 480;
+      const mainWidth = imgSettings.img_main_width ?? 1200;
+      const webpAggressive = (imgSettings.img_webp_aggressive ?? 0) == 1;
       const deleteOriginal = imgSettings.img_delete_original ?? 1;
 
       // Гарантируем наличие WebP-варианта для каждого файла
@@ -74,10 +80,14 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
         files.map((f) =>
           helpers.ensureWebpVariant(
             f.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'products', String(tenantId), f.filename),
-            { quality: webpQuality, recompress: true }
+            { quality: webpQuality, width: mainWidth, aggressive: webpAggressive, recompress: true, forceUnique: true }
           )
         )
       );
+      // Не допускаем тихий fallback без конвертации: если WebP не получен, считаем загрузку ошибкой.
+      if (webpPaths.some((p) => !p || !/\.webp$/i.test(String(p)))) {
+        return res.status(500).json({ ok: false, error: 'IMAGE_CONVERSION_FAILED' });
+      }
       // Генерируем уменьшенные варианты для сетки витрины (LCP)
       await Promise.all(
         webpPaths
@@ -85,20 +95,32 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
           .map((p) => helpers.ensureThumbVariant(p, { width: thumbWidth, quality: thumbQuality }))
       );
 
-      // Удаляем оригиналы (jpg/png/gif) если включена настройка
+      // Удаляем исходные загруженные файлы, если включена настройка.
+      // Важно: для входного .webp конвертер может вернуть новый файл с другим именем,
+      // тогда исходный .webp тоже нужно удалить.
       if (deleteOriginal) {
-        for (const f of files) {
-          const ext = (path.extname(f.filename) || '').toLowerCase();
-          if (ext !== '.webp') {
-            const origPath = f.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'products', String(tenantId), f.filename);
+        for (let idx = 0; idx < files.length; idx++) {
+          const f = files[idx];
+          const origPath = f.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'products', String(tenantId), f.filename);
+          const convertedPath = webpPaths[idx];
+          const sameFile = convertedPath && path.resolve(String(convertedPath)) === path.resolve(String(origPath));
+          if (!sameFile) {
             fs.unlink(origPath, () => {});
           }
         }
       }
 
-      const webpName = (name) => name.replace(/\.(jpe?g|png|gif)$/i, '.webp');
       const staticRoot = path.join(__dirname, '..', '..');
-      const urls = files.map((f) => `/static/uploads/products/${tenantId}/${webpName(f.filename)}`);
+      const urls = files.map((f, idx) => {
+        const convertedPath = webpPaths[idx];
+        if (convertedPath) {
+          const rel = path.relative(path.join(__dirname, '..', '..', 'static'), convertedPath).replace(/\\/g, '/');
+          return `/static/${rel}`;
+        }
+        const ext = path.extname(f.filename || '');
+        const fallbackName = ext ? `${f.filename.slice(0, -ext.length)}.webp` : `${f.filename}.webp`;
+        return `/static/uploads/products/${tenantId}/${fallbackName}`;
+      });
 
       // Собираем размеры итоговых файлов
       const sizes = urls.map((url) => {

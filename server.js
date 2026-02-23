@@ -389,8 +389,7 @@ app.use('/api/admin/stock', authMiddleware, makeAdminStockRouter({ db, helpers, 
 // товары/категории/сортировка/загрузка — оставляем старые пути /api/prod_* и /api/sort/*
 // Применяем middleware ко всем роутам products роутера
 const adminProductsRouter = makeAdminProductsRouter({ db, helpers });
-adminProductsRouter.use(authMiddleware);
-app.use('/api', adminProductsRouter);
+app.use('/api', authMiddleware, adminProductsRouter);
 
 // ------------------------------
 // Global errors (в т.ч. multer)

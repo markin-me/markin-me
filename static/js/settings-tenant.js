@@ -3286,6 +3286,8 @@
     const imgThumbQualityInput = document.getElementById("settingsImgThumbQuality");
     const imgThumbQualityValue = document.getElementById("settingsImgThumbQualityValue");
     const imgThumbWidthInput = document.getElementById("settingsImgThumbWidth");
+    const imgMainWidthInput = document.getElementById("settingsImgMainWidth");
+    const imgWebpAggressiveInput = document.getElementById("settingsImgWebpAggressive");
     const imgDeleteOriginalInput = document.getElementById("settingsImgDeleteOriginal");
     const imagesSaveBtn = document.getElementById("settingsImagesSaveBtn");
 
@@ -3308,6 +3310,8 @@
         if (imgThumbQualityValue) imgThumbQualityValue.textContent = imgThumbQualityInput.value;
       }
       if (imgThumbWidthInput) imgThumbWidthInput.value = tenant.img_thumb_width ?? 480;
+      if (imgMainWidthInput) imgMainWidthInput.value = tenant.img_main_width ?? 1200;
+      if (imgWebpAggressiveInput) imgWebpAggressiveInput.checked = (tenant.img_webp_aggressive ?? 0) == 1;
       if (imgDeleteOriginalInput) imgDeleteOriginalInput.checked = (tenant.img_delete_original ?? 1) == 1;
     };
 
@@ -3317,6 +3321,8 @@
         if (imgWebpQualityInput) payload.img_webp_quality = Number(imgWebpQualityInput.value);
         if (imgThumbQualityInput) payload.img_thumb_quality = Number(imgThumbQualityInput.value);
         if (imgThumbWidthInput) payload.img_thumb_width = Number(imgThumbWidthInput.value);
+        if (imgMainWidthInput) payload.img_main_width = Number(imgMainWidthInput.value);
+        if (imgWebpAggressiveInput) payload.img_webp_aggressive = imgWebpAggressiveInput.checked;
         if (imgDeleteOriginalInput) payload.img_delete_original = imgDeleteOriginalInput.checked;
 
         imagesSaveBtn.disabled = true;
