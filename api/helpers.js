@@ -2,9 +2,10 @@ const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
 
-// Sharp может не работать на некоторых хостингах (native-модуль падает при загрузке).
-// Поэтому делаем его опциональным и включаем только при явном флаге SHARP_ENABLED=1.
-const SHARP_ENABLED = process.env.SHARP_ENABLED === '1';
+// Sharp optional mode:
+// - enabled by default if package is available
+// - can be force-disabled with SHARP_ENABLED=0
+const SHARP_ENABLED = process.env.SHARP_ENABLED !== '0';
 let sharp = null;
 if (SHARP_ENABLED) {
   try {
@@ -359,6 +360,22 @@ async function resolveCategoryIdFromQuery(db, tenantId, req) {
  */
 async function ensureWebpVariant(originalPath, opts = {}) {
   const quality = Number.isFinite(opts.quality) ? opts.quality : 82;
+  const width = Number.isFinite(opts.width) ? opts.width : null;
+  const aggressive = opts.aggressive === true;
+  const forceUnique = opts.forceUnique === true;
+  const aggressiveQuality = Math.max(1, Math.min(quality, Math.round(quality * 0.6)));
+  const webpOptions = aggressive
+    ? {
+        quality: aggressiveQuality,
+        alphaQuality: 50,
+        effort: 6,
+        smartSubsample: true,
+        nearLossless: false,
+        preset: "photo",
+        minSize: true,
+        mixed: true,
+      }
+    : { quality };
   try {
     if (!sharp) {
       // Обработка изображений отключена – возвращаем оригинал как есть.
@@ -370,11 +387,17 @@ async function ensureWebpVariant(originalPath, opts = {}) {
     // WebP на входе — пережимаем с нужным качеством (на месте)
     if (ext === '.webp') {
       if (opts.recompress) {
-        const tmpPath = originalPath + '.tmp';
-        await sharp(originalPath)
-          .webp({ quality })
-          .toFile(tmpPath);
-        fs.renameSync(tmpPath, originalPath);
+        const pipeline = sharp(originalPath);
+        if (width && width > 0) {
+          pipeline.resize({ width, withoutEnlargement: true });
+        }
+        const outBuffer = await pipeline.webp(webpOptions).toBuffer();
+        const dir = path.dirname(originalPath);
+        const base = path.basename(originalPath, '.webp');
+        const outName = `${base}-${crypto.randomBytes(4).toString('hex')}.webp`;
+        const outPath = path.join(dir, outName);
+        fs.writeFileSync(outPath, outBuffer);
+        return outPath;
       }
       return originalPath;
     }
@@ -382,22 +405,27 @@ async function ensureWebpVariant(originalPath, opts = {}) {
     const dir = path.dirname(originalPath);
     const base = path.basename(originalPath, ext);
     const webpPath = path.join(dir, `${base}.webp`);
+    const uniqueWebpPath = path.join(dir, `${base}-${crypto.randomBytes(4).toString('hex')}.webp`);
 
-    // Если WebP уже есть и не старше оригинала — оставляем как есть
-    try {
-      const [srcStat, webpStat] = [fs.statSync(originalPath), fs.statSync(webpPath)];
-      if (webpStat.mtimeMs >= srcStat.mtimeMs) {
-        return webpPath;
+    if (!forceUnique) {
+      // Если WebP уже есть и не старше оригинала — оставляем как есть
+      try {
+        const [srcStat, webpStat] = [fs.statSync(originalPath), fs.statSync(webpPath)];
+        if (webpStat.mtimeMs >= srcStat.mtimeMs) {
+          return webpPath;
+        }
+      } catch {
+        // Одного из файлов может не быть — просто продолжаем
       }
-    } catch {
-      // Одного из файлов может не быть — просто продолжаем
     }
 
-    await sharp(originalPath)
-      .webp({ quality })
-      .toFile(webpPath);
+    const pipeline = sharp(originalPath);
+    if (width && width > 0) {
+      pipeline.resize({ width, withoutEnlargement: true });
+    }
+    await pipeline.webp(webpOptions).toFile(forceUnique ? uniqueWebpPath : webpPath);
 
-    return webpPath;
+    return forceUnique ? uniqueWebpPath : webpPath;
   } catch (err) {
     console.error('ensureWebpVariant error for', originalPath, err);
     return null;

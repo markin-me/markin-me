@@ -1,4 +1,0 @@
-[dotenv@17.2.3] injecting env (6) from .env -- tip: ⚙️  enable debug logging with { debug: true }
-🚀 Сервер запущен на 3000
-📝 Откройте http://localhost:3000/login в браузере
-✅ Подключение к MySQL успешно!

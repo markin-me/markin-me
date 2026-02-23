@@ -631,6 +631,18 @@
             <input class="control" type="number" id="settingsImgThumbWidth" min="100" max="2000" step="10" data-tenant-input="img_thumb_width" />
           </div>
           <div class="settings-site-field">
+            <label class="field-label">MAIN PHOTO WIDTH (PX)</label>
+            <input class="control" type="number" id="settingsImgMainWidth" min="100" max="4000" step="10" data-tenant-input="img_main_width" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">АГРЕССИВНОЕ СЖАТИЕ WEBP</label>
+            <label class="switch">
+              <input class="switch-input" type="checkbox" id="settingsImgWebpAggressive" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Сильнее пережимать (особенно для исходников .webp)</span>
+            </label>
+          </div>
+          <div class="settings-site-field">
             <label class="field-label">УДАЛЯТЬ ОРИГИНАЛ ПОСЛЕ КОНВЕРТАЦИИ</label>
             <label class="switch">
               <input class="switch-input" type="checkbox" id="settingsImgDeleteOriginal" checked />

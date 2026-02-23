@@ -500,6 +500,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const imgWebpQuality = req.body.img_webp_quality !== undefined ? helpers.numOrNull(req.body.img_webp_quality) : undefined;
       const imgThumbQuality = req.body.img_thumb_quality !== undefined ? helpers.numOrNull(req.body.img_thumb_quality) : undefined;
       const imgThumbWidth = req.body.img_thumb_width !== undefined ? helpers.numOrNull(req.body.img_thumb_width) : undefined;
+      const imgMainWidth = req.body.img_main_width !== undefined ? helpers.numOrNull(req.body.img_main_width) : undefined;
+      const imgWebpAggressive = req.body.img_webp_aggressive !== undefined ? (helpers.toBool(req.body.img_webp_aggressive, false) ? 1 : 0) : undefined;
       const imgDeleteOriginal = req.body.img_delete_original !== undefined ? (helpers.toBool(req.body.img_delete_original, true) ? 1 : 0) : undefined;
 
       const telegramBotUsername = req.body.telegram_bot_username !== undefined ? helpers.strOrNull(req.body.telegram_bot_username) : undefined;
@@ -676,6 +678,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const nextImgWebpQuality = imgWebpQuality !== undefined ? clamp(imgWebpQuality ?? 82, 1, 100) : (current.img_webp_quality ?? 82);
       const nextImgThumbQuality = imgThumbQuality !== undefined ? clamp(imgThumbQuality ?? 72, 1, 100) : (current.img_thumb_quality ?? 72);
       const nextImgThumbWidth = imgThumbWidth !== undefined ? clamp(imgThumbWidth ?? 480, 100, 2000) : (current.img_thumb_width ?? 480);
+      const nextImgMainWidth = imgMainWidth !== undefined ? clamp(imgMainWidth ?? 1200, 100, 4000) : (current.img_main_width ?? 1200);
+      const nextImgWebpAggressive = imgWebpAggressive !== undefined ? imgWebpAggressive : (current.img_webp_aggressive ?? 0);
       const nextImgDeleteOriginal = imgDeleteOriginal !== undefined ? imgDeleteOriginal : (current.img_delete_original ?? 1);
 
       const nextTelegramBotUsername = telegramBotUsername !== undefined ? telegramBotUsername : (current.telegram_bot_username ?? null);
@@ -706,8 +710,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_delete_original=?, telegram_bot_username=?, telegram_bot_token=?, chat_welcome_message=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_widget_enabled=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgDeleteOriginal, nextTelegramBotUsername, nextTelegramBotToken, nextChatWelcomeMessage, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatWidgetEnabled, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, telegram_bot_username=?, telegram_bot_token=?, chat_welcome_message=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_widget_enabled=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextTelegramBotUsername, nextTelegramBotToken, nextChatWelcomeMessage, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatWidgetEnabled, tenantId]
       );
 
       const [rows] = await db.query(
