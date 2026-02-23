@@ -10774,14 +10774,7 @@ const isViewMode = state.comboPanel.mode === "view";
       photoPrev: $("#pePhotoPrev", wrapper),
       photoNext: $("#pePhotoNext", wrapper),
       photoDots: $("#pePhotoDots", wrapper),
-      photoSizeBadge: (() => {
-        const badge = document.createElement("span");
-        badge.className = "photo-size-badge";
-        badge.textContent = "...";
-        const container = $("#pePhotoMainContainer", wrapper);
-        if (container) container.appendChild(badge);
-        return badge;
-      })(),
+      photoSizeBadge: null,
       baseUnitSelect: $("#pe_base_unit_id", wrapper),
       baseQtyInput: $("#pe_base_qty", wrapper),
       pcsLinkWrap: $("#pePcsLinkWrap", wrapper),
@@ -12371,6 +12364,13 @@ const isViewMode = state.comboPanel.mode === "view";
         </div>
       `;
       const grid = card.querySelector(".product-photo-grid-modal-grid");
+      const modalBody = card.querySelector(".product-photo-grid-modal-body");
+      if (modalBody) {
+        const dropHint = document.createElement("div");
+        dropHint.className = "product-photo-grid-modal-drop-hint";
+        dropHint.textContent = "\u041f\u0435\u0440\u0435\u0442\u0430\u0449\u0438\u0442\u0435 \u0444\u043e\u0442\u043e \u0441\u044e\u0434\u0430 \u0438\u043b\u0438 \u043e\u0442\u043f\u0443\u0441\u0442\u0438\u0442\u0435 \u0434\u043b\u044f \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438";
+        modalBody.appendChild(dropHint);
+      }
       const renderGrid = () => {
         if (!grid) return;
         draft.photos.forEach((ph) => {
@@ -12406,6 +12406,20 @@ const isViewMode = state.comboPanel.mode === "view";
           : `<button type="button" class="product-photo-grid-modal-tile product-photo-grid-modal-tile--add" data-role="add-photo" aria-label="\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0444\u043e\u0442\u043e"><i class="fas fa-plus"></i></button>`;
         grid.innerHTML = photosHtml + addTileHtml;
       };
+      const extractModalDropFiles = async (dt) => {
+        try {
+          if (!dt) return [];
+          const dtFiles = Array.from(dt.files || []);
+          if (dtFiles.length) return dtFiles;
+          if (typeof extractImagesFromDataTransfer === "function") {
+            return await extractImagesFromDataTransfer(dt);
+          }
+          return [];
+        } catch {
+          return [];
+        }
+      };
+      let clearFileDragState = () => {};
 
       const onClose = () => closeProductPhotoModal();
       overlay.appendChild(card);
@@ -12415,21 +12429,63 @@ const isViewMode = state.comboPanel.mode === "view";
       card.querySelector('[data-role="close"]')?.addEventListener("click", onClose);
       overlay.addEventListener("click", (e) => { if (e.target === overlay) onClose(); });
       if (!isView) {
-        const onFileDragOver = (e) => {
-          e.preventDefault();
+        let externalDragDepth = 0;
+        const hasExternalFilePayload = (dt) => {
+          if (!dt) return false;
+          const types = Array.from(dt.types || []).map((t) => String(t));
+          if (dt.files && dt.files.length > 0) return true;
+          return (
+            types.includes("Files") ||
+            types.includes("application/x-moz-file") ||
+            types.includes("public.file-url")
+          );
         };
-        const onFileDrop = async (e) => {
+        const setFileDragState = (active) => {
+          card.classList.toggle("is-file-drag-over", !!active);
+        };
+        clearFileDragState = () => {
+          externalDragDepth = 0;
+          setFileDragState(false);
+        };
+        const onFileDragEnter = (e) => {
+          if (!hasExternalFilePayload(e.dataTransfer)) return;
           e.preventDefault();
           e.stopPropagation();
+          externalDragDepth += 1;
+          setFileDragState(true);
+        };
+        const onFileDragOver = (e) => {
+          if (!hasExternalFilePayload(e.dataTransfer)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+          setFileDragState(true);
+        };
+        const onFileDragLeave = (e) => {
+          if (!hasExternalFilePayload(e.dataTransfer)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          externalDragDepth = Math.max(0, externalDragDepth - 1);
+          if (!externalDragDepth) setFileDragState(false);
+        };
+        const onFileDrop = async (e) => {
+          if (!hasExternalFilePayload(e.dataTransfer)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          clearFileDragState();
           try {
-            const files = await extractImagesFromDataTransfer(e.dataTransfer);
+            const files = await extractModalDropFiles(e.dataTransfer);
             if (!files.length) return;
             await addFilesAndUploadNow(files);
             renderGrid();
           } catch {}
         };
+        overlay.addEventListener("dragenter", onFileDragEnter, true);
+        card.addEventListener("dragenter", onFileDragEnter, true);
         overlay.addEventListener("dragover", onFileDragOver);
         card.addEventListener("dragover", onFileDragOver);
+        overlay.addEventListener("dragleave", onFileDragLeave, true);
+        card.addEventListener("dragleave", onFileDragLeave, true);
         overlay.addEventListener("drop", onFileDrop);
         card.addEventListener("drop", onFileDrop);
       }
@@ -12478,8 +12534,9 @@ const isViewMode = state.comboPanel.mode === "view";
           if (dragPhotoIdx < 0) {
             e.preventDefault();
             e.stopPropagation();
+            clearFileDragState();
             try {
-              const files = await extractImagesFromDataTransfer(e.dataTransfer);
+              const files = await extractModalDropFiles(e.dataTransfer);
               if (!files.length) return;
               await addFilesAndUploadNow(files);
               renderGrid();
@@ -12509,6 +12566,7 @@ const isViewMode = state.comboPanel.mode === "view";
         });
         grid.addEventListener("dragend", () => {
           dragPhotoIdx = -1;
+          clearFileDragState();
           grid.querySelectorAll(".product-photo-grid-modal-item.is-dragging").forEach((el) => el.classList.remove("is-dragging"));
           grid.querySelectorAll(".product-photo-grid-modal-item.is-drop-target").forEach((el) => el.classList.remove("is-drop-target"));
         });
@@ -12600,8 +12658,14 @@ const isViewMode = state.comboPanel.mode === "view";
       const extractImagesFromDataTransfer = async (dt) => {
         try {
           if (!dt) return [];
+          const anyFiles = Array.from(dt.files || []);
+          if (anyFiles.length) {
+            return anyFiles;
+          }
           const direct = pickImageFiles(dt.files || []);
           if (direct.length) return direct;
+          const rawFiles = Array.from(dt.files || []).filter((f) => f && Number(f.size) > 0);
+          if (rawFiles.length) return rawFiles;
           const items = Array.from(dt.items || []);
           const itemFiles = items.map((it) => it && it.getAsFile && it.getAsFile()).filter((f) => isLikelyImageFile(f));
           if (itemFiles.length) return itemFiles;

@@ -8758,9 +8758,33 @@ body.page-chat .panel{
 }
 
 .product-photo-grid-modal-body{
+  position: relative;
   min-height: 0;
   overflow: auto;
   padding: 14px;
+}
+
+.product-photo-grid-modal-drop-hint{
+  position: absolute;
+  inset: 14px;
+  border-radius: 12px;
+  border: 2px dashed color-mix(in srgb, var(--color-primary), transparent 35%);
+  background: transparent;
+  color: transparent;
+  font-size: 0;
+  line-height: 0;
+  display: block;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.99);
+  transition: opacity .15s ease, transform .15s ease;
+  z-index: 3;
+}
+
+.product-photo-grid-modal-card.is-file-drag-over .product-photo-grid-modal-drop-hint{
+  opacity: 1;
+  transform: scale(1);
 }
 
 .product-photo-grid-modal-grid{
