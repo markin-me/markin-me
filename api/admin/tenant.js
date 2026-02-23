@@ -7,11 +7,53 @@ const bcrypt = require('bcryptjs');
 module.exports = function makeAdminTenantRouter({ db, helpers }) {
   const router = express.Router();
   const subdomainRe = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+  const tenantChatColumns = [
+    {
+      name: 'chat_welcome_message',
+      sql: "text DEFAULT NULL COMMENT 'Welcome text shown in customer chat'"
+    },
+    {
+      name: 'chat_assistant_name',
+      sql: "varchar(160) DEFAULT NULL COMMENT 'Virtual assistant display name'"
+    },
+    {
+      name: 'chat_operator_name',
+      sql: "varchar(160) DEFAULT NULL COMMENT 'Operator display name'"
+    },
+    {
+      name: 'chat_quick_questions_json',
+      sql: "text DEFAULT NULL COMMENT 'JSON array of chat quick questions'"
+    },
+    {
+      name: 'chat_assistant_gender',
+      sql: "char(1) DEFAULT NULL COMMENT 'Virtual assistant gender: m/f'"
+    },
+    {
+      name: 'chat_widget_enabled',
+      sql: "tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Show customer chat button in storefront'"
+    }
+  ];
+  let tenantChatColumnsReady = false;
+  let ensureTenantChatColumnsPromise = null;
 
   function normalizeSubdomain(value) {
     if (value === undefined || value === null) return null;
     const s = String(value).trim().toLowerCase();
     return s === '' ? null : s;
+  }
+
+  function normalizeChatAssistantGender(value) {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    const raw = String(value).trim().toLowerCase();
+    if (!raw) return null;
+    if (raw === 'm' || raw === 'male' || raw === 'man' || raw === 'м' || raw === 'муж' || raw === 'мужской') {
+      return 'm';
+    }
+    if (raw === 'f' || raw === 'female' || raw === 'woman' || raw === 'ж' || raw === 'жен' || raw === 'женский') {
+      return 'f';
+    }
+    return '__invalid__';
   }
 
   function makePrintApiToken() {
@@ -24,6 +66,48 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       [tenantId, storeId]
     );
     return rows.length ? Number(rows[0].id) : null;
+  }
+
+  async function ensureTenantChatColumns() {
+    if (tenantChatColumnsReady) return true;
+    if (ensureTenantChatColumnsPromise) return ensureTenantChatColumnsPromise;
+
+    ensureTenantChatColumnsPromise = (async () => {
+      const [columnRows] = await db.query('SHOW COLUMNS FROM ten_tenants');
+      const existing = new Set(
+        (Array.isArray(columnRows) ? columnRows : [])
+          .map((row) => String(row?.Field || '').trim())
+          .filter(Boolean)
+      );
+
+      for (const column of tenantChatColumns) {
+        if (existing.has(column.name)) continue;
+        try {
+          await db.query(`ALTER TABLE ten_tenants ADD COLUMN \`${column.name}\` ${column.sql}`);
+          existing.add(column.name);
+        } catch (err) {
+          if (String(err?.code || '') === 'ER_DUP_FIELDNAME') {
+            existing.add(column.name);
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      tenantChatColumnsReady = tenantChatColumns.every((column) => existing.has(column.name));
+      return tenantChatColumnsReady;
+    })()
+      .catch((err) => {
+        ensureTenantChatColumnsPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (tenantChatColumnsReady) {
+          ensureTenantChatColumnsPromise = null;
+        }
+      });
+
+    return ensureTenantChatColumnsPromise;
   }
 
   const listConfigs = {
@@ -420,10 +504,58 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
 
       const telegramBotUsername = req.body.telegram_bot_username !== undefined ? helpers.strOrNull(req.body.telegram_bot_username) : undefined;
       const telegramBotToken = req.body.telegram_bot_token !== undefined ? helpers.strOrNull(req.body.telegram_bot_token) : undefined;
+      const chatWelcomeMessage = req.body.chat_welcome_message !== undefined ? helpers.strOrNull(req.body.chat_welcome_message) : undefined;
+      const chatAssistantName = req.body.chat_assistant_name !== undefined ? helpers.strOrNull(req.body.chat_assistant_name) : undefined;
+      const chatOperatorName = req.body.chat_operator_name !== undefined ? helpers.strOrNull(req.body.chat_operator_name) : undefined;
+      let chatAssistantGender = undefined;
+      if (req.body.chat_assistant_gender !== undefined) {
+        chatAssistantGender = normalizeChatAssistantGender(req.body.chat_assistant_gender);
+        if (chatAssistantGender === '__invalid__') {
+          return res.status(400).json({ ok: false, error: 'BAD_CHAT_ASSISTANT_GENDER' });
+        }
+      }
+      const chatWidgetEnabled = req.body.chat_widget_enabled !== undefined
+        ? (helpers.toBool(req.body.chat_widget_enabled, true) ? 1 : 0)
+        : undefined;
+      let chatQuickQuestionsJson = undefined;
+      if (req.body.chat_quick_questions_json !== undefined) {
+        const rawQuestions = req.body.chat_quick_questions_json;
+        let parsedQuestions = [];
+        if (rawQuestions === null) {
+          parsedQuestions = [];
+        } else if (Array.isArray(rawQuestions)) {
+          parsedQuestions = rawQuestions;
+        } else if (typeof rawQuestions === 'string') {
+          const trimmed = rawQuestions.trim();
+          if (!trimmed) {
+            parsedQuestions = [];
+          } else {
+            try {
+              const json = JSON.parse(trimmed);
+              if (!Array.isArray(json)) {
+                return res.status(400).json({ ok: false, error: 'BAD_CHAT_QUESTIONS' });
+              }
+              parsedQuestions = json;
+            } catch {
+              parsedQuestions = trimmed.split(/\r?\n/);
+            }
+          }
+        } else {
+          return res.status(400).json({ ok: false, error: 'BAD_CHAT_QUESTIONS' });
+        }
+
+        const normalizedQuestions = parsedQuestions
+          .map((item) => String(item ?? '').trim())
+          .filter(Boolean)
+          .slice(0, 6);
+        chatQuickQuestionsJson = normalizedQuestions.length ? JSON.stringify(normalizedQuestions) : null;
+      }
 
       if (!tenantId) {
         return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       }
+
+      await ensureTenantChatColumns();
 
       const [currentRows] = await db.query(
         'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
@@ -548,6 +680,20 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
 
       const nextTelegramBotUsername = telegramBotUsername !== undefined ? telegramBotUsername : (current.telegram_bot_username ?? null);
       const nextTelegramBotToken = telegramBotToken !== undefined ? telegramBotToken : (current.telegram_bot_token ?? null);
+      const nextChatWelcomeMessage = chatWelcomeMessage !== undefined ? chatWelcomeMessage : (current.chat_welcome_message ?? null);
+      const nextChatAssistantName = chatAssistantName !== undefined ? chatAssistantName : (current.chat_assistant_name ?? null);
+      const nextChatOperatorName = chatOperatorName !== undefined ? chatOperatorName : (current.chat_operator_name ?? null);
+      const currentChatAssistantGenderRaw = normalizeChatAssistantGender(current.chat_assistant_gender);
+      const currentChatAssistantGender =
+        currentChatAssistantGenderRaw === 'm' || currentChatAssistantGenderRaw === 'f'
+          ? currentChatAssistantGenderRaw
+          : null;
+      const nextChatAssistantGender =
+        chatAssistantGender !== undefined ? chatAssistantGender : currentChatAssistantGender;
+      const nextChatQuickQuestionsJson = chatQuickQuestionsJson !== undefined ? chatQuickQuestionsJson : (current.chat_quick_questions_json ?? null);
+      const nextChatWidgetEnabled = chatWidgetEnabled !== undefined
+        ? chatWidgetEnabled
+        : (Number(current.chat_widget_enabled) === 0 ? 0 : 1);
 
       if (email !== undefined && email && email !== current.email) {
         const [existsEmail] = await db.query(
@@ -560,8 +706,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_delete_original=?, telegram_bot_username=?, telegram_bot_token=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgDeleteOriginal, nextTelegramBotUsername, nextTelegramBotToken, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_delete_original=?, telegram_bot_username=?, telegram_bot_token=?, chat_welcome_message=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_widget_enabled=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgDeleteOriginal, nextTelegramBotUsername, nextTelegramBotToken, nextChatWelcomeMessage, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatWidgetEnabled, tenantId]
       );
 
       const [rows] = await db.query(

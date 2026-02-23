@@ -230,6 +230,7 @@
   const CLIENTS_PAGE_LIMIT = 80;
   const CLIENTS_SCROLL_THRESHOLD_PX = 220;
   let clientsRequestToken = 0;
+  let clientProfileRequestToken = 0;
   let orderRequestToken = 0;
   let discountCustomerSearchToken = 0;
   let discountCustomerSearchDebounce = null;
@@ -3094,6 +3095,7 @@
   // Open client
   // -----------------------------
   async function openClientById(id) {
+    const requestToken = ++clientProfileRequestToken;
     state.activeClientId = Number(id) || null;
     state.activeOrderId = null;
     state.activeOrder = null;
@@ -3104,6 +3106,7 @@
     if (row) row.classList.add("is-active");
 
     const json = await apiJson(`/api/admin/clients/${state.activeClientId}`);
+    if (requestToken !== clientProfileRequestToken) return;
     const loadedClient = json?.data || null;
     setClient(loadedClient);
 
@@ -3123,25 +3126,103 @@
     setContentTab("addresses");
 
     await loadAddresses();
+    if (requestToken !== clientProfileRequestToken) return;
 
     // Reset address form
     if (addrFormCard) addrFormCard.classList.add("hidden");
     if (addrToggleBtn) addrToggleBtn.textContent = "+ Новый адрес";
   }
 
-  async function selectClient(id, preferredTitle = "") {
+  function buildGuestClientProfile(clientId, preferredTitle = "") {
+    const title = String(preferredTitle || "").trim() || "\u0413\u043e\u0441\u0442\u044c";
+    return {
+      id: Number(clientId || 0) || 0,
+      name: title,
+      phone: "",
+      birthday: "",
+      photo: "",
+      total_orders: 0,
+      total_spent: 0,
+      last_order_date: "",
+      created_at: "",
+      is_guest_chat: true,
+    };
+  }
+
+  function normalizeGuestTitle(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/\u0451/g, "\u0435")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function isGuestTitle(value) {
+    const normalized = normalizeGuestTitle(value);
+    if (!normalized) return false;
+    return /^\u0433\u043e\u0441\u0442\u044c\b/.test(normalized);
+  }
+
+  async function openGuestClientById(id, preferredTitle = "") {
+    const requestToken = ++clientProfileRequestToken;
+    const clientId = Number(id) || null;
+    state.activeClientId = null;
+    state.activeOrderId = null;
+    state.activeOrder = null;
+
+    $$(".order-row.is-active", document).forEach((n) => n.classList.remove("is-active"));
+    const row = $(`.order-row[data-client-id="${clientId}"]`, document);
+    if (row) row.classList.add("is-active");
+
+    setClient(buildGuestClientProfile(clientId, preferredTitle));
+
+    const activeTab = tabsState.tabs.find((t) => t.key === tabsState.activeKey);
+    if (activeTab && activeTab.type === "client" && Number(activeTab.id) === Number(clientId)) {
+      const nextTitle = String(preferredTitle || "").trim() || "\u0413\u043e\u0441\u0442\u044c";
+      if (activeTab.title !== nextTitle) {
+        activeTab.title = nextTitle;
+        renderTabs();
+      }
+    }
+
+    hideEmptyState();
+    showOrdersList();
+    setContentTab("addresses");
+
+    state.addresses = [];
+    state.clientOrders = [];
+    state.clientDiscounts = [];
+    renderAddresses();
+    renderClientOrders();
+    renderClientDiscounts();
+    if (requestToken !== clientProfileRequestToken) return;
+
+    if (addrFormCard) addrFormCard.classList.add("hidden");
+    if (addrToggleBtn) addrToggleBtn.textContent = "+ \u041d\u043e\u0432\u044b\u0439 \u0430\u0434\u0440\u0435\u0441";
+  }
+
+  async function selectClient(id, preferredTitle = "", options = {}) {
     const clientId = Number(id) || null;
     if (!clientId) return;
+    const opts = options && typeof options === "object" ? options : {};
+    const hintedTitle = String(preferredTitle || "").trim();
+    const isGuestChatClient = opts.chatGuest === true || isGuestTitle(hintedTitle);
 
     const clientData = state.clients.find((x) => Number(x.id) === clientId);
-    const hintedTitle = String(preferredTitle || "").trim();
-    const title = String(clientData?.name || "").trim() || hintedTitle || "Клиент";
+    const title = isGuestChatClient
+      ? (hintedTitle || "\u0413\u043e\u0441\u0442\u044c")
+      : (String(clientData?.name || "").trim() || hintedTitle || "\u041a\u043b\u0438\u0435\u043d\u0442");
 
     ensureTab({
       type: 'client',
       id: clientId,
       title,
-      onActivate: () => openClientById(clientId),
+      onActivate: () => (
+        isGuestChatClient
+          ? openGuestClientById(clientId, title)
+          : openClientById(clientId)
+      ),
     });
 
     if (isMobile()) openSheet();
@@ -3632,8 +3713,11 @@
     loadDiscounts().catch(console.error);
   });
   window.__clientsDashboardApi = {
-    selectClientById(id, preferredTitle = "") {
-      return selectClient(id, preferredTitle);
+    selectClientById(id, preferredTitle = "", options = {}) {
+      return selectClient(id, preferredTitle, options);
+    },
+    selectGuestChatClient(id, preferredTitle = "") {
+      return selectClient(id, preferredTitle, { chatGuest: true });
     },
     refreshClients() {
       return loadClients();

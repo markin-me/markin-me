@@ -2,7 +2,9 @@
   const openBtn = document.getElementById("shopCompanyChatOpenBtn");
   const unreadBadge = document.getElementById("shopCompanyChatUnreadBadge");
   const overlay = document.getElementById("shopCompanyChatOverlay");
+  const modalHeader = overlay ? overlay.querySelector(".shop-company-chat-modal__header") : null;
   const modalBody = overlay ? overlay.querySelector(".shop-company-chat-modal__body") : null;
+  const modalTitle = document.getElementById("shopCompanyChatTitle");
   const closeBtn = document.getElementById("shopCompanyChatCloseBtn");
   const feed = document.getElementById("shopCompanyChatFeed");
   const thread = document.getElementById("shopCompanyChatThread");
@@ -37,8 +39,9 @@
   let typingIndicator = document.getElementById("shopCompanyChatTypingIndicator");
   const reactionBar = document.getElementById("shopCompanyChatReactionBar");
 
-  if (!openBtn || !overlay || !modalBody || !closeBtn) return;
+  if (!openBtn || !overlay || !modalHeader || !modalBody || !modalTitle || !closeBtn) return;
   if (!feed || !thread || !composer || !selectionToolbar || !selectionCloseBtn || !selectionCountEl || !selectionCopyBtn || !selectionDeleteBtn || !attachBtn || !attachInput || !attachPreviewOverlay || !attachPreviewCloseBtn || !attachPreviewTitle || !attachPreviewImage || !attachPreviewThumbs || !attachPreviewEmojiBtn || !attachPreviewCaption || !attachPreviewSendBtn || !imageViewerOverlay || !imageViewerCloseBtn || !imageViewerImage || !imageViewerCard || !input || !emojiBtn || !emojiPopover || !scrollDownBtn || !reactionBar) return;
+  const initialModalTitleText = String(modalTitle.textContent || "").trim() || "\u0427\u0430\u0442";
 
   const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/img/google/64";
   const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/emoji.json";
@@ -67,13 +70,13 @@
     flags: ["🏳️","🏴","🏁","🚩","🏳️‍🌈","🏳️‍⚧️","🇷🇺","🇺🇸","🇬🇧","🇩🇪","🇫🇷","🇪🇸","🇮🇹","🇺🇦","🇰🇿","🇧🇾","🇦🇲","🇬🇪","🇦🇿","🇹🇷","🇨🇳","🇯🇵","🇰🇷","🇮🇳","🇧🇷","🇨🇦","🇦🇺","🇲🇽","🇦🇪","🇸🇦","🇮🇱","🇵🇱","🇳🇱","🇸🇪","🇳🇴","🇫🇮","🇨🇭","🇦🇹","🇨🇿","🇸🇰","🇷🇴","🇧🇬","🇷🇸","🇭🇷","🇸🇮","🇪🇪","🇱🇻","🇱🇹","🇵🇹","🇬🇷"]
   };
   const QUICK_REACTIONS = [
-    "\u{1F44D}",
+    "\u{1F642}",
+    "\u{1F622}",
     "\u{2764}\u{FE0F}",
+    "\u{1F44D}",
+    "\u{1F44E}",
     "\u{1F525}",
-    "\u{1F602}",
-    "\u{1F970}",
-    "\u{1F64F}",
-    "\u{1FAE8}",
+    "\u{1F621}",
   ];
   const EXTRA_REACTIONS = [
     "\u{1F622}",
@@ -88,6 +91,7 @@
   const CHAT_THREAD_WAIT_RETRY_MS = 1200;
   const CHAT_THREAD_PAGE_SIZE = 60;
   const CHAT_THREAD_PAGE_MAX_SIZE = 200;
+  const CHAT_DROP_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif|heic|heif)$/i;
   const CHAT_AUTOSCROLL_MS = 170;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
   const CHAT_TYPING_HEARTBEAT_MS = 1800;
@@ -124,13 +128,20 @@
   let emojiRecentList = [];
   let emojiActiveCategory = "people";
   let emojiDatasetPromise = null;
+  let emojiPopoverMode = "composer";
+  let emojiPopoverReactionMessageId = "";
 
-  const QUICK_OPTIONS = [
-    "Где мой заказ?",
-    "Вопрос по качеству товара",
-    "Вопрос по комплектации заказа",
-    "Другой вопрос",
+  const DEFAULT_CHAT_QUICK_QUESTIONS = [
+    "\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?",
+    "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430",
+    "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430",
+    "\u0414\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
   ];
+  const CHAT_QUICK_QUESTIONS_MAX = 6;
+  const CHAT_SETTINGS_API_URL = "/api/public/tenant/chat-settings";
+  const CHAT_ASSISTANT_GENDER_MALE = "m";
+  const CHAT_ASSISTANT_GENDER_FEMALE = "f";
+  const DEFAULT_CHAT_ASSISTANT_GENDER = CHAT_ASSISTANT_GENDER_MALE;
 
   const QUICK_REPLIES = {
     "где мой заказ?":
@@ -140,16 +151,86 @@
     "вопрос по качеству товара":
       "Извините за ситуацию. Напишите, пожалуйста, какой товар и что именно не так, и я передам обращение в поддержку.",
     "вопрос по комплектации заказа":
-      "Поняла. Подскажите, чего не хватает или что было лишним, чтобы мы быстро все исправили.",
+      "Понял. Подскажите, чего не хватает или что было лишним, чтобы мы быстро все исправили.",
     "другой вопрос":
       "Я на связи. Опишите ваш вопрос, и я постараюсь помочь или переключу на оператора.",
   };
+  const HOT_QUESTION_ORDER_KEY = "\u0433\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437";
+  const HOT_QUESTION_ORDER_KEY_ALT = "\u0433\u0434\u0435 \u0437\u0430\u043a\u0430\u0437";
+  const HOT_QUESTION_QUALITY_KEY =
+    "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430";
+  const HOT_QUESTION_COMPLETENESS_KEY =
+    "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430";
+  const HOT_QUESTION_OTHER_KEY =
+    "\u0434\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441";
+  const HOT_QUESTION_GUEST_PHONE_REPLY =
+    "\u041d\u0435 \u043c\u043e\u0433\u0443 \u043d\u0430\u0439\u0442\u0438 \u0432\u0430\u0441 \u0432 \u0431\u0430\u0437\u0435. " +
+    "\u041f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430.";
+  const HOT_QUESTION_NO_ACTIVE_ORDERS_REPLY =
+    "\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u043b: \u0441\u0435\u0439\u0447\u0430\u0441 \u0443 \u0432\u0430\u0441 \u043d\u0435\u0442 " +
+    "\u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0445 \u0437\u0430\u043a\u0430\u0437\u043e\u0432.";
+  const HOT_QUESTION_NO_ACTIVE_ORDERS_REPLY_FEMALE =
+    "\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u043b\u0430: \u0441\u0435\u0439\u0447\u0430\u0441 \u0443 \u0432\u0430\u0441 \u043d\u0435\u0442 " +
+    "\u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0445 \u0437\u0430\u043a\u0430\u0437\u043e\u0432.";
+  const HOT_QUESTION_ORDER_STATUS_UNKNOWN = "\u0421\u0442\u0430\u0442\u0443\u0441 \u0443\u0442\u043e\u0447\u043d\u044f\u0435\u0442\u0441\u044f";
+  const HOT_QUESTION_ORDER_LIST_PREFIX = "\u041d\u0430\u0448\u0435\u043b \u0432\u0430\u0448\u0438 \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0435 \u0437\u0430\u043a\u0430\u0437\u044b.";
+  const HOT_QUESTION_ORDER_LIST_PREFIX_FEMALE = "\u041d\u0430\u0448\u043b\u0430 \u0432\u0430\u0448\u0438 \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0435 \u0437\u0430\u043a\u0430\u0437\u044b.";
+  const HOT_QUESTION_QUALITY_REPLY =
+    "\u041e\u0447\u0435\u043d\u044c \u0436\u0430\u043b\u044c, \u0447\u0442\u043e \u0442\u0430\u043a \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u043e\u0441\u044c. " +
+    "\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, " +
+    "\u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a.";
+  const HOT_QUESTION_COMPLETENESS_REPLY =
+    "\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, " +
+    "\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c.";
+  const HOT_QUESTION_COMPLETENESS_REPLY_FEMALE =
+    "\u041f\u043e\u043d\u044f\u043b\u0430. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, " +
+    "\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c.";
+  const HOT_QUESTION_OTHER_REPLY =
+    "\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. \u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435.";
+  const HOT_QUESTION_GENERIC_DETAILS_REPLY =
+    "\u0427\u0442\u043e\u0431\u044b \u043f\u0435\u0440\u0435\u0434\u0430\u0442\u044c \u043e\u0431\u0440\u0430\u0449\u0435\u043d\u0438\u0435 \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440\u0443, " +
+    "\u043e\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u0441\u0438\u0442\u0443\u0430\u0446\u0438\u044e \u0447\u0443\u0442\u044c \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435.";
+  const HOT_QUESTION_OPERATOR_HANDOFF_REPLY =
+    "\u041f\u0435\u0440\u0435\u0434\u0430\u044e \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440\u0443. " +
+    "\u041e\u043d \u043e\u0442\u0432\u0435\u0442\u0438\u0442 \u0432 \u044d\u0442\u043e\u043c \u0447\u0430\u0442\u0435.";
+  const ASSISTANT_MESSAGE_ID_PREFIX = "assistant-auto-";
+  const HOT_QUESTION_PHONE_PATTERN = /(?:\+?\d[\d\s\-()]{8,}\d)/g;
+  const HOT_QUESTION_ORDER_CARD_MESSAGE_RE = /^assistant-auto-(?:where-order|phone-order)-o([0-9_]+)-/;
+  const HOT_QUESTION_ORDER_CARD_PHOTOS_MAX = 4;
+  const CHAT_ORDER_DETAILS_TITLE = "\u0414\u0435\u0442\u0430\u043b\u0438 \u0437\u0430\u043a\u0430\u0437\u0430";
+  const CHAT_ORDER_LOADING_TEXT = "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430\u2026";
+  const CHAT_ORDER_LOAD_ERROR_TEXT = "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0434\u0435\u0442\u0430\u043b\u0438 \u0437\u0430\u043a\u0430\u0437\u0430.";
 
-  const VIRTUAL_ASSISTANT_NAME = "Ням-Ням";
-  const DAILY_WELCOME_TEXT =
-    "Привет! Я виртуальный помощник Ням-Ням!\n" +
-    "Если ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.";
-  const DAILY_OPTIONS_TEXT = "Чтобы я смог вам помочь, выберите категорию ниже:";
+  const DEFAULT_CHAT_ASSISTANT_NAME = "\u041d\u044f\u043c-\u041d\u044f\u043c";
+  const DEFAULT_CHAT_WELCOME_MESSAGE =
+    "\u041f\u0440\u0438\u0432\u0435\u0442! \u042f \u0432\u0438\u0440\u0442\u0443\u0430\u043b\u044c\u043d\u044b\u0439 \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u043a \u041d\u044f\u043c-\u041d\u044f\u043c!\n" +
+    "\u0415\u0441\u043b\u0438 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u0437\u0430\u043a\u0430\u0437\u0443, \u0442\u043e \u0441\u0435\u0433\u043e\u0434\u043d\u044f " +
+    "\u0441\u0442\u0430\u043b\u043a\u0438\u0432\u0430\u0435\u043c\u0441\u044f \u0441\u043e \u0441\u043b\u043e\u0436\u043d\u043e\u0441\u0442\u044f\u043c\u0438 \u0438\u0437-\u0437\u0430 " +
+    "\u043f\u043e\u0433\u043e\u0434\u043d\u044b\u0445 \u0443\u0441\u043b\u043e\u0432\u0438\u0439: \u043c\u043e\u0436\u0435\u043c \u0432\u0435\u0437\u0442\u0438 \u043f\u043e\u043a\u0443\u043f\u043a\u0443 " +
+    "\u0447\u0443\u0442\u044c \u0434\u043e\u043b\u044c\u0448\u0435.";
+  const DEFAULT_CHAT_WELCOME_MESSAGE_FEMALE =
+    "\u041f\u0440\u0438\u0432\u0435\u0442! \u042f \u0432\u0438\u0440\u0442\u0443\u0430\u043b\u044c\u043d\u0430\u044f \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u0446\u0430 \u041d\u044f\u043c-\u041d\u044f\u043c!\n" +
+    "\u0415\u0441\u043b\u0438 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u0437\u0430\u043a\u0430\u0437\u0443, \u0442\u043e \u0441\u0435\u0433\u043e\u0434\u043d\u044f " +
+    "\u0441\u0442\u0430\u043b\u043a\u0438\u0432\u0430\u0435\u043c\u0441\u044f \u0441\u043e \u0441\u043b\u043e\u0436\u043d\u043e\u0441\u0442\u044f\u043c\u0438 \u0438\u0437-\u0437\u0430 " +
+    "\u043f\u043e\u0433\u043e\u0434\u043d\u044b\u0445 \u0443\u0441\u043b\u043e\u0432\u0438\u0439: \u043c\u043e\u0436\u0435\u043c \u0432\u0435\u0437\u0442\u0438 \u043f\u043e\u043a\u0443\u043f\u043a\u0443 " +
+    "\u0447\u0443\u0442\u044c \u0434\u043e\u043b\u044c\u0448\u0435.";
+  const DEFAULT_CHAT_OPTIONS_TEXT =
+    "\u0427\u0442\u043e\u0431\u044b \u044f \u0441\u043c\u043e\u0433 \u0432\u0430\u043c \u043f\u043e\u043c\u043e\u0447\u044c, \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u044e \u043d\u0438\u0436\u0435:";
+  const chatRuntimeSettings = {
+    assistantName: DEFAULT_CHAT_ASSISTANT_NAME,
+    assistantGender: DEFAULT_CHAT_ASSISTANT_GENDER,
+    welcomeMessage: DEFAULT_CHAT_WELCOME_MESSAGE,
+    optionsText: DEFAULT_CHAT_OPTIONS_TEXT,
+    quickQuestions: DEFAULT_CHAT_QUICK_QUESTIONS.slice(),
+    operatorName: "",
+    isEnabled: true,
+  };
+  const hotQuestionAliases = {
+    order: new Set([HOT_QUESTION_ORDER_KEY, HOT_QUESTION_ORDER_KEY_ALT]),
+    quality: new Set([HOT_QUESTION_QUALITY_KEY]),
+    completeness: new Set([HOT_QUESTION_COMPLETENESS_KEY]),
+    other: new Set([HOT_QUESTION_OTHER_KEY]),
+  };
 
   const baseEntries = [];
 
@@ -184,10 +265,12 @@
   let deleteConfirmCloseTimer = 0;
   let suppressTapUntil = 0;
   let touchGesture = null;
+  let orderCardMouseDrag = null;
   let replyDraft = null;
   let replyUi = null;
   let attachPreviewItems = [];
   let attachPreviewActiveIndex = 0;
+  let feedDropDragDepth = 0;
   let pendingFeedNewCount = 0;
   let pendingFeedMessageIds = new Set();
   let hasLoadedSharedThreadOnce = false;
@@ -213,10 +296,22 @@
   let webPushSyncRequestedWithPermission = false;
   let webPushSyncForceRequested = false;
   let webPushSyncQueuedClientId = "";
+  const assistantHandoffPendingByClient = new Map();
   const selectedMessageIds = new Set();
+  const hotQuestionOrderCardsCache = new Map();
+  const hotQuestionOrderCardsFetchInFlight = new Map();
+  let chatOrderDetailsView = null;
+  let chatOrderBackBtn = null;
+  let chatOrderDetailsActive = false;
+  let chatOrderDetailsId = 0;
+  let chatOrderDetailsPrevTitle = "";
+  let chatOrderUiSnapshot = null;
+  let chatOrderFooterOutsideHandler = null;
 
   const LONG_PRESS_MS = 430;
   const SWIPE_REPLY_TRIGGER = 72;
+  const ORDER_CARD_MOUSE_DRAG_START_PX = 5;
+  const ORDER_CARD_MOUSE_DRAG_SUPPRESS_CLICK_MS = 240;
 
   function ensureUnreadBadge() {
     if (unreadBadge && unreadBadge.isConnected) return unreadBadge;
@@ -1327,6 +1422,281 @@
   const customerChatClientIdByIdentityPrefix = "shop_company_chat_customer_id_for_identity_t" + tenantId + "_";
   const webPushVapidStorageKey = "shop_company_chat_push_vapid_t" + tenantId;
 
+  function getTenantFromLocalStorage() {
+    try {
+      const raw = localStorage.getItem("tenant");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function normalizeChatQuickQuestionsList(rawValue) {
+    let parsed = [];
+    if (Array.isArray(rawValue)) {
+      parsed = rawValue;
+    } else if (typeof rawValue === "string") {
+      try {
+        const next = JSON.parse(rawValue);
+        if (Array.isArray(next)) parsed = next;
+      } catch {
+        parsed = [];
+      }
+    }
+
+    const normalized = parsed
+      .map(function (item) { return String(item ?? "").trim(); })
+      .filter(Boolean)
+      .slice(0, CHAT_QUICK_QUESTIONS_MAX);
+    return normalized.length ? normalized : DEFAULT_CHAT_QUICK_QUESTIONS.slice();
+  }
+
+  function applyAliasSet(setRef, values) {
+    setRef.clear();
+    values.forEach(function (value) {
+      const text = String(value || "");
+      if (!text) return;
+      setRef.add(text);
+    });
+  }
+
+  function rebuildHotQuestionAliases() {
+    const quick = Array.isArray(chatRuntimeSettings.quickQuestions)
+      ? chatRuntimeSettings.quickQuestions
+      : DEFAULT_CHAT_QUICK_QUESTIONS;
+    const orderAliases = [HOT_QUESTION_ORDER_KEY, HOT_QUESTION_ORDER_KEY_ALT];
+    const qualityAliases = [HOT_QUESTION_QUALITY_KEY];
+    const completenessAliases = [HOT_QUESTION_COMPLETENESS_KEY];
+    const otherAliases = [HOT_QUESTION_OTHER_KEY];
+
+    const addNormalizedAlias = function (target, value) {
+      const normalized = normalizeHotQuestionKey(value);
+      if (!normalized) return;
+      target.push(normalized);
+    };
+
+    addNormalizedAlias(orderAliases, quick[0]);
+    addNormalizedAlias(qualityAliases, quick[1]);
+    addNormalizedAlias(completenessAliases, quick[2]);
+    addNormalizedAlias(otherAliases, quick[3]);
+
+    applyAliasSet(hotQuestionAliases.order, orderAliases);
+    applyAliasSet(hotQuestionAliases.quality, qualityAliases);
+    applyAliasSet(hotQuestionAliases.completeness, completenessAliases);
+    applyAliasSet(hotQuestionAliases.other, otherAliases);
+  }
+
+  function normalizeAssistantGenderValue(rawValue) {
+    const normalized = String(rawValue == null ? "" : rawValue).trim().toLowerCase();
+    if (normalized === CHAT_ASSISTANT_GENDER_FEMALE || normalized === "female" || normalized === "\u0436") {
+      return CHAT_ASSISTANT_GENDER_FEMALE;
+    }
+    return DEFAULT_CHAT_ASSISTANT_GENDER;
+  }
+
+  function getDefaultChatWelcomeMessageByGender(rawGender) {
+    return normalizeAssistantGenderValue(rawGender) === CHAT_ASSISTANT_GENDER_FEMALE
+      ? DEFAULT_CHAT_WELCOME_MESSAGE_FEMALE
+      : DEFAULT_CHAT_WELCOME_MESSAGE;
+  }
+
+  function getGenderedAssistantText(maleText, femaleText) {
+    if (normalizeAssistantGenderValue(chatRuntimeSettings.assistantGender) === CHAT_ASSISTANT_GENDER_FEMALE) {
+      return String(femaleText || maleText || "");
+    }
+    return String(maleText || "");
+  }
+
+  function normalizeTenantChatSettings(rawSettings) {
+    const source = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+    const rawEnabledValue =
+      source.is_enabled
+      ?? source.chat_widget_enabled
+      ?? source.chat_enabled;
+    const normalizedEnabled = String(rawEnabledValue == null ? "" : rawEnabledValue).trim().toLowerCase();
+    const isEnabled = !(
+      rawEnabledValue === false
+      || rawEnabledValue === 0
+      || normalizedEnabled === "0"
+      || normalizedEnabled === "false"
+    );
+    const assistantName = String(
+      source.assistant_name ?? source.chat_assistant_name ?? ""
+    ).trim() || DEFAULT_CHAT_ASSISTANT_NAME;
+    const assistantGender = normalizeAssistantGenderValue(
+      source.assistant_gender ?? source.chat_assistant_gender ?? DEFAULT_CHAT_ASSISTANT_GENDER
+    );
+    const welcomeMessageRaw = String(
+      source.welcome_message ?? source.chat_welcome_message ?? ""
+    ).trim();
+    const welcomeMessage = welcomeMessageRaw || getDefaultChatWelcomeMessageByGender(assistantGender);
+    const operatorName = String(
+      source.operator_name
+      ?? source.chat_operator_name
+      ?? source.site_name
+      ?? source.name
+      ?? ""
+    ).trim();
+    const quickQuestions = normalizeChatQuickQuestionsList(
+      source.quick_questions ?? source.chat_quick_questions_json
+    );
+    return {
+      assistantName: assistantName,
+      assistantGender: assistantGender,
+      welcomeMessage: welcomeMessage,
+      optionsText: DEFAULT_CHAT_OPTIONS_TEXT,
+      quickQuestions: quickQuestions,
+      operatorName: operatorName,
+      isEnabled: isEnabled,
+    };
+  }
+
+  let chatRuntimeSettingsSyncAt = 0;
+  let chatRuntimeSettingsSyncInFlight = false;
+  const CHAT_SETTINGS_SYNC_MIN_INTERVAL_MS = 2500;
+
+  function syncRuntimeDecoratedEntries(list) {
+    const entries = Array.isArray(list) ? list : [];
+    entries.forEach(function (entry) {
+      if (!entry || entry.type !== "message" || entry.role !== "agent") return;
+      const messageId = String(entry.id || "");
+      if (isAssistantMessageId(messageId)) {
+        entry.author = String(chatRuntimeSettings.assistantName || DEFAULT_CHAT_ASSISTANT_NAME);
+        if (/^daily-welcome-\d{4}-\d{2}-\d{2}$/.test(messageId)) {
+          entry.text = String(
+            chatRuntimeSettings.welcomeMessage
+            || getDefaultChatWelcomeMessageByGender(chatRuntimeSettings.assistantGender)
+          );
+        }
+      } else {
+        entry.author = getCompanyAuthorName();
+      }
+    });
+  }
+
+  function refreshChatRuntimeDecoratedView() {
+    syncRuntimeDecoratedEntries(baseEntries);
+    syncRuntimeDecoratedEntries(liveEntries);
+    renderThread();
+    updateScrollDownButton();
+    renderUnreadBadge(liveEntries);
+  }
+
+  function applyChatWidgetEnabledState(isEnabled) {
+    const enabled = isEnabled !== false;
+    openBtn.classList.toggle("hidden", !enabled);
+    if (enabled) {
+      openBtn.removeAttribute("aria-hidden");
+      openBtn.removeAttribute("tabindex");
+      return;
+    }
+    openBtn.setAttribute("aria-hidden", "true");
+    openBtn.setAttribute("tabindex", "-1");
+    openBtn.removeAttribute("data-unread-count");
+    if (unreadBadge) {
+      unreadBadge.textContent = "";
+      unreadBadge.classList.add("hidden");
+    }
+    if (overlay.classList.contains("is-open")) {
+      closeCompanyChat();
+    }
+  }
+
+  function applyChatRuntimeSettings(rawSettings, options) {
+    const opts = options || {};
+    const prevStateKey = [
+      String(chatRuntimeSettings.assistantName || ""),
+      String(chatRuntimeSettings.assistantGender || ""),
+      String(chatRuntimeSettings.welcomeMessage || ""),
+      String(chatRuntimeSettings.optionsText || ""),
+      String(chatRuntimeSettings.operatorName || ""),
+      JSON.stringify(chatRuntimeSettings.quickQuestions || []),
+      String(chatRuntimeSettings.isEnabled !== false ? "1" : "0"),
+    ].join("|");
+
+    const next = normalizeTenantChatSettings(rawSettings);
+    chatRuntimeSettings.assistantName = next.assistantName;
+    chatRuntimeSettings.assistantGender = normalizeAssistantGenderValue(next.assistantGender);
+    chatRuntimeSettings.welcomeMessage = next.welcomeMessage;
+    chatRuntimeSettings.optionsText = next.optionsText;
+    chatRuntimeSettings.quickQuestions = next.quickQuestions.slice();
+    chatRuntimeSettings.operatorName = next.operatorName;
+    chatRuntimeSettings.isEnabled = next.isEnabled !== false;
+    rebuildHotQuestionAliases();
+    applyChatWidgetEnabledState(chatRuntimeSettings.isEnabled);
+
+    const nextStateKey = [
+      String(chatRuntimeSettings.assistantName || ""),
+      String(chatRuntimeSettings.assistantGender || ""),
+      String(chatRuntimeSettings.welcomeMessage || ""),
+      String(chatRuntimeSettings.optionsText || ""),
+      String(chatRuntimeSettings.operatorName || ""),
+      JSON.stringify(chatRuntimeSettings.quickQuestions || []),
+      String(chatRuntimeSettings.isEnabled !== false ? "1" : "0"),
+    ].join("|");
+    if (opts.refreshUi === true && prevStateKey !== nextStateKey) {
+      refreshChatRuntimeDecoratedView();
+    }
+    return next;
+  }
+
+  function getLocalTenantChatSettings() {
+    const tenant = getTenantFromLocalStorage();
+    if (!tenant || typeof tenant !== "object") return null;
+    return {
+      chat_assistant_name: tenant.chat_assistant_name,
+      chat_assistant_gender: tenant.chat_assistant_gender,
+      chat_welcome_message: tenant.chat_welcome_message,
+      chat_operator_name: tenant.chat_operator_name,
+      chat_quick_questions_json: tenant.chat_quick_questions_json,
+      chat_widget_enabled: tenant.chat_widget_enabled,
+      site_name: tenant.site_name,
+      name: tenant.name,
+    };
+  }
+
+  async function fetchTenantChatSettingsFromApi() {
+    const qs = new URLSearchParams({
+      tenant_id: String(tenantId),
+      _ts: String(Date.now()),
+    });
+    const json = await chatApiJson(CHAT_SETTINGS_API_URL + "?" + qs.toString());
+    return json && json.settings ? json.settings : null;
+  }
+
+  async function initChatRuntimeSettings(options) {
+    const opts = options && typeof options === "object" ? options : {};
+    const refreshUi = opts.refreshUi === true;
+    const fetchRemote = opts.fetchRemote !== false;
+    const forceRemote = opts.force === true;
+
+    applyChatRuntimeSettings(getLocalTenantChatSettings(), { refreshUi: refreshUi });
+    if (!fetchRemote) return;
+
+    const now = Date.now();
+    if (
+      !forceRemote
+      && chatRuntimeSettingsSyncAt
+      && (now - chatRuntimeSettingsSyncAt) < CHAT_SETTINGS_SYNC_MIN_INTERVAL_MS
+    ) {
+      return;
+    }
+    if (chatRuntimeSettingsSyncInFlight) return;
+
+    chatRuntimeSettingsSyncInFlight = true;
+    try {
+      const remoteSettings = await fetchTenantChatSettingsFromApi();
+      if (remoteSettings) applyChatRuntimeSettings(remoteSettings, { refreshUi: refreshUi });
+    } catch {
+      // fallback to local/default settings
+    } finally {
+      chatRuntimeSettingsSyncAt = Date.now();
+      chatRuntimeSettingsSyncInFlight = false;
+    }
+  }
+
+  rebuildHotQuestionAliases();
+
   try {
     webPushSubscriptionVapidKey = String(localStorage.getItem(webPushVapidStorageKey) || "");
   } catch {
@@ -1358,6 +1728,20 @@
   function normalizePhoneIdentity(value) {
     const digits = String(value || "").replace(/\D+/g, "");
     return digits.length >= 10 ? digits : "";
+  }
+
+  function normalizeNameIdentity(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/\u0451/g, "\u0435")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function isGuestLikeName(value) {
+    const normalized = normalizeNameIdentity(value);
+    if (!normalized) return false;
+    return /^\u0433\u043e\u0441\u0442\u044c\b/.test(normalized);
   }
 
   function getStableCustomerChatClientId(token, directIdCandidate, customerCandidate) {
@@ -1585,6 +1969,25 @@
 
     if (isSameChatClientProfile(currentProfile, nextProfile)) {
       chatClientProfile = nextProfile;
+      const profileNameChanged = normalizeNameIdentity(currentProfile.name) !== normalizeNameIdentity(nextProfile.name);
+      const profilePhoneChanged = normalizePhoneIdentity(currentProfile.phone) !== normalizePhoneIdentity(nextProfile.phone);
+      if (profileNameChanged || profilePhoneChanged) {
+        sharedThreadMeta = sanitizeSharedThreadMeta({
+          ...sharedThreadMeta,
+          name: String(nextProfile.name || sharedThreadMeta.name || ""),
+          phone: String(nextProfile.phone || sharedThreadMeta.phone || ""),
+        });
+        if (nextProfile.isGuest !== true) {
+          const nextMetaSnapshot = sanitizeSharedThreadMeta(sharedThreadMeta);
+          enqueueSharedMutation(function () {
+            return remotePatchSharedMeta({
+              name: String(nextMetaSnapshot.name || ""),
+              phone: String(nextMetaSnapshot.phone || ""),
+              lastWelcomeDay: String(nextMetaSnapshot.lastWelcomeDay || ""),
+            });
+          });
+        }
+      }
       queueWebPushSubscriptionSync({
         clientId: String(nextProfile.id || ""),
       });
@@ -1669,6 +2072,31 @@
       if (String(chatClientProfile.id || "") !== activeClientIdAfterSwitch) return;
       pullSharedThreadFromServer({ force: true }).catch(function () {});
     };
+    const syncProfileMetaWithServer = function () {
+      if (nextProfile.isGuest === true) return Promise.resolve();
+      if (String(chatClientProfile.id || "") !== activeClientIdAfterSwitch) return Promise.resolve();
+      sharedThreadMeta = sanitizeSharedThreadMeta({
+        ...sharedThreadMeta,
+        name: String(nextProfile.name || sharedThreadMeta.name || ""),
+        phone: String(nextProfile.phone || sharedThreadMeta.phone || ""),
+      });
+      const syncMetaSnapshot = sanitizeSharedThreadMeta(sharedThreadMeta);
+      return enqueueSharedMutation(function () {
+        if (String(chatClientProfile.id || "") !== activeClientIdAfterSwitch) return Promise.resolve();
+        return remotePatchSharedMeta({
+          name: String(syncMetaSnapshot.name || ""),
+          phone: String(syncMetaSnapshot.phone || ""),
+          lastWelcomeDay: String(syncMetaSnapshot.lastWelcomeDay || ""),
+        });
+      });
+    };
+    const finalizeProfileSwitch = function () {
+      syncProfileMetaWithServer()
+        .catch(function () {})
+        .finally(function () {
+          continueWithPull();
+        });
+    };
 
     if (shouldMergeGuestIntoCustomer || shouldMergeCustomerAliasIntoCustomer) {
       profileMergeInFlight = true;
@@ -1676,10 +2104,10 @@
         .catch(function () {})
         .finally(function () {
           profileMergeInFlight = false;
-          continueWithPull();
+          finalizeProfileSwitch();
         });
     } else {
-      continueWithPull();
+      finalizeProfileSwitch();
     }
     return true;
   }
@@ -1797,6 +2225,44 @@
     return hh + ":" + mm;
   }
 
+  function getCompanyAuthorName() {
+    const configured = String(chatRuntimeSettings.operatorName || "").trim();
+    if (configured) return configured;
+    try {
+      const tenant = getTenantFromLocalStorage();
+      if (tenant) {
+        const preferred = String(tenant.chat_operator_name || "").trim();
+        if (preferred) return preferred;
+        const name = String(
+          (tenant && (tenant.site_name || tenant.name || tenant.brand_name)) || ""
+        ).trim();
+        if (name) return name;
+      }
+    } catch {}
+    return "\u041a\u043e\u043c\u043f\u0430\u043d\u0438\u044f";
+  }
+
+  function isAssistantMessageId(messageId) {
+    const id = String(messageId || "");
+    if (!id) return false;
+    if (id.indexOf(ASSISTANT_MESSAGE_ID_PREFIX) === 0) return true;
+    if (/^daily-welcome-\d{4}-\d{2}-\d{2}$/.test(id)) return true;
+    if (/^daily-welcome-options-\d{4}-\d{2}-\d{2}$/.test(id)) return true;
+    return false;
+  }
+
+  function makeAssistantMessageId(suffix) {
+    const tail = String(suffix || "msg").replace(/[^\w-]+/g, "").slice(0, 80) || "msg";
+    return ASSISTANT_MESSAGE_ID_PREFIX + tail + "-" + Date.now() + "-"
+      + Math.random().toString(36).slice(2, 7);
+  }
+
+  function resolveAgentAuthorNameByMessageId(messageId) {
+    return isAssistantMessageId(messageId)
+      ? String(chatRuntimeSettings.assistantName || DEFAULT_CHAT_ASSISTANT_NAME)
+      : getCompanyAuthorName();
+  }
+
   function mapSharedMessageToEntry(message) {
     if (!message || typeof message !== "object") return null;
     const messageId = String(message.id || "");
@@ -1815,8 +2281,13 @@
       role: role,
       day: formatDayLabelFromIso(createdAt),
       time: formatTimeFromIso(createdAt) + (editedAt ? " • изм." : ""),
-      text: isDailyWelcome ? DAILY_WELCOME_TEXT : String(message.text || ""),
-      author: role === "agent" ? VIRTUAL_ASSISTANT_NAME : "",
+      text: isDailyWelcome
+        ? String(
+            chatRuntimeSettings.welcomeMessage
+            || getDefaultChatWelcomeMessageByGender(chatRuntimeSettings.assistantGender)
+          )
+        : String(message.text || ""),
+      author: role === "agent" ? resolveAgentAuthorNameByMessageId(messageId) : "",
       replyTo: message.replyTo && typeof message.replyTo === "object"
         ? {
             id: String(message.replyTo.id || ""),
@@ -1849,11 +2320,39 @@
 
   function sanitizeSharedThreadMeta(meta) {
     const source = meta && typeof meta === "object" ? meta : {};
+    const profile = chatClientProfile && typeof chatClientProfile === "object"
+      ? chatClientProfile
+      : null;
+    const profileName = String(profile && profile.name || "").trim();
+    const profilePhone = String(profile && profile.phone || "").trim();
+    const profileIsGuest = !!(profile && profile.isGuest === true);
+    const sourceName = String(source.name || "").trim();
+    const sourcePhone = String(source.phone || "").trim();
+    const profilePhoneIdentity = normalizePhoneIdentity(profilePhone);
+    const sourcePhoneIdentity = normalizePhoneIdentity(sourcePhone);
     const rawLastWelcomeDay = String(source.last_welcome_day || source.lastWelcomeDay || "").trim();
     const normalizedLastWelcomeDay = /^\d{4}-\d{2}-\d{2}$/.test(rawLastWelcomeDay) ? rawLastWelcomeDay : "";
+    const preferProfileName = (
+      !profileIsGuest
+      && !!profileName
+      && (!sourceName || isGuestLikeName(sourceName))
+    );
+    const preferProfilePhone = (
+      !profileIsGuest
+      && !!profilePhone
+      && (!sourcePhone || sourcePhoneIdentity !== profilePhoneIdentity)
+    );
     return {
-      name: String(source.name || chatClientProfile.name || "Клиент"),
-      phone: String(source.phone || chatClientProfile.phone || ""),
+      name: String(
+        preferProfileName
+          ? profileName
+          : (sourceName || profileName || "\u041a\u043b\u0438\u0435\u043d\u0442")
+      ),
+      phone: String(
+        preferProfilePhone
+          ? profilePhone
+          : (sourcePhone || profilePhone || "")
+      ),
       lastWelcomeDay: normalizedLastWelcomeDay,
     };
   }
@@ -1999,6 +2498,32 @@
     );
     const updatedAt = String(json && json.data && json.data.updated_at || "");
     if (updatedAt) sharedThreadUpdatedAt = updatedAt;
+  }
+
+  async function remotePatchSharedMeta(metaPatch) {
+    const requestClientId = getActiveChatClientId();
+    if (!requestClientId) return false;
+    const nextMeta = sanitizeSharedThreadMeta(metaPatch);
+    const json = await chatApiJson(
+      CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId) + "/meta",
+      {
+        method: "PATCH",
+        body: {
+          meta: {
+            name: String(nextMeta.name || ""),
+            phone: String(nextMeta.phone || ""),
+            last_welcome_day: String(nextMeta.lastWelcomeDay || ""),
+          },
+        },
+      }
+    );
+    const data = json && json.data ? json.data : {};
+    const updatedAt = String(data.updated_at || "");
+    if (updatedAt) sharedThreadUpdatedAt = updatedAt;
+    if (data.meta && typeof data.meta === "object") {
+      sharedThreadMeta = sanitizeSharedThreadMeta(data.meta);
+    }
+    return true;
   }
 
   async function remoteMarkSharedMessagesRead(messageIds, options) {
@@ -2278,7 +2803,24 @@
       });
       if (!snapshot || requestClientId !== getActiveChatClientId()) return false;
       const updatedAt = String(snapshot.updatedAt || "");
+      const rawSnapshotName = String(snapshot && snapshot.meta && snapshot.meta.name || "").trim();
+      const shouldRepairGuestMeta = (
+        chatClientProfile
+        && chatClientProfile.isGuest !== true
+        && (!rawSnapshotName || isGuestLikeName(rawSnapshotName))
+      );
       sharedThreadMeta = sanitizeSharedThreadMeta(snapshot.meta);
+      if (shouldRepairGuestMeta) {
+        const syncMetaSnapshot = sanitizeSharedThreadMeta(sharedThreadMeta);
+        enqueueSharedMutation(function () {
+          if (String(requestClientId) !== String(getActiveChatClientId() || "")) return Promise.resolve();
+          return remotePatchSharedMeta({
+            name: String(syncMetaSnapshot.name || ""),
+            phone: String(syncMetaSnapshot.phone || ""),
+            lastWelcomeDay: String(syncMetaSnapshot.lastWelcomeDay || ""),
+          });
+        });
+      }
 
       const remoteMessages = Array.isArray(snapshot.messages) ? snapshot.messages : [];
       const mappedEntries = remoteMessages
@@ -2791,7 +3333,7 @@
   function getMessageSenderLabel(entry) {
     if (!entry) return "Сообщение";
     if (entry.role === "user") return "Вы";
-    return String(entry.author || VIRTUAL_ASSISTANT_NAME);
+    return String(entry.author || chatRuntimeSettings.assistantName || DEFAULT_CHAT_ASSISTANT_NAME);
   }
 
   function isImageAttachment(attachment) {
@@ -2954,9 +3496,146 @@
 
   async function buildImageAttachmentFromFile(file) {
     if (!(file instanceof File)) return null;
-    const mime = String(file.type || "").toLowerCase();
-    if (!mime.startsWith("image/")) return null;
+    if (!isLikelyImageFile(file)) return null;
     return uploadSharedImageAttachment(file).catch(function () { return null; });
+  }
+
+  function isLikelyImageFile(file) {
+    if (!(file instanceof File)) return false;
+    const mime = String(file.type || "").toLowerCase();
+    if (mime.startsWith("image/")) return true;
+    const fileName = String(file.name || "").toLowerCase();
+    return CHAT_DROP_IMAGE_EXT_RE.test(fileName);
+  }
+
+  function dataTransferHasFiles(dataTransfer) {
+    if (!dataTransfer) return false;
+    const types = Array.from(dataTransfer.types || []);
+    return types.includes("Files");
+  }
+
+  function extractImageFilesFromDataTransfer(dataTransfer) {
+    if (!dataTransfer) return [];
+
+    const directFiles = Array.from(dataTransfer.files || []).filter(function (file) {
+      return isLikelyImageFile(file);
+    });
+    if (directFiles.length) return directFiles;
+
+    const itemFiles = [];
+    Array.from(dataTransfer.items || []).forEach(function (item) {
+      if (!item || item.kind !== "file") return;
+      const file = typeof item.getAsFile === "function" ? item.getAsFile() : null;
+      if (!isLikelyImageFile(file)) return;
+      itemFiles.push(file);
+    });
+    return itemFiles;
+  }
+
+  function setFeedImageDropActive(active) {
+    feed.classList.toggle("is-image-drop-target", active === true);
+  }
+
+  function resetFeedImageDrop() {
+    feedDropDragDepth = 0;
+    setFeedImageDropActive(false);
+  }
+
+  function initFeedImageDrop() {
+    if (feed.dataset.imageDropBound === "1") return;
+    feed.dataset.imageDropBound = "1";
+
+    feed.addEventListener("dragenter", function (event) {
+      if (!overlay.classList.contains("is-open")) return;
+      if (!dataTransferHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      feedDropDragDepth = Math.max(0, Number(feedDropDragDepth || 0)) + 1;
+      setFeedImageDropActive(true);
+    });
+
+    feed.addEventListener("dragover", function (event) {
+      if (!overlay.classList.contains("is-open")) return;
+      if (!dataTransferHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      feedDropDragDepth = Math.max(1, Number(feedDropDragDepth || 0));
+      setFeedImageDropActive(true);
+    });
+
+    feed.addEventListener("dragleave", function () {
+      if (!feed.classList.contains("is-image-drop-target")) return;
+      feedDropDragDepth = Math.max(0, Number(feedDropDragDepth || 0) - 1);
+      if (feedDropDragDepth === 0) {
+        setFeedImageDropActive(false);
+      }
+    });
+
+    feed.addEventListener("drop", async function (event) {
+      const hasFilePayload = dataTransferHasFiles(event.dataTransfer);
+      const files = extractImageFilesFromDataTransfer(event.dataTransfer);
+      if (!files.length) {
+        if (hasFilePayload) event.preventDefault();
+        resetFeedImageDrop();
+        return;
+      }
+      event.preventDefault();
+      resetFeedImageDrop();
+      await openAttachPreviewFromFiles(files).catch(function () {});
+    });
+
+    window.addEventListener("blur", function () {
+      resetFeedImageDrop();
+    });
+
+    window.addEventListener("dragend", function () {
+      resetFeedImageDrop();
+    });
+
+    document.addEventListener("drop", function (event) {
+      if (feed.contains(event.target)) return;
+      resetFeedImageDrop();
+    });
+  }
+
+  function initFeedImagePaste() {
+    if (feed.dataset.imagePasteBound !== "1") {
+      feed.dataset.imagePasteBound = "1";
+      if (!feed.hasAttribute("tabindex")) {
+        feed.tabIndex = -1;
+      }
+
+      feed.addEventListener("pointerdown", function (event) {
+        const target = event.target;
+        if (target && target.closest && target.closest("button,a,input,textarea,[contenteditable='true']")) return;
+        if (document.activeElement === feed) return;
+        try {
+          feed.focus({ preventScroll: true });
+        } catch {
+          feed.focus();
+        }
+      });
+
+      feed.addEventListener("paste", function (event) {
+        if (!overlay.classList.contains("is-open")) return;
+        const files = extractImageFilesFromDataTransfer(event.clipboardData);
+        if (!files.length) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openAttachPreviewFromFiles(files).catch(function () {});
+      });
+    }
+
+    if (input.dataset.imagePasteBound !== "1") {
+      input.dataset.imagePasteBound = "1";
+      input.addEventListener("paste", function (event) {
+        if (!overlay.classList.contains("is-open")) return;
+        const files = extractImageFilesFromDataTransfer(event.clipboardData);
+        if (!files.length) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openAttachPreviewFromFiles(files).catch(function () {});
+      });
+    }
   }
 
   function cssEscape(value) {
@@ -3039,6 +3718,8 @@
       renderEmojiPicker();
       ensureEmojiDatasetLoaded().catch(function () {});
     }
+    ensureContextMenu();
+    hideChatOrderDetailsView();
     refreshChatClientProfileIfNeeded({ pull: false });
     queueWebPushSubscriptionSync({
       clientId: getActiveChatClientId(),
@@ -3106,9 +3787,11 @@
     hideContextMenu();
     hideReactionBar();
     hideEmojiPopover();
+    hideChatOrderDetailsView();
     if (selectedMessageIds.size > 0) clearSelectionMode();
     if (pendingDeleteConfirm) closeDeleteConfirm();
     cancelEditingMessage();
+    resetFeedImageDrop();
     overlay.classList.remove("is-open");
     overlay.setAttribute("aria-hidden", "true");
     document.body.classList.remove("shop-company-chat-open");
@@ -3181,8 +3864,11 @@
       role: "agent",
       day: formatDayLabelFromIso(nowIso),
       time: formatTimeFromIso(nowIso),
-      text: DAILY_WELCOME_TEXT,
-      author: VIRTUAL_ASSISTANT_NAME,
+      text: String(
+        chatRuntimeSettings.welcomeMessage
+        || getDefaultChatWelcomeMessageByGender(chatRuntimeSettings.assistantGender)
+      ),
+      author: String(chatRuntimeSettings.assistantName || DEFAULT_CHAT_ASSISTANT_NAME),
       createdAt: nowIso,
       editedAt: "",
       read: true,
@@ -3233,8 +3919,11 @@
         role: "agent",
         day: String(entry.day || ""),
         time: String(entry.time || ""),
-        text: DAILY_OPTIONS_TEXT,
-        options: QUICK_OPTIONS.slice(),
+        text: String(chatRuntimeSettings.optionsText || DEFAULT_CHAT_OPTIONS_TEXT),
+        options: (Array.isArray(chatRuntimeSettings.quickQuestions)
+          ? chatRuntimeSettings.quickQuestions
+          : DEFAULT_CHAT_QUICK_QUESTIONS
+        ).slice(),
       });
       hasOptionsById.add(optionsId);
     });
@@ -3451,54 +4140,133 @@
   }
 
   function ensureContextMenu() {
-    if (contextMenuEl && contextMenuEl.isConnected) return;
+    let menu = contextMenuEl && contextMenuEl.isConnected ? contextMenuEl : null;
 
-    const menu = document.createElement("div");
-    menu.id = "shopCompanyChatContextMenu";
-    menu.className = "shop-company-chat-context-menu hidden";
-    menu.setAttribute("role", "menu");
-    menu.setAttribute("aria-label", "Действия с сообщением");
-    menu.innerHTML =
-      '<div class="shop-company-chat-context-reactions" role="group" aria-label="Реакции">' +
-        '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction="👍" aria-label="👍" title="👍">👍</button>' +
-        '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction="❤️" aria-label="❤️" title="❤️">❤️</button>' +
-        '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction="🔥" aria-label="🔥" title="🔥">🔥</button>' +
-        '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction="😂" aria-label="😂" title="😂">😂</button>' +
-        '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction="🥰" aria-label="🥰" title="🥰">🥰</button>' +
-        '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction="🙏" aria-label="🙏" title="🙏">🙏</button>' +
-      "</div>" +
-      '<button type="button" class="shop-company-chat-context-btn" data-chat-msg-action="reply">' +
-        '<i class="fas fa-reply"></i><span>Ответить</span>' +
-      "</button>" +
-      '<button type="button" class="shop-company-chat-context-btn" data-chat-msg-action="copy">' +
-        '<i class="far fa-copy"></i><span>Скопировать</span>' +
-      "</button>" +
-      '<button type="button" class="shop-company-chat-context-btn" data-chat-msg-action="edit">' +
-        '<i class="fas fa-pen"></i><span>Изменить</span>' +
-      "</button>" +
-      '<button type="button" class="shop-company-chat-context-btn is-danger" data-chat-msg-action="delete">' +
-        '<i class="far fa-trash-alt"></i><span>Удалить</span>' +
-      "</button>" +
-      '<div class="shop-company-chat-context-divider"></div>' +
-      '<button type="button" class="shop-company-chat-context-btn" data-chat-msg-action="select">' +
-        '<i class="far fa-circle-check"></i><span>Выбрать</span>' +
-      "</button>";
-    document.body.appendChild(menu);
-    contextMenuEl = menu;
-    contextMenuEditBtn = menu.querySelector('[data-chat-msg-action="edit"]');
-    contextMenuDeleteBtn = menu.querySelector('[data-chat-msg-action="delete"]');
+    if (!menu) {
+      menu = document.createElement("div");
+      menu.id = "shopCompanyChatContextMenu";
+      menu.className = "shop-company-chat-context-menu hidden";
+      menu.setAttribute("role", "menu");
+      menu.setAttribute("aria-label", "Действия с сообщением");
+      menu.innerHTML =
+        '<div class="shop-company-chat-context-reactions" role="group" aria-label="Reactions">' +
+          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="👍" aria-label="👍" title="👍">👍</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="❤️" aria-label="❤️" title="❤️">❤️</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="🔥" aria-label="🔥" title="🔥">🔥</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="😂" aria-label="😂" title="😂">😂</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="🥰" aria-label="🥰" title="🥰">🥰</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="🙏" aria-label="🙏" title="🙏">🙏</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="😃" aria-label="😃" title="😃">😃</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="😢" aria-label="😢" title="😢">😢</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="😕" aria-label="😕" title="😕">😕</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="😞" aria-label="😞" title="😞">😞</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="😟" aria-label="😟" title="😟">😟</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="🙁" aria-label="🙁" title="🙁">🙁</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="😮" aria-label="😮" title="😮">😮</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--toggle" data-chat-msg-reaction="__toggle_more__" aria-label="Show more reactions" aria-expanded="false">' +
+            '<i class="fas fa-chevron-down" aria-hidden="true"></i>' +
+          "</button>" +
+        "</div>" +
+        '<button type="button" class="shop-company-chat-context-btn" data-chat-msg-action="reply">' +
+          '<i class="fas fa-reply"></i><span>Ответить</span>' +
+        "</button>" +
+        '<button type="button" class="shop-company-chat-context-btn" data-chat-msg-action="copy">' +
+          '<i class="far fa-copy"></i><span>Скопировать</span>' +
+        "</button>" +
+        '<button type="button" class="shop-company-chat-context-btn" data-chat-msg-action="edit">' +
+          '<i class="fas fa-pen"></i><span>Изменить</span>' +
+        "</button>" +
+        '<button type="button" class="shop-company-chat-context-btn is-danger" data-chat-msg-action="delete">' +
+          '<i class="far fa-trash-alt"></i><span>Удалить</span>' +
+        "</button>" +
+        '<div class="shop-company-chat-context-divider"></div>' +
+        '<button type="button" class="shop-company-chat-context-btn" data-chat-msg-action="select">' +
+          '<i class="far fa-circle-check"></i><span>Выбрать</span>' +
+        "</button>";
+      document.body.appendChild(menu);
+      contextMenuEl = menu;
+      contextMenuEditBtn = menu.querySelector('[data-chat-msg-action="edit"]');
+      contextMenuDeleteBtn = menu.querySelector('[data-chat-msg-action="delete"]');
+    }
 
-    const reactionButtons = Array.from(menu.querySelectorAll("[data-chat-msg-reaction]"));
-    reactionButtons.forEach(function (btn) {
-      const raw = String(btn.getAttribute("data-chat-msg-reaction") || "").trim();
-      if (!raw) return;
-      setEmojiGlyph(btn, raw, "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--reaction");
+    normalizeContextMenuReactionButtons(menu);
+    setContextMenuReactionsExpanded(false);
+
+    if (menu.dataset.bound === "1") return;
+    menu.dataset.bound = "1";
+    menu.addEventListener("click", function (event) {
+      const reactionBtn = event.target.closest("[data-chat-msg-reaction]");
+      if (reactionBtn) {
+        const messageId = contextMenuMessageId;
+        const reaction = String(reactionBtn.getAttribute("data-chat-msg-reaction") || "").trim();
+        if (reaction === "__toggle_more__") {
+          event.preventDefault();
+          event.stopPropagation();
+          const targetMessageId = String(contextMenuMessageId || "");
+          hideContextMenu();
+          hideReactionBar();
+          showEmojiPopover("composer", {
+            mode: targetMessageId ? "reaction" : "composer",
+            messageId: targetMessageId,
+          });
+          if (input) input.focus();
+          return;
+        }
+        if (!messageId || !reaction) return;
+        toggleReaction(messageId, reaction);
+        hideContextMenu();
+        hideReactionBar();
+        return;
+      }
+
+      const actionBtn = event.target.closest("[data-chat-msg-action]");
+      if (!actionBtn) return;
+      const action = String(actionBtn.getAttribute("data-chat-msg-action") || "");
+      const messageId = contextMenuMessageId;
+      hideContextMenu();
+      hideReactionBar();
+      if (!messageId) return;
+
+      const msg = findMessageEntry(messageId);
+      if (!msg) return;
+
+      if (action === "reply") {
+        setReplyByMessage(messageId);
+        return;
+      }
+      if (action === "copy") {
+        copyToClipboard(msg.text || "").catch(function () {});
+        return;
+      }
+      if (action === "select") {
+        toggleSelectedMessage(messageId);
+        return;
+      }
+      if (action === "edit" && msg.role === "user") {
+        startEditingMessage(messageId);
+        return;
+      }
+      if (action === "delete") {
+        const allowDeleteForPeer = msg.role === "user";
+        openDeleteConfirm({
+          count: 1,
+          allowDeleteForPeer: allowDeleteForPeer,
+          onConfirm: function (payload) {
+            const deleteForPeer = allowDeleteForPeer && !(payload && payload.deleteForPeer === false);
+            if (deleteForPeer) {
+              if (removeMessageById(messageId)) return;
+            }
+            hideMessageLocallyById(messageId);
+          },
+        });
+      }
     });
   }
 
   function hideContextMenu() {
     if (!contextMenuEl) return;
     contextMenuEl.classList.add("hidden");
+    setContextMenuReactionsExpanded(false);
     contextMenuEl.style.left = "";
     contextMenuEl.style.top = "";
     contextMenuMessageId = "";
@@ -3811,6 +4579,515 @@
     return node;
   }
 
+  function formatChatOrderAmount(amount) {
+    const safeAmount = Number(amount || 0);
+    if (!Number.isFinite(safeAmount)) return "\u2014";
+    return safeAmount.toLocaleString("ru-RU") + " \u20bd";
+  }
+
+  function resolveChatOrderDisplayNumber(orderLike) {
+    const source = orderLike && typeof orderLike === "object" ? orderLike : {};
+    const id = toPositiveOrderId(source.id || source.orderId || source.order_id);
+    if (id) return "#" + String(id);
+    const publicId = String(source.publicId || source.public_id || "").trim();
+    if (publicId) return "#" + publicId;
+    return "#";
+  }
+
+  function resolveChatOrderStatusTitle(orderLike) {
+    const source = orderLike && typeof orderLike === "object" ? orderLike : {};
+    return String(
+      source.statusTitle || source.status_title || HOT_QUESTION_ORDER_STATUS_UNKNOWN
+    ).trim() || HOT_QUESTION_ORDER_STATUS_UNKNOWN;
+  }
+
+  function resolveChatOrderCreatedAt(orderLike) {
+    const source = orderLike && typeof orderLike === "object" ? orderLike : {};
+    return String(source.createdAt || source.created_at || "");
+  }
+
+  function resolveChatOrderTotal(orderLike) {
+    const source = orderLike && typeof orderLike === "object" ? orderLike : {};
+    if (Object.prototype.hasOwnProperty.call(source, "totalPrice")) return Number(source.totalPrice || 0);
+    return Number(source.total_price || 0);
+  }
+
+  function ensureChatOrderDetailsViewNode() {
+    if (chatOrderDetailsView && chatOrderDetailsView.isConnected) return chatOrderDetailsView;
+    const existing = modalBody.querySelector("#shopCompanyChatOrderDetailsView");
+    if (existing) {
+      chatOrderDetailsView = existing;
+      return chatOrderDetailsView;
+    }
+
+    const node = document.createElement("div");
+    node.id = "shopCompanyChatOrderDetailsView";
+    node.className = "shop-company-chat-order-view hidden";
+    modalBody.insertBefore(node, composer);
+    chatOrderDetailsView = node;
+    return chatOrderDetailsView;
+  }
+
+  function ensureChatOrderBackButton() {
+    if (chatOrderBackBtn && chatOrderBackBtn.isConnected) return chatOrderBackBtn;
+    const existing = modalHeader.querySelector("#shopCompanyChatBackBtn");
+    if (existing) {
+      chatOrderBackBtn = existing;
+      return chatOrderBackBtn;
+    }
+
+    const btn = document.createElement("button");
+    btn.id = "shopCompanyChatBackBtn";
+    btn.type = "button";
+    btn.className = "shop-company-chat-modal__back hidden";
+    btn.setAttribute("aria-label", "\u041d\u0430\u0437\u0430\u0434");
+    btn.innerHTML = '<i class="fas fa-arrow-left"></i>';
+    btn.addEventListener("click", function (event) {
+      event.preventDefault();
+      hideChatOrderDetailsView();
+    });
+
+    modalHeader.insertBefore(btn, modalTitle);
+    chatOrderBackBtn = btn;
+    return chatOrderBackBtn;
+  }
+
+  function setChatOrderDetailsMode(active) {
+    const isActive = active === true;
+    const detailsView = ensureChatOrderDetailsViewNode();
+    if (!detailsView) return;
+
+    if (isActive) {
+      if (!chatOrderUiSnapshot) {
+        chatOrderUiSnapshot = {
+          feedHidden: feed.classList.contains("hidden"),
+          scrollDownHidden: scrollDownBtn.classList.contains("hidden"),
+          reactionHidden: reactionBar.classList.contains("hidden"),
+          composerHidden: composer.classList.contains("hidden"),
+          selectionHidden: selectionToolbar.classList.contains("hidden"),
+        };
+      }
+      feed.classList.add("hidden");
+      scrollDownBtn.classList.add("hidden");
+      reactionBar.classList.add("hidden");
+      composer.classList.add("hidden");
+      selectionToolbar.classList.add("hidden");
+      detailsView.classList.remove("hidden");
+      return;
+    }
+
+    const snapshot = chatOrderUiSnapshot;
+    chatOrderUiSnapshot = null;
+    detailsView.classList.add("hidden");
+    if (!snapshot) {
+      feed.classList.remove("hidden");
+      composer.classList.remove("hidden");
+      return;
+    }
+    feed.classList.toggle("hidden", snapshot.feedHidden);
+    scrollDownBtn.classList.toggle("hidden", snapshot.scrollDownHidden);
+    reactionBar.classList.toggle("hidden", snapshot.reactionHidden);
+    composer.classList.toggle("hidden", snapshot.composerHidden);
+    selectionToolbar.classList.toggle("hidden", snapshot.selectionHidden);
+  }
+
+  function escapeChatHtml(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function detachChatOrderFooterOutsideHandler() {
+    if (!chatOrderFooterOutsideHandler) return;
+    document.removeEventListener("pointerdown", chatOrderFooterOutsideHandler, true);
+    chatOrderFooterOutsideHandler = null;
+  }
+
+  function renderChatOrderRepeatFooter(container, order) {
+    if (!container) return;
+    const source = order && typeof order === "object" ? order : {};
+    const items = Array.isArray(source.items) ? source.items : [];
+
+    const footer = document.createElement("div");
+    footer.className = "shop-company-chat-order-footer";
+
+    const repeatBtn = document.createElement("button");
+    repeatBtn.type = "button";
+    repeatBtn.className = "shop-checkout-back shop-order-details-repeat-btn";
+    repeatBtn.setAttribute("aria-label", "\u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c \u0437\u0430\u043a\u0430\u0437");
+    repeatBtn.innerHTML =
+      '<i class="fas fa-rotate-right" aria-hidden="true"></i>'
+      + '<span class="shop-order-details-repeat-text">\u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c \u0437\u0430\u043a\u0430\u0437</span>';
+
+    const totalBtn = document.createElement("button");
+    totalBtn.type = "button";
+    totalBtn.className = "shop-checkout-submit-btn shop-company-chat-order-total-btn";
+    totalBtn.innerHTML =
+      '<span class="shop-checkout-total">' + formatChatOrderAmount(resolveChatOrderTotal(source)) + "</span>";
+
+    totalBtn.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+
+    repeatBtn.addEventListener("click", async function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!repeatBtn.classList.contains("is-expanded")) {
+        repeatBtn.classList.add("is-expanded");
+        return;
+      }
+      if (!items.length) {
+        window.alert("\u0412 \u0437\u0430\u043a\u0430\u0437\u0435 \u043d\u0435\u0442 \u0442\u043e\u0432\u0430\u0440\u043e\u0432");
+        return;
+      }
+      if (repeatBtn.disabled) return;
+      repeatBtn.disabled = true;
+      try {
+        if (typeof window.repeatOrderItemsToCart === "function") {
+          await window.repeatOrderItemsToCart(items);
+        } else {
+          throw new Error("REPEAT_HANDLER_UNAVAILABLE");
+        }
+      } catch (_err) {
+        window.alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c \u0437\u0430\u043a\u0430\u0437");
+      } finally {
+        repeatBtn.disabled = false;
+        repeatBtn.classList.remove("is-expanded");
+      }
+    });
+
+    detachChatOrderFooterOutsideHandler();
+    chatOrderFooterOutsideHandler = function (event) {
+      if (!event) return;
+      if (event.target instanceof Node && repeatBtn.contains(event.target)) return;
+      repeatBtn.classList.remove("is-expanded");
+    };
+    document.addEventListener("pointerdown", chatOrderFooterOutsideHandler, true);
+
+    footer.appendChild(repeatBtn);
+    footer.appendChild(totalBtn);
+    container.appendChild(footer);
+  }
+
+  function buildChatOrderDetailsHtml(order) {
+    const source = order && typeof order === "object" ? order : {};
+    let html = '<div class="shop-order-details">';
+
+    html += '<div class="shop-order-details-header">';
+    html += '<div class="shop-order-details-title">\u0417\u0430\u043a\u0430\u0437 '
+      + escapeChatHtml(resolveChatOrderDisplayNumber(source))
+      + "</div>";
+    if (resolveChatOrderStatusTitle(source)) {
+      html += '<div class="shop-order-details-status">'
+        + escapeChatHtml(resolveChatOrderStatusTitle(source))
+        + "</div>";
+    }
+    html += "</div>";
+
+    html += '<div class="shop-order-details-info">';
+    html += '<div class="shop-order-info-row">';
+    html += '<div class="shop-order-info-label">\u0414\u0430\u0442\u0430 \u0438 \u0432\u0440\u0435\u043c\u044f</div>';
+    html += '<div class="shop-order-info-value">'
+      + escapeChatHtml(formatHotQuestionOrderDateLong(resolveChatOrderCreatedAt(source)))
+      + "</div>";
+    html += "</div>";
+
+    if (source.method_title || source.methodTitle) {
+      html += '<div class="shop-order-info-row">';
+      html += '<div class="shop-order-info-label">\u0421\u043f\u043e\u0441\u043e\u0431 \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438</div>';
+      html += '<div class="shop-order-info-value">'
+        + escapeChatHtml(String(source.method_title || source.methodTitle || ""))
+        + "</div>";
+      html += "</div>";
+    }
+
+    if (source.time_option_title || source.timeOptionTitle) {
+      html += '<div class="shop-order-info-row">';
+      html += '<div class="shop-order-info-label">\u0412\u0440\u0435\u043c\u044f \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438</div>';
+      html += '<div class="shop-order-info-value">'
+        + escapeChatHtml(String(source.time_option_title || source.timeOptionTitle || ""))
+        + "</div>";
+      html += "</div>";
+    }
+
+    const scheduledAt = String(source.scheduled_at || source.scheduledAt || "");
+    if (scheduledAt) {
+      html += '<div class="shop-order-info-row">';
+      html += '<div class="shop-order-info-label">\u0417\u0430\u043f\u043b\u0430\u043d\u0438\u0440\u043e\u0432\u0430\u043d\u043e \u043d\u0430</div>';
+      html += '<div class="shop-order-info-value">'
+        + escapeChatHtml(formatHotQuestionOrderDateLong(scheduledAt))
+        + "</div>";
+      html += "</div>";
+    }
+    html += "</div>";
+
+    const address = String(source.address || "").trim();
+    if (address) {
+      html += '<div class="shop-order-details-section">';
+      html += '<div class="shop-order-section-title">\u0410\u0434\u0440\u0435\u0441 \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438</div>';
+      html += '<div class="shop-order-address">' + escapeChatHtml(address) + "</div>";
+      html += "</div>";
+    }
+
+    const items = Array.isArray(source.items) ? source.items : [];
+    if (items.length) {
+      html += '<div class="shop-order-details-section">';
+      html += '<div class="shop-order-section-title">\u0422\u043e\u0432\u0430\u0440\u044b</div>';
+      html += '<div class="shop-cart-items">';
+      items.forEach(function (item) {
+        if (typeof window.formatOrderItem === "function") {
+          try {
+            html += String(window.formatOrderItem(item) || "");
+            return;
+          } catch (_err) {}
+        }
+        const safeItem = item && typeof item === "object" ? item : {};
+        const qtyRaw = Number(safeItem.qty ?? safeItem.quantity ?? safeItem.count ?? 1);
+        const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? Math.trunc(qtyRaw) : 1;
+        const linePriceRaw = Number(safeItem.total_price ?? safeItem.line_total ?? safeItem.totalPrice ?? 0);
+        const linePrice = Number.isFinite(linePriceRaw) ? linePriceRaw : 0;
+        html += '<div class="cart-row">';
+        html += '<div class="cart-mid"><div class="cart-title">'
+          + escapeChatHtml(String(safeItem.name || "\u2014"))
+          + "</div></div>";
+        html += '<div class="cart-right"><div class="cart-price">'
+          + formatChatOrderAmount(linePrice)
+          + '</div><div class="cart-qty">\u00d7' + String(qty) + "</div></div>";
+        html += "</div>";
+      });
+      html += "</div>";
+      html += "</div>";
+    }
+
+    if (source.cutlery_qty && Number(source.cutlery_qty) > 0) {
+      html += '<div class="shop-order-details-section">';
+      html += '<div class="shop-order-info-row">';
+      html += '<div class="shop-order-info-label">\u041f\u0440\u0438\u0431\u043e\u0440\u044b</div>';
+      html += '<div class="shop-order-info-value">' + escapeChatHtml(String(source.cutlery_qty)) + " \u0448\u0442.</div>";
+      html += "</div>";
+      html += "</div>";
+    }
+
+    if (source.comment) {
+      html += '<div class="shop-order-details-section">';
+      html += '<div class="shop-order-section-title">\u041a\u043e\u043c\u043c\u0435\u043d\u0442\u0430\u0440\u0438\u0439</div>';
+      html += '<div class="shop-order-comment">' + escapeChatHtml(String(source.comment || "")) + "</div>";
+      html += "</div>";
+    }
+
+    if (typeof window.renderOrderSummaryBlock === "function") {
+      try {
+        html += String(window.renderOrderSummaryBlock(source) || "");
+      } catch (_err) {
+        html += '<div class="shop-order-details-section shop-order-summary">';
+        html += '<div class="shop-order-summary-title">\u0421\u0443\u043c\u043c\u044b:</div>';
+        html += '<div class="shop-order-summary-total-row">';
+        html += '<span class="shop-order-summary-total-label">\u0418\u0422\u041e\u0413\u041e</span>';
+        html += '<span class="shop-order-summary-total-value">' + formatChatOrderAmount(resolveChatOrderTotal(source)) + "</span>";
+        html += "</div></div>";
+      }
+    } else {
+      html += '<div class="shop-order-details-section shop-order-summary">';
+      html += '<div class="shop-order-summary-title">\u0421\u0443\u043c\u043c\u044b:</div>';
+      html += '<div class="shop-order-summary-total-row">';
+      html += '<span class="shop-order-summary-total-label">\u0418\u0422\u041e\u0413\u041e</span>';
+      html += '<span class="shop-order-summary-total-value">' + formatChatOrderAmount(resolveChatOrderTotal(source)) + "</span>";
+      html += "</div></div>";
+    }
+
+    html += '<div class="shop-company-chat-order-footer-spacer"></div>';
+    html += "</div>";
+    return html;
+  }
+
+  function renderChatOrderDetailsContent(container, order) {
+    container.innerHTML = "";
+    const source = order && typeof order === "object" ? order : null;
+    if (!source) {
+      const empty = document.createElement("div");
+      empty.className = "shop-company-chat-order-empty";
+      empty.textContent = CHAT_ORDER_LOAD_ERROR_TEXT;
+      container.appendChild(empty);
+      return;
+    }
+
+    container.innerHTML = buildChatOrderDetailsHtml(source);
+
+    if (typeof window.bindOrderSummaryDiscountToggles === "function") {
+      try {
+        window.bindOrderSummaryDiscountToggles(container);
+      } catch (_err) {}
+    }
+    if (typeof window.bindRepeatOrderItemRows === "function") {
+      try {
+        const reopen = function () {
+          const sourceOrderId = toPositiveOrderId(source.id);
+          if (!sourceOrderId) return;
+          void openChatOrderDetailsView(sourceOrderId);
+        };
+        window.bindRepeatOrderItemRows(container, Array.isArray(source.items) ? source.items : [], {
+          onBack: reopen,
+          enableSwipeActions: true,
+        });
+      } catch (_err) {}
+    }
+
+    renderChatOrderRepeatFooter(container, source);
+  }
+
+  async function openChatOrderDetailsView(orderId) {
+    const safeOrderId = toPositiveOrderId(orderId);
+    if (!safeOrderId) return;
+
+    hideContextMenu();
+    hideReactionBar();
+    hideEmojiPopover();
+
+    const detailsView = ensureChatOrderDetailsViewNode();
+    const backBtn = ensureChatOrderBackButton();
+    if (!detailsView || !backBtn) return;
+
+    if (!chatOrderDetailsActive) {
+      chatOrderDetailsPrevTitle = String(modalTitle.textContent || "").trim() || initialModalTitleText;
+    }
+    chatOrderDetailsActive = true;
+    chatOrderDetailsId = safeOrderId;
+    backBtn.classList.remove("hidden");
+    modalTitle.textContent = CHAT_ORDER_DETAILS_TITLE;
+    setChatOrderDetailsMode(true);
+    detailsView.innerHTML =
+      '<div class="shop-company-chat-order-empty">' + CHAT_ORDER_LOADING_TEXT + "</div>";
+
+    try {
+      const json = await chatApiJson(
+        "/api/public/me/orders/" + encodeURIComponent(String(safeOrderId)) + "?_ts=" + Date.now()
+      );
+      if (!chatOrderDetailsActive || chatOrderDetailsId !== safeOrderId) return;
+      const payload = json && json.data ? json.data : null;
+      renderChatOrderDetailsContent(
+        detailsView,
+        payload || hotQuestionOrderCardsCache.get(safeOrderId) || null
+      );
+    } catch (_err) {
+      if (!chatOrderDetailsActive || chatOrderDetailsId !== safeOrderId) return;
+      const fallback = hotQuestionOrderCardsCache.get(safeOrderId) || null;
+      if (fallback) {
+        renderChatOrderDetailsContent(detailsView, fallback);
+      } else {
+        detailsView.innerHTML =
+          '<div class="shop-company-chat-order-empty">' + CHAT_ORDER_LOAD_ERROR_TEXT + "</div>";
+      }
+    }
+  }
+
+  function hideChatOrderDetailsView() {
+    if (!chatOrderDetailsActive && !chatOrderUiSnapshot) return;
+    chatOrderDetailsActive = false;
+    chatOrderDetailsId = 0;
+    detachChatOrderFooterOutsideHandler();
+    setChatOrderDetailsMode(false);
+    if (chatOrderBackBtn && chatOrderBackBtn.isConnected) {
+      chatOrderBackBtn.classList.add("hidden");
+    }
+    modalTitle.textContent = chatOrderDetailsPrevTitle || initialModalTitleText;
+    updateScrollDownButton();
+  }
+
+  function renderHotQuestionOrderCard(button, preview, orderId) {
+    const source = preview && typeof preview === "object"
+      ? preview
+      : {
+          id: orderId,
+          statusTitle: "\u041d\u0430\u0436\u043c\u0438\u0442\u0435, \u0447\u0442\u043e\u0431\u044b \u043e\u0442\u043a\u0440\u044b\u0442\u044c",
+          totalPrice: Number.NaN,
+          createdAt: "",
+          photos: [],
+        };
+    const safeOrderId = toPositiveOrderId(source.id || orderId);
+    const photos = Array.isArray(source.photos) ? source.photos.slice(0, HOT_QUESTION_ORDER_CARD_PHOTOS_MAX) : [];
+    button.innerHTML = "";
+
+    const head = document.createElement("div");
+    head.className = "shop-company-chat-order-card__head";
+
+    const title = document.createElement("div");
+    title.className = "shop-company-chat-order-card__title";
+    title.textContent = "\u0417\u0430\u043a\u0430\u0437 " + resolveChatOrderDisplayNumber(source);
+
+    const status = document.createElement("div");
+    status.className = "shop-company-chat-order-card__status";
+    status.textContent = resolveChatOrderStatusTitle(source);
+
+    head.appendChild(title);
+    head.appendChild(status);
+    button.appendChild(head);
+
+    const meta = document.createElement("div");
+    meta.className = "shop-company-chat-order-card__meta";
+    meta.textContent = formatHotQuestionOrderDateShort(resolveChatOrderCreatedAt(source));
+    button.appendChild(meta);
+
+    const total = document.createElement("div");
+    total.className = "shop-company-chat-order-card__total";
+    total.textContent = formatChatOrderAmount(resolveChatOrderTotal(source));
+    button.appendChild(total);
+
+    if (photos.length) {
+      const photosRow = document.createElement("div");
+      photosRow.className = "shop-company-chat-order-card__photos";
+      photos.forEach(function (src) {
+        const img = document.createElement("img");
+        img.className = "shop-company-chat-order-card__photo";
+        img.src = String(src || "");
+        img.alt = "";
+        img.loading = "lazy";
+        img.decoding = "async";
+        photosRow.appendChild(img);
+      });
+      button.appendChild(photosRow);
+    }
+
+    if (!safeOrderId) button.disabled = true;
+  }
+
+  function createHotQuestionOrderCardNode(entry) {
+    const resolvedList = resolveHotQuestionOrderCardPreviews(entry);
+    if (!Array.isArray(resolvedList) || !resolvedList.length) return null;
+
+    const strip = document.createElement("div");
+    strip.className = "shop-company-chat-order-card-strip";
+
+    resolvedList.forEach(function (resolved) {
+      const orderId = toPositiveOrderId(resolved && resolved.orderId);
+      if (!orderId) return;
+
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "shop-company-chat-order-card";
+      card.dataset.chatOrderCardId = String(orderId);
+      card.setAttribute("aria-label", "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0437\u0430\u043a\u0430\u0437");
+
+      renderHotQuestionOrderCard(card, resolved.preview, orderId);
+
+      if (!resolved.preview) {
+        ensureHotQuestionOrderCardPreview(orderId)
+          .then(function (preview) {
+            if (!card.isConnected || !preview) return;
+            renderHotQuestionOrderCard(card, preview, orderId);
+          })
+          .catch(function () {});
+      }
+
+      strip.appendChild(card);
+    });
+
+    return strip.childElementCount > 0 ? strip : null;
+  }
+
   function createMessageNode(entry) {
     const row = document.createElement("div");
     row.className = "shop-company-chat-row is-" + (entry.role || "agent");
@@ -3886,11 +5163,18 @@
     if (hasText) {
       bubble.appendChild(text);
     }
+
+    const orderCardNode = entry.role === "agent" ? createHotQuestionOrderCardNode(entry) : null;
+    if (orderCardNode) {
+      bubble.classList.add("shop-company-chat-bubble--order-card");
+      bubble.appendChild(orderCardNode);
+    }
+
     if (hasImageAttachment) {
       bubble.classList.add("has-attachment");
       if (!hasText) bubble.classList.add("has-attachment-only");
     }
-    if (emojiOnlyInfo.isEmojiOnly && !reply && !hasImageAttachment) {
+    if (emojiOnlyInfo.isEmojiOnly && !reply && !hasImageAttachment && !orderCardNode) {
       bubble.classList.add("is-emoji-only");
       if (emojiOnlyInfo.count <= 1) bubble.classList.add("is-emoji-only-single");
       else if (emojiOnlyInfo.count <= 3) bubble.classList.add("is-emoji-only-few");
@@ -4057,6 +5341,8 @@
     remountEmojiPopover("composer");
     emojiPopover.classList.add("hidden");
     emojiPopover.classList.remove("is-attach-preview");
+    emojiPopoverMode = "composer";
+    emojiPopoverReactionMessageId = "";
   }
 
   function toggleEmojiPopover(target) {
@@ -4069,8 +5355,33 @@
     remountEmojiPopover(normalizedTarget);
     emojiPopover.classList.toggle("is-attach-preview", isPreviewTarget);
     emojiPopover.classList.toggle("hidden", !willOpen);
-    if (!willOpen) remountEmojiPopover("composer");
-    if (willOpen) ensureEmojiDatasetLoaded().catch(function () {});
+    if (!willOpen) {
+      remountEmojiPopover("composer");
+      emojiPopoverMode = "composer";
+      emojiPopoverReactionMessageId = "";
+    }
+    if (willOpen) {
+      if (normalizedTarget !== "attach-preview") {
+        emojiPopoverMode = "composer";
+        emojiPopoverReactionMessageId = "";
+      }
+      ensureEmojiDatasetLoaded().catch(function () {});
+    }
+  }
+
+  function showEmojiPopover(target, options) {
+    const normalizedTarget = target === "attach-preview" ? "attach-preview" : "composer";
+    const isPreviewTarget = normalizedTarget === "attach-preview";
+    const opts = options && typeof options === "object" ? options : {};
+    const mode = opts.mode === "reaction" ? "reaction" : "composer";
+    const messageId = mode === "reaction" ? String(opts.messageId || "") : "";
+
+    remountEmojiPopover(normalizedTarget);
+    emojiPopover.classList.toggle("is-attach-preview", isPreviewTarget);
+    emojiPopover.classList.remove("hidden");
+    emojiPopoverMode = mode;
+    emojiPopoverReactionMessageId = messageId;
+    ensureEmojiDatasetLoaded().catch(function () {});
   }
 
   function normalizeEmojiCategoryName(rawCategory) {
@@ -4376,6 +5687,12 @@
         btn.addEventListener("click", function (event) {
           event.preventDefault();
           event.stopPropagation();
+          if (emojiPopoverMode === "reaction" && emojiPopoverReactionMessageId) {
+            toggleReaction(emojiPopoverReactionMessageId, emoji);
+            rememberRecentEmoji(emoji);
+            hideEmojiPopover();
+            return;
+          }
           insertEmojiIntoInput(emoji);
           rememberRecentEmoji(emoji);
         });
@@ -4443,8 +5760,162 @@
     });
   }
 
+  function collectAllReactionEmojis() {
+    const out = [];
+    const seen = new Set();
+    const push = function (value) {
+      const raw = String(value || "").trim();
+      if (!raw) return;
+      const normalized = normalizeReactionValue(raw) || raw;
+      if (!normalized || seen.has(normalized)) return;
+      seen.add(normalized);
+      out.push(raw);
+    };
+
+    const peopleSource = (emojiCategories.people && emojiCategories.people.length)
+      ? emojiCategories.people
+      : (EMOJI_FALLBACK_CATEGORIES.people || []);
+    peopleSource.forEach(push);
+    return out;
+  }
+
+  function ensureReactionBarAllEmojiButtons() {
+    Array.from(reactionBar.querySelectorAll('[data-reaction-slot="extra-all"]')).forEach(function (node) {
+      node.remove();
+    });
+
+    const toggleBtn = reactionBar.querySelector('[data-reaction="__toggle_more__"]');
+    if (!toggleBtn) return;
+
+    const skip = new Set();
+    QUICK_REACTIONS.forEach(function (emoji) {
+      const key = normalizeReactionValue(emoji);
+      if (key) skip.add(key);
+    });
+    EXTRA_REACTIONS.forEach(function (emoji) {
+      const key = normalizeReactionValue(emoji);
+      if (key) skip.add(key);
+    });
+
+    const fragment = document.createDocumentFragment();
+    collectAllReactionEmojis().forEach(function (emoji) {
+      const key = normalizeReactionValue(emoji);
+      if (!key || skip.has(key)) return;
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shop-company-chat-reaction-btn shop-company-chat-reaction-extra shop-company-chat-reaction-extra--dynamic";
+      btn.setAttribute("data-reaction-slot", "extra-all");
+      btn.setAttribute("data-reaction", emoji);
+      btn.setAttribute("aria-label", emoji);
+      btn.title = emoji;
+      setEmojiGlyph(btn, emoji, "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--reaction");
+      fragment.appendChild(btn);
+    });
+
+    toggleBtn.before(fragment);
+  }
+
+  function ensureContextMenuAllEmojiButtons(menuRoot) {
+    if (!menuRoot) return;
+    Array.from(menuRoot.querySelectorAll('[data-chat-msg-reaction-slot="extra-all"]')).forEach(function (node) {
+      node.remove();
+    });
+
+    const toggleBtn = menuRoot.querySelector('[data-chat-msg-reaction="__toggle_more__"]');
+    if (!toggleBtn) return;
+
+    const skip = new Set();
+    QUICK_REACTIONS.forEach(function (emoji) {
+      const key = normalizeReactionValue(emoji);
+      if (key) skip.add(key);
+    });
+    EXTRA_REACTIONS.forEach(function (emoji) {
+      const key = normalizeReactionValue(emoji);
+      if (key) skip.add(key);
+    });
+
+    const fragment = document.createDocumentFragment();
+    collectAllReactionEmojis().forEach(function (emoji) {
+      const key = normalizeReactionValue(emoji);
+      if (!key || skip.has(key)) return;
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shop-company-chat-context-reaction shop-company-chat-context-reaction--extra shop-company-chat-context-reaction--dynamic";
+      btn.setAttribute("data-chat-msg-reaction-slot", "extra-all");
+      btn.setAttribute("data-chat-msg-reaction", emoji);
+      btn.setAttribute("aria-label", emoji);
+      btn.title = emoji;
+      setEmojiGlyph(btn, emoji, "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--reaction");
+      fragment.appendChild(btn);
+    });
+
+    toggleBtn.before(fragment);
+  }
+
+  function normalizeContextMenuReactionButtons(menuRoot) {
+    if (!menuRoot) return;
+
+    const quickBtns = Array.from(menuRoot.querySelectorAll('[data-chat-msg-reaction-slot="quick"]'));
+    quickBtns.forEach(function (btn, index) {
+      const emoji = QUICK_REACTIONS[index] || QUICK_REACTIONS[QUICK_REACTIONS.length - 1];
+      btn.setAttribute("data-chat-msg-reaction", emoji);
+      btn.setAttribute("aria-label", emoji);
+      btn.title = emoji;
+      setEmojiGlyph(btn, emoji, "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--reaction");
+    });
+
+    const extraBtns = Array.from(menuRoot.querySelectorAll('[data-chat-msg-reaction-slot="extra"]'));
+    extraBtns.forEach(function (btn, index) {
+      const emoji = EXTRA_REACTIONS[index] || EXTRA_REACTIONS[EXTRA_REACTIONS.length - 1];
+      btn.setAttribute("data-chat-msg-reaction", emoji);
+      btn.setAttribute("aria-label", emoji);
+      btn.title = emoji;
+      setEmojiGlyph(btn, emoji, "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--reaction");
+    });
+  }
+
+  function setContextMenuReactionsExpanded(expanded) {
+    if (!contextMenuEl) return;
+    const isExpanded = !!expanded;
+    if (isExpanded) {
+      ensureContextMenuAllEmojiButtons(contextMenuEl);
+      ensureEmojiDatasetLoaded().then(function () {
+        if (!contextMenuEl || contextMenuEl.classList.contains("hidden")) return;
+        if (!contextMenuEl.classList.contains("is-reactions-expanded")) return;
+        ensureContextMenuAllEmojiButtons(contextMenuEl);
+        refreshContextMenuReactionBoxPosition();
+      }).catch(function () {});
+    }
+    contextMenuEl.classList.toggle("is-reactions-expanded", isExpanded);
+    const toggleBtn = contextMenuEl.querySelector('[data-chat-msg-reaction="__toggle_more__"]');
+    if (!toggleBtn) return;
+    toggleBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+    toggleBtn.setAttribute("aria-label", isExpanded ? "Hide extra reactions" : "Show more reactions");
+  }
+
+  function refreshContextMenuReactionBoxPosition() {
+    if (!contextMenuEl || contextMenuEl.classList.contains("hidden")) return;
+    const left = Number.parseFloat(contextMenuEl.style.left || "");
+    const top = Number.parseFloat(contextMenuEl.style.top || "");
+    if (!Number.isFinite(left) || !Number.isFinite(top)) return;
+    positionFloatingBox(contextMenuEl, left, top, 8);
+  }
+
   function setReactionBarExpanded(expanded) {
     const isExpanded = !!expanded;
+    if (isExpanded) {
+      ensureReactionBarAllEmojiButtons();
+      ensureEmojiDatasetLoaded().then(function () {
+        if (!reactionBar.classList.contains("is-expanded")) return;
+        ensureReactionBarAllEmojiButtons();
+        if (reactionMessageId) {
+          const anchor = thread.querySelector('[data-message-id="' + cssEscape(reactionMessageId) + '"]');
+          if (anchor) positionReactionBar(anchor);
+        }
+      }).catch(function () {});
+    }
     reactionBar.classList.toggle("is-expanded", isExpanded);
     const toggleBtn = reactionBar.querySelector('[data-reaction="__toggle_more__"]');
     if (!toggleBtn) return;
@@ -4844,15 +6315,20 @@
     const createdAt = new Date().toISOString();
     const direction = role === "user" ? "in" : "out";
     const status = role === "user" ? "sent" : "";
+    const messageId = String(
+      opts.messageId || (Date.now() + "-" + messageSeq + "-" + Math.random().toString(36).slice(2, 7))
+    );
     const message = {
-      id: String(opts.messageId || (Date.now() + "-" + messageSeq + "-" + Math.random().toString(36).slice(2, 7))),
+      id: messageId,
       type: "message",
       role: role,
       day: formatDayLabelFromIso(createdAt),
       time: formatTimeFromIso(createdAt),
       text: trimmed,
       attachment: attachment,
-      author: role === "agent" ? VIRTUAL_ASSISTANT_NAME : "",
+      author: role === "agent"
+        ? String(opts.author || resolveAgentAuthorNameByMessageId(messageId))
+        : "",
       replyTo: replyTo,
       reaction: "",
       reactions: { in: "", out: "" },
@@ -4876,6 +6352,496 @@
     if (role === "user") {
       scheduleOutgoingDeliveryProgress(message.id);
     }
+  }
+
+  function normalizeHotQuestionKey(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/\u0451/g, "\u0435")
+      .replace(/[!?.,;:()[\]{}"'`~]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function hasHotQuestionAlias(aliasSet, normalizedText, options) {
+    const text = String(normalizedText || "");
+    if (!text) return false;
+    const aliases = aliasSet instanceof Set ? Array.from(aliasSet) : [];
+    const opts = options || {};
+    const useIncludes = opts.includes === true;
+    for (let idx = 0; idx < aliases.length; idx += 1) {
+      const alias = String(aliases[idx] || "");
+      if (!alias) continue;
+      if (useIncludes) {
+        if (text.includes(alias)) return true;
+      } else if (text === alias) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function isWhereIsOrderHotQuestion(normalizedText) {
+    return hasHotQuestionAlias(hotQuestionAliases.order, normalizedText, { includes: true });
+  }
+
+  function formatHotQuestionOrderNumber(order) {
+    const source = order && typeof order === "object" ? order : {};
+    const orderId = toPositiveOrderId(source.id || source.orderId || source.order_id);
+    if (orderId) return "#" + String(orderId);
+    const publicId = String(source.public_id || "").trim();
+    if (publicId) return "#" + publicId;
+    return "#";
+  }
+
+  function formatHotQuestionOrderAmount(order) {
+    const amount = Number(order && order.total_price);
+    if (!Number.isFinite(amount) || amount <= 0) return "";
+    return amount.toLocaleString("ru-RU") + " \u20bd";
+  }
+
+  function formatHotQuestionOrderLine(order) {
+    const source = order && typeof order === "object" ? order : {};
+    const numberLabel = formatHotQuestionOrderNumber(source);
+    const statusLabel = String(source.status_title || HOT_QUESTION_ORDER_STATUS_UNKNOWN).trim();
+    const amountLabel = formatHotQuestionOrderAmount(source);
+    const parts = [numberLabel, statusLabel];
+    if (amountLabel) parts.push(amountLabel);
+    return "\u2022 " + parts.join(" - ");
+  }
+
+  function toPositiveOrderId(rawValue) {
+    const id = Number(rawValue || 0);
+    if (!Number.isFinite(id) || id <= 0) return 0;
+    return Math.trunc(id);
+  }
+
+  function formatHotQuestionOrderDateShort(isoValue) {
+    const date = new Date(String(isoValue || ""));
+    if (Number.isNaN(date.getTime())) return "\u2014";
+    return date.toLocaleString("ru-RU", {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  function formatHotQuestionOrderDateLong(isoValue) {
+    const date = new Date(String(isoValue || ""));
+    if (Number.isNaN(date.getTime())) return "\u2014";
+    return date.toLocaleString("ru-RU", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  function collectHotQuestionOrderPreviewPhotos(items, maxPhotos) {
+    const result = [];
+    const limit = Math.max(1, Math.min(8, Number(maxPhotos || HOT_QUESTION_ORDER_CARD_PHOTOS_MAX)));
+
+    const pushPhoto = function (rawPhoto) {
+      if (result.length >= limit) return;
+      const src = String(rawPhoto || "").trim();
+      if (!src) return;
+      result.push(src);
+    };
+
+    (Array.isArray(items) ? items : []).forEach(function (item) {
+      if (result.length >= limit) return;
+      const source = item && typeof item === "object" ? item : {};
+      const photos = Array.isArray(source.photos) ? source.photos : [];
+      if (photos.length) {
+        pushPhoto(photos[0]);
+        return;
+      }
+      pushPhoto(source.photo || source.product_photo || "");
+    });
+
+    return result;
+  }
+
+  function mapHotQuestionOrderPreview(rawOrder) {
+    const source = rawOrder && typeof rawOrder === "object" ? rawOrder : {};
+    const id = toPositiveOrderId(source.id);
+    if (!id) return null;
+    const preview = {
+      id: id,
+      publicId: String(source.public_id || "").trim(),
+      statusTitle: String(
+        source.status_title || source.statusTitle || HOT_QUESTION_ORDER_STATUS_UNKNOWN
+      ).trim() || HOT_QUESTION_ORDER_STATUS_UNKNOWN,
+      totalPrice: Number(source.total_price ?? source.totalPrice ?? 0),
+      createdAt: String(source.created_at || source.createdAt || ""),
+      photos: collectHotQuestionOrderPreviewPhotos(source.items || source.orderItems, HOT_QUESTION_ORDER_CARD_PHOTOS_MAX),
+      items: Array.isArray(source.items)
+        ? source.items
+        : (Array.isArray(source.orderItems) ? source.orderItems : []),
+    };
+    return preview;
+  }
+
+  function cacheHotQuestionOrderPreview(rawOrder) {
+    const preview = mapHotQuestionOrderPreview(rawOrder);
+    if (!preview) return null;
+    hotQuestionOrderCardsCache.set(preview.id, preview);
+    return preview;
+  }
+
+  function cacheHotQuestionOrderPreviews(rawOrders) {
+    if (!Array.isArray(rawOrders)) return [];
+    const out = [];
+    rawOrders.forEach(function (order) {
+      const preview = cacheHotQuestionOrderPreview(order);
+      if (preview) out.push(preview);
+    });
+    return out;
+  }
+
+  function extractHotQuestionOrderIdsFromText(value) {
+    const text = String(value || "");
+    if (!text) return [];
+    const found = [];
+    const seen = new Set();
+    const pattern = /#\s*(\d{1,12})/g;
+    let match = pattern.exec(text);
+    while (match) {
+      const id = toPositiveOrderId(match[1]);
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        found.push(id);
+      }
+      match = pattern.exec(text);
+    }
+    return found;
+  }
+
+  function resolveHotQuestionOrderCardIdsByMessageId(messageId) {
+    const id = String(messageId || "");
+    if (!id) return [];
+    const match = id.match(HOT_QUESTION_ORDER_CARD_MESSAGE_RE);
+    if (!match) return [];
+    const raw = String(match[1] || "");
+    if (!raw) return [];
+    const seen = new Set();
+    return raw
+      .split("_")
+      .map(function (part) { return toPositiveOrderId(part); })
+      .filter(function (orderId) {
+        if (!orderId || seen.has(orderId)) return false;
+        seen.add(orderId);
+        return true;
+      });
+  }
+
+  function resolveHotQuestionOrderCardPreviews(entry) {
+    const source = entry && typeof entry === "object" ? entry : {};
+    const ids = [];
+    const seen = new Set();
+
+    resolveHotQuestionOrderCardIdsByMessageId(source.id).forEach(function (orderId) {
+      if (!orderId || seen.has(orderId)) return;
+      seen.add(orderId);
+      ids.push(orderId);
+    });
+    if (!ids.length) return [];
+
+    extractHotQuestionOrderIdsFromText(source.text).forEach(function (id) {
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      ids.push(id);
+    });
+
+    return ids.map(function (orderId) {
+      return {
+        orderId: orderId,
+        preview: hotQuestionOrderCardsCache.get(orderId) || null,
+      };
+    });
+  }
+
+  async function fetchHotQuestionOrderPreviewById(orderId) {
+    const safeOrderId = toPositiveOrderId(orderId);
+    if (!safeOrderId) return null;
+    const json = await chatApiJson(
+      "/api/public/me/orders/" + encodeURIComponent(String(safeOrderId)) + "?_ts=" + Date.now()
+    );
+    const order = json && json.data ? json.data : null;
+    return cacheHotQuestionOrderPreview(order);
+  }
+
+  async function ensureHotQuestionOrderCardPreview(orderId) {
+    const safeOrderId = toPositiveOrderId(orderId);
+    if (!safeOrderId) return null;
+    if (hotQuestionOrderCardsCache.has(safeOrderId)) {
+      return hotQuestionOrderCardsCache.get(safeOrderId) || null;
+    }
+    if (hotQuestionOrderCardsFetchInFlight.has(safeOrderId)) {
+      return hotQuestionOrderCardsFetchInFlight.get(safeOrderId);
+    }
+    const pending = fetchHotQuestionOrderPreviewById(safeOrderId)
+      .then(function (preview) {
+        hotQuestionOrderCardsCache.set(safeOrderId, preview || null);
+        return preview || null;
+      })
+      .catch(function () {
+        hotQuestionOrderCardsCache.set(safeOrderId, null);
+        return null;
+      })
+      .finally(function () {
+        hotQuestionOrderCardsFetchInFlight.delete(safeOrderId);
+      });
+    hotQuestionOrderCardsFetchInFlight.set(safeOrderId, pending);
+    return pending;
+  }
+
+  async function fetchActiveOrdersForHotQuestion() {
+    const qs = new URLSearchParams({
+      limit: "200",
+      offset: "0",
+      status_is_final: "0",
+      _ts: String(Date.now()),
+    });
+    const json = await chatApiJson("/api/public/me/orders?" + qs.toString());
+    const rows = Array.isArray(json && json.data) ? json.data : [];
+    return rows;
+  }
+
+  async function fetchActiveOrdersByPhoneForHotQuestion(phone) {
+    const normalizedPhone = normalizePhoneForHotQuestion(phone);
+    if (!normalizedPhone) return [];
+    const qs = new URLSearchParams({
+      phone: normalizedPhone,
+      limit: "200",
+      _ts: String(Date.now()),
+    });
+    const json = await chatApiJson("/api/public/orders/by-phone?" + qs.toString());
+    const rows = Array.isArray(json && json.data) ? json.data : [];
+    return rows;
+  }
+
+  function normalizePhoneForHotQuestion(value) {
+    const digits = String(value || "").replace(/\D+/g, "");
+    if (!digits) return "";
+    if (digits.length === 11 && (digits[0] === "7" || digits[0] === "8")) {
+      return "7" + digits.slice(1);
+    }
+    if (digits.length === 10) {
+      return "7" + digits;
+    }
+    if (digits.length > 11) {
+      const tail11 = digits.slice(-11);
+      if (/^[78]\d{10}$/.test(tail11)) return "7" + tail11.slice(1);
+      const tail10 = digits.slice(-10);
+      if (/^\d{10}$/.test(tail10)) return "7" + tail10;
+    }
+    return digits.length >= 10 ? digits : "";
+  }
+
+  function extractPhoneCandidateFromHotQuestionText(value) {
+    const source = String(value || "");
+    if (!source) return "";
+    const matches = source.match(HOT_QUESTION_PHONE_PATTERN) || [];
+    for (let idx = 0; idx < matches.length; idx += 1) {
+      const normalized = normalizePhoneForHotQuestion(matches[idx]);
+      if (normalized) return normalized;
+    }
+    return normalizePhoneForHotQuestion(source);
+  }
+
+  function buildWhereIsOrderGuestReply() {
+    return HOT_QUESTION_GUEST_PHONE_REPLY;
+  }
+
+  function buildWhereIsOrderReplyFromOrders(activeOrders) {
+    if (!Array.isArray(activeOrders) || activeOrders.length === 0) {
+      return getGenderedAssistantText(
+        HOT_QUESTION_NO_ACTIVE_ORDERS_REPLY,
+        HOT_QUESTION_NO_ACTIVE_ORDERS_REPLY_FEMALE
+      );
+    }
+    return getGenderedAssistantText(
+      HOT_QUESTION_ORDER_LIST_PREFIX,
+      HOT_QUESTION_ORDER_LIST_PREFIX_FEMALE
+    );
+  }
+
+  function buildWhereIsOrderReplyPayloadFromOrders(activeOrders) {
+    const safeOrders = Array.isArray(activeOrders) ? activeOrders : [];
+    const orderCards = cacheHotQuestionOrderPreviews(safeOrders);
+    return {
+      text: buildWhereIsOrderReplyFromOrders(safeOrders),
+      orderCards: orderCards,
+    };
+  }
+
+  async function buildWhereIsOrderAutoReplyPayload(options) {
+    const opts = options && typeof options === "object" ? options : {};
+    const phoneCandidate = normalizePhoneForHotQuestion(opts.phone);
+    try {
+      if (phoneCandidate) {
+        const byPhoneOrders = await fetchActiveOrdersByPhoneForHotQuestion(phoneCandidate);
+        return buildWhereIsOrderReplyPayloadFromOrders(byPhoneOrders);
+      }
+
+      if (chatClientProfile && chatClientProfile.isGuest === true) {
+        return {
+          text: buildWhereIsOrderGuestReply(),
+          orderCards: [],
+        };
+      }
+      const token = getCustomerToken();
+      if (!token) {
+        return {
+          text: buildWhereIsOrderGuestReply(),
+          orderCards: [],
+        };
+      }
+
+      const activeOrders = await fetchActiveOrdersForHotQuestion();
+      return buildWhereIsOrderReplyPayloadFromOrders(activeOrders);
+    } catch (err) {
+      const errText = String(err && err.message || "").toUpperCase();
+      if (errText.includes("UNAUTHORIZED")) {
+        return {
+          text: buildWhereIsOrderGuestReply(),
+          orderCards: [],
+        };
+      }
+      return {
+        text: "\u0421\u0435\u0439\u0447\u0430\u0441 \u043d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c " +
+          "\u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c \u0441\u0442\u0430\u0442\u0443\u0441 \u0437\u0430\u043a\u0430\u0437\u0430. " +
+          "\u041f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u0435\u0449\u0435 \u0440\u0430\u0437 \u0447\u0443\u0442\u044c \u043f\u043e\u0437\u0436\u0435.",
+        orderCards: [],
+      };
+    }
+  }
+
+  async function buildWhereIsOrderAutoReplyText(options) {
+    const payload = await buildWhereIsOrderAutoReplyPayload(options);
+    return String(payload && payload.text || "");
+  }
+
+  function pushAssistantAutoReply(activeClientId, text, idSuffix, options) {
+    const opts = options && typeof options === "object" ? options : {};
+    const readyText = String(text || "").trim();
+    if (!readyText) return;
+    if (String(getActiveChatClientId() || "") !== String(activeClientId || "")) return;
+    let suffix = String(idSuffix || "msg");
+    const orderIds = [];
+    const seen = new Set();
+    (Array.isArray(opts.orderCards) ? opts.orderCards : []).forEach(function (card) {
+      const orderId = toPositiveOrderId(card && card.id);
+      if (!orderId || seen.has(orderId)) return;
+      seen.add(orderId);
+      orderIds.push(orderId);
+      cacheHotQuestionOrderPreview(card);
+    });
+    if (orderIds.length) {
+      suffix += "-o" + orderIds.join("_");
+    }
+    pushLiveMessage("agent", readyText, {
+      messageId: makeAssistantMessageId(suffix),
+      author: String(chatRuntimeSettings.assistantName || DEFAULT_CHAT_ASSISTANT_NAME),
+    });
+  }
+
+  function setAssistantHandoffPending(clientId, value) {
+    const id = String(clientId || "");
+    if (!id) return;
+    if (value === true) {
+      assistantHandoffPendingByClient.set(id, true);
+      return;
+    }
+    assistantHandoffPendingByClient.delete(id);
+  }
+
+  function isAssistantHandoffPending(clientId) {
+    const id = String(clientId || "");
+    if (!id) return false;
+    return assistantHandoffPendingByClient.get(id) === true;
+  }
+
+  function resolveAssistantDetailsReply(normalizedText) {
+    const key = String(normalizedText || "");
+    if (!key) return "";
+    if (hasHotQuestionAlias(hotQuestionAliases.quality, key, { includes: true })) return HOT_QUESTION_QUALITY_REPLY;
+    if (hasHotQuestionAlias(hotQuestionAliases.completeness, key, { includes: true })) {
+      return getGenderedAssistantText(
+        HOT_QUESTION_COMPLETENESS_REPLY,
+        HOT_QUESTION_COMPLETENESS_REPLY_FEMALE
+      );
+    }
+    if (hasHotQuestionAlias(hotQuestionAliases.other, key, { includes: true })) return HOT_QUESTION_OTHER_REPLY;
+    return "";
+  }
+
+  function scheduleAssistantHotQuestionReply(userText) {
+    const normalized = normalizeHotQuestionKey(userText);
+    if (!normalized) return;
+
+    const activeClientId = String(getActiveChatClientId() || "");
+    if (!activeClientId) return;
+
+    const phoneCandidate = extractPhoneCandidateFromHotQuestionText(userText);
+    if (phoneCandidate) {
+      setAssistantHandoffPending(activeClientId, false);
+      window.setTimeout(function () {
+        buildWhereIsOrderAutoReplyPayload({ phone: phoneCandidate })
+          .then(function (payload) {
+            pushAssistantAutoReply(
+              activeClientId,
+              String(payload && payload.text || ""),
+              "phone-order",
+              { orderCards: Array.isArray(payload && payload.orderCards) ? payload.orderCards : [] }
+            );
+          })
+          .catch(function () {});
+      }, 420);
+      return;
+    }
+
+    if (isWhereIsOrderHotQuestion(normalized)) {
+      setAssistantHandoffPending(activeClientId, false);
+      window.setTimeout(function () {
+        buildWhereIsOrderAutoReplyPayload()
+          .then(function (payload) {
+            pushAssistantAutoReply(
+              activeClientId,
+              String(payload && payload.text || ""),
+              "where-order",
+              { orderCards: Array.isArray(payload && payload.orderCards) ? payload.orderCards : [] }
+            );
+          })
+          .catch(function () {});
+      }, 420);
+      return;
+    }
+
+    const detailsReply = resolveAssistantDetailsReply(normalized);
+    if (detailsReply) {
+      window.setTimeout(function () {
+        pushAssistantAutoReply(activeClientId, detailsReply, "details");
+      }, 360);
+      setAssistantHandoffPending(activeClientId, true);
+      return;
+    }
+
+    if (isAssistantHandoffPending(activeClientId)) {
+      setAssistantHandoffPending(activeClientId, false);
+      window.setTimeout(function () {
+        pushAssistantAutoReply(activeClientId, HOT_QUESTION_OPERATOR_HANDOFF_REPLY, "handoff");
+      }, 360);
+      return;
+    }
+
+    window.setTimeout(function () {
+      pushAssistantAutoReply(activeClientId, HOT_QUESTION_GENERIC_DETAILS_REPLY, "details");
+    }, 360);
+    setAssistantHandoffPending(activeClientId, true);
   }
 
   function sendUserMessage(text, options) {
@@ -4907,6 +6873,9 @@
     hideReactionBar();
     hideEmojiPopover();
     pushLiveMessage("user", trimmed, { replyTo: replySnapshot, attachment: attachment });
+    if (trimmed) {
+      scheduleAssistantHotQuestionReply(trimmed);
+    }
     stopLocalTypingSession({ flush: true });
     clearReplyDraft();
     return true;
@@ -5204,24 +7173,36 @@
     emojiActiveCategory = getFirstAvailableEmojiCategory(emojiActiveCategory);
   }
 
-  initMessageAlerts();
-  bindEmojiPopoverGuard();
-  initAttachPreviewModal();
-  initMessageImageViewerModal();
-  setupComposerRichPreview();
+  function startChatRuntime() {
+    if (!chatRuntimeSettings.isEnabled) return;
+    initMessageAlerts();
+    bindEmojiPopoverGuard();
+    initAttachPreviewModal();
+    initFeedImageDrop();
+    initFeedImagePaste();
+    initMessageImageViewerModal();
+    setupComposerRichPreview();
   // probeEmojiAssetsAvailability — отложено до первого открытия чата
-  renderUnreadBadge(liveEntries);
-  refreshChatClientProfileIfNeeded({ pull: false });
-  queueWebPushSubscriptionSync({
-    clientId: getActiveChatClientId(),
-    immediate: true,
-  });
-  pullSharedThreadFromServer({ force: true }).catch(function () {});
-  startSharedThreadPolling();
+    renderUnreadBadge(liveEntries);
+    refreshChatClientProfileIfNeeded({ pull: false });
+    queueWebPushSubscriptionSync({
+      clientId: getActiveChatClientId(),
+      immediate: true,
+    });
+    pullSharedThreadFromServer({ force: true }).catch(function () {});
+    startSharedThreadPolling();
+  }
+
+  initChatRuntimeSettings({ fetchRemote: true, force: true, refreshUi: true })
+    .catch(function () {})
+    .finally(function () {
+      startChatRuntime();
+    });
 
   if ("serviceWorker" in navigator && navigator.serviceWorker.ready) {
     navigator.serviceWorker.ready
       .then(function () {
+        if (!chatRuntimeSettings.isEnabled) return;
         queueWebPushSubscriptionSync({
           clientId: getActiveChatClientId(),
           immediate: true,
@@ -5231,9 +7212,11 @@
   }
 
   openBtn.addEventListener("click", function (event) {
+    if (!chatRuntimeSettings.isEnabled) return;
     event.preventDefault();
     event.stopPropagation();
     requestMessageAlertNotificationPermission();
+    initChatRuntimeSettings({ fetchRemote: true, force: true, refreshUi: true }).catch(function () {});
     openCompanyChat();
   });
 
@@ -5322,6 +7305,10 @@
 
   window.addEventListener("storage", function (event) {
     const key = String(event && event.key || "");
+    if (key === "tenant") {
+      initChatRuntimeSettings({ fetchRemote: false, refreshUi: true }).catch(function () {});
+      return;
+    }
     if (key && key !== customerTokenKey && key !== customerCacheKey && key !== guestChatClientKey) return;
     refreshChatClientProfileIfNeeded({ pull: true });
   });
@@ -5339,65 +7326,24 @@
     touchGesture = null;
   }
 
-  ensureContextMenu();
-  renderReplyDraftUi();
-
-  if (contextMenuEl) {
-    contextMenuEl.addEventListener("click", function (event) {
-      const reactionBtn = event.target.closest("[data-chat-msg-reaction]");
-      if (reactionBtn) {
-        const messageId = contextMenuMessageId;
-        const reaction = String(reactionBtn.getAttribute("data-chat-msg-reaction") || "").trim();
-        if (!messageId || !reaction) return;
-        toggleReaction(messageId, reaction);
-        hideContextMenu();
-        hideReactionBar();
-        return;
-      }
-
-      const actionBtn = event.target.closest("[data-chat-msg-action]");
-      if (!actionBtn) return;
-      const action = String(actionBtn.getAttribute("data-chat-msg-action") || "");
-      const messageId = contextMenuMessageId;
-      hideContextMenu();
-      hideReactionBar();
-      if (!messageId) return;
-
-      const msg = findMessageEntry(messageId);
-      if (!msg) return;
-
-      if (action === "reply") {
-        setReplyByMessage(messageId);
-        return;
-      }
-      if (action === "copy") {
-        copyToClipboard(msg.text || "").catch(function () {});
-        return;
-      }
-      if (action === "select") {
-        toggleSelectedMessage(messageId);
-        return;
-      }
-      if (action === "edit" && msg.role === "user") {
-        startEditingMessage(messageId);
-        return;
-      }
-      if (action === "delete") {
-        const allowDeleteForPeer = msg.role === "user";
-        openDeleteConfirm({
-          count: 1,
-          allowDeleteForPeer: allowDeleteForPeer,
-          onConfirm: function (payload) {
-            const deleteForPeer = allowDeleteForPeer && !(payload && payload.deleteForPeer === false);
-            if (deleteForPeer) {
-              if (removeMessageById(messageId)) return;
-            }
-            hideMessageLocallyById(messageId);
-          },
-        });
-      }
-    });
+  function clearOrderCardMouseDrag(options) {
+    const state = orderCardMouseDrag;
+    if (!state) return;
+    const opts = options || {};
+    const strip = state.strip;
+    if (strip && strip.classList) {
+      strip.classList.remove("is-mouse-dragging");
+    }
+    if (opts.suppressClick === true && state.didDrag === true) {
+      suppressTapUntil = Math.max(
+        suppressTapUntil,
+        Date.now() + ORDER_CARD_MOUSE_DRAG_SUPPRESS_CLICK_MS
+      );
+    }
+    orderCardMouseDrag = null;
   }
+
+  renderReplyDraftUi();
 
   composer.addEventListener("submit", function (event) {
     event.preventDefault();
@@ -5510,6 +7456,15 @@
       return;
     }
 
+    const orderCardButton = event.target.closest("[data-chat-order-card-id]");
+    if (orderCardButton) {
+      const orderId = toPositiveOrderId(orderCardButton.getAttribute("data-chat-order-card-id"));
+      if (orderId) {
+        openChatOrderDetailsView(orderId).catch(function () {});
+      }
+      return;
+    }
+
     const attachmentImage = event.target.closest(".shop-company-chat-attachment-image");
     if (attachmentImage) {
       hideContextMenu();
@@ -5582,6 +7537,14 @@
 
     const bubble = event.target.closest(".shop-company-chat-bubble[data-message-id]");
     if (!bubble) {
+      clearTouchGesture();
+      return;
+    }
+    const inOrderCards =
+      !!event.target.closest(".shop-company-chat-order-card-strip")
+      || !!event.target.closest(".shop-company-chat-order-card")
+      || bubble.classList.contains("shop-company-chat-bubble--order-card");
+    if (inOrderCards) {
       clearTouchGesture();
       return;
     }
@@ -5689,18 +7652,121 @@
     clearTouchGesture();
   }, { passive: true });
 
+  thread.addEventListener("mousedown", function (event) {
+    if (event.button !== 0) return;
+    const targetEl = event.target && event.target.closest ? event.target : null;
+    if (!targetEl) return;
+    const orderStrip = targetEl.closest(".shop-company-chat-order-card-strip");
+    if (!orderStrip) return;
+    const maxLeft = Math.max(0, orderStrip.scrollWidth - orderStrip.clientWidth);
+    if (maxLeft <= 0) return;
+
+    clearOrderCardMouseDrag();
+    orderCardMouseDrag = {
+      strip: orderStrip,
+      startX: Number(event.clientX || 0),
+      startY: Number(event.clientY || 0),
+      startLeft: Math.max(0, Number(orderStrip.scrollLeft || 0)),
+      active: false,
+      didDrag: false,
+    };
+  });
+
+  document.addEventListener("mousemove", function (event) {
+    const state = orderCardMouseDrag;
+    if (!state || !state.strip || !state.strip.isConnected) return;
+
+    const dx = Number(event.clientX || 0) - state.startX;
+    const dy = Number(event.clientY || 0) - state.startY;
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+
+    if (!state.active) {
+      if (absX < ORDER_CARD_MOUSE_DRAG_START_PX && absY < ORDER_CARD_MOUSE_DRAG_START_PX) return;
+      if (absY > absX) {
+        clearOrderCardMouseDrag();
+        return;
+      }
+      state.active = true;
+      state.strip.classList.add("is-mouse-dragging");
+    }
+
+    event.preventDefault();
+    const maxLeft = Math.max(0, state.strip.scrollWidth - state.strip.clientWidth);
+    const nextLeft = Math.max(0, Math.min(maxLeft, state.startLeft - dx));
+    const prevLeft = Math.max(0, Number(state.strip.scrollLeft || 0));
+    if (Math.abs(nextLeft - prevLeft) > 0.1) {
+      state.strip.scrollLeft = nextLeft;
+      state.didDrag = true;
+    }
+  });
+
+  document.addEventListener("mouseup", function () {
+    if (!orderCardMouseDrag) return;
+    const shouldSuppressClick = orderCardMouseDrag.didDrag === true;
+    clearOrderCardMouseDrag({ suppressClick: shouldSuppressClick });
+  });
+
+  thread.addEventListener("dragstart", function (event) {
+    const targetEl = event.target && event.target.closest ? event.target : null;
+    if (!targetEl) return;
+    if (!targetEl.closest(".shop-company-chat-order-card-strip")) return;
+    event.preventDefault();
+  });
+
+  thread.addEventListener("wheel", function (event) {
+    const targetEl = event.target && event.target.closest ? event.target : null;
+    if (!targetEl) return;
+    const orderStrip = targetEl.closest(".shop-company-chat-order-card-strip");
+    if (!orderStrip) return;
+
+    const deltaX = Number(event.deltaX || 0);
+    const deltaY = Number(event.deltaY || 0);
+    if (Math.abs(deltaX) < 0.01 && Math.abs(deltaY) < 0.01) return;
+
+    const prefersHorizontal = event.shiftKey || Math.abs(deltaX) > Math.abs(deltaY);
+    const horizontalDelta = prefersHorizontal
+      ? (deltaX + (event.shiftKey ? deltaY : 0))
+      : deltaY;
+
+    if (Math.abs(horizontalDelta) >= 0.01) {
+      const maxLeft = Math.max(0, orderStrip.scrollWidth - orderStrip.clientWidth);
+      const prevLeft = Math.max(0, Number(orderStrip.scrollLeft || 0));
+      const nextLeft = Math.max(0, Math.min(maxLeft, prevLeft + horizontalDelta));
+      if (Math.abs(nextLeft - prevLeft) > 0.1) {
+        orderStrip.scrollLeft = nextLeft;
+        event.preventDefault();
+        return;
+      }
+    }
+
+    if (!prefersHorizontal) {
+      const maxTop = Math.max(0, feed.scrollHeight - feed.clientHeight);
+      if (maxTop <= 0) return;
+      const prevTop = Math.max(0, Number(feed.scrollTop || 0));
+      const nextTop = Math.max(0, Math.min(maxTop, prevTop + deltaY));
+      if (Math.abs(nextTop - prevTop) < 0.1) return;
+      feed.scrollTop = nextTop;
+      event.preventDefault();
+    }
+  }, { passive: false });
+
   reactionBar.addEventListener("click", function (event) {
     const btn = event.target.closest("[data-reaction]");
     if (!btn) return;
     const reaction = String(btn.getAttribute("data-reaction") || "");
     if (!reaction) return;
     if (reaction === "__toggle_more__") {
-      const nextExpanded = !reactionBar.classList.contains("is-expanded");
-      setReactionBarExpanded(nextExpanded);
-      if (reactionMessageId) {
-        const anchor = thread.querySelector('[data-message-id="' + cssEscape(reactionMessageId) + '"]');
-        if (anchor) positionReactionBar(anchor);
-      }
+      event.preventDefault();
+      event.stopPropagation();
+      const targetMessageId = String(reactionMessageId || contextMenuMessageId || "");
+      hideContextMenu();
+      hideReactionBar();
+      showEmojiPopover("composer", {
+        mode: targetMessageId ? "reaction" : "composer",
+        messageId: targetMessageId,
+      });
+      if (input) input.focus();
       return;
     }
     if (!reactionMessageId) return;
@@ -5806,7 +7872,12 @@
     hideReactionBar();
     hideEmojiPopover();
     clearTouchGesture();
+    clearOrderCardMouseDrag();
     if (isMessageImageViewerOpen()) updateMessageImageViewerLayout();
+  });
+
+  window.addEventListener("blur", function () {
+    clearOrderCardMouseDrag();
   });
 
   selectionCloseBtn.addEventListener("click", function () {

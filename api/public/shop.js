@@ -95,6 +95,135 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   function str(v) {
     return v === undefined || v === null ? '' : String(v);
   }
+
+  const CHAT_ASSISTANT_GENDER_MALE = 'm';
+  const CHAT_ASSISTANT_GENDER_FEMALE = 'f';
+  const DEFAULT_CHAT_ASSISTANT_GENDER = CHAT_ASSISTANT_GENDER_MALE;
+  const DEFAULT_CHAT_ASSISTANT_NAME = '\u041d\u044f\u043c-\u041d\u044f\u043c';
+  const DEFAULT_CHAT_WELCOME_MESSAGE =
+    '\u041f\u0440\u0438\u0432\u0435\u0442! \u042f \u0432\u0438\u0440\u0442\u0443\u0430\u043b\u044c\u043d\u044b\u0439 \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u043a \u041d\u044f\u043c-\u041d\u044f\u043c!\n' +
+    '\u0415\u0441\u043b\u0438 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u0437\u0430\u043a\u0430\u0437\u0443, \u0442\u043e \u0441\u0435\u0433\u043e\u0434\u043d\u044f ' +
+    '\u0441\u0442\u0430\u043b\u043a\u0438\u0432\u0430\u0435\u043c\u0441\u044f \u0441\u043e \u0441\u043b\u043e\u0436\u043d\u043e\u0441\u0442\u044f\u043c\u0438 \u0438\u0437-\u0437\u0430 ' +
+    '\u043f\u043e\u0433\u043e\u0434\u043d\u044b\u0445 \u0443\u0441\u043b\u043e\u0432\u0438\u0439: \u043c\u043e\u0436\u0435\u043c \u0432\u0435\u0437\u0442\u0438 \u043f\u043e\u043a\u0443\u043f\u043a\u0443 ' +
+    '\u0447\u0443\u0442\u044c \u0434\u043e\u043b\u044c\u0448\u0435.';
+  const DEFAULT_CHAT_WELCOME_MESSAGE_FEMALE =
+    '\u041f\u0440\u0438\u0432\u0435\u0442! \u042f \u0432\u0438\u0440\u0442\u0443\u0430\u043b\u044c\u043d\u0430\u044f \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u0446\u0430 \u041d\u044f\u043c-\u041d\u044f\u043c!\n' +
+    '\u0415\u0441\u043b\u0438 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u0437\u0430\u043a\u0430\u0437\u0443, \u0442\u043e \u0441\u0435\u0433\u043e\u0434\u043d\u044f ' +
+    '\u0441\u0442\u0430\u043b\u043a\u0438\u0432\u0430\u0435\u043c\u0441\u044f \u0441\u043e \u0441\u043b\u043e\u0436\u043d\u043e\u0441\u0442\u044f\u043c\u0438 \u0438\u0437-\u0437\u0430 ' +
+    '\u043f\u043e\u0433\u043e\u0434\u043d\u044b\u0445 \u0443\u0441\u043b\u043e\u0432\u0438\u0439: \u043c\u043e\u0436\u0435\u043c \u0432\u0435\u0437\u0442\u0438 \u043f\u043e\u043a\u0443\u043f\u043a\u0443 ' +
+    '\u0447\u0443\u0442\u044c \u0434\u043e\u043b\u044c\u0448\u0435.';
+  const DEFAULT_CHAT_QUICK_QUESTIONS = [
+    '\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?',
+    '\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430',
+    '\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430',
+    '\u0414\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441',
+  ];
+  const CHAT_QUICK_QUESTIONS_MAX = 6;
+
+  function normalizeAssistantGender(value) {
+    const raw = str(value).trim().toLowerCase();
+    if (raw === CHAT_ASSISTANT_GENDER_FEMALE || raw === 'f' || raw === 'female' || raw === '\u0436') {
+      return CHAT_ASSISTANT_GENDER_FEMALE;
+    }
+    return DEFAULT_CHAT_ASSISTANT_GENDER;
+  }
+
+  function getDefaultWelcomeMessageByGender(gender) {
+    return normalizeAssistantGender(gender) === CHAT_ASSISTANT_GENDER_FEMALE
+      ? DEFAULT_CHAT_WELCOME_MESSAGE_FEMALE
+      : DEFAULT_CHAT_WELCOME_MESSAGE;
+  }
+
+  function parseTenantChatQuickQuestions(rawValue) {
+    let parsed = [];
+    if (Array.isArray(rawValue)) {
+      parsed = rawValue;
+    } else if (typeof rawValue === 'string') {
+      try {
+        const value = JSON.parse(rawValue);
+        if (Array.isArray(value)) {
+          parsed = value;
+        }
+      } catch {
+        parsed = [];
+      }
+    }
+    const normalized = parsed
+      .map((item) => str(item).trim())
+      .filter(Boolean)
+      .slice(0, CHAT_QUICK_QUESTIONS_MAX);
+    return normalized.length ? normalized : DEFAULT_CHAT_QUICK_QUESTIONS.slice();
+  }
+
+  function buildPublicTenantChatSettings(tenantRow) {
+    const row = tenantRow && typeof tenantRow === 'object' ? tenantRow : {};
+    const assistantGender = normalizeAssistantGender(row.chat_assistant_gender);
+    const assistantName = str(row.chat_assistant_name).trim() || DEFAULT_CHAT_ASSISTANT_NAME;
+    const welcomeMessage = str(row.chat_welcome_message) || getDefaultWelcomeMessageByGender(assistantGender);
+    const chatWidgetRaw = row.chat_widget_enabled;
+    const chatWidgetNorm = str(chatWidgetRaw).trim().toLowerCase();
+    const isEnabled = !(
+      chatWidgetRaw === false
+      || chatWidgetRaw === 0
+      || chatWidgetNorm === '0'
+      || chatWidgetNorm === 'false'
+    );
+    const operatorName =
+      str(row.chat_operator_name).trim()
+      || str(row.site_name).trim()
+      || str(row.name).trim()
+      || '\u041e\u043f\u0435\u0440\u0430\u0442\u043e\u0440';
+    const quickQuestions = parseTenantChatQuickQuestions(row.chat_quick_questions_json);
+    return {
+      assistant_name: assistantName,
+      assistant_gender: assistantGender,
+      welcome_message: welcomeMessage,
+      operator_name: operatorName,
+      quick_questions: quickQuestions,
+      is_enabled: isEnabled,
+    };
+  }
+
+  function normalizePhoneLookupCandidates(phoneRaw) {
+    const sourceDigits = str(phoneRaw).replace(/[^\d]/g, '');
+    if (!sourceDigits) return [];
+
+    const digits = sourceDigits.slice(-32);
+    const candidates = new Set();
+
+    function pushVariant(value) {
+      const normalized = String(helpers.normalizePhone(value) || '').replace(/[^\d]/g, '');
+      if (normalized.length < 10) return;
+      candidates.add(normalized);
+    }
+
+    function pushTenDigitVariants(tenDigits) {
+      if (!/^\d{10}$/.test(tenDigits)) return;
+      pushVariant(tenDigits);
+      pushVariant(`7${tenDigits}`);
+      pushVariant(`8${tenDigits}`);
+    }
+
+    pushVariant(digits);
+
+    if (digits.length === 10) {
+      pushTenDigitVariants(digits);
+    }
+
+    if (digits.length >= 11) {
+      for (let idx = 0; idx <= digits.length - 11; idx += 1) {
+        const seq11 = digits.slice(idx, idx + 11);
+        if (/^[78]\d{10}$/.test(seq11)) {
+          pushVariant(seq11);
+          pushTenDigitVariants(seq11.slice(1));
+        }
+      }
+      pushVariant(digits.slice(-11));
+      pushTenDigitVariants(digits.slice(-10));
+    }
+
+    return Array.from(candidates).slice(0, 20);
+  }
   router.get('/changes', (req, res) => {
     try {
       if (!ordersEvents || typeof ordersEvents.getChanges !== 'function') {
@@ -1240,6 +1369,31 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   });
 
+  router.get('/tenant/chat-settings', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const [rows] = await db.query(
+        `SELECT *
+         FROM ten_tenants
+         WHERE id=? AND is_active=1
+         LIMIT 1`,
+        [tenantId]
+      );
+      const tenant = rows[0];
+      if (!tenant) {
+        return res.status(404).json({ ok: false, error: 'TENANT_NOT_FOUND' });
+      }
+      return res.json({
+        ok: true,
+        tenant_id: Number(tenant.id || tenantId),
+        settings: buildPublicTenantChatSettings(tenant),
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/tenant/stores', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -1705,6 +1859,88 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     } finally {
       conn.release();
+    }
+  });
+
+  // GET /api/public/orders/by-phone
+  // public endpoint for chat assistant: finds active orders by customer phone
+  router.get('/orders/by-phone', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const phone = str(req.query.phone || req.query.q);
+      const phoneCandidates = normalizePhoneLookupCandidates(phone);
+      if (!phoneCandidates.length) {
+        return res.status(400).json({ ok: false, error: 'BAD_PHONE' });
+      }
+
+      let limit = Number(req.query.limit ?? 5);
+      if (!Number.isFinite(limit) || limit <= 0) limit = 5;
+      if (limit > 200) limit = 200;
+      limit = Math.floor(limit);
+
+      const fetchLimit = limit + 1;
+      const storeTimezone = await getStoreTimezone(tenantId, storeId);
+      const placeholders = phoneCandidates.map(() => '?').join(', ');
+      const [rows] = await db.query(
+        `SELECT
+           o.id,
+           DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at_utc,
+           o.total_price, o.items, o.public_id,
+           s.title AS status_title, s.code AS status_code, s.is_final AS status_is_final,
+           p.title AS payment_title, p.code AS payment_code
+         FROM order_orders o
+         LEFT JOIN order_statuses s
+           ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+         LEFT JOIN order_payments p
+           ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
+         LEFT JOIN cust_customers c
+           ON c.tenant_id=o.tenant_id AND c.id=o.customer_id
+         WHERE o.tenant_id=? AND o.store_id=? AND o.is_active=1
+           AND COALESCE(s.is_final, 0)=0
+           AND (
+             o.customer_phone IN (${placeholders})
+             OR c.phone IN (${placeholders})
+           )
+         ORDER BY o.created_at DESC, o.id DESC
+         LIMIT ?`,
+        [tenantId, storeId, ...phoneCandidates, ...phoneCandidates, fetchLimit]
+      );
+
+      const hasMore = rows.length > limit;
+      const pageRows = hasMore ? rows.slice(0, limit) : rows;
+      const data = pageRows.map((r) => {
+        let items = [];
+        try {
+          const parsed = r.items ? JSON.parse(r.items) : [];
+          if (Array.isArray(parsed)) items = parsed;
+        } catch {}
+
+        return {
+          id: Number(r.id),
+          public_id: r.public_id || null,
+          created_at: helpers.utcToStoreDateTime(r.created_at_utc ?? r.created_at, storeTimezone),
+          total_price: Number(r.total_price || 0),
+          status_title: r.status_title || null,
+          status_code: r.status_code || null,
+          status_is_final: r.status_is_final ? Number(r.status_is_final) : 0,
+          payment_title: r.payment_title || null,
+          payment_code: r.payment_code || null,
+          items,
+        };
+      });
+
+      res.json({
+        ok: true,
+        data,
+        paging: {
+          limit,
+          has_more: hasMore,
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
 
