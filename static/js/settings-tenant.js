@@ -1,4 +1,4 @@
-﻿(() => {
+(() => {
   function formatValue(key, value) {
     if (key == "password_hash") return "••••••";
     if (key == "is_active") return Number(value) == 1 ? "Да" : "Нет";
@@ -304,11 +304,26 @@
       // Telegram bot fields
       const tgBotUsernameInput = document.getElementById("tenantTelegramBotUsername");
       const tgBotTokenInput = document.getElementById("tenantTelegramBotToken");
+      const maxBotIdInput = document.getElementById("tenantMaxBotId");
+      const maxBotTokenInput = document.getElementById("tenantMaxBotToken");
+      const maxLoginEnabledInput = document.getElementById("tenantMaxLoginEnabled");
       if (tgBotUsernameInput) {
         tgBotUsernameInput.value = tenant.telegram_bot_username || "";
       }
       if (tgBotTokenInput) {
         tgBotTokenInput.value = tenant.telegram_bot_token || "";
+      }
+      if (maxBotIdInput) {
+        maxBotIdInput.value = tenant.max_bot_id || "";
+      }
+      if (maxBotTokenInput) {
+        maxBotTokenInput.value = tenant.max_bot_token || "";
+      }
+      if (maxLoginEnabledInput) {
+        const hasRequired = !!(String(tenant.max_bot_id || "").trim() && String(tenant.max_bot_token || "").trim());
+        maxLoginEnabledInput.checked = Number(tenant.max_login_enabled || 0) === 1;
+        maxLoginEnabledInput.disabled = !hasRequired;
+        maxLoginEnabledInput.title = hasRequired ? "" : "Fill MAX bot ID and token first";
       }
 
       // Telegram mini app link
@@ -437,11 +452,13 @@
     const imagesCard = document.getElementById("settingsImagesCard");
     const printApiCard = document.getElementById("settingsPrintApiCard");
     const telegramAppCard = document.getElementById("settingsTelegramAppCard");
+    const maxAppCard = document.getElementById("settingsMaxAppCard");
     const rightDefault = document.getElementById("settingsRightDefault");
     const logoPanel = document.getElementById("settingsLogoPanel");
     const sitePanel = document.getElementById("settingsSitePanel");
     const domainPanel = document.getElementById("settingsDomainPanel");
     const telegramAppPanel = document.getElementById("settingsTelegramAppPanel");
+    const maxAppPanel = document.getElementById("settingsMaxAppPanel");
     const brandPanel = document.getElementById("settingsBrandPanel");
     const orderStatusesPanel = document.getElementById("settingsOrderStatusesPanel");
     const orderPaymentsPanel = document.getElementById("settingsOrderPaymentsPanel");
@@ -857,6 +874,7 @@
       if (sitePanel) sitePanel.classList.toggle("hidden", tabId !== "site");
       if (domainPanel) domainPanel.classList.toggle("hidden", tabId !== "domain");
       if (telegramAppPanel) telegramAppPanel.classList.toggle("hidden", tabId !== "telegram-app");
+      if (maxAppPanel) maxAppPanel.classList.toggle("hidden", tabId !== "max-app");
       if (brandPanel) brandPanel.classList.toggle("hidden", tabId !== "brand");
       if (orderStatusesPanel) orderStatusesPanel.classList.toggle("hidden", tabId !== "order-statuses");
       if (orderPaymentsPanel) orderPaymentsPanel.classList.toggle("hidden", tabId !== "order-payments");
@@ -930,6 +948,8 @@
           if (tabId === "logo" && logoCard) logoCard.classList.remove("is-active");
           if (tabId === "site" && siteCard) siteCard.classList.remove("is-active");
           if (tabId === "domain" && domainCard) domainCard.classList.remove("is-active");
+          if (tabId === "telegram-app" && telegramAppCard) telegramAppCard.classList.remove("is-active");
+          if (tabId === "max-app" && maxAppCard) maxAppCard.classList.remove("is-active");
           if (tabId === "brand" && brandCard) brandCard.classList.remove("is-active");
           if (tabId === "order-statuses" && orderStatusesCard) orderStatusesCard.classList.remove("is-active");
           if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.remove("is-active");
@@ -976,6 +996,7 @@
       if (tabId === "site" && siteCard) siteCard.classList.add("is-active");
       if (tabId === "domain" && domainCard) domainCard.classList.add("is-active");
       if (tabId === "telegram-app" && telegramAppCard) telegramAppCard.classList.add("is-active");
+      if (tabId === "max-app" && maxAppCard) maxAppCard.classList.add("is-active");
       if (tabId === "brand" && brandCard) brandCard.classList.add("is-active");
       if (tabId === "order-statuses" && orderStatusesCard) orderStatusesCard.classList.add("is-active");
       if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.add("is-active");
@@ -1012,11 +1033,31 @@
       });
     }
 
+    if (maxAppCard) {
+      maxAppCard.addEventListener("click", () => {
+        ensureTab("max-app", "Мини-приложение MAX");
+      });
+    }
+
     // Telegram bot username — save on change
     const tgBotUsernameEl = document.getElementById("tenantTelegramBotUsername");
     const tgBotUsernameLinkBtn = document.getElementById("tenantTelegramBotUsernameLink");
     const tgBotTokenEl = document.getElementById("tenantTelegramBotToken");
     const tgBotTokenCopyBtn = document.getElementById("tenantTelegramBotTokenCopyBtn");
+    const maxBotIdEl = document.getElementById("tenantMaxBotId");
+    const maxBotTokenEl = document.getElementById("tenantMaxBotToken");
+    const maxBotTokenCopyBtn = document.getElementById("tenantMaxBotTokenCopyBtn");
+    const maxLoginEnabledEl = document.getElementById("tenantMaxLoginEnabled");
+
+    const syncMaxLoginSwitchState = function () {
+      if (!maxLoginEnabledEl) return;
+      var hasRequired = !!(String((maxBotIdEl && maxBotIdEl.value) || "").trim() && String((maxBotTokenEl && maxBotTokenEl.value) || "").trim());
+      maxLoginEnabledEl.disabled = !hasRequired;
+      maxLoginEnabledEl.title = hasRequired ? "" : "Fill MAX bot ID and token first";
+      if (!hasRequired) {
+        maxLoginEnabledEl.checked = false;
+      }
+    };
 
     if (tgBotUsernameEl) {
       tgBotUsernameEl.addEventListener("change", function () {
@@ -1046,6 +1087,49 @@
       tgBotTokenCopyBtn.addEventListener("click", function () {
         navigator.clipboard.writeText(tgBotTokenEl.value).then(function () {
           var icon = tgBotTokenCopyBtn.querySelector("i");
+          if (icon) {
+            icon.className = "fas fa-check";
+            setTimeout(function () { icon.className = "fas fa-copy"; }, 1500);
+          }
+        });
+      });
+    }
+
+    if (maxBotIdEl) {
+      maxBotIdEl.addEventListener("change", function () {
+        var val = maxBotIdEl.value.trim();
+        updateTenantFields({ max_bot_id: val || null });
+        syncMaxLoginSwitchState();
+      });
+    }
+
+    if (maxBotTokenEl) {
+      maxBotTokenEl.addEventListener("change", function () {
+        var val = maxBotTokenEl.value.trim();
+        updateTenantFields({ max_bot_token: val || null });
+        syncMaxLoginSwitchState();
+      });
+    }
+
+    if (maxLoginEnabledEl) {
+      maxLoginEnabledEl.addEventListener("change", function () {
+        if (maxLoginEnabledEl.checked) {
+          var hasRequired = !!(String((maxBotIdEl && maxBotIdEl.value) || "").trim() && String((maxBotTokenEl && maxBotTokenEl.value) || "").trim());
+          if (!hasRequired) {
+            maxLoginEnabledEl.checked = false;
+            alert("Fill MAX bot ID and token first");
+            return;
+          }
+        }
+        updateTenantFields({ max_login_enabled: maxLoginEnabledEl.checked ? 1 : 0 });
+      });
+      syncMaxLoginSwitchState();
+    }
+
+    if (maxBotTokenCopyBtn && maxBotTokenEl) {
+      maxBotTokenCopyBtn.addEventListener("click", function () {
+        navigator.clipboard.writeText(maxBotTokenEl.value).then(function () {
+          var icon = maxBotTokenCopyBtn.querySelector("i");
           if (icon) {
             icon.className = "fas fa-check";
             setTimeout(function () { icon.className = "fas fa-copy"; }, 1500);

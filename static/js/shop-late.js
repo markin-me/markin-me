@@ -8944,6 +8944,25 @@ function renderSheetAddressList() {
     nextBtn.textContent = "Продолжить";
     form.appendChild(nextBtn);
 
+    const maxLoginBtn = document.createElement("button");
+    maxLoginBtn.type = "button";
+    maxLoginBtn.className = "btn";
+    maxLoginBtn.style.width = "100%";
+    maxLoginBtn.style.marginTop = "10px";
+    maxLoginBtn.style.display = "none";
+    maxLoginBtn.textContent = "Войти через MAX";
+    form.appendChild(maxLoginBtn);
+
+    (async function syncMaxLoginButtonVisibility() {
+      try {
+        const probe = await apiJson("/api/public/max/auth-link");
+        const hasLink = !!(probe && probe.ok !== false && probe.link);
+        maxLoginBtn.style.display = hasLink ? "" : "none";
+      } catch {
+        maxLoginBtn.style.display = "none";
+      }
+    })();
+
     const bWrap = document.createElement("div");
     bWrap.style.display = "none";
     bWrap.style.gap = "16px";
@@ -9035,6 +9054,33 @@ function renderSheetAddressList() {
         return;
       }
       revealBirthdayStep();
+    });
+
+    maxLoginBtn.addEventListener("click", async () => {
+      maxLoginBtn.disabled = true;
+      const prev = maxLoginBtn.textContent;
+      maxLoginBtn.textContent = "…";
+      try {
+        const json = await apiJson("/api/public/max/auth-link");
+        if (!json || json.ok === false || !json.link) {
+          const errCode = json && json.error ? String(json.error) : "";
+          if (errCode === "MAX_LOGIN_DISABLED") {
+            alert("MAX login is disabled for this site");
+          } else if (errCode === "MAX_BOT_NOT_CONFIGURED") {
+            alert("Бот MAX не настроен для этого сайта");
+          } else {
+            alert("Не удалось открыть вход через MAX");
+          }
+          return;
+        }
+        const opened = window.open(String(json.link), "_blank", "noopener,noreferrer");
+        if (!opened) return;
+      } catch {
+        alert("Ошибка при открытии MAX");
+      } finally {
+        maxLoginBtn.disabled = false;
+        maxLoginBtn.textContent = prev;
+      }
     });
 
     bdayInfoBtn.addEventListener("click", (e) => {
@@ -11578,6 +11624,261 @@ function renderSheetAddressList() {
     updateRow.appendChild(updateBtn);
     settingsWrap.appendChild(updateRow);
 
+    const maxLinkRow = document.createElement("div");
+    maxLinkRow.className = "shop-profile-settings-row";
+    const maxLinkLeft = document.createElement("div");
+    maxLinkLeft.style.display = "grid";
+    maxLinkLeft.style.gap = "2px";
+    const maxLinkTitle = document.createElement("div");
+    maxLinkTitle.className = "shop-profile-settings-title";
+    maxLinkTitle.textContent = "\u041f\u0440\u0438\u0432\u044f\u0437\u0430\u0442\u044c MAX";
+    const maxLinkHint = document.createElement("div");
+    maxLinkHint.className = "muted";
+    maxLinkHint.textContent = "\u041d\u0435 \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d";
+    maxLinkLeft.appendChild(maxLinkTitle);
+    maxLinkLeft.appendChild(maxLinkHint);
+
+    const maxLinkBtn = document.createElement("button");
+    maxLinkBtn.type = "button";
+    maxLinkBtn.className = "btn btn-sm";
+    maxLinkBtn.textContent = "\u041f\u0440\u0438\u0432\u044f\u0437\u0430\u0442\u044c";
+
+    let maxLinkBusy = false;
+    let maxLinkPollTimer = null;
+
+    function setMaxLinkUi(state) {
+      const linked = Boolean(state && state.linked);
+      const maxUserId = state && state.maxUserId ? String(state.maxUserId) : "";
+      if (linked) {
+        maxLinkBtn.disabled = false;
+        maxLinkBtn.textContent = "\u041f\u0435\u0440\u0435\u043f\u0440\u0438\u0432\u044f\u0437\u0430\u0442\u044c";
+        maxLinkHint.textContent = `ID: ${maxUserId}`;
+        return;
+      }
+      maxLinkBtn.disabled = Boolean(maxLinkBusy);
+      maxLinkBtn.textContent = maxLinkBusy ? "\u2026" : "\u041f\u0440\u0438\u0432\u044f\u0437\u0430\u0442\u044c";
+      if (!maxLinkBusy) maxLinkHint.textContent = "\u041d\u0435 \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d";
+    }
+
+    async function loadMaxLinkStatus() {
+      try {
+        const json = await apiJson("/api/public/max/link-status");
+        if (!json || json.ok === false) return false;
+        if (json.linked && json.data && json.data.max_user_id) {
+          setMaxLinkUi({ linked: true, maxUserId: json.data.max_user_id });
+          return true;
+        }
+        setMaxLinkUi({ linked: false });
+        return false;
+      } catch {
+        return false;
+      }
+    }
+
+    maxLinkBtn.addEventListener("click", async () => {
+      if (maxLinkBusy) return;
+      maxLinkBusy = true;
+      maxLinkHint.textContent = "\u041f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0430 \u0441\u0441\u044b\u043b\u043a\u0438\u2026";
+      setMaxLinkUi({ linked: false });
+      try {
+        const json = await apiJson("/api/public/max/link-token", { method: "POST", body: {} });
+        if (!json || json.ok === false || !json.link) {
+          const errCode = json && json.error ? String(json.error) : "";
+          if (errCode === "MAX_LOGIN_DISABLED") {
+            alert("MAX login is disabled for this site");
+          } else if (errCode === "MAX_BOT_NOT_CONFIGURED") {
+            alert("\u0411\u043e\u0442 MAX \u043d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d \u0434\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0441\u0430\u0439\u0442\u0430");
+          } else {
+            alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0437\u0434\u0430\u0442\u044c \u0441\u0441\u044b\u043b\u043a\u0443 \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0438");
+          }
+          return;
+        }
+
+        const link = String(json.link);
+        try {
+          const opened = window.open(link, "_blank", "noopener,noreferrer");
+          if (!opened) return;
+        } catch {
+          alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u043d\u043e\u0432\u0443\u044e \u0432\u043a\u043b\u0430\u0434\u043a\u0443. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430.");
+        }
+
+        maxLinkHint.textContent = "\u041e\u0436\u0438\u0434\u0430\u0435\u043c \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0443\u2026";
+        if (maxLinkPollTimer) clearInterval(maxLinkPollTimer);
+        maxLinkPollTimer = setInterval(async () => {
+          const linked = await loadMaxLinkStatus();
+          if (linked && maxLinkPollTimer) {
+            clearInterval(maxLinkPollTimer);
+            maxLinkPollTimer = null;
+          }
+        }, 4000);
+      } catch {
+        alert("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0435 MAX");
+      } finally {
+        maxLinkBusy = false;
+        setMaxLinkUi({ linked: false });
+      }
+    });
+
+    maxLinkRow.appendChild(maxLinkLeft);
+    maxLinkRow.appendChild(maxLinkBtn);
+    settingsWrap.appendChild(maxLinkRow);
+
+    const phoneVerifyRow = document.createElement("div");
+    phoneVerifyRow.className = "shop-profile-settings-row";
+    const phoneVerifyLeft = document.createElement("div");
+    phoneVerifyLeft.style.display = "grid";
+    phoneVerifyLeft.style.gap = "2px";
+    const phoneVerifyTitle = document.createElement("div");
+    phoneVerifyTitle.className = "shop-profile-settings-title";
+    phoneVerifyTitle.textContent = "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u0442\u0435\u043b\u0435\u0444\u043e\u043d";
+    const phoneVerifyHint = document.createElement("div");
+    phoneVerifyHint.className = "muted";
+    phoneVerifyHint.textContent = "\u041d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d";
+    phoneVerifyLeft.appendChild(phoneVerifyTitle);
+    phoneVerifyLeft.appendChild(phoneVerifyHint);
+
+    const phoneVerifyAction = document.createElement("div");
+    phoneVerifyAction.style.display = "flex";
+    phoneVerifyAction.style.alignItems = "center";
+    phoneVerifyAction.style.gap = "8px";
+
+    const phoneVerifyBtn = document.createElement("button");
+    phoneVerifyBtn.type = "button";
+    phoneVerifyBtn.className = "btn btn-sm";
+    phoneVerifyBtn.textContent = "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c";
+
+    const phoneVerifyInput = document.createElement("input");
+    phoneVerifyInput.type = "text";
+    phoneVerifyInput.inputMode = "numeric";
+    phoneVerifyInput.maxLength = 4;
+    phoneVerifyInput.placeholder = "\u041a\u043e\u0434";
+    phoneVerifyInput.className = "input";
+    phoneVerifyInput.style.width = "92px";
+    phoneVerifyInput.style.textAlign = "center";
+    phoneVerifyInput.style.letterSpacing = "2px";
+    phoneVerifyInput.style.display = "none";
+
+    phoneVerifyAction.appendChild(phoneVerifyBtn);
+    phoneVerifyAction.appendChild(phoneVerifyInput);
+
+    let phoneVerifyBusy = false;
+    let phoneVerifyVerified = false;
+    let phoneVerifyAwaitingCode = false;
+
+    function applyPhoneVerifyInputStateInvalid(invalid) {
+      if (invalid) {
+        phoneVerifyInput.style.borderColor = "#e74c3c";
+      } else {
+        phoneVerifyInput.style.borderColor = "";
+      }
+    }
+
+    function setPhoneVerifyUi() {
+      if (phoneVerifyVerified) {
+        phoneVerifyHint.textContent = "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d";
+        phoneVerifyBtn.style.display = "";
+        phoneVerifyBtn.disabled = false;
+        phoneVerifyBtn.textContent = "\u041f\u0435\u0440\u0435\u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c";
+        phoneVerifyInput.style.display = "none";
+        return;
+      }
+
+      phoneVerifyHint.textContent = phoneVerifyAwaitingCode
+        ? "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 4-\u0445 \u0437\u043d\u0430\u0447\u043d\u044b\u0439 \u043a\u043e\u0434 \u0438\u0437 MAX"
+        : "\u041d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d";
+      phoneVerifyBtn.style.display = phoneVerifyAwaitingCode ? "none" : "";
+      phoneVerifyBtn.disabled = phoneVerifyBusy;
+      phoneVerifyBtn.textContent = phoneVerifyBusy ? "\u2026" : "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c";
+      phoneVerifyInput.style.display = phoneVerifyAwaitingCode ? "" : "none";
+      phoneVerifyInput.disabled = phoneVerifyBusy;
+    }
+
+    async function loadPhoneVerifyStatus() {
+      try {
+        const json = await apiJson("/api/public/phone-verification/status");
+        const verified = Boolean(json && json.data && json.data.verified);
+        phoneVerifyVerified = verified;
+        phoneVerifyAwaitingCode = !verified && Boolean(json && json.data && json.data.expires_at);
+        setPhoneVerifyUi();
+      } catch {
+        phoneVerifyVerified = false;
+        phoneVerifyAwaitingCode = false;
+        setPhoneVerifyUi();
+      }
+    }
+
+    async function submitPhoneVerifyCode() {
+      const code = String(phoneVerifyInput.value || "").replace(/\D/g, "").slice(0, 4);
+      if (code.length !== 4 || phoneVerifyBusy) return;
+      phoneVerifyBusy = true;
+      applyPhoneVerifyInputStateInvalid(false);
+      setPhoneVerifyUi();
+      try {
+        const json = await apiJson("/api/public/phone-verification/verify", {
+          method: "POST",
+          body: { code },
+        });
+        if (json && json.ok !== false) {
+          phoneVerifyVerified = true;
+          phoneVerifyAwaitingCode = false;
+          phoneVerifyInput.value = "";
+          applyPhoneVerifyInputStateInvalid(false);
+        } else {
+          phoneVerifyInput.value = "";
+          applyPhoneVerifyInputStateInvalid(true);
+          phoneVerifyInput.focus();
+        }
+      } catch {
+        phoneVerifyInput.value = "";
+        applyPhoneVerifyInputStateInvalid(true);
+        phoneVerifyInput.focus();
+      } finally {
+        phoneVerifyBusy = false;
+        setPhoneVerifyUi();
+      }
+    }
+
+    phoneVerifyBtn.addEventListener("click", async () => {
+      if (phoneVerifyBusy) return;
+      phoneVerifyBusy = true;
+      setPhoneVerifyUi();
+      try {
+        const json = await apiJson("/api/public/phone-verification/send", { method: "POST", body: {} });
+        if (json && json.ok !== false) {
+          phoneVerifyAwaitingCode = true;
+          phoneVerifyVerified = false;
+          phoneVerifyInput.value = "";
+          applyPhoneVerifyInputStateInvalid(false);
+          setPhoneVerifyUi();
+          phoneVerifyInput.focus();
+        } else {
+          alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043a\u043e\u0434 \u0432 MAX");
+        }
+      } catch (e) {
+        if (String(e && e.message || "") === "MAX_NOT_LINKED") {
+          alert("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043f\u0440\u0438\u0432\u044f\u0436\u0438\u0442\u0435 MAX");
+        } else {
+          alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043a\u043e\u0434 \u0432 MAX");
+        }
+      } finally {
+        phoneVerifyBusy = false;
+        setPhoneVerifyUi();
+      }
+    });
+
+    phoneVerifyInput.addEventListener("input", () => {
+      const normalized = String(phoneVerifyInput.value || "").replace(/\D/g, "").slice(0, 4);
+      phoneVerifyInput.value = normalized;
+      applyPhoneVerifyInputStateInvalid(false);
+      if (normalized.length === 4) {
+        submitPhoneVerifyCode();
+      }
+    });
+
+    phoneVerifyRow.appendChild(phoneVerifyLeft);
+    phoneVerifyRow.appendChild(phoneVerifyAction);
+    settingsWrap.appendChild(phoneVerifyRow);
+
     const logoutRow = document.createElement("div");
     logoutRow.className = "shop-profile-settings-row";
     const logoutBtn = document.createElement("button");
@@ -11700,6 +12001,10 @@ function renderSheetAddressList() {
         discountsLoaded = true;
         discountsList.innerHTML = '<div class="muted">Загрузка…</div>';
         loadCustomerDiscounts().then(renderCustomerDiscounts);
+      }
+      if (tab === "settings") {
+        loadMaxLinkStatus();
+        loadPhoneVerifyStatus();
       }
     }
 

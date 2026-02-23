@@ -6,6 +6,15 @@ const { sendNewOrderNotification } = require('../telegramNotifications');
 const { sendOrderToPrintBot } = require('../printPush');
 const discountHelpers = require('../helpers/discounts');
 const {
+  makeLinkToken,
+  buildMaxDeepLink,
+  getTenantMaxBotId,
+  getTenantMaxBotToken,
+  sendMaxMessage,
+  confirmMaxLink,
+  notifyCustomerLogin,
+} = require('../maxIntegration');
+const {
   applyStockDeductionForOrderItems,
   checkStockAvailabilityForOrderItems,
 } = require('../helpers/orderStock');
@@ -64,6 +73,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return null;
   }
 
+  async function isTenantMaxLoginEnabled(tenantId) {
+    const [rows] = await db.query(
+      'SELECT max_login_enabled FROM ten_tenants WHERE id=? LIMIT 1',
+      [tenantId]
+    );
+    if (!rows.length) return false;
+    return Number(rows[0].max_login_enabled || 0) === 1;
+  }
+
   function attachProductThumbs(row) {
     const photos = Array.isArray(row?.photos) ? row.photos : [];
     const main = photos[0] || null;
@@ -105,6 +123,22 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const since = req.query.since;
       const data = ordersEvents.getChanges(tenantId, storeId, since);
       return res.json({ ok: true, data });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/unit-conversions', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const [rows] = await db.query(
+        `SELECT id, from_unit_id, to_unit_id, factor, is_active
+         FROM prod_unit_conversions
+         WHERE tenant_id=? AND is_active=1`,
+        [tenantId]
+      );
+      return res.json({ ok: true, data: rows || [] });
     } catch (e) {
       console.error(e);
       return res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -605,6 +639,17 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const exp = new Date(r.expires_at);
       if (!Number.isNaN(exp.getTime()) && exp.getTime() < Date.now()) return null;
     }
+
+    // Sliding session: on each valid request reset TTL to 30 days from now.
+    // This does not accumulate beyond 30 days ahead because we set from NOW().
+    try {
+      await db.query(
+        `UPDATE cust_customer_sessions
+         SET expires_at=DATE_ADD(NOW(), INTERVAL 30 DAY)
+         WHERE id=? AND tenant_id=? AND is_active=1`,
+        [Number(r.session_id), tenantId]
+      );
+    } catch {}
 
     return {
       id: Number(r.customer_id),
@@ -1196,9 +1241,362 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       );
 
       res.json({ ok: true, token, customer: me[0] || null });
+
+      setImmediate(async () => {
+        try {
+          await notifyCustomerLogin({ db, tenantId, customerId });
+        } catch (err) {
+          console.error('MAX login notify error:', err.message || err);
+        }
+      });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // POST /api/public/max/link-token
+  // headers: x-customer-token
+  router.post('/max/link-token', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const sessionToken = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, sessionToken);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const tenantBotId = await getTenantMaxBotId(db, tenantId);
+      const tenantBotToken = await getTenantMaxBotToken(db, tenantId);
+      if (!tenantBotId || !tenantBotToken) {
+        return res.status(409).json({ ok: false, error: 'MAX_BOT_NOT_CONFIGURED' });
+      }
+
+      const linkToken = makeLinkToken();
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+      await db.query(
+        `INSERT INTO cust_customer_max_link_tokens
+         (tenant_id, customer_id, link_token, expires_at)
+         VALUES (?, ?, ?, ?)`,
+        [tenantId, Number(customer.id), linkToken, expiresAt]
+      );
+
+      res.json({
+        ok: true,
+        token: linkToken,
+        link: buildMaxDeepLink(linkToken, tenantBotId),
+        expires_at: expiresAt.toISOString(),
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // GET /api/public/max/auth-link
+  // Public link for "Login via MAX" (without existing customer session)
+  router.get('/max/auth-link', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      if (!(await isTenantMaxLoginEnabled(tenantId))) {
+        return res.status(403).json({ ok: false, error: 'MAX_LOGIN_DISABLED' });
+      }
+      const tenantBotId = await getTenantMaxBotId(db, tenantId);
+      const tenantBotToken = await getTenantMaxBotToken(db, tenantId);
+      if (!tenantBotId || !tenantBotToken) {
+        return res.status(409).json({ ok: false, error: 'MAX_BOT_NOT_CONFIGURED' });
+      }
+      const link = `https://max.ru/${encodeURIComponent(tenantBotId)}?start=link`;
+      return res.json({ ok: true, link });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // GET /api/public/max/finish-login?token=...
+  // One-time MAX login token exchange -> customer session + redirect to /shop
+  router.get('/max/finish-login', async (req, res) => {
+    const loginToken = str(req.query.token);
+    if (!loginToken) return res.status(400).send('TOKEN_REQUIRED');
+
+    const conn = await db.getConnection();
+    try {
+      const [tenantRows] = await conn.query(
+        `SELECT t.max_login_enabled
+         FROM cust_customer_max_login_tokens lt
+         JOIN ten_tenants t ON t.id = lt.tenant_id
+         WHERE lt.login_token=?
+         LIMIT 1`,
+        [loginToken]
+      );
+      if (!tenantRows.length || Number(tenantRows[0].max_login_enabled || 0) !== 1) {
+        return res.status(403).send('MAX_LOGIN_DISABLED');
+      }
+
+      await conn.beginTransaction();
+
+      const [rows] = await conn.query(
+        `SELECT id, tenant_id, customer_id
+         FROM cust_customer_max_login_tokens
+         WHERE login_token=? AND used_at IS NULL AND expires_at > NOW()
+         LIMIT 1
+         FOR UPDATE`,
+        [loginToken]
+      );
+      if (!rows.length) {
+        await conn.rollback();
+        return res.status(400).send('TOKEN_INVALID_OR_EXPIRED');
+      }
+
+      const row = rows[0];
+      const tenantId = Number(row.tenant_id);
+      const customerId = Number(row.customer_id);
+
+      const [customerRows] = await conn.query(
+        `SELECT id, is_active
+         FROM cust_customers
+         WHERE tenant_id=? AND id=?
+         LIMIT 1`,
+        [tenantId, customerId]
+      );
+      if (!customerRows.length || Number(customerRows[0].is_active || 0) !== 1) {
+        await conn.rollback();
+        return res.status(404).send('CUSTOMER_NOT_FOUND');
+      }
+
+      const sessionToken = makeToken32();
+      await conn.query(
+        `INSERT INTO cust_customer_sessions
+         (tenant_id, customer_id, token, expires_at, is_active)
+         VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 30 DAY), 1)`,
+        [tenantId, customerId, sessionToken]
+      );
+
+      await conn.query(
+        `UPDATE cust_customer_max_login_tokens
+         SET used_at=NOW()
+         WHERE id=?`,
+        [Number(row.id)]
+      );
+
+      await conn.commit();
+
+      const redirectUrl = `/shop?tenant_id=${tenantId}&max_login=1`;
+      const html = `<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body>
+<script>
+try {
+  localStorage.setItem('shop_customer_token_t${tenantId}', ${JSON.stringify(sessionToken)});
+} catch (e) {}
+window.location.replace(${JSON.stringify(redirectUrl)});
+</script>
+</body>
+</html>`;
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.status(200).send(html);
+    } catch (e) {
+      await conn.rollback();
+      console.error('MAX_FINISH_LOGIN_ERROR:', e);
+      return res.status(500).send('DB_ERROR');
+    } finally {
+      conn.release();
+    }
+  });
+
+  // GET /api/public/max/link-status
+  // headers: x-customer-token
+  router.get('/max/link-status', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const sessionToken = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, sessionToken);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const [rows] = await db.query(
+        `SELECT max_user_id, phone, updated_at
+         FROM cust_customers
+         WHERE tenant_id=? AND id=?
+         LIMIT 1`,
+        [tenantId, Number(customer.id)]
+      );
+
+      if (!rows.length) {
+        return res.json({ ok: true, linked: false, data: null });
+      }
+
+      return res.json({
+        ok: true,
+        linked: true,
+        data: {
+          max_user_id: rows[0].max_user_id,
+          phone: rows[0].phone,
+          linked_at: rows[0].updated_at,
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // POST /api/public/max/link-confirm
+  // body: { token, max_user_id, phone }
+  router.post('/max/link-confirm', async (req, res) => {
+    try {
+      const secret = String(process.env.MAX_BOT_INTERNAL_SECRET || '').trim();
+      if (!secret) return res.status(503).json({ ok: false, error: 'MAX_SECRET_NOT_CONFIGURED' });
+
+      const givenSecret = str(req.headers['x-max-bot-secret']);
+      if (!givenSecret || givenSecret !== secret) {
+        return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      }
+
+      const result = await confirmMaxLink({
+        db,
+        helpers,
+        token: req.body.token,
+        maxUserId: req.body.max_user_id,
+        phone: req.body.phone,
+      });
+
+      if (!result.ok) {
+        return res.status(result.status || 400).json({ ok: false, error: result.error || 'LINK_FAILED' });
+      }
+
+      return res.json({
+        ok: true,
+        data: {
+          tenant_id: result.tenantId,
+          customer_id: result.customerId,
+          max_user_id: result.maxUserId,
+          phone: result.phone,
+        },
+      });
+    } catch (e) {
+      console.error('MAX link confirm error:', e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // GET /api/public/phone-verification/status
+  router.get('/phone-verification/status', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const sessionToken = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, sessionToken);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const [rows] = await db.query(
+        `SELECT phone_verified_at, phone_verify_expires_at
+         FROM cust_customers
+         WHERE tenant_id=? AND id=?
+         LIMIT 1`,
+        [tenantId, Number(customer.id)]
+      );
+      const row = rows[0] || {};
+      return res.json({
+        ok: true,
+        data: {
+          verified: Boolean(row.phone_verified_at),
+          phone_verified_at: row.phone_verified_at || null,
+          expires_at: row.phone_verify_expires_at || null,
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // POST /api/public/phone-verification/send
+  router.post('/phone-verification/send', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const sessionToken = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, sessionToken);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const [rows] = await db.query(
+        `SELECT id, max_user_id
+         FROM cust_customers
+         WHERE tenant_id=? AND id=? AND is_active=1
+         LIMIT 1`,
+        [tenantId, Number(customer.id)]
+      );
+      const row = rows[0];
+      if (!row) return res.status(404).json({ ok: false, error: 'CUSTOMER_NOT_FOUND' });
+      if (!row.max_user_id) return res.status(409).json({ ok: false, error: 'MAX_NOT_LINKED' });
+
+      const code = String(Math.floor(1000 + Math.random() * 9000));
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+      await db.query(
+        `UPDATE cust_customers
+         SET phone_verify_code=?, phone_verify_expires_at=?, phone_verified_at=NULL, updated_at=NOW()
+         WHERE tenant_id=? AND id=?`,
+        [code, expiresAt, tenantId, Number(customer.id)]
+      );
+
+      await sendMaxMessage({
+        db,
+        tenantId,
+        maxUserId: row.max_user_id,
+        text: `Код подтверждения номера: ${code}. Срок действия: 24 часа.`,
+      });
+
+      return res.json({ ok: true, data: { expires_at: expiresAt.toISOString() } });
+    } catch (e) {
+      console.error('PHONE_VERIFY_SEND_ERROR:', e);
+      return res.status(500).json({ ok: false, error: 'SEND_FAILED' });
+    }
+  });
+
+  // POST /api/public/phone-verification/verify
+  // body: { code }
+  router.post('/phone-verification/verify', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const sessionToken = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, sessionToken);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const code = String(req.body?.code || '').replace(/\D/g, '').slice(0, 4);
+      if (code.length !== 4) return res.status(400).json({ ok: false, error: 'CODE_INVALID' });
+
+      const [rows] = await db.query(
+        `SELECT phone_verify_code, phone_verify_expires_at
+         FROM cust_customers
+         WHERE tenant_id=? AND id=?
+         LIMIT 1`,
+        [tenantId, Number(customer.id)]
+      );
+      const row = rows[0];
+      if (!row) return res.status(404).json({ ok: false, error: 'CUSTOMER_NOT_FOUND' });
+      if (!row.phone_verify_code || !row.phone_verify_expires_at) {
+        return res.status(400).json({ ok: false, error: 'CODE_NOT_REQUESTED' });
+      }
+
+      const expMs = new Date(row.phone_verify_expires_at).getTime();
+      if (!Number.isFinite(expMs) || expMs < Date.now()) {
+        return res.status(400).json({ ok: false, error: 'CODE_EXPIRED' });
+      }
+      if (String(row.phone_verify_code) !== code) {
+        return res.status(400).json({ ok: false, error: 'CODE_INVALID' });
+      }
+
+      await db.query(
+        `UPDATE cust_customers
+         SET phone_verified_at=NOW(), phone_verify_code=NULL, phone_verify_expires_at=NULL, updated_at=NOW()
+         WHERE tenant_id=? AND id=?`,
+        [tenantId, Number(customer.id)]
+      );
+
+      return res.json({ ok: true, data: { verified: true } });
+    } catch (e) {
+      console.error('PHONE_VERIFY_CHECK_ERROR:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
 
