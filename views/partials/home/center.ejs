@@ -10,6 +10,11 @@
           </div>
         </div>
         <div class="toolbar-right">
+          <label class="switch settings-chat-subheader-switch hidden" id="settingsChatWidgetSwitchWrap" title="Вкл/выкл чата на витрине">
+            <input class="switch-input" type="checkbox" id="settingsChatWidgetEnabledSwitch" />
+            <span class="switch-ui" aria-hidden="true"></span>
+            <span class="switch-text">Вкл/выкл чата</span>
+          </label>
           <button class="btn btn-icon btn-primary" id="settingsAddOrderBtn" type="button" title="Новый филиал" aria-label="Новая точка продаж">
             <i class="fas fa-plus"></i>
           </button>
@@ -86,22 +91,55 @@
             </div>
           </button>
 
-          <button class="order-row product-row settings-card" id="settingsSoundsCard" type="button">
+          <button class="order-row product-row settings-card" id="settingsSoundsCard" type="button" data-settings-chat-card="1">
             <div class="product-avatar"><i class="fas fa-bell"></i></div>
             <div class="order-col">
               <div class="product-title">Звуки уведомлений</div>
-              <div class="muted">Новый заказ и отмена заказа</div>
+              <div class="muted">Звук нового сообщения в чате</div>
             </div>
             <div class="order-col">
               <span class="badge">Открыть</span>
             </div>
           </button>
 
-          <button class="order-row product-row settings-card" id="settingsNotificationsCard" type="button">
-            <div class="product-avatar"><i class="fas fa-paper-plane"></i></div>
+          <button class="order-row product-row settings-card" id="settingsChatWelcomeCard" type="button" data-settings-chat-card="1">
+            <div class="product-avatar"><i class="fas fa-comment-dots"></i></div>
             <div class="order-col">
-              <div class="product-title">Уведомления</div>
-              <div class="muted">Telegram-бот для новых заказов по филиалам</div>
+              <div class="product-title">Приветственное сообщение</div>
+              <div class="muted">Первое сообщение в чате</div>
+            </div>
+            <div class="order-col">
+              <span class="badge">Открыть</span>
+            </div>
+          </button>
+
+          <button class="order-row product-row settings-card" id="settingsChatAssistantNameCard" type="button" data-settings-chat-card="1">
+            <div class="product-avatar"><i class="fas fa-robot"></i></div>
+            <div class="order-col">
+              <div class="product-title">Имя и пол помощника</div>
+              <div class="muted">Отображение имени и пола помощника</div>
+            </div>
+            <div class="order-col">
+              <span class="badge">Открыть</span>
+            </div>
+          </button>
+
+          <button class="order-row product-row settings-card" id="settingsChatOperatorNameCard" type="button" data-settings-chat-card="1">
+            <div class="product-avatar"><i class="fas fa-user-tie"></i></div>
+            <div class="order-col">
+              <div class="product-title">Имя оператора</div>
+              <div class="muted">По умолчанию имя компании, можно изменить</div>
+            </div>
+            <div class="order-col">
+              <span class="badge">Открыть</span>
+            </div>
+          </button>
+
+          <button class="order-row product-row settings-card" id="settingsChatHotQuestionsCard" type="button" data-settings-chat-card="1">
+            <div class="product-avatar"><i class="fas fa-th-large"></i></div>
+            <div class="order-col">
+              <div class="product-title">Сетка горячих вопросов</div>
+              <div class="muted">Быстрые кнопки в приветственном блоке</div>
             </div>
             <div class="order-col">
               <span class="badge">Открыть</span>

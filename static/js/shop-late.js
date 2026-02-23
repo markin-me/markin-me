@@ -9393,6 +9393,9 @@ function renderSheetAddressList() {
 
     return html;
   }
+  if (typeof window !== "undefined") {
+    window.renderOrderSummaryBlock = renderOrderSummaryBlock;
+  }
 
   function bindOrderSummaryDiscountToggles(root) {
     if (!root || !root.querySelectorAll) return;
@@ -9411,6 +9414,9 @@ function renderSheetAddressList() {
         breakdown.setAttribute("aria-hidden", willOpen ? "false" : "true");
       });
     });
+  }
+  if (typeof window !== "undefined") {
+    window.bindOrderSummaryDiscountToggles = bindOrderSummaryDiscountToggles;
   }
 
   function hideMobileOrderDetailsActions() {
@@ -10665,6 +10671,9 @@ function renderSheetAddressList() {
     if (navigator.vibrate) navigator.vibrate(10);
     return true;
   }
+  if (typeof window !== "undefined") {
+    window.repeatOrderItemsToCart = repeatOrderItemsToCart;
+  }
 
   function initRepeatOrderSwipeRow(
     container,
@@ -11134,6 +11143,9 @@ function renderSheetAddressList() {
         },
       });
     });
+  }
+  if (typeof window !== "undefined") {
+    window.bindRepeatOrderItemRows = bindRepeatOrderItemRows;
   }
 
   function buildProfileContent({ host, me, onLogout, initialTab }) {

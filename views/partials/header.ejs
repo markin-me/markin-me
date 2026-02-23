@@ -8,6 +8,14 @@
         </div>
         <div class="logo-text" id="headerBrandName">По щам</div>
         <% const hasCitySelector = (typeof showCitySelector !== 'undefined' && showCitySelector === true); %>
+        <% const tenantChatWidgetRaw = (typeof tenant !== 'undefined' && tenant) ? tenant.chat_widget_enabled : undefined; %>
+        <% const tenantChatWidgetNorm = String(tenantChatWidgetRaw == null ? '' : tenantChatWidgetRaw).trim().toLowerCase(); %>
+        <% const isCompanyChatEnabled = !(
+             tenantChatWidgetRaw === 0
+             || tenantChatWidgetRaw === false
+             || tenantChatWidgetNorm === '0'
+             || tenantChatWidgetNorm === 'false'
+           ); %>
         <% if (hasCitySelector) { %>
           <div class="header-address-widget" id="headerAddressWidget">
             <button type="button" class="header-address-button" id="headerAddressButton">
@@ -81,7 +89,7 @@
         </div>
       </div>
 
-      <% if (hasCitySelector) { %>
+      <% if (hasCitySelector && isCompanyChatEnabled) { %>
         <button class="header-btn shop-company-chat-btn" id="shopCompanyChatOpenBtn" type="button" aria-label="Чат с компанией" title="Чат с компанией">
           <i class="fas fa-comment-dots"></i>
           <span class="shop-company-chat-unread hidden" id="shopCompanyChatUnreadBadge" aria-live="polite" aria-atomic="true"></span>

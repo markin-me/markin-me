@@ -354,6 +354,22 @@
       // Фавикон в панели «Данные сайта»
       updateSiteFavicon(tenant.favicon_light_url);
 
+      const chatWidgetToggle = document.getElementById("settingsChatWidgetEnabledSwitch");
+      if (chatWidgetToggle) {
+        const rawChatWidgetEnabled = tenant ? tenant.chat_widget_enabled : undefined;
+        const normalizedChatWidgetEnabled = String(rawChatWidgetEnabled == null ? "" : rawChatWidgetEnabled).trim().toLowerCase();
+        chatWidgetToggle.checked = !(
+          rawChatWidgetEnabled === 0
+          || rawChatWidgetEnabled === false
+          || normalizedChatWidgetEnabled === "0"
+          || normalizedChatWidgetEnabled === "false"
+        );
+      }
+
+      if (typeof applyChatSettingsFromTenant === "function") {
+        applyChatSettingsFromTenant(tenant);
+      }
+
       // Фото товаров — заполнить настройки конвертации
       if (typeof window.__applyImagesSettings === "function") {
         window.__applyImagesSettings(tenant);
@@ -416,6 +432,53 @@
     const storesList = document.getElementById("storesList");
     const storesEmpty = document.getElementById("storesEmpty");
     const settingsAddOrderBtn = document.getElementById("settingsAddOrderBtn");
+    const settingsChatWidgetSwitchWrap = document.getElementById("settingsChatWidgetSwitchWrap");
+    const settingsChatWidgetEnabledSwitch = document.getElementById("settingsChatWidgetEnabledSwitch");
+    const settingsTenantCardItems = settingsTenantCards
+      ? Array.from(settingsTenantCards.querySelectorAll(".settings-card"))
+      : [];
+
+    function normalizeChatWidgetEnabledValue(rawValue) {
+      if (rawValue === undefined || rawValue === null || rawValue === "") return true;
+      if (rawValue === false || rawValue === 0) return false;
+      const normalized = String(rawValue).trim().toLowerCase();
+      if (!normalized) return true;
+      if (normalized === "0" || normalized === "false" || normalized === "off" || normalized === "no") return false;
+      if (normalized === "1" || normalized === "true" || normalized === "on" || normalized === "yes") return true;
+      const numeric = Number(normalized);
+      if (Number.isFinite(numeric)) return numeric !== 0;
+      return true;
+    }
+
+    function syncSettingsToolbarControls(section) {
+      const isChats = section === "chats";
+      if (settingsChatWidgetSwitchWrap) {
+        settingsChatWidgetSwitchWrap.classList.toggle("hidden", !isChats);
+      }
+      if (settingsAddOrderBtn) {
+        settingsAddOrderBtn.classList.toggle("hidden", section === "site" || isChats);
+      }
+    }
+
+    function applySettingsCardsFilterBySection(section) {
+      const isChats = section === "chats";
+      settingsTenantCardItems.forEach((card) => {
+        const isChatCard = card.getAttribute("data-settings-chat-card") === "1";
+        const shouldShow = isChats ? isChatCard : !isChatCard;
+        card.classList.toggle("hidden", !shouldShow);
+      });
+    }
+
+    applySettingsCardsFilterBySection(document.body.getAttribute("data-settings-section") || "tenant");
+    syncSettingsToolbarControls(document.body.getAttribute("data-settings-section") || "tenant");
+
+    if (settingsChatWidgetEnabledSwitch) {
+      const cachedTenant = typeof getAuthTenant === "function" ? getAuthTenant() : null;
+      settingsChatWidgetEnabledSwitch.checked = normalizeChatWidgetEnabledValue(
+        cachedTenant ? cachedTenant.chat_widget_enabled : undefined
+      );
+    }
+
     settingsSectionButtons.forEach((btn) => {
       btn.addEventListener("click", () => {
         settingsSectionButtons.forEach((el) => el.classList.remove("is-active"));
@@ -424,18 +487,26 @@
         document.body.setAttribute("data-settings-section", section);
         const isStores = section === "stores";
         const isSite = section === "site";
+        const isChats = section === "chats";
         if (settingsCenterTitle) {
-          settingsCenterTitle.textContent = isStores ? "Филиалы" : isSite ? "Сайт" : "Компания";
+          settingsCenterTitle.textContent = isStores
+            ? "Филиалы"
+            : isSite
+              ? "Сайт"
+              : isChats
+                ? "\u0427\u0430\u0442\u044b"
+                : "Компания";
         }
         if (settingsCenterSubtitle) {
           settingsCenterSubtitle.textContent = isStores ? "Загрузка..." : "";
         }
+        applySettingsCardsFilterBySection(section);
         if (settingsTenantCards) settingsTenantCards.classList.toggle("hidden", isStores || isSite);
         if (settingsStoresEmpty) settingsStoresEmpty.classList.add("hidden");
         if (settingsCardsPanel) settingsCardsPanel.classList.toggle("hidden", isStores || isSite);
         if (storesPanel) storesPanel.classList.toggle("hidden", !isStores);
         if (siteSectionPanel) siteSectionPanel.classList.toggle("hidden", !isSite);
-        if (settingsAddOrderBtn) settingsAddOrderBtn.classList.toggle("hidden", isSite);
+        syncSettingsToolbarControls(section);
 
         if (isStores) {
           const hasStoreTab = rightTabs && rightTabs.querySelector("[data-right-tab^=\"store-\"]");
@@ -452,6 +523,9 @@
           }
           loadStores();
         } else {
+          setActiveRightTab("");
+          if (rightHeader) rightHeader.classList.add("hidden");
+          if (rightTabs) rightTabs.classList.add("hidden");
           if (settingsStoreEmpty) settingsStoreEmpty.classList.add("hidden");
           if (settingsStorePanel) settingsStorePanel.classList.add("hidden");
           if (rightDefault) rightDefault.classList.remove("hidden");
@@ -467,6 +541,10 @@
     const orderDeliveryCard = document.getElementById("settingsOrderDeliveryCard");
     const orderTimeOptionsCard = document.getElementById("settingsOrderTimeOptionsCard");
     const soundsCard = document.getElementById("settingsSoundsCard");
+    const chatWelcomeCard = document.getElementById("settingsChatWelcomeCard");
+    const chatAssistantNameCard = document.getElementById("settingsChatAssistantNameCard");
+    const chatOperatorNameCard = document.getElementById("settingsChatOperatorNameCard");
+    const chatHotQuestionsCard = document.getElementById("settingsChatHotQuestionsCard");
     const notificationsCard = document.getElementById("settingsNotificationsCard");
     const imagesCard = document.getElementById("settingsImagesCard");
     const printApiCard = document.getElementById("settingsPrintApiCard");
@@ -484,6 +562,10 @@
     const orderDeliveryPanel = document.getElementById("settingsOrderDeliveryPanel");
     const orderTimeOptionsPanel = document.getElementById("settingsOrderTimeOptionsPanel");
     const soundsPanel = document.getElementById("settingsSoundsPanel");
+    const chatWelcomePanel = document.getElementById("settingsChatWelcomePanel");
+    const chatAssistantNamePanel = document.getElementById("settingsChatAssistantNamePanel");
+    const chatOperatorNamePanel = document.getElementById("settingsChatOperatorNamePanel");
+    const chatHotQuestionsPanel = document.getElementById("settingsChatHotQuestionsPanel");
     const imagesPanel = document.getElementById("settingsImagesPanel");
     const printApiPanel = document.getElementById("settingsPrintApiPanel");
     const settingsNotificationsPanel = document.getElementById("settingsNotificationsPanel");
@@ -499,6 +581,18 @@
     const settingsOrderStockDeductMode = document.getElementById("settingsOrderStockDeductMode");
     const settingsOrderStockDeductStatus = document.getElementById("settingsOrderStockDeductStatus");
     const settingsOrderStockDeductStatusField = document.getElementById("settingsOrderStockDeductStatusField");
+    const settingsChatWelcomeMessageInput = document.getElementById("settingsChatWelcomeMessageInput");
+    const settingsChatWelcomeSaveBtn = document.getElementById("settingsChatWelcomeSaveBtn");
+    const settingsChatAssistantNameInput = document.getElementById("settingsChatAssistantNameInput");
+    const settingsChatAssistantNameSaveBtn = document.getElementById("settingsChatAssistantNameSaveBtn");
+    const settingsChatAssistantGenderOptions = document.getElementById("settingsChatAssistantGenderOptions");
+    const settingsChatOperatorNameInput = document.getElementById("settingsChatOperatorNameInput");
+    const settingsChatOperatorNameSaveBtn = document.getElementById("settingsChatOperatorNameSaveBtn");
+    const settingsChatHotQuestionsGrid = document.getElementById("settingsChatHotQuestionsGrid");
+    const settingsChatQuickQuestionsJson = document.getElementById("settingsChatQuickQuestionsJson");
+    const settingsChatQuickQuestionsAddBtn = document.getElementById("settingsChatQuickQuestionsAddBtn");
+    const settingsChatQuickQuestionsSaveBtn = document.getElementById("settingsChatQuickQuestionsSaveBtn");
+    const settingsChatQuickQuestionsResetBtn = document.getElementById("settingsChatQuickQuestionsResetBtn");
     const rightTabs = document.getElementById("settingsRightTabs");
     const rightHeader = rightTabs ? rightTabs.closest(".settings-right-header") : null;
     if (rightTabs) {
@@ -570,6 +664,207 @@
       useGlobal: false,
       values: {}
     };
+    const DEFAULT_CHAT_ASSISTANT_NAME = "\u041d\u044f\u043c-\u041d\u044f\u043c";
+    const DEFAULT_CHAT_ASSISTANT_GENDER = "m";
+    const DEFAULT_CHAT_WELCOME_MESSAGE =
+      "\u041f\u0440\u0438\u0432\u0435\u0442! \u042f \u0432\u0438\u0440\u0442\u0443\u0430\u043b\u044c\u043d\u044b\u0439 \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u043a \u041d\u044f\u043c-\u041d\u044f\u043c!\n" +
+      "\u0415\u0441\u043b\u0438 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u0437\u0430\u043a\u0430\u0437\u0443, \u0442\u043e \u0441\u0435\u0433\u043e\u0434\u043d\u044f " +
+      "\u0441\u0442\u0430\u043b\u043a\u0438\u0432\u0430\u0435\u043c\u0441\u044f \u0441\u043e \u0441\u043b\u043e\u0436\u043d\u043e\u0441\u0442\u044f\u043c\u0438 \u0438\u0437-\u0437\u0430 " +
+      "\u043f\u043e\u0433\u043e\u0434\u043d\u044b\u0445 \u0443\u0441\u043b\u043e\u0432\u0438\u0439: \u043c\u043e\u0436\u0435\u043c \u0432\u0435\u0437\u0442\u0438 \u043f\u043e\u043a\u0443\u043f\u043a\u0443 " +
+      "\u0447\u0443\u0442\u044c \u0434\u043e\u043b\u044c\u0448\u0435.";
+    const DEFAULT_CHAT_QUICK_QUESTIONS = [
+      "\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?",
+      "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430",
+      "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430",
+      "\u0414\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441"
+    ];
+    const CHAT_QUICK_QUESTIONS_MIN = DEFAULT_CHAT_QUICK_QUESTIONS.length;
+    const CHAT_QUICK_QUESTIONS_MAX = 6;
+
+    function normalizeChatAssistantGenderValue(rawValue) {
+      if (rawValue === undefined || rawValue === null || rawValue === "") {
+        return DEFAULT_CHAT_ASSISTANT_GENDER;
+      }
+      const normalized = String(rawValue).trim().toLowerCase();
+      if (normalized === "f" || normalized === "female" || normalized === "\u0436") return "f";
+      return DEFAULT_CHAT_ASSISTANT_GENDER;
+    }
+
+    function getSelectedChatAssistantGender() {
+      if (!settingsChatAssistantGenderOptions) return DEFAULT_CHAT_ASSISTANT_GENDER;
+      const checked = settingsChatAssistantGenderOptions.querySelector(
+        'input[name="settingsChatAssistantGender"]:checked'
+      );
+      return normalizeChatAssistantGenderValue(checked ? checked.value : DEFAULT_CHAT_ASSISTANT_GENDER);
+    }
+
+    function setSelectedChatAssistantGender(rawValue) {
+      if (!settingsChatAssistantGenderOptions) return;
+      const value = normalizeChatAssistantGenderValue(rawValue);
+      const target = settingsChatAssistantGenderOptions.querySelector(
+        `input[name="settingsChatAssistantGender"][value="${value}"]`
+      );
+      if (target) target.checked = true;
+    }
+
+    function parseChatQuickQuestions(rawValue) {
+      const fallback = DEFAULT_CHAT_QUICK_QUESTIONS.slice();
+      if (!rawValue) return fallback;
+
+      let parsed = [];
+      if (Array.isArray(rawValue)) {
+        parsed = rawValue;
+      } else if (typeof rawValue === "string") {
+        try {
+          const next = JSON.parse(rawValue);
+          if (Array.isArray(next)) {
+            parsed = next;
+          }
+        } catch (err) {
+          parsed = [];
+        }
+      }
+
+      const normalized = parsed
+        .map((item) => String(item ?? "").trim())
+        .filter(Boolean)
+        .slice(0, CHAT_QUICK_QUESTIONS_MAX);
+      return normalized.length ? normalized : fallback;
+    }
+
+    function getSettingsChatQuickQuestionInputs() {
+      if (!settingsChatHotQuestionsGrid) return [];
+      return Array.from(settingsChatHotQuestionsGrid.querySelectorAll("[data-chat-quick-input]"));
+    }
+
+    function getChatQuickQuestionPlaceholder(index) {
+      if (index >= 0 && index < DEFAULT_CHAT_QUICK_QUESTIONS.length) {
+        return DEFAULT_CHAT_QUICK_QUESTIONS[index];
+      }
+      return `\u0412\u043e\u043f\u0440\u043e\u0441 ${index + 1}`;
+    }
+
+    function updateChatQuickQuestionControlsState() {
+      if (!settingsChatQuickQuestionsAddBtn) return;
+      const inputs = getSettingsChatQuickQuestionInputs();
+      settingsChatQuickQuestionsAddBtn.disabled = inputs.length >= CHAT_QUICK_QUESTIONS_MAX;
+    }
+
+    function reindexChatQuickQuestionInputs() {
+      const inputs = getSettingsChatQuickQuestionInputs();
+      inputs.forEach((input, index) => {
+        input.setAttribute("data-chat-quick-input", String(index));
+        input.placeholder = getChatQuickQuestionPlaceholder(index);
+      });
+      updateChatQuickQuestionControlsState();
+      return inputs;
+    }
+
+    function createChatQuickQuestionInput(value, index) {
+      const pill = document.createElement("label");
+      pill.className = "settings-chat-question-pill";
+
+      const input = document.createElement("input");
+      input.className = "control settings-chat-question-input";
+      input.type = "text";
+      input.setAttribute("data-chat-quick-input", String(index));
+      input.placeholder = getChatQuickQuestionPlaceholder(index);
+      input.value = String(value ?? "").trim();
+
+      pill.appendChild(input);
+      return { pill, input };
+    }
+
+    function ensureChatQuickQuestionInputsCount(count) {
+      if (!settingsChatHotQuestionsGrid) return [];
+      const safeCount = Number.isFinite(Number(count)) ? Number(count) : CHAT_QUICK_QUESTIONS_MIN;
+      const target = Math.max(CHAT_QUICK_QUESTIONS_MIN, Math.min(CHAT_QUICK_QUESTIONS_MAX, safeCount));
+      let inputs = getSettingsChatQuickQuestionInputs();
+
+      while (inputs.length < target) {
+        const { pill } = createChatQuickQuestionInput("", inputs.length);
+        settingsChatHotQuestionsGrid.appendChild(pill);
+        inputs = getSettingsChatQuickQuestionInputs();
+      }
+
+      while (inputs.length > target) {
+        const lastInput = inputs[inputs.length - 1];
+        const wrapper = lastInput ? lastInput.closest(".settings-chat-question-pill") : null;
+        if (wrapper) wrapper.remove();
+        else if (lastInput) lastInput.remove();
+        inputs = getSettingsChatQuickQuestionInputs();
+      }
+
+      return reindexChatQuickQuestionInputs();
+    }
+
+    function appendChatQuickQuestionInput() {
+      if (!settingsChatHotQuestionsGrid) return null;
+      const inputs = getSettingsChatQuickQuestionInputs();
+      if (inputs.length >= CHAT_QUICK_QUESTIONS_MAX) return null;
+      const { pill, input } = createChatQuickQuestionInput("", inputs.length);
+      settingsChatHotQuestionsGrid.appendChild(pill);
+      reindexChatQuickQuestionInputs();
+      return input;
+    }
+
+    function getChatOperatorFallbackName() {
+      const tenant = typeof getAuthTenant === "function" ? getAuthTenant() : null;
+      const name = tenant && tenant.name ? String(tenant.name).trim() : "";
+      return name || "";
+    }
+
+    function applyChatQuickQuestionsToInputs(rawValue) {
+      if (!settingsChatHotQuestionsGrid) return;
+      const list = parseChatQuickQuestions(rawValue);
+      const inputs = ensureChatQuickQuestionInputsCount(list.length);
+      inputs.forEach((input, index) => {
+        input.value = list[index] || "";
+      });
+      if (settingsChatQuickQuestionsJson) {
+        settingsChatQuickQuestionsJson.value = JSON.stringify(list);
+      }
+      updateChatQuickQuestionControlsState();
+    }
+
+    function collectChatQuickQuestionsFromInputs() {
+      return getSettingsChatQuickQuestionInputs()
+        .map((input) => String(input && input.value ? input.value : "").trim())
+        .filter(Boolean)
+        .slice(0, CHAT_QUICK_QUESTIONS_MAX);
+    }
+
+    reindexChatQuickQuestionInputs();
+
+    function applyChatSettingsFromTenant(tenant) {
+      const assistantValue = tenant && tenant.chat_assistant_name ? String(tenant.chat_assistant_name).trim() : "";
+      if (settingsChatAssistantNameInput) {
+        settingsChatAssistantNameInput.value = assistantValue || DEFAULT_CHAT_ASSISTANT_NAME;
+      }
+
+      setSelectedChatAssistantGender(
+        tenant ? tenant.chat_assistant_gender : DEFAULT_CHAT_ASSISTANT_GENDER
+      );
+
+      const welcomeValue = tenant && tenant.chat_welcome_message ? String(tenant.chat_welcome_message) : "";
+      if (settingsChatWelcomeMessageInput) {
+        settingsChatWelcomeMessageInput.value = welcomeValue || DEFAULT_CHAT_WELCOME_MESSAGE;
+      }
+
+      const operatorFallback = getChatOperatorFallbackName() || "\u041e\u043f\u0435\u0440\u0430\u0442\u043e\u0440";
+      if (settingsChatOperatorNameInput) {
+        settingsChatOperatorNameInput.placeholder = operatorFallback;
+        const customValue = tenant && tenant.chat_operator_name ? String(tenant.chat_operator_name).trim() : "";
+        settingsChatOperatorNameInput.value = customValue || operatorFallback;
+      }
+      if (settingsChatWidgetEnabledSwitch) {
+        settingsChatWidgetEnabledSwitch.checked = normalizeChatWidgetEnabledValue(
+          tenant ? tenant.chat_widget_enabled : undefined
+        );
+      }
+
+      applyChatQuickQuestionsToInputs(tenant ? tenant.chat_quick_questions_json : null);
+    }
 
     function getDayKey(day) {
       return day === null ? STORE_HOURS_GLOBAL_KEY : `day-${day}`;
@@ -900,6 +1195,10 @@
       if (orderDeliveryPanel) orderDeliveryPanel.classList.toggle("hidden", tabId !== "order-delivery");
       if (orderTimeOptionsPanel) orderTimeOptionsPanel.classList.toggle("hidden", tabId !== "order-time-options");
       if (soundsPanel) soundsPanel.classList.toggle("hidden", tabId !== "sounds");
+      if (chatWelcomePanel) chatWelcomePanel.classList.toggle("hidden", tabId !== "chat-welcome");
+      if (chatAssistantNamePanel) chatAssistantNamePanel.classList.toggle("hidden", tabId !== "chat-assistant-name");
+      if (chatOperatorNamePanel) chatOperatorNamePanel.classList.toggle("hidden", tabId !== "chat-operator-name");
+      if (chatHotQuestionsPanel) chatHotQuestionsPanel.classList.toggle("hidden", tabId !== "chat-hot-questions");
       if (settingsNotificationsPanel) settingsNotificationsPanel.classList.toggle("hidden", tabId !== "notifications");
       if (imagesPanel) imagesPanel.classList.toggle("hidden", tabId !== "images");
       if (printApiPanel) printApiPanel.classList.toggle("hidden", tabId !== "print-api");
@@ -975,6 +1274,10 @@
           if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.remove("is-active");
           if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.remove("is-active");
           if (tabId === "sounds" && soundsCard) soundsCard.classList.remove("is-active");
+          if (tabId === "chat-welcome" && chatWelcomeCard) chatWelcomeCard.classList.remove("is-active");
+          if (tabId === "chat-assistant-name" && chatAssistantNameCard) chatAssistantNameCard.classList.remove("is-active");
+          if (tabId === "chat-operator-name" && chatOperatorNameCard) chatOperatorNameCard.classList.remove("is-active");
+          if (tabId === "chat-hot-questions" && chatHotQuestionsCard) chatHotQuestionsCard.classList.remove("is-active");
           if (tabId === "notifications" && notificationsCard) notificationsCard.classList.remove("is-active");
           if (tabId === "images" && imagesCard) imagesCard.classList.remove("is-active");
           if (tabId === "print-api" && printApiCard) printApiCard.classList.remove("is-active");
@@ -1022,6 +1325,10 @@
       if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.add("is-active");
       if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.add("is-active");
       if (tabId === "sounds" && soundsCard) soundsCard.classList.add("is-active");
+      if (tabId === "chat-welcome" && chatWelcomeCard) chatWelcomeCard.classList.add("is-active");
+      if (tabId === "chat-assistant-name" && chatAssistantNameCard) chatAssistantNameCard.classList.add("is-active");
+      if (tabId === "chat-operator-name" && chatOperatorNameCard) chatOperatorNameCard.classList.add("is-active");
+      if (tabId === "chat-hot-questions" && chatHotQuestionsCard) chatHotQuestionsCard.classList.add("is-active");
       if (tabId === "notifications" && notificationsCard) notificationsCard.classList.add("is-active");
       if (tabId === "images" && imagesCard) imagesCard.classList.add("is-active");
       if (tabId === "print-api" && printApiCard) printApiCard.classList.add("is-active");
@@ -1366,7 +1673,29 @@
         ensureTab("sounds", "Звуки уведомлений");
       });
     }
+    if (chatWelcomeCard) {
+      chatWelcomeCard.addEventListener("click", () => {
+        ensureTab("chat-welcome", "\u041f\u0440\u0438\u0432\u0435\u0442\u0441\u0442\u0432\u0435\u043d\u043d\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435");
+      });
+    }
 
+    if (chatAssistantNameCard) {
+      chatAssistantNameCard.addEventListener("click", () => {
+        ensureTab("chat-assistant-name", "\u0418\u043c\u044f \u0432\u0438\u0440\u0442\u0443\u0430\u043b\u044c\u043d\u043e\u0433\u043e \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u043a\u0430");
+      });
+    }
+
+    if (chatOperatorNameCard) {
+      chatOperatorNameCard.addEventListener("click", () => {
+        ensureTab("chat-operator-name", "\u0418\u043c\u044f \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440\u0430");
+      });
+    }
+
+    if (chatHotQuestionsCard) {
+      chatHotQuestionsCard.addEventListener("click", () => {
+        ensureTab("chat-hot-questions", "\u0421\u0435\u0442\u043a\u0430 \u0433\u043e\u0440\u044f\u0447\u0438\u0445 \u0432\u043e\u043f\u0440\u043e\u0441\u043e\u0432");
+      });
+    }
     if (notificationsCard) {
       notificationsCard.addEventListener("click", () => {
         ensureTab("notifications", "Уведомления");
@@ -3313,6 +3642,8 @@
       btn.addEventListener("click", () => {
         const section = btn.getAttribute("data-settings-section") || "";
         const isDelivery = section === "delivery";
+        applySettingsCardsFilterBySection(section);
+        syncSettingsToolbarControls(section);
 
         if (settingsCenterTitle && isDelivery) {
           settingsCenterTitle.textContent = "Доставка";
@@ -3437,6 +3768,128 @@
     }
 
     // --- Фото товаров (images settings) ---
+    async function saveChatSettingsPayload(button, payload, errorText, onSuccess) {
+      if (!payload || typeof payload !== "object") return;
+      const idleText = button ? String(button.textContent || "") : "";
+      if (button) {
+        button.disabled = true;
+        button.textContent = "\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u0435...";
+      }
+      try {
+        const data = await updateTenantFields(payload);
+        if (!data || !data.ok || !data.tenant) {
+          alert(errorText || "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0443.");
+          return;
+        }
+        updateTenantCache(data.tenant);
+        applyBrandFromTenant(data.tenant);
+        applyChatSettingsFromTenant(data.tenant);
+        if (typeof onSuccess === "function") onSuccess(data.tenant);
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.textContent = idleText || "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c";
+        }
+      }
+    }
+
+    if (settingsChatWidgetEnabledSwitch) {
+      settingsChatWidgetEnabledSwitch.addEventListener("change", async () => {
+        const nextValue = settingsChatWidgetEnabledSwitch.checked ? 1 : 0;
+        const prevChecked = !settingsChatWidgetEnabledSwitch.checked;
+        settingsChatWidgetEnabledSwitch.disabled = true;
+        try {
+          const data = await updateTenantFields({ chat_widget_enabled: nextValue });
+          if (!data || !data.ok || !data.tenant) {
+            settingsChatWidgetEnabledSwitch.checked = prevChecked;
+            alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0432\u0438\u0434\u0438\u043c\u043e\u0441\u0442\u044c \u0447\u0430\u0442\u0430.");
+            return;
+          }
+          updateTenantCache(data.tenant);
+          applyBrandFromTenant(data.tenant);
+          applyChatSettingsFromTenant(data.tenant);
+        } finally {
+          settingsChatWidgetEnabledSwitch.disabled = false;
+        }
+      });
+    }
+
+    if (settingsChatWelcomeSaveBtn && settingsChatWelcomeMessageInput) {
+      settingsChatWelcomeSaveBtn.addEventListener("click", async () => {
+        const raw = String(settingsChatWelcomeMessageInput.value || "").trim();
+        const value = raw && raw !== DEFAULT_CHAT_WELCOME_MESSAGE ? raw : null;
+        await saveChatSettingsPayload(
+          settingsChatWelcomeSaveBtn,
+          { chat_welcome_message: value },
+          "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043f\u0440\u0438\u0432\u0435\u0442\u0441\u0442\u0432\u0438\u0435."
+        );
+      });
+    }
+
+    if (settingsChatAssistantNameSaveBtn && settingsChatAssistantNameInput) {
+      settingsChatAssistantNameSaveBtn.addEventListener("click", async () => {
+        const raw = String(settingsChatAssistantNameInput.value || "").trim();
+        const nameValue = raw && raw !== DEFAULT_CHAT_ASSISTANT_NAME ? raw : null;
+        const selectedGender = getSelectedChatAssistantGender();
+        const genderValue = selectedGender === DEFAULT_CHAT_ASSISTANT_GENDER ? null : selectedGender;
+        await saveChatSettingsPayload(
+          settingsChatAssistantNameSaveBtn,
+          {
+            chat_assistant_name: nameValue,
+            chat_assistant_gender: genderValue,
+          },
+          "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0438\u043c\u044f \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u043a\u0430."
+        );
+      });
+    }
+
+    if (settingsChatOperatorNameSaveBtn && settingsChatOperatorNameInput) {
+      settingsChatOperatorNameSaveBtn.addEventListener("click", async () => {
+        const raw = String(settingsChatOperatorNameInput.value || "").trim();
+        const fallback = getChatOperatorFallbackName();
+        const value = raw && (!fallback || raw !== fallback) ? raw : null;
+        await saveChatSettingsPayload(
+          settingsChatOperatorNameSaveBtn,
+          { chat_operator_name: value },
+          "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0438\u043c\u044f \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440\u0430."
+        );
+      });
+    }
+
+    if (settingsChatQuickQuestionsResetBtn) {
+      settingsChatQuickQuestionsResetBtn.addEventListener("click", () => {
+        const raw = settingsChatQuickQuestionsJson ? settingsChatQuickQuestionsJson.value : null;
+        applyChatQuickQuestionsToInputs(raw);
+      });
+    }
+
+    if (settingsChatQuickQuestionsAddBtn) {
+      settingsChatQuickQuestionsAddBtn.addEventListener("click", () => {
+        const input = appendChatQuickQuestionInput();
+        if (!input) return;
+        input.focus();
+        input.select();
+      });
+    }
+
+    if (settingsChatQuickQuestionsSaveBtn) {
+      settingsChatQuickQuestionsSaveBtn.addEventListener("click", async () => {
+        const list = collectChatQuickQuestionsFromInputs();
+        const normalizedList = list.length ? list : DEFAULT_CHAT_QUICK_QUESTIONS.slice();
+        const serialized = JSON.stringify(normalizedList);
+        const payloadValue = serialized === JSON.stringify(DEFAULT_CHAT_QUICK_QUESTIONS) ? null : serialized;
+
+        await saveChatSettingsPayload(
+          settingsChatQuickQuestionsSaveBtn,
+          { chat_quick_questions_json: payloadValue },
+          "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0433\u043e\u0440\u044f\u0447\u0438\u0435 \u0432\u043e\u043f\u0440\u043e\u0441\u044b.",
+          () => {
+            applyChatQuickQuestionsToInputs(payloadValue || null);
+          }
+        );
+      });
+    }
+
     const imgWebpQualityInput = document.getElementById("settingsImgWebpQuality");
     const imgWebpQualityValue = document.getElementById("settingsImgWebpQualityValue");
     const imgThumbQualityInput = document.getElementById("settingsImgThumbQuality");

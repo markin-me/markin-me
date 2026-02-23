@@ -26,6 +26,7 @@
   const CHAT_CLIENTS_LOAD_MORE_THRESHOLD_PX = 140;
   const CHAT_THREAD_PAGE_SIZE = 60;
   const CHAT_THREAD_LOAD_MORE_THRESHOLD_PX = 20;
+  const CHAT_DROP_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif|heic|heif)$/i;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
   const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
   const IMAGE_OPTIMIZE_TARGET_BYTES = 900 * 1024;
@@ -38,6 +39,11 @@
   const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/img/google/64";
   const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/emoji.json";
   const EMOJI_RECENT_STORAGE_KEY = "dashboard:chat-recent-emojis:v1";
+  const CHAT_ASSISTANT_ORDER_CARD_MESSAGE_RE = /^assistant-auto-(?:where-order|phone-order)-o([0-9_]+)-/;
+  const CHAT_ASSISTANT_ORDER_CARD_TEXT_RE = /#\s*(\d{1,12})/g;
+  const CHAT_ORDER_CARD_STATUS_FALLBACK = "\u0411\u0435\u0437 \u0441\u0442\u0430\u0442\u0443\u0441\u0430";
+  const CHAT_ORDER_CARD_OPEN_LABEL = "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0437\u0430\u043a\u0430\u0437";
+  const CHAT_ORDER_CARD_TITLE = "\u0417\u0430\u043a\u0430\u0437";
   const EMOJI_CATEGORY_META = [
     { key: "recent", label: "Недавние", iconClass: "far fa-clock" },
     { key: "people", label: "Смайлы и люди", iconClass: "far fa-smile" },
@@ -62,13 +68,13 @@
     flags: ["🏳️","🏴","🏁","🚩","🏳️‍🌈","🏳️‍⚧️","🇷🇺","🇺🇸","🇬🇧","🇩🇪","🇫🇷","🇪🇸","🇮🇹","🇺🇦","🇰🇿","🇧🇾","🇦🇲","🇬🇪","🇦🇿","🇹🇷","🇨🇳","🇯🇵","🇰🇷","🇮🇳","🇧🇷","🇨🇦","🇦🇺","🇲🇽","🇦🇪","🇸🇦","🇮🇱","🇵🇱","🇳🇱","🇸🇪","🇳🇴","🇫🇮","🇨🇭","🇦🇹","🇨🇿","🇸🇰","🇷🇴","🇧🇬","🇷🇸","🇭🇷","🇸🇮","🇪🇪","🇱🇻","🇱🇹","🇵🇹","🇬🇷"]
   };
   const QUICK_REACTIONS = [
-    "\u{1F44D}",
+    "\u{1F642}",
+    "\u{1F622}",
     "\u{2764}\u{FE0F}",
+    "\u{1F44D}",
+    "\u{1F44E}",
     "\u{1F525}",
-    "\u{1F602}",
-    "\u{1F970}",
-    "\u{1F64F}",
-    "\u{1FAE8}",
+    "\u{1F621}",
   ];
   const EXTRA_REACTIONS = [
     "\u{1F622}",
@@ -205,6 +211,7 @@
     localTypingPhrase: "",
     attachPreviewItems: [],
     attachPreviewActiveIndex: 0,
+    threadDropDragDepth: 0,
     clientsPager: null,
     threadHistoryByClient: {},
   };
@@ -215,6 +222,8 @@
   let emojiRecentList = [];
   let emojiActiveCategory = "people";
   let emojiDatasetPromise = null;
+  let emojiPopoverMode = "composer";
+  let emojiPopoverReactionMessageId = "";
   let unreadEventRaf = 0;
   let messageAlertAudioCtx = null;
   let messageAlertAudioUnlocked = false;
@@ -773,6 +782,96 @@
     };
   }
 
+  async function patchRemoteThreadMeta(clientId, metaPatch = {}) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+    const nextName = String(metaPatch?.name || "").trim();
+    const nextPhone = String(metaPatch?.phone || "").trim();
+    if (!nextName && !nextPhone) return false;
+    await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}/meta`, {
+      method: "PATCH",
+      body: {
+        meta: {
+          name: nextName,
+          phone: nextPhone,
+        },
+      },
+    });
+    return true;
+  }
+
+  function syncClientIdentityIntoList(clientId, profile) {
+    const key = normalizeClientIdKey(clientId || profile?.id);
+    const nextName = String(profile?.name || "").trim();
+    const nextPhone = String(profile?.phone || "").trim();
+    const nextNameIdentity = normalizeClientNameIdentity(nextName);
+    const nextPhoneDigits = normalizePhoneDigits(nextPhone);
+    if (!key) {
+      return {
+        changed: false,
+        prevName: "",
+        prevPhone: "",
+        nextName,
+        nextPhone,
+      };
+    }
+
+    let prevName = "";
+    let prevPhone = "";
+    let changed = false;
+
+    state.clients = (Array.isArray(state.clients) ? state.clients : []).map((row) => {
+      if (Number(row?.id) !== Number(key)) return row;
+      prevName = String(row?.name || "").trim();
+      prevPhone = String(row?.phone || "").trim();
+      const prevNameIdentity = normalizeClientNameIdentity(prevName);
+      const prevPhoneDigits = normalizePhoneDigits(prevPhone);
+      const nextRow = { ...row };
+
+      if (nextName && prevNameIdentity !== nextNameIdentity) {
+        nextRow.name = nextName;
+        changed = true;
+      }
+      if (nextPhoneDigits && prevPhoneDigits !== nextPhoneDigits) {
+        nextRow.phone = nextPhone;
+        changed = true;
+      }
+      if (
+        nextRow._isVirtualChatClient === true
+        && nextName
+        && !isGuestLikeClientName(nextName)
+      ) {
+        delete nextRow._isVirtualChatClient;
+        changed = true;
+      }
+
+      return changed ? nextRow : row;
+    });
+
+    if (state.activeClient && Number(state.activeClient.id) === Number(key)) {
+      const activeName = String(state.activeClient.name || "").trim();
+      const activePhone = String(state.activeClient.phone || "").trim();
+      const activeNameIdentity = normalizeClientNameIdentity(activeName);
+      const activePhoneDigits = normalizePhoneDigits(activePhone);
+      if (nextName && activeNameIdentity !== nextNameIdentity) {
+        state.activeClient.name = nextName;
+        changed = true;
+      }
+      if (nextPhoneDigits && activePhoneDigits !== nextPhoneDigits) {
+        state.activeClient.phone = nextPhone;
+        changed = true;
+      }
+    }
+
+    return {
+      changed,
+      prevName,
+      prevPhone,
+      nextName,
+      nextPhone,
+    };
+  }
+
   function applyRemoteThreadSnapshot(snapshot, options = {}) {
     if (!snapshot || !Number.isFinite(Number(snapshot.clientId))) return false;
     const key = normalizeClientIdKey(snapshot.clientId);
@@ -1237,6 +1336,21 @@
     };
   }
 
+  function normalizeClientNameIdentity(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/\u0451/g, "\u0435")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function isGuestLikeClientName(value) {
+    const normalized = normalizeClientNameIdentity(value);
+    if (!normalized) return false;
+    return /^\u0433\u043e\u0441\u0442\u044c\b/.test(normalized);
+  }
+
   function mergeRemoteClients(localRows, remoteRows) {
     const merged = new Map();
     (Array.isArray(localRows) ? localRows : []).forEach((row) => {
@@ -1248,10 +1362,9 @@
     (Array.isArray(remoteRows) ? remoteRows : []).forEach((remote) => {
       const key = normalizeClientIdKey(remote?.client_id ?? remote?.clientId ?? remote?.id);
       if (!key) return;
-      const existing = merged.get(key);
-      if (existing) return;
-
       const meta = remote?.meta && typeof remote.meta === "object" ? remote.meta : {};
+      const remoteName = String(meta.name || "").trim();
+      const remotePhone = String(meta.phone || "").trim();
       const updatedAt = String(
         remote?.updated_at
         || remote?.updatedAt
@@ -1259,6 +1372,62 @@
         || remote?.lastMessageAt
         || ""
       );
+      const existing = merged.get(key);
+      if (existing) {
+        const nextExisting = { ...existing };
+        const existingName = String(nextExisting.name || "").trim();
+        const existingPhone = String(nextExisting.phone || "").trim();
+        const existingPhoneDigits = normalizePhoneDigits(existingPhone);
+        const remotePhoneDigits = normalizePhoneDigits(remotePhone);
+        const existingNameIsGuest = isGuestLikeClientName(existingName);
+        const remoteNameIsGuest = isGuestLikeClientName(remoteName);
+
+        const shouldReplaceName = (
+          !!remoteName
+          && (
+            !existingName
+            || (existingNameIsGuest && !remoteNameIsGuest)
+            || (
+              nextExisting._isVirtualChatClient === true
+              && !remoteNameIsGuest
+              && normalizeClientNameIdentity(remoteName) !== normalizeClientNameIdentity(existingName)
+            )
+          )
+        );
+        if (shouldReplaceName && remoteName !== existingName) {
+          nextExisting.name = remoteName;
+        }
+
+        const shouldReplacePhone = (
+          !!remotePhone
+          && (
+            !existingPhoneDigits
+            || (existingNameIsGuest && !remoteNameIsGuest)
+            || (
+              nextExisting._isVirtualChatClient === true
+              && !!remotePhoneDigits
+              && remotePhoneDigits !== existingPhoneDigits
+              && !remoteNameIsGuest
+            )
+          )
+        );
+        if (shouldReplacePhone && remotePhoneDigits && remotePhoneDigits !== existingPhoneDigits) {
+          nextExisting.phone = remotePhone;
+        }
+
+        if (updatedAt) {
+          const existingUpdatedAt = String(nextExisting.updated_at || "");
+          if (!existingUpdatedAt || compareIsoDates(updatedAt, existingUpdatedAt) > 0) {
+            nextExisting.updated_at = updatedAt;
+            if (!nextExisting.created_at) nextExisting.created_at = updatedAt;
+            if (!nextExisting.last_order_date) nextExisting.last_order_date = updatedAt;
+          }
+        }
+
+        merged.set(key, nextExisting);
+        return;
+      }
+
       merged.set(key, {
         id: Number(key),
         name: String(meta.name || `Клиент #${key}`),
@@ -1414,7 +1583,32 @@
       );
       if (prevFingerprint !== nextFingerprint) {
         state.clients = merged;
+        const activeKey = normalizeClientIdKey(state.activeClientId);
+        let activeIdentityChanged = false;
+        if (activeKey) {
+          const activeFromList = merged.find((client) => Number(client?.id) === Number(activeKey)) || null;
+          if (activeFromList) {
+            const prevActive = state.activeClient && typeof state.activeClient === "object"
+              ? state.activeClient
+              : {};
+            const nextActiveName = String(activeFromList.name || prevActive.name || "");
+            const nextActivePhone = String(activeFromList.phone || prevActive.phone || "");
+            activeIdentityChanged = (
+              normalizeClientNameIdentity(prevActive.name) !== normalizeClientNameIdentity(nextActiveName)
+              || normalizePhoneDigits(prevActive.phone) !== normalizePhoneDigits(nextActivePhone)
+            );
+            state.activeClient = {
+              ...prevActive,
+              id: Number(activeFromList.id || activeKey),
+              name: nextActiveName,
+              phone: nextActivePhone,
+            };
+          }
+        }
         applyClientFilter();
+        if (activeIdentityChanged && Number(state.activeClientId) === Number(activeKey)) {
+          renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
+        }
       }
     }
     const ids = (state.clients || []).map((client) => client.id);
@@ -2568,10 +2762,12 @@
       ? "Вы точно хотите удалить это сообщение?"
       : "Вы точно хотите удалить эти сообщения?"));
     const checkText = String(options.checkText || `Также удалить для ${clientName}`);
+    const confirmText = String(options.confirmText || "\u0423\u0414\u0410\u041b\u0418\u0422\u042c");
 
     if (ui.title) ui.title.textContent = titleText;
     if (ui.text) ui.text.textContent = bodyText;
     if (ui.checkText) ui.checkText.textContent = checkText;
+    if (ui.deleteBtn) ui.deleteBtn.textContent = confirmText;
     if (ui.checkRow) ui.checkRow.classList.toggle("hidden", !allowDeleteForClient);
     if (ui.check) {
       ui.check.disabled = !allowDeleteForClient;
@@ -2889,6 +3085,146 @@
     if (!Number.isFinite(amount)) return "—";
     const rounded = Math.round(amount);
     return `${new Intl.NumberFormat("ru-RU").format(rounded)} ₽`;
+  }
+
+  function toPositiveOrderId(rawValue) {
+    const id = Number(rawValue || 0);
+    if (!Number.isFinite(id) || id <= 0) return 0;
+    return Math.trunc(id);
+  }
+
+  function resolveAssistantOrderCardId(messageId) {
+    const id = String(messageId || "").trim();
+    if (!id) return 0;
+    const match = id.match(CHAT_ASSISTANT_ORDER_CARD_MESSAGE_RE);
+    if (!match) return 0;
+    const raw = String(match[1] || "");
+    if (!raw) return 0;
+    return toPositiveOrderId(raw.split("_")[0] || "");
+  }
+
+  function resolveAssistantOrderCardIdsByMessageId(messageId) {
+    const id = String(messageId || "").trim();
+    if (!id) return [];
+    const match = id.match(CHAT_ASSISTANT_ORDER_CARD_MESSAGE_RE);
+    if (!match) return [];
+    const raw = String(match[1] || "");
+    if (!raw) return [];
+    const seen = new Set();
+    return raw
+      .split("_")
+      .map((part) => toPositiveOrderId(part))
+      .filter((orderId) => {
+        if (!orderId || seen.has(orderId)) return false;
+        seen.add(orderId);
+        return true;
+      });
+  }
+
+  function extractAssistantOrderCardIdsFromText(value) {
+    const text = String(value || "");
+    if (!text) return [];
+    const ids = [];
+    const seen = new Set();
+    let match = CHAT_ASSISTANT_ORDER_CARD_TEXT_RE.exec(text);
+    while (match) {
+      const id = toPositiveOrderId(match[1]);
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+      match = CHAT_ASSISTANT_ORDER_CARD_TEXT_RE.exec(text);
+    }
+    CHAT_ASSISTANT_ORDER_CARD_TEXT_RE.lastIndex = 0;
+    return ids;
+  }
+
+  function resolveAssistantOrderCardIds(message) {
+    const source = message && typeof message === "object" ? message : {};
+    const ids = [];
+    const seen = new Set();
+
+    resolveAssistantOrderCardIdsByMessageId(source.id).forEach((orderId) => {
+      if (!orderId || seen.has(orderId)) return;
+      seen.add(orderId);
+      ids.push(orderId);
+    });
+    if (!ids.length) return ids;
+
+    extractAssistantOrderCardIdsFromText(source.text).forEach((id) => {
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      ids.push(id);
+    });
+
+    return ids;
+  }
+
+  function findKnownOrderById(orderId) {
+    const id = toPositiveOrderId(orderId);
+    if (!id) return null;
+
+    const fromActiveList = (Array.isArray(state.activeOrders) ? state.activeOrders : [])
+      .find((order) => toPositiveOrderId(order?.id) === id);
+    if (fromActiveList && typeof fromActiveList === "object") return fromActiveList;
+
+    const fromDetailsCache = state.orderDetailsCache instanceof Map
+      ? state.orderDetailsCache.get(id)
+      : null;
+    if (fromDetailsCache && typeof fromDetailsCache === "object") return fromDetailsCache;
+    return null;
+  }
+
+  function buildMessageOrderCardModels(message) {
+    const ids = resolveAssistantOrderCardIds(message);
+    if (!ids.length) return [];
+
+    return ids.map((orderId) => {
+      const knownOrder = findKnownOrderById(orderId);
+      const statusTitle = String(knownOrder?.status_title || knownOrder?.statusTitle || CHAT_ORDER_CARD_STATUS_FALLBACK).trim()
+        || CHAT_ORDER_CARD_STATUS_FALLBACK;
+      const totalRaw = knownOrder ? (knownOrder.total_price ?? knownOrder.total ?? null) : null;
+      const totalLabel = totalRaw === null || totalRaw === undefined ? "" : fmtOrderAmount(totalRaw);
+
+      return {
+        orderId,
+        orderLabel: `#${orderId}`,
+        statusTitle,
+        totalLabel,
+      };
+    });
+  }
+
+  function buildMessageOrderCardMarkup(model) {
+    if (!model) return "";
+    const statusMarkup = model.statusTitle
+      ? `<div class="chat-message-order-card__status">${escapeHtml(model.statusTitle)}</div>`
+      : "";
+    const totalMarkup = model.totalLabel
+      ? `<div class="chat-message-order-card__total">${escapeHtml(model.totalLabel)}</div>`
+      : "";
+    const label = `${CHAT_ORDER_CARD_TITLE} ${model.orderLabel}`;
+
+    return `
+      <button
+        type="button"
+        class="chat-message-order-card"
+        data-chat-order-card-id="${escapeHtml(String(model.orderId))}"
+        aria-label="${escapeHtml(CHAT_ORDER_CARD_OPEN_LABEL)}"
+      >
+        <div class="chat-message-order-card__head">
+          <span class="chat-message-order-card__title">${escapeHtml(label)}</span>
+          ${statusMarkup}
+        </div>
+        ${totalMarkup}
+      </button>
+    `;
+  }
+
+  function buildMessageOrderCardsMarkup(models) {
+    const list = Array.isArray(models) ? models.filter(Boolean) : [];
+    if (!list.length) return "";
+    return `<div class="chat-message-order-cards">${list.map(buildMessageOrderCardMarkup).join("")}</div>`;
   }
 
   function getOrderAddressLine(order) {
@@ -3617,6 +3953,16 @@
         btn.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
+          if (
+            emojiPopoverMode === "reaction"
+            && emojiPopoverReactionMessageId
+            && state.activeClientId
+          ) {
+            reactMessageFromContext(emojiPopoverReactionMessageId, emoji);
+            rememberRecentEmoji(emoji);
+            hideEmojiPopover();
+            return;
+          }
           insertEmojiIntoComposer(emoji);
           rememberRecentEmoji(emoji);
         });
@@ -3685,9 +4031,74 @@
     });
   }
 
+  function collectAllReactionEmojis() {
+    const out = [];
+    const seen = new Set();
+    const push = (value) => {
+      const raw = String(value || "").trim();
+      if (!raw) return;
+      const normalized = normalizeReactionValue(raw) || raw;
+      if (!normalized || seen.has(normalized)) return;
+      seen.add(normalized);
+      out.push(raw);
+    };
+
+    const peopleSource = (emojiCategories.people && emojiCategories.people.length)
+      ? emojiCategories.people
+      : (EMOJI_FALLBACK_CATEGORIES.people || []);
+    peopleSource.forEach(push);
+
+    return out;
+  }
+
+  function ensureReactionBarAllEmojiButtons() {
+    if (!dom.center.reactionBar) return;
+    $$('[data-chat-reaction-slot="extra-all"]', dom.center.reactionBar).forEach((node) => node.remove());
+    const toggleBtn = $('[data-chat-reaction="__toggle_more__"]', dom.center.reactionBar);
+    if (!toggleBtn) return;
+
+    const skip = new Set();
+    QUICK_REACTIONS.forEach((emoji) => {
+      const key = normalizeReactionValue(emoji);
+      if (key) skip.add(key);
+    });
+    EXTRA_REACTIONS.forEach((emoji) => {
+      const key = normalizeReactionValue(emoji);
+      if (key) skip.add(key);
+    });
+
+    const fragment = document.createDocumentFragment();
+    collectAllReactionEmojis().forEach((emoji) => {
+      const key = normalizeReactionValue(emoji);
+      if (!key || skip.has(key)) return;
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "chat-reaction-btn chat-reaction-extra chat-reaction-extra--dynamic";
+      btn.setAttribute("data-chat-reaction-slot", "extra-all");
+      btn.setAttribute("data-chat-reaction", emoji);
+      btn.setAttribute("aria-label", emoji);
+      btn.title = emoji;
+      setEmojiGlyph(btn, emoji, "chat-emoji-glyph chat-emoji-glyph--reaction");
+      fragment.appendChild(btn);
+    });
+
+    toggleBtn.before(fragment);
+  }
+
   function setReactionBarExpanded(expanded) {
     if (!dom.center.reactionBar) return;
     const isExpanded = !!expanded;
+    if (isExpanded) {
+      ensureReactionBarAllEmojiButtons();
+      ensureEmojiDatasetLoaded().then(() => {
+        if (!dom.center.reactionBar || !dom.center.reactionBar.classList.contains("is-expanded")) return;
+        ensureReactionBarAllEmojiButtons();
+        if (dom.center.contextMenu && !dom.center.contextMenu.classList.contains("hidden")) {
+          positionReactionBar(dom.center.contextMenu.getBoundingClientRect());
+        }
+      }).catch(() => {});
+    }
     dom.center.reactionBar.classList.toggle("is-expanded", isExpanded);
     const toggleBtn = $('[data-chat-reaction="__toggle_more__"]', dom.center.reactionBar);
     if (!toggleBtn) return;
@@ -4368,10 +4779,153 @@
 
   async function buildImageAttachmentFromFile(file) {
     if (!(file instanceof File)) return null;
-    const mime = String(file.type || "").toLowerCase();
-    if (!mime.startsWith("image/")) return null;
+    if (!isLikelyImageFile(file)) return null;
     if (!state.activeClientId) return null;
     return uploadChatImageAttachment(state.activeClientId, file).catch(() => null);
+  }
+
+  function isLikelyImageFile(file) {
+    if (!(file instanceof File)) return false;
+    const mime = String(file.type || "").toLowerCase();
+    if (mime.startsWith("image/")) return true;
+    const fileName = String(file.name || "").toLowerCase();
+    return CHAT_DROP_IMAGE_EXT_RE.test(fileName);
+  }
+
+  function dataTransferHasFiles(dataTransfer) {
+    if (!dataTransfer) return false;
+    const types = Array.from(dataTransfer.types || []);
+    return types.includes("Files");
+  }
+
+  function extractImageFilesFromDataTransfer(dataTransfer) {
+    if (!dataTransfer) return [];
+
+    const directFiles = Array.from(dataTransfer.files || []).filter((file) => isLikelyImageFile(file));
+    if (directFiles.length) return directFiles;
+
+    const itemFiles = [];
+    Array.from(dataTransfer.items || []).forEach((item) => {
+      if (!item || item.kind !== "file") return;
+      const file = typeof item.getAsFile === "function" ? item.getAsFile() : null;
+      if (!isLikelyImageFile(file)) return;
+      itemFiles.push(file);
+    });
+    return itemFiles;
+  }
+
+  function setThreadImageDropActive(active) {
+    if (!dom.center.messagesWrap) return;
+    dom.center.messagesWrap.classList.toggle("is-image-drop-target", active === true);
+  }
+
+  function resetThreadImageDrop() {
+    state.threadDropDragDepth = 0;
+    setThreadImageDropActive(false);
+  }
+
+  function initThreadImageDrop() {
+    const wrap = dom.center.messagesWrap;
+    if (!wrap || wrap.dataset.imageDropBound === "1") return;
+    wrap.dataset.imageDropBound = "1";
+
+    wrap.addEventListener("dragenter", (event) => {
+      if (!dataTransferHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      if (!state.activeClientId) return;
+      state.threadDropDragDepth = Math.max(0, Number(state.threadDropDragDepth || 0)) + 1;
+      setThreadImageDropActive(true);
+    });
+
+    wrap.addEventListener("dragover", (event) => {
+      if (!dataTransferHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      if (!state.activeClientId) return;
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      state.threadDropDragDepth = Math.max(1, Number(state.threadDropDragDepth || 0));
+      setThreadImageDropActive(true);
+    });
+
+    wrap.addEventListener("dragleave", () => {
+      if (!wrap.classList.contains("is-image-drop-target")) return;
+      state.threadDropDragDepth = Math.max(0, Number(state.threadDropDragDepth || 0) - 1);
+      if (state.threadDropDragDepth === 0) {
+        setThreadImageDropActive(false);
+      }
+    });
+
+    wrap.addEventListener("drop", async (event) => {
+      const hasFilePayload = dataTransferHasFiles(event.dataTransfer);
+      if (!state.activeClientId) {
+        if (hasFilePayload) event.preventDefault();
+        resetThreadImageDrop();
+        return;
+      }
+      const files = extractImageFilesFromDataTransfer(event.dataTransfer);
+      if (!files.length) {
+        if (hasFilePayload) event.preventDefault();
+        resetThreadImageDrop();
+        return;
+      }
+      event.preventDefault();
+      resetThreadImageDrop();
+      await openAttachPreviewFromFiles(files).catch(console.error);
+    });
+
+    window.addEventListener("blur", () => {
+      resetThreadImageDrop();
+    });
+
+    window.addEventListener("dragend", () => {
+      resetThreadImageDrop();
+    });
+
+    document.addEventListener("drop", (event) => {
+      if (wrap.contains(event.target)) return;
+      resetThreadImageDrop();
+    });
+  }
+
+  function initThreadImagePaste() {
+    const wrap = dom.center.messagesWrap;
+    if (wrap && wrap.dataset.imagePasteBound !== "1") {
+      wrap.dataset.imagePasteBound = "1";
+      if (!wrap.hasAttribute("tabindex")) {
+        wrap.tabIndex = -1;
+      }
+
+      wrap.addEventListener("pointerdown", (event) => {
+        const target = event.target;
+        if (target && target.closest && target.closest("button,a,input,textarea,[contenteditable='true']")) return;
+        if (document.activeElement === wrap) return;
+        try {
+          wrap.focus({ preventScroll: true });
+        } catch {
+          wrap.focus();
+        }
+      });
+
+      wrap.addEventListener("paste", (event) => {
+        if (!state.activeClientId) return;
+        const files = extractImageFilesFromDataTransfer(event.clipboardData);
+        if (!files.length) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openAttachPreviewFromFiles(files).catch(console.error);
+      });
+    }
+
+    if (dom.center.input && dom.center.input.dataset.imagePasteBound !== "1") {
+      dom.center.input.dataset.imagePasteBound = "1";
+      dom.center.input.addEventListener("paste", (event) => {
+        if (!state.activeClientId) return;
+        const files = extractImageFilesFromDataTransfer(event.clipboardData);
+        if (!files.length) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openAttachPreviewFromFiles(files).catch(console.error);
+      });
+    }
   }
 
   async function copyToClipboard(value) {
@@ -4429,6 +4983,10 @@
         <i class="far fa-trash-alt" aria-hidden="true"></i>
         <span>Очистить чат</span>
       </button>
+      <button type="button" class="chat-message-menu-btn is-danger hidden" data-chat-client-action="delete-guest">
+        <i class="far fa-trash-alt" aria-hidden="true"></i>
+        <span>\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0447\u0430\u0442</span>
+      </button>
     `;
     document.body.appendChild(menu);
 
@@ -4441,6 +4999,10 @@
       if (!clientId) return;
       if (action === "clear") {
         clearClientChat(clientId);
+        return;
+      }
+      if (action === "delete-guest") {
+        deleteGuestClientChat(clientId);
       }
     });
 
@@ -4451,6 +5013,126 @@
   function hideClientContextMenu() {
     if (state.clientContextMenu) state.clientContextMenu.classList.add("hidden");
     state.contextClientId = null;
+  }
+
+  function findClientById(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return null;
+    const id = Number(key);
+    return (state.clients || []).find((row) => Number(row?.id) === id) || null;
+  }
+
+  function isGuestChatClient(client) {
+    if (!client || typeof client !== "object") return false;
+    const isVirtual = client._isVirtualChatClient === true;
+    const phoneDigits = normalizePhoneDigits(client.phone);
+    const totalOrders = Number(client.total_orders || 0);
+    const hasOrders = Number.isFinite(totalOrders) && totalOrders > 0;
+    if (isVirtual && !phoneDigits && !hasOrders) return true;
+    const normalizedName = normalizeClientNameIdentity(client.name);
+    if (!normalizedName) return false;
+    return /^\u0433\u043e\u0441\u0442\u044c\b/.test(normalizedName);
+  }
+
+  function destroyClientThreadState(clientId, options = {}) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return { removed: false, wasActive: false };
+    const opts = options || {};
+    const idNum = Number(key);
+    const wasActive = Number(state.activeClientId) === idNum;
+
+    const saveTimer = state.remoteSaveTimers[key];
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      delete state.remoteSaveTimers[key];
+    }
+    const hideTimer = Number(state.peerTypingHideTimers[key] || 0);
+    if (hideTimer) {
+      clearTimeout(hideTimer);
+      delete state.peerTypingHideTimers[key];
+    }
+
+    delete state.remoteThreadUpdatedAt[key];
+    delete state.remoteSummaryFingerprints[key];
+    delete state.remoteSummariesByClient[key];
+    delete state.remoteSaveInFlight[key];
+    delete state.remoteMutationQueues[key];
+    delete state.localThreadMutations[key];
+    delete state.pendingScrollNewByClient[key];
+    delete state.pendingScrollMessageIdsByClient[key];
+    delete state.threadScrollTopByClient[key];
+    delete state.peerTypingByClient[key];
+    delete state.peerTypingUpdatedAtByClient[key];
+    delete state.threadHistoryByClient[key];
+
+    const hiddenMap = ensureHiddenMessageMap();
+    if (hiddenMap && typeof hiddenMap === "object") delete hiddenMap[key];
+    if (state.store?.threads && typeof state.store.threads === "object") delete state.store.threads[key];
+
+    const ui = ensureUiStoreState();
+    if (ui?.threadScrollTopByClient && typeof ui.threadScrollTopByClient === "object") {
+      delete ui.threadScrollTopByClient[key];
+    }
+
+    if (Number(state.store?.lastOpenClientId || 0) === idNum) {
+      state.store.lastOpenClientId = null;
+    }
+
+    if (opts.removeClientEntry === true) {
+      state.clients = (state.clients || []).filter((row) => Number(row?.id) !== idNum);
+      state.filteredClients = (state.filteredClients || []).filter((row) => Number(row?.id) !== idNum);
+    }
+
+    if (normalizeClientIdKey(state.localTypingClientId) === key) {
+      stopLocalTypingSession(key, { flush: true, force: true });
+    }
+
+    if (wasActive) {
+      hideMessageContextMenu();
+      if (state.selectionMode || state.selectedMessageIds.size) setSelectionMode(false);
+      cancelEditingMessage();
+      clearComposerReply();
+      if (dom.center.input) {
+        dom.center.input.value = "";
+        syncComposerRichPreview({});
+      }
+      state.activeClientId = null;
+      state.activeClient = null;
+      setActiveOrders([], { forceRender: true });
+    }
+
+    saveStore();
+    return { removed: true, wasActive };
+  }
+
+  function deleteGuestClientChat(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+    const client = findClientById(key);
+    if (!isGuestChatClient(client)) return false;
+
+    const clientName = String(client?.name || `\u0413\u043e\u0441\u0442\u044c #${key}`);
+    openDeleteConfirm({
+      count: 1,
+      clientName,
+      title: `\u0423\u0434\u0430\u043b\u0438\u0442\u044c ${clientName}?`,
+      text: "\u0427\u0430\u0442 \u0433\u043e\u0441\u0442\u044f \u0431\u0443\u0434\u0435\u0442 \u0443\u0434\u0430\u043b\u0435\u043d \u0431\u0435\u0437 \u0432\u043e\u0437\u043c\u043e\u0436\u043d\u043e\u0441\u0442\u0438 \u0432\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f.",
+      allowDeleteForClient: false,
+      onConfirm: () => {
+        const result = destroyClientThreadState(key, { removeClientEntry: true });
+        applyClientFilter();
+        if (result.wasActive) {
+          renderMessages();
+          const fallbackClient = Array.isArray(state.filteredClients) ? state.filteredClients[0] : null;
+          if (fallbackClient && Number(fallbackClient.id) > 0) {
+            selectClient(fallbackClient.id).catch(console.error);
+          }
+        }
+        emitUnreadChangedSoon();
+        deleteRemoteThread(key).catch(console.error);
+      },
+    });
+    return true;
   }
 
   function clearClientChat(clientId) {
@@ -4466,9 +5148,10 @@
     openDeleteConfirm({
       count,
       clientName,
-      title: `Удалить чат с ${clientName}?`,
-      text: "Вы точно хотите удалить этот чат?",
-      checkText: `Удалить у ${clientName}`,
+      title: `\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u0447\u0430\u0442 \u0441 ${clientName}?`,
+      text: "\u0412\u044b \u0442\u043e\u0447\u043d\u043e \u0445\u043e\u0442\u0438\u0442\u0435 \u043e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u044d\u0442\u043e\u0442 \u0447\u0430\u0442?",
+      checkText: `\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u0443 ${clientName}`,
+      confirmText: "\u041e\u0427\u0418\u0421\u0422\u0418\u0422\u042c",
       allowDeleteForClient: true,
       onConfirm: ({ deleteForClient } = {}) => {
         const removeForBoth = deleteForClient !== false;
@@ -4524,6 +5207,16 @@
     if (!key) return;
     hideMessageContextMenu();
     const menu = ensureClientContextMenu();
+    const client = findClientById(key);
+    const canDeleteGuest = isGuestChatClient(client);
+    const clearBtn = menu.querySelector('[data-chat-client-action="clear"]');
+    const guestDeleteBtn = menu.querySelector('[data-chat-client-action="delete-guest"]');
+    if (clearBtn) {
+      clearBtn.classList.remove("hidden");
+    }
+    if (guestDeleteBtn) {
+      guestDeleteBtn.classList.toggle("hidden", !canDeleteGuest);
+    }
     state.contextClientId = key;
     positionFloatingBox(menu, x, y, 8);
   }
@@ -4875,6 +5568,7 @@
     const keepPinnedBeforeRender = shouldKeepMessagesPinnedToBottom();
 
     if (!state.activeClientId) {
+      resetThreadImageDrop();
       setSelectionMode(false);
       dom.center.empty.classList.remove("hidden");
       dom.center.messages.innerHTML = "";
@@ -4947,6 +5641,7 @@
       const imageAttachment = getMessageImageAttachment(msg);
       const hasImageAttachment = !!imageAttachment;
       const hasText = String(msg.text || "").trim().length > 0;
+      const orderCardModels = buildMessageOrderCardModels(msg);
       const reply = msg.replyTo && typeof msg.replyTo === "object" ? msg.replyTo : null;
       const replyMarkup = reply
         ? `
@@ -4972,12 +5667,14 @@
       const textMarkup = hasText
         ? `<div class="chat-message-text">${escapeHtml(msg.text || "").replace(/\n/g, "<br>")}</div>`
         : "";
+      const orderCardMarkup = buildMessageOrderCardsMarkup(orderCardModels);
       item.innerHTML = `
         <span class="chat-message-select-badge" aria-hidden="true"><i class="fas fa-check"></i></span>
         <div class="chat-message-bubble">
           ${replyMarkup}
           ${attachmentMarkup}
           ${textMarkup}
+          ${orderCardMarkup}
           <div class="chat-message-meta">
             <span class="chat-message-time">${escapeHtml(time)}</span>
             ${outgoingStatus
@@ -4997,6 +5694,9 @@
         bubble.classList.add("has-attachment");
         if (!hasText) bubble.classList.add("has-attachment-only");
       }
+      if (bubble && orderCardModels.length) {
+        bubble.classList.add("chat-message-bubble--order-card");
+      }
       if (reply) {
         const replyLineNode = $(".chat-message-reply-line", item);
         if (replyLineNode) {
@@ -5007,7 +5707,7 @@
           );
         }
       }
-      if (bubble && emojiOnlyInfo.isEmojiOnly && !reply && !hasImageAttachment) {
+      if (bubble && emojiOnlyInfo.isEmojiOnly && !reply && !hasImageAttachment && !orderCardModels.length) {
         bubble.classList.add("is-emoji-only");
         if (emojiOnlyInfo.count <= 1) bubble.classList.add("is-emoji-only-single");
         else if (emojiOnlyInfo.count <= 3) bubble.classList.add("is-emoji-only-few");
@@ -5260,6 +5960,8 @@
     remountEmojiPopover("composer");
     dom.center.emojiPopover.classList.add("hidden");
     dom.center.emojiPopover.classList.remove("is-attach-preview");
+    emojiPopoverMode = "composer";
+    emojiPopoverReactionMessageId = "";
   }
 
   function remountEmojiPopover(target = "composer") {
@@ -5292,8 +5994,34 @@
     remountEmojiPopover(normalizedTarget);
     popover.classList.toggle("is-attach-preview", isPreviewTarget);
     popover.classList.toggle("hidden", !willOpen);
-    if (!willOpen) remountEmojiPopover("composer");
-    if (willOpen) ensureEmojiDatasetLoaded().catch(() => {});
+    if (!willOpen) {
+      remountEmojiPopover("composer");
+      emojiPopoverMode = "composer";
+      emojiPopoverReactionMessageId = "";
+    }
+    if (willOpen) {
+      if (normalizedTarget !== "attach-preview") {
+        emojiPopoverMode = "composer";
+        emojiPopoverReactionMessageId = "";
+      }
+      ensureEmojiDatasetLoaded().catch(() => {});
+    }
+  }
+
+  function showEmojiPopover(target = "composer", options = {}) {
+    if (!dom.center.emojiPopover) return;
+    const popover = dom.center.emojiPopover;
+    const normalizedTarget = target === "attach-preview" ? "attach-preview" : "composer";
+    const isPreviewTarget = normalizedTarget === "attach-preview";
+    const mode = options && options.mode === "reaction" ? "reaction" : "composer";
+    const messageId = mode === "reaction" ? String(options.messageId || "") : "";
+
+    remountEmojiPopover(normalizedTarget);
+    popover.classList.toggle("is-attach-preview", isPreviewTarget);
+    popover.classList.remove("hidden");
+    emojiPopoverMode = mode;
+    emojiPopoverReactionMessageId = messageId;
+    ensureEmojiDatasetLoaded().catch(() => {});
   }
 
   function sendPreparedImageAttachments(attachments, options = {}) {
@@ -5441,6 +6169,18 @@
         return;
       }
 
+      const orderCard = event.target.closest("[data-chat-order-card-id]");
+      if (orderCard) {
+        if (!state.selectionMode) {
+          const orderId = Number(orderCard.getAttribute("data-chat-order-card-id") || 0);
+          if (Number.isFinite(orderId) && orderId > 0) {
+            event.preventDefault();
+            openOrderFromMessageCard(orderId);
+          }
+          return;
+        }
+      }
+
       const reactionPill = event.target.closest("[data-chat-msg-reaction-toggle]");
       if (reactionPill && state.activeClientId) {
         const messageId = reactionPill.getAttribute("data-chat-msg-reaction-toggle");
@@ -5530,11 +6270,15 @@
         const messageId = state.contextMessageId;
         if (!reaction) return;
         if (reaction === "__toggle_more__") {
-          const nextExpanded = !dom.center.reactionBar.classList.contains("is-expanded");
-          setReactionBarExpanded(nextExpanded);
-          if (dom.center.contextMenu && !dom.center.contextMenu.classList.contains("hidden")) {
-            positionReactionBar(dom.center.contextMenu.getBoundingClientRect());
-          }
+          event.preventDefault();
+          event.stopPropagation();
+          const targetMessageId = String(state.contextMessageId || "");
+          hideMessageContextMenu();
+          showEmojiPopover("composer", {
+            mode: targetMessageId ? "reaction" : "composer",
+            messageId: targetMessageId,
+          });
+          if (dom.center.input) dom.center.input.focus();
           return;
         }
         if (!messageId) return hideMessageContextMenu();
@@ -5616,6 +6360,14 @@
     clientsRightApi.openOrderById(headerOrderId);
   }
 
+  function openOrderFromMessageCard(orderId) {
+    const id = Number(orderId || 0);
+    if (!Number.isFinite(id) || id <= 0) return;
+    const clientsRightApi = getClientsRightApi();
+    if (!clientsRightApi || typeof clientsRightApi.openOrderById !== "function") return;
+    clientsRightApi.openOrderById(id);
+  }
+
   function initHeaderOrderOpenAction() {
     if (!dom.center.headerOrder || dom.center.headerOrder.dataset.boundOpenOrder === "1") return;
     dom.center.headerOrder.dataset.boundOpenOrder = "1";
@@ -5631,8 +6383,35 @@
     });
   }
 
-  async function loadActiveClientData(clientId, selectedFromList = null) {
+  function buildGuestActiveClientProfile(clientId, selectedFromList = null) {
+    const source = selectedFromList && typeof selectedFromList === "object" ? selectedFromList : {};
+    const guestName = String(source.name || "\u0413\u043e\u0441\u0442\u044c").trim() || "\u0413\u043e\u0441\u0442\u044c";
+    return {
+      id: Number(clientId || source.id || 0) || 0,
+      name: guestName,
+      phone: "",
+      birthday: "",
+      photo: "",
+      total_orders: 0,
+      total_spent: 0,
+      last_order_date: "",
+      created_at: "",
+      is_guest_chat: true,
+    };
+  }
+
+  async function loadActiveClientData(clientId, selectedFromList = null, options = {}) {
     const requestId = ++state.requestToken;
+    const isGuestClient = options && options.isGuest === true;
+    if (isGuestClient) {
+      state.activeClient = buildGuestActiveClientProfile(clientId, selectedFromList);
+      setActiveOrders([], { forceRender: true });
+      renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
+      restoreThreadScrollPosition(state.activeClientId);
+      saveThreadScrollPosition(state.activeClientId);
+      return;
+    }
+
     try {
       const [clientJson, ordersJson] = await Promise.all([
         apiJson(`/api/admin/clients/${clientId}`),
@@ -5641,6 +6420,27 @@
       if (requestId !== state.requestToken) return;
 
       state.activeClient = clientJson?.data || selectedFromList;
+      const syncedIdentity = syncClientIdentityIntoList(clientId, state.activeClient);
+      if (syncedIdentity.changed) {
+        applyClientFilter();
+      }
+      const prevPhoneDigits = normalizePhoneDigits(syncedIdentity.prevPhone);
+      const nextPhoneDigits = normalizePhoneDigits(syncedIdentity.nextPhone);
+      const shouldPatchMeta = (
+        !!syncedIdentity.nextName
+        && !isGuestLikeClientName(syncedIdentity.nextName)
+        && (
+          syncedIdentity.changed
+          || isGuestLikeClientName(syncedIdentity.prevName)
+          || (!!nextPhoneDigits && nextPhoneDigits !== prevPhoneDigits)
+        )
+      );
+      if (shouldPatchMeta) {
+        patchRemoteThreadMeta(clientId, {
+          name: syncedIdentity.nextName,
+          phone: syncedIdentity.nextPhone,
+        }).catch(console.error);
+      }
       setActiveOrders(Array.isArray(ordersJson?.data) ? ordersJson.data : [], { forceRender: true });
       renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
       restoreThreadScrollPosition(state.activeClientId);
@@ -5678,6 +6478,7 @@
       dom.center.input.style.overflowY = "hidden";
     }
     syncComposerRichPreview({});
+    resetThreadImageDrop();
 
     state.activeClientId = id;
     state.store.lastOpenClientId = id;
@@ -5698,15 +6499,29 @@
     }
 
     const selectedFromList = state.clients.find((c) => Number(c.id) === id) || null;
+    const isGuestClient = isGuestChatClient(selectedFromList);
     const clientsRightApi = getClientsRightApi();
-    if (clientsRightApi && typeof clientsRightApi.selectClientById === "function") {
-      clientsRightApi.selectClientById(id, selectedFromList?.name || "").catch(console.error);
+    if (clientsRightApi) {
+      if (
+        isGuestClient
+        && typeof clientsRightApi.selectGuestChatClient === "function"
+      ) {
+        clientsRightApi.selectGuestChatClient(id, selectedFromList?.name || "").catch(console.error);
+      } else if (typeof clientsRightApi.selectClientById === "function") {
+        clientsRightApi.selectClientById(
+          id,
+          selectedFromList?.name || "",
+          { chatGuest: isGuestClient }
+        ).catch(console.error);
+      }
     }
 
-    state.activeClient = selectedFromList;
+    state.activeClient = isGuestClient
+      ? buildGuestActiveClientProfile(id, selectedFromList)
+      : selectedFromList;
     setActiveOrders([], { forceRender: true });
 
-    await loadActiveClientData(id, selectedFromList);
+    await loadActiveClientData(id, selectedFromList, { isGuest: isGuestClient });
   }
 
   function mergeClientsIntoState(rows, { reset = false } = {}) {
@@ -5880,6 +6695,8 @@
     normalizeQuickReactionButtons();
     decorateComposerEmojiControls();
     initAttachPreviewModal();
+    initThreadImageDrop();
+    initThreadImagePaste();
     initMessageImageViewerModal();
     ensureComposerReplyElements();
     renderComposerReply();
@@ -6054,6 +6871,7 @@
     document.addEventListener("tenantStoreChanged", () => {
       loadClients().catch(console.error);
     });
+
   }
 
   init();

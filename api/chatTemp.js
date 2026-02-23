@@ -18,6 +18,24 @@ const CHAT_SUMMARIES_PAGE_DEFAULT_LIMIT = 50;
 const CHAT_SUMMARIES_PAGE_MAX_LIMIT = 200;
 const CHAT_THREAD_PAGE_DEFAULT_LIMIT = 60;
 const CHAT_THREAD_PAGE_MAX_LIMIT = 200;
+const CHAT_GUEST_THREAD_TTL_DAYS = parsePositiveInt(
+  process.env.CHAT_GUEST_THREAD_TTL_DAYS,
+  7,
+  1,
+  365
+);
+const CHAT_GUEST_THREAD_CLEANUP_MIN_INTERVAL_MS = parsePositiveInt(
+  process.env.CHAT_GUEST_THREAD_CLEANUP_MIN_INTERVAL_MS,
+  5 * 60 * 1000,
+  10000,
+  24 * 60 * 60 * 1000
+);
+const CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT = parsePositiveInt(
+  process.env.CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT,
+  200,
+  10,
+  2000
+);
 const CHAT_PUSH_ENDPOINT_MAX_LENGTH = 1024;
 const CHAT_UPLOAD_RELATIVE_DIR = path.join("static", "uploads", "chat");
 const CHAT_UPLOAD_ABSOLUTE_DIR = path.join(__dirname, "..", CHAT_UPLOAD_RELATIVE_DIR);
@@ -69,6 +87,7 @@ const attachmentUpload = multer({
 const threadWaiters = new Map();
 const tenantWaiters = new Map();
 const threadTypingState = new Map();
+const guestThreadCleanupState = new Map();
 let ensurePushSubscriptionsTablePromise = null;
 const CHAT_PUSH_UNIQUE_INDEX_LEGACY = "ux_chat_push_subscriptions_tenant_endpoint";
 const CHAT_PUSH_UNIQUE_INDEX_V2 = "ux_chat_push_subscriptions_tenant_actor_client_endpoint";
@@ -253,6 +272,19 @@ async function deletePushSubscriptionsForThread(tenantId, clientId) {
   );
 }
 
+async function deletePushSubscriptionsForThreads(tenantId, clientIds) {
+  await ensurePushSubscriptionsTable();
+  const ids = (Array.isArray(clientIds) ? clientIds : [])
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!ids.length) return;
+  await db.query(
+    `DELETE FROM chat_push_subscriptions
+      WHERE tenant_id = ? AND client_id IN (${ids.map(() => "?").join(",")})`,
+    [Number(tenantId), ...ids]
+  );
+}
+
 async function listPushSubscriptionsForThread(tenantId, clientId, actorKey) {
   await ensurePushSubscriptionsTable();
   const actor = actorKey === "in" ? "in" : "out";
@@ -326,6 +358,10 @@ async function sendPushToSubscriptions(subscriptions, payload) {
 async function notifyPushPeerAboutMessage(tenantId, clientId, senderActor, message) {
   if (!webPushEnabled) return;
   const peerActor = senderActor === "in" ? "out" : "in";
+  if (peerActor === "in") {
+    const chatEnabled = await isTenantChatWidgetEnabled(tenantId);
+    if (!chatEnabled) return;
+  }
   const subscriptions = await listPushSubscriptionsForThread(tenantId, clientId, peerActor);
   if (!subscriptions.length) return;
   const messageIdRaw = String(message && message.id ? message.id : "").trim();
@@ -345,6 +381,39 @@ async function notifyPushPeerAboutMessage(tenantId, clientId, senderActor, messa
     url,
     tag: `chat-${tenantId}-${clientId}-${peerActor}-${tagSuffix}`,
   });
+}
+
+function normalizeTenantChatWidgetEnabled(rawValue) {
+  if (rawValue === undefined || rawValue === null || rawValue === "") return true;
+  if (rawValue === false || rawValue === 0) return false;
+  const normalized = String(rawValue).trim().toLowerCase();
+  if (!normalized) return true;
+  if (normalized === "0" || normalized === "false" || normalized === "off" || normalized === "no") return false;
+  if (normalized === "1" || normalized === "true" || normalized === "on" || normalized === "yes") return true;
+  const numeric = Number(normalized);
+  if (Number.isFinite(numeric)) return numeric !== 0;
+  return true;
+}
+
+async function isTenantChatWidgetEnabled(tenantId) {
+  const key = String(tenantId || "").trim();
+  if (!key) return true;
+
+  try {
+    const [rows] = await db.query(
+      `SELECT chat_widget_enabled
+         FROM ten_tenants
+        WHERE id = ?
+        LIMIT 1`,
+      [Number(key)]
+    );
+    const row = Array.isArray(rows) && rows.length ? rows[0] : null;
+    return normalizeTenantChatWidgetEnabled(row ? row.chat_widget_enabled : undefined);
+  } catch (err) {
+    const code = String(err && err.code || "");
+    if (code === "ER_BAD_FIELD_ERROR") return true;
+    throw err;
+  }
 }
 
 function getTenantId(req) {
@@ -383,6 +452,105 @@ function parsePositiveInt(value, fallback, min = 1, max = Number.MAX_SAFE_INTEGE
   if (whole < min) return Math.trunc(fallback);
   if (whole > max) return Math.trunc(max);
   return whole;
+}
+
+function getGuestThreadCleanupBucket(tenantId) {
+  const key = String(tenantId || "");
+  if (!key) return null;
+  let bucket = guestThreadCleanupState.get(key);
+  if (!bucket) {
+    bucket = {
+      lastRunAt: 0,
+      inFlight: null,
+    };
+    guestThreadCleanupState.set(key, bucket);
+  }
+  return bucket;
+}
+
+async function cleanupExpiredGuestThreadsForTenant(tenantId) {
+  const tenant = String(tenantId || "");
+  if (!tenant || CHAT_GUEST_THREAD_TTL_DAYS <= 0) return 0;
+
+  const guestPrefix = "\u0433\u043e\u0441\u0442\u044c";
+  const timestamp = new Date().toISOString();
+  let totalDeleted = 0;
+
+  for (let pass = 0; pass < 5; pass += 1) {
+    const [candidateRows] = await db.query(
+      `SELECT client_id
+         FROM chat_threads
+        WHERE tenant_id = ?
+          AND updated_at < (NOW(3) - INTERVAL ? DAY)
+          AND LOWER(TRIM(COALESCE(meta_name, ''))) LIKE CONCAT(?, '%')
+        ORDER BY updated_at ASC, client_id ASC
+        LIMIT ?`,
+      [
+        Number(tenant),
+        CHAT_GUEST_THREAD_TTL_DAYS,
+        guestPrefix,
+        CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT,
+      ]
+    );
+
+    const clientIds = (Array.isArray(candidateRows) ? candidateRows : [])
+      .map((row) => normalizeClientId(row?.client_id))
+      .filter(Boolean);
+    if (!clientIds.length) break;
+
+    const [deleteResult] = await db.query(
+      `DELETE FROM chat_threads
+        WHERE tenant_id = ? AND client_id IN (${clientIds.map(() => "?").join(",")})`,
+      [Number(tenant), ...clientIds.map((id) => Number(id))]
+    );
+    const deletedNow = Number(deleteResult?.affectedRows || 0);
+    if (deletedNow <= 0) break;
+
+    totalDeleted += deletedNow;
+    await deletePushSubscriptionsForThreads(tenant, clientIds).catch(() => {});
+    clientIds.forEach((clientId) => {
+      clearThreadTypingState(tenant, clientId);
+      notifyThreadChange(tenant, clientId, timestamp);
+    });
+
+    if (clientIds.length < CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT) break;
+  }
+
+  if (totalDeleted > 0) {
+    console.info(
+      `[chat-temp] auto-removed expired guest chats tenant=${tenant} count=${totalDeleted}`
+    );
+  }
+
+  return totalDeleted;
+}
+
+function scheduleExpiredGuestThreadsCleanup(tenantId) {
+  const tenant = String(tenantId || "");
+  if (!tenant || CHAT_GUEST_THREAD_TTL_DAYS <= 0) return;
+  const bucket = getGuestThreadCleanupBucket(tenant);
+  if (!bucket) return;
+
+  const now = Date.now();
+  if (bucket.inFlight) return;
+  if (
+    bucket.lastRunAt > 0
+    && (now - bucket.lastRunAt) < CHAT_GUEST_THREAD_CLEANUP_MIN_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  bucket.lastRunAt = now;
+  bucket.inFlight = cleanupExpiredGuestThreadsForTenant(tenant)
+    .catch((err) => {
+      console.error("chat-temp guest cleanup error:", err);
+    })
+    .finally(() => {
+      const next = getGuestThreadCleanupBucket(tenant);
+      if (!next) return;
+      next.inFlight = null;
+      next.lastRunAt = Date.now();
+    });
 }
 
 function parseJsonObject(value) {
@@ -534,6 +702,28 @@ function sanitizeMeta(meta) {
     phone: String(meta.phone || "").slice(0, 60),
     last_welcome_day: lastWelcomeDay,
   };
+}
+
+function sanitizeMetaPatch(meta) {
+  const source = meta && typeof meta === "object" ? meta : null;
+  if (!source) return {};
+  const patch = {};
+
+  if (Object.prototype.hasOwnProperty.call(source, "name")) {
+    patch.name = String(source.name || "").slice(0, 160);
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "phone")) {
+    patch.phone = String(source.phone || "").slice(0, 60);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(source, "last_welcome_day")
+    || Object.prototype.hasOwnProperty.call(source, "lastWelcomeDay")
+  ) {
+    const rawLastWelcomeDay = String(source.last_welcome_day || source.lastWelcomeDay || "").trim();
+    patch.last_welcome_day = /^\d{4}-\d{2}-\d{2}$/.test(rawLastWelcomeDay) ? rawLastWelcomeDay : "";
+  }
+
+  return patch;
 }
 
 function sanitizeMetaFromDbRow(row) {
@@ -1540,6 +1730,14 @@ async function readTenantUpdatedAt(tenantId) {
 module.exports = function makeChatTempRouter() {
   const router = express.Router();
 
+  router.use((req, res, next) => {
+    try {
+      const tenantId = getTenantId(req);
+      scheduleExpiredGuestThreadsCleanup(tenantId);
+    } catch {}
+    next();
+  });
+
   router.post("/thread/merge", async (req, res) => {
     const tenantId = getTenantId(req);
     const fromClientId = normalizeClientId(req.body?.from_client_id || req.body?.fromClientId);
@@ -2046,6 +2244,70 @@ module.exports = function makeChatTempRouter() {
       });
     } catch (err) {
       console.error("chat-temp GET /thread/:clientId/meta error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
+  router.patch("/thread/:clientId/meta", async (req, res) => {
+    const tenantId = getTenantId(req);
+    const clientId = normalizeClientId(req.params.clientId);
+    if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
+
+    const sourceMeta = req.body && typeof req.body === "object"
+      ? (req.body.meta && typeof req.body.meta === "object" ? req.body.meta : req.body)
+      : {};
+    const metaPatch = sanitizeMetaPatch(sourceMeta);
+    const patchKeys = Object.keys(metaPatch);
+
+    let conn;
+    try {
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+
+      const existingMetaRow = await readThreadMeta(tenantId, clientId, conn);
+      const existingMeta = sanitizeMetaFromDbRow(existingMetaRow);
+      const mergedMeta = sanitizeMeta({
+        ...existingMeta,
+        ...metaPatch,
+      });
+
+      const changed = (
+        patchKeys.length > 0
+        && (
+          String(existingMeta.name || "") !== String(mergedMeta.name || "")
+          || String(existingMeta.phone || "") !== String(mergedMeta.phone || "")
+          || String(existingMeta.last_welcome_day || "") !== String(mergedMeta.last_welcome_day || "")
+        )
+      );
+
+      let updatedAtIso = "";
+      if (patchKeys.length > 0 && (changed || !existingMetaRow)) {
+        const updatedAt = new Date();
+        await upsertThreadMeta(conn, tenantId, clientId, mergedMeta, updatedAt);
+        updatedAtIso = updatedAt.toISOString();
+      }
+
+      await conn.commit();
+      conn.release();
+      conn = null;
+
+      if (updatedAtIso) notifyThreadChange(tenantId, clientId, updatedAtIso);
+
+      return res.json({
+        ok: true,
+        data: {
+          client_id: Number(clientId),
+          changed: !!updatedAtIso,
+          updated_at: updatedAtIso,
+          meta: sanitizeMeta(mergedMeta),
+        },
+      });
+    } catch (err) {
+      if (conn) {
+        try { await conn.rollback(); } catch {}
+        conn.release();
+      }
+      console.error("chat-temp PATCH /thread/:clientId/meta error:", err);
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
   });

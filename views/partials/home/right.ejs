@@ -105,46 +105,116 @@
             <div id="settingsStoreTelegramList"></div>
           </div>
         </form>
-        <div class="stores-form-actions">
-          <button class="btn btn-primary btn-sm" type="button" id="settingsStoreSaveBtn">
+        <div class="stores-form-actions settings-footer-actions">
+          <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsStoreSaveBtn">
             <span id="settingsStoreSaveText">Сохранить</span>
           </button>
-          <button class="btn btn-link btn-sm" type="button" id="settingsStoreResetBtn">Сбросить</button>
+          <button class="settings-footer-btn settings-footer-btn--cancel" type="button" id="settingsStoreResetBtn" title="Сбросить" aria-label="Сбросить">
+            <i class="fas fa-times"></i>
+          </button>
         </div>
       </div>
 
-      <div class="info-card settings-right-panel hidden" id="settingsNotificationsPanel">
+      <div class="info-card settings-right-panel hidden" id="settingsChatWelcomePanel">
         <div class="settings-list-header">
-          <div class="settings-list-title">Уведомления</div>
-          <button type="button" class="btn btn-icon btn-sm global-telegram-add-toggle" id="globalTelegramToggleBtn" title="Добавить Telegram">
-            <i class="fas fa-plus"></i>
+          <div class="settings-list-title">Приветственное сообщение</div>
+          <div class="settings-list-subtitle">Текст, который клиент увидит в самом начале диалога.</div>
+        </div>
+        <div class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">ТЕКСТ ПРИВЕТСТВИЯ</label>
+            <textarea class="textarea" id="settingsChatWelcomeMessageInput" rows="5" data-tenant-input="chat_welcome_message" placeholder="Привет! Я виртуальный помощник..."></textarea>
+          </div>
+        </div>
+        <div class="stores-form-actions settings-chat-panel-actions settings-footer-actions">
+          <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsChatWelcomeSaveBtn">Сохранить</button>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsChatAssistantNamePanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">Имя и пол помощника</div>
+          <div class="settings-list-subtitle">Имя и пол помощника в клиентском чате.</div>
+        </div>
+        <div class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">ИМЯ ПОМОЩНИКА</label>
+            <input class="control" type="text" id="settingsChatAssistantNameInput" data-tenant-input="chat_assistant_name" placeholder="Ням-Ням" />
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ПОЛ</label>
+            <div class="settings-chat-gender-options" id="settingsChatAssistantGenderOptions">
+              <label class="settings-chat-gender-option">
+                <input class="settings-chat-gender-input" type="radio" name="settingsChatAssistantGender" id="settingsChatAssistantGenderMale" value="m" checked />
+                <span class="settings-chat-gender-dot" aria-hidden="true"></span>
+                <span class="settings-chat-gender-label">Мужской</span>
+              </label>
+              <label class="settings-chat-gender-option">
+                <input class="settings-chat-gender-input" type="radio" name="settingsChatAssistantGender" id="settingsChatAssistantGenderFemale" value="f" />
+                <span class="settings-chat-gender-dot" aria-hidden="true"></span>
+                <span class="settings-chat-gender-label">Женский</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="stores-form-actions settings-chat-panel-actions settings-footer-actions">
+          <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsChatAssistantNameSaveBtn">Сохранить</button>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsChatOperatorNamePanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">Имя оператора</div>
+          <div class="settings-list-subtitle">По умолчанию используется название компании, но можно задать вручную.</div>
+        </div>
+        <div class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">ИМЯ ОПЕРАТОРА</label>
+            <input class="control" type="text" id="settingsChatOperatorNameInput" data-tenant-input="chat_operator_name" placeholder="Оператор" />
+            <div class="field-hint">Если поле пустое, будет использоваться значение по умолчанию.</div>
+          </div>
+        </div>
+        <div class="stores-form-actions settings-chat-panel-actions settings-footer-actions">
+          <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsChatOperatorNameSaveBtn">Сохранить</button>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsChatHotQuestionsPanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">Сетка горячих вопросов</div>
+          <div class="settings-list-subtitle">Вопросы, которые клиент может отправить одним нажатием.</div>
+        </div>
+        <div class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">КНОПКИ БЫСТРЫХ ВОПРОСОВ</label>
+            <div class="settings-chat-questions-grid" id="settingsChatHotQuestionsGrid">
+              <label class="settings-chat-question-pill">
+                <input class="control settings-chat-question-input" type="text" data-chat-quick-input="0" placeholder="Где мой заказ?" />
+              </label>
+              <label class="settings-chat-question-pill">
+                <input class="control settings-chat-question-input" type="text" data-chat-quick-input="1" placeholder="Вопрос по качеству товара" />
+              </label>
+              <label class="settings-chat-question-pill">
+                <input class="control settings-chat-question-input" type="text" data-chat-quick-input="2" placeholder="Вопрос по комплектации заказа" />
+              </label>
+              <label class="settings-chat-question-pill">
+                <input class="control settings-chat-question-input" type="text" data-chat-quick-input="3" placeholder="Другой вопрос" />
+              </label>
+            </div>
+            <div class="settings-chat-question-add-wrap">
+              <button class="settings-chat-question-add-btn" type="button" id="settingsChatQuickQuestionsAddBtn" aria-label="Add quick question">
+                <i class="fas fa-plus"></i>
+              </button>
+            </div>
+            <input class="hidden" type="text" id="settingsChatQuickQuestionsJson" data-tenant-input="chat_quick_questions_json" />
+          </div>
+        </div>
+        <div class="stores-form-actions settings-chat-panel-actions settings-footer-actions">
+          <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsChatQuickQuestionsSaveBtn">Сохранить</button>
+          <button class="settings-footer-btn settings-footer-btn--cancel" type="button" id="settingsChatQuickQuestionsResetBtn" title="Сбросить" aria-label="Сбросить">
+            <i class="fas fa-times"></i>
           </button>
         </div>
-
-        <!-- Форма добавления (скрыта по умолчанию) -->
-        <div class="global-telegram-connect hidden" id="globalTelegramConnectBlock">
-          <p class="field-hint">
-            Получайте заявки в Telegram с помощью нашего бота. Для этого перейдите по ссылке:
-            <a href="https://t.me/noti_m_bot" target="_blank">https://t.me/noti_m_bot</a> и напишите команду /start.<br>
-            Через некоторое время бот пришлёт API key и Secret key, которые нужно вставить в поля ниже.
-          </p>
-          <div class="field-group">
-            <label class="field-label">TELEGRAM API KEY</label>
-            <input type="text" class="control" id="globalTelegramApiKey" placeholder="Например: 915611204">
-          </div>
-          <div class="field-group">
-            <label class="field-label">SECRET KEY</label>
-            <input type="text" class="control" id="globalTelegramSecretKey" placeholder="Ключ от бота">
-          </div>
-          <div class="global-telegram-form-actions">
-            <button type="button" class="btn btn-primary btn-sm" id="globalTelegramAddBtn">Добавить</button>
-            <button type="button" class="btn btn-link btn-sm" id="globalTelegramCancelBtn">Отмена</button>
-          </div>
-        </div>
-
-        <!-- Список подключений -->
-        <div id="globalTelegramBindings"></div>
-
       </div>
 
       <div class="info-card settings-right-panel hidden" id="settingsLogoPanel">
@@ -650,8 +720,8 @@
             </label>
           </div>
         </div>
-        <div class="stores-form-actions">
-          <button class="btn btn-primary btn-sm" type="button" id="settingsImagesSaveBtn">Сохранить</button>
+        <div class="stores-form-actions settings-footer-actions">
+          <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsImagesSaveBtn">Сохранить</button>
         </div>
       </div>
 
@@ -765,12 +835,16 @@
             </label>
           </div>
         </form>
-        <div class="stores-form-actions">
-          <button class="btn btn-primary btn-sm" type="button" id="settingsDeliverySaveBtn">
+        <div class="stores-form-actions settings-footer-actions">
+          <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsDeliverySaveBtn">
             <span id="settingsDeliverySaveText">Сохранить</span>
           </button>
-          <button class="btn btn-link btn-sm" type="button" id="settingsDeliveryResetBtn">Сбросить</button>
-          <button class="btn btn-danger btn-sm" type="button" id="settingsDeliveryDeleteBtn">Удалить</button>
+          <button class="settings-footer-btn settings-footer-btn--cancel" type="button" id="settingsDeliveryResetBtn" title="Сбросить" aria-label="Сбросить">
+            <i class="fas fa-times"></i>
+          </button>
+          <button class="settings-footer-btn settings-footer-btn--delete" type="button" id="settingsDeliveryDeleteBtn" title="Удалить" aria-label="Удалить">
+            <i class="fas fa-trash"></i>
+          </button>
         </div>
       </div>
     </div>
