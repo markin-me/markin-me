@@ -8664,10 +8664,406 @@ const isViewMode = state.comboPanel.mode === "view";
     }).join("");
   }
 
+  function formatComboSetFileSize(bytes) {
+    if (!bytes || bytes <= 0) return "";
+    if (bytes < 1024) return String(bytes) + " B";
+    const kb = bytes / 1024;
+    if (kb < 1024) return kb.toFixed(kb < 10 ? 1 : 0) + " KB";
+    return (kb / 1024).toFixed(1) + " MB";
+  }
+
+  function isComboSetImageFile(file) {
+    if (!file) return false;
+    const mime = String(file.type || "").toLowerCase();
+    if (mime.startsWith("image/")) return true;
+    const name = String(file.name || "").toLowerCase();
+    return /\.(jpe?g|png|webp|gif|bmp|svg|heic|heif|avif)$/i.test(name);
+  }
+
+  function pickComboSetImageFiles(input) {
+    return Array.from(input || []).filter((f) => isComboSetImageFile(f));
+  }
+
+  async function extractComboSetImagesFromDataTransfer(dt) {
+    try {
+      if (!dt) return [];
+      const direct = pickComboSetImageFiles(dt.files || []);
+      if (direct.length) return direct;
+      const rawFiles = Array.from(dt.files || []).filter((f) => f && Number(f.size) > 0);
+      if (rawFiles.length) return rawFiles;
+      const items = Array.from(dt.items || []);
+      const itemFiles = items.map((it) => it && it.getAsFile && it.getAsFile()).filter((f) => isComboSetImageFile(f));
+      return itemFiles;
+    } catch {
+      return [];
+    }
+  }
+
+  function extractComboSetImagesFromClipboard(cb) {
+    try {
+      if (!cb) return [];
+      const direct = pickComboSetImageFiles(cb.files || []);
+      if (direct.length) return direct;
+      const items = Array.from(cb.items || []);
+      return items.map((it) => it && it.getAsFile && it.getAsFile()).filter((f) => isComboSetImageFile(f));
+    } catch {
+      return [];
+    }
+  }
+
+  let comboSetPhotoUploadSeq = 0;
+  async function addComboSetFilesAndUploadNow(files) {
+    if (!state.comboSetPanel) return;
+    const photos = state.comboSetPanel.photos || (state.comboSetPanel.photos = []);
+    const canAdd = Math.max(0, 1 - photos.length);
+    const selected = pickComboSetImageFiles(files).slice(0, canAdd);
+    if (!selected.length) return;
+
+    const placeholders = selected.map((f) => {
+      const preview = URL.createObjectURL(f);
+      return {
+        kind: "file",
+        file: f,
+        preview,
+        fileSize: Number(f.size || 0),
+        __uploading: true,
+        __uploadKey: `combo_up_${Date.now()}_${comboSetPhotoUploadSeq++}`,
+      };
+    });
+    placeholders.forEach((ph) => photos.push(ph));
+    if (state.comboSetPanel.activePhotoIdx < 0) state.comboSetPanel.activePhotoIdx = 0;
+    renderComboSetPhotos();
+
+    try {
+      const uploadResult = await apiUploadImages(selected);
+      const urls = Array.isArray(uploadResult?.urls) ? uploadResult.urls : [];
+      const sizes = Array.isArray(uploadResult?.sizes) ? uploadResult.sizes : [];
+      placeholders.forEach((ph, idx) => {
+        const at = photos.findIndex((x) => x && x.__uploadKey === ph.__uploadKey);
+        if (at < 0) return;
+        const url = urls[idx];
+        if (!url) {
+          photos.splice(at, 1);
+          try { URL.revokeObjectURL(ph.preview); } catch {}
+          return;
+        }
+        photos[at] = {
+          kind: "url",
+          url,
+          fileSize: Number(sizes[idx]) > 0 ? Number(sizes[idx]) : (ph.fileSize || 0),
+        };
+        try { URL.revokeObjectURL(ph.preview); } catch {}
+      });
+      if (!photos.length) state.comboSetPanel.activePhotoIdx = -1;
+      else if (state.comboSetPanel.activePhotoIdx < 0 || state.comboSetPanel.activePhotoIdx >= photos.length) state.comboSetPanel.activePhotoIdx = 0;
+      renderComboSetPhotos();
+    } catch {
+      placeholders.forEach((ph) => {
+        const at = photos.findIndex((x) => x && x.__uploadKey === ph.__uploadKey);
+        if (at >= 0) photos.splice(at, 1);
+        try { URL.revokeObjectURL(ph.preview); } catch {}
+      });
+      if (!photos.length) state.comboSetPanel.activePhotoIdx = -1;
+      renderComboSetPhotos();
+      if (typeof toast !== "undefined") toast("\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438 \u0444\u043e\u0442\u043e");
+    }
+  }
+
+  let comboSetPhotoModalEscHandler = null;
+  let comboSetPhotoModalPasteHandler = null;
+  function closeComboSetPhotoModal() {
+    const open = document.querySelectorAll(".product-photo-grid-modal-overlay[data-combo-photo-modal='1']");
+    open.forEach((el) => el.remove());
+    if (comboSetPhotoModalEscHandler) {
+      document.removeEventListener("keydown", comboSetPhotoModalEscHandler);
+      comboSetPhotoModalEscHandler = null;
+    }
+    if (comboSetPhotoModalPasteHandler) {
+      document.removeEventListener("paste", comboSetPhotoModalPasteHandler);
+      comboSetPhotoModalPasteHandler = null;
+    }
+  }
+
+  function openComboSetPhotoGridModal() {
+    if (!state.comboSetPanel) return;
+    closeComboSetPhotoModal();
+    const isView = state.comboSetPanel.mode === "view";
+    const overlay = document.createElement("div");
+    overlay.className = "product-photo-grid-modal-overlay";
+    overlay.setAttribute("data-combo-photo-modal", "1");
+    const card = document.createElement("div");
+    card.className = "product-photo-grid-modal-card";
+    card.innerHTML = `
+      <div class="product-photo-grid-modal-head">
+        <div class="product-photo-grid-modal-title">\u0424\u043e\u0442\u043e\u0433\u0440\u0430\u0444\u0438\u0438 \u043a\u043e\u043c\u0431\u043e</div>
+        <button type="button" class="product-photo-grid-modal-close" aria-label="\u0417\u0430\u043a\u0440\u044b\u0442\u044c"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="product-photo-grid-modal-body">
+        <div class="product-photo-grid-modal-grid"></div>
+      </div>
+      <div class="product-photo-grid-modal-foot">
+        <button type="button" class="btn" data-role="close">\u0417\u0430\u043a\u0440\u044b\u0442\u044c</button>
+      </div>
+    `;
+    const grid = card.querySelector(".product-photo-grid-modal-grid");
+    const modalFileInput = document.createElement("input");
+    modalFileInput.type = "file";
+    modalFileInput.accept = "image/*";
+    modalFileInput.multiple = true;
+    modalFileInput.className = "hidden";
+    card.appendChild(modalFileInput);
+    const modalBody = card.querySelector(".product-photo-grid-modal-body");
+    if (modalBody) {
+      const dropHint = document.createElement("div");
+      dropHint.className = "product-photo-grid-modal-drop-hint";
+      dropHint.textContent = "\u041f\u0435\u0440\u0435\u0442\u0430\u0449\u0438\u0442\u0435 \u0444\u043e\u0442\u043e \u0441\u044e\u0434\u0430 \u0438\u043b\u0438 \u043e\u0442\u043f\u0443\u0441\u0442\u0438\u0442\u0435 \u0434\u043b\u044f \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438";
+      modalBody.appendChild(dropHint);
+    }
+    const extractModalDropFiles = async (dt) => {
+      try {
+        if (!dt) return [];
+        const dtFiles = Array.from(dt.files || []);
+        if (dtFiles.length) return dtFiles;
+        return await extractComboSetImagesFromDataTransfer(dt);
+      } catch {
+        return [];
+      }
+    };
+    let clearFileDragState = () => {};
+    const renderGrid = () => {
+      if (!grid || !state.comboSetPanel) return;
+      const photos = state.comboSetPanel.photos || [];
+      const photosHtml = photos.map((ph, idx) => {
+        const src = ph && ph.kind === "file" ? ph.preview : ph?.url;
+        if (!src) return `<div class="product-photo-grid-modal-tile is-empty"></div>`;
+        const localSize = ph && ph.kind === "file" && ph.file && Number(ph.file.size) > 0 ? Number(ph.file.size) : 0;
+        const resolvedSize = Number(ph?.fileSize) > 0 ? Number(ph.fileSize) : localSize;
+        const sizeLabel = resolvedSize > 0 ? formatComboSetFileSize(resolvedSize) : "";
+        const removeBtn = isView ? "" : `<button type="button" class="product-photo-grid-modal-remove" data-role="remove-photo" data-photo-idx="${idx}" aria-label="\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0444\u043e\u0442\u043e"><i class="fas fa-times"></i></button>`;
+        const dragAttr = isView ? "" : ` draggable="true"`;
+        return `
+          <div class="product-photo-grid-modal-item" data-photo-idx="${idx}"${dragAttr}>
+            <div class="product-photo-grid-modal-tile">
+              <img src="${escapeHtml(String(src))}" alt="">
+              ${removeBtn}
+            </div>
+            <div class="product-photo-grid-modal-size">${escapeHtml(sizeLabel)}</div>
+          </div>
+        `;
+      }).join("");
+      const canAddMore = photos.length < 1;
+      const addTileHtml = (!isView && canAddMore) ? `<button type="button" class="product-photo-grid-modal-tile product-photo-grid-modal-tile--add" data-role="add-photo" aria-label="\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0444\u043e\u0442\u043e"><i class="fas fa-plus"></i></button>` : "";
+      grid.innerHTML = photosHtml + addTileHtml;
+    };
+
+    const onClose = () => closeComboSetPhotoModal();
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    renderGrid();
+    card.querySelector(".product-photo-grid-modal-close")?.addEventListener("click", onClose);
+    card.querySelector('[data-role="close"]')?.addEventListener("click", onClose);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) onClose(); });
+    if (!isView) {
+      let externalDragDepth = 0;
+      const hasExternalFilePayload = (dt) => {
+        if (!dt) return false;
+        const types = Array.from(dt.types || []).map((t) => String(t));
+        if (dt.files && dt.files.length > 0) return true;
+        return (
+          types.includes("Files") ||
+          types.includes("application/x-moz-file") ||
+          types.includes("public.file-url")
+        );
+      };
+      const setFileDragState = (active) => {
+        card.classList.toggle("is-file-drag-over", !!active);
+      };
+      clearFileDragState = () => {
+        externalDragDepth = 0;
+        setFileDragState(false);
+      };
+      const onFileDragEnter = (e) => {
+        if (!hasExternalFilePayload(e.dataTransfer)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        externalDragDepth += 1;
+        setFileDragState(true);
+      };
+      const onFileDragOver = (e) => {
+        if (!hasExternalFilePayload(e.dataTransfer)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+        setFileDragState(true);
+      };
+      const onFileDragLeave = (e) => {
+        if (!hasExternalFilePayload(e.dataTransfer)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        externalDragDepth = Math.max(0, externalDragDepth - 1);
+        if (!externalDragDepth) setFileDragState(false);
+      };
+      const onFileDrop = async (e) => {
+        if (!hasExternalFilePayload(e.dataTransfer)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        clearFileDragState();
+        try {
+          const files = await extractModalDropFiles(e.dataTransfer);
+          if (!files.length) return;
+          await addComboSetFilesAndUploadNow(files);
+          renderGrid();
+        } catch {}
+      };
+      overlay.addEventListener("dragenter", onFileDragEnter, true);
+      card.addEventListener("dragenter", onFileDragEnter, true);
+      overlay.addEventListener("dragover", onFileDragOver);
+      card.addEventListener("dragover", onFileDragOver);
+      overlay.addEventListener("dragleave", onFileDragLeave, true);
+      card.addEventListener("dragleave", onFileDragLeave, true);
+      overlay.addEventListener("drop", onFileDrop);
+      card.addEventListener("drop", onFileDrop);
+    }
+    if (!isView && grid) {
+      let dragPhotoIdx = -1;
+      let dragOverIdx = -1;
+      grid.addEventListener("dragstart", (e) => {
+        const item = e.target.closest?.(".product-photo-grid-modal-item[data-photo-idx]");
+        if (!item) return;
+        const idx = Number(item.getAttribute("data-photo-idx"));
+        if (!Number.isFinite(idx) || idx < 0) return;
+        dragPhotoIdx = idx;
+        item.classList.add("is-dragging");
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", String(idx));
+        }
+      });
+      grid.addEventListener("dragover", (e) => {
+        if (dragPhotoIdx < 0) {
+          const hasExternalPayload =
+            (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) ||
+            (e.dataTransfer && e.dataTransfer.types && (
+              Array.from(e.dataTransfer.types).includes("Files") ||
+              Array.from(e.dataTransfer.types).includes("text/uri-list") ||
+              Array.from(e.dataTransfer.types).includes("text/html") ||
+              Array.from(e.dataTransfer.types).includes("text/plain")
+            ));
+          if (hasExternalPayload) e.preventDefault();
+          return;
+        }
+        const item = e.target.closest?.(".product-photo-grid-modal-item[data-photo-idx]");
+        if (!item) return;
+        const idx = Number(item.getAttribute("data-photo-idx"));
+        if (!Number.isFinite(idx) || idx < 0 || idx === dragPhotoIdx) return;
+        e.preventDefault();
+        dragOverIdx = idx;
+        item.classList.add("is-drop-target");
+      });
+      grid.addEventListener("dragleave", (e) => {
+        const item = e.target.closest?.(".product-photo-grid-modal-item[data-photo-idx]");
+        if (!item) return;
+        item.classList.remove("is-drop-target");
+      });
+      grid.addEventListener("drop", async (e) => {
+        if (dragPhotoIdx < 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          clearFileDragState();
+          try {
+            const files = await extractModalDropFiles(e.dataTransfer);
+            if (!files.length) return;
+            await addComboSetFilesAndUploadNow(files);
+            renderGrid();
+          } catch {}
+          return;
+        }
+        const item = e.target.closest?.(".product-photo-grid-modal-item[data-photo-idx]");
+        if (!state.comboSetPanel) return;
+        const photos = state.comboSetPanel.photos || [];
+        let dropIdx = item ? Number(item.getAttribute("data-photo-idx")) : -1;
+        if ((!Number.isFinite(dropIdx) || dropIdx < 0) && Number.isFinite(dragOverIdx) && dragOverIdx >= 0) {
+          dropIdx = dragOverIdx;
+        }
+        if (!Number.isFinite(dropIdx) || dropIdx < 0) {
+          const target = document.elementFromPoint(e.clientX, e.clientY)?.closest?.(".product-photo-grid-modal-item[data-photo-idx]");
+          if (target) {
+            const at = Number(target.getAttribute("data-photo-idx"));
+            if (Number.isFinite(at) && at >= 0) dropIdx = at;
+          }
+        }
+        if (item) item.classList.remove("is-drop-target");
+        if (!Number.isFinite(dragPhotoIdx) || dragPhotoIdx < 0 || !Number.isFinite(dropIdx) || dropIdx < 0 || dropIdx === dragPhotoIdx) return;
+        e.preventDefault();
+        const [moved] = photos.splice(dragPhotoIdx, 1);
+        photos.splice(dropIdx, 0, moved);
+        if (state.comboSetPanel.activePhotoIdx === dragPhotoIdx) {
+          state.comboSetPanel.activePhotoIdx = dropIdx;
+        } else if (state.comboSetPanel.activePhotoIdx === dropIdx) {
+          state.comboSetPanel.activePhotoIdx = dragPhotoIdx;
+        } else if (dragPhotoIdx < state.comboSetPanel.activePhotoIdx && dropIdx >= state.comboSetPanel.activePhotoIdx) {
+          state.comboSetPanel.activePhotoIdx--;
+        } else if (dragPhotoIdx > state.comboSetPanel.activePhotoIdx && dropIdx <= state.comboSetPanel.activePhotoIdx) {
+          state.comboSetPanel.activePhotoIdx++;
+        }
+        dragPhotoIdx = -1;
+        renderComboSetPhotos();
+        renderGrid();
+      });
+      grid.addEventListener("dragend", () => {
+        dragPhotoIdx = -1;
+        dragOverIdx = -1;
+        clearFileDragState();
+        grid.querySelectorAll(".product-photo-grid-modal-item.is-dragging").forEach((el) => el.classList.remove("is-dragging"));
+        grid.querySelectorAll(".product-photo-grid-modal-item.is-drop-target").forEach((el) => el.classList.remove("is-drop-target"));
+      });
+    }
+    card.addEventListener("click", (e) => {
+      if (isView || !state.comboSetPanel) return;
+      const removeBtn = e.target.closest?.('[data-role="remove-photo"]');
+      if (removeBtn) {
+        const idx = Number(removeBtn.getAttribute("data-photo-idx"));
+        const photos = state.comboSetPanel.photos || [];
+        if (Number.isFinite(idx) && idx >= 0 && idx < photos.length) {
+          const removed = photos.splice(idx, 1);
+          if (removed[0] && removed[0].kind === "file") {
+            try { URL.revokeObjectURL(removed[0].preview); } catch {}
+          }
+          state.comboSetPanel.activePhotoIdx = photos.length ? 0 : -1;
+          renderComboSetPhotos();
+          renderGrid();
+        }
+        return;
+      }
+      if (e.target.closest?.('[data-role="add-photo"]')) {
+        modalFileInput.click();
+      }
+    });
+    if (!isView) {
+      modalFileInput.addEventListener("change", async () => {
+        if (modalFileInput.files && modalFileInput.files.length) {
+          await addComboSetFilesAndUploadNow(modalFileInput.files);
+          renderGrid();
+        }
+        modalFileInput.value = "";
+      });
+      comboSetPhotoModalPasteHandler = async (e) => {
+        const files = extractComboSetImagesFromClipboard(e.clipboardData);
+        if (!files.length) return;
+        e.preventDefault();
+        await addComboSetFilesAndUploadNow(files);
+        renderGrid();
+      };
+      document.addEventListener("paste", comboSetPhotoModalPasteHandler);
+    }
+    comboSetPhotoModalEscHandler = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", comboSetPhotoModalEscHandler);
+  }
+
   function renderComboSetPhotos() {
     const photos = state.comboSetPanel?.photos ?? [];
     const activeIdx = typeof state.comboSetPanel?.activePhotoIdx === "number" ? state.comboSetPanel.activePhotoIdx : -1;
-    const total = Math.min(photos.length, 10);
+    const total = Math.min(photos.length, 1);
     const mainEl = document.getElementById("comboSetPhotoMain");
     const placeholderEl = document.getElementById("comboSetPhotoPlaceholder");
     const prevBtn = document.getElementById("comboSetPhotoPrev");
@@ -8676,7 +9072,7 @@ const isViewMode = state.comboPanel.mode === "view";
     const thumbsEl = document.getElementById("comboSetPhotoThumbs");
     const thumbsWrapper = document.getElementById("comboSetPhotoThumbsWrapper");
     const counterEl = document.getElementById("comboSetPhotosCounter");
-    if (counterEl) counterEl.textContent = total + "/10";
+    if (counterEl) counterEl.textContent = total + "/1";
     if (!total) {
       if (mainEl) { mainEl.src = ""; mainEl.classList.add("hidden"); }
       if (placeholderEl) {
@@ -8703,9 +9099,9 @@ const isViewMode = state.comboPanel.mode === "view";
     const showNav = total > 1;
     if (prevBtn) prevBtn.classList.toggle("hidden", !showNav);
     if (nextBtn) nextBtn.classList.toggle("hidden", !showNav);
-    if (dotsEl) { dotsEl.classList.toggle("hidden", !showNav); dotsEl.innerHTML = photos.slice(0, 10).map((_, i) => `<span class="photo-dot ${i === (activeIdx >= 0 ? activeIdx : 0) ? "is-active" : ""}" data-combo-set-dot="${i}"></span>`).join(""); }
+    if (dotsEl) { dotsEl.classList.toggle("hidden", !showNav); dotsEl.innerHTML = photos.slice(0, 1).map((_, i) => `<span class="photo-dot ${i === (activeIdx >= 0 ? activeIdx : 0) ? "is-active" : ""}" data-combo-set-dot="${i}"></span>`).join(""); }
     if (thumbsEl) {
-      thumbsEl.innerHTML = photos.slice(0, 10).map((p, i) => {
+      thumbsEl.innerHTML = photos.slice(0, 1).map((p, i) => {
         const s = (p.kind === "url" ? p.url : (p.preview || "")).replace(/'/g, "\\'");
         return `<div class="img-thumb ${i === (activeIdx >= 0 ? activeIdx : 0) ? "is-active" : ""}" data-combo-set-thumb="${i}" style="background-image:url('${s}')"></div>`;
       }).join("");
@@ -15730,18 +16126,9 @@ const isViewMode = state.comboPanel.mode === "view";
         const files = Array.from(e.target.files || []);
         e.target.value = "";
         if (!files.length || !state.comboSetPanel) return;
-        const photos = state.comboSetPanel.photos || [];
-        const space = Math.max(0, 10 - photos.length);
-        const toAdd = files.slice(0, space).filter((f) => /^image\//.test(f.type || ""));
-        if (!toAdd.length) return;
-        try {
-          const uploadResult = await apiUploadImages(toAdd);
-          uploadResult.urls.forEach((url) => photos.push({ kind: "url", url }));
-          state.comboSetPanel.activePhotoIdx = photos.length - uploadResult.urls.length;
-          if (state.comboSetPanel.activePhotoIdx < 0) state.comboSetPanel.activePhotoIdx = 0;
-          renderComboSetPhotos();
-        } catch (err) {
-          if (typeof toast !== "undefined") toast("Ошибка загрузки фото");
+        await addComboSetFilesAndUploadNow(files);
+        if (document.querySelector(".product-photo-grid-modal-overlay[data-combo-photo-modal='1']")) {
+          openComboSetPhotoGridModal();
         }
       });
     }
@@ -15751,21 +16138,17 @@ const isViewMode = state.comboPanel.mode === "view";
       comboSetPhotoMainContainer.addEventListener("drop", async (e) => {
         e.preventDefault();
         e.currentTarget.classList.remove("drag-over");
-        const files = Array.from(e.dataTransfer?.files || []).filter((f) => /^image\//.test(f.type || ""));
+        const files = await extractComboSetImagesFromDataTransfer(e.dataTransfer);
         if (!files.length || !state.comboSetPanel) return;
-        const photos = state.comboSetPanel.photos || [];
-        const space = Math.max(0, 10 - photos.length);
-        const toAdd = files.slice(0, space);
-        if (!toAdd.length) return;
-        try {
-          const uploadResult = await apiUploadImages(toAdd);
-          uploadResult.urls.forEach((url) => photos.push({ kind: "url", url }));
-          state.comboSetPanel.activePhotoIdx = photos.length - uploadResult.urls.length;
-          if (state.comboSetPanel.activePhotoIdx < 0) state.comboSetPanel.activePhotoIdx = 0;
-          renderComboSetPhotos();
-        } catch (err) {
-          if (typeof toast !== "undefined") toast("Ошибка загрузки фото");
+        await addComboSetFilesAndUploadNow(files);
+        if (document.querySelector(".product-photo-grid-modal-overlay[data-combo-photo-modal='1']")) {
+          openComboSetPhotoGridModal();
         }
+      });
+      comboSetPhotoMainContainer.addEventListener("click", (e) => {
+        if (!state.comboSetPanel) return;
+        if (e.target.closest("#comboSetPhotoPrev, #comboSetPhotoNext, [data-combo-set-dot]")) return;
+        openComboSetPhotoGridModal();
       });
     }
     if (comboSetInfoPanel) {
