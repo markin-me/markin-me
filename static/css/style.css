@@ -2387,6 +2387,43 @@ body.page-orders .orders-list .order-client-phone-text{
 .settings-sound-actions{display:flex;gap:8px}
 .settings-site-form{display:grid;gap:12px}
 .settings-site-field .field-label{margin-bottom:6px;display:block}
+.settings-auth-photo-box{
+  width:120px;
+  aspect-ratio:1 / 1;
+  border:1px dashed var(--color-border);
+  border-radius:28px;
+  background:var(--color-surface-2);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:hidden;
+}
+.settings-auth-photo-img{
+  width:100%;
+  height:100%;
+  object-fit:contain;
+  border-radius:28px;
+}
+.settings-auth-photo-icon{
+  width:72px;
+  height:72px;
+  border-radius:50%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:800;
+}
+.settings-auth-photo-icon--telegram{
+  background:#2aabee;
+  color:#fff;
+  font-size:34px;
+}
+.settings-auth-photo-icon--max{
+  background:#111;
+  color:#f59a3c;
+  font-size:24px;
+  letter-spacing:0.5px;
+}
 .settings-chat-panel-actions{margin-top:4px}
 .settings-chat-questions-grid{
   display:grid;
