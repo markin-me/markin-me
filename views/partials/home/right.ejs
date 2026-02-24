@@ -371,6 +371,13 @@
       <div class="info-card settings-right-panel hidden" id="settingsTelegramAppPanel">
         <div class="settings-site-form">
           <div class="settings-site-field">
+            <label class="field-label">PHOTO TELEGRAM</label>
+            <div class="settings-auth-photo-box" id="settingsTelegramPhotoBox">
+              <img class="settings-auth-photo-img" src="/static/uploads/auth/telegram-auth.png" alt="Telegram auth icon" loading="lazy" />
+            </div>
+          </div>
+
+          <div class="settings-site-field">
             <label class="field-label">ИМЯ БОТА</label>
             <span class="field-hint">Имя вашего Telegram-бота (без @)</span>
             <div class="control-with-action">
@@ -427,6 +434,13 @@
 
       <div class="info-card settings-right-panel hidden" id="settingsMaxAppPanel">
         <div class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">PHOTO MAX</label>
+            <div class="settings-auth-photo-box" id="settingsMaxPhotoBox">
+              <img class="settings-auth-photo-img" src="/static/uploads/auth/max-auth.png" alt="MAX auth icon" loading="lazy" />
+            </div>
+          </div>
+
           <div class="settings-site-field">
             <label class="field-label">ID БОТА MAX</label>
             <span class="field-hint">Username или ID бота для deeplink (пример: @id220807718849_bot)</span>
@@ -786,6 +800,33 @@
           <div class="settings-list-subtitle">Перетащите строку, чтобы изменить порядок.</div>
         </div>
         <div class="settings-list" data-settings-list="order-time-options"></div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsSystemPollingPanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">Поллинг</div>
+          <div class="settings-list-subtitle">Управление Telegram polling на этом сервере</div>
+        </div>
+        <div class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">TELEGRAM ENV POLLING</label>
+            <span class="field-hint">Polling для TELEGRAM_BOT_TOKEN (.env)</span>
+            <label class="switch">
+              <input class="switch-input" type="checkbox" id="settingsPollingEnvEnabled" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Включено</span>
+            </label>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">TENANT TELEGRAM POLLING</label>
+            <span class="field-hint">Polling tenant-ботов из ten_tenants</span>
+            <label class="switch">
+              <input class="switch-input" type="checkbox" id="settingsPollingTenantEnabled" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Включено</span>
+            </label>
+          </div>
+        </div>
       </div>
 
       <div class="info-card hidden" id="settingsDeliveryEmpty">

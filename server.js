@@ -29,6 +29,55 @@ const { authMiddleware } = require('./api/middleware/auth');
 const app = express();
 const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '9';
 const PORT = process.env.PORT || 3000;
+const SYSTEM_SETTINGS_DIR = path.join(__dirname, 'data');
+const SYSTEM_SETTINGS_FILE = path.join(SYSTEM_SETTINGS_DIR, 'system-settings.json');
+const runtimePollingState = {
+  telegram_env_enabled: String(process.env.DISABLE_TELEGRAM_POLLING || '').trim() !== '1',
+  telegram_tenant_enabled: String(process.env.DISABLE_TG_AUTH_POLLING || '').trim() !== '1',
+};
+let telegramEnvPollingHandle = null;
+let telegramTenantPollingHandle = null;
+
+function readSystemSettings() {
+  try {
+    if (!fs.existsSync(SYSTEM_SETTINGS_FILE)) return null;
+    const raw = fs.readFileSync(SYSTEM_SETTINGS_FILE, 'utf8');
+    const parsed = JSON.parse(raw || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (e) {
+    console.error('System settings read error:', e.message || e);
+    return null;
+  }
+}
+
+function writeSystemSettings(nextState) {
+  try {
+    if (!fs.existsSync(SYSTEM_SETTINGS_DIR)) {
+      fs.mkdirSync(SYSTEM_SETTINGS_DIR, { recursive: true });
+    }
+    const payload = {
+      telegram_env_enabled: Boolean(nextState.telegram_env_enabled),
+      telegram_tenant_enabled: Boolean(nextState.telegram_tenant_enabled),
+      updated_at: new Date().toISOString(),
+    };
+    fs.writeFileSync(SYSTEM_SETTINGS_FILE, JSON.stringify(payload, null, 2), 'utf8');
+  } catch (e) {
+    console.error('System settings write error:', e.message || e);
+  }
+}
+
+function bootstrapSystemSettings() {
+  const fromFile = readSystemSettings();
+  if (!fromFile) return;
+  if (Object.prototype.hasOwnProperty.call(fromFile, 'telegram_env_enabled')) {
+    runtimePollingState.telegram_env_enabled = Boolean(fromFile.telegram_env_enabled);
+  }
+  if (Object.prototype.hasOwnProperty.call(fromFile, 'telegram_tenant_enabled')) {
+    runtimePollingState.telegram_tenant_enabled = Boolean(fromFile.telegram_tenant_enabled);
+  }
+}
+
+bootstrapSystemSettings();
 
 // Инициализация с обработкой ошибок
 let ordersEvents;
@@ -413,6 +462,94 @@ app.use((err, req, res, next) => {
   return res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
 });
 
+function startTelegramEnvPollingIfNeeded() {
+  if (!runtimePollingState.telegram_env_enabled) return;
+  if (telegramEnvPollingHandle) return;
+
+  const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+  const webhookUrl = (process.env.TELEGRAM_WEBHOOK_URL || '').trim();
+  if (!telegramToken || webhookUrl) return;
+
+  try {
+    telegramEnvPollingHandle = startTelegramPolling(db, telegramToken) || null;
+  } catch (e) {
+    console.error('Telegram bot start error:', e.message);
+  }
+}
+
+function stopTelegramEnvPollingIfRunning() {
+  if (!telegramEnvPollingHandle) return;
+  try {
+    if (typeof telegramEnvPollingHandle.stop === 'function') telegramEnvPollingHandle.stop();
+  } catch (e) {
+    console.error('Telegram bot stop error:', e.message || e);
+  } finally {
+    telegramEnvPollingHandle = null;
+  }
+}
+
+function startTenantTelegramPollingIfNeeded() {
+  if (!runtimePollingState.telegram_tenant_enabled) return;
+  if (telegramTenantPollingHandle) return;
+  try {
+    telegramTenantPollingHandle = startTenantTelegramAuthPolling(db, helpers) || null;
+  } catch (e) {
+    console.error('TG auth polling start error:', e.message || e);
+  }
+}
+
+function stopTenantTelegramPollingIfRunning() {
+  if (!telegramTenantPollingHandle) return;
+  try {
+    if (typeof telegramTenantPollingHandle.stop === 'function') telegramTenantPollingHandle.stop();
+  } catch (e) {
+    console.error('TG auth polling stop error:', e.message || e);
+  } finally {
+    telegramTenantPollingHandle = null;
+  }
+}
+
+app.get('/api/admin/system/polling', authMiddleware, (req, res) => {
+  return res.json({
+    ok: true,
+    data: {
+      telegram_env_enabled: Boolean(runtimePollingState.telegram_env_enabled),
+      telegram_tenant_enabled: Boolean(runtimePollingState.telegram_tenant_enabled),
+    },
+  });
+});
+
+app.put('/api/admin/system/polling', authMiddleware, (req, res) => {
+  const hasEnv = Object.prototype.hasOwnProperty.call(req.body || {}, 'telegram_env_enabled');
+  const hasTenant = Object.prototype.hasOwnProperty.call(req.body || {}, 'telegram_tenant_enabled');
+
+  if (!hasEnv && !hasTenant) {
+    return res.status(400).json({ ok: false, error: 'NO_FIELDS' });
+  }
+
+  if (hasEnv) {
+    runtimePollingState.telegram_env_enabled = Boolean(req.body.telegram_env_enabled);
+    if (runtimePollingState.telegram_env_enabled) startTelegramEnvPollingIfNeeded();
+    else stopTelegramEnvPollingIfRunning();
+  }
+
+  if (hasTenant) {
+    runtimePollingState.telegram_tenant_enabled = Boolean(req.body.telegram_tenant_enabled);
+    if (runtimePollingState.telegram_tenant_enabled) startTenantTelegramPollingIfNeeded();
+    else stopTenantTelegramPollingIfRunning();
+  }
+
+  writeSystemSettings(runtimePollingState);
+
+  return res.json({
+    ok: true,
+    data: {
+      telegram_env_enabled: Boolean(runtimePollingState.telegram_env_enabled),
+      telegram_tenant_enabled: Boolean(runtimePollingState.telegram_tenant_enabled),
+    },
+  });
+});
+
 // ------------------------------
 // Start
 // ------------------------------
@@ -421,14 +558,14 @@ app.listen(PORT, () => {
   console.log(`📝 Откройте http://localhost:${PORT}/login в браузере`);
   const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
   const webhookUrl = (process.env.TELEGRAM_WEBHOOK_URL || '').trim();
-  if (telegramToken) {
+  if (telegramToken && runtimePollingState.telegram_env_enabled) {
     if (webhookUrl) {
       setWebhook(telegramToken, webhookUrl)
         .then(() => console.log('📱 Telegram: webhook зарегистрирован', webhookUrl))
         .catch((e) => console.error('Telegram setWebhook error:', e.message));
     } else {
       try {
-        startTelegramPolling(db, telegramToken);
+        telegramEnvPollingHandle = startTelegramPolling(db, telegramToken) || null;
       } catch (e) {
         console.error('Telegram bot start error:', e.message);
       }
@@ -441,10 +578,12 @@ app.listen(PORT, () => {
     console.error('MAX bot start error:', e.message || e);
   }
 
-  try {
-    startTenantTelegramAuthPolling(db, helpers);
-  } catch (e) {
-    console.error('TG auth polling start error:', e.message || e);
+  if (runtimePollingState.telegram_tenant_enabled) {
+    try {
+      telegramTenantPollingHandle = startTenantTelegramAuthPolling(db, helpers) || null;
+    } catch (e) {
+      console.error('TG auth polling start error:', e.message || e);
+    }
   }
 }).on('error', (err) => {
   console.error('Ошибка запуска сервера:', err);

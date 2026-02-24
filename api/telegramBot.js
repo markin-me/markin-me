@@ -163,10 +163,13 @@ function startPolling(db, token) {
   }
 
   let offset = 0;
+  let stopped = false;
+  let timer = null;
   const apiBase = `${TELEGRAM_API}${token.trim()}`;
   const processOne = (update) => processUpdate(db, apiBase, update);
 
   async function poll() {
+    if (stopped) return;
     try {
       const url = `${apiBase}/getUpdates?offset=${offset}&timeout=25`;
       const res = await fetch(url);
@@ -179,11 +182,20 @@ function startPolling(db, token) {
     } catch (err) {
       console.error('Telegram getUpdates error:', err.message);
     }
-    setTimeout(poll, 500);
+    if (!stopped) {
+      timer = setTimeout(poll, 500);
+    }
   }
 
   console.log('📱 Telegram бот: polling запущен');
   poll();
+  return {
+    stop() {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      timer = null;
+    }
+  };
 }
 
 async function sendMessage(apiBase, chatId, text, extra = null) {

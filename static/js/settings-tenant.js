@@ -428,6 +428,7 @@
     const settingsStoresEmpty = document.getElementById("settingsStoresEmpty");
     const settingsCardsPanel = document.getElementById("settingsCardsPanel");
     const siteSectionPanel = document.getElementById("sitePanel");
+    const systemSectionPanel = document.getElementById("systemPanel");
     const storesPanel = document.getElementById("storesPanel");
     const storesList = document.getElementById("storesList");
     const storesEmpty = document.getElementById("storesEmpty");
@@ -456,7 +457,7 @@
         settingsChatWidgetSwitchWrap.classList.toggle("hidden", !isChats);
       }
       if (settingsAddOrderBtn) {
-        settingsAddOrderBtn.classList.toggle("hidden", section === "site" || isChats);
+        settingsAddOrderBtn.classList.toggle("hidden", section === "site" || section === "system" || isChats);
       }
     }
 
@@ -488,6 +489,7 @@
         const isStores = section === "stores";
         const isSite = section === "site";
         const isChats = section === "chats";
+        const isSystem = section === "system";
         if (settingsCenterTitle) {
           settingsCenterTitle.textContent = isStores
             ? "Филиалы"
@@ -500,12 +502,16 @@
         if (settingsCenterSubtitle) {
           settingsCenterSubtitle.textContent = isStores ? "Загрузка..." : "";
         }
+        if (settingsCenterTitle && isSystem) {
+          settingsCenterTitle.textContent = "\u0421\u0438\u0441\u0442\u0435\u043c\u043d\u044b\u0435";
+        }
         applySettingsCardsFilterBySection(section);
-        if (settingsTenantCards) settingsTenantCards.classList.toggle("hidden", isStores || isSite);
+        if (settingsTenantCards) settingsTenantCards.classList.toggle("hidden", isStores || isSite || isSystem);
         if (settingsStoresEmpty) settingsStoresEmpty.classList.add("hidden");
-        if (settingsCardsPanel) settingsCardsPanel.classList.toggle("hidden", isStores || isSite);
+        if (settingsCardsPanel) settingsCardsPanel.classList.toggle("hidden", isStores || isSite || isSystem);
         if (storesPanel) storesPanel.classList.toggle("hidden", !isStores);
         if (siteSectionPanel) siteSectionPanel.classList.toggle("hidden", !isSite);
+        if (systemSectionPanel) systemSectionPanel.classList.toggle("hidden", !isSystem);
         syncSettingsToolbarControls(section);
 
         if (isStores) {
@@ -548,6 +554,7 @@
     const notificationsCard = document.getElementById("settingsNotificationsCard");
     const imagesCard = document.getElementById("settingsImagesCard");
     const printApiCard = document.getElementById("settingsPrintApiCard");
+    const systemPollingCard = document.getElementById("settingsSystemPollingCard");
     const telegramAppCard = document.getElementById("settingsTelegramAppCard");
     const maxAppCard = document.getElementById("settingsMaxAppCard");
     const rightDefault = document.getElementById("settingsRightDefault");
@@ -568,6 +575,7 @@
     const chatHotQuestionsPanel = document.getElementById("settingsChatHotQuestionsPanel");
     const imagesPanel = document.getElementById("settingsImagesPanel");
     const printApiPanel = document.getElementById("settingsPrintApiPanel");
+    const systemPollingPanel = document.getElementById("settingsSystemPollingPanel");
     const settingsNotificationsPanel = document.getElementById("settingsNotificationsPanel");
     const globalTelegramBindings = document.getElementById("globalTelegramBindings");
     const globalTelegramConnectBlock = document.getElementById("globalTelegramConnectBlock");
@@ -626,6 +634,8 @@
     const settingsPrintApiCopyToken = document.getElementById("settingsPrintApiCopyToken");
     const settingsPrintApiPrinterStatus = document.getElementById("settingsPrintApiPrinterStatus");
     const settingsPrintApiPrinterName = document.getElementById("settingsPrintApiPrinterName");
+    const settingsPollingEnvEnabled = document.getElementById("settingsPollingEnvEnabled");
+    const settingsPollingTenantEnabled = document.getElementById("settingsPollingTenantEnabled");
     const settingsStoreTelegramList = document.getElementById("settingsStoreTelegramList");
     const settingsStoreTelegramApiKey = document.getElementById("settingsStoreTelegramApiKey");
     const settingsStoreTelegramSecretKey = document.getElementById("settingsStoreTelegramSecretKey");
@@ -1173,6 +1183,43 @@
       });
       return entries;
     }
+
+    async function loadSystemPollingSettings() {
+      try {
+        const res = await authFetch("/api/admin/system/polling");
+        const data = await res.json();
+        if (!data || !data.ok || !data.data) return;
+        if (settingsPollingEnvEnabled) {
+          settingsPollingEnvEnabled.checked = Boolean(data.data.telegram_env_enabled);
+        }
+        if (settingsPollingTenantEnabled) {
+          settingsPollingTenantEnabled.checked = Boolean(data.data.telegram_tenant_enabled);
+        }
+      } catch (err) {
+        console.error("Failed to load system polling settings:", err);
+      }
+    }
+
+    async function saveSystemPollingSettings(payload) {
+      try {
+        const res = await authFetch("/api/admin/system/polling", {
+          method: "PUT",
+          body: JSON.stringify(payload || {})
+        });
+        const data = await res.json();
+        if (!data || !data.ok || !data.data) return null;
+        if (settingsPollingEnvEnabled) {
+          settingsPollingEnvEnabled.checked = Boolean(data.data.telegram_env_enabled);
+        }
+        if (settingsPollingTenantEnabled) {
+          settingsPollingTenantEnabled.checked = Boolean(data.data.telegram_tenant_enabled);
+        }
+        return data.data;
+      } catch (err) {
+        console.error("Failed to save system polling settings:", err);
+        return null;
+      }
+    }
     function setActiveRightTab(tabId) {
       activeRightTabId = tabId;
       const section = document.body.getAttribute("data-settings-section");
@@ -1202,6 +1249,7 @@
       if (settingsNotificationsPanel) settingsNotificationsPanel.classList.toggle("hidden", tabId !== "notifications");
       if (imagesPanel) imagesPanel.classList.toggle("hidden", tabId !== "images");
       if (printApiPanel) printApiPanel.classList.toggle("hidden", tabId !== "print-api");
+      if (systemPollingPanel) systemPollingPanel.classList.toggle("hidden", tabId !== "system-polling");
       if (settingsDeliveryPanel) settingsDeliveryPanel.classList.toggle("hidden", tabId !== DELIVERY_TAB_ID);
       if (settingsStorePanel) settingsStorePanel.classList.toggle("hidden", !tabId.startsWith("store-"));
       if (settingsStoreEmpty) {
@@ -1221,6 +1269,9 @@
       }
       if (tabId === "print-api") {
         ensurePrintApiReady();
+      }
+      if (tabId === "system-polling") {
+        loadSystemPollingSettings();
       }
       if (tabId === "notifications") {
         loadNotificationsOverview();
@@ -1281,6 +1332,7 @@
           if (tabId === "notifications" && notificationsCard) notificationsCard.classList.remove("is-active");
           if (tabId === "images" && imagesCard) imagesCard.classList.remove("is-active");
           if (tabId === "print-api" && printApiCard) printApiCard.classList.remove("is-active");
+          if (tabId === "system-polling" && systemPollingCard) systemPollingCard.classList.remove("is-active");
           if (tabId === DELIVERY_TAB_ID) {
             deliverySettingsState.selectedId = null;
             deliverySettingsState.snapshot = null;
@@ -1332,6 +1384,7 @@
       if (tabId === "notifications" && notificationsCard) notificationsCard.classList.add("is-active");
       if (tabId === "images" && imagesCard) imagesCard.classList.add("is-active");
       if (tabId === "print-api" && printApiCard) printApiCard.classList.add("is-active");
+      if (tabId === "system-polling" && systemPollingCard) systemPollingCard.classList.add("is-active");
     }
 
     if (logoCard) {
@@ -1362,6 +1415,30 @@
     if (maxAppCard) {
       maxAppCard.addEventListener("click", () => {
         ensureTab("max-app", "Мини-приложение MAX");
+      });
+    }
+
+    if (systemPollingCard) {
+      systemPollingCard.addEventListener("click", () => {
+        ensureTab("system-polling", "\u041f\u043e\u043b\u043b\u0438\u043d\u0433");
+      });
+    }
+
+    if (settingsPollingEnvEnabled) {
+      settingsPollingEnvEnabled.addEventListener("change", async () => {
+        const prev = !settingsPollingEnvEnabled.checked;
+        const next = settingsPollingEnvEnabled.checked;
+        const saved = await saveSystemPollingSettings({ telegram_env_enabled: next });
+        if (!saved) settingsPollingEnvEnabled.checked = prev;
+      });
+    }
+
+    if (settingsPollingTenantEnabled) {
+      settingsPollingTenantEnabled.addEventListener("change", async () => {
+        const prev = !settingsPollingTenantEnabled.checked;
+        const next = settingsPollingTenantEnabled.checked;
+        const saved = await saveSystemPollingSettings({ telegram_tenant_enabled: next });
+        if (!saved) settingsPollingTenantEnabled.checked = prev;
       });
     }
 
@@ -3642,6 +3719,7 @@
       btn.addEventListener("click", () => {
         const section = btn.getAttribute("data-settings-section") || "";
         const isDelivery = section === "delivery";
+        const isSystem = section === "system";
         applySettingsCardsFilterBySection(section);
         syncSettingsToolbarControls(section);
 
@@ -3651,11 +3729,12 @@
         if (settingsCenterSubtitle && isDelivery) {
           settingsCenterSubtitle.textContent = "Загрузка...";
         }
-        if (settingsTenantCards) settingsTenantCards.classList.toggle("hidden", isDelivery || section === "stores" || section === "site");
-        if (settingsCardsPanel) settingsCardsPanel.classList.toggle("hidden", isDelivery || section === "stores" || section === "site");
+        if (settingsTenantCards) settingsTenantCards.classList.toggle("hidden", isDelivery || isSystem || section === "stores" || section === "site");
+        if (settingsCardsPanel) settingsCardsPanel.classList.toggle("hidden", isDelivery || isSystem || section === "stores" || section === "site");
         if (deliveryPanel) deliveryPanel.classList.toggle("hidden", !isDelivery);
         if (storesPanel) storesPanel.classList.toggle("hidden", section !== "stores");
         if (siteSectionPanel) siteSectionPanel.classList.toggle("hidden", section !== "site");
+        if (systemSectionPanel) systemSectionPanel.classList.toggle("hidden", !isSystem);
 
         if (isDelivery) {
           if (rightDefault) rightDefault.classList.add("hidden");

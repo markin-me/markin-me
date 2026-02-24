@@ -326,10 +326,13 @@ async function pollTenantBot(db, helpers, state, tenantBot) {
 function startTenantTelegramAuthPolling(db, helpers) {
   const offsetsByToken = new Map();
   let busy = false;
+  let stopped = false;
+  let timer = null;
 
   async function tick() {
+    if (stopped) return;
     if (busy) {
-      setTimeout(tick, 1000);
+      timer = setTimeout(tick, 1000);
       return;
     }
     busy = true;
@@ -347,11 +350,20 @@ function startTenantTelegramAuthPolling(db, helpers) {
     } finally {
       busy = false;
     }
-    setTimeout(tick, 800);
+    if (!stopped) {
+      timer = setTimeout(tick, 800);
+    }
   }
 
   console.log('TG auth polling started (tenant tokens from DB)');
   tick();
+  return {
+    stop() {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      timer = null;
+    }
+  };
 }
 
 module.exports = { startTenantTelegramAuthPolling };
