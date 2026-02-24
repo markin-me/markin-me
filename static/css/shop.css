@@ -9485,14 +9485,25 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 }
 
 .sp-media{
-  width: calc(100% - 16px);
+  width: 100%;
   aspect-ratio: 1 / 1;
   background: #fff;
   position: relative;
   overflow: hidden;
-  border-radius: 14px;
-  margin: 8px 8px 0;
+  border-radius: 0 0 14px 14px;
+  margin: 0;
   align-self: center;
+}
+
+.sp-media::after{
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.38);
+  opacity: 0;
+  transition: opacity 220ms ease-out;
+  pointer-events: none;
+  z-index: 2;
 }
 
 .sp-img{
@@ -9500,6 +9511,8 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   height: 100%;
   object-fit: contain;
   display: block;
+  position: relative;
+  z-index: 1;
 }
 
 /* РџРѕР»РЅРѕСЂР°Р·РјРµСЂРЅРѕРµ РёР·РѕР±СЂР°Р¶РµРЅРёРµ РјРѕР¶РµС‚ Р±С‹С‚СЊ РІ <picture> (WebP) вЂ” РЅРµ Р»РѕРјР°РµРј СЃРµС‚РєСѓ */
@@ -9545,8 +9558,8 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 }
 
 /* Р·Р°С‚РµРјРЅРµРЅРёРµ РїСЂРё РґРѕР±Р°РІР»РµРЅРёРё */
-.sp-media.is-dim .sp-img{
-  filter: brightness(.62);
+.sp-media.is-dim::after{
+  opacity: 1;
 }
 
 /* qty overlay */
@@ -9556,6 +9569,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   display: grid;
   place-items: center;
   pointer-events: none;
+  z-index: 3;
 }
 
 .sp-qtyOverlay.hidden{ display: none; }
@@ -9581,8 +9595,8 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   inset: 0;
   display: grid;
   place-items: center;
-  transition: transform 110ms linear;
-  will-change: transform;
+  transition: transform 320ms cubic-bezier(.16,.84,.28,1), opacity 320ms ease-out;
+  will-change: transform, opacity;
 }
 
 /* info */
