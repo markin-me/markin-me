@@ -258,6 +258,18 @@
   let emojiDatasetPromise = null;
   let emojiPopoverMode = "composer";
   let emojiPopoverReactionMessageId = "";
+
+  function shouldUseNativeMobileEmojiKeyboard() {
+    const narrowViewport = typeof window.matchMedia === "function"
+      ? window.matchMedia("(max-width: 768px)").matches
+      : window.innerWidth <= 768;
+    if (!narrowViewport) return false;
+
+    const hasTouchPoints = Number(navigator.maxTouchPoints || 0) > 0;
+    const hasCoarsePointer = typeof window.matchMedia === "function"
+      && window.matchMedia("(pointer: coarse)").matches;
+    return hasTouchPoints || hasCoarsePointer;
+  }
   let emojiAtlasPreloadStarted = false;
   let unreadEventRaf = 0;
   let messageAlertAudioCtx = null;
@@ -2861,6 +2873,7 @@
   }
 
   function preloadEmojiAtlas() {
+    if (shouldUseNativeMobileEmojiKeyboard()) return;
     if (!EMOJI_ATLAS_ENABLED || emojiAtlasPreloadStarted) return;
     emojiAtlasPreloadStarted = true;
     const img = new Image();
@@ -2899,6 +2912,7 @@
   }
 
   function createEmojiAtlasGlyph(glyphClassName, emojiValue) {
+    if (shouldUseNativeMobileEmojiKeyboard()) return null;
     const pos = getEmojiAtlasPosition(emojiValue);
     if (!pos) return null;
     const cellSize = getEmojiAtlasRenderCellSize(glyphClassName);
@@ -2927,7 +2941,10 @@
     if (!value) return;
     const cls = String(glyphClassName || "");
     const atlasGlyph = createEmojiAtlasGlyph(cls, value);
-    if (!atlasGlyph) return;
+    if (!atlasGlyph) {
+      target.appendChild(document.createTextNode(value));
+      return;
+    }
     target.appendChild(atlasGlyph);
   }
 
@@ -6207,6 +6224,11 @@
       dom.center.attachPreviewEmojiBtn.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
+        if (shouldUseNativeMobileEmojiKeyboard()) {
+          hideEmojiPopover();
+          if (dom.center.attachPreviewCaption) dom.center.attachPreviewCaption.focus();
+          return;
+        }
         toggleEmojiPopover("attach-preview");
         if (dom.center.attachPreviewCaption) dom.center.attachPreviewCaption.focus();
       });
@@ -6352,6 +6374,12 @@
         if (reaction === "__toggle_more__") {
           event.preventDefault();
           event.stopPropagation();
+          if (shouldUseNativeMobileEmojiKeyboard()) {
+            hideMessageContextMenu();
+            const nextExpanded = !dom.center.reactionBar.classList.contains("is-expanded");
+            setReactionBarExpanded(nextExpanded);
+            return;
+          }
           const targetMessageId = String(state.contextMessageId || "");
           hideMessageContextMenu();
           showEmojiPopover("composer", {
@@ -6852,6 +6880,11 @@
       dom.center.emojiBtn.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
+        if (shouldUseNativeMobileEmojiKeyboard()) {
+          hideEmojiPopover();
+          if (dom.center.input) dom.center.input.focus();
+          return;
+        }
         toggleEmojiPopover("composer");
         if (dom.center.input) dom.center.input.focus();
       });
