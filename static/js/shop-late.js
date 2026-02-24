@@ -11701,6 +11701,31 @@ function renderSheetAddressList() {
     maxLinkBtn.className = "btn btn-sm";
     maxLinkBtn.textContent = "\u041f\u0440\u0438\u0432\u044f\u0437\u0430\u0442\u044c";
 
+    let authOptionsLoaded = false;
+    let maxLoginEnabled = false;
+    let tgLoginEnabled = false;
+
+    function applyAuthSettingsVisibility() {
+      maxLinkRow.style.display = maxLoginEnabled ? "" : "none";
+      tgLinkRow.style.display = tgLoginEnabled ? "" : "none";
+      phoneVerifyRow.style.display = (maxLoginEnabled || tgLoginEnabled) ? "" : "none";
+    }
+
+    async function loadAuthSettingsVisibility() {
+      try {
+        const json = await apiJson("/api/public/auth/options");
+        const data = (json && json.data) || {};
+        maxLoginEnabled = Boolean(data.max_login_enabled);
+        tgLoginEnabled = Boolean(data.tg_login_enabled);
+      } catch {
+        maxLoginEnabled = false;
+        tgLoginEnabled = false;
+      } finally {
+        authOptionsLoaded = true;
+        applyAuthSettingsVisibility();
+      }
+    }
+
     let maxLinkBusy = false;
     let maxLinkPollTimer = null;
 
@@ -12158,9 +12183,18 @@ function renderSheetAddressList() {
         loadCustomerDiscounts().then(renderCustomerDiscounts);
       }
       if (tab === "settings") {
-        loadMaxLinkStatus();
-        loadTgLinkStatus();
-        loadPhoneVerifyStatus();
+        if (!authOptionsLoaded) {
+          loadAuthSettingsVisibility().then(() => {
+            if (maxLoginEnabled) loadMaxLinkStatus();
+            if (tgLoginEnabled) loadTgLinkStatus();
+            if (maxLoginEnabled || tgLoginEnabled) loadPhoneVerifyStatus();
+          });
+        } else {
+          applyAuthSettingsVisibility();
+          if (maxLoginEnabled) loadMaxLinkStatus();
+          if (tgLoginEnabled) loadTgLinkStatus();
+          if (maxLoginEnabled || tgLoginEnabled) loadPhoneVerifyStatus();
+        }
       }
     }
 

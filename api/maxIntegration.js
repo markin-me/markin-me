@@ -96,8 +96,8 @@ async function confirmMaxLink({ db, helpers, token, maxUserId, phone }) {
 
     const [rows] = await conn.query(
       `SELECT id, tenant_id, customer_id
-       FROM cust_customer_max_link_tokens
-       WHERE link_token=? AND used_at IS NULL AND expires_at > NOW()
+       FROM cust_customer_auth_tokens
+       WHERE token=? AND provider='max' AND purpose='link' AND used_at IS NULL AND expires_at > NOW()
        LIMIT 1
        FOR UPDATE`,
       [linkToken]
@@ -149,9 +149,9 @@ async function confirmMaxLink({ db, helpers, token, maxUserId, phone }) {
     );
 
     await conn.query(
-      `INSERT INTO cust_customer_max_links
-       (tenant_id, customer_id, max_user_id, phone, linked_at)
-       VALUES (?, ?, ?, ?, NOW())
+      `INSERT INTO cust_customer_auth_identities
+       (tenant_id, customer_id, provider, provider_user_id, phone, linked_at)
+       VALUES (?, ?, 'max', ?, ?, NOW())
        ON DUPLICATE KEY UPDATE
          customer_id=VALUES(customer_id),
          phone=VALUES(phone),
@@ -160,10 +160,11 @@ async function confirmMaxLink({ db, helpers, token, maxUserId, phone }) {
     );
 
     await conn.query(
-      `UPDATE cust_customer_max_link_tokens
-       SET used_at=NOW(), used_max_user_id=?, used_phone=?
-       WHERE id=?`,
-      [userId, normalizedPhone || null, Number(row.id)]
+      `UPDATE cust_customer_auth_tokens
+       SET used_at=NOW(), provider_user_id=?, phone=?
+       WHERE tenant_id=? AND provider='max' AND purpose='link' AND token=? AND used_at IS NULL
+       LIMIT 1`,
+      [userId, normalizedPhone || null, tenantId, linkToken]
     );
 
     await conn.commit();
