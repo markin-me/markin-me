@@ -2264,39 +2264,84 @@ body.page-orders .orders-list .order-client-phone-text{
 .settings-chat-panel-actions{margin-top:4px}
 .settings-chat-questions-grid{
   display:grid;
-  gap:8px;
+  gap:10px;
   grid-template-columns:1fr;
 }
-.settings-chat-question-pill{
+.settings-chat-question-row{
   border:1px solid var(--color-border);
   border-radius:12px;
   background:#ffffff;
-  min-height:44px;
-  padding:0 14px;
-  display:flex;
-  align-items:center;
+  padding:10px 12px;
+  display:grid;
+  gap:8px;
   transition:background var(--dur-fast) var(--ease-smooth), border-color var(--dur-fast) var(--ease-smooth), box-shadow var(--dur-fast) var(--ease-smooth);
 }
-.settings-chat-question-pill:hover{background:#f8f8f9}
-.settings-chat-question-pill:focus-within{
+.settings-chat-question-row:hover{background:#f8f8f9}
+.settings-chat-question-row:focus-within{
   border-color:var(--primary-45);
   box-shadow:0 0 0 3px var(--primary-12);
+}
+.settings-chat-question-row.is-system{
+  background:#fff9f2;
+}
+.settings-chat-question-row-head{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.settings-chat-question-row-controls{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex:0 0 auto;
 }
 .settings-chat-question-input{
   min-width:0;
   width:100%;
   border:none !important;
   background:transparent !important;
-  padding:10px 0 !important;
+  padding:0 !important;
   height:auto !important;
-  text-align:center;
-  font-size:16px;
+  text-align:left;
+  font-size:15px;
   font-weight:700;
   color:#2f3137;
+}
+.settings-chat-question-input.is-readonly{
+  pointer-events:none;
+  color:#1f2d3d;
 }
 .settings-chat-question-input:focus{
   outline:none;
   box-shadow:none !important;
+}
+.settings-chat-question-answer{
+  min-height:68px;
+  resize:vertical;
+}
+.settings-chat-question-switch{
+  gap:0;
+}
+.settings-chat-question-switch .switch-text{
+  display:none;
+}
+.settings-chat-question-delete-btn{
+  width:30px;
+  height:30px;
+  border:1px solid var(--color-border);
+  border-radius:10px;
+  background:#fff;
+  color:#7f8a99;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  transition:color var(--dur-fast) var(--ease-smooth), border-color var(--dur-fast) var(--ease-smooth), background var(--dur-fast) var(--ease-smooth);
+}
+.settings-chat-question-delete-btn:hover{
+  color:#e24a4a;
+  border-color:#f1b9b9;
+  background:#fff5f5;
 }
 .settings-chat-question-add-wrap{
   display:flex;

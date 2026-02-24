@@ -165,30 +165,52 @@
   let emojiPopoverMode = "composer";
   let emojiPopoverReactionMessageId = "";
 
-  const DEFAULT_CHAT_QUICK_QUESTIONS = [
-    "\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?",
-    "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430",
-    "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430",
-    "\u0414\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+  const CHAT_QUICK_ORDER_ID = "order";
+  const CHAT_QUICK_ORDER_QUESTION = "\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?";
+  const DEFAULT_CHAT_QUICK_QUESTION_ITEMS = [
+    {
+      id: CHAT_QUICK_ORDER_ID,
+      type: "order",
+      question: CHAT_QUICK_ORDER_QUESTION,
+      answer: "",
+      enabled: true,
+    },
+    {
+      id: "quality",
+      type: "custom",
+      question: "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430",
+      answer:
+        "\u041e\u0447\u0435\u043d\u044c \u0436\u0430\u043b\u044c, \u0447\u0442\u043e \u0442\u0430\u043a \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u043e\u0441\u044c. " +
+        "\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, " +
+        "\u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a.",
+      enabled: true,
+    },
+    {
+      id: "completeness",
+      type: "custom",
+      question: "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430",
+      answer:
+        "\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, " +
+        "\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c.",
+      enabled: true,
+    },
+    {
+      id: "other",
+      type: "custom",
+      question: "\u0414\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+      answer:
+        "\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. \u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435.",
+      enabled: true,
+    },
   ];
+  const DEFAULT_CHAT_QUICK_QUESTIONS = DEFAULT_CHAT_QUICK_QUESTION_ITEMS
+    .filter(function (item) { return item && item.enabled !== false; })
+    .map(function (item) { return String(item.question || ""); });
   const CHAT_QUICK_QUESTIONS_MAX = 6;
   const CHAT_SETTINGS_API_URL = "/api/public/tenant/chat-settings";
   const CHAT_ASSISTANT_GENDER_MALE = "m";
   const CHAT_ASSISTANT_GENDER_FEMALE = "f";
   const DEFAULT_CHAT_ASSISTANT_GENDER = CHAT_ASSISTANT_GENDER_MALE;
-
-  const QUICK_REPLIES = {
-    "\u0433\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?":
-      "\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u044e \u0441\u0442\u0430\u0442\u0443\u0441 \u0437\u0430\u043a\u0430\u0437\u0430. \u0415\u0441\u043b\u0438 \u043a\u0443\u0440\u044c\u0435\u0440 \u0437\u0430\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f \u0438\u0437-\u0437\u0430 \u043f\u043e\u0433\u043e\u0434\u044b, \u043c\u044b \u043e\u0431\u044f\u0437\u0430\u0442\u0435\u043b\u044c\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u0438\u043c \u0432\u0440\u0435\u043c\u044f \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438.",
-    "\u0433\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437":
-      "\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u044e \u0441\u0442\u0430\u0442\u0443\u0441 \u0437\u0430\u043a\u0430\u0437\u0430. \u0415\u0441\u043b\u0438 \u043a\u0443\u0440\u044c\u0435\u0440 \u0437\u0430\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f \u0438\u0437-\u0437\u0430 \u043f\u043e\u0433\u043e\u0434\u044b, \u043c\u044b \u043e\u0431\u044f\u0437\u0430\u0442\u0435\u043b\u044c\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u0438\u043c \u0432\u0440\u0435\u043c\u044f \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438.",
-    "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430":
-      "\u0418\u0437\u0432\u0438\u043d\u0438\u0442\u0435 \u0437\u0430 \u0441\u0438\u0442\u0443\u0430\u0446\u0438\u044e. \u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a, \u0438 \u044f \u043f\u0435\u0440\u0435\u0434\u0430\u043c \u043e\u0431\u0440\u0430\u0449\u0435\u043d\u0438\u0435 \u0432 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u043a\u0443.",
-    "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430":
-      "\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, \u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c, \u0447\u0442\u043e\u0431\u044b \u043c\u044b \u0431\u044b\u0441\u0442\u0440\u043e \u0432\u0441\u0435 \u0438\u0441\u043f\u0440\u0430\u0432\u0438\u043b\u0438.",
-    "\u0434\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441":
-      "\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. \u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441, \u0438 \u044f \u043f\u043e\u0441\u0442\u0430\u0440\u0430\u044e\u0441\u044c \u043f\u043e\u043c\u043e\u0447\u044c \u0438\u043b\u0438 \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0443 \u043d\u0430 \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440\u0430.",
-  };
   const HOT_QUESTION_ORDER_KEY = "\u0433\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437";
   const HOT_QUESTION_ORDER_KEY_ALT = "\u0433\u0434\u0435 \u0437\u0430\u043a\u0430\u0437";
   const HOT_QUESTION_QUALITY_KEY =
@@ -256,6 +278,15 @@
     welcomeMessage: DEFAULT_CHAT_WELCOME_MESSAGE,
     optionsText: DEFAULT_CHAT_OPTIONS_TEXT,
     quickQuestions: DEFAULT_CHAT_QUICK_QUESTIONS.slice(),
+    quickQuestionsConfig: DEFAULT_CHAT_QUICK_QUESTION_ITEMS.map(function (item) {
+      return {
+        id: String(item.id || ""),
+        type: item.id === CHAT_QUICK_ORDER_ID ? "order" : "custom",
+        question: String(item.question || ""),
+        answer: String(item.answer || ""),
+        enabled: item.enabled !== false,
+      };
+    }),
     operatorName: "",
     isEnabled: true,
   };
@@ -1465,24 +1496,193 @@
     }
   }
 
-  function normalizeChatQuickQuestionsList(rawValue) {
+  function cloneDefaultChatQuickQuestionItems() {
+    return DEFAULT_CHAT_QUICK_QUESTION_ITEMS.map(function (item) {
+      return {
+        id: String(item.id || ""),
+        type: item.id === CHAT_QUICK_ORDER_ID ? "order" : "custom",
+        question: String(item.question || ""),
+        answer: String(item.answer || ""),
+        enabled: item.enabled !== false,
+      };
+    });
+  }
+
+  function normalizeChatQuickQuestionText(value) {
+    return String(value === undefined || value === null ? "" : value)
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 160);
+  }
+
+  function normalizeChatQuickQuestionAnswer(value) {
+    return String(value === undefined || value === null ? "" : value)
+      .replace(/\s+\n/g, "\n")
+      .trim()
+      .slice(0, 1200);
+  }
+
+  function normalizeChatQuickQuestionEnabled(value, fallback) {
+    if (value === undefined || value === null || value === "") return fallback !== false;
+    if (typeof value === "boolean") return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (!normalized) return fallback !== false;
+    if (normalized === "1" || normalized === "true" || normalized === "on" || normalized === "yes") return true;
+    if (normalized === "0" || normalized === "false" || normalized === "off" || normalized === "no") return false;
+    const numeric = Number(normalized);
+    if (Number.isFinite(numeric)) return numeric !== 0;
+    return fallback !== false;
+  }
+
+  function normalizeChatQuickQuestionId(value, index) {
+    const source = String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/-{2,}/g, "-")
+      .replace(/^[-_]+|[-_]+$/g, "")
+      .slice(0, 48);
+    if (source && source !== CHAT_QUICK_ORDER_ID) return source;
+    return "custom-" + String(index + 1);
+  }
+
+  function isOrderQuickQuestionLike(value) {
+    const normalized = normalizeHotQuestionKey(value);
+    if (!normalized) return false;
+    return normalized.includes(HOT_QUESTION_ORDER_KEY) || normalized.includes(HOT_QUESTION_ORDER_KEY_ALT);
+  }
+
+  function getDefaultQuickQuestionAnswerByText(value) {
+    const key = normalizeHotQuestionKey(value);
+    if (key === HOT_QUESTION_QUALITY_KEY) return HOT_QUESTION_QUALITY_REPLY;
+    if (key === HOT_QUESTION_COMPLETENESS_KEY) return HOT_QUESTION_COMPLETENESS_REPLY;
+    if (key === HOT_QUESTION_OTHER_KEY) return HOT_QUESTION_OTHER_REPLY;
+    return "";
+  }
+
+  function normalizeChatQuickQuestionConfigList(rawValue) {
     let parsed = [];
     if (Array.isArray(rawValue)) {
       parsed = rawValue;
     } else if (typeof rawValue === "string") {
-      try {
-        const next = JSON.parse(rawValue);
-        if (Array.isArray(next)) parsed = next;
-      } catch {
+      const trimmed = rawValue.trim();
+      if (!trimmed) {
         parsed = [];
+      } else {
+        try {
+          const next = JSON.parse(trimmed);
+          parsed = Array.isArray(next) ? next : [];
+        } catch {
+          parsed = [];
+        }
       }
+    } else if (rawValue && typeof rawValue === "object" && Array.isArray(rawValue.items)) {
+      parsed = rawValue.items;
     }
 
-    const normalized = parsed
-      .map(function (item) { return String(item ?? "").trim(); })
+    if (!parsed.length) return cloneDefaultChatQuickQuestionItems();
+
+    const maxCustomItems = Math.max(0, CHAT_QUICK_QUESTIONS_MAX - 1);
+    const customCandidates = [];
+    let orderEnabled = true;
+    let orderDefined = false;
+
+    parsed.forEach(function (item, index) {
+      if (customCandidates.length >= maxCustomItems) return;
+
+      if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
+        const question = normalizeChatQuickQuestionText(item);
+        if (!question) return;
+        if (index === 0 && isOrderQuickQuestionLike(question)) {
+          orderDefined = true;
+          orderEnabled = true;
+          return;
+        }
+        customCandidates.push({
+          id: "",
+          question: question,
+          answer: getDefaultQuickQuestionAnswerByText(question),
+          enabled: true,
+        });
+        return;
+      }
+
+      if (!item || typeof item !== "object") return;
+      const source = item;
+      const question = normalizeChatQuickQuestionText(
+        source.question ?? source.label ?? source.title ?? source.text ?? ""
+      );
+      const rawId = String(source.id ?? source.key ?? source.code ?? "").trim();
+      const rawType = String(source.type ?? "").trim().toLowerCase();
+      const isOrder = (
+        rawId === CHAT_QUICK_ORDER_ID
+        || rawType === CHAT_QUICK_ORDER_ID
+        || normalizeChatQuickQuestionEnabled(source.is_order, false)
+        || (index === 0 && isOrderQuickQuestionLike(question))
+      );
+
+      if (isOrder) {
+        orderDefined = true;
+        orderEnabled = normalizeChatQuickQuestionEnabled(
+          source.enabled ?? source.is_enabled ?? source.active,
+          true
+        );
+        return;
+      }
+
+      if (!question) return;
+      let answer = normalizeChatQuickQuestionAnswer(
+        source.answer ?? source.reply ?? source.response ?? source.message ?? ""
+      );
+      if (!answer) answer = getDefaultQuickQuestionAnswerByText(question);
+      customCandidates.push({
+        id: rawId,
+        question: question,
+        answer: answer,
+        enabled: normalizeChatQuickQuestionEnabled(
+          source.enabled ?? source.is_enabled ?? source.active,
+          true
+        ),
+      });
+    });
+
+    const usedIds = new Set([CHAT_QUICK_ORDER_ID]);
+    const customItems = [];
+    customCandidates.slice(0, maxCustomItems).forEach(function (item, index) {
+      let id = normalizeChatQuickQuestionId(item.id, index);
+      if (usedIds.has(id)) {
+        let seq = index + 1;
+        while (usedIds.has("custom-" + String(seq))) seq += 1;
+        id = "custom-" + String(seq);
+      }
+      usedIds.add(id);
+      customItems.push({
+        id: id,
+        type: "custom",
+        question: normalizeChatQuickQuestionText(item.question),
+        answer: normalizeChatQuickQuestionAnswer(item.answer),
+        enabled: item.enabled !== false,
+      });
+    });
+
+    return [
+      {
+        id: CHAT_QUICK_ORDER_ID,
+        type: "order",
+        question: CHAT_QUICK_ORDER_QUESTION,
+        answer: "",
+        enabled: orderDefined ? orderEnabled !== false : true,
+      },
+      ...customItems,
+    ];
+  }
+
+  function buildEnabledQuickQuestions(configList) {
+    return (Array.isArray(configList) ? configList : [])
+      .filter(function (item) { return item && item.enabled !== false; })
+      .map(function (item) { return normalizeChatQuickQuestionText(item.question); })
       .filter(Boolean)
       .slice(0, CHAT_QUICK_QUESTIONS_MAX);
-    return normalized.length ? normalized : DEFAULT_CHAT_QUICK_QUESTIONS.slice();
   }
 
   function applyAliasSet(setRef, values) {
@@ -1495,9 +1695,23 @@
   }
 
   function rebuildHotQuestionAliases() {
-    const quick = Array.isArray(chatRuntimeSettings.quickQuestions)
-      ? chatRuntimeSettings.quickQuestions
-      : DEFAULT_CHAT_QUICK_QUESTIONS;
+    const quickConfig = Array.isArray(chatRuntimeSettings.quickQuestionsConfig)
+      ? chatRuntimeSettings.quickQuestionsConfig
+      : cloneDefaultChatQuickQuestionItems();
+    const orderItem = quickConfig.find(function (item) {
+      if (!item || item.enabled === false) return false;
+      const id = String(item.id || "").toLowerCase();
+      const type = String(item.type || "").toLowerCase();
+      return id === CHAT_QUICK_ORDER_ID || type === "order";
+    });
+    const enabledCustom = quickConfig
+      .filter(function (item) {
+        if (!item || item.enabled === false) return false;
+        const id = String(item.id || "").toLowerCase();
+        const type = String(item.type || "").toLowerCase();
+        return !(id === CHAT_QUICK_ORDER_ID || type === "order");
+      })
+      .slice(0, 3);
     const orderAliases = [HOT_QUESTION_ORDER_KEY, HOT_QUESTION_ORDER_KEY_ALT];
     const qualityAliases = [HOT_QUESTION_QUALITY_KEY];
     const completenessAliases = [HOT_QUESTION_COMPLETENESS_KEY];
@@ -1509,10 +1723,11 @@
       target.push(normalized);
     };
 
-    addNormalizedAlias(orderAliases, quick[0]);
-    addNormalizedAlias(qualityAliases, quick[1]);
-    addNormalizedAlias(completenessAliases, quick[2]);
-    addNormalizedAlias(otherAliases, quick[3]);
+    addNormalizedAlias(orderAliases, CHAT_QUICK_ORDER_QUESTION);
+    if (orderItem) addNormalizedAlias(orderAliases, orderItem.question);
+    addNormalizedAlias(qualityAliases, enabledCustom[0] && enabledCustom[0].question);
+    addNormalizedAlias(completenessAliases, enabledCustom[1] && enabledCustom[1].question);
+    addNormalizedAlias(otherAliases, enabledCustom[2] && enabledCustom[2].question);
 
     applyAliasSet(hotQuestionAliases.order, orderAliases);
     applyAliasSet(hotQuestionAliases.quality, qualityAliases);
@@ -1571,15 +1786,19 @@
       ?? source.name
       ?? ""
     ).trim();
-    const quickQuestions = normalizeChatQuickQuestionsList(
-      source.quick_questions ?? source.chat_quick_questions_json
+    const quickQuestionsConfig = normalizeChatQuickQuestionConfigList(
+      source.quick_questions_config
+      ?? source.quick_questions
+      ?? source.chat_quick_questions_json
     );
+    const quickQuestions = buildEnabledQuickQuestions(quickQuestionsConfig);
     return {
       assistantName: assistantName,
       assistantGender: assistantGender,
       welcomeMessage: welcomeMessage,
       optionsText: DEFAULT_CHAT_OPTIONS_TEXT,
       quickQuestions: quickQuestions,
+      quickQuestionsConfig: quickQuestionsConfig,
       operatorName: operatorName,
       isEnabled: isEnabled,
     };
@@ -1645,6 +1864,7 @@
       String(chatRuntimeSettings.optionsText || ""),
       String(chatRuntimeSettings.operatorName || ""),
       JSON.stringify(chatRuntimeSettings.quickQuestions || []),
+      JSON.stringify(chatRuntimeSettings.quickQuestionsConfig || []),
       String(chatRuntimeSettings.isEnabled !== false ? "1" : "0"),
     ].join("|");
 
@@ -1654,6 +1874,9 @@
     chatRuntimeSettings.welcomeMessage = next.welcomeMessage;
     chatRuntimeSettings.optionsText = next.optionsText;
     chatRuntimeSettings.quickQuestions = next.quickQuestions.slice();
+    chatRuntimeSettings.quickQuestionsConfig = Array.isArray(next.quickQuestionsConfig)
+      ? next.quickQuestionsConfig.slice()
+      : cloneDefaultChatQuickQuestionItems();
     chatRuntimeSettings.operatorName = next.operatorName;
     chatRuntimeSettings.isEnabled = next.isEnabled !== false;
     rebuildHotQuestionAliases();
@@ -1666,6 +1889,7 @@
       String(chatRuntimeSettings.optionsText || ""),
       String(chatRuntimeSettings.operatorName || ""),
       JSON.stringify(chatRuntimeSettings.quickQuestions || []),
+      JSON.stringify(chatRuntimeSettings.quickQuestionsConfig || []),
       String(chatRuntimeSettings.isEnabled !== false ? "1" : "0"),
     ].join("|");
     if (opts.refreshUi === true && prevStateKey !== nextStateKey) {
@@ -1683,6 +1907,7 @@
       chat_welcome_message: tenant.chat_welcome_message,
       chat_operator_name: tenant.chat_operator_name,
       chat_quick_questions_json: tenant.chat_quick_questions_json,
+      quick_questions_config: tenant.quick_questions_config,
       chat_widget_enabled: tenant.chat_widget_enabled,
       site_name: tenant.site_name,
       name: tenant.name,
@@ -7025,6 +7250,36 @@
     return assistantHandoffPendingByClient.get(id) === true;
   }
 
+  function findMatchedCustomQuickQuestionConfig(normalizedText) {
+    const key = String(normalizedText || "");
+    if (!key) return null;
+    const configList = Array.isArray(chatRuntimeSettings.quickQuestionsConfig)
+      ? chatRuntimeSettings.quickQuestionsConfig
+      : [];
+    for (let idx = 0; idx < configList.length; idx += 1) {
+      const item = configList[idx];
+      if (!item || item.enabled === false) continue;
+      const id = String(item.id || "").toLowerCase();
+      const type = String(item.type || "").toLowerCase();
+      if (id === CHAT_QUICK_ORDER_ID || type === "order") continue;
+      const questionKey = normalizeHotQuestionKey(item.question);
+      if (!questionKey) continue;
+      if (key === questionKey || key.includes(questionKey)) return item;
+    }
+    return null;
+  }
+
+  function resolveConfiguredQuickQuestionReply(normalizedText) {
+    const matched = findMatchedCustomQuickQuestionConfig(normalizedText);
+    if (!matched) return null;
+    const answer = normalizeChatQuickQuestionAnswer(matched.answer || "");
+    return {
+      id: String(matched.id || ""),
+      text: answer || HOT_QUESTION_GENERIC_DETAILS_REPLY,
+      handoff: true,
+    };
+  }
+
   function resolveAssistantDetailsReply(normalizedText) {
     const key = String(normalizedText || "");
     if (!key) return "";
@@ -7078,6 +7333,17 @@
           })
           .catch(function () {});
       }, 420);
+      return;
+    }
+
+    const quickReply = resolveConfiguredQuickQuestionReply(normalized);
+    if (quickReply && quickReply.text) {
+      const suffixSource = String(quickReply.id || "custom");
+      const suffixSafe = suffixSource.replace(/[^\w-]+/g, "").slice(0, 32) || "custom";
+      window.setTimeout(function () {
+        pushAssistantAutoReply(activeClientId, quickReply.text, "quick-" + suffixSafe);
+      }, 360);
+      setAssistantHandoffPending(activeClientId, quickReply.handoff === true);
       return;
     }
 

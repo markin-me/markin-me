@@ -677,13 +677,44 @@
       "\u0441\u0442\u0430\u043b\u043a\u0438\u0432\u0430\u0435\u043c\u0441\u044f \u0441\u043e \u0441\u043b\u043e\u0436\u043d\u043e\u0441\u0442\u044f\u043c\u0438 \u0438\u0437-\u0437\u0430 " +
       "\u043f\u043e\u0433\u043e\u0434\u043d\u044b\u0445 \u0443\u0441\u043b\u043e\u0432\u0438\u0439: \u043c\u043e\u0436\u0435\u043c \u0432\u0435\u0437\u0442\u0438 \u043f\u043e\u043a\u0443\u043f\u043a\u0443 " +
       "\u0447\u0443\u0442\u044c \u0434\u043e\u043b\u044c\u0448\u0435.";
-    const DEFAULT_CHAT_QUICK_QUESTIONS = [
-      "\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?",
-      "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430",
-      "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430",
-      "\u0414\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441"
+    const CHAT_QUICK_ORDER_ID = "order";
+    const CHAT_QUICK_ORDER_QUESTION = "\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?";
+    const DEFAULT_CHAT_QUICK_QUESTION_ITEMS = [
+      {
+        id: CHAT_QUICK_ORDER_ID,
+        type: "order",
+        question: CHAT_QUICK_ORDER_QUESTION,
+        answer: "",
+        enabled: true,
+      },
+      {
+        id: "quality",
+        type: "custom",
+        question: "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430",
+        answer:
+          "\u041e\u0447\u0435\u043d\u044c \u0436\u0430\u043b\u044c, \u0447\u0442\u043e \u0442\u0430\u043a \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u043e\u0441\u044c. " +
+          "\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, " +
+          "\u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a.",
+        enabled: true,
+      },
+      {
+        id: "completeness",
+        type: "custom",
+        question: "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430",
+        answer:
+          "\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, " +
+          "\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c.",
+        enabled: true,
+      },
+      {
+        id: "other",
+        type: "custom",
+        question: "\u0414\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+        answer:
+          "\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. \u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435.",
+        enabled: true,
+      },
     ];
-    const CHAT_QUICK_QUESTIONS_MIN = DEFAULT_CHAT_QUICK_QUESTIONS.length;
     const CHAT_QUICK_QUESTIONS_MAX = 6;
     const CHAT_ASSISTANT_GENDER_STORAGE_KEY = "settings_chat_assistant_gender";
 
@@ -760,105 +791,408 @@
       }
     }
 
-    function parseChatQuickQuestions(rawValue) {
-      const fallback = DEFAULT_CHAT_QUICK_QUESTIONS.slice();
-      if (!rawValue) return fallback;
+    function cloneDefaultChatQuickQuestionItems() {
+      return DEFAULT_CHAT_QUICK_QUESTION_ITEMS.map((item) => ({
+        id: String(item.id || ""),
+        type: item.id === CHAT_QUICK_ORDER_ID ? "order" : "custom",
+        question: String(item.question || ""),
+        answer: item.id === CHAT_QUICK_ORDER_ID ? "" : String(item.answer || ""),
+        enabled: item.enabled !== false,
+      }));
+    }
+
+    function normalizeChatQuickQuestionKey(value) {
+      return String(value || "")
+        .toLowerCase()
+        .replace(/\u0451/g, "\u0435")
+        .replace(/[!?.,;:()[\]{}"'`~]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function normalizeChatQuickQuestionText(value) {
+      return String(value === undefined || value === null ? "" : value)
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 160);
+    }
+
+    function normalizeChatQuickQuestionAnswer(value) {
+      return String(value === undefined || value === null ? "" : value)
+        .replace(/\s+\n/g, "\n")
+        .trim()
+        .slice(0, 1200);
+    }
+
+    function normalizeChatQuickQuestionEnabled(value, fallback) {
+      if (value === undefined || value === null || value === "") return fallback !== false;
+      if (typeof value === "boolean") return value;
+      const normalized = String(value).trim().toLowerCase();
+      if (!normalized) return fallback !== false;
+      if (normalized === "1" || normalized === "true" || normalized === "on" || normalized === "yes") return true;
+      if (normalized === "0" || normalized === "false" || normalized === "off" || normalized === "no") return false;
+      const numeric = Number(normalized);
+      if (Number.isFinite(numeric)) return numeric !== 0;
+      return fallback !== false;
+    }
+
+    function normalizeChatQuickQuestionId(value, index) {
+      const source = String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-")
+        .replace(/-{2,}/g, "-")
+        .replace(/^[-_]+|[-_]+$/g, "")
+        .slice(0, 48);
+      if (source && source !== CHAT_QUICK_ORDER_ID) return source;
+      return `custom-${index + 1}`;
+    }
+
+    function isOrderQuickQuestionLike(value) {
+      const normalized = normalizeChatQuickQuestionKey(value);
+      if (!normalized) return false;
+      return normalized.includes("\u0433\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437")
+        || normalized.includes("\u0433\u0434\u0435 \u0437\u0430\u043a\u0430\u0437");
+    }
+
+    function getDefaultQuickQuestionAnswer(value) {
+      const key = normalizeChatQuickQuestionKey(value);
+      if (key === "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430") {
+        return (
+          "\u041e\u0447\u0435\u043d\u044c \u0436\u0430\u043b\u044c, \u0447\u0442\u043e \u0442\u0430\u043a \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u043e\u0441\u044c. " +
+          "\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, " +
+          "\u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a."
+        );
+      }
+      if (key === "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430") {
+        return (
+          "\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, " +
+          "\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c."
+        );
+      }
+      if (key === "\u0434\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441") {
+        return (
+          "\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. " +
+          "\u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435."
+        );
+      }
+      return "";
+    }
+
+    function normalizeChatQuickQuestionItems(rawValue, options = {}) {
+      const opts = options && typeof options === "object" ? options : {};
+      const fallbackToDefault = opts.fallbackToDefault !== false;
 
       let parsed = [];
       if (Array.isArray(rawValue)) {
         parsed = rawValue;
       } else if (typeof rawValue === "string") {
-        try {
-          const next = JSON.parse(rawValue);
-          if (Array.isArray(next)) {
-            parsed = next;
-          }
-        } catch (err) {
+        const trimmed = rawValue.trim();
+        if (!trimmed) {
           parsed = [];
+        } else {
+          try {
+            const next = JSON.parse(trimmed);
+            parsed = Array.isArray(next) ? next : [];
+          } catch {
+            parsed = [];
+          }
         }
+      } else if (rawValue && typeof rawValue === "object" && Array.isArray(rawValue.items)) {
+        parsed = rawValue.items;
       }
 
-      const normalized = parsed
-        .map((item) => String(item ?? "").trim())
-        .filter(Boolean)
-        .slice(0, CHAT_QUICK_QUESTIONS_MAX);
-      return normalized.length ? normalized : fallback;
+      if (!parsed.length && fallbackToDefault) {
+        return cloneDefaultChatQuickQuestionItems();
+      }
+
+      const maxCustomItems = Math.max(0, CHAT_QUICK_QUESTIONS_MAX - 1);
+      const customCandidates = [];
+      let orderEnabled = true;
+      let orderDefined = false;
+
+      parsed.forEach((item, index) => {
+        if (customCandidates.length >= maxCustomItems) return;
+
+        if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
+          const question = normalizeChatQuickQuestionText(item);
+          if (!question) return;
+          if (index === 0 && isOrderQuickQuestionLike(question)) {
+            orderDefined = true;
+            orderEnabled = true;
+            return;
+          }
+          customCandidates.push({
+            id: "",
+            question,
+            answer: getDefaultQuickQuestionAnswer(question),
+            enabled: true,
+          });
+          return;
+        }
+
+        if (!item || typeof item !== "object") return;
+        const source = item;
+        const question = normalizeChatQuickQuestionText(
+          source.question ?? source.label ?? source.title ?? source.text ?? ""
+        );
+        const rawId = String(source.id ?? source.key ?? source.code ?? "").trim();
+        const rawType = String(source.type ?? "").trim().toLowerCase();
+        const isOrder = (
+          rawId === CHAT_QUICK_ORDER_ID
+          || rawType === CHAT_QUICK_ORDER_ID
+          || normalizeChatQuickQuestionEnabled(source.is_order, false)
+          || (index === 0 && isOrderQuickQuestionLike(question))
+        );
+        if (isOrder) {
+          orderDefined = true;
+          orderEnabled = normalizeChatQuickQuestionEnabled(
+            source.enabled ?? source.is_enabled ?? source.active,
+            true
+          );
+          return;
+        }
+        if (!question) return;
+        let answer = normalizeChatQuickQuestionAnswer(
+          source.answer ?? source.reply ?? source.response ?? source.message ?? ""
+        );
+        if (!answer) answer = getDefaultQuickQuestionAnswer(question);
+        customCandidates.push({
+          id: rawId,
+          question,
+          answer,
+          enabled: normalizeChatQuickQuestionEnabled(
+            source.enabled ?? source.is_enabled ?? source.active,
+            true
+          ),
+        });
+      });
+
+      const usedIds = new Set([CHAT_QUICK_ORDER_ID]);
+      const customItems = [];
+      customCandidates.slice(0, maxCustomItems).forEach((item, index) => {
+        let id = normalizeChatQuickQuestionId(item.id, index);
+        if (usedIds.has(id)) {
+          let seq = index + 1;
+          while (usedIds.has(`custom-${seq}`)) seq += 1;
+          id = `custom-${seq}`;
+        }
+        usedIds.add(id);
+        customItems.push({
+          id,
+          type: "custom",
+          question: normalizeChatQuickQuestionText(item.question),
+          answer: normalizeChatQuickQuestionAnswer(item.answer),
+          enabled: item.enabled !== false,
+        });
+      });
+
+      return [
+        {
+          id: CHAT_QUICK_ORDER_ID,
+          type: "order",
+          question: CHAT_QUICK_ORDER_QUESTION,
+          answer: "",
+          enabled: orderDefined ? orderEnabled !== false : true,
+        },
+        ...customItems,
+      ];
     }
 
-    function getSettingsChatQuickQuestionInputs() {
+    function isSameChatQuickQuestionItems(a, b) {
+      const left = Array.isArray(a) ? a : [];
+      const right = Array.isArray(b) ? b : [];
+      if (left.length !== right.length) return false;
+      for (let idx = 0; idx < left.length; idx += 1) {
+        const l = left[idx] || {};
+        const r = right[idx] || {};
+        if (String(l.id || "") !== String(r.id || "")) return false;
+        if (String(l.type || "") !== String(r.type || "")) return false;
+        if (normalizeChatQuickQuestionText(l.question) !== normalizeChatQuickQuestionText(r.question)) return false;
+        if (normalizeChatQuickQuestionAnswer(l.answer) !== normalizeChatQuickQuestionAnswer(r.answer)) return false;
+        if ((l.enabled !== false) !== (r.enabled !== false)) return false;
+      }
+      return true;
+    }
+
+    function serializeChatQuickQuestionItems(items) {
+      return JSON.stringify(
+        (Array.isArray(items) ? items : []).map((item) => ({
+          id: String(item && item.id ? item.id : ""),
+          type: String(item && item.type ? item.type : "custom"),
+          question: normalizeChatQuickQuestionText(item && item.question ? item.question : ""),
+          answer: normalizeChatQuickQuestionAnswer(item && item.answer ? item.answer : ""),
+          enabled: item && item.enabled !== false,
+        }))
+      );
+    }
+
+    function getSettingsChatQuickQuestionRows() {
       if (!settingsChatHotQuestionsGrid) return [];
-      return Array.from(settingsChatHotQuestionsGrid.querySelectorAll("[data-chat-quick-input]"));
-    }
-
-    function getChatQuickQuestionPlaceholder(index) {
-      if (index >= 0 && index < DEFAULT_CHAT_QUICK_QUESTIONS.length) {
-        return DEFAULT_CHAT_QUICK_QUESTIONS[index];
-      }
-      return `\u0412\u043e\u043f\u0440\u043e\u0441 ${index + 1}`;
+      return Array.from(settingsChatHotQuestionsGrid.querySelectorAll("[data-chat-quick-row]"));
     }
 
     function updateChatQuickQuestionControlsState() {
       if (!settingsChatQuickQuestionsAddBtn) return;
-      const inputs = getSettingsChatQuickQuestionInputs();
-      settingsChatQuickQuestionsAddBtn.disabled = inputs.length >= CHAT_QUICK_QUESTIONS_MAX;
+      const rows = getSettingsChatQuickQuestionRows();
+      settingsChatQuickQuestionsAddBtn.disabled = rows.length >= CHAT_QUICK_QUESTIONS_MAX;
     }
 
-    function reindexChatQuickQuestionInputs() {
-      const inputs = getSettingsChatQuickQuestionInputs();
-      inputs.forEach((input, index) => {
-        input.setAttribute("data-chat-quick-input", String(index));
-        input.placeholder = getChatQuickQuestionPlaceholder(index);
+    function createChatQuickQuestionRow(item, index) {
+      const rowItem = item && typeof item === "object" ? item : {};
+      const type = String(rowItem.type || "").toLowerCase() === "order" ? "order" : "custom";
+      const row = document.createElement("div");
+      row.className = "settings-chat-question-row";
+      if (type === "order") row.classList.add("is-system");
+      row.setAttribute("data-chat-quick-row", "1");
+      row.setAttribute("data-chat-quick-type", type);
+      row.setAttribute("data-chat-quick-id", String(rowItem.id || (type === "order" ? CHAT_QUICK_ORDER_ID : "")));
+
+      const header = document.createElement("div");
+      header.className = "settings-chat-question-row-head";
+
+      const questionInput = document.createElement("input");
+      questionInput.className = "control settings-chat-question-input";
+      questionInput.type = "text";
+      questionInput.setAttribute("data-chat-quick-question", "1");
+      questionInput.placeholder = type === "order"
+        ? CHAT_QUICK_ORDER_QUESTION
+        : `\u0412\u043e\u043f\u0440\u043e\u0441 ${index + 1}`;
+      questionInput.value = type === "order"
+        ? CHAT_QUICK_ORDER_QUESTION
+        : normalizeChatQuickQuestionText(rowItem.question);
+      if (type === "order") {
+        questionInput.readOnly = true;
+        questionInput.classList.add("is-readonly");
+      }
+
+      const controls = document.createElement("div");
+      controls.className = "settings-chat-question-row-controls";
+
+      const switchLabel = document.createElement("label");
+      switchLabel.className = "switch settings-chat-question-switch";
+      const switchInput = document.createElement("input");
+      switchInput.className = "switch-input";
+      switchInput.type = "checkbox";
+      switchInput.setAttribute("data-chat-quick-enabled", "1");
+      switchInput.checked = rowItem.enabled !== false;
+      const switchUi = document.createElement("span");
+      switchUi.className = "switch-ui";
+      switchUi.setAttribute("aria-hidden", "true");
+      switchLabel.appendChild(switchInput);
+      switchLabel.appendChild(switchUi);
+      controls.appendChild(switchLabel);
+
+      if (type !== "order") {
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "settings-chat-question-delete-btn";
+        removeBtn.setAttribute("data-chat-quick-delete", "1");
+        removeBtn.setAttribute("aria-label", "\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u043e\u043f\u0440\u043e\u0441");
+        removeBtn.innerHTML = '<i class="fas fa-times"></i>';
+        removeBtn.addEventListener("click", () => {
+          row.remove();
+          updateChatQuickQuestionControlsState();
+        });
+        controls.appendChild(removeBtn);
+      }
+
+      header.appendChild(questionInput);
+      header.appendChild(controls);
+      row.appendChild(header);
+
+      if (type !== "order") {
+        const answerInput = document.createElement("textarea");
+        answerInput.className = "textarea settings-chat-question-answer";
+        answerInput.rows = 3;
+        answerInput.setAttribute("data-chat-quick-answer", "1");
+        answerInput.placeholder = "\u041e\u0442\u0432\u0435\u0442 \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u043a\u0430";
+        answerInput.value = normalizeChatQuickQuestionAnswer(rowItem.answer);
+        row.appendChild(answerInput);
+      }
+
+      return row;
+    }
+
+    function renderChatQuickQuestionRows(items) {
+      if (!settingsChatHotQuestionsGrid) return;
+      settingsChatHotQuestionsGrid.innerHTML = "";
+      const list = Array.isArray(items) ? items : [];
+      list.forEach((item, index) => {
+        settingsChatHotQuestionsGrid.appendChild(createChatQuickQuestionRow(item, index));
       });
       updateChatQuickQuestionControlsState();
-      return inputs;
     }
 
-    function createChatQuickQuestionInput(value, index) {
-      const pill = document.createElement("label");
-      pill.className = "settings-chat-question-pill";
-
-      const input = document.createElement("input");
-      input.className = "control settings-chat-question-input";
-      input.type = "text";
-      input.setAttribute("data-chat-quick-input", String(index));
-      input.placeholder = getChatQuickQuestionPlaceholder(index);
-      input.value = String(value ?? "").trim();
-
-      pill.appendChild(input);
-      return { pill, input };
-    }
-
-    function ensureChatQuickQuestionInputsCount(count) {
-      if (!settingsChatHotQuestionsGrid) return [];
-      const safeCount = Number.isFinite(Number(count)) ? Number(count) : CHAT_QUICK_QUESTIONS_MIN;
-      const target = Math.max(CHAT_QUICK_QUESTIONS_MIN, Math.min(CHAT_QUICK_QUESTIONS_MAX, safeCount));
-      let inputs = getSettingsChatQuickQuestionInputs();
-
-      while (inputs.length < target) {
-        const { pill } = createChatQuickQuestionInput("", inputs.length);
-        settingsChatHotQuestionsGrid.appendChild(pill);
-        inputs = getSettingsChatQuickQuestionInputs();
-      }
-
-      while (inputs.length > target) {
-        const lastInput = inputs[inputs.length - 1];
-        const wrapper = lastInput ? lastInput.closest(".settings-chat-question-pill") : null;
-        if (wrapper) wrapper.remove();
-        else if (lastInput) lastInput.remove();
-        inputs = getSettingsChatQuickQuestionInputs();
-      }
-
-      return reindexChatQuickQuestionInputs();
-    }
-
-    function appendChatQuickQuestionInput() {
+    function appendChatQuickQuestionRow() {
       if (!settingsChatHotQuestionsGrid) return null;
-      const inputs = getSettingsChatQuickQuestionInputs();
-      if (inputs.length >= CHAT_QUICK_QUESTIONS_MAX) return null;
-      const { pill, input } = createChatQuickQuestionInput("", inputs.length);
-      settingsChatHotQuestionsGrid.appendChild(pill);
-      reindexChatQuickQuestionInputs();
-      return input;
+      const rows = getSettingsChatQuickQuestionRows();
+      if (rows.length >= CHAT_QUICK_QUESTIONS_MAX) return null;
+      const row = createChatQuickQuestionRow(
+        {
+          id: "",
+          type: "custom",
+          question: "",
+          answer: "",
+          enabled: true,
+        },
+        rows.length
+      );
+      settingsChatHotQuestionsGrid.appendChild(row);
+      updateChatQuickQuestionControlsState();
+      return row.querySelector("[data-chat-quick-question]");
+    }
+
+    function collectChatQuickQuestionsFromRows() {
+      const rows = getSettingsChatQuickQuestionRows();
+      const out = [];
+      rows.forEach((row, index) => {
+        const type = String(row.getAttribute("data-chat-quick-type") || "custom").toLowerCase();
+        const enabledInput = row.querySelector("[data-chat-quick-enabled]");
+        const enabled = enabledInput ? enabledInput.checked : true;
+        if (type === "order") {
+          out.push({
+            id: CHAT_QUICK_ORDER_ID,
+            type: "order",
+            question: CHAT_QUICK_ORDER_QUESTION,
+            answer: "",
+            enabled,
+          });
+          return;
+        }
+
+        const questionInput = row.querySelector("[data-chat-quick-question]");
+        const answerInput = row.querySelector("[data-chat-quick-answer]");
+        const question = normalizeChatQuickQuestionText(questionInput ? questionInput.value : "");
+        if (!question) return;
+        const answer = normalizeChatQuickQuestionAnswer(answerInput ? answerInput.value : "");
+        const rawId = row.getAttribute("data-chat-quick-id");
+        out.push({
+          id: normalizeChatQuickQuestionId(rawId, index),
+          type: "custom",
+          question,
+          answer,
+          enabled,
+        });
+      });
+
+      return normalizeChatQuickQuestionItems(out, { fallbackToDefault: false });
+    }
+
+    function buildChatQuickQuestionsPayloadValue(items) {
+      const normalizedItems = normalizeChatQuickQuestionItems(items, { fallbackToDefault: false });
+      const defaultItems = cloneDefaultChatQuickQuestionItems();
+      return isSameChatQuickQuestionItems(normalizedItems, defaultItems)
+        ? null
+        : serializeChatQuickQuestionItems(normalizedItems);
+    }
+
+    function applyChatQuickQuestionsToInputs(rawValue) {
+      const items = normalizeChatQuickQuestionItems(rawValue, { fallbackToDefault: true });
+      renderChatQuickQuestionRows(items);
+      if (settingsChatQuickQuestionsJson) {
+        settingsChatQuickQuestionsJson.value = serializeChatQuickQuestionItems(items);
+      }
     }
 
     function getChatOperatorFallbackName() {
@@ -867,27 +1201,7 @@
       return name || "";
     }
 
-    function applyChatQuickQuestionsToInputs(rawValue) {
-      if (!settingsChatHotQuestionsGrid) return;
-      const list = parseChatQuickQuestions(rawValue);
-      const inputs = ensureChatQuickQuestionInputsCount(list.length);
-      inputs.forEach((input, index) => {
-        input.value = list[index] || "";
-      });
-      if (settingsChatQuickQuestionsJson) {
-        settingsChatQuickQuestionsJson.value = JSON.stringify(list);
-      }
-      updateChatQuickQuestionControlsState();
-    }
-
-    function collectChatQuickQuestionsFromInputs() {
-      return getSettingsChatQuickQuestionInputs()
-        .map((input) => String(input && input.value ? input.value : "").trim())
-        .filter(Boolean)
-        .slice(0, CHAT_QUICK_QUESTIONS_MAX);
-    }
-
-    reindexChatQuickQuestionInputs();
+    applyChatQuickQuestionsToInputs(null);
     setSelectedChatAssistantGender(readStoredChatAssistantGender() || DEFAULT_CHAT_ASSISTANT_GENDER, { persist: false });
 
     function applyChatSettingsFromTenant(tenant) {
@@ -930,7 +1244,11 @@
         settingsChatGuestThreadTtlDaysInput.value = String(normalizeChatGuestThreadTtlDays(ttlDaysRaw));
       }
 
-      applyChatQuickQuestionsToInputs(tenant ? tenant.chat_quick_questions_json : null);
+      applyChatQuickQuestionsToInputs(
+        tenant
+          ? (tenant.quick_questions_config ?? tenant.chat_quick_questions_json)
+          : null
+      );
     }
 
     function getDayKey(day) {
@@ -3972,7 +4290,7 @@
 
     if (settingsChatQuickQuestionsAddBtn) {
       settingsChatQuickQuestionsAddBtn.addEventListener("click", () => {
-        const input = appendChatQuickQuestionInput();
+        const input = appendChatQuickQuestionRow();
         if (!input) return;
         input.focus();
         input.select();
@@ -3981,10 +4299,8 @@
 
     if (settingsChatQuickQuestionsSaveBtn) {
       settingsChatQuickQuestionsSaveBtn.addEventListener("click", async () => {
-        const list = collectChatQuickQuestionsFromInputs();
-        const normalizedList = list.length ? list : DEFAULT_CHAT_QUICK_QUESTIONS.slice();
-        const serialized = JSON.stringify(normalizedList);
-        const payloadValue = serialized === JSON.stringify(DEFAULT_CHAT_QUICK_QUESTIONS) ? null : serialized;
+        const items = collectChatQuickQuestionsFromRows();
+        const payloadValue = buildChatQuickQuestionsPayloadValue(items);
 
         await saveChatSettingsPayload(
           settingsChatQuickQuestionsSaveBtn,
