@@ -8946,29 +8946,38 @@ function renderSheetAddressList() {
 
     const maxLoginBtn = document.createElement("button");
     maxLoginBtn.type = "button";
-    maxLoginBtn.className = "btn";
-    maxLoginBtn.style.width = "100%";
-    maxLoginBtn.style.marginTop = "10px";
+    maxLoginBtn.className = "shop-auth-social-btn shop-auth-social-btn--max";
     maxLoginBtn.style.display = "none";
-    maxLoginBtn.textContent = "Войти через MAX";
-    form.appendChild(maxLoginBtn);
+    maxLoginBtn.setAttribute("aria-label", "Войти через MAX");
+    const maxIcon = document.createElement("img");
+    maxIcon.src = "/static/uploads/auth/max-auth.png";
+    maxIcon.alt = "MAX";
+    maxLoginBtn.appendChild(maxIcon);
 
     const tgLoginBtn = document.createElement("button");
     tgLoginBtn.type = "button";
-    tgLoginBtn.className = "btn";
-    tgLoginBtn.style.width = "100%";
-    tgLoginBtn.style.marginTop = "10px";
+    tgLoginBtn.className = "shop-auth-social-btn shop-auth-social-btn--telegram";
     tgLoginBtn.style.display = "none";
-    tgLoginBtn.textContent = "\u0412\u043e\u0439\u0442\u0438 \u0447\u0435\u0440\u0435\u0437 Telegram";
-    form.appendChild(tgLoginBtn);
+    tgLoginBtn.setAttribute("aria-label", "Войти через Telegram");
+    const tgIcon = document.createElement("img");
+    tgIcon.src = "/static/uploads/auth/telegram-auth.png";
+    tgIcon.alt = "Telegram";
+    tgLoginBtn.appendChild(tgIcon);
+
+    const socialRow = document.createElement("div");
+    socialRow.className = "shop-auth-social-row";
+    socialRow.appendChild(maxLoginBtn);
+    socialRow.appendChild(tgLoginBtn);
 
     (async function syncMaxLoginButtonVisibility() {
       try {
         const probe = await apiJson("/api/public/max/auth-link");
         const hasLink = !!(probe && probe.ok !== false && probe.link);
         maxLoginBtn.style.display = hasLink ? "" : "none";
+        socialRow.style.display = (maxLoginBtn.style.display !== "none" || tgLoginBtn.style.display !== "none") ? "" : "none";
       } catch {
         maxLoginBtn.style.display = "none";
+        socialRow.style.display = (maxLoginBtn.style.display !== "none" || tgLoginBtn.style.display !== "none") ? "" : "none";
       }
     })();
 
@@ -8977,8 +8986,10 @@ function renderSheetAddressList() {
         const probe = await apiJson("/api/public/tg/auth-link");
         const hasLink = !!(probe && probe.ok !== false && probe.link);
         tgLoginBtn.style.display = hasLink ? "" : "none";
+        socialRow.style.display = (maxLoginBtn.style.display !== "none" || tgLoginBtn.style.display !== "none") ? "" : "none";
       } catch {
         tgLoginBtn.style.display = "none";
+        socialRow.style.display = (maxLoginBtn.style.display !== "none" || tgLoginBtn.style.display !== "none") ? "" : "none";
       }
     })();
 
@@ -9004,8 +9015,22 @@ function renderSheetAddressList() {
     const bdayInfoHint = document.createElement("div");
     bdayInfoHint.className = "shop-auth-bday-info-hint hidden";
     bdayInfoHint.textContent = "Дата рождения используется как пароль для входа в учетную запись.";
+    const codeWrap = document.createElement("div");
+    codeWrap.className = "shop-auth-code-wrap hidden";
+    const codeInputs = [];
+    for (let i = 0; i < 4; i += 1) {
+      const codeCell = document.createElement("input");
+      codeCell.type = "text";
+      codeCell.inputMode = "numeric";
+      codeCell.maxLength = 1;
+      codeCell.className = "shop-auth-code-cell";
+      codeCell.autocomplete = i === 0 ? "one-time-code" : "off";
+      codeInputs.push(codeCell);
+      codeWrap.appendChild(codeCell);
+    }
     bdayInputWrap.appendChild(bday);
     bdayInputWrap.appendChild(bdayInfoBtn);
+    bdayInputWrap.appendChild(codeWrap);
     bdayInputWrap.appendChild(bdayInfoHint);
     bWrap.appendChild(bLabel);
     bWrap.appendChild(bdayInputWrap);
@@ -9023,22 +9048,79 @@ function renderSheetAddressList() {
     bWrap.appendChild(loginBtn);
 
     form.appendChild(bWrap);
+    form.appendChild(socialRow);
     wrap.appendChild(form);
 
-    const revealBirthdayStep = () => {
-      if (nextBtn.disabled || nextBtn.style.display === "none") return;
-      nextBtn.disabled = true;
+    let authStepMode = "birthday";
+    const clearCodeInputs = () => codeInputs.forEach((cell) => { cell.value = ""; });
+    const getCodeValue = () => codeInputs.map((cell) => String(cell.value || "").replace(/\D/g, "")).join("");
+    const focusCodeIndex = (index) => {
+      const safe = Math.max(0, Math.min(codeInputs.length - 1, Number(index) || 0));
+      if (codeInputs[safe]) codeInputs[safe].focus();
+    };
+
+    const setBirthdayStepUi = () => {
+      authStepMode = "birthday";
+      note.textContent = "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0434\u0430\u0442\u0443 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f (\u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433).";
+      bLabel.textContent = "\u0414\u0430\u0442\u0430 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f";
+      bday.placeholder = "\u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433";
+      bday.inputMode = "numeric";
+      bday.maxLength = 10;
+      bday.value = "";
+      bday.style.display = "";
+      bdayInfoBtn.classList.remove("hidden");
+      codeWrap.classList.add("hidden");
+      bdayInfoHint.classList.add("hidden");
+      clearCodeInputs();
+      setBirthdayError("");
+    };
+
+    const setCodeStepUi = () => {
+      authStepMode = "code";
+      note.textContent = "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043a\u043e\u0434 \u0438\u0437 \u0431\u043e\u0442\u0430.";
+      bLabel.textContent = "\u041a\u043e\u0434 \u0438\u0437 \u0431\u043e\u0442\u0430";
+      bday.placeholder = "1234";
+      bday.inputMode = "numeric";
+      bday.maxLength = 4;
+      bday.value = "";
+      bday.style.display = "none";
+      bdayInfoBtn.classList.add("hidden");
+      codeWrap.classList.remove("hidden");
+      bdayInfoHint.classList.add("hidden");
+      clearCodeInputs();
+      setBirthdayError("");
+    };
+
+    const revealSecondStep = () => {
+      if (nextBtn.style.display === "none") return;
       nextBtn.style.display = "none";
       bWrap.style.display = "grid";
-      bWrap.appendChild(maxLoginBtn);
-      bWrap.appendChild(tgLoginBtn);
-      note.textContent = "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0434\u0430\u0442\u0443 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f (\u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433).";
-      bday.focus();
+      if (authStepMode === "code") focusCodeIndex(0);
+      else bday.focus();
     };
+    const checkPhoneStatus = async () => {
+      const json = await apiJson("/api/public/auth/phone-status", {
+        method: "POST",
+        body: { phone: phone.value },
+        headers: { "x-customer-token": "" },
+      });
+      return {
+        exists: Boolean(json && json.exists),
+        requiresMessengerLogin: Boolean(json && json.requires_messenger_login),
+      };
+    };
+    let autoContinueLockPhone = "";
     phone.addEventListener("input", () => {
       enforcePhonePrefix(phone);
       const n = normalizePhone(phone.value);
-      if (n && n.length === 11 && n.startsWith("7")) revealBirthdayStep();
+      if (n && n.length === 11 && n.startsWith("7")) {
+        if (nextBtn.style.display !== "none" && !nextBtn.disabled && autoContinueLockPhone !== n) {
+          autoContinueLockPhone = n;
+          nextBtn.click();
+        }
+      } else {
+        autoContinueLockPhone = "";
+      }
     });
     phone.addEventListener("focus", () => enforcePhonePrefix(phone));
 
@@ -9049,7 +9131,14 @@ function renderSheetAddressList() {
     };
 
     const normalizeBirthdayField = () => {
-      handleBirthdayInput(bday);
+      if (authStepMode === "birthday") {
+        handleBirthdayInput(bday);
+        if (isValidBirthday(bday.value) && !loginBtn.disabled) {
+          loginBtn.click();
+        }
+      } else {
+        bday.value = String(bday.value || "").replace(/\D/g, "").slice(0, 4);
+      }
       setBirthdayError("");
     };
 
@@ -9062,25 +9151,94 @@ function renderSheetAddressList() {
     });
     bday.addEventListener("blur", () => {
       if (!str(bday.value).trim()) return;
-      if (!isValidBirthday(bday.value)) {
-        setBirthdayError("Введите дату рождения в формате дд.мм.гггг");
+      if (authStepMode === "birthday") {
+        if (!isValidBirthday(bday.value)) {
+          setBirthdayError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0434\u0430\u0442\u0443 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f \u0432 \u0444\u043e\u0440\u043c\u0430\u0442\u0435 \u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433");
+        }
+      } else if (getCodeValue().length !== 4) {
+        setBirthdayError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 4-\u0437\u043d\u0430\u0447\u043d\u044b\u0439 \u043a\u043e\u0434");
       }
     });
+    codeInputs.forEach((cell, idx) => {
+      cell.addEventListener("input", () => {
+        const digit = String(cell.value || "").replace(/\D/g, "").slice(-1);
+        cell.value = digit;
+        setBirthdayError("");
+        if (digit && idx < codeInputs.length - 1) focusCodeIndex(idx + 1);
+        if (getCodeValue().length === 4 && authStepMode === "code" && !loginBtn.disabled) {
+          loginBtn.click();
+        }
+      });
+      cell.addEventListener("keydown", (e) => {
+        if (e.key === "Backspace") {
+          if (!cell.value && idx > 0) {
+            e.preventDefault();
+            codeInputs[idx - 1].value = "";
+            focusCodeIndex(idx - 1);
+          }
+          return;
+        }
+        if (e.key === "ArrowLeft" && idx > 0) {
+          e.preventDefault();
+          focusCodeIndex(idx - 1);
+        } else if (e.key === "ArrowRight" && idx < codeInputs.length - 1) {
+          e.preventDefault();
+          focusCodeIndex(idx + 1);
+        } else if (e.key === "Enter" && !loginBtn.disabled) {
+          e.preventDefault();
+          loginBtn.click();
+        }
+      });
+      cell.addEventListener("paste", (e) => {
+        const text = String(e.clipboardData?.getData("text") || "").replace(/\D/g, "").slice(0, 4);
+        if (!text) return;
+        e.preventDefault();
+        clearCodeInputs();
+        text.split("").forEach((ch, p) => {
+          if (codeInputs[p]) codeInputs[p].value = ch;
+        });
+        focusCodeIndex(Math.min(text.length, 3));
+        if (text.length === 4 && authStepMode === "code" && !loginBtn.disabled) {
+          loginBtn.click();
+        }
+      });
+    });
 
-    nextBtn.addEventListener("click", () => {
+
+    nextBtn.addEventListener("click", async () => {
       enforcePhonePrefix(phone);
       const n = normalizePhone(phone.value);
       if (!n || n.length !== 11 || !n.startsWith("7")) {
-        alert("Введите телефон (РФ): +7XXXXXXXXXX");
+        alert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0442\u0435\u043b\u0435\u0444\u043e\u043d (\u0420\u0424): +7XXXXXXXXXX");
         return;
       }
-      revealBirthdayStep();
+      nextBtn.disabled = true;
+      try {
+        const status = await checkPhoneStatus();
+        if (status.requiresMessengerLogin) {
+          setCodeStepUi();
+          revealSecondStep();
+          await apiJson("/api/public/auth/messenger-code/send", {
+            method: "POST",
+            body: { phone: phone.value },
+            headers: { "x-customer-token": "" },
+          });
+          return;
+        }
+        setBirthdayStepUi();
+        revealSecondStep();
+      } catch (e) {
+        const err = String(e && e.message ? e.message : "");
+        if (err === "MESSENGER_NOT_LINKED") alert("\u041d\u043e\u043c\u0435\u0440 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d, \u043d\u043e \u0431\u043e\u0442 \u043d\u0435 \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d");
+        else alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0441\u0442\u0430\u0442\u0443\u0441 \u0432\u0445\u043e\u0434\u0430");
+      } finally {
+        if (nextBtn.style.display !== "none") nextBtn.disabled = false;
+      }
     });
 
     maxLoginBtn.addEventListener("click", async () => {
       maxLoginBtn.disabled = true;
-      const prev = maxLoginBtn.textContent;
-      maxLoginBtn.textContent = "…";
+      maxLoginBtn.classList.add("is-loading");
       try {
         const json = await apiJson("/api/public/max/auth-link");
         if (!json || json.ok === false || !json.link) {
@@ -9100,14 +9258,13 @@ function renderSheetAddressList() {
         alert("Ошибка при открытии MAX");
       } finally {
         maxLoginBtn.disabled = false;
-        maxLoginBtn.textContent = prev;
+        maxLoginBtn.classList.remove("is-loading");
       }
     });
 
     tgLoginBtn.addEventListener("click", async () => {
       tgLoginBtn.disabled = true;
-      const prev = tgLoginBtn.textContent;
-      tgLoginBtn.textContent = "\u2026";
+      tgLoginBtn.classList.add("is-loading");
       try {
         const json = await apiJson("/api/public/tg/auth-link");
         if (!json || json.ok === false || !json.link) {
@@ -9125,7 +9282,7 @@ function renderSheetAddressList() {
         alert("\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u043e\u0442\u043a\u0440\u044b\u0442\u0438\u0438 Telegram");
       } finally {
         tgLoginBtn.disabled = false;
-        tgLoginBtn.textContent = prev;
+        tgLoginBtn.classList.remove("is-loading");
       }
     });
 
@@ -9142,23 +9299,43 @@ function renderSheetAddressList() {
       enforcePhonePrefix(phone);
       const n = normalizePhone(phone.value);
       if (!n || n.length !== 11 || !n.startsWith("7")) {
-        alert("Введите телефон (РФ): +7XXXXXXXXXX");
+        alert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0442\u0435\u043b\u0435\u0444\u043e\u043d (\u0420\u0424): +7XXXXXXXXXX");
         return;
       }
-      if (!isValidBirthday(bday.value)) {
-        setBirthdayError("Введите дату рождения в формате дд.мм.гггг");
-        return;
+      if (authStepMode === "birthday") {
+        if (!isValidBirthday(bday.value)) {
+          setBirthdayError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0434\u0430\u0442\u0443 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f \u0432 \u0444\u043e\u0440\u043c\u0430\u0442\u0435 \u0434\u0434.\u043c\u043c.\u0433\u0433\u0433\u0433");
+          return;
+        }
+      } else {
+        const code = getCodeValue().slice(0, 4);
+        if (code.length !== 4) {
+          setBirthdayError("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 4-\u0437\u043d\u0430\u0447\u043d\u044b\u0439 \u043a\u043e\u0434");
+          return;
+        }
       }
 
       loginBtn.disabled = true;
-      loginBtn.textContent = "Проверяем…";
+      loginBtn.textContent = "\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u043c...";
 
       try {
-        const json = await apiJson("/api/public/auth/login", {
-          method: "POST",
-          body: { phone: phone.value, birthday: str(bday.value).trim() },
-          headers: { "x-customer-token": "" }, // на логин не надо старый токен
-        });
+        let json = null;
+        if (authStepMode === "birthday") {
+          json = await apiJson("/api/public/auth/login", {
+            method: "POST",
+            body: { phone: phone.value, birthday: str(bday.value).trim() },
+            headers: { "x-customer-token": "" },
+          });
+        } else {
+          json = await apiJson("/api/public/auth/messenger-code/verify", {
+            method: "POST",
+            body: {
+              phone: phone.value,
+              code: getCodeValue().slice(0, 4),
+            },
+            headers: { "x-customer-token": "" },
+          });
+        }
 
         if (json.token) setCustomerToken(json.token);
         if (json.customer) setCustomerCache(json.customer);
@@ -9168,17 +9345,28 @@ function renderSheetAddressList() {
         if (me) {
           if (typeof onSuccess === "function") onSuccess(me);
         } else {
-          alert("Не удалось войти");
+          alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0432\u043e\u0439\u0442\u0438");
         }
       } catch (e) {
         console.error(e);
-        if (String(e.message || "") === "WRONG_BIRTHDAY") alert("Дата рождения не совпадает");
-        else alert("Ошибка входа: " + (e.message || "UNKNOWN"));
+        const err = String(e.message || "");
+        if (err === "WRONG_BIRTHDAY") {
+          bday.value = "";
+          setBirthdayError("");
+          if (typeof showToast === "function") showToast("\u041d\u0435\u0432\u0435\u0440\u043d\u0430\u044f \u0434\u0430\u0442\u0430 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f");
+          else alert("\u041d\u0435\u0432\u0435\u0440\u043d\u0430\u044f \u0434\u0430\u0442\u0430 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f");
+        }
+        else if (err === "MESSENGER_LOGIN_REQUIRED") alert("\u0414\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u043d\u043e\u043c\u0435\u0440\u0430 \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0442\u043e\u043b\u044c\u043a\u043e \u0432\u0445\u043e\u0434 \u0447\u0435\u0440\u0435\u0437 Telegram \u0438\u043b\u0438 MAX");
+        else if (err === "CODE_INVALID") alert("\u041d\u0435\u0432\u0435\u0440\u043d\u044b\u0439 \u043a\u043e\u0434");
+        else if (err === "CODE_EXPIRED") alert("\u041a\u043e\u0434 \u0438\u0441\u0442\u0435\u043a, \u0437\u0430\u043f\u0440\u043e\u0441\u0438\u0442\u0435 \u043d\u043e\u0432\u044b\u0439");
+        else alert("\u041e\u0448\u0438\u0431\u043a\u0430 \u0432\u0445\u043e\u0434\u0430: " + (e.message || "UNKNOWN"));
       } finally {
         loginBtn.disabled = false;
-        loginBtn.textContent = "Войти";
+        loginBtn.textContent = "\u0412\u043e\u0439\u0442\u0438";
       }
+
     });
+
 
     return wrap;
   }

@@ -1377,9 +1377,211 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     }
   }
 
-// ------------------------------
+  // ------------------------------
   // AUTH
   // ------------------------------
+
+  // POST /api/public/auth/phone-status
+  // body: { phone }
+  router.post('/auth/phone-status', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const phone = helpers.normalizePhone(str(req.body.phone));
+      if (!phone || phone.length < 10) {
+        return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
+      }
+
+      const [rows] = await db.query(
+        `SELECT id, phone_verified_at
+         FROM cust_customers
+         WHERE tenant_id=? AND phone=?
+         LIMIT 1`,
+        [tenantId, phone]
+      );
+      if (!rows.length) {
+        return res.json({ ok: true, exists: false, requires_messenger_login: false });
+      }
+
+      const row = rows[0];
+      const [tenantRows] = await db.query(
+        `SELECT tg_login_enabled, max_login_enabled
+         FROM ten_tenants
+         WHERE id=?
+         LIMIT 1`,
+        [tenantId]
+      );
+      const tenantCfg = tenantRows[0] || {};
+      const hasMessengerLogin = Number(tenantCfg.tg_login_enabled || 0) === 1 || Number(tenantCfg.max_login_enabled || 0) === 1;
+
+      return res.json({
+        ok: true,
+        exists: true,
+        requires_messenger_login: Boolean(row.phone_verified_at) && hasMessengerLogin,
+      });
+    } catch (e) {
+      console.error('AUTH_PHONE_STATUS_ERROR:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // POST /api/public/auth/messenger-code/send
+  // body: { phone }
+  router.post('/auth/messenger-code/send', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const phone = helpers.normalizePhone(str(req.body.phone));
+      if (!phone || phone.length < 10) {
+        return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
+      }
+
+      const [rows] = await db.query(
+        `SELECT id, is_active, phone_verified_at, telegram_user_id, max_user_id
+         FROM cust_customers
+         WHERE tenant_id=? AND phone=?
+         LIMIT 1`,
+        [tenantId, phone]
+      );
+      if (!rows.length) return res.status(404).json({ ok: false, error: 'CUSTOMER_NOT_FOUND' });
+      const row = rows[0];
+      if (Number(row.is_active || 0) !== 1) return res.status(403).json({ ok: false, error: 'CLIENT_BLOCKED' });
+      if (!row.phone_verified_at) return res.status(409).json({ ok: false, error: 'BIRTHDAY_LOGIN_REQUIRED' });
+
+      const [tenantRows] = await db.query(
+        `SELECT tg_login_enabled, max_login_enabled
+         FROM ten_tenants
+         WHERE id=?
+         LIMIT 1`,
+        [tenantId]
+      );
+      const tenantCfg = tenantRows[0] || {};
+      const tgEnabled = Number(tenantCfg.tg_login_enabled || 0) === 1;
+      const maxEnabled = Number(tenantCfg.max_login_enabled || 0) === 1;
+
+      const code = String(Math.floor(1000 + Math.random() * 9000));
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await db.query(
+        `UPDATE cust_customers
+         SET phone_verify_code=?, phone_verify_expires_at=?, updated_at=NOW()
+         WHERE tenant_id=? AND id=?
+         LIMIT 1`,
+        [code, expiresAt, tenantId, Number(row.id)]
+      );
+
+      const messageText = `\u041a\u043e\u0434 \u0432\u0445\u043e\u0434\u0430: ${code}. \u0421\u0440\u043e\u043a \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u044f: 24 \u0447\u0430\u0441\u0430.`;
+      let sentVia = null;
+      let lastSendErr = null;
+
+      // Priority: MAX (if tenant enabled) -> Telegram (fallback if tenant enabled)
+      if (maxEnabled && row.max_user_id) {
+        try {
+          await sendMaxMessage({
+            db,
+            tenantId,
+            maxUserId: row.max_user_id,
+            text: messageText,
+          });
+          sentVia = 'max';
+        } catch (maxErr) {
+          lastSendErr = maxErr;
+        }
+      }
+      if (!sentVia && tgEnabled && row.telegram_user_id) {
+        try {
+          await sendTenantTelegramText({
+            tenantId,
+            telegramUserId: row.telegram_user_id,
+            text: messageText,
+          });
+          sentVia = 'telegram';
+        } catch (tgErr) {
+          lastSendErr = tgErr;
+        }
+      }
+      if (!sentVia) {
+        if (!tgEnabled && !maxEnabled) {
+          return res.status(409).json({ ok: false, error: 'MESSENGER_LOGIN_DISABLED' });
+        }
+        if ((maxEnabled && !row.max_user_id) && (tgEnabled && !row.telegram_user_id)) {
+          return res.status(409).json({ ok: false, error: 'MESSENGER_NOT_LINKED' });
+        }
+        if (lastSendErr) throw lastSendErr;
+        return res.status(409).json({ ok: false, error: 'MESSENGER_NOT_AVAILABLE' });
+      }
+
+      return res.json({ ok: true, sent_via: sentVia, ttl_sec: 86400 });
+    } catch (e) {
+      console.error('AUTH_MESSENGER_CODE_SEND_ERROR:', e);
+      return res.status(500).json({ ok: false, error: 'SEND_FAILED' });
+    }
+  });
+
+  // POST /api/public/auth/messenger-code/verify
+  // body: { phone, code }
+  router.post('/auth/messenger-code/verify', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const phone = helpers.normalizePhone(str(req.body.phone));
+      const code = String(req.body?.code || '').replace(/\D/g, '').slice(0, 4);
+      if (!phone || phone.length < 10) return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
+      if (code.length !== 4) return res.status(400).json({ ok: false, error: 'CODE_INVALID' });
+
+      const [rows] = await db.query(
+        `SELECT id, name, phone, DATE_FORMAT(birthday, '%Y-%m-%d') AS birthday, photo,
+                is_active, phone_verified_at, phone_verify_code, phone_verify_expires_at
+         FROM cust_customers
+         WHERE tenant_id=? AND phone=?
+         LIMIT 1`,
+        [tenantId, phone]
+      );
+      if (!rows.length) return res.status(404).json({ ok: false, error: 'CUSTOMER_NOT_FOUND' });
+      const row = rows[0];
+      if (Number(row.is_active || 0) !== 1) return res.status(403).json({ ok: false, error: 'CLIENT_BLOCKED' });
+      if (!row.phone_verified_at) return res.status(409).json({ ok: false, error: 'BIRTHDAY_LOGIN_REQUIRED' });
+      if (!row.phone_verify_code || !row.phone_verify_expires_at) {
+        return res.status(400).json({ ok: false, error: 'CODE_NOT_REQUESTED' });
+      }
+      if (Date.now() > new Date(row.phone_verify_expires_at).getTime()) {
+        return res.status(400).json({ ok: false, error: 'CODE_EXPIRED' });
+      }
+      if (String(row.phone_verify_code) !== code) {
+        return res.status(400).json({ ok: false, error: 'CODE_INVALID' });
+      }
+
+      const customerId = Number(row.id);
+      const token = makeToken32();
+      await dualWriteSession(db, {
+        tenantId,
+        storeId: 1,
+        customerId,
+        token,
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        isActive: 1,
+      });
+
+      await db.query(
+        `UPDATE cust_customers
+         SET phone_verify_code=NULL, phone_verify_expires_at=NULL, updated_at=NOW()
+         WHERE tenant_id=? AND id=?
+         LIMIT 1`,
+        [tenantId, customerId]
+      );
+
+      return res.json({
+        ok: true,
+        token,
+        customer: {
+          id: row.id,
+          name: row.name,
+          phone: row.phone,
+          birthday: row.birthday || null,
+          photo: row.photo || null,
+        },
+      });
+    } catch (e) {
+      console.error('AUTH_MESSENGER_CODE_VERIFY_ERROR:', e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
 
   // POST /api/public/auth/login
   // body: { phone, birthday } ; birthday = dd.mm.yyyy
@@ -1401,9 +1603,11 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       // РёС‰РµРј РєР»РёРµРЅС‚Р°
       const [ex] = await db.query(
-        `SELECT id, name, phone, DATE_FORMAT(birthday, '%Y-%m-%d') AS birthday, is_active
-         FROM cust_customers
-         WHERE tenant_id=? AND phone=?
+        `SELECT c.id, c.name, c.phone, DATE_FORMAT(c.birthday, '%Y-%m-%d') AS birthday, c.is_active, c.phone_verified_at,
+                t.tg_login_enabled, t.max_login_enabled
+         FROM cust_customers c
+         JOIN ten_tenants t ON t.id = c.tenant_id
+         WHERE c.tenant_id=? AND c.phone=?
          LIMIT 1`,
         [tenantId, phone]
       );
@@ -1423,6 +1627,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         const c = ex[0];
         if (Number(c.is_active || 0) !== 1) {
           return res.status(403).json({ ok: false, error: 'CLIENT_BLOCKED' });
+        }
+        const hasMessengerLogin = Number(c.tg_login_enabled || 0) === 1 || Number(c.max_login_enabled || 0) === 1;
+        if (c.phone_verified_at && hasMessengerLogin) {
+          return res.status(403).json({ ok: false, error: 'MESSENGER_LOGIN_REQUIRED' });
         }
 
         customerId = Number(c.id);

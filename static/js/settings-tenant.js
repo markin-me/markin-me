@@ -323,7 +323,7 @@
         const hasRequired = !!(String(tenant.telegram_bot_username || "").trim() && String(tenant.telegram_bot_token || "").trim());
         tgLoginEnabledInput.checked = Number(tenant.tg_login_enabled ?? 0) === 1;
         tgLoginEnabledInput.disabled = !hasRequired;
-        tgLoginEnabledInput.title = hasRequired ? "" : "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0438\u043c\u044f \u0431\u043e\u0442\u0430 \u0438 \u0442\u043e\u043a\u0435\u043d Telegram";
+        tgLoginEnabledInput.title = hasRequired ? "" : "Сначала заполните имя бота и токен Telegram";
       }
       if (maxBotIdInput) {
         maxBotIdInput.value = tenant.max_bot_id || "";
@@ -338,7 +338,7 @@
         const hasRequired = !!(String(tenant.max_bot_id || "").trim() && String(tenant.max_bot_token || "").trim());
         maxLoginEnabledInput.checked = Number(tenant.max_login_enabled || 0) === 1;
         maxLoginEnabledInput.disabled = !hasRequired;
-        maxLoginEnabledInput.title = hasRequired ? "" : "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 ID \u0431\u043e\u0442\u0430 MAX \u0438 \u0442\u043e\u043a\u0435\u043d";
+        maxLoginEnabledInput.title = hasRequired ? "" : "Сначала заполните ID бота и токен MAX";
       }
 
       // Telegram mini app link
@@ -1529,7 +1529,7 @@
       if (!maxLoginEnabledEl) return;
       var hasRequired = !!(String((maxBotIdEl && maxBotIdEl.value) || "").trim() && String((maxBotTokenEl && maxBotTokenEl.value) || "").trim());
       maxLoginEnabledEl.disabled = !hasRequired;
-      maxLoginEnabledEl.title = hasRequired ? "" : "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 ID \u0431\u043e\u0442\u0430 MAX \u0438 \u0442\u043e\u043a\u0435\u043d";
+      maxLoginEnabledEl.title = hasRequired ? "" : "Сначала заполните ID бота и токен MAX";
       if (!hasRequired) {
         maxLoginEnabledEl.checked = false;
       }
@@ -1538,15 +1538,16 @@
       if (!tgLoginEnabledEl) return;
       var hasRequired = !!(String((tgBotUsernameEl && tgBotUsernameEl.value) || "").trim() && String((tgBotTokenEl && tgBotTokenEl.value) || "").trim());
       tgLoginEnabledEl.disabled = !hasRequired;
-      tgLoginEnabledEl.title = hasRequired ? "" : "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0438\u043c\u044f \u0431\u043e\u0442\u0430 \u0438 \u0442\u043e\u043a\u0435\u043d Telegram";
+      tgLoginEnabledEl.title = hasRequired ? "" : "Сначала заполните имя бота и токен Telegram";
       if (!hasRequired) {
         tgLoginEnabledEl.checked = false;
       }
     };
 
+
     if (tgBotUsernameEl) {
       tgBotUsernameEl.addEventListener("change", function () {
-        var val = tgBotUsernameEl.value.trim().replace(/^@/, "");
+        var val = tgBotUsernameEl.value.trim();
         tgBotUsernameEl.value = val;
         updateTenantFields({ telegram_bot_username: val || null });
         syncTgLoginSwitchState();
@@ -1598,25 +1599,24 @@
       });
     }
 
+    if (maxMiniAppEnabledEl) {
+      maxMiniAppEnabledEl.addEventListener("change", function () {
+        updateTenantFields({ max_mini_app_enabled: maxMiniAppEnabledEl.checked ? 1 : 0 });
+      });
+    }
     if (maxLoginEnabledEl) {
       maxLoginEnabledEl.addEventListener("change", function () {
         if (maxLoginEnabledEl.checked) {
           var hasRequired = !!(String((maxBotIdEl && maxBotIdEl.value) || "").trim() && String((maxBotTokenEl && maxBotTokenEl.value) || "").trim());
           if (!hasRequired) {
             maxLoginEnabledEl.checked = false;
-            alert("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 ID \u0431\u043e\u0442\u0430 MAX \u0438 \u0442\u043e\u043a\u0435\u043d");
+            alert("Сначала заполните ID бота и токен MAX");
             return;
           }
         }
         updateTenantFields({ max_login_enabled: maxLoginEnabledEl.checked ? 1 : 0 });
       });
       syncMaxLoginSwitchState();
-    }
-
-    if (maxMiniAppEnabledEl) {
-      maxMiniAppEnabledEl.addEventListener("change", function () {
-        updateTenantFields({ max_mini_app_enabled: maxMiniAppEnabledEl.checked ? 1 : 0 });
-      });
     }
 
     if (maxBotTokenCopyBtn && maxBotTokenEl) {
@@ -1636,13 +1636,12 @@
         updateTenantFields({ tg_mini_app_enabled: tgMiniAppEnabledEl.checked ? 1 : 0 });
       });
     }
-
     if (tgLoginEnabledEl) {
       tgLoginEnabledEl.addEventListener("change", function () {
         var hasRequired = !!(String((tgBotUsernameEl && tgBotUsernameEl.value) || "").trim() && String((tgBotTokenEl && tgBotTokenEl.value) || "").trim());
         if (!hasRequired) {
           tgLoginEnabledEl.checked = false;
-          alert("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0438\u043c\u044f \u0431\u043e\u0442\u0430 \u0438 \u0442\u043e\u043a\u0435\u043d Telegram");
+          alert("Сначала заполните имя бота и токен Telegram");
           return;
         }
         updateTenantFields({ tg_login_enabled: tgLoginEnabledEl.checked ? 1 : 0 });
