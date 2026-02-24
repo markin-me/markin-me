@@ -429,6 +429,30 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     const assistantGender = normalizeAssistantGender(row.chat_assistant_gender);
     const assistantName = str(row.chat_assistant_name).trim() || DEFAULT_CHAT_ASSISTANT_NAME;
     const welcomeMessage = str(row.chat_welcome_message) || getDefaultWelcomeMessageByGender(assistantGender);
+    const welcomeEnabledRaw = row.chat_welcome_enabled;
+    const welcomeEnabledNorm = str(welcomeEnabledRaw).trim().toLowerCase();
+    const welcomeEnabled = !(
+      welcomeEnabledRaw === false
+      || welcomeEnabledRaw === 0
+      || welcomeEnabledNorm === '0'
+      || welcomeEnabledNorm === 'false'
+    );
+    const assistantEnabledRaw = row.chat_assistant_enabled;
+    const assistantEnabledNorm = str(assistantEnabledRaw).trim().toLowerCase();
+    const assistantEnabled = !(
+      assistantEnabledRaw === false
+      || assistantEnabledRaw === 0
+      || assistantEnabledNorm === '0'
+      || assistantEnabledNorm === 'false'
+    );
+    const quickQuestionsEnabledRaw = row.chat_quick_questions_enabled;
+    const quickQuestionsEnabledNorm = str(quickQuestionsEnabledRaw).trim().toLowerCase();
+    const quickQuestionsEnabled = !(
+      quickQuestionsEnabledRaw === false
+      || quickQuestionsEnabledRaw === 0
+      || quickQuestionsEnabledNorm === '0'
+      || quickQuestionsEnabledNorm === 'false'
+    );
     const chatWidgetRaw = row.chat_widget_enabled;
     const chatWidgetNorm = str(chatWidgetRaw).trim().toLowerCase();
     const isEnabled = !(
@@ -448,9 +472,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       assistant_name: assistantName,
       assistant_gender: assistantGender,
       welcome_message: welcomeMessage,
+      welcome_enabled: welcomeEnabled,
+      assistant_enabled: assistantEnabled,
       operator_name: operatorName,
       quick_questions: quickQuestions,
       quick_questions_config: quickQuestionsConfig,
+      quick_questions_enabled: quickQuestionsEnabled,
       is_enabled: isEnabled,
     };
   }

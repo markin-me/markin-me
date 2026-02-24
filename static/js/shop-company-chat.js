@@ -43,13 +43,13 @@
   if (!feed || !thread || !composer || !selectionToolbar || !selectionCloseBtn || !selectionCountEl || !selectionCopyBtn || !selectionDeleteBtn || !attachBtn || !attachInput || !attachPreviewOverlay || !attachPreviewCloseBtn || !attachPreviewTitle || !attachPreviewImage || !attachPreviewThumbs || !attachPreviewEmojiBtn || !attachPreviewCaption || !attachPreviewSendBtn || !imageViewerOverlay || !imageViewerCloseBtn || !imageViewerImage || !imageViewerCard || !input || !emojiBtn || !emojiPopover || !scrollDownBtn || !reactionBar) return;
   const initialModalTitleText = String(modalTitle.textContent || "").trim() || "\u0427\u0430\u0442";
 
-  const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/img/google/64";
-  const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/emoji.json";
+  const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64";
+  const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/emoji.json";
   const EMOJI_REMOTE_DATASET_ENABLED = false;
   const EMOJI_NATIVE_RENDER_ONLY = true;
   const EMOJI_REACTION_POOL_LIMIT = 64;
   const EMOJI_ATLAS_ENABLED = true;
-  const EMOJI_ATLAS_URL = "/static/assets/emoji/google-people-atlas.webp?v=1";
+  const EMOJI_ATLAS_URL = "/static/assets/emoji/apple-people-atlas.webp?v=1";
   const EMOJI_ATLAS_COLUMNS = 16;
   const EMOJI_RECENT_STORAGE_KEY = "shop-company-chat-recent-emojis:v1";
   const EMOJI_CATEGORY_META = [
@@ -73,7 +73,8 @@
       "\u{1F628}","\u{1F630}","\u{1F625}","\u{1F613}","\u{1F917}","\u{1F914}","\u{1FAE1}","\u{1F92D}","\u{1FAE2}","\u{1F92B}",
       "\u{1F925}","\u{1F636}","\u{1FAE0}","\u{1F610}","\u{1FAE4}","\u{1F611}","\u{1F62C}","\u{1F644}","\u{1F62E}\u{200D}\u{1F4A8}","\u{1F924}",
       "\u{1F62A}","\u{1F635}","\u{1F910}","\u{1F974}","\u{1F922}","\u{1F92E}","\u{1F927}","\u{1F637}","\u{1F912}","\u{1F915}",
-      "\u{2764}\u{FE0F}","\u{1F494}","\u{1F4AF}","\u{1F44D}","\u{1F44E}","\u{1F44F}","\u{1F64C}","\u{1F64F}","\u{1F44B}","\u{1F91D}","\u{1F4AA}"
+      "\u{2764}\u{FE0F}","\u{1F494}","\u{1F4AF}","\u{1F44D}","\u{1F44E}","\u{1F44F}","\u{1F64C}","\u{1F64F}","\u{1F44B}","\u{1F91D}","\u{1F4AA}",
+      "\u{1F622}","\u{1F525}","\u{1F62E}"
     ],
     nature: [],
     food: [],
@@ -99,7 +100,7 @@
     "\u{1F621}",
   ];
   const EXTRA_REACTIONS = [
-    "\u{1F622}",
+    "\u{1F97A}",
     "\u{1F615}",
     "\u{1F61E}",
     "\u{1F61F}",
@@ -126,6 +127,7 @@
   const CHAT_THREAD_PAGE_MAX_SIZE = 200;
   const CHAT_DROP_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif|heic|heif)$/i;
   const CHAT_AUTOSCROLL_MS = 170;
+  const CHAT_EMOJI_SHEET_SETTLE_MS = 280;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
   const CHAT_TYPING_HEARTBEAT_MS = 1800;
   const CHAT_TYPING_IDLE_STOP_MS = 2600;
@@ -213,12 +215,6 @@
   const DEFAULT_CHAT_ASSISTANT_GENDER = CHAT_ASSISTANT_GENDER_MALE;
   const HOT_QUESTION_ORDER_KEY = "\u0433\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437";
   const HOT_QUESTION_ORDER_KEY_ALT = "\u0433\u0434\u0435 \u0437\u0430\u043a\u0430\u0437";
-  const HOT_QUESTION_QUALITY_KEY =
-    "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430";
-  const HOT_QUESTION_COMPLETENESS_KEY =
-    "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430";
-  const HOT_QUESTION_OTHER_KEY =
-    "\u0434\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441";
   const HOT_QUESTION_GUEST_PHONE_REPLY =
     "\u041d\u0435 \u043c\u043e\u0433\u0443 \u043d\u0430\u0439\u0442\u0438 \u0432\u0430\u0441 \u0432 \u0431\u0430\u0437\u0435. " +
     "\u041f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430.";
@@ -231,24 +227,6 @@
   const HOT_QUESTION_ORDER_STATUS_UNKNOWN = "\u0421\u0442\u0430\u0442\u0443\u0441 \u0443\u0442\u043e\u0447\u043d\u044f\u0435\u0442\u0441\u044f";
   const HOT_QUESTION_ORDER_LIST_PREFIX = "\u041d\u0430\u0448\u0435\u043b \u0432\u0430\u0448\u0438 \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0435 \u0437\u0430\u043a\u0430\u0437\u044b.";
   const HOT_QUESTION_ORDER_LIST_PREFIX_FEMALE = "\u041d\u0430\u0448\u043b\u0430 \u0432\u0430\u0448\u0438 \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0435 \u0437\u0430\u043a\u0430\u0437\u044b.";
-  const HOT_QUESTION_QUALITY_REPLY =
-    "\u041e\u0447\u0435\u043d\u044c \u0436\u0430\u043b\u044c, \u0447\u0442\u043e \u0442\u0430\u043a \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u043e\u0441\u044c. " +
-    "\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, " +
-    "\u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a.";
-  const HOT_QUESTION_COMPLETENESS_REPLY =
-    "\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, " +
-    "\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c.";
-  const HOT_QUESTION_COMPLETENESS_REPLY_FEMALE =
-    "\u041f\u043e\u043d\u044f\u043b\u0430. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, " +
-    "\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c.";
-  const HOT_QUESTION_OTHER_REPLY =
-    "\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. \u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435.";
-  const HOT_QUESTION_GENERIC_DETAILS_REPLY =
-    "\u0427\u0442\u043e\u0431\u044b \u043f\u0435\u0440\u0435\u0434\u0430\u0442\u044c \u043e\u0431\u0440\u0430\u0449\u0435\u043d\u0438\u0435 \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440\u0443, " +
-    "\u043e\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u0441\u0438\u0442\u0443\u0430\u0446\u0438\u044e \u0447\u0443\u0442\u044c \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435.";
-  const HOT_QUESTION_OPERATOR_HANDOFF_REPLY =
-    "\u041f\u0435\u0440\u0435\u0434\u0430\u044e \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440\u0443. " +
-    "\u041e\u043d \u043e\u0442\u0432\u0435\u0442\u0438\u0442 \u0432 \u044d\u0442\u043e\u043c \u0447\u0430\u0442\u0435.";
   const ASSISTANT_MESSAGE_ID_PREFIX = "assistant-auto-";
   const HOT_QUESTION_PHONE_PATTERN = /(?:\+?\d[\d\s\-()]{8,}\d)/g;
   const HOT_QUESTION_ORDER_CARD_MESSAGE_RE = /^assistant-auto-(?:where-order|phone-order)-o([0-9_]+)-/;
@@ -276,6 +254,7 @@
     assistantName: DEFAULT_CHAT_ASSISTANT_NAME,
     assistantGender: DEFAULT_CHAT_ASSISTANT_GENDER,
     welcomeMessage: DEFAULT_CHAT_WELCOME_MESSAGE,
+    welcomeEnabled: true,
     optionsText: DEFAULT_CHAT_OPTIONS_TEXT,
     quickQuestions: DEFAULT_CHAT_QUICK_QUESTIONS.slice(),
     quickQuestionsConfig: DEFAULT_CHAT_QUICK_QUESTION_ITEMS.map(function (item) {
@@ -287,14 +266,13 @@
         enabled: item.enabled !== false,
       };
     }),
+    quickQuestionsEnabled: true,
     operatorName: "",
+    assistantEnabled: true,
     isEnabled: true,
   };
   const hotQuestionAliases = {
     order: new Set([HOT_QUESTION_ORDER_KEY, HOT_QUESTION_ORDER_KEY_ALT]),
-    quality: new Set([HOT_QUESTION_QUALITY_KEY]),
-    completeness: new Set([HOT_QUESTION_COMPLETENESS_KEY]),
-    other: new Set([HOT_QUESTION_OTHER_KEY]),
   };
 
   const baseEntries = [];
@@ -315,6 +293,8 @@
   let sharedThreadMutationVersion = 0;
   let profileMergeInFlight = false;
   let feedScrollRaf = 0;
+  let emojiSheetSettleRaf = 0;
+  let emojiSheetSettleTimer = 0;
   let sharedPullInFlight = false;
   let sharedHistoryHasMore = false;
   let sharedHistoryNextBeforeId = null;
@@ -361,7 +341,6 @@
   let webPushSyncRequestedWithPermission = false;
   let webPushSyncForceRequested = false;
   let webPushSyncQueuedClientId = "";
-  const assistantHandoffPendingByClient = new Map();
   const selectedMessageIds = new Set();
   const hotQuestionOrderCardsCache = new Map();
   const hotQuestionOrderCardsFetchInFlight = new Map();
@@ -708,6 +687,62 @@
   function clampFeedScrollTop(value) {
     const maxTop = Math.max(0, feed.scrollHeight - feed.clientHeight);
     return Math.max(0, Math.min(Number(value || 0), maxTop));
+  }
+
+  function getFeedBottomDistanceSnapshot() {
+    if (!feed) return null;
+    const distance = Number(feed.scrollHeight || 0) - Number(feed.clientHeight || 0) - Number(feed.scrollTop || 0);
+    if (!Number.isFinite(distance)) return null;
+    return Math.max(0, distance);
+  }
+
+  function applyFeedBottomDistanceSnapshot(distance) {
+    if (!feed) return false;
+    const raw = Number(distance);
+    if (!Number.isFinite(raw)) return false;
+    const nextTop = Number(feed.scrollHeight || 0) - Number(feed.clientHeight || 0) - Math.max(0, raw);
+    feed.scrollTop = clampFeedScrollTop(nextTop);
+    updateScrollDownButton();
+    return true;
+  }
+
+  function stopEmojiSheetBottomDistanceStabilization() {
+    if (emojiSheetSettleRaf) {
+      cancelAnimationFrame(emojiSheetSettleRaf);
+      emojiSheetSettleRaf = 0;
+    }
+    if (emojiSheetSettleTimer) {
+      clearTimeout(emojiSheetSettleTimer);
+      emojiSheetSettleTimer = 0;
+    }
+  }
+
+  function stabilizeFeedBottomDistance(distance, durationMs) {
+    const target = Number(distance);
+    if (!Number.isFinite(target) || target < 0) return;
+    const duration = Math.max(120, Number(durationMs || CHAT_EMOJI_SHEET_SETTLE_MS));
+    stopEmojiSheetBottomDistanceStabilization();
+
+    const startedAt = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+
+    const step = function (now) {
+      applyFeedBottomDistanceSnapshot(target);
+      const current = typeof now === "number" ? now : Date.now();
+      if ((current - startedAt) < duration) {
+        emojiSheetSettleRaf = requestAnimationFrame(step);
+        return;
+      }
+      emojiSheetSettleRaf = 0;
+      applyFeedBottomDistanceSnapshot(target);
+    };
+
+    emojiSheetSettleRaf = requestAnimationFrame(step);
+    emojiSheetSettleTimer = window.setTimeout(function () {
+      stopEmojiSheetBottomDistanceStabilization();
+      applyFeedBottomDistanceSnapshot(target);
+    }, duration + 90);
   }
 
   function normalizePersistedFeedTop(value) {
@@ -1552,14 +1587,6 @@
     return normalized.includes(HOT_QUESTION_ORDER_KEY) || normalized.includes(HOT_QUESTION_ORDER_KEY_ALT);
   }
 
-  function getDefaultQuickQuestionAnswerByText(value) {
-    const key = normalizeHotQuestionKey(value);
-    if (key === HOT_QUESTION_QUALITY_KEY) return HOT_QUESTION_QUALITY_REPLY;
-    if (key === HOT_QUESTION_COMPLETENESS_KEY) return HOT_QUESTION_COMPLETENESS_REPLY;
-    if (key === HOT_QUESTION_OTHER_KEY) return HOT_QUESTION_OTHER_REPLY;
-    return "";
-  }
-
   function normalizeChatQuickQuestionConfigList(rawValue) {
     let parsed = [];
     if (Array.isArray(rawValue)) {
@@ -1601,7 +1628,7 @@
         customCandidates.push({
           id: "",
           question: question,
-          answer: getDefaultQuickQuestionAnswerByText(question),
+          answer: "",
           enabled: true,
         });
         return;
@@ -1634,7 +1661,6 @@
       let answer = normalizeChatQuickQuestionAnswer(
         source.answer ?? source.reply ?? source.response ?? source.message ?? ""
       );
-      if (!answer) answer = getDefaultQuickQuestionAnswerByText(question);
       customCandidates.push({
         id: rawId,
         question: question,
@@ -1704,18 +1730,7 @@
       const type = String(item.type || "").toLowerCase();
       return id === CHAT_QUICK_ORDER_ID || type === "order";
     });
-    const enabledCustom = quickConfig
-      .filter(function (item) {
-        if (!item || item.enabled === false) return false;
-        const id = String(item.id || "").toLowerCase();
-        const type = String(item.type || "").toLowerCase();
-        return !(id === CHAT_QUICK_ORDER_ID || type === "order");
-      })
-      .slice(0, 3);
     const orderAliases = [HOT_QUESTION_ORDER_KEY, HOT_QUESTION_ORDER_KEY_ALT];
-    const qualityAliases = [HOT_QUESTION_QUALITY_KEY];
-    const completenessAliases = [HOT_QUESTION_COMPLETENESS_KEY];
-    const otherAliases = [HOT_QUESTION_OTHER_KEY];
 
     const addNormalizedAlias = function (target, value) {
       const normalized = normalizeHotQuestionKey(value);
@@ -1725,14 +1740,8 @@
 
     addNormalizedAlias(orderAliases, CHAT_QUICK_ORDER_QUESTION);
     if (orderItem) addNormalizedAlias(orderAliases, orderItem.question);
-    addNormalizedAlias(qualityAliases, enabledCustom[0] && enabledCustom[0].question);
-    addNormalizedAlias(completenessAliases, enabledCustom[1] && enabledCustom[1].question);
-    addNormalizedAlias(otherAliases, enabledCustom[2] && enabledCustom[2].question);
 
     applyAliasSet(hotQuestionAliases.order, orderAliases);
-    applyAliasSet(hotQuestionAliases.quality, qualityAliases);
-    applyAliasSet(hotQuestionAliases.completeness, completenessAliases);
-    applyAliasSet(hotQuestionAliases.other, otherAliases);
   }
 
   function normalizeAssistantGenderValue(rawValue) {
@@ -1779,6 +1788,16 @@
       source.welcome_message ?? source.chat_welcome_message ?? ""
     ).trim();
     const welcomeMessage = welcomeMessageRaw || getDefaultChatWelcomeMessageByGender(assistantGender);
+    const welcomeEnabledRaw =
+      source.welcome_enabled
+      ?? source.chat_welcome_enabled;
+    const welcomeEnabledNorm = String(welcomeEnabledRaw == null ? "" : welcomeEnabledRaw).trim().toLowerCase();
+    const welcomeEnabled = !(
+      welcomeEnabledRaw === false
+      || welcomeEnabledRaw === 0
+      || welcomeEnabledNorm === "0"
+      || welcomeEnabledNorm === "false"
+    );
     const operatorName = String(
       source.operator_name
       ?? source.chat_operator_name
@@ -1786,20 +1805,43 @@
       ?? source.name
       ?? ""
     ).trim();
+    const assistantEnabledRaw =
+      source.assistant_enabled
+      ?? source.chat_assistant_enabled;
+    const assistantEnabledNorm = String(assistantEnabledRaw == null ? "" : assistantEnabledRaw).trim().toLowerCase();
+    const assistantEnabled = !(
+      assistantEnabledRaw === false
+      || assistantEnabledRaw === 0
+      || assistantEnabledNorm === "0"
+      || assistantEnabledNorm === "false"
+    );
     const quickQuestionsConfig = normalizeChatQuickQuestionConfigList(
       source.quick_questions_config
       ?? source.quick_questions
       ?? source.chat_quick_questions_json
     );
     const quickQuestions = buildEnabledQuickQuestions(quickQuestionsConfig);
+    const quickQuestionsEnabledRaw =
+      source.quick_questions_enabled
+      ?? source.chat_quick_questions_enabled;
+    const quickQuestionsEnabledNorm = String(quickQuestionsEnabledRaw == null ? "" : quickQuestionsEnabledRaw).trim().toLowerCase();
+    const quickQuestionsEnabled = !(
+      quickQuestionsEnabledRaw === false
+      || quickQuestionsEnabledRaw === 0
+      || quickQuestionsEnabledNorm === "0"
+      || quickQuestionsEnabledNorm === "false"
+    );
     return {
       assistantName: assistantName,
       assistantGender: assistantGender,
       welcomeMessage: welcomeMessage,
+      welcomeEnabled: welcomeEnabled,
       optionsText: DEFAULT_CHAT_OPTIONS_TEXT,
       quickQuestions: quickQuestions,
       quickQuestionsConfig: quickQuestionsConfig,
+      quickQuestionsEnabled: quickQuestionsEnabled,
       operatorName: operatorName,
+      assistantEnabled: assistantEnabled,
       isEnabled: isEnabled,
     };
   }
@@ -1861,10 +1903,13 @@
       String(chatRuntimeSettings.assistantName || ""),
       String(chatRuntimeSettings.assistantGender || ""),
       String(chatRuntimeSettings.welcomeMessage || ""),
+      String(chatRuntimeSettings.welcomeEnabled !== false ? "1" : "0"),
       String(chatRuntimeSettings.optionsText || ""),
       String(chatRuntimeSettings.operatorName || ""),
       JSON.stringify(chatRuntimeSettings.quickQuestions || []),
       JSON.stringify(chatRuntimeSettings.quickQuestionsConfig || []),
+      String(chatRuntimeSettings.quickQuestionsEnabled !== false ? "1" : "0"),
+      String(chatRuntimeSettings.assistantEnabled !== false ? "1" : "0"),
       String(chatRuntimeSettings.isEnabled !== false ? "1" : "0"),
     ].join("|");
 
@@ -1872,12 +1917,15 @@
     chatRuntimeSettings.assistantName = next.assistantName;
     chatRuntimeSettings.assistantGender = normalizeAssistantGenderValue(next.assistantGender);
     chatRuntimeSettings.welcomeMessage = next.welcomeMessage;
+    chatRuntimeSettings.welcomeEnabled = next.welcomeEnabled !== false;
     chatRuntimeSettings.optionsText = next.optionsText;
     chatRuntimeSettings.quickQuestions = next.quickQuestions.slice();
     chatRuntimeSettings.quickQuestionsConfig = Array.isArray(next.quickQuestionsConfig)
       ? next.quickQuestionsConfig.slice()
       : cloneDefaultChatQuickQuestionItems();
+    chatRuntimeSettings.quickQuestionsEnabled = next.quickQuestionsEnabled !== false;
     chatRuntimeSettings.operatorName = next.operatorName;
+    chatRuntimeSettings.assistantEnabled = next.assistantEnabled !== false;
     chatRuntimeSettings.isEnabled = next.isEnabled !== false;
     rebuildHotQuestionAliases();
     applyChatWidgetEnabledState(chatRuntimeSettings.isEnabled);
@@ -1886,10 +1934,13 @@
       String(chatRuntimeSettings.assistantName || ""),
       String(chatRuntimeSettings.assistantGender || ""),
       String(chatRuntimeSettings.welcomeMessage || ""),
+      String(chatRuntimeSettings.welcomeEnabled !== false ? "1" : "0"),
       String(chatRuntimeSettings.optionsText || ""),
       String(chatRuntimeSettings.operatorName || ""),
       JSON.stringify(chatRuntimeSettings.quickQuestions || []),
       JSON.stringify(chatRuntimeSettings.quickQuestionsConfig || []),
+      String(chatRuntimeSettings.quickQuestionsEnabled !== false ? "1" : "0"),
+      String(chatRuntimeSettings.assistantEnabled !== false ? "1" : "0"),
       String(chatRuntimeSettings.isEnabled !== false ? "1" : "0"),
     ].join("|");
     if (opts.refreshUi === true && prevStateKey !== nextStateKey) {
@@ -1905,9 +1956,12 @@
       chat_assistant_name: tenant.chat_assistant_name,
       chat_assistant_gender: tenant.chat_assistant_gender,
       chat_welcome_message: tenant.chat_welcome_message,
+      chat_welcome_enabled: tenant.chat_welcome_enabled,
       chat_operator_name: tenant.chat_operator_name,
       chat_quick_questions_json: tenant.chat_quick_questions_json,
+      chat_quick_questions_enabled: tenant.chat_quick_questions_enabled,
       quick_questions_config: tenant.quick_questions_config,
+      chat_assistant_enabled: tenant.chat_assistant_enabled,
       chat_widget_enabled: tenant.chat_widget_enabled,
       site_name: tenant.site_name,
       name: tenant.name,
@@ -3370,9 +3424,27 @@
     };
   }
 
+  function getEmojiAtlasRenderCellSize(glyphClassName) {
+    const cls = String(glyphClassName || "");
+    if (!cls) return 24;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--reaction") !== -1) return 26;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--pill") !== -1) return 32;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--composer") !== -1) return 30;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--picker") !== -1) return 24;
+    if (
+      cls.indexOf("shop-company-chat-emoji-glyph--input-inline") !== -1
+      || cls.indexOf("shop-company-chat-emoji-glyph--preview") !== -1
+    ) {
+      return null;
+    }
+    return 24;
+  }
+
   function createEmojiAtlasGlyph(glyphClassName, emojiValue) {
     const pos = getEmojiAtlasPosition(emojiValue);
     if (!pos) return null;
+    const cellSize = getEmojiAtlasRenderCellSize(glyphClassName);
+    const hasPixelLayout = Number.isFinite(cellSize) && cellSize > 0;
     const xPercent = EMOJI_ATLAS_COLUMNS > 1 ? (pos.col / (EMOJI_ATLAS_COLUMNS - 1)) * 100 : 0;
     const yPercent = EMOJI_ATLAS_ROWS > 1 ? (pos.row / (EMOJI_ATLAS_ROWS - 1)) * 100 : 0;
 
@@ -3380,8 +3452,13 @@
     glyph.className = String(glyphClassName || "");
     glyph.style.backgroundImage = 'url("' + EMOJI_ATLAS_URL + '")';
     glyph.style.backgroundRepeat = "no-repeat";
-    glyph.style.backgroundSize = String(EMOJI_ATLAS_COLUMNS * 100) + "% " + String(EMOJI_ATLAS_ROWS * 100) + "%";
-    glyph.style.backgroundPosition = String(xPercent) + "% " + String(yPercent) + "%";
+    if (hasPixelLayout) {
+      glyph.style.backgroundSize = String(EMOJI_ATLAS_COLUMNS * cellSize) + "px " + String(EMOJI_ATLAS_ROWS * cellSize) + "px";
+      glyph.style.backgroundPosition = String(-pos.col * cellSize) + "px " + String(-pos.row * cellSize) + "px";
+    } else {
+      glyph.style.backgroundSize = String(EMOJI_ATLAS_COLUMNS * 100) + "% " + String(EMOJI_ATLAS_ROWS * 100) + "%";
+      glyph.style.backgroundPosition = String(xPercent) + "% " + String(yPercent) + "%";
+    }
     glyph.setAttribute("aria-hidden", "true");
     return glyph;
   }
@@ -3425,47 +3502,17 @@
     if (!host) return;
     const val = String(glyphValue || "");
     if (!val) return;
-    const atlasGlyph = createEmojiAtlasGlyph(className, val);
-    if (atlasGlyph) {
-      host.appendChild(atlasGlyph);
-      return;
-    }
-    const glyph = document.createElement("span");
-    glyph.className = String(className || "");
-    glyph.textContent = val;
-    glyph.setAttribute("aria-hidden", "true");
-    host.appendChild(glyph);
+    const cls = String(className || "");
+    const atlasGlyph = createEmojiAtlasGlyph(cls, val);
+    if (!atlasGlyph) return;
+    host.appendChild(atlasGlyph);
   }
 
   function setEmojiGlyph(target, emoji, glyphClassName) {
     if (!target) return;
     const value = String(emoji || "");
-    if (emojiAssetsState === "fallback") {
-      target.textContent = "";
-      appendNativeEmojiGlyph(target, value, glyphClassName);
-      return;
-    }
-    const src = getEmojiAssetUrl(value);
     target.textContent = "";
-    if (!src) {
-      appendNativeEmojiGlyph(target, value, glyphClassName);
-      return;
-    }
-
-    const img = document.createElement("img");
-    img.className = glyphClassName;
-    img.src = src;
-    img.alt = value;
-    img.decoding = "async";
-    img.loading = "lazy";
-    img.fetchPriority = "low";
-    img.draggable = false;
-    img.setAttribute("aria-hidden", "true");
-    img.addEventListener("error", function () {
-      target.textContent = value;
-      activateNativeEmojiFallback();
-    }, { once: true });
-    target.appendChild(img);
+    appendNativeEmojiGlyph(target, value, glyphClassName);
   }
 
   const emojiGraphemeSegmenter = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
@@ -3515,28 +3562,6 @@
       const segments = segmentGraphemes(line);
       segments.forEach(function (segment) {
         if (isEmojiGrapheme(segment)) {
-          if (emojiAssetsState === "fallback") {
-            appendNativeEmojiGlyph(target, segment, glyphClassName);
-            return;
-          }
-          const src = getEmojiAssetUrl(segment);
-          if (src) {
-            const img = document.createElement("img");
-            img.className = glyphClassName;
-            img.src = src;
-            img.alt = segment;
-            img.decoding = "async";
-            img.loading = "lazy";
-            img.fetchPriority = "low";
-            img.draggable = false;
-            img.setAttribute("aria-hidden", "true");
-            img.addEventListener("error", function () {
-              img.replaceWith(document.createTextNode(segment));
-              activateNativeEmojiFallback();
-            }, { once: true });
-            target.appendChild(img);
-            return;
-          }
           appendNativeEmojiGlyph(target, segment, glyphClassName);
           return;
         }
@@ -4156,6 +4181,9 @@
   }
 
   function ensureDailyWelcomeMessage() {
+    if (chatRuntimeSettings.assistantEnabled === false) return null;
+    if (chatRuntimeSettings.welcomeEnabled === false) return null;
+
     const dayKey = getLocalDayKey(new Date());
     if (!dayKey) return null;
 
@@ -4211,10 +4239,21 @@
   }
 
   function getAllEntries() {
+    const quickQuestionsFeatureEnabled = (
+      chatRuntimeSettings.assistantEnabled !== false
+      && chatRuntimeSettings.quickQuestionsEnabled !== false
+      && chatRuntimeSettings.welcomeEnabled !== false
+    );
     const rawEntries = baseEntries
       .slice(visibleStart)
       .concat(liveEntries)
       .filter(function (entry) {
+        if (entry && entry.type === "options" && !quickQuestionsFeatureEnabled) return false;
+        const entryId = String(entry && entry.id || "");
+        if (
+          (chatRuntimeSettings.assistantEnabled === false || chatRuntimeSettings.welcomeEnabled === false)
+          && /^daily-welcome-\d{4}-\d{2}-\d{2}$/.test(entryId)
+        ) return false;
         return !isMessageHiddenLocally(entry && entry.id);
       });
 
@@ -4228,6 +4267,7 @@
     const withDailyPair = [];
     rawEntries.forEach(function (entry) {
       withDailyPair.push(entry);
+      if (!quickQuestionsFeatureEnabled) return;
       const dayKey = getDailyWelcomeDayKey(entry);
       if (!dayKey) return;
 
@@ -4523,14 +4563,10 @@
         if (reaction === "__toggle_more__") {
           event.preventDefault();
           event.stopPropagation();
-          const targetMessageId = String(contextMenuMessageId || "");
-          hideContextMenu();
           hideReactionBar();
-          showEmojiPopover("composer", {
-            mode: targetMessageId ? "reaction" : "composer",
-            messageId: targetMessageId,
-          });
-          if (input) input.focus();
+          const nextExpanded = !menu.classList.contains("is-reactions-expanded");
+          setContextMenuReactionsExpanded(nextExpanded);
+          refreshContextMenuReactionBoxPosition();
           return;
         }
         if (!messageId || !reaction) return;
@@ -5684,13 +5720,20 @@
 
   function syncEmojiSheetOpenState() {
     if (!modalBody || !emojiPopover) return;
+    const wasMobileSheetOpen = modalBody.classList.contains("is-emoji-sheet-open");
     const isMobileSheetOpen = (
       !emojiPopover.classList.contains("hidden")
       && emojiPopover.classList.contains("is-mobile-sheet")
       && !emojiPopover.classList.contains("is-attach-preview")
     );
+    const feedBottomDistance = wasMobileSheetOpen !== isMobileSheetOpen
+      ? getFeedBottomDistanceSnapshot()
+      : null;
     modalBody.classList.toggle("is-emoji-sheet-open", isMobileSheetOpen);
     setComposerEmojiButtonMode(isMobileSheetOpen);
+    if (feedBottomDistance != null) {
+      stabilizeFeedBottomDistance(feedBottomDistance, CHAT_EMOJI_SHEET_SETTLE_MS);
+    }
   }
 
   function setEmojiDefaultOpenCategory() {
@@ -5729,6 +5772,7 @@
   }
 
   function hideEmojiPopover() {
+    stopEmojiSheetBottomDistanceStabilization();
     remountEmojiPopover("composer");
     emojiPopover.classList.add("hidden");
     emojiPopover.classList.remove("is-attach-preview");
@@ -7211,6 +7255,7 @@
   }
 
   function pushAssistantAutoReply(activeClientId, text, idSuffix, options) {
+    if (chatRuntimeSettings.assistantEnabled === false) return;
     const opts = options && typeof options === "object" ? options : {};
     const readyText = String(text || "").trim();
     if (!readyText) return;
@@ -7232,22 +7277,6 @@
       messageId: makeAssistantMessageId(suffix),
       author: String(chatRuntimeSettings.assistantName || DEFAULT_CHAT_ASSISTANT_NAME),
     });
-  }
-
-  function setAssistantHandoffPending(clientId, value) {
-    const id = String(clientId || "");
-    if (!id) return;
-    if (value === true) {
-      assistantHandoffPendingByClient.set(id, true);
-      return;
-    }
-    assistantHandoffPendingByClient.delete(id);
-  }
-
-  function isAssistantHandoffPending(clientId) {
-    const id = String(clientId || "");
-    if (!id) return false;
-    return assistantHandoffPendingByClient.get(id) === true;
   }
 
   function findMatchedCustomQuickQuestionConfig(normalizedText) {
@@ -7273,28 +7302,15 @@
     const matched = findMatchedCustomQuickQuestionConfig(normalizedText);
     if (!matched) return null;
     const answer = normalizeChatQuickQuestionAnswer(matched.answer || "");
+    if (!answer) return null;
     return {
       id: String(matched.id || ""),
-      text: answer || HOT_QUESTION_GENERIC_DETAILS_REPLY,
-      handoff: true,
+      text: answer,
     };
   }
 
-  function resolveAssistantDetailsReply(normalizedText) {
-    const key = String(normalizedText || "");
-    if (!key) return "";
-    if (hasHotQuestionAlias(hotQuestionAliases.quality, key, { includes: true })) return HOT_QUESTION_QUALITY_REPLY;
-    if (hasHotQuestionAlias(hotQuestionAliases.completeness, key, { includes: true })) {
-      return getGenderedAssistantText(
-        HOT_QUESTION_COMPLETENESS_REPLY,
-        HOT_QUESTION_COMPLETENESS_REPLY_FEMALE
-      );
-    }
-    if (hasHotQuestionAlias(hotQuestionAliases.other, key, { includes: true })) return HOT_QUESTION_OTHER_REPLY;
-    return "";
-  }
-
   function scheduleAssistantHotQuestionReply(userText) {
+    if (chatRuntimeSettings.assistantEnabled === false) return;
     const normalized = normalizeHotQuestionKey(userText);
     if (!normalized) return;
 
@@ -7303,7 +7319,6 @@
 
     const phoneCandidate = extractPhoneCandidateFromHotQuestionText(userText);
     if (phoneCandidate) {
-      setAssistantHandoffPending(activeClientId, false);
       window.setTimeout(function () {
         buildWhereIsOrderAutoReplyPayload({ phone: phoneCandidate })
           .then(function (payload) {
@@ -7320,7 +7335,6 @@
     }
 
     if (isWhereIsOrderHotQuestion(normalized)) {
-      setAssistantHandoffPending(activeClientId, false);
       window.setTimeout(function () {
         buildWhereIsOrderAutoReplyPayload()
           .then(function (payload) {
@@ -7336,38 +7350,20 @@
       return;
     }
 
-    const quickReply = resolveConfiguredQuickQuestionReply(normalized);
+    const quickReply = (
+      chatRuntimeSettings.quickQuestionsEnabled === false
+      || chatRuntimeSettings.welcomeEnabled === false
+    )
+      ? null
+      : resolveConfiguredQuickQuestionReply(normalized);
     if (quickReply && quickReply.text) {
       const suffixSource = String(quickReply.id || "custom");
       const suffixSafe = suffixSource.replace(/[^\w-]+/g, "").slice(0, 32) || "custom";
       window.setTimeout(function () {
         pushAssistantAutoReply(activeClientId, quickReply.text, "quick-" + suffixSafe);
       }, 360);
-      setAssistantHandoffPending(activeClientId, quickReply.handoff === true);
       return;
     }
-
-    const detailsReply = resolveAssistantDetailsReply(normalized);
-    if (detailsReply) {
-      window.setTimeout(function () {
-        pushAssistantAutoReply(activeClientId, detailsReply, "details");
-      }, 360);
-      setAssistantHandoffPending(activeClientId, true);
-      return;
-    }
-
-    if (isAssistantHandoffPending(activeClientId)) {
-      setAssistantHandoffPending(activeClientId, false);
-      window.setTimeout(function () {
-        pushAssistantAutoReply(activeClientId, HOT_QUESTION_OPERATOR_HANDOFF_REPLY, "handoff");
-      }, 360);
-      return;
-    }
-
-    window.setTimeout(function () {
-      pushAssistantAutoReply(activeClientId, HOT_QUESTION_GENERIC_DETAILS_REPLY, "details");
-    }, 360);
-    setAssistantHandoffPending(activeClientId, true);
   }
 
   function sendUserMessage(text, options) {
@@ -8295,14 +8291,13 @@
     if (reaction === "__toggle_more__") {
       event.preventDefault();
       event.stopPropagation();
-      const targetMessageId = String(reactionMessageId || contextMenuMessageId || "");
       hideContextMenu();
-      hideReactionBar();
-      showEmojiPopover("composer", {
-        mode: targetMessageId ? "reaction" : "composer",
-        messageId: targetMessageId,
-      });
-      if (input) input.focus();
+      const nextExpanded = !reactionBar.classList.contains("is-expanded");
+      setReactionBarExpanded(nextExpanded);
+      if (nextExpanded && reactionMessageId) {
+        const anchor = thread.querySelector('[data-message-id="' + cssEscape(reactionMessageId) + '"]');
+        if (anchor) positionReactionBar(anchor);
+      }
       return;
     }
     if (!reactionMessageId) return;
@@ -8318,7 +8313,10 @@
     if (!reactionBar.classList.contains("hidden")) {
       hideReactionBar();
     }
-    if (!emojiPopover.classList.contains("hidden")) {
+    if (
+      !emojiPopover.classList.contains("hidden")
+      && !emojiPopover.classList.contains("is-mobile-sheet")
+    ) {
       hideEmojiPopover();
     }
     updateScrollDownButton();
@@ -8404,9 +8402,23 @@
   });
 
   window.addEventListener("resize", function () {
+    const feedBottomDistance = getFeedBottomDistanceSnapshot();
     hideContextMenu();
     hideReactionBar();
-    hideEmojiPopover();
+    const keepMobileEmojiSheetOpen = (
+      isMobileChatViewport()
+      && !emojiPopover.classList.contains("hidden")
+      && emojiPopover.classList.contains("is-mobile-sheet")
+      && !emojiPopover.classList.contains("is-attach-preview")
+    );
+    if (keepMobileEmojiSheetOpen) {
+      requestAnimationFrame(function () {
+        syncEmojiPickerViewportPosition();
+        if (feedBottomDistance != null) stabilizeFeedBottomDistance(feedBottomDistance, 220);
+      });
+    } else {
+      hideEmojiPopover();
+    }
     clearTouchGesture();
     clearOrderCardMouseDrag();
     if (isMessageImageViewerOpen()) updateMessageImageViewerLayout();

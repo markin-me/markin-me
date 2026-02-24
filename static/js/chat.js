@@ -36,13 +36,13 @@
   const IMAGE_OPTIMIZE_MIN_QUALITY = 0.58;
   const IMAGE_OPTIMIZE_SCALE_STEP = 0.84;
   const TEST_CHAT_IDS_TO_PRUNE = ["9997", "9998", "9999"];
-  const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/img/google/64";
-  const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/emoji.json";
+  const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64";
+  const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/emoji.json";
   const EMOJI_REMOTE_DATASET_ENABLED = false;
   const EMOJI_NATIVE_RENDER_ONLY = true;
   const EMOJI_REACTION_POOL_LIMIT = 64;
   const EMOJI_ATLAS_ENABLED = true;
-  const EMOJI_ATLAS_URL = "/static/assets/emoji/google-people-atlas.webp?v=1";
+  const EMOJI_ATLAS_URL = "/static/assets/emoji/apple-people-atlas.webp?v=1";
   const EMOJI_ATLAS_COLUMNS = 16;
   const EMOJI_RECENT_STORAGE_KEY = "dashboard:chat-recent-emojis:v1";
   const CHAT_ASSISTANT_ORDER_CARD_MESSAGE_RE = /^assistant-auto-(?:where-order|phone-order)-o([0-9_]+)-/;
@@ -71,7 +71,8 @@
       "\u{1F628}","\u{1F630}","\u{1F625}","\u{1F613}","\u{1F917}","\u{1F914}","\u{1FAE1}","\u{1F92D}","\u{1FAE2}","\u{1F92B}",
       "\u{1F925}","\u{1F636}","\u{1FAE0}","\u{1F610}","\u{1FAE4}","\u{1F611}","\u{1F62C}","\u{1F644}","\u{1F62E}\u{200D}\u{1F4A8}","\u{1F924}",
       "\u{1F62A}","\u{1F635}","\u{1F910}","\u{1F974}","\u{1F922}","\u{1F92E}","\u{1F927}","\u{1F637}","\u{1F912}","\u{1F915}",
-      "\u{2764}\u{FE0F}","\u{1F494}","\u{1F4AF}","\u{1F44D}","\u{1F44E}","\u{1F44F}","\u{1F64C}","\u{1F64F}","\u{1F44B}","\u{1F91D}","\u{1F4AA}"
+      "\u{2764}\u{FE0F}","\u{1F494}","\u{1F4AF}","\u{1F44D}","\u{1F44E}","\u{1F44F}","\u{1F64C}","\u{1F64F}","\u{1F44B}","\u{1F91D}","\u{1F4AA}",
+      "\u{1F622}","\u{1F525}","\u{1F62E}"
     ],
     nature: [],
     food: [],
@@ -97,7 +98,7 @@
     "\u{1F621}",
   ];
   const EXTRA_REACTIONS = [
-    "\u{1F622}",
+    "\u{1F97A}",
     "\u{1F615}",
     "\u{1F61E}",
     "\u{1F61F}",
@@ -2879,9 +2880,29 @@
     };
   }
 
+  function getEmojiAtlasRenderCellSize(glyphClassName) {
+    const cls = String(glyphClassName || "");
+    if (!cls) return 24;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--reaction") !== -1 || cls.indexOf("chat-emoji-glyph--reaction") !== -1) return 26;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--pill") !== -1 || cls.indexOf("chat-emoji-glyph--pill") !== -1) return 32;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--composer") !== -1 || cls.indexOf("chat-emoji-glyph--composer") !== -1) return 30;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--picker") !== -1 || cls.indexOf("chat-emoji-glyph--picker") !== -1) return 24;
+    if (
+      cls.indexOf("shop-company-chat-emoji-glyph--input-inline") !== -1
+      || cls.indexOf("shop-company-chat-emoji-glyph--preview") !== -1
+      || cls.indexOf("chat-emoji-glyph--input-inline") !== -1
+      || cls.indexOf("chat-emoji-glyph--preview") !== -1
+    ) {
+      return null;
+    }
+    return 24;
+  }
+
   function createEmojiAtlasGlyph(glyphClassName, emojiValue) {
     const pos = getEmojiAtlasPosition(emojiValue);
     if (!pos) return null;
+    const cellSize = getEmojiAtlasRenderCellSize(glyphClassName);
+    const hasPixelLayout = Number.isFinite(cellSize) && cellSize > 0;
     const xPercent = EMOJI_ATLAS_COLUMNS > 1 ? (pos.col / (EMOJI_ATLAS_COLUMNS - 1)) * 100 : 0;
     const yPercent = EMOJI_ATLAS_ROWS > 1 ? (pos.row / (EMOJI_ATLAS_ROWS - 1)) * 100 : 0;
 
@@ -2889,8 +2910,13 @@
     glyph.className = String(glyphClassName || "");
     glyph.style.backgroundImage = `url("${EMOJI_ATLAS_URL}")`;
     glyph.style.backgroundRepeat = "no-repeat";
-    glyph.style.backgroundSize = `${EMOJI_ATLAS_COLUMNS * 100}% ${EMOJI_ATLAS_ROWS * 100}%`;
-    glyph.style.backgroundPosition = `${xPercent}% ${yPercent}%`;
+    if (hasPixelLayout) {
+      glyph.style.backgroundSize = `${EMOJI_ATLAS_COLUMNS * cellSize}px ${EMOJI_ATLAS_ROWS * cellSize}px`;
+      glyph.style.backgroundPosition = `${-pos.col * cellSize}px ${-pos.row * cellSize}px`;
+    } else {
+      glyph.style.backgroundSize = `${EMOJI_ATLAS_COLUMNS * 100}% ${EMOJI_ATLAS_ROWS * 100}%`;
+      glyph.style.backgroundPosition = `${xPercent}% ${yPercent}%`;
+    }
     glyph.setAttribute("aria-hidden", "true");
     return glyph;
   }
@@ -2899,40 +2925,17 @@
     if (!target) return;
     const value = String(emoji || "");
     if (!value) return;
-    const atlasGlyph = createEmojiAtlasGlyph(glyphClassName, value);
-    if (atlasGlyph) {
-      target.appendChild(atlasGlyph);
-      return;
-    }
-    const glyph = document.createElement("span");
-    glyph.className = String(glyphClassName || "");
-    glyph.textContent = value;
-    glyph.setAttribute("aria-hidden", "true");
-    target.appendChild(glyph);
+    const cls = String(glyphClassName || "");
+    const atlasGlyph = createEmojiAtlasGlyph(cls, value);
+    if (!atlasGlyph) return;
+    target.appendChild(atlasGlyph);
   }
 
   function setEmojiGlyph(target, emoji, glyphClassName) {
     if (!target) return;
     const value = String(emoji || "");
-    const src = getEmojiAssetUrl(value);
     target.textContent = "";
-    if (!src) {
-      appendNativeEmojiGlyph(target, value, glyphClassName);
-      return;
-    }
-
-    const img = document.createElement("img");
-    img.className = glyphClassName;
-    img.src = src;
-    img.alt = value;
-    img.decoding = "async";
-    img.loading = "lazy";
-    img.draggable = false;
-    img.setAttribute("aria-hidden", "true");
-    img.addEventListener("error", () => {
-      target.textContent = value;
-    }, { once: true });
-    target.appendChild(img);
+    appendNativeEmojiGlyph(target, value, glyphClassName);
   }
 
   const emojiGraphemeSegmenter = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
@@ -2982,22 +2985,6 @@
       const segments = segmentGraphemes(line);
       segments.forEach((segment) => {
         if (isEmojiGrapheme(segment)) {
-          const src = getEmojiAssetUrl(segment);
-          if (src) {
-            const img = document.createElement("img");
-            img.className = glyphClassName;
-            img.src = src;
-            img.alt = segment;
-            img.decoding = "async";
-            img.loading = "lazy";
-            img.draggable = false;
-            img.setAttribute("aria-hidden", "true");
-            img.addEventListener("error", () => {
-              img.replaceWith(document.createTextNode(segment));
-            }, { once: true });
-            target.appendChild(img);
-            return;
-          }
           appendNativeEmojiGlyph(target, segment, glyphClassName);
           return;
         }

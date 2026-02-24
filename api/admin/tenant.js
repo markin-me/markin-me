@@ -13,6 +13,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       sql: "text DEFAULT NULL COMMENT 'Welcome text shown in customer chat'"
     },
     {
+      name: 'chat_welcome_enabled',
+      sql: "tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Enable welcome message in customer chat'"
+    },
+    {
       name: 'chat_assistant_name',
       sql: "varchar(160) DEFAULT NULL COMMENT 'Virtual assistant display name'"
     },
@@ -25,8 +29,16 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       sql: "text DEFAULT NULL COMMENT 'JSON array of chat quick questions'"
     },
     {
+      name: 'chat_quick_questions_enabled',
+      sql: "tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Enable quick questions grid in customer chat'"
+    },
+    {
       name: 'chat_assistant_gender',
       sql: "char(1) DEFAULT NULL COMMENT 'Virtual assistant gender: m/f'"
+    },
+    {
+      name: 'chat_assistant_enabled',
+      sql: "tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Enable virtual assistant auto replies'"
     },
     {
       name: 'chat_widget_enabled',
@@ -787,6 +799,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const tgMiniAppEnabled = req.body.tg_mini_app_enabled !== undefined ? (helpers.toBool(req.body.tg_mini_app_enabled, false) ? 1 : 0) : undefined;
       const tgLoginEnabled = req.body.tg_login_enabled !== undefined ? (helpers.toBool(req.body.tg_login_enabled, false) ? 1 : 0) : undefined;
       const chatWelcomeMessage = req.body.chat_welcome_message !== undefined ? helpers.strOrNull(req.body.chat_welcome_message) : undefined;
+      const chatWelcomeEnabled = req.body.chat_welcome_enabled !== undefined
+        ? (helpers.toBool(req.body.chat_welcome_enabled, true) ? 1 : 0)
+        : undefined;
       const chatAssistantName = req.body.chat_assistant_name !== undefined ? helpers.strOrNull(req.body.chat_assistant_name) : undefined;
       const chatOperatorName = req.body.chat_operator_name !== undefined ? helpers.strOrNull(req.body.chat_operator_name) : undefined;
       let chatAssistantGender = undefined;
@@ -796,6 +811,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
           return res.status(400).json({ ok: false, error: 'BAD_CHAT_ASSISTANT_GENDER' });
         }
       }
+      const chatAssistantEnabled = req.body.chat_assistant_enabled !== undefined
+        ? (helpers.toBool(req.body.chat_assistant_enabled, true) ? 1 : 0)
+        : undefined;
       const chatWidgetEnabled = req.body.chat_widget_enabled !== undefined
         ? (helpers.toBool(req.body.chat_widget_enabled, true) ? 1 : 0)
         : undefined;
@@ -829,6 +847,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
             : JSON.stringify(normalizedItems);
         }
       }
+      const chatQuickQuestionsEnabled = req.body.chat_quick_questions_enabled !== undefined
+        ? (helpers.toBool(req.body.chat_quick_questions_enabled, true) ? 1 : 0)
+        : undefined;
 
       if (!tenantId) {
         return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
@@ -968,6 +989,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const nextTgMiniAppEnabled = tgMiniAppEnabled !== undefined ? tgMiniAppEnabled : (current.tg_mini_app_enabled ?? 0);
       const nextTgLoginEnabled = tgLoginEnabled !== undefined ? tgLoginEnabled : (current.tg_login_enabled ?? 0);
       const nextChatWelcomeMessage = chatWelcomeMessage !== undefined ? chatWelcomeMessage : (current.chat_welcome_message ?? null);
+      const nextChatWelcomeEnabled = chatWelcomeEnabled !== undefined
+        ? chatWelcomeEnabled
+        : (Number(current.chat_welcome_enabled) === 0 ? 0 : 1);
       const nextChatAssistantName = chatAssistantName !== undefined ? chatAssistantName : (current.chat_assistant_name ?? null);
       const nextChatOperatorName = chatOperatorName !== undefined ? chatOperatorName : (current.chat_operator_name ?? null);
       const currentChatAssistantGenderRaw = normalizeChatAssistantGender(current.chat_assistant_gender);
@@ -978,6 +1002,12 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const nextChatAssistantGender =
         chatAssistantGender !== undefined ? chatAssistantGender : currentChatAssistantGender;
       const nextChatQuickQuestionsJson = chatQuickQuestionsJson !== undefined ? chatQuickQuestionsJson : (current.chat_quick_questions_json ?? null);
+      const nextChatQuickQuestionsEnabled = chatQuickQuestionsEnabled !== undefined
+        ? chatQuickQuestionsEnabled
+        : (Number(current.chat_quick_questions_enabled) === 0 ? 0 : 1);
+      const nextChatAssistantEnabled = chatAssistantEnabled !== undefined
+        ? chatAssistantEnabled
+        : (Number(current.chat_assistant_enabled) === 0 ? 0 : 1);
       const nextChatWidgetEnabled = chatWidgetEnabled !== undefined
         ? chatWidgetEnabled
         : (Number(current.chat_widget_enabled) === 0 ? 0 : 1);
@@ -996,8 +1026,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_assistant_enabled=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatAssistantEnabled, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, tenantId]
       );
 
       const [rows] = await db.query(

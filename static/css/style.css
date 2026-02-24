@@ -1054,6 +1054,10 @@ body.page-home .page-col-right .panel{
   font-weight:700;
   white-space:nowrap;
 }
+.settings-chat-assistant-main-switch{
+  margin-left:auto;
+  flex:0 0 auto;
+}
 
 .date-filter{position:relative}
 .date-popover{
@@ -2387,6 +2391,25 @@ body.page-orders .orders-list .order-client-phone-text{
 .settings-sound-actions{display:flex;gap:8px}
 .settings-site-form{display:grid;gap:12px}
 .settings-site-field .field-label{margin-bottom:6px;display:block}
+.settings-site-inline-switch{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+.settings-site-inline-switch .field-label{
+  margin-bottom:0;
+}
+.settings-site-inline-switch .switch{
+  margin-left:auto;
+  flex:0 0 auto;
+}
+.settings-site-field.is-disabled{
+  opacity:.68;
+}
+.settings-chat-questions-grid.is-disabled{
+  opacity:.68;
+}
 .settings-auth-photo-box{
   width:120px;
   aspect-ratio:1 / 1;
@@ -2425,6 +2448,9 @@ body.page-orders .orders-list .order-client-phone-text{
   letter-spacing:0.5px;
 }
 .settings-chat-panel-actions{margin-top:4px}
+.settings-right-panel .stores-form-actions.settings-footer-actions.settings-chat-panel-actions{
+  margin-top:auto;
+}
 .settings-chat-questions-grid{
   display:grid;
   gap:10px;
@@ -2457,6 +2483,39 @@ body.page-orders .orders-list .order-client-phone-text{
   align-items:center;
   gap:8px;
   flex:0 0 auto;
+}
+.settings-chat-question-expand-btn{
+  width:30px;
+  height:30px;
+  border:1px solid var(--color-border);
+  border-radius:10px;
+  background:#fff;
+  color:#7f8a99;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  flex:0 0 auto;
+  transition:color var(--dur-fast) var(--ease-smooth), border-color var(--dur-fast) var(--ease-smooth), background var(--dur-fast) var(--ease-smooth);
+}
+.settings-chat-question-expand-btn i{
+  font-size:12px;
+  transition:transform var(--dur-fast) var(--ease-smooth);
+}
+.settings-chat-question-row.is-expanded .settings-chat-question-expand-btn i{
+  transform:rotate(180deg);
+}
+.settings-chat-question-expand-btn:hover{
+  color:#4d5a6b;
+  border-color:#d7dce4;
+  background:#f7f9fc;
+}
+.settings-chat-question-row-body{
+  display:grid;
+  gap:8px;
+}
+.settings-chat-question-row.is-collapsed .settings-chat-question-row-body{
+  display:none;
 }
 .settings-chat-question-input{
   min-width:0;
@@ -8352,8 +8411,13 @@ body.page-chat .panel{
 }
 
 .chat-emoji-glyph--reaction{
-  width:34px;
-  height:34px;
+  width:26px;
+  height:26px;
+  filter:none !important;
+  -webkit-filter:none !important;
+  text-shadow:none !important;
+  box-shadow:none !important;
+  outline:none !important;
 }
 
 .chat-emoji-glyph--pill{
@@ -8470,6 +8534,7 @@ body.page-chat .panel{
   border:0;
   background:transparent;
   padding:9px 6px 8px;
+  font-size:16px;
   text-align:left;
   box-shadow:none;
   line-height:1.25;
@@ -8723,9 +8788,9 @@ body.page-chat .panel{
   display:flex;
   flex-wrap:nowrap;
   align-items:center;
-  gap:6px;
-  padding:6px 8px;
-  max-width:min(390px, calc(100vw - 16px));
+  gap:4px;
+  padding:4px 6px;
+  max-width:min(332px, calc(100vw - 16px));
   border-radius:999px;
   border:1px solid color-mix(in srgb, var(--color-border), transparent 22%);
   background:
@@ -8751,29 +8816,29 @@ body.page-chat .panel{
 
 .chat-reaction-bar.is-expanded{
   display:grid;
-  grid-template-columns:repeat(8, 38px);
+  grid-template-columns:repeat(8, 32px);
   justify-content:start;
   align-content:start;
-  gap:6px;
-  width:min(352px, calc(100vw - 16px));
-  max-height:min(48vh, 300px);
+  gap:4px;
+  width:min(300px, calc(100vw - 16px));
+  max-height:min(44vh, 236px);
   overflow-y:auto;
   overflow-x:hidden;
-  border-radius:18px;
-  padding:8px;
+  border-radius:14px;
+  padding:6px;
   scrollbar-width:thin;
   scrollbar-color:color-mix(in srgb, var(--color-border), transparent 12%) transparent;
 }
 
 .chat-reaction-btn{
-  width:38px;
-  height:38px;
+  width:32px;
+  height:32px;
   border:0;
   background:transparent;
-  border-radius:9px;
+  border-radius:8px;
   display:grid;
   place-items:center;
-  font-size:28px;
+  font-size:22px;
   line-height:1;
   cursor:pointer;
   box-shadow:none;
@@ -8798,8 +8863,8 @@ body.page-chat .panel{
 }
 
 .chat-reaction-close{
-  width:38px;
-  height:38px;
+  width:32px;
+  height:32px;
   border:0;
   background:transparent;
   border-radius:999px;

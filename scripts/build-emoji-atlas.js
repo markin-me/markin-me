@@ -4,13 +4,13 @@ const sharp = require("sharp");
 
 const SOURCE_JS = path.resolve(__dirname, "..", "static", "js", "shop-company-chat.js");
 const OUT_DIR = path.resolve(__dirname, "..", "static", "assets", "emoji");
-const OUT_WEBP = path.join(OUT_DIR, "google-people-atlas.webp");
-const OUT_MANIFEST = path.join(OUT_DIR, "google-people-atlas.manifest.json");
+const OUT_WEBP = path.join(OUT_DIR, "apple-people-atlas.webp");
+const OUT_MANIFEST = path.join(OUT_DIR, "apple-people-atlas.manifest.json");
 
-const CDN_BASE = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/img/google/64";
+const CDN_BASE = "https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64";
 const CELL_SIZE = 64;
 const COLUMNS = 16;
-const WEBP_QUALITY = 86;
+const WEBP_QUALITY = 100;
 
 function readEmojiListFromSource(filePath) {
   const text = fs.readFileSync(filePath, "utf8");
@@ -106,7 +106,7 @@ async function buildAtlas() {
     },
   })
     .composite(composites)
-    .webp({ quality: WEBP_QUALITY, effort: 6, alphaQuality: 100 })
+    .webp({ quality: WEBP_QUALITY, effort: 6, lossless: true, alphaQuality: 100 })
     .toFile(OUT_WEBP);
 
   const manifest = {
