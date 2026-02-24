@@ -58,8 +58,8 @@ async function processUpdate(db, apiBase, update) {
 
       const [custRows] = await db.query(
         `SELECT id, tenant_id, customer_id
-         FROM cust_customer_tg_link_tokens
-         WHERE link_token=? AND used_at IS NULL AND expires_at > NOW()
+         FROM cust_customer_auth_tokens
+         WHERE token=? AND provider='tg' AND purpose='link' AND used_at IS NULL AND expires_at > NOW()
          LIMIT 1`,
         [payload]
       );
@@ -72,12 +72,26 @@ async function processUpdate(db, apiBase, update) {
            WHERE tenant_id=? AND id=?`,
           [resolvedTgUserId, Number(tokenRow.tenant_id), Number(tokenRow.customer_id)]
         );
-        await db.query(
-          `UPDATE cust_customer_tg_link_tokens
-           SET used_at=NOW(), used_tg_user_id=?
-           WHERE id=?`,
-          [resolvedTgUserId, Number(tokenRow.id)]
-        );
+        try {
+          await db.query(
+            `INSERT INTO cust_customer_auth_identities
+             (tenant_id, customer_id, provider, provider_user_id, linked_at)
+             VALUES (?, ?, 'tg', ?, NOW())
+             ON DUPLICATE KEY UPDATE
+               customer_id=VALUES(customer_id),
+               linked_at=NOW()`,
+            [Number(tokenRow.tenant_id), Number(tokenRow.customer_id), resolvedTgUserId]
+          );
+          await db.query(
+            `UPDATE cust_customer_auth_tokens
+             SET used_at=NOW(), provider_user_id=?
+             WHERE tenant_id=? AND provider='tg' AND purpose='link' AND token=? AND used_at IS NULL
+             LIMIT 1`,
+            [resolvedTgUserId, Number(tokenRow.tenant_id), payload]
+          );
+        } catch (err) {
+          console.error('AUTH_DUAL_WRITE_TG_LINK_LEGACY_FAILED:', err.message || err);
+        }
         await sendMessage(apiBase, chatId, '\u0054\u0065\u006c\u0065\u0067\u0072\u0061\u006d \u0443\u0441\u043f\u0435\u0448\u043d\u043e \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d \u043a \u0432\u0430\u0448\u0435\u043c\u0443 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0443.');
         return;
       }

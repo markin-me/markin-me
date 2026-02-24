@@ -755,6 +755,57 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   }
 
+  async function dualWriteAuthToken(connOrDb, payload) {
+    try {
+      await connOrDb.query(
+        `INSERT INTO cust_customer_auth_tokens
+         (tenant_id, customer_id, provider, purpose, token, expires_at, used_at, provider_user_id, phone, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, NOW()))`,
+        [
+          Number(payload.tenantId),
+          payload.customerId == null ? null : Number(payload.customerId),
+          String(payload.provider),
+          String(payload.purpose),
+          String(payload.token),
+          payload.expiresAt,
+          payload.usedAt || null,
+          payload.providerUserId || null,
+          payload.phone || null,
+          payload.createdAt || null,
+        ]
+      );
+    } catch (err) {
+      console.error('AUTH_DUAL_WRITE_TOKEN_FAILED:', err.message || err);
+    }
+  }
+
+  async function dualWriteSession(connOrDb, payload) {
+    try {
+      await connOrDb.query(
+        `INSERT INTO cust_customer_sessions
+         (tenant_id, store_id, customer_id, token, expires_at, is_active, user_agent, ip_address)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           expires_at=VALUES(expires_at),
+           is_active=VALUES(is_active),
+           user_agent=COALESCE(VALUES(user_agent), user_agent),
+           ip_address=COALESCE(VALUES(ip_address), ip_address)`,
+        [
+          Number(payload.tenantId),
+          Number(payload.storeId || 1),
+          Number(payload.customerId),
+          String(payload.token),
+          payload.expiresAt || null,
+          Number(payload.isActive == null ? 1 : payload.isActive),
+          payload.userAgent || null,
+          payload.ipAddress || null,
+        ]
+      );
+    } catch (err) {
+      console.error('AUTH_DUAL_WRITE_SESSION_FAILED:', err.message || err);
+    }
+  }
+
   async function getActiveStatusIdDefault(tenantId, storeId) {
     // РїСЂРѕР±СѓРµРј "new", РµСЃР»Рё РЅРµС‚ вЂ” РїРµСЂРІС‹Р№ Р°РєС‚РёРІРЅС‹Р№ РїРѕ sort
     const [r1] = await db.query(
@@ -772,7 +823,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
   async function getCustomerByToken(tenantId, token) {
     if (!token) return null;
-
+    const sessionTable = 'cust_customer_sessions';
     const [rows] = await db.query(
       `SELECT
          s.id AS session_id,
@@ -785,7 +836,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
          DATE_FORMAT(c.birthday, '%Y-%m-%d') AS birthday,
          c.photo,
          c.is_active
-       FROM cust_customer_sessions s
+       FROM ${sessionTable} s
        JOIN cust_customers c
          ON c.tenant_id=s.tenant_id AND c.id=s.customer_id
        WHERE s.tenant_id=? AND s.token=? AND s.is_active=1
@@ -807,10 +858,16 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     // This does not accumulate beyond 30 days ahead because we set from NOW().
     try {
       await db.query(
-        `UPDATE cust_customer_sessions
+        `UPDATE ${sessionTable}
          SET expires_at=DATE_ADD(NOW(), INTERVAL 30 DAY)
          WHERE id=? AND tenant_id=? AND is_active=1`,
         [Number(r.session_id), tenantId]
+      );
+      await db.query(
+        `UPDATE cust_customer_sessions
+         SET expires_at=DATE_ADD(NOW(), INTERVAL 30 DAY)
+         WHERE tenant_id=? AND token=? AND is_active=1`,
+        [tenantId, token]
       );
     } catch {}
 
@@ -1388,12 +1445,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const token = makeToken32();
 
       // СЃСЂРѕРє 30 РґРЅРµР№
-      await db.query(
-        `INSERT INTO cust_customer_sessions
-         (tenant_id, customer_id, token, expires_at, is_active)
-         VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 30 DAY), 1)`,
-        [tenantId, customerId, token]
-      );
+      await dualWriteSession(db, {
+        tenantId,
+        storeId: 1,
+        customerId,
+        token,
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        isActive: 1,
+      });
 
       const [me] = await db.query(
         `SELECT id, name, phone, DATE_FORMAT(birthday, '%Y-%m-%d') AS birthday, photo
@@ -1436,12 +1495,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const linkToken = makeLinkToken();
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-      await db.query(
-        `INSERT INTO cust_customer_max_link_tokens
-         (tenant_id, customer_id, link_token, expires_at)
-         VALUES (?, ?, ?, ?)`,
-        [tenantId, Number(customer.id), linkToken, expiresAt]
-      );
+      await dualWriteAuthToken(db, {
+        tenantId,
+        customerId: Number(customer.id),
+        provider: 'max',
+        purpose: 'link',
+        token: linkToken,
+        expiresAt,
+      });
 
       res.json({
         ok: true,
@@ -1478,12 +1539,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       const linkToken = makeLinkToken();
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-      await db.query(
-        `INSERT INTO cust_customer_tg_link_tokens
-         (tenant_id, customer_id, link_token, expires_at)
-         VALUES (?, ?, ?, ?)`,
-        [tenantId, Number(customer.id), linkToken, expiresAt]
-      );
+      await dualWriteAuthToken(db, {
+        tenantId,
+        customerId: Number(customer.id),
+        provider: 'tg',
+        purpose: 'link',
+        token: linkToken,
+        expiresAt,
+      });
 
       const link = `https://t.me/${encodeURIComponent(username)}?start=${encodeURIComponent(linkToken)}`;
       res.json({
@@ -1554,13 +1617,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     const target = str(req.query.target).toLowerCase() === 'miniapp' ? 'miniapp' : 'site';
     if (!loginToken) return res.status(400).send('TOKEN_REQUIRED');
 
+    const maxLoginReadTable = 'cust_customer_auth_tokens';
     const conn = await db.getConnection();
     try {
       const [tenantRows] = await conn.query(
         `SELECT t.max_login_enabled
-         FROM cust_customer_max_login_tokens lt
+         FROM ${maxLoginReadTable} lt
          JOIN ten_tenants t ON t.id = lt.tenant_id
-         WHERE lt.login_token=?
+         WHERE lt.token=? AND lt.provider='max' AND lt.purpose='login'
          LIMIT 1`,
         [loginToken]
       );
@@ -1572,8 +1636,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       const [rows] = await conn.query(
         `SELECT id, tenant_id, customer_id
-         FROM cust_customer_max_login_tokens
-         WHERE login_token=? AND used_at IS NULL AND expires_at > NOW()
+         FROM ${maxLoginReadTable}
+         WHERE token=? AND provider='max' AND purpose='login' AND used_at IS NULL AND expires_at > NOW()
          LIMIT 1
          FOR UPDATE`,
         [loginToken]
@@ -1600,18 +1664,21 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
 
       const sessionToken = makeToken32();
-      await conn.query(
-        `INSERT INTO cust_customer_sessions
-         (tenant_id, customer_id, token, expires_at, is_active)
-         VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 30 DAY), 1)`,
-        [tenantId, customerId, sessionToken]
-      );
+      await dualWriteSession(conn, {
+        tenantId,
+        storeId: 1,
+        customerId,
+        token: sessionToken,
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        isActive: 1,
+      });
 
       await conn.query(
-        `UPDATE cust_customer_max_login_tokens
+        `UPDATE cust_customer_auth_tokens
          SET used_at=NOW()
-         WHERE id=?`,
-        [Number(row.id)]
+         WHERE tenant_id=? AND provider='max' AND purpose='login' AND token=? AND used_at IS NULL
+         LIMIT 1`,
+        [tenantId, loginToken]
       );
 
       await conn.commit();
@@ -1649,13 +1716,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const target = str(req.query.target).toLowerCase() === 'miniapp' ? 'miniapp' : 'site';
     if (!loginToken) return res.status(400).send('TOKEN_REQUIRED');
 
+    const tgLoginReadTable = 'cust_customer_auth_tokens';
     const conn = await db.getConnection();
     try {
       const [tenantRows] = await conn.query(
         `SELECT t.tg_login_enabled
-         FROM cust_customer_tg_login_tokens lt
+         FROM ${tgLoginReadTable} lt
          JOIN ten_tenants t ON t.id = lt.tenant_id
-         WHERE lt.login_token=?
+         WHERE lt.token=? AND lt.provider='tg' AND lt.purpose='login'
          LIMIT 1`,
         [loginToken]
       );
@@ -1667,8 +1735,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const [rows] = await conn.query(
         `SELECT id, tenant_id, customer_id
-         FROM cust_customer_tg_login_tokens
-         WHERE login_token=? AND used_at IS NULL AND expires_at > NOW()
+         FROM ${tgLoginReadTable}
+         WHERE token=? AND provider='tg' AND purpose='login' AND used_at IS NULL AND expires_at > NOW()
          LIMIT 1
          FOR UPDATE`,
         [loginToken]
@@ -1698,25 +1766,23 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const sessionToken = makeLinkToken();
       const sessionExpiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
 
-      await conn.query(
-        `INSERT INTO cust_customer_sessions
-         (tenant_id, customer_id, token, user_agent, ip_address, is_active, expires_at)
-         VALUES (?, ?, ?, ?, ?, 1, ?)`,
-        [
-          tenantId,
-          customerId,
-          sessionToken,
-          String(req.headers['user-agent'] || '').slice(0, 500),
-          String(req.ip || req.connection?.remoteAddress || '').slice(0, 64),
-          sessionExpiresAt,
-        ]
-      );
+      await dualWriteSession(conn, {
+        tenantId,
+        storeId: 1,
+        customerId,
+        token: sessionToken,
+        expiresAt: sessionExpiresAt,
+        isActive: 1,
+        userAgent: String(req.headers['user-agent'] || '').slice(0, 500),
+        ipAddress: String(req.ip || req.connection?.remoteAddress || '').slice(0, 64),
+      });
 
       await conn.query(
-        `UPDATE cust_customer_tg_login_tokens
+        `UPDATE cust_customer_auth_tokens
          SET used_at=NOW()
-         WHERE id=?`,
-        [Number(tokenRow.id)]
+         WHERE tenant_id=? AND provider='tg' AND purpose='login' AND token=? AND used_at IS NULL
+         LIMIT 1`,
+        [tenantId, loginToken]
       );
 
       await conn.commit();
@@ -2014,7 +2080,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       await db.query(
         `UPDATE cust_customer_sessions
-         SET is_active=0
+         SET is_active=0, revoked_at=NOW()
          WHERE tenant_id=? AND token=?`,
         [tenantId, token]
       );
@@ -2060,6 +2126,30 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         ok: true,
         tenant_id: Number(tenant.id || tenantId),
         settings: buildPublicTenantChatSettings(tenant),
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.get('/auth/options', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const [rows] = await db.query(
+        `SELECT max_login_enabled, tg_login_enabled
+         FROM ten_tenants
+         WHERE id=?
+         LIMIT 1`,
+        [tenantId]
+      );
+      const row = rows && rows[0] ? rows[0] : {};
+      return res.json({
+        ok: true,
+        data: {
+          max_login_enabled: Number(row.max_login_enabled || 0) === 1,
+          tg_login_enabled: Number(row.tg_login_enabled || 0) === 1,
+        },
       });
     } catch (e) {
       console.error(e);

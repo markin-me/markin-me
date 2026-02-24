@@ -149,30 +149,43 @@ async function fetchTenantsWithMaxToken(db) {
 
 async function rememberPendingToken(db, tenantId, userId, token) {
   if (!tenantId || !userId || !token) return;
-  await db.query(
-    `INSERT INTO cust_customer_max_pending (tenant_id, max_user_id, link_token, expires_at)
-     VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))
-     ON DUPLICATE KEY UPDATE
-       link_token=VALUES(link_token),
-       expires_at=VALUES(expires_at)`,
-    [tenantId, userId, token]
-  );
+  try {
+    await db.query(
+      `INSERT INTO cust_customer_auth_tokens
+       (tenant_id, customer_id, provider, purpose, token, expires_at, provider_user_id)
+       VALUES (?, NULL, 'max', 'pending', ?, DATE_ADD(NOW(), INTERVAL 24 HOUR), ?)
+       ON DUPLICATE KEY UPDATE
+         expires_at=VALUES(expires_at),
+         provider_user_id=VALUES(provider_user_id)`,
+      [tenantId, token, String(userId)]
+    );
+  } catch (err) {
+    console.error('AUTH_DUAL_WRITE_MAX_PENDING_FAILED:', err.message || err);
+  }
 }
 
 async function readPendingToken(db, tenantId, userId) {
   if (!tenantId || !userId) return null;
   const [rows] = await db.query(
-    `SELECT link_token
-     FROM cust_customer_max_pending
-     WHERE tenant_id=? AND max_user_id=? AND expires_at > NOW()
+    `SELECT token
+     FROM cust_customer_auth_tokens
+     WHERE tenant_id=? AND provider='max' AND purpose='pending' AND provider_user_id=? AND expires_at > NOW()
+     ORDER BY id DESC
      LIMIT 1`,
-    [tenantId, userId]
+    [tenantId, String(userId)]
   );
-  return rows[0]?.link_token || null;
+  return rows[0]?.token || null;
 }
 
 async function cleanupPending(db) {
-  await db.query('DELETE FROM cust_customer_max_pending WHERE expires_at <= NOW()');
+  try {
+    await db.query(
+      `DELETE FROM cust_customer_auth_tokens
+       WHERE provider='max' AND purpose='pending' AND expires_at <= NOW()`
+    );
+  } catch (err) {
+    console.error('AUTH_DUAL_WRITE_MAX_PENDING_CLEANUP_FAILED:', err.message || err);
+  }
 }
 
 async function getTenantReturnLinks(db, tenantId) {
@@ -237,12 +250,16 @@ function buildFinishLoginUrl(siteUrl, loginToken, target) {
 
 async function issueOneTimeLoginToken(db, tenantId, customerId) {
   const token = makeOneTimeLoginToken();
-  await db.query(
-    `INSERT INTO cust_customer_max_login_tokens
-     (tenant_id, customer_id, login_token, expires_at)
-     VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))`,
-    [Number(tenantId), Number(customerId), token]
-  );
+  try {
+    await db.query(
+      `INSERT INTO cust_customer_auth_tokens
+       (tenant_id, customer_id, provider, purpose, token, expires_at)
+       VALUES (?, ?, 'max', 'login', ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))`,
+      [Number(tenantId), Number(customerId), token]
+    );
+  } catch (err) {
+    console.error('AUTH_DUAL_WRITE_MAX_LOGIN_TOKEN_FAILED:', err.message || err);
+  }
   return token;
 }
 
@@ -348,6 +365,20 @@ async function bindByPhoneDirect(db, helpers, tenantId, maxUserId, phone, sender
       [tId, normalizedName || 'Клиент', normalizedPhone, uId]
     );
     customerId = Number(ins.insertId);
+    try {
+      await db.query(
+        `INSERT INTO cust_customer_auth_identities
+         (tenant_id, customer_id, provider, provider_user_id, phone, linked_at)
+         VALUES (?, ?, 'max', ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE
+           customer_id=VALUES(customer_id),
+           phone=VALUES(phone),
+           linked_at=NOW()`,
+        [tId, customerId, uId, normalizedPhone]
+      );
+    } catch (err) {
+      console.error('AUTH_DUAL_WRITE_MAX_IDENTITY_FAILED:', err.message || err);
+    }
     return { ok: true, customerId, phone: normalizedPhone };
   }
 
@@ -370,6 +401,20 @@ async function bindByPhoneDirect(db, helpers, tenantId, maxUserId, phone, sender
      WHERE tenant_id=? AND id=?`,
     [uId, nextName, tId, customerId]
   );
+  try {
+    await db.query(
+      `INSERT INTO cust_customer_auth_identities
+       (tenant_id, customer_id, provider, provider_user_id, phone, linked_at)
+       VALUES (?, ?, 'max', ?, ?, NOW())
+       ON DUPLICATE KEY UPDATE
+         customer_id=VALUES(customer_id),
+         phone=VALUES(phone),
+         linked_at=NOW()`,
+      [tId, customerId, uId, normalizedPhone]
+    );
+  } catch (err) {
+    console.error('AUTH_DUAL_WRITE_MAX_IDENTITY_FAILED:', err.message || err);
+  }
 
   return { ok: true, customerId, phone: normalizedPhone };
 }

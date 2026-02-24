@@ -84,8 +84,8 @@ async function sendContactRequest(token, chatId) {
 async function bindByLinkToken(db, tenantId, tgUserId, token) {
   const [rows] = await db.query(
     `SELECT id, customer_id
-     FROM cust_customer_tg_link_tokens
-     WHERE tenant_id=? AND link_token=? AND used_at IS NULL AND expires_at > NOW()
+     FROM cust_customer_auth_tokens
+     WHERE tenant_id=? AND token=? AND provider='tg' AND purpose='link' AND used_at IS NULL AND expires_at > NOW()
      LIMIT 1`,
     [tenantId, String(token || '').trim()]
   );
@@ -98,12 +98,26 @@ async function bindByLinkToken(db, tenantId, tgUserId, token) {
      WHERE tenant_id=? AND id=?`,
     [String(tgUserId), Number(tenantId), Number(row.customer_id)]
   );
-  await db.query(
-    `UPDATE cust_customer_tg_link_tokens
-     SET used_at=NOW(), used_tg_user_id=?
-     WHERE id=?`,
-    [String(tgUserId), Number(row.id)]
-  );
+  try {
+    await db.query(
+      `INSERT INTO cust_customer_auth_identities
+       (tenant_id, customer_id, provider, provider_user_id, linked_at)
+       VALUES (?, ?, 'tg', ?, NOW())
+       ON DUPLICATE KEY UPDATE
+         customer_id=VALUES(customer_id),
+         linked_at=NOW()`,
+      [Number(tenantId), Number(row.customer_id), String(tgUserId)]
+    );
+    await db.query(
+      `UPDATE cust_customer_auth_tokens
+       SET used_at=NOW(), provider_user_id=?
+       WHERE tenant_id=? AND provider='tg' AND purpose='link' AND token=? AND used_at IS NULL
+       LIMIT 1`,
+      [String(tgUserId), Number(tenantId), String(token || '').trim()]
+    );
+  } catch (err) {
+    console.error('AUTH_DUAL_WRITE_TG_LINK_FAILED:', err.message || err);
+  }
   return { ok: true, customerId: Number(row.customer_id) };
 }
 
@@ -129,6 +143,20 @@ async function bindByPhone(db, helpers, tenantId, tgUserId, rawPhone, senderName
        VALUES (?, 1, ?, ?, 1, CURDATE(), NOW(), ?)`,
       [tenantId, String(senderName || '\u041a\u043b\u0438\u0435\u043d\u0442').trim() || '\u041a\u043b\u0438\u0435\u043d\u0442', phone, String(tgUserId)]
     );
+    try {
+      await db.query(
+        `INSERT INTO cust_customer_auth_identities
+         (tenant_id, customer_id, provider, provider_user_id, phone, linked_at)
+         VALUES (?, ?, 'tg', ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE
+           customer_id=VALUES(customer_id),
+           phone=VALUES(phone),
+           linked_at=NOW()`,
+        [Number(tenantId), Number(ins.insertId), String(tgUserId), phone]
+      );
+    } catch (err) {
+      console.error('AUTH_DUAL_WRITE_TG_IDENTITY_FAILED:', err.message || err);
+    }
     return { ok: true, customerId: Number(ins.insertId) };
   }
 
@@ -140,6 +168,20 @@ async function bindByPhone(db, helpers, tenantId, tgUserId, rawPhone, senderName
      WHERE tenant_id=? AND id=?`,
     [String(tgUserId), Number(tenantId), Number(rows[0].id)]
   );
+  try {
+    await db.query(
+      `INSERT INTO cust_customer_auth_identities
+       (tenant_id, customer_id, provider, provider_user_id, phone, linked_at)
+       VALUES (?, ?, 'tg', ?, ?, NOW())
+       ON DUPLICATE KEY UPDATE
+         customer_id=VALUES(customer_id),
+         phone=VALUES(phone),
+         linked_at=NOW()`,
+      [Number(tenantId), Number(rows[0].id), String(tgUserId), phone]
+    );
+  } catch (err) {
+    console.error('AUTH_DUAL_WRITE_TG_IDENTITY_FAILED:', err.message || err);
+  }
   return { ok: true, customerId: Number(rows[0].id) };
 }
 
@@ -156,12 +198,16 @@ async function findKnownCustomerByTelegram(db, tenantId, tgUserId) {
 
 async function issueOneTimeTgLoginToken(db, tenantId, customerId) {
   const token = makeOneTimeToken();
-  await db.query(
-    `INSERT INTO cust_customer_tg_login_tokens
-     (tenant_id, customer_id, login_token, expires_at)
-     VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))`,
-    [Number(tenantId), Number(customerId), token]
-  );
+  try {
+    await db.query(
+      `INSERT INTO cust_customer_auth_tokens
+       (tenant_id, customer_id, provider, purpose, token, expires_at)
+       VALUES (?, ?, 'tg', 'login', ?, DATE_ADD(NOW(), INTERVAL 24 HOUR))`,
+      [Number(tenantId), Number(customerId), token]
+    );
+  } catch (err) {
+    console.error('AUTH_DUAL_WRITE_TG_LOGIN_TOKEN_FAILED:', err.message || err);
+  }
   return token;
 }
 
