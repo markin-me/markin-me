@@ -368,27 +368,37 @@
 
       <div class="info-card settings-right-panel hidden" id="settingsTelegramAppPanel">
         <div class="settings-site-form">
-          <div class="settings-site-field">
-            <label class="field-label">PHOTO TELEGRAM</label>
-            <div class="settings-auth-photo-box" id="settingsTelegramPhotoBox">
-              <img class="settings-auth-photo-img" src="/static/uploads/auth/telegram-auth.png" alt="Telegram auth icon" loading="lazy" />
+          <div class="settings-auth-top">
+            <div class="settings-auth-photo-column">
+              <div class="settings-site-field">
+                <div class="settings-auth-photo-box" id="settingsTelegramPhotoBox">
+                  <img class="settings-auth-photo-img" src="/static/uploads/auth/telegram-auth.png" alt="Telegram auth icon" loading="lazy" />
+                </div>
+              </div>
             </div>
-          </div>
-
-          <div class="settings-site-field">
-            <label class="field-label">ИМЯ БОТА</label>
-            <span class="field-hint">Имя вашего Telegram-бота (без @)</span>
-            <div class="control-with-action">
-              <input class="control" type="text" id="tenantTelegramBotUsername" placeholder="username_bot" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
-              <button class="control-inline-btn" type="button" id="tenantTelegramBotUsernameLink" title="Открыть бота">
-                <i class="fab fa-telegram"></i>
-              </button>
+            <div class="settings-auth-meta-column">
+              <div class="settings-site-field">
+                <label class="field-label">ВХОД ЧЕРЕЗ TELEGRAM</label>
+                <label class="switch">
+                  <input class="switch-input" type="checkbox" id="tenantTelegramLoginEnabled" />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                  <span class="switch-text">Включено</span>
+                </label>
+              </div>
+              <div class="settings-site-field">
+                <label class="field-label">ИМЯ БОТА</label>
+                <div class="control-with-action">
+                  <input class="control" type="text" id="tenantTelegramBotUsername" placeholder="@username_bot" autocomplete="off" />
+                  <button class="control-inline-btn" type="button" id="tenantTelegramBotUsernameLink" title="Открыть бота">
+                    <i class="fab fa-telegram"></i>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
           <div class="settings-site-field">
             <label class="field-label">ТОКЕН БОТА</label>
-            <span class="field-hint">Токен от @BotFather</span>
             <div class="control-with-action">
               <input class="control" type="text" id="tenantTelegramBotToken" placeholder="123456:ABC-DEF..." autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
               <button class="control-inline-btn" type="button" id="tenantTelegramBotTokenCopyBtn" title="Скопировать">
@@ -417,37 +427,37 @@
               <span class="switch-text">Включено</span>
             </label>
           </div>
-
-          <div class="settings-site-field">
-            <label class="field-label">ВХОД ЧЕРЕЗ TELEGRAM</label>
-            <span class="field-hint">Разрешить вход клиентов через Telegram</span>
-            <label class="switch">
-              <input class="switch-input" type="checkbox" id="tenantTelegramLoginEnabled" />
-              <span class="switch-ui" aria-hidden="true"></span>
-              <span class="switch-text">Включено</span>
-            </label>
-          </div>
         </div>
       </div>
 
       <div class="info-card settings-right-panel hidden" id="settingsMaxAppPanel">
         <div class="settings-site-form">
-          <div class="settings-site-field">
-            <label class="field-label">PHOTO MAX</label>
-            <div class="settings-auth-photo-box" id="settingsMaxPhotoBox">
-              <img class="settings-auth-photo-img" src="/static/uploads/auth/max-auth.png" alt="MAX auth icon" loading="lazy" />
+          <div class="settings-auth-top">
+            <div class="settings-auth-photo-column">
+              <div class="settings-site-field">
+                <div class="settings-auth-photo-box" id="settingsMaxPhotoBox">
+                  <img class="settings-auth-photo-img" src="/static/uploads/auth/max-auth.png" alt="MAX auth icon" loading="lazy" />
+                </div>
+              </div>
+            </div>
+            <div class="settings-auth-meta-column">
+              <div class="settings-site-field">
+                <label class="field-label">ВХОД ЧЕРЕЗ MAX</label>
+                <label class="switch">
+                  <input class="switch-input" type="checkbox" id="tenantMaxLoginEnabled" />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                  <span class="switch-text">Включено</span>
+                </label>
+              </div>
+              <div class="settings-site-field">
+                <label class="field-label">ID БОТА MAX</label>
+                <input class="control" type="text" id="tenantMaxBotId" placeholder="@bot_username" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              </div>
             </div>
           </div>
 
           <div class="settings-site-field">
-            <label class="field-label">ID БОТА MAX</label>
-            <span class="field-hint">Username или ID бота для deeplink (пример: @id220807718849_bot)</span>
-            <input class="control" type="text" id="tenantMaxBotId" placeholder="@bot_username" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
-          </div>
-
-          <div class="settings-site-field">
             <label class="field-label">ТОКЕН БОТА MAX</label>
-            <span class="field-hint">Токен вашего MAX-бота для авторизации клиентов</span>
             <div class="control-with-action">
               <input class="control" type="text" id="tenantMaxBotToken" placeholder="Введите токен" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
               <button class="control-inline-btn" type="button" id="tenantMaxBotTokenCopyBtn" title="Скопировать">
@@ -470,15 +480,6 @@
             <span class="field-hint">Показывать кнопку перехода в MAX mini app после авторизации</span>
             <label class="switch">
               <input class="switch-input" type="checkbox" id="tenantMaxMiniAppEnabled" />
-              <span class="switch-ui" aria-hidden="true"></span>
-              <span class="switch-text">Включено</span>
-            </label>
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">ВХОД ЧЕРЕЗ MAX</label>
-            <span class="field-hint">Разрешить вход клиентов через MAX (требуются ID бота и токен)</span>
-            <label class="switch">
-              <input class="switch-input" type="checkbox" id="tenantMaxLoginEnabled" />
               <span class="switch-ui" aria-hidden="true"></span>
               <span class="switch-text">Включено</span>
             </label>

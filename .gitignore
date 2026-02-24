@@ -4,8 +4,12 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-uploads/
-static/uploads/
+uploads/*
+!uploads/auth/
+!uploads/auth/**
+static/uploads/*
+!static/uploads/auth/
+!static/uploads/auth/**
 db-tools/
 
 # Временные скрипты для настройки

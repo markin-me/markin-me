@@ -5304,7 +5304,7 @@ async function initAddresses() {
     const next = String(newValue);
     el.setAttribute("data-v", next);
 
-    if (!prev) {
+    if (!prev || prev === next) {
       el.textContent = next;
       return;
     }
@@ -5322,19 +5322,23 @@ async function initAddresses() {
     el.appendChild(newSpan);
 
     oldSpan.style.transform = "translateX(0)";
-    newSpan.style.transform = dir === "inc" ? "translateX(100%)" : "translateX(-100%)";
+    oldSpan.style.opacity = "1";
+    newSpan.style.transform = "translateX(0) scale(0.8)";
+    newSpan.style.opacity = "0";
 
     void el.offsetWidth;
 
     requestAnimationFrame(() => {
-      oldSpan.style.transform = dir === "inc" ? "translateX(-100%)" : "translateX(100%)";
-      newSpan.style.transform = "translateX(0)";
+      oldSpan.style.transform = dir === "inc" ? "translateX(-105%) scale(0.9)" : "translateX(105%) scale(0.9)";
+      oldSpan.style.opacity = "0";
+      newSpan.style.transform = "translateX(0) scale(1)";
+      newSpan.style.opacity = "1";
     });
 
     setTimeout(() => {
       el.innerHTML = "";
       el.textContent = next;
-    }, 120);
+    }, 320);
   }
 
   // -----------------------------
