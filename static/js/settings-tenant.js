@@ -511,6 +511,7 @@
     const chatAssistantNameCard = document.getElementById("settingsChatAssistantNameCard");
     const chatOperatorNameCard = document.getElementById("settingsChatOperatorNameCard");
     const chatHotQuestionsCard = document.getElementById("settingsChatHotQuestionsCard");
+    const chatMessageSettingsCard = document.getElementById("settingsChatMessageSettingsCard");
     const notificationsCard = document.getElementById("settingsNotificationsCard");
     const imagesCard = document.getElementById("settingsImagesCard");
     const printApiCard = document.getElementById("settingsPrintApiCard");
@@ -530,6 +531,7 @@
     const chatAssistantNamePanel = document.getElementById("settingsChatAssistantNamePanel");
     const chatOperatorNamePanel = document.getElementById("settingsChatOperatorNamePanel");
     const chatHotQuestionsPanel = document.getElementById("settingsChatHotQuestionsPanel");
+    const chatMessageSettingsPanel = document.getElementById("settingsChatMessageSettingsPanel");
     const imagesPanel = document.getElementById("settingsImagesPanel");
     const printApiPanel = document.getElementById("settingsPrintApiPanel");
     const settingsNotificationsPanel = document.getElementById("settingsNotificationsPanel");
@@ -557,6 +559,8 @@
     const settingsChatQuickQuestionsAddBtn = document.getElementById("settingsChatQuickQuestionsAddBtn");
     const settingsChatQuickQuestionsSaveBtn = document.getElementById("settingsChatQuickQuestionsSaveBtn");
     const settingsChatQuickQuestionsResetBtn = document.getElementById("settingsChatQuickQuestionsResetBtn");
+    const settingsChatGuestThreadTtlDaysInput = document.getElementById("settingsChatGuestThreadTtlDaysInput");
+    const settingsChatMessageSettingsSaveBtn = document.getElementById("settingsChatMessageSettingsSaveBtn");
     const rightTabs = document.getElementById("settingsRightTabs");
     const rightHeader = rightTabs ? rightTabs.closest(".settings-right-header") : null;
     if (rightTabs) {
@@ -630,6 +634,7 @@
     };
     const DEFAULT_CHAT_ASSISTANT_NAME = "\u041d\u044f\u043c-\u041d\u044f\u043c";
     const DEFAULT_CHAT_ASSISTANT_GENDER = "m";
+    const DEFAULT_CHAT_GUEST_THREAD_TTL_DAYS = 7;
     const DEFAULT_CHAT_WELCOME_MESSAGE =
       "\u041f\u0440\u0438\u0432\u0435\u0442! \u042f \u0432\u0438\u0440\u0442\u0443\u0430\u043b\u044c\u043d\u044b\u0439 \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u043a \u041d\u044f\u043c-\u041d\u044f\u043c!\n" +
       "\u0415\u0441\u043b\u0438 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u0437\u0430\u043a\u0430\u0437\u0443, \u0442\u043e \u0441\u0435\u0433\u043e\u0434\u043d\u044f " +
@@ -644,6 +649,15 @@
     ];
     const CHAT_QUICK_QUESTIONS_MIN = DEFAULT_CHAT_QUICK_QUESTIONS.length;
     const CHAT_QUICK_QUESTIONS_MAX = 6;
+    const CHAT_ASSISTANT_GENDER_STORAGE_KEY = "settings_chat_assistant_gender";
+
+    function getChatAssistantGenderStorageKey() {
+      const tenant = typeof getAuthTenant === "function" ? getAuthTenant() : null;
+      const tenantId = Number(tenant && tenant.id ? tenant.id : 0);
+      return tenantId > 0
+        ? `${CHAT_ASSISTANT_GENDER_STORAGE_KEY}:${tenantId}`
+        : CHAT_ASSISTANT_GENDER_STORAGE_KEY;
+    }
 
     function normalizeChatAssistantGenderValue(rawValue) {
       if (rawValue === undefined || rawValue === null || rawValue === "") {
@@ -654,21 +668,60 @@
       return DEFAULT_CHAT_ASSISTANT_GENDER;
     }
 
+    function normalizeChatGuestThreadTtlDays(rawValue) {
+      if (rawValue === undefined || rawValue === null || rawValue === "") return DEFAULT_CHAT_GUEST_THREAD_TTL_DAYS;
+      const parsed = Number(rawValue);
+      if (!Number.isFinite(parsed)) return DEFAULT_CHAT_GUEST_THREAD_TTL_DAYS;
+      const whole = Math.trunc(parsed);
+      if (whole < 1) return 1;
+      if (whole > 365) return 365;
+      return whole;
+    }
+
+    function readStoredChatAssistantGender() {
+      if (typeof window === "undefined" || !window.localStorage) return "";
+      try {
+        const rawValue = window.localStorage.getItem(getChatAssistantGenderStorageKey());
+        if (rawValue === null || rawValue === undefined || rawValue === "") return "";
+        return normalizeChatAssistantGenderValue(rawValue);
+      } catch {
+        return "";
+      }
+    }
+
+    function writeStoredChatAssistantGender(rawValue) {
+      if (typeof window === "undefined" || !window.localStorage) return;
+      try {
+        const value = normalizeChatAssistantGenderValue(rawValue);
+        window.localStorage.setItem(getChatAssistantGenderStorageKey(), value);
+      } catch {}
+    }
+
     function getSelectedChatAssistantGender() {
-      if (!settingsChatAssistantGenderOptions) return DEFAULT_CHAT_ASSISTANT_GENDER;
+      if (!settingsChatAssistantGenderOptions) {
+        const stored = readStoredChatAssistantGender();
+        return normalizeChatAssistantGenderValue(stored || DEFAULT_CHAT_ASSISTANT_GENDER);
+      }
       const checked = settingsChatAssistantGenderOptions.querySelector(
         'input[name="settingsChatAssistantGender"]:checked'
       );
-      return normalizeChatAssistantGenderValue(checked ? checked.value : DEFAULT_CHAT_ASSISTANT_GENDER);
+      if (checked) return normalizeChatAssistantGenderValue(checked.value);
+      const stored = readStoredChatAssistantGender();
+      return normalizeChatAssistantGenderValue(stored || DEFAULT_CHAT_ASSISTANT_GENDER);
     }
 
-    function setSelectedChatAssistantGender(rawValue) {
-      if (!settingsChatAssistantGenderOptions) return;
+    function setSelectedChatAssistantGender(rawValue, options = {}) {
+      const opts = options && typeof options === "object" ? options : {};
       const value = normalizeChatAssistantGenderValue(rawValue);
-      const target = settingsChatAssistantGenderOptions.querySelector(
-        `input[name="settingsChatAssistantGender"][value="${value}"]`
-      );
-      if (target) target.checked = true;
+      if (settingsChatAssistantGenderOptions) {
+        const target = settingsChatAssistantGenderOptions.querySelector(
+          `input[name="settingsChatAssistantGender"][value="${value}"]`
+        );
+        if (target) target.checked = true;
+      }
+      if (opts.persist !== false) {
+        writeStoredChatAssistantGender(value);
+      }
     }
 
     function parseChatQuickQuestions(rawValue) {
@@ -799,6 +852,7 @@
     }
 
     reindexChatQuickQuestionInputs();
+    setSelectedChatAssistantGender(readStoredChatAssistantGender() || DEFAULT_CHAT_ASSISTANT_GENDER, { persist: false });
 
     function applyChatSettingsFromTenant(tenant) {
       const assistantValue = tenant && tenant.chat_assistant_name ? String(tenant.chat_assistant_name).trim() : "";
@@ -806,8 +860,16 @@
         settingsChatAssistantNameInput.value = assistantValue || DEFAULT_CHAT_ASSISTANT_NAME;
       }
 
+      const tenantGenderRaw = tenant ? tenant.chat_assistant_gender : undefined;
+      const tenantGenderPresent = !(
+        tenantGenderRaw === undefined
+        || tenantGenderRaw === null
+        || String(tenantGenderRaw).trim() === ""
+      );
       setSelectedChatAssistantGender(
-        tenant ? tenant.chat_assistant_gender : DEFAULT_CHAT_ASSISTANT_GENDER
+        tenantGenderPresent
+          ? tenantGenderRaw
+          : (readStoredChatAssistantGender() || getSelectedChatAssistantGender())
       );
 
       const welcomeValue = tenant && tenant.chat_welcome_message ? String(tenant.chat_welcome_message) : "";
@@ -825,6 +887,11 @@
         settingsChatWidgetEnabledSwitch.checked = normalizeChatWidgetEnabledValue(
           tenant ? tenant.chat_widget_enabled : undefined
         );
+      }
+
+      if (settingsChatGuestThreadTtlDaysInput) {
+        const ttlDaysRaw = tenant ? tenant.chat_guest_thread_ttl_days : undefined;
+        settingsChatGuestThreadTtlDaysInput.value = String(normalizeChatGuestThreadTtlDays(ttlDaysRaw));
       }
 
       applyChatQuickQuestionsToInputs(tenant ? tenant.chat_quick_questions_json : null);
@@ -1162,6 +1229,7 @@
       if (chatAssistantNamePanel) chatAssistantNamePanel.classList.toggle("hidden", tabId !== "chat-assistant-name");
       if (chatOperatorNamePanel) chatOperatorNamePanel.classList.toggle("hidden", tabId !== "chat-operator-name");
       if (chatHotQuestionsPanel) chatHotQuestionsPanel.classList.toggle("hidden", tabId !== "chat-hot-questions");
+      if (chatMessageSettingsPanel) chatMessageSettingsPanel.classList.toggle("hidden", tabId !== "chat-message-settings");
       if (settingsNotificationsPanel) settingsNotificationsPanel.classList.toggle("hidden", tabId !== "notifications");
       if (imagesPanel) imagesPanel.classList.toggle("hidden", tabId !== "images");
       if (printApiPanel) printApiPanel.classList.toggle("hidden", tabId !== "print-api");
@@ -1239,6 +1307,7 @@
           if (tabId === "chat-assistant-name" && chatAssistantNameCard) chatAssistantNameCard.classList.remove("is-active");
           if (tabId === "chat-operator-name" && chatOperatorNameCard) chatOperatorNameCard.classList.remove("is-active");
           if (tabId === "chat-hot-questions" && chatHotQuestionsCard) chatHotQuestionsCard.classList.remove("is-active");
+          if (tabId === "chat-message-settings" && chatMessageSettingsCard) chatMessageSettingsCard.classList.remove("is-active");
           if (tabId === "notifications" && notificationsCard) notificationsCard.classList.remove("is-active");
           if (tabId === "images" && imagesCard) imagesCard.classList.remove("is-active");
           if (tabId === "print-api" && printApiCard) printApiCard.classList.remove("is-active");
@@ -1289,6 +1358,7 @@
       if (tabId === "chat-assistant-name" && chatAssistantNameCard) chatAssistantNameCard.classList.add("is-active");
       if (tabId === "chat-operator-name" && chatOperatorNameCard) chatOperatorNameCard.classList.add("is-active");
       if (tabId === "chat-hot-questions" && chatHotQuestionsCard) chatHotQuestionsCard.classList.add("is-active");
+      if (tabId === "chat-message-settings" && chatMessageSettingsCard) chatMessageSettingsCard.classList.add("is-active");
       if (tabId === "notifications" && notificationsCard) notificationsCard.classList.add("is-active");
       if (tabId === "images" && imagesCard) imagesCard.classList.add("is-active");
       if (tabId === "print-api" && printApiCard) printApiCard.classList.add("is-active");
@@ -1538,6 +1608,11 @@
     if (chatHotQuestionsCard) {
       chatHotQuestionsCard.addEventListener("click", () => {
         ensureTab("chat-hot-questions", "\u0421\u0435\u0442\u043a\u0430 \u0433\u043e\u0440\u044f\u0447\u0438\u0445 \u0432\u043e\u043f\u0440\u043e\u0441\u043e\u0432");
+      });
+    }
+    if (chatMessageSettingsCard) {
+      chatMessageSettingsCard.addEventListener("click", () => {
+        ensureTab("chat-message-settings", "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439");
       });
     }
     if (notificationsCard) {
@@ -3658,6 +3733,16 @@
       });
     }
 
+    if (settingsChatAssistantGenderOptions) {
+      settingsChatAssistantGenderOptions.addEventListener("change", (event) => {
+        const target = event.target && event.target.closest
+          ? event.target.closest('input[name="settingsChatAssistantGender"]')
+          : null;
+        if (!target) return;
+        writeStoredChatAssistantGender(target.value);
+      });
+    }
+
     if (settingsChatWelcomeSaveBtn && settingsChatWelcomeMessageInput) {
       settingsChatWelcomeSaveBtn.addEventListener("click", async () => {
         const raw = String(settingsChatWelcomeMessageInput.value || "").trim();
@@ -3696,6 +3781,28 @@
           settingsChatOperatorNameSaveBtn,
           { chat_operator_name: value },
           "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0438\u043c\u044f \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440\u0430."
+        );
+      });
+    }
+
+    if (settingsChatGuestThreadTtlDaysInput) {
+      settingsChatGuestThreadTtlDaysInput.addEventListener("blur", () => {
+        settingsChatGuestThreadTtlDaysInput.value = String(
+          normalizeChatGuestThreadTtlDays(settingsChatGuestThreadTtlDaysInput.value)
+        );
+      });
+    }
+
+    if (settingsChatMessageSettingsSaveBtn && settingsChatGuestThreadTtlDaysInput) {
+      settingsChatMessageSettingsSaveBtn.addEventListener("click", async () => {
+        const normalizedTtlDays = normalizeChatGuestThreadTtlDays(settingsChatGuestThreadTtlDaysInput.value);
+        await saveChatSettingsPayload(
+          settingsChatMessageSettingsSaveBtn,
+          { chat_guest_thread_ttl_days: normalizedTtlDays },
+          "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0432\u0440\u0435\u043c\u044f \u0436\u0438\u0437\u043d\u0438 \u0433\u043e\u0441\u0442\u0435\u0432\u044b\u0445 \u0447\u0430\u0442\u043e\u0432.",
+          () => {
+            settingsChatGuestThreadTtlDaysInput.value = String(normalizedTtlDays);
+          }
         );
       });
     }

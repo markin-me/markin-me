@@ -5337,12 +5337,84 @@
     desiredParent.appendChild(emojiPopover);
   }
 
+  function updateEmojiPopoverViewportMode() {
+    if (!emojiPopover) return;
+    const useMobileSheet = isMobileChatViewport();
+    emojiPopover.classList.toggle("is-mobile-sheet", useMobileSheet);
+  }
+
+  function setComposerEmojiButtonMode(isKeyboardMode) {
+    if (!emojiBtn) return;
+    const keyboardMode = isKeyboardMode === true;
+    emojiBtn.classList.toggle("is-keyboard-mode", keyboardMode);
+    emojiBtn.setAttribute(
+      "aria-label",
+      keyboardMode ? "\u041a\u043b\u0430\u0432\u0438\u0430\u0442\u0443\u0440\u0430" : "\u042d\u043c\u043e\u0434\u0437\u0438"
+    );
+    const icon = emojiBtn.querySelector("i");
+    if (!icon) return;
+    icon.classList.remove("far", "fas", "fa-smile", "fa-keyboard");
+    if (keyboardMode) {
+      icon.classList.add("far", "fa-keyboard");
+    } else {
+      icon.classList.add("far", "fa-smile");
+    }
+  }
+
+  function syncEmojiSheetOpenState() {
+    if (!modalBody || !emojiPopover) return;
+    const isMobileSheetOpen = (
+      !emojiPopover.classList.contains("hidden")
+      && emojiPopover.classList.contains("is-mobile-sheet")
+      && !emojiPopover.classList.contains("is-attach-preview")
+    );
+    modalBody.classList.toggle("is-emoji-sheet-open", isMobileSheetOpen);
+    setComposerEmojiButtonMode(isMobileSheetOpen);
+  }
+
+  function setEmojiDefaultOpenCategory() {
+    const categories = getEmojiCategoriesForRender();
+    const recent = Array.isArray(categories.recent) ? categories.recent : [];
+    if (recent.length > 0) {
+      emojiActiveCategory = "recent";
+      return;
+    }
+    const firstAvailable = EMOJI_CATEGORY_META
+      .map(function (meta) { return meta.key; })
+      .find(function (key) {
+        const list = Array.isArray(categories[key]) ? categories[key] : [];
+        return list.length > 0;
+      });
+    emojiActiveCategory = firstAvailable || "people";
+  }
+
+  function syncEmojiPickerViewportPosition() {
+    if (!emojiPopover || emojiPopover.classList.contains("hidden")) return;
+    const body = emojiPopover.querySelector(".shop-company-chat-emoji-body");
+    if (!body) return;
+    const sections = Array.from(body.querySelectorAll(".shop-company-chat-emoji-section"));
+    if (!sections.length) return;
+    const activeSection = sections.find(function (section) {
+      return String(section.getAttribute("data-emoji-category") || "") === String(emojiActiveCategory || "");
+    });
+    const fallbackSection = sections[0];
+    const targetSection = activeSection || fallbackSection;
+    if (!targetSection) return;
+    if (emojiPopover.classList.contains("is-mobile-sheet")) {
+      body.scrollLeft = Math.max(0, targetSection.offsetLeft || 0);
+      return;
+    }
+    body.scrollTop = Math.max(0, targetSection.offsetTop - 2);
+  }
+
   function hideEmojiPopover() {
     remountEmojiPopover("composer");
     emojiPopover.classList.add("hidden");
     emojiPopover.classList.remove("is-attach-preview");
+    emojiPopover.classList.remove("is-mobile-sheet");
     emojiPopoverMode = "composer";
     emojiPopoverReactionMessageId = "";
+    syncEmojiSheetOpenState();
   }
 
   function toggleEmojiPopover(target) {
@@ -5354,18 +5426,24 @@
 
     remountEmojiPopover(normalizedTarget);
     emojiPopover.classList.toggle("is-attach-preview", isPreviewTarget);
+    updateEmojiPopoverViewportMode();
     emojiPopover.classList.toggle("hidden", !willOpen);
     if (!willOpen) {
       remountEmojiPopover("composer");
       emojiPopoverMode = "composer";
       emojiPopoverReactionMessageId = "";
+      emojiPopover.classList.remove("is-mobile-sheet");
     }
+    syncEmojiSheetOpenState();
     if (willOpen) {
       if (normalizedTarget !== "attach-preview") {
         emojiPopoverMode = "composer";
         emojiPopoverReactionMessageId = "";
+        setEmojiDefaultOpenCategory();
       }
+      renderEmojiPicker();
       ensureEmojiDatasetLoaded().catch(function () {});
+      requestAnimationFrame(syncEmojiPickerViewportPosition);
     }
   }
 
@@ -5378,10 +5456,17 @@
 
     remountEmojiPopover(normalizedTarget);
     emojiPopover.classList.toggle("is-attach-preview", isPreviewTarget);
+    updateEmojiPopoverViewportMode();
     emojiPopover.classList.remove("hidden");
     emojiPopoverMode = mode;
     emojiPopoverReactionMessageId = messageId;
+    if (mode !== "reaction" && normalizedTarget !== "attach-preview") {
+      setEmojiDefaultOpenCategory();
+    }
+    syncEmojiSheetOpenState();
+    renderEmojiPicker();
     ensureEmojiDatasetLoaded().catch(function () {});
+    requestAnimationFrame(syncEmojiPickerViewportPosition);
   }
 
   function normalizeEmojiCategoryName(rawCategory) {
@@ -5426,8 +5511,13 @@
     const seen = new Set();
     const out = [];
     input.forEach(function (item) {
-      const emoji = String(item || "").trim().normalize("NFC");
-      if (!emoji || !hasEmojiInText(emoji)) return;
+      const raw = String(item || "").trim().normalize("NFC");
+      if (!raw) return;
+      const graphemes = segmentGraphemes(raw).filter(Boolean);
+      const emoji = emojiGraphemeSegmenter
+        ? (graphemes.length === 1 ? String(graphemes[0] || "").trim().normalize("NFC") : "")
+        : raw;
+      if (!emoji || !isEmojiGrapheme(emoji)) return;
       const key = normalizeReactionValue(emoji);
       if (!key || seen.has(key)) return;
       seen.add(key);
@@ -5460,7 +5550,11 @@
       const raw = localStorage.getItem(EMOJI_RECENT_STORAGE_KEY);
       if (!raw) return [];
       const parsed = JSON.parse(raw);
-      return normalizeEmojiList(parsed).slice(0, 42);
+      const normalized = normalizeEmojiList(parsed).slice(0, 42);
+      try {
+        localStorage.setItem(EMOJI_RECENT_STORAGE_KEY, JSON.stringify(normalized));
+      } catch {}
+      return normalized;
     } catch {
       return [];
     }
@@ -5658,6 +5752,14 @@
         if (!section) return;
         emojiActiveCategory = category.key;
         updateActiveTabUi(emojiActiveCategory);
+        if (emojiPopover.classList.contains("is-mobile-sheet")) {
+          const left = Math.max(0, section.offsetLeft || 0);
+          body.scrollTo({
+            left: left,
+            behavior: "smooth",
+          });
+          return;
+        }
         body.scrollTo({
           top: Math.max(0, section.offsetTop - 2),
           behavior: "smooth",
@@ -5669,6 +5771,17 @@
       const section = document.createElement("section");
       section.className = "shop-company-chat-emoji-section";
       section.setAttribute("data-emoji-category", category.key);
+      if (emojiPopover.classList.contains("is-mobile-sheet")) {
+        section.style.width = "max-content";
+        section.style.minWidth = "max-content";
+        section.style.maxWidth = "none";
+        section.style.flex = "0 0 auto";
+      } else {
+        section.style.width = "";
+        section.style.minWidth = "";
+        section.style.maxWidth = "";
+        section.style.flex = "";
+      }
 
       const title = document.createElement("div");
       title.className = "shop-company-chat-emoji-title";
@@ -5677,6 +5790,17 @@
 
       const grid = document.createElement("div");
       grid.className = "shop-company-chat-emoji-grid";
+      if (emojiPopover.classList.contains("is-mobile-sheet")) {
+        grid.style.width = "max-content";
+        grid.style.gridAutoFlow = "column";
+        grid.style.gridTemplateRows = "repeat(4, 40px)";
+        grid.style.gridAutoColumns = "40px";
+      } else {
+        grid.style.width = "";
+        grid.style.gridAutoFlow = "";
+        grid.style.gridTemplateRows = "";
+        grid.style.gridAutoColumns = "";
+      }
       list.forEach(function (emoji) {
         const btn = document.createElement("button");
         btn.type = "button";
@@ -5704,6 +5828,23 @@
     });
 
     const syncActiveCategoryByScroll = function () {
+      if (emojiPopover.classList.contains("is-mobile-sheet")) {
+        const left = Math.max(0, body.scrollLeft || 0);
+        let nextKey = emojiActiveCategory;
+        visibleCategories.forEach(function (category) {
+          const section = sectionByKey.get(category.key);
+          if (!section) return;
+          const sectionLeft = Math.max(0, section.offsetLeft || 0);
+          if (sectionLeft <= (left + 8)) {
+            nextKey = category.key;
+          }
+        });
+        if (nextKey && nextKey !== emojiActiveCategory) {
+          emojiActiveCategory = nextKey;
+          updateActiveTabUi(emojiActiveCategory);
+        }
+        return;
+      }
       const threshold = body.scrollTop + 12;
       let currentKey = emojiActiveCategory;
       visibleCategories.forEach(function (category) {
@@ -5721,9 +5862,14 @@
     updateActiveTabUi(emojiActiveCategory);
 
     requestAnimationFrame(function () {
-      const activeSection = sectionByKey.get(emojiActiveCategory);
-      if (!activeSection) return;
-      body.scrollTop = Math.max(0, activeSection.offsetTop - 2);
+      if (emojiPopover.classList.contains("is-mobile-sheet")) {
+        const activeSection = sectionByKey.get(emojiActiveCategory);
+        body.scrollLeft = Math.max(0, activeSection ? (activeSection.offsetLeft || 0) : 0);
+      } else {
+        const activeSection = sectionByKey.get(emojiActiveCategory);
+        if (!activeSection) return;
+        body.scrollTop = Math.max(0, activeSection.offsetTop - 2);
+      }
       requestAnimationFrame(syncActiveCategoryByScroll);
     });
   }
@@ -7405,7 +7551,16 @@
     hideContextMenu();
     hideReactionBar();
     toggleEmojiPopover("composer");
-    input.focus();
+    const isMobileSheetOpen = (
+      isMobileChatViewport()
+      && !emojiPopover.classList.contains("hidden")
+      && emojiPopover.classList.contains("is-mobile-sheet")
+    );
+    if (isMobileSheetOpen) {
+      input.blur();
+    } else {
+      input.focus();
+    }
   });
 
   thread.addEventListener("click", function (event) {

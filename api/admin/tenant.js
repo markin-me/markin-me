@@ -31,6 +31,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     {
       name: 'chat_widget_enabled',
       sql: "tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Show customer chat button in storefront'"
+    },
+    {
+      name: 'chat_guest_thread_ttl_days',
+      sql: "smallint unsigned DEFAULT NULL COMMENT 'Guest chat TTL in days'"
     }
   ];
   let tenantChatColumnsReady = false;
@@ -519,6 +523,19 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const chatWidgetEnabled = req.body.chat_widget_enabled !== undefined
         ? (helpers.toBool(req.body.chat_widget_enabled, true) ? 1 : 0)
         : undefined;
+      let chatGuestThreadTtlDays = undefined;
+      if (req.body.chat_guest_thread_ttl_days !== undefined) {
+        const ttlRaw = helpers.numOrNull(req.body.chat_guest_thread_ttl_days);
+        if (ttlRaw === null) {
+          chatGuestThreadTtlDays = null;
+        } else {
+          const ttl = Math.trunc(Number(ttlRaw));
+          if (!Number.isFinite(ttl) || ttl < 1 || ttl > 365) {
+            return res.status(400).json({ ok: false, error: 'BAD_CHAT_GUEST_THREAD_TTL_DAYS' });
+          }
+          chatGuestThreadTtlDays = ttl;
+        }
+      }
       let chatQuickQuestionsJson = undefined;
       if (req.body.chat_quick_questions_json !== undefined) {
         const rawQuestions = req.body.chat_quick_questions_json;
@@ -698,6 +715,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const nextChatWidgetEnabled = chatWidgetEnabled !== undefined
         ? chatWidgetEnabled
         : (Number(current.chat_widget_enabled) === 0 ? 0 : 1);
+      const nextChatGuestThreadTtlDays = chatGuestThreadTtlDays !== undefined
+        ? chatGuestThreadTtlDays
+        : (current.chat_guest_thread_ttl_days ?? null);
 
       if (email !== undefined && email && email !== current.email) {
         const [existsEmail] = await db.query(
@@ -710,8 +730,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, telegram_bot_username=?, telegram_bot_token=?, chat_welcome_message=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_widget_enabled=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextTelegramBotUsername, nextTelegramBotToken, nextChatWelcomeMessage, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatWidgetEnabled, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, telegram_bot_username=?, telegram_bot_token=?, chat_welcome_message=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextTelegramBotUsername, nextTelegramBotToken, nextChatWelcomeMessage, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, tenantId]
       );
 
       const [rows] = await db.query(
