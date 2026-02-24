@@ -6855,6 +6855,7 @@ body.page-shop .shop-company-chat-btn:hover{
   flex-direction: column;
   position: relative;
   padding: 0;
+  transition: padding-bottom 220ms var(--ease-smooth);
 }
 
 .shop-company-chat-modal__body .chat-attach-preview-overlay{
@@ -8309,6 +8310,31 @@ body.page-shop .shop-company-chat-btn:hover{
   z-index: 20;
 }
 
+.shop-company-chat-emoji-popover.is-mobile-sheet{
+  position: fixed;
+  left: max(8px, env(safe-area-inset-left));
+  right: max(8px, env(safe-area-inset-right));
+  bottom: calc(8px + env(safe-area-inset-bottom));
+  width: auto;
+  height: clamp(220px, 41vh, 290px);
+  max-height: clamp(220px, 41vh, 290px);
+  min-height: 220px;
+  border-radius: 18px;
+  padding: 8px 10px 10px;
+  z-index: 1705;
+  animation: shop-company-chat-emoji-sheet-up .22s var(--ease-smooth);
+}
+
+.shop-company-chat-emoji-popover.is-mobile-sheet::before{
+  content: "";
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-text-muted), transparent 40%);
+  margin: 1px auto 8px;
+  flex-shrink: 0;
+}
+
 .shop-company-chat-emoji-popover.is-attach-preview{
   position: fixed;
   left: 50%;
@@ -8316,6 +8342,13 @@ body.page-shop .shop-company-chat-btn:hover{
   bottom: 22px;
   transform: translateX(-50%);
   z-index: 1700;
+}
+
+.shop-company-chat-emoji-popover.is-mobile-sheet.is-attach-preview{
+  left: max(8px, env(safe-area-inset-left));
+  right: max(8px, env(safe-area-inset-right));
+  bottom: calc(8px + env(safe-area-inset-bottom));
+  transform: none;
 }
 
 .shop-company-chat-emoji-categories{
@@ -8368,6 +8401,22 @@ body.page-shop .shop-company-chat-btn:hover{
   scrollbar-width: none;
 }
 
+.shop-company-chat-emoji-popover.is-mobile-sheet .shop-company-chat-emoji-body{
+  margin-top: 8px;
+  min-height: 0;
+  max-height: none;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: flex-start;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
+}
+
 .shop-company-chat-emoji-body::-webkit-scrollbar{
   width: 0;
   height: 0;
@@ -8384,10 +8433,44 @@ body.page-shop .shop-company-chat-btn:hover{
   margin-top: 10px;
 }
 
+.shop-company-chat-emoji-popover.is-mobile-sheet .shop-company-chat-emoji-section{
+  width: max-content;
+  min-width: max-content;
+  max-width: none;
+  flex: 0 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+.shop-company-chat-emoji-popover.is-mobile-sheet .shop-company-chat-emoji-section + .shop-company-chat-emoji-section{
+  margin-left: 0;
+  margin-top: 0;
+}
+
 .shop-company-chat-emoji-grid{
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 4px;
+}
+
+.shop-company-chat-emoji-popover.is-mobile-sheet .shop-company-chat-emoji-grid{
+  flex: 0 0 auto;
+  min-height: auto;
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(4, 40px);
+  grid-auto-columns: 40px;
+  justify-content: start;
+  align-content: start;
+  width: max-content;
+  overflow: hidden;
+  gap: 6px;
+  padding-top: 2px;
+  padding-bottom: 8px;
 }
 
 .shop-company-chat-emoji-empty{
@@ -8413,10 +8496,25 @@ body.page-shop .shop-company-chat-btn:hover{
   justify-content: center;
 }
 
+.shop-company-chat-emoji-popover.is-mobile-sheet .shop-company-chat-emoji-btn{
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  border-radius: 10px;
+}
+
 .shop-company-chat-emoji-glyph{
   display: block;
   width: 24px;
   height: 24px;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-style: normal;
+  font-weight: 400;
+  font-variant-emoji: emoji;
+  line-height: 1;
+  white-space: nowrap;
   object-fit: contain;
   image-rendering: auto;
   pointer-events: none;
@@ -8523,6 +8621,17 @@ body.page-shop .shop-company-chat-btn:hover{
 .shop-company-chat-emoji-btn:hover{
   background: var(--color-surface-2);
   border-color: var(--color-border);
+}
+
+@keyframes shop-company-chat-emoji-sheet-up{
+  from{
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to{
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .shop-company-chat-composer{
@@ -8854,6 +8963,14 @@ body.page-shop.shop-company-chat-open{
   .shop-company-chat-composer{
     min-height: 50px;
     margin: 0 10px 10px;
+  }
+
+  .shop-company-chat-modal__body.is-emoji-sheet-open{
+    padding-bottom: calc(clamp(220px, 41vh, 290px) + 12px + env(safe-area-inset-bottom));
+  }
+
+  .shop-company-chat-modal__body.is-emoji-sheet-open .shop-company-chat-scroll-down{
+    bottom: calc(92px + clamp(220px, 41vh, 290px));
   }
 
   .shop-company-chat-selection-toolbar{

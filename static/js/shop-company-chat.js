@@ -45,30 +45,50 @@
 
   const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/img/google/64";
   const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/emoji.json";
+  const EMOJI_REMOTE_DATASET_ENABLED = false;
+  const EMOJI_NATIVE_RENDER_ONLY = true;
+  const EMOJI_REACTION_POOL_LIMIT = 64;
+  const EMOJI_ATLAS_ENABLED = true;
+  const EMOJI_ATLAS_URL = "/static/assets/emoji/google-people-atlas.webp?v=1";
+  const EMOJI_ATLAS_COLUMNS = 16;
   const EMOJI_RECENT_STORAGE_KEY = "shop-company-chat-recent-emojis:v1";
   const EMOJI_CATEGORY_META = [
-    { key: "recent", label: "Недавние", iconClass: "far fa-clock" },
-    { key: "people", label: "Смайлы и люди", iconClass: "far fa-smile" },
-    { key: "nature", label: "Животные и природа", iconClass: "fas fa-paw" },
-    { key: "food", label: "Еда и напитки", iconClass: "fas fa-apple-whole" },
-    { key: "activity", label: "Активности", iconClass: "far fa-futbol" },
-    { key: "travel", label: "Путешествия", iconClass: "fas fa-car-side" },
-    { key: "objects", label: "Объекты", iconClass: "far fa-lightbulb" },
-    { key: "symbols", label: "Символы", iconClass: "fas fa-at" },
-    { key: "flags", label: "Флаги", iconClass: "far fa-flag" },
+    { key: "recent", label: "\u041d\u0435\u0434\u0430\u0432\u043d\u0438\u0435", iconClass: "far fa-clock" },
+    { key: "people", label: "\u0421\u043c\u0430\u0439\u043b\u044b \u0438 \u043b\u044e\u0434\u0438", iconClass: "far fa-smile" },
+    { key: "nature", label: "\u0416\u0438\u0432\u043e\u0442\u043d\u044b\u0435 \u0438 \u043f\u0440\u0438\u0440\u043e\u0434\u0430", iconClass: "fas fa-paw" },
+    { key: "food", label: "\u0415\u0434\u0430 \u0438 \u043d\u0430\u043f\u0438\u0442\u043a\u0438", iconClass: "fas fa-apple-whole" },
+    { key: "activity", label: "\u0410\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u0438", iconClass: "far fa-futbol" },
+    { key: "travel", label: "\u041f\u0443\u0442\u0435\u0448\u0435\u0441\u0442\u0432\u0438\u044f", iconClass: "fas fa-car-side" },
+    { key: "objects", label: "\u041e\u0431\u044a\u0435\u043a\u0442\u044b", iconClass: "far fa-lightbulb" },
+    { key: "symbols", label: "\u0421\u0438\u043c\u0432\u043e\u043b\u044b", iconClass: "fas fa-at" },
+    { key: "flags", label: "\u0424\u043b\u0430\u0433\u0438", iconClass: "far fa-flag" },
   ];
   const EMOJI_FALLBACK_CATEGORIES = {
     people: [
-      "😀","😃","😄","😁","😆","😅","🤣","😂","🙂","🙃","😉","😊","😇","🥰","😍","😘","😗","😚","😋","😛","😜","🤪","🤨","🧐","🤓","😎","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🫡","🤭","🫢","🤫","🤥","😶","🫠","😐","🫤","😑","😬","🙄","😮‍💨","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","❤️","💔","💯","👍","👎","👏","🙌","🙏","👋","🤝","💪"
+      "\u{1F600}","\u{1F603}","\u{1F604}","\u{1F601}","\u{1F606}","\u{1F605}","\u{1F923}","\u{1F602}","\u{1F642}","\u{1F643}",
+      "\u{1F609}","\u{1F60A}","\u{1F607}","\u{1F970}","\u{1F60D}","\u{1F618}","\u{1F617}","\u{1F61A}","\u{1F60B}","\u{1F61B}",
+      "\u{1F61C}","\u{1F92A}","\u{1F928}","\u{1F9D0}","\u{1F913}","\u{1F60E}","\u{1F973}","\u{1F60F}","\u{1F612}","\u{1F61E}",
+      "\u{1F614}","\u{1F61F}","\u{1F615}","\u{1F641}","\u{2639}\u{FE0F}","\u{1F623}","\u{1F616}","\u{1F62B}","\u{1F629}","\u{1F97A}",
+      "\u{1F62D}","\u{1F624}","\u{1F620}","\u{1F621}","\u{1F92C}","\u{1F92F}","\u{1F633}","\u{1F975}","\u{1F976}","\u{1F631}",
+      "\u{1F628}","\u{1F630}","\u{1F625}","\u{1F613}","\u{1F917}","\u{1F914}","\u{1FAE1}","\u{1F92D}","\u{1FAE2}","\u{1F92B}",
+      "\u{1F925}","\u{1F636}","\u{1FAE0}","\u{1F610}","\u{1FAE4}","\u{1F611}","\u{1F62C}","\u{1F644}","\u{1F62E}\u{200D}\u{1F4A8}","\u{1F924}",
+      "\u{1F62A}","\u{1F635}","\u{1F910}","\u{1F974}","\u{1F922}","\u{1F92E}","\u{1F927}","\u{1F637}","\u{1F912}","\u{1F915}",
+      "\u{2764}\u{FE0F}","\u{1F494}","\u{1F4AF}","\u{1F44D}","\u{1F44E}","\u{1F44F}","\u{1F64C}","\u{1F64F}","\u{1F44B}","\u{1F91D}","\u{1F4AA}"
     ],
-    nature: ["🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐮","🐷","🐸","🐵","🐔","🐧","🐦","🦆","🦅","🦉","🦇","🐺","🐗","🐴","🦄","🐝","🪲","🐞","🦋","🐌","🐢","🐍","🦎","🐙","🦑","🦞","🦀","🐬","🐳","🦈","🐊","🌵","🌲","🌳","🌴","🌷","🌸","🌹","🌺","🌻","🌼","🌿","☘️","🍀","🌱","🌈","⭐","🌙","☀️","🌧️","⛈️","❄️","🔥","🌊"],
-    food: ["🍏","🍎","🍐","🍊","🍋","🍌","🍉","🍇","🍓","🫐","🍒","🍑","🥭","🍍","🥥","🥝","🍅","🥑","🥦","🥬","🥒","🌶️","🫑","🌽","🥕","🧄","🧅","🥔","🍠","🫚","🥐","🥖","🍞","🥨","🧀","🥚","🍳","🥞","🧇","🥓","🍗","🍖","🌭","🍔","🍟","🍕","🌮","🌯","🥙","🧆","🥪","🍝","🍜","🍣","🍤","🍱","🍛","🍚","🍙","🍘","🍥","🥟","🍦","🍰","🧁","🍪","🍫","🍿","🍩","🍮","☕","🍵","🧃","🥤","🍺","🍷"],
-    activity: ["⚽","🏀","🏈","⚾","🥎","🎾","🏐","🏉","🥏","🎱","🏓","🏸","🏒","🏑","🥍","🏏","⛳","🏹","🎣","🤿","🥊","🥋","🎽","🛹","🛼","🛷","⛸️","🥌","🎯","🎳","🎮","🕹️","🎲","🧩","♟️","🎨","🎭","🎤","🎧","🎼","🎹","🥁","🎷","🎺","🎸","🎻","🎬","📷","📸","🧘","🤸","⛹️","🏋️","🚴","🏊","🏄","🧗","🤾","🤽"],
-    travel: ["🚗","🚕","🚙","🚌","🚎","🏎️","🚓","🚑","🚒","🚐","🛻","🚚","🚛","🚜","🛵","🏍️","🚲","🛴","🚨","🚔","🚍","✈️","🛫","🛬","🚁","🚂","🚆","🚇","🚊","🚉","🚢","🛳️","⛵","🚤","🗽","🗼","🏰","🏯","🏟️","🎡","🎢","⛲","⛰️","🏔️","🗻","🏝️","🏜️","🌋","🏙️","🌆","🌃","🌉","🛣️","🛤️","🌁","🗺️","🧭","⛽"],
-    objects: ["⌚","📱","💻","⌨️","🖥️","🖨️","🖱️","📷","📹","🎥","📺","📻","🎙️","🎚️","📀","💿","📼","☎️","📞","🕰️","⏰","⏱️","⏲️","🧭","📡","🔋","🔌","💡","🔦","🕯️","🪫","🧯","🧲","🧰","🛠️","🔧","🔨","⚙️","⛓️","🧱","🪜","🧪","🧬","🔬","🔭","📌","✂️","🖊️","🖋️","📎","📁","🗂️","🗃️","🗄️","📦","🧳","🎁","🛒","💳","💵","💰","🔒","🔑"],
-    symbols: ["❤️","🧡","💛","💚","💙","💜","🖤","🤍","🤎","💔","❣️","💕","💞","💓","💗","💖","💘","💝","💟","☮️","✝️","☪️","🕉️","☸️","✡️","🔯","🪯","☯️","☦️","🛐","⛎","♈","♉","♊","♋","♌","♍","♎","♏","♐","♑","♒","♓","🆔","⚛️","🉑","☢️","☣️","📴","📳","🈶","🈚","🈸","🈺","🈷️","✴️","🆚","💮","🉐","㊙️","㊗️","🈴","🈵","🈹","🈲","🅰️","🅱️","🆎","🆘","❌","⭕","🔴","🟠","🟡","🟢","🔵","🟣","⚪","⚫","▪️","▫️","◾","◽","🔶","🔷","🔸","🔹","🔺","🔻","💠","🔘","🔳","🔲"],
-    flags: ["🏳️","🏴","🏁","🚩","🏳️‍🌈","🏳️‍⚧️","🇷🇺","🇺🇸","🇬🇧","🇩🇪","🇫🇷","🇪🇸","🇮🇹","🇺🇦","🇰🇿","🇧🇾","🇦🇲","🇬🇪","🇦🇿","🇹🇷","🇨🇳","🇯🇵","🇰🇷","🇮🇳","🇧🇷","🇨🇦","🇦🇺","🇲🇽","🇦🇪","🇸🇦","🇮🇱","🇵🇱","🇳🇱","🇸🇪","🇳🇴","🇫🇮","🇨🇭","🇦🇹","🇨🇿","🇸🇰","🇷🇴","🇧🇬","🇷🇸","🇭🇷","🇸🇮","🇪🇪","🇱🇻","🇱🇹","🇵🇹","🇬🇷"]
+    nature: [],
+    food: [],
+    activity: [],
+    travel: [],
+    objects: [],
+    symbols: [],
+    flags: []
   };
+  function normalizeEmojiAtlasKey(value) {
+    return String(value || "")
+      .trim()
+      .normalize("NFC")
+      .replace(/\uFE0F/g, "");
+  }
   const QUICK_REACTIONS = [
     "\u{1F642}",
     "\u{1F622}",
@@ -86,6 +106,19 @@
     "\u{1F641}",
     "\u{1F62E}",
   ];
+  const EMOJI_ATLAS_ROWS = Math.max(
+    1,
+    Math.ceil(((EMOJI_FALLBACK_CATEGORIES.people || []).length || 1) / EMOJI_ATLAS_COLUMNS)
+  );
+  const EMOJI_ATLAS_INDEX_BY_KEY = (function () {
+    const map = Object.create(null);
+    (EMOJI_FALLBACK_CATEGORIES.people || []).forEach(function (emoji, index) {
+      const key = normalizeEmojiAtlasKey(emoji);
+      if (!key) return;
+      if (map[key] === undefined) map[key] = index;
+    });
+    return map;
+  })();
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
   const CHAT_THREAD_WAIT_TIMEOUT_MS = 20000;
   const CHAT_THREAD_WAIT_RETRY_MS = 1200;
@@ -109,21 +142,22 @@
   const IMAGE_OPTIMIZE_SCALE_STEP = 0.84;
   const CHAT_REACTION_ACTOR = "in";
   const CHAT_TYPING_PHRASES = [
-    "печатает",
-    "набирает ответ",
-    "клацает по клавишам",
-    "стучит по клавиатуре",
-    "строчит сообщение",
-    "собирает мысли в текст",
-    "формулирует ответ",
-    "набивает текст",
-    "долбит по клавишам",
-    "подбирает слова",
-    "колдует над сообщением",
-    "нажимает клавиши",
+    "\u043f\u0435\u0447\u0430\u0442\u0430\u0435\u0442",
+    "\u043d\u0430\u0431\u0438\u0440\u0430\u0435\u0442 \u043e\u0442\u0432\u0435\u0442",
+    "\u043a\u043b\u0430\u0446\u0430\u0435\u0442 \u043f\u043e \u043a\u043b\u0430\u0432\u0438\u0448\u0430\u043c",
+    "\u0441\u0442\u0443\u0447\u0438\u0442 \u043f\u043e \u043a\u043b\u0430\u0432\u0438\u0430\u0442\u0443\u0440\u0435",
+    "\u0441\u0442\u0440\u043e\u0447\u0438\u0442 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435",
+    "\u0441\u043e\u0431\u0438\u0440\u0430\u0435\u0442 \u043c\u044b\u0441\u043b\u0438 \u0432 \u0442\u0435\u043a\u0441\u0442",
+    "\u0444\u043e\u0440\u043c\u0443\u043b\u0438\u0440\u0443\u0435\u0442 \u043e\u0442\u0432\u0435\u0442",
+    "\u043d\u0430\u0431\u0438\u0432\u0430\u0435\u0442 \u0442\u0435\u043a\u0441\u0442",
+    "\u0434\u043e\u043b\u0431\u0438\u0442 \u043f\u043e \u043a\u043b\u0430\u0432\u0438\u0448\u0430\u043c",
+    "\u043f\u043e\u0434\u0431\u0438\u0440\u0430\u0435\u0442 \u0441\u043b\u043e\u0432\u0430",
+    "\u043a\u043e\u043b\u0434\u0443\u0435\u0442 \u043d\u0430\u0434 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435\u043c",
+    "\u043d\u0430\u0436\u0438\u043c\u0430\u0435\u0442 \u043a\u043b\u0430\u0432\u0438\u0448\u0438",
   ];
 
-  let emojiAssetsState = "unknown";
+  let emojiAssetsState = EMOJI_NATIVE_RENDER_ONLY ? "fallback" : "unknown";
+  let emojiAtlasPreloadStarted = false;
   let emojiCategories = {};
   let emojiRecentList = [];
   let emojiActiveCategory = "people";
@@ -144,16 +178,16 @@
   const DEFAULT_CHAT_ASSISTANT_GENDER = CHAT_ASSISTANT_GENDER_MALE;
 
   const QUICK_REPLIES = {
-    "где мой заказ?":
-      "Проверяю статус заказа. Если курьер задерживается из-за погоды, мы обязательно обновим время доставки.",
-    "где мой заказ":
-      "Проверяю статус заказа. Если курьер задерживается из-за погоды, мы обязательно обновим время доставки.",
-    "вопрос по качеству товара":
-      "Извините за ситуацию. Напишите, пожалуйста, какой товар и что именно не так, и я передам обращение в поддержку.",
-    "вопрос по комплектации заказа":
-      "Понял. Подскажите, чего не хватает или что было лишним, чтобы мы быстро все исправили.",
-    "другой вопрос":
-      "Я на связи. Опишите ваш вопрос, и я постараюсь помочь или переключу на оператора.",
+    "\u0433\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?":
+      "\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u044e \u0441\u0442\u0430\u0442\u0443\u0441 \u0437\u0430\u043a\u0430\u0437\u0430. \u0415\u0441\u043b\u0438 \u043a\u0443\u0440\u044c\u0435\u0440 \u0437\u0430\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f \u0438\u0437-\u0437\u0430 \u043f\u043e\u0433\u043e\u0434\u044b, \u043c\u044b \u043e\u0431\u044f\u0437\u0430\u0442\u0435\u043b\u044c\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u0438\u043c \u0432\u0440\u0435\u043c\u044f \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438.",
+    "\u0433\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437":
+      "\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u044e \u0441\u0442\u0430\u0442\u0443\u0441 \u0437\u0430\u043a\u0430\u0437\u0430. \u0415\u0441\u043b\u0438 \u043a\u0443\u0440\u044c\u0435\u0440 \u0437\u0430\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f \u0438\u0437-\u0437\u0430 \u043f\u043e\u0433\u043e\u0434\u044b, \u043c\u044b \u043e\u0431\u044f\u0437\u0430\u0442\u0435\u043b\u044c\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u0438\u043c \u0432\u0440\u0435\u043c\u044f \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438.",
+    "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430":
+      "\u0418\u0437\u0432\u0438\u043d\u0438\u0442\u0435 \u0437\u0430 \u0441\u0438\u0442\u0443\u0430\u0446\u0438\u044e. \u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a, \u0438 \u044f \u043f\u0435\u0440\u0435\u0434\u0430\u043c \u043e\u0431\u0440\u0430\u0449\u0435\u043d\u0438\u0435 \u0432 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u043a\u0443.",
+    "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430":
+      "\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, \u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c, \u0447\u0442\u043e\u0431\u044b \u043c\u044b \u0431\u044b\u0441\u0442\u0440\u043e \u0432\u0441\u0435 \u0438\u0441\u043f\u0440\u0430\u0432\u0438\u043b\u0438.",
+    "\u0434\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441":
+      "\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. \u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441, \u0438 \u044f \u043f\u043e\u0441\u0442\u0430\u0440\u0430\u044e\u0441\u044c \u043f\u043e\u043c\u043e\u0447\u044c \u0438\u043b\u0438 \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0443 \u043d\u0430 \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440\u0430.",
   };
   const HOT_QUESTION_ORDER_KEY = "\u0433\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437";
   const HOT_QUESTION_ORDER_KEY_ALT = "\u0433\u0434\u0435 \u0437\u0430\u043a\u0430\u0437";
@@ -356,11 +390,11 @@
 
   function getRandomTypingPhrase() {
     if (!Array.isArray(CHAT_TYPING_PHRASES) || !CHAT_TYPING_PHRASES.length) {
-      return "печатает";
+      return "\u043f\u0435\u0447\u0430\u0442\u0430\u0435\u0442";
     }
     const idx = Math.floor(Math.random() * CHAT_TYPING_PHRASES.length);
     const phrase = String(CHAT_TYPING_PHRASES[idx] || "").trim();
-    return phrase || "печатает";
+    return phrase || "\u043f\u0435\u0447\u0430\u0442\u0430\u0435\u0442";
   }
 
   function normalizePeerTypingInfo(raw) {
@@ -1027,8 +1061,8 @@
     if (!("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
     try {
-      const n = new Notification(String(title || "Новое сообщение"), {
-        body: String(body || "Откройте чат, чтобы ответить."),
+      const n = new Notification(String(title || "\u041d\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435"), {
+        body: String(body || "\u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 \u0447\u0430\u0442, \u0447\u0442\u043e\u0431\u044b \u043e\u0442\u0432\u0435\u0442\u0438\u0442\u044c."),
         silent: false,
       });
       n.onclick = function () {
@@ -1061,8 +1095,8 @@
     if (!tabActive || !isOpen) {
       if (shouldSuppressLocalBrowserNotification()) return;
       showIncomingMessageBrowserNotification(
-        "Новое сообщение от компании",
-        getEntryPreviewText(entry) || "Откройте чат, чтобы ответить."
+        "\u041d\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u043e\u0442 \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438",
+        getEntryPreviewText(entry) || "\u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 \u0447\u0430\u0442, \u0447\u0442\u043e\u0431\u044b \u043e\u0442\u0432\u0435\u0442\u0438\u0442\u044c."
       );
     }
   }
@@ -1827,7 +1861,7 @@
       const stableCustomerId = getStableCustomerChatClientId(token, directId, customer);
       return {
         id: Math.trunc(stableCustomerId),
-        name: String((customer && customer.name) || "Клиент"),
+        name: String((customer && customer.name) || "\u041a\u043b\u0438\u0435\u043d\u0442"),
         phone: String((customer && customer.phone) || ""),
         isGuest: false,
       };
@@ -1836,7 +1870,7 @@
     const guestId = ensureGuestChatClientId(opts.forceNewGuest === true);
     return {
       id: Math.trunc(guestId),
-      name: "Гость",
+      name: "\u0413\u043e\u0441\u0442\u044c",
       phone: "",
       isGuest: true,
     };
@@ -1912,7 +1946,7 @@
     const id = Number(source.id);
     return {
       id: Number.isFinite(id) && id > 0 ? Math.trunc(id) : 0,
-      name: String(source.name || "Клиент"),
+      name: String(source.name || "\u041a\u043b\u0438\u0435\u043d\u0442"),
       phone: String(source.phone || ""),
       isGuest: source.isGuest === true,
     };
@@ -1935,7 +1969,7 @@
   lastFeedViewportState = loadPersistedFeedViewportState(chatClientProfile.id);
   lastFeedScrollTop = Number(lastFeedViewportState && lastFeedViewportState.top);
   let sharedThreadMeta = {
-    name: String(chatClientProfile.name || "Клиент"),
+    name: String(chatClientProfile.name || "\u041a\u043b\u0438\u0435\u043d\u0442"),
     phone: String(chatClientProfile.phone || ""),
     lastWelcomeDay: "",
   };
@@ -2052,7 +2086,7 @@
     visibleStart = baseEntries.length;
     loadOlderMessages(INITIAL_BATCH, false);
     sharedThreadMeta = {
-      name: String(chatClientProfile.name || "Клиент"),
+      name: String(chatClientProfile.name || "\u041a\u043b\u0438\u0435\u043d\u0442"),
       phone: String(chatClientProfile.phone || ""),
       lastWelcomeDay: "",
     };
@@ -2208,8 +2242,8 @@
     const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
     const diffDays = Math.round((target.getTime() - today.getTime()) / 86400000);
 
-    if (diffDays === 0) return "Сегодня";
-    if (diffDays === -1) return "Вчера";
+    if (diffDays === 0) return "\u0421\u0435\u0433\u043e\u0434\u043d\u044f";
+    if (diffDays === -1) return "\u0412\u0447\u0435\u0440\u0430";
 
     const dd = String(date.getDate()).padStart(2, "0");
     const mm = String(date.getMonth() + 1).padStart(2, "0");
@@ -2280,7 +2314,7 @@
       type: "message",
       role: role,
       day: formatDayLabelFromIso(createdAt),
-      time: formatTimeFromIso(createdAt) + (editedAt ? " • изм." : ""),
+      time: formatTimeFromIso(createdAt) + (editedAt ? " \u00b7 \u0438\u0437\u043c." : ""),
       text: isDailyWelcome
         ? String(
             chatRuntimeSettings.welcomeMessage
@@ -2452,7 +2486,7 @@
         body: {
           message: payload,
           meta: {
-            name: String(metaState.name || "Клиент"),
+            name: String(metaState.name || "\u041a\u043b\u0438\u0435\u043d\u0442"),
             phone: String(metaState.phone || ""),
             last_welcome_day: String(metaState.lastWelcomeDay || ""),
           },
@@ -2475,7 +2509,7 @@
         body: {
           patch: patch,
           meta: {
-            name: String(metaState.name || "Клиент"),
+            name: String(metaState.name || "\u041a\u043b\u0438\u0435\u043d\u0442"),
             phone: String(metaState.phone || ""),
             last_welcome_day: String(metaState.lastWelcomeDay || ""),
           },
@@ -2542,7 +2576,7 @@
         body: {
           message_ids: ids,
           meta: {
-            name: String(metaState.name || "Клиент"),
+            name: String(metaState.name || "\u041a\u043b\u0438\u0435\u043d\u0442"),
             phone: String(metaState.phone || ""),
             last_welcome_day: String(metaState.lastWelcomeDay || ""),
           },
@@ -3091,6 +3125,42 @@
     return code ? EMOJI_ASSET_BASE_URL + "/" + code + ".png" : "";
   }
 
+  function preloadEmojiAtlas() {
+    if (!EMOJI_ATLAS_ENABLED || emojiAtlasPreloadStarted) return;
+    emojiAtlasPreloadStarted = true;
+    const img = new Image();
+    img.decoding = "async";
+    img.src = EMOJI_ATLAS_URL;
+  }
+
+  function getEmojiAtlasPosition(emoji) {
+    if (!EMOJI_ATLAS_ENABLED) return null;
+    const key = normalizeEmojiAtlasKey(emoji);
+    if (!key) return null;
+    const index = EMOJI_ATLAS_INDEX_BY_KEY[key];
+    if (!Number.isFinite(index) || index < 0) return null;
+    return {
+      row: Math.floor(index / EMOJI_ATLAS_COLUMNS),
+      col: index % EMOJI_ATLAS_COLUMNS,
+    };
+  }
+
+  function createEmojiAtlasGlyph(glyphClassName, emojiValue) {
+    const pos = getEmojiAtlasPosition(emojiValue);
+    if (!pos) return null;
+    const xPercent = EMOJI_ATLAS_COLUMNS > 1 ? (pos.col / (EMOJI_ATLAS_COLUMNS - 1)) * 100 : 0;
+    const yPercent = EMOJI_ATLAS_ROWS > 1 ? (pos.row / (EMOJI_ATLAS_ROWS - 1)) * 100 : 0;
+
+    const glyph = document.createElement("span");
+    glyph.className = String(glyphClassName || "");
+    glyph.style.backgroundImage = 'url("' + EMOJI_ATLAS_URL + '")';
+    glyph.style.backgroundRepeat = "no-repeat";
+    glyph.style.backgroundSize = String(EMOJI_ATLAS_COLUMNS * 100) + "% " + String(EMOJI_ATLAS_ROWS * 100) + "%";
+    glyph.style.backgroundPosition = String(xPercent) + "% " + String(yPercent) + "%";
+    glyph.setAttribute("aria-hidden", "true");
+    return glyph;
+  }
+
   function activateNativeEmojiFallback() {
     if (emojiAssetsState === "fallback") return;
     emojiAssetsState = "fallback";
@@ -3107,6 +3177,10 @@
   }
 
   function probeEmojiAssetsAvailability() {
+    if (EMOJI_NATIVE_RENDER_ONLY) {
+      emojiAssetsState = "fallback";
+      return;
+    }
     const src = getEmojiAssetUrl("\u{1F642}");
     if (!src) {
       emojiAssetsState = "fallback";
@@ -3122,17 +3196,34 @@
     probe.src = src;
   }
 
+  function appendNativeEmojiGlyph(host, glyphValue, className) {
+    if (!host) return;
+    const val = String(glyphValue || "");
+    if (!val) return;
+    const atlasGlyph = createEmojiAtlasGlyph(className, val);
+    if (atlasGlyph) {
+      host.appendChild(atlasGlyph);
+      return;
+    }
+    const glyph = document.createElement("span");
+    glyph.className = String(className || "");
+    glyph.textContent = val;
+    glyph.setAttribute("aria-hidden", "true");
+    host.appendChild(glyph);
+  }
+
   function setEmojiGlyph(target, emoji, glyphClassName) {
     if (!target) return;
     const value = String(emoji || "");
     if (emojiAssetsState === "fallback") {
-      target.textContent = value;
+      target.textContent = "";
+      appendNativeEmojiGlyph(target, value, glyphClassName);
       return;
     }
     const src = getEmojiAssetUrl(value);
     target.textContent = "";
     if (!src) {
-      target.textContent = value;
+      appendNativeEmojiGlyph(target, value, glyphClassName);
       return;
     }
 
@@ -3141,7 +3232,8 @@
     img.src = src;
     img.alt = value;
     img.decoding = "async";
-    img.loading = "eager";
+    img.loading = "lazy";
+    img.fetchPriority = "low";
     img.draggable = false;
     img.setAttribute("aria-hidden", "true");
     img.addEventListener("error", function () {
@@ -3199,7 +3291,7 @@
       segments.forEach(function (segment) {
         if (isEmojiGrapheme(segment)) {
           if (emojiAssetsState === "fallback") {
-            target.appendChild(document.createTextNode(segment));
+            appendNativeEmojiGlyph(target, segment, glyphClassName);
             return;
           }
           const src = getEmojiAssetUrl(segment);
@@ -3209,7 +3301,8 @@
             img.src = src;
             img.alt = segment;
             img.decoding = "async";
-            img.loading = "eager";
+            img.loading = "lazy";
+            img.fetchPriority = "low";
             img.draggable = false;
             img.setAttribute("aria-hidden", "true");
             img.addEventListener("error", function () {
@@ -3219,6 +3312,8 @@
             target.appendChild(img);
             return;
           }
+          appendNativeEmojiGlyph(target, segment, glyphClassName);
+          return;
         }
         target.appendChild(document.createTextNode(segment));
       });
@@ -3325,14 +3420,14 @@
 
   function getReplyPreviewText(text) {
     const normalized = String(text || "").replace(/\s+/g, " ").trim();
-    if (!normalized) return "Сообщение";
+    if (!normalized) return "\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435";
     if (normalized.length <= 74) return normalized;
-    return normalized.slice(0, 74).trimEnd() + "…";
+    return normalized.slice(0, 74).trimEnd() + "\u2026";
   }
 
   function getMessageSenderLabel(entry) {
-    if (!entry) return "Сообщение";
-    if (entry.role === "user") return "Вы";
+    if (!entry) return "\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435";
+    if (entry.role === "user") return "\u0412\u044b";
     return String(entry.author || chatRuntimeSettings.assistantName || DEFAULT_CHAT_ASSISTANT_NAME);
   }
 
@@ -3363,7 +3458,7 @@
     if (!entry || typeof entry !== "object") return "";
     const text = String(entry.text || "").replace(/\s+/g, " ").trim();
     if (text) return text;
-    return getEntryImageAttachment(entry) ? "Фото" : "";
+    return getEntryImageAttachment(entry) ? "\u0424\u043e\u0442\u043e" : "";
   }
 
   function readFileAsDataUrl(file) {
@@ -3710,6 +3805,7 @@
 
   var emojiPickerInitialized = false;
   function openCompanyChat() {
+    preloadEmojiAtlas();
     if (!emojiPickerInitialized) {
       emojiPickerInitialized = true;
       probeEmojiAssetsAvailability();
@@ -3971,7 +4067,7 @@
         '<div class="shop-company-chat-composer-reply__name"></div>' +
         '<div class="shop-company-chat-composer-reply__text"></div>' +
       "</div>" +
-      '<button class="shop-company-chat-composer-reply__close" type="button" aria-label="Отменить ответ" title="Отменить ответ">' +
+      '<button class="shop-company-chat-composer-reply__close" type="button" aria-label="\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c \u043e\u0442\u0432\u0435\u0442" title="\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c \u043e\u0442\u0432\u0435\u0442">' +
         '<i class="fas fa-times"></i>' +
       "</button>";
 
@@ -4003,7 +4099,7 @@
       return;
     }
 
-    ui.name.textContent = String(replyDraft.sender || "Сообщение");
+    ui.name.textContent = String(replyDraft.sender || "\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435");
     renderEmojiMessageText(
       ui.text,
       getReplyPreviewText(replyDraft.text || ""),
@@ -4087,7 +4183,7 @@
 
     target.text = nextText;
     target.editedAt = new Date().toISOString();
-    target.time = formatTimeFromIso(target.createdAt || target.editedAt) + " • изм.";
+    target.time = formatTimeFromIso(target.createdAt || target.editedAt) + " \u00b7 \u0438\u0437\u043c.";
     if (inLive) markSharedThreadMutated();
 
     const prevTop = feed.scrollTop;
@@ -4147,41 +4243,41 @@
       menu.id = "shopCompanyChatContextMenu";
       menu.className = "shop-company-chat-context-menu hidden";
       menu.setAttribute("role", "menu");
-      menu.setAttribute("aria-label", "Действия с сообщением");
+      menu.setAttribute("aria-label", "\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u044f \u0441 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435\u043c");
       menu.innerHTML =
         '<div class="shop-company-chat-context-reactions" role="group" aria-label="Reactions">' +
-          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="👍" aria-label="👍" title="👍">👍</button>' +
-          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="❤️" aria-label="❤️" title="❤️">❤️</button>' +
-          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="🔥" aria-label="🔥" title="🔥">🔥</button>' +
-          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="😂" aria-label="😂" title="😂">😂</button>' +
-          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="🥰" aria-label="🥰" title="🥰">🥰</button>' +
-          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="🙏" aria-label="🙏" title="🙏">🙏</button>' +
-          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="😃" aria-label="😃" title="😃">😃</button>' +
-          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="😢" aria-label="😢" title="😢">😢</button>' +
-          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="😕" aria-label="😕" title="😕">😕</button>' +
-          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="😞" aria-label="😞" title="😞">😞</button>' +
-          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="😟" aria-label="😟" title="😟">😟</button>' +
-          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="🙁" aria-label="🙁" title="🙁">🙁</button>' +
-          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="😮" aria-label="😮" title="😮">😮</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="\u{1F44D}" aria-label="\u{1F44D}" title="\u{1F44D}">\u{1F44D}</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="\u{2764}\u{FE0F}" aria-label="\u{2764}\u{FE0F}" title="\u{2764}\u{FE0F}">\u{2764}\u{FE0F}</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="\u{1F525}" aria-label="\u{1F525}" title="\u{1F525}">\u{1F525}</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="\u{1F602}" aria-label="\u{1F602}" title="\u{1F602}">\u{1F602}</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="\u{1F970}" aria-label="\u{1F970}" title="\u{1F970}">\u{1F970}</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="\u{1F64F}" aria-label="\u{1F64F}" title="\u{1F64F}">\u{1F64F}</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction" data-chat-msg-reaction-slot="quick" data-chat-msg-reaction="\u{1F603}" aria-label="\u{1F603}" title="\u{1F603}">\u{1F603}</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="\u{1F622}" aria-label="\u{1F622}" title="\u{1F622}">\u{1F622}</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="\u{1F615}" aria-label="\u{1F615}" title="\u{1F615}">\u{1F615}</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="\u{1F61E}" aria-label="\u{1F61E}" title="\u{1F61E}">\u{1F61E}</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="\u{1F61F}" aria-label="\u{1F61F}" title="\u{1F61F}">\u{1F61F}</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="\u{1F641}" aria-label="\u{1F641}" title="\u{1F641}">\u{1F641}</button>' +
+          '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--extra" data-chat-msg-reaction-slot="extra" data-chat-msg-reaction="\u{1F62E}" aria-label="\u{1F62E}" title="\u{1F62E}">\u{1F62E}</button>' +
           '<button type="button" class="shop-company-chat-context-reaction shop-company-chat-context-reaction--toggle" data-chat-msg-reaction="__toggle_more__" aria-label="Show more reactions" aria-expanded="false">' +
             '<i class="fas fa-chevron-down" aria-hidden="true"></i>' +
           "</button>" +
         "</div>" +
         '<button type="button" class="shop-company-chat-context-btn" data-chat-msg-action="reply">' +
-          '<i class="fas fa-reply"></i><span>Ответить</span>' +
+          '<i class="fas fa-reply"></i><span>\u041e\u0442\u0432\u0435\u0442\u0438\u0442\u044c</span>' +
         "</button>" +
         '<button type="button" class="shop-company-chat-context-btn" data-chat-msg-action="copy">' +
-          '<i class="far fa-copy"></i><span>Скопировать</span>' +
+          '<i class="far fa-copy"></i><span>\u0421\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u0442\u044c</span>' +
         "</button>" +
         '<button type="button" class="shop-company-chat-context-btn" data-chat-msg-action="edit">' +
-          '<i class="fas fa-pen"></i><span>Изменить</span>' +
+          '<i class="fas fa-pen"></i><span>\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c</span>' +
         "</button>" +
         '<button type="button" class="shop-company-chat-context-btn is-danger" data-chat-msg-action="delete">' +
-          '<i class="far fa-trash-alt"></i><span>Удалить</span>' +
+          '<i class="far fa-trash-alt"></i><span>\u0423\u0434\u0430\u043b\u0438\u0442\u044c</span>' +
         "</button>" +
         '<div class="shop-company-chat-context-divider"></div>' +
         '<button type="button" class="shop-company-chat-context-btn" data-chat-msg-action="select">' +
-          '<i class="far fa-circle-check"></i><span>Выбрать</span>' +
+          '<i class="far fa-circle-check"></i><span>\u0412\u044b\u0431\u0440\u0430\u0442\u044c</span>' +
         "</button>";
       document.body.appendChild(menu);
       contextMenuEl = menu;
@@ -4279,15 +4375,15 @@
     overlay.className = "chat-delete-confirm-overlay shop-company-chat-delete-confirm-overlay hidden";
     overlay.innerHTML =
       '<div class="chat-delete-confirm-card" role="dialog" aria-modal="true" aria-labelledby="shopCompanyDeleteConfirmTitle">' +
-        '<div class="chat-delete-confirm-title" id="shopCompanyDeleteConfirmTitle">Удалить сообщение</div>' +
-        '<div class="chat-delete-confirm-text" id="shopCompanyDeleteConfirmText">Вы точно хотите удалить это сообщение?</div>' +
+        '<div class="chat-delete-confirm-title" id="shopCompanyDeleteConfirmTitle">\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435</div>' +
+        '<div class="chat-delete-confirm-text" id="shopCompanyDeleteConfirmText">\u0412\u044b \u0442\u043e\u0447\u043d\u043e \u0445\u043e\u0442\u0438\u0442\u0435 \u0443\u0434\u0430\u043b\u0438\u0442\u044c \u044d\u0442\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435?</div>' +
         '<label class="chat-delete-confirm-check" for="shopCompanyDeleteConfirmForPeer">' +
           '<input class="chat-delete-confirm-checkbox" id="shopCompanyDeleteConfirmForPeer" type="checkbox" checked />' +
-          '<span class="chat-delete-confirm-check-text" id="shopCompanyDeleteConfirmCheckText">Также удалить у собеседника</span>' +
+          '<span class="chat-delete-confirm-check-text" id="shopCompanyDeleteConfirmCheckText">\u0422\u0430\u043a\u0436\u0435 \u0443\u0434\u0430\u043b\u0438\u0442\u044c \u0443 \u0441\u043e\u0431\u0435\u0441\u0435\u0434\u043d\u0438\u043a\u0430</span>' +
         "</label>" +
         '<div class="chat-delete-confirm-actions">' +
-          '<button type="button" class="chat-delete-confirm-btn chat-delete-confirm-btn--cancel" id="shopCompanyDeleteConfirmCancelBtn">ОТМЕНА</button>' +
-          '<button type="button" class="chat-delete-confirm-btn chat-delete-confirm-btn--danger" id="shopCompanyDeleteConfirmDeleteBtn">УДАЛИТЬ</button>' +
+          '<button type="button" class="chat-delete-confirm-btn chat-delete-confirm-btn--cancel" id="shopCompanyDeleteConfirmCancelBtn">\u041e\u0422\u041c\u0415\u041d\u0410</button>' +
+          '<button type="button" class="chat-delete-confirm-btn chat-delete-confirm-btn--danger" id="shopCompanyDeleteConfirmDeleteBtn">\u0423\u0414\u0410\u041b\u0418\u0422\u042c</button>' +
         "</div>" +
       "</div>";
     modalBody.appendChild(overlay);
@@ -4339,10 +4435,10 @@
   function getMessagesWord(count) {
     const n = Math.abs(Number(count || 0)) % 100;
     const n1 = n % 10;
-    if (n > 10 && n < 20) return "сообщений";
-    if (n1 > 1 && n1 < 5) return "сообщения";
-    if (n1 === 1) return "сообщение";
-    return "сообщений";
+    if (n > 10 && n < 20) return "\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439";
+    if (n1 > 1 && n1 < 5) return "\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f";
+    if (n1 === 1) return "\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435";
+    return "\u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439";
   }
 
   function getSelectedMessageEntries() {
@@ -4358,7 +4454,7 @@
     const active = count > 0;
     modalBody.classList.toggle("is-selection-mode", active);
     selectionToolbar.classList.toggle("hidden", !active);
-    selectionCountEl.textContent = "Выбрано " + count + " " + getMessagesWord(count);
+    selectionCountEl.textContent = "\u0412\u044b\u0431\u0440\u0430\u043d\u043e " + count + " " + getMessagesWord(count);
   }
 
   function clearSelectionMode() {
@@ -4429,11 +4525,11 @@
     const opts = options || {};
     const count = Math.max(1, Number(opts.count || 1));
     const allowDeleteForPeer = opts.allowDeleteForPeer !== false;
-    if (ui.title) ui.title.textContent = "Удалить " + count + " " + getMessagesWord(count);
+    if (ui.title) ui.title.textContent = "\u0423\u0434\u0430\u043b\u0438\u0442\u044c " + count + " " + getMessagesWord(count);
     if (ui.text) ui.text.textContent = count === 1
-      ? "Вы точно хотите удалить это сообщение?"
-      : "Вы точно хотите удалить эти сообщения?";
-    if (ui.checkText) ui.checkText.textContent = "Также удалить у собеседника";
+      ? "\u0412\u044b \u0442\u043e\u0447\u043d\u043e \u0445\u043e\u0442\u0438\u0442\u0435 \u0443\u0434\u0430\u043b\u0438\u0442\u044c \u044d\u0442\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435?"
+      : "\u0412\u044b \u0442\u043e\u0447\u043d\u043e \u0445\u043e\u0442\u0438\u0442\u0435 \u0443\u0434\u0430\u043b\u0438\u0442\u044c \u044d\u0442\u0438 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f?";
+    if (ui.checkText) ui.checkText.textContent = "\u0422\u0430\u043a\u0436\u0435 \u0443\u0434\u0430\u043b\u0438\u0442\u044c \u0443 \u0441\u043e\u0431\u0435\u0441\u0435\u0434\u043d\u0438\u043a\u0430";
     if (ui.checkRow) ui.checkRow.classList.toggle("hidden", !allowDeleteForPeer);
     if (ui.check) {
       ui.check.disabled = !allowDeleteForPeer;
@@ -5126,7 +5222,7 @@
 
       const snippetName = document.createElement("div");
       snippetName.className = "shop-company-chat-reply-name";
-      snippetName.textContent = String(reply.sender || "Сообщение");
+      snippetName.textContent = String(reply.sender || "\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435");
       snippet.appendChild(snippetName);
 
       const snippetLine = document.createElement("div");
@@ -5149,7 +5245,7 @@
       const img = document.createElement("img");
       img.className = "shop-company-chat-attachment-image";
       img.src = getAttachmentImageSrc(imageAttachment);
-      img.alt = String(imageAttachment.name || "Фото");
+      img.alt = String(imageAttachment.name || "\u0424\u043e\u0442\u043e");
       img.loading = "eager";
       img.decoding = "async";
       attachmentWrap.appendChild(img);
@@ -5194,7 +5290,7 @@
         const status = getOutgoingDeliveryStatus(entry);
         const statusEl = document.createElement("span");
         statusEl.className = "shop-company-chat-status shop-company-chat-status--" + status;
-        statusEl.setAttribute("aria-label", status === "read" ? "Прочитано" : status === "delivered" ? "Доставлено" : "Отправлено");
+        statusEl.setAttribute("aria-label", status === "read" ? "\u041f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043e" : status === "delivered" ? "\u0414\u043e\u0441\u0442\u0430\u0432\u043b\u0435\u043d\u043e" : "\u041e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e");
         statusEl.innerHTML = getOutgoingStatusIconMarkup(status);
         meta.appendChild(statusEl);
       }
@@ -5214,7 +5310,7 @@
         reaction.className = "shop-company-chat-reaction-pill";
         reaction.dataset.messageId = String(entry.id || "");
         reaction.dataset.reactionActor = String(itemReaction.actor || "");
-        reaction.title = itemReaction.actor === CHAT_REACTION_ACTOR ? "Изменить реакцию" : "Реакция собеседника";
+        reaction.title = itemReaction.actor === CHAT_REACTION_ACTOR ? "\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c \u0440\u0435\u0430\u043a\u0446\u0438\u044e" : "\u0420\u0435\u0430\u043a\u0446\u0438\u044f \u0441\u043e\u0431\u0435\u0441\u0435\u0434\u043d\u0438\u043a\u0430";
         reaction.dataset.reactionValue = String(itemReaction.reaction || "");
         reaction.setAttribute("aria-label", String(itemReaction.reaction || ""));
         setEmojiGlyph(reaction, itemReaction.reaction, "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--pill");
@@ -5337,12 +5433,84 @@
     desiredParent.appendChild(emojiPopover);
   }
 
+  function updateEmojiPopoverViewportMode() {
+    if (!emojiPopover) return;
+    const useMobileSheet = isMobileChatViewport();
+    emojiPopover.classList.toggle("is-mobile-sheet", useMobileSheet);
+  }
+
+  function setComposerEmojiButtonMode(isKeyboardMode) {
+    if (!emojiBtn) return;
+    const keyboardMode = isKeyboardMode === true;
+    emojiBtn.classList.toggle("is-keyboard-mode", keyboardMode);
+    emojiBtn.setAttribute(
+      "aria-label",
+      keyboardMode ? "\u041a\u043b\u0430\u0432\u0438\u0430\u0442\u0443\u0440\u0430" : "\u042d\u043c\u043e\u0434\u0437\u0438"
+    );
+    const icon = emojiBtn.querySelector("i");
+    if (!icon) return;
+    icon.classList.remove("far", "fas", "fa-smile", "fa-keyboard");
+    if (keyboardMode) {
+      icon.classList.add("far", "fa-keyboard");
+    } else {
+      icon.classList.add("far", "fa-smile");
+    }
+  }
+
+  function syncEmojiSheetOpenState() {
+    if (!modalBody || !emojiPopover) return;
+    const isMobileSheetOpen = (
+      !emojiPopover.classList.contains("hidden")
+      && emojiPopover.classList.contains("is-mobile-sheet")
+      && !emojiPopover.classList.contains("is-attach-preview")
+    );
+    modalBody.classList.toggle("is-emoji-sheet-open", isMobileSheetOpen);
+    setComposerEmojiButtonMode(isMobileSheetOpen);
+  }
+
+  function setEmojiDefaultOpenCategory() {
+    const categories = getEmojiCategoriesForRender();
+    const recent = Array.isArray(categories.recent) ? categories.recent : [];
+    if (recent.length > 0) {
+      emojiActiveCategory = "recent";
+      return;
+    }
+    const firstAvailable = EMOJI_CATEGORY_META
+      .map(function (meta) { return meta.key; })
+      .find(function (key) {
+        const list = Array.isArray(categories[key]) ? categories[key] : [];
+        return list.length > 0;
+      });
+    emojiActiveCategory = firstAvailable || "people";
+  }
+
+  function syncEmojiPickerViewportPosition() {
+    if (!emojiPopover || emojiPopover.classList.contains("hidden")) return;
+    const body = emojiPopover.querySelector(".shop-company-chat-emoji-body");
+    if (!body) return;
+    const sections = Array.from(body.querySelectorAll(".shop-company-chat-emoji-section"));
+    if (!sections.length) return;
+    const activeSection = sections.find(function (section) {
+      return String(section.getAttribute("data-emoji-category") || "") === String(emojiActiveCategory || "");
+    });
+    const fallbackSection = sections[0];
+    const targetSection = activeSection || fallbackSection;
+    if (!targetSection) return;
+    if (emojiPopover.classList.contains("is-mobile-sheet")) {
+      body.scrollLeft = Math.max(0, targetSection.offsetLeft || 0);
+      return;
+    }
+    body.scrollTop = Math.max(0, targetSection.offsetTop - 2);
+  }
+
   function hideEmojiPopover() {
     remountEmojiPopover("composer");
     emojiPopover.classList.add("hidden");
     emojiPopover.classList.remove("is-attach-preview");
+    emojiPopover.classList.remove("is-mobile-sheet");
     emojiPopoverMode = "composer";
     emojiPopoverReactionMessageId = "";
+    syncEmojiSheetOpenState();
   }
 
   function toggleEmojiPopover(target) {
@@ -5354,18 +5522,24 @@
 
     remountEmojiPopover(normalizedTarget);
     emojiPopover.classList.toggle("is-attach-preview", isPreviewTarget);
+    updateEmojiPopoverViewportMode();
     emojiPopover.classList.toggle("hidden", !willOpen);
     if (!willOpen) {
       remountEmojiPopover("composer");
       emojiPopoverMode = "composer";
       emojiPopoverReactionMessageId = "";
+      emojiPopover.classList.remove("is-mobile-sheet");
     }
+    syncEmojiSheetOpenState();
     if (willOpen) {
       if (normalizedTarget !== "attach-preview") {
         emojiPopoverMode = "composer";
         emojiPopoverReactionMessageId = "";
+        setEmojiDefaultOpenCategory();
       }
+      renderEmojiPicker();
       ensureEmojiDatasetLoaded().catch(function () {});
+      requestAnimationFrame(syncEmojiPickerViewportPosition);
     }
   }
 
@@ -5378,10 +5552,17 @@
 
     remountEmojiPopover(normalizedTarget);
     emojiPopover.classList.toggle("is-attach-preview", isPreviewTarget);
+    updateEmojiPopoverViewportMode();
     emojiPopover.classList.remove("hidden");
     emojiPopoverMode = mode;
     emojiPopoverReactionMessageId = messageId;
+    if (mode !== "reaction" && normalizedTarget !== "attach-preview") {
+      setEmojiDefaultOpenCategory();
+    }
+    syncEmojiSheetOpenState();
+    renderEmojiPicker();
     ensureEmojiDatasetLoaded().catch(function () {});
+    requestAnimationFrame(syncEmojiPickerViewportPosition);
   }
 
   function normalizeEmojiCategoryName(rawCategory) {
@@ -5426,8 +5607,13 @@
     const seen = new Set();
     const out = [];
     input.forEach(function (item) {
-      const emoji = String(item || "").trim().normalize("NFC");
-      if (!emoji || !hasEmojiInText(emoji)) return;
+      const raw = String(item || "").trim().normalize("NFC");
+      if (!raw) return;
+      const graphemes = segmentGraphemes(raw).filter(Boolean);
+      const emoji = emojiGraphemeSegmenter
+        ? (graphemes.length === 1 ? String(graphemes[0] || "").trim().normalize("NFC") : "")
+        : raw;
+      if (!emoji || !isEmojiGrapheme(emoji)) return;
       const key = normalizeReactionValue(emoji);
       if (!key || seen.has(key)) return;
       seen.add(key);
@@ -5460,7 +5646,11 @@
       const raw = localStorage.getItem(EMOJI_RECENT_STORAGE_KEY);
       if (!raw) return [];
       const parsed = JSON.parse(raw);
-      return normalizeEmojiList(parsed).slice(0, 42);
+      const normalized = normalizeEmojiList(parsed).slice(0, 42);
+      try {
+        localStorage.setItem(EMOJI_RECENT_STORAGE_KEY, JSON.stringify(normalized));
+      } catch {}
+      return normalized;
     } catch {
       return [];
     }
@@ -5537,6 +5727,10 @@
   }
 
   async function ensureEmojiDatasetLoaded() {
+    if (!EMOJI_REMOTE_DATASET_ENABLED) {
+      if (!emojiDatasetPromise) emojiDatasetPromise = Promise.resolve();
+      return emojiDatasetPromise;
+    }
     if (emojiDatasetPromise) return emojiDatasetPromise;
 
     emojiDatasetPromise = (async function () {
@@ -5615,7 +5809,7 @@
     if (!visibleCategories.length) {
       const empty = document.createElement("div");
       empty.className = "shop-company-chat-emoji-empty";
-      empty.textContent = "Нет эмодзи";
+      empty.textContent = "\u041d\u0435\u0442 \u044d\u043c\u043e\u0434\u0437\u0438";
       emojiPopover.appendChild(empty);
       return;
     }
@@ -5658,6 +5852,14 @@
         if (!section) return;
         emojiActiveCategory = category.key;
         updateActiveTabUi(emojiActiveCategory);
+        if (emojiPopover.classList.contains("is-mobile-sheet")) {
+          const left = Math.max(0, section.offsetLeft || 0);
+          body.scrollTo({
+            left: left,
+            behavior: "smooth",
+          });
+          return;
+        }
         body.scrollTo({
           top: Math.max(0, section.offsetTop - 2),
           behavior: "smooth",
@@ -5669,14 +5871,50 @@
       const section = document.createElement("section");
       section.className = "shop-company-chat-emoji-section";
       section.setAttribute("data-emoji-category", category.key);
+      if (emojiPopover.classList.contains("is-mobile-sheet")) {
+        const mobileRows = 4;
+        const mobileColWidth = 40;
+        const mobileGap = 6;
+        const columns = Math.max(1, Math.ceil(list.length / mobileRows));
+        const computedWidth = (columns * mobileColWidth) + ((columns - 1) * mobileGap);
+        section.style.width = String(computedWidth) + "px";
+        section.style.minWidth = String(computedWidth) + "px";
+        section.style.maxWidth = String(computedWidth) + "px";
+        section.style.flex = "0 0 auto";
+      } else {
+        section.style.width = "";
+        section.style.minWidth = "";
+        section.style.maxWidth = "";
+        section.style.flex = "";
+      }
 
       const title = document.createElement("div");
       title.className = "shop-company-chat-emoji-title";
       title.textContent = category.label;
+      if (emojiPopover.classList.contains("is-mobile-sheet")) {
+        title.style.whiteSpace = "nowrap";
+        title.style.width = "max-content";
+        title.style.maxWidth = "none";
+      } else {
+        title.style.whiteSpace = "";
+        title.style.width = "";
+        title.style.maxWidth = "";
+      }
       section.appendChild(title);
 
       const grid = document.createElement("div");
       grid.className = "shop-company-chat-emoji-grid";
+      if (emojiPopover.classList.contains("is-mobile-sheet")) {
+        grid.style.width = "max-content";
+        grid.style.gridAutoFlow = "column";
+        grid.style.gridTemplateRows = "repeat(4, 40px)";
+        grid.style.gridAutoColumns = "40px";
+      } else {
+        grid.style.width = "";
+        grid.style.gridAutoFlow = "";
+        grid.style.gridTemplateRows = "";
+        grid.style.gridAutoColumns = "";
+      }
       list.forEach(function (emoji) {
         const btn = document.createElement("button");
         btn.type = "button";
@@ -5704,6 +5942,23 @@
     });
 
     const syncActiveCategoryByScroll = function () {
+      if (emojiPopover.classList.contains("is-mobile-sheet")) {
+        const left = Math.max(0, body.scrollLeft || 0);
+        let nextKey = emojiActiveCategory;
+        visibleCategories.forEach(function (category) {
+          const section = sectionByKey.get(category.key);
+          if (!section) return;
+          const sectionLeft = Math.max(0, section.offsetLeft || 0);
+          if (sectionLeft <= (left + 8)) {
+            nextKey = category.key;
+          }
+        });
+        if (nextKey && nextKey !== emojiActiveCategory) {
+          emojiActiveCategory = nextKey;
+          updateActiveTabUi(emojiActiveCategory);
+        }
+        return;
+      }
       const threshold = body.scrollTop + 12;
       let currentKey = emojiActiveCategory;
       visibleCategories.forEach(function (category) {
@@ -5721,9 +5976,14 @@
     updateActiveTabUi(emojiActiveCategory);
 
     requestAnimationFrame(function () {
-      const activeSection = sectionByKey.get(emojiActiveCategory);
-      if (!activeSection) return;
-      body.scrollTop = Math.max(0, activeSection.offsetTop - 2);
+      if (emojiPopover.classList.contains("is-mobile-sheet")) {
+        const activeSection = sectionByKey.get(emojiActiveCategory);
+        body.scrollLeft = Math.max(0, activeSection ? (activeSection.offsetLeft || 0) : 0);
+      } else {
+        const activeSection = sectionByKey.get(emojiActiveCategory);
+        if (!activeSection) return;
+        body.scrollTop = Math.max(0, activeSection.offsetTop - 2);
+      }
       requestAnimationFrame(syncActiveCategoryByScroll);
     });
   }
@@ -5776,7 +6036,7 @@
       ? emojiCategories.people
       : (EMOJI_FALLBACK_CATEGORIES.people || []);
     peopleSource.forEach(push);
-    return out;
+    return out.slice(0, EMOJI_REACTION_POOL_LIMIT);
   }
 
   function ensureReactionBarAllEmojiButtons() {
@@ -5920,7 +6180,7 @@
     const toggleBtn = reactionBar.querySelector('[data-reaction="__toggle_more__"]');
     if (!toggleBtn) return;
     toggleBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
-    toggleBtn.setAttribute("aria-label", isExpanded ? "Скрыть дополнительные реакции" : "Показать ещё реакции");
+    toggleBtn.setAttribute("aria-label", isExpanded ? "\u0421\u043a\u0440\u044b\u0442\u044c \u0434\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u0440\u0435\u0430\u043a\u0446\u0438\u0438" : "\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c \u0435\u0449\u0451 \u0440\u0435\u0430\u043a\u0446\u0438\u0438");
   }
 
   function decorateComposerEmojiControls() {
@@ -5931,8 +6191,8 @@
       smileIcon.className = "far fa-smile";
       smileIcon.setAttribute("aria-hidden", "true");
       emojiBtn.appendChild(smileIcon);
-      emojiBtn.setAttribute("aria-label", "Эмодзи");
-      emojiBtn.title = "Эмодзи";
+      emojiBtn.setAttribute("aria-label", "\u042d\u043c\u043e\u0434\u0437\u0438");
+      emojiBtn.title = "\u042d\u043c\u043e\u0434\u0437\u0438";
     }
 
     Array.from(composer.querySelectorAll("button")).forEach(function (btn) {
@@ -6883,9 +7143,9 @@
 
   function getAttachPreviewTitle(count) {
     const total = Number(count) || 0;
-    if (total <= 1) return "1 фотография";
-    if (total >= 2 && total <= 4) return String(total) + " фотографии";
-    return String(total) + " фотографий";
+    if (total <= 1) return "1 \u0444\u043e\u0442\u043e\u0433\u0440\u0430\u0444\u0438\u044f";
+    if (total >= 2 && total <= 4) return String(total) + " \u0444\u043e\u0442\u043e\u0433\u0440\u0430\u0444\u0438\u0438";
+    return String(total) + " \u0444\u043e\u0442\u043e\u0433\u0440\u0430\u0444\u0438\u0439";
   }
 
   function closeAttachPreview(options) {
@@ -7008,7 +7268,7 @@
     attachPreviewTitle.textContent = getAttachPreviewTitle(total);
     if (active) {
       attachPreviewImage.src = getAttachmentImageSrc(active);
-      attachPreviewImage.alt = String(active.name || "Изображение");
+      attachPreviewImage.alt = String(active.name || "\u0418\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0435");
     }
 
     attachPreviewThumbs.innerHTML = "";
@@ -7023,7 +7283,7 @@
 
         const img = document.createElement("img");
         img.src = getAttachmentImageSrc(item);
-        img.alt = String(item.name || ("Фото " + String(idx + 1)));
+        img.alt = String(item.name || ("\u0424\u043e\u0442\u043e " + String(idx + 1)));
         img.loading = "eager";
         img.decoding = "async";
         img.draggable = false;
@@ -7175,6 +7435,7 @@
 
   function startChatRuntime() {
     if (!chatRuntimeSettings.isEnabled) return;
+    preloadEmojiAtlas();
     initMessageAlerts();
     bindEmojiPopoverGuard();
     initAttachPreviewModal();
@@ -7182,7 +7443,7 @@
     initFeedImagePaste();
     initMessageImageViewerModal();
     setupComposerRichPreview();
-  // probeEmojiAssetsAvailability — отложено до первого открытия чата
+  // probeEmojiAssetsAvailability intentionally deferred until first chat open
     renderUnreadBadge(liveEntries);
     refreshChatClientProfileIfNeeded({ pull: false });
     queueWebPushSubscriptionSync({
@@ -7405,7 +7666,16 @@
     hideContextMenu();
     hideReactionBar();
     toggleEmojiPopover("composer");
-    input.focus();
+    const isMobileSheetOpen = (
+      isMobileChatViewport()
+      && !emojiPopover.classList.contains("hidden")
+      && emojiPopover.classList.contains("is-mobile-sheet")
+    );
+    if (isMobileSheetOpen) {
+      input.blur();
+    } else {
+      input.focus();
+    }
   });
 
   thread.addEventListener("click", function (event) {

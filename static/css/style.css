@@ -8289,6 +8289,12 @@ body.page-chat .panel{
   display:block;
   width:24px;
   height:24px;
+  font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif;
+  font-style:normal;
+  font-weight:400;
+  font-variant-emoji:emoji;
+  line-height:1;
+  white-space:nowrap;
   object-fit:contain;
   image-rendering:auto;
   pointer-events:none;

@@ -38,6 +38,12 @@
   const TEST_CHAT_IDS_TO_PRUNE = ["9997", "9998", "9999"];
   const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/img/google/64";
   const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/emoji.json";
+  const EMOJI_REMOTE_DATASET_ENABLED = false;
+  const EMOJI_NATIVE_RENDER_ONLY = true;
+  const EMOJI_REACTION_POOL_LIMIT = 64;
+  const EMOJI_ATLAS_ENABLED = true;
+  const EMOJI_ATLAS_URL = "/static/assets/emoji/google-people-atlas.webp?v=1";
+  const EMOJI_ATLAS_COLUMNS = 16;
   const EMOJI_RECENT_STORAGE_KEY = "dashboard:chat-recent-emojis:v1";
   const CHAT_ASSISTANT_ORDER_CARD_MESSAGE_RE = /^assistant-auto-(?:where-order|phone-order)-o([0-9_]+)-/;
   const CHAT_ASSISTANT_ORDER_CARD_TEXT_RE = /#\s*(\d{1,12})/g;
@@ -45,28 +51,42 @@
   const CHAT_ORDER_CARD_OPEN_LABEL = "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0437\u0430\u043a\u0430\u0437";
   const CHAT_ORDER_CARD_TITLE = "\u0417\u0430\u043a\u0430\u0437";
   const EMOJI_CATEGORY_META = [
-    { key: "recent", label: "Недавние", iconClass: "far fa-clock" },
-    { key: "people", label: "Смайлы и люди", iconClass: "far fa-smile" },
-    { key: "nature", label: "Животные и природа", iconClass: "fas fa-paw" },
-    { key: "food", label: "Еда и напитки", iconClass: "fas fa-apple-whole" },
-    { key: "activity", label: "Активности", iconClass: "far fa-futbol" },
-    { key: "travel", label: "Путешествия", iconClass: "fas fa-car-side" },
-    { key: "objects", label: "Объекты", iconClass: "far fa-lightbulb" },
-    { key: "symbols", label: "Символы", iconClass: "fas fa-at" },
-    { key: "flags", label: "Флаги", iconClass: "far fa-flag" },
+    { key: "recent", label: "\u041d\u0435\u0434\u0430\u0432\u043d\u0438\u0435", iconClass: "far fa-clock" },
+    { key: "people", label: "\u0421\u043c\u0430\u0439\u043b\u044b \u0438 \u043b\u044e\u0434\u0438", iconClass: "far fa-smile" },
+    { key: "nature", label: "\u0416\u0438\u0432\u043e\u0442\u043d\u044b\u0435 \u0438 \u043f\u0440\u0438\u0440\u043e\u0434\u0430", iconClass: "fas fa-paw" },
+    { key: "food", label: "\u0415\u0434\u0430 \u0438 \u043d\u0430\u043f\u0438\u0442\u043a\u0438", iconClass: "fas fa-apple-whole" },
+    { key: "activity", label: "\u0410\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u0438", iconClass: "far fa-futbol" },
+    { key: "travel", label: "\u041f\u0443\u0442\u0435\u0448\u0435\u0441\u0442\u0432\u0438\u044f", iconClass: "fas fa-car-side" },
+    { key: "objects", label: "\u041e\u0431\u044a\u0435\u043a\u0442\u044b", iconClass: "far fa-lightbulb" },
+    { key: "symbols", label: "\u0421\u0438\u043c\u0432\u043e\u043b\u044b", iconClass: "fas fa-at" },
+    { key: "flags", label: "\u0424\u043b\u0430\u0433\u0438", iconClass: "far fa-flag" },
   ];
   const EMOJI_FALLBACK_CATEGORIES = {
     people: [
-      "😀","😃","😄","😁","😆","😅","🤣","😂","🙂","🙃","😉","😊","😇","🥰","😍","😘","😗","😚","😋","😛","😜","🤪","🤨","🧐","🤓","😎","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🫡","🤭","🫢","🤫","🤥","😶","🫠","😐","🫤","😑","😬","🙄","😮‍💨","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","❤️","💔","💯","👍","👎","👏","🙌","🙏","👋","🤝","💪"
+      "\u{1F600}","\u{1F603}","\u{1F604}","\u{1F601}","\u{1F606}","\u{1F605}","\u{1F923}","\u{1F602}","\u{1F642}","\u{1F643}",
+      "\u{1F609}","\u{1F60A}","\u{1F607}","\u{1F970}","\u{1F60D}","\u{1F618}","\u{1F617}","\u{1F61A}","\u{1F60B}","\u{1F61B}",
+      "\u{1F61C}","\u{1F92A}","\u{1F928}","\u{1F9D0}","\u{1F913}","\u{1F60E}","\u{1F973}","\u{1F60F}","\u{1F612}","\u{1F61E}",
+      "\u{1F614}","\u{1F61F}","\u{1F615}","\u{1F641}","\u{2639}\u{FE0F}","\u{1F623}","\u{1F616}","\u{1F62B}","\u{1F629}","\u{1F97A}",
+      "\u{1F62D}","\u{1F624}","\u{1F620}","\u{1F621}","\u{1F92C}","\u{1F92F}","\u{1F633}","\u{1F975}","\u{1F976}","\u{1F631}",
+      "\u{1F628}","\u{1F630}","\u{1F625}","\u{1F613}","\u{1F917}","\u{1F914}","\u{1FAE1}","\u{1F92D}","\u{1FAE2}","\u{1F92B}",
+      "\u{1F925}","\u{1F636}","\u{1FAE0}","\u{1F610}","\u{1FAE4}","\u{1F611}","\u{1F62C}","\u{1F644}","\u{1F62E}\u{200D}\u{1F4A8}","\u{1F924}",
+      "\u{1F62A}","\u{1F635}","\u{1F910}","\u{1F974}","\u{1F922}","\u{1F92E}","\u{1F927}","\u{1F637}","\u{1F912}","\u{1F915}",
+      "\u{2764}\u{FE0F}","\u{1F494}","\u{1F4AF}","\u{1F44D}","\u{1F44E}","\u{1F44F}","\u{1F64C}","\u{1F64F}","\u{1F44B}","\u{1F91D}","\u{1F4AA}"
     ],
-    nature: ["🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐮","🐷","🐸","🐵","🐔","🐧","🐦","🦆","🦅","🦉","🦇","🐺","🐗","🐴","🦄","🐝","🪲","🐞","🦋","🐌","🐢","🐍","🦎","🐙","🦑","🦞","🦀","🐬","🐳","🦈","🐊","🌵","🌲","🌳","🌴","🌷","🌸","🌹","🌺","🌻","🌼","🌿","☘️","🍀","🌱","🌈","⭐","🌙","☀️","🌧️","⛈️","❄️","🔥","🌊"],
-    food: ["🍏","🍎","🍐","🍊","🍋","🍌","🍉","🍇","🍓","🫐","🍒","🍑","🥭","🍍","🥥","🥝","🍅","🥑","🥦","🥬","🥒","🌶️","🫑","🌽","🥕","🧄","🧅","🥔","🍠","🫚","🥐","🥖","🍞","🥨","🧀","🥚","🍳","🥞","🧇","🥓","🍗","🍖","🌭","🍔","🍟","🍕","🌮","🌯","🥙","🧆","🥪","🍝","🍜","🍣","🍤","🍱","🍛","🍚","🍙","🍘","🍥","🥟","🍦","🍰","🧁","🍪","🍫","🍿","🍩","🍮","☕","🍵","🧃","🥤","🍺","🍷"],
-    activity: ["⚽","🏀","🏈","⚾","🥎","🎾","🏐","🏉","🥏","🎱","🏓","🏸","🏒","🏑","🥍","🏏","⛳","🏹","🎣","🤿","🥊","🥋","🎽","🛹","🛼","🛷","⛸️","🥌","🎯","🎳","🎮","🕹️","🎲","🧩","♟️","🎨","🎭","🎤","🎧","🎼","🎹","🥁","🎷","🎺","🎸","🎻","🎬","📷","📸","🧘","🤸","⛹️","🏋️","🚴","🏊","🏄","🧗","🤾","🤽"],
-    travel: ["🚗","🚕","🚙","🚌","🚎","🏎️","🚓","🚑","🚒","🚐","🛻","🚚","🚛","🚜","🛵","🏍️","🚲","🛴","🚨","🚔","🚍","✈️","🛫","🛬","🚁","🚂","🚆","🚇","🚊","🚉","🚢","🛳️","⛵","🚤","🗽","🗼","🏰","🏯","🏟️","🎡","🎢","⛲","⛰️","🏔️","🗻","🏝️","🏜️","🌋","🏙️","🌆","🌃","🌉","🛣️","🛤️","🌁","🗺️","🧭","⛽"],
-    objects: ["⌚","📱","💻","⌨️","🖥️","🖨️","🖱️","📷","📹","🎥","📺","📻","🎙️","🎚️","📀","💿","📼","☎️","📞","🕰️","⏰","⏱️","⏲️","🧭","📡","🔋","🔌","💡","🔦","🕯️","🪫","🧯","🧲","🧰","🛠️","🔧","🔨","⚙️","⛓️","🧱","🪜","🧪","🧬","🔬","🔭","📌","✂️","🖊️","🖋️","📎","📁","🗂️","🗃️","🗄️","📦","🧳","🎁","🛒","💳","💵","💰","🔒","🔑"],
-    symbols: ["❤️","🧡","💛","💚","💙","💜","🖤","🤍","🤎","💔","❣️","💕","💞","💓","💗","💖","💘","💝","💟","☮️","✝️","☪️","🕉️","☸️","✡️","🔯","🪯","☯️","☦️","🛐","⛎","♈","♉","♊","♋","♌","♍","♎","♏","♐","♑","♒","♓","🆔","⚛️","🉑","☢️","☣️","📴","📳","🈶","🈚","🈸","🈺","🈷️","✴️","🆚","💮","🉐","㊙️","㊗️","🈴","🈵","🈹","🈲","🅰️","🅱️","🆎","🆘","❌","⭕","🔴","🟠","🟡","🟢","🔵","🟣","⚪","⚫","▪️","▫️","◾","◽","🔶","🔷","🔸","🔹","🔺","🔻","💠","🔘","🔳","🔲"],
-    flags: ["🏳️","🏴","🏁","🚩","🏳️‍🌈","🏳️‍⚧️","🇷🇺","🇺🇸","🇬🇧","🇩🇪","🇫🇷","🇪🇸","🇮🇹","🇺🇦","🇰🇿","🇧🇾","🇦🇲","🇬🇪","🇦🇿","🇹🇷","🇨🇳","🇯🇵","🇰🇷","🇮🇳","🇧🇷","🇨🇦","🇦🇺","🇲🇽","🇦🇪","🇸🇦","🇮🇱","🇵🇱","🇳🇱","🇸🇪","🇳🇴","🇫🇮","🇨🇭","🇦🇹","🇨🇿","🇸🇰","🇷🇴","🇧🇬","🇷🇸","🇭🇷","🇸🇮","🇪🇪","🇱🇻","🇱🇹","🇵🇹","🇬🇷"]
+    nature: [],
+    food: [],
+    activity: [],
+    travel: [],
+    objects: [],
+    symbols: [],
+    flags: [],
   };
+  function normalizeEmojiAtlasKey(value) {
+    return String(value || "")
+      .trim()
+      .normalize("NFC")
+      .replace(/\uFE0F/g, "");
+  }
   const QUICK_REACTIONS = [
     "\u{1F642}",
     "\u{1F622}",
@@ -84,6 +104,19 @@
     "\u{1F641}",
     "\u{1F62E}",
   ];
+  const EMOJI_ATLAS_ROWS = Math.max(
+    1,
+    Math.ceil(((EMOJI_FALLBACK_CATEGORIES.people || []).length || 1) / EMOJI_ATLAS_COLUMNS)
+  );
+  const EMOJI_ATLAS_INDEX_BY_KEY = (() => {
+    const map = Object.create(null);
+    (EMOJI_FALLBACK_CATEGORIES.people || []).forEach((emoji, index) => {
+      const key = normalizeEmojiAtlasKey(emoji);
+      if (!key) return;
+      if (map[key] === undefined) map[key] = index;
+    });
+    return map;
+  })();
   const CHAT_REACTION_ACTOR = "out";
   const CHAT_TYPING_PHRASES = [
     "печатает",
@@ -224,6 +257,7 @@
   let emojiDatasetPromise = null;
   let emojiPopoverMode = "composer";
   let emojiPopoverReactionMessageId = "";
+  let emojiAtlasPreloadStarted = false;
   let unreadEventRaf = 0;
   let messageAlertAudioCtx = null;
   let messageAlertAudioUnlocked = false;
@@ -2820,8 +2854,61 @@
   }
 
   function getEmojiAssetUrl(emoji) {
+    if (EMOJI_NATIVE_RENDER_ONLY) return "";
     const code = emojiToAssetCode(emoji);
     return code ? `${EMOJI_ASSET_BASE_URL}/${code}.png` : "";
+  }
+
+  function preloadEmojiAtlas() {
+    if (!EMOJI_ATLAS_ENABLED || emojiAtlasPreloadStarted) return;
+    emojiAtlasPreloadStarted = true;
+    const img = new Image();
+    img.decoding = "async";
+    img.src = EMOJI_ATLAS_URL;
+  }
+
+  function getEmojiAtlasPosition(emoji) {
+    if (!EMOJI_ATLAS_ENABLED) return null;
+    const key = normalizeEmojiAtlasKey(emoji);
+    if (!key) return null;
+    const index = EMOJI_ATLAS_INDEX_BY_KEY[key];
+    if (!Number.isFinite(index) || index < 0) return null;
+    return {
+      row: Math.floor(index / EMOJI_ATLAS_COLUMNS),
+      col: index % EMOJI_ATLAS_COLUMNS,
+    };
+  }
+
+  function createEmojiAtlasGlyph(glyphClassName, emojiValue) {
+    const pos = getEmojiAtlasPosition(emojiValue);
+    if (!pos) return null;
+    const xPercent = EMOJI_ATLAS_COLUMNS > 1 ? (pos.col / (EMOJI_ATLAS_COLUMNS - 1)) * 100 : 0;
+    const yPercent = EMOJI_ATLAS_ROWS > 1 ? (pos.row / (EMOJI_ATLAS_ROWS - 1)) * 100 : 0;
+
+    const glyph = document.createElement("span");
+    glyph.className = String(glyphClassName || "");
+    glyph.style.backgroundImage = `url("${EMOJI_ATLAS_URL}")`;
+    glyph.style.backgroundRepeat = "no-repeat";
+    glyph.style.backgroundSize = `${EMOJI_ATLAS_COLUMNS * 100}% ${EMOJI_ATLAS_ROWS * 100}%`;
+    glyph.style.backgroundPosition = `${xPercent}% ${yPercent}%`;
+    glyph.setAttribute("aria-hidden", "true");
+    return glyph;
+  }
+
+  function appendNativeEmojiGlyph(target, emoji, glyphClassName) {
+    if (!target) return;
+    const value = String(emoji || "");
+    if (!value) return;
+    const atlasGlyph = createEmojiAtlasGlyph(glyphClassName, value);
+    if (atlasGlyph) {
+      target.appendChild(atlasGlyph);
+      return;
+    }
+    const glyph = document.createElement("span");
+    glyph.className = String(glyphClassName || "");
+    glyph.textContent = value;
+    glyph.setAttribute("aria-hidden", "true");
+    target.appendChild(glyph);
   }
 
   function setEmojiGlyph(target, emoji, glyphClassName) {
@@ -2830,7 +2917,7 @@
     const src = getEmojiAssetUrl(value);
     target.textContent = "";
     if (!src) {
-      target.textContent = value;
+      appendNativeEmojiGlyph(target, value, glyphClassName);
       return;
     }
 
@@ -2911,6 +2998,8 @@
             target.appendChild(img);
             return;
           }
+          appendNativeEmojiGlyph(target, segment, glyphClassName);
+          return;
         }
 
         target.appendChild(document.createTextNode(segment));
@@ -3796,6 +3885,10 @@
   }
 
   async function ensureEmojiDatasetLoaded() {
+    if (!EMOJI_REMOTE_DATASET_ENABLED) {
+      if (!emojiDatasetPromise) emojiDatasetPromise = Promise.resolve();
+      return emojiDatasetPromise;
+    }
     if (emojiDatasetPromise) return emojiDatasetPromise;
 
     emojiDatasetPromise = (async () => {
@@ -3882,7 +3975,7 @@
     if (!visibleCategories.length) {
       const empty = document.createElement("div");
       empty.className = "chat-emoji-empty";
-      empty.textContent = "Нет эмодзи";
+      empty.textContent = "\u041d\u0435\u0442 \u044d\u043c\u043e\u0434\u0437\u0438";
       popover.appendChild(empty);
       return;
     }
@@ -4048,7 +4141,7 @@
       : (EMOJI_FALLBACK_CATEGORIES.people || []);
     peopleSource.forEach(push);
 
-    return out;
+    return out.slice(0, EMOJI_REACTION_POOL_LIMIT);
   }
 
   function ensureReactionBarAllEmojiButtons() {
@@ -6679,6 +6772,7 @@
   }
 
   function initComposer() {
+    preloadEmojiAtlas();
     if (!Object.keys(emojiCategories).length) {
       emojiCategories = normalizeEmojiCategoryMap(EMOJI_FALLBACK_CATEGORIES);
     }

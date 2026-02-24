@@ -18,7 +18,7 @@ const CHAT_SUMMARIES_PAGE_DEFAULT_LIMIT = 50;
 const CHAT_SUMMARIES_PAGE_MAX_LIMIT = 200;
 const CHAT_THREAD_PAGE_DEFAULT_LIMIT = 60;
 const CHAT_THREAD_PAGE_MAX_LIMIT = 200;
-const CHAT_GUEST_THREAD_TTL_DAYS = parsePositiveInt(
+const CHAT_GUEST_THREAD_TTL_DAYS_DEFAULT = parsePositiveInt(
   process.env.CHAT_GUEST_THREAD_TTL_DAYS,
   7,
   1,
@@ -30,12 +30,19 @@ const CHAT_GUEST_THREAD_CLEANUP_MIN_INTERVAL_MS = parsePositiveInt(
   10000,
   24 * 60 * 60 * 1000
 );
+const CHAT_ORPHAN_THREAD_CLEANUP_MIN_INTERVAL_MS = parsePositiveInt(
+  process.env.CHAT_ORPHAN_THREAD_CLEANUP_MIN_INTERVAL_MS,
+  30 * 1000,
+  5000,
+  24 * 60 * 60 * 1000
+);
 const CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT = parsePositiveInt(
   process.env.CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT,
   200,
   10,
   2000
 );
+const CHAT_ORPHAN_THREAD_CLEANUP_BATCH_LIMIT = CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT;
 const CHAT_PUSH_ENDPOINT_MAX_LENGTH = 1024;
 const CHAT_UPLOAD_RELATIVE_DIR = path.join("static", "uploads", "chat");
 const CHAT_UPLOAD_ABSOLUTE_DIR = path.join(__dirname, "..", CHAT_UPLOAD_RELATIVE_DIR);
@@ -395,6 +402,16 @@ function normalizeTenantChatWidgetEnabled(rawValue) {
   return true;
 }
 
+function normalizeTenantGuestThreadTtlDays(rawValue) {
+  if (rawValue === undefined || rawValue === null || rawValue === "") return null;
+  const n = Number(rawValue);
+  if (!Number.isFinite(n)) return null;
+  const whole = Math.trunc(n);
+  if (whole < 1) return null;
+  if (whole > 365) return 365;
+  return whole;
+}
+
 async function isTenantChatWidgetEnabled(tenantId) {
   const key = String(tenantId || "").trim();
   if (!key) return true;
@@ -412,6 +429,28 @@ async function isTenantChatWidgetEnabled(tenantId) {
   } catch (err) {
     const code = String(err && err.code || "");
     if (code === "ER_BAD_FIELD_ERROR") return true;
+    throw err;
+  }
+}
+
+async function resolveGuestThreadTtlDaysForTenant(tenantId) {
+  const key = String(tenantId || "").trim();
+  if (!key) return CHAT_GUEST_THREAD_TTL_DAYS_DEFAULT;
+
+  try {
+    const [rows] = await db.query(
+      `SELECT chat_guest_thread_ttl_days
+         FROM ten_tenants
+        WHERE id = ?
+        LIMIT 1`,
+      [Number(key)]
+    );
+    const row = Array.isArray(rows) && rows.length ? rows[0] : null;
+    const ttlDays = normalizeTenantGuestThreadTtlDays(row ? row.chat_guest_thread_ttl_days : null);
+    return ttlDays || CHAT_GUEST_THREAD_TTL_DAYS_DEFAULT;
+  } catch (err) {
+    const code = String(err && err.code || "");
+    if (code === "ER_BAD_FIELD_ERROR") return CHAT_GUEST_THREAD_TTL_DAYS_DEFAULT;
     throw err;
   }
 }
@@ -460,7 +499,8 @@ function getGuestThreadCleanupBucket(tenantId) {
   let bucket = guestThreadCleanupState.get(key);
   if (!bucket) {
     bucket = {
-      lastRunAt: 0,
+      lastGuestRunAt: 0,
+      lastOrphanRunAt: 0,
       inFlight: null,
     };
     guestThreadCleanupState.set(key, bucket);
@@ -470,7 +510,10 @@ function getGuestThreadCleanupBucket(tenantId) {
 
 async function cleanupExpiredGuestThreadsForTenant(tenantId) {
   const tenant = String(tenantId || "");
-  if (!tenant || CHAT_GUEST_THREAD_TTL_DAYS <= 0) return 0;
+  if (!tenant) return 0;
+
+  const ttlDays = await resolveGuestThreadTtlDaysForTenant(tenant);
+  if (!ttlDays || ttlDays <= 0) return 0;
 
   const guestPrefix = "\u0433\u043e\u0441\u0442\u044c";
   const timestamp = new Date().toISOString();
@@ -487,7 +530,7 @@ async function cleanupExpiredGuestThreadsForTenant(tenantId) {
         LIMIT ?`,
       [
         Number(tenant),
-        CHAT_GUEST_THREAD_TTL_DAYS,
+        ttlDays,
         guestPrefix,
         CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT,
       ]
@@ -525,23 +568,100 @@ async function cleanupExpiredGuestThreadsForTenant(tenantId) {
   return totalDeleted;
 }
 
+async function cleanupOrphanedClientThreadsForTenant(tenantId) {
+  const tenant = String(tenantId || "");
+  if (!tenant) return 0;
+
+  const guestPrefix = "\u0433\u043e\u0441\u0442\u044c";
+  const timestamp = new Date().toISOString();
+  let totalDeleted = 0;
+
+  for (let pass = 0; pass < 5; pass += 1) {
+    const [candidateRows] = await db.query(
+      `SELECT t.client_id
+         FROM chat_threads t
+         LEFT JOIN cust_customers c
+           ON c.tenant_id = t.tenant_id
+          AND c.id = t.client_id
+        WHERE t.tenant_id = ?
+          AND c.id IS NULL
+          AND LOWER(TRIM(COALESCE(t.meta_name, ''))) NOT LIKE CONCAT(?, '%')
+        ORDER BY t.updated_at ASC, t.client_id ASC
+        LIMIT ?`,
+      [
+        Number(tenant),
+        guestPrefix,
+        CHAT_ORPHAN_THREAD_CLEANUP_BATCH_LIMIT,
+      ]
+    );
+
+    const clientIds = (Array.isArray(candidateRows) ? candidateRows : [])
+      .map((row) => normalizeClientId(row?.client_id))
+      .filter(Boolean);
+    if (!clientIds.length) break;
+
+    const [deleteResult] = await db.query(
+      `DELETE FROM chat_threads
+        WHERE tenant_id = ? AND client_id IN (${clientIds.map(() => "?").join(",")})`,
+      [Number(tenant), ...clientIds.map((id) => Number(id))]
+    );
+    const deletedNow = Number(deleteResult?.affectedRows || 0);
+    if (deletedNow <= 0) break;
+
+    totalDeleted += deletedNow;
+    await deletePushSubscriptionsForThreads(tenant, clientIds).catch(() => {});
+    clientIds.forEach((clientId) => {
+      clearThreadTypingState(tenant, clientId);
+      notifyThreadChange(tenant, clientId, timestamp);
+    });
+
+    if (clientIds.length < CHAT_ORPHAN_THREAD_CLEANUP_BATCH_LIMIT) break;
+  }
+
+  if (totalDeleted > 0) {
+    console.info(
+      `[chat-temp] auto-removed orphan client chats tenant=${tenant} count=${totalDeleted}`
+    );
+  }
+
+  return totalDeleted;
+}
+
 function scheduleExpiredGuestThreadsCleanup(tenantId) {
   const tenant = String(tenantId || "");
-  if (!tenant || CHAT_GUEST_THREAD_TTL_DAYS <= 0) return;
+  if (!tenant) return;
   const bucket = getGuestThreadCleanupBucket(tenant);
   if (!bucket) return;
 
   const now = Date.now();
   if (bucket.inFlight) return;
-  if (
-    bucket.lastRunAt > 0
-    && (now - bucket.lastRunAt) < CHAT_GUEST_THREAD_CLEANUP_MIN_INTERVAL_MS
-  ) {
+  const shouldRunOrphan = !(
+    bucket.lastOrphanRunAt > 0
+    && (now - bucket.lastOrphanRunAt) < CHAT_ORPHAN_THREAD_CLEANUP_MIN_INTERVAL_MS
+  );
+  const shouldRunGuest = !(
+    bucket.lastGuestRunAt > 0
+    && (now - bucket.lastGuestRunAt) < CHAT_GUEST_THREAD_CLEANUP_MIN_INTERVAL_MS
+  );
+  if (!shouldRunOrphan && !shouldRunGuest) {
     return;
   }
 
-  bucket.lastRunAt = now;
-  bucket.inFlight = cleanupExpiredGuestThreadsForTenant(tenant)
+  if (shouldRunOrphan) {
+    bucket.lastOrphanRunAt = now;
+  }
+  if (shouldRunGuest) {
+    bucket.lastGuestRunAt = now;
+  }
+
+  bucket.inFlight = (async () => {
+    if (shouldRunOrphan) {
+      await cleanupOrphanedClientThreadsForTenant(tenant);
+    }
+    if (shouldRunGuest) {
+      await cleanupExpiredGuestThreadsForTenant(tenant);
+    }
+  })()
     .catch((err) => {
       console.error("chat-temp guest cleanup error:", err);
     })
@@ -549,7 +669,6 @@ function scheduleExpiredGuestThreadsCleanup(tenantId) {
       const next = getGuestThreadCleanupBucket(tenant);
       if (!next) return;
       next.inFlight = null;
-      next.lastRunAt = Date.now();
     });
 }
 

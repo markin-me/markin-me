@@ -31,6 +31,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     {
       name: 'chat_widget_enabled',
       sql: "tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Show customer chat button in storefront'"
+    },
+    {
+      name: 'chat_guest_thread_ttl_days',
+      sql: "smallint unsigned DEFAULT NULL COMMENT 'Guest chat TTL in days'"
     }
   ];
   let tenantChatColumnsReady = false;
@@ -514,6 +518,65 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const maxLoginEnabled = req.body.max_login_enabled !== undefined ? (helpers.toBool(req.body.max_login_enabled, false) ? 1 : 0) : undefined;
       const tgMiniAppEnabled = req.body.tg_mini_app_enabled !== undefined ? (helpers.toBool(req.body.tg_mini_app_enabled, false) ? 1 : 0) : undefined;
       const tgLoginEnabled = req.body.tg_login_enabled !== undefined ? (helpers.toBool(req.body.tg_login_enabled, false) ? 1 : 0) : undefined;
+      const chatWelcomeMessage = req.body.chat_welcome_message !== undefined ? helpers.strOrNull(req.body.chat_welcome_message) : undefined;
+      const chatAssistantName = req.body.chat_assistant_name !== undefined ? helpers.strOrNull(req.body.chat_assistant_name) : undefined;
+      const chatOperatorName = req.body.chat_operator_name !== undefined ? helpers.strOrNull(req.body.chat_operator_name) : undefined;
+      let chatAssistantGender = undefined;
+      if (req.body.chat_assistant_gender !== undefined) {
+        chatAssistantGender = normalizeChatAssistantGender(req.body.chat_assistant_gender);
+        if (chatAssistantGender === '__invalid__') {
+          return res.status(400).json({ ok: false, error: 'BAD_CHAT_ASSISTANT_GENDER' });
+        }
+      }
+      const chatWidgetEnabled = req.body.chat_widget_enabled !== undefined
+        ? (helpers.toBool(req.body.chat_widget_enabled, true) ? 1 : 0)
+        : undefined;
+      let chatGuestThreadTtlDays = undefined;
+      if (req.body.chat_guest_thread_ttl_days !== undefined) {
+        const ttlRaw = helpers.numOrNull(req.body.chat_guest_thread_ttl_days);
+        if (ttlRaw === null) {
+          chatGuestThreadTtlDays = null;
+        } else {
+          const ttl = Math.trunc(Number(ttlRaw));
+          if (!Number.isFinite(ttl) || ttl < 1 || ttl > 365) {
+            return res.status(400).json({ ok: false, error: 'BAD_CHAT_GUEST_THREAD_TTL_DAYS' });
+          }
+          chatGuestThreadTtlDays = ttl;
+        }
+      }
+      let chatQuickQuestionsJson = undefined;
+      if (req.body.chat_quick_questions_json !== undefined) {
+        const rawQuestions = req.body.chat_quick_questions_json;
+        let parsedQuestions = [];
+        if (rawQuestions === null) {
+          parsedQuestions = [];
+        } else if (Array.isArray(rawQuestions)) {
+          parsedQuestions = rawQuestions;
+        } else if (typeof rawQuestions === 'string') {
+          const trimmed = rawQuestions.trim();
+          if (!trimmed) {
+            parsedQuestions = [];
+          } else {
+            try {
+              const json = JSON.parse(trimmed);
+              if (!Array.isArray(json)) {
+                return res.status(400).json({ ok: false, error: 'BAD_CHAT_QUESTIONS' });
+              }
+              parsedQuestions = json;
+            } catch {
+              parsedQuestions = trimmed.split(/\r?\n/);
+            }
+          }
+        } else {
+          return res.status(400).json({ ok: false, error: 'BAD_CHAT_QUESTIONS' });
+        }
+
+        const normalizedQuestions = parsedQuestions
+          .map((item) => String(item ?? '').trim())
+          .filter(Boolean)
+          .slice(0, 6);
+        chatQuickQuestionsJson = normalizedQuestions.length ? JSON.stringify(normalizedQuestions) : null;
+      }
 
       if (!tenantId) {
         return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
@@ -652,6 +715,23 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const nextTelegramBotToken = telegramBotToken !== undefined ? telegramBotToken : (current.telegram_bot_token ?? null);
       const nextTgMiniAppEnabled = tgMiniAppEnabled !== undefined ? tgMiniAppEnabled : (current.tg_mini_app_enabled ?? 0);
       const nextTgLoginEnabled = tgLoginEnabled !== undefined ? tgLoginEnabled : (current.tg_login_enabled ?? 0);
+      const nextChatWelcomeMessage = chatWelcomeMessage !== undefined ? chatWelcomeMessage : (current.chat_welcome_message ?? null);
+      const nextChatAssistantName = chatAssistantName !== undefined ? chatAssistantName : (current.chat_assistant_name ?? null);
+      const nextChatOperatorName = chatOperatorName !== undefined ? chatOperatorName : (current.chat_operator_name ?? null);
+      const currentChatAssistantGenderRaw = normalizeChatAssistantGender(current.chat_assistant_gender);
+      const currentChatAssistantGender =
+        currentChatAssistantGenderRaw === 'm' || currentChatAssistantGenderRaw === 'f'
+          ? currentChatAssistantGenderRaw
+          : null;
+      const nextChatAssistantGender =
+        chatAssistantGender !== undefined ? chatAssistantGender : currentChatAssistantGender;
+      const nextChatQuickQuestionsJson = chatQuickQuestionsJson !== undefined ? chatQuickQuestionsJson : (current.chat_quick_questions_json ?? null);
+      const nextChatWidgetEnabled = chatWidgetEnabled !== undefined
+        ? chatWidgetEnabled
+        : (Number(current.chat_widget_enabled) === 0 ? 0 : 1);
+      const nextChatGuestThreadTtlDays = chatGuestThreadTtlDays !== undefined
+        ? chatGuestThreadTtlDays
+        : (current.chat_guest_thread_ttl_days ?? null);
 
       if (email !== undefined && email && email !== current.email) {
         const [existsEmail] = await db.query(
@@ -664,8 +744,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, tenantId]
       );
 
       const [rows] = await db.query(

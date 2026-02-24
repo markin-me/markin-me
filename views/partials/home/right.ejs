@@ -217,6 +217,23 @@
         </div>
       </div>
 
+      <div class="info-card settings-right-panel hidden" id="settingsChatMessageSettingsPanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">Настройка сообщений</div>
+          <div class="settings-list-subtitle">Параметры автоочистки гостевых чатов.</div>
+        </div>
+        <div class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">ВРЕМЯ ЖИЗНИ ГОСТЕВЫХ ЧАТОВ (ДНЕЙ)</label>
+            <input class="control" type="number" min="1" max="365" step="1" id="settingsChatGuestThreadTtlDaysInput" data-tenant-input="chat_guest_thread_ttl_days" placeholder="7" />
+            <div class="field-hint">Чаты гостей будут удаляться автоматически после указанного количества дней без активности.</div>
+          </div>
+        </div>
+        <div class="stores-form-actions settings-chat-panel-actions settings-footer-actions">
+          <button class="settings-footer-btn settings-footer-btn--save" type="button" id="settingsChatMessageSettingsSaveBtn">Сохранить</button>
+        </div>
+      </div>
+
       <div class="info-card settings-right-panel hidden" id="settingsLogoPanel">
         <div class="settings-logo-grid">
           <div class="settings-logo-tile" data-logo-key="logo_light_url">
