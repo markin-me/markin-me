@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "thumbs": "node scripts/generate-product-thumbs.js"
+    "thumbs": "node scripts/generate-product-thumbs.js",
+    "emoji:atlas": "node scripts/build-emoji-atlas.js"
   },
   "keywords": [],
   "author": "",
