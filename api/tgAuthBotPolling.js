@@ -1,5 +1,4 @@
 const crypto = require('crypto');
-const authReadsNew = String(process.env.AUTH_READS_NEW || '1').trim() === '1';
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 

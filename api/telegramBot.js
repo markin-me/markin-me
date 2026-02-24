@@ -5,7 +5,6 @@
 const crypto = require('crypto');
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 const TG_LOGIN_START_PAYLOADS = new Set(['login', 'auth', 'link', 'shop']);
-const authReadsNew = String(process.env.AUTH_READS_NEW || '1').trim() === '1';
 
 async function sendContactRequestMessage(apiBase, chatId) {
   return sendMessage(

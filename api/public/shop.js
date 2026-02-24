@@ -22,7 +22,6 @@ const TELEGRAM_API = 'https://api.telegram.org/bot';
 
 module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
-  const authReadsNew = String(process.env.AUTH_READS_NEW || '1').trim() === '1';
 
   // ------------------------------
   // Upload: customer avatar

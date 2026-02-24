@@ -1,6 +1,5 @@
 const { confirmMaxLink, sendMaxMessage, getTenantMaxBotId } = require('./maxIntegration');
 const crypto = require('crypto');
-const authReadsNew = String(process.env.AUTH_READS_NEW || '1').trim() === '1';
 
 function normalizeUpdatesPayload(data) {
   if (!data) return [];
