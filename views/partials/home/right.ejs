@@ -419,6 +419,75 @@
               </button>
             </div>
           </div>
+
+          <div class="settings-site-field">
+            <label class="field-label">MINI APP В СООБЩЕНИИ БОТА</label>
+            <span class="field-hint">Показывать кнопку перехода в Telegram mini app после авторизации</span>
+            <label class="switch">
+              <input class="switch-input" type="checkbox" id="tenantTelegramMiniAppEnabled" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Включено</span>
+            </label>
+          </div>
+
+          <div class="settings-site-field">
+            <label class="field-label">ВХОД ЧЕРЕЗ TELEGRAM</label>
+            <span class="field-hint">Разрешить вход клиентов через Telegram</span>
+            <label class="switch">
+              <input class="switch-input" type="checkbox" id="tenantTelegramLoginEnabled" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Включено</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card settings-right-panel hidden" id="settingsMaxAppPanel">
+        <div class="settings-site-form">
+          <div class="settings-site-field">
+            <label class="field-label">ID БОТА MAX</label>
+            <span class="field-hint">Username или ID бота для deeplink (пример: @id220807718849_bot)</span>
+            <input class="control" type="text" id="tenantMaxBotId" placeholder="@bot_username" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+          </div>
+
+          <div class="settings-site-field">
+            <label class="field-label">ТОКЕН БОТА MAX</label>
+            <span class="field-hint">Токен вашего MAX-бота для авторизации клиентов</span>
+            <div class="control-with-action">
+              <input class="control" type="text" id="tenantMaxBotToken" placeholder="Введите токен" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              <button class="control-inline-btn" type="button" id="tenantMaxBotTokenCopyBtn" title="Скопировать">
+                <i class="fas fa-copy"></i>
+              </button>
+            </div>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ССЫЛКА ДЛЯ MAX MINI APP</label>
+            <span class="field-hint">Используйте эту ссылку в настройках MAX-бота:</span>
+            <div class="control-with-action">
+              <input class="control" type="text" id="tenantMaxMiniAppInput" readonly />
+              <button class="control-inline-btn" type="button" id="tenantMaxMiniAppCopyBtn" title="Скопировать">
+                <i class="fas fa-copy"></i>
+              </button>
+            </div>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">MINI APP В СООБЩЕНИИ БОТА</label>
+            <span class="field-hint">Показывать кнопку перехода в MAX mini app после авторизации</span>
+            <label class="switch">
+              <input class="switch-input" type="checkbox" id="tenantMaxMiniAppEnabled" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Включено</span>
+            </label>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">ВХОД ЧЕРЕЗ MAX</label>
+            <span class="field-hint">Разрешить вход клиентов через MAX (требуются ID бота и токен)</span>
+            <label class="switch">
+              <input class="switch-input" type="checkbox" id="tenantMaxLoginEnabled" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-text">Включено</span>
+            </label>
+          </div>
         </div>
       </div>
 

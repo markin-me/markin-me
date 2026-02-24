@@ -457,12 +457,14 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const hostHeader = firstHeaderValue(forwardedHost, req.get('host') || 'localhost:3000');
       const baseUrl = `${protocol}://${hostHeader}`;
       const telegramMiniAppUrl = `${baseUrl}/tg-app?tenant_id=${tenant.id}`;
+      const maxMiniAppUrl = `${baseUrl}/max-app?tenant_id=${tenant.id}`;
 
       res.json({
         ok: true,
         tenant: {
           ...tenant,
-          telegram_mini_app_url: telegramMiniAppUrl
+          telegram_mini_app_url: telegramMiniAppUrl,
+          max_mini_app_url: maxMiniAppUrl
         }
       });
     } catch (err) {

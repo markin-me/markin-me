@@ -304,17 +304,51 @@
       // Telegram bot fields
       const tgBotUsernameInput = document.getElementById("tenantTelegramBotUsername");
       const tgBotTokenInput = document.getElementById("tenantTelegramBotToken");
+      const tgMiniAppEnabledInput = document.getElementById("tenantTelegramMiniAppEnabled");
+      const tgLoginEnabledInput = document.getElementById("tenantTelegramLoginEnabled");
+      const maxBotIdInput = document.getElementById("tenantMaxBotId");
+      const maxBotTokenInput = document.getElementById("tenantMaxBotToken");
+      const maxMiniAppEnabledInput = document.getElementById("tenantMaxMiniAppEnabled");
+      const maxLoginEnabledInput = document.getElementById("tenantMaxLoginEnabled");
       if (tgBotUsernameInput) {
         tgBotUsernameInput.value = tenant.telegram_bot_username || "";
       }
       if (tgBotTokenInput) {
         tgBotTokenInput.value = tenant.telegram_bot_token || "";
       }
+      if (tgMiniAppEnabledInput) {
+        tgMiniAppEnabledInput.checked = Number(tenant.tg_mini_app_enabled ?? 1) === 1;
+      }
+      if (tgLoginEnabledInput) {
+        const hasRequired = !!(String(tenant.telegram_bot_username || "").trim() && String(tenant.telegram_bot_token || "").trim());
+        tgLoginEnabledInput.checked = Number(tenant.tg_login_enabled ?? 0) === 1;
+        tgLoginEnabledInput.disabled = !hasRequired;
+        tgLoginEnabledInput.title = hasRequired ? "" : "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0438\u043c\u044f \u0431\u043e\u0442\u0430 \u0438 \u0442\u043e\u043a\u0435\u043d Telegram";
+      }
+      if (maxBotIdInput) {
+        maxBotIdInput.value = tenant.max_bot_id || "";
+      }
+      if (maxBotTokenInput) {
+        maxBotTokenInput.value = tenant.max_bot_token || "";
+      }
+      if (maxMiniAppEnabledInput) {
+        maxMiniAppEnabledInput.checked = Number(tenant.max_mini_app_enabled ?? 1) === 1;
+      }
+      if (maxLoginEnabledInput) {
+        const hasRequired = !!(String(tenant.max_bot_id || "").trim() && String(tenant.max_bot_token || "").trim());
+        maxLoginEnabledInput.checked = Number(tenant.max_login_enabled || 0) === 1;
+        maxLoginEnabledInput.disabled = !hasRequired;
+        maxLoginEnabledInput.title = hasRequired ? "" : "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 ID \u0431\u043e\u0442\u0430 MAX \u0438 \u0442\u043e\u043a\u0435\u043d";
+      }
 
       // Telegram mini app link
       const tgMiniAppInput = document.getElementById("tenantTelegramMiniAppInput");
       if (tgMiniAppInput && tenant.telegram_mini_app_url) {
         tgMiniAppInput.value = tenant.telegram_mini_app_url;
+      }
+      const maxMiniAppInput = document.getElementById("tenantMaxMiniAppInput");
+      if (maxMiniAppInput && tenant.max_mini_app_url) {
+        maxMiniAppInput.value = tenant.max_mini_app_url;
       }
 
       // Фавикон в панели «Данные сайта»
@@ -516,11 +550,13 @@
     const imagesCard = document.getElementById("settingsImagesCard");
     const printApiCard = document.getElementById("settingsPrintApiCard");
     const telegramAppCard = document.getElementById("settingsTelegramAppCard");
+    const maxAppCard = document.getElementById("settingsMaxAppCard");
     const rightDefault = document.getElementById("settingsRightDefault");
     const logoPanel = document.getElementById("settingsLogoPanel");
     const sitePanel = document.getElementById("settingsSitePanel");
     const domainPanel = document.getElementById("settingsDomainPanel");
     const telegramAppPanel = document.getElementById("settingsTelegramAppPanel");
+    const maxAppPanel = document.getElementById("settingsMaxAppPanel");
     const brandPanel = document.getElementById("settingsBrandPanel");
     const orderStatusesPanel = document.getElementById("settingsOrderStatusesPanel");
     const orderPaymentsPanel = document.getElementById("settingsOrderPaymentsPanel");
@@ -1219,6 +1255,7 @@
       if (sitePanel) sitePanel.classList.toggle("hidden", tabId !== "site");
       if (domainPanel) domainPanel.classList.toggle("hidden", tabId !== "domain");
       if (telegramAppPanel) telegramAppPanel.classList.toggle("hidden", tabId !== "telegram-app");
+      if (maxAppPanel) maxAppPanel.classList.toggle("hidden", tabId !== "max-app");
       if (brandPanel) brandPanel.classList.toggle("hidden", tabId !== "brand");
       if (orderStatusesPanel) orderStatusesPanel.classList.toggle("hidden", tabId !== "order-statuses");
       if (orderPaymentsPanel) orderPaymentsPanel.classList.toggle("hidden", tabId !== "order-payments");
@@ -1297,6 +1334,8 @@
           if (tabId === "logo" && logoCard) logoCard.classList.remove("is-active");
           if (tabId === "site" && siteCard) siteCard.classList.remove("is-active");
           if (tabId === "domain" && domainCard) domainCard.classList.remove("is-active");
+          if (tabId === "telegram-app" && telegramAppCard) telegramAppCard.classList.remove("is-active");
+          if (tabId === "max-app" && maxAppCard) maxAppCard.classList.remove("is-active");
           if (tabId === "brand" && brandCard) brandCard.classList.remove("is-active");
           if (tabId === "order-statuses" && orderStatusesCard) orderStatusesCard.classList.remove("is-active");
           if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.remove("is-active");
@@ -1348,6 +1387,7 @@
       if (tabId === "site" && siteCard) siteCard.classList.add("is-active");
       if (tabId === "domain" && domainCard) domainCard.classList.add("is-active");
       if (tabId === "telegram-app" && telegramAppCard) telegramAppCard.classList.add("is-active");
+      if (tabId === "max-app" && maxAppCard) maxAppCard.classList.add("is-active");
       if (tabId === "brand" && brandCard) brandCard.classList.add("is-active");
       if (tabId === "order-statuses" && orderStatusesCard) orderStatusesCard.classList.add("is-active");
       if (tabId === "order-payments" && orderPaymentsCard) orderPaymentsCard.classList.add("is-active");
@@ -1389,17 +1429,50 @@
       });
     }
 
+    if (maxAppCard) {
+      maxAppCard.addEventListener("click", () => {
+        ensureTab("max-app", "Мини-приложение MAX");
+      });
+    }
+
     // Telegram bot username — save on change
     const tgBotUsernameEl = document.getElementById("tenantTelegramBotUsername");
     const tgBotUsernameLinkBtn = document.getElementById("tenantTelegramBotUsernameLink");
     const tgBotTokenEl = document.getElementById("tenantTelegramBotToken");
     const tgBotTokenCopyBtn = document.getElementById("tenantTelegramBotTokenCopyBtn");
+    const tgMiniAppEnabledEl = document.getElementById("tenantTelegramMiniAppEnabled");
+    const tgLoginEnabledEl = document.getElementById("tenantTelegramLoginEnabled");
+    const maxBotIdEl = document.getElementById("tenantMaxBotId");
+    const maxBotTokenEl = document.getElementById("tenantMaxBotToken");
+    const maxBotTokenCopyBtn = document.getElementById("tenantMaxBotTokenCopyBtn");
+    const maxMiniAppEnabledEl = document.getElementById("tenantMaxMiniAppEnabled");
+    const maxLoginEnabledEl = document.getElementById("tenantMaxLoginEnabled");
+
+    const syncMaxLoginSwitchState = function () {
+      if (!maxLoginEnabledEl) return;
+      var hasRequired = !!(String((maxBotIdEl && maxBotIdEl.value) || "").trim() && String((maxBotTokenEl && maxBotTokenEl.value) || "").trim());
+      maxLoginEnabledEl.disabled = !hasRequired;
+      maxLoginEnabledEl.title = hasRequired ? "" : "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 ID \u0431\u043e\u0442\u0430 MAX \u0438 \u0442\u043e\u043a\u0435\u043d";
+      if (!hasRequired) {
+        maxLoginEnabledEl.checked = false;
+      }
+    };
+    const syncTgLoginSwitchState = function () {
+      if (!tgLoginEnabledEl) return;
+      var hasRequired = !!(String((tgBotUsernameEl && tgBotUsernameEl.value) || "").trim() && String((tgBotTokenEl && tgBotTokenEl.value) || "").trim());
+      tgLoginEnabledEl.disabled = !hasRequired;
+      tgLoginEnabledEl.title = hasRequired ? "" : "\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0438\u043c\u044f \u0431\u043e\u0442\u0430 \u0438 \u0442\u043e\u043a\u0435\u043d Telegram";
+      if (!hasRequired) {
+        tgLoginEnabledEl.checked = false;
+      }
+    };
 
     if (tgBotUsernameEl) {
       tgBotUsernameEl.addEventListener("change", function () {
         var val = tgBotUsernameEl.value.trim().replace(/^@/, "");
         tgBotUsernameEl.value = val;
         updateTenantFields({ telegram_bot_username: val || null });
+        syncTgLoginSwitchState();
       });
     }
 
@@ -1415,6 +1488,7 @@
       tgBotTokenEl.addEventListener("change", function () {
         var val = tgBotTokenEl.value.trim();
         updateTenantFields({ telegram_bot_token: val || null });
+        syncTgLoginSwitchState();
       });
     }
 
@@ -1431,6 +1505,74 @@
       });
     }
 
+    if (maxBotIdEl) {
+      maxBotIdEl.addEventListener("change", function () {
+        var val = maxBotIdEl.value.trim();
+        updateTenantFields({ max_bot_id: val || null });
+        syncMaxLoginSwitchState();
+      });
+    }
+
+    if (maxBotTokenEl) {
+      maxBotTokenEl.addEventListener("change", function () {
+        var val = maxBotTokenEl.value.trim();
+        updateTenantFields({ max_bot_token: val || null });
+        syncMaxLoginSwitchState();
+      });
+    }
+
+    if (maxLoginEnabledEl) {
+      maxLoginEnabledEl.addEventListener("change", function () {
+        if (maxLoginEnabledEl.checked) {
+          var hasRequired = !!(String((maxBotIdEl && maxBotIdEl.value) || "").trim() && String((maxBotTokenEl && maxBotTokenEl.value) || "").trim());
+          if (!hasRequired) {
+            maxLoginEnabledEl.checked = false;
+            alert("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 ID \u0431\u043e\u0442\u0430 MAX \u0438 \u0442\u043e\u043a\u0435\u043d");
+            return;
+          }
+        }
+        updateTenantFields({ max_login_enabled: maxLoginEnabledEl.checked ? 1 : 0 });
+      });
+      syncMaxLoginSwitchState();
+    }
+
+    if (maxMiniAppEnabledEl) {
+      maxMiniAppEnabledEl.addEventListener("change", function () {
+        updateTenantFields({ max_mini_app_enabled: maxMiniAppEnabledEl.checked ? 1 : 0 });
+      });
+    }
+
+    if (maxBotTokenCopyBtn && maxBotTokenEl) {
+      maxBotTokenCopyBtn.addEventListener("click", function () {
+        navigator.clipboard.writeText(maxBotTokenEl.value).then(function () {
+          var icon = maxBotTokenCopyBtn.querySelector("i");
+          if (icon) {
+            icon.className = "fas fa-check";
+            setTimeout(function () { icon.className = "fas fa-copy"; }, 1500);
+          }
+        });
+      });
+    }
+
+    if (tgMiniAppEnabledEl) {
+      tgMiniAppEnabledEl.addEventListener("change", function () {
+        updateTenantFields({ tg_mini_app_enabled: tgMiniAppEnabledEl.checked ? 1 : 0 });
+      });
+    }
+
+    if (tgLoginEnabledEl) {
+      tgLoginEnabledEl.addEventListener("change", function () {
+        var hasRequired = !!(String((tgBotUsernameEl && tgBotUsernameEl.value) || "").trim() && String((tgBotTokenEl && tgBotTokenEl.value) || "").trim());
+        if (!hasRequired) {
+          tgLoginEnabledEl.checked = false;
+          alert("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0438\u043c\u044f \u0431\u043e\u0442\u0430 \u0438 \u0442\u043e\u043a\u0435\u043d Telegram");
+          return;
+        }
+        updateTenantFields({ tg_login_enabled: tgLoginEnabledEl.checked ? 1 : 0 });
+      });
+      syncTgLoginSwitchState();
+    }
+
     // Копирование ссылки Telegram mini app
     var tgMiniAppCopyBtn = document.getElementById("tenantTelegramMiniAppCopyBtn");
     var tgMiniAppCopyInput = document.getElementById("tenantTelegramMiniAppInput");
@@ -1438,6 +1580,20 @@
       tgMiniAppCopyBtn.addEventListener("click", function () {
         navigator.clipboard.writeText(tgMiniAppCopyInput.value).then(function () {
           var icon = tgMiniAppCopyBtn.querySelector("i");
+          if (icon) {
+            icon.className = "fas fa-check";
+            setTimeout(function () { icon.className = "fas fa-copy"; }, 1500);
+          }
+        });
+      });
+    }
+
+    var maxMiniAppCopyBtn = document.getElementById("tenantMaxMiniAppCopyBtn");
+    var maxMiniAppCopyInput = document.getElementById("tenantMaxMiniAppInput");
+    if (maxMiniAppCopyBtn && maxMiniAppCopyInput) {
+      maxMiniAppCopyBtn.addEventListener("click", function () {
+        navigator.clipboard.writeText(maxMiniAppCopyInput.value).then(function () {
+          var icon = maxMiniAppCopyBtn.querySelector("i");
           if (icon) {
             icon.className = "fas fa-check";
             setTimeout(function () { icon.className = "fas fa-copy"; }, 1500);

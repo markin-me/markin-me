@@ -7967,7 +7967,7 @@ function updateCartBadge() {
 
   async function loadUnitConversions() {
     try {
-      const json = await apiJson("/api/admin/unit-conversions?all=1");
+      const json = await apiJson("/api/public/unit-conversions");
       state.unitConversions = Array.isArray(json.data) ? json.data : [];
     } catch (e) {
       console.error("Failed to load unit conversions", e);

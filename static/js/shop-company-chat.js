@@ -5772,9 +5772,14 @@
       section.className = "shop-company-chat-emoji-section";
       section.setAttribute("data-emoji-category", category.key);
       if (emojiPopover.classList.contains("is-mobile-sheet")) {
-        section.style.width = "max-content";
-        section.style.minWidth = "max-content";
-        section.style.maxWidth = "none";
+        const mobileRows = 4;
+        const mobileColWidth = 40;
+        const mobileGap = 6;
+        const columns = Math.max(1, Math.ceil(list.length / mobileRows));
+        const computedWidth = (columns * mobileColWidth) + ((columns - 1) * mobileGap);
+        section.style.width = String(computedWidth) + "px";
+        section.style.minWidth = String(computedWidth) + "px";
+        section.style.maxWidth = String(computedWidth) + "px";
         section.style.flex = "0 0 auto";
       } else {
         section.style.width = "";
@@ -5786,6 +5791,15 @@
       const title = document.createElement("div");
       title.className = "shop-company-chat-emoji-title";
       title.textContent = category.label;
+      if (emojiPopover.classList.contains("is-mobile-sheet")) {
+        title.style.whiteSpace = "nowrap";
+        title.style.width = "max-content";
+        title.style.maxWidth = "none";
+      } else {
+        title.style.whiteSpace = "";
+        title.style.width = "";
+        title.style.maxWidth = "";
+      }
       section.appendChild(title);
 
       const grid = document.createElement("div");

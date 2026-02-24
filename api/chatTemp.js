@@ -155,6 +155,34 @@ function hashPushEndpoint(endpoint) {
   return crypto.createHash("sha256").update(String(endpoint || "")).digest("hex");
 }
 
+function isTransientDbConnectionError(err) {
+  const code = String(err?.code || "").toUpperCase();
+  if (
+    code === "PROTOCOL_CONNECTION_LOST"
+    || code === "ECONNRESET"
+    || code === "EPIPE"
+    || code === "PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR"
+    || code === "PROTOCOL_ENQUEUE_AFTER_QUIT"
+  ) return true;
+  const message = String(err?.message || "").toLowerCase();
+  return message.includes("connection lost")
+    || message.includes("server closed the connection");
+}
+
+async function queryWithTransientRetry(conn, sql, params = [], retries = 1) {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await conn.query(sql, params);
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= retries || !isTransientDbConnectionError(err)) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    }
+  }
+  throw lastErr;
+}
+
 function sanitizePushSubscription(raw) {
   const source = raw && typeof raw === "object" ? raw : {};
   const endpoint = String(source.endpoint || "").trim().slice(0, CHAT_PUSH_ENDPOINT_MAX_LENGTH);
@@ -1188,12 +1216,14 @@ async function storeChatAttachmentImage({ file, tenantId, clientId }) {
 }
 
 async function readThreadMeta(tenantId, clientId, conn = db) {
-  const [rows] = await conn.query(
+  const [rows] = await queryWithTransientRetry(
+    conn,
     `SELECT tenant_id, client_id, updated_at, meta_name, meta_phone, meta_last_welcome_day
        FROM chat_threads
       WHERE tenant_id = ? AND client_id = ?
       LIMIT 1`,
-    [tenantId, clientId]
+    [tenantId, clientId],
+    conn === db ? 1 : 0
   );
   return rows[0] || null;
 }
@@ -1995,6 +2025,21 @@ module.exports = function makeChatTempRouter() {
         },
       });
     } catch (err) {
+      if (isTransientDbConnectionError(err)) {
+        console.warn("chat-temp wait transient DB disconnect:", err?.code || err?.message || err);
+        return res.json({
+          ok: true,
+          data: {
+            client_id: Number(normalizeClientId(req.params.clientId) || 0),
+            changed: false,
+            message_changed: false,
+            typing_changed: false,
+            updated_at: "",
+            typing: null,
+            timeout: true,
+          },
+        });
+      }
       console.error("chat-temp GET /thread/:clientId/wait error:", err);
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
