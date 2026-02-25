@@ -109,6 +109,24 @@
     tg_login_enabled: 0
   };
   let telegramDraft = { ...telegramOriginal };
+  let maxDraftMode = false;
+  let maxCancelConfirm = false;
+  let maxOriginal = {
+    max_bot_id: "",
+    max_bot_token: "",
+    max_mini_app_enabled: 1,
+    max_login_enabled: 0
+  };
+  let maxDraft = { ...maxOriginal };
+  let siteDraftMode = false;
+  let siteCancelConfirm = false;
+  let siteOriginal = {
+    site_name: "",
+    site_description: "",
+    subdomain: "",
+    favicon_light_url: ""
+  };
+  let siteDraft = { ...siteOriginal };
 
   function applyBrandFromTenant(tenant) {
     if (!tenant) return;
@@ -290,9 +308,47 @@
           setSoundPreview(key, tenant[key]);
         }
       });
+      siteOriginal = {
+        site_name: String(tenant.site_name || ""),
+        site_description: String(tenant.site_description || ""),
+        subdomain: String(tenant.subdomain || ""),
+        favicon_light_url: String(tenant.favicon_light_url || "")
+      };
+      siteDraft = { ...siteOriginal };
+      siteDraftMode = false;
+      siteCancelConfirm = false;
+      const siteNameInput = document.querySelector('[data-site-input="site_name"]');
+      const siteDescriptionInput = document.querySelector('[data-site-input="site_description"]');
+      const subdomainInputEl = document.getElementById("subdomainInput");
+      if (siteNameInput) {
+        siteNameInput.disabled = true;
+        siteNameInput.readOnly = true;
+      }
+      if (siteDescriptionInput) {
+        siteDescriptionInput.disabled = true;
+        siteDescriptionInput.readOnly = true;
+      }
+      if (subdomainInputEl) {
+        subdomainInputEl.disabled = true;
+        subdomainInputEl.readOnly = true;
+      }
+      const siteUploadBtnEl = document.getElementById("siteFaviconUploadBtn");
+      const siteDeleteBtnEl = document.getElementById("siteFaviconDeleteBtn");
+      if (siteUploadBtnEl) siteUploadBtnEl.disabled = true;
+      if (siteDeleteBtnEl) siteDeleteBtnEl.disabled = true;
+      const siteFooterViewEl = document.getElementById("settingsSiteFooterView");
+      const siteFooterEditEl = document.getElementById("settingsSiteFooterEdit");
+      if (siteFooterViewEl) siteFooterViewEl.classList.remove("hidden");
+      if (siteFooterEditEl) siteFooterEditEl.classList.add("hidden");
+      const siteCancelBtnEl = document.getElementById("settingsSiteCancelBtn");
+      if (siteCancelBtnEl) {
+        siteCancelBtnEl.classList.remove("is-confirm");
+        siteCancelBtnEl.title = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+        siteCancelBtnEl.setAttribute("aria-label", "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c");
+        siteCancelBtnEl.innerHTML = '<i class="fas fa-times"></i>';
+      }
       domainOriginalValue = String(tenant.custom_domain || "");
       domainAsciiValue = String(tenant.custom_domain_ascii || "");
-      setDomainDraftMode(false);
       const settingsPriceRoundingModeInput = document.getElementById("settingsPriceRoundingMode");
       const settingsPriceRoundingPrecisionInput = document.getElementById("settingsPriceRoundingPrecision");
       if (settingsPriceRoundingModeInput && !settingsPriceRoundingModeInput.value) {
@@ -389,6 +445,36 @@
         maxLoginEnabledInput.checked = Number(tenant.max_login_enabled || 0) === 1;
         maxLoginEnabledInput.disabled = !hasRequired;
         maxLoginEnabledInput.title = hasRequired ? "" : "Сначала заполните ID бота и токен MAX";
+      }
+      maxOriginal = {
+        max_bot_id: String(tenant.max_bot_id || ""),
+        max_bot_token: String(tenant.max_bot_token || ""),
+        max_mini_app_enabled: Number(tenant.max_mini_app_enabled ?? 1) === 1 ? 1 : 0,
+        max_login_enabled: Number(tenant.max_login_enabled ?? 0) === 1 ? 1 : 0
+      };
+      maxDraft = { ...maxOriginal };
+      maxDraftMode = false;
+      maxCancelConfirm = false;
+      if (maxBotIdInput) {
+        maxBotIdInput.disabled = true;
+        maxBotIdInput.readOnly = true;
+      }
+      if (maxBotTokenInput) {
+        maxBotTokenInput.disabled = true;
+        maxBotTokenInput.readOnly = true;
+      }
+      if (maxMiniAppEnabledInput) maxMiniAppEnabledInput.disabled = true;
+      if (maxLoginEnabledInput) maxLoginEnabledInput.disabled = true;
+      const maxFooterViewEl = document.getElementById("settingsMaxFooterView");
+      const maxFooterEditEl = document.getElementById("settingsMaxFooterEdit");
+      if (maxFooterViewEl) maxFooterViewEl.classList.remove("hidden");
+      if (maxFooterEditEl) maxFooterEditEl.classList.add("hidden");
+      const maxCancelBtnEl = document.getElementById("settingsMaxCancelBtn");
+      if (maxCancelBtnEl) {
+        maxCancelBtnEl.classList.remove("is-confirm");
+        maxCancelBtnEl.title = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+        maxCancelBtnEl.setAttribute("aria-label", "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c");
+        maxCancelBtnEl.innerHTML = '<i class="fas fa-times"></i>';
       }
 
       // Telegram mini app link
@@ -2187,6 +2273,21 @@
     const maxBotTokenCopyBtn = document.getElementById("tenantMaxBotTokenCopyBtn");
     const maxMiniAppEnabledEl = document.getElementById("tenantMaxMiniAppEnabled");
     const maxLoginEnabledEl = document.getElementById("tenantMaxLoginEnabled");
+    const maxEditBtn = document.getElementById("settingsMaxEditBtn");
+    const maxSaveBtn = document.getElementById("settingsMaxSaveBtn");
+    const maxCancelBtn = document.getElementById("settingsMaxCancelBtn");
+    const maxFooterView = document.getElementById("settingsMaxFooterView");
+    const maxFooterEdit = document.getElementById("settingsMaxFooterEdit");
+    const siteNameEl = document.querySelector('[data-site-input="site_name"]');
+    const siteDescriptionEl = document.querySelector('[data-site-input="site_description"]');
+    const subdomainEl = document.getElementById("subdomainInput");
+    const siteUploadBtn = document.getElementById("siteFaviconUploadBtn");
+    const siteDeleteBtn = document.getElementById("siteFaviconDeleteBtn");
+    const siteEditBtn = document.getElementById("settingsSiteEditBtn");
+    const siteSaveBtn = document.getElementById("settingsSiteSaveBtn");
+    const siteCancelBtn = document.getElementById("settingsSiteCancelBtn");
+    const siteFooterView = document.getElementById("settingsSiteFooterView");
+    const siteFooterEdit = document.getElementById("settingsSiteFooterEdit");
 
     const syncMaxLoginSwitchState = function () {
       if (!maxLoginEnabledEl) return;
@@ -2206,6 +2307,112 @@
         tgLoginEnabledEl.checked = false;
       }
     };
+
+    function resetSiteCancelButton() {
+      if (!siteCancelBtn) return;
+      siteCancelConfirm = false;
+      siteCancelBtn.classList.remove("is-confirm");
+      siteCancelBtn.title = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+      siteCancelBtn.setAttribute("aria-label", "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c");
+      siteCancelBtn.innerHTML = '<i class="fas fa-times"></i>';
+    }
+
+    function readSiteFormValues() {
+      return {
+        site_name: String((siteNameEl && siteNameEl.value) || "").trim(),
+        site_description: String((siteDescriptionEl && siteDescriptionEl.value) || "").trim(),
+        subdomain: String((subdomainEl && subdomainEl.value) || "").trim().toLowerCase(),
+        favicon_light_url: String(siteDraft.favicon_light_url || "")
+      };
+    }
+
+    function applySiteFormValues(values) {
+      if (siteNameEl) siteNameEl.value = String(values.site_name || "");
+      if (siteDescriptionEl) siteDescriptionEl.value = String(values.site_description || "");
+      if (subdomainEl) subdomainEl.value = String(values.subdomain || "");
+      updateSiteFavicon(values.favicon_light_url || "");
+      setPreviewFromValue("favicon_light_url", values.favicon_light_url || "");
+    }
+
+    function setSiteDraftMode(enabled) {
+      siteDraftMode = Boolean(enabled);
+      if (siteNameEl) {
+        siteNameEl.disabled = !siteDraftMode;
+        siteNameEl.readOnly = !siteDraftMode;
+      }
+      if (siteDescriptionEl) {
+        siteDescriptionEl.disabled = !siteDraftMode;
+        siteDescriptionEl.readOnly = !siteDraftMode;
+      }
+      if (subdomainEl) {
+        subdomainEl.disabled = !siteDraftMode;
+        subdomainEl.readOnly = !siteDraftMode;
+      }
+      if (siteUploadBtn) siteUploadBtn.disabled = !siteDraftMode;
+      if (siteDeleteBtn) siteDeleteBtn.disabled = !siteDraftMode;
+      if (siteFooterView) siteFooterView.classList.toggle("hidden", siteDraftMode);
+      if (siteFooterEdit) siteFooterEdit.classList.toggle("hidden", !siteDraftMode);
+      if (!siteDraftMode) resetSiteCancelButton();
+    }
+
+    function cancelSiteDraft() {
+      siteDraft = { ...siteOriginal };
+      applySiteFormValues(siteOriginal);
+      setSiteDraftMode(false);
+    }
+
+    function resetMaxCancelButton() {
+      if (!maxCancelBtn) return;
+      maxCancelConfirm = false;
+      maxCancelBtn.classList.remove("is-confirm");
+      maxCancelBtn.title = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+      maxCancelBtn.setAttribute("aria-label", "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c");
+      maxCancelBtn.innerHTML = '<i class="fas fa-times"></i>';
+    }
+
+    function readMaxFormValues() {
+      return {
+        max_bot_id: String((maxBotIdEl && maxBotIdEl.value) || "").trim(),
+        max_bot_token: String((maxBotTokenEl && maxBotTokenEl.value) || "").trim(),
+        max_mini_app_enabled: maxMiniAppEnabledEl && maxMiniAppEnabledEl.checked ? 1 : 0,
+        max_login_enabled: maxLoginEnabledEl && maxLoginEnabledEl.checked ? 1 : 0
+      };
+    }
+
+    function applyMaxFormValues(values) {
+      if (maxBotIdEl) maxBotIdEl.value = String(values.max_bot_id || "");
+      if (maxBotTokenEl) maxBotTokenEl.value = String(values.max_bot_token || "");
+      if (maxMiniAppEnabledEl) maxMiniAppEnabledEl.checked = Number(values.max_mini_app_enabled || 0) === 1;
+      if (maxLoginEnabledEl) maxLoginEnabledEl.checked = Number(values.max_login_enabled || 0) === 1;
+      syncMaxLoginSwitchState();
+    }
+
+    function setMaxDraftMode(enabled) {
+      maxDraftMode = Boolean(enabled);
+      if (maxBotIdEl) {
+        maxBotIdEl.disabled = !maxDraftMode;
+        maxBotIdEl.readOnly = !maxDraftMode;
+      }
+      if (maxBotTokenEl) {
+        maxBotTokenEl.disabled = !maxDraftMode;
+        maxBotTokenEl.readOnly = !maxDraftMode;
+      }
+      if (maxMiniAppEnabledEl) maxMiniAppEnabledEl.disabled = !maxDraftMode;
+      if (maxLoginEnabledEl) maxLoginEnabledEl.disabled = !maxDraftMode;
+      if (maxFooterView) maxFooterView.classList.toggle("hidden", maxDraftMode);
+      if (maxFooterEdit) maxFooterEdit.classList.toggle("hidden", !maxDraftMode);
+      if (!maxDraftMode) {
+        resetMaxCancelButton();
+      } else {
+        syncMaxLoginSwitchState();
+      }
+    }
+
+    function cancelMaxDraft() {
+      maxDraft = { ...maxOriginal };
+      applyMaxFormValues(maxOriginal);
+      setMaxDraftMode(false);
+    }
 
     function resetTelegramCancelButton() {
       if (!telegramCancelBtn) return;
@@ -2374,10 +2581,150 @@
       });
     }
 
+    if (siteEditBtn) {
+      siteEditBtn.addEventListener("click", function () {
+        siteDraft = { ...siteOriginal };
+        applySiteFormValues(siteDraft);
+        setSiteDraftMode(true);
+        if (siteNameEl) {
+          siteNameEl.focus();
+          siteNameEl.select();
+        }
+      });
+    }
+
+    if (siteCancelBtn) {
+      siteCancelBtn.addEventListener("click", function () {
+        if (!siteDraftMode) return;
+        if (!siteCancelConfirm) {
+          siteCancelConfirm = true;
+          siteCancelBtn.classList.add("is-confirm");
+          siteCancelBtn.textContent = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+          siteCancelBtn.title = "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u043e\u0442\u043c\u0435\u043d\u0443";
+          siteCancelBtn.setAttribute("aria-label", "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u043e\u0442\u043c\u0435\u043d\u0443");
+          return;
+        }
+        cancelSiteDraft();
+      });
+    }
+
+    if (siteSaveBtn) {
+      siteSaveBtn.addEventListener("click", async function () {
+        if (!siteDraftMode) return;
+        siteDraft = readSiteFormValues();
+        if (subdomainEl) subdomainEl.value = siteDraft.subdomain;
+        const payload = {
+          site_name: siteDraft.site_name || null,
+          site_description: siteDraft.site_description || null,
+          subdomain: siteDraft.subdomain || null,
+          favicon_light_url: siteDraft.favicon_light_url || null
+        };
+        const data = await updateTenantFields(payload);
+        if (!data || !data.ok) {
+          if (data && data.error === "INVALID_SUBDOMAIN") {
+            alert("Субдомен: только латиница, цифры и дефис.");
+          } else if (data && data.error === "SUBDOMAIN_TAKEN") {
+            alert("Субдомен уже занят.");
+          } else {
+            alert("Не удалось сохранить данные сайта.");
+          }
+          await loadTenantProfile();
+          return;
+        }
+        if (data.tenant) {
+          updateTenantCache(data.tenant);
+          applyBrandFromTenant(data.tenant);
+          updateShopLink(data.tenant);
+          siteOriginal = {
+            site_name: String(data.tenant.site_name || ""),
+            site_description: String(data.tenant.site_description || ""),
+            subdomain: String(data.tenant.subdomain || ""),
+            favicon_light_url: String(data.tenant.favicon_light_url || "")
+          };
+        } else {
+          siteOriginal = { ...siteDraft };
+        }
+        siteDraft = { ...siteOriginal };
+        applySiteFormValues(siteOriginal);
+        setSiteDraftMode(false);
+      });
+    }
+
+    if (maxEditBtn) {
+      maxEditBtn.addEventListener("click", function () {
+        maxDraft = { ...maxOriginal };
+        applyMaxFormValues(maxDraft);
+        setMaxDraftMode(true);
+        if (maxBotIdEl) {
+          maxBotIdEl.focus();
+          maxBotIdEl.select();
+        }
+      });
+    }
+
+    if (maxCancelBtn) {
+      maxCancelBtn.addEventListener("click", function () {
+        if (!maxDraftMode) return;
+        if (!maxCancelConfirm) {
+          maxCancelConfirm = true;
+          maxCancelBtn.classList.add("is-confirm");
+          maxCancelBtn.textContent = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+          maxCancelBtn.title = "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u043e\u0442\u043c\u0435\u043d\u0443";
+          maxCancelBtn.setAttribute("aria-label", "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u043e\u0442\u043c\u0435\u043d\u0443");
+          return;
+        }
+        cancelMaxDraft();
+      });
+    }
+
+    if (maxSaveBtn) {
+      maxSaveBtn.addEventListener("click", async function () {
+        if (!maxDraftMode) return;
+        maxDraft = readMaxFormValues();
+        const hasRequired = !!(maxDraft.max_bot_id && maxDraft.max_bot_token);
+        if (maxDraft.max_login_enabled === 1 && !hasRequired) {
+          alert("Сначала заполните ID бота и токен MAX");
+          if (maxLoginEnabledEl) maxLoginEnabledEl.checked = false;
+          maxDraft.max_login_enabled = 0;
+          return;
+        }
+        const payload = {
+          max_bot_id: maxDraft.max_bot_id || null,
+          max_bot_token: maxDraft.max_bot_token || null,
+          max_mini_app_enabled: maxDraft.max_mini_app_enabled ? 1 : 0,
+          max_login_enabled: maxDraft.max_login_enabled ? 1 : 0
+        };
+        const data = await updateTenantFields(payload);
+        if (!data || !data.ok) {
+          alert("Не удалось сохранить настройки MAX.");
+          return;
+        }
+        if (data.tenant) {
+          updateTenantCache(data.tenant);
+          applyBrandFromTenant(data.tenant);
+          maxOriginal = {
+            max_bot_id: String(data.tenant.max_bot_id || ""),
+            max_bot_token: String(data.tenant.max_bot_token || ""),
+            max_mini_app_enabled: Number(data.tenant.max_mini_app_enabled ?? 1) === 1 ? 1 : 0,
+            max_login_enabled: Number(data.tenant.max_login_enabled ?? 0) === 1 ? 1 : 0
+          };
+        } else {
+          maxOriginal = { ...maxDraft };
+        }
+        maxDraft = { ...maxOriginal };
+        applyMaxFormValues(maxOriginal);
+        setMaxDraftMode(false);
+      });
+    }
+
     if (maxBotIdEl) {
       maxBotIdEl.addEventListener("change", function () {
         var val = maxBotIdEl.value.trim();
-        updateTenantFields({ max_bot_id: val || null });
+        if (maxDraftMode) {
+          maxDraft.max_bot_id = val;
+        } else {
+          updateTenantFields({ max_bot_id: val || null });
+        }
         syncMaxLoginSwitchState();
       });
     }
@@ -2385,14 +2732,22 @@
     if (maxBotTokenEl) {
       maxBotTokenEl.addEventListener("change", function () {
         var val = maxBotTokenEl.value.trim();
-        updateTenantFields({ max_bot_token: val || null });
+        if (maxDraftMode) {
+          maxDraft.max_bot_token = val;
+        } else {
+          updateTenantFields({ max_bot_token: val || null });
+        }
         syncMaxLoginSwitchState();
       });
     }
 
     if (maxMiniAppEnabledEl) {
       maxMiniAppEnabledEl.addEventListener("change", function () {
-        updateTenantFields({ max_mini_app_enabled: maxMiniAppEnabledEl.checked ? 1 : 0 });
+        if (maxDraftMode) {
+          maxDraft.max_mini_app_enabled = maxMiniAppEnabledEl.checked ? 1 : 0;
+        } else {
+          updateTenantFields({ max_mini_app_enabled: maxMiniAppEnabledEl.checked ? 1 : 0 });
+        }
       });
     }
     if (maxLoginEnabledEl) {
@@ -2405,7 +2760,11 @@
             return;
           }
         }
-        updateTenantFields({ max_login_enabled: maxLoginEnabledEl.checked ? 1 : 0 });
+        if (maxDraftMode) {
+          maxDraft.max_login_enabled = maxLoginEnabledEl.checked ? 1 : 0;
+        } else {
+          updateTenantFields({ max_login_enabled: maxLoginEnabledEl.checked ? 1 : 0 });
+        }
       });
       syncMaxLoginSwitchState();
     }
@@ -2447,6 +2806,8 @@
       });
       syncTgLoginSwitchState();
     }
+    setSiteDraftMode(false);
+    setMaxDraftMode(false);
     setTelegramDraftMode(false);
 
     // Копирование ссылки Telegram mini app
@@ -4033,22 +4394,25 @@
         uploadBtn.addEventListener("click", function () { fileInput.click(); });
         fileInput.addEventListener("change", async function () {
           if (!fileInput.files || !fileInput.files.length) return;
+          if (!siteDraftMode) {
+            fileInput.value = "";
+            return;
+          }
           var res = await uploadTenantAsset("favicon_light_url", fileInput.files[0]);
           if (res && res.url) {
+            siteDraft.favicon_light_url = String(res.url || "");
             updateSiteFavicon(res.url);
             setPreviewFromValue("favicon_light_url", res.url);
-            if (res.tenant) { updateTenantCache(res.tenant); applyBrandFromTenant(res.tenant); }
           }
           fileInput.value = "";
         });
       }
       if (deleteBtn) {
         deleteBtn.addEventListener("click", async function () {
-          var payload = { favicon_light_url: null };
-          var data = await updateTenantFields(payload);
+          if (!siteDraftMode) return;
+          siteDraft.favicon_light_url = "";
           updateSiteFavicon("");
           setPreviewFromValue("favicon_light_url", "");
-          if (data && data.tenant) { updateTenantCache(data.tenant); applyBrandFromTenant(data.tenant); }
         });
       }
     })();
@@ -4112,6 +4476,7 @@
 
     document.querySelectorAll("[data-site-input]").forEach((input) => {
       input.addEventListener("blur", async () => {
+        if (!siteDraftMode) return;
         const key = input.getAttribute("data-site-input");
         if (!key) return;
         if (key === "custom_domain") return;
@@ -4120,31 +4485,7 @@
           value = value.toLowerCase();
           input.value = value;
         }
-        const payload = { [key]: value || null };
-        const data = await updateTenantFields(payload);
-        if (!data || !data.ok) {
-          if (key === "subdomain") {
-            if (data && data.error === "INVALID_SUBDOMAIN") {
-              alert("Субдомен: только латиница, цифры и дефис.");
-            } else if (data && data.error === "SUBDOMAIN_TAKEN") {
-              alert("Субдомен уже занят.");
-            } else {
-              alert("Не удалось сохранить субдомен.");
-            }
-            await loadTenantProfile();
-          }
-          return;
-        }
-        if (data.tenant) {
-          updateTenantCache(data.tenant);
-          applyBrandFromTenant(data.tenant);
-          if (key === "subdomain" || key === "custom_domain") {
-            updateShopLink(data.tenant);
-          }
-          if (key === "subdomain") {
-            input.value = data.tenant.subdomain || "";
-          }
-        }
+        siteDraft[key] = value || "";
       });
     });
 

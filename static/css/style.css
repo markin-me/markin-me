@@ -2413,6 +2413,48 @@ body.page-orders .orders-list .order-client-phone-text{
   padding:0;
   border-top:none;
 }
+#settingsMaxAppPanel{
+  border:none;
+  border-radius:0;
+  padding:0;
+  background:transparent;
+  gap:0;
+}
+#settingsMaxAppPanel .settings-panel-scroll{
+  padding:0;
+  align-content:start;
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+#settingsMaxAppPanel .settings-panel-scroll::-webkit-scrollbar{
+  width:0;
+  height:0;
+}
+#settingsMaxAppPanel > .panel-footer{
+  padding:0;
+  border-top:none;
+}
+#settingsSitePanel{
+  border:none;
+  border-radius:0;
+  padding:0;
+  background:transparent;
+  gap:0;
+}
+#settingsSitePanel .settings-panel-scroll{
+  padding:0;
+  align-content:start;
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+#settingsSitePanel .settings-panel-scroll::-webkit-scrollbar{
+  width:0;
+  height:0;
+}
+#settingsSitePanel > .panel-footer{
+  padding:0;
+  border-top:none;
+}
 .settings-right-panel .stores-form-actions.settings-footer-actions{
   margin-top:auto;
   padding-top:12px;
