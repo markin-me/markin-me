@@ -199,8 +199,7 @@ ALTER TABLE `ten_tenants`
   ADD COLUMN `chat_assistant_gender` char(1) COLLATE utf8mb4_general_ci DEFAULT NULL COMMENT 'Virtual assistant gender: m/f',
   ADD COLUMN `chat_guest_thread_ttl_days` smallint UNSIGNED DEFAULT NULL COMMENT 'Guest chat TTL in days',
   ADD COLUMN `chat_welcome_enabled` tinyint(1) NOT NULL DEFAULT '1' COMMENT 'Enable welcome message in customer chat',
-  ADD COLUMN `chat_quick_questions_enabled` tinyint(1) NOT NULL DEFAULT '1' COMMENT 'Enable quick questions grid in customer chat',
-  ADD COLUMN `chat_assistant_enabled` tinyint(1) NOT NULL DEFAULT '1' COMMENT 'Enable virtual assistant auto replies';
+  ADD COLUMN `chat_quick_questions_enabled` tinyint(1) NOT NULL DEFAULT '1' COMMENT 'Enable quick questions grid in customer chat';
 
 UPDATE `ten_tenants`
 SET
@@ -215,7 +214,6 @@ SET
   `chat_widget_enabled` = COALESCE(`chat_widget_enabled`, 1),
   `chat_welcome_enabled` = COALESCE(`chat_welcome_enabled`, 1),
   `chat_quick_questions_enabled` = COALESCE(`chat_quick_questions_enabled`, 1),
-  `chat_assistant_enabled` = COALESCE(`chat_assistant_enabled`, 1),
   `max_login_enabled` = COALESCE(`max_login_enabled`, 0),
   `tg_login_enabled` = COALESCE(`tg_login_enabled`, 0),
   `max_mini_app_enabled` = COALESCE(`max_mini_app_enabled`, 1),

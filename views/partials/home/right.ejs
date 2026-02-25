@@ -118,30 +118,12 @@
       <div class="info-card settings-right-panel hidden" id="settingsChatAssistantNamePanel">
         <div class="settings-list-header">
           <div class="settings-list-title">Виртуальный помощник</div>
-          <label class="switch settings-chat-assistant-main-switch">
-            <input class="switch-input" type="checkbox" id="settingsChatAssistantEnabledSwitch" checked />
-            <span class="switch-ui" aria-hidden="true"></span>
-          </label>
           <div class="settings-list-subtitle">Имя, пол, приветствие и сетка горячих вопросов.</div>
         </div>
         <div class="settings-site-form">
           <div class="settings-site-field">
             <label class="field-label">ИМЯ ПОМОЩНИКА</label>
             <input class="control" type="text" id="settingsChatAssistantNameInput" data-tenant-input="chat_assistant_name" placeholder="Ням-Ням" />
-          </div>
-          <div class="settings-site-field">
-            <div class="settings-site-inline-switch">
-              <label class="field-label">ПРИВЕТСТВИЕ В ЧАТЕ</label>
-              <label class="switch">
-                <input class="switch-input" type="checkbox" id="settingsChatWelcomeEnabledSwitch" checked />
-                <span class="switch-ui" aria-hidden="true"></span>
-                <span class="switch-text">Включено</span>
-              </label>
-            </div>
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">ТЕКСТ ПРИВЕТСТВИЯ</label>
-            <textarea class="textarea" id="settingsChatWelcomeMessageInput" rows="5" data-tenant-input="chat_welcome_message" placeholder="Привет! Я виртуальный помощник..."></textarea>
           </div>
           <div class="settings-site-field">
             <label class="field-label">ПОЛ</label>
@@ -158,15 +140,41 @@
               </label>
             </div>
           </div>
-          <div class="settings-site-field" id="settingsChatQuickQuestionsSection">
-            <div class="settings-site-inline-switch">
-              <label class="field-label">СЕТКА ГОРЯЧИХ ВОПРОСОВ</label>
-              <label class="switch">
-                <input class="switch-input" type="checkbox" id="settingsChatQuickQuestionsEnabledSwitch" checked />
-                <span class="switch-ui" aria-hidden="true"></span>
-              </label>
+          <div class="settings-site-field" id="settingsChatWelcomeSection">
+            <div class="settings-chat-question-row settings-chat-welcome-row is-collapsed" id="settingsChatWelcomeRow">
+              <div class="settings-chat-question-row-head">
+                <button
+                  class="settings-chat-question-expand-btn"
+                  type="button"
+                  id="settingsChatWelcomeExpandBtn"
+                  aria-label="Toggle welcome message"
+                  aria-expanded="false"
+                >
+                  <i class="fas fa-chevron-down"></i>
+                </button>
+                <label class="field-label settings-chat-welcome-label" for="settingsChatWelcomeEnabledSwitch">ПРИВЕТСТВИЕ В ЧАТЕ</label>
+                <div class="settings-chat-question-row-controls">
+                  <label class="switch settings-chat-question-switch">
+                    <input class="switch-input" type="checkbox" id="settingsChatWelcomeEnabledSwitch" checked />
+                    <span class="switch-ui" aria-hidden="true"></span>
+                  </label>
+                </div>
+              </div>
+              <div class="settings-chat-question-row-body" id="settingsChatWelcomeBody" hidden>
+                <textarea class="textarea" id="settingsChatWelcomeMessageInput" rows="5" data-tenant-input="chat_welcome_message" placeholder="Привет! Я виртуальный помощник..."></textarea>
+              </div>
             </div>
-            <label class="field-label">КНОПКИ БЫСТРЫХ ВОПРОСОВ</label>
+          </div>
+          <div class="settings-site-field" id="settingsChatQuickQuestionsSection">
+            <div class="settings-chat-question-row-head settings-chat-quick-questions-head">
+              <label class="field-label settings-chat-quick-questions-label" for="settingsChatQuickQuestionsEnabledSwitch">КНОПКИ БЫСТРЫХ ВОПРОСОВ</label>
+              <div class="settings-chat-question-row-controls">
+                <label class="switch settings-chat-question-switch">
+                  <input class="switch-input" type="checkbox" id="settingsChatQuickQuestionsEnabledSwitch" checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+            </div>
             <div class="settings-chat-questions-grid" id="settingsChatHotQuestionsGrid"></div>
             <div class="settings-chat-question-add-wrap">
               <button class="settings-chat-question-add-btn" type="button" id="settingsChatQuickQuestionsAddBtn" aria-label="Add quick question">

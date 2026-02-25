@@ -268,7 +268,6 @@
     }),
     quickQuestionsEnabled: true,
     operatorName: "",
-    assistantEnabled: true,
     isEnabled: true,
   };
   const hotQuestionAliases = {
@@ -1144,7 +1143,9 @@
   function shouldSuppressLocalBrowserNotification() {
     if (!isWebPushSupported() || !isWebPushSecureContext()) return false;
     if (Notification.permission !== "granted") return false;
-    return !!String(webPushSyncedFingerprint || "").trim();
+    if (String(webPushSyncedFingerprint || "").trim()) return true;
+    if (String(webPushSubscriptionVapidKey || "").trim()) return true;
+    return webPushSyncInFlight === true;
   }
 
   function maybeNotifyIncomingAgentMessage(entry) {
@@ -1808,16 +1809,6 @@
       ?? source.name
       ?? ""
     ).trim();
-    const assistantEnabledRaw =
-      source.assistant_enabled
-      ?? source.chat_assistant_enabled;
-    const assistantEnabledNorm = String(assistantEnabledRaw == null ? "" : assistantEnabledRaw).trim().toLowerCase();
-    const assistantEnabled = !(
-      assistantEnabledRaw === false
-      || assistantEnabledRaw === 0
-      || assistantEnabledNorm === "0"
-      || assistantEnabledNorm === "false"
-    );
     const quickQuestionsConfig = normalizeChatQuickQuestionConfigList(
       source.quick_questions_config
       ?? source.quick_questions
@@ -1844,7 +1835,6 @@
       quickQuestionsConfig: quickQuestionsConfig,
       quickQuestionsEnabled: quickQuestionsEnabled,
       operatorName: operatorName,
-      assistantEnabled: assistantEnabled,
       isEnabled: isEnabled,
     };
   }
@@ -1912,7 +1902,6 @@
       JSON.stringify(chatRuntimeSettings.quickQuestions || []),
       JSON.stringify(chatRuntimeSettings.quickQuestionsConfig || []),
       String(chatRuntimeSettings.quickQuestionsEnabled !== false ? "1" : "0"),
-      String(chatRuntimeSettings.assistantEnabled !== false ? "1" : "0"),
       String(chatRuntimeSettings.isEnabled !== false ? "1" : "0"),
     ].join("|");
 
@@ -1928,7 +1917,6 @@
       : cloneDefaultChatQuickQuestionItems();
     chatRuntimeSettings.quickQuestionsEnabled = next.quickQuestionsEnabled !== false;
     chatRuntimeSettings.operatorName = next.operatorName;
-    chatRuntimeSettings.assistantEnabled = next.assistantEnabled !== false;
     chatRuntimeSettings.isEnabled = next.isEnabled !== false;
     rebuildHotQuestionAliases();
     applyChatWidgetEnabledState(chatRuntimeSettings.isEnabled);
@@ -1943,7 +1931,6 @@
       JSON.stringify(chatRuntimeSettings.quickQuestions || []),
       JSON.stringify(chatRuntimeSettings.quickQuestionsConfig || []),
       String(chatRuntimeSettings.quickQuestionsEnabled !== false ? "1" : "0"),
-      String(chatRuntimeSettings.assistantEnabled !== false ? "1" : "0"),
       String(chatRuntimeSettings.isEnabled !== false ? "1" : "0"),
     ].join("|");
     if (opts.refreshUi === true && prevStateKey !== nextStateKey) {
@@ -1964,7 +1951,6 @@
       chat_quick_questions_json: tenant.chat_quick_questions_json,
       chat_quick_questions_enabled: tenant.chat_quick_questions_enabled,
       quick_questions_config: tenant.quick_questions_config,
-      chat_assistant_enabled: tenant.chat_assistant_enabled,
       chat_widget_enabled: tenant.chat_widget_enabled,
       site_name: tenant.site_name,
       name: tenant.name,
@@ -4235,7 +4221,6 @@
   }
 
   function ensureDailyWelcomeMessage() {
-    if (chatRuntimeSettings.assistantEnabled === false) return null;
     if (chatRuntimeSettings.welcomeEnabled === false) return null;
 
     const dayKey = getLocalDayKey(new Date());
@@ -4293,11 +4278,7 @@
   }
 
   function getAllEntries() {
-    const quickQuestionsFeatureEnabled = (
-      chatRuntimeSettings.assistantEnabled !== false
-      && chatRuntimeSettings.quickQuestionsEnabled !== false
-      && chatRuntimeSettings.welcomeEnabled !== false
-    );
+    const quickQuestionsFeatureEnabled = chatRuntimeSettings.quickQuestionsEnabled !== false;
     const rawEntries = baseEntries
       .slice(visibleStart)
       .concat(liveEntries)
@@ -4305,7 +4286,7 @@
         if (entry && entry.type === "options" && !quickQuestionsFeatureEnabled) return false;
         const entryId = String(entry && entry.id || "");
         if (
-          (chatRuntimeSettings.assistantEnabled === false || chatRuntimeSettings.welcomeEnabled === false)
+          chatRuntimeSettings.welcomeEnabled === false
           && /^daily-welcome-\d{4}-\d{2}-\d{2}$/.test(entryId)
         ) return false;
         return !isMessageHiddenLocally(entry && entry.id);
@@ -4342,6 +4323,38 @@
       });
       hasOptionsById.add(optionsId);
     });
+
+    if (quickQuestionsFeatureEnabled) {
+      const hasAnyOptions = withDailyPair.some(function (entry) {
+        return entry && entry.type === "options";
+      });
+      if (!hasAnyOptions) {
+        const nowIso = new Date().toISOString();
+        const dayKey = getLocalDayKey(nowIso);
+        const optionsId = "daily-welcome-options-" + dayKey;
+        if (dayKey && !isMessageHiddenLocally(optionsId)) {
+          const anchorEntry = withDailyPair[0] || null;
+          const dayLabel = anchorEntry && anchorEntry.day
+            ? String(anchorEntry.day)
+            : formatDayLabelFromIso(nowIso);
+          const timeLabel = anchorEntry && anchorEntry.time
+            ? String(anchorEntry.time)
+            : formatTimeFromIso(nowIso);
+          withDailyPair.unshift({
+            id: optionsId,
+            type: "options",
+            role: "agent",
+            day: dayLabel,
+            time: timeLabel,
+            text: String(chatRuntimeSettings.optionsText || DEFAULT_CHAT_OPTIONS_TEXT),
+            options: (Array.isArray(chatRuntimeSettings.quickQuestions)
+              ? chatRuntimeSettings.quickQuestions
+              : DEFAULT_CHAT_QUICK_QUESTIONS
+            ).slice(),
+          });
+        }
+      }
+    }
 
     return withDailyPair;
   }
@@ -7474,7 +7487,6 @@
   }
 
   function pushAssistantAutoReply(activeClientId, text, idSuffix, options) {
-    if (chatRuntimeSettings.assistantEnabled === false) return;
     const opts = options && typeof options === "object" ? options : {};
     const readyText = String(text || "").trim();
     if (!readyText) return;
@@ -7529,7 +7541,6 @@
   }
 
   function scheduleAssistantHotQuestionReply(userText) {
-    if (chatRuntimeSettings.assistantEnabled === false) return;
     const normalized = normalizeHotQuestionKey(userText);
     if (!normalized) return;
 
@@ -7571,7 +7582,6 @@
 
     const quickReply = (
       chatRuntimeSettings.quickQuestionsEnabled === false
-      || chatRuntimeSettings.welcomeEnabled === false
     )
       ? null
       : resolveConfiguredQuickQuestionReply(normalized);

@@ -370,10 +370,16 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       }
 
       if (!question) return;
+      const hasExplicitAnswer = (
+        Object.prototype.hasOwnProperty.call(source, 'answer')
+        || Object.prototype.hasOwnProperty.call(source, 'reply')
+        || Object.prototype.hasOwnProperty.call(source, 'response')
+        || Object.prototype.hasOwnProperty.call(source, 'message')
+      );
       let answer = normalizeChatQuickQuestionAnswer(
         source.answer ?? source.reply ?? source.response ?? source.message ?? ''
       );
-      if (!answer) answer = getDefaultQuickQuestionAnswer(question);
+      if (!answer && !hasExplicitAnswer) answer = getDefaultQuickQuestionAnswer(question);
       customCandidates.push({
         id: rawId,
         question,
@@ -437,14 +443,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       || welcomeEnabledNorm === '0'
       || welcomeEnabledNorm === 'false'
     );
-    const assistantEnabledRaw = row.chat_assistant_enabled;
-    const assistantEnabledNorm = str(assistantEnabledRaw).trim().toLowerCase();
-    const assistantEnabled = !(
-      assistantEnabledRaw === false
-      || assistantEnabledRaw === 0
-      || assistantEnabledNorm === '0'
-      || assistantEnabledNorm === 'false'
-    );
     const quickQuestionsEnabledRaw = row.chat_quick_questions_enabled;
     const quickQuestionsEnabledNorm = str(quickQuestionsEnabledRaw).trim().toLowerCase();
     const quickQuestionsEnabled = !(
@@ -473,7 +471,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       assistant_gender: assistantGender,
       welcome_message: welcomeMessage,
       welcome_enabled: welcomeEnabled,
-      assistant_enabled: assistantEnabled,
       operator_name: operatorName,
       quick_questions: quickQuestions,
       quick_questions_config: quickQuestionsConfig,

@@ -2324,6 +2324,27 @@ body.page-orders .orders-list .order-client-phone-text{
 .settings-chat-panel-actions{margin-top:4px}
 .settings-right-panel .stores-form-actions.settings-footer-actions.settings-chat-panel-actions{
   margin-top:auto;
+  padding-top:12px;
+}
+#settingsChatAssistantNamePanel{
+  overflow:hidden;
+}
+#settingsChatAssistantNamePanel .settings-site-form{
+  flex:1 1 auto;
+  min-height:0;
+  overflow-y:auto;
+  overflow-x:hidden;
+  align-content:start;
+  -ms-overflow-style:none;
+  scrollbar-width:none;
+}
+#settingsChatAssistantNamePanel .settings-site-form::-webkit-scrollbar{
+  width:0;
+  height:0;
+  display:none;
+}
+#settingsChatAssistantNamePanel .stores-form-actions.settings-footer-actions.settings-chat-panel-actions{
+  flex:0 0 auto;
 }
 .settings-chat-questions-grid{
   display:grid;
@@ -2352,11 +2373,33 @@ body.page-orders .orders-list .order-client-phone-text{
   align-items:center;
   gap:10px;
 }
+.settings-chat-welcome-label{
+  margin-bottom:0 !important;
+  flex:1 1 auto;
+}
+.settings-chat-quick-questions-head{
+  padding:0 12px 0 0;
+  margin-bottom:6px;
+}
+.settings-chat-quick-questions-label{
+  margin-bottom:0 !important;
+  flex:1 1 auto;
+  min-width:0;
+  padding-right:14px;
+}
 .settings-chat-question-row-controls{
   display:flex;
   align-items:center;
   gap:8px;
   flex:0 0 auto;
+  margin-left:auto;
+}
+.settings-chat-question-row.is-system .settings-chat-question-row-controls::after{
+  content:"";
+  display:block;
+  width:30px;
+  height:30px;
+  flex:0 0 30px;
 }
 .settings-chat-question-expand-btn{
   width:30px;
@@ -2392,8 +2435,9 @@ body.page-orders .orders-list .order-client-phone-text{
   display:none;
 }
 .settings-chat-question-input{
+  flex:1 1 auto;
   min-width:0;
-  width:100%;
+  width:auto;
   border:none !important;
   background:transparent !important;
   padding:0 !important;

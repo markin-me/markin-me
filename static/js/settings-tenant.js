@@ -277,11 +277,13 @@
           setSoundPreview(key, tenant[key]);
         }
       });
-      if (settingsPriceRoundingMode && !settingsPriceRoundingMode.value) {
-        settingsPriceRoundingMode.value = "none";
+      const settingsPriceRoundingModeInput = document.getElementById("settingsPriceRoundingMode");
+      const settingsPriceRoundingPrecisionInput = document.getElementById("settingsPriceRoundingPrecision");
+      if (settingsPriceRoundingModeInput && !settingsPriceRoundingModeInput.value) {
+        settingsPriceRoundingModeInput.value = "none";
       }
-      if (settingsPriceRoundingPrecision && !settingsPriceRoundingPrecision.value) {
-        settingsPriceRoundingPrecision.value = "2";
+      if (settingsPriceRoundingPrecisionInput && !settingsPriceRoundingPrecisionInput.value) {
+        settingsPriceRoundingPrecisionInput.value = "2";
       }
 
       const stockDeductModeSelect = document.getElementById("settingsOrderStockDeductMode");
@@ -366,8 +368,14 @@
         );
       }
 
-      if (typeof applyChatSettingsFromTenant === "function") {
-        applyChatSettingsFromTenant(tenant);
+      const applyChatSettingsFromTenantFn = (
+        typeof window !== "undefined"
+        && typeof window.__applyChatSettingsFromTenant === "function"
+      )
+        ? window.__applyChatSettingsFromTenant
+        : null;
+      if (applyChatSettingsFromTenantFn) {
+        applyChatSettingsFromTenantFn(tenant);
       }
 
       // Фото товаров — заполнить настройки конвертации
@@ -419,8 +427,6 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => {
-    loadTenantProfile();
-
     const settingsSectionButtons = document.querySelectorAll("[data-settings-section]");
     const settingsCenterTitle = document.getElementById("settingsCenterTitle");
     const settingsCenterSubtitle = document.getElementById("settingsCenterSubtitle");
@@ -451,7 +457,7 @@
       return true;
     }
 
-    function normalizeChatAssistantEnabledValue(rawValue) {
+    function normalizeChatToggleEnabledValue(rawValue) {
       if (rawValue === undefined || rawValue === null || rawValue === "") return true;
       if (rawValue === false || rawValue === 0) return false;
       const normalized = String(rawValue).trim().toLowerCase();
@@ -464,11 +470,11 @@
     }
 
     function normalizeChatWelcomeEnabledValue(rawValue) {
-      return normalizeChatAssistantEnabledValue(rawValue);
+      return normalizeChatToggleEnabledValue(rawValue);
     }
 
     function normalizeChatQuickQuestionsEnabledValue(rawValue) {
-      return normalizeChatAssistantEnabledValue(rawValue);
+      return normalizeChatToggleEnabledValue(rawValue);
     }
 
     function syncSettingsToolbarControls(section) {
@@ -607,9 +613,12 @@
     const settingsOrderStockDeductMode = document.getElementById("settingsOrderStockDeductMode");
     const settingsOrderStockDeductStatus = document.getElementById("settingsOrderStockDeductStatus");
     const settingsOrderStockDeductStatusField = document.getElementById("settingsOrderStockDeductStatusField");
+    const settingsChatWelcomeSection = document.getElementById("settingsChatWelcomeSection");
+    const settingsChatWelcomeRow = document.getElementById("settingsChatWelcomeRow");
+    const settingsChatWelcomeBody = document.getElementById("settingsChatWelcomeBody");
+    const settingsChatWelcomeExpandBtn = document.getElementById("settingsChatWelcomeExpandBtn");
     const settingsChatWelcomeMessageInput = document.getElementById("settingsChatWelcomeMessageInput");
     const settingsChatWelcomeEnabledSwitch = document.getElementById("settingsChatWelcomeEnabledSwitch");
-    const settingsChatAssistantEnabledSwitch = document.getElementById("settingsChatAssistantEnabledSwitch");
     const settingsChatAssistantNameInput = document.getElementById("settingsChatAssistantNameInput");
     const settingsChatAssistantNameSaveBtn = document.getElementById("settingsChatAssistantNameSaveBtn");
     const settingsChatAssistantGenderOptions = document.getElementById("settingsChatAssistantGenderOptions");
@@ -980,10 +989,16 @@
           return;
         }
         if (!question) return;
+        const hasExplicitAnswer = (
+          Object.prototype.hasOwnProperty.call(source, "answer")
+          || Object.prototype.hasOwnProperty.call(source, "reply")
+          || Object.prototype.hasOwnProperty.call(source, "response")
+          || Object.prototype.hasOwnProperty.call(source, "message")
+        );
         let answer = normalizeChatQuickQuestionAnswer(
           source.answer ?? source.reply ?? source.response ?? source.message ?? ""
         );
-        if (!answer) answer = getDefaultQuickQuestionAnswer(question);
+        if (!answer && !hasExplicitAnswer) answer = getDefaultQuickQuestionAnswer(question);
         customCandidates.push({
           id: rawId,
           question,
@@ -1082,30 +1097,41 @@
       }
     }
 
-    function ensureChatQuickQuestionAccordionState(preferredRow) {
-      const rows = getSettingsChatQuickQuestionRows().filter((row) => isChatQuickQuestionRowExpandable(row));
-      if (!rows.length) return;
-      let activeRow = rows.includes(preferredRow) ? preferredRow : null;
-      if (!activeRow) {
-        activeRow = rows.find((row) => row.classList.contains("is-expanded")) || rows[0];
-      }
-      rows.forEach((row) => {
-        setChatQuickQuestionRowExpanded(row, row === activeRow);
+    function toggleChatQuickQuestionRowExpanded(row) {
+      if (!row || !isChatQuickQuestionRowExpandable(row)) return;
+      const rows = getSettingsChatQuickQuestionRows().filter((item) => isChatQuickQuestionRowExpandable(item));
+      const shouldExpand = !row.classList.contains("is-expanded");
+      rows.forEach((item) => {
+        if (item === row) return;
+        setChatQuickQuestionRowExpanded(item, false);
       });
+      setChatQuickQuestionRowExpanded(row, shouldExpand);
     }
 
-    function isChatAssistantEnabledInUi() {
-      return settingsChatAssistantEnabledSwitch ? settingsChatAssistantEnabledSwitch.checked : true;
+    function setChatWelcomeExpanded(expanded) {
+      if (!settingsChatWelcomeRow || !settingsChatWelcomeBody) return;
+      const isExpanded = !!expanded;
+      settingsChatWelcomeRow.classList.toggle("is-expanded", isExpanded);
+      settingsChatWelcomeRow.classList.toggle("is-collapsed", !isExpanded);
+      settingsChatWelcomeBody.hidden = !isExpanded;
+      if (settingsChatWelcomeExpandBtn) {
+        settingsChatWelcomeExpandBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+        settingsChatWelcomeExpandBtn.setAttribute("title", isExpanded ? "Collapse" : "Expand");
+      }
+    }
+
+    function toggleChatWelcomeExpanded() {
+      if (!settingsChatWelcomeRow || !settingsChatWelcomeBody) return;
+      const shouldExpand = !settingsChatWelcomeRow.classList.contains("is-expanded");
+      setChatWelcomeExpanded(shouldExpand);
     }
 
     function isChatWelcomeEnabledInUi() {
-      return isChatAssistantEnabledInUi()
-        && (settingsChatWelcomeEnabledSwitch ? settingsChatWelcomeEnabledSwitch.checked : true);
+      return settingsChatWelcomeEnabledSwitch ? settingsChatWelcomeEnabledSwitch.checked : true;
     }
 
     function isChatQuickQuestionsEnabledInUi() {
-      return isChatWelcomeEnabledInUi()
-        && (settingsChatQuickQuestionsEnabledSwitch ? settingsChatQuickQuestionsEnabledSwitch.checked : true);
+      return settingsChatQuickQuestionsEnabledSwitch ? settingsChatQuickQuestionsEnabledSwitch.checked : true;
     }
 
     function updateChatQuickQuestionControlsState() {
@@ -1119,23 +1145,17 @@
     }
 
     function syncChatAssistantHierarchyUi() {
-      const assistantEnabled = isChatAssistantEnabledInUi();
-      if (settingsChatWelcomeEnabledSwitch) {
-        settingsChatWelcomeEnabledSwitch.disabled = !assistantEnabled;
-      }
-
       const welcomeEnabled = isChatWelcomeEnabledInUi();
+      if (settingsChatWelcomeSection) {
+        settingsChatWelcomeSection.classList.toggle("is-disabled", !welcomeEnabled);
+      }
       if (settingsChatWelcomeMessageInput) {
         settingsChatWelcomeMessageInput.disabled = !welcomeEnabled;
       }
-      if (settingsChatQuickQuestionsEnabledSwitch) {
-        settingsChatQuickQuestionsEnabledSwitch.disabled = !welcomeEnabled;
-      }
-      if (settingsChatQuickQuestionsSection) {
-        settingsChatQuickQuestionsSection.classList.toggle("is-disabled", !welcomeEnabled);
-      }
-
       const quickEnabled = isChatQuickQuestionsEnabledInUi();
+      if (settingsChatQuickQuestionsSection) {
+        settingsChatQuickQuestionsSection.classList.toggle("is-disabled", !quickEnabled);
+      }
       if (settingsChatHotQuestionsGrid) {
         settingsChatHotQuestionsGrid.classList.toggle("is-disabled", !quickEnabled);
         settingsChatHotQuestionsGrid
@@ -1178,8 +1198,9 @@
       const controls = document.createElement("div");
       controls.className = "settings-chat-question-row-controls";
 
+      let expandBtn = null;
       if (type !== "order") {
-        const expandBtn = document.createElement("button");
+        expandBtn = document.createElement("button");
         expandBtn.type = "button";
         expandBtn.className = "settings-chat-question-expand-btn";
         expandBtn.setAttribute("data-chat-quick-expand", "1");
@@ -1189,9 +1210,8 @@
         expandBtn.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
-          ensureChatQuickQuestionAccordionState(row);
+          toggleChatQuickQuestionRowExpanded(row);
         });
-        controls.appendChild(expandBtn);
       }
 
       const switchLabel = document.createElement("label");
@@ -1218,23 +1238,16 @@
         removeBtn.addEventListener("click", () => {
           row.remove();
           updateChatQuickQuestionControlsState();
-          ensureChatQuickQuestionAccordionState();
         });
         controls.appendChild(removeBtn);
       }
 
+      if (expandBtn) header.appendChild(expandBtn);
       header.appendChild(questionInput);
       header.appendChild(controls);
       row.appendChild(header);
 
       if (type !== "order") {
-        header.addEventListener("click", (event) => {
-          if (event.target.closest("button, .switch")) return;
-          ensureChatQuickQuestionAccordionState(row);
-        });
-        questionInput.addEventListener("focus", () => {
-          ensureChatQuickQuestionAccordionState(row);
-        });
         const body = document.createElement("div");
         body.className = "settings-chat-question-row-body";
         body.setAttribute("data-chat-quick-body", "1");
@@ -1259,7 +1272,6 @@
       list.forEach((item, index) => {
         settingsChatHotQuestionsGrid.appendChild(createChatQuickQuestionRow(item, index));
       });
-      ensureChatQuickQuestionAccordionState();
       updateChatQuickQuestionControlsState();
       syncChatAssistantHierarchyUi();
     }
@@ -1280,7 +1292,6 @@
         rows.length
       );
       settingsChatHotQuestionsGrid.appendChild(row);
-      ensureChatQuickQuestionAccordionState(row);
       updateChatQuickQuestionControlsState();
       syncChatAssistantHierarchyUi();
       return row.querySelector("[data-chat-quick-question]");
@@ -1346,6 +1357,7 @@
 
     applyChatQuickQuestionsToInputs(null);
     setSelectedChatAssistantGender(readStoredChatAssistantGender() || DEFAULT_CHAT_ASSISTANT_GENDER, { persist: false });
+    setChatWelcomeExpanded(false);
     syncChatAssistantHierarchyUi();
 
     function applyChatSettingsFromTenant(tenant) {
@@ -1366,7 +1378,10 @@
           : (readStoredChatAssistantGender() || getSelectedChatAssistantGender())
       );
 
-      const welcomeValue = tenant && tenant.chat_welcome_message ? String(tenant.chat_welcome_message) : "";
+      const welcomeValueRaw = tenant && tenant.chat_welcome_message != null
+        ? String(tenant.chat_welcome_message)
+        : "";
+      const welcomeValue = welcomeValueRaw.trim();
       if (settingsChatWelcomeMessageInput) {
         settingsChatWelcomeMessageInput.value = welcomeValue || DEFAULT_CHAT_WELCOME_MESSAGE;
       }
@@ -1375,12 +1390,6 @@
           tenant ? tenant.chat_welcome_enabled : undefined
         );
       }
-      if (settingsChatAssistantEnabledSwitch) {
-        settingsChatAssistantEnabledSwitch.checked = normalizeChatAssistantEnabledValue(
-          tenant ? tenant.chat_assistant_enabled : undefined
-        );
-      }
-
       const operatorFallback = getChatOperatorFallbackName() || "\u041e\u043f\u0435\u0440\u0430\u0442\u043e\u0440";
       if (settingsChatOperatorNameInput) {
         settingsChatOperatorNameInput.placeholder = operatorFallback;
@@ -1410,6 +1419,11 @@
       }
       syncChatAssistantHierarchyUi();
     }
+
+    if (typeof window !== "undefined") {
+      window.__applyChatSettingsFromTenant = applyChatSettingsFromTenant;
+    }
+    loadTenantProfile();
 
     function getDayKey(day) {
       return day === null ? STORE_HOURS_GLOBAL_KEY : `day-${day}`;
@@ -4428,15 +4442,17 @@
       });
     }
 
-    if (settingsChatAssistantEnabledSwitch) {
-      settingsChatAssistantEnabledSwitch.addEventListener("change", () => {
+    if (settingsChatWelcomeEnabledSwitch) {
+      settingsChatWelcomeEnabledSwitch.addEventListener("change", () => {
         syncChatAssistantHierarchyUi();
       });
     }
 
-    if (settingsChatWelcomeEnabledSwitch) {
-      settingsChatWelcomeEnabledSwitch.addEventListener("change", () => {
-        syncChatAssistantHierarchyUi();
+    if (settingsChatWelcomeExpandBtn) {
+      settingsChatWelcomeExpandBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleChatWelcomeExpanded();
       });
     }
 
@@ -4466,9 +4482,6 @@
         const quickQuestionsEnabledValue = settingsChatQuickQuestionsEnabledSwitch
           ? (settingsChatQuickQuestionsEnabledSwitch.checked ? 1 : 0)
           : 1;
-        const assistantEnabledValue = settingsChatAssistantEnabledSwitch
-          ? (settingsChatAssistantEnabledSwitch.checked ? 1 : 0)
-          : 1;
         await saveChatSettingsPayload(
           settingsChatAssistantNameSaveBtn,
           {
@@ -4478,7 +4491,6 @@
             chat_welcome_enabled: welcomeEnabledValue,
             chat_quick_questions_json: quickQuestionsPayloadValue,
             chat_quick_questions_enabled: quickQuestionsEnabledValue,
-            chat_assistant_enabled: assistantEnabledValue,
           },
           "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0438\u043c\u044f \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u043a\u0430."
         );

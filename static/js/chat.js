@@ -2227,7 +2227,9 @@
   function shouldSuppressLocalBrowserNotification() {
     if (!isWebPushSupported() || !isWebPushSecureContext()) return false;
     if (Notification.permission !== "granted") return false;
-    return !!String(webPushSyncedFingerprint || "").trim();
+    if (String(webPushSyncedFingerprint || "").trim()) return true;
+    if (String(webPushSubscriptionVapidKey || "").trim()) return true;
+    return webPushSyncInFlight === true;
   }
 
   function maybeNotifyIncomingMessage(options = {}) {
