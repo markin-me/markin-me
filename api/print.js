@@ -1,7 +1,14 @@
-﻿const express = require("express");
+const express = require("express");
 
 module.exports = function makePrintApiRouter({ db, helpers }) {
   const router = express.Router();
+  const HTML_JOB_PREFIX = "__HTML_BASE64__:";
+
+  function encodeHtmlJobPayload(html) {
+    const rawHtml = String(html || "");
+    if (!rawHtml.trim()) return "";
+    return `${HTML_JOB_PREFIX}${Buffer.from(rawHtml, "utf-8").toString("base64")}`;
+  }
 
   async function getStoreTimezone(tenantId, storeId) {
     let storeTimezone = "+0";
@@ -135,6 +142,84 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     const mm = String(date.getMonth() + 1).padStart(2, "0");
     const dd = String(date.getDate()).padStart(2, "0");
     return `${yyyy}-${mm}-${dd}`;
+  }
+
+  async function buildOrderTemplateHtml(tenantId, storeId, orderId) {
+    if (!Number.isFinite(Number(tenantId)) || !Number.isFinite(Number(storeId)) || !Number.isFinite(Number(orderId))) {
+      return null;
+    }
+
+    const [orderRows] = await db.query(
+      `
+      SELECT
+        o.id, o.public_id,
+        DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+        o.customer_id, o.customer_name, o.customer_phone,
+        o.address, o.comment, o.address_comment, o.cutlery_qty,
+        o.change_from, o.total_price, o.delivery_cost,
+        o.discount_amount, o.discounts_json, o.items,
+        DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
+        o.delivery_type_id, o.payment_id, o.time_option_id, o.status_id,
+        o.pickup_store_id,
+
+        s.code AS statusCode, s.title AS statusTitle,
+        p.code AS paymentCode, p.title AS paymentTitle,
+        m.code AS methodCode, m.title AS methodTitle,
+        t.code AS timeOptionCode, t.title AS timeOptionTitle,
+        c.telegram_user_id AS customerTelegramId,
+        ps.name AS pickupStoreName, ps.address AS pickupStoreAddress,
+        ca.comment AS address_comment_from_cust
+      FROM order_orders o
+      LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+      LEFT JOIN order_payments p ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
+      LEFT JOIN order_delivery_types m ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
+      LEFT JOIN order_time_options t ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
+      LEFT JOIN cust_customers c ON c.tenant_id=o.tenant_id AND c.store_id=o.store_id AND c.id=o.customer_id
+      LEFT JOIN ten_stores ps ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
+      LEFT JOIN cust_customer_addresses ca ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
+      WHERE o.tenant_id=? AND o.store_id=? AND o.id=? LIMIT 1
+      `,
+      [tenantId, storeId, orderId]
+    );
+
+    if (!orderRows.length) {
+      return null;
+    }
+
+    const order = orderRows[0];
+
+    let items = [];
+    try {
+      const parsed = order.items ? JSON.parse(order.items) : [];
+      if (Array.isArray(parsed)) items = parsed;
+    } catch {}
+
+    let discountsJson = [];
+    try {
+      const parsed = order.discounts_json ? JSON.parse(order.discounts_json) : [];
+      if (Array.isArray(parsed)) discountsJson = parsed;
+    } catch {}
+
+    order.items = items;
+    order.discounts_json = discountsJson;
+    const storeTimezone = await getStoreTimezone(tenantId, storeId);
+    order.created_at = helpers.utcToStoreDateTime(order.created_at, storeTimezone) || order.created_at;
+    order.scheduled_at = normalizeScheduledAtForPrint(order, storeTimezone) || order.scheduled_at;
+    order.address_comment = (order.address_comment && String(order.address_comment).trim())
+      ? order.address_comment
+      : (order.address_comment_from_cust && String(order.address_comment_from_cust).trim())
+        ? order.address_comment_from_cust
+        : null;
+    order.payment_title = order.paymentTitle ?? null;
+    order.payment_code = order.paymentCode ?? null;
+    order.method_title = order.methodTitle ?? null;
+    order.method_code = order.methodCode ?? null;
+    order.time_option_title = order.timeOptionTitle ?? null;
+    order.time_option_code = order.timeOptionCode ?? null;
+    order.pickup_store_name = order.pickupStoreName ?? null;
+    order.pickup_store_address = order.pickupStoreAddress ?? null;
+
+    return generateReceiptHtmlForOrder(order, storeTimezone);
   }
 
   function parseLocalDate(value) {
@@ -475,6 +560,39 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
         return res.json({ ok: true, data: null });
       }
 
+      let jobPayload = job.pdf_base64 || "";
+      const jobOrderId = Number(job.order_id || 0);
+      if (jobOrderId > 0 && String(jobPayload).startsWith(HTML_JOB_PREFIX)) {
+        const freshHtml = await buildOrderTemplateHtml(
+          Number(tokenRow.tenant_id),
+          Number(tokenRow.store_id),
+          jobOrderId
+        );
+        const freshPayload = encodeHtmlJobPayload(freshHtml);
+        if (freshPayload) {
+          jobPayload = freshPayload;
+          if (freshPayload !== String(job.pdf_base64 || "")) {
+            const storeClock = await getStoreClock(Number(tokenRow.tenant_id), Number(tokenRow.store_id));
+            const nowSql = storeClock.nowSql || helpers.formatUtcDateTime(Date.now());
+            await db.query(
+              `
+              UPDATE print_jobs
+              SET pdf_base64=?, updated_at=?
+              WHERE id=? AND tenant_id=? AND store_id=? AND token_id=?
+              `,
+              [
+                freshPayload,
+                nowSql,
+                Number(job.id),
+                Number(tokenRow.tenant_id),
+                Number(tokenRow.store_id),
+                Number(tokenRow.id)
+              ]
+            );
+          }
+        }
+      }
+
       return res.json({
         ok: true,
         data: {
@@ -485,7 +603,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
             id: Number(job.order_id || 0) || null,
             public_id: job.public_id || null
           },
-          pdf_base64: job.pdf_base64 || ""
+          pdf_base64: jobPayload
         }
       });
     } catch (e) {
@@ -643,80 +761,10 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       const tenantId = Number(tokenRow.tenant_id);
       const storeId = Number(tokenRow.store_id);
       const orderId = Number(req.params.orderId);
-      // Получаем заказ с полными данными (как в admin orders API)
-      const [orderRows] = await db.query(
-        `
-        SELECT
-          o.id, o.public_id,
-          DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
-          o.customer_id, o.customer_name, o.customer_phone,
-          o.address, o.comment, o.address_comment, o.cutlery_qty,
-          o.change_from, o.total_price, o.delivery_cost,
-          o.discount_amount, o.discounts_json, o.items,
-          DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
-          o.delivery_type_id, o.payment_id, o.time_option_id, o.status_id,
-          o.pickup_store_id,
-          
-          s.code AS statusCode, s.title AS statusTitle,
-          p.code AS paymentCode, p.title AS paymentTitle,
-          m.code AS methodCode, m.title AS methodTitle,
-          t.code AS timeOptionCode, t.title AS timeOptionTitle,
-          c.telegram_user_id AS customerTelegramId,
-          ps.name AS pickupStoreName, ps.address AS pickupStoreAddress,
-          ca.comment AS address_comment_from_cust
-        FROM order_orders o
-        LEFT JOIN order_statuses s ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
-        LEFT JOIN order_payments p ON p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.id=o.payment_id
-        LEFT JOIN order_delivery_types m ON m.tenant_id=o.tenant_id AND m.store_id=o.store_id AND m.id=o.delivery_type_id
-        LEFT JOIN order_time_options t ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.time_option_id
-        LEFT JOIN cust_customers c ON c.tenant_id=o.tenant_id AND c.store_id=o.store_id AND c.id=o.customer_id
-        LEFT JOIN ten_stores ps ON ps.tenant_id=o.tenant_id AND ps.id=o.pickup_store_id
-        LEFT JOIN cust_customer_addresses ca ON ca.tenant_id=o.tenant_id AND ca.id=o.delivery_address_id AND ca.is_active=1
-        WHERE o.tenant_id=? AND o.store_id=? AND o.id=? LIMIT 1
-        `,
-        [tenantId, storeId, orderId]
-      );
-
-      if (!orderRows.length) {
+      const html = await buildOrderTemplateHtml(tenantId, storeId, orderId);
+      if (!html) {
         return res.json({ ok: true, data: null });
       }
-
-      const order = orderRows[0];
-      
-      // Парсим JSON поля
-      let items = [];
-      try {
-        const parsed = order.items ? JSON.parse(order.items) : [];
-        if (Array.isArray(parsed)) items = parsed;
-      } catch {}
-
-      let discountsJson = [];
-      try {
-        const parsed = order.discounts_json ? JSON.parse(order.discounts_json) : [];
-        if (Array.isArray(parsed)) discountsJson = parsed;
-      } catch {}
-      
-      order.items = items;
-      order.discounts_json = discountsJson;
-      const storeTimezone = await getStoreTimezone(tenantId, storeId);
-      order.created_at = helpers.utcToStoreDateTime(order.created_at, storeTimezone) || order.created_at;
-      order.scheduled_at = normalizeScheduledAtForPrint(order, storeTimezone) || order.scheduled_at;
-      order.address_comment = (order.address_comment && String(order.address_comment).trim())
-        ? order.address_comment
-        : (order.address_comment_from_cust && String(order.address_comment_from_cust).trim())
-          ? order.address_comment_from_cust
-          : null;
-      order.payment_title = order.paymentTitle ?? null;
-      order.payment_code = order.paymentCode ?? null;
-      order.method_title = order.methodTitle ?? null;
-      order.method_code = order.methodCode ?? null;
-      order.time_option_title = order.timeOptionTitle ?? null;
-      order.time_option_code = order.timeOptionCode ?? null;
-      order.pickup_store_name = order.pickupStoreName ?? null;
-      order.pickup_store_address = order.pickupStoreAddress ?? null;
-
-      // Генерируем HTML в том же формате, что и CRM кнопка печати.
-      const html = generateReceiptHtmlForOrder(order, storeTimezone);
 
       res.json({
         ok: true,
