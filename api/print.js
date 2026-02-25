@@ -205,6 +205,35 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     return valueText;
   }
 
+  function normalizeScheduledAtForPrint(order, timezone) {
+    if (!order) return "";
+    const rawValue = String(order.scheduled_at || "").trim();
+    if (!rawValue) return "";
+
+    const optionCode = String(order.time_option_code || "").trim().toLowerCase();
+    if (optionCode !== "at_time") return rawValue;
+
+    const created = parseLocalDate(order.created_at);
+    const scheduledRaw = parseLocalDate(rawValue);
+    if (!created || !scheduledRaw) return rawValue;
+
+    // If "at_time" is already not earlier than created_at, keep as-is.
+    const diffRawMinutes = Math.round((scheduledRaw.getTime() - created.getTime()) / 60000);
+    if (diffRawMinutes >= -30) return rawValue;
+
+    // Try interpreting scheduled_at as UTC and shift to store timezone.
+    const shiftedValue = helpers.utcToStoreDateTime(rawValue, timezone ?? "+0");
+    if (!shiftedValue || shiftedValue === rawValue) return rawValue;
+    const scheduledShifted = parseLocalDate(shiftedValue);
+    if (!scheduledShifted) return rawValue;
+
+    const diffShiftedMinutes = Math.round((scheduledShifted.getTime() - created.getTime()) / 60000);
+    if (diffShiftedMinutes >= -30) {
+      return shiftedValue;
+    }
+    return rawValue;
+  }
+
   function roundMoney(value) {
     const n = Number(value || 0);
     if (!Number.isFinite(n)) return 0;
@@ -653,6 +682,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       order.discounts_json = discountsJson;
       const storeTimezone = await getStoreTimezone(tenantId, storeId);
       order.created_at = helpers.utcToStoreDateTime(order.created_at, storeTimezone) || order.created_at;
+      order.scheduled_at = normalizeScheduledAtForPrint(order, storeTimezone) || order.scheduled_at;
       order.address_comment = (order.address_comment && String(order.address_comment).trim())
         ? order.address_comment
         : (order.address_comment_from_cust && String(order.address_comment_from_cust).trim())
