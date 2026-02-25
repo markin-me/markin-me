@@ -7879,6 +7879,21 @@ body.page-shop .shop-company-chat-btn:hover{
   padding-right: 0;
 }
 
+.shop-company-chat-bubble.is-emoji-only-single .shop-company-chat-text{
+  font-size: 76px;
+  line-height: 1;
+}
+
+.shop-company-chat-bubble.is-emoji-only-few .shop-company-chat-text{
+  font-size: 62px;
+  line-height: 1;
+}
+
+.shop-company-chat-bubble.is-emoji-only-many .shop-company-chat-text{
+  font-size: 52px;
+  line-height: 1;
+}
+
 .shop-company-chat-bubble.is-emoji-only .shop-company-chat-meta{
   position: static;
   display: flex;

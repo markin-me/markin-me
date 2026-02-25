@@ -8035,6 +8035,21 @@ body.page-chat .panel{
   padding-right:0;
 }
 
+.chat-message-bubble.is-emoji-only-single .chat-message-text{
+  font-size:76px;
+  line-height:1;
+}
+
+.chat-message-bubble.is-emoji-only-few .chat-message-text{
+  font-size:62px;
+  line-height:1;
+}
+
+.chat-message-bubble.is-emoji-only-many .chat-message-text{
+  font-size:52px;
+  line-height:1;
+}
+
 .chat-message-bubble.is-emoji-only .chat-message-meta{
   position:static;
   display:flex;

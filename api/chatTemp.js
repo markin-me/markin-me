@@ -327,6 +327,34 @@ function getPushPreviewText(message) {
   return "\u041d\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435";
 }
 
+function isAssistantOrSystemMessageId(messageId) {
+  const id = String(messageId || "").trim();
+  if (!id) return false;
+  if (id.indexOf("assistant-auto-") === 0) return true;
+  if (/^daily-welcome-\d{4}-\d{2}-\d{2}$/.test(id)) return true;
+  if (/^daily-welcome-options-\d{4}-\d{2}-\d{2}$/.test(id)) return true;
+  return false;
+}
+
+function normalizeMessageDirection(directionRaw, messageId) {
+  if (isAssistantOrSystemMessageId(messageId)) return "out";
+  return String(directionRaw || "").toLowerCase() === "out" ? "out" : "in";
+}
+
+function shouldNotifyPushForPeer(peerActor, message) {
+  const actor = peerActor === "in" ? "in" : "out";
+  const source = message && typeof message === "object" ? message : {};
+  const direction = normalizeMessageDirection(source.direction, source.id);
+  const messageId = String(source.id || "").trim();
+
+  // Admin push notifications must include only real client messages.
+  if (actor === "out") {
+    if (direction !== "in") return false;
+    if (isAssistantOrSystemMessageId(messageId)) return false;
+  }
+  return true;
+}
+
 function normalizeTenantPushCompanyTitle(rawValue) {
   return String(rawValue || "")
     .replace(/\s+/g, " ")
@@ -450,6 +478,7 @@ async function notifyPushPeerAboutMessage(tenantId, clientId, senderActor, messa
     const chatEnabled = await isTenantChatWidgetEnabled(tenantId);
     if (!chatEnabled) return;
   }
+  if (!shouldNotifyPushForPeer(peerActor, message)) return;
   const subscriptions = await listPushSubscriptionsForThread(tenantId, clientId, peerActor);
   if (!subscriptions.length) return;
   const messageIdRaw = String(message && message.id ? message.id : "").trim();
@@ -841,7 +870,7 @@ function sanitizeMessage(raw) {
   const id = String(raw.id || "").trim().slice(0, 120);
   if (!id) return null;
 
-  const direction = String(raw.direction || "").toLowerCase() === "out" ? "out" : "in";
+  const direction = normalizeMessageDirection(raw.direction, id);
   const deliveryStatusRaw = String(raw.deliveryStatus || "").toLowerCase();
   const deliveryStatus = ["sent", "delivered", "read"].includes(deliveryStatusRaw)
     ? deliveryStatusRaw
@@ -1147,7 +1176,7 @@ function mergeReactionsByActor(existingRows, nextMessages, actorKey) {
     const id = String(row.message_id || "").trim();
     if (!id) return;
     byId.set(id, {
-      direction: String(row.direction || "").toLowerCase() === "out" ? "out" : "in",
+      direction: normalizeMessageDirection(row.direction, id),
       reaction: String(row.reaction_legacy || "").slice(0, 20),
       reactions: sanitizeReactions({
         in: row.reaction_in,
@@ -1168,7 +1197,7 @@ function mergeReactionsByActor(existingRows, nextMessages, actorKey) {
     nextReactions[peer] = prev.reactions[peer];
     msg.reactions = nextReactions;
 
-    const direction = String(msg.direction || "").toLowerCase() === "out" ? "out" : "in";
+    const direction = normalizeMessageDirection(msg.direction, id);
     const legacy = String(msg.reaction || "").slice(0, 20);
     msg.reaction = legacy || String(nextReactions[direction] || "");
     return msg;
@@ -1176,7 +1205,8 @@ function mergeReactionsByActor(existingRows, nextMessages, actorKey) {
 }
 
 function mapDbMessageRowToApi(row) {
-  const direction = String(row.direction || "").toLowerCase() === "out" ? "out" : "in";
+  const messageId = String(row.message_id || "");
+  const direction = normalizeMessageDirection(row.direction, messageId);
   const reactions = sanitizeReactions({
     in: row.reaction_in,
     out: row.reaction_out,
@@ -1184,7 +1214,7 @@ function mapDbMessageRowToApi(row) {
   const legacyReaction = String(row.reaction_legacy || "").slice(0, 20);
 
   return {
-    id: String(row.message_id || ""),
+    id: messageId,
     direction,
     text: String(row.text || "").slice(0, 5000),
     createdAt: toIsoOrNow(row.created_at),
@@ -1833,7 +1863,16 @@ async function querySummaryRows(
           tenant_id,
           client_id,
           COUNT(*) AS message_count,
-          SUM(CASE WHEN direction = 'in' AND is_read = 0 THEN 1 ELSE 0 END) AS unread_count
+          SUM(
+            CASE
+              WHEN direction = 'in'
+                AND is_read = 0
+                AND message_id NOT LIKE 'assistant-auto-%'
+                AND message_id NOT LIKE 'daily-welcome-%'
+              THEN 1
+              ELSE 0
+            END
+          ) AS unread_count
         FROM chat_messages
         WHERE tenant_id = ?
         GROUP BY tenant_id, client_id

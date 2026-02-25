@@ -931,7 +931,7 @@
       ? sanitizeThread(incomingNext.concat(prev))
       : preserveHistory
         ? sanitizeThread(prev.concat(incomingNext))
-        : incomingNext;
+        : sanitizeThread(incomingNext);
     const same = stableSerialize(prev) === stableSerialize(next);
     const remoteUpdatedAt = String(snapshot.updatedAt || "");
     const knownUpdatedAt = String(state.remoteThreadUpdatedAt[key] || "");
@@ -1901,6 +1901,15 @@
 
   function getThread(clientId) { return clientId ? ensureThread(clientId) : []; }
 
+  function isAssistantOrSystemThreadMessageId(messageId) {
+    const id = String(messageId || "").trim();
+    if (!id) return false;
+    if (id.indexOf("assistant-auto-") === 0) return true;
+    if (/^daily-welcome-\d{4}-\d{2}-\d{2}$/.test(id)) return true;
+    if (/^daily-welcome-options-\d{4}-\d{2}-\d{2}$/.test(id)) return true;
+    return false;
+  }
+
   function sanitizeThread(messages) {
     const list = Array.isArray(messages) ? messages : [];
     const out = [];
@@ -1912,6 +1921,9 @@
       if (!id) return;
 
       ensureMessageReactions(message);
+      message.direction = isAssistantOrSystemThreadMessageId(id)
+        ? "out"
+        : (String(message.direction || "").toLowerCase() === "out" ? "out" : "in");
       if (!message.createdAt) message.createdAt = new Date().toISOString();
 
       if (indexById.has(id)) {
@@ -2917,8 +2929,6 @@
     if (shouldUseNativeMobileEmojiKeyboard()) return null;
     const pos = getEmojiAtlasPosition(emojiValue);
     if (!pos) return null;
-    const cellSize = getEmojiAtlasRenderCellSize(glyphClassName);
-    const hasPixelLayout = Number.isFinite(cellSize) && cellSize > 0;
     const xPercent = EMOJI_ATLAS_COLUMNS > 1 ? (pos.col / (EMOJI_ATLAS_COLUMNS - 1)) * 100 : 0;
     const yPercent = EMOJI_ATLAS_ROWS > 1 ? (pos.row / (EMOJI_ATLAS_ROWS - 1)) * 100 : 0;
 
@@ -2926,13 +2936,8 @@
     glyph.className = String(glyphClassName || "");
     glyph.style.backgroundImage = `url("${EMOJI_ATLAS_URL}")`;
     glyph.style.backgroundRepeat = "no-repeat";
-    if (hasPixelLayout) {
-      glyph.style.backgroundSize = `${EMOJI_ATLAS_COLUMNS * cellSize}px ${EMOJI_ATLAS_ROWS * cellSize}px`;
-      glyph.style.backgroundPosition = `${-pos.col * cellSize}px ${-pos.row * cellSize}px`;
-    } else {
-      glyph.style.backgroundSize = `${EMOJI_ATLAS_COLUMNS * 100}% ${EMOJI_ATLAS_ROWS * 100}%`;
-      glyph.style.backgroundPosition = `${xPercent}% ${yPercent}%`;
-    }
+    glyph.style.backgroundSize = `${EMOJI_ATLAS_COLUMNS * 100}% ${EMOJI_ATLAS_ROWS * 100}%`;
+    glyph.style.backgroundPosition = `${xPercent}% ${yPercent}%`;
     glyph.setAttribute("aria-hidden", "true");
     return glyph;
   }

@@ -330,6 +330,7 @@
   let lastFeedScrollTop = null;
   let lastFeedViewportState = null;
   let pendingFeedRestoreState = null;
+  let pendingFeedRestoreMutationVersion = 0;
   let peerTypingState = { active: false, text: "", updatedAt: "", expiresAt: "" };
   let peerTypingUpdatedAt = "";
   let peerTypingHideTimer = 0;
@@ -868,9 +869,15 @@
   function tryApplyPendingFeedRestoreState() {
     if (!overlay.classList.contains("is-open")) return false;
     if (!pendingFeedRestoreState || typeof pendingFeedRestoreState !== "object") return false;
+    if (pendingFeedRestoreMutationVersion !== sharedThreadMutationVersion) {
+      pendingFeedRestoreState = null;
+      pendingFeedRestoreMutationVersion = sharedThreadMutationVersion;
+      return false;
+    }
     applyFeedViewportStateSnapshot(pendingFeedRestoreState);
     if (!isFeedViewportRestoreSatisfied(pendingFeedRestoreState)) return false;
     pendingFeedRestoreState = null;
+    pendingFeedRestoreMutationVersion = sharedThreadMutationVersion;
     return true;
   }
 
@@ -970,11 +977,13 @@
     }
 
     pendingFeedRestoreState = { ...snapshot };
+    pendingFeedRestoreMutationVersion = sharedThreadMutationVersion;
     const applied = applyFeedViewportStateSnapshot(snapshot);
     if (!applied) return false;
     scheduleFeedViewportRestoreStabilization(snapshot);
     if (isFeedViewportRestoreSatisfied(snapshot)) {
       pendingFeedRestoreState = null;
+      pendingFeedRestoreMutationVersion = sharedThreadMutationVersion;
     }
     return true;
   }
@@ -2332,6 +2341,7 @@
     sharedHistoryNextBeforeId = null;
     sharedHistoryLoading = false;
     pendingFeedRestoreState = null;
+    pendingFeedRestoreMutationVersion = sharedThreadMutationVersion;
     sharedPullInFlight = false;
     sharedMutationQueue = Promise.resolve();
     sharedMutationPendingCount = 0;
@@ -3423,8 +3433,6 @@
     if (shouldUseNativeMobileEmojiKeyboard()) return null;
     const pos = getEmojiAtlasPosition(emojiValue);
     if (!pos) return null;
-    const cellSize = getEmojiAtlasRenderCellSize(glyphClassName);
-    const hasPixelLayout = Number.isFinite(cellSize) && cellSize > 0;
     const xPercent = EMOJI_ATLAS_COLUMNS > 1 ? (pos.col / (EMOJI_ATLAS_COLUMNS - 1)) * 100 : 0;
     const yPercent = EMOJI_ATLAS_ROWS > 1 ? (pos.row / (EMOJI_ATLAS_ROWS - 1)) * 100 : 0;
 
@@ -3432,13 +3440,8 @@
     glyph.className = String(glyphClassName || "");
     glyph.style.backgroundImage = 'url("' + EMOJI_ATLAS_URL + '")';
     glyph.style.backgroundRepeat = "no-repeat";
-    if (hasPixelLayout) {
-      glyph.style.backgroundSize = String(EMOJI_ATLAS_COLUMNS * cellSize) + "px " + String(EMOJI_ATLAS_ROWS * cellSize) + "px";
-      glyph.style.backgroundPosition = String(-pos.col * cellSize) + "px " + String(-pos.row * cellSize) + "px";
-    } else {
-      glyph.style.backgroundSize = String(EMOJI_ATLAS_COLUMNS * 100) + "% " + String(EMOJI_ATLAS_ROWS * 100) + "%";
-      glyph.style.backgroundPosition = String(xPercent) + "% " + String(yPercent) + "%";
-    }
+    glyph.style.backgroundSize = String(EMOJI_ATLAS_COLUMNS * 100) + "% " + String(EMOJI_ATLAS_ROWS * 100) + "%";
+    glyph.style.backgroundPosition = String(xPercent) + "% " + String(yPercent) + "%";
     glyph.setAttribute("aria-hidden", "true");
     return glyph;
   }
@@ -4100,6 +4103,7 @@
       immediate: true,
     });
     pendingFeedRestoreState = loadPersistedFeedViewportState(getActiveChatClientId());
+    pendingFeedRestoreMutationVersion = sharedThreadMutationVersion;
     if (!initialized) {
       // Keep preloaded thread state from startup sync.
       // Reset only when there is no local snapshot yet.
@@ -4183,6 +4187,7 @@
     persistFeedScrollPositionSnapshot();
     scheduleDeferredClosedFeedPersist();
     pendingFeedRestoreState = null;
+    pendingFeedRestoreMutationVersion = sharedThreadMutationVersion;
     renderUnreadBadge(liveEntries);
     renderTypingIndicator();
   }
