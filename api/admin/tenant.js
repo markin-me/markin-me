@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
+const { domainToASCII } = require('url');
 
 module.exports = function makeAdminTenantRouter({ db, helpers }) {
   const router = express.Router();
@@ -52,6 +53,35 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     if (value === undefined || value === null) return null;
     const s = String(value).trim().toLowerCase();
     return s === '' ? null : s;
+  }
+
+  function normalizeCustomDomain(value) {
+    if (value === undefined) return { provided: false };
+    if (value === null) return { provided: true, unicode: null, ascii: null };
+
+    let host = String(value).trim().toLowerCase();
+    if (!host) return { provided: true, unicode: null, ascii: null };
+
+    host = host.replace(/^https?:\/\//i, '');
+    host = host.split('/')[0].split('?')[0].split('#')[0].trim();
+    host = host.replace(/\.+$/, '');
+    host = host.replace(/^\.+/, '');
+    if (!host) return { provided: true, unicode: null, ascii: null };
+
+    if (host.includes(':')) {
+      const idx = host.lastIndexOf(':');
+      const maybePort = host.slice(idx + 1);
+      if (/^\d+$/.test(maybePort)) {
+        host = host.slice(0, idx).trim();
+      }
+    }
+
+    const ascii = String(domainToASCII(host) || '').trim().toLowerCase();
+    if (!ascii) {
+      return { provided: true, invalid: true };
+    }
+
+    return { provided: true, unicode: host, ascii };
   }
 
   function normalizeChatAssistantGender(value) {
@@ -780,7 +810,10 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const siteName = req.body.site_name !== undefined ? helpers.strOrNull(req.body.site_name) : undefined;
       const siteDescription = req.body.site_description !== undefined ? helpers.strOrNull(req.body.site_description) : undefined;
       const subdomain = req.body.subdomain !== undefined ? normalizeSubdomain(req.body.subdomain) : undefined;
-      const customDomain = req.body.custom_domain !== undefined ? helpers.strOrNull(req.body.custom_domain) : undefined;
+      const customDomainNormalized = normalizeCustomDomain(req.body.custom_domain);
+      if (customDomainNormalized.invalid) {
+        return res.status(400).json({ ok: false, error: 'INVALID_CUSTOM_DOMAIN' });
+      }
       const soundNewOrder = req.body.sound_new_order_url !== undefined ? helpers.strOrNull(req.body.sound_new_order_url) : undefined;
       const soundCancelled = req.body.sound_order_cancelled_url !== undefined ? helpers.strOrNull(req.body.sound_order_cancelled_url) : undefined;
       const soundNewMessage = req.body.sound_new_message_url !== undefined ? helpers.strOrNull(req.body.sound_new_message_url) : undefined;
@@ -963,7 +996,12 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
           }
         }
       }
-      const nextCustomDomain = customDomain !== undefined ? customDomain : current.custom_domain;
+      const nextCustomDomain = customDomainNormalized.provided
+        ? customDomainNormalized.unicode
+        : current.custom_domain;
+      const nextCustomDomainAscii = customDomainNormalized.provided
+        ? customDomainNormalized.ascii
+        : (current.custom_domain_ascii || null);
       const nextSoundNewOrder = soundNewOrder !== undefined ? soundNewOrder : (current.sound_new_order_url ?? null);
       const nextSoundCancelled = soundCancelled !== undefined ? soundCancelled : (current.sound_order_cancelled_url ?? null);
       const nextSoundNewMessage = soundNewMessage !== undefined ? soundNewMessage : (current.sound_new_message_url ?? null);
@@ -1021,9 +1059,19 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         }
       }
 
+      if (customDomainNormalized.provided && nextCustomDomainAscii) {
+        const [existsDomain] = await db.query(
+          'SELECT id FROM ten_tenants WHERE custom_domain_ascii=? AND id<>? LIMIT 1',
+          [nextCustomDomainAscii, tenantId]
+        );
+        if (existsDomain.length > 0) {
+          return res.status(409).json({ ok: false, error: 'CUSTOM_DOMAIN_TAKEN' });
+        }
+      }
+
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, tenantId]
       );
 
       const [rows] = await db.query(
@@ -2332,7 +2380,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
   // ───────── Проверка подключения домена ─────────
   router.post('/check-domain', async (req, res) => {
     try {
-      const domain = req.body.domain ? String(req.body.domain).trim().toLowerCase() : '';
+      const normalized = normalizeCustomDomain(req.body.domain);
+      const domain = normalized.ascii || '';
       if (!domain) return res.json({ ok: false, error: 'NO_DOMAIN' });
 
       const dns = require('dns').promises;

@@ -499,7 +499,14 @@
         <div class="settings-site-form">
           <div class="settings-site-field">
             <label class="field-label">ВАШ ДОМЕН</label>
-            <input class="control" type="text" placeholder="example.com" data-tenant-input="custom_domain" data-site-input="custom_domain" id="domainInput" />
+            <div class="control-with-action">
+              <input class="control" type="text" placeholder="example.com" data-tenant-input="custom_domain" data-site-input="custom_domain" id="domainInput" />
+              <button class="control-inline-btn" type="button" id="domainAsciiInfoBtn" title="Информация" aria-label="Информация">
+                <i class="fas fa-info-circle"></i>
+              </button>
+            </div>
+            <div class="field-hint hidden" id="domainConnectedHint"></div>
+            <div class="field-hint hidden" id="domainAsciiInfoHint"></div>
           </div>
 
           <div class="settings-site-field">
@@ -558,6 +565,19 @@
                 <span class="domain-check-text">SSL-сертификат</span>
                 <span class="domain-check-status" id="domainCheckSslStatus"></span>
               </div>
+            </div>
+          </div>
+        </div>
+        <div class="panel-footer" id="settingsDomainFooter">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsDomainFooterView">
+              <button class="product-footer-btn product-footer-edit" id="settingsDomainEditBtn" type="button">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsDomainFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" id="settingsDomainCancelBtn" type="button" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" id="settingsDomainSaveBtn" type="button">Сохранить</button>
             </div>
           </div>
         </div>

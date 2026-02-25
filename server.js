@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const cookieParser = require('cookie-parser');
+const { domainToASCII } = require('url');
 
 const db = require('./db');
 const helpers = require('./api/helpers');
@@ -27,7 +28,7 @@ const makeChatTempRouter = require('./api/chatTemp');
 const { authMiddleware } = require('./api/middleware/auth');
 
 const app = express();
-const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '9';
+const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '1.1';
 const PORT = process.env.PORT || 3000;
 const SYSTEM_SETTINGS_DIR = path.join(__dirname, 'data');
 const SYSTEM_SETTINGS_FILE = path.join(SYSTEM_SETTINGS_DIR, 'system-settings.json');
@@ -203,8 +204,15 @@ function getSubdomain(hostname) {
   return null;
 }
 
+function normalizeHostForMatch(hostname) {
+  const host = String(hostname || '').trim().toLowerCase();
+  if (!host) return '';
+  const ascii = String(domainToASCII(host) || '').trim().toLowerCase();
+  return ascii || host;
+}
+
 async function resolveTenant(req) {
-  const host = String(req.hostname || '').toLowerCase();
+  const host = normalizeHostForMatch(req.hostname);
   const queryTenantId = Number(req.query.tenant_id);
   const querySubdomain = helpers.strOrNull(req.query.subdomain);
   let tenant = null;
@@ -216,7 +224,10 @@ async function resolveTenant(req) {
     const [rows] = await db.query('SELECT * FROM ten_tenants WHERE subdomain=? LIMIT 1', [querySubdomain.toLowerCase()]);
     tenant = rows[0] || null;
   } else if (host) {
-    const [custom] = await db.query('SELECT * FROM ten_tenants WHERE custom_domain=? LIMIT 1', [host]);
+    const [custom] = await db.query(
+      'SELECT * FROM ten_tenants WHERE custom_domain_ascii=? OR custom_domain=? LIMIT 1',
+      [host, host]
+    );
     if (custom.length) {
       tenant = custom[0];
     } else {
@@ -237,9 +248,12 @@ async function resolveTenant(req) {
 }
 
 async function isTenantHost(req) {
-  const host = String(req.hostname || '').toLowerCase();
+  const host = normalizeHostForMatch(req.hostname);
   if (!host) return false;
-  const [custom] = await db.query('SELECT id FROM ten_tenants WHERE custom_domain=? LIMIT 1', [host]);
+  const [custom] = await db.query(
+    'SELECT id FROM ten_tenants WHERE custom_domain_ascii=? OR custom_domain=? LIMIT 1',
+    [host, host]
+  );
   if (custom.length) return true;
   const sub = getSubdomain(host);
   if (!sub) return false;
@@ -401,10 +415,13 @@ app.use(async (req, res, next) => {
   const sub = getSubdomain(req.hostname);
   if (sub) return renderShop(req, res);
   // Проверка custom_domain — если домен привязан к тенанту, показываем витрину
-  const host = String(req.hostname || '').toLowerCase();
+  const host = normalizeHostForMatch(req.hostname);
   if (host) {
     try {
-      const [rows] = await db.query('SELECT id FROM ten_tenants WHERE custom_domain=? LIMIT 1', [host]);
+      const [rows] = await db.query(
+        'SELECT id FROM ten_tenants WHERE custom_domain_ascii=? OR custom_domain=? LIMIT 1',
+        [host, host]
+      );
       if (rows.length) return renderShop(req, res);
     } catch (e) { /* ignore */ }
   }

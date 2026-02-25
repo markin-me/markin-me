@@ -96,6 +96,10 @@
   let activeStoreId = getActiveStoreIdFromStorage();
   let tenantStockDeductMode = "on_create";
   let tenantStockDeductStatusId = null;
+  let domainDraftMode = false;
+  let domainCancelConfirm = false;
+  let domainOriginalValue = "";
+  let domainAsciiValue = "";
 
   function applyBrandFromTenant(tenant) {
     if (!tenant) return;
@@ -277,6 +281,9 @@
           setSoundPreview(key, tenant[key]);
         }
       });
+      domainOriginalValue = String(tenant.custom_domain || "");
+      domainAsciiValue = String(tenant.custom_domain_ascii || "");
+      setDomainDraftMode(false);
       const settingsPriceRoundingModeInput = document.getElementById("settingsPriceRoundingMode");
       const settingsPriceRoundingPrecisionInput = document.getElementById("settingsPriceRoundingPrecision");
       if (settingsPriceRoundingModeInput && !settingsPriceRoundingModeInput.value) {
@@ -1946,11 +1953,145 @@
     }
 
     const domainCard = document.getElementById("settingsDomainCard");
+    const domainInputEl = document.getElementById("domainInput");
+    const domainEditBtn = document.getElementById("settingsDomainEditBtn");
+    const domainSaveBtn = document.getElementById("settingsDomainSaveBtn");
+    const domainCancelBtn = document.getElementById("settingsDomainCancelBtn");
+    const domainFooterView = document.getElementById("settingsDomainFooterView");
+    const domainFooterEdit = document.getElementById("settingsDomainFooterEdit");
+    const domainConnectedHintEl = document.getElementById("domainConnectedHint");
+    const domainAsciiInfoHintEl = document.getElementById("domainAsciiInfoHint");
+    const domainAsciiInfoBtn = document.getElementById("domainAsciiInfoBtn");
     if (domainCard) {
       domainCard.addEventListener("click", () => {
         ensureTab("domain", "Домен");
       });
     }
+    function resetDomainCancelButton() {
+      if (!domainCancelBtn) return;
+      domainCancelConfirm = false;
+      domainCancelBtn.classList.remove("is-confirm");
+      domainCancelBtn.title = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+      domainCancelBtn.setAttribute("aria-label", "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c");
+      domainCancelBtn.innerHTML = '<i class="fas fa-times"></i>';
+    }
+
+    function toAsciiHostForDisplay(hostValue) {
+      const raw = String(hostValue || "").trim();
+      if (!raw) return "";
+      try {
+        const parsed = new URL(`http://${raw}`);
+        return String(parsed.hostname || "").trim().toLowerCase();
+      } catch (_) {
+        return raw.toLowerCase();
+      }
+    }
+
+    function renderDomainViewState() {
+      const asciiViewValue = domainAsciiValue || toAsciiHostForDisplay(domainOriginalValue);
+      if (domainInputEl) {
+        domainInputEl.value = asciiViewValue || domainOriginalValue || "";
+      }
+      if (domainConnectedHintEl) {
+        if (domainOriginalValue) {
+          domainConnectedHintEl.textContent = "\u0423 \u0412\u0430\u0441 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d \u0434\u043e\u043c\u0435\u043d: " + domainOriginalValue;
+          domainConnectedHintEl.classList.remove("hidden");
+        } else {
+          domainConnectedHintEl.textContent = "";
+          domainConnectedHintEl.classList.add("hidden");
+        }
+      }
+    }
+
+    function setDomainDraftMode(enabled) {
+      domainDraftMode = Boolean(enabled);
+      if (domainInputEl) domainInputEl.readOnly = !domainDraftMode;
+      if (domainFooterView) domainFooterView.classList.toggle("hidden", domainDraftMode);
+      if (domainFooterEdit) domainFooterEdit.classList.toggle("hidden", !domainDraftMode);
+      if (domainAsciiInfoHintEl && !domainDraftMode) domainAsciiInfoHintEl.classList.add("hidden");
+      if (!domainDraftMode) {
+        resetDomainCancelButton();
+        renderDomainViewState();
+      }
+    }
+
+    function cancelDomainDraft() {
+      if (domainInputEl) domainInputEl.value = domainOriginalValue || "";
+      setDomainDraftMode(false);
+    }
+
+    if (domainEditBtn) {
+      domainEditBtn.addEventListener("click", () => {
+        setDomainDraftMode(true);
+        if (domainInputEl) domainInputEl.value = domainOriginalValue || domainAsciiValue || "";
+        if (domainAsciiInfoHintEl) domainAsciiInfoHintEl.classList.add("hidden");
+        if (domainInputEl) {
+          domainInputEl.focus();
+          domainInputEl.select();
+        }
+      });
+    }
+
+    if (domainCancelBtn) {
+      domainCancelBtn.addEventListener("click", () => {
+        if (!domainDraftMode) return;
+        if (!domainCancelConfirm) {
+          domainCancelConfirm = true;
+          domainCancelBtn.classList.add("is-confirm");
+          domainCancelBtn.textContent = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+          domainCancelBtn.title = "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u043e\u0442\u043c\u0435\u043d\u0443";
+          domainCancelBtn.setAttribute("aria-label", "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u043e\u0442\u043c\u0435\u043d\u0443");
+          return;
+        }
+        cancelDomainDraft();
+      });
+    }
+
+    if (domainSaveBtn) {
+      domainSaveBtn.addEventListener("click", async () => {
+        if (!domainDraftMode || !domainInputEl) return;
+        const value = String(domainInputEl.value || "").trim();
+        const data = await updateTenantFields({ custom_domain: value || null });
+        if (!data || !data.ok) {
+          if (data && data.error === "CUSTOM_DOMAIN_TAKEN") {
+            alert("\u042d\u0442\u043e\u0442 \u0434\u043e\u043c\u0435\u043d \u0443\u0436\u0435 \u043f\u0440\u0438\u0432\u044f\u0437\u0430\u043d \u043a \u0434\u0440\u0443\u0433\u043e\u043c\u0443 \u0442\u0435\u043d\u0430\u043d\u0442\u0443.");
+          } else if (data && data.error === "INVALID_CUSTOM_DOMAIN") {
+            alert("\u041d\u0435\u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u044b\u0439 \u0434\u043e\u043c\u0435\u043d. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u0444\u043e\u0440\u043c\u0430\u0442.");
+          } else {
+            alert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0434\u043e\u043c\u0435\u043d.");
+          }
+          return;
+        }
+        if (data.tenant) {
+          updateTenantCache(data.tenant);
+          applyBrandFromTenant(data.tenant);
+          updateShopLink(data.tenant);
+          domainOriginalValue = String(data.tenant.custom_domain || "");
+          domainAsciiValue = String(data.tenant.custom_domain_ascii || toAsciiHostForDisplay(domainOriginalValue) || "");
+        } else {
+          domainOriginalValue = value;
+          domainAsciiValue = toAsciiHostForDisplay(domainOriginalValue);
+        }
+        setDomainDraftMode(false);
+      });
+    }
+
+    if (domainAsciiInfoBtn) {
+      domainAsciiInfoBtn.addEventListener("click", () => {
+        if (!domainAsciiInfoHintEl) return;
+        const currentlyHidden = domainAsciiInfoHintEl.classList.contains("hidden");
+        if (!currentlyHidden) {
+          domainAsciiInfoHintEl.classList.add("hidden");
+          return;
+        }
+        domainAsciiInfoHintEl.textContent =
+          "\u0414\u043e\u043c\u0435\u043d \u0432 \u043f\u043e\u043b\u0435 \u043f\u043e\u043a\u0430\u0437\u0430\u043d \u0432 ASCII (punycode). "
+          + "\u042d\u0442\u043e \u0442\u0435\u0445\u043d\u0438\u0447\u0435\u0441\u043a\u0438\u0439 \u0444\u043e\u0440\u043c\u0430\u0442 \u0434\u043b\u044f DNS/SSL \u0438 \u0441\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e\u0433\u043e \u0440\u043e\u0443\u0442\u0438\u043d\u0433\u0430 IDN-\u0434\u043e\u043c\u0435\u043d\u043e\u0432.";
+        domainAsciiInfoHintEl.classList.remove("hidden");
+      });
+    }
+
+    setDomainDraftMode(false);
 
     if (telegramAppCard) {
       telegramAppCard.addEventListener("click", () => {
@@ -3790,6 +3931,7 @@
       input.addEventListener("blur", async () => {
         const key = input.getAttribute("data-site-input");
         if (!key) return;
+        if (key === "custom_domain") return;
         let value = input.value.trim();
         if (key === "subdomain") {
           value = value.toLowerCase();
