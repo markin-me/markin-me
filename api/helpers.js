@@ -106,14 +106,54 @@ function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
 }
 
+const TIMEZONE_OFFSET_ALIAS_MINUTES = Object.freeze({
+  UTC: 0,
+  GMT: 0,
+  'EUROPE/KALININGRAD': 120,
+  'EUROPE/MOSCOW': 180,
+  'EUROPE/SAMARA': 240,
+  'ASIA/YEKATERINBURG': 300,
+  'ASIA/OMSK': 360,
+  'ASIA/NOVOSIBIRSK': 420,
+  'ASIA/BARNAUL': 420,
+  'ASIA/KRASNOYARSK': 420,
+  'ASIA/IRKUTSK': 480,
+  'ASIA/YAKUTSK': 540,
+  'ASIA/VLADIVOSTOK': 600,
+  'ASIA/MAGADAN': 660,
+  'ASIA/KAMCHATKA': 720,
+});
+
 function parseTimezoneOffsetToMinutes(v) {
   if (v === undefined || v === null || v === '') return 0;
   if (typeof v === 'number' && Number.isFinite(v)) {
     return Math.round(v * 60);
   }
 
-  let s = String(v).trim();
+  const source = String(v).trim();
+  let s = source;
   if (!s) return 0;
+  const aliasKey = s.toUpperCase();
+  if (Object.prototype.hasOwnProperty.call(TIMEZONE_OFFSET_ALIAS_MINUTES, aliasKey)) {
+    return TIMEZONE_OFFSET_ALIAS_MINUTES[aliasKey];
+  }
+
+  const namedGmt = aliasKey.match(/^(?:UTC|GMT)\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?$/);
+  if (namedGmt) {
+    const sign = namedGmt[1] === '-' ? -1 : 1;
+    const hh = Number(namedGmt[2] || 0);
+    const mm = Number(namedGmt[3] || 0);
+    if (hh <= 14 && mm <= 59) return sign * (hh * 60 + mm);
+  }
+
+  const etcGmt = aliasKey.match(/^ETC\/GMT([+-])(\d{1,2})$/);
+  if (etcGmt) {
+    // IANA Etc/GMT signs are inverted: Etc/GMT-4 means UTC+4.
+    const sign = etcGmt[1] === '-' ? 1 : -1;
+    const hh = Number(etcGmt[2] || 0);
+    if (hh <= 14) return sign * hh * 60;
+  }
+
   if (/^utc/i.test(s)) s = s.slice(3).trim();
   if (!s) return 0;
   if (s === 'Z') return 0;

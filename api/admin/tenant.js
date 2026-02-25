@@ -13,6 +13,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       sql: "text DEFAULT NULL COMMENT 'Welcome text shown in customer chat'"
     },
     {
+      name: 'chat_welcome_enabled',
+      sql: "tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Enable welcome message in customer chat'"
+    },
+    {
       name: 'chat_assistant_name',
       sql: "varchar(160) DEFAULT NULL COMMENT 'Virtual assistant display name'"
     },
@@ -23,6 +27,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
     {
       name: 'chat_quick_questions_json',
       sql: "text DEFAULT NULL COMMENT 'JSON array of chat quick questions'"
+    },
+    {
+      name: 'chat_quick_questions_enabled',
+      sql: "tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Enable quick questions grid in customer chat'"
     },
     {
       name: 'chat_assistant_gender',
@@ -58,6 +66,280 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
       return 'f';
     }
     return '__invalid__';
+  }
+
+  const CHAT_QUICK_ORDER_ID = 'order';
+  const CHAT_QUICK_ORDER_QUESTION = '\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?';
+  const CHAT_QUICK_QUESTIONS_MAX = 6;
+  const CHAT_QUICK_DEFAULT_ITEMS = Object.freeze([
+    {
+      id: CHAT_QUICK_ORDER_ID,
+      type: 'order',
+      question: CHAT_QUICK_ORDER_QUESTION,
+      answer: '',
+      enabled: true,
+    },
+    {
+      id: 'quality',
+      type: 'custom',
+      question: '\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430',
+      answer:
+        '\u041e\u0447\u0435\u043d\u044c \u0436\u0430\u043b\u044c, \u0447\u0442\u043e \u0442\u0430\u043a \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u043e\u0441\u044c. ' +
+        '\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, ' +
+        '\u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a.',
+      enabled: true,
+    },
+    {
+      id: 'completeness',
+      type: 'custom',
+      question: '\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430',
+      answer:
+        '\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, ' +
+        '\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c.',
+      enabled: true,
+    },
+    {
+      id: 'other',
+      type: 'custom',
+      question: '\u0414\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441',
+      answer:
+        '\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. \u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435.',
+      enabled: true,
+    },
+  ]);
+  const CHAT_QUICK_DEFAULT_ANSWER_BY_KEY = Object.freeze({
+    '\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430':
+      '\u041e\u0447\u0435\u043d\u044c \u0436\u0430\u043b\u044c, \u0447\u0442\u043e \u0442\u0430\u043a \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u043e\u0441\u044c. ' +
+      '\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, ' +
+      '\u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a.',
+    '\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430':
+      '\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, ' +
+      '\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c.',
+    '\u0434\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441':
+      '\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. \u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435.',
+  });
+
+  function cloneDefaultChatQuickItems() {
+    return CHAT_QUICK_DEFAULT_ITEMS.map((item) => ({
+      id: String(item.id || ''),
+      type: item.id === CHAT_QUICK_ORDER_ID ? 'order' : 'custom',
+      question: String(item.question || ''),
+      answer: item.id === CHAT_QUICK_ORDER_ID ? '' : String(item.answer || ''),
+      enabled: item.enabled !== false,
+    }));
+  }
+
+  function normalizeChatQuickQuestionKey(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/\u0451/g, '\u0435')
+      .replace(/[!?.,;:()[\]{}"'`~]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function normalizeChatQuickQuestionText(value) {
+    return String(value === undefined || value === null ? '' : value)
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 160);
+  }
+
+  function normalizeChatQuickQuestionAnswer(value) {
+    return String(value === undefined || value === null ? '' : value)
+      .replace(/\s+\n/g, '\n')
+      .trim()
+      .slice(0, 1200);
+  }
+
+  function normalizeChatQuickQuestionEnabled(value, fallback) {
+    if (value === undefined || value === null || value === '') return fallback !== false;
+    if (typeof value === 'boolean') return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (!normalized) return fallback !== false;
+    if (normalized === '1' || normalized === 'true' || normalized === 'on' || normalized === 'yes') return true;
+    if (normalized === '0' || normalized === 'false' || normalized === 'off' || normalized === 'no') return false;
+    return helpers.toBool(value, fallback !== false);
+  }
+
+  function normalizeChatQuickQuestionId(rawValue, index) {
+    const source = String(rawValue || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/-{2,}/g, '-')
+      .replace(/^[-_]+|[-_]+$/g, '')
+      .slice(0, 48);
+    if (source && source !== CHAT_QUICK_ORDER_ID) return source;
+    return `custom-${index + 1}`;
+  }
+
+  function isOrderQuickQuestionLike(value) {
+    const normalized = normalizeChatQuickQuestionKey(value);
+    if (!normalized) return false;
+    return normalized.includes('\u0433\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437')
+      || normalized.includes('\u0433\u0434\u0435 \u0437\u0430\u043a\u0430\u0437');
+  }
+
+  function getDefaultChatQuickQuestionAnswer(value) {
+    const key = normalizeChatQuickQuestionKey(value);
+    return String(CHAT_QUICK_DEFAULT_ANSWER_BY_KEY[key] || '');
+  }
+
+  function sanitizeChatQuickQuestionsConfig(rawValue, options = {}) {
+    const opts = options && typeof options === 'object' ? options : {};
+    const fallbackToDefault = opts.fallbackToDefault !== false;
+
+    let parsed = [];
+    if (Array.isArray(rawValue)) {
+      parsed = rawValue;
+    } else if (typeof rawValue === 'string') {
+      const trimmed = rawValue.trim();
+      if (!trimmed) {
+        parsed = [];
+      } else {
+        try {
+          const value = JSON.parse(trimmed);
+          if (!Array.isArray(value)) {
+            return { ok: false, error: 'BAD_CHAT_QUESTIONS' };
+          }
+          parsed = value;
+        } catch {
+          parsed = trimmed.split(/\r?\n/);
+        }
+      }
+    } else if (rawValue && typeof rawValue === 'object' && Array.isArray(rawValue.items)) {
+      parsed = rawValue.items;
+    } else if (rawValue === null || rawValue === undefined) {
+      parsed = [];
+    } else {
+      return { ok: false, error: 'BAD_CHAT_QUESTIONS' };
+    }
+
+    if (!parsed.length && fallbackToDefault) {
+      return { ok: true, items: cloneDefaultChatQuickItems() };
+    }
+
+    const maxCustomItems = Math.max(0, CHAT_QUICK_QUESTIONS_MAX - 1);
+    const customCandidates = [];
+    let orderEnabled = true;
+    let orderDefined = false;
+
+    parsed.forEach((item, index) => {
+      if (customCandidates.length >= maxCustomItems) return;
+
+      if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+        const question = normalizeChatQuickQuestionText(item);
+        if (!question) return;
+        if (isOrderQuickQuestionLike(question) && index === 0) {
+          orderEnabled = true;
+          orderDefined = true;
+          return;
+        }
+        customCandidates.push({
+          id: '',
+          question,
+          answer: getDefaultChatQuickQuestionAnswer(question),
+          enabled: true,
+        });
+        return;
+      }
+
+      if (!item || typeof item !== 'object') return;
+
+      const source = item;
+      const question = normalizeChatQuickQuestionText(
+        source.question ?? source.label ?? source.title ?? source.text ?? ''
+      );
+      const rawId = String(source.id ?? source.key ?? source.code ?? '').trim();
+      const rawType = String(source.type ?? '').trim().toLowerCase();
+      const isOrder = (
+        rawId === CHAT_QUICK_ORDER_ID
+        || rawType === CHAT_QUICK_ORDER_ID
+        || normalizeChatQuickQuestionEnabled(source.is_order, false)
+        || (index === 0 && isOrderQuickQuestionLike(question))
+      );
+
+      if (isOrder) {
+        orderEnabled = normalizeChatQuickQuestionEnabled(
+          source.enabled ?? source.is_enabled ?? source.active,
+          true
+        );
+        orderDefined = true;
+        return;
+      }
+
+      if (!question) return;
+      const hasExplicitAnswer = (
+        Object.prototype.hasOwnProperty.call(source, 'answer')
+        || Object.prototype.hasOwnProperty.call(source, 'reply')
+        || Object.prototype.hasOwnProperty.call(source, 'response')
+        || Object.prototype.hasOwnProperty.call(source, 'message')
+      );
+
+      let answer = normalizeChatQuickQuestionAnswer(
+        source.answer ?? source.reply ?? source.response ?? source.message ?? ''
+      );
+      if (!answer && !hasExplicitAnswer) answer = getDefaultChatQuickQuestionAnswer(question);
+
+      customCandidates.push({
+        id: rawId,
+        question,
+        answer,
+        enabled: normalizeChatQuickQuestionEnabled(
+          source.enabled ?? source.is_enabled ?? source.active,
+          true
+        ),
+      });
+    });
+
+    const uniqueIds = new Set([CHAT_QUICK_ORDER_ID]);
+    const customItems = [];
+    customCandidates.slice(0, maxCustomItems).forEach((item, index) => {
+      let id = normalizeChatQuickQuestionId(item.id, index);
+      if (uniqueIds.has(id)) {
+        let seq = index + 1;
+        while (uniqueIds.has(`custom-${seq}`)) seq += 1;
+        id = `custom-${seq}`;
+      }
+      uniqueIds.add(id);
+      customItems.push({
+        id,
+        type: 'custom',
+        question: String(item.question || ''),
+        answer: normalizeChatQuickQuestionAnswer(item.answer || ''),
+        enabled: item.enabled !== false,
+      });
+    });
+
+    const normalizedItems = [
+      {
+        id: CHAT_QUICK_ORDER_ID,
+        type: 'order',
+        question: CHAT_QUICK_ORDER_QUESTION,
+        answer: '',
+        enabled: orderDefined ? orderEnabled !== false : true,
+      },
+      ...customItems,
+    ];
+
+    return { ok: true, items: normalizedItems };
+  }
+
+  function isSameChatQuickQuestionsConfig(a, b) {
+    const left = Array.isArray(a) ? a : [];
+    const right = Array.isArray(b) ? b : [];
+    if (left.length !== right.length) return false;
+    for (let idx = 0; idx < left.length; idx += 1) {
+      const l = left[idx] || {};
+      const r = right[idx] || {};
+      if (String(l.id || '') !== String(r.id || '')) return false;
+      if (String(l.type || '') !== String(r.type || '')) return false;
+      if (String(l.question || '') !== String(r.question || '')) return false;
+      if (String(l.answer || '') !== String(r.answer || '')) return false;
+      if ((l.enabled !== false) !== (r.enabled !== false)) return false;
+    }
+    return true;
   }
 
   function makePrintApiToken() {
@@ -519,6 +801,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const tgMiniAppEnabled = req.body.tg_mini_app_enabled !== undefined ? (helpers.toBool(req.body.tg_mini_app_enabled, false) ? 1 : 0) : undefined;
       const tgLoginEnabled = req.body.tg_login_enabled !== undefined ? (helpers.toBool(req.body.tg_login_enabled, false) ? 1 : 0) : undefined;
       const chatWelcomeMessage = req.body.chat_welcome_message !== undefined ? helpers.strOrNull(req.body.chat_welcome_message) : undefined;
+      const chatWelcomeEnabled = req.body.chat_welcome_enabled !== undefined
+        ? (helpers.toBool(req.body.chat_welcome_enabled, true) ? 1 : 0)
+        : undefined;
       const chatAssistantName = req.body.chat_assistant_name !== undefined ? helpers.strOrNull(req.body.chat_assistant_name) : undefined;
       const chatOperatorName = req.body.chat_operator_name !== undefined ? helpers.strOrNull(req.body.chat_operator_name) : undefined;
       let chatAssistantGender = undefined;
@@ -547,36 +832,23 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       let chatQuickQuestionsJson = undefined;
       if (req.body.chat_quick_questions_json !== undefined) {
         const rawQuestions = req.body.chat_quick_questions_json;
-        let parsedQuestions = [];
         if (rawQuestions === null) {
-          parsedQuestions = [];
-        } else if (Array.isArray(rawQuestions)) {
-          parsedQuestions = rawQuestions;
-        } else if (typeof rawQuestions === 'string') {
-          const trimmed = rawQuestions.trim();
-          if (!trimmed) {
-            parsedQuestions = [];
-          } else {
-            try {
-              const json = JSON.parse(trimmed);
-              if (!Array.isArray(json)) {
-                return res.status(400).json({ ok: false, error: 'BAD_CHAT_QUESTIONS' });
-              }
-              parsedQuestions = json;
-            } catch {
-              parsedQuestions = trimmed.split(/\r?\n/);
-            }
-          }
+          chatQuickQuestionsJson = null;
         } else {
-          return res.status(400).json({ ok: false, error: 'BAD_CHAT_QUESTIONS' });
+          const normalized = sanitizeChatQuickQuestionsConfig(rawQuestions, { fallbackToDefault: false });
+          if (!normalized.ok) {
+            return res.status(400).json({ ok: false, error: normalized.error || 'BAD_CHAT_QUESTIONS' });
+          }
+          const normalizedItems = normalized.items;
+          const defaultItems = cloneDefaultChatQuickItems();
+          chatQuickQuestionsJson = isSameChatQuickQuestionsConfig(normalizedItems, defaultItems)
+            ? null
+            : JSON.stringify(normalizedItems);
         }
-
-        const normalizedQuestions = parsedQuestions
-          .map((item) => String(item ?? '').trim())
-          .filter(Boolean)
-          .slice(0, 6);
-        chatQuickQuestionsJson = normalizedQuestions.length ? JSON.stringify(normalizedQuestions) : null;
       }
+      const chatQuickQuestionsEnabled = req.body.chat_quick_questions_enabled !== undefined
+        ? (helpers.toBool(req.body.chat_quick_questions_enabled, true) ? 1 : 0)
+        : undefined;
 
       if (!tenantId) {
         return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
@@ -716,6 +988,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const nextTgMiniAppEnabled = tgMiniAppEnabled !== undefined ? tgMiniAppEnabled : (current.tg_mini_app_enabled ?? 0);
       const nextTgLoginEnabled = tgLoginEnabled !== undefined ? tgLoginEnabled : (current.tg_login_enabled ?? 0);
       const nextChatWelcomeMessage = chatWelcomeMessage !== undefined ? chatWelcomeMessage : (current.chat_welcome_message ?? null);
+      const nextChatWelcomeEnabled = chatWelcomeEnabled !== undefined
+        ? chatWelcomeEnabled
+        : (Number(current.chat_welcome_enabled) === 0 ? 0 : 1);
       const nextChatAssistantName = chatAssistantName !== undefined ? chatAssistantName : (current.chat_assistant_name ?? null);
       const nextChatOperatorName = chatOperatorName !== undefined ? chatOperatorName : (current.chat_operator_name ?? null);
       const currentChatAssistantGenderRaw = normalizeChatAssistantGender(current.chat_assistant_gender);
@@ -726,6 +1001,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const nextChatAssistantGender =
         chatAssistantGender !== undefined ? chatAssistantGender : currentChatAssistantGender;
       const nextChatQuickQuestionsJson = chatQuickQuestionsJson !== undefined ? chatQuickQuestionsJson : (current.chat_quick_questions_json ?? null);
+      const nextChatQuickQuestionsEnabled = chatQuickQuestionsEnabled !== undefined
+        ? chatQuickQuestionsEnabled
+        : (Number(current.chat_quick_questions_enabled) === 0 ? 0 : 1);
       const nextChatWidgetEnabled = chatWidgetEnabled !== undefined
         ? chatWidgetEnabled
         : (Number(current.chat_widget_enabled) === 0 ? 0 : 1);
@@ -744,8 +1022,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, tenantId]
       );
 
       const [rows] = await db.query(
@@ -800,8 +1078,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const realUtcNow = Date.now();
 
       // Вычисляем время филиала
-      const offsetHours = Number.isNaN(Number(storeTimezone)) ? 0 : Number(storeTimezone);
-      const offsetMs = offsetHours * 60 * 60 * 1000;
+      const offsetMinutes = helpers.parseTimezoneOffsetToMinutes(storeTimezone ?? "+0");
+      const offsetMs = offsetMinutes * 60 * 1000;
       const storeTime = realUtcNow + offsetMs;
       const storeDate = new Date(storeTime);
 

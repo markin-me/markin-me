@@ -277,11 +277,13 @@
           setSoundPreview(key, tenant[key]);
         }
       });
-      if (settingsPriceRoundingMode && !settingsPriceRoundingMode.value) {
-        settingsPriceRoundingMode.value = "none";
+      const settingsPriceRoundingModeInput = document.getElementById("settingsPriceRoundingMode");
+      const settingsPriceRoundingPrecisionInput = document.getElementById("settingsPriceRoundingPrecision");
+      if (settingsPriceRoundingModeInput && !settingsPriceRoundingModeInput.value) {
+        settingsPriceRoundingModeInput.value = "none";
       }
-      if (settingsPriceRoundingPrecision && !settingsPriceRoundingPrecision.value) {
-        settingsPriceRoundingPrecision.value = "2";
+      if (settingsPriceRoundingPrecisionInput && !settingsPriceRoundingPrecisionInput.value) {
+        settingsPriceRoundingPrecisionInput.value = "2";
       }
 
       const stockDeductModeSelect = document.getElementById("settingsOrderStockDeductMode");
@@ -366,8 +368,14 @@
         );
       }
 
-      if (typeof applyChatSettingsFromTenant === "function") {
-        applyChatSettingsFromTenant(tenant);
+      const applyChatSettingsFromTenantFn = (
+        typeof window !== "undefined"
+        && typeof window.__applyChatSettingsFromTenant === "function"
+      )
+        ? window.__applyChatSettingsFromTenant
+        : null;
+      if (applyChatSettingsFromTenantFn) {
+        applyChatSettingsFromTenantFn(tenant);
       }
 
       // Фото товаров — заполнить настройки конвертации
@@ -419,8 +427,6 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => {
-    loadTenantProfile();
-
     const settingsSectionButtons = document.querySelectorAll("[data-settings-section]");
     const settingsCenterTitle = document.getElementById("settingsCenterTitle");
     const settingsCenterSubtitle = document.getElementById("settingsCenterSubtitle");
@@ -449,6 +455,26 @@
       const numeric = Number(normalized);
       if (Number.isFinite(numeric)) return numeric !== 0;
       return true;
+    }
+
+    function normalizeChatToggleEnabledValue(rawValue) {
+      if (rawValue === undefined || rawValue === null || rawValue === "") return true;
+      if (rawValue === false || rawValue === 0) return false;
+      const normalized = String(rawValue).trim().toLowerCase();
+      if (!normalized) return true;
+      if (normalized === "0" || normalized === "false" || normalized === "off" || normalized === "no") return false;
+      if (normalized === "1" || normalized === "true" || normalized === "on" || normalized === "yes") return true;
+      const numeric = Number(normalized);
+      if (Number.isFinite(numeric)) return numeric !== 0;
+      return true;
+    }
+
+    function normalizeChatWelcomeEnabledValue(rawValue) {
+      return normalizeChatToggleEnabledValue(rawValue);
+    }
+
+    function normalizeChatQuickQuestionsEnabledValue(rawValue) {
+      return normalizeChatToggleEnabledValue(rawValue);
     }
 
     function syncSettingsToolbarControls(section) {
@@ -547,10 +573,8 @@
     const orderDeliveryCard = document.getElementById("settingsOrderDeliveryCard");
     const orderTimeOptionsCard = document.getElementById("settingsOrderTimeOptionsCard");
     const soundsCard = document.getElementById("settingsSoundsCard");
-    const chatWelcomeCard = document.getElementById("settingsChatWelcomeCard");
     const chatAssistantNameCard = document.getElementById("settingsChatAssistantNameCard");
     const chatOperatorNameCard = document.getElementById("settingsChatOperatorNameCard");
-    const chatHotQuestionsCard = document.getElementById("settingsChatHotQuestionsCard");
     const chatMessageSettingsCard = document.getElementById("settingsChatMessageSettingsCard");
     const notificationsCard = document.getElementById("settingsNotificationsCard");
     const imagesCard = document.getElementById("settingsImagesCard");
@@ -570,10 +594,8 @@
     const orderDeliveryPanel = document.getElementById("settingsOrderDeliveryPanel");
     const orderTimeOptionsPanel = document.getElementById("settingsOrderTimeOptionsPanel");
     const soundsPanel = document.getElementById("settingsSoundsPanel");
-    const chatWelcomePanel = document.getElementById("settingsChatWelcomePanel");
     const chatAssistantNamePanel = document.getElementById("settingsChatAssistantNamePanel");
     const chatOperatorNamePanel = document.getElementById("settingsChatOperatorNamePanel");
-    const chatHotQuestionsPanel = document.getElementById("settingsChatHotQuestionsPanel");
     const chatMessageSettingsPanel = document.getElementById("settingsChatMessageSettingsPanel");
     const imagesPanel = document.getElementById("settingsImagesPanel");
     const printApiPanel = document.getElementById("settingsPrintApiPanel");
@@ -591,18 +613,22 @@
     const settingsOrderStockDeductMode = document.getElementById("settingsOrderStockDeductMode");
     const settingsOrderStockDeductStatus = document.getElementById("settingsOrderStockDeductStatus");
     const settingsOrderStockDeductStatusField = document.getElementById("settingsOrderStockDeductStatusField");
+    const settingsChatWelcomeSection = document.getElementById("settingsChatWelcomeSection");
+    const settingsChatWelcomeRow = document.getElementById("settingsChatWelcomeRow");
+    const settingsChatWelcomeBody = document.getElementById("settingsChatWelcomeBody");
+    const settingsChatWelcomeExpandBtn = document.getElementById("settingsChatWelcomeExpandBtn");
     const settingsChatWelcomeMessageInput = document.getElementById("settingsChatWelcomeMessageInput");
-    const settingsChatWelcomeSaveBtn = document.getElementById("settingsChatWelcomeSaveBtn");
+    const settingsChatWelcomeEnabledSwitch = document.getElementById("settingsChatWelcomeEnabledSwitch");
     const settingsChatAssistantNameInput = document.getElementById("settingsChatAssistantNameInput");
     const settingsChatAssistantNameSaveBtn = document.getElementById("settingsChatAssistantNameSaveBtn");
     const settingsChatAssistantGenderOptions = document.getElementById("settingsChatAssistantGenderOptions");
     const settingsChatOperatorNameInput = document.getElementById("settingsChatOperatorNameInput");
     const settingsChatOperatorNameSaveBtn = document.getElementById("settingsChatOperatorNameSaveBtn");
     const settingsChatHotQuestionsGrid = document.getElementById("settingsChatHotQuestionsGrid");
+    const settingsChatQuickQuestionsSection = document.getElementById("settingsChatQuickQuestionsSection");
     const settingsChatQuickQuestionsJson = document.getElementById("settingsChatQuickQuestionsJson");
+    const settingsChatQuickQuestionsEnabledSwitch = document.getElementById("settingsChatQuickQuestionsEnabledSwitch");
     const settingsChatQuickQuestionsAddBtn = document.getElementById("settingsChatQuickQuestionsAddBtn");
-    const settingsChatQuickQuestionsSaveBtn = document.getElementById("settingsChatQuickQuestionsSaveBtn");
-    const settingsChatQuickQuestionsResetBtn = document.getElementById("settingsChatQuickQuestionsResetBtn");
     const settingsChatGuestThreadTtlDaysInput = document.getElementById("settingsChatGuestThreadTtlDaysInput");
     const settingsChatMessageSettingsSaveBtn = document.getElementById("settingsChatMessageSettingsSaveBtn");
     const rightTabs = document.getElementById("settingsRightTabs");
@@ -687,13 +713,44 @@
       "\u0441\u0442\u0430\u043b\u043a\u0438\u0432\u0430\u0435\u043c\u0441\u044f \u0441\u043e \u0441\u043b\u043e\u0436\u043d\u043e\u0441\u0442\u044f\u043c\u0438 \u0438\u0437-\u0437\u0430 " +
       "\u043f\u043e\u0433\u043e\u0434\u043d\u044b\u0445 \u0443\u0441\u043b\u043e\u0432\u0438\u0439: \u043c\u043e\u0436\u0435\u043c \u0432\u0435\u0437\u0442\u0438 \u043f\u043e\u043a\u0443\u043f\u043a\u0443 " +
       "\u0447\u0443\u0442\u044c \u0434\u043e\u043b\u044c\u0448\u0435.";
-    const DEFAULT_CHAT_QUICK_QUESTIONS = [
-      "\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?",
-      "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430",
-      "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430",
-      "\u0414\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441"
+    const CHAT_QUICK_ORDER_ID = "order";
+    const CHAT_QUICK_ORDER_QUESTION = "\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?";
+    const DEFAULT_CHAT_QUICK_QUESTION_ITEMS = [
+      {
+        id: CHAT_QUICK_ORDER_ID,
+        type: "order",
+        question: CHAT_QUICK_ORDER_QUESTION,
+        answer: "",
+        enabled: true,
+      },
+      {
+        id: "quality",
+        type: "custom",
+        question: "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430",
+        answer:
+          "\u041e\u0447\u0435\u043d\u044c \u0436\u0430\u043b\u044c, \u0447\u0442\u043e \u0442\u0430\u043a \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u043e\u0441\u044c. " +
+          "\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, " +
+          "\u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a.",
+        enabled: true,
+      },
+      {
+        id: "completeness",
+        type: "custom",
+        question: "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430",
+        answer:
+          "\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, " +
+          "\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c.",
+        enabled: true,
+      },
+      {
+        id: "other",
+        type: "custom",
+        question: "\u0414\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+        answer:
+          "\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. \u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435.",
+        enabled: true,
+      },
     ];
-    const CHAT_QUICK_QUESTIONS_MIN = DEFAULT_CHAT_QUICK_QUESTIONS.length;
     const CHAT_QUICK_QUESTIONS_MAX = 6;
     const CHAT_ASSISTANT_GENDER_STORAGE_KEY = "settings_chat_assistant_gender";
 
@@ -770,105 +827,526 @@
       }
     }
 
-    function parseChatQuickQuestions(rawValue) {
-      const fallback = DEFAULT_CHAT_QUICK_QUESTIONS.slice();
-      if (!rawValue) return fallback;
+    function cloneDefaultChatQuickQuestionItems() {
+      return DEFAULT_CHAT_QUICK_QUESTION_ITEMS.map((item) => ({
+        id: String(item.id || ""),
+        type: item.id === CHAT_QUICK_ORDER_ID ? "order" : "custom",
+        question: String(item.question || ""),
+        answer: item.id === CHAT_QUICK_ORDER_ID ? "" : String(item.answer || ""),
+        enabled: item.enabled !== false,
+      }));
+    }
+
+    function normalizeChatQuickQuestionKey(value) {
+      return String(value || "")
+        .toLowerCase()
+        .replace(/\u0451/g, "\u0435")
+        .replace(/[!?.,;:()[\]{}"'`~]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function normalizeChatQuickQuestionText(value) {
+      return String(value === undefined || value === null ? "" : value)
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 160);
+    }
+
+    function normalizeChatQuickQuestionAnswer(value) {
+      return String(value === undefined || value === null ? "" : value)
+        .replace(/\s+\n/g, "\n")
+        .trim()
+        .slice(0, 1200);
+    }
+
+    function normalizeChatQuickQuestionEnabled(value, fallback) {
+      if (value === undefined || value === null || value === "") return fallback !== false;
+      if (typeof value === "boolean") return value;
+      const normalized = String(value).trim().toLowerCase();
+      if (!normalized) return fallback !== false;
+      if (normalized === "1" || normalized === "true" || normalized === "on" || normalized === "yes") return true;
+      if (normalized === "0" || normalized === "false" || normalized === "off" || normalized === "no") return false;
+      const numeric = Number(normalized);
+      if (Number.isFinite(numeric)) return numeric !== 0;
+      return fallback !== false;
+    }
+
+    function normalizeChatQuickQuestionId(value, index) {
+      const source = String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-")
+        .replace(/-{2,}/g, "-")
+        .replace(/^[-_]+|[-_]+$/g, "")
+        .slice(0, 48);
+      if (source && source !== CHAT_QUICK_ORDER_ID) return source;
+      return `custom-${index + 1}`;
+    }
+
+    function isOrderQuickQuestionLike(value) {
+      const normalized = normalizeChatQuickQuestionKey(value);
+      if (!normalized) return false;
+      return normalized.includes("\u0433\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437")
+        || normalized.includes("\u0433\u0434\u0435 \u0437\u0430\u043a\u0430\u0437");
+    }
+
+    function getDefaultQuickQuestionAnswer(value) {
+      const key = normalizeChatQuickQuestionKey(value);
+      if (key === "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430") {
+        return (
+          "\u041e\u0447\u0435\u043d\u044c \u0436\u0430\u043b\u044c, \u0447\u0442\u043e \u0442\u0430\u043a \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u043e\u0441\u044c. " +
+          "\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, " +
+          "\u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a."
+        );
+      }
+      if (key === "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430") {
+        return (
+          "\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, " +
+          "\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c."
+        );
+      }
+      if (key === "\u0434\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441") {
+        return (
+          "\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. " +
+          "\u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435."
+        );
+      }
+      return "";
+    }
+
+    function normalizeChatQuickQuestionItems(rawValue, options = {}) {
+      const opts = options && typeof options === "object" ? options : {};
+      const fallbackToDefault = opts.fallbackToDefault !== false;
 
       let parsed = [];
       if (Array.isArray(rawValue)) {
         parsed = rawValue;
       } else if (typeof rawValue === "string") {
-        try {
-          const next = JSON.parse(rawValue);
-          if (Array.isArray(next)) {
-            parsed = next;
-          }
-        } catch (err) {
+        const trimmed = rawValue.trim();
+        if (!trimmed) {
           parsed = [];
+        } else {
+          try {
+            const next = JSON.parse(trimmed);
+            parsed = Array.isArray(next) ? next : [];
+          } catch {
+            parsed = [];
+          }
         }
+      } else if (rawValue && typeof rawValue === "object" && Array.isArray(rawValue.items)) {
+        parsed = rawValue.items;
       }
 
-      const normalized = parsed
-        .map((item) => String(item ?? "").trim())
-        .filter(Boolean)
-        .slice(0, CHAT_QUICK_QUESTIONS_MAX);
-      return normalized.length ? normalized : fallback;
+      if (!parsed.length && fallbackToDefault) {
+        return cloneDefaultChatQuickQuestionItems();
+      }
+
+      const maxCustomItems = Math.max(0, CHAT_QUICK_QUESTIONS_MAX - 1);
+      const customCandidates = [];
+      let orderEnabled = true;
+      let orderDefined = false;
+
+      parsed.forEach((item, index) => {
+        if (customCandidates.length >= maxCustomItems) return;
+
+        if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
+          const question = normalizeChatQuickQuestionText(item);
+          if (!question) return;
+          if (index === 0 && isOrderQuickQuestionLike(question)) {
+            orderDefined = true;
+            orderEnabled = true;
+            return;
+          }
+          customCandidates.push({
+            id: "",
+            question,
+            answer: getDefaultQuickQuestionAnswer(question),
+            enabled: true,
+          });
+          return;
+        }
+
+        if (!item || typeof item !== "object") return;
+        const source = item;
+        const question = normalizeChatQuickQuestionText(
+          source.question ?? source.label ?? source.title ?? source.text ?? ""
+        );
+        const rawId = String(source.id ?? source.key ?? source.code ?? "").trim();
+        const rawType = String(source.type ?? "").trim().toLowerCase();
+        const isOrder = (
+          rawId === CHAT_QUICK_ORDER_ID
+          || rawType === CHAT_QUICK_ORDER_ID
+          || normalizeChatQuickQuestionEnabled(source.is_order, false)
+          || (index === 0 && isOrderQuickQuestionLike(question))
+        );
+        if (isOrder) {
+          orderDefined = true;
+          orderEnabled = normalizeChatQuickQuestionEnabled(
+            source.enabled ?? source.is_enabled ?? source.active,
+            true
+          );
+          return;
+        }
+        if (!question) return;
+        const hasExplicitAnswer = (
+          Object.prototype.hasOwnProperty.call(source, "answer")
+          || Object.prototype.hasOwnProperty.call(source, "reply")
+          || Object.prototype.hasOwnProperty.call(source, "response")
+          || Object.prototype.hasOwnProperty.call(source, "message")
+        );
+        let answer = normalizeChatQuickQuestionAnswer(
+          source.answer ?? source.reply ?? source.response ?? source.message ?? ""
+        );
+        if (!answer && !hasExplicitAnswer) answer = getDefaultQuickQuestionAnswer(question);
+        customCandidates.push({
+          id: rawId,
+          question,
+          answer,
+          enabled: normalizeChatQuickQuestionEnabled(
+            source.enabled ?? source.is_enabled ?? source.active,
+            true
+          ),
+        });
+      });
+
+      const usedIds = new Set([CHAT_QUICK_ORDER_ID]);
+      const customItems = [];
+      customCandidates.slice(0, maxCustomItems).forEach((item, index) => {
+        let id = normalizeChatQuickQuestionId(item.id, index);
+        if (usedIds.has(id)) {
+          let seq = index + 1;
+          while (usedIds.has(`custom-${seq}`)) seq += 1;
+          id = `custom-${seq}`;
+        }
+        usedIds.add(id);
+        customItems.push({
+          id,
+          type: "custom",
+          question: normalizeChatQuickQuestionText(item.question),
+          answer: normalizeChatQuickQuestionAnswer(item.answer),
+          enabled: item.enabled !== false,
+        });
+      });
+
+      return [
+        {
+          id: CHAT_QUICK_ORDER_ID,
+          type: "order",
+          question: CHAT_QUICK_ORDER_QUESTION,
+          answer: "",
+          enabled: orderDefined ? orderEnabled !== false : true,
+        },
+        ...customItems,
+      ];
     }
 
-    function getSettingsChatQuickQuestionInputs() {
+    function isSameChatQuickQuestionItems(a, b) {
+      const left = Array.isArray(a) ? a : [];
+      const right = Array.isArray(b) ? b : [];
+      if (left.length !== right.length) return false;
+      for (let idx = 0; idx < left.length; idx += 1) {
+        const l = left[idx] || {};
+        const r = right[idx] || {};
+        if (String(l.id || "") !== String(r.id || "")) return false;
+        if (String(l.type || "") !== String(r.type || "")) return false;
+        if (normalizeChatQuickQuestionText(l.question) !== normalizeChatQuickQuestionText(r.question)) return false;
+        if (normalizeChatQuickQuestionAnswer(l.answer) !== normalizeChatQuickQuestionAnswer(r.answer)) return false;
+        if ((l.enabled !== false) !== (r.enabled !== false)) return false;
+      }
+      return true;
+    }
+
+    function serializeChatQuickQuestionItems(items) {
+      return JSON.stringify(
+        (Array.isArray(items) ? items : []).map((item) => ({
+          id: String(item && item.id ? item.id : ""),
+          type: String(item && item.type ? item.type : "custom"),
+          question: normalizeChatQuickQuestionText(item && item.question ? item.question : ""),
+          answer: normalizeChatQuickQuestionAnswer(item && item.answer ? item.answer : ""),
+          enabled: item && item.enabled !== false,
+        }))
+      );
+    }
+
+    function getSettingsChatQuickQuestionRows() {
       if (!settingsChatHotQuestionsGrid) return [];
-      return Array.from(settingsChatHotQuestionsGrid.querySelectorAll("[data-chat-quick-input]"));
+      return Array.from(settingsChatHotQuestionsGrid.querySelectorAll("[data-chat-quick-row]"));
     }
 
-    function getChatQuickQuestionPlaceholder(index) {
-      if (index >= 0 && index < DEFAULT_CHAT_QUICK_QUESTIONS.length) {
-        return DEFAULT_CHAT_QUICK_QUESTIONS[index];
+    function getChatQuickQuestionRowBody(row) {
+      if (!row) return null;
+      return row.querySelector("[data-chat-quick-body]");
+    }
+
+    function isChatQuickQuestionRowExpandable(row) {
+      return !!getChatQuickQuestionRowBody(row);
+    }
+
+    function setChatQuickQuestionRowExpanded(row, expanded) {
+      if (!row || !isChatQuickQuestionRowExpandable(row)) return;
+      const body = getChatQuickQuestionRowBody(row);
+      const expandBtn = row.querySelector("[data-chat-quick-expand]");
+      const isExpanded = !!expanded;
+      row.classList.toggle("is-expanded", isExpanded);
+      row.classList.toggle("is-collapsed", !isExpanded);
+      if (body) body.hidden = !isExpanded;
+      if (expandBtn) {
+        expandBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+        expandBtn.setAttribute("title", isExpanded ? "Collapse" : "Expand");
       }
-      return `\u0412\u043e\u043f\u0440\u043e\u0441 ${index + 1}`;
+    }
+
+    function toggleChatQuickQuestionRowExpanded(row) {
+      if (!row || !isChatQuickQuestionRowExpandable(row)) return;
+      const rows = getSettingsChatQuickQuestionRows().filter((item) => isChatQuickQuestionRowExpandable(item));
+      const shouldExpand = !row.classList.contains("is-expanded");
+      rows.forEach((item) => {
+        if (item === row) return;
+        setChatQuickQuestionRowExpanded(item, false);
+      });
+      setChatQuickQuestionRowExpanded(row, shouldExpand);
+    }
+
+    function setChatWelcomeExpanded(expanded) {
+      if (!settingsChatWelcomeRow || !settingsChatWelcomeBody) return;
+      const isExpanded = !!expanded;
+      settingsChatWelcomeRow.classList.toggle("is-expanded", isExpanded);
+      settingsChatWelcomeRow.classList.toggle("is-collapsed", !isExpanded);
+      settingsChatWelcomeBody.hidden = !isExpanded;
+      if (settingsChatWelcomeExpandBtn) {
+        settingsChatWelcomeExpandBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+        settingsChatWelcomeExpandBtn.setAttribute("title", isExpanded ? "Collapse" : "Expand");
+      }
+    }
+
+    function toggleChatWelcomeExpanded() {
+      if (!settingsChatWelcomeRow || !settingsChatWelcomeBody) return;
+      const shouldExpand = !settingsChatWelcomeRow.classList.contains("is-expanded");
+      setChatWelcomeExpanded(shouldExpand);
+    }
+
+    function isChatWelcomeEnabledInUi() {
+      return settingsChatWelcomeEnabledSwitch ? settingsChatWelcomeEnabledSwitch.checked : true;
+    }
+
+    function isChatQuickQuestionsEnabledInUi() {
+      return settingsChatQuickQuestionsEnabledSwitch ? settingsChatQuickQuestionsEnabledSwitch.checked : true;
     }
 
     function updateChatQuickQuestionControlsState() {
+      const quickControlsEnabled = isChatQuickQuestionsEnabledInUi();
+      if (settingsChatQuickQuestionsAddBtn) {
+        settingsChatQuickQuestionsAddBtn.disabled = !quickControlsEnabled;
+      }
       if (!settingsChatQuickQuestionsAddBtn) return;
-      const inputs = getSettingsChatQuickQuestionInputs();
-      settingsChatQuickQuestionsAddBtn.disabled = inputs.length >= CHAT_QUICK_QUESTIONS_MAX;
+      const rows = getSettingsChatQuickQuestionRows();
+      settingsChatQuickQuestionsAddBtn.disabled = !quickControlsEnabled || rows.length >= CHAT_QUICK_QUESTIONS_MAX;
     }
 
-    function reindexChatQuickQuestionInputs() {
-      const inputs = getSettingsChatQuickQuestionInputs();
-      inputs.forEach((input, index) => {
-        input.setAttribute("data-chat-quick-input", String(index));
-        input.placeholder = getChatQuickQuestionPlaceholder(index);
+    function syncChatAssistantHierarchyUi() {
+      const welcomeEnabled = isChatWelcomeEnabledInUi();
+      if (settingsChatWelcomeSection) {
+        settingsChatWelcomeSection.classList.toggle("is-disabled", !welcomeEnabled);
+      }
+      if (settingsChatWelcomeMessageInput) {
+        settingsChatWelcomeMessageInput.disabled = !welcomeEnabled;
+      }
+      const quickEnabled = isChatQuickQuestionsEnabledInUi();
+      if (settingsChatQuickQuestionsSection) {
+        settingsChatQuickQuestionsSection.classList.toggle("is-disabled", !quickEnabled);
+      }
+      if (settingsChatHotQuestionsGrid) {
+        settingsChatHotQuestionsGrid.classList.toggle("is-disabled", !quickEnabled);
+        settingsChatHotQuestionsGrid
+          .querySelectorAll("input, textarea, button, select")
+          .forEach((el) => {
+            el.disabled = !quickEnabled;
+          });
+      }
+      updateChatQuickQuestionControlsState();
+    }
+
+    function createChatQuickQuestionRow(item, index) {
+      const rowItem = item && typeof item === "object" ? item : {};
+      const type = String(rowItem.type || "").toLowerCase() === "order" ? "order" : "custom";
+      const row = document.createElement("div");
+      row.className = "settings-chat-question-row";
+      if (type === "order") row.classList.add("is-system");
+      row.setAttribute("data-chat-quick-row", "1");
+      row.setAttribute("data-chat-quick-type", type);
+      row.setAttribute("data-chat-quick-id", String(rowItem.id || (type === "order" ? CHAT_QUICK_ORDER_ID : "")));
+
+      const header = document.createElement("div");
+      header.className = "settings-chat-question-row-head";
+
+      const questionInput = document.createElement("input");
+      questionInput.className = "control settings-chat-question-input";
+      questionInput.type = "text";
+      questionInput.setAttribute("data-chat-quick-question", "1");
+      questionInput.placeholder = type === "order"
+        ? CHAT_QUICK_ORDER_QUESTION
+        : `\u0412\u043e\u043f\u0440\u043e\u0441 ${index + 1}`;
+      questionInput.value = type === "order"
+        ? CHAT_QUICK_ORDER_QUESTION
+        : normalizeChatQuickQuestionText(rowItem.question);
+      if (type === "order") {
+        questionInput.readOnly = true;
+        questionInput.classList.add("is-readonly");
+      }
+
+      const controls = document.createElement("div");
+      controls.className = "settings-chat-question-row-controls";
+
+      let expandBtn = null;
+      if (type !== "order") {
+        expandBtn = document.createElement("button");
+        expandBtn.type = "button";
+        expandBtn.className = "settings-chat-question-expand-btn";
+        expandBtn.setAttribute("data-chat-quick-expand", "1");
+        expandBtn.setAttribute("aria-label", "Toggle answer");
+        expandBtn.setAttribute("aria-expanded", "false");
+        expandBtn.innerHTML = '<i class="fas fa-chevron-down"></i>';
+        expandBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleChatQuickQuestionRowExpanded(row);
+        });
+      }
+
+      const switchLabel = document.createElement("label");
+      switchLabel.className = "switch settings-chat-question-switch";
+      const switchInput = document.createElement("input");
+      switchInput.className = "switch-input";
+      switchInput.type = "checkbox";
+      switchInput.setAttribute("data-chat-quick-enabled", "1");
+      switchInput.checked = rowItem.enabled !== false;
+      const switchUi = document.createElement("span");
+      switchUi.className = "switch-ui";
+      switchUi.setAttribute("aria-hidden", "true");
+      switchLabel.appendChild(switchInput);
+      switchLabel.appendChild(switchUi);
+      controls.appendChild(switchLabel);
+
+      if (type !== "order") {
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "settings-chat-question-delete-btn";
+        removeBtn.setAttribute("data-chat-quick-delete", "1");
+        removeBtn.setAttribute("aria-label", "\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u043e\u043f\u0440\u043e\u0441");
+        removeBtn.innerHTML = '<i class="fas fa-times"></i>';
+        removeBtn.addEventListener("click", () => {
+          row.remove();
+          updateChatQuickQuestionControlsState();
+        });
+        controls.appendChild(removeBtn);
+      }
+
+      if (expandBtn) header.appendChild(expandBtn);
+      header.appendChild(questionInput);
+      header.appendChild(controls);
+      row.appendChild(header);
+
+      if (type !== "order") {
+        const body = document.createElement("div");
+        body.className = "settings-chat-question-row-body";
+        body.setAttribute("data-chat-quick-body", "1");
+        const answerInput = document.createElement("textarea");
+        answerInput.className = "textarea settings-chat-question-answer";
+        answerInput.rows = 3;
+        answerInput.setAttribute("data-chat-quick-answer", "1");
+        answerInput.placeholder = "\u041e\u0442\u0432\u0435\u0442 \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u043a\u0430";
+        answerInput.value = normalizeChatQuickQuestionAnswer(rowItem.answer);
+        body.appendChild(answerInput);
+        row.appendChild(body);
+        setChatQuickQuestionRowExpanded(row, false);
+      }
+
+      return row;
+    }
+
+    function renderChatQuickQuestionRows(items) {
+      if (!settingsChatHotQuestionsGrid) return;
+      settingsChatHotQuestionsGrid.innerHTML = "";
+      const list = Array.isArray(items) ? items : [];
+      list.forEach((item, index) => {
+        settingsChatHotQuestionsGrid.appendChild(createChatQuickQuestionRow(item, index));
       });
       updateChatQuickQuestionControlsState();
-      return inputs;
+      syncChatAssistantHierarchyUi();
     }
 
-    function createChatQuickQuestionInput(value, index) {
-      const pill = document.createElement("label");
-      pill.className = "settings-chat-question-pill";
-
-      const input = document.createElement("input");
-      input.className = "control settings-chat-question-input";
-      input.type = "text";
-      input.setAttribute("data-chat-quick-input", String(index));
-      input.placeholder = getChatQuickQuestionPlaceholder(index);
-      input.value = String(value ?? "").trim();
-
-      pill.appendChild(input);
-      return { pill, input };
-    }
-
-    function ensureChatQuickQuestionInputsCount(count) {
-      if (!settingsChatHotQuestionsGrid) return [];
-      const safeCount = Number.isFinite(Number(count)) ? Number(count) : CHAT_QUICK_QUESTIONS_MIN;
-      const target = Math.max(CHAT_QUICK_QUESTIONS_MIN, Math.min(CHAT_QUICK_QUESTIONS_MAX, safeCount));
-      let inputs = getSettingsChatQuickQuestionInputs();
-
-      while (inputs.length < target) {
-        const { pill } = createChatQuickQuestionInput("", inputs.length);
-        settingsChatHotQuestionsGrid.appendChild(pill);
-        inputs = getSettingsChatQuickQuestionInputs();
-      }
-
-      while (inputs.length > target) {
-        const lastInput = inputs[inputs.length - 1];
-        const wrapper = lastInput ? lastInput.closest(".settings-chat-question-pill") : null;
-        if (wrapper) wrapper.remove();
-        else if (lastInput) lastInput.remove();
-        inputs = getSettingsChatQuickQuestionInputs();
-      }
-
-      return reindexChatQuickQuestionInputs();
-    }
-
-    function appendChatQuickQuestionInput() {
+    function appendChatQuickQuestionRow() {
       if (!settingsChatHotQuestionsGrid) return null;
-      const inputs = getSettingsChatQuickQuestionInputs();
-      if (inputs.length >= CHAT_QUICK_QUESTIONS_MAX) return null;
-      const { pill, input } = createChatQuickQuestionInput("", inputs.length);
-      settingsChatHotQuestionsGrid.appendChild(pill);
-      reindexChatQuickQuestionInputs();
-      return input;
+      if (!isChatQuickQuestionsEnabledInUi()) return null;
+      const rows = getSettingsChatQuickQuestionRows();
+      if (rows.length >= CHAT_QUICK_QUESTIONS_MAX) return null;
+      const row = createChatQuickQuestionRow(
+        {
+          id: "",
+          type: "custom",
+          question: "",
+          answer: "",
+          enabled: true,
+        },
+        rows.length
+      );
+      settingsChatHotQuestionsGrid.appendChild(row);
+      updateChatQuickQuestionControlsState();
+      syncChatAssistantHierarchyUi();
+      return row.querySelector("[data-chat-quick-question]");
+    }
+
+    function collectChatQuickQuestionsFromRows() {
+      const rows = getSettingsChatQuickQuestionRows();
+      const out = [];
+      rows.forEach((row, index) => {
+        const type = String(row.getAttribute("data-chat-quick-type") || "custom").toLowerCase();
+        const enabledInput = row.querySelector("[data-chat-quick-enabled]");
+        const enabled = enabledInput ? enabledInput.checked : true;
+        if (type === "order") {
+          out.push({
+            id: CHAT_QUICK_ORDER_ID,
+            type: "order",
+            question: CHAT_QUICK_ORDER_QUESTION,
+            answer: "",
+            enabled,
+          });
+          return;
+        }
+
+        const questionInput = row.querySelector("[data-chat-quick-question]");
+        const answerInput = row.querySelector("[data-chat-quick-answer]");
+        const question = normalizeChatQuickQuestionText(questionInput ? questionInput.value : "");
+        if (!question) return;
+        const answer = normalizeChatQuickQuestionAnswer(answerInput ? answerInput.value : "");
+        const rawId = row.getAttribute("data-chat-quick-id");
+        out.push({
+          id: normalizeChatQuickQuestionId(rawId, index),
+          type: "custom",
+          question,
+          answer,
+          enabled,
+        });
+      });
+
+      return normalizeChatQuickQuestionItems(out, { fallbackToDefault: false });
+    }
+
+    function buildChatQuickQuestionsPayloadValue(items) {
+      const normalizedItems = normalizeChatQuickQuestionItems(items, { fallbackToDefault: false });
+      const defaultItems = cloneDefaultChatQuickQuestionItems();
+      return isSameChatQuickQuestionItems(normalizedItems, defaultItems)
+        ? null
+        : serializeChatQuickQuestionItems(normalizedItems);
+    }
+
+    function applyChatQuickQuestionsToInputs(rawValue) {
+      const items = normalizeChatQuickQuestionItems(rawValue, { fallbackToDefault: true });
+      renderChatQuickQuestionRows(items);
+      if (settingsChatQuickQuestionsJson) {
+        settingsChatQuickQuestionsJson.value = serializeChatQuickQuestionItems(items);
+      }
     }
 
     function getChatOperatorFallbackName() {
@@ -877,28 +1355,10 @@
       return name || "";
     }
 
-    function applyChatQuickQuestionsToInputs(rawValue) {
-      if (!settingsChatHotQuestionsGrid) return;
-      const list = parseChatQuickQuestions(rawValue);
-      const inputs = ensureChatQuickQuestionInputsCount(list.length);
-      inputs.forEach((input, index) => {
-        input.value = list[index] || "";
-      });
-      if (settingsChatQuickQuestionsJson) {
-        settingsChatQuickQuestionsJson.value = JSON.stringify(list);
-      }
-      updateChatQuickQuestionControlsState();
-    }
-
-    function collectChatQuickQuestionsFromInputs() {
-      return getSettingsChatQuickQuestionInputs()
-        .map((input) => String(input && input.value ? input.value : "").trim())
-        .filter(Boolean)
-        .slice(0, CHAT_QUICK_QUESTIONS_MAX);
-    }
-
-    reindexChatQuickQuestionInputs();
+    applyChatQuickQuestionsToInputs(null);
     setSelectedChatAssistantGender(readStoredChatAssistantGender() || DEFAULT_CHAT_ASSISTANT_GENDER, { persist: false });
+    setChatWelcomeExpanded(false);
+    syncChatAssistantHierarchyUi();
 
     function applyChatSettingsFromTenant(tenant) {
       const assistantValue = tenant && tenant.chat_assistant_name ? String(tenant.chat_assistant_name).trim() : "";
@@ -918,11 +1378,18 @@
           : (readStoredChatAssistantGender() || getSelectedChatAssistantGender())
       );
 
-      const welcomeValue = tenant && tenant.chat_welcome_message ? String(tenant.chat_welcome_message) : "";
+      const welcomeValueRaw = tenant && tenant.chat_welcome_message != null
+        ? String(tenant.chat_welcome_message)
+        : "";
+      const welcomeValue = welcomeValueRaw.trim();
       if (settingsChatWelcomeMessageInput) {
         settingsChatWelcomeMessageInput.value = welcomeValue || DEFAULT_CHAT_WELCOME_MESSAGE;
       }
-
+      if (settingsChatWelcomeEnabledSwitch) {
+        settingsChatWelcomeEnabledSwitch.checked = normalizeChatWelcomeEnabledValue(
+          tenant ? tenant.chat_welcome_enabled : undefined
+        );
+      }
       const operatorFallback = getChatOperatorFallbackName() || "\u041e\u043f\u0435\u0440\u0430\u0442\u043e\u0440";
       if (settingsChatOperatorNameInput) {
         settingsChatOperatorNameInput.placeholder = operatorFallback;
@@ -940,8 +1407,23 @@
         settingsChatGuestThreadTtlDaysInput.value = String(normalizeChatGuestThreadTtlDays(ttlDaysRaw));
       }
 
-      applyChatQuickQuestionsToInputs(tenant ? tenant.chat_quick_questions_json : null);
+      applyChatQuickQuestionsToInputs(
+        tenant
+          ? (tenant.quick_questions_config ?? tenant.chat_quick_questions_json)
+          : null
+      );
+      if (settingsChatQuickQuestionsEnabledSwitch) {
+        settingsChatQuickQuestionsEnabledSwitch.checked = normalizeChatQuickQuestionsEnabledValue(
+          tenant ? tenant.chat_quick_questions_enabled : undefined
+        );
+      }
+      syncChatAssistantHierarchyUi();
     }
+
+    if (typeof window !== "undefined") {
+      window.__applyChatSettingsFromTenant = applyChatSettingsFromTenant;
+    }
+    loadTenantProfile();
 
     function getDayKey(day) {
       return day === null ? STORE_HOURS_GLOBAL_KEY : `day-${day}`;
@@ -1309,10 +1791,8 @@
       if (orderDeliveryPanel) orderDeliveryPanel.classList.toggle("hidden", tabId !== "order-delivery");
       if (orderTimeOptionsPanel) orderTimeOptionsPanel.classList.toggle("hidden", tabId !== "order-time-options");
       if (soundsPanel) soundsPanel.classList.toggle("hidden", tabId !== "sounds");
-      if (chatWelcomePanel) chatWelcomePanel.classList.toggle("hidden", tabId !== "chat-welcome");
       if (chatAssistantNamePanel) chatAssistantNamePanel.classList.toggle("hidden", tabId !== "chat-assistant-name");
       if (chatOperatorNamePanel) chatOperatorNamePanel.classList.toggle("hidden", tabId !== "chat-operator-name");
-      if (chatHotQuestionsPanel) chatHotQuestionsPanel.classList.toggle("hidden", tabId !== "chat-hot-questions");
       if (chatMessageSettingsPanel) chatMessageSettingsPanel.classList.toggle("hidden", tabId !== "chat-message-settings");
       if (settingsNotificationsPanel) settingsNotificationsPanel.classList.toggle("hidden", tabId !== "notifications");
       if (imagesPanel) imagesPanel.classList.toggle("hidden", tabId !== "images");
@@ -1393,10 +1873,8 @@
           if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.remove("is-active");
           if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.remove("is-active");
           if (tabId === "sounds" && soundsCard) soundsCard.classList.remove("is-active");
-          if (tabId === "chat-welcome" && chatWelcomeCard) chatWelcomeCard.classList.remove("is-active");
           if (tabId === "chat-assistant-name" && chatAssistantNameCard) chatAssistantNameCard.classList.remove("is-active");
           if (tabId === "chat-operator-name" && chatOperatorNameCard) chatOperatorNameCard.classList.remove("is-active");
-          if (tabId === "chat-hot-questions" && chatHotQuestionsCard) chatHotQuestionsCard.classList.remove("is-active");
           if (tabId === "chat-message-settings" && chatMessageSettingsCard) chatMessageSettingsCard.classList.remove("is-active");
           if (tabId === "notifications" && notificationsCard) notificationsCard.classList.remove("is-active");
           if (tabId === "images" && imagesCard) imagesCard.classList.remove("is-active");
@@ -1446,10 +1924,8 @@
       if (tabId === "order-delivery" && orderDeliveryCard) orderDeliveryCard.classList.add("is-active");
       if (tabId === "order-time-options" && orderTimeOptionsCard) orderTimeOptionsCard.classList.add("is-active");
       if (tabId === "sounds" && soundsCard) soundsCard.classList.add("is-active");
-      if (tabId === "chat-welcome" && chatWelcomeCard) chatWelcomeCard.classList.add("is-active");
       if (tabId === "chat-assistant-name" && chatAssistantNameCard) chatAssistantNameCard.classList.add("is-active");
       if (tabId === "chat-operator-name" && chatOperatorNameCard) chatOperatorNameCard.classList.add("is-active");
-      if (tabId === "chat-hot-questions" && chatHotQuestionsCard) chatHotQuestionsCard.classList.add("is-active");
       if (tabId === "chat-message-settings" && chatMessageSettingsCard) chatMessageSettingsCard.classList.add("is-active");
       if (tabId === "notifications" && notificationsCard) notificationsCard.classList.add("is-active");
       if (tabId === "images" && imagesCard) imagesCard.classList.add("is-active");
@@ -1819,15 +2295,9 @@
         ensureTab("sounds", "Звуки уведомлений");
       });
     }
-    if (chatWelcomeCard) {
-      chatWelcomeCard.addEventListener("click", () => {
-        ensureTab("chat-welcome", "\u041f\u0440\u0438\u0432\u0435\u0442\u0441\u0442\u0432\u0435\u043d\u043d\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435");
-      });
-    }
-
     if (chatAssistantNameCard) {
       chatAssistantNameCard.addEventListener("click", () => {
-        ensureTab("chat-assistant-name", "\u0418\u043c\u044f \u0432\u0438\u0440\u0442\u0443\u0430\u043b\u044c\u043d\u043e\u0433\u043e \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u043a\u0430");
+        ensureTab("chat-assistant-name", "\u0412\u0438\u0440\u0442\u0443\u0430\u043b\u044c\u043d\u044b\u0439 \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u043a");
       });
     }
 
@@ -1837,11 +2307,6 @@
       });
     }
 
-    if (chatHotQuestionsCard) {
-      chatHotQuestionsCard.addEventListener("click", () => {
-        ensureTab("chat-hot-questions", "\u0421\u0435\u0442\u043a\u0430 \u0433\u043e\u0440\u044f\u0447\u0438\u0445 \u0432\u043e\u043f\u0440\u043e\u0441\u043e\u0432");
-      });
-    }
     if (chatMessageSettingsCard) {
       chatMessageSettingsCard.addEventListener("click", () => {
         ensureTab("chat-message-settings", "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439");
@@ -3977,15 +4442,23 @@
       });
     }
 
-    if (settingsChatWelcomeSaveBtn && settingsChatWelcomeMessageInput) {
-      settingsChatWelcomeSaveBtn.addEventListener("click", async () => {
-        const raw = String(settingsChatWelcomeMessageInput.value || "").trim();
-        const value = raw && raw !== DEFAULT_CHAT_WELCOME_MESSAGE ? raw : null;
-        await saveChatSettingsPayload(
-          settingsChatWelcomeSaveBtn,
-          { chat_welcome_message: value },
-          "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043f\u0440\u0438\u0432\u0435\u0442\u0441\u0442\u0432\u0438\u0435."
-        );
+    if (settingsChatWelcomeEnabledSwitch) {
+      settingsChatWelcomeEnabledSwitch.addEventListener("change", () => {
+        syncChatAssistantHierarchyUi();
+      });
+    }
+
+    if (settingsChatWelcomeExpandBtn) {
+      settingsChatWelcomeExpandBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleChatWelcomeExpanded();
+      });
+    }
+
+    if (settingsChatQuickQuestionsEnabledSwitch) {
+      settingsChatQuickQuestionsEnabledSwitch.addEventListener("change", () => {
+        syncChatAssistantHierarchyUi();
       });
     }
 
@@ -3995,11 +4468,29 @@
         const nameValue = raw && raw !== DEFAULT_CHAT_ASSISTANT_NAME ? raw : null;
         const selectedGender = getSelectedChatAssistantGender();
         const genderValue = selectedGender === DEFAULT_CHAT_ASSISTANT_GENDER ? null : selectedGender;
+        const welcomeRaw = settingsChatWelcomeMessageInput
+          ? String(settingsChatWelcomeMessageInput.value || "").trim()
+          : "";
+        const welcomeValue = welcomeRaw && welcomeRaw !== DEFAULT_CHAT_WELCOME_MESSAGE
+          ? welcomeRaw
+          : null;
+        const welcomeEnabledValue = settingsChatWelcomeEnabledSwitch
+          ? (settingsChatWelcomeEnabledSwitch.checked ? 1 : 0)
+          : 1;
+        const quickQuestionsItems = collectChatQuickQuestionsFromRows();
+        const quickQuestionsPayloadValue = buildChatQuickQuestionsPayloadValue(quickQuestionsItems);
+        const quickQuestionsEnabledValue = settingsChatQuickQuestionsEnabledSwitch
+          ? (settingsChatQuickQuestionsEnabledSwitch.checked ? 1 : 0)
+          : 1;
         await saveChatSettingsPayload(
           settingsChatAssistantNameSaveBtn,
           {
             chat_assistant_name: nameValue,
             chat_assistant_gender: genderValue,
+            chat_welcome_message: welcomeValue,
+            chat_welcome_enabled: welcomeEnabledValue,
+            chat_quick_questions_json: quickQuestionsPayloadValue,
+            chat_quick_questions_enabled: quickQuestionsEnabledValue,
           },
           "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0438\u043c\u044f \u043f\u043e\u043c\u043e\u0449\u043d\u0438\u043a\u0430."
         );
@@ -4041,37 +4532,12 @@
       });
     }
 
-    if (settingsChatQuickQuestionsResetBtn) {
-      settingsChatQuickQuestionsResetBtn.addEventListener("click", () => {
-        const raw = settingsChatQuickQuestionsJson ? settingsChatQuickQuestionsJson.value : null;
-        applyChatQuickQuestionsToInputs(raw);
-      });
-    }
-
     if (settingsChatQuickQuestionsAddBtn) {
       settingsChatQuickQuestionsAddBtn.addEventListener("click", () => {
-        const input = appendChatQuickQuestionInput();
+        const input = appendChatQuickQuestionRow();
         if (!input) return;
         input.focus();
         input.select();
-      });
-    }
-
-    if (settingsChatQuickQuestionsSaveBtn) {
-      settingsChatQuickQuestionsSaveBtn.addEventListener("click", async () => {
-        const list = collectChatQuickQuestionsFromInputs();
-        const normalizedList = list.length ? list : DEFAULT_CHAT_QUICK_QUESTIONS.slice();
-        const serialized = JSON.stringify(normalizedList);
-        const payloadValue = serialized === JSON.stringify(DEFAULT_CHAT_QUICK_QUESTIONS) ? null : serialized;
-
-        await saveChatSettingsPayload(
-          settingsChatQuickQuestionsSaveBtn,
-          { chat_quick_questions_json: payloadValue },
-          "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0433\u043e\u0440\u044f\u0447\u0438\u0435 \u0432\u043e\u043f\u0440\u043e\u0441\u044b.",
-          () => {
-            applyChatQuickQuestionsToInputs(payloadValue || null);
-          }
-        );
       });
     }
 

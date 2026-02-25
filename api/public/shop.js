@@ -164,12 +164,55 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     '\u0441\u0442\u0430\u043b\u043a\u0438\u0432\u0430\u0435\u043c\u0441\u044f \u0441\u043e \u0441\u043b\u043e\u0436\u043d\u043e\u0441\u0442\u044f\u043c\u0438 \u0438\u0437-\u0437\u0430 ' +
     '\u043f\u043e\u0433\u043e\u0434\u043d\u044b\u0445 \u0443\u0441\u043b\u043e\u0432\u0438\u0439: \u043c\u043e\u0436\u0435\u043c \u0432\u0435\u0437\u0442\u0438 \u043f\u043e\u043a\u0443\u043f\u043a\u0443 ' +
     '\u0447\u0443\u0442\u044c \u0434\u043e\u043b\u044c\u0448\u0435.';
-  const DEFAULT_CHAT_QUICK_QUESTIONS = [
-    '\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?',
-    '\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430',
-    '\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430',
-    '\u0414\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441',
-  ];
+  const CHAT_QUICK_ORDER_ID = 'order';
+  const CHAT_QUICK_ORDER_QUESTION = '\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?';
+  const DEFAULT_CHAT_QUICK_QUESTION_ITEMS = Object.freeze([
+    {
+      id: CHAT_QUICK_ORDER_ID,
+      type: 'order',
+      question: CHAT_QUICK_ORDER_QUESTION,
+      answer: '',
+      enabled: true,
+    },
+    {
+      id: 'quality',
+      type: 'custom',
+      question: '\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430',
+      answer:
+        '\u041e\u0447\u0435\u043d\u044c \u0436\u0430\u043b\u044c, \u0447\u0442\u043e \u0442\u0430\u043a \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u043e\u0441\u044c. ' +
+        '\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, ' +
+        '\u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a.',
+      enabled: true,
+    },
+    {
+      id: 'completeness',
+      type: 'custom',
+      question: '\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430',
+      answer:
+        '\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, ' +
+        '\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c.',
+      enabled: true,
+    },
+    {
+      id: 'other',
+      type: 'custom',
+      question: '\u0414\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441',
+      answer:
+        '\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. \u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435.',
+      enabled: true,
+    },
+  ]);
+  const CHAT_QUICK_DEFAULT_ANSWER_BY_KEY = Object.freeze({
+    '\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430':
+      '\u041e\u0447\u0435\u043d\u044c \u0436\u0430\u043b\u044c, \u0447\u0442\u043e \u0442\u0430\u043a \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u043e\u0441\u044c. ' +
+      '\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, ' +
+      '\u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a.',
+    '\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430':
+      '\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, ' +
+      '\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c.',
+    '\u0434\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441':
+      '\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. \u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435.',
+  });
   const CHAT_QUICK_QUESTIONS_MAX = 6;
 
   function normalizeAssistantGender(value) {
@@ -186,25 +229,205 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       : DEFAULT_CHAT_WELCOME_MESSAGE;
   }
 
-  function parseTenantChatQuickQuestions(rawValue) {
+  function cloneDefaultChatQuickQuestionItems() {
+    return DEFAULT_CHAT_QUICK_QUESTION_ITEMS.map((item) => ({
+      id: String(item.id || ''),
+      type: item.id === CHAT_QUICK_ORDER_ID ? 'order' : 'custom',
+      question: String(item.question || ''),
+      answer: item.id === CHAT_QUICK_ORDER_ID ? '' : String(item.answer || ''),
+      enabled: item.enabled !== false,
+    }));
+  }
+
+  function normalizeChatQuickQuestionKey(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/\u0451/g, '\u0435')
+      .replace(/[!?.,;:()[\]{}"'`~]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function normalizeChatQuickQuestionText(value) {
+    return String(value === undefined || value === null ? '' : value)
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 160);
+  }
+
+  function normalizeChatQuickQuestionAnswer(value) {
+    return String(value === undefined || value === null ? '' : value)
+      .replace(/\s+\n/g, '\n')
+      .trim()
+      .slice(0, 1200);
+  }
+
+  function normalizeChatQuickQuestionEnabled(value, fallback) {
+    if (value === undefined || value === null || value === '') return fallback !== false;
+    if (typeof value === 'boolean') return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (!normalized) return fallback !== false;
+    if (normalized === '1' || normalized === 'true' || normalized === 'on' || normalized === 'yes') return true;
+    if (normalized === '0' || normalized === 'false' || normalized === 'off' || normalized === 'no') return false;
+    const numeric = Number(normalized);
+    if (Number.isFinite(numeric)) return numeric !== 0;
+    return fallback !== false;
+  }
+
+  function normalizeChatQuickQuestionId(value, index) {
+    const source = String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/-{2,}/g, '-')
+      .replace(/^[-_]+|[-_]+$/g, '')
+      .slice(0, 48);
+    if (source && source !== CHAT_QUICK_ORDER_ID) return source;
+    return `custom-${index + 1}`;
+  }
+
+  function isOrderQuickQuestionLike(value) {
+    const normalized = normalizeChatQuickQuestionKey(value);
+    if (!normalized) return false;
+    return normalized.includes('\u0433\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437')
+      || normalized.includes('\u0433\u0434\u0435 \u0437\u0430\u043a\u0430\u0437');
+  }
+
+  function getDefaultQuickQuestionAnswer(value) {
+    const key = normalizeChatQuickQuestionKey(value);
+    return String(CHAT_QUICK_DEFAULT_ANSWER_BY_KEY[key] || '');
+  }
+
+  function parseTenantChatQuickQuestionsConfig(rawValue) {
     let parsed = [];
     if (Array.isArray(rawValue)) {
       parsed = rawValue;
     } else if (typeof rawValue === 'string') {
-      try {
-        const value = JSON.parse(rawValue);
-        if (Array.isArray(value)) {
-          parsed = value;
-        }
-      } catch {
+      const trimmed = rawValue.trim();
+      if (!trimmed) {
         parsed = [];
+      } else {
+        try {
+          const value = JSON.parse(trimmed);
+          parsed = Array.isArray(value) ? value : [];
+        } catch {
+          parsed = [];
+        }
       }
+    } else if (rawValue && typeof rawValue === 'object' && Array.isArray(rawValue.items)) {
+      parsed = rawValue.items;
     }
-    const normalized = parsed
-      .map((item) => str(item).trim())
+
+    if (!parsed.length) return cloneDefaultChatQuickQuestionItems();
+
+    const maxCustomItems = Math.max(0, CHAT_QUICK_QUESTIONS_MAX - 1);
+    const customCandidates = [];
+    let orderEnabled = true;
+    let orderDefined = false;
+
+    parsed.forEach((item, index) => {
+      if (customCandidates.length >= maxCustomItems) return;
+
+      if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+        const question = normalizeChatQuickQuestionText(item);
+        if (!question) return;
+        if (isOrderQuickQuestionLike(question) && index === 0) {
+          orderEnabled = true;
+          orderDefined = true;
+          return;
+        }
+        customCandidates.push({
+          id: '',
+          question,
+          answer: getDefaultQuickQuestionAnswer(question),
+          enabled: true,
+        });
+        return;
+      }
+
+      if (!item || typeof item !== 'object') return;
+
+      const source = item;
+      const question = normalizeChatQuickQuestionText(
+        source.question ?? source.label ?? source.title ?? source.text ?? ''
+      );
+      const rawId = String(source.id ?? source.key ?? source.code ?? '').trim();
+      const rawType = String(source.type ?? '').trim().toLowerCase();
+      const isOrder = (
+        rawId === CHAT_QUICK_ORDER_ID
+        || rawType === CHAT_QUICK_ORDER_ID
+        || normalizeChatQuickQuestionEnabled(source.is_order, false)
+        || (index === 0 && isOrderQuickQuestionLike(question))
+      );
+
+      if (isOrder) {
+        orderEnabled = normalizeChatQuickQuestionEnabled(
+          source.enabled ?? source.is_enabled ?? source.active,
+          true
+        );
+        orderDefined = true;
+        return;
+      }
+
+      if (!question) return;
+      const hasExplicitAnswer = (
+        Object.prototype.hasOwnProperty.call(source, 'answer')
+        || Object.prototype.hasOwnProperty.call(source, 'reply')
+        || Object.prototype.hasOwnProperty.call(source, 'response')
+        || Object.prototype.hasOwnProperty.call(source, 'message')
+      );
+      let answer = normalizeChatQuickQuestionAnswer(
+        source.answer ?? source.reply ?? source.response ?? source.message ?? ''
+      );
+      if (!answer && !hasExplicitAnswer) answer = getDefaultQuickQuestionAnswer(question);
+      customCandidates.push({
+        id: rawId,
+        question,
+        answer,
+        enabled: normalizeChatQuickQuestionEnabled(
+          source.enabled ?? source.is_enabled ?? source.active,
+          true
+        ),
+      });
+    });
+
+    const usedIds = new Set([CHAT_QUICK_ORDER_ID]);
+    const customItems = [];
+    customCandidates.slice(0, maxCustomItems).forEach((item, index) => {
+      let id = normalizeChatQuickQuestionId(item.id, index);
+      if (usedIds.has(id)) {
+        let seq = index + 1;
+        while (usedIds.has(`custom-${seq}`)) seq += 1;
+        id = `custom-${seq}`;
+      }
+      usedIds.add(id);
+      customItems.push({
+        id,
+        type: 'custom',
+        question: String(item.question || ''),
+        answer: normalizeChatQuickQuestionAnswer(item.answer || ''),
+        enabled: item.enabled !== false,
+      });
+    });
+
+    return [
+      {
+        id: CHAT_QUICK_ORDER_ID,
+        type: 'order',
+        question: CHAT_QUICK_ORDER_QUESTION,
+        answer: '',
+        enabled: orderDefined ? orderEnabled !== false : true,
+      },
+      ...customItems,
+    ];
+  }
+
+  function buildEnabledChatQuickQuestionLabels(config) {
+    return (Array.isArray(config) ? config : [])
+      .filter((item) => item && item.enabled !== false)
+      .map((item) => normalizeChatQuickQuestionText(item.question))
       .filter(Boolean)
       .slice(0, CHAT_QUICK_QUESTIONS_MAX);
-    return normalized.length ? normalized : DEFAULT_CHAT_QUICK_QUESTIONS.slice();
   }
 
   function buildPublicTenantChatSettings(tenantRow) {
@@ -212,6 +435,22 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     const assistantGender = normalizeAssistantGender(row.chat_assistant_gender);
     const assistantName = str(row.chat_assistant_name).trim() || DEFAULT_CHAT_ASSISTANT_NAME;
     const welcomeMessage = str(row.chat_welcome_message) || getDefaultWelcomeMessageByGender(assistantGender);
+    const welcomeEnabledRaw = row.chat_welcome_enabled;
+    const welcomeEnabledNorm = str(welcomeEnabledRaw).trim().toLowerCase();
+    const welcomeEnabled = !(
+      welcomeEnabledRaw === false
+      || welcomeEnabledRaw === 0
+      || welcomeEnabledNorm === '0'
+      || welcomeEnabledNorm === 'false'
+    );
+    const quickQuestionsEnabledRaw = row.chat_quick_questions_enabled;
+    const quickQuestionsEnabledNorm = str(quickQuestionsEnabledRaw).trim().toLowerCase();
+    const quickQuestionsEnabled = !(
+      quickQuestionsEnabledRaw === false
+      || quickQuestionsEnabledRaw === 0
+      || quickQuestionsEnabledNorm === '0'
+      || quickQuestionsEnabledNorm === 'false'
+    );
     const chatWidgetRaw = row.chat_widget_enabled;
     const chatWidgetNorm = str(chatWidgetRaw).trim().toLowerCase();
     const isEnabled = !(
@@ -225,13 +464,17 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       || str(row.site_name).trim()
       || str(row.name).trim()
       || '\u041e\u043f\u0435\u0440\u0430\u0442\u043e\u0440';
-    const quickQuestions = parseTenantChatQuickQuestions(row.chat_quick_questions_json);
+    const quickQuestionsConfig = parseTenantChatQuickQuestionsConfig(row.chat_quick_questions_json);
+    const quickQuestions = buildEnabledChatQuickQuestionLabels(quickQuestionsConfig);
     return {
       assistant_name: assistantName,
       assistant_gender: assistantGender,
       welcome_message: welcomeMessage,
+      welcome_enabled: welcomeEnabled,
       operator_name: operatorName,
       quick_questions: quickQuestions,
+      quick_questions_config: quickQuestionsConfig,
+      quick_questions_enabled: quickQuestionsEnabled,
       is_enabled: isEnabled,
     };
   }

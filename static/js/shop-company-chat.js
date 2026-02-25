@@ -43,13 +43,13 @@
   if (!feed || !thread || !composer || !selectionToolbar || !selectionCloseBtn || !selectionCountEl || !selectionCopyBtn || !selectionDeleteBtn || !attachBtn || !attachInput || !attachPreviewOverlay || !attachPreviewCloseBtn || !attachPreviewTitle || !attachPreviewImage || !attachPreviewThumbs || !attachPreviewEmojiBtn || !attachPreviewCaption || !attachPreviewSendBtn || !imageViewerOverlay || !imageViewerCloseBtn || !imageViewerImage || !imageViewerCard || !input || !emojiBtn || !emojiPopover || !scrollDownBtn || !reactionBar) return;
   const initialModalTitleText = String(modalTitle.textContent || "").trim() || "\u0427\u0430\u0442";
 
-  const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/img/google/64";
-  const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/emoji.json";
+  const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64";
+  const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/emoji.json";
   const EMOJI_REMOTE_DATASET_ENABLED = false;
   const EMOJI_NATIVE_RENDER_ONLY = true;
   const EMOJI_REACTION_POOL_LIMIT = 64;
   const EMOJI_ATLAS_ENABLED = true;
-  const EMOJI_ATLAS_URL = "/static/assets/emoji/google-people-atlas.webp?v=1";
+  const EMOJI_ATLAS_URL = "/static/assets/emoji/apple-people-atlas.webp?v=1";
   const EMOJI_ATLAS_COLUMNS = 16;
   const EMOJI_RECENT_STORAGE_KEY = "shop-company-chat-recent-emojis:v1";
   const EMOJI_CATEGORY_META = [
@@ -73,7 +73,8 @@
       "\u{1F628}","\u{1F630}","\u{1F625}","\u{1F613}","\u{1F917}","\u{1F914}","\u{1FAE1}","\u{1F92D}","\u{1FAE2}","\u{1F92B}",
       "\u{1F925}","\u{1F636}","\u{1FAE0}","\u{1F610}","\u{1FAE4}","\u{1F611}","\u{1F62C}","\u{1F644}","\u{1F62E}\u{200D}\u{1F4A8}","\u{1F924}",
       "\u{1F62A}","\u{1F635}","\u{1F910}","\u{1F974}","\u{1F922}","\u{1F92E}","\u{1F927}","\u{1F637}","\u{1F912}","\u{1F915}",
-      "\u{2764}\u{FE0F}","\u{1F494}","\u{1F4AF}","\u{1F44D}","\u{1F44E}","\u{1F44F}","\u{1F64C}","\u{1F64F}","\u{1F44B}","\u{1F91D}","\u{1F4AA}"
+      "\u{2764}\u{FE0F}","\u{1F494}","\u{1F4AF}","\u{1F44D}","\u{1F44E}","\u{1F44F}","\u{1F64C}","\u{1F64F}","\u{1F44B}","\u{1F91D}","\u{1F4AA}",
+      "\u{1F622}","\u{1F525}","\u{1F62E}"
     ],
     nature: [],
     food: [],
@@ -99,7 +100,7 @@
     "\u{1F621}",
   ];
   const EXTRA_REACTIONS = [
-    "\u{1F622}",
+    "\u{1F97A}",
     "\u{1F615}",
     "\u{1F61E}",
     "\u{1F61F}",
@@ -126,6 +127,7 @@
   const CHAT_THREAD_PAGE_MAX_SIZE = 200;
   const CHAT_DROP_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif|heic|heif)$/i;
   const CHAT_AUTOSCROLL_MS = 170;
+  const CHAT_EMOJI_SHEET_SETTLE_MS = 280;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
   const CHAT_TYPING_HEARTBEAT_MS = 1800;
   const CHAT_TYPING_IDLE_STOP_MS = 2600;
@@ -165,38 +167,54 @@
   let emojiPopoverMode = "composer";
   let emojiPopoverReactionMessageId = "";
 
-  const DEFAULT_CHAT_QUICK_QUESTIONS = [
-    "\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?",
-    "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430",
-    "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430",
-    "\u0414\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+  const CHAT_QUICK_ORDER_ID = "order";
+  const CHAT_QUICK_ORDER_QUESTION = "\u0413\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?";
+  const DEFAULT_CHAT_QUICK_QUESTION_ITEMS = [
+    {
+      id: CHAT_QUICK_ORDER_ID,
+      type: "order",
+      question: CHAT_QUICK_ORDER_QUESTION,
+      answer: "",
+      enabled: true,
+    },
+    {
+      id: "quality",
+      type: "custom",
+      question: "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430",
+      answer:
+        "\u041e\u0447\u0435\u043d\u044c \u0436\u0430\u043b\u044c, \u0447\u0442\u043e \u0442\u0430\u043a \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u043e\u0441\u044c. " +
+        "\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, " +
+        "\u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a.",
+      enabled: true,
+    },
+    {
+      id: "completeness",
+      type: "custom",
+      question: "\u0412\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430",
+      answer:
+        "\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, " +
+        "\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c.",
+      enabled: true,
+    },
+    {
+      id: "other",
+      type: "custom",
+      question: "\u0414\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+      answer:
+        "\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. \u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435.",
+      enabled: true,
+    },
   ];
+  const DEFAULT_CHAT_QUICK_QUESTIONS = DEFAULT_CHAT_QUICK_QUESTION_ITEMS
+    .filter(function (item) { return item && item.enabled !== false; })
+    .map(function (item) { return String(item.question || ""); });
   const CHAT_QUICK_QUESTIONS_MAX = 6;
   const CHAT_SETTINGS_API_URL = "/api/public/tenant/chat-settings";
   const CHAT_ASSISTANT_GENDER_MALE = "m";
   const CHAT_ASSISTANT_GENDER_FEMALE = "f";
   const DEFAULT_CHAT_ASSISTANT_GENDER = CHAT_ASSISTANT_GENDER_MALE;
-
-  const QUICK_REPLIES = {
-    "\u0433\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437?":
-      "\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u044e \u0441\u0442\u0430\u0442\u0443\u0441 \u0437\u0430\u043a\u0430\u0437\u0430. \u0415\u0441\u043b\u0438 \u043a\u0443\u0440\u044c\u0435\u0440 \u0437\u0430\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f \u0438\u0437-\u0437\u0430 \u043f\u043e\u0433\u043e\u0434\u044b, \u043c\u044b \u043e\u0431\u044f\u0437\u0430\u0442\u0435\u043b\u044c\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u0438\u043c \u0432\u0440\u0435\u043c\u044f \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438.",
-    "\u0433\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437":
-      "\u041f\u0440\u043e\u0432\u0435\u0440\u044f\u044e \u0441\u0442\u0430\u0442\u0443\u0441 \u0437\u0430\u043a\u0430\u0437\u0430. \u0415\u0441\u043b\u0438 \u043a\u0443\u0440\u044c\u0435\u0440 \u0437\u0430\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f \u0438\u0437-\u0437\u0430 \u043f\u043e\u0433\u043e\u0434\u044b, \u043c\u044b \u043e\u0431\u044f\u0437\u0430\u0442\u0435\u043b\u044c\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u0438\u043c \u0432\u0440\u0435\u043c\u044f \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438.",
-    "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430":
-      "\u0418\u0437\u0432\u0438\u043d\u0438\u0442\u0435 \u0437\u0430 \u0441\u0438\u0442\u0443\u0430\u0446\u0438\u044e. \u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a, \u0438 \u044f \u043f\u0435\u0440\u0435\u0434\u0430\u043c \u043e\u0431\u0440\u0430\u0449\u0435\u043d\u0438\u0435 \u0432 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u043a\u0443.",
-    "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430":
-      "\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, \u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c, \u0447\u0442\u043e\u0431\u044b \u043c\u044b \u0431\u044b\u0441\u0442\u0440\u043e \u0432\u0441\u0435 \u0438\u0441\u043f\u0440\u0430\u0432\u0438\u043b\u0438.",
-    "\u0434\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441":
-      "\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. \u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441, \u0438 \u044f \u043f\u043e\u0441\u0442\u0430\u0440\u0430\u044e\u0441\u044c \u043f\u043e\u043c\u043e\u0447\u044c \u0438\u043b\u0438 \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0443 \u043d\u0430 \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440\u0430.",
-  };
   const HOT_QUESTION_ORDER_KEY = "\u0433\u0434\u0435 \u043c\u043e\u0439 \u0437\u0430\u043a\u0430\u0437";
   const HOT_QUESTION_ORDER_KEY_ALT = "\u0433\u0434\u0435 \u0437\u0430\u043a\u0430\u0437";
-  const HOT_QUESTION_QUALITY_KEY =
-    "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0443 \u0442\u043e\u0432\u0430\u0440\u0430";
-  const HOT_QUESTION_COMPLETENESS_KEY =
-    "\u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e \u043a\u043e\u043c\u043f\u043b\u0435\u043a\u0442\u0430\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430";
-  const HOT_QUESTION_OTHER_KEY =
-    "\u0434\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441";
   const HOT_QUESTION_GUEST_PHONE_REPLY =
     "\u041d\u0435 \u043c\u043e\u0433\u0443 \u043d\u0430\u0439\u0442\u0438 \u0432\u0430\u0441 \u0432 \u0431\u0430\u0437\u0435. " +
     "\u041f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430.";
@@ -209,24 +227,6 @@
   const HOT_QUESTION_ORDER_STATUS_UNKNOWN = "\u0421\u0442\u0430\u0442\u0443\u0441 \u0443\u0442\u043e\u0447\u043d\u044f\u0435\u0442\u0441\u044f";
   const HOT_QUESTION_ORDER_LIST_PREFIX = "\u041d\u0430\u0448\u0435\u043b \u0432\u0430\u0448\u0438 \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0435 \u0437\u0430\u043a\u0430\u0437\u044b.";
   const HOT_QUESTION_ORDER_LIST_PREFIX_FEMALE = "\u041d\u0430\u0448\u043b\u0430 \u0432\u0430\u0448\u0438 \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u044e\u0449\u0438\u0435 \u0437\u0430\u043a\u0430\u0437\u044b.";
-  const HOT_QUESTION_QUALITY_REPLY =
-    "\u041e\u0447\u0435\u043d\u044c \u0436\u0430\u043b\u044c, \u0447\u0442\u043e \u0442\u0430\u043a \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u043e\u0441\u044c. " +
-    "\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, " +
-    "\u043a\u0430\u043a\u043e\u0439 \u0442\u043e\u0432\u0430\u0440 \u0438 \u0447\u0442\u043e \u0438\u043c\u0435\u043d\u043d\u043e \u043d\u0435 \u0442\u0430\u043a.";
-  const HOT_QUESTION_COMPLETENESS_REPLY =
-    "\u041f\u043e\u043d\u044f\u043b. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, " +
-    "\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c.";
-  const HOT_QUESTION_COMPLETENESS_REPLY_FEMALE =
-    "\u041f\u043e\u043d\u044f\u043b\u0430. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, " +
-    "\u0447\u0435\u0433\u043e \u043d\u0435 \u0445\u0432\u0430\u0442\u0430\u0435\u0442 \u0438\u043b\u0438 \u0447\u0442\u043e \u0431\u044b\u043b\u043e \u043b\u0438\u0448\u043d\u0438\u043c.";
-  const HOT_QUESTION_OTHER_REPLY =
-    "\u042f \u043d\u0430 \u0441\u0432\u044f\u0437\u0438. \u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435.";
-  const HOT_QUESTION_GENERIC_DETAILS_REPLY =
-    "\u0427\u0442\u043e\u0431\u044b \u043f\u0435\u0440\u0435\u0434\u0430\u0442\u044c \u043e\u0431\u0440\u0430\u0449\u0435\u043d\u0438\u0435 \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440\u0443, " +
-    "\u043e\u043f\u0438\u0448\u0438\u0442\u0435, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u0441\u0438\u0442\u0443\u0430\u0446\u0438\u044e \u0447\u0443\u0442\u044c \u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435.";
-  const HOT_QUESTION_OPERATOR_HANDOFF_REPLY =
-    "\u041f\u0435\u0440\u0435\u0434\u0430\u044e \u0432\u0430\u0448 \u0432\u043e\u043f\u0440\u043e\u0441 \u043e\u043f\u0435\u0440\u0430\u0442\u043e\u0440\u0443. " +
-    "\u041e\u043d \u043e\u0442\u0432\u0435\u0442\u0438\u0442 \u0432 \u044d\u0442\u043e\u043c \u0447\u0430\u0442\u0435.";
   const ASSISTANT_MESSAGE_ID_PREFIX = "assistant-auto-";
   const HOT_QUESTION_PHONE_PATTERN = /(?:\+?\d[\d\s\-()]{8,}\d)/g;
   const HOT_QUESTION_ORDER_CARD_MESSAGE_RE = /^assistant-auto-(?:where-order|phone-order)-o([0-9_]+)-/;
@@ -254,16 +254,24 @@
     assistantName: DEFAULT_CHAT_ASSISTANT_NAME,
     assistantGender: DEFAULT_CHAT_ASSISTANT_GENDER,
     welcomeMessage: DEFAULT_CHAT_WELCOME_MESSAGE,
+    welcomeEnabled: true,
     optionsText: DEFAULT_CHAT_OPTIONS_TEXT,
     quickQuestions: DEFAULT_CHAT_QUICK_QUESTIONS.slice(),
+    quickQuestionsConfig: DEFAULT_CHAT_QUICK_QUESTION_ITEMS.map(function (item) {
+      return {
+        id: String(item.id || ""),
+        type: item.id === CHAT_QUICK_ORDER_ID ? "order" : "custom",
+        question: String(item.question || ""),
+        answer: String(item.answer || ""),
+        enabled: item.enabled !== false,
+      };
+    }),
+    quickQuestionsEnabled: true,
     operatorName: "",
     isEnabled: true,
   };
   const hotQuestionAliases = {
     order: new Set([HOT_QUESTION_ORDER_KEY, HOT_QUESTION_ORDER_KEY_ALT]),
-    quality: new Set([HOT_QUESTION_QUALITY_KEY]),
-    completeness: new Set([HOT_QUESTION_COMPLETENESS_KEY]),
-    other: new Set([HOT_QUESTION_OTHER_KEY]),
   };
 
   const baseEntries = [];
@@ -283,7 +291,18 @@
   let sharedMutationPendingCount = 0;
   let sharedThreadMutationVersion = 0;
   let profileMergeInFlight = false;
+  let chatBodyScrollLockState = null;
+  let chatBodyScrollLockY = 0;
   let feedScrollRaf = 0;
+  let emojiSheetSettleRaf = 0;
+  let emojiSheetSettleTimer = 0;
+  let scrollDownComposerOffsetRaf = 0;
+  let closeFeedPersistRaf = 0;
+  let closeFeedPersistTimerFast = 0;
+  let closeFeedPersistTimerSlow = 0;
+  let closeFeedPersistToken = 0;
+  let mobileKeyboardInsetSyncRaf = 0;
+  let mobileKeyboardViewportSyncBound = false;
   let sharedPullInFlight = false;
   let sharedHistoryHasMore = false;
   let sharedHistoryNextBeforeId = null;
@@ -330,7 +349,6 @@
   let webPushSyncRequestedWithPermission = false;
   let webPushSyncForceRequested = false;
   let webPushSyncQueuedClientId = "";
-  const assistantHandoffPendingByClient = new Map();
   const selectedMessageIds = new Set();
   const hotQuestionOrderCardsCache = new Map();
   const hotQuestionOrderCardsFetchInFlight = new Map();
@@ -679,6 +697,62 @@
     return Math.max(0, Math.min(Number(value || 0), maxTop));
   }
 
+  function getFeedBottomDistanceSnapshot() {
+    if (!feed) return null;
+    const distance = Number(feed.scrollHeight || 0) - Number(feed.clientHeight || 0) - Number(feed.scrollTop || 0);
+    if (!Number.isFinite(distance)) return null;
+    return Math.max(0, distance);
+  }
+
+  function applyFeedBottomDistanceSnapshot(distance) {
+    if (!feed) return false;
+    const raw = Number(distance);
+    if (!Number.isFinite(raw)) return false;
+    const nextTop = Number(feed.scrollHeight || 0) - Number(feed.clientHeight || 0) - Math.max(0, raw);
+    feed.scrollTop = clampFeedScrollTop(nextTop);
+    updateScrollDownButton();
+    return true;
+  }
+
+  function stopEmojiSheetBottomDistanceStabilization() {
+    if (emojiSheetSettleRaf) {
+      cancelAnimationFrame(emojiSheetSettleRaf);
+      emojiSheetSettleRaf = 0;
+    }
+    if (emojiSheetSettleTimer) {
+      clearTimeout(emojiSheetSettleTimer);
+      emojiSheetSettleTimer = 0;
+    }
+  }
+
+  function stabilizeFeedBottomDistance(distance, durationMs) {
+    const target = Number(distance);
+    if (!Number.isFinite(target) || target < 0) return;
+    const duration = Math.max(120, Number(durationMs || CHAT_EMOJI_SHEET_SETTLE_MS));
+    stopEmojiSheetBottomDistanceStabilization();
+
+    const startedAt = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+
+    const step = function (now) {
+      applyFeedBottomDistanceSnapshot(target);
+      const current = typeof now === "number" ? now : Date.now();
+      if ((current - startedAt) < duration) {
+        emojiSheetSettleRaf = requestAnimationFrame(step);
+        return;
+      }
+      emojiSheetSettleRaf = 0;
+      applyFeedBottomDistanceSnapshot(target);
+    };
+
+    emojiSheetSettleRaf = requestAnimationFrame(step);
+    emojiSheetSettleTimer = window.setTimeout(function () {
+      stopEmojiSheetBottomDistanceStabilization();
+      applyFeedBottomDistanceSnapshot(target);
+    }, duration + 90);
+  }
+
   function normalizePersistedFeedTop(value) {
     const top = Number(value || 0);
     if (!Number.isFinite(top) || top <= 0) return 0;
@@ -730,10 +804,12 @@
       anchorOffset: Number(snapshot.anchorOffset) || 0,
     };
 
-    window.setTimeout(function () {
-      if (!overlay.classList.contains("is-open")) return;
-      applyFeedViewportStateSnapshot(stableSnapshot);
-    }, 120);
+    if (!isMobileChatViewport()) {
+      window.setTimeout(function () {
+        if (!overlay.classList.contains("is-open")) return;
+        applyFeedViewportStateSnapshot(stableSnapshot);
+      }, 120);
+    }
 
     const attachmentImages = Array.from(
       thread.querySelectorAll(".shop-company-chat-attachment-image")
@@ -795,10 +871,53 @@
     applyFeedViewportStateSnapshot(pendingFeedRestoreState);
     if (!isFeedViewportRestoreSatisfied(pendingFeedRestoreState)) return false;
     pendingFeedRestoreState = null;
-    requestAnimationFrame(function () {
-      ensureTopVisibleEntryNotClipped();
-    });
     return true;
+  }
+
+  function cancelDeferredClosedFeedPersist() {
+    closeFeedPersistToken += 1;
+    if (closeFeedPersistRaf) {
+      cancelAnimationFrame(closeFeedPersistRaf);
+      closeFeedPersistRaf = 0;
+    }
+    if (closeFeedPersistTimerFast) {
+      clearTimeout(closeFeedPersistTimerFast);
+      closeFeedPersistTimerFast = 0;
+    }
+    if (closeFeedPersistTimerSlow) {
+      clearTimeout(closeFeedPersistTimerSlow);
+      closeFeedPersistTimerSlow = 0;
+    }
+  }
+
+  function persistFeedViewportAfterClose() {
+    if (overlay.classList.contains("is-open")) return;
+    saveFeedScrollPosition({ force: true, persist: true });
+    persistFeedScrollPositionSnapshot();
+  }
+
+  function scheduleDeferredClosedFeedPersist() {
+    cancelDeferredClosedFeedPersist();
+    const token = closeFeedPersistToken;
+    const persistIfCurrent = function () {
+      if (token !== closeFeedPersistToken) return;
+      persistFeedViewportAfterClose();
+    };
+
+    closeFeedPersistRaf = requestAnimationFrame(function () {
+      closeFeedPersistRaf = 0;
+      persistIfCurrent();
+    });
+
+    closeFeedPersistTimerFast = window.setTimeout(function () {
+      closeFeedPersistTimerFast = 0;
+      persistIfCurrent();
+    }, 90);
+
+    closeFeedPersistTimerSlow = window.setTimeout(function () {
+      closeFeedPersistTimerSlow = 0;
+      persistIfCurrent();
+    }, 240);
   }
 
   function saveFeedScrollPosition(options) {
@@ -830,7 +949,6 @@
   function restoreFeedScrollPosition(options) {
     const opts = options || {};
     const clientId = String(opts.clientId || getActiveChatClientId() || "");
-    let normalizedTopSnapshot = false;
 
     let snapshot = lastFeedViewportState && typeof lastFeedViewportState === "object"
       ? { ...lastFeedViewportState }
@@ -851,60 +969,10 @@
       };
     }
 
-    if (isMobileChatViewport() && thread && snapshot) {
-      const firstRow = thread.querySelector(".shop-company-chat-row[data-message-id]");
-      const firstRowId = String(firstRow && firstRow.getAttribute("data-message-id") || "");
-      const snapshotAnchorId = String(snapshot.anchorId || "");
-      const snapshotTop = Number(snapshot.top || 0);
-      if (
-        firstRowId
-        && snapshotAnchorId
-        && firstRowId === snapshotAnchorId
-        && Number.isFinite(snapshotTop)
-        && snapshotTop <= 220
-      ) {
-        snapshot = {
-          ...snapshot,
-          top: 0,
-          anchorId: "",
-          anchorOffset: 0,
-        };
-        normalizedTopSnapshot = true;
-      }
-    }
-
-    if (normalizedTopSnapshot && clientId) {
-      savePersistedFeedViewportState(clientId, snapshot);
-    }
-
     pendingFeedRestoreState = { ...snapshot };
     const applied = applyFeedViewportStateSnapshot(snapshot);
     if (!applied) return false;
     scheduleFeedViewportRestoreStabilization(snapshot);
-    if (isMobileChatViewport() && Number(snapshot.top) <= 4) {
-      const normalizeTopSnapshot = function () {
-        if (!feed || !thread) return;
-        const currentTop = Math.max(0, Number(feed.scrollTop || 0));
-        if (currentTop > 140) return;
-        const children = Array.from(thread.children || []);
-        if (!children.length) return;
-        const feedRect = feed.getBoundingClientRect();
-        const topEdge = feedRect.top + 1;
-        const firstRect = children[0].getBoundingClientRect();
-        const firstItemClipped = firstRect.top < (topEdge - 1) || firstRect.bottom <= (topEdge + 1);
-        if (!firstItemClipped && currentTop > 0) return;
-        feed.scrollTop = 0;
-        updateScrollDownButton();
-      };
-      requestAnimationFrame(normalizeTopSnapshot);
-      window.setTimeout(normalizeTopSnapshot, 220);
-    }
-    requestAnimationFrame(function () {
-      ensureTopVisibleEntryNotClipped();
-    });
-    window.setTimeout(function () {
-      ensureTopVisibleEntryNotClipped();
-    }, 160);
     if (isFeedViewportRestoreSatisfied(snapshot)) {
       pendingFeedRestoreState = null;
     }
@@ -1075,7 +1143,9 @@
   function shouldSuppressLocalBrowserNotification() {
     if (!isWebPushSupported() || !isWebPushSecureContext()) return false;
     if (Notification.permission !== "granted") return false;
-    return !!String(webPushSyncedFingerprint || "").trim();
+    if (String(webPushSyncedFingerprint || "").trim()) return true;
+    if (String(webPushSubscriptionVapidKey || "").trim()) return true;
+    return webPushSyncInFlight === true;
   }
 
   function maybeNotifyIncomingAgentMessage(entry) {
@@ -1095,7 +1165,7 @@
     if (!tabActive || !isOpen) {
       if (shouldSuppressLocalBrowserNotification()) return;
       showIncomingMessageBrowserNotification(
-        "\u041d\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u043e\u0442 \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438",
+        getCompanyAuthorName(),
         getEntryPreviewText(entry) || "\u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 \u0447\u0430\u0442, \u0447\u0442\u043e\u0431\u044b \u043e\u0442\u0432\u0435\u0442\u0438\u0442\u044c."
       );
     }
@@ -1465,24 +1535,184 @@
     }
   }
 
-  function normalizeChatQuickQuestionsList(rawValue) {
+  function cloneDefaultChatQuickQuestionItems() {
+    return DEFAULT_CHAT_QUICK_QUESTION_ITEMS.map(function (item) {
+      return {
+        id: String(item.id || ""),
+        type: item.id === CHAT_QUICK_ORDER_ID ? "order" : "custom",
+        question: String(item.question || ""),
+        answer: String(item.answer || ""),
+        enabled: item.enabled !== false,
+      };
+    });
+  }
+
+  function normalizeChatQuickQuestionText(value) {
+    return String(value === undefined || value === null ? "" : value)
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 160);
+  }
+
+  function normalizeChatQuickQuestionAnswer(value) {
+    return String(value === undefined || value === null ? "" : value)
+      .replace(/\s+\n/g, "\n")
+      .trim()
+      .slice(0, 1200);
+  }
+
+  function normalizeChatQuickQuestionEnabled(value, fallback) {
+    if (value === undefined || value === null || value === "") return fallback !== false;
+    if (typeof value === "boolean") return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (!normalized) return fallback !== false;
+    if (normalized === "1" || normalized === "true" || normalized === "on" || normalized === "yes") return true;
+    if (normalized === "0" || normalized === "false" || normalized === "off" || normalized === "no") return false;
+    const numeric = Number(normalized);
+    if (Number.isFinite(numeric)) return numeric !== 0;
+    return fallback !== false;
+  }
+
+  function normalizeChatQuickQuestionId(value, index) {
+    const source = String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/-{2,}/g, "-")
+      .replace(/^[-_]+|[-_]+$/g, "")
+      .slice(0, 48);
+    if (source && source !== CHAT_QUICK_ORDER_ID) return source;
+    return "custom-" + String(index + 1);
+  }
+
+  function isOrderQuickQuestionLike(value) {
+    const normalized = normalizeHotQuestionKey(value);
+    if (!normalized) return false;
+    return normalized.includes(HOT_QUESTION_ORDER_KEY) || normalized.includes(HOT_QUESTION_ORDER_KEY_ALT);
+  }
+
+  function normalizeChatQuickQuestionConfigList(rawValue) {
     let parsed = [];
     if (Array.isArray(rawValue)) {
       parsed = rawValue;
     } else if (typeof rawValue === "string") {
-      try {
-        const next = JSON.parse(rawValue);
-        if (Array.isArray(next)) parsed = next;
-      } catch {
+      const trimmed = rawValue.trim();
+      if (!trimmed) {
         parsed = [];
+      } else {
+        try {
+          const next = JSON.parse(trimmed);
+          parsed = Array.isArray(next) ? next : [];
+        } catch {
+          parsed = [];
+        }
       }
+    } else if (rawValue && typeof rawValue === "object" && Array.isArray(rawValue.items)) {
+      parsed = rawValue.items;
     }
 
-    const normalized = parsed
-      .map(function (item) { return String(item ?? "").trim(); })
+    if (!parsed.length) return cloneDefaultChatQuickQuestionItems();
+
+    const maxCustomItems = Math.max(0, CHAT_QUICK_QUESTIONS_MAX - 1);
+    const customCandidates = [];
+    let orderEnabled = true;
+    let orderDefined = false;
+
+    parsed.forEach(function (item, index) {
+      if (customCandidates.length >= maxCustomItems) return;
+
+      if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
+        const question = normalizeChatQuickQuestionText(item);
+        if (!question) return;
+        if (index === 0 && isOrderQuickQuestionLike(question)) {
+          orderDefined = true;
+          orderEnabled = true;
+          return;
+        }
+        customCandidates.push({
+          id: "",
+          question: question,
+          answer: "",
+          enabled: true,
+        });
+        return;
+      }
+
+      if (!item || typeof item !== "object") return;
+      const source = item;
+      const question = normalizeChatQuickQuestionText(
+        source.question ?? source.label ?? source.title ?? source.text ?? ""
+      );
+      const rawId = String(source.id ?? source.key ?? source.code ?? "").trim();
+      const rawType = String(source.type ?? "").trim().toLowerCase();
+      const isOrder = (
+        rawId === CHAT_QUICK_ORDER_ID
+        || rawType === CHAT_QUICK_ORDER_ID
+        || normalizeChatQuickQuestionEnabled(source.is_order, false)
+        || (index === 0 && isOrderQuickQuestionLike(question))
+      );
+
+      if (isOrder) {
+        orderDefined = true;
+        orderEnabled = normalizeChatQuickQuestionEnabled(
+          source.enabled ?? source.is_enabled ?? source.active,
+          true
+        );
+        return;
+      }
+
+      if (!question) return;
+      let answer = normalizeChatQuickQuestionAnswer(
+        source.answer ?? source.reply ?? source.response ?? source.message ?? ""
+      );
+      customCandidates.push({
+        id: rawId,
+        question: question,
+        answer: answer,
+        enabled: normalizeChatQuickQuestionEnabled(
+          source.enabled ?? source.is_enabled ?? source.active,
+          true
+        ),
+      });
+    });
+
+    const usedIds = new Set([CHAT_QUICK_ORDER_ID]);
+    const customItems = [];
+    customCandidates.slice(0, maxCustomItems).forEach(function (item, index) {
+      let id = normalizeChatQuickQuestionId(item.id, index);
+      if (usedIds.has(id)) {
+        let seq = index + 1;
+        while (usedIds.has("custom-" + String(seq))) seq += 1;
+        id = "custom-" + String(seq);
+      }
+      usedIds.add(id);
+      customItems.push({
+        id: id,
+        type: "custom",
+        question: normalizeChatQuickQuestionText(item.question),
+        answer: normalizeChatQuickQuestionAnswer(item.answer),
+        enabled: item.enabled !== false,
+      });
+    });
+
+    return [
+      {
+        id: CHAT_QUICK_ORDER_ID,
+        type: "order",
+        question: CHAT_QUICK_ORDER_QUESTION,
+        answer: "",
+        enabled: orderDefined ? orderEnabled !== false : true,
+      },
+      ...customItems,
+    ];
+  }
+
+  function buildEnabledQuickQuestions(configList) {
+    return (Array.isArray(configList) ? configList : [])
+      .filter(function (item) { return item && item.enabled !== false; })
+      .map(function (item) { return normalizeChatQuickQuestionText(item.question); })
       .filter(Boolean)
       .slice(0, CHAT_QUICK_QUESTIONS_MAX);
-    return normalized.length ? normalized : DEFAULT_CHAT_QUICK_QUESTIONS.slice();
   }
 
   function applyAliasSet(setRef, values) {
@@ -1495,13 +1725,16 @@
   }
 
   function rebuildHotQuestionAliases() {
-    const quick = Array.isArray(chatRuntimeSettings.quickQuestions)
-      ? chatRuntimeSettings.quickQuestions
-      : DEFAULT_CHAT_QUICK_QUESTIONS;
+    const quickConfig = Array.isArray(chatRuntimeSettings.quickQuestionsConfig)
+      ? chatRuntimeSettings.quickQuestionsConfig
+      : cloneDefaultChatQuickQuestionItems();
+    const orderItem = quickConfig.find(function (item) {
+      if (!item || item.enabled === false) return false;
+      const id = String(item.id || "").toLowerCase();
+      const type = String(item.type || "").toLowerCase();
+      return id === CHAT_QUICK_ORDER_ID || type === "order";
+    });
     const orderAliases = [HOT_QUESTION_ORDER_KEY, HOT_QUESTION_ORDER_KEY_ALT];
-    const qualityAliases = [HOT_QUESTION_QUALITY_KEY];
-    const completenessAliases = [HOT_QUESTION_COMPLETENESS_KEY];
-    const otherAliases = [HOT_QUESTION_OTHER_KEY];
 
     const addNormalizedAlias = function (target, value) {
       const normalized = normalizeHotQuestionKey(value);
@@ -1509,15 +1742,10 @@
       target.push(normalized);
     };
 
-    addNormalizedAlias(orderAliases, quick[0]);
-    addNormalizedAlias(qualityAliases, quick[1]);
-    addNormalizedAlias(completenessAliases, quick[2]);
-    addNormalizedAlias(otherAliases, quick[3]);
+    addNormalizedAlias(orderAliases, CHAT_QUICK_ORDER_QUESTION);
+    if (orderItem) addNormalizedAlias(orderAliases, orderItem.question);
 
     applyAliasSet(hotQuestionAliases.order, orderAliases);
-    applyAliasSet(hotQuestionAliases.quality, qualityAliases);
-    applyAliasSet(hotQuestionAliases.completeness, completenessAliases);
-    applyAliasSet(hotQuestionAliases.other, otherAliases);
   }
 
   function normalizeAssistantGenderValue(rawValue) {
@@ -1564,6 +1792,16 @@
       source.welcome_message ?? source.chat_welcome_message ?? ""
     ).trim();
     const welcomeMessage = welcomeMessageRaw || getDefaultChatWelcomeMessageByGender(assistantGender);
+    const welcomeEnabledRaw =
+      source.welcome_enabled
+      ?? source.chat_welcome_enabled;
+    const welcomeEnabledNorm = String(welcomeEnabledRaw == null ? "" : welcomeEnabledRaw).trim().toLowerCase();
+    const welcomeEnabled = !(
+      welcomeEnabledRaw === false
+      || welcomeEnabledRaw === 0
+      || welcomeEnabledNorm === "0"
+      || welcomeEnabledNorm === "false"
+    );
     const operatorName = String(
       source.operator_name
       ?? source.chat_operator_name
@@ -1571,15 +1809,31 @@
       ?? source.name
       ?? ""
     ).trim();
-    const quickQuestions = normalizeChatQuickQuestionsList(
-      source.quick_questions ?? source.chat_quick_questions_json
+    const quickQuestionsConfig = normalizeChatQuickQuestionConfigList(
+      source.quick_questions_config
+      ?? source.quick_questions
+      ?? source.chat_quick_questions_json
+    );
+    const quickQuestions = buildEnabledQuickQuestions(quickQuestionsConfig);
+    const quickQuestionsEnabledRaw =
+      source.quick_questions_enabled
+      ?? source.chat_quick_questions_enabled;
+    const quickQuestionsEnabledNorm = String(quickQuestionsEnabledRaw == null ? "" : quickQuestionsEnabledRaw).trim().toLowerCase();
+    const quickQuestionsEnabled = !(
+      quickQuestionsEnabledRaw === false
+      || quickQuestionsEnabledRaw === 0
+      || quickQuestionsEnabledNorm === "0"
+      || quickQuestionsEnabledNorm === "false"
     );
     return {
       assistantName: assistantName,
       assistantGender: assistantGender,
       welcomeMessage: welcomeMessage,
+      welcomeEnabled: welcomeEnabled,
       optionsText: DEFAULT_CHAT_OPTIONS_TEXT,
       quickQuestions: quickQuestions,
+      quickQuestionsConfig: quickQuestionsConfig,
+      quickQuestionsEnabled: quickQuestionsEnabled,
       operatorName: operatorName,
       isEnabled: isEnabled,
     };
@@ -1642,9 +1896,12 @@
       String(chatRuntimeSettings.assistantName || ""),
       String(chatRuntimeSettings.assistantGender || ""),
       String(chatRuntimeSettings.welcomeMessage || ""),
+      String(chatRuntimeSettings.welcomeEnabled !== false ? "1" : "0"),
       String(chatRuntimeSettings.optionsText || ""),
       String(chatRuntimeSettings.operatorName || ""),
       JSON.stringify(chatRuntimeSettings.quickQuestions || []),
+      JSON.stringify(chatRuntimeSettings.quickQuestionsConfig || []),
+      String(chatRuntimeSettings.quickQuestionsEnabled !== false ? "1" : "0"),
       String(chatRuntimeSettings.isEnabled !== false ? "1" : "0"),
     ].join("|");
 
@@ -1652,8 +1909,13 @@
     chatRuntimeSettings.assistantName = next.assistantName;
     chatRuntimeSettings.assistantGender = normalizeAssistantGenderValue(next.assistantGender);
     chatRuntimeSettings.welcomeMessage = next.welcomeMessage;
+    chatRuntimeSettings.welcomeEnabled = next.welcomeEnabled !== false;
     chatRuntimeSettings.optionsText = next.optionsText;
     chatRuntimeSettings.quickQuestions = next.quickQuestions.slice();
+    chatRuntimeSettings.quickQuestionsConfig = Array.isArray(next.quickQuestionsConfig)
+      ? next.quickQuestionsConfig.slice()
+      : cloneDefaultChatQuickQuestionItems();
+    chatRuntimeSettings.quickQuestionsEnabled = next.quickQuestionsEnabled !== false;
     chatRuntimeSettings.operatorName = next.operatorName;
     chatRuntimeSettings.isEnabled = next.isEnabled !== false;
     rebuildHotQuestionAliases();
@@ -1663,9 +1925,12 @@
       String(chatRuntimeSettings.assistantName || ""),
       String(chatRuntimeSettings.assistantGender || ""),
       String(chatRuntimeSettings.welcomeMessage || ""),
+      String(chatRuntimeSettings.welcomeEnabled !== false ? "1" : "0"),
       String(chatRuntimeSettings.optionsText || ""),
       String(chatRuntimeSettings.operatorName || ""),
       JSON.stringify(chatRuntimeSettings.quickQuestions || []),
+      JSON.stringify(chatRuntimeSettings.quickQuestionsConfig || []),
+      String(chatRuntimeSettings.quickQuestionsEnabled !== false ? "1" : "0"),
       String(chatRuntimeSettings.isEnabled !== false ? "1" : "0"),
     ].join("|");
     if (opts.refreshUi === true && prevStateKey !== nextStateKey) {
@@ -1681,8 +1946,11 @@
       chat_assistant_name: tenant.chat_assistant_name,
       chat_assistant_gender: tenant.chat_assistant_gender,
       chat_welcome_message: tenant.chat_welcome_message,
+      chat_welcome_enabled: tenant.chat_welcome_enabled,
       chat_operator_name: tenant.chat_operator_name,
       chat_quick_questions_json: tenant.chat_quick_questions_json,
+      chat_quick_questions_enabled: tenant.chat_quick_questions_enabled,
+      quick_questions_config: tenant.quick_questions_config,
       chat_widget_enabled: tenant.chat_widget_enabled,
       site_name: tenant.site_name,
       name: tenant.name,
@@ -2790,11 +3058,6 @@
 
     const prevTop = feed.scrollTop;
     const isChatOpen = overlay.classList.contains("is-open");
-    const hiddenDistanceBefore = feed.scrollHeight - feed.clientHeight - feed.scrollTop;
-    const hadScrollDownButton = isChatOpen && (
-      pendingFeedNewCount > 0
-      || hiddenDistanceBefore >= CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX
-    );
     liveEntries = entries;
     sharedThreadUpdatedAt = remoteUpdatedAt;
     renderThread();
@@ -2803,17 +3066,11 @@
       applyPeerTypingState(null, { forceInactive: true });
       maybeNotifyIncomingAgentMessage(latestIncomingAgentEntry);
     }
-    const shouldAutoScrollIncoming = isChatOpen && hasIncomingAgentMessages && !hadScrollDownButton;
-
-    if (shouldAutoScrollIncoming) {
-      scrollToBottom(false);
-    } else {
-      feed.scrollTop = prevTop;
-      tryApplyPendingFeedRestoreState();
-      updateScrollDownButton();
-      if (isChatOpen && hasIncomingAgentMessages) {
-        addPendingFeedMessageIds(appendedAgentMessageIds);
-      }
+    feed.scrollTop = prevTop;
+    tryApplyPendingFeedRestoreState();
+    updateScrollDownButton();
+    if (isChatOpen && hasIncomingAgentMessages) {
+      addPendingFeedMessageIds(appendedAgentMessageIds);
     }
     hasLoadedSharedThreadOnce = true;
     if (readChangedIds.length) {
@@ -3126,6 +3383,7 @@
   }
 
   function preloadEmojiAtlas() {
+    if (shouldUseNativeMobileEmojiKeyboard()) return;
     if (!EMOJI_ATLAS_ENABLED || emojiAtlasPreloadStarted) return;
     emojiAtlasPreloadStarted = true;
     const img = new Image();
@@ -3145,9 +3403,28 @@
     };
   }
 
+  function getEmojiAtlasRenderCellSize(glyphClassName) {
+    const cls = String(glyphClassName || "");
+    if (!cls) return 24;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--reaction") !== -1) return 26;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--pill") !== -1) return 32;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--composer") !== -1) return 30;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--picker") !== -1) return 24;
+    if (
+      cls.indexOf("shop-company-chat-emoji-glyph--input-inline") !== -1
+      || cls.indexOf("shop-company-chat-emoji-glyph--preview") !== -1
+    ) {
+      return null;
+    }
+    return 24;
+  }
+
   function createEmojiAtlasGlyph(glyphClassName, emojiValue) {
+    if (shouldUseNativeMobileEmojiKeyboard()) return null;
     const pos = getEmojiAtlasPosition(emojiValue);
     if (!pos) return null;
+    const cellSize = getEmojiAtlasRenderCellSize(glyphClassName);
+    const hasPixelLayout = Number.isFinite(cellSize) && cellSize > 0;
     const xPercent = EMOJI_ATLAS_COLUMNS > 1 ? (pos.col / (EMOJI_ATLAS_COLUMNS - 1)) * 100 : 0;
     const yPercent = EMOJI_ATLAS_ROWS > 1 ? (pos.row / (EMOJI_ATLAS_ROWS - 1)) * 100 : 0;
 
@@ -3155,8 +3432,13 @@
     glyph.className = String(glyphClassName || "");
     glyph.style.backgroundImage = 'url("' + EMOJI_ATLAS_URL + '")';
     glyph.style.backgroundRepeat = "no-repeat";
-    glyph.style.backgroundSize = String(EMOJI_ATLAS_COLUMNS * 100) + "% " + String(EMOJI_ATLAS_ROWS * 100) + "%";
-    glyph.style.backgroundPosition = String(xPercent) + "% " + String(yPercent) + "%";
+    if (hasPixelLayout) {
+      glyph.style.backgroundSize = String(EMOJI_ATLAS_COLUMNS * cellSize) + "px " + String(EMOJI_ATLAS_ROWS * cellSize) + "px";
+      glyph.style.backgroundPosition = String(-pos.col * cellSize) + "px " + String(-pos.row * cellSize) + "px";
+    } else {
+      glyph.style.backgroundSize = String(EMOJI_ATLAS_COLUMNS * 100) + "% " + String(EMOJI_ATLAS_ROWS * 100) + "%";
+      glyph.style.backgroundPosition = String(xPercent) + "% " + String(yPercent) + "%";
+    }
     glyph.setAttribute("aria-hidden", "true");
     return glyph;
   }
@@ -3200,47 +3482,20 @@
     if (!host) return;
     const val = String(glyphValue || "");
     if (!val) return;
-    const atlasGlyph = createEmojiAtlasGlyph(className, val);
-    if (atlasGlyph) {
-      host.appendChild(atlasGlyph);
+    const cls = String(className || "");
+    const atlasGlyph = createEmojiAtlasGlyph(cls, val);
+    if (!atlasGlyph) {
+      host.appendChild(document.createTextNode(val));
       return;
     }
-    const glyph = document.createElement("span");
-    glyph.className = String(className || "");
-    glyph.textContent = val;
-    glyph.setAttribute("aria-hidden", "true");
-    host.appendChild(glyph);
+    host.appendChild(atlasGlyph);
   }
 
   function setEmojiGlyph(target, emoji, glyphClassName) {
     if (!target) return;
     const value = String(emoji || "");
-    if (emojiAssetsState === "fallback") {
-      target.textContent = "";
-      appendNativeEmojiGlyph(target, value, glyphClassName);
-      return;
-    }
-    const src = getEmojiAssetUrl(value);
     target.textContent = "";
-    if (!src) {
-      appendNativeEmojiGlyph(target, value, glyphClassName);
-      return;
-    }
-
-    const img = document.createElement("img");
-    img.className = glyphClassName;
-    img.src = src;
-    img.alt = value;
-    img.decoding = "async";
-    img.loading = "lazy";
-    img.fetchPriority = "low";
-    img.draggable = false;
-    img.setAttribute("aria-hidden", "true");
-    img.addEventListener("error", function () {
-      target.textContent = value;
-      activateNativeEmojiFallback();
-    }, { once: true });
-    target.appendChild(img);
+    appendNativeEmojiGlyph(target, value, glyphClassName);
   }
 
   const emojiGraphemeSegmenter = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
@@ -3290,28 +3545,6 @@
       const segments = segmentGraphemes(line);
       segments.forEach(function (segment) {
         if (isEmojiGrapheme(segment)) {
-          if (emojiAssetsState === "fallback") {
-            appendNativeEmojiGlyph(target, segment, glyphClassName);
-            return;
-          }
-          const src = getEmojiAssetUrl(segment);
-          if (src) {
-            const img = document.createElement("img");
-            img.className = glyphClassName;
-            img.src = src;
-            img.alt = segment;
-            img.decoding = "async";
-            img.loading = "lazy";
-            img.fetchPriority = "low";
-            img.draggable = false;
-            img.setAttribute("aria-hidden", "true");
-            img.addEventListener("error", function () {
-              img.replaceWith(document.createTextNode(segment));
-              activateNativeEmojiFallback();
-            }, { once: true });
-            target.appendChild(img);
-            return;
-          }
           appendNativeEmojiGlyph(target, segment, glyphClassName);
           return;
         }
@@ -3803,8 +4036,52 @@
     return "";
   }
 
+  function lockBackgroundPageScrollForChat() {
+    if (chatBodyScrollLockState) return;
+    const bodyStyle = document.body.style;
+    chatBodyScrollLockY = Math.max(
+      0,
+      Number(window.pageYOffset || window.scrollY || document.documentElement.scrollTop || 0)
+    );
+    chatBodyScrollLockState = {
+      position: String(bodyStyle.position || ""),
+      top: String(bodyStyle.top || ""),
+      left: String(bodyStyle.left || ""),
+      right: String(bodyStyle.right || ""),
+      width: String(bodyStyle.width || ""),
+      overflow: String(bodyStyle.overflow || ""),
+      overscrollBehavior: String(bodyStyle.overscrollBehavior || ""),
+    };
+
+    bodyStyle.position = "fixed";
+    bodyStyle.top = "-" + String(chatBodyScrollLockY) + "px";
+    bodyStyle.left = "0";
+    bodyStyle.right = "0";
+    bodyStyle.width = "100%";
+    bodyStyle.overflow = "hidden";
+    bodyStyle.overscrollBehavior = "none";
+  }
+
+  function unlockBackgroundPageScrollForChat() {
+    if (!chatBodyScrollLockState) return;
+    const bodyStyle = document.body.style;
+    const savedY = Math.max(0, Number(chatBodyScrollLockY || 0));
+    bodyStyle.position = chatBodyScrollLockState.position;
+    bodyStyle.top = chatBodyScrollLockState.top;
+    bodyStyle.left = chatBodyScrollLockState.left;
+    bodyStyle.right = chatBodyScrollLockState.right;
+    bodyStyle.width = chatBodyScrollLockState.width;
+    bodyStyle.overflow = chatBodyScrollLockState.overflow;
+    bodyStyle.overscrollBehavior = chatBodyScrollLockState.overscrollBehavior;
+    chatBodyScrollLockState = null;
+    chatBodyScrollLockY = 0;
+    if (overlay.classList.contains("is-open")) return;
+    window.scrollTo(0, savedY);
+  }
+
   var emojiPickerInitialized = false;
   function openCompanyChat() {
+    cancelDeferredClosedFeedPersist();
     preloadEmojiAtlas();
     if (!emojiPickerInitialized) {
       emojiPickerInitialized = true;
@@ -3833,9 +4110,14 @@
     }
     closeAttachPreview({ focusComposer: false });
     hideEmojiPopover();
+    bindMobileKeyboardViewportSync();
+    setMobileKeyboardInset(0);
     overlay.classList.add("is-open");
     overlay.setAttribute("aria-hidden", "false");
     document.body.classList.add("shop-company-chat-open");
+    lockBackgroundPageScrollForChat();
+    scheduleScrollDownComposerExtraOffsetSync();
+    scheduleMobileKeyboardInsetSync();
     renderTypingIndicator();
     requestAnimationFrame(function () {
       pullSharedThreadFromServer({ force: true })
@@ -3848,7 +4130,6 @@
               return remoteCreateSharedMessage(welcomeMessage);
             });
           }
-          startSharedThreadPolling();
           const restored = restoreFeedScrollPosition({ preferPersisted: true });
           if (!restored) {
             scrollToBottom(false, true);
@@ -3856,21 +4137,27 @@
             syncPendingFeedCountByViewport();
             updateScrollDownButton();
           }
-          window.setTimeout(function () {
-            tryApplyPendingFeedRestoreState();
-          }, 0);
-          window.setTimeout(function () {
-            tryApplyPendingFeedRestoreState();
-          }, 220);
+          if (isMobileChatViewport()) {
+            requestAnimationFrame(function () {
+              tryApplyPendingFeedRestoreState();
+            });
+          } else {
+            window.setTimeout(function () {
+              tryApplyPendingFeedRestoreState();
+            }, 0);
+            window.setTimeout(function () {
+              tryApplyPendingFeedRestoreState();
+            }, 220);
+          }
           syncComposerRichPreview({});
-          input.focus();
-          syncVisibleChatReadState();
-          window.setTimeout(function () {
-            ensureTopVisibleEntryNotClipped();
-          }, 0);
-          window.setTimeout(function () {
-            ensureTopVisibleEntryNotClipped();
-          }, 220);
+          if (!shouldUseNativeMobileEmojiKeyboard()) {
+            input.focus();
+            scheduleMobileKeyboardInsetSyncBurst();
+          } else {
+            setMobileKeyboardInset(0);
+          }
+          startSharedThreadPolling();
+          syncVisibleChatReadState({ preserveViewport: true });
         });
     });
   }
@@ -3891,7 +4178,10 @@
     overlay.classList.remove("is-open");
     overlay.setAttribute("aria-hidden", "true");
     document.body.classList.remove("shop-company-chat-open");
+    unlockBackgroundPageScrollForChat();
+    unbindMobileKeyboardViewportSync();
     persistFeedScrollPositionSnapshot();
+    scheduleDeferredClosedFeedPersist();
     pendingFeedRestoreState = null;
     renderUnreadBadge(liveEntries);
     renderTypingIndicator();
@@ -3931,6 +4221,8 @@
   }
 
   function ensureDailyWelcomeMessage() {
+    if (chatRuntimeSettings.welcomeEnabled === false) return null;
+
     const dayKey = getLocalDayKey(new Date());
     if (!dayKey) return null;
 
@@ -3986,10 +4278,17 @@
   }
 
   function getAllEntries() {
+    const quickQuestionsFeatureEnabled = chatRuntimeSettings.quickQuestionsEnabled !== false;
     const rawEntries = baseEntries
       .slice(visibleStart)
       .concat(liveEntries)
       .filter(function (entry) {
+        if (entry && entry.type === "options" && !quickQuestionsFeatureEnabled) return false;
+        const entryId = String(entry && entry.id || "");
+        if (
+          chatRuntimeSettings.welcomeEnabled === false
+          && /^daily-welcome-\d{4}-\d{2}-\d{2}$/.test(entryId)
+        ) return false;
         return !isMessageHiddenLocally(entry && entry.id);
       });
 
@@ -4003,6 +4302,7 @@
     const withDailyPair = [];
     rawEntries.forEach(function (entry) {
       withDailyPair.push(entry);
+      if (!quickQuestionsFeatureEnabled) return;
       const dayKey = getDailyWelcomeDayKey(entry);
       if (!dayKey) return;
 
@@ -4023,6 +4323,38 @@
       });
       hasOptionsById.add(optionsId);
     });
+
+    if (quickQuestionsFeatureEnabled) {
+      const hasAnyOptions = withDailyPair.some(function (entry) {
+        return entry && entry.type === "options";
+      });
+      if (!hasAnyOptions) {
+        const nowIso = new Date().toISOString();
+        const dayKey = getLocalDayKey(nowIso);
+        const optionsId = "daily-welcome-options-" + dayKey;
+        if (dayKey && !isMessageHiddenLocally(optionsId)) {
+          const anchorEntry = withDailyPair[0] || null;
+          const dayLabel = anchorEntry && anchorEntry.day
+            ? String(anchorEntry.day)
+            : formatDayLabelFromIso(nowIso);
+          const timeLabel = anchorEntry && anchorEntry.time
+            ? String(anchorEntry.time)
+            : formatTimeFromIso(nowIso);
+          withDailyPair.unshift({
+            id: optionsId,
+            type: "options",
+            role: "agent",
+            day: dayLabel,
+            time: timeLabel,
+            text: String(chatRuntimeSettings.optionsText || DEFAULT_CHAT_OPTIONS_TEXT),
+            options: (Array.isArray(chatRuntimeSettings.quickQuestions)
+              ? chatRuntimeSettings.quickQuestions
+              : DEFAULT_CHAT_QUICK_QUESTIONS
+            ).slice(),
+          });
+        }
+      }
+    }
 
     return withDailyPair;
   }
@@ -4096,6 +4428,7 @@
     if (!replyDraft || !replyDraft.id) {
       ui.root.classList.add("hidden");
       syncComposerRichPreview({});
+      scheduleScrollDownComposerExtraOffsetSync();
       return;
     }
 
@@ -4107,6 +4440,7 @@
     );
     ui.root.classList.remove("hidden");
     syncComposerRichPreview({});
+    scheduleScrollDownComposerExtraOffsetSync();
   }
 
   function clearReplyDraft() {
@@ -4298,14 +4632,10 @@
         if (reaction === "__toggle_more__") {
           event.preventDefault();
           event.stopPropagation();
-          const targetMessageId = String(contextMenuMessageId || "");
-          hideContextMenu();
           hideReactionBar();
-          showEmojiPopover("composer", {
-            mode: targetMessageId ? "reaction" : "composer",
-            messageId: targetMessageId,
-          });
-          if (input) input.focus();
+          const nextExpanded = !menu.classList.contains("is-reactions-expanded");
+          setContextMenuReactionsExpanded(nextExpanded);
+          refreshContextMenuReactionBoxPosition();
           return;
         }
         if (!messageId || !reaction) return;
@@ -4455,6 +4785,7 @@
     modalBody.classList.toggle("is-selection-mode", active);
     selectionToolbar.classList.toggle("hidden", !active);
     selectionCountEl.textContent = "\u0412\u044b\u0431\u0440\u0430\u043d\u043e " + count + " " + getMessagesWord(count);
+    scheduleScrollDownComposerExtraOffsetSync();
   }
 
   function clearSelectionMode() {
@@ -5459,13 +5790,20 @@
 
   function syncEmojiSheetOpenState() {
     if (!modalBody || !emojiPopover) return;
+    const wasMobileSheetOpen = modalBody.classList.contains("is-emoji-sheet-open");
     const isMobileSheetOpen = (
       !emojiPopover.classList.contains("hidden")
       && emojiPopover.classList.contains("is-mobile-sheet")
       && !emojiPopover.classList.contains("is-attach-preview")
     );
+    const feedBottomDistance = wasMobileSheetOpen !== isMobileSheetOpen
+      ? getFeedBottomDistanceSnapshot()
+      : null;
     modalBody.classList.toggle("is-emoji-sheet-open", isMobileSheetOpen);
     setComposerEmojiButtonMode(isMobileSheetOpen);
+    if (feedBottomDistance != null) {
+      stabilizeFeedBottomDistance(feedBottomDistance, CHAT_EMOJI_SHEET_SETTLE_MS);
+    }
   }
 
   function setEmojiDefaultOpenCategory() {
@@ -5504,6 +5842,7 @@
   }
 
   function hideEmojiPopover() {
+    stopEmojiSheetBottomDistanceStabilization();
     remountEmojiPopover("composer");
     emojiPopover.classList.add("hidden");
     emojiPopover.classList.remove("is-attach-preview");
@@ -5515,6 +5854,15 @@
 
   function toggleEmojiPopover(target) {
     const normalizedTarget = target === "attach-preview" ? "attach-preview" : "composer";
+    if (shouldUseNativeMobileEmojiKeyboard()) {
+      hideEmojiPopover();
+      if (normalizedTarget === "attach-preview") {
+        attachPreviewCaption.focus();
+      } else if (!input.disabled) {
+        input.focus();
+      }
+      return;
+    }
     const isPreviewTarget = normalizedTarget === "attach-preview";
     const isOpen = !emojiPopover.classList.contains("hidden");
     const hasSameTarget = emojiPopover.classList.contains("is-attach-preview") === isPreviewTarget;
@@ -5549,6 +5897,15 @@
     const opts = options && typeof options === "object" ? options : {};
     const mode = opts.mode === "reaction" ? "reaction" : "composer";
     const messageId = mode === "reaction" ? String(opts.messageId || "") : "";
+    if (shouldUseNativeMobileEmojiKeyboard() && mode !== "reaction") {
+      hideEmojiPopover();
+      if (normalizedTarget === "attach-preview") {
+        attachPreviewCaption.focus();
+      } else if (!input.disabled) {
+        input.focus();
+      }
+      return;
+    }
 
     remountEmojiPopover(normalizedTarget);
     emojiPopover.classList.toggle("is-attach-preview", isPreviewTarget);
@@ -6220,6 +6577,7 @@
   function syncComposerRichPreview(options) {
     if (!input || typeof input.__syncEmojiPreview !== "function") return;
     input.__syncEmojiPreview(options || {});
+    scheduleScrollDownComposerExtraOffsetSync();
   }
 
   function setupComposerRichPreview() {
@@ -6257,6 +6615,7 @@
         preview.classList.add("hidden");
         preview.textContent = "";
         input.classList.remove("is-rich-emoji-preview");
+        scheduleScrollDownComposerExtraOffsetSync();
         if (stickToBottom) scrollToBottom(true);
         return;
       }
@@ -6265,6 +6624,7 @@
       input.classList.add("is-rich-emoji-preview");
       renderEmojiMessageText(preview, value, "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--input-inline");
       preview.style.transform = "translate(" + (-Math.max(0, input.scrollLeft)) + "px, " + (-Math.max(0, input.scrollTop)) + "px)";
+      scheduleScrollDownComposerExtraOffsetSync();
 
       if (stickToBottom) scrollToBottom(true);
     };
@@ -6440,6 +6800,145 @@
       && window.matchMedia("(max-width: 768px)").matches;
   }
 
+  function shouldUseNativeMobileEmojiKeyboard() {
+    if (!isMobileChatViewport()) return false;
+    const hasTouchPoints = Number(navigator.maxTouchPoints || 0) > 0;
+    const hasCoarsePointer = typeof window.matchMedia === "function"
+      && window.matchMedia("(pointer: coarse)").matches;
+    return hasTouchPoints || hasCoarsePointer;
+  }
+
+  function parseCssLengthPx(value) {
+    const parsed = parseFloat(String(value || ""));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function getElementOuterHeightPx(node) {
+    if (!node || !node.isConnected) return 0;
+    const rect = node.getBoundingClientRect();
+    const styles = window.getComputedStyle(node);
+    const marginTop = parseCssLengthPx(styles.marginTop);
+    const marginBottom = parseCssLengthPx(styles.marginBottom);
+    const height = Number(rect && rect.height || 0);
+    if (!Number.isFinite(height) || height <= 0) return 0;
+    return Math.max(0, height + marginTop + marginBottom);
+  }
+
+  function setScrollDownComposerExtraOffset(valuePx) {
+    const raw = Number(valuePx || 0);
+    const next = Number.isFinite(raw) && raw > 0 ? Math.round(raw) : 0;
+    const prev = Number(overlay.dataset.scrollDownComposerExtra || 0);
+    if (prev === next) return;
+    overlay.dataset.scrollDownComposerExtra = String(next);
+    overlay.style.setProperty("--shop-chat-scroll-down-composer-extra", String(next) + "px");
+  }
+
+  function computeScrollDownComposerExtraOffset() {
+    if (!overlay.classList.contains("is-open")) return 0;
+    const selectionModeActive = (
+      modalBody
+      && modalBody.classList.contains("is-selection-mode")
+      && !selectionToolbar.classList.contains("hidden")
+    );
+    const anchor = selectionModeActive ? selectionToolbar : composer;
+    if (!anchor || anchor.classList.contains("hidden")) return 0;
+    const outerHeight = getElementOuterHeightPx(anchor);
+    if (!Number.isFinite(outerHeight) || outerHeight <= 0) return 0;
+    const base = isMobileChatViewport() ? 60 : 72;
+    return Math.max(0, outerHeight - base);
+  }
+
+  function syncScrollDownComposerExtraOffsetNow() {
+    setScrollDownComposerExtraOffset(computeScrollDownComposerExtraOffset());
+  }
+
+  function scheduleScrollDownComposerExtraOffsetSync() {
+    if (scrollDownComposerOffsetRaf) return;
+    scrollDownComposerOffsetRaf = requestAnimationFrame(function () {
+      scrollDownComposerOffsetRaf = 0;
+      syncScrollDownComposerExtraOffsetNow();
+    });
+  }
+
+  function setMobileKeyboardInset(valuePx) {
+    const raw = Number(valuePx || 0);
+    const rounded = Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0;
+    const next = rounded < 8 ? 0 : rounded;
+    const prev = Number(overlay.dataset.keyboardInset || 0);
+    if (prev === next) {
+      scheduleScrollDownComposerExtraOffsetSync();
+      return;
+    }
+    overlay.dataset.keyboardInset = String(next);
+    overlay.style.setProperty("--shop-chat-mobile-keyboard-inset", String(next) + "px");
+    overlay.classList.toggle("is-mobile-keyboard-open", next > 0);
+    scheduleScrollDownComposerExtraOffsetSync();
+  }
+
+  function computeMobileKeyboardInset() {
+    if (!overlay.classList.contains("is-open")) return 0;
+    if (!shouldUseNativeMobileEmojiKeyboard()) return 0;
+    const viewport = window.visualViewport;
+    if (!viewport) return 0;
+    const viewportHeight = Number(viewport.height || 0);
+    if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return 0;
+    const rect = overlay.getBoundingClientRect();
+    const overlap = Number(rect && rect.bottom || 0) - viewportHeight;
+    if (!Number.isFinite(overlap) || overlap <= 0) return 0;
+    return overlap;
+  }
+
+  function syncMobileKeyboardInsetNow() {
+    setMobileKeyboardInset(computeMobileKeyboardInset());
+  }
+
+  function scheduleMobileKeyboardInsetSync() {
+    if (mobileKeyboardInsetSyncRaf) return;
+    mobileKeyboardInsetSyncRaf = requestAnimationFrame(function () {
+      mobileKeyboardInsetSyncRaf = 0;
+      syncMobileKeyboardInsetNow();
+    });
+  }
+
+  function scheduleMobileKeyboardInsetSyncBurst() {
+    scheduleMobileKeyboardInsetSync();
+    window.setTimeout(scheduleMobileKeyboardInsetSync, 60);
+    window.setTimeout(scheduleMobileKeyboardInsetSync, 180);
+    window.setTimeout(scheduleMobileKeyboardInsetSync, 320);
+  }
+
+  function bindMobileKeyboardViewportSync() {
+    if (mobileKeyboardViewportSyncBound) return;
+    mobileKeyboardViewportSyncBound = true;
+    const viewport = window.visualViewport;
+    if (viewport) {
+      viewport.addEventListener("resize", scheduleMobileKeyboardInsetSync);
+      viewport.addEventListener("scroll", scheduleMobileKeyboardInsetSync);
+    }
+    window.addEventListener("orientationchange", scheduleMobileKeyboardInsetSync);
+  }
+
+  function unbindMobileKeyboardViewportSync() {
+    if (!mobileKeyboardViewportSyncBound) return;
+    mobileKeyboardViewportSyncBound = false;
+    const viewport = window.visualViewport;
+    if (viewport) {
+      viewport.removeEventListener("resize", scheduleMobileKeyboardInsetSync);
+      viewport.removeEventListener("scroll", scheduleMobileKeyboardInsetSync);
+    }
+    window.removeEventListener("orientationchange", scheduleMobileKeyboardInsetSync);
+    if (mobileKeyboardInsetSyncRaf) {
+      cancelAnimationFrame(mobileKeyboardInsetSyncRaf);
+      mobileKeyboardInsetSyncRaf = 0;
+    }
+    if (scrollDownComposerOffsetRaf) {
+      cancelAnimationFrame(scrollDownComposerOffsetRaf);
+      scrollDownComposerOffsetRaf = 0;
+    }
+    setScrollDownComposerExtraOffset(0);
+    setMobileKeyboardInset(0);
+  }
+
   function ensureTopVisibleEntryNotClipped() {
     if (!feed || !thread || !isMobileChatViewport()) return;
     const feedRect = feed.getBoundingClientRect();
@@ -6478,8 +6977,10 @@
     feedScrollRaf = 0;
   }
 
-  function scrollToBottom(smooth, fixTopClip) {
-    const target = Math.max(0, feed.scrollHeight - feed.clientHeight);
+  function scrollToBottom(smooth, fixTopClip, bottomGapPx) {
+    const gapValue = Number(bottomGapPx);
+    const gap = Number.isFinite(gapValue) && gapValue > 0 ? gapValue : 0;
+    const target = Math.max(0, feed.scrollHeight - feed.clientHeight - gap);
     const shouldFixTopClip = fixTopClip === true;
 
     if (!smooth) {
@@ -6604,7 +7105,7 @@
     markSharedThreadMutated();
 
     renderThread();
-    scrollToBottom(true);
+    scrollToBottom(false);
     enqueueSharedMutation(function () {
       return remoteCreateSharedMessage(message);
     });
@@ -7009,34 +7510,34 @@
     });
   }
 
-  function setAssistantHandoffPending(clientId, value) {
-    const id = String(clientId || "");
-    if (!id) return;
-    if (value === true) {
-      assistantHandoffPendingByClient.set(id, true);
-      return;
-    }
-    assistantHandoffPendingByClient.delete(id);
-  }
-
-  function isAssistantHandoffPending(clientId) {
-    const id = String(clientId || "");
-    if (!id) return false;
-    return assistantHandoffPendingByClient.get(id) === true;
-  }
-
-  function resolveAssistantDetailsReply(normalizedText) {
+  function findMatchedCustomQuickQuestionConfig(normalizedText) {
     const key = String(normalizedText || "");
-    if (!key) return "";
-    if (hasHotQuestionAlias(hotQuestionAliases.quality, key, { includes: true })) return HOT_QUESTION_QUALITY_REPLY;
-    if (hasHotQuestionAlias(hotQuestionAliases.completeness, key, { includes: true })) {
-      return getGenderedAssistantText(
-        HOT_QUESTION_COMPLETENESS_REPLY,
-        HOT_QUESTION_COMPLETENESS_REPLY_FEMALE
-      );
+    if (!key) return null;
+    const configList = Array.isArray(chatRuntimeSettings.quickQuestionsConfig)
+      ? chatRuntimeSettings.quickQuestionsConfig
+      : [];
+    for (let idx = 0; idx < configList.length; idx += 1) {
+      const item = configList[idx];
+      if (!item || item.enabled === false) continue;
+      const id = String(item.id || "").toLowerCase();
+      const type = String(item.type || "").toLowerCase();
+      if (id === CHAT_QUICK_ORDER_ID || type === "order") continue;
+      const questionKey = normalizeHotQuestionKey(item.question);
+      if (!questionKey) continue;
+      if (key === questionKey || key.includes(questionKey)) return item;
     }
-    if (hasHotQuestionAlias(hotQuestionAliases.other, key, { includes: true })) return HOT_QUESTION_OTHER_REPLY;
-    return "";
+    return null;
+  }
+
+  function resolveConfiguredQuickQuestionReply(normalizedText) {
+    const matched = findMatchedCustomQuickQuestionConfig(normalizedText);
+    if (!matched) return null;
+    const answer = normalizeChatQuickQuestionAnswer(matched.answer || "");
+    if (!answer) return null;
+    return {
+      id: String(matched.id || ""),
+      text: answer,
+    };
   }
 
   function scheduleAssistantHotQuestionReply(userText) {
@@ -7048,7 +7549,6 @@
 
     const phoneCandidate = extractPhoneCandidateFromHotQuestionText(userText);
     if (phoneCandidate) {
-      setAssistantHandoffPending(activeClientId, false);
       window.setTimeout(function () {
         buildWhereIsOrderAutoReplyPayload({ phone: phoneCandidate })
           .then(function (payload) {
@@ -7065,7 +7565,6 @@
     }
 
     if (isWhereIsOrderHotQuestion(normalized)) {
-      setAssistantHandoffPending(activeClientId, false);
       window.setTimeout(function () {
         buildWhereIsOrderAutoReplyPayload()
           .then(function (payload) {
@@ -7081,27 +7580,19 @@
       return;
     }
 
-    const detailsReply = resolveAssistantDetailsReply(normalized);
-    if (detailsReply) {
+    const quickReply = (
+      chatRuntimeSettings.quickQuestionsEnabled === false
+    )
+      ? null
+      : resolveConfiguredQuickQuestionReply(normalized);
+    if (quickReply && quickReply.text) {
+      const suffixSource = String(quickReply.id || "custom");
+      const suffixSafe = suffixSource.replace(/[^\w-]+/g, "").slice(0, 32) || "custom";
       window.setTimeout(function () {
-        pushAssistantAutoReply(activeClientId, detailsReply, "details");
-      }, 360);
-      setAssistantHandoffPending(activeClientId, true);
-      return;
-    }
-
-    if (isAssistantHandoffPending(activeClientId)) {
-      setAssistantHandoffPending(activeClientId, false);
-      window.setTimeout(function () {
-        pushAssistantAutoReply(activeClientId, HOT_QUESTION_OPERATOR_HANDOFF_REPLY, "handoff");
+        pushAssistantAutoReply(activeClientId, quickReply.text, "quick-" + suffixSafe);
       }, 360);
       return;
     }
-
-    window.setTimeout(function () {
-      pushAssistantAutoReply(activeClientId, HOT_QUESTION_GENERIC_DETAILS_REPLY, "details");
-    }, 360);
-    setAssistantHandoffPending(activeClientId, true);
   }
 
   function sendUserMessage(text, options) {
@@ -7310,7 +7801,15 @@
     renderAttachPreview();
     attachPreviewOverlay.classList.remove("hidden");
     attachPreviewOverlay.setAttribute("aria-hidden", "false");
-    attachPreviewCaption.focus();
+    const shouldFocusCaption = (
+      opts.focusCaption === true
+      || (opts.focusCaption !== false && !shouldUseNativeMobileEmojiKeyboard())
+    );
+    if (shouldFocusCaption) {
+      attachPreviewCaption.focus();
+    } else {
+      attachPreviewCaption.blur();
+    }
     return true;
   }
 
@@ -7399,6 +7898,11 @@
     attachPreviewEmojiBtn.addEventListener("click", function (event) {
       event.preventDefault();
       event.stopPropagation();
+      if (shouldUseNativeMobileEmojiKeyboard()) {
+        hideEmojiPopover();
+        attachPreviewCaption.focus();
+        return;
+      }
       toggleEmojiPopover("attach-preview");
       attachPreviewCaption.focus();
     });
@@ -7415,6 +7919,14 @@
       if (event.key !== "Enter") return;
       event.preventDefault();
       attachPreviewSendBtn.click();
+    });
+
+    attachPreviewCaption.addEventListener("focus", function () {
+      scheduleMobileKeyboardInsetSyncBurst();
+    });
+
+    attachPreviewCaption.addEventListener("blur", function () {
+      scheduleMobileKeyboardInsetSyncBurst();
     });
 
     attachPreviewOverlay.addEventListener("click", function (event) {
@@ -7645,8 +8157,13 @@
     handleComposerTypingActivity();
   });
 
+  input.addEventListener("focus", function () {
+    scheduleMobileKeyboardInsetSyncBurst();
+  });
+
   input.addEventListener("blur", function () {
     scheduleLocalTypingStop(CHAT_TYPING_BLUR_STOP_MS);
+    scheduleMobileKeyboardInsetSyncBurst();
   });
 
   attachBtn.addEventListener("click", function (event) {
@@ -7665,6 +8182,11 @@
     event.stopPropagation();
     hideContextMenu();
     hideReactionBar();
+    if (shouldUseNativeMobileEmojiKeyboard()) {
+      hideEmojiPopover();
+      input.focus();
+      return;
+    }
     toggleEmojiPopover("composer");
     const isMobileSheetOpen = (
       isMobileChatViewport()
@@ -8029,14 +8551,13 @@
     if (reaction === "__toggle_more__") {
       event.preventDefault();
       event.stopPropagation();
-      const targetMessageId = String(reactionMessageId || contextMenuMessageId || "");
       hideContextMenu();
-      hideReactionBar();
-      showEmojiPopover("composer", {
-        mode: targetMessageId ? "reaction" : "composer",
-        messageId: targetMessageId,
-      });
-      if (input) input.focus();
+      const nextExpanded = !reactionBar.classList.contains("is-expanded");
+      setReactionBarExpanded(nextExpanded);
+      if (nextExpanded && reactionMessageId) {
+        const anchor = thread.querySelector('[data-message-id="' + cssEscape(reactionMessageId) + '"]');
+        if (anchor) positionReactionBar(anchor);
+      }
       return;
     }
     if (!reactionMessageId) return;
@@ -8052,7 +8573,10 @@
     if (!reactionBar.classList.contains("hidden")) {
       hideReactionBar();
     }
-    if (!emojiPopover.classList.contains("hidden")) {
+    if (
+      !emojiPopover.classList.contains("hidden")
+      && !emojiPopover.classList.contains("is-mobile-sheet")
+    ) {
       hideEmojiPopover();
     }
     updateScrollDownButton();
@@ -8138,12 +8662,30 @@
   });
 
   window.addEventListener("resize", function () {
+    scheduleMobileKeyboardInsetSync();
+    scheduleScrollDownComposerExtraOffsetSync();
+    const feedBottomDistance = getFeedBottomDistanceSnapshot();
     hideContextMenu();
     hideReactionBar();
-    hideEmojiPopover();
+    const keepMobileEmojiSheetOpen = (
+      isMobileChatViewport()
+      && !emojiPopover.classList.contains("hidden")
+      && emojiPopover.classList.contains("is-mobile-sheet")
+      && !emojiPopover.classList.contains("is-attach-preview")
+    );
+    if (keepMobileEmojiSheetOpen) {
+      requestAnimationFrame(function () {
+        syncEmojiPickerViewportPosition();
+        if (feedBottomDistance != null) stabilizeFeedBottomDistance(feedBottomDistance, 220);
+      });
+    } else {
+      hideEmojiPopover();
+    }
     clearTouchGesture();
     clearOrderCardMouseDrag();
     if (isMessageImageViewerOpen()) updateMessageImageViewerLayout();
+    scheduleMobileKeyboardInsetSyncBurst();
+    scheduleScrollDownComposerExtraOffsetSync();
   });
 
   window.addEventListener("blur", function () {

@@ -44,6 +44,7 @@ const CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT = parsePositiveInt(
 );
 const CHAT_ORPHAN_THREAD_CLEANUP_BATCH_LIMIT = CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT;
 const CHAT_PUSH_ENDPOINT_MAX_LENGTH = 1024;
+const CHAT_PUSH_COMPANY_TITLE_CACHE_TTL_MS = 60 * 1000;
 const CHAT_UPLOAD_RELATIVE_DIR = path.join("static", "uploads", "chat");
 const CHAT_UPLOAD_ABSOLUTE_DIR = path.join(__dirname, "..", CHAT_UPLOAD_RELATIVE_DIR);
 const CHAT_ALLOWED_IMAGE_MIME = new Set([
@@ -95,6 +96,7 @@ const threadWaiters = new Map();
 const tenantWaiters = new Map();
 const threadTypingState = new Map();
 const guestThreadCleanupState = new Map();
+const tenantPushCompanyTitleCache = new Map();
 let ensurePushSubscriptionsTablePromise = null;
 const CHAT_PUSH_UNIQUE_INDEX_LEGACY = "ux_chat_push_subscriptions_tenant_endpoint";
 const CHAT_PUSH_UNIQUE_INDEX_V2 = "ux_chat_push_subscriptions_tenant_actor_client_endpoint";
@@ -325,13 +327,91 @@ function getPushPreviewText(message) {
   return "\u041d\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435";
 }
 
+function normalizeTenantPushCompanyTitle(rawValue) {
+  return String(rawValue || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+}
+
+async function resolveTenantPushCompanyTitle(tenantId) {
+  const key = String(tenantId || "").trim();
+  if (!key) return "\u041a\u043e\u043c\u043f\u0430\u043d\u0438\u044f";
+
+  const now = Date.now();
+  const cached = tenantPushCompanyTitleCache.get(key);
+  if (cached && cached.expiresAt > now && cached.title) return cached.title;
+
+  let title = "";
+  try {
+    const [rows] = await db.query(
+      `SELECT site_name, name
+         FROM ten_tenants
+        WHERE id = ?
+        LIMIT 1`,
+      [Number(key)]
+    );
+    const row = Array.isArray(rows) && rows.length ? rows[0] : null;
+    title = normalizeTenantPushCompanyTitle(
+      (row && (row.site_name || row.name)) || ""
+    );
+  } catch (err) {
+    const code = String(err && err.code || "");
+    if (code !== "ER_BAD_FIELD_ERROR") {
+      console.error("resolveTenantPushCompanyTitle failed:", err && err.message ? err.message : err);
+    } else {
+      try {
+        const [rows] = await db.query(
+          `SELECT name
+             FROM ten_tenants
+            WHERE id = ?
+            LIMIT 1`,
+          [Number(key)]
+        );
+        const row = Array.isArray(rows) && rows.length ? rows[0] : null;
+        title = normalizeTenantPushCompanyTitle(row ? row.name : "");
+      } catch (nestedErr) {
+        console.error(
+          "resolveTenantPushCompanyTitle fallback failed:",
+          nestedErr && nestedErr.message ? nestedErr.message : nestedErr
+        );
+      }
+    }
+  }
+
+  if (!title) title = "\u041a\u043e\u043c\u043f\u0430\u043d\u0438\u044f";
+  tenantPushCompanyTitleCache.set(key, {
+    title,
+    expiresAt: now + CHAT_PUSH_COMPANY_TITLE_CACHE_TTL_MS,
+  });
+  return title;
+}
+
 async function sendPushToSubscriptions(subscriptions, payload) {
   if (!webPushEnabled) return;
   const rows = Array.isArray(subscriptions) ? subscriptions : [];
   if (!rows.length) return;
   const body = JSON.stringify(payload || {});
   const invalidIds = [];
+  const duplicateIds = [];
+  const seenEndpointHashes = new Set();
+  const uniqueRows = [];
+
   for (const row of rows) {
+    const endpoint = String(row && row.endpoint || "");
+    const id = Number(row && row.id || 0);
+    if (endpoint) {
+      const endpointHash = hashPushEndpoint(endpoint);
+      if (seenEndpointHashes.has(endpointHash)) {
+        if (id > 0) duplicateIds.push(id);
+        continue;
+      }
+      seenEndpointHashes.add(endpointHash);
+    }
+    uniqueRows.push(row);
+  }
+
+  for (const row of uniqueRows) {
     const endpoint = String(row && row.endpoint || "");
     const p256dh = String(row && row.p256dh || "");
     const auth = String(row && row.auth || "");
@@ -357,8 +437,9 @@ async function sendPushToSubscriptions(subscriptions, payload) {
       }
     }
   }
-  if (invalidIds.length) {
-    await deletePushSubscriptionsByIds(invalidIds).catch(() => {});
+  const idsToDelete = Array.from(new Set([...invalidIds, ...duplicateIds]));
+  if (idsToDelete.length) {
+    await deletePushSubscriptionsByIds(idsToDelete).catch(() => {});
   }
 }
 
@@ -376,7 +457,7 @@ async function notifyPushPeerAboutMessage(tenantId, clientId, senderActor, messa
   const tagSuffix = safeMessageId || String(Date.now());
   const preview = getPushPreviewText(message);
   const title = peerActor === "in"
-    ? "\u041d\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u043e\u0442 \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438"
+    ? await resolveTenantPushCompanyTitle(tenantId)
     : "\u041d\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u043e\u0442 \u043a\u043b\u0438\u0435\u043d\u0442\u0430";
   const url = peerActor === "in" ? "/shop" : "/dashboard/chat";
   await sendPushToSubscriptions(subscriptions, {
