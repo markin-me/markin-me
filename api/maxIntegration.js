@@ -48,35 +48,52 @@ async function sendMaxMessage({ db, tenantId, maxUserId, text, botToken, extraPa
   const apiBase = String(process.env.MAX_API_BASE_URL || '').trim().replace(/\/+$/, '');
   if (!token || !apiBase || !maxUserId || !text) return { ok: false, skipped: true };
 
-  const payload = { text: String(text) };
-  if (extraPayload && typeof extraPayload === 'object') {
-    Object.assign(payload, extraPayload);
+  const userQuery = encodeURIComponent(String(maxUserId).trim());
+  const makePayload = (withExtra) => {
+    const payload = { text: String(text) };
+    if (withExtra && extraPayload && typeof extraPayload === 'object') {
+      Object.assign(payload, extraPayload);
+    }
+    return payload;
+  };
+
+  const sendOnce = async (payload) => {
+    const res = await fetch(`${apiBase}/messages?user_id=${userQuery}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: token,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const raw = await res.text().catch(() => '');
+    let data = null;
+    try {
+      data = raw ? JSON.parse(raw) : null;
+    } catch {
+      data = null;
+    }
+    return { ok: res.ok, status: res.status, data, raw };
+  };
+
+  const first = await sendOnce(makePayload(true));
+  if (first.ok) return { ok: true, data: first.data };
+
+  const hasExtraPayload = Boolean(extraPayload && typeof extraPayload === 'object');
+  if (hasExtraPayload) {
+    const retry = await sendOnce(makePayload(false));
+    if (retry.ok) return { ok: true, data: retry.data, fallbackWithoutPayload: true };
+    const retryMsg = (retry.data && (retry.data.error || retry.data.message))
+      ? String(retry.data.error || retry.data.message)
+      : String(retry.raw || '').slice(0, 300);
+    throw new Error(`MAX_SEND_FAILED:HTTP_${retry.status}${retryMsg ? `:${retryMsg}` : ''}`);
   }
 
-  const userId = Number(maxUserId);
-  const userQuery = Number.isFinite(userId) ? String(userId) : encodeURIComponent(String(maxUserId));
-  const res = await fetch(`${apiBase}/messages?user_id=${userQuery}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: token,
-    },
-    body: JSON.stringify(payload),
-  });
-
-  let data = null;
-  try {
-    data = await res.json();
-  } catch {
-    data = null;
-  }
-
-  if (!res.ok) {
-    const msg = data && data.error ? data.error : `HTTP_${res.status}`;
-    throw new Error(`MAX_SEND_FAILED:${msg}`);
-  }
-
-  return { ok: true, data };
+  const firstMsg = (first.data && (first.data.error || first.data.message))
+    ? String(first.data.error || first.data.message)
+    : String(first.raw || '').slice(0, 300);
+  throw new Error(`MAX_SEND_FAILED:HTTP_${first.status}${firstMsg ? `:${firstMsg}` : ''}`);
 }
 
 async function confirmMaxLink({ db, helpers, token, maxUserId, phone }) {

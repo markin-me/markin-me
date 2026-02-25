@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Хост: 10.0.231.119
--- Время создания: Фев 24 2026 г., 16:31
+-- Время создания: Фев 24 2026 г., 22:24
 -- Версия сервера: 8.0.37-29
 -- Версия PHP: 7.2.34
 
@@ -201,16 +201,41 @@ CREATE TABLE `chat_messages` (
 --
 
 INSERT INTO `chat_messages` (`id`, `tenant_id`, `client_id`, `message_id`, `direction`, `text`, `created_at`, `edited_at`, `is_read`, `is_pinned`, `reaction_legacy`, `reaction_in`, `reaction_out`, `reply_to_json`, `attachment_json`, `delivery_status`, `delivered_at`, `read_at`, `created_row_at`, `updated_row_at`) VALUES
-(14230, 1, 522, 'daily-welcome-2026-02-24', 'out', 'Привет! Я виртуальный помощник Ням!\nЖми на вопросы, а я с удовольствием тебе отвечу!', '2026-02-24 14:34:30.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 14:34:30.000', '2026-02-24 14:34:30.000', '2026-02-24 10:40:14.343', '2026-02-24 10:40:14.343'),
-(14233, 1, 522, '1771930404438-5vm2qh', 'out', 'ты тут?😎', '2026-02-24 17:53:24.438', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 17:59:38.165', '2026-02-24 17:59:38.165', '2026-02-24 13:53:25.199', '2026-02-24 13:59:37.700'),
-(14234, 1, 522, '1771930412892-xhn9g3', 'out', '😎', '2026-02-24 17:53:32.892', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 17:59:38.165', '2026-02-24 17:59:38.165', '2026-02-24 13:53:33.642', '2026-02-24 13:59:37.700'),
-(14239, 1, 4, 'daily-welcome-2026-02-24', 'out', 'Привет! Я виртуальный помощник Ням!\nЖми на вопросы, а я с удовольствием тебе отвечу!', '2026-02-24 19:05:49.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 19:05:49.000', '2026-02-24 19:05:49.000', '2026-02-24 15:05:51.498', '2026-02-24 16:29:07.416'),
-(14240, 1, 4, '1771934757910-1-hiwk8', 'in', 'как у вас заказать?', '2026-02-24 19:05:57.910', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 19:08:33.510', '2026-02-24 19:08:33.510', '2026-02-24 15:05:58.758', '2026-02-24 15:08:34.052'),
-(14241, 1, 4, 'assistant-auto-details-1771934758283-hx8kk', 'out', 'Чтобы передать обращение оператору, опишите, пожалуйста, ситуацию чуть подробнее.', '2026-02-24 19:05:58.283', NULL, 1, 0, '', '', '', NULL, NULL, 'read', NULL, NULL, '2026-02-24 15:05:59.571', '2026-02-24 15:05:59.571'),
-(14242, 1, 4, '1771937161459-1-n279k', 'in', 'Вопрос по комплектации заказа', '2026-02-24 19:46:01.459', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 19:46:29.129', '2026-02-24 19:46:29.129', '2026-02-24 15:46:02.467', '2026-02-24 15:46:29.725'),
-(14243, 1, 4, 'assistant-auto-quick-completeness-1771937161837-fu02d', 'out', 'Понял. Подскажите, чего не хватает или что было лишним?', '2026-02-24 19:46:01.837', NULL, 1, 0, '', '', '', NULL, NULL, 'read', NULL, NULL, '2026-02-24 15:46:03.618', '2026-02-24 15:46:03.618'),
-(14244, 1, 4, '1771937181218-3-j6mi5', 'in', '', '2026-02-24 19:46:21.218', NULL, 1, 0, '', '', '', NULL, '{\"kind\":\"image\",\"name\":\"ÐÐ¸Ð·Ð¸ÑÐºÐ¸.jpg\",\"mime\":\"image/webp\",\"dataUrl\":\"\",\"url\":\"/static/uploads/chat/1/4/2026/02/1771937179734_b56392d361.webp\",\"width\":1064,\"height\":591,\"size\":66188}', 'read', '2026-02-24 19:46:29.129', '2026-02-24 19:46:29.129', '2026-02-24 15:46:22.127', '2026-02-24 15:46:29.725'),
-(14245, 1, 906604041, 'daily-welcome-2026-02-24', 'out', 'Привет! Я виртуальный помощник Ням-Ням!\nЕсли ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.', '2026-02-24 20:22:12.585', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 20:22:12.585', '2026-02-24 20:22:12.585', '2026-02-24 16:22:12.457', '2026-02-24 16:22:12.457');
+(14263, 1, 956981387, 'daily-welcome-2026-02-24', 'out', 'Привет! Я виртуальный помощник Ням-Ням!\nЕсли ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.', '2026-02-24 21:54:00.263', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 21:54:00.263', '2026-02-24 21:54:00.263', '2026-02-24 17:54:00.631', '2026-02-24 17:54:00.631'),
+(14264, 1, 926912826, 'daily-welcome-2026-02-24', 'out', 'Привет! Я виртуальный помощник Ням-Ням!\nЕсли ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.', '2026-02-24 21:54:21.961', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 21:54:21.961', '2026-02-24 21:54:21.961', '2026-02-24 17:54:22.332', '2026-02-24 17:54:22.332'),
+(14274, 1, 522, 'daily-welcome-2026-02-24', 'out', 'Привет! Я виртуальный помощник Ням-Ням!\nЕсли ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.', '2026-02-24 21:47:39.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 21:47:39.000', '2026-02-24 21:47:39.000', '2026-02-24 18:22:39.402', '2026-02-24 18:22:39.402'),
+(14275, 1, 522, '1771945393050-1-hhfci', 'in', 'Про🥰', '2026-02-24 22:03:13.000', NULL, 1, 0, '', '', '', NULL, '{\"kind\":\"image\",\"name\":\"IMG_0449.jpeg\",\"mime\":\"image/webp\",\"dataUrl\":\"\",\"url\":\"/static/uploads/chat/1/522/2026/02/1771945380871_64a8a8bc39.webp\",\"width\":3024,\"height\":3024,\"size\":346094}', 'read', '2026-02-24 22:06:48.000', '2026-02-24 22:06:48.000', '2026-02-24 18:22:39.402', '2026-02-24 18:22:39.402'),
+(14319, 1, 980745086, 'daily-welcome-2026-02-24', 'out', 'Привет! Я виртуальный помощник Ням-Ням!\nЕсли ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.', '2026-02-24 23:09:25.172', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 23:09:25.172', '2026-02-24 23:09:25.172', '2026-02-24 19:09:25.700', '2026-02-24 19:09:25.700'),
+(14352, 1, 4, '1771934757910-1-hiwk8', 'in', 'как у вас заказать?', '2026-02-24 19:05:57.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 19:08:33.000', '2026-02-24 19:08:33.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14353, 1, 4, 'assistant-auto-details-1771934758283-hx8kk', 'out', 'Чтобы передать обращение оператору, опишите, пожалуйста, ситуацию чуть подробнее.', '2026-02-24 19:05:58.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', NULL, NULL, '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14354, 1, 4, 'assistant-auto-quick-completeness-1771937161837-fu02d', 'out', 'Понял. Подскажите, чего не хватает или что было лишним?', '2026-02-24 19:46:01.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', NULL, NULL, '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14355, 1, 4, '1771937161459-1-n279k', 'in', 'Вопрос по комплектации заказа', '2026-02-24 19:46:01.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 19:46:29.000', '2026-02-24 19:46:29.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14356, 1, 4, '1771937181218-3-j6mi5', 'in', '', '2026-02-24 19:46:21.000', NULL, 1, 0, '', '', '', NULL, '{\"kind\":\"image\",\"name\":\"ÐÐ¸Ð·Ð¸ÑÐºÐ¸.jpg\",\"mime\":\"image/webp\",\"dataUrl\":\"\",\"url\":\"/static/uploads/chat/1/4/2026/02/1771937179734_b56392d361.webp\",\"width\":1064,\"height\":591,\"size\":66188}', 'read', '2026-02-24 19:46:29.000', '2026-02-24 19:46:29.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14357, 1, 4, 'daily-welcome-2026-02-24', 'out', 'Привет! Я виртуальный помощник Ням-Ням!\nЕсли ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.', '2026-02-24 21:49:28.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 21:49:28.000', '2026-02-24 21:49:28.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14358, 1, 4, '1771945906682-1-yzr40', 'in', 'Где мой заказ?', '2026-02-24 22:11:46.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 22:38:01.000', '2026-02-24 22:38:01.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14359, 1, 4, 'assistant-auto-where-order-1771945907129-pdxw1', 'out', 'Не могу найти вас в базе. Пожалуйста, напишите ваш номер телефона.', '2026-02-24 22:11:47.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', NULL, NULL, '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14360, 1, 4, '1771947470623-1-6u3od', 'in', '🧶', '2026-02-24 22:37:50.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 22:38:01.000', '2026-02-24 22:38:01.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14361, 1, 4, '1771947533361-1-mwepv', 'in', 'Ку', '2026-02-24 22:38:53.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 22:38:53.000', '2026-02-24 22:38:53.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14362, 1, 4, '1771947542221-zqnuoq', 'out', 'ку', '2026-02-24 22:39:02.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 22:39:03.000', '2026-02-24 22:39:03.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14363, 1, 4, '1771947599868-d3dhg7', 'out', 'ку', '2026-02-24 22:39:59.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 22:42:16.000', '2026-02-24 22:42:16.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14364, 1, 4, '1771947637180-1hyt5x', 'out', 'куку', '2026-02-24 22:40:37.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 22:42:16.000', '2026-02-24 22:42:16.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14365, 1, 4, '1771947698875-q0hz4e', 'out', 'ку', '2026-02-24 22:41:38.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 22:42:16.000', '2026-02-24 22:42:16.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14366, 1, 4, '1771947730843-v1zgtb', 'out', 'ку', '2026-02-24 22:42:10.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 22:42:55.000', '2026-02-24 22:42:55.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14367, 1, 4, '1771947752415-x0wapj', 'out', 'ку', '2026-02-24 22:42:32.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-24 22:42:55.000', '2026-02-24 22:42:55.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14368, 1, 4, '1771948516170-1-83wzd', 'in', 'Правда', '2026-02-24 22:55:16.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-25 00:27:08.000', '2026-02-25 00:27:08.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14369, 1, 4, '1771948563942-2-qi4qe', 'in', 'Где мой заказ?', '2026-02-24 22:56:03.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-25 00:27:08.000', '2026-02-25 00:27:08.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14370, 1, 4, 'assistant-auto-where-order-o244_243-1771948564989-3tw0k', 'out', 'Нашел ваши действующие заказы.', '2026-02-24 22:56:04.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', NULL, NULL, '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14371, 1, 4, 'daily-welcome-2026-02-25', 'out', 'Привет! Я виртуальный помощник Ням-Ням!\nЕсли ваш вопрос по заказу, то сегодня сталкиваемся со сложностями из-за погодных условий: можем везти покупку чуть дольше.', '2026-02-25 00:32:23.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-25 00:32:23.000', '2026-02-25 00:32:23.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14372, 1, 4, '1771954389773-1-60j39', 'in', '👨‍👨‍👧‍👧', '2026-02-25 00:33:09.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-25 00:33:18.000', '2026-02-25 00:33:18.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14373, 1, 4, '1771954442848-2-23srt', 'in', 'Где мой заказ?', '2026-02-25 00:34:02.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-25 00:34:03.000', '2026-02-25 00:34:03.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14374, 1, 4, 'assistant-auto-where-order-o244_243-1771954443953-jz2tb', 'out', 'Нашел ваши действующие заказы.', '2026-02-25 00:34:03.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', NULL, NULL, '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14375, 1, 4, '1771955990429-1-h9t09', 'in', '🦺', '2026-02-25 00:59:50.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-25 01:03:57.000', '2026-02-25 01:03:57.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14376, 1, 4, '1771956002864-2-bpeij', 'in', '👙', '2026-02-25 01:00:02.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-25 01:03:57.000', '2026-02-25 01:03:57.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14377, 1, 4, '1771956007044-3-rxiyl', 'in', 'Созсрс', '2026-02-25 01:00:07.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-25 01:03:57.000', '2026-02-25 01:03:57.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14378, 1, 4, '1771956192215-1-qixxr', 'in', 'Куку', '2026-02-25 01:03:12.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-25 01:03:57.000', '2026-02-25 01:03:57.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14379, 1, 4, '1771956231089-2-08fuz', 'in', '🧵👚', '2026-02-25 01:03:51.000', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-25 01:03:57.000', '2026-02-25 01:03:57.000', '2026-02-24 21:08:58.743', '2026-02-24 21:08:58.743'),
+(14380, 1, 4, '1771958676652-1-v24d1', 'in', '🦐', '2026-02-25 01:44:36.652', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-25 01:44:41.913', '2026-02-25 01:44:41.913', '2026-02-24 21:44:37.116', '2026-02-24 21:44:42.158'),
+(14381, 1, 4, '1771958741833-2-98shn', 'in', '🪰', '2026-02-25 01:45:41.833', NULL, 1, 0, '', '', '', NULL, NULL, 'read', '2026-02-25 01:45:43.022', '2026-02-25 01:45:43.022', '2026-02-24 21:45:42.352', '2026-02-24 21:45:43.264');
 
 -- --------------------------------------------------------
 
@@ -237,16 +262,16 @@ CREATE TABLE `chat_push_subscriptions` (
 --
 
 INSERT INTO `chat_push_subscriptions` (`id`, `tenant_id`, `client_id`, `actor`, `endpoint_hash`, `endpoint`, `p256dh`, `auth`, `user_agent`, `created_at`, `updated_at`) VALUES
-(52, 1, 0, 'out', '5303857b54899c119073cddaa9f5fa08ac42f2cad2b3d6f91c40ceb6c401ce78', 'https://fcm.googleapis.com/fcm/send/dbBtql4CF4k:APA91bGpMyHtVBAiAh2piAoiulAs8MJxf5xaTOM2GQ8YBub5seDcu6mfTSM4SGH8ZyNj-yhnPz3a4cgokoOeETol5ilBwmP6AmHFdQCjMdeYv6cKSEoDXf0WFjKYEGEXzyYFXEIowZR-', 'BC1qmascgfYkAbfN_cIiPE-IvzaIrIdToIEX_bMO-d-I-80zgD1qAm53S38Q-Io_wd7jJb9p9XZVD3tNhziaVDI', '7pM-HETLuALaaM3ayyqarQ', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-21 18:36:55.477', '2026-02-24 16:22:41.121'),
+(52, 1, 0, 'out', '5303857b54899c119073cddaa9f5fa08ac42f2cad2b3d6f91c40ceb6c401ce78', 'https://fcm.googleapis.com/fcm/send/dbBtql4CF4k:APA91bGpMyHtVBAiAh2piAoiulAs8MJxf5xaTOM2GQ8YBub5seDcu6mfTSM4SGH8ZyNj-yhnPz3a4cgokoOeETol5ilBwmP6AmHFdQCjMdeYv6cKSEoDXf0WFjKYEGEXzyYFXEIowZR-', 'BC1qmascgfYkAbfN_cIiPE-IvzaIrIdToIEX_bMO-d-I-80zgD1qAm53S38Q-Io_wd7jJb9p9XZVD3tNhziaVDI', '7pM-HETLuALaaM3ayyqarQ', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-21 18:36:55.477', '2026-02-24 22:01:09.983'),
 (68, 1, 998694111, 'in', '5303857b54899c119073cddaa9f5fa08ac42f2cad2b3d6f91c40ceb6c401ce78', 'https://fcm.googleapis.com/fcm/send/dbBtql4CF4k:APA91bGpMyHtVBAiAh2piAoiulAs8MJxf5xaTOM2GQ8YBub5seDcu6mfTSM4SGH8ZyNj-yhnPz3a4cgokoOeETol5ilBwmP6AmHFdQCjMdeYv6cKSEoDXf0WFjKYEGEXzyYFXEIowZR-', 'BC1qmascgfYkAbfN_cIiPE-IvzaIrIdToIEX_bMO-d-I-80zgD1qAm53S38Q-Io_wd7jJb9p9XZVD3tNhziaVDI', '7pM-HETLuALaaM3ayyqarQ', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-22 07:23:59.243', '2026-02-22 07:23:59.243'),
 (86, 1, 936459938, 'in', '5303857b54899c119073cddaa9f5fa08ac42f2cad2b3d6f91c40ceb6c401ce78', 'https://fcm.googleapis.com/fcm/send/dbBtql4CF4k:APA91bGpMyHtVBAiAh2piAoiulAs8MJxf5xaTOM2GQ8YBub5seDcu6mfTSM4SGH8ZyNj-yhnPz3a4cgokoOeETol5ilBwmP6AmHFdQCjMdeYv6cKSEoDXf0WFjKYEGEXzyYFXEIowZR-', 'BC1qmascgfYkAbfN_cIiPE-IvzaIrIdToIEX_bMO-d-I-80zgD1qAm53S38Q-Io_wd7jJb9p9XZVD3tNhziaVDI', '7pM-HETLuALaaM3ayyqarQ', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-22 12:42:55.769', '2026-02-22 12:42:55.769'),
 (94, 1, 930491163, 'in', '5303857b54899c119073cddaa9f5fa08ac42f2cad2b3d6f91c40ceb6c401ce78', 'https://fcm.googleapis.com/fcm/send/dbBtql4CF4k:APA91bGpMyHtVBAiAh2piAoiulAs8MJxf5xaTOM2GQ8YBub5seDcu6mfTSM4SGH8ZyNj-yhnPz3a4cgokoOeETol5ilBwmP6AmHFdQCjMdeYv6cKSEoDXf0WFjKYEGEXzyYFXEIowZR-', 'BC1qmascgfYkAbfN_cIiPE-IvzaIrIdToIEX_bMO-d-I-80zgD1qAm53S38Q-Io_wd7jJb9p9XZVD3tNhziaVDI', '7pM-HETLuALaaM3ayyqarQ', 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1', '2026-02-22 13:08:25.752', '2026-02-22 13:10:19.338'),
 (99, 1, 917647584, 'in', '5303857b54899c119073cddaa9f5fa08ac42f2cad2b3d6f91c40ceb6c401ce78', 'https://fcm.googleapis.com/fcm/send/dbBtql4CF4k:APA91bGpMyHtVBAiAh2piAoiulAs8MJxf5xaTOM2GQ8YBub5seDcu6mfTSM4SGH8ZyNj-yhnPz3a4cgokoOeETol5ilBwmP6AmHFdQCjMdeYv6cKSEoDXf0WFjKYEGEXzyYFXEIowZR-', 'BC1qmascgfYkAbfN_cIiPE-IvzaIrIdToIEX_bMO-d-I-80zgD1qAm53S38Q-Io_wd7jJb9p9XZVD3tNhziaVDI', '7pM-HETLuALaaM3ayyqarQ', 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1', '2026-02-22 13:26:04.361', '2026-02-22 13:26:04.361'),
 (105, 1, 906647115, 'in', '5303857b54899c119073cddaa9f5fa08ac42f2cad2b3d6f91c40ceb6c401ce78', 'https://fcm.googleapis.com/fcm/send/dbBtql4CF4k:APA91bGpMyHtVBAiAh2piAoiulAs8MJxf5xaTOM2GQ8YBub5seDcu6mfTSM4SGH8ZyNj-yhnPz3a4cgokoOeETol5ilBwmP6AmHFdQCjMdeYv6cKSEoDXf0WFjKYEGEXzyYFXEIowZR-', 'BC1qmascgfYkAbfN_cIiPE-IvzaIrIdToIEX_bMO-d-I-80zgD1qAm53S38Q-Io_wd7jJb9p9XZVD3tNhziaVDI', '7pM-HETLuALaaM3ayyqarQ', 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1', '2026-02-22 13:42:13.033', '2026-02-22 13:42:13.033'),
-(135, 1, 971609663, 'in', '5303857b54899c119073cddaa9f5fa08ac42f2cad2b3d6f91c40ceb6c401ce78', 'https://fcm.googleapis.com/fcm/send/dbBtql4CF4k:APA91bGpMyHtVBAiAh2piAoiulAs8MJxf5xaTOM2GQ8YBub5seDcu6mfTSM4SGH8ZyNj-yhnPz3a4cgokoOeETol5ilBwmP6AmHFdQCjMdeYv6cKSEoDXf0WFjKYEGEXzyYFXEIowZR-', 'BC1qmascgfYkAbfN_cIiPE-IvzaIrIdToIEX_bMO-d-I-80zgD1qAm53S38Q-Io_wd7jJb9p9XZVD3tNhziaVDI', '7pM-HETLuALaaM3ayyqarQ', 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1', '2026-02-22 15:14:05.730', '2026-02-22 15:14:05.730'),
+(135, 1, 971609663, 'in', '5303857b54899c119073cddaa9f5fa08ac42f2cad2b3d6f91c40ceb6c401ce78', 'https://fcm.googleapis.com/fcm/send/dbBtql4CF4k:APA91bGpMyHtVBAiAh2piAoiulAs8MJxf5xaTOM2GQ8YBub5seDcu6mfTSM4SGH8ZyNj-yhnPz3a4cgokoOeETol5ilBwmP6AmHFdQCjMdeYv6cKSEoDXf0WFjKYEGEXzyYFXEIowZR-', 'BC1qmascgfYkAbfN_cIiPE-IvzaIrIdToIEX_bMO-d-I-80zgD1qAm53S38Q-Io_wd7jJb9p9XZVD3tNhziaVDI', '7pM-HETLuALaaM3ayyqarQ', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-22 15:14:05.730', '2026-02-24 21:08:37.486'),
 (195, 1, 905266871, 'in', 'f8c48adba0b70bb458c1449ff8603a25defde34c5dde1f4d2f5eef1bc4e59082', 'https://fcm.googleapis.com/fcm/send/dW0taQ2A9Pw:APA91bE98NZOCOmjbHRIBC4Eul9BIly-D7nK3dqYY_dsbhrBX5WkV_v5mnufHSTJg_N8o7r8gihBE6Ivx9q89mJpheHf4VpyH54xIUAMIfRagDNHKO6IdYEv9UjUloy8D6iThBTgQrmp', 'BJKcRomTU0j7pjVWSiintAXBpJDIpvgyvt1vqa9fTF1kNCmXrLU4r3-nzQilureb-IzAJGcskv9uELAogJHXOCw', '5vqsmZ3m0ucqq8L3slZsAA', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 YaBrowser/24.7.0.0 Safari/537.36', '2026-02-23 14:45:41.470', '2026-02-23 14:45:41.470'),
 (225, 1, 0, 'out', 'f8c48adba0b70bb458c1449ff8603a25defde34c5dde1f4d2f5eef1bc4e59082', 'https://fcm.googleapis.com/fcm/send/dW0taQ2A9Pw:APA91bE98NZOCOmjbHRIBC4Eul9BIly-D7nK3dqYY_dsbhrBX5WkV_v5mnufHSTJg_N8o7r8gihBE6Ivx9q89mJpheHf4VpyH54xIUAMIfRagDNHKO6IdYEv9UjUloy8D6iThBTgQrmp', 'BJKcRomTU0j7pjVWSiintAXBpJDIpvgyvt1vqa9fTF1kNCmXrLU4r3-nzQilureb-IzAJGcskv9uELAogJHXOCw', '5vqsmZ3m0ucqq8L3slZsAA', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 YaBrowser/24.7.0.0 Safari/537.36', '2026-02-23 19:20:03.258', '2026-02-24 14:15:21.276'),
-(268, 1, 4, 'in', '5303857b54899c119073cddaa9f5fa08ac42f2cad2b3d6f91c40ceb6c401ce78', 'https://fcm.googleapis.com/fcm/send/dbBtql4CF4k:APA91bGpMyHtVBAiAh2piAoiulAs8MJxf5xaTOM2GQ8YBub5seDcu6mfTSM4SGH8ZyNj-yhnPz3a4cgokoOeETol5ilBwmP6AmHFdQCjMdeYv6cKSEoDXf0WFjKYEGEXzyYFXEIowZR-', 'BC1qmascgfYkAbfN_cIiPE-IvzaIrIdToIEX_bMO-d-I-80zgD1qAm53S38Q-Io_wd7jJb9p9XZVD3tNhziaVDI', '7pM-HETLuALaaM3ayyqarQ', 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1', '2026-02-24 15:05:49.836', '2026-02-24 16:28:38.495');
+(268, 1, 4, 'in', '5303857b54899c119073cddaa9f5fa08ac42f2cad2b3d6f91c40ceb6c401ce78', 'https://fcm.googleapis.com/fcm/send/dbBtql4CF4k:APA91bGpMyHtVBAiAh2piAoiulAs8MJxf5xaTOM2GQ8YBub5seDcu6mfTSM4SGH8ZyNj-yhnPz3a4cgokoOeETol5ilBwmP6AmHFdQCjMdeYv6cKSEoDXf0WFjKYEGEXzyYFXEIowZR-', 'BC1qmascgfYkAbfN_cIiPE-IvzaIrIdToIEX_bMO-d-I-80zgD1qAm53S38Q-Io_wd7jJb9p9XZVD3tNhziaVDI', '7pM-HETLuALaaM3ayyqarQ', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36', '2026-02-24 15:05:49.836', '2026-02-24 21:08:57.963');
 
 -- --------------------------------------------------------
 
@@ -271,9 +296,11 @@ CREATE TABLE `chat_threads` (
 
 INSERT INTO `chat_threads` (`id`, `tenant_id`, `client_id`, `meta_name`, `meta_phone`, `meta_last_welcome_day`, `updated_at`, `created_at`) VALUES
 (614, 1, 370, '', '', '', '2026-02-18 17:59:34.943', '2026-02-18 13:59:20.182'),
-(1347, 1, 522, 'Максим Маркин', '79021461966', '', '2026-02-24 17:59:38.165', '2026-02-24 10:40:14.149'),
-(1360, 1, 4, 'Александр', '79835549121', '2026-02-24', '2026-02-24 20:29:06.486', '2026-02-24 15:05:51.400'),
-(1368, 1, 906604041, 'Гость', '', '2026-02-24', '2026-02-24 20:22:12.693', '2026-02-24 16:22:12.360');
+(1360, 1, 4, 'Александр', '79835549121', '', '2026-02-25 01:45:43.022', '2026-02-24 15:05:51.400'),
+(1383, 1, 522, 'Максим Маркин', '79021461966', '', '2026-02-24 18:22:39.858', '2026-02-24 17:47:39.635'),
+(1385, 1, 956981387, 'Гость', '', '2026-02-24', '2026-02-24 21:54:00.846', '2026-02-24 17:54:00.532'),
+(1386, 1, 926912826, 'Гость', '', '2026-02-24', '2026-02-24 21:54:22.550', '2026-02-24 17:54:22.240'),
+(1428, 1, 980745086, 'Гость', '', '2026-02-24', '2026-02-24 23:09:24.614', '2026-02-24 19:09:25.601');
 
 -- --------------------------------------------------------
 
@@ -712,7 +739,7 @@ INSERT INTO `cust_customers` (`id`, `tenant_id`, `store_id`, `status_id`, `phone
 (518, 1, 1, NULL, '79012223344', 'Клиент', '1999-11-11', NULL, NULL, '2026-02-22', 0, 0.00, NULL, NULL, 1, '2026-02-22 05:57:40', '2026-02-22 05:57:40', NULL, NULL, NULL, NULL),
 (519, 1, 1, NULL, '79839839833', 'Клиент', '1999-12-12', NULL, NULL, '2026-02-22', 0, 0.00, NULL, NULL, 1, '2026-02-22 07:03:32', '2026-02-22 07:03:32', NULL, NULL, NULL, NULL),
 (520, 1, 1, NULL, '79837373737', 'Клиент', '1999-12-13', NULL, NULL, '2026-02-22', 0, 0.00, NULL, NULL, 1, '2026-02-22 09:34:10', '2026-02-22 09:34:10', NULL, NULL, NULL, NULL),
-(522, 1, 1, NULL, '79021461966', 'Максим Маркин', '1996-03-15', NULL, 915611204, '2026-02-23', 0, 0.00, NULL, NULL, 1, '2026-02-23 09:31:27', '2026-02-24 13:22:42', '71607539', '3121', '2026-02-25 20:22:43', '2026-02-23 17:42:18');
+(522, 1, 1, NULL, '79021461966', 'Максим Маркин', '1996-03-15', NULL, 915611204, '2026-02-23', 0, 0.00, NULL, NULL, 1, '2026-02-23 09:31:27', '2026-02-24 19:03:20', '71607539', NULL, NULL, '2026-02-23 17:42:18');
 
 -- --------------------------------------------------------
 
@@ -792,7 +819,7 @@ INSERT INTO `cust_customer_auth_identities` (`id`, `tenant_id`, `customer_id`, `
 (10, 1, 298, 'tg', '821270997', '79130832952', '2026-02-11 07:52:53', '2026-02-11 04:52:53', '2026-02-24 07:46:47'),
 (11, 1, 112, 'tg', '876054666', '79520082499', '2026-02-11 07:52:53', '2026-02-11 04:52:53', '2026-02-24 07:46:47'),
 (12, 1, 186, 'tg', '885374563', '79635779568', '2026-02-11 07:52:53', '2026-02-11 04:52:53', '2026-02-24 07:46:47'),
-(13, 1, 522, 'tg', '915611204', '79021461966', '2026-02-23 17:57:16', '2026-02-23 09:31:27', '2026-02-24 07:46:47'),
+(13, 1, 522, 'tg', '915611204', '79021461966', '2026-02-24 22:03:21', '2026-02-23 09:31:27', '2026-02-24 19:03:21'),
 (14, 1, 125, 'tg', '927382634', '79021426669', '2026-02-11 07:52:53', '2026-02-11 04:52:53', '2026-02-24 07:46:47'),
 (15, 1, 348, 'tg', '991296631', '79967002173', '2026-02-11 07:52:53', '2026-02-11 04:52:53', '2026-02-24 07:46:47'),
 (16, 1, 140, 'tg', '996793857', '79520009035', '2026-02-11 07:52:53', '2026-02-11 04:52:53', '2026-02-24 07:46:47'),
@@ -886,7 +913,32 @@ INSERT INTO `cust_customer_auth_tokens` (`id`, `tenant_id`, `customer_id`, `prov
 (34, 1, 522, 'tg', 'login', '0f8ad8a133164a5a81332ed4863ef308b5ea28af8b71b9d5', '2026-02-24 18:40:51', NULL, NULL, NULL, '2026-02-23 18:40:51'),
 (43, 1, 522, 'max', 'login', 'b1d9d422e59446c9811a289fd44ebee35372a0823606885a', '2026-02-25 11:06:08', NULL, NULL, NULL, '2026-02-24 11:06:08'),
 (44, 1, 522, 'tg', 'login', '0ad65e1509be41a7ae0bc05185c731a4a39cb6ea123ebeff', '2026-02-25 11:06:12', NULL, NULL, NULL, '2026-02-24 11:06:12'),
-(45, 1, 522, 'tg', 'login', 'd87887186bf34e99b2dfafd76bb93fef4b9e92acb648049f', '2026-02-25 16:01:34', NULL, NULL, NULL, '2026-02-24 16:01:34');
+(45, 1, 522, 'tg', 'login', 'd87887186bf34e99b2dfafd76bb93fef4b9e92acb648049f', '2026-02-25 16:01:34', NULL, NULL, NULL, '2026-02-24 16:01:34'),
+(46, 1, 522, 'tg', 'login', '17b432791905450d8cbe54c0e38c36a7914ba2d061f52e7c', '2026-02-25 16:40:44', NULL, NULL, NULL, '2026-02-24 16:40:44'),
+(47, 1, 522, 'tg', 'login', '9f57660c4c064e98b980bb20eb66534ce43e5b8d15e560d2', '2026-02-25 18:23:58', NULL, NULL, NULL, '2026-02-24 18:23:58'),
+(48, 1, 522, 'tg', 'login', 'bc9441dd6e8e415e82e38fdbcfd39e7dbfcf891d8044d0ab', '2026-02-25 18:23:59', NULL, NULL, NULL, '2026-02-24 18:23:59'),
+(49, 1, 522, 'max', 'login', '83d91e1558a643bd90dd7e60d518f331c1c7c71d40cd5cb2', '2026-02-25 20:36:43', NULL, NULL, NULL, '2026-02-24 20:36:43'),
+(50, 1, NULL, 'max', 'pending', 'f7849c880292480f83ca8fd858500b730e40f3b1ba2d4614', '2026-02-25 20:39:01', NULL, '71607539', NULL, '2026-02-24 20:39:01'),
+(51, 1, 522, 'max', 'login', '24841bad87f74d349a63daa700d21b4d5655fcbd7df829a6', '2026-02-25 20:39:01', NULL, NULL, NULL, '2026-02-24 20:39:01'),
+(52, 1, NULL, 'max', 'pending', '725f4f5f55f641f2ba3dedbb4f68c1912e1d6d9960594301', '2026-02-25 20:39:18', NULL, '71607539', NULL, '2026-02-24 20:39:18'),
+(53, 1, 522, 'max', 'login', '9e96ff6bae6e4aeaa2baf2de37495ab219815b49f009d5f4', '2026-02-25 20:39:18', NULL, NULL, NULL, '2026-02-24 20:39:18'),
+(54, 1, 522, 'max', 'login', 'b20e3c338c774e6da76ae3b023b43bc61cb710fc7ee3b09e', '2026-02-25 20:47:02', NULL, NULL, NULL, '2026-02-24 20:47:02'),
+(55, 1, 522, 'tg', '', '5c0b0e4c533f4923bbffbc6672f5e01a64215d38a49c93d6', '2036-02-24 21:35:26', NULL, '915611204', NULL, '2026-02-24 21:35:26'),
+(56, 1, 522, 'tg', 'login', '1c81112c509b437995ef2daa9b651330756349471918946c', '2026-02-25 21:42:37', NULL, NULL, NULL, '2026-02-24 21:42:37'),
+(57, 1, 522, 'tg', 'login', 'f3874c0c0f5e4b7390c39de059ab334126aa4cc1b1ff240b', '2026-02-25 21:43:06', NULL, NULL, NULL, '2026-02-24 21:43:06'),
+(58, 1, 522, 'tg', 'login', '7ae26bd100cb42b9bcbe54e5170332bcdfa4625c7caca2f2', '2026-02-25 21:52:28', NULL, NULL, NULL, '2026-02-24 21:52:28'),
+(59, 1, 522, 'tg', 'login', 'fe19adb21c86412cbd6b8d9e4a1118de8bd4e81bf2920230', '2026-02-25 21:52:53', NULL, NULL, NULL, '2026-02-24 21:52:53'),
+(60, 1, 522, 'tg', 'login', 'e90490b4db29463ba70703134c15235e432e4494cf4c5ed1', '2026-02-25 21:54:46', NULL, NULL, NULL, '2026-02-24 21:54:46'),
+(61, 1, NULL, 'tg', '', '594036e9a68342108fbe6aa333c3942b', '2026-02-26 02:01:53', NULL, NULL, 'http://posham.localh', '2026-02-24 22:01:52'),
+(62, 1, NULL, 'tg', '', '86a54adae5274c9c83b70e4eda5432b3', '2026-02-26 02:01:54', NULL, NULL, 'http://posham.localh', '2026-02-24 22:01:53'),
+(63, 1, NULL, 'tg', '', 'a4c5d71a4e924383bac4f21cf8612d9b', '2026-02-26 02:03:11', NULL, NULL, 'http://posham.localh', '2026-02-24 22:03:10'),
+(64, 1, NULL, 'tg', '', 'd29d72d6901a4b599837df26b81d03ec', '2036-02-23 02:11:02', NULL, NULL, 'http://posham.localh', '2026-02-24 22:11:01'),
+(65, 1, NULL, 'tg', '', '9bebb70385ee4a288b0c65a25ef96c86', '2036-02-23 02:11:03', NULL, NULL, 'http://posham.localh', '2026-02-24 22:11:02'),
+(66, 1, NULL, 'tg', '', 'd1fdf2cd605245ad80fc9cae64924c31', '2036-02-23 02:12:01', NULL, NULL, 'http://posham.localh', '2026-02-24 22:11:59'),
+(67, 1, NULL, 'tg', '', 'aa88f56876cc4977a5502b2c6007eafa', '2036-02-23 02:12:02', NULL, NULL, 'http://posham.localh', '2026-02-24 22:12:01'),
+(68, 1, NULL, 'tg', '', '328993fdee1e4e838151411acc06e32e', '2036-02-23 02:13:56', NULL, NULL, 'http://localhost:300', '2026-02-24 22:13:54'),
+(69, 1, NULL, 'tg', '', '053252ed6e554d9d82c3328d86876eb2', '2036-02-23 02:15:42', NULL, NULL, 'http://localhost:300', '2026-02-24 22:15:41'),
+(70, 1, NULL, 'tg', 'pending', 'testtok123', '2026-02-26 02:16:16', NULL, 'login_origin', 'http://localhost:300', '2026-02-24 22:16:15');
 
 -- --------------------------------------------------------
 
@@ -930,7 +982,9 @@ CREATE TABLE `cust_customer_favorites` (
 
 INSERT INTO `cust_customer_favorites` (`id`, `tenant_id`, `store_id`, `customer_id`, `item_signature`, `item_type`, `product_id`, `combo_id`, `title`, `photo`, `item_json`, `created_at`, `updated_at`) VALUES
 (28, 1, 1, 519, '6381e8ab6eb3ede83aab54ec25d710c210a343479ff2c2330ff2b1ff44c2d74a', 'combo', NULL, 9, 'Второе+суп+напиток', '/static/uploads/products/1/45f7062aac0d155bbbce22f54d129177.webp', '{\"type\":\"combo\",\"combo_id\":9,\"combo_title\":\"Второе+суп+напиток\",\"name\":\"Второе+суп+напиток\",\"qty\":1,\"price\":505,\"line_total\":505,\"old_line_total\":532,\"unit_price_before_discount\":532,\"photos\":[\"/static/uploads/products/1/45f7062aac0d155bbbce22f54d129177.webp\",\"/static/uploads/products/1/6213f8e610df42dc64364e4a629a3455.webp\",\"/static/uploads/products/1/40617d9e12e86588994e9d3d101eda7b.webp\"],\"selections\":[{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/45f7062aac0d155bbbce22f54d129177.webp\",\"variant_label\":\"\",\"variant_group_id\":null,\"variant_value_index\":0,\"variant_group_title\":\"\",\"variant_unit\":\"\",\"unit_id\":null,\"unit_price_override\":225,\"unit_price_before_discount\":null,\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit_id\":3,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":1,\"qty\":1,\"unit_id\":1,\"unit\":\"шт\"}]},{\"product_id\":37,\"product_name\":\"Солянка мясная сборная\",\"product_photo\":\"/static/uploads/products/1/6213f8e610df42dc64364e4a629a3455.webp\",\"variant_label\":\"250\",\"variant_group_id\":8,\"variant_value_index\":0,\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"unit_id\":3,\"unit_price_override\":185,\"unit_price_before_discount\":null,\"ingredients_display\":[{\"ingredient_id\":71,\"name\":\"Долька лимона\",\"quantity\":0,\"qty\":0,\"unit_id\":1,\"unit\":\"шт\"}]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/40617d9e12e86588994e9d3d101eda7b.webp\",\"variant_label\":\"500\",\"variant_group_id\":14,\"variant_value_index\":0,\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"unit_id\":5,\"unit_price_override\":95,\"unit_price_before_discount\":null,\"ingredients_display\":[]}]}', '2026-02-22 07:07:26', '2026-02-22 07:07:26'),
-(29, 1, 1, 4, 'f2364ed2469e03e9201b7e3f29d112b565af6b51f358112fb1d4abcd85c88e0f', 'product', 14, NULL, 'Пюре с куриной котлетой', '/static/uploads/products/1/d7619481316a235377b2af14a0dc2214.webp', '{\"type\":\"product\",\"product_id\":14,\"name\":\"Пюре с куриной котлетой\",\"qty\":1,\"price\":278,\"old_price\":0,\"line_total\":278,\"photos\":[\"/static/uploads/products/1/d7619481316a235377b2af14a0dc2214.webp\",\"/static/uploads/products/1/b76da5e2fe331b4147d1befe763b9bc1-d542f578.webp\"],\"option_item_ids\":[],\"options\":[],\"option_items\":[],\"ingredients\":[{\"ingredient_id\":12,\"ingredient_name\":\"Картофельное пюре\",\"name\":\"Картофельное пюре\",\"quantity\":150,\"qty\":150,\"unit_id\":3,\"unit_label\":\"г\",\"unit\":\"г\"},{\"ingredient_id\":13,\"ingredient_name\":\"Куринная котлета\",\"name\":\"Куринная котлета\",\"quantity\":1,\"qty\":1,\"unit_id\":1,\"unit_label\":\"шт\",\"unit\":\"шт\"}],\"variant_group_id\":null,\"variant_value_index\":null,\"variant_label\":\"\",\"variants\":[],\"discount\":null}', '2026-02-23 07:43:43', '2026-02-23 07:43:43');
+(29, 1, 1, 4, 'f2364ed2469e03e9201b7e3f29d112b565af6b51f358112fb1d4abcd85c88e0f', 'product', 14, NULL, 'Пюре с куриной котлетой', '/static/uploads/products/1/d7619481316a235377b2af14a0dc2214.webp', '{\"type\":\"product\",\"product_id\":14,\"name\":\"Пюре с куриной котлетой\",\"qty\":1,\"price\":278,\"old_price\":0,\"line_total\":278,\"photos\":[\"/static/uploads/products/1/d7619481316a235377b2af14a0dc2214.webp\",\"/static/uploads/products/1/b76da5e2fe331b4147d1befe763b9bc1-d542f578.webp\"],\"option_item_ids\":[],\"options\":[],\"option_items\":[],\"ingredients\":[{\"ingredient_id\":12,\"ingredient_name\":\"Картофельное пюре\",\"name\":\"Картофельное пюре\",\"quantity\":150,\"qty\":150,\"unit_id\":3,\"unit_label\":\"г\",\"unit\":\"г\"},{\"ingredient_id\":13,\"ingredient_name\":\"Куринная котлета\",\"name\":\"Куринная котлета\",\"quantity\":1,\"qty\":1,\"unit_id\":1,\"unit_label\":\"шт\",\"unit\":\"шт\"}],\"variant_group_id\":null,\"variant_value_index\":null,\"variant_label\":\"\",\"variants\":[],\"discount\":null}', '2026-02-23 07:43:43', '2026-02-23 07:43:43'),
+(30, 1, 1, 522, '99739ab9d504142bf28face997c67ee0ca8f49d2543e00096a9fb231c2e28945', 'product', 58, NULL, 'Пампушка', '/static/uploads/products/1/43a3491f4c955849c818ddfb71178a65.webp', '{\"type\":\"product\",\"product_id\":58,\"name\":\"Пампушка\",\"qty\":1,\"price\":20,\"old_price\":0,\"line_total\":20,\"photos\":[\"/static/uploads/products/1/43a3491f4c955849c818ddfb71178a65.webp\"],\"option_item_ids\":[],\"options\":[],\"option_items\":[],\"ingredients\":[],\"variant_group_id\":null,\"variant_value_index\":null,\"variant_label\":\"\",\"variants\":[],\"discount\":null}', '2026-02-24 14:57:48', '2026-02-24 14:57:48'),
+(31, 1, 1, 522, '6381e8ab6eb3ede83aab54ec25d710c210a343479ff2c2330ff2b1ff44c2d74a', 'combo', NULL, 9, 'Второе+суп+напиток', '/static/uploads/products/1/45f7062aac0d155bbbce22f54d129177.webp', '{\"type\":\"combo\",\"combo_id\":9,\"combo_title\":\"Второе+суп+напиток\",\"name\":\"Второе+суп+напиток\",\"qty\":1,\"price\":505,\"line_total\":505,\"old_line_total\":532,\"unit_price_before_discount\":532,\"photos\":[\"/static/uploads/products/1/45f7062aac0d155bbbce22f54d129177.webp\",\"/static/uploads/products/1/6213f8e610df42dc64364e4a629a3455.webp\",\"/static/uploads/products/1/40617d9e12e86588994e9d3d101eda7b.webp\"],\"selections\":[{\"product_id\":42,\"product_name\":\"Баварская колбаска с гречкой\",\"product_photo\":\"/static/uploads/products/1/45f7062aac0d155bbbce22f54d129177.webp\",\"variant_label\":\"\",\"variant_group_id\":null,\"variant_value_index\":0,\"variant_group_title\":\"\",\"variant_unit\":\"\",\"unit_id\":null,\"unit_price_override\":225,\"unit_price_before_discount\":null,\"ingredients_display\":[{\"ingredient_id\":21,\"name\":\"Гречка с овощами\",\"quantity\":150,\"qty\":150,\"unit_id\":3,\"unit\":\"г\"},{\"ingredient_id\":25,\"name\":\"Баварская колбаска\",\"quantity\":1,\"qty\":1,\"unit_id\":1,\"unit\":\"шт\"}]},{\"product_id\":37,\"product_name\":\"Солянка мясная сборная\",\"product_photo\":\"/static/uploads/products/1/6213f8e610df42dc64364e4a629a3455.webp\",\"variant_label\":\"250\",\"variant_group_id\":8,\"variant_value_index\":0,\"variant_group_title\":\"Супа (Грамм)\",\"variant_unit\":\"г\",\"unit_id\":3,\"unit_price_override\":185,\"unit_price_before_discount\":null,\"ingredients_display\":[{\"ingredient_id\":71,\"name\":\"Долька лимона\",\"quantity\":0,\"qty\":0,\"unit_id\":1,\"unit\":\"шт\"}]},{\"product_id\":81,\"product_name\":\"Морс Малина\",\"product_photo\":\"/static/uploads/products/1/40617d9e12e86588994e9d3d101eda7b.webp\",\"variant_label\":\"500\",\"variant_group_id\":14,\"variant_value_index\":0,\"variant_group_title\":\"Объем напитка\",\"variant_unit\":\"мл\",\"unit_id\":5,\"unit_price_override\":95,\"unit_price_before_discount\":null,\"ingredients_display\":[]}]}', '2026-02-24 14:57:57', '2026-02-24 14:57:57');
 
 -- --------------------------------------------------------
 
@@ -1065,7 +1119,7 @@ INSERT INTO `cust_customer_sessions` (`id`, `tenant_id`, `store_id`, `customer_i
 (106, 1, 1, 4, '9ca86808498f4a769f56ac495b37672c', '2026-02-22 13:13:04', '2026-03-24 13:13:04', 0, NULL, NULL, '2026-02-24 10:46:23'),
 (107, 1, 1, 4, 'cd5419c3042d4a33960c5ee0a97f0f6c', '2026-02-22 13:29:34', '2026-03-24 13:29:34', 0, NULL, NULL, '2026-02-24 10:46:23'),
 (108, 1, 1, 4, '9afe9c979f78468fbed941db5ee08625', '2026-02-22 13:53:01', '2026-03-24 13:53:01', 0, NULL, NULL, '2026-02-24 10:46:23'),
-(109, 1, 1, 4, 'f45c4e12bf5b4f82937c63ef17e0f1ad', '2026-02-22 15:20:53', '2026-03-26 16:31:08', 1, NULL, NULL, NULL),
+(109, 1, 1, 4, 'f45c4e12bf5b4f82937c63ef17e0f1ad', '2026-02-22 15:20:53', '2026-03-26 18:52:01', 0, NULL, NULL, '2026-02-24 18:52:02'),
 (110, 1, 1, 1, '1f511cfff6cd4e5680bb1eaf9b5987ee', '2026-02-23 08:36:02', '2026-03-25 08:36:02', 0, NULL, NULL, '2026-02-24 10:46:23'),
 (111, 1, 1, 1, '38d7be7bae7249aba425e4549cc86384', '2026-02-23 10:55:02', '2026-03-25 10:55:02', 0, NULL, NULL, '2026-02-24 10:46:23'),
 (112, 1, 1, 1, '131294b98d324b828bbd2f07e5c3bec5', '2026-02-23 11:02:02', '2026-03-25 11:02:02', 0, NULL, NULL, '2026-02-24 10:46:23'),
@@ -1083,7 +1137,17 @@ INSERT INTO `cust_customer_sessions` (`id`, `tenant_id`, `store_id`, `customer_i
 (135, 1, 1, 522, 'c645fd94ed2a490a91aee7466d22b3d3', '2026-02-24 16:21:04', '2026-03-26 16:21:07', 0, NULL, NULL, '2026-02-24 16:21:20'),
 (136, 1, 1, 522, '0cdf8534e6fc415f9732f9a428080cfc', '2026-02-24 16:21:33', '2026-03-26 16:21:37', 0, NULL, NULL, '2026-02-24 16:21:38'),
 (137, 1, 1, 522, '00c7e18a645f4254876d4ace93f56b83', '2026-02-24 16:27:16', '2026-03-26 16:27:18', 0, NULL, NULL, '2026-02-24 16:27:22'),
-(138, 1, 1, 522, '73be22af89cf48218ca2d0abd3534122', '2026-02-24 16:27:38', '2026-03-26 16:27:40', 0, NULL, NULL, '2026-02-24 16:27:44');
+(138, 1, 1, 522, '73be22af89cf48218ca2d0abd3534122', '2026-02-24 16:27:38', '2026-03-26 16:27:40', 0, NULL, NULL, '2026-02-24 16:27:44'),
+(139, 1, 1, 522, 'de54255021324a0ea408068e6a5971ad', '2026-02-24 16:39:39', '2026-03-26 16:39:41', 0, NULL, NULL, '2026-02-24 16:39:48'),
+(140, 1, 1, 522, '015734d09a484b048e161dad3faec6a0', '2026-02-24 16:41:39', '2026-03-26 16:41:49', 0, NULL, NULL, '2026-02-24 16:41:50'),
+(141, 1, 1, 522, '7ce927fdf17345ccb82a29d00638d778', '2026-02-24 16:42:20', '2026-03-26 21:35:20', 0, NULL, NULL, '2026-02-24 21:35:23'),
+(142, 1, 1, 522, '32ac401227b94e16b7a9feeaec5c618c', '2026-02-24 17:55:38', '2026-03-26 17:55:43', 0, NULL, NULL, '2026-02-24 17:55:44'),
+(143, 1, 1, 522, '9827c791049844d2abb9e713c2e74342', '2026-02-24 17:56:00', '2026-03-26 18:09:22', 1, NULL, NULL, NULL),
+(144, 1, 1, 522, '57549650eb1147068bd146c8221b60c4', '2026-02-24 18:22:38', '2026-03-26 18:23:00', 0, NULL, NULL, '2026-02-24 18:23:00'),
+(145, 1, 1, 4, '58609e26bc5742ec88b79e155347ada5', '2026-02-24 18:24:24', '2026-03-26 19:11:12', 1, NULL, NULL, NULL),
+(146, 1, 1, 4, 'f45c47ff1d9e4f84ac12ff108fee64a1', '2026-02-24 18:41:28', '2026-03-26 18:50:33', 0, NULL, NULL, '2026-02-24 18:50:37'),
+(147, 1, 1, 4, '0aa3f3349b214e8b9bd2f007815eb7f1', '2026-02-24 20:32:42', '2026-03-26 21:46:13', 1, NULL, NULL, NULL),
+(148, 1, 1, 4, '56b99266ac604255a757dd39d3ef9eb3', '2026-02-24 21:08:54', '2026-03-26 22:23:23', 1, NULL, NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -1852,7 +1916,7 @@ CREATE TABLE `prod_combos` (
 --
 
 INSERT INTO `prod_combos` (`id`, `tenant_id`, `title`, `description`, `discount_percent`, `category_code`, `image_url`, `is_active`, `sort_order`, `created_at`, `updated_at`) VALUES
-(9, 1, 'Второе+суп+напиток', 'е6776', 5.00, 'cat-ml5837lr', NULL, 1, 0, '2026-02-04 09:27:29', '2026-02-10 12:37:13'),
+(9, 1, 'Второе+суп+напиток', 'На обед, На обед и ужин', 5.00, 'cat-ml5837lr', NULL, 1, 0, '2026-02-04 09:27:29', '2026-02-24 14:17:53'),
 (10, 1, 'Второе+суп+напиток', 'е6776', 5.00, 'cat-ml5837lr', NULL, 1, 0, '2026-02-11 04:13:34', '2026-02-15 12:02:17');
 
 -- --------------------------------------------------------
@@ -1947,9 +2011,9 @@ CREATE TABLE `prod_combo_set_blocks` (
 --
 
 INSERT INTO `prod_combo_set_blocks` (`id`, `tenant_id`, `combo_id`, `block_id`, `sort_order`, `created_at`, `updated_at`) VALUES
-(101, 1, 9, 3, 0, '2026-02-11 04:07:13', '2026-02-11 04:07:13'),
-(102, 1, 9, 2, 1, '2026-02-11 04:07:13', '2026-02-11 04:07:13'),
-(103, 1, 9, 4, 2, '2026-02-11 04:07:13', '2026-02-11 04:07:13');
+(104, 1, 9, 3, 0, '2026-02-24 14:17:53', '2026-02-24 14:17:53'),
+(105, 1, 9, 2, 1, '2026-02-24 14:17:53', '2026-02-24 14:17:53'),
+(106, 1, 9, 4, 2, '2026-02-24 14:17:53', '2026-02-24 14:17:53');
 
 -- --------------------------------------------------------
 
@@ -3626,7 +3690,7 @@ CREATE TABLE `ten_tenants` (
 --
 
 INSERT INTO `ten_tenants` (`id`, `store_id`, `name`, `slug`, `subdomain`, `email`, `password_hash`, `phone`, `is_active`, `created_at`, `updated_at`, `logo_light_url`, `logo_dark_url`, `favicon_light_url`, `favicon_dark_url`, `apple_touch_icon_url`, `android_icon_url`, `price_rounding_mode`, `price_rounding_precision`, `timezone`, `site_name`, `site_description`, `custom_domain`, `sound_new_order_url`, `sound_order_cancelled_url`, `sound_new_message_url`, `order_stock_deduct_mode`, `order_stock_deduct_status_id`, `img_webp_quality`, `img_thumb_quality`, `img_thumb_width`, `img_main_width`, `img_webp_aggressive`, `img_delete_original`, `telegram_bot_username`, `telegram_bot_token`, `max_bot_token`, `chat_welcome_message`, `chat_assistant_name`, `chat_operator_name`, `chat_quick_questions_json`, `max_bot_id`, `max_login_enabled`, `chat_widget_enabled`, `max_mini_app_enabled`, `tg_mini_app_enabled`, `tg_login_enabled`, `chat_assistant_gender`, `chat_guest_thread_ttl_days`, `chat_welcome_enabled`, `chat_quick_questions_enabled`, `chat_assistant_enabled`) VALUES
-(1, 1, 'По щам - домашняя еда с доставкой', NULL, 'posham', 'admin@test.ru', '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', 'admin@test.ru', 1, '2026-01-21 13:07:16', '2026-02-24 13:24:51', '/static/uploads/tenants/1/128bd8ff18d813eac1b7c6dfe944074b.webp', '/static/uploads/tenants/1/023858f4f5eaa98ba91ecc7bb443b3e8.webp', '/static/uploads/tenants/1/657d60ffee6820cb6c732d17a74b15a0.webp', NULL, '/static/uploads/tenants/1/f7b74205208c529a5b5e50359dc568f7.webp', '/static/uploads/tenants/1/6ecaea8b1114bc2ab3bc466d30502b77.webp', 'down', 0, NULL, 'По щам', NULL, NULL, '/static/uploads/tenants/1/sounds/3cded567d63fabaed72171f6093a0c1e.mp3', '/static/uploads/tenants/1/sounds/e0b30de53ccb7cdd20fa32c0fbb800db.mp3', '/static/uploads/tenants/1/sounds/fb3304169927ffa0144d4967880f0873.mp3', 'on_create', 5, 100, 100, 300, 500, 1, 1, 'posham_loginbot', '8333328970:AAGhDd7KP62vb3W1Rqwi9VDlDK7DyPNc444', 'f9LHodD0cOJ5ns5y_4BJ_Mft5NxOLQCSPEDrftSagJZnHH8vomG9ig2CnEpEl80PwjmOph5Qa4I7N-dW7G15', NULL, NULL, 'По щам', NULL, '@id220807718849_bot', 0, 1, 1, 1, 0, NULL, NULL, 1, 1, 1);
+(1, 1, 'По щам - домашняя еда с доставкой', NULL, 'posham', 'admin@test.ru', '$2a$10$c2.HUSbW1ssrMsF03XsC6eMSkXR6FtMqOPLpSUgkUIQRibqfk9.zO', 'admin@test.ru', 1, '2026-01-21 13:07:16', '2026-02-24 18:54:41', '/static/uploads/tenants/1/128bd8ff18d813eac1b7c6dfe944074b.webp', '/static/uploads/tenants/1/023858f4f5eaa98ba91ecc7bb443b3e8.webp', '/static/uploads/tenants/1/657d60ffee6820cb6c732d17a74b15a0.webp', NULL, '/static/uploads/tenants/1/f7b74205208c529a5b5e50359dc568f7.webp', '/static/uploads/tenants/1/6ecaea8b1114bc2ab3bc466d30502b77.webp', 'down', 0, NULL, 'По щам', NULL, NULL, '/static/uploads/tenants/1/sounds/3cded567d63fabaed72171f6093a0c1e.mp3', '/static/uploads/tenants/1/sounds/e0b30de53ccb7cdd20fa32c0fbb800db.mp3', '/static/uploads/tenants/1/sounds/fb3304169927ffa0144d4967880f0873.mp3', 'on_create', 5, 100, 100, 300, 500, 1, 1, 'posham_loginbot', '8333328970:AAGhDd7KP62vb3W1Rqwi9VDlDK7DyPNc444', 'f9LHodD0cOJ5ns5y_4BJ_Mft5NxOLQCSPEDrftSagJZnHH8vomG9ig2CnEpEl80PwjmOph5Qa4I7N-dW7G15', NULL, NULL, 'По щам', NULL, NULL, 0, 1, 1, 1, 1, NULL, NULL, 1, 1, 1);
 
 -- --------------------------------------------------------
 
@@ -4208,19 +4272,19 @@ ALTER TABLE `app_users`
 -- AUTO_INCREMENT для таблицы `chat_messages`
 --
 ALTER TABLE `chat_messages`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14248;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14382;
 
 --
 -- AUTO_INCREMENT для таблицы `chat_push_subscriptions`
 --
 ALTER TABLE `chat_push_subscriptions`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=275;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=316;
 
 --
 -- AUTO_INCREMENT для таблицы `chat_threads`
 --
 ALTER TABLE `chat_threads`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1371;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1453;
 
 --
 -- AUTO_INCREMENT для таблицы `cust_categories`
@@ -4244,13 +4308,13 @@ ALTER TABLE `cust_customer_addresses`
 -- AUTO_INCREMENT для таблицы `cust_customer_auth_identities`
 --
 ALTER TABLE `cust_customer_auth_identities`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=69;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=71;
 
 --
 -- AUTO_INCREMENT для таблицы `cust_customer_auth_tokens`
 --
 ALTER TABLE `cust_customer_auth_tokens`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=46;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=71;
 
 --
 -- AUTO_INCREMENT для таблицы `cust_customer_category_links`
@@ -4262,13 +4326,13 @@ ALTER TABLE `cust_customer_category_links`
 -- AUTO_INCREMENT для таблицы `cust_customer_favorites`
 --
 ALTER TABLE `cust_customer_favorites`
-  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=30;
+  MODIFY `id` int NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=32;
 
 --
 -- AUTO_INCREMENT для таблицы `cust_customer_sessions`
 --
 ALTER TABLE `cust_customer_sessions`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=139;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=149;
 
 --
 -- AUTO_INCREMENT для таблицы `cust_statuses`
@@ -4388,7 +4452,7 @@ ALTER TABLE `prod_combo_block_products`
 -- AUTO_INCREMENT для таблицы `prod_combo_set_blocks`
 --
 ALTER TABLE `prod_combo_set_blocks`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=104;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=107;
 
 --
 -- AUTO_INCREMENT для таблицы `prod_option_assignments`
