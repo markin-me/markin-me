@@ -2025,7 +2025,27 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       if (!tenantBotId || !tenantBotToken) {
         return res.status(409).json({ ok: false, error: 'MAX_BOT_NOT_CONFIGURED' });
       }
-      const link = `https://max.ru/${encodeURIComponent(tenantBotId)}?start=link`;
+
+      const forwardedProto = req.headers['x-forwarded-proto'];
+      const forwardedHost = req.headers['x-forwarded-host'];
+      const firstHeaderValue = (raw, fallback = '') => {
+        if (!raw) return fallback;
+        if (Array.isArray(raw)) return String(raw[0]).trim();
+        return String(raw).split(',')[0].trim();
+      };
+      const protocol = firstHeaderValue(forwardedProto, req.protocol || 'https');
+      const hostHeader = firstHeaderValue(forwardedHost, req.get('host') || 'localhost:3000');
+      const origin = `${protocol}://${hostHeader}`;
+      const loginOriginToken = makeToken32();
+
+      await db.query(
+        `INSERT INTO cust_customer_auth_tokens
+         (tenant_id, customer_id, provider, purpose, token, expires_at, used_at, provider_user_id, phone, created_at)
+         VALUES (?, NULL, 'max', 'pending', ?, DATE_ADD(NOW(), INTERVAL 10 YEAR), NULL, ?, 'login_origin', NOW())`,
+        [tenantId, loginOriginToken, origin]
+      );
+
+      const link = `https://max.ru/${encodeURIComponent(tenantBotId)}?start=${encodeURIComponent(loginOriginToken)}`;
       return res.json({ ok: true, link });
     } catch (e) {
       console.error(e);
@@ -2053,7 +2073,26 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         return res.status(409).json({ ok: false, error: 'TG_BOT_NOT_CONFIGURED' });
       }
 
-      const link = `https://t.me/${encodeURIComponent(username)}?start=login`;
+      const forwardedProto = req.headers['x-forwarded-proto'];
+      const forwardedHost = req.headers['x-forwarded-host'];
+      const firstHeaderValue = (raw, fallback = '') => {
+        if (!raw) return fallback;
+        if (Array.isArray(raw)) return String(raw[0]).trim();
+        return String(raw).split(',')[0].trim();
+      };
+      const protocol = firstHeaderValue(forwardedProto, req.protocol || 'https');
+      const hostHeader = firstHeaderValue(forwardedHost, req.get('host') || 'localhost:3000');
+      const origin = `${protocol}://${hostHeader}`;
+      const loginOriginToken = makeToken32();
+
+      await db.query(
+        `INSERT INTO cust_customer_auth_tokens
+         (tenant_id, customer_id, provider, purpose, token, expires_at, used_at, provider_user_id, phone, created_at)
+         VALUES (?, NULL, 'tg', 'pending', ?, DATE_ADD(NOW(), INTERVAL 10 YEAR), NULL, ?, 'login_origin', NOW())`,
+        [tenantId, loginOriginToken, origin]
+      );
+
+      const link = `https://t.me/${encodeURIComponent(username)}?start=${encodeURIComponent(loginOriginToken)}`;
       return res.json({ ok: true, link });
     } catch (e) {
       console.error(e);
@@ -2065,19 +2104,23 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   // One-time MAX login token exchange -> customer session + redirect to site/miniapp
   router.get('/max/finish-login', async (req, res) => {
     const loginToken = str(req.query.token);
+    const persistentToken = str(req.query.ptoken);
+    const isPersistent = !!persistentToken;
+    const effectiveToken = persistentToken || loginToken;
     const target = str(req.query.target).toLowerCase() === 'miniapp' ? 'miniapp' : 'site';
-    if (!loginToken) return res.status(400).send('TOKEN_REQUIRED');
+    if (!effectiveToken) return res.status(400).send('TOKEN_REQUIRED');
 
     const maxLoginReadTable = 'cust_customer_auth_tokens';
     const conn = await db.getConnection();
     try {
+      const purposeFilter = 'login';
       const [tenantRows] = await conn.query(
         `SELECT t.max_login_enabled
          FROM ${maxLoginReadTable} lt
          JOIN ten_tenants t ON t.id = lt.tenant_id
-         WHERE lt.token=? AND lt.provider='max' AND lt.purpose='login'
+         WHERE lt.token=? AND lt.provider='max' AND lt.purpose=?
          LIMIT 1`,
-        [loginToken]
+        [effectiveToken, purposeFilter]
       );
       if (!tenantRows.length || Number(tenantRows[0].max_login_enabled || 0) !== 1) {
         return res.status(403).send('MAX_LOGIN_DISABLED');
@@ -2085,14 +2128,26 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       await conn.beginTransaction();
 
-      const [rows] = await conn.query(
-        `SELECT id, tenant_id, customer_id
-         FROM ${maxLoginReadTable}
-         WHERE token=? AND provider='max' AND purpose='login' AND used_at IS NULL AND expires_at > NOW()
-         LIMIT 1
-         FOR UPDATE`,
-        [loginToken]
-      );
+      let rows = [];
+      if (isPersistent) {
+        [rows] = await conn.query(
+          `SELECT id, tenant_id, customer_id
+           FROM ${maxLoginReadTable}
+           WHERE token=? AND provider='max' AND purpose='login'
+           LIMIT 1
+           FOR UPDATE`,
+          [effectiveToken]
+        );
+      } else {
+        [rows] = await conn.query(
+          `SELECT id, tenant_id, customer_id
+           FROM ${maxLoginReadTable}
+           WHERE token=? AND provider='max' AND purpose='login' AND used_at IS NULL AND expires_at > NOW()
+           LIMIT 1
+           FOR UPDATE`,
+          [effectiveToken]
+        );
+      }
       if (!rows.length) {
         await conn.rollback();
         return res.status(400).send('TOKEN_INVALID_OR_EXPIRED');
@@ -2124,13 +2179,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         isActive: 1,
       });
 
-      await conn.query(
-        `UPDATE cust_customer_auth_tokens
-         SET used_at=NOW()
-         WHERE tenant_id=? AND provider='max' AND purpose='login' AND token=? AND used_at IS NULL
-         LIMIT 1`,
-        [tenantId, loginToken]
-      );
+      if (!isPersistent) {
+        await conn.query(
+          `UPDATE cust_customer_auth_tokens
+           SET used_at=NOW()
+           WHERE tenant_id=? AND provider='max' AND purpose='login' AND token=? AND used_at IS NULL
+           LIMIT 1`,
+          [tenantId, effectiveToken]
+        );
+      }
 
       await conn.commit();
 
@@ -2143,6 +2200,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 <body>
 <script>
 try {
+  localStorage.setItem('shop_customer_token', ${JSON.stringify(sessionToken)});
   localStorage.setItem('shop_customer_token_t${tenantId}', ${JSON.stringify(sessionToken)});
 } catch (e) {}
 window.location.replace(${JSON.stringify(redirectUrl)});
@@ -2164,19 +2222,23 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   // One-time Telegram login token exchange -> customer session + redirect to site/miniapp
   router.get('/tg/finish-login', async (req, res) => {
     const loginToken = str(req.query.token);
+    const persistentToken = str(req.query.ptoken);
+    const isPersistent = !!persistentToken;
+    const effectiveToken = persistentToken || loginToken;
     const target = str(req.query.target).toLowerCase() === 'miniapp' ? 'miniapp' : 'site';
-    if (!loginToken) return res.status(400).send('TOKEN_REQUIRED');
+    if (!effectiveToken) return res.status(400).send('TOKEN_REQUIRED');
 
     const tgLoginReadTable = 'cust_customer_auth_tokens';
     const conn = await db.getConnection();
     try {
+      const purposeFilter = 'login';
       const [tenantRows] = await conn.query(
         `SELECT t.tg_login_enabled
          FROM ${tgLoginReadTable} lt
          JOIN ten_tenants t ON t.id = lt.tenant_id
-         WHERE lt.token=? AND lt.provider='tg' AND lt.purpose='login'
+         WHERE lt.token=? AND lt.provider='tg' AND lt.purpose=?
          LIMIT 1`,
-        [loginToken]
+        [effectiveToken, purposeFilter]
       );
       if (!tenantRows.length || Number(tenantRows[0].tg_login_enabled || 0) !== 1) {
         return res.status(403).send('TG_LOGIN_DISABLED');
@@ -2184,14 +2246,26 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       await conn.beginTransaction();
 
-      const [rows] = await conn.query(
-        `SELECT id, tenant_id, customer_id
-         FROM ${tgLoginReadTable}
-         WHERE token=? AND provider='tg' AND purpose='login' AND used_at IS NULL AND expires_at > NOW()
-         LIMIT 1
-         FOR UPDATE`,
-        [loginToken]
-      );
+      let rows = [];
+      if (isPersistent) {
+        [rows] = await conn.query(
+          `SELECT id, tenant_id, customer_id
+           FROM ${tgLoginReadTable}
+           WHERE token=? AND provider='tg' AND purpose='login'
+           LIMIT 1
+           FOR UPDATE`,
+          [effectiveToken]
+        );
+      } else {
+        [rows] = await conn.query(
+          `SELECT id, tenant_id, customer_id
+           FROM ${tgLoginReadTable}
+           WHERE token=? AND provider='tg' AND purpose='login' AND used_at IS NULL AND expires_at > NOW()
+           LIMIT 1
+           FOR UPDATE`,
+          [effectiveToken]
+        );
+      }
       if (!rows.length) {
         await conn.rollback();
         return res.status(400).send('TOKEN_INVALID_OR_EXPIRED');
@@ -2228,13 +2302,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         ipAddress: String(req.ip || req.connection?.remoteAddress || '').slice(0, 64),
       });
 
-      await conn.query(
-        `UPDATE cust_customer_auth_tokens
-         SET used_at=NOW()
-         WHERE tenant_id=? AND provider='tg' AND purpose='login' AND token=? AND used_at IS NULL
-         LIMIT 1`,
-        [tenantId, loginToken]
-      );
+      if (!isPersistent) {
+        await conn.query(
+          `UPDATE cust_customer_auth_tokens
+           SET used_at=NOW()
+           WHERE tenant_id=? AND provider='tg' AND purpose='login' AND token=? AND used_at IS NULL
+           LIMIT 1`,
+          [tenantId, effectiveToken]
+        );
+      }
 
       await conn.commit();
 
@@ -2248,6 +2324,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 <script>
 try {
   localStorage.setItem('shop_customer_token', ${JSON.stringify(sessionToken)});
+  localStorage.setItem('shop_customer_token_t${tenantId}', ${JSON.stringify(sessionToken)});
 } catch (e) {}
 window.location.replace(${JSON.stringify(redirectUrl)});
 </script>

@@ -37,6 +37,23 @@ const runtimePollingState = {
 };
 let telegramEnvPollingHandle = null;
 let telegramTenantPollingHandle = null;
+let fatalErrorLogged = false;
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+  if (String(process.env.IN_PASSENGER || '').trim() === '1') {
+    if (!fatalErrorLogged) {
+      fatalErrorLogged = true;
+      console.error('IN_PASSENGER=1; process kept alive after uncaught exception for diagnostics.');
+    }
+    return;
+  }
+  process.exit(1);
+});
 
 function readSystemSettings() {
   try {
@@ -219,6 +236,17 @@ async function resolveTenant(req) {
   return tenant;
 }
 
+async function isTenantHost(req) {
+  const host = String(req.hostname || '').toLowerCase();
+  if (!host) return false;
+  const [custom] = await db.query('SELECT id FROM ten_tenants WHERE custom_domain=? LIMIT 1', [host]);
+  if (custom.length) return true;
+  const sub = getSubdomain(host);
+  if (!sub) return false;
+  const [rows] = await db.query('SELECT id FROM ten_tenants WHERE subdomain=? LIMIT 1', [sub]);
+  return rows.length > 0;
+}
+
 async function renderShop(req, res) {
   try {
     const tenant = await resolveTenant(req);
@@ -236,6 +264,33 @@ async function renderShop(req, res) {
 // ------------------------------
 // API: Auth (публичные роуты)
 // ------------------------------
+app.use(async (req, res, next) => {
+  const route = String(req.path || '');
+  const isAdminRoute = (
+    route === '/login'
+    || route === '/register'
+    || route.startsWith('/dashboard')
+    || route.startsWith('/api/auth')
+    || route.startsWith('/api/admin')
+  );
+
+  if (!isAdminRoute) return next();
+
+  try {
+    const tenantHost = await isTenantHost(req);
+    if (!tenantHost) return next();
+
+    if (route.startsWith('/api/')) {
+      return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+    }
+
+    return renderShop(req, res);
+  } catch (err) {
+    console.error('Admin host guard error:', err);
+    return next();
+  }
+});
+
 app.use('/api/auth', makeAuthRouter({ db, helpers }));
 
 // ------------------------------
@@ -336,7 +391,13 @@ app.get('/sw.js', (req, res) => {
 });
 
 app.use(async (req, res, next) => {
-  if (req.path.startsWith('/api') || req.path.startsWith('/static') || req.path === '/manifest.json' || req.path === '/sw.js') return next();
+  if (
+    req.path.startsWith('/api')
+    || req.path.startsWith('/static')
+    || req.path === '/manifest.json'
+    || req.path === '/sw.js'
+    || req.path === '/max-app'
+  ) return next();
   const sub = getSubdomain(req.hostname);
   if (sub) return renderShop(req, res);
   // Проверка custom_domain — если домен привязан к тенанту, показываем витрину
@@ -385,6 +446,41 @@ app.get('/tg-app', (req, res) => {
 
 // Telegram mini app: витрина как на /shop или posham.localhost:3000/
 app.get('/telegram/app', (req, res) => {
+  return renderShop(req, res);
+});
+
+function extractMaxAppLaunchToken(req) {
+  const candidates = [
+    req.query && req.query.ptoken,
+    req.query && req.query.token,
+    req.query && req.query.startapp,
+    req.query && req.query.start,
+    req.query && req.query.payload,
+  ];
+  for (const candidate of candidates) {
+    const raw = String(candidate || '').trim();
+    if (!raw) continue;
+    const prefixed = raw.match(/^(?:ptoken|token|login|auth)[:=](.+)$/i);
+    const token = prefixed && prefixed[1] ? String(prefixed[1]).trim() : raw;
+    if (token) return token;
+  }
+  return '';
+}
+
+// MAX mini app entry-point.
+// If launch payload carries auth token, complete login first and then open mini app.
+app.get('/max-app', (req, res) => {
+  try {
+    const launchToken = extractMaxAppLaunchToken(req);
+    if (launchToken) {
+      const qs = new URLSearchParams();
+      qs.set('ptoken', launchToken);
+      qs.set('target', 'miniapp');
+      return res.redirect(302, `/api/public/max/finish-login?${qs.toString()}`);
+    }
+  } catch (err) {
+    console.error('Ошибка обработки /max-app launch token:', err);
+  }
   return renderShop(req, res);
 });
 
@@ -553,7 +649,40 @@ app.put('/api/admin/system/polling', authMiddleware, (req, res) => {
 // ------------------------------
 // Start
 // ------------------------------
-app.listen(PORT, () => {
+function resolveListenTarget() {
+  const listen = String(process.env.LISTEN || '').trim();
+  if (!listen) return { port: Number(PORT) || 3000 };
+
+  // Passenger often provides LISTEN as host:port, e.g. 127.0.0.1:61065
+  const idx = listen.lastIndexOf(':');
+  if (idx > 0) {
+    const host = listen.slice(0, idx).trim();
+    const portRaw = listen.slice(idx + 1).trim();
+    const port = Number(portRaw);
+    if (host && Number.isFinite(port) && port > 0) {
+      return { host, port };
+    }
+  }
+
+  const port = Number(listen);
+  if (Number.isFinite(port) && port > 0) {
+    return { port };
+  }
+
+  return { path: listen };
+}
+
+const listenTarget = resolveListenTarget();
+const server = listenTarget.path
+  ? app.listen(listenTarget.path)
+  : app.listen(listenTarget.port, listenTarget.host);
+
+server.on('listening', () => {
+  const bindLabel = listenTarget.path
+    ? listenTarget.path
+    : `${listenTarget.host || '0.0.0.0'}:${listenTarget.port}`;
+  console.log(`Server bind target: ${bindLabel}`);
+  console.log(`Passenger mode: ${String(process.env.IN_PASSENGER || '').trim() === '1' ? 'yes' : 'no'}`);
   console.log(`🚀 Сервер запущен на ${PORT}`);
   console.log(`📝 Откройте http://localhost:${PORT}/login в браузере`);
   const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -585,10 +714,13 @@ app.listen(PORT, () => {
       console.error('TG auth polling start error:', e.message || e);
     }
   }
-}).on('error', (err) => {
+});
+
+server.on('error', (err) => {
   console.error('Ошибка запуска сервера:', err);
   if (err.code === 'EADDRINUSE') {
     console.error(`Порт ${PORT} уже занят. Остановите другой процесс или измените PORT.`);
   }
   process.exit(1);
 });
+
