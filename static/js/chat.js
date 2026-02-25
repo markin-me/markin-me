@@ -4999,6 +4999,8 @@
       }
 
       wrap.addEventListener("pointerdown", (event) => {
+        const pointerType = String(event.pointerType || "").toLowerCase();
+        if (pointerType === "touch" || pointerType === "pen" || shouldUseNativeMobileEmojiKeyboard()) return;
         const target = event.target;
         if (target && target.closest && target.closest("button,a,input,textarea,[contenteditable='true']")) return;
         if (document.activeElement === wrap) return;

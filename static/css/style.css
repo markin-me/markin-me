@@ -7423,6 +7423,8 @@ body.page-chat .panel{
   flex:1;
   min-height:0;
   position:relative;
+  overscroll-behavior-y:contain;
+  -webkit-overflow-scrolling:touch;
   --chat-tail-cut-bg:color-mix(in srgb, var(--color-surface-2), transparent 35%);
   background:
     radial-gradient(circle at 20% 0%, color-mix(in srgb, var(--primary-14), transparent 60%), transparent 35%),
