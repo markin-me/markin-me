@@ -11420,6 +11420,29 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   gap: 10px;
   width: 100%;
 }
+.shop-checkout-footer-actions{
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  grid-template-areas:
+    "comment comment"
+    "back submit";
+  align-items: center;
+  row-gap: 10px;
+  column-gap: 10px;
+}
+.shop-checkout-footer-comment-input{
+  grid-area: comment;
+  width: 100%;
+  min-width: 0;
+}
+#shopCheckoutBackBtn{
+  grid-area: back;
+}
+#shopCheckoutSubmitBtn{
+  grid-area: submit;
+  width: 100%;
+  min-width: 0;
+}
 
 .shop-checkout-footer-actions.is-order-success .shop-checkout-back,
 .shop-mobile-cart-actions-checkout.is-order-success .shop-checkout-back{
@@ -12970,6 +12993,10 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   padding: 4px 12px;
 }
 
+.shop-checkout-content{
+  padding-top: 12px;
+}
+
 .shop-profile-header-actions{
   display: flex;
   align-items: center;
@@ -13425,10 +13452,9 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   width:0;
   height:0;
 }
-.shop-checkout-method-picker::before,
-.shop-checkout-method-picker::after{
-  content:"";
+.shop-checkout-method-spacer{
   flex:0 0 var(--carousel-side-pad);
+  pointer-events:none;
 }
 
 .shop-checkout-method-pill-icon{
@@ -13492,6 +13518,11 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   width: 180px;
 }
 
+.shop-checkout-comment{
+  border-radius: 999px;
+  padding-inline: 16px;
+}
+
 .shop-checkout-dropdown-wrap{
   position: relative;
   width: 100%;
@@ -13506,13 +13537,18 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   align-items: center;
   gap: 6px;
   padding: 8px 12px;
-  border-radius: 10px;
+  border-radius: 999px;
   border: 1px solid var(--color-border);
   background: var(--color-surface);
   cursor: pointer;
   font-weight: 700;
   width: 100%;
   justify-content: space-between;
+}
+
+.shop-checkout-time-static-label:disabled{
+  opacity: 1;
+  cursor: default;
 }
 
 .shop-checkout-select::after{
@@ -13522,9 +13558,28 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 }
 
 .shop-checkout-change-custom{
-  margin-top: 8px;
-  width: 100%;
+  margin-top: 0;
+  width: calc((100% - 8px) / 2);
+  border-radius: 999px;
+  text-align: center;
 }
+
+.shop-checkout-change{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:8px;
+}
+
+.shop-checkout-change > .shop-checkout-time-wheel-wrap,
+.shop-checkout-change > .shop-checkout-change-noncash{
+  width: calc((100% - 8px) / 2);
+}
+.shop-checkout-change .shop-checkout-select{
+  justify-content: center;
+  text-align: center;
+}
+
 
 .shop-checkout-dropdown{
   position: absolute;
@@ -13617,8 +13672,8 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 /* === "РќР° РґР°С‚Сѓ" date selector === */
 /* Row 1: [РќР° РґР°С‚Сѓ в–ѕ] + [Р”СЂСѓРіРѕР№ РґРµРЅСЊ] РёР»Рё [РљРѕ РІСЂРµРјРµРЅРё в–ѕ] + [19:00 в–ѕ] */
 .shop-checkout-date-row1{
-  display:grid;
-  grid-template-columns:1fr 1fr;
+  display:flex;
+  flex-direction:column;
   gap:8px;
   align-items:center;
   margin-top:6px;
@@ -13642,11 +13697,11 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
 }
 /* РЎРµРєС†РёСЏ РїРѕРґ РїРµСЂРІС‹Рј СЂСЏРґРѕРј */
 .shop-checkout-time-input--ondate{
-  margin-top:8px;
+  margin-top:6px;
 }
 .shop-checkout-date-calendar{
   position:relative;
-  margin-bottom:8px;
+  margin-bottom:0;
 }
 .shop-checkout-date-calendar .date-popover{
   position:absolute;
@@ -13655,12 +13710,65 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   right:0;
   width:100%;
 }
+.shop-checkout-date-calendar .date-popover{
+  width: 236px;
+  padding: 8px;
+  gap: 6px;
+  border-radius: 30px;
+}
+.shop-checkout-date-calendar .date-popover-title{
+  font-size: 13px;
+}
+.shop-checkout-date-calendar .date-weekdays{
+  font-size: 10px;
+  gap: 3px;
+}
+.shop-checkout-date-calendar .date-grid{
+  gap: 3px;
+}
+.shop-checkout-date-calendar .date-cell,
+.shop-checkout-date-calendar .date-empty{
+  height: 30px;
+}
+.shop-checkout-date-calendar .date-cell{
+  border-radius: 30px;
+  border: 1px solid var(--color-border);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.shop-checkout-date-calendar .date-cell.is-start,
+.shop-checkout-date-calendar .date-cell.is-end{
+  border-color: transparent;
+}
+.shop-checkout-date-calendar .date-cell.is-past{
+  opacity: 0.5;
+}
 /* Row 2: [РґР°С‚Р°] + [СЃР»РѕС‚С‹ РІСЂРµРјРµРЅРё] вЂ” 50/50 */
 .shop-checkout-date-row2{
-  display:grid;
-  grid-template-columns:1fr 1fr;
+  display:flex;
+  flex-direction:column;
   gap:8px;
   align-items:center;
+}
+.shop-checkout-date-row1 .shop-checkout-dropdown-wrap,
+.shop-checkout-date-row2 .shop-checkout-dropdown-wrap{
+  width: calc((100% - 8px) / 2);
+}
+.shop-checkout-date-row1 .shop-checkout-select,
+.shop-checkout-date-row2 .shop-checkout-select{
+  justify-content: center;
+  text-align: center;
+}
+.shop-checkout-date-row1 .shop-checkout-select::after,
+.shop-checkout-date-row2 .shop-checkout-select::after{
+  right: 12px;
+}
+.shop-checkout-time-input--slots{
+  width: calc((100% - 8px) / 2);
+}
+.shop-checkout-time-input--slots .shop-checkout-dropdown-wrap{
+  width: 100%;
 }
 /* dateDisplay СЃС‚РёР»РёР·СѓРµС‚СЃСЏ С‡РµСЂРµР· .shop-checkout-select, СѓР±РёСЂР°РµРј СЃС‚СЂРµР»РєСѓ */
 .shop-checkout-date-display.shop-checkout-select::after{
@@ -13686,7 +13794,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   padding: 0;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 12px;
+  border-radius: 30px;
   box-shadow: 0 8px 24px var(--overlay-bg), 0 2px 8px var(--overlay-bg);
   visibility: hidden;
   opacity: 0;
@@ -13712,7 +13820,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   top: 50%;
   transform: translateY(-50%);
   height: 44px;
-  border-radius: 10px;
+  border-radius: 30px;
   background: var(--color-surface-2);
   pointer-events: none;
   z-index: 0;
@@ -15379,6 +15487,9 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
 
 /* РќР° РјРѕР±РёР»СЊРЅС‹С…: СЃРєСЂС‹РІР°РµРј header Р±РµР№РґР¶, РїРѕРєР°Р·С‹РІР°РµРј РјРѕР±РёР»СЊРЅС‹Р№ */
 @media (max-width: 768px) {
+  .shop-checkout-footer-comment-input{
+    display: none !important;
+  }
   .header-profile-wrapper .shop-active-orders-badge {
     display: none !important;
   }
@@ -15448,6 +15559,16 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
   }
   .shop-mobile-delivery-progress-wrap.hidden {
     display: none;
+  }
+  .shop-mobile-checkout-comment-wrap {
+    width: 100%;
+    flex-shrink: 0;
+  }
+  .shop-mobile-checkout-comment-wrap.hidden {
+    display: none;
+  }
+  .shop-mobile-checkout-comment-input {
+    width: 100%;
   }
   .shop-mobile-delivery-progress-bar {
     height: 6px;

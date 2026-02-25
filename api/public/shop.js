@@ -1097,20 +1097,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       if (!Number.isNaN(exp.getTime()) && exp.getTime() < Date.now()) return null;
     }
 
-    // Sliding session: on each valid request reset TTL to 30 days from now.
-    // This does not accumulate beyond 30 days ahead because we set from NOW().
+    // Sliding session: refresh TTL only when expiry is near.
+    // This reduces write pressure under frequent /me, /me/orders, /me/addresses calls.
     try {
       await db.query(
         `UPDATE ${sessionTable}
          SET expires_at=DATE_ADD(NOW(), INTERVAL 30 DAY)
-         WHERE id=? AND tenant_id=? AND is_active=1`,
+         WHERE id=? AND tenant_id=? AND is_active=1
+           AND (expires_at IS NULL OR expires_at < DATE_ADD(NOW(), INTERVAL 7 DAY))`,
         [Number(r.session_id), tenantId]
-      );
-      await db.query(
-        `UPDATE cust_customer_sessions
-         SET expires_at=DATE_ADD(NOW(), INTERVAL 30 DAY)
-         WHERE tenant_id=? AND token=? AND is_active=1`,
-        [tenantId, token]
       );
     } catch {}
 
@@ -5159,7 +5154,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       );
 
       const [timeOptions] = await db.query(
-        `SELECT id, code, title, description,
+        `SELECT id, code, title, icon, description,
                 has_time_window, starts_at, ends_at, step_minutes, lead_minutes, sort
          FROM order_time_options
          WHERE tenant_id=? AND store_id=? AND is_active=1

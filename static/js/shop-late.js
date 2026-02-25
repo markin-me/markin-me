@@ -7741,6 +7741,8 @@ function applySheetAddressTitle(backMode = "cart") {
       if (elMobileCheckoutBtn) {
         elMobileCheckoutBtn.disabled = !hasItems;
       }
+      const mobileCommentWrap = document.getElementById("shopMobileCheckoutCommentWrap");
+      if (mobileCommentWrap) mobileCommentWrap.classList.add("hidden");
       updateMobileDeliveryProgress();
     }
     // Обновляем ботомщит активного заказа
@@ -14526,10 +14528,6 @@ function setBottomNavActive(tab) {
     const wrap = document.createElement("div");
     wrap.className = "shop-checkout";
 
-    const title = document.createElement("div");
-    title.className = "shop-checkout-title";
-    title.textContent = "Ваш заказ:";
-    wrap.appendChild(title);
 
     const isPlaceholderCustomerName = (rawName) => {
       const value = str(rawName || "").trim().toLowerCase();
@@ -14614,18 +14612,36 @@ function setBottomNavActive(tab) {
     const methodDefault = pickDefaultCode(methods, preferredMethodCode, "takeaway");
     const methodPickerRoot = document.createElement("div");
     methodPickerRoot.className = "shop-checkout-method-picker";
+    const methodPickerLeftSpacer = document.createElement("span");
+    methodPickerLeftSpacer.className = "shop-checkout-method-spacer";
+    const methodPickerRightSpacer = document.createElement("span");
+    methodPickerRightSpacer.className = "shop-checkout-method-spacer";
+    methodPickerRoot.appendChild(methodPickerLeftSpacer);
     methodPickerRoot.addEventListener("wheel", (event) => {
       if (!event || typeof event.deltaY !== "number") return;
       if (window.matchMedia && !window.matchMedia("(min-width: 769px)").matches) return;
-      const hasOverflowX = methodPickerRoot.scrollWidth > methodPickerRoot.clientWidth;
-      if (!hasOverflowX) return;
+      if (!methods.length) return;
       if (Math.abs(event.deltaY) <= Math.abs(event.deltaX || 0)) return;
-      methodPickerRoot.scrollLeft += event.deltaY;
       event.preventDefault();
+      const now = Date.now();
+      if (now < methodWheelLockUntil) return;
+      methodWheelLockUntil = now + 140;
+      const direction = event.deltaY > 0 ? 1 : -1;
+      let currentIndex = methods.findIndex((item) => item.code === selectedMethodCode);
+      if (currentIndex < 0) currentIndex = 0;
+      const nextIndex = Math.max(0, Math.min(methods.length - 1, currentIndex + direction));
+      const nextCode = methods[nextIndex]?.code;
+      if (!nextCode || nextCode === selectedMethodCode) return;
+      setMethodValue(nextCode, { center: true, centerBehavior: "smooth", deferChange: true });
     }, { passive: false });
     let selectedMethodCode = methodDefault;
-    let centerSnapTimer = null;
     let isProgrammaticSnap = false;
+    let settleRafId = 0;
+    let settleStableFrames = 0;
+    let settleLastLeft = 0;
+    let settleScheduled = false;
+    let ensureCenterRafId = 0;
+    let methodWheelLockUntil = 0;
 
     function getMethodButtons() {
       return Array.from(methodPickerRoot.querySelectorAll(".shop-checkout-method-pill"));
@@ -14650,27 +14666,72 @@ function setBottomNavActive(tab) {
       return nearestCode;
     }
 
-    function centerMethodByCode(code, behavior = "smooth") {
+    function cancelSettleWatcher() {
+      if (settleRafId) {
+        cancelAnimationFrame(settleRafId);
+        settleRafId = 0;
+      }
+      settleStableFrames = 0;
+    }
+
+    function waitForScrollIdle(onIdle) {
+      cancelSettleWatcher();
+      settleLastLeft = methodPickerRoot.scrollLeft;
+      const tick = () => {
+        const currentLeft = methodPickerRoot.scrollLeft;
+        const delta = Math.abs(currentLeft - settleLastLeft);
+        settleLastLeft = currentLeft;
+        if (delta < 0.5) {
+          settleStableFrames += 1;
+        } else {
+          settleStableFrames = 0;
+        }
+        if (settleStableFrames >= 3) {
+          settleRafId = 0;
+          settleStableFrames = 0;
+          if (typeof onIdle === "function") onIdle();
+          return;
+        }
+        settleRafId = requestAnimationFrame(tick);
+      };
+      settleRafId = requestAnimationFrame(tick);
+    }
+
+    function centerMethodByCode(code, behavior = "smooth", onDone = null) {
       const targetBtn = methodPickerRoot.querySelector(`.shop-checkout-method-pill[data-code="${code}"]`);
       if (!targetBtn) return;
-      const targetLeft = targetBtn.offsetLeft + (targetBtn.offsetWidth / 2) - (methodPickerRoot.clientWidth / 2);
-      const maxLeft = Math.max(0, methodPickerRoot.scrollWidth - methodPickerRoot.clientWidth);
-      const nextLeft = Math.max(0, Math.min(maxLeft, targetLeft));
+      if (methodPickerRoot.clientWidth <= 0 || targetBtn.offsetWidth <= 0) return false;
+      const applyCenter = () => {
+        targetBtn.scrollIntoView({
+          behavior,
+          block: "nearest",
+          inline: "center"
+        });
+      };
       isProgrammaticSnap = true;
-      methodPickerRoot.scrollTo({ left: nextLeft, behavior });
-      setTimeout(() => { isProgrammaticSnap = false; }, behavior === "auto" ? 0 : 220);
+      applyCenter();
+      requestAnimationFrame(() => applyCenter());
+      waitForScrollIdle(() => {
+        isProgrammaticSnap = false;
+        if (typeof onDone === "function") onDone();
+      });
+      return true;
     }
 
     function updateCarouselSidePadding() {
       const firstBtn = methodPickerRoot.querySelector(".shop-checkout-method-pill");
-      if (!firstBtn) return;
+      if (!firstBtn) return false;
+      if (methodPickerRoot.clientWidth <= 0 || firstBtn.offsetWidth <= 0) return false;
       const pad = Math.max(0, (methodPickerRoot.clientWidth - firstBtn.offsetWidth) / 2);
-      methodPickerRoot.style.setProperty("--carousel-side-pad", `${Math.round(pad)}px`);
+      const px = `${Math.round(pad)}px`;
+      methodPickerRoot.style.setProperty("--carousel-side-pad", px);
+      methodPickerLeftSpacer.style.flexBasis = px;
+      methodPickerRightSpacer.style.flexBasis = px;
+      return true;
     }
 
-    function createMethodIconElement(iconRaw, code) {
-      const fallback = code === "delivery" ? "fas fa-truck" : "fas fa-store";
-      const resolvedIcon = String(iconRaw || "").trim() || fallback;
+    function createOptionIconElement(iconRaw, fallback) {
+      const resolvedIcon = String(iconRaw || "").trim() || String(fallback || "").trim() || "fas fa-circle";
       const isUrl = resolvedIcon.includes("/") || resolvedIcon.startsWith("http");
       if (isUrl) {
         const img = document.createElement("img");
@@ -14688,6 +14749,10 @@ function setBottomNavActive(tab) {
         icon.className = `fas fa-${resolvedIcon}`;
       }
       return icon;
+    }
+    function createMethodIconElement(iconRaw, code) {
+      const fallback = code === "delivery" ? "fas fa-truck" : "fas fa-store";
+      return createOptionIconElement(iconRaw, fallback);
     }
 
     function setMethodValue(code, opts = {}) {
@@ -14713,13 +14778,36 @@ function setBottomNavActive(tab) {
       };
 
       if (deferChange && center && centerBehavior !== "auto" && nextCode !== selectedMethodCode) {
-        centerMethodByCode(nextCode, centerBehavior);
-        setTimeout(() => applySelection(), 220);
+        centerMethodByCode(nextCode, centerBehavior, applySelection);
         return;
       }
 
       if (center) centerMethodByCode(nextCode, centerBehavior);
       applySelection();
+    }
+
+    function finalizeCarouselSnap() {
+      settleScheduled = false;
+      const centeredCode = getCenteredMethodCode();
+      if (!centeredCode) return;
+      if (centeredCode === selectedMethodCode) {
+        centerMethodByCode(centeredCode, "smooth");
+        return;
+      }
+      setMethodValue(centeredCode, { center: false });
+      centerMethodByCode(centeredCode, "smooth");
+    }
+
+    function scheduleFinalizeAfterIdle() {
+      if (settleScheduled) return;
+      settleScheduled = true;
+      waitForScrollIdle(() => {
+        if (isProgrammaticSnap) {
+          settleScheduled = false;
+          return;
+        }
+        finalizeCarouselSnap();
+      });
     }
 
     methods.forEach((method) => {
@@ -14743,36 +14831,49 @@ function setBottomNavActive(tab) {
       btn.addEventListener("click", () => setMethodValue(method.code, { center: true, centerBehavior: "smooth", deferChange: true }));
       methodPickerRoot.appendChild(btn);
     });
+    methodPickerRoot.appendChild(methodPickerRightSpacer);
 
     methodPickerRoot.addEventListener("scroll", () => {
       if (isProgrammaticSnap) return;
-      if (centerSnapTimer) clearTimeout(centerSnapTimer);
-      centerSnapTimer = setTimeout(() => {
-        const centeredCode = getCenteredMethodCode();
-        if (!centeredCode) return;
-        centerMethodByCode(centeredCode, "smooth");
-        if (centeredCode !== selectedMethodCode) {
-          setMethodValue(centeredCode, { center: false });
-        } else {
-          setMethodValue(centeredCode, { silent: true, center: false });
-        }
-      }, 90);
+      scheduleFinalizeAfterIdle();
+    });
+
+    methodPickerRoot.addEventListener("pointerup", () => {
+      if (isProgrammaticSnap) return;
+      scheduleFinalizeAfterIdle();
     });
 
     const methodSelect = {
       root: methodPickerRoot,
       getValue: () => selectedMethodCode || methodDefault || "takeaway",
-      setValue: (code, silent) => setMethodValue(code, { silent })
+      setValue: (code, silent) => setMethodValue(code, { silent }),
+      ensureCentered: () => {
+        const padded = updateCarouselSidePadding();
+        if (!padded) return false;
+        return centerMethodByCode(selectedMethodCode || methodDefault || "takeaway", "auto");
+      }
     };
+
+    function scheduleEnsureCenteredUntilReady(attempt = 0) {
+      if (ensureCenterRafId) cancelAnimationFrame(ensureCenterRafId);
+      ensureCenterRafId = requestAnimationFrame(() => {
+        const ok = methodSelect.ensureCentered();
+        if (ok) {
+          ensureCenterRafId = 0;
+          return;
+        }
+        if (attempt < 60) {
+          scheduleEnsureCenteredUntilReady(attempt + 1);
+        } else {
+          ensureCenterRafId = 0;
+        }
+      });
+    }
+
     methodSelect.setValue(methodDefault, true);
-    requestAnimationFrame(() => {
-      updateCarouselSidePadding();
-      centerMethodByCode(methodSelect.getValue(), "auto");
-    });
     if (typeof ResizeObserver === "function") {
       const methodCarouselResizeObserver = new ResizeObserver(() => {
-        updateCarouselSidePadding();
-        centerMethodByCode(methodSelect.getValue(), "auto");
+        scheduleEnsureCenteredUntilReady();
       });
       methodCarouselResizeObserver.observe(methodPickerRoot);
     }
@@ -14799,10 +14900,6 @@ function setBottomNavActive(tab) {
     });
 
     const methodWrap = document.createElement("div");
-    const methodLabel = document.createElement("label");
-    methodLabel.className = "field-label";
-    methodLabel.textContent = "Способ";
-    methodWrap.appendChild(methodLabel);
     methodWrap.appendChild(methodSelect.root);
 
     const addressWrap = document.createElement("div");
@@ -14963,11 +15060,66 @@ function setBottomNavActive(tab) {
     pickupWrap.appendChild(pickupLabel);
     pickupWrap.appendChild(pickupField);
 
+    const cLabel = document.createElement("label");
+    cLabel.className = "field-label";
+    cLabel.textContent = "Комментарий";
+    cLabel.style.display = "none";
+    const comment = document.createElement("input");
+    comment.className = "control shop-checkout-comment";
+    comment.type = "text";
+    comment.placeholder = "Введите комментарий к заказу";
+    comment.value = draft.comment || "";
+    wrap.appendChild(cLabel);
+    wrap.appendChild(comment);
+    const mobileCommentWrap = document.getElementById("shopMobileCheckoutCommentWrap");
+    const mobileCommentInput = document.getElementById("shopMobileCheckoutCommentInput");
+    const desktopFooterCommentInput = document.getElementById("shopCheckoutFooterCommentInput");
+    const isMobileCheckout = window.matchMedia("(max-width: 768px)").matches;
+    const isDesktopCheckout = !isMobileCheckout;
+    if (mobileCommentInput) {
+      mobileCommentInput.value = comment.value || "";
+      mobileCommentInput.oninput = () => {
+        comment.value = mobileCommentInput.value || "";
+        if (desktopFooterCommentInput && desktopFooterCommentInput.value !== comment.value) {
+          desktopFooterCommentInput.value = comment.value;
+        }
+      };
+      comment.addEventListener("input", () => {
+        if (mobileCommentInput.value !== comment.value) mobileCommentInput.value = comment.value;
+        if (desktopFooterCommentInput && desktopFooterCommentInput.value !== comment.value) {
+          desktopFooterCommentInput.value = comment.value;
+        }
+      });
+    }
+    if (desktopFooterCommentInput) {
+      desktopFooterCommentInput.value = comment.value || "";
+      desktopFooterCommentInput.oninput = () => {
+        comment.value = desktopFooterCommentInput.value || "";
+        if (mobileCommentInput && mobileCommentInput.value !== comment.value) {
+          mobileCommentInput.value = comment.value;
+        }
+      };
+    }
+    if (isMobileCheckout) {
+      cLabel.style.display = "none";
+      comment.style.display = "none";
+      if (mobileCommentWrap) mobileCommentWrap.classList.remove("hidden");
+    } else if (mobileCommentWrap) {
+      mobileCommentWrap.classList.add("hidden");
+    }
+    if (isDesktopCheckout) {
+      cLabel.style.display = "none";
+      comment.style.display = "none";
+    }
+    const getCommentValue = () => {
+      if (isMobileCheckout && mobileCommentInput) return str(mobileCommentInput.value).trim();
+      if (isDesktopCheckout && desktopFooterCommentInput) return str(desktopFooterCommentInput.value).trim();
+      return str(comment.value).trim();
+    };
+
     const methodRow = document.createElement("div");
     methodRow.className = "shop-checkout-method-block";
     methodRow.appendChild(methodWrap);
-    methodRow.appendChild(addressWrap);
-    methodRow.appendChild(pickupWrap);
     wrap.appendChild(methodRow);
 
     function refreshAddressVisibility() {
@@ -14987,23 +15139,13 @@ function setBottomNavActive(tab) {
     refreshAddressVisibility();
     syncCheckoutMode(methodSelect.getValue());
 
-    const cLabel = document.createElement("label");
-    cLabel.className = "field-label";
-    cLabel.textContent = "Комментарий";
-    const comment = document.createElement("input");
-    comment.className = "control";
-    comment.type = "text";
-    comment.placeholder = "Комментарий";
-    comment.value = draft.comment || "";
-    wrap.appendChild(cLabel);
-    wrap.appendChild(comment);
-
     const timeLabel = document.createElement("label");
     timeLabel.className = "field-label";
     timeLabel.textContent = "Когда приготовить?";
+    timeLabel.style.display = "none";
     wrap.appendChild(timeLabel);
 
-    const timeOptions = (cfg.timeOptions || []).map(x => ({ code: x.code, title: x.title }));
+    const timeOptions = (cfg.timeOptions || []).map(x => ({ code: x.code, title: x.title, icon: x.icon }));
     const storeIsOpen = Boolean(cfg.storeIsOpen);
     const storeTimezone = cfg.storeTimezone || "+0";
     const storeHours = cfg.storeHours || [];
@@ -15054,7 +15196,226 @@ function setBottomNavActive(tab) {
       : (availableTimeOptions[0]?.code || defaultFallback);
     const timeDefault = fallbackCode;
 
-    const timeSelect = buildDropdown(availableTimeOptions, timeDefault);
+    function createTimeIconPicker(options, defaultCode) {
+      const pickerRoot = document.createElement("div");
+      pickerRoot.className = "shop-checkout-method-picker";
+      const leftSpacer = document.createElement("span");
+      leftSpacer.className = "shop-checkout-method-spacer";
+      const rightSpacer = document.createElement("span");
+      rightSpacer.className = "shop-checkout-method-spacer";
+      pickerRoot.appendChild(leftSpacer);
+
+      let currentCode = defaultCode;
+      let settleRafId = 0;
+      let stableFrames = 0;
+      let lastLeft = 0;
+      let settleScheduled = false;
+      let programmatic = false;
+      let ensureRafId = 0;
+      let wheelLockUntil = 0;
+      const fallbackIcons = { asap: "fas fa-bolt", at_time: "fas fa-clock", on_date: "fas fa-calendar-day" };
+
+      function getButtons() { return Array.from(pickerRoot.querySelectorAll(".shop-checkout-method-pill")); }
+      function getCenteredCode() {
+        const buttons = getButtons();
+        if (!buttons.length) return null;
+        const rootRect = pickerRoot.getBoundingClientRect();
+        const centerX = rootRect.left + (pickerRoot.clientWidth / 2);
+        let nearestCode = buttons[0].getAttribute("data-code");
+        let nearestDistance = Number.POSITIVE_INFINITY;
+        buttons.forEach((btn) => {
+          const rect = btn.getBoundingClientRect();
+          const distance = Math.abs(centerX - (rect.left + (rect.width / 2)));
+          if (distance < nearestDistance) {
+            nearestDistance = distance;
+            nearestCode = btn.getAttribute("data-code");
+          }
+        });
+        return nearestCode;
+      }
+      function cancelSettle() {
+        if (settleRafId) cancelAnimationFrame(settleRafId);
+        settleRafId = 0;
+        stableFrames = 0;
+      }
+      function waitIdle(onIdle) {
+        cancelSettle();
+        lastLeft = pickerRoot.scrollLeft;
+        const tick = () => {
+          const currentLeft = pickerRoot.scrollLeft;
+          const delta = Math.abs(currentLeft - lastLeft);
+          lastLeft = currentLeft;
+          stableFrames = delta < 0.5 ? (stableFrames + 1) : 0;
+          if (stableFrames >= 3) {
+            settleRafId = 0;
+            stableFrames = 0;
+            if (typeof onIdle === "function") onIdle();
+            return;
+          }
+          settleRafId = requestAnimationFrame(tick);
+        };
+        settleRafId = requestAnimationFrame(tick);
+      }
+      function centerCode(code, behavior = "smooth", onDone = null) {
+        const targetBtn = pickerRoot.querySelector(`.shop-checkout-method-pill[data-code="${code}"]`);
+        if (!targetBtn) return false;
+        if (pickerRoot.clientWidth <= 0 || targetBtn.offsetWidth <= 0) return false;
+        const doCenter = () => targetBtn.scrollIntoView({ behavior, block: "nearest", inline: "center" });
+        programmatic = true;
+        doCenter();
+        requestAnimationFrame(() => doCenter());
+        waitIdle(() => {
+          programmatic = false;
+          if (typeof onDone === "function") onDone();
+        });
+        return true;
+      }
+      function updatePadding() {
+        const firstBtn = pickerRoot.querySelector(".shop-checkout-method-pill");
+        if (!firstBtn) return false;
+        if (pickerRoot.clientWidth <= 0 || firstBtn.offsetWidth <= 0) return false;
+        const pad = Math.max(0, (pickerRoot.clientWidth - firstBtn.offsetWidth) / 2);
+        const px = `${Math.round(pad)}px`;
+        pickerRoot.style.setProperty("--carousel-side-pad", px);
+        leftSpacer.style.flexBasis = px;
+        rightSpacer.style.flexBasis = px;
+        return true;
+      }
+      function applyCode(code, silent) {
+        currentCode = code;
+        pickerRoot.querySelectorAll(".shop-checkout-method-pill").forEach((btn) => {
+          const active = btn.getAttribute("data-code") === code;
+          btn.classList.toggle("is-active", active);
+          btn.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+        if (!silent) pickerRoot.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      function setCode(code, opts = {}) {
+        const silent = Boolean(opts.silent);
+        const center = opts.center === true;
+        const centerBehavior = opts.centerBehavior || "smooth";
+        const deferChange = opts.deferChange === true;
+        if (!code) {
+          applyCode("", silent);
+          return;
+        }
+        const hasTarget = options.some((item) => item.code === code);
+        const nextCode = hasTarget ? code : (defaultCode || "");
+        if (!nextCode) return;
+        const commit = () => applyCode(nextCode, silent);
+        if (deferChange && center && centerBehavior !== "auto" && nextCode !== currentCode) {
+          centerCode(nextCode, centerBehavior, commit);
+          return;
+        }
+        if (center) centerCode(nextCode, centerBehavior);
+        commit();
+      }
+      function finalizeSnap() {
+        settleScheduled = false;
+        const centeredCode = getCenteredCode();
+        if (!centeredCode) return;
+        if (centeredCode === currentCode) {
+          centerCode(centeredCode, "smooth");
+          return;
+        }
+        setCode(centeredCode, { center: false });
+        centerCode(centeredCode, "smooth");
+      }
+      function scheduleSnap() {
+        if (settleScheduled) return;
+        settleScheduled = true;
+        waitIdle(() => {
+          if (programmatic) {
+            settleScheduled = false;
+            return;
+          }
+          finalizeSnap();
+        });
+      }
+      function ensureCentered() {
+        if (!currentCode) return false;
+        const padded = updatePadding();
+        if (!padded) return false;
+        return centerCode(currentCode || defaultCode, "auto");
+      }
+      function scheduleEnsure(attempt = 0) {
+        if (ensureRafId) cancelAnimationFrame(ensureRafId);
+        ensureRafId = requestAnimationFrame(() => {
+          const ok = ensureCentered();
+          if (ok) {
+            ensureRafId = 0;
+            return;
+          }
+          if (attempt < 60) scheduleEnsure(attempt + 1);
+          else ensureRafId = 0;
+        });
+      }
+
+      options.forEach((option) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "shop-checkout-method-pill";
+        btn.setAttribute("data-code", option.code);
+        btn.setAttribute("aria-pressed", "false");
+        btn.innerHTML = `
+          <span class="shop-checkout-method-pill-icon"></span>
+          <span class="shop-checkout-method-pill-title"></span>
+        `;
+        const iconWrap = btn.querySelector(".shop-checkout-method-pill-icon");
+        if (iconWrap) {
+          const iconEl = createOptionIconElement(option.icon, fallbackIcons[option.code] || "fas fa-clock");
+          iconEl.setAttribute("aria-hidden", "true");
+          iconWrap.appendChild(iconEl);
+        }
+        const titleEl = btn.querySelector(".shop-checkout-method-pill-title");
+        if (titleEl) titleEl.textContent = option.title || option.code || "";
+        btn.addEventListener("click", () => setCode(option.code, { center: true, centerBehavior: "smooth", deferChange: true }));
+        pickerRoot.appendChild(btn);
+      });
+      pickerRoot.appendChild(rightSpacer);
+
+      pickerRoot.addEventListener("wheel", (event) => {
+        if (!event || typeof event.deltaY !== "number") return;
+        if (window.matchMedia && !window.matchMedia("(min-width: 769px)").matches) return;
+        const hasOverflowX = pickerRoot.scrollWidth > pickerRoot.clientWidth;
+        if (!hasOverflowX) return;
+        if (Math.abs(event.deltaY) <= Math.abs(event.deltaX || 0)) return;
+        event.preventDefault();
+        const now = Date.now();
+        if (now < wheelLockUntil) return;
+        wheelLockUntil = now + 140;
+        const direction = event.deltaY > 0 ? 1 : -1;
+        let currentIndex = options.findIndex((item) => item.code === currentCode);
+        if (currentIndex < 0) currentIndex = 0;
+        const nextIndex = Math.max(0, Math.min(options.length - 1, currentIndex + direction));
+        const nextCode = options[nextIndex]?.code;
+        if (!nextCode || nextCode === currentCode) return;
+        setCode(nextCode, { center: true, centerBehavior: "smooth", deferChange: true });
+      }, { passive: false });
+      pickerRoot.addEventListener("scroll", () => {
+        if (programmatic) return;
+        scheduleSnap();
+      });
+      pickerRoot.addEventListener("pointerup", () => {
+        if (programmatic) return;
+        scheduleSnap();
+      });
+
+      if (typeof ResizeObserver === "function") {
+        const ro = new ResizeObserver(() => scheduleEnsure());
+        ro.observe(pickerRoot);
+      }
+      setCode(defaultCode, { silent: true });
+
+      return {
+        root: pickerRoot,
+        getValue: () => currentCode || "",
+        setValue: (code, silent) => setCode(code, { silent }),
+        ensureCentered: () => scheduleEnsure()
+      };
+    }
+
+    const timeSelect = createTimeIconPicker(availableTimeOptions, timeDefault);
 
     // --- Hidden input для итогового значения времени ---
     const timeInput = document.createElement("input");
@@ -15079,16 +15440,35 @@ function setBottomNavActive(tab) {
     let calendarViewMonth = selectedDate.getMonth();
     let calendarOpen = false;
 
-    // Row 1: [На дату в–ѕ] + [Другой день]  (timeSelect всегда видим, btnOtherDay только при on_date)
+    // Row for "Ко времени": [Сегодня] + [слоты времени]
+    const timePickerRow = document.createElement("div");
+    timePickerRow.className = "shop-checkout-method-block";
+    timePickerRow.appendChild(timeSelect.root);
+
     const timeRow = document.createElement("div");
     timeRow.className = "shop-checkout-date-row1";
-    timeRow.appendChild(timeSelect.root);
 
-    const btnOtherDay = document.createElement("button");
-    btnOtherDay.type = "button";
-    btnOtherDay.className = "shop-checkout-date-toggle";
-    btnOtherDay.textContent = "Выбрать день";
-    timeRow.appendChild(btnOtherDay);
+    const todayAtTimeWrap = document.createElement("div");
+    todayAtTimeWrap.className = "shop-checkout-dropdown-wrap";
+    todayAtTimeWrap.style.display = "none";
+    const todayAtTimeLabel = document.createElement("button");
+    todayAtTimeLabel.type = "button";
+    todayAtTimeLabel.className = "shop-checkout-select shop-checkout-date-display shop-checkout-time-static-label";
+    todayAtTimeLabel.textContent = "Сегодня";
+    todayAtTimeLabel.disabled = true;
+    todayAtTimeWrap.appendChild(todayAtTimeLabel);
+    timeRow.appendChild(todayAtTimeWrap);
+
+    const asapNowWrap = document.createElement("div");
+    asapNowWrap.className = "shop-checkout-dropdown-wrap";
+    asapNowWrap.style.display = "none";
+    const asapNowLabel = document.createElement("button");
+    asapNowLabel.type = "button";
+    asapNowLabel.className = "shop-checkout-select shop-checkout-date-display shop-checkout-time-static-label";
+    asapNowLabel.textContent = "40-80 мин";
+    asapNowLabel.disabled = true;
+    asapNowWrap.appendChild(asapNowLabel);
+    timeRow.appendChild(asapNowWrap);
 
     // --- Секция "На дату" (Row 2 + календарь) ---
     const dateSection = document.createElement("div");
@@ -15166,6 +15546,7 @@ function setBottomNavActive(tab) {
     timeSlotsWrapAtTime.appendChild(timeSlotsDropdownAtTime.root);
     timeRow.appendChild(timeSlotsWrapAtTime);
 
+    wrap.appendChild(timePickerRow);
     wrap.appendChild(timeRow);
     wrap.appendChild(dateSection);
     wrap.appendChild(timeInput);
@@ -15232,16 +15613,8 @@ function setBottomNavActive(tab) {
     dateDisplay.textContent = formatDateDisplay(selectedDate);
 
     // --- Обработчики ---
-    // Клик по dateDisplay сбрасывает на "завтра"
+    // Клик по dateDisplay открывает/закрывает календарь выбора даты
     dateDisplay.addEventListener("click", () => {
-      const tmrw = new Date();
-      tmrw.setDate(tmrw.getDate() + 1);
-      setSelectedDate(tmrw);
-      calPopover.classList.add("hidden");
-      calendarOpen = false;
-    });
-
-    btnOtherDay.addEventListener("click", () => {
       if (calendarOpen) {
         calPopover.classList.add("hidden");
         calendarOpen = false;
@@ -15278,7 +15651,7 @@ function setBottomNavActive(tab) {
     });
 
     document.addEventListener("click", (e) => {
-      if (calendarOpen && !calendarWrap.contains(e.target) && !btnOtherDay.contains(e.target)) {
+      if (calendarOpen && !calendarWrap.contains(e.target) && !dateDisplay.contains(e.target)) {
         calPopover.classList.add("hidden");
         calendarOpen = false;
       }
@@ -15296,12 +15669,21 @@ function setBottomNavActive(tab) {
       const config = timeOptionByCode[selectedCode];
       const hasWindow = config && Number(config.has_time_window) === 1;
       const isOnDate = selectedCode === "on_date";
-      btnOtherDay.style.display = isOnDate ? "" : "none";
+      const isAtTime = selectedCode === "at_time";
+      const isAsap = selectedCode === "asap";
+      const showAtTimePair = isAtTime && hasWindow;
+      const showAsapPair = isAsap;
+      if (todayAtTimeLabel) {
+        todayAtTimeLabel.textContent = showAtTimePair ? "Сегодня" : "Сейчас";
+      }
       dateSection.style.display = isOnDate ? "" : "none";
-      timeSlotsWrapAtTime.style.display = (hasWindow && !isOnDate) ? "" : "none";
+      todayAtTimeWrap.style.display = (showAtTimePair || showAsapPair) ? "" : "none";
+      timeSlotsWrapAtTime.style.display = showAtTimePair ? "" : "none";
+      asapNowWrap.style.display = showAsapPair ? "" : "none";
       // Когда нет соседних элементов — timeSelect на всю ширину
-      const hasNeighbor = isOnDate || (hasWindow && !isOnDate);
-      timeSelect.root.style.gridColumn = hasNeighbor ? "" : "1 / -1";
+      const hasNeighbor = showAtTimePair || showAsapPair;
+      timeRow.style.display = hasNeighbor ? "" : "none";
+      timeSlotsWrapAtTime.style.gridColumn = "";
     }
 
     function updateTimeSlotsOptions() {
@@ -15366,9 +15748,226 @@ function setBottomNavActive(tab) {
 
     let currentPayableTotal = getPayableTotalForMethod(methodSelect.getValue());
 
-    const payments = (cfg.payments || []).map(x => ({ code: x.code, title: x.title }));
-    const payDefault = pickDefaultCode(payments, draft.payment_code, "cash");
-    const paySelect = buildDropdown(payments, payDefault);
+    const payments = (cfg.payments || []).map(x => ({ code: x.code, title: x.title, icon: x.icon }));
+    const payDefault = "";
+    function createPaymentIconPicker(options, defaultCode) {
+      const pickerRoot = document.createElement("div");
+      pickerRoot.className = "shop-checkout-method-picker";
+      const leftSpacer = document.createElement("span");
+      leftSpacer.className = "shop-checkout-method-spacer";
+      const rightSpacer = document.createElement("span");
+      rightSpacer.className = "shop-checkout-method-spacer";
+      pickerRoot.appendChild(leftSpacer);
+
+      let currentCode = defaultCode;
+      let settleRafId = 0;
+      let stableFrames = 0;
+      let lastLeft = 0;
+      let settleScheduled = false;
+      let programmatic = false;
+      let ensureRafId = 0;
+      let wheelLockUntil = 0;
+      const fallbackIcons = {
+        cash: "fas fa-money-bill-wave",
+        card: "fas fa-credit-card",
+        online: "fas fa-wallet",
+        sbp: "fas fa-qrcode"
+      };
+
+      function getButtons() { return Array.from(pickerRoot.querySelectorAll(".shop-checkout-method-pill")); }
+      function getCenteredCode() {
+        const buttons = getButtons();
+        if (!buttons.length) return null;
+        const rootRect = pickerRoot.getBoundingClientRect();
+        const centerX = rootRect.left + (pickerRoot.clientWidth / 2);
+        let nearestCode = buttons[0].getAttribute("data-code");
+        let nearestDistance = Number.POSITIVE_INFINITY;
+        buttons.forEach((btn) => {
+          const rect = btn.getBoundingClientRect();
+          const distance = Math.abs(centerX - (rect.left + (rect.width / 2)));
+          if (distance < nearestDistance) {
+            nearestDistance = distance;
+            nearestCode = btn.getAttribute("data-code");
+          }
+        });
+        return nearestCode;
+      }
+      function cancelSettle() {
+        if (settleRafId) cancelAnimationFrame(settleRafId);
+        settleRafId = 0;
+        stableFrames = 0;
+      }
+      function waitIdle(onIdle) {
+        cancelSettle();
+        lastLeft = pickerRoot.scrollLeft;
+        const tick = () => {
+          const currentLeft = pickerRoot.scrollLeft;
+          const delta = Math.abs(currentLeft - lastLeft);
+          lastLeft = currentLeft;
+          stableFrames = delta < 0.5 ? (stableFrames + 1) : 0;
+          if (stableFrames >= 3) {
+            settleRafId = 0;
+            stableFrames = 0;
+            if (typeof onIdle === "function") onIdle();
+            return;
+          }
+          settleRafId = requestAnimationFrame(tick);
+        };
+        settleRafId = requestAnimationFrame(tick);
+      }
+      function centerCode(code, behavior = "smooth", onDone = null) {
+        const targetBtn = pickerRoot.querySelector(`.shop-checkout-method-pill[data-code="${code}"]`);
+        if (!targetBtn) return false;
+        if (pickerRoot.clientWidth <= 0 || targetBtn.offsetWidth <= 0) return false;
+        const doCenter = () => targetBtn.scrollIntoView({ behavior, block: "nearest", inline: "center" });
+        programmatic = true;
+        doCenter();
+        requestAnimationFrame(() => doCenter());
+        waitIdle(() => {
+          programmatic = false;
+          if (typeof onDone === "function") onDone();
+        });
+        return true;
+      }
+      function updatePadding() {
+        const firstBtn = pickerRoot.querySelector(".shop-checkout-method-pill");
+        if (!firstBtn) return false;
+        if (pickerRoot.clientWidth <= 0 || firstBtn.offsetWidth <= 0) return false;
+        const pad = Math.max(0, (pickerRoot.clientWidth - firstBtn.offsetWidth) / 2);
+        const px = `${Math.round(pad)}px`;
+        pickerRoot.style.setProperty("--carousel-side-pad", px);
+        leftSpacer.style.flexBasis = px;
+        rightSpacer.style.flexBasis = px;
+        return true;
+      }
+      function applyCode(code, silent) {
+        currentCode = code;
+        pickerRoot.querySelectorAll(".shop-checkout-method-pill").forEach((btn) => {
+          const active = btn.getAttribute("data-code") === code;
+          btn.classList.toggle("is-active", active);
+          btn.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+        if (!silent) pickerRoot.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      function setCode(code, opts = {}) {
+        const silent = Boolean(opts.silent);
+        const center = opts.center === true;
+        const centerBehavior = opts.centerBehavior || "smooth";
+        const deferChange = opts.deferChange === true;
+        const hasTarget = options.some((item) => item.code === code);
+        const nextCode = hasTarget ? code : (options[0]?.code || defaultCode);
+        if (!nextCode) return;
+        const commit = () => applyCode(nextCode, silent);
+        if (deferChange && center && centerBehavior !== "auto" && nextCode !== currentCode) {
+          centerCode(nextCode, centerBehavior, commit);
+          return;
+        }
+        if (center) centerCode(nextCode, centerBehavior);
+        commit();
+      }
+      function finalizeSnap() {
+        settleScheduled = false;
+        const centeredCode = getCenteredCode();
+        if (!centeredCode) return;
+        if (centeredCode === currentCode) {
+          centerCode(centeredCode, "smooth");
+          return;
+        }
+        setCode(centeredCode, { center: false });
+        centerCode(centeredCode, "smooth");
+      }
+      function scheduleSnap() {
+        if (settleScheduled) return;
+        settleScheduled = true;
+        waitIdle(() => {
+          if (programmatic) {
+            settleScheduled = false;
+            return;
+          }
+          finalizeSnap();
+        });
+      }
+      function ensureCentered() {
+        const padded = updatePadding();
+        if (!padded) return false;
+        return centerCode(currentCode || defaultCode, "auto");
+      }
+      function scheduleEnsure(attempt = 0) {
+        if (ensureRafId) cancelAnimationFrame(ensureRafId);
+        ensureRafId = requestAnimationFrame(() => {
+          const ok = ensureCentered();
+          if (ok) {
+            ensureRafId = 0;
+            return;
+          }
+          if (attempt < 60) scheduleEnsure(attempt + 1);
+          else ensureRafId = 0;
+        });
+      }
+
+      options.forEach((option) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "shop-checkout-method-pill";
+        btn.setAttribute("data-code", option.code);
+        btn.setAttribute("aria-pressed", "false");
+        btn.innerHTML = `
+          <span class="shop-checkout-method-pill-icon"></span>
+          <span class="shop-checkout-method-pill-title"></span>
+        `;
+        const iconWrap = btn.querySelector(".shop-checkout-method-pill-icon");
+        if (iconWrap) {
+          const iconEl = createOptionIconElement(option.icon, fallbackIcons[option.code] || "fas fa-credit-card");
+          iconEl.setAttribute("aria-hidden", "true");
+          iconWrap.appendChild(iconEl);
+        }
+        const titleEl = btn.querySelector(".shop-checkout-method-pill-title");
+        if (titleEl) titleEl.textContent = option.title || option.code || "";
+        btn.addEventListener("click", () => setCode(option.code, { center: true, centerBehavior: "smooth", deferChange: true }));
+        pickerRoot.appendChild(btn);
+      });
+      pickerRoot.appendChild(rightSpacer);
+
+      pickerRoot.addEventListener("wheel", (event) => {
+        if (!event || typeof event.deltaY !== "number") return;
+        if (window.matchMedia && !window.matchMedia("(min-width: 769px)").matches) return;
+        if (!options.length) return;
+        if (Math.abs(event.deltaY) <= Math.abs(event.deltaX || 0)) return;
+        event.preventDefault();
+        const now = Date.now();
+        if (now < wheelLockUntil) return;
+        wheelLockUntil = now + 140;
+        const direction = event.deltaY > 0 ? 1 : -1;
+        let currentIndex = options.findIndex((item) => item.code === currentCode);
+        if (currentIndex < 0) currentIndex = 0;
+        const nextIndex = Math.max(0, Math.min(options.length - 1, currentIndex + direction));
+        const nextCode = options[nextIndex]?.code;
+        if (!nextCode || nextCode === currentCode) return;
+        setCode(nextCode, { center: true, centerBehavior: "smooth", deferChange: true });
+      }, { passive: false });
+      pickerRoot.addEventListener("scroll", () => {
+        if (programmatic) return;
+        scheduleSnap();
+      });
+      pickerRoot.addEventListener("pointerup", () => {
+        if (programmatic) return;
+        scheduleSnap();
+      });
+
+      if (typeof ResizeObserver === "function") {
+        const ro = new ResizeObserver(() => scheduleEnsure());
+        ro.observe(pickerRoot);
+      }
+      setCode(defaultCode, { silent: true });
+
+      return {
+        root: pickerRoot,
+        getValue: () => currentCode || defaultCode,
+        setValue: (code, silent) => setCode(code, { silent }),
+        ensureCentered: () => scheduleEnsure()
+      };
+    }
+    const paySelect = createPaymentIconPicker(payments, payDefault);
 
     const changeAmounts = [500, 1000, 2000, 5000].filter(v => v > currentPayableTotal);
     const changeOptions = [
@@ -15384,16 +15983,38 @@ function setBottomNavActive(tab) {
     const payLabel = document.createElement("label");
     payLabel.className = "field-label";
     payLabel.textContent = "Оплата";
+    payLabel.style.display = "none";
     payWrap.appendChild(payLabel);
     payWrap.appendChild(paySelect.root);
+    const clearPaymentInvalidState = () => {
+      paySelect.root.classList.remove("is-invalid");
+    };
+    const markPaymentInvalidState = () => {
+      paySelect.root.classList.add("is-invalid");
+      if (typeof payWrap.scrollIntoView === "function") {
+        payWrap.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+      setTimeout(() => {
+        clearPaymentInvalidState();
+      }, 2600);
+    };
 
     const changeWrap = document.createElement("div");
     changeWrap.className = "shop-checkout-change";
     const changeLabel = document.createElement("label");
     changeLabel.className = "field-label";
     changeLabel.textContent = "Сдача";
+    changeLabel.style.display = "none";
     changeWrap.appendChild(changeLabel);
     changeWrap.appendChild(changeSelect.root);
+
+    const changeNonCashHint = document.createElement("button");
+    changeNonCashHint.type = "button";
+    changeNonCashHint.className = "shop-checkout-select shop-checkout-change-noncash";
+    changeNonCashHint.textContent = "При получении";
+    changeNonCashHint.disabled = true;
+    changeNonCashHint.style.display = "none";
+    changeWrap.appendChild(changeNonCashHint);
 
     const changeCustomInput = document.createElement("input");
     const minChangeAmount = Math.ceil(currentPayableTotal) + 1;
@@ -15412,11 +16033,12 @@ function setBottomNavActive(tab) {
     });
     changeWrap.appendChild(changeCustomInput);
 
-    const payRow = document.createElement("div");
-    payRow.className = "shop-checkout-grid-row shop-checkout-grid-row--two";
-    payRow.appendChild(payWrap);
-    payRow.appendChild(changeWrap);
-    wrap.appendChild(payRow);
+    const payMethodRow = document.createElement("div");
+    payMethodRow.className = "shop-checkout-method-block";
+    payMethodRow.appendChild(payWrap);
+    wrap.appendChild(payMethodRow);
+
+    wrap.appendChild(changeWrap);
 
     const deliveryInfoWrap = document.createElement("div");
     deliveryInfoWrap.className = "shop-checkout-delivery-info";
@@ -15716,10 +16338,13 @@ function setBottomNavActive(tab) {
 
     function refreshChangeVisibility() {
       const isCash = paySelect.getValue() === "cash";
-      changeWrap.style.display = isCash ? "" : "none";
+      changeWrap.style.display = "";
+      changeSelect.root.style.display = isCash ? "" : "none";
+      changeNonCashHint.style.display = isCash ? "none" : "";
       const isCustom = changeSelect.getValue() === "custom";
       changeCustomInput.style.display = (isCash && isCustom) ? "" : "none";
     }
+    paySelect.root.addEventListener("change", clearPaymentInvalidState);
     paySelect.root.addEventListener("change", refreshChangeVisibility);
     changeSelect.root.addEventListener("change", refreshChangeVisibility);
     refreshChangeVisibility();
@@ -15749,12 +16374,12 @@ function setBottomNavActive(tab) {
             method_user_selected: Boolean(draft.method_user_selected),
             delivery_address: str(address.value).trim() || null,
             pickup_store_id: selectedPickupStoreId || null,
-            comment: str(comment.value).trim() || null,
+            comment: getCommentValue() || null,
             address_comment: draft?.address_comment ?? null,
             time_option_code: timeSelect.getValue() || timeDefault || "asap",
             scheduled_at: timeInput.value || "",
             scheduled_date: getDateString(selectedDate),
-            payment_code: paySelect.getValue() || payDefault || "cash",
+            payment_code: paySelect.getValue() || null,
             change_from: getChangeFromValue(),
           });
           if (typeof onEditAddress === "function") onEditAddress();
@@ -15780,12 +16405,12 @@ function setBottomNavActive(tab) {
           method_user_selected: Boolean(draft.method_user_selected),
           delivery_address: str(address.value).trim() || null,
           pickup_store_id: selectedPickupStoreId || null,
-          comment: str(comment.value).trim() || null,
+          comment: getCommentValue() || null,
           address_comment: draft?.address_comment ?? null,
           time_option_code: timeSelect.getValue() || timeDefault || "asap",
           scheduled_at: timeInput.value || "",
           scheduled_date: getDateString(selectedDate),
-          payment_code: paySelect.getValue() || payDefault || "cash",
+          payment_code: paySelect.getValue() || null,
           change_from: getChangeFromValue(),
         });
 
@@ -15795,6 +16420,13 @@ function setBottomNavActive(tab) {
       });
 
     container.appendChild(wrap);
+    scheduleEnsureCenteredUntilReady();
+    if (timeSelect && typeof timeSelect.ensureCentered === "function") {
+      timeSelect.ensureCentered();
+    }
+    if (paySelect && typeof paySelect.ensureCentered === "function") {
+      paySelect.ensureCentered();
+    }
 
     updateMobileDeliveryProgress();
 
@@ -15842,7 +16474,7 @@ function setBottomNavActive(tab) {
         __forceHideCheckoutDeliveryProgress = false;
         clearCartAll();
         saveCheckoutDraft({});
-        if (typeof window.updateActiveOrdersBadge === "function") { Promise.resolve(window.updateActiveOrdersBadge()).catch(() => {}); }
+        if (typeof window.updateActiveOrdersBadge === "function") { Promise.resolve(window.updateActiveOrdersBadge({ force: true })).catch(() => {}); }
         if (isSheet && window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen()) {
           window.AppModal.close("sheet");
         } else if (typeof showCartView === "function") {
@@ -15930,7 +16562,7 @@ function setBottomNavActive(tab) {
       actions.submitBtn.onclick = async () => {
         const resolvedItems = cartItemsResolved();
         const totals = computeCartTotals(resolvedItems);
-        const payload = {
+      const payload = {
         customer_name: str(name.value).trim(),
         customer_phone: str(phone.value).trim(),
         promo_code: str(promo.value).trim() || null,
@@ -15938,11 +16570,11 @@ function setBottomNavActive(tab) {
         delivery_address: str(address.value).trim() || null,
         delivery_address_id: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" && state.selectedAddress?.id ? Number(state.selectedAddress.id) : null,
         pickup_store_id: selectedPickupStoreId || null,
-        comment: str(comment.value).trim() || null,
+        comment: getCommentValue() || null,
         address_comment: (draft && draft.address_comment) ? str(draft.address_comment).trim() || null : null,
         time_option_code: timeSelect.getValue() || timeDefault || "asap",
         scheduled_at: null,
-        payment_code: paySelect.getValue() || payDefault || "cash",
+        payment_code: paySelect.getValue() || null,
         cutlery_qty: 0,
         change_from: getChangeFromValue(),
         items: resolvedItems.map(x => {
@@ -16042,6 +16674,11 @@ function setBottomNavActive(tab) {
         alert("Выберите точку самовывоза");
         return;
       }
+      if (!payload.payment_code) {
+        alert("Выберите способ оплаты");
+        markPaymentInvalidState();
+        return;
+      }
 
       if ((payload.time_option_code === "at_time" || payload.time_option_code === "on_date")) {
         if (!timeInput.value) {
@@ -16136,7 +16773,7 @@ function setBottomNavActive(tab) {
           localStorage.setItem(LAST_ORDER_KEY, String(res.data.public_id));
           clearCartAll();
           saveCheckoutDraft({});
-          if (typeof window.updateActiveOrdersBadge === "function") { Promise.resolve(window.updateActiveOrdersBadge()).catch(() => {}); }
+          if (typeof window.updateActiveOrdersBadge === "function") { Promise.resolve(window.updateActiveOrdersBadge({ force: true })).catch(() => {}); }
           setCheckoutSubmitting(false);
           showOrderSuccess(res.data.id, res.data.public_id, orderTotalWithDelivery);
         } else {
@@ -16449,9 +17086,12 @@ function initShopLate() {
 
       // Глобальная переменная для хранения активных заказов
       window._activeOrders = [];
+      let activeOrdersBadgeLoading = false;
+      let activeOrdersBadgeLastSyncAt = 0;
+      const ACTIVE_ORDERS_BADGE_MIN_REFRESH_MS = 4000;
     
       // Активные заказы: обновление бейджа и обработчик клика
-      window.updateActiveOrdersBadge = async function updateActiveOrdersBadge() {
+      window.updateActiveOrdersBadge = async function updateActiveOrdersBadge(opts = {}) {
         const badges = [elActiveOrdersBadge, elActiveOrdersBadgeMobile, elActiveOrdersSheetCollapsed].filter(Boolean);
         if (badges.length === 0) return;
       
@@ -16487,6 +17127,13 @@ function initShopLate() {
           badges.forEach(badge => badge.classList.add("hidden"));
           return;
         }
+
+        const forceRefresh = Boolean(opts && opts.force === true);
+        if (activeOrdersBadgeLoading) return;
+        if (!forceRefresh && Date.now() - activeOrdersBadgeLastSyncAt < ACTIVE_ORDERS_BADGE_MIN_REFRESH_MS) {
+          return;
+        }
+        activeOrdersBadgeLoading = true;
       
         try {
           const token = getCustomerToken();
@@ -16496,7 +17143,7 @@ function initShopLate() {
             return;
           }
 
-          const json = await apiJson("/api/public/me/orders");
+          const json = await apiJson("/api/public/me/orders?limit=20");
           const orders = Array.isArray(json.data) ? json.data : [];
         
           // Считаем активные заказы: все заказы с нефинальными статусами
@@ -16508,6 +17155,7 @@ function initShopLate() {
 
           // Сохраняем активные заказы в глобальную переменную
           window._activeOrders = activeOrders;
+          activeOrdersBadgeLastSyncAt = Date.now();
 
           const count = activeOrders.length;
         
@@ -16571,6 +17219,8 @@ function initShopLate() {
           // Если ошибка (не авторизован и т.д.), скрываем бейджи
           badges.forEach(badge => badge.classList.add("hidden"));
           window._activeOrders = [];
+        } finally {
+          activeOrdersBadgeLoading = false;
         }
       }
 
@@ -16629,7 +17279,7 @@ function initShopLate() {
         const activeOrders = window._activeOrders || [];
         if (activeOrders.length === 0) {
           // Если нет активных заказов, обновляем и пробуем снова
-          await window.updateActiveOrdersBadge();
+          await window.updateActiveOrdersBadge({ force: true });
           const updatedOrders = window._activeOrders || [];
           if (updatedOrders.length === 0) return;
           activeOrders.push(...updatedOrders);
@@ -17171,3 +17821,4 @@ function initShopLate() {
     console.error(e);
   }
 }
+
