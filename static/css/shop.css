@@ -13386,6 +13386,97 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   gap:4px;
 }
 
+.shop-checkout-method-picker{
+  display:flex;
+  align-items:stretch;
+  gap:8px;
+  overflow-x:auto;
+  padding-bottom:2px;
+  --carousel-side-pad: 0px;
+  scroll-behavior:smooth;
+  scroll-snap-type:x mandatory;
+}
+
+.shop-checkout-method-pill{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  min-width:86px;
+  padding:10px 12px;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  color:var(--color-text);
+  cursor:pointer;
+  transform:scale(.9);
+  opacity:.84;
+  transition:background-color .15s ease, color .15s ease, transform .18s ease, opacity .18s ease;
+  scroll-snap-align:center;
+  scroll-snap-stop:always;
+}
+
+.shop-checkout-method-picker{
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+.shop-checkout-method-picker::-webkit-scrollbar{
+  width:0;
+  height:0;
+}
+.shop-checkout-method-picker::before,
+.shop-checkout-method-picker::after{
+  content:"";
+  flex:0 0 var(--carousel-side-pad);
+}
+
+.shop-checkout-method-pill-icon{
+  width:50px;
+  height:50px;
+  border-radius:10px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  background:var(--color-surface-2);
+  color:var(--color-text-muted);
+  font-size:22px;
+}
+
+.shop-checkout-method-pill-icon-img{
+  width:30px;
+  height:30px;
+  object-fit:contain;
+}
+
+.shop-checkout-method-pill-title{
+  font-size:13px;
+  font-weight:700;
+  line-height:1.1;
+  white-space:nowrap;
+  color:var(--color-text-muted);
+}
+
+.shop-checkout-method-pill:hover{
+  background:transparent;
+}
+
+.shop-checkout-method-pill.is-active{
+  background:transparent;
+  transform:scale(1);
+  opacity:1;
+}
+
+.shop-checkout-method-pill.is-active .shop-checkout-method-pill-icon{
+  background:color-mix(in srgb, var(--color-primary) 14%, var(--color-surface-2));
+  color:var(--color-primary);
+  box-shadow:0 7px 18px rgba(107, 114, 128, 0.35);
+}
+
+.shop-checkout-method-pill.is-active .shop-checkout-method-pill-title{
+  color:var(--color-text);
+}
+
 .shop-checkout-name{
   overflow: hidden;
   text-overflow: ellipsis;

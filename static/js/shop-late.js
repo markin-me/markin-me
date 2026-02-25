@@ -14594,7 +14594,7 @@ function setBottomNavActive(tab) {
       wrap.appendChild(nameRow);
     }
 
-    const methods = (cfg.methods || []).map(x => ({ code: x.code, title: x.title }));
+    const methods = (cfg.methods || []).map(x => ({ code: x.code, title: x.title, icon: x.icon }));
     const methodUserSelected = Boolean(draft.method_user_selected);
     // Determine preferred method: from draft, or from delivery mode toggle
     let preferredMethodCode = methodUserSelected ? draft.method_code : null;
@@ -14612,7 +14612,170 @@ function setBottomNavActive(tab) {
       preferredMethodCode = "delivery";
     }
     const methodDefault = pickDefaultCode(methods, preferredMethodCode, "takeaway");
-    const methodSelect = buildDropdown(methods, methodDefault);
+    const methodPickerRoot = document.createElement("div");
+    methodPickerRoot.className = "shop-checkout-method-picker";
+    methodPickerRoot.addEventListener("wheel", (event) => {
+      if (!event || typeof event.deltaY !== "number") return;
+      if (window.matchMedia && !window.matchMedia("(min-width: 769px)").matches) return;
+      const hasOverflowX = methodPickerRoot.scrollWidth > methodPickerRoot.clientWidth;
+      if (!hasOverflowX) return;
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX || 0)) return;
+      methodPickerRoot.scrollLeft += event.deltaY;
+      event.preventDefault();
+    }, { passive: false });
+    let selectedMethodCode = methodDefault;
+    let centerSnapTimer = null;
+    let isProgrammaticSnap = false;
+
+    function getMethodButtons() {
+      return Array.from(methodPickerRoot.querySelectorAll(".shop-checkout-method-pill"));
+    }
+
+    function getCenteredMethodCode() {
+      const buttons = getMethodButtons();
+      if (!buttons.length) return null;
+      const rootRect = methodPickerRoot.getBoundingClientRect();
+      const centerX = rootRect.left + (methodPickerRoot.clientWidth / 2);
+      let nearestCode = buttons[0].getAttribute("data-code");
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      buttons.forEach((btn) => {
+        const rect = btn.getBoundingClientRect();
+        const btnCenter = rect.left + (rect.width / 2);
+        const distance = Math.abs(centerX - btnCenter);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestCode = btn.getAttribute("data-code");
+        }
+      });
+      return nearestCode;
+    }
+
+    function centerMethodByCode(code, behavior = "smooth") {
+      const targetBtn = methodPickerRoot.querySelector(`.shop-checkout-method-pill[data-code="${code}"]`);
+      if (!targetBtn) return;
+      const targetLeft = targetBtn.offsetLeft + (targetBtn.offsetWidth / 2) - (methodPickerRoot.clientWidth / 2);
+      const maxLeft = Math.max(0, methodPickerRoot.scrollWidth - methodPickerRoot.clientWidth);
+      const nextLeft = Math.max(0, Math.min(maxLeft, targetLeft));
+      isProgrammaticSnap = true;
+      methodPickerRoot.scrollTo({ left: nextLeft, behavior });
+      setTimeout(() => { isProgrammaticSnap = false; }, behavior === "auto" ? 0 : 220);
+    }
+
+    function updateCarouselSidePadding() {
+      const firstBtn = methodPickerRoot.querySelector(".shop-checkout-method-pill");
+      if (!firstBtn) return;
+      const pad = Math.max(0, (methodPickerRoot.clientWidth - firstBtn.offsetWidth) / 2);
+      methodPickerRoot.style.setProperty("--carousel-side-pad", `${Math.round(pad)}px`);
+    }
+
+    function createMethodIconElement(iconRaw, code) {
+      const fallback = code === "delivery" ? "fas fa-truck" : "fas fa-store";
+      const resolvedIcon = String(iconRaw || "").trim() || fallback;
+      const isUrl = resolvedIcon.includes("/") || resolvedIcon.startsWith("http");
+      if (isUrl) {
+        const img = document.createElement("img");
+        img.className = "shop-checkout-method-pill-icon-img";
+        img.src = resolvedIcon;
+        img.alt = "";
+        return img;
+      }
+      const icon = document.createElement("i");
+      if (resolvedIcon.includes(" ")) {
+        icon.className = resolvedIcon;
+      } else if (resolvedIcon.startsWith("fa-")) {
+        icon.className = `fas ${resolvedIcon}`;
+      } else {
+        icon.className = `fas fa-${resolvedIcon}`;
+      }
+      return icon;
+    }
+
+    function setMethodValue(code, opts = {}) {
+      const silent = Boolean(opts.silent);
+      const center = opts.center === true;
+      const centerBehavior = opts.centerBehavior || "smooth";
+      const deferChange = opts.deferChange === true;
+      const hasTarget = methods.some((item) => item.code === code);
+      const nextCode = hasTarget ? code : (methods[0]?.code || methodDefault || "takeaway");
+      if (!nextCode) return;
+      const applySelection = () => {
+        selectedMethodCode = nextCode;
+
+        methodPickerRoot.querySelectorAll(".shop-checkout-method-pill").forEach((btn) => {
+          const active = btn.getAttribute("data-code") === nextCode;
+          btn.classList.toggle("is-active", active);
+          btn.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+
+        if (!silent) {
+          methodPickerRoot.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      };
+
+      if (deferChange && center && centerBehavior !== "auto" && nextCode !== selectedMethodCode) {
+        centerMethodByCode(nextCode, centerBehavior);
+        setTimeout(() => applySelection(), 220);
+        return;
+      }
+
+      if (center) centerMethodByCode(nextCode, centerBehavior);
+      applySelection();
+    }
+
+    methods.forEach((method) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shop-checkout-method-pill";
+      btn.setAttribute("data-code", method.code);
+      btn.setAttribute("aria-pressed", "false");
+      btn.innerHTML = `
+        <span class="shop-checkout-method-pill-icon"></span>
+        <span class="shop-checkout-method-pill-title"></span>
+      `;
+      const iconWrapEl = btn.querySelector(".shop-checkout-method-pill-icon");
+      if (iconWrapEl) {
+        const iconEl = createMethodIconElement(method.icon, method.code);
+        iconEl.setAttribute("aria-hidden", "true");
+        iconWrapEl.appendChild(iconEl);
+      }
+      const titleEl = btn.querySelector(".shop-checkout-method-pill-title");
+      if (titleEl) titleEl.textContent = method.title || method.code || "";
+      btn.addEventListener("click", () => setMethodValue(method.code, { center: true, centerBehavior: "smooth", deferChange: true }));
+      methodPickerRoot.appendChild(btn);
+    });
+
+    methodPickerRoot.addEventListener("scroll", () => {
+      if (isProgrammaticSnap) return;
+      if (centerSnapTimer) clearTimeout(centerSnapTimer);
+      centerSnapTimer = setTimeout(() => {
+        const centeredCode = getCenteredMethodCode();
+        if (!centeredCode) return;
+        centerMethodByCode(centeredCode, "smooth");
+        if (centeredCode !== selectedMethodCode) {
+          setMethodValue(centeredCode, { center: false });
+        } else {
+          setMethodValue(centeredCode, { silent: true, center: false });
+        }
+      }, 90);
+    });
+
+    const methodSelect = {
+      root: methodPickerRoot,
+      getValue: () => selectedMethodCode || methodDefault || "takeaway",
+      setValue: (code, silent) => setMethodValue(code, { silent })
+    };
+    methodSelect.setValue(methodDefault, true);
+    requestAnimationFrame(() => {
+      updateCarouselSidePadding();
+      centerMethodByCode(methodSelect.getValue(), "auto");
+    });
+    if (typeof ResizeObserver === "function") {
+      const methodCarouselResizeObserver = new ResizeObserver(() => {
+        updateCarouselSidePadding();
+        centerMethodByCode(methodSelect.getValue(), "auto");
+      });
+      methodCarouselResizeObserver.observe(methodPickerRoot);
+    }
     function syncCheckoutMode(code) {
       const resolvedCode = code || methodDefault || "takeaway";
       window._checkoutMethodCode = resolvedCode;
