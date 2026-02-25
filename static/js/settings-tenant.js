@@ -100,6 +100,15 @@
   let domainCancelConfirm = false;
   let domainOriginalValue = "";
   let domainAsciiValue = "";
+  let telegramDraftMode = false;
+  let telegramCancelConfirm = false;
+  let telegramOriginal = {
+    telegram_bot_username: "",
+    telegram_bot_token: "",
+    tg_mini_app_enabled: 1,
+    tg_login_enabled: 0
+  };
+  let telegramDraft = { ...telegramOriginal };
 
   function applyBrandFromTenant(tenant) {
     if (!tenant) return;
@@ -333,6 +342,38 @@
         tgLoginEnabledInput.checked = Number(tenant.tg_login_enabled ?? 0) === 1;
         tgLoginEnabledInput.disabled = !hasRequired;
         tgLoginEnabledInput.title = hasRequired ? "" : "Сначала заполните имя бота и токен Telegram";
+      }
+      telegramOriginal = {
+        telegram_bot_username: String(tenant.telegram_bot_username || ""),
+        telegram_bot_token: String(tenant.telegram_bot_token || ""),
+        tg_mini_app_enabled: Number(tenant.tg_mini_app_enabled ?? 1) === 1 ? 1 : 0,
+        tg_login_enabled: Number(tenant.tg_login_enabled ?? 0) === 1 ? 1 : 0
+      };
+      telegramDraft = { ...telegramOriginal };
+      // Безопасный сброс Telegram-режима прямо здесь:
+      // loadTenantProfile вызывается раньше, чем инициализируются нижние const-переменные.
+      telegramDraftMode = false;
+      telegramCancelConfirm = false;
+      if (tgBotUsernameInput) {
+        tgBotUsernameInput.disabled = true;
+        tgBotUsernameInput.readOnly = true;
+      }
+      if (tgBotTokenInput) {
+        tgBotTokenInput.disabled = true;
+        tgBotTokenInput.readOnly = true;
+      }
+      if (tgMiniAppEnabledInput) tgMiniAppEnabledInput.disabled = true;
+      if (tgLoginEnabledInput) tgLoginEnabledInput.disabled = true;
+      const telegramFooterViewEl = document.getElementById("settingsTelegramFooterView");
+      const telegramFooterEditEl = document.getElementById("settingsTelegramFooterEdit");
+      if (telegramFooterViewEl) telegramFooterViewEl.classList.remove("hidden");
+      if (telegramFooterEditEl) telegramFooterEditEl.classList.add("hidden");
+      const telegramCancelBtnEl = document.getElementById("settingsTelegramCancelBtn");
+      if (telegramCancelBtnEl) {
+        telegramCancelBtnEl.classList.remove("is-confirm");
+        telegramCancelBtnEl.title = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+        telegramCancelBtnEl.setAttribute("aria-label", "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c");
+        telegramCancelBtnEl.innerHTML = '<i class="fas fa-times"></i>';
       }
       if (maxBotIdInput) {
         maxBotIdInput.value = tenant.max_bot_id || "";
@@ -2136,6 +2177,11 @@
     const tgBotTokenCopyBtn = document.getElementById("tenantTelegramBotTokenCopyBtn");
     const tgMiniAppEnabledEl = document.getElementById("tenantTelegramMiniAppEnabled");
     const tgLoginEnabledEl = document.getElementById("tenantTelegramLoginEnabled");
+    const telegramEditBtn = document.getElementById("settingsTelegramEditBtn");
+    const telegramSaveBtn = document.getElementById("settingsTelegramSaveBtn");
+    const telegramCancelBtn = document.getElementById("settingsTelegramCancelBtn");
+    const telegramFooterView = document.getElementById("settingsTelegramFooterView");
+    const telegramFooterEdit = document.getElementById("settingsTelegramFooterEdit");
     const maxBotIdEl = document.getElementById("tenantMaxBotId");
     const maxBotTokenEl = document.getElementById("tenantMaxBotToken");
     const maxBotTokenCopyBtn = document.getElementById("tenantMaxBotTokenCopyBtn");
@@ -2161,12 +2207,136 @@
       }
     };
 
+    function resetTelegramCancelButton() {
+      if (!telegramCancelBtn) return;
+      telegramCancelConfirm = false;
+      telegramCancelBtn.classList.remove("is-confirm");
+      telegramCancelBtn.title = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+      telegramCancelBtn.setAttribute("aria-label", "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c");
+      telegramCancelBtn.innerHTML = '<i class="fas fa-times"></i>';
+    }
+
+    function readTelegramFormValues() {
+      return {
+        telegram_bot_username: String((tgBotUsernameEl && tgBotUsernameEl.value) || "").trim(),
+        telegram_bot_token: String((tgBotTokenEl && tgBotTokenEl.value) || "").trim(),
+        tg_mini_app_enabled: tgMiniAppEnabledEl && tgMiniAppEnabledEl.checked ? 1 : 0,
+        tg_login_enabled: tgLoginEnabledEl && tgLoginEnabledEl.checked ? 1 : 0
+      };
+    }
+
+    function applyTelegramFormValues(values) {
+      if (tgBotUsernameEl) tgBotUsernameEl.value = String(values.telegram_bot_username || "");
+      if (tgBotTokenEl) tgBotTokenEl.value = String(values.telegram_bot_token || "");
+      if (tgMiniAppEnabledEl) tgMiniAppEnabledEl.checked = Number(values.tg_mini_app_enabled || 0) === 1;
+      if (tgLoginEnabledEl) tgLoginEnabledEl.checked = Number(values.tg_login_enabled || 0) === 1;
+      syncTgLoginSwitchState();
+    }
+
+    function setTelegramDraftMode(enabled) {
+      telegramDraftMode = Boolean(enabled);
+      if (tgBotUsernameEl) {
+        tgBotUsernameEl.disabled = !telegramDraftMode;
+        tgBotUsernameEl.readOnly = !telegramDraftMode;
+      }
+      if (tgBotTokenEl) {
+        tgBotTokenEl.disabled = !telegramDraftMode;
+        tgBotTokenEl.readOnly = !telegramDraftMode;
+      }
+      if (tgMiniAppEnabledEl) tgMiniAppEnabledEl.disabled = !telegramDraftMode;
+      if (tgLoginEnabledEl) tgLoginEnabledEl.disabled = !telegramDraftMode;
+      if (telegramFooterView) telegramFooterView.classList.toggle("hidden", telegramDraftMode);
+      if (telegramFooterEdit) telegramFooterEdit.classList.toggle("hidden", !telegramDraftMode);
+      if (!telegramDraftMode) {
+        resetTelegramCancelButton();
+      } else {
+        syncTgLoginSwitchState();
+      }
+    }
+
+    function cancelTelegramDraft() {
+      telegramDraft = { ...telegramOriginal };
+      applyTelegramFormValues(telegramOriginal);
+      setTelegramDraftMode(false);
+    }
+
+    if (telegramEditBtn) {
+      telegramEditBtn.addEventListener("click", function () {
+        telegramDraft = { ...telegramOriginal };
+        applyTelegramFormValues(telegramDraft);
+        setTelegramDraftMode(true);
+        if (tgBotUsernameEl) {
+          tgBotUsernameEl.focus();
+          tgBotUsernameEl.select();
+        }
+      });
+    }
+
+    if (telegramCancelBtn) {
+      telegramCancelBtn.addEventListener("click", function () {
+        if (!telegramDraftMode) return;
+        if (!telegramCancelConfirm) {
+          telegramCancelConfirm = true;
+          telegramCancelBtn.classList.add("is-confirm");
+          telegramCancelBtn.textContent = "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c";
+          telegramCancelBtn.title = "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u043e\u0442\u043c\u0435\u043d\u0443";
+          telegramCancelBtn.setAttribute("aria-label", "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u043e\u0442\u043c\u0435\u043d\u0443");
+          return;
+        }
+        cancelTelegramDraft();
+      });
+    }
+
+    if (telegramSaveBtn) {
+      telegramSaveBtn.addEventListener("click", async function () {
+        if (!telegramDraftMode) return;
+        telegramDraft = readTelegramFormValues();
+        const hasRequired = !!(telegramDraft.telegram_bot_username && telegramDraft.telegram_bot_token);
+        if (telegramDraft.tg_login_enabled === 1 && !hasRequired) {
+          alert("Сначала заполните имя бота и токен Telegram");
+          if (tgLoginEnabledEl) tgLoginEnabledEl.checked = false;
+          telegramDraft.tg_login_enabled = 0;
+          return;
+        }
+        const payload = {
+          telegram_bot_username: telegramDraft.telegram_bot_username || null,
+          telegram_bot_token: telegramDraft.telegram_bot_token || null,
+          tg_mini_app_enabled: telegramDraft.tg_mini_app_enabled ? 1 : 0,
+          tg_login_enabled: telegramDraft.tg_login_enabled ? 1 : 0
+        };
+        const data = await updateTenantFields(payload);
+        if (!data || !data.ok) {
+          alert("Не удалось сохранить настройки Telegram.");
+          return;
+        }
+        if (data.tenant) {
+          updateTenantCache(data.tenant);
+          applyBrandFromTenant(data.tenant);
+          telegramOriginal = {
+            telegram_bot_username: String(data.tenant.telegram_bot_username || ""),
+            telegram_bot_token: String(data.tenant.telegram_bot_token || ""),
+            tg_mini_app_enabled: Number(data.tenant.tg_mini_app_enabled ?? 1) === 1 ? 1 : 0,
+            tg_login_enabled: Number(data.tenant.tg_login_enabled ?? 0) === 1 ? 1 : 0
+          };
+        } else {
+          telegramOriginal = { ...telegramDraft };
+        }
+        telegramDraft = { ...telegramOriginal };
+        applyTelegramFormValues(telegramOriginal);
+        setTelegramDraftMode(false);
+      });
+    }
+
 
     if (tgBotUsernameEl) {
       tgBotUsernameEl.addEventListener("change", function () {
         var val = tgBotUsernameEl.value.trim();
         tgBotUsernameEl.value = val;
-        updateTenantFields({ telegram_bot_username: val || null });
+        if (telegramDraftMode) {
+          telegramDraft.telegram_bot_username = val;
+        } else {
+          updateTenantFields({ telegram_bot_username: val || null });
+        }
         syncTgLoginSwitchState();
       });
     }
@@ -2182,7 +2352,11 @@
     if (tgBotTokenEl) {
       tgBotTokenEl.addEventListener("change", function () {
         var val = tgBotTokenEl.value.trim();
-        updateTenantFields({ telegram_bot_token: val || null });
+        if (telegramDraftMode) {
+          telegramDraft.telegram_bot_token = val;
+        } else {
+          updateTenantFields({ telegram_bot_token: val || null });
+        }
         syncTgLoginSwitchState();
       });
     }
@@ -2250,7 +2424,11 @@
 
     if (tgMiniAppEnabledEl) {
       tgMiniAppEnabledEl.addEventListener("change", function () {
-        updateTenantFields({ tg_mini_app_enabled: tgMiniAppEnabledEl.checked ? 1 : 0 });
+        if (telegramDraftMode) {
+          telegramDraft.tg_mini_app_enabled = tgMiniAppEnabledEl.checked ? 1 : 0;
+        } else {
+          updateTenantFields({ tg_mini_app_enabled: tgMiniAppEnabledEl.checked ? 1 : 0 });
+        }
       });
     }
     if (tgLoginEnabledEl) {
@@ -2261,10 +2439,15 @@
           alert("Сначала заполните имя бота и токен Telegram");
           return;
         }
-        updateTenantFields({ tg_login_enabled: tgLoginEnabledEl.checked ? 1 : 0 });
+        if (telegramDraftMode) {
+          telegramDraft.tg_login_enabled = tgLoginEnabledEl.checked ? 1 : 0;
+        } else {
+          updateTenantFields({ tg_login_enabled: tgLoginEnabledEl.checked ? 1 : 0 });
+        }
       });
       syncTgLoginSwitchState();
     }
+    setTelegramDraftMode(false);
 
     // Копирование ссылки Telegram mini app
     var tgMiniAppCopyBtn = document.getElementById("tenantTelegramMiniAppCopyBtn");

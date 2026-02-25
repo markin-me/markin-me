@@ -374,8 +374,8 @@
         </div>
       </div>
 
-      <div class="info-card settings-right-panel hidden" id="settingsTelegramAppPanel">
-        <div class="settings-site-form">
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsTelegramAppPanel">
+        <div class="settings-site-form settings-panel-scroll">
           <div class="settings-auth-top">
             <div class="settings-auth-photo-column">
               <div class="settings-site-field">
@@ -434,6 +434,19 @@
               <span class="switch-ui" aria-hidden="true"></span>
               <span class="switch-text">Включено</span>
             </label>
+          </div>
+        </div>
+        <div class="panel-footer" id="settingsTelegramFooter">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsTelegramFooterView">
+              <button class="product-footer-btn product-footer-edit" id="settingsTelegramEditBtn" type="button">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsTelegramFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" id="settingsTelegramCancelBtn" type="button" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" id="settingsTelegramSaveBtn" type="button">Сохранить</button>
+            </div>
           </div>
         </div>
       </div>
@@ -495,8 +508,8 @@
         </div>
       </div>
 
-      <div class="info-card settings-right-panel hidden" id="settingsDomainPanel">
-        <div class="settings-site-form">
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsDomainPanel">
+        <div class="settings-site-form settings-panel-scroll">
           <div class="settings-site-field">
             <label class="field-label">ВАШ ДОМЕН</label>
             <div class="control-with-action">
