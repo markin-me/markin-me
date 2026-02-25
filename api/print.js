@@ -64,10 +64,24 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     );
   }
 
+  async function getStoreClock(tenantId, storeId) {
+    const timezone = await getStoreTimezone(tenantId, storeId);
+    const offsetMinutes = helpers.parseTimezoneOffsetToMinutes(timezone ?? "+0");
+    const shiftedNowMs = Date.now() + offsetMinutes * 60 * 1000;
+    return {
+      timezone,
+      nowSql: helpers.formatUtcDateTime(shiftedNowMs),
+      staleBeforeSql: helpers.formatUtcDateTime(shiftedNowMs - 5 * 60 * 1000),
+    };
+  }
+
   async function claimNextPrintJob(tokenRow) {
     const tenantId = Number(tokenRow.tenant_id);
     const storeId = Number(tokenRow.store_id);
     const tokenId = Number(tokenRow.id);
+    const storeClock = await getStoreClock(tenantId, storeId);
+    const staleBeforeSql = storeClock.staleBeforeSql || helpers.formatUtcDateTime(Date.now() - 5 * 60 * 1000);
+    const nowSql = storeClock.nowSql || helpers.formatUtcDateTime(Date.now());
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
@@ -78,13 +92,13 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
         WHERE tenant_id=? AND store_id=? AND token_id=?
           AND (
             status='pending'
-            OR (status='processing' AND locked_at < DATE_SUB(NOW(), INTERVAL 5 MINUTE))
+            OR (status='processing' AND locked_at < ?)
           )
         ORDER BY created_at ASC, id ASC
         LIMIT 1
         FOR UPDATE
         `,
-        [tenantId, storeId, tokenId]
+        [tenantId, storeId, tokenId, staleBeforeSql]
       );
 
       if (!rows.length) {
@@ -96,10 +110,10 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       await conn.query(
         `
         UPDATE print_jobs
-        SET status='processing', attempts=attempts+1, locked_at=NOW(), last_error=NULL, updated_at=NOW()
+        SET status='processing', attempts=attempts+1, locked_at=?, last_error=NULL, updated_at=?
         WHERE id=?
         `,
-        [job.id]
+        [nowSql, nowSql, job.id]
       );
       await conn.commit();
       return {
@@ -497,14 +511,16 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       if (!Number.isFinite(jobId) || jobId <= 0) {
         return res.status(400).json({ ok: false, error: "BAD_JOB_ID" });
       }
+      const storeClock = await getStoreClock(Number(tokenRow.tenant_id), Number(tokenRow.store_id));
+      const nowSql = storeClock.nowSql || helpers.formatUtcDateTime(Date.now());
 
       const [result] = await db.query(
         `
         UPDATE print_jobs
-        SET status='done', locked_at=NULL, acked_at=NOW(), last_error=NULL, updated_at=NOW()
+        SET status='done', locked_at=NULL, acked_at=?, last_error=NULL, updated_at=?
         WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND status='processing'
         `,
-        [jobId, Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id)]
+        [nowSql, nowSql, jobId, Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id)]
       );
 
       if (!Number(result.affectedRows || 0)) {
@@ -550,6 +566,8 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       if (!Number.isFinite(jobId) || jobId <= 0) {
         return res.status(400).json({ ok: false, error: "BAD_JOB_ID" });
       }
+      const storeClock = await getStoreClock(Number(tokenRow.tenant_id), Number(tokenRow.store_id));
+      const nowSql = storeClock.nowSql || helpers.formatUtcDateTime(Date.now());
 
       const errorText = String(req.body?.error || "PRINT_FAILED").slice(0, 2000);
       const [result] = await db.query(
@@ -559,10 +577,10 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
           status=CASE WHEN attempts >= 5 THEN 'failed' ELSE 'pending' END,
           locked_at=NULL,
           last_error=?,
-          updated_at=NOW()
+          updated_at=?
         WHERE id=? AND tenant_id=? AND store_id=? AND token_id=? AND status='processing'
         `,
-        [errorText, jobId, Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id)]
+        [errorText, nowSql, jobId, Number(tokenRow.tenant_id), Number(tokenRow.store_id), Number(tokenRow.id)]
       );
 
       if (!Number(result.affectedRows || 0)) {
