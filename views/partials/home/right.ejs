@@ -1,4 +1,4 @@
-<% if (activePage === "settings") { %>
+﻿<% if (activePage === "settings") { %>
   <div class="panel">
     <div class="panel-header settings-right-header hidden">
       <div class="product-tabs settings-right-tabs hidden" id="settingsRightTabs"></div>
@@ -334,8 +334,8 @@
         </div>
       </div>
 
-      <div class="info-card settings-right-panel hidden" id="settingsSitePanel">
-        <div class="settings-site-form">
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsSitePanel">
+        <div class="settings-site-form settings-panel-scroll">
           <div class="settings-site-field">
             <label class="field-label">НАЗВАНИЕ САЙТА</label>
             <div class="site-name-row">
@@ -372,9 +372,21 @@
             </div>
           </div>
         </div>
+        <div class="panel-footer" id="settingsSiteFooter">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsSiteFooterView">
+              <button class="product-footer-btn product-footer-edit" id="settingsSiteEditBtn" type="button">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsSiteFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" id="settingsSiteCancelBtn" type="button" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" id="settingsSiteSaveBtn" type="button">Сохранить</button>
+            </div>
+          </div>
+        </div>
       </div>
-
-      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsTelegramAppPanel">
+<div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsTelegramAppPanel">
         <div class="settings-site-form settings-panel-scroll">
           <div class="settings-auth-top">
             <div class="settings-auth-photo-column">
@@ -451,8 +463,8 @@
         </div>
       </div>
 
-      <div class="info-card settings-right-panel hidden" id="settingsMaxAppPanel">
-        <div class="settings-site-form">
+      <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsMaxAppPanel">
+        <div class="settings-site-form settings-panel-scroll">
           <div class="settings-auth-top">
             <div class="settings-auth-photo-column">
               <div class="settings-site-field">
@@ -504,6 +516,19 @@
               <span class="switch-ui" aria-hidden="true"></span>
               <span class="switch-text">Включено</span>
             </label>
+          </div>
+        </div>
+        <div class="panel-footer" id="settingsMaxFooter">
+          <div class="product-footer-actions">
+            <div class="product-footer-view" id="settingsMaxFooterView">
+              <button class="product-footer-btn product-footer-edit" id="settingsMaxEditBtn" type="button">Редактировать</button>
+            </div>
+            <div class="product-footer-edit-mode hidden" id="settingsMaxFooterEdit">
+              <button class="product-footer-btn product-footer-cancel" id="settingsMaxCancelBtn" type="button" title="Отменить" aria-label="Отменить">
+                <i class="fas fa-times"></i>
+              </button>
+              <button class="product-footer-btn product-footer-save" id="settingsMaxSaveBtn" type="button">Сохранить</button>
+            </div>
           </div>
         </div>
       </div>
@@ -940,3 +965,4 @@
     </div>
   </div>
 <% } %>
+
