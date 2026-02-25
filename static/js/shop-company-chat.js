@@ -1165,7 +1165,7 @@
     if (!tabActive || !isOpen) {
       if (shouldSuppressLocalBrowserNotification()) return;
       showIncomingMessageBrowserNotification(
-        "\u041d\u043e\u0432\u043e\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u043e\u0442 \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438",
+        getCompanyAuthorName(),
         getEntryPreviewText(entry) || "\u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 \u0447\u0430\u0442, \u0447\u0442\u043e\u0431\u044b \u043e\u0442\u0432\u0435\u0442\u0438\u0442\u044c."
       );
     }

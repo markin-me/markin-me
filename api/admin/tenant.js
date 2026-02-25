@@ -1078,8 +1078,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const realUtcNow = Date.now();
 
       // Вычисляем время филиала
-      const offsetHours = Number.isNaN(Number(storeTimezone)) ? 0 : Number(storeTimezone);
-      const offsetMs = offsetHours * 60 * 60 * 1000;
+      const offsetMinutes = helpers.parseTimezoneOffsetToMinutes(storeTimezone ?? "+0");
+      const offsetMs = offsetMinutes * 60 * 1000;
       const storeTime = realUtcNow + offsetMs;
       const storeDate = new Date(storeTime);
 
