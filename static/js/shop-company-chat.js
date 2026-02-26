@@ -2,6 +2,7 @@
   const openBtn = document.getElementById("shopCompanyChatOpenBtn");
   const unreadBadge = document.getElementById("shopCompanyChatUnreadBadge");
   const overlay = document.getElementById("shopCompanyChatOverlay");
+  const modal = overlay ? overlay.querySelector(".shop-company-chat-modal") : null;
   const modalHeader = overlay ? overlay.querySelector(".shop-company-chat-modal__header") : null;
   const modalBody = overlay ? overlay.querySelector(".shop-company-chat-modal__body") : null;
   const modalTitle = document.getElementById("shopCompanyChatTitle");
@@ -39,7 +40,7 @@
   let typingIndicator = document.getElementById("shopCompanyChatTypingIndicator");
   const reactionBar = document.getElementById("shopCompanyChatReactionBar");
 
-  if (!openBtn || !overlay || !modalHeader || !modalBody || !modalTitle || !closeBtn) return;
+  if (!openBtn || !overlay || !modal || !modalHeader || !modalBody || !modalTitle || !closeBtn) return;
   if (!feed || !thread || !composer || !selectionToolbar || !selectionCloseBtn || !selectionCountEl || !selectionCopyBtn || !selectionDeleteBtn || !attachBtn || !attachInput || !attachPreviewOverlay || !attachPreviewCloseBtn || !attachPreviewTitle || !attachPreviewImage || !attachPreviewThumbs || !attachPreviewEmojiBtn || !attachPreviewCaption || !attachPreviewSendBtn || !imageViewerOverlay || !imageViewerCloseBtn || !imageViewerImage || !imageViewerCard || !input || !emojiBtn || !emojiPopover || !scrollDownBtn || !reactionBar) return;
   const initialModalTitleText = String(modalTitle.textContent || "").trim() || "\u0427\u0430\u0442";
 
@@ -353,7 +354,9 @@
   let localTypingPhrase = "";
   let messageAlertAudioCtx = null;
   let messageAlertAudioUnlocked = false;
+  let messageAlertUnlockAttempted = false;
   let messageAlertLastAt = 0;
+  let suppressIncomingAlertsUntil = 0;
   let webPushPublicKeyCache = "";
   let webPushPublicKeyFetched = false;
   let webPushSyncTimer = 0;
@@ -1090,24 +1093,30 @@
     } catch {}
   }
 
+  function suppressIncomingAlertsFor(ms) {
+    const durationMs = Math.max(0, Number(ms || 0));
+    if (!durationMs) return;
+    const until = Date.now() + durationMs;
+    if (until > suppressIncomingAlertsUntil) {
+      suppressIncomingAlertsUntil = until;
+    }
+  }
+
+  function shouldSuppressIncomingAlertsNow() {
+    return Date.now() < suppressIncomingAlertsUntil;
+  }
+
   function unlockMessageAlertsOnce() {
+    if (messageAlertUnlockAttempted) return;
+    messageAlertUnlockAttempted = true;
+
+    // Preload tenant sound asset without playback to avoid false "incoming" dings on first tap.
     const soundUrl = getTenantMessageSoundUrl();
     if (soundUrl) {
       try {
         const audio = new Audio(soundUrl);
-        audio.volume = 0.001;
-        const unlockPromise = audio.play();
-        if (unlockPromise && typeof unlockPromise.then === "function") {
-          unlockPromise
-            .then(function () {
-              messageAlertAudioUnlocked = true;
-              try {
-                audio.pause();
-                audio.currentTime = 0;
-              } catch {}
-            })
-            .catch(function () {});
-        }
+        audio.preload = "auto";
+        audio.load();
       } catch {}
     }
     const ctx = ensureMessageAlertAudioContext();
@@ -1160,6 +1169,64 @@
     playFallbackMessageAlertTone();
   }
 
+  function playOutgoingMessageSendTone() {
+    const ctx = ensureMessageAlertAudioContext();
+    if (!ctx) return;
+
+    const scheduleTone = function () {
+      try {
+        const startAt = ctx.currentTime + 0.002;
+        const master = ctx.createGain();
+        master.gain.setValueAtTime(0.0001, startAt);
+        master.gain.exponentialRampToValueAtTime(0.06, startAt + 0.012);
+        master.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.17);
+        master.connect(ctx.destination);
+
+        const oscA = ctx.createOscillator();
+        const gainA = ctx.createGain();
+        oscA.type = "triangle";
+        oscA.frequency.setValueAtTime(1320, startAt);
+        oscA.frequency.exponentialRampToValueAtTime(1680, startAt + 0.08);
+        gainA.gain.setValueAtTime(1, startAt);
+        gainA.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.11);
+        oscA.connect(gainA);
+        gainA.connect(master);
+        oscA.start(startAt);
+        oscA.stop(startAt + 0.12);
+
+        const oscB = ctx.createOscillator();
+        const gainB = ctx.createGain();
+        oscB.type = "sine";
+        oscB.frequency.setValueAtTime(1760, startAt + 0.05);
+        oscB.frequency.exponentialRampToValueAtTime(1480, startAt + 0.145);
+        gainB.gain.setValueAtTime(0.0001, startAt + 0.045);
+        gainB.gain.exponentialRampToValueAtTime(0.7, startAt + 0.072);
+        gainB.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.17);
+        oscB.connect(gainB);
+        gainB.connect(master);
+        oscB.start(startAt + 0.045);
+        oscB.stop(startAt + 0.18);
+      } catch {}
+    };
+
+    try {
+      if (ctx.state === "running") {
+        messageAlertAudioUnlocked = true;
+        scheduleTone();
+        return;
+      }
+      const resumePromise = ctx.resume();
+      if (resumePromise && typeof resumePromise.then === "function") {
+        resumePromise
+          .then(function () {
+            messageAlertAudioUnlocked = true;
+            scheduleTone();
+          })
+          .catch(function () {});
+      }
+    } catch {}
+  }
+
   function showIncomingMessageBrowserNotification(title, body) {
     if (!("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
@@ -1184,6 +1251,7 @@
   }
 
   function maybeNotifyIncomingAgentMessage(entry) {
+    if (shouldSuppressIncomingAlertsNow()) return;
     const isOpen = overlay.classList.contains("is-open");
     const tabVisible = isChatTabActiveForRead();
     const tabFocused = typeof document.hasFocus !== "function" || document.hasFocus();
@@ -2998,9 +3066,11 @@
 
   async function fetchUnreadSnapshot(options) {
     const opts = options || {};
+    const requestClientId = String(getActiveChatClientId() || "").trim();
     const qs = new URLSearchParams({
       _ts: String(Date.now()),
     });
+    if (requestClientId) qs.set("client_id", requestClientId);
     const json = await chatApiJson(CHAT_TEMP_API_BASE + "/unread?" + qs.toString(), {
       signal: opts.signal,
     });
@@ -3009,6 +3079,7 @@
 
   async function waitUnreadSnapshotChange(options) {
     const opts = options || {};
+    const requestClientId = String(getActiveChatClientId() || "").trim();
     const timeoutMs = Math.max(
       1000,
       Number(opts.timeoutMs || opts.timeout || CHAT_UNREAD_WAIT_TIMEOUT_MS)
@@ -3019,6 +3090,7 @@
       timeout_ms: String(timeoutMs),
       _ts: String(Date.now()),
     });
+    if (requestClientId) qs.set("client_id", requestClientId);
     const json = await chatApiJson(CHAT_TEMP_API_BASE + "/unread/wait?" + qs.toString(), {
       signal: opts.signal,
     });
@@ -3030,6 +3102,7 @@
     const next = Math.max(0, Number(nextTotal || 0));
     if (!unreadStatePrimed) return;
     if (next <= prev) return;
+    if (shouldSuppressIncomingAlertsNow()) return;
     if (overlay.classList.contains("is-open")) return;
 
     const now = Date.now();
@@ -3193,20 +3266,35 @@
         .map(function (entry) { return String(entry.id || ""); })
         .filter(Boolean)
     );
-    const appendedAgentMessageIds = appendOlder || opts.skipIncomingNotify === true
+    const previousLatestAgentCreatedAt = (Array.isArray(liveEntries) ? liveEntries : [])
+      .filter(function (entry) { return entry && entry.type === "message" && entry.role === "agent"; })
+      .map(function (entry) { return String(entry.createdAt || ""); })
+      .filter(Boolean)
+      .reduce(function (latest, isoValue) {
+        if (!latest) return isoValue;
+        return compareIsoDates(isoValue, latest) > 0 ? isoValue : latest;
+      }, "");
+    const appendedAgentEntries = appendOlder || opts.skipIncomingNotify === true
       ? []
       : entries
         .filter(function (entry) {
           return entry && entry.type === "message" && entry.role === "agent";
         })
-        .map(function (entry) {
-          return String(entry.id || "");
-        })
-        .filter(function (id) {
+        .filter(function (entry) {
+          const id = String(entry && entry.id || "");
           return id && !previousMessageIds.has(id);
         });
-    const appendedAgentIdSet = new Set(appendedAgentMessageIds);
-    const latestIncomingAgentEntry = appendedAgentMessageIds.length
+    const notifiableAgentEntries = appendedAgentEntries.filter(function (entry) {
+      if (!entry || !previousLatestAgentCreatedAt) return true;
+      const entryCreatedAt = String(entry.createdAt || "");
+      if (!entryCreatedAt) return true;
+      return compareIsoDates(entryCreatedAt, previousLatestAgentCreatedAt) >= 0;
+    });
+    const notifiableAgentMessageIds = notifiableAgentEntries
+      .map(function (entry) { return String(entry && entry.id || ""); })
+      .filter(Boolean);
+    const notifiableAgentIdSet = new Set(notifiableAgentMessageIds);
+    const latestIncomingAgentEntry = notifiableAgentMessageIds.length
       ? entries
         .slice()
         .reverse()
@@ -3214,7 +3302,7 @@
           return entry
             && entry.type === "message"
             && entry.role === "agent"
-            && appendedAgentIdSet.has(String(entry.id || ""));
+            && notifiableAgentIdSet.has(String(entry.id || ""));
         }) || null
       : null;
 
@@ -3223,7 +3311,7 @@
     liveEntries = entries;
     sharedThreadUpdatedAt = remoteUpdatedAt;
     renderThread();
-    const hasIncomingAgentMessages = hasLoadedSharedThreadOnce && appendedAgentMessageIds.length > 0;
+    const hasIncomingAgentMessages = hasLoadedSharedThreadOnce && notifiableAgentMessageIds.length > 0;
     if (hasIncomingAgentMessages) {
       applyPeerTypingState(null, { forceInactive: true });
       maybeNotifyIncomingAgentMessage(latestIncomingAgentEntry);
@@ -3232,7 +3320,7 @@
     tryApplyPendingFeedRestoreState();
     updateScrollDownButton();
     if (isChatOpen && hasIncomingAgentMessages) {
-      addPendingFeedMessageIds(appendedAgentMessageIds);
+      addPendingFeedMessageIds(notifiableAgentMessageIds);
     }
     hasLoadedSharedThreadOnce = true;
     if (readChangedIds.length) {
@@ -4421,6 +4509,7 @@
 
   var emojiPickerInitialized = false;
   function openCompanyChat() {
+    suppressIncomingAlertsFor(1800);
     cancelDeferredClosedFeedPersist();
     preloadEmojiAtlas();
     if (!emojiPickerInitialized) {
@@ -7974,6 +8063,7 @@
     hideReactionBar();
     hideEmojiPopover();
     pushLiveMessage("user", trimmed, { replyTo: replySnapshot, attachment: attachment });
+    playOutgoingMessageSendTone();
     if (trimmed) {
       scheduleAssistantHotQuestionReply(trimmed);
     }
@@ -8029,6 +8119,12 @@
     return !imageViewerOverlay.classList.contains("hidden");
   }
 
+  function syncMessageImageViewerViewportMode() {
+    if (!modal || !modal.classList) return;
+    const useDesktopViewport = isMessageImageViewerOpen() && !isMobileChatViewport();
+    modal.classList.toggle("is-image-viewer-open", useDesktopViewport);
+  }
+
   function clearMessageImageViewerLayout() {
     imageViewerOverlay.style.removeProperty("--chat-image-viewer-max-width");
     imageViewerOverlay.style.removeProperty("--chat-image-viewer-max-height");
@@ -8038,18 +8134,26 @@
 
   function updateMessageImageViewerLayout() {
     if (!isMessageImageViewerOpen()) return;
+    if (!imageViewerOverlay || !imageViewerOverlay.isConnected) return;
     const naturalWidth = Number(imageViewerImage.naturalWidth || 0);
     const naturalHeight = Number(imageViewerImage.naturalHeight || 0);
     if (!Number.isFinite(naturalWidth) || !Number.isFinite(naturalHeight) || naturalWidth <= 0 || naturalHeight <= 0) return;
 
-    const viewportWidth = Math.max(
-      Number(window.innerWidth || 0),
-      Number(document.documentElement && document.documentElement.clientWidth || 0)
-    );
-    const viewportHeight = Math.max(
-      Number(window.innerHeight || 0),
-      Number(document.documentElement && document.documentElement.clientHeight || 0)
-    );
+    const overlayRect = imageViewerOverlay.getBoundingClientRect();
+    const overlayWidth = Number(overlayRect && overlayRect.width || 0);
+    const overlayHeight = Number(overlayRect && overlayRect.height || 0);
+    const viewportWidth = overlayWidth > 0
+      ? overlayWidth
+      : Math.max(
+        Number(window.innerWidth || 0),
+        Number(document.documentElement && document.documentElement.clientWidth || 0)
+      );
+    const viewportHeight = overlayHeight > 0
+      ? overlayHeight
+      : Math.max(
+        Number(window.innerHeight || 0),
+        Number(document.documentElement && document.documentElement.clientHeight || 0)
+      );
     if (!viewportWidth || !viewportHeight) return;
 
     const compact = viewportWidth <= 640;
@@ -8072,6 +8176,7 @@
     imageViewerOverlay.setAttribute("aria-hidden", "true");
     imageViewerImage.removeAttribute("src");
     clearMessageImageViewerLayout();
+    syncMessageImageViewerViewportMode();
   }
 
   function openMessageImageViewer(imageSrc, imageAlt) {
@@ -8082,6 +8187,7 @@
     imageViewerImage.alt = String(imageAlt || "Image preview");
     imageViewerOverlay.classList.remove("hidden");
     imageViewerOverlay.setAttribute("aria-hidden", "false");
+    syncMessageImageViewerViewportMode();
     if (imageViewerImage.complete) {
       updateMessageImageViewerLayout();
     }
@@ -8209,6 +8315,7 @@
       hideReactionBar();
       hideEmojiPopover();
       clearReplyDraft();
+      playOutgoingMessageSendTone();
     }
     return sent;
   }
@@ -9097,6 +9204,7 @@
     }
     clearTouchGesture();
     clearOrderCardMouseDrag();
+    syncMessageImageViewerViewportMode();
     if (isMessageImageViewerOpen()) updateMessageImageViewerLayout();
     scheduleMobileKeyboardInsetSyncBurst();
     scheduleScrollDownComposerExtraOffsetSync();

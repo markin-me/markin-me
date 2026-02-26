@@ -8028,6 +8028,24 @@ body.page-chat .panel{
   padding:4px;
 }
 
+.chat-message--out .chat-message-bubble.has-attachment-only{
+  padding:0;
+  overflow:hidden;
+}
+
+.chat-message--out .chat-message-bubble.has-attachment-only .chat-message-attachment{
+  border-radius:inherit;
+}
+
+.chat-message--in .chat-message-bubble.has-attachment-only{
+  padding:0;
+  overflow:hidden;
+}
+
+.chat-message--in .chat-message-bubble.has-attachment-only .chat-message-attachment{
+  border-radius:inherit;
+}
+
 .chat-message-reply-snippet[data-chat-scroll-to-message]{
   cursor:pointer;
   transition:background var(--dur-fast) var(--ease-smooth), transform var(--dur-fast) var(--ease-smooth);
@@ -9249,6 +9267,11 @@ body.page-chat .panel{
 
 @media (max-width: 768px){
   .chat-attach-preview-overlay{
+    padding:10px;
+    border-radius:0;
+  }
+
+  .chat-image-viewer-overlay{
     padding:10px;
     border-radius:0;
   }

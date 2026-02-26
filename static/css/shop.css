@@ -6890,6 +6890,12 @@ body.page-shop .shop-company-chat-btn:hover{
   opacity: 1;
 }
 
+@media (min-width: 769px){
+  .shop-company-chat-overlay.is-open .shop-company-chat-modal.is-image-viewer-open{
+    transform: none;
+  }
+}
+
 .shop-company-chat-modal__header{
   min-height: 74px;
   padding: 12px 16px;
@@ -7189,16 +7195,16 @@ body.page-shop .shop-company-chat-btn:hover{
 }
 
 .shop-company-chat-modal__body .chat-image-viewer-card{
-  width: min(96vw, 1080px);
-  height: min(88vh, 820px);
+  width: min(var(--chat-image-viewer-max-width, 96vw), 1080px);
+  height: min(var(--chat-image-viewer-max-height, 88vh), 820px);
   position: relative;
   display: grid;
   place-items: center;
 }
 
 .shop-company-chat-modal__body .chat-image-viewer-image{
-  max-width: 100%;
-  max-height: 100%;
+  max-width: min(var(--chat-image-viewer-target-width, 100%), 100%);
+  max-height: min(var(--chat-image-viewer-target-height, 100%), 100%);
   width: auto;
   height: auto;
   object-fit: contain;
@@ -7859,6 +7865,24 @@ body.page-shop .shop-company-chat-btn:hover{
 
 .shop-company-chat-bubble.has-attachment-only{
   padding: 4px;
+}
+
+.shop-company-chat-row.is-user .shop-company-chat-bubble.has-attachment-only{
+  padding: 0;
+  overflow: hidden;
+}
+
+.shop-company-chat-row.is-user .shop-company-chat-bubble.has-attachment-only .shop-company-chat-attachment{
+  border-radius: inherit;
+}
+
+.shop-company-chat-row.is-agent .shop-company-chat-bubble.has-attachment-only{
+  padding: 0;
+  overflow: hidden;
+}
+
+.shop-company-chat-row.is-agent .shop-company-chat-bubble.has-attachment-only .shop-company-chat-attachment{
+  border-radius: inherit;
 }
 
 .shop-company-chat-status{
@@ -9297,6 +9321,13 @@ body.page-shop.shop-company-chat-open{
   }
 
   .shop-company-chat-modal__body .chat-attach-preview-overlay{
+    padding: 10px;
+    border-radius: 0;
+  }
+
+  .shop-company-chat-modal__body .chat-image-viewer-overlay{
+    position: absolute;
+    inset: 0;
     padding: 10px;
     border-radius: 0;
   }

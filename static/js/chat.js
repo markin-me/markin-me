@@ -2366,6 +2366,64 @@
     playFallbackMessageAlertTone();
   }
 
+  function playOutgoingMessageSendTone() {
+    const ctx = ensureMessageAlertAudioContext();
+    if (!ctx) return;
+
+    const scheduleTone = () => {
+      try {
+        const startAt = ctx.currentTime + 0.002;
+        const master = ctx.createGain();
+        master.gain.setValueAtTime(0.0001, startAt);
+        master.gain.exponentialRampToValueAtTime(0.06, startAt + 0.012);
+        master.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.17);
+        master.connect(ctx.destination);
+
+        const oscA = ctx.createOscillator();
+        const gainA = ctx.createGain();
+        oscA.type = "triangle";
+        oscA.frequency.setValueAtTime(1320, startAt);
+        oscA.frequency.exponentialRampToValueAtTime(1680, startAt + 0.08);
+        gainA.gain.setValueAtTime(1, startAt);
+        gainA.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.11);
+        oscA.connect(gainA);
+        gainA.connect(master);
+        oscA.start(startAt);
+        oscA.stop(startAt + 0.12);
+
+        const oscB = ctx.createOscillator();
+        const gainB = ctx.createGain();
+        oscB.type = "sine";
+        oscB.frequency.setValueAtTime(1760, startAt + 0.05);
+        oscB.frequency.exponentialRampToValueAtTime(1480, startAt + 0.145);
+        gainB.gain.setValueAtTime(0.0001, startAt + 0.045);
+        gainB.gain.exponentialRampToValueAtTime(0.7, startAt + 0.072);
+        gainB.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.17);
+        oscB.connect(gainB);
+        gainB.connect(master);
+        oscB.start(startAt + 0.045);
+        oscB.stop(startAt + 0.18);
+      } catch {}
+    };
+
+    try {
+      if (ctx.state === "running") {
+        messageAlertAudioUnlocked = true;
+        scheduleTone();
+        return;
+      }
+      const resumePromise = ctx.resume();
+      if (resumePromise && typeof resumePromise.then === "function") {
+        resumePromise
+          .then(() => {
+            messageAlertAudioUnlocked = true;
+            scheduleTone();
+          })
+          .catch(() => {});
+      }
+    } catch {}
+  }
+
   function showIncomingMessageBrowserNotification(title, body) {
     if (!("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
@@ -6117,6 +6175,7 @@
     hideMessageContextMenu();
     renderMessages({ forceScrollBottom: true, smoothScroll: true });
     applyClientFilter();
+    playOutgoingMessageSendTone();
     return true;
   }
 
@@ -6179,6 +6238,63 @@
     );
   }
 
+  function clearMessageImageViewerLayout() {
+    if (!dom.center.imageViewerOverlay) return;
+    dom.center.imageViewerOverlay.style.removeProperty("--chat-image-viewer-max-width");
+    dom.center.imageViewerOverlay.style.removeProperty("--chat-image-viewer-max-height");
+    dom.center.imageViewerOverlay.style.removeProperty("--chat-image-viewer-target-width");
+    dom.center.imageViewerOverlay.style.removeProperty("--chat-image-viewer-target-height");
+  }
+
+  function updateMessageImageViewerLayout() {
+    const overlay = dom.center.imageViewerOverlay;
+    const image = dom.center.imageViewerImage;
+    if (!isMessageImageViewerOpen()) return;
+    if (!overlay || !overlay.isConnected || !image) return;
+
+    const naturalWidth = Number(image.naturalWidth || 0);
+    const naturalHeight = Number(image.naturalHeight || 0);
+    if (
+      !Number.isFinite(naturalWidth)
+      || !Number.isFinite(naturalHeight)
+      || naturalWidth <= 0
+      || naturalHeight <= 0
+    ) {
+      return;
+    }
+
+    const overlayRect = overlay.getBoundingClientRect();
+    const overlayWidth = Number((overlayRect && overlayRect.width) || 0);
+    const overlayHeight = Number((overlayRect && overlayRect.height) || 0);
+    const viewportWidth = overlayWidth > 0
+      ? overlayWidth
+      : Math.max(
+        Number(window.innerWidth || 0),
+        Number((document.documentElement && document.documentElement.clientWidth) || 0)
+      );
+    const viewportHeight = overlayHeight > 0
+      ? overlayHeight
+      : Math.max(
+        Number(window.innerHeight || 0),
+        Number((document.documentElement && document.documentElement.clientHeight) || 0)
+      );
+    if (!viewportWidth || !viewportHeight) return;
+
+    const compact = viewportWidth <= 768;
+    const padding = compact ? 12 : 18;
+    const closeButtonReserve = compact ? 18 : 24;
+    const maxWidth = Math.max(220, viewportWidth - (padding * 2));
+    const maxHeight = Math.max(180, viewportHeight - (padding * 2) - closeButtonReserve);
+    const scale = Math.min(maxWidth / naturalWidth, maxHeight / naturalHeight, 1);
+    const targetWidth = Math.max(160, Math.round(naturalWidth * scale));
+    const targetHeight = Math.max(120, Math.round(naturalHeight * scale));
+
+    overlay.style.setProperty("--chat-image-viewer-max-width", maxWidth + "px");
+    overlay.style.setProperty("--chat-image-viewer-max-height", maxHeight + "px");
+    overlay.style.setProperty("--chat-image-viewer-target-width", targetWidth + "px");
+    overlay.style.setProperty("--chat-image-viewer-target-height", targetHeight + "px");
+  }
+
   function closeMessageImageViewer() {
     if (!dom.center.imageViewerOverlay) return;
     dom.center.imageViewerOverlay.classList.add("hidden");
@@ -6186,16 +6302,21 @@
     if (dom.center.imageViewerImage) {
       dom.center.imageViewerImage.removeAttribute("src");
     }
+    clearMessageImageViewerLayout();
   }
 
   function openMessageImageViewer(imageSrc, imageAlt = "") {
     if (!dom.center.imageViewerOverlay || !dom.center.imageViewerImage) return false;
     const src = String(imageSrc || "").trim();
     if (!src) return false;
+    clearMessageImageViewerLayout();
     dom.center.imageViewerImage.src = src;
     dom.center.imageViewerImage.alt = String(imageAlt || "Image preview");
     dom.center.imageViewerOverlay.classList.remove("hidden");
     dom.center.imageViewerOverlay.setAttribute("aria-hidden", "false");
+    if (dom.center.imageViewerImage.complete) {
+      updateMessageImageViewerLayout();
+    }
     return true;
   }
 
@@ -6214,6 +6335,12 @@
       if (event.target !== overlay) return;
       closeMessageImageViewer();
     });
+
+    if (dom.center.imageViewerImage) {
+      dom.center.imageViewerImage.addEventListener("load", () => {
+        updateMessageImageViewerLayout();
+      });
+    }
   }
 
   function renderAttachPreview() {
@@ -6403,6 +6530,7 @@
       hideMessageContextMenu();
       renderMessages({ forceScrollBottom: true, smoothScroll: true });
       applyClientFilter();
+      playOutgoingMessageSendTone();
     }
     return sent;
   }
@@ -6683,6 +6811,7 @@
     window.addEventListener("resize", () => {
       hideMessageContextMenu();
       hideClientContextMenu();
+      if (isMessageImageViewerOpen()) updateMessageImageViewerLayout();
     });
     window.addEventListener("scroll", () => {
       hideMessageContextMenu();
