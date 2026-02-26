@@ -3384,7 +3384,7 @@ optionGroups.forEach((group) => {
     desiredQty,
     {
       showToastOnOut = true,
-      refreshOnOut = true,
+      refreshOnOut = false,
       variantOverrides = null,
     } = {}
   ) {
@@ -4659,7 +4659,7 @@ optionGroups.forEach((group) => {
       const check = await checkStockForItemsPayload(payload, {
         showToastOnOut,
         toastMessage: "\u041d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
-      refreshOnOut: true,
+      refreshOnOut: false,
       });
       return check.available;
     }
@@ -5204,7 +5204,7 @@ optionGroups.forEach((group) => {
             const draftCheck = await checkStockForItemsPayload(payload, {
               showToastOnOut: true,
               toastMessage: "\u041d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
-      refreshOnOut: true,
+      refreshOnOut: false,
             });
             if (!draftCheck.available) return;
           } catch (e) {
@@ -5923,7 +5923,7 @@ optionGroups.forEach((group) => {
             const draftCheck = await checkStockForItemsPayload(payload, {
               showToastOnOut: true,
               toastMessage: "\u041d\u0435\u0442 \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438",
-      refreshOnOut: true,
+      refreshOnOut: false,
             });
             if (!draftCheck.available) return;
           } catch (e) {
@@ -8340,7 +8340,7 @@ function renderSheetAddressList() {
       if (token && a.id) {
         try {
           await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
-          await refreshAddressState();
+          await refreshAddressState({ force: true });
           renderSheetAddressList();
         } catch (err) {
           alert("Не удалось удалить адрес");
@@ -8380,7 +8380,7 @@ function renderSheetAddressList() {
       if (token && pendingAddress.id) {
         try {
           await apiJson(`/api/public/me/addresses/${pendingAddress.id}/default`, { method: "PUT" });
-          await refreshAddressState();
+          await refreshAddressState({ force: true });
           updateAddressChip();
         } catch (e) {
           alert("Не удалось выбрать адрес");
@@ -8792,7 +8792,7 @@ function renderSheetAddressList() {
         } else {
           await apiJson("/api/public/me/addresses", { method: "POST", body: { ...payload, is_default: 1 } });
         }
-        await refreshAddressState();
+        await refreshAddressState({ force: true });
       } else {
         // guest
         saveAddressDraft(payload);
@@ -8899,16 +8899,26 @@ function renderSheetAddressList() {
     }
   }
 
-  async function fetchMeSafe() {
+  async function fetchMeSafe(opts = {}) {
+    const force = !!opts?.force;
     const token = getCustomerToken();
     if (!token) return null;
+    const cached = !force ? getCustomerCache() : null;
+    if (cached) return cached;
     try {
-      const json = await apiJson("/api/public/me");
-      if (json.customer) {
-        setCustomerCache(json.customer);
-        return json.customer;
+      const boot = await apiJson("/api/public/me/bootstrap");
+      const payload = boot?.data || {};
+      if (payload.customer) {
+        setCustomerCache(payload.customer);
+        if (Array.isArray(payload.addresses)) {
+          state.addresses = payload.addresses;
+        }
+        return payload.customer;
       }
-      return null;
+      const json = await apiJson("/api/public/me");
+      if (!json.customer) return null;
+      setCustomerCache(json.customer);
+      return json.customer;
     } catch (e) {
       if (String(e.message || "").includes("UNAUTHORIZED")) {
         clearCustomer();
@@ -11896,6 +11906,8 @@ function renderSheetAddressList() {
     let authOptionsLoaded = false;
     let maxLoginEnabled = false;
     let tgLoginEnabled = false;
+    let settingsBootstrapLoaded = false;
+    let settingsBootstrapPromise = null;
 
     function applyAuthSettingsVisibility() {
       maxLinkRow.style.display = maxLoginEnabled ? "" : "none";
@@ -11918,6 +11930,54 @@ function renderSheetAddressList() {
       }
     }
 
+    async function loadSettingsBootstrap({ force = false } = {}) {
+      if (force) {
+        settingsBootstrapLoaded = false;
+        settingsBootstrapPromise = null;
+      }
+      if (settingsBootstrapLoaded) return true;
+      if (settingsBootstrapPromise) return settingsBootstrapPromise;
+
+      settingsBootstrapPromise = (async () => {
+        try {
+          const json = await apiJson("/api/public/me/settings-bootstrap");
+          const data = (json && json.data) || {};
+          const auth = data.auth_options || {};
+          const maxData = data.max || {};
+          const tgData = data.tg || {};
+          const phoneData = data.phone_verification || {};
+
+          maxLoginEnabled = Boolean(auth.max_login_enabled);
+          tgLoginEnabled = Boolean(auth.tg_login_enabled);
+          authOptionsLoaded = true;
+          applyAuthSettingsVisibility();
+
+          setMaxLinkUi({
+            linked: Boolean(maxData.linked),
+            maxUserId: maxData.max_user_id || "",
+          });
+          setTgLinkUi({
+            linked: Boolean(tgData.linked),
+            tgUserId: tgData.telegram_user_id || "",
+          });
+
+          phoneVerifyVerified = Boolean(phoneData.verified);
+          phoneVerifyAwaitingCode = !phoneVerifyVerified && Boolean(phoneData.expires_at);
+          setPhoneVerifyUi();
+
+          settingsBootstrapLoaded = true;
+          return true;
+        } catch {
+          settingsBootstrapLoaded = false;
+          return false;
+        } finally {
+          settingsBootstrapPromise = null;
+        }
+      })();
+
+      return settingsBootstrapPromise;
+    }
+
     let maxLinkBusy = false;
     let maxLinkPollTimer = null;
 
@@ -11936,6 +11996,10 @@ function renderSheetAddressList() {
     }
 
     async function loadMaxLinkStatus() {
+      if (!settingsBootstrapLoaded) {
+        const bootOk = await loadSettingsBootstrap();
+        if (bootOk) return Boolean(maxLinkHint.textContent && maxLinkHint.textContent.startsWith("ID:"));
+      }
       try {
         const json = await apiJson("/api/public/max/link-status");
         if (!json || json.ok === false) return false;
@@ -11956,6 +12020,7 @@ function renderSheetAddressList() {
       maxLinkHint.textContent = "\u041f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0430 \u0441\u0441\u044b\u043b\u043a\u0438\u2026";
       setMaxLinkUi({ linked: false });
       try {
+        settingsBootstrapLoaded = false;
         const json = await apiJson("/api/public/max/link-token", { method: "POST", body: {} });
         if (!json || json.ok === false || !json.link) {
           const errCode = json && json.error ? String(json.error) : "";
@@ -12035,6 +12100,10 @@ function renderSheetAddressList() {
     }
 
     async function loadTgLinkStatus() {
+      if (!settingsBootstrapLoaded) {
+        const bootOk = await loadSettingsBootstrap();
+        if (bootOk) return Boolean(tgLinkHint.textContent && tgLinkHint.textContent.startsWith("ID:"));
+      }
       try {
         const json = await apiJson("/api/public/tg/link-status");
         if (!json || json.ok === false) return false;
@@ -12055,6 +12124,7 @@ function renderSheetAddressList() {
       tgLinkHint.textContent = "\u041f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0430 \u0441\u0441\u044b\u043b\u043a\u0438\u2026";
       setTgLinkUi({ linked: false });
       try {
+        settingsBootstrapLoaded = false;
         const json = await apiJson("/api/public/tg/link-token", { method: "POST", body: {} });
         if (!json || json.ok === false || !json.link) {
           const errCode = json && json.error ? String(json.error) : "";
@@ -12166,6 +12236,10 @@ function renderSheetAddressList() {
     }
 
     async function loadPhoneVerifyStatus() {
+      if (!settingsBootstrapLoaded) {
+        const bootOk = await loadSettingsBootstrap();
+        if (bootOk) return;
+      }
       try {
         const json = await apiJson("/api/public/phone-verification/status");
         const verified = Boolean(json && json.data && json.data.verified);
@@ -12215,6 +12289,7 @@ function renderSheetAddressList() {
       phoneVerifyBusy = true;
       setPhoneVerifyUi();
       try {
+        settingsBootstrapLoaded = false;
         const json = await apiJson("/api/public/phone-verification/send", { method: "POST", body: {} });
         if (json && json.ok !== false) {
           phoneVerifyAwaitingCode = true;
@@ -12375,18 +12450,21 @@ function renderSheetAddressList() {
         loadCustomerDiscounts().then(renderCustomerDiscounts);
       }
       if (tab === "settings") {
-        if (!authOptionsLoaded) {
-          loadAuthSettingsVisibility().then(() => {
-            if (maxLoginEnabled) loadMaxLinkStatus();
-            if (tgLoginEnabled) loadTgLinkStatus();
-            if (maxLoginEnabled || tgLoginEnabled) loadPhoneVerifyStatus();
-          });
-        } else {
+        loadSettingsBootstrap().then((ok) => {
+          if (ok) return;
+          if (!authOptionsLoaded) {
+            loadAuthSettingsVisibility().then(() => {
+              if (maxLoginEnabled) loadMaxLinkStatus();
+              if (tgLoginEnabled) loadTgLinkStatus();
+              if (maxLoginEnabled || tgLoginEnabled) loadPhoneVerifyStatus();
+            });
+            return;
+          }
           applyAuthSettingsVisibility();
           if (maxLoginEnabled) loadMaxLinkStatus();
           if (tgLoginEnabled) loadTgLinkStatus();
           if (maxLoginEnabled || tgLoginEnabled) loadPhoneVerifyStatus();
-        }
+        });
       }
     }
 
@@ -12459,7 +12537,7 @@ function renderSheetAddressList() {
               try {
                 await apiJson(`/api/public/me/addresses/${a.id}/default`, { method: "PUT" });
                 await reloadAddresses();
-                await refreshAddressState();
+                await refreshAddressState({ force: true });
               } catch (e) {
                 alert("Не удалось изменить основной адрес");
               }
@@ -12487,7 +12565,7 @@ function renderSheetAddressList() {
             try {
               await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
               await reloadAddresses();
-              await refreshAddressState();
+              await refreshAddressState({ force: true });
             } catch (e) {
               alert("Не удалось удалить адрес");
             }
@@ -13029,7 +13107,7 @@ function renderSheetAddressList() {
           }
           closeProfileAddressForm();
           await reloadAddresses();
-          await refreshAddressState();
+          await refreshAddressState({ force: true });
         } catch (e) {
           alert(profileEditingId ? "Не удалось обновить адрес" : "Не удалось добавить адрес");
         } finally {

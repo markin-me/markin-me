@@ -42,7 +42,7 @@ function createOrdersEventsHub() {
   function getChanges(tenantId, storeId, since) {
     const channel = getChannel(tenantId, storeId);
     const lastId = Number(since || 0);
-    if (!Number.isFinite(lastId) || lastId <= 0) return [];
+    if (!Number.isFinite(lastId) || lastId <= 0) return channel.log.slice();
     return channel.log.filter((evt) => evt.id > lastId);
   }
 

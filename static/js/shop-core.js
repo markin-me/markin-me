@@ -337,6 +337,9 @@
 
   const CUSTOMER_TOKEN_KEY = `shop_customer_token_t${tenantId}`;
   const CUSTOMER_CACHE_KEY = `shop_customer_cache_t${tenantId}`;
+  let meBootstrapPromise = null;
+  let meBootstrapToken = "";
+  let meBootstrapLoaded = false;
 
   // -----------------------------
   // Format helpers
@@ -652,6 +655,9 @@
     setCustomerToken("");
     setCustomerCache(null);
     resetFavoritesCache();
+    meBootstrapPromise = null;
+    meBootstrapToken = "";
+    meBootstrapLoaded = false;
   }
 
   // -----------------------------
@@ -726,6 +732,10 @@
   let stockEventsSource = null;
   let stockEventsStoreId = null;
   let stockEventsReconnectTimer = null;
+  let stockEventsWaitLoopStarted = false;
+  let stockEventsWaitLoopToken = 0;
+  let stockEventsWaitSupported = true;
+  let stockEventsCursor = 0;
   let stockRefreshDebounceTimer = null;
   let stockRefreshInFlight = false;
   let stockRefreshPending = false;
@@ -921,11 +931,6 @@
     }
     stockRefreshInFlight = true;
     try {
-      const activeCategoryId = Number(state.activeCategoryId || 0);
-      if (Number.isFinite(activeCategoryId) && activeCategoryId > 0) {
-        await loadProductsForCategory(activeCategoryId, { lite: false });
-      }
-
       const openedProductId = Number(openProductCtx?.productId || 0);
       if (Number.isFinite(openedProductId) && openedProductId > 0) {
         try {
@@ -943,7 +948,6 @@
 
       await warmupCartProducts();
       pruneUnavailableCartItems();
-      syncCartUiAfterStateChange();
     } catch (e) {
       console.warn("Stock sync refresh failed:", reason, e);
     } finally {
@@ -958,7 +962,88 @@
   function ensurePublicStockEventsConnection() {
     const currentStoreId = Number(getActiveStoreId() || 0) || 1;
     stockEventsStoreId = currentStoreId;
-    // Long-poll mode.
+    startPublicStockEventsWaitLoop();
+  }
+
+  async function waitForPublicStockEventsChange() {
+    if (!stockEventsWaitSupported) {
+      return { changed: false, cursor: Number(stockEventsCursor || 0) || 0 };
+    }
+    const qs = new URLSearchParams({
+      since: String(Number(stockEventsCursor || 0) || 0),
+      timeout_ms: "20000",
+      _ts: String(Date.now()),
+    });
+    const json = await apiJson(`/api/public/changes/wait?${qs.toString()}`);
+    const data = json?.data || {};
+    const nextCursor = Number(data.cursor || 0);
+    return {
+      changed: data.changed === true,
+      cursor: Number.isFinite(nextCursor) && nextCursor >= 0 ? nextCursor : Number(stockEventsCursor || 0) || 0,
+    };
+  }
+
+  async function fetchPublicStockEventsSince(sinceCursor) {
+    const since = Number(sinceCursor || 0);
+    const qs = new URLSearchParams({
+      since: String(Number.isFinite(since) && since > 0 ? since : 0),
+      _ts: String(Date.now()),
+    });
+    const json = await apiJson(`/api/public/changes?${qs.toString()}`);
+    const events = Array.isArray(json?.data) ? json.data : [];
+    return events;
+  }
+
+  async function applyStockChangedEvent(evtData) {
+    const data = evtData && typeof evtData === "object" ? evtData : {};
+    const stockLevels = extractStockLevelsFromPayload(data);
+    if (stockLevels.length) {
+      mergeStockLevels(stockLevels, "stock_event");
+      pruneUnavailableCartItems();
+      return;
+    }
+
+    const productIds = Array.isArray(data.product_ids)
+      ? data.product_ids.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+      : [];
+    if (!productIds.length) return;
+    await refreshProductsByIds(productIds);
+    pruneUnavailableCartItems();
+  }
+
+  function startPublicStockEventsWaitLoop() {
+    if (stockEventsWaitLoopStarted) return;
+    stockEventsWaitLoopStarted = true;
+    stockEventsWaitLoopToken += 1;
+    const token = stockEventsWaitLoopToken;
+
+    (async function runWaitLoop() {
+      while (stockEventsWaitLoopStarted && token === stockEventsWaitLoopToken) {
+        if (!stockEventsWaitSupported) {
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+          continue;
+        }
+        try {
+          const prevCursor = Number(stockEventsCursor || 0) || 0;
+          const waited = await waitForPublicStockEventsChange();
+          if (!stockEventsWaitLoopStarted || token !== stockEventsWaitLoopToken) break;
+          stockEventsCursor = Number(waited.cursor || stockEventsCursor || 0) || 0;
+          if (!waited.changed) continue;
+
+          const events = await fetchPublicStockEventsSince(prevCursor);
+          for (const evt of events) {
+            const eventName = String(evt?.event || "").toLowerCase();
+            if (eventName !== "stock.changed") continue;
+            await applyStockChangedEvent(evt?.data || {});
+          }
+        } catch (e) {
+          if (e?.httpStatus === 404 || e?.httpStatus === 405 || e?.httpStatus === 410 || String(e?.message || "") === "EVENTS_UNAVAILABLE") {
+            stockEventsWaitSupported = false;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+        }
+      }
+    })().catch(() => {});
   }
 
   function bindStockSyncWakeupHandlers() {
@@ -980,6 +1065,10 @@
         clearTimeout(stockEventsReconnectTimer);
         stockEventsReconnectTimer = null;
       }
+    });
+    document.addEventListener("tenantStoreChanged", () => {
+      stockEventsCursor = 0;
+      stockEventsWaitSupported = true;
     });
   }
 
@@ -2291,7 +2380,9 @@
   let __cartStockRecheckTimer = null;
   let __cartStockRecheckSnapshot = [];
   let __cartStockRecheckOpts = {};
+  const ENABLE_LIVE_CART_STOCK_RECHECK = false;
   function queueCartStockRecheck(previousCartSnapshot, opts = {}) {
+    if (!ENABLE_LIVE_CART_STOCK_RECHECK) return;
     __cartStockRecheckSnapshot = cloneCartState(previousCartSnapshot || []);
     __cartStockRecheckOpts = { ...(opts || {}) };
     const seq = ++__cartStockRecheckSeq;
@@ -4374,6 +4465,52 @@ function showProductView() {
     }
   }
 
+  function invalidateMeBootstrap() {
+    meBootstrapPromise = null;
+    meBootstrapLoaded = false;
+    meBootstrapToken = "";
+  }
+
+  async function loadMeBootstrap({ force = false } = {}) {
+    const token = getCustomerToken();
+    if (!token) return null;
+
+    if (force) invalidateMeBootstrap();
+
+    if (meBootstrapLoaded && meBootstrapToken === token) {
+      return {
+        customer: getCustomerCache(),
+        addresses: Array.isArray(state.addresses) ? state.addresses : [],
+      };
+    }
+    if (meBootstrapPromise) return meBootstrapPromise;
+
+    meBootstrapPromise = (async () => {
+      try {
+        const json = await apiJson("/api/public/me/bootstrap");
+        const payload = json?.data || {};
+        const customer = payload?.customer || null;
+        const addresses = Array.isArray(payload?.addresses) ? payload.addresses : [];
+        if (customer) setCustomerCache(customer);
+        state.addresses = addresses;
+        meBootstrapLoaded = true;
+        meBootstrapToken = token;
+        return { customer, addresses };
+      } catch (e) {
+        if (String(e?.message || "").includes("UNAUTHORIZED")) {
+          clearCustomer();
+          state.addresses = [];
+          return null;
+        }
+        throw e;
+      } finally {
+        meBootstrapPromise = null;
+      }
+    })();
+
+    return meBootstrapPromise;
+  }
+
   function pickDefaultAddress(list) {
     const arr = Array.isArray(list) ? list : [];
     return arr.find(a => Number(a.is_default) === 1) || arr[0] || null;
@@ -4381,33 +4518,38 @@ function showProductView() {
 
   async function syncDraftAddressToAccountIfNeeded() {
     const token = getCustomerToken();
-    if (!token) return;
-
-    const me = await fetchMeSafe();
-    if (!me) return;
+    if (!token) return false;
+    const cachedCustomer = getCustomerCache();
+    if (!cachedCustomer) return false;
 
     const draft = loadAddressDraft();
-    if (!draft) return;
+    if (!draft) return false;
 
     const payload = normalizeAddressPayload(draft);
-    if (!payload.street || !payload.house) return;
+    if (!payload.street || !payload.house) return false;
 
     try {
       await apiJson("/api/public/me/addresses", { method: "POST", body: { ...payload, is_default: 1 } });
       clearAddressDraft();
+      return true;
     } catch (e) {
       // ?? ????????? ?????????
       console.error(e);
+      return false;
     }
   }
 
-  async function refreshAddressState() {
+  async function refreshAddressState(opts = {}) {
+    const force = !!opts?.force;
     const token = getCustomerToken();
     if (token) {
-      const me = await fetchMeSafe();
+      const boot = await loadMeBootstrap({ force });
+      const me = boot?.customer || null;
       if (me) {
-        await syncDraftAddressToAccountIfNeeded();
-        await reloadAddressesFromServer();
+        const syncedDraft = await syncDraftAddressToAccountIfNeeded();
+        if (syncedDraft) {
+          await loadMeBootstrap({ force: true });
+        }
         const sel = pickDefaultAddress(state.addresses);
         setSelectedAddress(sel ? sel : null);
         return;
@@ -4746,7 +4888,7 @@ function showProductView() {
         if (token && a.id) {
           try {
             await apiJson(`/api/public/me/addresses/${a.id}`, { method: "DELETE" });
-            await refreshAddressState();
+            await refreshAddressState({ force: true });
             if (state._addressPendingAddress && isSameAddressRef(a, state._addressPendingAddress)) {
               state._addressPendingAddress = null;
             }
@@ -4940,7 +5082,7 @@ function showProductView() {
     if (token && pendingAddress.id) {
       try {
         await apiJson(`/api/public/me/addresses/${pendingAddress.id}/default`, { method: "PUT" });
-        await refreshAddressState();
+        await refreshAddressState({ force: true });
       } catch (e) {
         alert("Не удалось выбрать адрес");
         return;
@@ -5217,7 +5359,7 @@ async function initAddresses() {
               body: { ...payload, is_default: 1 },
             });
           }
-          await refreshAddressState();
+          await refreshAddressState({ force: true });
 
           // ????? ?????????? ? ???????? ?????
           if (state._addressFormBackMode === "profile") {

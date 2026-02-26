@@ -2632,6 +2632,103 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     }
   });
 
+  // GET /api/public/me/settings-bootstrap
+  // Combines profile settings-related statuses for lazy loading on Settings tab.
+  router.get('/me/settings-bootstrap', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const sessionToken = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, sessionToken);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const [tenantRows] = await db.query(
+        `SELECT max_login_enabled, tg_login_enabled
+         FROM ten_tenants
+         WHERE id=?
+         LIMIT 1`,
+        [tenantId]
+      );
+      const tenantRow = tenantRows[0] || {};
+      const maxLoginEnabled = Number(tenantRow.max_login_enabled || 0) === 1;
+      const tgLoginEnabled = Number(tenantRow.tg_login_enabled || 0) === 1;
+
+      const [rows] = await db.query(
+        `SELECT max_user_id, telegram_user_id, phone,
+                phone_verified_at, phone_verify_expires_at, updated_at
+         FROM cust_customers
+         WHERE tenant_id=? AND id=?
+         LIMIT 1`,
+        [tenantId, Number(customer.id)]
+      );
+      const row = rows[0] || {};
+      const maxUserId = String(row.max_user_id || '').trim();
+      const tgUserId = String(row.telegram_user_id || '').trim();
+
+      return res.json({
+        ok: true,
+        data: {
+          auth_options: {
+            max_login_enabled: maxLoginEnabled,
+            tg_login_enabled: tgLoginEnabled,
+          },
+          max: {
+            linked: !!maxUserId,
+            max_user_id: maxUserId || null,
+            phone: row.phone || null,
+            linked_at: row.updated_at || null,
+          },
+          tg: {
+            linked: !!tgUserId,
+            telegram_user_id: tgUserId || null,
+            phone: row.phone || null,
+            linked_at: row.updated_at || null,
+          },
+          phone_verification: {
+            verified: Boolean(row.phone_verified_at),
+            phone_verified_at: row.phone_verified_at || null,
+            expires_at: row.phone_verify_expires_at || null,
+          },
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // GET /api/public/me/bootstrap
+  // Returns customer profile + active addresses in one payload for first-page bootstrap.
+  router.get('/me/bootstrap', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const token = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, token);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const [addresses] = await db.query(
+        `SELECT
+           id, city, street, house, entrance, floor, apartment, comment,
+           is_default, is_active,
+           created_at, updated_at
+         FROM cust_customer_addresses
+         WHERE tenant_id=? AND customer_id=? AND is_active=1
+         ORDER BY is_default DESC, updated_at DESC, id DESC`,
+        [tenantId, customer.id]
+      );
+
+      return res.json({
+        ok: true,
+        data: {
+          customer,
+          addresses: Array.isArray(addresses) ? addresses : [],
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/tenant/chat-settings', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
