@@ -4996,6 +4996,499 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     }
   });
 
+  router.post('/products/batch/default-cart-config', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const ids = Array.isArray(req.body?.ids)
+        ? Array.from(new Set(req.body.ids.map(Number).filter((n) => Number.isFinite(n) && n > 0)))
+        : [];
+      if (!ids.length) return res.json({ ok: true, data: {} });
+      if (ids.length > 100) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+
+      const toNum = (v, fallback = 0) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const parseVariantValueNumber = (value) => {
+        const s = String(value ?? '').replace(',', '.');
+        const m = s.match(/-?\d+(?:\.\d+)?/);
+        return m ? Number(m[0]) : NaN;
+      };
+      const formatVariantValueLabel = (value, unitShortTitle) => {
+        const rawValue = str(value || '').trim();
+        const unit = str(unitShortTitle || '').trim();
+        if (!rawValue) return '';
+        if (!unit) return rawValue;
+        const hasLetters = /[a-zа-я]/i.test(rawValue);
+        return hasLetters ? rawValue : `${rawValue} ${unit}`;
+      };
+      const getSimpleVariantPrice = (basePrice, values, selectedIndex, discountTiers) => {
+        const price = Number(basePrice || 0);
+        const idx = Number(selectedIndex);
+        const list = Array.isArray(values) ? values : [];
+        if (!list.length || !Number.isFinite(idx) || idx < 0 || idx >= list.length) return price;
+        const baseValue = parseVariantValueNumber(list[0]);
+        const selectedValue = parseVariantValueNumber(list[idx]);
+        if (Number.isFinite(baseValue) && baseValue > 0 && Number.isFinite(selectedValue) && selectedValue > 0) {
+          let out = price * (selectedValue / baseValue);
+          const tiers = Array.isArray(discountTiers) ? discountTiers : [];
+          const tier = tiers.find((t) => Number(t.sort_order) === idx);
+          const discountPercent = Number(tier?.discount_percent || 0) || 0;
+          if (discountPercent !== 0) out = out * (1 - discountPercent / 100);
+          return out;
+        }
+        return price;
+      };
+
+      const [productRows] = await db.query(
+        `SELECT id, name, price, base_unit_id, base_qty, unit_id
+         FROM prod_products
+         WHERE tenant_id=? AND id IN (${ids.map(() => '?').join(',')})`,
+        [tenantId, ...ids]
+      );
+      const productsById = new Map(productRows.map((r) => [Number(r.id), r]));
+
+      const [pcsRows] = await db.query(
+        `SELECT id FROM prod_units WHERE tenant_id=? AND code='pcs' LIMIT 1`,
+        [tenantId]
+      );
+      const pcsUnitId = pcsRows.length ? Number(pcsRows[0].id) : 0;
+
+      const [ingredientRows] = await db.query(
+        `SELECT
+           i.product_id,
+           i.id,
+           i.ingredient_id,
+           i.quantity,
+           i.unit_id,
+           i.quantity_min,
+           i.quantity_max,
+           i.quantity_step,
+           i.price_override,
+           i.is_variable,
+           i.sort_order,
+           p.name AS ingredient_name,
+           p.photos_json AS ingredient_photos,
+           u.code AS unit_code,
+           u.title AS unit_title,
+           u.short_title AS unit_short_title,
+           pul.factor AS ingredient_pcs_factor
+         FROM prod_product_ingredients i
+         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+         JOIN prod_units u ON u.id=i.unit_id
+         LEFT JOIN prod_product_unit_links pul
+           ON pul.tenant_id=i.tenant_id
+          AND pul.product_id=i.ingredient_id
+          AND pul.base_unit_id=p.base_unit_id
+          AND pul.unit_id=?
+         WHERE i.tenant_id=? AND i.product_id IN (${ids.map(() => '?').join(',')})
+           AND (i.is_variable = 1 OR i.is_variable IS NULL)
+         ORDER BY i.product_id ASC, i.sort_order ASC, i.id ASC`,
+        [pcsUnitId || 0, tenantId, ...ids]
+      );
+      const ingredientsByProductId = new Map();
+      for (const r of ingredientRows) {
+        const pid = Number(r.product_id);
+        if (!ingredientsByProductId.has(pid)) ingredientsByProductId.set(pid, []);
+        r.ingredient_photos = safeJsonArray(r.ingredient_photos);
+        ingredientsByProductId.get(pid).push(r);
+      }
+
+      const [variantRows] = await db.query(
+        `SELECT
+           va.product_id,
+           vg.id,
+           vg.title,
+           vg.unit_id,
+           vg.values,
+           vg.default_value_index AS group_default_value_index,
+           va.default_value_index AS assignment_default_value_index,
+           u.code AS unit_code,
+           u.title AS unit_title,
+           u.short_title AS unit_short_title
+         FROM prod_variant_assignments va
+         JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
+         LEFT JOIN prod_units u ON u.id=vg.unit_id
+         WHERE va.tenant_id=?
+           AND va.product_id IN (${ids.map(() => '?').join(',')})
+           AND va.is_active=1 AND vg.is_active=1
+         ORDER BY va.product_id ASC, va.sort_order ASC, vg.sort_order ASC`,
+        [tenantId, ...ids]
+      );
+      const groupIds = Array.from(new Set(variantRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0)));
+      const tiersByGroupId = new Map();
+      if (groupIds.length) {
+        const [tiers] = await db.query(
+          `SELECT variant_group_id, min_quantity, discount_percent, sort_order
+           FROM prod_variant_discount_tiers
+           WHERE tenant_id=? AND variant_group_id IN (${groupIds.map(() => '?').join(',')})
+           ORDER BY variant_group_id ASC, sort_order ASC, min_quantity ASC`,
+          [tenantId, ...groupIds]
+        );
+        for (const t of tiers) {
+          const gid = Number(t.variant_group_id);
+          if (!tiersByGroupId.has(gid)) tiersByGroupId.set(gid, []);
+          tiersByGroupId.get(gid).push(t);
+        }
+      }
+      const variantsByProductId = new Map();
+      for (const v of variantRows) {
+        const pid = Number(v.product_id);
+        if (!variantsByProductId.has(pid)) variantsByProductId.set(pid, []);
+        const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
+        const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
+        variantsByProductId.get(pid).push({
+          id: Number(v.id),
+          title: str(v.title || ''),
+          unit_id: v.unit_id ? Number(v.unit_id) : null,
+          unit_code: str(v.unit_code || ''),
+          unit_title: str(v.unit_title || ''),
+          unit_short_title: str(v.unit_short_title || ''),
+          values: safeJsonArray(v.values),
+          default_value_index: assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
+          discount_tiers: tiersByGroupId.get(Number(v.id)) || [],
+        });
+      }
+
+      const [assignmentRows] = await db.query(
+        `SELECT
+           a.assign_id AS product_id,
+           a.id AS assignment_id,
+           a.group_id,
+           a.priority,
+           a.sort_order,
+           a.is_active,
+           a.selection_type AS assignment_selection_type,
+           a.min_select AS assignment_min_select,
+           a.max_select AS assignment_max_select,
+           g.title,
+           g.selection_type AS group_selection_type,
+           g.min_select AS group_min_select,
+           g.max_select AS group_max_select,
+           g.is_required,
+           g.out_of_stock_action,
+           g.is_active AS group_is_active
+         FROM prod_option_assignments a
+         JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id
+         WHERE a.tenant_id=?
+           AND a.assign_type='product'
+           AND a.assign_id IN (${ids.map(() => '?').join(',')})
+           AND a.is_active=1
+           AND g.is_active=1
+         ORDER BY a.assign_id ASC, a.sort_order ASC, a.id ASC`,
+        [tenantId, ...ids]
+      );
+
+      const assignmentsByProductId = new Map();
+      const optionGroupIds = new Set();
+      for (const r of assignmentRows) {
+        const pid = Number(r.product_id);
+        if (!assignmentsByProductId.has(pid)) assignmentsByProductId.set(pid, []);
+        assignmentsByProductId.get(pid).push({
+          assignment_id: Number(r.assignment_id),
+          group_id: Number(r.group_id),
+          title: str(r.title || ''),
+          selection_type: r.assignment_selection_type || r.group_selection_type || 'single',
+          min_select: r.assignment_min_select ?? r.group_min_select ?? 0,
+          max_select: r.assignment_max_select ?? r.group_max_select ?? null,
+          is_required: Number(r.is_required ?? 0) === 1,
+          is_active: Number(r.is_active || 0) === 1,
+          out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
+          priority: Number(r.priority || 0),
+          sort_order: Number(r.sort_order || 0),
+        });
+        optionGroupIds.add(Number(r.group_id));
+      }
+
+      const optionGroupDetailsById = new Map();
+      if (optionGroupIds.size > 0) {
+        const groupIdsArr = Array.from(optionGroupIds).filter((n) => Number.isFinite(n) && n > 0);
+        const [groupRows] = await db.query(
+          `SELECT id, title, selection_type, min_select, max_select, is_required, allow_variants, is_active
+           FROM prod_option_groups
+           WHERE tenant_id=? AND id IN (${groupIdsArr.map(() => '?').join(',')})`,
+          [tenantId, ...groupIdsArr]
+        );
+        const groupMetaById = new Map(groupRows.map((g) => [Number(g.id), g]));
+
+        const [itemRows] = await db.query(
+          `SELECT
+             i.id,
+             i.group_id,
+             i.target_product_id,
+             i.price_mode,
+             i.price_value,
+             i.qty_min,
+             i.qty_max,
+             i.is_active,
+             i.sort_order,
+             p.name AS product_name,
+             p.price AS product_price,
+             p.photos_json AS product_photos_json
+           FROM prod_option_items i
+           JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
+           LEFT JOIN prod_product_stocks ps
+             ON ps.tenant_id = p.tenant_id AND ps.store_id = ? AND ps.product_id = p.id
+           WHERE i.tenant_id=?
+             AND i.group_id IN (${groupIdsArr.map(() => '?').join(',')})
+             AND i.target_type='product'
+             AND i.is_active=1
+             AND p.is_active=1
+             AND p.site_visibility=1
+             AND (ps.qty IS NULL OR ps.qty > 0)
+           ORDER BY i.group_id ASC, i.sort_order ASC, i.id ASC`,
+          [storeId, tenantId, ...groupIdsArr]
+        );
+
+        const targetOptionProductIds = Array.from(new Set(
+          itemRows.map((r) => Number(r.target_product_id)).filter((n) => Number.isFinite(n) && n > 0)
+        ));
+        const optionVariantsByProductId = new Map();
+        if (targetOptionProductIds.length > 0) {
+          const [ovRows] = await db.query(
+            `SELECT
+               va.product_id,
+               vg.id,
+               vg.title,
+               vg.unit_id,
+               vg.values,
+               vg.default_value_index AS group_default_value_index,
+               va.default_value_index AS assignment_default_value_index,
+               u.code AS unit_code,
+               u.title AS unit_title,
+               u.short_title AS unit_short_title
+             FROM prod_variant_assignments va
+             JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
+             LEFT JOIN prod_units u ON u.id=vg.unit_id
+             WHERE va.tenant_id=?
+               AND va.product_id IN (${targetOptionProductIds.map(() => '?').join(',')})
+               AND va.is_active=1 AND vg.is_active=1
+             ORDER BY va.product_id ASC, va.sort_order ASC, vg.sort_order ASC`,
+            [tenantId, ...targetOptionProductIds]
+          );
+          const ovGroupIds = Array.from(new Set(ovRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0)));
+          const ovTiersByGroupId = new Map();
+          if (ovGroupIds.length) {
+            const [ovTiers] = await db.query(
+              `SELECT variant_group_id, min_quantity, discount_percent, sort_order
+               FROM prod_variant_discount_tiers
+               WHERE tenant_id=? AND variant_group_id IN (${ovGroupIds.map(() => '?').join(',')})
+               ORDER BY variant_group_id ASC, sort_order ASC, min_quantity ASC`,
+              [tenantId, ...ovGroupIds]
+            );
+            for (const t of ovTiers) {
+              const gid = Number(t.variant_group_id);
+              if (!ovTiersByGroupId.has(gid)) ovTiersByGroupId.set(gid, []);
+              ovTiersByGroupId.get(gid).push(t);
+            }
+          }
+          for (const v of ovRows) {
+            const pid = Number(v.product_id);
+            if (!optionVariantsByProductId.has(pid)) optionVariantsByProductId.set(pid, []);
+            const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
+            const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
+            optionVariantsByProductId.get(pid).push({
+              id: Number(v.id),
+              title: str(v.title || ''),
+              unit_id: v.unit_id ? Number(v.unit_id) : null,
+              unit_code: str(v.unit_code || ''),
+              unit_title: str(v.unit_title || ''),
+              unit_short_title: str(v.unit_short_title || ''),
+              values: safeJsonArray(v.values),
+              default_value_index: assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
+              discount_tiers: ovTiersByGroupId.get(Number(v.id)) || [],
+            });
+          }
+        }
+
+        const groupItems = new Map();
+        for (const item of itemRows) {
+          const gid = Number(item.group_id);
+          if (!groupItems.has(gid)) groupItems.set(gid, []);
+          const targetProductId = Number(item.target_product_id || 0);
+          const variants = optionVariantsByProductId.get(targetProductId) || [];
+          groupItems.get(gid).push({
+            id: Number(item.id),
+            target_product_id: targetProductId,
+            title: str(item.product_name || ''),
+            name: str(item.product_name || ''),
+            product_price: Number(item.product_price || 0),
+            price_mode: str(item.price_mode || 'from_target'),
+            price_value: Number(item.price_value || 0),
+            price: str(item.price_mode || '') === 'fixed'
+              ? Number(item.price_value || 0)
+              : Number(item.product_price || 0),
+            qty_min: Number(item.qty_min ?? 1),
+            qty_max: Number(item.qty_max ?? 1),
+            is_active: Number(item.is_active || 0) === 1,
+            product_photos_json: safeJsonArray(item.product_photos_json),
+            variants,
+          });
+        }
+
+        for (const gid of groupIdsArr) {
+          const meta = groupMetaById.get(Number(gid));
+          if (!meta) continue;
+          optionGroupDetailsById.set(Number(gid), {
+            group: {
+              id: Number(meta.id),
+              title: str(meta.title || ''),
+              selection_type: meta.selection_type || 'single',
+              min_select: meta.min_select ?? 0,
+              max_select: meta.max_select ?? null,
+              is_required: Number(meta.is_required ?? 0) === 1,
+              allow_variants: Number(meta.allow_variants ?? 0) === 1,
+              is_active: Number(meta.is_active || 0) === 1,
+            },
+            items: groupItems.get(Number(gid)) || [],
+          });
+        }
+      }
+
+      const result = {};
+      for (const pid of ids) {
+        const product = productsById.get(Number(pid));
+        if (!product) continue;
+        const variants = variantsByProductId.get(Number(pid)) || [];
+        const optionAssignments = assignmentsByProductId.get(Number(pid)) || [];
+        const ingredientsRaw = ingredientsByProductId.get(Number(pid)) || [];
+
+        let variantGroupId = null;
+        let variantValueIndex = null;
+        let variantLabel = '';
+        let variantUnitPrice = Number(product.price || 0);
+        const firstVariantGroup = Array.isArray(variants) && variants.length > 0 ? variants[0] : null;
+        const variantValues = Array.isArray(firstVariantGroup?.values) ? firstVariantGroup.values : [];
+        if (firstVariantGroup && variantValues.length > 0) {
+          const rawIdx = firstVariantGroup.default_value_index != null ? Number(firstVariantGroup.default_value_index) : 0;
+          const safeIdx = Number.isFinite(rawIdx) && rawIdx >= 0 && rawIdx < variantValues.length ? rawIdx : 0;
+          const valueLabel = formatVariantValueLabel(
+            variantValues[safeIdx],
+            firstVariantGroup.unit_short_title || firstVariantGroup.unit_code || firstVariantGroup.unit_title || ''
+          );
+          const groupTitle = str(firstVariantGroup.title || '').trim();
+          variantGroupId = Number(firstVariantGroup.id || 0) || null;
+          variantValueIndex = safeIdx;
+          variantLabel = groupTitle ? `${groupTitle}: ${valueLabel}` : valueLabel;
+          variantUnitPrice = getSimpleVariantPrice(
+            Number(product.price || 0),
+            variantValues,
+            safeIdx,
+            firstVariantGroup.discount_tiers || []
+          );
+        }
+
+        const selectedOptionItems = [];
+        const activeAssignments = optionAssignments.filter((a) => Number(a?.is_active ?? 1) === 1);
+        activeAssignments.forEach((assignment) => {
+          const groupId = Number(assignment?.group_id || 0);
+          if (!Number.isFinite(groupId) || groupId <= 0) return;
+          const details = optionGroupDetailsById.get(groupId) || null;
+          if (!details) return;
+          const groupMeta = details.group || {};
+          const items = (Array.isArray(details.items) ? details.items : [])
+            .filter((item) => Number(item?.is_active ?? 1) === 1);
+          if (!items.length) return;
+
+          const selectionType = str(groupMeta.selection_type || assignment.selection_type || 'single').trim().toLowerCase() || 'single';
+          const minSelect = Number(groupMeta.min_select ?? assignment.min_select ?? 0);
+          const requiredSingle = selectionType === 'single' && (Number(groupMeta.is_required || 0) === 1 || minSelect > 0);
+
+          const addDefaultOptionItem = (item, qty) => {
+            const safeQty = Math.max(1, Number(qty || 1));
+            const targetProductId = Number(item?.target_product_id || item?.product_id || 0);
+            const out = {
+              id: Number(item.id),
+              title: str(item.title || item.name || ''),
+              name: str(item.name || item.title || ''),
+              price: Number(item.price || 0),
+              qty: safeQty,
+              quantity: safeQty,
+              target_product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
+              product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
+            };
+
+            const itemVariants = Array.isArray(item?.variants) ? item.variants : [];
+            const firstItemVariantGroup = itemVariants.length ? itemVariants[0] : null;
+            const itemVariantValues = Array.isArray(firstItemVariantGroup?.values) ? firstItemVariantGroup.values : [];
+            if (firstItemVariantGroup && itemVariantValues.length > 0) {
+              const rawVariantIdx = firstItemVariantGroup.default_value_index != null
+                ? Number(firstItemVariantGroup.default_value_index)
+                : 0;
+              const safeVariantIdx = Number.isFinite(rawVariantIdx) && rawVariantIdx >= 0 && rawVariantIdx < itemVariantValues.length
+                ? rawVariantIdx
+                : 0;
+              const variantUnitPriceForOption = getSimpleVariantPrice(
+                Number(out.price || 0),
+                itemVariantValues,
+                safeVariantIdx,
+                firstItemVariantGroup.discount_tiers || []
+              );
+              out.variant_group_id = Number(firstItemVariantGroup.id || 0) || null;
+              out.variant_value_index = safeVariantIdx;
+              out.variant_label = formatVariantValueLabel(
+                itemVariantValues[safeVariantIdx],
+                firstItemVariantGroup.unit_short_title || firstItemVariantGroup.unit_code || firstItemVariantGroup.unit_title || ''
+              );
+              out.variant_price_diff = Number(variantUnitPriceForOption || 0) - Number(out.price || 0);
+              out.price = Number(variantUnitPriceForOption || 0);
+            }
+
+            selectedOptionItems.push(out);
+          };
+
+          if (selectionType === 'single') {
+            if (requiredSingle) addDefaultOptionItem(items[0], 1);
+            return;
+          }
+
+          if (selectionType === 'multiple_group' || selectionType === 'multiple_item' || selectionType === 'multiple') {
+            items.forEach((item) => {
+              const qtyMin = Number(item?.qty_min ?? 0);
+              if (qtyMin > 0) addDefaultOptionItem(item, qtyMin);
+            });
+          }
+        });
+
+        const ingredients = ingredientsRaw
+          .map((ing) => {
+            const ingredientId = Number(ing?.ingredient_id || ing?.id || 0);
+            if (!Number.isFinite(ingredientId) || ingredientId <= 0) return null;
+            const quantity = Number(ing?.quantity ?? ing?.qty ?? 0);
+            if (!(quantity > 0)) return null;
+            return {
+              ingredient_id: ingredientId,
+              ingredient_name: str(ing?.ingredient_name || ing?.name || ''),
+              name: str(ing?.name || ing?.ingredient_name || ''),
+              quantity,
+              qty: quantity,
+              unit_id: toNum(ing?.unit_id, null),
+              unit_label: str(ing?.unit_short_title || ing?.unit_label || ing?.unit_title || ing?.unit_code || ing?.unit || ''),
+              unit: str(ing?.unit || ing?.unit_short_title || ing?.unit_label || ing?.unit_title || ing?.unit_code || ''),
+            };
+          })
+          .filter(Boolean);
+
+        result[pid] = {
+          option_item_ids: selectedOptionItems.map((it) => Number(it.id)).filter((id) => Number.isFinite(id) && id > 0),
+          option_items: selectedOptionItems,
+          ingredients,
+          ingredient_price_diff: 0,
+          variant_group_id: variantGroupId,
+          variant_value_index: variantValueIndex,
+          variant_label: variantLabel,
+          variant_unit_price: Number(variantUnitPrice || 0),
+        };
+      }
+
+      res.json({ ok: true, data: result });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.get('/products/:id/option-assignments', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);

@@ -745,6 +745,11 @@
   let autoAddLoaded = false;
   let upsellLoadPromise = null;
   let upsellLoaded = false;
+  const upsellDefaultConfigCache = new Map();
+  let upsellConfigObserver = null;
+  let upsellConfigObserverRoot = null;
+  let upsellConfigBatchTimer = null;
+  const upsellConfigBatchPendingIds = new Set();
 
   function normalizeStockQty(rawQty) {
     if (rawQty === undefined) return undefined;
@@ -7971,9 +7976,135 @@ function updateCartBadge() {
       upsellLoaded = false;
     } finally {
       upsellLoadPromise = null;
-    }
+      }
     })();
     return upsellLoadPromise;
+  }
+
+  function getUpsellDefaultConfigCacheEntry(productId) {
+    const pid = Number(productId || 0);
+    if (!Number.isFinite(pid) || pid <= 0) return null;
+    return upsellDefaultConfigCache.get(pid) || null;
+  }
+
+  function warmUpsellDefaultConfig(productId, sourceProduct) {
+    const pid = Number(productId || 0);
+    if (!Number.isFinite(pid) || pid <= 0) return null;
+    const cached = getUpsellDefaultConfigCacheEntry(pid);
+    if (cached && cached.promise) return cached.promise;
+
+    const promise = buildUpsellDefaultCartConfig(pid, sourceProduct)
+      .then((cfg) => {
+        upsellDefaultConfigCache.set(pid, { promise: Promise.resolve(cfg), data: cfg, ts: Date.now() });
+        return cfg;
+      })
+      .catch((err) => {
+        upsellDefaultConfigCache.delete(pid);
+        throw err;
+      });
+
+    upsellDefaultConfigCache.set(pid, { promise, data: null, ts: Date.now() });
+    return promise;
+  }
+
+  function queueUpsellConfigBatch(productIds, productsById, opts = {}) {
+    const ids = Array.isArray(productIds)
+      ? Array.from(new Set(productIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)))
+      : [];
+    if (!ids.length) return;
+
+    const unresolved = ids.filter((id) => !upsellDefaultConfigCache.has(id));
+    if (!unresolved.length) return;
+    unresolved.forEach((id) => upsellConfigBatchPendingIds.add(id));
+
+    const flush = async () => {
+      const batchIds = Array.from(upsellConfigBatchPendingIds).filter((id) => !upsellDefaultConfigCache.has(id));
+      upsellConfigBatchPendingIds.clear();
+      if (!batchIds.length) return;
+
+      const byId = productsById instanceof Map ? productsById : new Map();
+      let batchData = {};
+      try {
+        const json = await apiJson('/api/public/products/batch/default-cart-config', {
+          method: 'POST',
+          body: { ids: batchIds },
+        });
+        batchData = (json && typeof json.data === "object" && json.data) ? json.data : {};
+      } catch {
+        batchData = {};
+      }
+
+      await Promise.all(batchIds.map(async (pid) => {
+        const key = String(pid);
+        const cfg = batchData[key] || batchData[pid] || null;
+        if (cfg && typeof cfg === "object") {
+          upsellDefaultConfigCache.set(pid, {
+            promise: Promise.resolve(cfg),
+            data: cfg,
+            ts: Date.now(),
+          });
+          return;
+        }
+        const src = byId.get(pid) || null;
+        try {
+          await warmUpsellDefaultConfig(pid, src);
+        } catch {}
+      }));
+    };
+
+    if (upsellConfigBatchTimer) clearTimeout(upsellConfigBatchTimer);
+    const delayMs = Math.max(0, Number(opts.delayMs ?? 80));
+    upsellConfigBatchTimer = setTimeout(() => {
+      upsellConfigBatchTimer = null;
+      flush().catch(() => {});
+    }, delayMs);
+  }
+
+  function ensureUpsellConfigObserver(scrollEl, productsById) {
+    if (!scrollEl) return;
+    const byId = productsById instanceof Map ? productsById : new Map();
+    if (!("IntersectionObserver" in window)) {
+      const ids = Array.from(byId.keys()).slice(0, 6);
+      queueUpsellConfigBatch(ids, byId, { delayMs: 0 });
+      return;
+    }
+
+    if (upsellConfigObserver && upsellConfigObserverRoot !== scrollEl) {
+      try { upsellConfigObserver.disconnect(); } catch {}
+      upsellConfigObserver = null;
+      upsellConfigObserverRoot = null;
+    }
+
+    if (!upsellConfigObserver) {
+      upsellConfigObserverRoot = scrollEl;
+      upsellConfigObserver = new IntersectionObserver((entries) => {
+        const ids = [];
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          const pid = Number(entry.target?.dataset?.productId || 0);
+          if (!Number.isFinite(pid) || pid <= 0) return;
+          ids.push(pid);
+        });
+        if (ids.length) queueUpsellConfigBatch(ids, byId, { delayMs: 60 });
+      }, {
+        root: scrollEl,
+        rootMargin: "120px 0px",
+        threshold: 0.01,
+      });
+    }
+
+    const cards = scrollEl.querySelectorAll(".cart-upsell-card");
+    cards.forEach((card) => {
+      const pid = Number(card?.dataset?.productId || 0);
+      if (!Number.isFinite(pid) || pid <= 0) return;
+      if (upsellConfigObserver) upsellConfigObserver.observe(card);
+    });
+
+    const initialIds = Array.from(cards)
+      .slice(0, 4)
+      .map((card) => Number(card?.dataset?.productId || 0))
+      .filter((id) => Number.isFinite(id) && id > 0);
+    queueUpsellConfigBatch(initialIds, byId, { delayMs: 0 });
   }
 
   async function preloadCartEnhancers() {
@@ -8089,6 +8220,9 @@ function updateCartBadge() {
     });
 
     _syncUpsellVisibility(scrollEl, upsellEl);
+    const visibleProducts = allProducts.filter((p) => visibleIds.has(Number(p.id)));
+    const productsById = new Map(visibleProducts.map((p) => [Number(p.id), p]));
+    ensureUpsellConfigObserver(scrollEl, productsById);
   }
 
     function formatUpsellVariantValueLabel(value, unitShortTitle) {
@@ -8294,7 +8428,10 @@ function updateCartBadge() {
     if (!Number.isFinite(pid)) return;
     const wasEmpty = cartCountTotal() === 0;
 
-    const defaults = await buildUpsellDefaultCartConfig(pid, p);
+    const cachedDefaults = getUpsellDefaultConfigCacheEntry(pid);
+    const defaults = cachedDefaults && cachedDefaults.promise
+      ? await cachedDefaults.promise
+      : await warmUpsellDefaultConfig(pid, p);
     const optionItems = Array.isArray(defaults.option_items) ? defaults.option_items : [];
     const ingredients = Array.isArray(defaults.ingredients) ? defaults.ingredients : [];
     const hasVariant =

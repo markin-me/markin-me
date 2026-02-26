@@ -28,7 +28,10 @@ const makeChatTempRouter = require('./api/chatTemp');
 const { authMiddleware } = require('./api/middleware/auth');
 
 const app = express();
-const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '1.1.3';
+const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '1.1.4';
+const STATIC_ASSET_VERSION = String(
+  process.env.STATIC_ASSET_VERSION || process.env.TG_APP_VERSION || ''
+).trim();
 const PORT = process.env.PORT || 3000;
 const TENANT_LOOKUP_CACHE_MS = Number(process.env.TENANT_LOOKUP_CACHE_MS || 60_000);
 const STATIC_FILE_VERSION_CACHE_MS = Number(process.env.STATIC_FILE_VERSION_CACHE_MS || 300_000);
@@ -211,6 +214,7 @@ async function findTenantBySubdomain(subdomain) {
 }
 
 function getStaticFileVersionCached(relativePath) {
+  if (STATIC_ASSET_VERSION) return STATIC_ASSET_VERSION;
   const cacheKey = `static:version:${relativePath}`;
   const cached = getFreshCachedValue(staticVersionCache, cacheKey);
   if (cached.hit) return cached.value;
