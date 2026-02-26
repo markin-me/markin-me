@@ -94,6 +94,9 @@ const attachmentUpload = multer({
 
 const threadWaiters = new Map();
 const tenantWaiters = new Map();
+const tenantChangeState = new Map();
+const tenantUnreadWaiters = new Map();
+const tenantUnreadState = new Map();
 const threadTypingState = new Map();
 const guestThreadCleanupState = new Map();
 const tenantPushCompanyTitleCache = new Map();
@@ -679,6 +682,7 @@ async function cleanupExpiredGuestThreadsForTenant(tenantId) {
   }
 
   if (totalDeleted > 0) {
+    scheduleTenantUnreadRefresh(tenant);
     console.info(
       `[chat-temp] auto-removed expired guest chats tenant=${tenant} count=${totalDeleted}`
     );
@@ -738,6 +742,7 @@ async function cleanupOrphanedClientThreadsForTenant(tenantId) {
   }
 
   if (totalDeleted > 0) {
+    scheduleTenantUnreadRefresh(tenant);
     console.info(
       `[chat-temp] auto-removed orphan client chats tenant=${tenant} count=${totalDeleted}`
     );
@@ -990,6 +995,231 @@ function getTenantKey(tenantId) {
   return tenant || "";
 }
 
+function getTenantChangeEntry(tenantId, create = false) {
+  const key = getTenantKey(tenantId);
+  if (!key) return null;
+  let entry = tenantChangeState.get(key);
+  if ((!entry || typeof entry !== "object") && create === true) {
+    entry = {
+      loaded: false,
+      updatedAt: "",
+      revision: 0,
+    };
+    tenantChangeState.set(key, entry);
+  }
+  return entry || null;
+}
+
+async function ensureTenantChangeEntryLoaded(tenantId) {
+  const entry = getTenantChangeEntry(tenantId, true);
+  if (!entry) return {
+    loaded: true,
+    updatedAt: "",
+    revision: 0,
+  };
+  if (entry.loaded) return entry;
+
+  const updatedAt = await readTenantUpdatedAt(tenantId);
+  entry.updatedAt = String(updatedAt || "");
+  if (entry.updatedAt && Number(entry.revision || 0) <= 0) {
+    entry.revision = 1;
+  }
+  entry.loaded = true;
+  return entry;
+}
+
+function touchTenantChange(tenantId, updatedAt = "") {
+  const entry = getTenantChangeEntry(tenantId, true);
+  if (!entry) return {
+    updatedAt: String(updatedAt || ""),
+    revision: 0,
+  };
+  const nextUpdatedAt = String(updatedAt || "").trim() || new Date().toISOString();
+  entry.updatedAt = nextUpdatedAt;
+  entry.revision = Number(entry.revision || 0) + 1;
+  entry.loaded = true;
+  return {
+    updatedAt: entry.updatedAt,
+    revision: entry.revision,
+  };
+}
+
+function getTenantUnreadEntry(tenantId, create = false) {
+  const key = getTenantKey(tenantId);
+  if (!key) return null;
+  let entry = tenantUnreadState.get(key);
+  if ((!entry || typeof entry !== "object") && create === true) {
+    entry = {
+      loaded: false,
+      total: 0,
+      updatedAt: "",
+      revision: 0,
+      loadingPromise: null,
+      refreshTimer: 0,
+    };
+    tenantUnreadState.set(key, entry);
+  }
+  return entry || null;
+}
+
+function notifyTenantUnreadChange(tenantId, payload = {}) {
+  const key = getTenantKey(tenantId);
+  if (!key) return;
+  const set = tenantUnreadWaiters.get(key);
+  if (!set || !set.size) return;
+
+  const data = {
+    total: Number(payload.total || 0),
+    updatedAt: String(payload.updatedAt || ""),
+    revision: Number(payload.revision || 0),
+  };
+  Array.from(set).forEach((resolve) => {
+    try { resolve(data); } catch {}
+  });
+}
+
+function waitForTenantUnreadChange(tenantId, timeoutMs) {
+  const key = getTenantKey(tenantId);
+  if (!key) return Promise.resolve({ timeout: true });
+  const timeout = Math.min(
+    CHAT_LONG_POLL_MAX_TIMEOUT_MS,
+    Math.max(CHAT_LONG_POLL_MIN_TIMEOUT_MS, Number(timeoutMs || 0) || 20000)
+  );
+  return new Promise((resolve) => {
+    const waitSet = tenantUnreadWaiters.get(key) || new Set();
+    let done = false;
+    const complete = (payload) => {
+      if (done) return;
+      done = true;
+      waitSet.delete(complete);
+      if (!waitSet.size) tenantUnreadWaiters.delete(key);
+      clearTimeout(timer);
+      resolve(payload || { timeout: true });
+    };
+    waitSet.add(complete);
+    tenantUnreadWaiters.set(key, waitSet);
+    const timer = setTimeout(() => complete({ timeout: true }), timeout);
+  });
+}
+
+async function readTenantUnreadTotal(tenantId) {
+  const [rows] = await db.query(
+    `SELECT COUNT(*) AS total
+       FROM chat_messages
+      WHERE tenant_id = ?
+        AND direction = 'in'
+        AND is_read = 0
+        AND message_id NOT LIKE 'assistant-auto-%'
+        AND message_id NOT LIKE 'daily-welcome-%'`,
+    [Number(tenantId)]
+  );
+  const total = Number(rows?.[0]?.total || 0);
+  if (!Number.isFinite(total) || total < 0) return 0;
+  return Math.trunc(total);
+}
+
+function applyTenantUnreadTotal(tenantId, totalRaw, updatedAt = "") {
+  const entry = getTenantUnreadEntry(tenantId, true);
+  if (!entry) {
+    return {
+      changed: false,
+      total: 0,
+      updatedAt: "",
+      revision: 0,
+    };
+  }
+
+  const total = Number(totalRaw);
+  const nextTotal = Number.isFinite(total) && total > 0 ? Math.trunc(total) : 0;
+  const prevTotal = Number(entry.total || 0);
+  const changed = !entry.loaded || prevTotal !== nextTotal;
+  entry.total = nextTotal;
+  entry.updatedAt = String(updatedAt || "").trim() || new Date().toISOString();
+  entry.loaded = true;
+
+  if (changed) {
+    entry.revision = Number(entry.revision || 0) + 1;
+    notifyTenantUnreadChange(tenantId, {
+      total: entry.total,
+      updatedAt: entry.updatedAt,
+      revision: entry.revision,
+    });
+  }
+
+  return {
+    changed,
+    total: entry.total,
+    updatedAt: entry.updatedAt,
+    revision: entry.revision,
+  };
+}
+
+async function ensureTenantUnreadLoaded(tenantId) {
+  const entry = getTenantUnreadEntry(tenantId, true);
+  if (!entry) return {
+    total: 0,
+    updatedAt: "",
+    revision: 0,
+  };
+  if (entry.loaded) {
+    return {
+      total: Number(entry.total || 0),
+      updatedAt: String(entry.updatedAt || ""),
+      revision: Number(entry.revision || 0),
+    };
+  }
+  if (entry.loadingPromise) {
+    await entry.loadingPromise;
+    return {
+      total: Number(entry.total || 0),
+      updatedAt: String(entry.updatedAt || ""),
+      revision: Number(entry.revision || 0),
+    };
+  }
+
+  entry.loadingPromise = readTenantUnreadTotal(tenantId)
+    .then((total) => {
+      applyTenantUnreadTotal(tenantId, total, new Date().toISOString());
+    })
+    .catch((err) => {
+      console.error("chat-temp unread warmup error:", err);
+    })
+    .finally(() => {
+      const current = getTenantUnreadEntry(tenantId);
+      if (current) current.loadingPromise = null;
+    });
+
+  await entry.loadingPromise;
+  return {
+    total: Number(entry.total || 0),
+    updatedAt: String(entry.updatedAt || ""),
+    revision: Number(entry.revision || 0),
+  };
+}
+
+function scheduleTenantUnreadRefresh(tenantId, options = {}) {
+  const key = getTenantKey(tenantId);
+  if (!key) return;
+  const entry = getTenantUnreadEntry(tenantId, true);
+  if (!entry) return;
+
+  const delayMs = Number.isFinite(Number(options.delayMs))
+    ? Math.max(0, Math.trunc(Number(options.delayMs)))
+    : 180;
+
+  if (entry.refreshTimer) return;
+  entry.refreshTimer = setTimeout(async () => {
+    const current = getTenantUnreadEntry(tenantId);
+    if (current) current.refreshTimer = 0;
+    try {
+      const total = await readTenantUnreadTotal(tenantId);
+      applyTenantUnreadTotal(tenantId, total, new Date().toISOString());
+    } catch (err) {
+      console.error("chat-temp unread refresh error:", err);
+    }
+  }, delayMs);
+}
+
 function sanitizeTypingText(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -1089,9 +1319,13 @@ function clearThreadTypingState(tenantId, clientId) {
 function notifyTenantChange(tenantId, updatedAt = "") {
   const key = getTenantKey(tenantId);
   if (!key) return;
+  const changed = touchTenantChange(key, updatedAt);
   const set = tenantWaiters.get(key);
   if (!set || !set.size) return;
-  const payload = { updatedAt: String(updatedAt || "") };
+  const payload = {
+    updatedAt: String(changed.updatedAt || ""),
+    revision: Number(changed.revision || 0),
+  };
   Array.from(set).forEach((resolve) => {
     try { resolve(payload); } catch {}
   });
@@ -2032,6 +2266,7 @@ module.exports = function makeChatTempRouter() {
       clearThreadTypingState(tenantId, fromClientId);
       notifyThreadChange(tenantId, toClientId, merged?.updated_at || "");
       notifyThreadChange(tenantId, fromClientId, merged?.updated_at || "");
+      scheduleTenantUnreadRefresh(tenantId);
       return res.json({ ok: true, data: merged });
     } catch (err) {
       if (conn) {
@@ -2281,6 +2516,7 @@ module.exports = function makeChatTempRouter() {
         messageChanged: true,
         typingChanged: true,
       });
+      scheduleTenantUnreadRefresh(tenantId);
       const responseMessage = row ? mapDbMessageRowToApi(row) : message;
       const senderActorForPush = resolvePushSenderActor(responseMessage, actorKey);
       notifyPushPeerAboutMessage(tenantId, clientId, senderActorForPush, responseMessage).catch((err) => {
@@ -2352,6 +2588,7 @@ module.exports = function makeChatTempRouter() {
       conn.release();
       conn = null;
       notifyThreadChange(tenantId, clientId, updatedAt.toISOString());
+      scheduleTenantUnreadRefresh(tenantId);
 
       return res.json({
         ok: true,
@@ -2419,7 +2656,10 @@ module.exports = function makeChatTempRouter() {
       await conn.commit();
       conn.release();
       conn = null;
-      if (changed) notifyThreadChange(tenantId, clientId, updatedAt.toISOString());
+      if (changed) {
+        notifyThreadChange(tenantId, clientId, updatedAt.toISOString());
+        scheduleTenantUnreadRefresh(tenantId);
+      }
 
       return res.json({
         ok: true,
@@ -2469,7 +2709,10 @@ module.exports = function makeChatTempRouter() {
       await conn.commit();
       conn.release();
       conn = null;
-      if (changed) notifyThreadChange(tenantId, clientId, updatedAt.toISOString());
+      if (changed) {
+        notifyThreadChange(tenantId, clientId, updatedAt.toISOString());
+        scheduleTenantUnreadRefresh(tenantId);
+      }
 
       return res.json({
         ok: true,
@@ -2685,6 +2928,7 @@ module.exports = function makeChatTempRouter() {
       conn.release();
       conn = null;
       notifyThreadChange(tenantId, clientId, updatedAt.toISOString());
+      scheduleTenantUnreadRefresh(tenantId);
 
       return res.json({
         ok: true,
@@ -2721,6 +2965,7 @@ module.exports = function makeChatTempRouter() {
         await deletePushSubscriptionsForThread(tenantId, clientId).catch(() => {});
         clearThreadTypingState(tenantId, clientId);
         notifyThreadChange(tenantId, clientId, new Date().toISOString());
+        scheduleTenantUnreadRefresh(tenantId);
       }
 
       return res.json({ ok: true, data: { client_id: Number(clientId), deleted } });
@@ -2730,47 +2975,134 @@ module.exports = function makeChatTempRouter() {
     }
   });
 
+  router.get("/unread", async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const snapshot = await ensureTenantUnreadLoaded(tenantId);
+      return res.json({
+        ok: true,
+        data: {
+          unread_total: Number(snapshot.total || 0),
+          total: Number(snapshot.total || 0),
+          updated_at: String(snapshot.updatedAt || ""),
+          revision: Number(snapshot.revision || 0),
+        },
+      });
+    } catch (err) {
+      console.error("chat-temp GET /unread error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
+  router.get("/unread/wait", async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const timeoutMs = Number(req.query.timeout_ms || req.query.timeout || 20000);
+
+      const sinceTotalRaw = Number(req.query.since_total ?? req.query.sinceTotal);
+      const hasSinceTotal = Number.isFinite(sinceTotalRaw) && sinceTotalRaw >= 0;
+      const sinceTotal = hasSinceTotal ? Math.trunc(sinceTotalRaw) : -1;
+
+      const sinceRevisionRaw = Number(req.query.since_revision ?? req.query.sinceRevision);
+      const hasSinceRevision = Number.isFinite(sinceRevisionRaw) && sinceRevisionRaw >= 0;
+      const sinceRevision = hasSinceRevision ? Math.trunc(sinceRevisionRaw) : -1;
+
+      const currentSnapshot = await ensureTenantUnreadLoaded(tenantId);
+      const currentTotal = Number(currentSnapshot.total || 0);
+      const currentRevision = Number(currentSnapshot.revision || 0);
+
+      const changedNow = hasSinceRevision
+        ? currentRevision > sinceRevision
+        : (hasSinceTotal ? currentTotal !== sinceTotal : currentTotal > 0);
+      if (changedNow) {
+        return res.json({
+          ok: true,
+          data: {
+            changed: true,
+            unread_total: currentTotal,
+            total: currentTotal,
+            updated_at: String(currentSnapshot.updatedAt || ""),
+            revision: currentRevision,
+            timeout: false,
+          },
+        });
+      }
+
+      const waitResult = await waitForTenantUnreadChange(tenantId, timeoutMs);
+      const nextEntry = getTenantUnreadEntry(tenantId, true) || {};
+      const nextTotal = Number.isFinite(Number(waitResult?.total))
+        ? Math.max(0, Math.trunc(Number(waitResult.total)))
+        : Math.max(0, Math.trunc(Number(nextEntry.total || 0)));
+      const nextRevision = Number.isFinite(Number(waitResult?.revision))
+        ? Math.max(0, Math.trunc(Number(waitResult.revision)))
+        : Math.max(0, Math.trunc(Number(nextEntry.revision || 0)));
+      const nextUpdatedAt = String(waitResult?.updatedAt || nextEntry.updatedAt || "");
+
+      const changed = hasSinceRevision
+        ? nextRevision > sinceRevision
+        : (hasSinceTotal ? nextTotal !== sinceTotal : nextTotal > 0);
+
+      return res.json({
+        ok: true,
+        data: {
+          changed,
+          unread_total: nextTotal,
+          total: nextTotal,
+          updated_at: nextUpdatedAt,
+          revision: nextRevision,
+          timeout: waitResult?.timeout === true,
+        },
+      });
+    } catch (err) {
+      console.error("chat-temp GET /unread/wait error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
   router.get("/summaries/wait", async (req, res) => {
     try {
       const tenantId = getTenantId(req);
       const since = String(req.query.since || "").trim();
+      const sinceRevisionRaw = Number(req.query.since_revision ?? req.query.sinceRevision);
+      const hasSinceRevision = Number.isFinite(sinceRevisionRaw) && sinceRevisionRaw >= 0;
+      const sinceRevision = hasSinceRevision ? Math.trunc(sinceRevisionRaw) : -1;
       const timeoutMs = Number(req.query.timeout_ms || req.query.timeout || 20000);
 
-      const currentUpdatedAt = await readTenantUpdatedAt(tenantId);
-      if (!since) {
-        if (!currentUpdatedAt) {
-          // Nothing to report yet; keep long-poll open until a new thread/message appears.
-        } else {
-          return res.json({
-            ok: true,
-            data: {
-              changed: true,
-              updated_at: currentUpdatedAt,
-              timeout: false,
-            },
-          });
-        }
-      } else if (String(currentUpdatedAt || "") !== since) {
+      const currentState = await ensureTenantChangeEntryLoaded(tenantId);
+      const currentUpdatedAt = String(currentState?.updatedAt || "");
+      const currentRevision = Number(currentState?.revision || 0);
+      const changedNow = hasSinceRevision
+        ? currentRevision > sinceRevision
+        : (!since ? !!currentUpdatedAt : String(currentUpdatedAt || "") !== String(since || ""));
+
+      if (changedNow) {
         return res.json({
           ok: true,
           data: {
             changed: true,
             updated_at: currentUpdatedAt,
+            revision: currentRevision,
             timeout: false,
           },
         });
       }
 
       const waitResult = await waitForTenantChange(tenantId, timeoutMs);
-      const nextUpdatedAt = await readTenantUpdatedAt(tenantId);
-      const changed = waitResult?.timeout !== true
-        || String(nextUpdatedAt || "") !== String(since || "");
+      const nextState = getTenantChangeEntry(tenantId, true) || currentState || {};
+      const nextUpdatedAt = String(waitResult?.updatedAt || nextState.updatedAt || "");
+      const nextRevision = Number.isFinite(Number(waitResult?.revision))
+        ? Math.max(0, Math.trunc(Number(waitResult.revision)))
+        : Math.max(0, Math.trunc(Number(nextState.revision || 0)));
+      const changed = hasSinceRevision
+        ? nextRevision > sinceRevision
+        : (!since ? !!nextUpdatedAt : String(nextUpdatedAt || "") !== String(since || ""));
 
       return res.json({
         ok: true,
         data: {
           changed,
           updated_at: nextUpdatedAt,
+          revision: nextRevision,
           timeout: waitResult?.timeout === true,
         },
       });

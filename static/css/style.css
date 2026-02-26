@@ -7326,6 +7326,87 @@ body.page-chat .panel{
   display:flex;
   flex-direction:column;
   position:relative;
+  overflow:hidden;
+}
+
+.chat-bootstrap-loader{
+  position:absolute;
+  inset:0;
+  z-index:9;
+  display:grid;
+  align-content:center;
+  gap:18px;
+  padding:20px;
+  background:
+    radial-gradient(circle at 16% 12%, color-mix(in srgb, var(--primary-14), transparent 58%), transparent 40%),
+    linear-gradient(180deg, color-mix(in srgb, var(--color-surface-2), transparent 24%), color-mix(in srgb, var(--color-surface), #fff 4%));
+  transition:opacity .2s ease, visibility .2s ease;
+}
+
+.chat-bootstrap-loader.hidden{
+  opacity:0;
+  visibility:hidden;
+  pointer-events:none;
+}
+
+.chat-bootstrap-loader-row{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  max-width:280px;
+}
+
+.chat-bootstrap-loader-dot{
+  width:10px;
+  height:10px;
+  border-radius:999px;
+  background:color-mix(in srgb, var(--color-primary), #fff 12%);
+  box-shadow:0 0 0 7px color-mix(in srgb, var(--primary-14), transparent 45%);
+}
+
+.chat-bootstrap-loader-line{
+  height:12px;
+  border-radius:999px;
+  flex:1 1 auto;
+  min-width:0;
+  background:
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--color-border), transparent 15%) 25%,
+      color-mix(in srgb, #fff, var(--color-border) 35%) 50%,
+      color-mix(in srgb, var(--color-border), transparent 15%) 75%);
+  background-size:240% 100%;
+  animation:chat-bootstrap-shimmer 1.35s ease-in-out infinite;
+}
+
+.chat-bootstrap-loader-bubbles{
+  display:grid;
+  gap:10px;
+  max-width:min(560px, 100%);
+}
+
+.chat-bootstrap-loader-bubble{
+  height:56px;
+  border-radius:16px;
+  background:
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--color-surface-2), transparent 5%) 25%,
+      color-mix(in srgb, #fff, var(--color-surface-2) 48%) 50%,
+      color-mix(in srgb, var(--color-surface-2), transparent 5%) 75%);
+  background-size:220% 100%;
+  animation:chat-bootstrap-shimmer 1.5s ease-in-out infinite;
+}
+
+.chat-bootstrap-loader-bubble:nth-child(2){
+  width:82%;
+}
+
+.chat-bootstrap-loader-bubble:nth-child(3){
+  width:66%;
+}
+
+@keyframes chat-bootstrap-shimmer{
+  0%{background-position:100% 0;}
+  100%{background-position:-100% 0;}
 }
 
 .chat-header-island{
@@ -7471,6 +7552,15 @@ body.page-chat .panel{
   background:
     radial-gradient(circle at 20% 0%, color-mix(in srgb, var(--primary-14), transparent 60%), transparent 35%),
     linear-gradient(180deg, color-mix(in srgb, var(--color-surface-2), transparent 35%), transparent 40%);
+}
+
+.chat-main-body.is-bootstrap-loading{
+  overflow:hidden;
+}
+
+.chat-main-body.is-bootstrap-loading .chat-empty-state,
+.chat-main-body.is-bootstrap-loading .chat-messages{
+  visibility:hidden;
 }
 
 .chat-main-body:focus{

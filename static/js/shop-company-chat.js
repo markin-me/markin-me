@@ -123,6 +123,8 @@
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
   const CHAT_THREAD_WAIT_TIMEOUT_MS = 20000;
   const CHAT_THREAD_WAIT_RETRY_MS = 1200;
+  const CHAT_UNREAD_WAIT_TIMEOUT_MS = 25000;
+  const CHAT_UNREAD_WAIT_RETRY_MS = 1400;
   const CHAT_THREAD_PAGE_SIZE = 60;
   const CHAT_THREAD_PAGE_MAX_SIZE = 200;
   const CHAT_DROP_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif|heic|heif)$/i;
@@ -287,6 +289,7 @@
   let sharedThreadUpdatedAt = "";
   let sharedThreadWaitLoopStarted = false;
   let sharedThreadWaitLoopToken = 0;
+  let sharedThreadWaitAbortController = null;
   let sharedMutationQueue = Promise.resolve();
   let sharedMutationPendingCount = 0;
   let sharedThreadMutationVersion = 0;
@@ -331,6 +334,13 @@
   let lastFeedViewportState = null;
   let pendingFeedRestoreState = null;
   let pendingFeedRestoreMutationVersion = 0;
+  let unreadServerTotal = 0;
+  let unreadServerRevision = 0;
+  let unreadServerUpdatedAt = "";
+  let unreadStatePrimed = false;
+  let unreadWaitLoopStarted = false;
+  let unreadWaitLoopToken = 0;
+  let unreadWaitAbortController = null;
   let peerTypingState = { active: false, text: "", updatedAt: "", expiresAt: "" };
   let peerTypingUpdatedAt = "";
   let peerTypingHideTimer = 0;
@@ -358,6 +368,7 @@
   let chatOrderDetailsActive = false;
   let chatOrderDetailsId = 0;
   let chatOrderDetailsPrevTitle = "";
+  let chatBootstrapLoaderEl = null;
   let chatOrderUiSnapshot = null;
   let chatOrderFooterOutsideHandler = null;
 
@@ -1005,9 +1016,15 @@
     const badge = ensureUnreadBadge();
     if (!badge) return;
 
-    const unreadCount = getUnreadAgentCount(entries);
+    const localUnreadCount = getUnreadAgentCount(entries);
     const pendingCount = Math.max(0, Number(pendingFeedNewCount || 0));
     const isOpen = overlay.classList.contains("is-open");
+    if (isOpen) {
+      unreadServerTotal = localUnreadCount;
+      unreadStatePrimed = true;
+    }
+    const serverUnreadCount = Math.max(0, Number(unreadServerTotal || 0));
+    const unreadCount = unreadStatePrimed ? serverUnreadCount : localUnreadCount;
     const displayCount = isOpen ? pendingCount : unreadCount;
 
     if (displayCount <= 0) {
@@ -1026,6 +1043,12 @@
   function isChatTabActiveForRead() {
     if (typeof document === "undefined") return true;
     if (document.visibilityState && document.visibilityState !== "visible") return false;
+    return true;
+  }
+
+  function isTabForegroundActive() {
+    if (!isChatTabActiveForRead()) return false;
+    if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
     return true;
   }
 
@@ -1885,6 +1908,9 @@
     if (enabled) {
       openBtn.removeAttribute("aria-hidden");
       openBtn.removeAttribute("tabindex");
+      if (!overlay.classList.contains("is-open")) {
+        startUnreadPolling();
+      }
       return;
     }
     openBtn.setAttribute("aria-hidden", "true");
@@ -1897,6 +1923,8 @@
     if (overlay.classList.contains("is-open")) {
       closeCompanyChat();
     }
+    stopSharedThreadPolling();
+    stopUnreadPolling();
   }
 
   function applyChatRuntimeSettings(rawSettings, options) {
@@ -2345,6 +2373,10 @@
     sharedPullInFlight = false;
     sharedMutationQueue = Promise.resolve();
     sharedMutationPendingCount = 0;
+    unreadServerTotal = 0;
+    unreadServerRevision = 0;
+    unreadServerUpdatedAt = "";
+    unreadStatePrimed = false;
     lastFeedViewportState = loadPersistedFeedViewportState(nextProfile.id);
     lastFeedScrollTop = Number(lastFeedViewportState && lastFeedViewportState.top);
     clearPendingFeedNewCount();
@@ -2519,6 +2551,7 @@
       method: options.method || "GET",
       headers: headers,
       keepalive: options.keepalive === true,
+      signal: options.signal,
       body: options.body
         ? (isFormDataBody ? options.body : JSON.stringify(options.body))
         : undefined,
@@ -2758,6 +2791,13 @@
     });
   }
 
+  function isAbortRequestError(err) {
+    if (!err) return false;
+    if (err.name === "AbortError") return true;
+    const message = String(err && err.message || "");
+    return /aborted|aborterror/i.test(message);
+  }
+
   function enqueueSharedMutation(mutator) {
     if (typeof mutator !== "function") return Promise.resolve();
     sharedMutationPendingCount += 1;
@@ -2899,7 +2939,8 @@
     return isImageAttachment(attachment) ? attachment : null;
   }
 
-  async function waitSharedThreadUpdate(sinceUpdatedAt, typingSinceUpdatedAt, timeoutMs) {
+  async function waitSharedThreadUpdate(sinceUpdatedAt, typingSinceUpdatedAt, timeoutMs, options) {
+    const opts = options || {};
     const requestClientId = getActiveChatClientId();
     if (!requestClientId) {
       return {
@@ -2918,7 +2959,8 @@
       _ts: String(Date.now()),
     });
     const json = await chatApiJson(
-      CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId) + "/wait?" + qs.toString()
+      CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(requestClientId) + "/wait?" + qs.toString(),
+      { signal: opts.signal }
     );
     const data = json && json.data ? json.data : {};
     return {
@@ -2929,6 +2971,86 @@
       typingChanged: data.typing_changed === true,
       typing: data.typing && typeof data.typing === "object" ? data.typing : null,
     };
+  }
+
+  function normalizeUnreadSnapshot(payload) {
+    const data = payload && typeof payload === "object" ? payload : {};
+    const totalRaw = Number(data.unread_total ?? data.total ?? 0);
+    const total = Number.isFinite(totalRaw) && totalRaw > 0 ? Math.trunc(totalRaw) : 0;
+    const revisionRaw = Number(data.revision || 0);
+    const revision = Number.isFinite(revisionRaw) && revisionRaw > 0 ? Math.trunc(revisionRaw) : 0;
+    return {
+      total: total,
+      revision: revision,
+      updatedAt: String(data.updated_at || data.updatedAt || ""),
+      changed: data.changed === true,
+      timeout: data.timeout === true,
+    };
+  }
+
+  async function fetchUnreadSnapshot(options) {
+    const opts = options || {};
+    const qs = new URLSearchParams({
+      _ts: String(Date.now()),
+    });
+    const json = await chatApiJson(CHAT_TEMP_API_BASE + "/unread?" + qs.toString(), {
+      signal: opts.signal,
+    });
+    return normalizeUnreadSnapshot(json && json.data ? json.data : {});
+  }
+
+  async function waitUnreadSnapshotChange(options) {
+    const opts = options || {};
+    const timeoutMs = Math.max(
+      1000,
+      Number(opts.timeoutMs || opts.timeout || CHAT_UNREAD_WAIT_TIMEOUT_MS)
+    );
+    const qs = new URLSearchParams({
+      since_total: String(Math.max(0, Number(unreadServerTotal || 0))),
+      since_revision: String(Math.max(0, Number(unreadServerRevision || 0))),
+      timeout_ms: String(timeoutMs),
+      _ts: String(Date.now()),
+    });
+    const json = await chatApiJson(CHAT_TEMP_API_BASE + "/unread/wait?" + qs.toString(), {
+      signal: opts.signal,
+    });
+    return normalizeUnreadSnapshot(json && json.data ? json.data : {});
+  }
+
+  function maybeNotifyUnreadIncrease(previousTotal, nextTotal) {
+    const prev = Math.max(0, Number(previousTotal || 0));
+    const next = Math.max(0, Number(nextTotal || 0));
+    if (!unreadStatePrimed) return;
+    if (next <= prev) return;
+    if (overlay.classList.contains("is-open")) return;
+
+    const now = Date.now();
+    if (now - messageAlertLastAt < CHAT_MESSAGE_ALERT_COOLDOWN_MS) return;
+    messageAlertLastAt = now;
+    playMessageAlertSound();
+
+    if (!isTabForegroundActive()) {
+      if (shouldSuppressLocalBrowserNotification()) return;
+      showIncomingMessageBrowserNotification(
+        getCompanyAuthorName(),
+        "\u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 \u0447\u0430\u0442, \u0447\u0442\u043e\u0431\u044b \u043e\u0442\u0432\u0435\u0442\u0438\u0442\u044c."
+      );
+    }
+  }
+
+  function applyUnreadSnapshot(snapshot, options) {
+    const opts = options || {};
+    const normalized = normalizeUnreadSnapshot(snapshot || {});
+    const prevTotal = Math.max(0, Number(unreadServerTotal || 0));
+    unreadServerTotal = normalized.total;
+    unreadServerRevision = normalized.revision;
+    unreadServerUpdatedAt = normalized.updatedAt;
+    if (opts.notify !== false) {
+      maybeNotifyUnreadIncrease(prevTotal, normalized.total);
+    }
+    unreadStatePrimed = true;
+    renderUnreadBadge(liveEntries);
+    return normalized;
   }
 
   function mergeSharedEntryLists(olderEntries, newerEntries) {
@@ -3036,6 +3158,8 @@
     const readChangedIds = Array.isArray(readReceiptState && readReceiptState.readIds)
       ? readReceiptState.readIds
       : [];
+    unreadServerTotal = getUnreadAgentCount(entries);
+    unreadStatePrimed = true;
     renderUnreadBadge(entries);
     const sameThread = stableSerialize(currentEntries) === stableSerialize(entries);
     const hasPendingLocalSave = sharedMutationPendingCount > 0;
@@ -3316,6 +3440,14 @@
 
     (async function runSharedThreadWaitLoop() {
       while (sharedThreadWaitLoopStarted && loopToken === sharedThreadWaitLoopToken) {
+        if (!overlay.classList.contains("is-open")) {
+          await sleepMs(CHAT_THREAD_WAIT_RETRY_MS);
+          continue;
+        }
+        if (!isChatTabActiveForRead()) {
+          await sleepMs(CHAT_THREAD_WAIT_RETRY_MS);
+          continue;
+        }
         refreshChatClientProfileIfNeeded({ pull: false });
         const activeClientId = getActiveChatClientId();
         if (!activeClientId || profileMergeInFlight) {
@@ -3326,11 +3458,17 @@
         try {
           const knownUpdatedAt = String(sharedThreadUpdatedAt || "");
           const knownTypingUpdatedAt = String(peerTypingUpdatedAt || "");
+          const waitAbortController = new AbortController();
+          sharedThreadWaitAbortController = waitAbortController;
           const waited = await waitSharedThreadUpdate(
             knownUpdatedAt,
             knownTypingUpdatedAt,
-            CHAT_THREAD_WAIT_TIMEOUT_MS
+            CHAT_THREAD_WAIT_TIMEOUT_MS,
+            { signal: waitAbortController.signal }
           );
+          if (sharedThreadWaitAbortController === waitAbortController) {
+            sharedThreadWaitAbortController = null;
+          }
           if (!sharedThreadWaitLoopStarted || loopToken !== sharedThreadWaitLoopToken) break;
           if (profileMergeInFlight) continue;
           if (String(activeClientId) !== String(getActiveChatClientId())) continue;
@@ -3348,8 +3486,11 @@
           if (shouldPullThread) {
             await pullSharedThreadFromServerIfChanged({ force: true }).catch(function () {});
           }
-        } catch {
+        } catch (err) {
+          if (isAbortRequestError(err)) break;
           await sleepMs(CHAT_THREAD_WAIT_RETRY_MS);
+        } finally {
+          sharedThreadWaitAbortController = null;
         }
       }
     })().catch(function () {});
@@ -3359,6 +3500,64 @@
     if (!sharedThreadWaitLoopStarted) return;
     sharedThreadWaitLoopStarted = false;
     sharedThreadWaitLoopToken += 1;
+    if (sharedThreadWaitAbortController) {
+      try { sharedThreadWaitAbortController.abort(); } catch {}
+      sharedThreadWaitAbortController = null;
+    }
+  }
+
+  function stopUnreadPolling() {
+    if (!unreadWaitLoopStarted) return;
+    unreadWaitLoopStarted = false;
+    unreadWaitLoopToken += 1;
+    if (unreadWaitAbortController) {
+      try { unreadWaitAbortController.abort(); } catch {}
+      unreadWaitAbortController = null;
+    }
+  }
+
+  function startUnreadPolling() {
+    if (!chatRuntimeSettings.isEnabled) return;
+    if (overlay.classList.contains("is-open")) return;
+    if (unreadWaitLoopStarted) return;
+    unreadWaitLoopStarted = true;
+    unreadWaitLoopToken += 1;
+    const loopToken = unreadWaitLoopToken;
+
+    (async function runUnreadWaitLoop() {
+      if (!unreadStatePrimed) {
+        try {
+          const initialSnapshot = await fetchUnreadSnapshot();
+          if (!unreadWaitLoopStarted || loopToken !== unreadWaitLoopToken) return;
+          applyUnreadSnapshot(initialSnapshot, { notify: false });
+        } catch {}
+      }
+
+      while (unreadWaitLoopStarted && loopToken === unreadWaitLoopToken) {
+        if (overlay.classList.contains("is-open")) {
+          await sleepMs(CHAT_UNREAD_WAIT_RETRY_MS);
+          continue;
+        }
+        try {
+          const waitAbortController = new AbortController();
+          unreadWaitAbortController = waitAbortController;
+          const waited = await waitUnreadSnapshotChange({
+            timeoutMs: CHAT_UNREAD_WAIT_TIMEOUT_MS,
+            signal: waitAbortController.signal,
+          });
+          if (unreadWaitAbortController === waitAbortController) {
+            unreadWaitAbortController = null;
+          }
+          if (!unreadWaitLoopStarted || loopToken !== unreadWaitLoopToken) break;
+          applyUnreadSnapshot(waited, { notify: true });
+        } catch (err) {
+          if (isAbortRequestError(err)) break;
+          await sleepMs(CHAT_UNREAD_WAIT_RETRY_MS);
+        } finally {
+          unreadWaitAbortController = null;
+        }
+      }
+    })().catch(function () {});
   }
 
   function syncVisibleChatReadState(options) {
@@ -4102,6 +4301,30 @@
     window.scrollTo(0, savedY);
   }
 
+  function ensureChatBootstrapLoader() {
+    if (chatBootstrapLoaderEl && chatBootstrapLoaderEl.isConnected) return chatBootstrapLoaderEl;
+    if (!feed || !feed.isConnected) return null;
+    const node = document.createElement("div");
+    node.className = "shop-company-chat-bootstrap-loader hidden";
+    node.setAttribute("aria-hidden", "true");
+    node.innerHTML =
+      '<div class="shop-company-chat-bootstrap-loader__bar"></div>' +
+      '<div class="shop-company-chat-bootstrap-loader__bubble is-agent"></div>' +
+      '<div class="shop-company-chat-bootstrap-loader__bubble is-user"></div>' +
+      '<div class="shop-company-chat-bootstrap-loader__bubble is-agent"></div>';
+    feed.appendChild(node);
+    chatBootstrapLoaderEl = node;
+    return node;
+  }
+
+  function setChatBootstrapLoading(active) {
+    const loader = ensureChatBootstrapLoader();
+    if (!loader) return;
+    const nextActive = active === true;
+    modalBody.classList.toggle("is-bootstrap-loading", nextActive);
+    loader.classList.toggle("hidden", !nextActive);
+  }
+
   var emojiPickerInitialized = false;
   function openCompanyChat() {
     cancelDeferredClosedFeedPersist();
@@ -4116,6 +4339,7 @@
     }
     ensureContextMenu();
     hideChatOrderDetailsView();
+    stopUnreadPolling();
     refreshChatClientProfileIfNeeded({ pull: false });
     queueWebPushSubscriptionSync({
       clientId: getActiveChatClientId(),
@@ -4125,8 +4349,7 @@
     pendingFeedRestoreState = loadPersistedFeedViewportState(getActiveChatClientId());
     pendingFeedRestoreMutationVersion = sharedThreadMutationVersion;
     if (!initialized) {
-      // Keep preloaded thread state from startup sync.
-      // Reset only when there is no local snapshot yet.
+      // Initialize local thread view once before first remote pull.
       if (!Array.isArray(liveEntries) || liveEntries.length <= 0) {
         resetConversation();
       }
@@ -4143,6 +4366,10 @@
     scheduleScrollDownComposerExtraOffsetSync();
     scheduleMobileKeyboardInsetSync();
     renderTypingIndicator();
+    const showBootstrapLoader = !hasLoadedSharedThreadOnce;
+    if (showBootstrapLoader) {
+      setChatBootstrapLoading(true);
+    }
     requestAnimationFrame(function () {
       pullSharedThreadFromServer({ force: true })
         .catch(function () { return false; })
@@ -4180,6 +4407,7 @@
           } else {
             setMobileKeyboardInset(0);
           }
+          setChatBootstrapLoading(false);
           startSharedThreadPolling();
           syncVisibleChatReadState({ preserveViewport: true });
         });
@@ -4187,6 +4415,7 @@
   }
 
   function closeCompanyChat() {
+    stopSharedThreadPolling();
     stopLocalTypingSession({ flush: true });
     saveFeedScrollPosition({ persist: true });
     syncVisibleChatReadState({ force: true, flushRemote: true, preserveViewport: true });
@@ -4208,8 +4437,10 @@
     scheduleDeferredClosedFeedPersist();
     pendingFeedRestoreState = null;
     pendingFeedRestoreMutationVersion = sharedThreadMutationVersion;
+    setChatBootstrapLoading(false);
     renderUnreadBadge(liveEntries);
     renderTypingIndicator();
+    startUnreadPolling();
   }
 
   function resetConversation() {
@@ -7971,7 +8202,6 @@
   }
 
   function startChatRuntime() {
-    if (!chatRuntimeSettings.isEnabled) return;
     preloadEmojiAtlas();
     initMessageAlerts();
     bindEmojiPopoverGuard();
@@ -7981,14 +8211,14 @@
     initMessageImageViewerModal();
     setupComposerRichPreview();
   // probeEmojiAssetsAvailability intentionally deferred until first chat open
+    ensureChatBootstrapLoader();
     renderUnreadBadge(liveEntries);
-    refreshChatClientProfileIfNeeded({ pull: false });
-    queueWebPushSubscriptionSync({
-      clientId: getActiveChatClientId(),
-      immediate: true,
-    });
-    pullSharedThreadFromServer({ force: true }).catch(function () {});
-    startSharedThreadPolling();
+    if (!chatRuntimeSettings.isEnabled) {
+      stopSharedThreadPolling();
+      stopUnreadPolling();
+      return;
+    }
+    startUnreadPolling();
   }
 
   initChatRuntimeSettings({ fetchRemote: true, force: true, refreshUi: true })
@@ -8001,6 +8231,7 @@
     navigator.serviceWorker.ready
       .then(function () {
         if (!chatRuntimeSettings.isEnabled) return;
+        if (!overlay.classList.contains("is-open")) return;
         queueWebPushSubscriptionSync({
           clientId: getActiveChatClientId(),
           immediate: true,
@@ -8061,6 +8292,8 @@
   function syncReadOnForeground() {
     if (!overlay.classList.contains("is-open")) return;
     if (!isChatTabActiveForRead()) return;
+    stopUnreadPolling();
+    startSharedThreadPolling();
     pullSharedThreadFromServer({ force: true })
       .catch(function () {
         syncVisibleChatReadState();
@@ -8068,20 +8301,37 @@
   }
 
   document.addEventListener("visibilitychange", function () {
-    if (document.visibilityState !== "visible") return;
-    syncReadOnForeground();
+    if (document.visibilityState !== "visible") {
+      stopSharedThreadPolling();
+      stopLocalTypingSession({ flush: true, keepalive: true });
+      if (!overlay.classList.contains("is-open")) {
+        startUnreadPolling();
+      }
+      return;
+    }
+    if (overlay.classList.contains("is-open")) {
+      syncReadOnForeground();
+      return;
+    }
+    startUnreadPolling();
   });
 
   window.addEventListener("focus", function () {
-    refreshChatClientProfileIfNeeded({ pull: false });
-    queueWebPushSubscriptionSync({
-      clientId: getActiveChatClientId(),
-      immediate: true,
-    });
-    syncReadOnForeground();
+    if (overlay.classList.contains("is-open")) {
+      refreshChatClientProfileIfNeeded({ pull: false });
+      queueWebPushSubscriptionSync({
+        clientId: getActiveChatClientId(),
+        immediate: true,
+      });
+      syncReadOnForeground();
+      return;
+    }
+    startUnreadPolling();
   });
 
   window.addEventListener("pagehide", function () {
+    stopSharedThreadPolling();
+    stopUnreadPolling();
     stopLocalTypingSession({ flush: true, keepalive: true });
     if (overlay.classList.contains("is-open")) {
       saveFeedScrollPosition({ persist: true });
@@ -8093,6 +8343,8 @@
   });
 
   window.addEventListener("beforeunload", function () {
+    stopSharedThreadPolling();
+    stopUnreadPolling();
     stopLocalTypingSession({ flush: true, keepalive: true });
     if (overlay.classList.contains("is-open")) {
       saveFeedScrollPosition({ persist: true });
@@ -8105,10 +8357,17 @@
     const key = String(event && event.key || "");
     if (key === "tenant") {
       initChatRuntimeSettings({ fetchRemote: false, refreshUi: true }).catch(function () {});
+      if (!overlay.classList.contains("is-open")) {
+        startUnreadPolling();
+      }
       return;
     }
     if (key && key !== customerTokenKey && key !== customerCacheKey && key !== guestChatClientKey) return;
-    refreshChatClientProfileIfNeeded({ pull: true });
+    refreshChatClientProfileIfNeeded({ pull: overlay.classList.contains("is-open") });
+    if (!overlay.classList.contains("is-open")) {
+      unreadStatePrimed = false;
+      startUnreadPolling();
+    }
   });
 
   function clearTouchGesture() {

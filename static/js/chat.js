@@ -191,6 +191,7 @@
       selectionCloseBtn: $("#chatSelectionCloseBtn"),
       selectionCopyBtn: $("#chatSelectionCopyBtn"),
       selectionDeleteBtn: $("#chatSelectionDeleteBtn"),
+      bootstrapLoader: $("#chatBootstrapLoader"),
     },
   };
 
@@ -228,6 +229,7 @@
     summariesWaitLoopStarted: false,
     summariesWaitLoopToken: 0,
     summariesUpdatedAt: "",
+    summariesRevision: 0,
     summariesPollTimer: 0,
     activeOrdersPollTimer: 0,
     activeOrdersPollInFlight: false,
@@ -248,6 +250,10 @@
     threadDropDragDepth: 0,
     clientsPager: null,
     threadHistoryByClient: {},
+    activeThreadWaitAbortController: null,
+    summariesWaitAbortController: null,
+    isRealtimePaused: false,
+    isBootstrapLoading: true,
   };
   state.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.store?.ui?.threadScrollTopByClient);
   state.clientsPager = createDefaultClientsPager();
@@ -315,6 +321,25 @@
       resetClientsPager();
     }
     return state.clientsPager;
+  }
+
+  function isAbortError(err) {
+    if (!err) return false;
+    const name = String(err.name || "").toLowerCase();
+    if (name === "aborterror") return true;
+    const msg = String(err.message || "").toLowerCase();
+    return msg.includes("aborted");
+  }
+
+  function setChatBootstrapLoading(active) {
+    const nextActive = active === true;
+    state.isBootstrapLoading = nextActive;
+    if (dom.center.bootstrapLoader) {
+      dom.center.bootstrapLoader.classList.toggle("hidden", !nextActive);
+    }
+    if (dom.center.messagesWrap) {
+      dom.center.messagesWrap.classList.toggle("is-bootstrap-loading", nextActive);
+    }
   }
 
   function ensureThreadHistoryState(clientId) {
@@ -412,6 +437,7 @@
       method: opts.method || "GET",
       headers,
       keepalive: opts.keepalive === true,
+      signal: opts.signal,
       body: opts.body
         ? (isFormDataBody ? opts.body : JSON.stringify(opts.body))
         : undefined,
@@ -1201,7 +1227,8 @@
     clientId,
     sinceUpdatedAt,
     typingSinceUpdatedAt = "",
-    timeoutMs = THREAD_SYNC_WAIT_TIMEOUT_MS
+    timeoutMs = THREAD_SYNC_WAIT_TIMEOUT_MS,
+    options = {}
   ) {
     const key = normalizeClientIdKey(clientId);
     if (!key) {
@@ -1220,7 +1247,9 @@
       timeout_ms: String(Math.max(1000, Number(timeoutMs || THREAD_SYNC_WAIT_TIMEOUT_MS))),
       _ts: String(Date.now()),
     });
-    const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}/wait?${qs.toString()}`);
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/thread/${encodeURIComponent(key)}/wait?${qs.toString()}`, {
+      signal: options.signal,
+    });
     const data = json?.data || {};
     return {
       changed: data.changed === true,
@@ -1620,16 +1649,27 @@
     return changed || changedIds.length > 0;
   }
 
-  async function waitRemoteSummariesUpdate(sinceUpdatedAt, timeoutMs = THREAD_SYNC_SUMMARY_WAIT_TIMEOUT_MS) {
+  async function waitRemoteSummariesUpdate(
+    sinceUpdatedAt,
+    sinceRevision = 0,
+    timeoutMs = THREAD_SYNC_SUMMARY_WAIT_TIMEOUT_MS,
+    options = {}
+  ) {
     const qs = new URLSearchParams({
       since: String(sinceUpdatedAt || ""),
+      since_revision: String(Math.max(0, Math.trunc(Number(sinceRevision || 0)))),
       timeout_ms: String(Math.max(1000, Number(timeoutMs || THREAD_SYNC_SUMMARY_WAIT_TIMEOUT_MS))),
       _ts: String(Date.now()),
     });
-    const json = await apiJson(`${CHAT_TEMP_API_BASE}/summaries/wait?${qs.toString()}`);
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/summaries/wait?${qs.toString()}`, {
+      signal: options.signal,
+    });
     return {
       changed: json?.data?.changed === true,
       updatedAt: String(json?.data?.updated_at || ""),
+      revision: Number.isFinite(Number(json?.data?.revision))
+        ? Math.max(0, Math.trunc(Number(json.data.revision)))
+        : 0,
       timeout: json?.data?.timeout === true,
     };
   }
@@ -1688,6 +1728,8 @@
   }
 
   function startRemoteSyncLoops() {
+    state.isRealtimePaused = false;
+
     if (!state.activeThreadWaitLoopStarted) {
       state.activeThreadWaitLoopStarted = true;
       state.activeThreadWaitLoopToken += 1;
@@ -1705,11 +1747,14 @@
           try {
             const knownUpdatedAt = String(state.remoteThreadUpdatedAt[activeId] || "");
             const knownTypingUpdatedAt = getPeerTypingUpdatedAt(activeId);
+            const waitAbort = new AbortController();
+            state.activeThreadWaitAbortController = waitAbort;
             const waited = await waitThreadRemoteUpdate(
               activeId,
               knownUpdatedAt,
               knownTypingUpdatedAt,
-              THREAD_SYNC_WAIT_TIMEOUT_MS
+              THREAD_SYNC_WAIT_TIMEOUT_MS,
+              { signal: waitAbort.signal }
             );
             if (!state.activeThreadWaitLoopStarted || loopToken !== state.activeThreadWaitLoopToken) break;
             if (normalizeClientIdKey(state.activeClientId) !== activeId) continue;
@@ -1730,9 +1775,12 @@
               await pullThreadFromRemoteIfChanged(activeId, { skipReadMark: false, force: true }).catch(console.error);
             }
           } catch (err) {
-            console.error(err);
+            if (!isAbortError(err)) {
+              console.error(err);
+            }
             await sleepMs(THREAD_SYNC_WAIT_RETRY_MS);
           } finally {
+            state.activeThreadWaitAbortController = null;
             const elapsed = Date.now() - loopStartedAt;
             if (elapsed < THREAD_SYNC_LOOP_MIN_INTERVAL_MS) {
               await sleepMs(THREAD_SYNC_LOOP_MIN_INTERVAL_MS - elapsed);
@@ -1752,19 +1800,36 @@
           const loopStartedAt = Date.now();
           try {
             const knownUpdatedAt = String(state.summariesUpdatedAt || "");
-            const waited = await waitRemoteSummariesUpdate(knownUpdatedAt, THREAD_SYNC_SUMMARY_WAIT_TIMEOUT_MS);
+            const knownRevision = Number(state.summariesRevision || 0);
+            const waitAbort = new AbortController();
+            state.summariesWaitAbortController = waitAbort;
+            const waited = await waitRemoteSummariesUpdate(
+              knownUpdatedAt,
+              knownRevision,
+              THREAD_SYNC_SUMMARY_WAIT_TIMEOUT_MS,
+              { signal: waitAbort.signal }
+            );
             if (!state.summariesWaitLoopStarted || summariesLoopToken !== state.summariesWaitLoopToken) break;
             const nextUpdatedAt = String(waited?.updatedAt || "");
+            const nextRevision = Number.isFinite(Number(waited?.revision))
+              ? Math.max(0, Math.trunc(Number(waited.revision)))
+              : 0;
             // Always pull summaries after wait returns to prevent stale UI
             // on installations where updated_at has second-level precision.
             await syncRemoteSummariesSnapshot({ forceThreads: waited?.timeout !== true }).catch(console.error);
             if (nextUpdatedAt || state.summariesUpdatedAt) {
               state.summariesUpdatedAt = nextUpdatedAt;
             }
+            if (nextRevision || state.summariesRevision) {
+              state.summariesRevision = nextRevision;
+            }
           } catch (err) {
-            console.error(err);
+            if (!isAbortError(err)) {
+              console.error(err);
+            }
             await sleepMs(THREAD_SYNC_WAIT_RETRY_MS);
           } finally {
+            state.summariesWaitAbortController = null;
             const elapsed = Date.now() - loopStartedAt;
             if (elapsed < THREAD_SYNC_LOOP_MIN_INTERVAL_MS) {
               await sleepMs(THREAD_SYNC_LOOP_MIN_INTERVAL_MS - elapsed);
@@ -1783,6 +1848,57 @@
         }
       }, THREAD_SYNC_SUMMARY_POLL_MS);
     }
+  }
+
+  function stopRemoteSyncLoops() {
+    state.isRealtimePaused = true;
+    state.activeThreadWaitLoopStarted = false;
+    state.activeThreadWaitLoopToken += 1;
+    state.summariesWaitLoopStarted = false;
+    state.summariesWaitLoopToken += 1;
+
+    if (state.activeThreadWaitAbortController) {
+      try { state.activeThreadWaitAbortController.abort(); } catch {}
+      state.activeThreadWaitAbortController = null;
+    }
+    if (state.summariesWaitAbortController) {
+      try { state.summariesWaitAbortController.abort(); } catch {}
+      state.summariesWaitAbortController = null;
+    }
+
+    if (state.summariesPollTimer) {
+      window.clearInterval(state.summariesPollTimer);
+      state.summariesPollTimer = 0;
+    }
+  }
+
+  function pauseRealtimeSync(options = {}) {
+    stopRemoteSyncLoops();
+    stopActiveOrdersPollTimer();
+
+    Object.keys(state.remoteSaveTimers || {}).forEach((key) => {
+      const timerId = Number(state.remoteSaveTimers[key] || 0);
+      if (timerId) window.clearTimeout(timerId);
+      delete state.remoteSaveTimers[key];
+    });
+
+    if (webPushSyncTimer) {
+      window.clearTimeout(webPushSyncTimer);
+      webPushSyncTimer = 0;
+    }
+
+    if (options.keepTyping !== true) {
+      stopLocalTypingSession(state.activeClientId, {
+        flush: options.flushTyping !== false,
+        keepalive: options.keepalive === true,
+        force: options.forceTypingStop === true,
+      });
+    }
+  }
+
+  function resumeRealtimeSync() {
+    startRemoteSyncLoops();
+    ensureActiveOrdersPollTimer();
   }
 
   function loadStore() {
@@ -3618,7 +3734,21 @@
     }
   }
 
+  function ensureActiveOrdersPollTimer() {
+    if (state.activeOrdersPollTimer) return;
+    state.activeOrdersPollTimer = window.setInterval(() => {
+      refreshActiveOrdersForActiveClient().catch(console.error);
+    }, ACTIVE_ORDERS_POLL_MS);
+  }
+
+  function stopActiveOrdersPollTimer() {
+    if (!state.activeOrdersPollTimer) return;
+    window.clearInterval(state.activeOrdersPollTimer);
+    state.activeOrdersPollTimer = 0;
+  }
+
   function initOrderHeaderLiveSync() {
+    ensureActiveOrdersPollTimer();
     if (initOrderHeaderLiveSync.bound) return;
     initOrderHeaderLiveSync.bound = true;
 
@@ -3644,12 +3774,6 @@
         hydrateHeaderOrderDetails(state.requestToken, activeClientId).catch(console.error);
       }
     });
-
-    if (!state.activeOrdersPollTimer) {
-      state.activeOrdersPollTimer = window.setInterval(() => {
-        refreshActiveOrdersForActiveClient().catch(console.error);
-      }, ACTIVE_ORDERS_POLL_MS);
-    }
 
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState !== "visible") return;
@@ -6940,6 +7064,7 @@
   }
 
   function init() {
+    setChatBootstrapLoading(true);
     initMessageAlerts();
     initComposer();
     initSelectionToolbar();
@@ -6976,8 +7101,12 @@
     renderChatHeader();
     syncSelectionUi();
     renderMessages();
-    startRemoteSyncLoops();
-    loadClients().catch(console.error);
+    resumeRealtimeSync();
+    loadClients()
+      .catch(console.error)
+      .finally(() => {
+        setChatBootstrapLoading(false);
+      });
 
     const syncReadOnForeground = () => {
       if (!state.activeClientId) return;
@@ -6993,27 +7122,40 @@
     };
 
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState !== "visible") return;
+      if (document.visibilityState !== "visible") {
+        pauseRealtimeSync({ flushTyping: true });
+        return;
+      }
+      resumeRealtimeSync();
       syncChatsOnForeground();
     });
 
     window.addEventListener("focus", () => {
+      resumeRealtimeSync();
       syncChatsOnForeground();
     });
 
     window.addEventListener("pageshow", () => {
+      resumeRealtimeSync();
       syncChatsOnForeground();
     });
 
     window.addEventListener("pagehide", () => {
-      stopLocalTypingSession(state.activeClientId, { flush: true, keepalive: true });
+      pauseRealtimeSync({ flushTyping: true, keepalive: true });
       saveThreadScrollPosition(state.activeClientId);
       saveClientsListScrollPosition();
       saveStore();
     });
 
     document.addEventListener("tenantStoreChanged", () => {
-      loadClients().catch(console.error);
+      state.summariesUpdatedAt = "";
+      state.summariesRevision = 0;
+      setChatBootstrapLoading(true);
+      loadClients()
+        .catch(console.error)
+        .finally(() => {
+          setChatBootstrapLoading(false);
+        });
     });
 
   }

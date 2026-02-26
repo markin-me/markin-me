@@ -57,7 +57,9 @@
   <script src="<%= assetUrl('/static/js/current-time.js') %>"></script>
   <script src="<%= assetUrl('/static/js/theme.js') %>"></script>
   <script src="<%= assetUrl('/static/js/sidebar.js') %>"></script>
-  <script src="<%= assetUrl('/static/js/chat-sidebar-badge.js') %>"></script>
+  <% if ((activePage || '') !== 'chat') { %>
+    <script src="<%= assetUrl('/static/js/chat-sidebar-badge.js') %>"></script>
+  <% } %>
 
   <!-- ✅ Модалка -->
   <script src="<%= assetUrl('/static/js/appModal.js') %>"></script>

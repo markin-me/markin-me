@@ -5,18 +5,22 @@
 
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
   const CHAT_UNREAD_EVENT = "dashboard:chat-unread-changed";
-  const FALLBACK_POLL_MS = 4000;
+  const FALLBACK_POLL_MS = 45000;
   const WAIT_TIMEOUT_MS = 25000;
   const WAIT_RETRY_MS = 1200;
   const MESSAGE_ALERT_COOLDOWN_MS = 900;
+
   let timerId = 0;
   let inFlight = false;
   let waitLoopStarted = false;
   let waitLoopToken = 0;
   let waitSupported = true;
-  let summariesUpdatedAt = "";
+
   let unreadTotal = 0;
+  let unreadRevision = 0;
+  let unreadUpdatedAt = "";
   let unreadPrimed = false;
+
   let messageAlertLastAt = 0;
   let messageAlertAudioCtx = null;
   let messageAlertAudioUnlocked = false;
@@ -40,12 +44,6 @@
     return Number.isFinite(n) && n > 0 ? String(Math.trunc(n)) : "1";
   }
 
-  function hideBadge() {
-    badge.textContent = "";
-    badge.classList.add("hidden");
-    navLink.removeAttribute("data-unread-count");
-  }
-
   function isChatPageActive() {
     try {
       if (navLink.classList.contains("active-nav")) return true;
@@ -57,11 +55,20 @@
     }
   }
 
+  if (isChatPageActive()) {
+    badge.textContent = "";
+    badge.classList.add("hidden");
+    navLink.removeAttribute("data-unread-count");
+    return;
+  }
+
+  function hideBadge() {
+    badge.textContent = "";
+    badge.classList.add("hidden");
+    navLink.removeAttribute("data-unread-count");
+  }
+
   function showBadge(totalUnread) {
-    if (isChatPageActive()) {
-      hideBadge();
-      return;
-    }
     const n = Number(totalUnread || 0);
     if (!Number.isFinite(n) || n <= 0) {
       hideBadge();
@@ -71,24 +78,6 @@
     badge.textContent = text;
     badge.classList.remove("hidden");
     navLink.setAttribute("data-unread-count", text);
-  }
-
-  function getUnreadValue(row) {
-    if (!row || typeof row !== "object") return 0;
-    const raw = row.unread_count ?? row.unreadCount ?? row.unread ?? row.unread_messages ?? row.unreadMessages;
-    const unread = Number(raw || 0);
-    if (!Number.isFinite(unread) || unread <= 0) return 0;
-    return unread;
-  }
-
-  function compareIsoDates(a, b) {
-    const ta = a ? new Date(String(a)).getTime() : 0;
-    const tb = b ? new Date(String(b)).getTime() : 0;
-    const safeA = Number.isFinite(ta) ? ta : 0;
-    const safeB = Number.isFinite(tb) ? tb : 0;
-    if (safeA > safeB) return 1;
-    if (safeA < safeB) return -1;
-    return 0;
   }
 
   function isTabForegroundActive() {
@@ -102,7 +91,7 @@
       const raw = localStorage.getItem("tenant");
       if (!raw) return "";
       const tenant = JSON.parse(raw);
-      return String(tenant && tenant.sound_new_message_url || "").trim();
+      return String((tenant && tenant.sound_new_message_url) || "").trim();
     } catch {
       return "";
     }
@@ -147,6 +136,7 @@
         }
       } catch {}
     }
+
     const ctx = ensureAlertAudioContext();
     if (ctx) {
       if (ctx.state === "running") {
@@ -157,6 +147,7 @@
         }).catch(function () {});
       }
     }
+
     requestNotificationPermissionSafe();
   }
 
@@ -211,78 +202,56 @@
     } catch {}
   }
 
-  function pickLatestUnreadRow(rows) {
-    const list = Array.isArray(rows) ? rows : [];
-    return list
-      .filter(function (row) {
-        return getUnreadValue(row) > 0;
-      })
-      .sort(function (a, b) {
-        const ua = String(a && (a.updated_at || a.updatedAt || a.last_message_at || a.lastMessageAt) || "");
-        const ub = String(b && (b.updated_at || b.updatedAt || b.last_message_at || b.lastMessageAt) || "");
-        return compareIsoDates(ub, ua);
-      })[0] || null;
-  }
-
-  function maybeNotifyUnreadIncrease(nextTotal, rows) {
+  function maybeNotifyUnreadIncrease(nextTotal) {
     if (!unreadPrimed) return;
     if (!Number.isFinite(nextTotal) || nextTotal <= unreadTotal) return;
-    if (isChatPageActive()) return;
 
     const now = Date.now();
     if (now - messageAlertLastAt < MESSAGE_ALERT_COOLDOWN_MS) return;
     messageAlertLastAt = now;
-
     playMessageAlertSound();
 
     if (!isTabForegroundActive()) {
-      const latestRow = pickLatestUnreadRow(rows);
-      const clientName = String(
-        latestRow
-        && latestRow.meta
-        && typeof latestRow.meta === "object"
-        && latestRow.meta.name
-        || "Клиент"
-      ).trim() || "Клиент";
-      const preview = String(
-        latestRow && (latestRow.last_message_text || latestRow.lastMessageText) || ""
-      ).replace(/\s+/g, " ").trim();
       showMessageNotification(
-        "Новое сообщение: " + clientName,
-        preview || "Откройте чаты, чтобы ответить."
+        "Новое сообщение",
+        "Откройте чаты, чтобы ответить."
       );
     }
   }
 
-  function getLatestUpdatedAt(rows) {
-    const list = Array.isArray(rows) ? rows : [];
-    let latest = "";
-    list.forEach(function (row) {
-      if (!row || typeof row !== "object") return;
-      const value = String(row.updated_at ?? row.updatedAt ?? row.last_message_at ?? row.lastMessageAt ?? "").trim();
-      if (!value) return;
-      if (!latest || compareIsoDates(value, latest) > 0) {
-        latest = value;
-      }
-    });
-    return latest;
+  function makeHeaders() {
+    const headers = {
+      "x-tenant-id": getTenantId(),
+      "x-store-id": getStoreId(),
+    };
+    const token = localStorage.getItem("authToken");
+    if (token) headers.Authorization = "Bearer " + token;
+    return headers;
+  }
+
+  function normalizeUnreadPayload(json) {
+    const data = json && json.data && typeof json.data === "object" ? json.data : {};
+    const totalRaw = Number(data.unread_total ?? data.total ?? 0);
+    const total = Number.isFinite(totalRaw) && totalRaw > 0 ? Math.trunc(totalRaw) : 0;
+    const revisionRaw = Number(data.revision || 0);
+    const revision = Number.isFinite(revisionRaw) && revisionRaw > 0 ? Math.trunc(revisionRaw) : 0;
+    return {
+      total,
+      revision,
+      updatedAt: String(data.updated_at || ""),
+      changed: data.changed === true,
+      timeout: data.timeout === true,
+    };
   }
 
   async function pullUnreadCount() {
     if (inFlight) return;
     inFlight = true;
     try {
-      const headers = {
-        "x-tenant-id": getTenantId(),
-        "x-store-id": getStoreId(),
-      };
-      const token = localStorage.getItem("authToken");
-      if (token) headers.Authorization = "Bearer " + token;
-
       const qs = new URLSearchParams({ _ts: String(Date.now()) });
-      const res = await fetch(CHAT_TEMP_API_BASE + "/summaries?" + qs.toString(), {
+      const res = await fetch(CHAT_TEMP_API_BASE + "/unread?" + qs.toString(), {
         method: "GET",
-        headers: headers,
+        headers: makeHeaders(),
         cache: "no-store",
       });
       if (!res.ok) {
@@ -290,22 +259,16 @@
         return;
       }
       const json = await res.json().catch(function () { return null; });
-      if (!json || json.ok !== true || !Array.isArray(json.data)) return;
-
-      const total = json.data.reduce(function (sum, row) {
-        return sum + getUnreadValue(row);
-      }, 0);
-      maybeNotifyUnreadIncrease(total, json.data);
-      unreadTotal = Number.isFinite(total) && total > 0 ? total : 0;
+      if (!json || json.ok !== true) return;
+      const payload = normalizeUnreadPayload(json);
+      maybeNotifyUnreadIncrease(payload.total);
+      unreadTotal = payload.total;
+      unreadRevision = payload.revision;
+      unreadUpdatedAt = payload.updatedAt;
       unreadPrimed = true;
-
-      showBadge(total);
-      const latestUpdatedAt = getLatestUpdatedAt(json.data);
-      if (latestUpdatedAt || summariesUpdatedAt) {
-        summariesUpdatedAt = latestUpdatedAt;
-      }
+      showBadge(payload.total);
     } catch {
-      // keep last visible state on transient errors
+      // Keep previous unread state on transient errors.
     } finally {
       inFlight = false;
     }
@@ -317,30 +280,27 @@
     });
   }
 
-  async function waitForSummariesChange() {
+  async function waitForUnreadChange() {
     if (!waitSupported) {
       return {
         changed: false,
-        updatedAt: summariesUpdatedAt,
+        timeout: true,
+        total: unreadTotal,
+        revision: unreadRevision,
+        updatedAt: unreadUpdatedAt,
       };
     }
 
-    const headers = {
-      "x-tenant-id": getTenantId(),
-      "x-store-id": getStoreId(),
-    };
-    const token = localStorage.getItem("authToken");
-    if (token) headers.Authorization = "Bearer " + token;
-
     const qs = new URLSearchParams({
-      since: String(summariesUpdatedAt || ""),
+      since_total: String(Math.max(0, Number(unreadTotal || 0))),
+      since_revision: String(Math.max(0, Number(unreadRevision || 0))),
       timeout_ms: String(Math.max(1000, WAIT_TIMEOUT_MS)),
       _ts: String(Date.now()),
     });
 
-    const res = await fetch(CHAT_TEMP_API_BASE + "/summaries/wait?" + qs.toString(), {
+    const res = await fetch(CHAT_TEMP_API_BASE + "/unread/wait?" + qs.toString(), {
       method: "GET",
-      headers: headers,
+      headers: makeHeaders(),
       cache: "no-store",
     });
 
@@ -349,14 +309,20 @@
         hideBadge();
         return {
           changed: false,
-          updatedAt: summariesUpdatedAt,
+          timeout: true,
+          total: unreadTotal,
+          revision: unreadRevision,
+          updatedAt: unreadUpdatedAt,
         };
       }
       if (res.status === 404 || res.status === 405) {
         waitSupported = false;
         return {
           changed: false,
-          updatedAt: summariesUpdatedAt,
+          timeout: true,
+          total: unreadTotal,
+          revision: unreadRevision,
+          updatedAt: unreadUpdatedAt,
         };
       }
       throw new Error("WAIT_HTTP_" + String(res.status || 0));
@@ -366,14 +332,14 @@
     if (!json || json.ok !== true) {
       return {
         changed: false,
-        updatedAt: summariesUpdatedAt,
+        timeout: true,
+        total: unreadTotal,
+        revision: unreadRevision,
+        updatedAt: unreadUpdatedAt,
       };
     }
 
-    return {
-      changed: json.data && json.data.changed === true,
-      updatedAt: String((json.data && json.data.updated_at) || ""),
-    };
+    return normalizeUnreadPayload(json);
   }
 
   function startWaitLoop() {
@@ -386,18 +352,21 @@
       while (waitLoopStarted && loopToken === waitLoopToken) {
         if (!waitSupported) {
           await sleepMs(FALLBACK_POLL_MS);
+          await pullUnreadCount().catch(function () {});
           continue;
         }
 
         try {
-          const waitResult = await waitForSummariesChange();
+          const waitResult = await waitForUnreadChange();
           if (!waitLoopStarted || loopToken !== waitLoopToken) break;
-          if (typeof waitResult.updatedAt === "string") {
-            summariesUpdatedAt = waitResult.updatedAt;
+          if (waitResult.changed) {
+            maybeNotifyUnreadIncrease(waitResult.total);
+            unreadTotal = waitResult.total;
+            unreadRevision = waitResult.revision;
+            unreadUpdatedAt = waitResult.updatedAt;
+            unreadPrimed = true;
+            showBadge(unreadTotal);
           }
-          // Always refresh after wait returns. This avoids missed updates
-          // when backend timestamp precision is coarser than message frequency.
-          await pullUnreadCount();
         } catch {
           await sleepMs(WAIT_RETRY_MS);
         }
@@ -427,14 +396,18 @@
   });
 
   document.addEventListener("tenantStoreChanged", function () {
-    summariesUpdatedAt = "";
+    unreadTotal = 0;
+    unreadRevision = 0;
+    unreadUpdatedAt = "";
+    unreadPrimed = false;
     pullUnreadCount().catch(function () {});
   });
 
   document.addEventListener(CHAT_UNREAD_EVENT, function (event) {
     const totalUnread = Number(event?.detail?.totalUnread);
     if (Number.isFinite(totalUnread)) {
-      showBadge(totalUnread);
+      unreadTotal = totalUnread > 0 ? Math.trunc(totalUnread) : 0;
+      showBadge(unreadTotal);
       return;
     }
     pullUnreadCount().catch(function () {});
