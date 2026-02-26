@@ -677,6 +677,7 @@
       method: opts.method || "GET",
       headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: opts.signal,
     });
 
     const json = await res.json().catch(() => null);
@@ -736,6 +737,7 @@
   let stockEventsWaitLoopToken = 0;
   let stockEventsWaitSupported = true;
   let stockEventsCursor = 0;
+  let stockEventsWaitAbortController = null;
   let stockRefreshDebounceTimer = null;
   let stockRefreshInFlight = false;
   let stockRefreshPending = false;
@@ -983,13 +985,21 @@
       timeout_ms: "20000",
       _ts: String(Date.now()),
     });
-    const json = await apiJson(`/api/public/changes/wait?${qs.toString()}`);
-    const data = json?.data || {};
-    const nextCursor = Number(data.cursor || 0);
-    return {
-      changed: data.changed === true,
-      cursor: Number.isFinite(nextCursor) && nextCursor >= 0 ? nextCursor : Number(stockEventsCursor || 0) || 0,
-    };
+    const controller = new AbortController();
+    stockEventsWaitAbortController = controller;
+    try {
+      const json = await apiJson(`/api/public/changes/wait?${qs.toString()}`, { signal: controller.signal });
+      const data = json?.data || {};
+      const nextCursor = Number(data.cursor || 0);
+      return {
+        changed: data.changed === true,
+        cursor: Number.isFinite(nextCursor) && nextCursor >= 0 ? nextCursor : Number(stockEventsCursor || 0) || 0,
+      };
+    } finally {
+      if (stockEventsWaitAbortController === controller) {
+        stockEventsWaitAbortController = null;
+      }
+    }
   }
 
   async function fetchPublicStockEventsSince(sinceCursor) {
@@ -1051,6 +1061,9 @@
             await applyStockChangedEvent(evt?.data || {});
           }
         } catch (e) {
+          if (e?.name === "AbortError") {
+            continue;
+          }
           const msg = String(e?.message || "");
           if (e?.httpStatus === 404 || e?.httpStatus === 405 || e?.httpStatus === 410 || msg === "EVENTS_UNAVAILABLE") {
             stockEventsWaitSupported = false;
@@ -6003,6 +6016,9 @@ async function initAddresses() {
   }
 
   function openProductDetails(productId, opts = {}) {
+    try {
+      if (stockEventsWaitAbortController) stockEventsWaitAbortController.abort();
+    } catch {}
     return ensureShopLateLoaded().then(() => {
       if (typeof window.openProductDetails === "function" && window.openProductDetails !== openProductDetails) {
         return window.openProductDetails(productId, opts);
@@ -6081,6 +6097,9 @@ async function initAddresses() {
   }
 
   function openComboDetails(comboId, opts = {}) {
+    try {
+      if (stockEventsWaitAbortController) stockEventsWaitAbortController.abort();
+    } catch {}
     return ensureShopLateLoaded().then(() => {
       if (typeof window.openComboDetails === "function" && window.openComboDetails !== openComboDetails) {
         return window.openComboDetails(comboId, opts);
