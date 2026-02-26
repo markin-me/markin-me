@@ -14072,6 +14072,7 @@ function setBottomNavActive(tab) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "shop-checkout-select shop-checkout-time-wheel-trigger";
+    btn.setAttribute("aria-expanded", "false");
 
     const panel = document.createElement("div");
     panel.className = PANEL_CLASS;
@@ -14084,6 +14085,24 @@ function setBottomNavActive(tab) {
 
     let opts = Array.isArray(options) ? options.slice() : [];
     let current = value || (opts[0] ? opts[0].code : "");
+
+    function isOpen() {
+      return panel.classList.contains("is-open");
+    }
+
+    function setOpen(nextOpen) {
+      const willOpen = Boolean(nextOpen);
+      panel.classList.toggle("is-open", willOpen);
+      wrap.classList.toggle("is-open", willOpen);
+      btn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+      if (willOpen && opts.length > 0) {
+        const selectedIndex = getSelectedIndex();
+        scrollToIndex(selectedIndex);
+        requestAnimationFrame(() => {
+          scrollToIndex(selectedIndex);
+        });
+      }
+    }
 
     function getSelectedIndex() {
       const i = opts.findIndex(o => o.code === current);
@@ -14141,7 +14160,7 @@ function setBottomNavActive(tab) {
           current = o.code;
           scrollToIndex(i);
           updateButtonText();
-          panel.classList.remove("is-open");
+          setOpen(false);
           wrap.dispatchEvent(new Event("change"));
         });
         scrollEl.appendChild(item);
@@ -14162,7 +14181,7 @@ function setBottomNavActive(tab) {
       }
       updateButtonText();
       renderItems();
-      if (panel.classList.contains("is-open")) {
+      if (isOpen()) {
         scrollToIndex(getSelectedIndex());
       }
     }
@@ -14170,7 +14189,7 @@ function setBottomNavActive(tab) {
     function setValue(val) {
       current = val;
       updateButtonText();
-      if (panel.classList.contains("is-open")) {
+      if (isOpen()) {
         scrollToIndex(getSelectedIndex());
       }
     }
@@ -14185,7 +14204,7 @@ function setBottomNavActive(tab) {
       // Даже когда слотов нет (opts.length === 0), даём панели
       // раскрыться — так пользователь явно видит, что селектор
       // отреагировал на нажатие, а не «сломался».
-      panel.classList.toggle("is-open");
+      setOpen(!isOpen());
 
       if (scrollParent != null && prevScrollTop != null) {
         requestAnimationFrame(() => {
@@ -14198,16 +14217,12 @@ function setBottomNavActive(tab) {
         });
       }
 
-      if (panel.classList.contains("is-open") && opts.length > 0) {
-        requestAnimationFrame(() => {
-          scrollToIndex(getSelectedIndex());
-        });
-      }
+      if (isOpen() && opts.length > 0) scrollToIndex(getSelectedIndex());
     });
 
     document.addEventListener("click", (e) => {
       if (!wrap.contains(e.target)) {
-        panel.classList.remove("is-open");
+        setOpen(false);
       }
     });
 
@@ -14660,6 +14675,7 @@ function setBottomNavActive(tab) {
       let wheelFinalizeTimer = 0;
       let mobileFinalizeTimer = 0;
       let ensureRafId = 0;
+      let visualRafId = 0;
       let smoothScrollRafId = 0;
       let smoothScrollToken = 0;
       let wheelSessionActive = false;
@@ -14696,6 +14712,28 @@ function setBottomNavActive(tab) {
         leftSpacer.style.flexBasis = px;
         rightSpacer.style.flexBasis = px;
         return true;
+      }
+
+      function updateVisualFocusNow() {
+        visualRafId = 0;
+        const buttons = getButtons();
+        if (!buttons.length) return;
+        if (root.clientWidth <= 0) return;
+        const rootRect = root.getBoundingClientRect();
+        const centerX = rootRect.left + (root.clientWidth / 2);
+        buttons.forEach((btn) => {
+          const rect = btn.getBoundingClientRect();
+          const btnCenter = rect.left + (rect.width / 2);
+          const distance = Math.abs(centerX - btnCenter);
+          const influenceRadius = Math.max(rect.width * 1.35, 1);
+          const focus = Math.max(0, Math.min(1, 1 - (distance / influenceRadius)));
+          btn.style.setProperty("--carousel-focus", focus.toFixed(4));
+        });
+      }
+
+      function scheduleVisualFocusUpdate() {
+        if (visualRafId) return;
+        visualRafId = requestAnimationFrame(updateVisualFocusNow);
       }
 
       function getCenteredCode() {
@@ -14787,6 +14825,7 @@ function setBottomNavActive(tab) {
         if (behavior === "auto") {
           cancelSmoothScroll();
           root.scrollLeft = targetLeft;
+          scheduleVisualFocusUpdate();
           return true;
         }
 
@@ -14802,6 +14841,7 @@ function setBottomNavActive(tab) {
 
         cancelSmoothScroll();
         root.scrollLeft = targetLeft;
+        scheduleVisualFocusUpdate();
         return true;
       }
 
@@ -14819,6 +14859,7 @@ function setBottomNavActive(tab) {
         });
 
         if (center) centerCode(currentCode, centerBehavior);
+        scheduleVisualFocusUpdate();
 
         if (!silent && prevCode !== currentCode) {
           root.dispatchEvent(new Event("change", { bubbles: true }));
@@ -14935,6 +14976,7 @@ function setBottomNavActive(tab) {
         cancelSmoothScroll();
       }, { passive: true });
       root.addEventListener("scroll", () => {
+        scheduleVisualFocusUpdate();
         if (wheelSessionActive) return;
         if (!isMobileViewport()) return;
         scheduleMobileFinalize(150);
@@ -14974,10 +15016,12 @@ function setBottomNavActive(tab) {
         const ro = new ResizeObserver(() => {
           if (hasUserInteracted) return;
           scheduleEnsure();
+          scheduleVisualFocusUpdate();
         });
         ro.observe(root);
       }
       scheduleEnsure();
+      scheduleVisualFocusUpdate();
 
       return {
         root,
@@ -15197,6 +15241,41 @@ function setBottomNavActive(tab) {
     const mobileCommentWrap = document.getElementById("shopMobileCheckoutCommentWrap");
     const mobileCommentInput = document.getElementById("shopMobileCheckoutCommentInput");
     const desktopFooterCommentInput = document.getElementById("shopCheckoutFooterCommentInput");
+    const isCommentTextarea = (node) => String(node?.tagName || "").toUpperCase() === "TEXTAREA";
+    const autosizeCommentField = (field) => {
+      if (!isCommentTextarea(field)) return;
+      if (!field.classList.contains("is-expanded")) return;
+      field.style.height = "auto";
+      const minHeight = 40;
+      const maxHeight = 150;
+      const nextHeight = Math.max(minHeight, Math.min(maxHeight, field.scrollHeight || minHeight));
+      field.style.height = `${nextHeight}px`;
+      field.scrollTop = field.scrollHeight;
+    };
+    const collapseCommentField = (field) => {
+      if (!isCommentTextarea(field)) return;
+      field.classList.remove("is-expanded");
+      field.style.height = "";
+      field.scrollTop = 0;
+    };
+    const bindCommentFieldAutogrow = (field) => {
+      if (!isCommentTextarea(field)) return;
+      if (field.dataset.commentGrowBound === "1") return;
+      field.dataset.commentGrowBound = "1";
+      collapseCommentField(field);
+      field.addEventListener("focus", () => {
+        field.classList.add("is-expanded");
+        autosizeCommentField(field);
+      });
+      field.addEventListener("blur", () => {
+        collapseCommentField(field);
+      });
+      field.addEventListener("input", () => {
+        autosizeCommentField(field);
+      });
+    };
+    bindCommentFieldAutogrow(mobileCommentInput);
+    bindCommentFieldAutogrow(desktopFooterCommentInput);
     if (mobileNameInput) {
       mobileNameInput.value = str(name.value || "");
       mobileNameInput.oninput = () => {
@@ -15215,14 +15294,18 @@ function setBottomNavActive(tab) {
       mobileCommentInput.value = comment.value || "";
       mobileCommentInput.oninput = () => {
         comment.value = mobileCommentInput.value || "";
+        autosizeCommentField(mobileCommentInput);
         if (desktopFooterCommentInput && desktopFooterCommentInput.value !== comment.value) {
           desktopFooterCommentInput.value = comment.value;
+          autosizeCommentField(desktopFooterCommentInput);
         }
       };
       comment.addEventListener("input", () => {
         if (mobileCommentInput.value !== comment.value) mobileCommentInput.value = comment.value;
+        autosizeCommentField(mobileCommentInput);
         if (desktopFooterCommentInput && desktopFooterCommentInput.value !== comment.value) {
           desktopFooterCommentInput.value = comment.value;
+          autosizeCommentField(desktopFooterCommentInput);
         }
       });
     }
@@ -15230,8 +15313,10 @@ function setBottomNavActive(tab) {
       desktopFooterCommentInput.value = comment.value || "";
       desktopFooterCommentInput.oninput = () => {
         comment.value = desktopFooterCommentInput.value || "";
+        autosizeCommentField(desktopFooterCommentInput);
         if (mobileCommentInput && mobileCommentInput.value !== comment.value) {
           mobileCommentInput.value = comment.value;
+          autosizeCommentField(mobileCommentInput);
         }
       };
     }
@@ -15391,6 +15476,7 @@ function setBottomNavActive(tab) {
 
     const timeRow = document.createElement("div");
     timeRow.className = "shop-checkout-date-row1";
+    timeRow.classList.add("shop-checkout-time-stack");
 
     const todayAtTimeWrap = document.createElement("div");
     todayAtTimeWrap.className = "shop-checkout-dropdown-wrap";
@@ -15405,6 +15491,7 @@ function setBottomNavActive(tab) {
 
     const asapNowWrap = document.createElement("div");
     asapNowWrap.className = "shop-checkout-dropdown-wrap";
+    asapNowWrap.classList.add("shop-checkout-time-stack-divider");
     asapNowWrap.style.display = "none";
     const asapNowLabel = document.createElement("button");
     asapNowLabel.type = "button";
@@ -15419,9 +15506,6 @@ function setBottomNavActive(tab) {
     dateSection.className = "shop-checkout-time-input--ondate";
 
     // Календарь-попover
-    const calendarWrap = document.createElement("div");
-    calendarWrap.className = "shop-checkout-date-calendar";
-
     const calPopover = document.createElement("div");
     calPopover.className = "date-popover hidden";
 
@@ -15459,23 +15543,23 @@ function setBottomNavActive(tab) {
     calGrid.className = "date-grid";
     calPopover.appendChild(calGrid);
 
-    calendarWrap.appendChild(calPopover);
-    dateSection.appendChild(calendarWrap);
-
     // Row 2: [На завтра / дд.мм] + [селектор времени]
     const dateRow2 = document.createElement("div");
     dateRow2.className = "shop-checkout-date-row2";
+    dateRow2.classList.add("shop-checkout-time-stack");
 
     const dateDisplayWrap = document.createElement("div");
-    dateDisplayWrap.className = "shop-checkout-dropdown-wrap";
+    dateDisplayWrap.className = "shop-checkout-dropdown-wrap shop-checkout-date-calendar";
     const dateDisplay = document.createElement("button");
     dateDisplay.type = "button";
     dateDisplay.className = "shop-checkout-select shop-checkout-date-display";
     dateDisplayWrap.appendChild(dateDisplay);
+    dateDisplayWrap.appendChild(calPopover);
 
     const timeSlotsDropdown = buildTimeWheelPicker([], "");
     const dateSlotsWrap = document.createElement("div");
     dateSlotsWrap.className = "shop-checkout-time-input--slots";
+    dateSlotsWrap.classList.add("shop-checkout-time-stack-divider");
     dateSlotsWrap.appendChild(timeSlotsDropdown.root);
 
     dateRow2.appendChild(dateDisplayWrap);
@@ -15485,6 +15569,7 @@ function setBottomNavActive(tab) {
     // Слоты для "Ко времени" — в том же ряду что и timeSelect
     const timeSlotsWrapAtTime = document.createElement("div");
     timeSlotsWrapAtTime.className = "shop-checkout-time-input--slots";
+    timeSlotsWrapAtTime.classList.add("shop-checkout-time-stack-divider");
     timeSlotsWrapAtTime.style.display = "none";
     const timeSlotsDropdownAtTime = buildTimeWheelPicker([], "");
     timeSlotsWrapAtTime.appendChild(timeSlotsDropdownAtTime.root);
@@ -15595,7 +15680,7 @@ function setBottomNavActive(tab) {
     });
 
     document.addEventListener("click", (e) => {
-      if (calendarOpen && !calendarWrap.contains(e.target) && !dateDisplay.contains(e.target)) {
+      if (calendarOpen && !dateDisplayWrap.contains(e.target)) {
         calPopover.classList.add("hidden");
         calendarOpen = false;
       }
@@ -15627,6 +15712,7 @@ function setBottomNavActive(tab) {
       // Когда нет соседних элементов — timeSelect на всю ширину
       const hasNeighbor = showAtTimePair || showAsapPair;
       timeRow.style.display = hasNeighbor ? "" : "none";
+      timeRow.classList.toggle("is-combined", hasNeighbor);
       timeSlotsWrapAtTime.style.gridColumn = "";
     }
 
@@ -15637,9 +15723,11 @@ function setBottomNavActive(tab) {
       if (selectedCode === "on_date") {
         if (!config || Number(config.has_time_window) !== 1) {
           dateSlotsWrap.style.display = "none";
+          dateRow2.classList.remove("is-combined");
           return;
         }
         dateSlotsWrap.style.display = "";
+        dateRow2.classList.add("is-combined");
         const slots = buildTimeSlots(config, selectedDate, storeTimezone);
         const slotOptions = slots.map(value => ({ code: value, title: value }));
         const preferred = timeInput.value || storedDraftTime || "";
@@ -15653,8 +15741,10 @@ function setBottomNavActive(tab) {
 
       if (!config || Number(config.has_time_window) !== 1) {
         timeSlotsDropdownAtTime.setOptions([]);
+        dateRow2.classList.remove("is-combined");
         return;
       }
+      dateRow2.classList.remove("is-combined");
       const slots = buildTimeSlots(config, null, storeTimezone);
       const slotOptions = slots.map(value => ({ code: value, title: value }));
       const preferred = timeInput.value || storedDraftTime || "";
@@ -16083,7 +16173,9 @@ function setBottomNavActive(tab) {
       changeSelect.root.style.display = isCash ? "" : "none";
       changeNonCashHint.style.display = isCash ? "none" : "";
       const isCustom = changeSelect.getValue() === "custom";
-      changeCustomInput.style.display = (isCash && isCustom) ? "" : "none";
+      const showCustomInput = isCash && isCustom;
+      changeCustomInput.style.display = showCustomInput ? "" : "none";
+      changeWrap.classList.toggle("is-combined", showCustomInput);
     }
     paySelect.root.addEventListener("change", clearPaymentInvalidState);
     paySelect.root.addEventListener("change", refreshChangeVisibility);
