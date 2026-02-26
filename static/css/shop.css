@@ -12339,20 +12339,34 @@ div.shop-pd-option-thumb{
 .shop-pd-option-qty-btn{
   width: 28px;
   height: 28px;
+  min-width: 28px;
   border: 1px solid var(--shop-buy);
   border-radius: 50%;
   background: var(--shop-buy);
   color: #fff;
   font-size: 18px;
   font-weight: 700;
+  line-height: 1;
+  padding: 0;
+  gap: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  vertical-align: middle;
+  transform-origin: center center;
   transform: scale(1);
   box-shadow: 0 4px 10px rgba(255, 136, 0, 0.24);
   transition: background 0.15s ease, border-color 0.15s ease, transform 0.14s ease, box-shadow 0.14s ease, color 0.14s ease, filter 0.14s ease;
   cursor: pointer;
 }
 .shop-pd-option-qty-btn:hover:not(:disabled){
+  background: var(--shop-buy);
+  border-color: var(--shop-buy);
+  color: #fff;
   filter: brightness(1.03);
   box-shadow: 0 6px 12px rgba(255, 136, 0, 0.3);
+  transform: scale(1);
 }
 .shop-pd-option-qty-btn:active:not(:disabled),
 .shop-pd-option-qty-btn.is-pressed:not(:disabled){
