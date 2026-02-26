@@ -10475,20 +10475,40 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 .shop-combo-picker-ingredient-btn{
   width: 32px;
   height: 32px;
-  border-radius: 10px;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface-2);
-  color: var(--color-text);
-  font-size: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--shop-buy);
+  background: var(--shop-buy);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 700;
   line-height: 1;
   cursor: pointer;
   display: grid;
   place-items: center;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transform: scale(1);
+  box-shadow: 0 4px 10px rgba(255, 136, 0, 0.24);
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.14s ease, box-shadow 0.14s ease, color 0.14s ease, filter 0.14s ease;
 }
 .shop-combo-picker-ingredient-btn:hover{
-  background: var(--shop-hover-dark);
-  border-color: var(--color-text-muted);
+  filter: brightness(1.03);
+  box-shadow: 0 6px 12px rgba(255, 136, 0, 0.3);
+}
+.shop-combo-picker-ingredient-btn:active,
+.shop-combo-picker-ingredient-btn.is-pressed{
+  background: #ef7600;
+  border-color: #ef7600;
+  color: #fff;
+  transform: scale(1.12);
+  box-shadow: 0 0 0 4px rgba(255, 136, 0, 0.2), 0 8px 14px rgba(255, 136, 0, 0.36);
+}
+.shop-combo-picker-ingredient-btn:disabled{
+  background: #eef0f3;
+  border-color: #e0e5ea;
+  color: #9ca3ad;
+  transform: none;
+  box-shadow: none;
+  filter: none;
+  cursor: default;
 }
 
 /* РџРѕР»РЅС‹Р№ СЌРєСЂР°РЅ РєРѕРјР±Рѕ: РєР°СЂС‚РѕС‡РєРё + Р·Р°РјРµРЅРёС‚СЊ + РґРѕР±Р°РІРёС‚СЊ */
@@ -12192,11 +12212,37 @@ div.shop-pd-option-thumb{
 .shop-pd-option-qty-btn{
   width: 28px;
   height: 28px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface);
+  border: 1px solid var(--shop-buy);
+  border-radius: 50%;
+  background: var(--shop-buy);
+  color: #fff;
+  font-size: 18px;
   font-weight: 700;
+  transform: scale(1);
+  box-shadow: 0 4px 10px rgba(255, 136, 0, 0.24);
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.14s ease, box-shadow 0.14s ease, color 0.14s ease, filter 0.14s ease;
   cursor: pointer;
+}
+.shop-pd-option-qty-btn:hover:not(:disabled){
+  filter: brightness(1.03);
+  box-shadow: 0 6px 12px rgba(255, 136, 0, 0.3);
+}
+.shop-pd-option-qty-btn:active:not(:disabled),
+.shop-pd-option-qty-btn.is-pressed:not(:disabled){
+  background: #ef7600;
+  border-color: #ef7600;
+  color: #fff;
+  transform: scale(1.12);
+  box-shadow: 0 0 0 4px rgba(255, 136, 0, 0.2), 0 8px 14px rgba(255, 136, 0, 0.36);
+}
+.shop-pd-option-qty-btn:disabled{
+  background: #eef0f3;
+  border-color: #e0e5ea;
+  color: #9ca3ad;
+  transform: none;
+  box-shadow: none;
+  filter: none;
+  cursor: not-allowed;
 }
 .shop-pd-option-qty-value{
   min-width: 16px;
@@ -12346,24 +12392,40 @@ div.shop-pd-option-thumb{
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
-  font-size: 18px;
-  font-weight: 600;
-  border: 1px solid var(--color-border);
-  background: var(--color-bg);
-  color: var(--color-text);
+  border-radius: 50%;
+  font-size: 20px;
+  font-weight: 700;
+  border: 1px solid var(--shop-buy);
+  background: var(--shop-buy);
+  color: #fff;
   cursor: pointer;
-  transition: all 0.2s;
+  transform: scale(1);
+  box-shadow: 0 4px 10px rgba(255, 136, 0, 0.24);
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.14s ease, box-shadow 0.14s ease, color 0.14s ease, filter 0.14s ease;
 }
 
 .shop-pd-ingredient-controls .qty-btn:hover:not(:disabled){
-  background: var(--shop-buy);
-  color: var(--shop-buy-text);
-  border-color: var(--shop-buy);
+  filter: brightness(1.03);
+  box-shadow: 0 6px 12px rgba(255, 136, 0, 0.3);
+}
+
+.shop-pd-ingredient-controls .qty-btn:active:not(:disabled),
+.shop-pd-ingredient-controls .qty-btn.is-pressed:not(:disabled){
+  background: #ef7600;
+  border-color: #ef7600;
+  color: #fff;
+  transform: scale(1.12);
+  box-shadow: 0 0 0 4px rgba(255, 136, 0, 0.2), 0 8px 14px rgba(255, 136, 0, 0.36);
 }
 
 .shop-pd-ingredient-controls .qty-btn:disabled{
-  opacity: 0.4;
+  background: #eef0f3;
+  border-color: #e0e5ea;
+  color: #9ca3ad;
+  opacity: 1;
+  transform: none;
+  box-shadow: none;
+  filter: none;
   cursor: not-allowed;
 }
 

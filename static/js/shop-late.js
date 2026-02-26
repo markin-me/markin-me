@@ -207,6 +207,77 @@
 
 const comboProductIngredientsCache = new Map();
 const comboProductVariantsCache = new Map();
+const productDetailsConfigCache = new Map();
+let productDetailsPrefetchTimer = null;
+
+function normalizeComboVariantList(rawList) {
+  const variants = Array.isArray(rawList) ? rawList : [];
+  return variants.map((v) => ({
+    id: Number(v.id),
+    title: str(v.title || ""),
+    unit_id: v.unit_id ? Number(v.unit_id) : null,
+    unit_code: str(v.unit_code || ""),
+    unit_title: str(v.unit_title || ""),
+    unit_short_title: str(v.unit_short_title || ""),
+    values: Array.isArray(v.values) ? v.values : [],
+    discount_tiers: Array.isArray(v.discount_tiers) ? v.discount_tiers : [],
+    default_value_index: v.default_value_index != null ? Number(v.default_value_index) : null,
+  }));
+}
+
+async function preloadComboProductsData(productIds) {
+  const ids = Array.isArray(productIds)
+    ? Array.from(new Set(productIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)))
+    : [];
+  if (!ids.length) return;
+
+  const missingIngredients = ids.filter((id) => !comboProductIngredientsCache.has(id));
+  const missingVariants = ids.filter((id) => !comboProductVariantsCache.has(id));
+
+  const tasks = [];
+
+  if (missingIngredients.length) {
+    tasks.push(
+      apiJson('/api/public/products/batch/ingredients', {
+        method: 'POST',
+        body: { ids: missingIngredients },
+      })
+        .then((json) => {
+          const data = json?.data && typeof json.data === "object" ? json.data : {};
+          missingIngredients.forEach((id) => {
+            const list = Array.isArray(data[id]) ? data[id] : [];
+            comboProductIngredientsCache.set(id, Promise.resolve(list));
+          });
+        })
+        .catch((e) => {
+          console.warn("Failed to preload combo ingredients batch:", e);
+        })
+    );
+  }
+
+  if (missingVariants.length) {
+    tasks.push(
+      apiJson('/api/public/products/batch/variants', {
+        method: 'POST',
+        body: { ids: missingVariants },
+      })
+        .then((json) => {
+          const data = json?.data && typeof json.data === "object" ? json.data : {};
+          missingVariants.forEach((id) => {
+            const list = normalizeComboVariantList(Array.isArray(data[id]) ? data[id] : []);
+            comboProductVariantsCache.set(id, Promise.resolve(list));
+          });
+        })
+        .catch((e) => {
+          console.warn("Failed to preload combo variants batch:", e);
+        })
+    );
+  }
+
+  if (tasks.length) {
+    await Promise.allSettled(tasks);
+  }
+}
 
 async function resolveProductIngredients(productId) {
   const pid = Number(productId || 0);
@@ -315,18 +386,7 @@ async function resolveProductVariants(productId) {
 
   const request = (async () => {
     const res = await apiJson(`/api/public/products/${pid}/variants`);
-    const variants = Array.isArray(res.data) ? res.data : [];
-    return variants.map((v) => ({
-      id: Number(v.id),
-      title: str(v.title || ""),
-      unit_id: v.unit_id ? Number(v.unit_id) : null,
-      unit_code: str(v.unit_code || ""),
-      unit_title: str(v.unit_title || ""),
-      unit_short_title: str(v.unit_short_title || ""),
-      values: Array.isArray(v.values) ? v.values : [],
-      discount_tiers: Array.isArray(v.discount_tiers) ? v.discount_tiers : [],
-      default_value_index: v.default_value_index != null ? Number(v.default_value_index) : null,
-    }));
+    return normalizeComboVariantList(Array.isArray(res.data) ? res.data : []);
   })();
   comboProductVariantsCache.set(pid, request);
 
@@ -337,6 +397,71 @@ async function resolveProductVariants(productId) {
     console.error("Failed to load product variants:", e);
     return [];
   }
+}
+
+async function resolveProductDetailsConfig(productId) {
+  const pid = Number(productId || 0);
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return { optionGroups: [], ingredients: [], variants: [] };
+  }
+  const cached = productDetailsConfigCache.get(pid);
+  if (cached && cached.promise) return cached.promise;
+
+  const promise = (async () => {
+    const [optionGroups, ingredients, variants] = await Promise.all([
+      resolveProductOptionGroups(pid),
+      resolveProductIngredients(pid),
+      resolveProductVariants(pid),
+    ]);
+    return {
+      optionGroups: Array.isArray(optionGroups) ? optionGroups : [],
+      ingredients: Array.isArray(ingredients) ? ingredients : [],
+      variants: Array.isArray(variants) ? variants : [],
+    };
+  })();
+
+  productDetailsConfigCache.set(pid, { promise, ts: Date.now() });
+  try {
+    return await promise;
+  } catch (e) {
+    productDetailsConfigCache.delete(pid);
+    throw e;
+  }
+}
+
+function prefetchProductDetailsConfig(productIds, opts = {}) {
+  const ids = Array.isArray(productIds)
+    ? Array.from(new Set(productIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)))
+    : [];
+  if (!ids.length) return;
+
+  const limit = Math.max(1, Number(opts.limit || 6));
+  const delayMs = Math.max(0, Number(opts.delayMs ?? 220));
+  const queue = ids.filter((id) => !productDetailsConfigCache.has(id)).slice(0, limit);
+  if (!queue.length) return;
+
+  const run = async () => {
+    for (const id of queue) {
+      try {
+        await resolveProductDetailsConfig(id);
+      } catch {}
+    }
+  };
+
+  if (productDetailsPrefetchTimer) {
+    clearTimeout(productDetailsPrefetchTimer);
+    productDetailsPrefetchTimer = null;
+  }
+  productDetailsPrefetchTimer = setTimeout(() => {
+    productDetailsPrefetchTimer = null;
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(() => {
+        run().catch(() => {});
+      }, { timeout: 1200 });
+      return;
+    }
+    run().catch(() => {});
+  }, delayMs);
 }
 
 function buildProductDetailsContent(
@@ -471,6 +596,91 @@ function buildProductDetailsContent(
       if (typeof afterHide === "function") afterHide();
     };
     listEl.addEventListener("transitionend", onEnd);
+  }
+
+  function setOptionVariantAccordionState(accordionEl, open, duration = 220) {
+    if (!accordionEl) return;
+    const willOpen = !!open;
+    const OPEN_PADDING_TOP_PX = 8;
+    const OPEN_MARGIN_TOP_PX = 8;
+    const OPEN_BORDER_TOP_WIDTH_PX = 1;
+    const currentTeardown = accordionEl.__variantAccordionTeardown;
+    if (typeof currentTeardown === "function") {
+      try { currentTeardown(); } catch {}
+      accordionEl.__variantAccordionTeardown = null;
+    }
+
+    if (willOpen) {
+      accordionEl.classList.add("is-open");
+      accordionEl.style.display = "block";
+      const full = accordionEl.scrollHeight || 0;
+      accordionEl.style.overflow = "hidden";
+      accordionEl.style.maxHeight = "0px";
+      accordionEl.style.opacity = "0";
+      accordionEl.style.paddingTop = "0px";
+      accordionEl.style.marginTop = "0px";
+      accordionEl.style.borderTopWidth = "0px";
+      accordionEl.style.transition = `max-height ${duration}ms ease, opacity ${duration}ms ease, padding-top ${duration}ms ease, margin-top ${duration}ms ease, border-top-width ${duration}ms ease`;
+      const run = () => {
+        const target = accordionEl.scrollHeight || full;
+        accordionEl.style.maxHeight = `${target}px`;
+        accordionEl.style.opacity = "1";
+        accordionEl.style.paddingTop = `${OPEN_PADDING_TOP_PX}px`;
+        accordionEl.style.marginTop = `${OPEN_MARGIN_TOP_PX}px`;
+        accordionEl.style.borderTopWidth = `${OPEN_BORDER_TOP_WIDTH_PX}px`;
+      };
+      if (window.requestAnimationFrame) requestAnimationFrame(run);
+      else run();
+      const onEnd = () => {
+        accordionEl.style.maxHeight = "";
+        accordionEl.style.overflow = "";
+        accordionEl.style.transition = "";
+        accordionEl.removeEventListener("transitionend", onEnd);
+        accordionEl.__variantAccordionTeardown = null;
+      };
+      accordionEl.__variantAccordionTeardown = onEnd;
+      accordionEl.addEventListener("transitionend", onEnd);
+      return;
+    }
+
+    if (!accordionEl.classList.contains("is-open")) {
+      accordionEl.style.display = "none";
+      return;
+    }
+    const full = accordionEl.scrollHeight || 0;
+    accordionEl.style.display = "block";
+    accordionEl.style.overflow = "hidden";
+    accordionEl.style.maxHeight = `${full}px`;
+    accordionEl.style.opacity = "1";
+    const computed = window.getComputedStyle(accordionEl);
+    accordionEl.style.paddingTop = computed.paddingTop || `${OPEN_PADDING_TOP_PX}px`;
+    accordionEl.style.marginTop = computed.marginTop || `${OPEN_MARGIN_TOP_PX}px`;
+    accordionEl.style.borderTopWidth = computed.borderTopWidth || `${OPEN_BORDER_TOP_WIDTH_PX}px`;
+    accordionEl.style.transition = `max-height ${duration}ms ease, opacity ${duration}ms ease, padding-top ${duration}ms ease, margin-top ${duration}ms ease, border-top-width ${duration}ms ease`;
+    const run = () => {
+      accordionEl.style.maxHeight = "0px";
+      accordionEl.style.opacity = "0";
+      accordionEl.style.paddingTop = "0px";
+      accordionEl.style.marginTop = "0px";
+      accordionEl.style.borderTopWidth = "0px";
+    };
+    if (window.requestAnimationFrame) requestAnimationFrame(run);
+    else run();
+    const onEnd = () => {
+      accordionEl.classList.remove("is-open");
+      accordionEl.style.display = "none";
+      accordionEl.style.maxHeight = "";
+      accordionEl.style.opacity = "";
+      accordionEl.style.paddingTop = "";
+      accordionEl.style.marginTop = "";
+      accordionEl.style.borderTopWidth = "";
+      accordionEl.style.overflow = "";
+      accordionEl.style.transition = "";
+      accordionEl.removeEventListener("transitionend", onEnd);
+      accordionEl.__variantAccordionTeardown = null;
+    };
+    accordionEl.__variantAccordionTeardown = onEnd;
+    accordionEl.addEventListener("transitionend", onEnd);
   }
 
   /* ================= HERO (ФОТО + СТРЕЛКИ DESKTOP + СВАЙП MOBILE + DOTS) ================= */
@@ -1226,7 +1436,7 @@ function buildProductDetailsContent(
           const setGearState = (open) => {
             accordionOpen = !!open;
             if (!gearBtn || !variantAccordion) return;
-            variantAccordion.style.display = accordionOpen ? "block" : "none";
+            setOptionVariantAccordionState(variantAccordion, accordionOpen);
             gearBtn.classList.toggle("is-open", accordionOpen);
           };
 
@@ -1755,14 +1965,14 @@ function buildProductDetailsContent(
                 if (typeof setDefaultVariantForOptionItem === "function") {
                   setDefaultVariantForOptionItem(item, groupState.variantByItemId);
                 }
-                variantAccordion.style.display = "block";
+                setOptionVariantAccordionState(variantAccordion, true);
                 gearBtn.classList.add("is-open");
+                updateCard();
+                if (typeof onSelectionChange === "function") onSelectionChange();
               } else {
-                variantAccordion.style.display = "none";
+                setOptionVariantAccordionState(variantAccordion, false);
                 gearBtn.classList.remove("is-open");
               }
-              updateCard();
-              if (typeof onSelectionChange === "function") onSelectionChange();
             });
 
             // Регистрируем контроллер, чтобы можно было закрыть этот аккордеон при открытии другого
@@ -1770,7 +1980,7 @@ function buildProductDetailsContent(
               itemId,
               close: () => {
                 accordionOpen = false;
-                variantAccordion.style.display = "none";
+                setOptionVariantAccordionState(variantAccordion, false);
                 gearBtn.classList.remove("is-open");
               },
             });
@@ -1894,7 +2104,7 @@ function buildProductDetailsContent(
 
           const btnMinus = document.createElement("button");
           btnMinus.type = "button";
-          btnMinus.className = "btn btn-sm";
+          btnMinus.className = "btn btn-sm shop-pd-option-qty-btn";
           btnMinus.textContent = "−";
           // Кнопка "-" отключена если qty <= itemMin (обязательные опции нельзя убрать)
           btnMinus.disabled = currentQty <= itemMin;
@@ -1920,9 +2130,25 @@ function buildProductDetailsContent(
 
           const btnPlus = document.createElement("button");
           btnPlus.type = "button";
-          btnPlus.className = "btn btn-sm";
+          btnPlus.className = "btn btn-sm shop-pd-option-qty-btn";
           btnPlus.textContent = "+";
           btnPlus.disabled = currentQty >= itemMax || isOptionUnavailableForPlus();
+
+          const bindPressFx = (btn) => {
+            if (!btn) return;
+            const pressOn = () => {
+              if (btn.disabled) return;
+              btn.classList.add("is-pressed");
+            };
+            const pressOff = () => btn.classList.remove("is-pressed");
+            btn.addEventListener("pointerdown", pressOn);
+            btn.addEventListener("pointerup", pressOff);
+            btn.addEventListener("pointercancel", pressOff);
+            btn.addEventListener("pointerleave", pressOff);
+            btn.addEventListener("blur", pressOff);
+          };
+          bindPressFx(btnMinus);
+          bindPressFx(btnPlus);
           btnPlus.addEventListener("click", (e) => {
             e.stopPropagation();
             if (isOptionUnavailableForPlus()) {
@@ -2215,7 +2441,7 @@ function buildProductDetailsContent(
                 }
                 if (typeof onSelectionChange === "function") onSelectionChange();
               }
-              variantAccordion.style.display = accordionOpen ? "block" : "none";
+              setOptionVariantAccordionState(variantAccordion, accordionOpen);
               gearBtn.classList.toggle("is-open", accordionOpen);
             });
 
@@ -2389,6 +2615,22 @@ function buildProductDetailsContent(
         btnPlus.className = "btn btn-sm qty-btn qty-plus";
         btnPlus.textContent = "+";
         btnPlus.disabled = currentQty >= max || isIngUnavailableForPlus();
+
+        const bindPressFx = (btn) => {
+          if (!btn) return;
+          const pressOn = () => {
+            if (btn.disabled) return;
+            btn.classList.add("is-pressed");
+          };
+          const pressOff = () => btn.classList.remove("is-pressed");
+          btn.addEventListener("pointerdown", pressOn);
+          btn.addEventListener("pointerup", pressOff);
+          btn.addEventListener("pointercancel", pressOff);
+          btn.addEventListener("pointerleave", pressOff);
+          btn.addEventListener("blur", pressOff);
+        };
+        bindPressFx(btnMinus);
+        bindPressFx(btnPlus);
 
         controls.appendChild(btnMinus);
         controls.appendChild(qtyDisplay);
@@ -2652,9 +2894,11 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
   if (!container) return;
   container.innerHTML = "";
 
-  const optionGroups = await resolveProductOptionGroups(product.id);
-  const ingredients = await resolveProductIngredients(product.id);
-  const variants = await resolveProductVariants(product.id);
+  const {
+    optionGroups,
+    ingredients,
+    variants,
+  } = await resolveProductDetailsConfig(product.id);
   const selectionState = new Map();
   const ingredientState = new Map();
   const variantState = {
@@ -5556,6 +5800,10 @@ optionGroups.forEach((group) => {
           expandWrap.className = "shop-combo-picker-expand";
           expandWrap.innerHTML = "<div class=\"shop-combo-picker-expand-loading\">Загрузка…</div>";
           card.appendChild(expandWrap);
+          expandWrap.style.overflow = "hidden";
+          expandWrap.style.maxHeight = "0px";
+          expandWrap.style.opacity = "0";
+          expandWrap.style.transition = "max-height 260ms ease, opacity 220ms ease";
 
           (async () => {
             const selectedProd = getSelectedProduct(blockIndex);
@@ -5787,6 +6035,23 @@ optionGroups.forEach((group) => {
                 btnPlus.type = "button";
                 btnPlus.className = "shop-combo-picker-ingredient-btn";
                 btnPlus.textContent = "+";
+
+                const bindPressFx = (btn) => {
+                  if (!btn) return;
+                  const pressOn = () => {
+                    if (btn.disabled) return;
+                    btn.classList.add("is-pressed");
+                  };
+                  const pressOff = () => btn.classList.remove("is-pressed");
+                  btn.addEventListener("pointerdown", pressOn);
+                  btn.addEventListener("pointerup", pressOff);
+                  btn.addEventListener("pointercancel", pressOff);
+                  btn.addEventListener("pointerleave", pressOff);
+                  btn.addEventListener("blur", pressOff);
+                };
+                bindPressFx(btnMinus);
+                bindPressFx(btnPlus);
+
                 btnMinus.disabled = currentQty <= minQty;
                 btnPlus.disabled = currentQty >= maxQty || isIngUnavailableForPlus();
 
@@ -5844,6 +6109,9 @@ optionGroups.forEach((group) => {
             });
             updatePrice();
             requestAnimationFrame(() => {
+              const targetHeight = Math.max(0, expandWrap.scrollHeight || expandInner.scrollHeight || 0);
+              expandWrap.style.maxHeight = targetHeight + "px";
+              expandWrap.style.opacity = "1";
               let scrollContainer = expandWrap.parentElement;
               while (scrollContainer) {
                 const style = window.getComputedStyle(scrollContainer);
@@ -5854,14 +6122,16 @@ optionGroups.forEach((group) => {
                 scrollContainer = scrollContainer.parentElement;
               }
               if (!scrollContainer) return;
-              // Скроллим к родительской карточке (row), а не к expand-панели,
-              // чтобы карточка не уезжала за хедер
               const parentRow = expandWrap.closest(".shop-combo-picker-row");
               const target = parentRow || expandWrap;
               const targetRect = target.getBoundingClientRect();
               const containerRect = scrollContainer.getBoundingClientRect();
               const targetTopInContent = scrollContainer.scrollTop + (targetRect.top - containerRect.top);
-              scrollContainer.scrollTop = targetTopInContent;
+              if (typeof scrollContainer.scrollTo === "function") {
+                scrollContainer.scrollTo({ top: targetTopInContent, behavior: "smooth" });
+              } else {
+                scrollContainer.scrollTop = targetTopInContent;
+              }
             });
           })();
         }
@@ -6019,6 +6289,21 @@ optionGroups.forEach((group) => {
     }
     const data = json?.data;
     if (!data) return;
+
+    try {
+      const comboProductIds = [];
+      const blocks = Array.isArray(data?.blocks) ? data.blocks : [];
+      blocks.forEach((block) => {
+        const products = Array.isArray(block?.products) ? block.products : [];
+        products.forEach((prod) => {
+          const pid = Number(prod?.product_id || 0);
+          if (Number.isFinite(pid) && pid > 0) comboProductIds.push(pid);
+        });
+      });
+      await preloadComboProductsData(comboProductIds);
+    } catch (e) {
+      console.warn("Failed to preload combo products data:", e);
+    }
 
     if (isMobile) {
       if (!hasLiveCartSheetContext()) {
@@ -12021,7 +12306,7 @@ function renderSheetAddressList() {
       setMaxLinkUi({ linked: false });
       try {
         settingsBootstrapLoaded = false;
-        const json = await apiJson("/api/public/max/link-token", { method: "POST", body: {} });
+        const json = await apiJson("/api/public/auth/link-token", { method: "POST", body: { provider: "max" } });
         if (!json || json.ok === false || !json.link) {
           const errCode = json && json.error ? String(json.error) : "";
           if (errCode === "MAX_LOGIN_DISABLED") {
@@ -12125,7 +12410,7 @@ function renderSheetAddressList() {
       setTgLinkUi({ linked: false });
       try {
         settingsBootstrapLoaded = false;
-        const json = await apiJson("/api/public/tg/link-token", { method: "POST", body: {} });
+        const json = await apiJson("/api/public/auth/link-token", { method: "POST", body: { provider: "tg" } });
         if (!json || json.ok === false || !json.link) {
           const errCode = json && json.error ? String(json.error) : "";
           if (errCode === "TG_BOT_NOT_CONFIGURED") {
@@ -17744,4 +18029,7 @@ function initShopLate() {
     console.error(e);
   }
 }
+
+window.prefetchProductDetailsConfig = prefetchProductDetailsConfig;
+
 
