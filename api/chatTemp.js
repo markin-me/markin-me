@@ -355,6 +355,15 @@ function shouldNotifyPushForPeer(peerActor, message) {
   return true;
 }
 
+function resolvePushSenderActor(message, fallbackActor) {
+  const source = message && typeof message === "object" ? message : null;
+  if (source) {
+    const direction = normalizeMessageDirection(source.direction, source.id);
+    return direction === "in" ? "in" : "out";
+  }
+  return fallbackActor === "in" ? "in" : "out";
+}
+
 function normalizeTenantPushCompanyTitle(rawValue) {
   return String(rawValue || "")
     .replace(/\s+/g, " ")
@@ -1157,11 +1166,24 @@ function waitForTenantChange(tenantId, timeoutMs) {
 }
 
 function getRequestReactionActor(req) {
+  const explicitQueryActor = String(req.query?.chat_actor || req.query?.actor || "")
+    .trim()
+    .toLowerCase();
+  if (explicitQueryActor === "in" || explicitQueryActor === "customer" || explicitQueryActor === "client") return "in";
+  if (explicitQueryActor === "out" || explicitQueryActor === "admin" || explicitQueryActor === "operator") return "out";
+
+  const explicitBodyActor = String(req.body?.chat_actor || req.body?.actor || "")
+    .trim()
+    .toLowerCase();
+  if (explicitBodyActor === "in" || explicitBodyActor === "customer" || explicitBodyActor === "client") return "in";
+  if (explicitBodyActor === "out" || explicitBodyActor === "admin" || explicitBodyActor === "operator") return "out";
+
   const explicitActor = String(req.headers["x-chat-actor"] || req.headers["x-chat-role"] || "")
     .trim()
     .toLowerCase();
   if (explicitActor === "in" || explicitActor === "customer" || explicitActor === "client") return "in";
   if (explicitActor === "out" || explicitActor === "admin" || explicitActor === "operator") return "out";
+
   const customerToken = String(req.headers["x-customer-token"] || "").trim();
   return customerToken ? "in" : "out";
 }
@@ -2260,7 +2282,8 @@ module.exports = function makeChatTempRouter() {
         typingChanged: true,
       });
       const responseMessage = row ? mapDbMessageRowToApi(row) : message;
-      notifyPushPeerAboutMessage(tenantId, clientId, actorKey, responseMessage).catch((err) => {
+      const senderActorForPush = resolvePushSenderActor(responseMessage, actorKey);
+      notifyPushPeerAboutMessage(tenantId, clientId, senderActorForPush, responseMessage).catch((err) => {
         console.error("chat-temp push notify error:", err && err.message ? err.message : err);
       });
 

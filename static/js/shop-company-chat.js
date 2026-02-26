@@ -2479,6 +2479,25 @@
     return changed;
   }
 
+  function withChatActorQuery(url, actorValue) {
+    const rawUrl = String(url || "");
+    if (!rawUrl || rawUrl.indexOf(CHAT_TEMP_API_BASE) !== 0) return rawUrl;
+    const actor = String(actorValue || "").trim().toLowerCase();
+    if (!actor) return rawUrl;
+    try {
+      const parsed = new URL(rawUrl, window.location.origin);
+      if (!parsed.searchParams.has("chat_actor")) {
+        parsed.searchParams.set("chat_actor", actor);
+      }
+      return parsed.pathname + parsed.search + parsed.hash;
+    } catch {
+      const hasQuery = rawUrl.indexOf("?") !== -1;
+      const already = rawUrl.indexOf("chat_actor=") !== -1;
+      if (already) return rawUrl;
+      return rawUrl + (hasQuery ? "&" : "?") + "chat_actor=" + encodeURIComponent(actor);
+    }
+  }
+
   async function chatApiJson(url, opts) {
     const options = opts || {};
     const isFormDataBody = (
@@ -2492,10 +2511,11 @@
       ...(options.body && !isFormDataBody ? { "Content-Type": "application/json" } : {}),
       ...(options.headers || {}),
     };
+    const requestUrl = withChatActorQuery(url, "in");
     const customerToken = getCustomerToken();
     if (customerToken) headers["x-customer-token"] = customerToken;
 
-    const res = await fetch(url, {
+    const res = await fetch(requestUrl, {
       method: options.method || "GET",
       headers: headers,
       keepalive: options.keepalive === true,
