@@ -326,6 +326,9 @@
   let replyUi = null;
   let attachPreviewItems = [];
   let attachPreviewActiveIndex = 0;
+  let attachPreviewSourceFiles = [];
+  let attachPreviewObjectUrls = [];
+  let attachPreviewSending = false;
   let feedDropDragDepth = 0;
   let pendingFeedNewCount = 0;
   let pendingFeedMessageIds = new Set();
@@ -2928,9 +2931,14 @@
   async function uploadSharedImageAttachment(file) {
     const requestClientId = getActiveChatClientId();
     if (!requestClientId || !(file instanceof File)) return null;
+    const uploadFile = await convertImageFileToWebpForChatUpload(file);
     const fd = new FormData();
     fd.append("client_id", String(requestClientId));
-    fd.append("file", file);
+    fd.append(
+      "file",
+      uploadFile,
+      String(uploadFile && uploadFile.name || toWebpFileName(file.name))
+    );
     const json = await chatApiJson(CHAT_TEMP_API_BASE + "/attachment", {
       method: "POST",
       body: fd,
@@ -3893,7 +3901,9 @@
     const dataUrl = String(attachment.dataUrl || "");
     const url = String(attachment.url || attachment.src || "");
     const hasDataUrl = /^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl);
-    const hasUrl = /^(?:\/uploads\/chat\/|\/static\/uploads\/chat\/)/i.test(url) || /^https?:\/\//i.test(url);
+    const hasUrl = /^(?:\/uploads\/chat\/|\/static\/uploads\/chat\/)/i.test(url)
+      || /^https?:\/\//i.test(url)
+      || /^blob:/i.test(url);
     return hasDataUrl || hasUrl;
   }
 
@@ -4028,6 +4038,37 @@
     return best;
   }
 
+  function toWebpFileName(fileName) {
+    const raw = String(fileName || "").trim();
+    const withoutExt = raw.replace(/\.[^./\\]+$/, "");
+    const base = String(withoutExt || "chat-image")
+      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-")
+      .trim();
+    return (base || "chat-image") + ".webp";
+  }
+
+  async function convertImageFileToWebpForChatUpload(file) {
+    if (!(file instanceof File)) return file;
+    const sourceMime = String(file.type || "").toLowerCase();
+    if (!sourceMime.startsWith("image/")) return file;
+    if (sourceMime === "image/gif" || sourceMime === "image/svg+xml") return file;
+    try {
+      const optimized = await buildOptimizedImagePayload(file, "image/webp");
+      if (!optimized || !optimized.dataUrl) return file;
+      const optimizedMime = String(optimized.mime || "").toLowerCase();
+      if (optimizedMime !== "image/webp") return file;
+      const blob = await fetch(optimized.dataUrl).then(function (res) { return res.blob(); });
+      if (!blob || !blob.size) return file;
+      if (typeof File !== "function") return file;
+      return new File([blob], toWebpFileName(file.name), {
+        type: "image/webp",
+        lastModified: Number(file.lastModified || Date.now()),
+      });
+    } catch {
+      return file;
+    }
+  }
+
   function getImageSizeFromDataUrl(dataUrl) {
     return new Promise(function (resolve) {
       const img = new Image();
@@ -4048,6 +4089,27 @@
     if (!(file instanceof File)) return null;
     if (!isLikelyImageFile(file)) return null;
     return uploadSharedImageAttachment(file).catch(function () { return null; });
+  }
+
+  function buildLocalAttachPreviewItemFromFile(file) {
+    if (!(file instanceof File)) return null;
+    if (!isLikelyImageFile(file)) return null;
+    let objectUrl = "";
+    try {
+      objectUrl = URL.createObjectURL(file);
+    } catch {
+      return null;
+    }
+    attachPreviewObjectUrls.push(objectUrl);
+    return {
+      kind: "image",
+      name: String(file.name || "image"),
+      mime: String(file.type || "image/*"),
+      url: String(objectUrl || ""),
+      width: 0,
+      height: 0,
+      size: Number(file.size || 0),
+    };
   }
 
   function isLikelyImageFile(file) {
@@ -4301,6 +4363,34 @@
     window.scrollTo(0, savedY);
   }
 
+  function getTenantSplashLogoUrl() {
+    try {
+      const raw = localStorage.getItem("tenant");
+      if (!raw) return "";
+      const tenant = JSON.parse(raw);
+      return String(
+        (tenant && (tenant.logo_light_url || tenant.logo_dark_url)) || ""
+      ).trim();
+    } catch {
+      return "";
+    }
+  }
+
+  function syncChatBootstrapLoaderLogo() {
+    const loader = ensureChatBootstrapLoader();
+    if (!loader) return;
+    const logoEl = loader.querySelector(".shop-company-chat-bootstrap-loader__logo");
+    if (!logoEl) return;
+    const logoUrl = getTenantSplashLogoUrl();
+    if (logoUrl) {
+      logoEl.setAttribute("src", logoUrl);
+      logoEl.classList.remove("hidden");
+      return;
+    }
+    logoEl.removeAttribute("src");
+    logoEl.classList.add("hidden");
+  }
+
   function ensureChatBootstrapLoader() {
     if (chatBootstrapLoaderEl && chatBootstrapLoaderEl.isConnected) return chatBootstrapLoaderEl;
     if (!feed || !feed.isConnected) return null;
@@ -4308,12 +4398,15 @@
     node.className = "shop-company-chat-bootstrap-loader hidden";
     node.setAttribute("aria-hidden", "true");
     node.innerHTML =
-      '<div class="shop-company-chat-bootstrap-loader__bar"></div>' +
-      '<div class="shop-company-chat-bootstrap-loader__bubble is-agent"></div>' +
-      '<div class="shop-company-chat-bootstrap-loader__bubble is-user"></div>' +
-      '<div class="shop-company-chat-bootstrap-loader__bubble is-agent"></div>';
+      '<div class="shop-company-chat-bootstrap-loader__stack">' +
+        '<img class="shop-company-chat-bootstrap-loader__logo hidden" alt="" />' +
+        '<div class="shop-company-chat-bootstrap-loader__track">' +
+          '<div class="shop-company-chat-bootstrap-loader__fill"></div>' +
+        "</div>" +
+      "</div>";
     feed.appendChild(node);
     chatBootstrapLoaderEl = node;
+    syncChatBootstrapLoaderLogo();
     return node;
   }
 
@@ -4321,6 +4414,7 @@
     const loader = ensureChatBootstrapLoader();
     if (!loader) return;
     const nextActive = active === true;
+    if (nextActive) syncChatBootstrapLoaderLogo();
     modalBody.classList.toggle("is-bootstrap-loading", nextActive);
     loader.classList.toggle("hidden", !nextActive);
   }
@@ -7895,6 +7989,14 @@
     return String(total) + " \u0444\u043e\u0442\u043e\u0433\u0440\u0430\u0444\u0438\u0439";
   }
 
+  function clearAttachPreviewObjectUrls() {
+    if (!Array.isArray(attachPreviewObjectUrls) || !attachPreviewObjectUrls.length) return;
+    attachPreviewObjectUrls.forEach(function (url) {
+      try { URL.revokeObjectURL(String(url || "")); } catch {}
+    });
+    attachPreviewObjectUrls = [];
+  }
+
   function closeAttachPreview(options) {
     const opts = options || {};
     const clearItems = opts.clearItems !== false;
@@ -7905,8 +8007,11 @@
     attachPreviewOverlay.setAttribute("aria-hidden", "true");
 
     if (clearItems) {
+      clearAttachPreviewObjectUrls();
       attachPreviewItems = [];
       attachPreviewActiveIndex = 0;
+      attachPreviewSourceFiles = [];
+      attachPreviewSending = false;
     }
     if (clearCaption) {
       attachPreviewCaption.value = "";
@@ -7914,6 +8019,7 @@
 
     attachPreviewThumbs.innerHTML = "";
     attachPreviewThumbs.classList.add("hidden");
+    attachPreviewSendBtn.disabled = false;
     if (emojiPopover.classList.contains("is-attach-preview")) hideEmojiPopover();
     attachInput.value = "";
     if (focusComposer && !input.disabled) input.focus();
@@ -8052,6 +8158,8 @@
 
     attachPreviewItems = list;
     attachPreviewActiveIndex = 0;
+    attachPreviewSending = false;
+    attachPreviewSendBtn.disabled = false;
     attachPreviewCaption.value = String(opts.caption || "");
 
     renderAttachPreview();
@@ -8123,14 +8231,21 @@
     const list = Array.isArray(files) ? files : [];
     if (!list.length) return false;
     if (editingMessageId) cancelEditingMessage();
+    clearAttachPreviewObjectUrls();
+    attachPreviewSourceFiles = [];
 
-    const prepared = await Promise.all(
-      list.map(function (file) {
-        return buildImageAttachmentFromFile(file).catch(function () { return null; });
-      })
-    );
-    const attachments = prepared.filter(function (item) { return !!item; });
-    if (!attachments.length) return false;
+    const prepared = [];
+    list.forEach(function (file) {
+      if (!(file instanceof File)) return;
+      if (!isLikelyImageFile(file)) return;
+      const previewAttachment = buildLocalAttachPreviewItemFromFile(file);
+      if (!previewAttachment) return;
+      prepared.push({ file: file, attachment: previewAttachment });
+    });
+
+    if (!prepared.length) return false;
+    attachPreviewSourceFiles = prepared.map(function (item) { return item.file; });
+    const attachments = prepared.map(function (item) { return item.attachment; });
     return openAttachPreview(attachments);
   }
 
@@ -8163,11 +8278,26 @@
       attachPreviewCaption.focus();
     });
 
-    attachPreviewSendBtn.addEventListener("click", function () {
+    attachPreviewSendBtn.addEventListener("click", async function () {
+      if (attachPreviewSending) return;
       const caption = String(attachPreviewCaption.value || "");
-      const sent = sendPreparedImageAttachments(attachPreviewItems, { caption: caption });
-      if (sent > 0) {
-        closeAttachPreview({ clearCaption: true });
+      const sourceFiles = Array.isArray(attachPreviewSourceFiles)
+        ? attachPreviewSourceFiles.filter(function (file) { return file instanceof File; })
+        : [];
+      attachPreviewSending = true;
+      attachPreviewSendBtn.disabled = true;
+      try {
+        const sent = sourceFiles.length
+          ? await sendImageAttachments(sourceFiles, { caption: caption })
+          : sendPreparedImageAttachments(attachPreviewItems, { caption: caption });
+        if (sent > 0) {
+          closeAttachPreview({ clearCaption: true });
+        }
+      } finally {
+        attachPreviewSending = false;
+        if (!attachPreviewOverlay.classList.contains("hidden")) {
+          attachPreviewSendBtn.disabled = false;
+        }
       }
     });
 

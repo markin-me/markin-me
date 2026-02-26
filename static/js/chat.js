@@ -247,6 +247,9 @@
     localTypingPhrase: "",
     attachPreviewItems: [],
     attachPreviewActiveIndex: 0,
+    attachPreviewSourceFiles: [],
+    attachPreviewObjectUrls: [],
+    attachPreviewSending: false,
     threadDropDragDepth: 0,
     clientsPager: null,
     threadHistoryByClient: {},
@@ -1212,9 +1215,14 @@
   async function uploadChatImageAttachment(clientId, file) {
     const key = normalizeClientIdKey(clientId);
     if (!key || !file) return null;
+    const uploadFile = await convertImageFileToWebpForChatUpload(file);
     const fd = new FormData();
     fd.append("client_id", String(key));
-    fd.append("file", file);
+    fd.append(
+      "file",
+      uploadFile,
+      String(uploadFile && uploadFile.name || toWebpFileName(file && file.name))
+    );
     const json = await apiJson(`${CHAT_TEMP_API_BASE}/attachment`, {
       method: "POST",
       body: fd,
@@ -2741,7 +2749,9 @@
     const dataUrl = String(attachment.dataUrl || "");
     const url = String(attachment.url || attachment.src || "");
     const hasDataUrl = /^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl);
-    const hasUrl = /^(?:\/uploads\/chat\/|\/static\/uploads\/chat\/)/i.test(url) || /^https?:\/\//i.test(url);
+    const hasUrl = /^(?:\/uploads\/chat\/|\/static\/uploads\/chat\/)/i.test(url)
+      || /^https?:\/\//i.test(url)
+      || /^blob:/i.test(url);
     return hasDataUrl || hasUrl;
   }
 
@@ -5012,6 +5022,37 @@
     return best;
   }
 
+  function toWebpFileName(fileName) {
+    const raw = String(fileName || "").trim();
+    const withoutExt = raw.replace(/\.[^./\\]+$/, "");
+    const base = String(withoutExt || "chat-image")
+      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-")
+      .trim();
+    return (base || "chat-image") + ".webp";
+  }
+
+  async function convertImageFileToWebpForChatUpload(file) {
+    if (!(file instanceof File)) return file;
+    const sourceMime = String(file.type || "").toLowerCase();
+    if (!sourceMime.startsWith("image/")) return file;
+    if (sourceMime === "image/gif" || sourceMime === "image/svg+xml") return file;
+    try {
+      const optimized = await buildOptimizedImagePayload(file, "image/webp");
+      if (!optimized || !optimized.dataUrl) return file;
+      const optimizedMime = String(optimized.mime || "").toLowerCase();
+      if (optimizedMime !== "image/webp") return file;
+      const blob = await fetch(optimized.dataUrl).then((res) => res.blob());
+      if (!blob || !blob.size) return file;
+      if (typeof File !== "function") return file;
+      return new File([blob], toWebpFileName(file.name), {
+        type: "image/webp",
+        lastModified: Number(file.lastModified || Date.now()),
+      });
+    } catch {
+      return file;
+    }
+  }
+
   function getImageSizeFromDataUrl(dataUrl) {
     return new Promise((resolve) => {
       const img = new Image();
@@ -5031,6 +5072,27 @@
     if (!isLikelyImageFile(file)) return null;
     if (!state.activeClientId) return null;
     return uploadChatImageAttachment(state.activeClientId, file).catch(() => null);
+  }
+
+  function buildLocalAttachPreviewItemFromFile(file) {
+    if (!(file instanceof File)) return null;
+    if (!isLikelyImageFile(file)) return null;
+    let objectUrl = "";
+    try {
+      objectUrl = URL.createObjectURL(file);
+    } catch {
+      return null;
+    }
+    state.attachPreviewObjectUrls.push(objectUrl);
+    return {
+      kind: "image",
+      name: String(file.name || "image"),
+      mime: String(file.type || "image/*"),
+      url: String(objectUrl || ""),
+      width: 0,
+      height: 0,
+      size: Number(file.size || 0),
+    };
   }
 
   function isLikelyImageFile(file) {
@@ -6065,6 +6127,15 @@
     return `${total} фотографий`;
   }
 
+  function clearAttachPreviewObjectUrls() {
+    const urls = Array.isArray(state.attachPreviewObjectUrls) ? state.attachPreviewObjectUrls : [];
+    if (!urls.length) return;
+    urls.forEach((url) => {
+      try { URL.revokeObjectURL(String(url || "")); } catch {}
+    });
+    state.attachPreviewObjectUrls = [];
+  }
+
   function closeAttachPreview(options = {}) {
     const clearItems = options.clearItems !== false;
     const focusComposer = options.focusComposer !== false;
@@ -6075,8 +6146,11 @@
       overlay.setAttribute("aria-hidden", "true");
     }
     if (clearItems) {
+      clearAttachPreviewObjectUrls();
       state.attachPreviewItems = [];
       state.attachPreviewActiveIndex = 0;
+      state.attachPreviewSourceFiles = [];
+      state.attachPreviewSending = false;
     }
     if (clearCaption && dom.center.attachPreviewCaption) {
       dom.center.attachPreviewCaption.value = "";
@@ -6084,6 +6158,9 @@
     if (dom.center.attachPreviewThumbs) {
       dom.center.attachPreviewThumbs.innerHTML = "";
       dom.center.attachPreviewThumbs.classList.add("hidden");
+    }
+    if (dom.center.attachPreviewSendBtn) {
+      dom.center.attachPreviewSendBtn.disabled = false;
     }
     if (
       dom.center.emojiPopover
@@ -6195,6 +6272,13 @@
 
     state.attachPreviewItems = items;
     state.attachPreviewActiveIndex = 0;
+    if (options.preserveSourceFiles !== true) {
+      state.attachPreviewSourceFiles = [];
+    }
+    state.attachPreviewSending = false;
+    if (dom.center.attachPreviewSendBtn) {
+      dom.center.attachPreviewSendBtn.disabled = false;
+    }
     if (dom.center.attachPreviewCaption) {
       dom.center.attachPreviewCaption.value = String(options.caption || "");
     }
@@ -6342,14 +6426,22 @@
     if (state.editingMessageId) {
       cancelEditingMessage();
     }
+    clearAttachPreviewObjectUrls();
+    state.attachPreviewSourceFiles = [];
 
-    const prepared = await Promise.all(
-      list.map((file) => buildImageAttachmentFromFile(file).catch(() => null))
-    );
-    const attachments = prepared.filter(Boolean);
+    const prepared = [];
+    list.forEach((file) => {
+      if (!(file instanceof File)) return;
+      if (!isLikelyImageFile(file)) return;
+      const previewAttachment = buildLocalAttachPreviewItemFromFile(file);
+      if (!previewAttachment) return;
+      prepared.push({ file, attachment: previewAttachment });
+    });
 
-    if (!attachments.length) return false;
-    return openAttachPreview(attachments);
+    if (!prepared.length) return false;
+    state.attachPreviewSourceFiles = prepared.map((item) => item.file);
+    const attachments = prepared.map((item) => item.attachment);
+    return openAttachPreview(attachments, { preserveSourceFiles: true });
   }
 
   function initAttachPreviewModal() {
@@ -6389,13 +6481,32 @@
     }
 
     if (dom.center.attachPreviewSendBtn) {
-      dom.center.attachPreviewSendBtn.addEventListener("click", () => {
+      dom.center.attachPreviewSendBtn.addEventListener("click", async () => {
+        if (state.attachPreviewSending) return;
         const caption = dom.center.attachPreviewCaption
           ? String(dom.center.attachPreviewCaption.value || "")
           : "";
-        const sent = sendPreparedImageAttachments(state.attachPreviewItems, { caption });
-        if (sent > 0) {
-          closeAttachPreview({ clearCaption: true });
+        const sourceFiles = Array.isArray(state.attachPreviewSourceFiles)
+          ? state.attachPreviewSourceFiles.filter((file) => file instanceof File)
+          : [];
+
+        state.attachPreviewSending = true;
+        dom.center.attachPreviewSendBtn.disabled = true;
+        try {
+          const sent = sourceFiles.length
+            ? await sendImageAttachments(sourceFiles, { caption })
+            : sendPreparedImageAttachments(state.attachPreviewItems, { caption });
+          if (sent > 0) {
+            closeAttachPreview({ clearCaption: true });
+          }
+        } finally {
+          state.attachPreviewSending = false;
+          if (
+            dom.center.attachPreviewOverlay
+            && !dom.center.attachPreviewOverlay.classList.contains("hidden")
+          ) {
+            dom.center.attachPreviewSendBtn.disabled = false;
+          }
         }
       });
     }

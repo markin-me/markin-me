@@ -7400,74 +7400,54 @@ body.page-shop .shop-company-chat-btn:hover{
 
 .shop-company-chat-bootstrap-loader{
   position: absolute;
-  inset: 10px 16px 14px;
+  inset: 0;
   z-index: 12;
   pointer-events: none;
-  display: grid;
-  grid-template-rows: 4px repeat(3, auto);
-  align-content: start;
-  gap: 14px;
-  padding: 6px 0;
-  border-radius: 16px;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--color-surface), #fff 34%) 0%,
-      color-mix(in srgb, var(--color-surface), #fff 18%) 72%,
-      transparent 100%
-    );
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: #fff;
 }
 
 .shop-company-chat-bootstrap-loader.hidden{
   display: none;
 }
 
-.shop-company-chat-bootstrap-loader__bar{
-  width: clamp(96px, 36%, 172px);
-  height: 4px;
+.shop-company-chat-bootstrap-loader__stack{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.shop-company-chat-bootstrap-loader__logo{
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  object-fit: cover;
+}
+
+.shop-company-chat-bootstrap-loader__track{
+  width: 48px;
+  height: 3px;
+  background: #eee;
   border-radius: 999px;
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--color-primary), #fff 60%) 0%,
-      color-mix(in srgb, var(--color-primary), #fff 78%) 50%,
-      color-mix(in srgb, var(--color-primary), #fff 60%) 100%
-    );
-  animation: shop-company-chat-bootstrap-shimmer 1.2s ease-in-out infinite;
-}
-
-.shop-company-chat-bootstrap-loader__bubble{
-  width: min(72%, 340px);
-  height: 56px;
-  border-radius: 18px;
-  position: relative;
   overflow: hidden;
-  background: color-mix(in srgb, var(--color-surface-2), #fff 12%);
 }
 
-.shop-company-chat-bootstrap-loader__bubble::after{
-  content: "";
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(
-      110deg,
-      transparent 12%,
-      rgba(255, 255, 255, 0.62) 45%,
-      transparent 78%
-    );
-  transform: translateX(-120%);
-  animation: shop-company-chat-bootstrap-shimmer 1.2s ease-in-out infinite;
+.shop-company-chat-bootstrap-loader__fill{
+  width: 40%;
+  height: 100%;
+  border-radius: 999px;
+  background: #f60;
+  animation: shop-company-chat-splash-bar 1.2s ease-in-out infinite;
 }
 
-.shop-company-chat-bootstrap-loader__bubble.is-user{
-  margin-left: auto;
-  background: color-mix(in srgb, #5f6167, #fff 18%);
-}
-
-@keyframes shop-company-chat-bootstrap-shimmer{
-  0%{ transform: translateX(-120%); }
-  100%{ transform: translateX(140%); }
+@keyframes shop-company-chat-splash-bar{
+  0%{ transform: translateX(-100%); }
+  50%{ transform: translateX(150%); }
+  100%{ transform: translateX(-100%); }
 }
 
 .shop-company-chat-feed:focus{
