@@ -11430,6 +11430,17 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   row-gap: 10px;
   column-gap: 10px;
 }
+.shop-checkout-footer-actions.has-name-input{
+  grid-template-areas:
+    "name name"
+    "comment comment"
+    "back submit";
+}
+.shop-checkout-footer-name-input{
+  grid-area: name;
+  width: 100%;
+  min-width: 0;
+}
 .shop-checkout-footer-comment-input{
   grid-area: comment;
   width: 100%;
@@ -15564,8 +15575,23 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     width: 100%;
     flex-shrink: 0;
   }
+  .shop-mobile-checkout-name-wrap {
+    width: 100%;
+    flex-shrink: 0;
+  }
+  .shop-mobile-checkout-name-wrap.hidden {
+    display: none;
+  }
   .shop-mobile-checkout-comment-wrap.hidden {
     display: none;
+  }
+  .shop-mobile-checkout-name-input {
+    width: 100%;
+    border-radius: 999px;
+    padding-inline: 16px;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
   }
   .shop-mobile-checkout-comment-input {
     width: 100%;
@@ -16120,3 +16146,36 @@ body.page-shop .sidebar-open-tab{display:none}
   white-space: nowrap;
 }
 
+/* Portrait lock fallback for mobile browsers that ignore orientation lock. */
+.shop-portrait-guard {
+  position: fixed;
+  inset: 0;
+  z-index: 999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 18, 24, 0.94);
+}
+
+.shop-portrait-guard.hidden {
+  display: none;
+}
+
+.shop-portrait-guard-card {
+  max-width: 420px;
+  width: 100%;
+  border-radius: 16px;
+  padding: 16px 18px;
+  text-align: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 1.35;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+body.shop-portrait-guard-active {
+  overflow: hidden !important;
+}
