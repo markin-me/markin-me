@@ -1,4 +1,12 @@
 <aside id="app-sidebar" class="panel app-sidebar">
+  <% const sidebarTenantChatWidgetRaw = (typeof tenant !== 'undefined' && tenant) ? tenant.chat_widget_enabled : undefined; %>
+  <% const sidebarTenantChatWidgetNorm = String(sidebarTenantChatWidgetRaw == null ? '' : sidebarTenantChatWidgetRaw).trim().toLowerCase(); %>
+  <% const isSidebarChatEnabled = !(
+       sidebarTenantChatWidgetRaw === 0
+       || sidebarTenantChatWidgetRaw === false
+       || sidebarTenantChatWidgetNorm === '0'
+       || sidebarTenantChatWidgetNorm === 'false'
+     ); %>
   <nav class="app-sidebar-nav no-scrollbar">
     <ul class="app-sidebar-list">
       <li>
@@ -36,7 +44,7 @@
         </a>
       </li>
 
-      <li>
+      <li class="<%= isSidebarChatEnabled ? '' : 'hidden' %>">
         <a href="/dashboard/chat" id="sidebarChatNavLink" class="nav-item nav-item--chat <%= activePage === 'chat' ? 'active-nav' : '' %>">
           <i class="fas fa-comments nav-icon"></i>
           <span class="nav-text">Чаты</span>

@@ -7456,6 +7456,80 @@ body.page-shop .shop-company-chat-btn:hover{
   100%{ transform: translateX(-100%); }
 }
 
+.shop-company-chat-permission-prompt{
+  position: absolute;
+  inset: 0;
+  z-index: 18;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  background: rgba(15, 23, 42, .34);
+  backdrop-filter: blur(1.5px);
+  -webkit-backdrop-filter: blur(1.5px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease;
+}
+
+.shop-company-chat-permission-prompt__card{
+  position: relative;
+  width: min(92%, 348px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 12px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--color-border), transparent 14%);
+  background: color-mix(in srgb, #fff, var(--color-surface) 8%);
+  box-shadow: 0 14px 32px rgba(15, 23, 42, .18);
+}
+
+.shop-company-chat-permission-prompt.is-visible{
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.shop-company-chat-permission-prompt__close{
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #71717a;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.shop-company-chat-permission-prompt__text{
+  width: 100%;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.3;
+  color: var(--color-text);
+  padding-right: 22px;
+}
+
+.shop-company-chat-permission-prompt__allow{
+  min-height: 34px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: #f60;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.shop-company-chat-permission-prompt__allow:hover{
+  background: #ea580c;
+}
+
 .shop-company-chat-feed:focus{
   outline: none;
 }
@@ -9254,6 +9328,20 @@ body.page-shop.shop-company-chat-open{
     padding: 6px 8px;
   }
 
+  .shop-company-chat-permission-prompt{
+    padding: 10px;
+  }
+
+  .shop-company-chat-permission-prompt__card{
+    width: min(96%, 332px);
+    padding: 12px 12px 10px;
+  }
+
+  .shop-company-chat-permission-prompt__text{
+    font-size: 13px;
+    padding-right: 20px;
+  }
+
   .shop-company-chat-selection-count{
     font-size: 15px;
   }
@@ -9354,6 +9442,14 @@ body.page-shop.shop-company-chat-open{
     grid-template-columns: 34px minmax(0, 1fr) auto;
     gap: 6px;
     padding: 8px 10px 10px;
+  }
+
+  .shop-company-chat-modal__body #shopCompanyChatAttachPreviewEmojiBtn{
+    display: none;
+  }
+
+  .shop-company-chat-modal__body #shopCompanyChatAttachPreviewOverlay .chat-attach-preview-foot{
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .shop-company-chat-modal__body .chat-attach-preview-caption{

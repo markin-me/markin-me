@@ -7,6 +7,7 @@
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
   const ORDER_UPDATED_EVENT = "dashboard:order-updated";
   const CHAT_UNREAD_EVENT = "dashboard:chat-unread-changed";
+  const TENANT_DATA_CHANGED_EVENT = "tenantDataChanged";
   const THREAD_SYNC_SAVE_DEBOUNCE_MS = 220;
   const THREAD_SYNC_SUMMARY_POLL_MS = 15000;
   const THREAD_SYNC_SUMMARY_WAIT_TIMEOUT_MS = 25000;
@@ -257,6 +258,7 @@
     summariesWaitAbortController: null,
     isRealtimePaused: false,
     isBootstrapLoading: true,
+    chatWidgetEnabled: true,
   };
   state.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.store?.ui?.threadScrollTopByClient);
   state.clientsPager = createDefaultClientsPager();
@@ -294,6 +296,7 @@
   let webPushSubscriptionVapidKey = "";
   let webPushSyncRequestedWithPermission = false;
   let webPushSyncForceRequested = false;
+  const activeApiAbortControllers = new Set();
   const adminPushVapidStorageKey = "dashboard_chat_push_vapid_t" + String(getTenantId());
 
   try {
@@ -397,6 +400,95 @@
     return 1;
   }
 
+  function normalizeTenantChatWidgetEnabled(rawValue) {
+    if (rawValue === undefined || rawValue === null || rawValue === "") return true;
+    if (rawValue === false || rawValue === 0) return false;
+    const normalized = String(rawValue).trim().toLowerCase();
+    if (!normalized) return true;
+    if (normalized === "0" || normalized === "false" || normalized === "off" || normalized === "no") return false;
+    if (normalized === "1" || normalized === "true" || normalized === "on" || normalized === "yes") return true;
+    const numeric = Number(normalized);
+    if (Number.isFinite(numeric)) return numeric !== 0;
+    return true;
+  }
+
+  function getTenantChatWidgetEnabledFromStorage() {
+    try {
+      const tenant = JSON.parse(localStorage.getItem("tenant") || "{}");
+      return normalizeTenantChatWidgetEnabled(tenant && tenant.chat_widget_enabled);
+    } catch {
+      return true;
+    }
+  }
+
+  function isChatWidgetEnabledRuntime() {
+    return state.chatWidgetEnabled !== false;
+  }
+
+  function setSidebarChatNavVisibility(enabled) {
+    const navLink = document.getElementById("sidebarChatNavLink");
+    if (!navLink) return;
+    const navItem = navLink.closest("li");
+    const hidden = enabled !== true;
+    if (navItem) {
+      navItem.classList.toggle("hidden", hidden);
+    } else {
+      navLink.classList.toggle("hidden", hidden);
+    }
+    navLink.setAttribute("aria-hidden", hidden ? "true" : "false");
+  }
+
+  function abortAllActiveApiRequests() {
+    activeApiAbortControllers.forEach((controller) => {
+      try { controller.abort(); } catch {}
+    });
+    activeApiAbortControllers.clear();
+  }
+
+  function applyChatWidgetEnabledRuntimeState(enabled, options = {}) {
+    const wasEnabled = state.chatWidgetEnabled !== false;
+    const nextEnabled = enabled !== false;
+    state.chatWidgetEnabled = nextEnabled;
+    setSidebarChatNavVisibility(nextEnabled);
+
+    if (!nextEnabled) {
+      pauseRealtimeSync({ flushTyping: true, keepalive: true, forceTypingStop: true });
+      abortAllActiveApiRequests();
+      messageAlertSummariesPrimed = false;
+      setComposerEnabled(false);
+      setChatBootstrapLoading(false);
+      return { enabled: false, changed: nextEnabled !== wasEnabled };
+    }
+
+    if (!wasEnabled || options.resume === true) {
+      resumeRealtimeSync();
+    }
+
+    return { enabled: true, changed: nextEnabled !== wasEnabled };
+  }
+
+  function syncChatWidgetEnabledFromTenant(options = {}) {
+    const runtimeState = applyChatWidgetEnabledRuntimeState(
+      getTenantChatWidgetEnabledFromStorage(),
+      options
+    );
+    if (!runtimeState.enabled) return false;
+
+    if (runtimeState.changed || options.reload === true) {
+      state.summariesUpdatedAt = "";
+      state.summariesRevision = 0;
+      setChatBootstrapLoading(true);
+      loadClients()
+        .catch(console.error)
+        .finally(() => {
+          if (isChatWidgetEnabledRuntime()) {
+            setChatBootstrapLoading(false);
+          }
+        });
+    }
+    return true;
+  }
+
   function withChatActorQuery(url, actorValue) {
     const rawUrl = String(url || "");
     if (!rawUrl || rawUrl.indexOf(CHAT_TEMP_API_BASE) !== 0) return rawUrl;
@@ -417,6 +509,12 @@
   }
 
   async function apiJson(url, opts = {}) {
+    if (!isChatWidgetEnabledRuntime()) {
+      const disabledErr = new Error("CHAT_DISABLED");
+      disabledErr.name = "AbortError";
+      throw disabledErr;
+    }
+
     const tenantId = getTenantId();
     const token = localStorage.getItem("authToken");
     const storeId = localStorage.getItem("activeStoreId") || "1";
@@ -436,27 +534,48 @@
     const actorFromHeaders = String(headers["x-chat-actor"] || "").trim().toLowerCase();
     const requestUrl = withChatActorQuery(url, actorFromHeaders || "out");
 
-    const res = await fetch(requestUrl, {
-      method: opts.method || "GET",
-      headers,
-      keepalive: opts.keepalive === true,
-      signal: opts.signal,
-      body: opts.body
-        ? (isFormDataBody ? opts.body : JSON.stringify(opts.body))
-        : undefined,
-    });
-
-    if (res.status === 401) {
-      localStorage.removeItem("authToken");
-      localStorage.removeItem("user");
-      localStorage.removeItem("tenant");
-      window.location.href = "/login";
-      throw new Error("UNAUTHORIZED");
+    const requestAbortController = new AbortController();
+    activeApiAbortControllers.add(requestAbortController);
+    const externalSignal = opts.signal;
+    const abortFromExternal = () => {
+      try { requestAbortController.abort(); } catch {}
+    };
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        abortFromExternal();
+      } else {
+        externalSignal.addEventListener("abort", abortFromExternal, { once: true });
+      }
     }
 
-    const json = await res.json().catch(() => null);
-    if (!json || json.ok !== true) throw new Error(json?.error || `API_ERROR (${res.status})`);
-    return json;
+    try {
+      const res = await fetch(requestUrl, {
+        method: opts.method || "GET",
+        headers,
+        keepalive: opts.keepalive === true,
+        signal: requestAbortController.signal,
+        body: opts.body
+          ? (isFormDataBody ? opts.body : JSON.stringify(opts.body))
+          : undefined,
+      });
+
+      if (res.status === 401) {
+        localStorage.removeItem("authToken");
+        localStorage.removeItem("user");
+        localStorage.removeItem("tenant");
+        window.location.href = "/login";
+        throw new Error("UNAUTHORIZED");
+      }
+
+      const json = await res.json().catch(() => null);
+      if (!json || json.ok !== true) throw new Error(json?.error || `API_ERROR (${res.status})`);
+      return json;
+    } finally {
+      activeApiAbortControllers.delete(requestAbortController);
+      if (externalSignal) {
+        try { externalSignal.removeEventListener("abort", abortFromExternal); } catch {}
+      }
+    }
   }
 
   function normalizeClientIdKey(clientId) {
@@ -1683,6 +1802,7 @@
   }
 
   async function syncRemoteSummariesSnapshot(options = {}) {
+    if (!isChatWidgetEnabledRuntime()) return;
     const pager = ensureClientsPager();
     const remotePage = await loadRemoteChatClientsPage({
       limit: pager.pageSize || CHAT_CLIENTS_PAGE_SIZE,
@@ -1736,6 +1856,7 @@
   }
 
   function startRemoteSyncLoops() {
+    if (!isChatWidgetEnabledRuntime()) return;
     state.isRealtimePaused = false;
 
     if (!state.activeThreadWaitLoopStarted) {
@@ -1905,6 +2026,7 @@
   }
 
   function resumeRealtimeSync() {
+    if (!isChatWidgetEnabledRuntime()) return;
     startRemoteSyncLoops();
     ensureActiveOrdersPollTimer();
   }
@@ -2617,6 +2739,15 @@
   }
 
   function queueWebPushSubscriptionSync(options = {}) {
+    if (!isChatWidgetEnabledRuntime()) {
+      if (webPushSyncTimer) {
+        window.clearTimeout(webPushSyncTimer);
+        webPushSyncTimer = 0;
+      }
+      webPushSyncRequestedWithPermission = false;
+      webPushSyncForceRequested = false;
+      return;
+    }
     if (options.requestPermission === true) webPushSyncRequestedWithPermission = true;
     if (options.force === true) webPushSyncForceRequested = true;
     if (webPushSyncTimer) {
@@ -2637,6 +2768,7 @@
   }
 
   async function syncWebPushSubscription(options = {}) {
+    if (!isChatWidgetEnabledRuntime()) return;
     if (!isWebPushSupported()) return;
     if (!isWebPushSecureContext()) return;
     if (webPushSyncInFlight) {
@@ -3780,6 +3912,7 @@
   }
 
   async function refreshActiveOrdersForActiveClient(options = {}) {
+    if (!isChatWidgetEnabledRuntime()) return false;
     const clientId = Number(options.clientId || state.activeClientId || 0);
     if (!Number.isFinite(clientId) || clientId <= 0) return false;
     if (state.activeOrdersPollInFlight && !options.force) return false;
@@ -3795,6 +3928,7 @@
       }
       return changed;
     } catch (err) {
+      if (isAbortError(err) || !isChatWidgetEnabledRuntime()) return false;
       console.error(err);
       return false;
     } finally {
@@ -3803,6 +3937,7 @@
   }
 
   function ensureActiveOrdersPollTimer() {
+    if (!isChatWidgetEnabledRuntime()) return;
     if (state.activeOrdersPollTimer) return;
     state.activeOrdersPollTimer = window.setInterval(() => {
       refreshActiveOrdersForActiveClient().catch(console.error);
@@ -3816,11 +3951,14 @@
   }
 
   function initOrderHeaderLiveSync() {
-    ensureActiveOrdersPollTimer();
+    if (isChatWidgetEnabledRuntime()) {
+      ensureActiveOrdersPollTimer();
+    }
     if (initOrderHeaderLiveSync.bound) return;
     initOrderHeaderLiveSync.bound = true;
 
     document.addEventListener(ORDER_UPDATED_EVENT, (event) => {
+      if (!isChatWidgetEnabledRuntime()) return;
       const order = event?.detail?.order;
       if (!order || typeof order !== "object") return;
 
@@ -3844,6 +3982,7 @@
     });
 
     document.addEventListener("visibilitychange", () => {
+      if (!isChatWidgetEnabledRuntime()) return;
       if (document.visibilityState !== "visible") return;
       refreshActiveOrdersForActiveClient({ force: true, forceHydrate: true }).catch(console.error);
     });
@@ -7058,6 +7197,7 @@
   }
 
   async function loadClientsPage(options = {}) {
+    if (!isChatWidgetEnabledRuntime()) return false;
     const reset = options.reset === true;
     const ensureSelection = options.ensureSelection === true;
     const pager = ensureClientsPager();
@@ -7167,10 +7307,12 @@
   }
 
   async function loadClients() {
+    if (!isChatWidgetEnabledRuntime()) return;
     if (!dom.left.list) return;
     try {
       await loadClientsPage({ reset: true, ensureSelection: true });
     } catch (err) {
+      if (isAbortError(err) || !isChatWidgetEnabledRuntime()) return;
       console.error(err);
       dom.left.list.innerHTML = "";
       if (dom.left.empty) {
@@ -7304,7 +7446,9 @@
   }
 
   function init() {
-    setChatBootstrapLoading(true);
+    state.chatWidgetEnabled = getTenantChatWidgetEnabledFromStorage();
+    setSidebarChatNavVisibility(state.chatWidgetEnabled !== false);
+    setChatBootstrapLoading(state.chatWidgetEnabled !== false);
     initMessageAlerts();
     initComposer();
     initSelectionToolbar();
@@ -7341,14 +7485,10 @@
     renderChatHeader();
     syncSelectionUi();
     renderMessages();
-    resumeRealtimeSync();
-    loadClients()
-      .catch(console.error)
-      .finally(() => {
-        setChatBootstrapLoading(false);
-      });
+    syncChatWidgetEnabledFromTenant({ reload: true, resume: true });
 
     const syncReadOnForeground = () => {
+      if (!isChatWidgetEnabledRuntime()) return;
       if (!state.activeClientId) return;
       if (!isChatTabActiveForRead()) return;
       syncActiveThreadReadState();
@@ -7356,6 +7496,7 @@
     };
 
     const syncChatsOnForeground = () => {
+      if (!isChatWidgetEnabledRuntime()) return;
       queueWebPushSubscriptionSync({ immediate: true });
       syncRemoteSummariesSnapshot({ forceThreads: true }).catch(console.error);
       syncReadOnForeground();
@@ -7366,17 +7507,17 @@
         pauseRealtimeSync({ flushTyping: true });
         return;
       }
-      resumeRealtimeSync();
+      if (!syncChatWidgetEnabledFromTenant({ resume: true })) return;
       syncChatsOnForeground();
     });
 
     window.addEventListener("focus", () => {
-      resumeRealtimeSync();
+      if (!syncChatWidgetEnabledFromTenant({ resume: true })) return;
       syncChatsOnForeground();
     });
 
     window.addEventListener("pageshow", () => {
-      resumeRealtimeSync();
+      if (!syncChatWidgetEnabledFromTenant({ resume: true })) return;
       syncChatsOnForeground();
     });
 
@@ -7388,14 +7529,16 @@
     });
 
     document.addEventListener("tenantStoreChanged", () => {
-      state.summariesUpdatedAt = "";
-      state.summariesRevision = 0;
-      setChatBootstrapLoading(true);
-      loadClients()
-        .catch(console.error)
-        .finally(() => {
-          setChatBootstrapLoading(false);
-        });
+      syncChatWidgetEnabledFromTenant({ reload: true, resume: true });
+    });
+
+    document.addEventListener(TENANT_DATA_CHANGED_EVENT, () => {
+      syncChatWidgetEnabledFromTenant({ reload: true, resume: true });
+    });
+
+    window.addEventListener("storage", (event) => {
+      if (String(event?.key || "") !== "tenant") return;
+      syncChatWidgetEnabledFromTenant({ reload: true, resume: true });
     });
 
   }

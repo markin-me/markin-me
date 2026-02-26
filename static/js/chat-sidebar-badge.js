@@ -5,6 +5,7 @@
 
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
   const CHAT_UNREAD_EVENT = "dashboard:chat-unread-changed";
+  const TENANT_DATA_CHANGED_EVENT = "tenantDataChanged";
   const FALLBACK_POLL_MS = 45000;
   const WAIT_TIMEOUT_MS = 25000;
   const WAIT_RETRY_MS = 1200;
@@ -24,6 +25,42 @@
   let messageAlertLastAt = 0;
   let messageAlertAudioCtx = null;
   let messageAlertAudioUnlocked = false;
+  let pullAbortController = null;
+  let waitAbortController = null;
+  let chatWidgetEnabled = true;
+
+  const navItem = navLink.closest("li");
+
+  function normalizeChatWidgetEnabled(rawValue) {
+    if (rawValue === undefined || rawValue === null || rawValue === "") return true;
+    if (rawValue === false || rawValue === 0) return false;
+    const normalized = String(rawValue).trim().toLowerCase();
+    if (!normalized) return true;
+    if (normalized === "0" || normalized === "false" || normalized === "off" || normalized === "no") return false;
+    if (normalized === "1" || normalized === "true" || normalized === "on" || normalized === "yes") return true;
+    const numeric = Number(normalized);
+    if (Number.isFinite(numeric)) return numeric !== 0;
+    return true;
+  }
+
+  function getTenantChatWidgetEnabled() {
+    try {
+      const tenant = JSON.parse(localStorage.getItem("tenant") || "{}");
+      return normalizeChatWidgetEnabled(tenant && tenant.chat_widget_enabled);
+    } catch {
+      return true;
+    }
+  }
+
+  function setChatNavVisibility(enabled) {
+    const hidden = enabled !== true;
+    if (navItem) {
+      navItem.classList.toggle("hidden", hidden);
+    } else {
+      navLink.classList.toggle("hidden", hidden);
+    }
+    navLink.setAttribute("aria-hidden", hidden ? "true" : "false");
+  }
 
   function getTenantId() {
     const meta = document.querySelector('meta[name="tenant_id"]');
@@ -56,6 +93,7 @@
   }
 
   if (isChatPageActive()) {
+    setChatNavVisibility(getTenantChatWidgetEnabled());
     badge.textContent = "";
     badge.classList.add("hidden");
     navLink.removeAttribute("data-unread-count");
@@ -78,6 +116,54 @@
     badge.textContent = text;
     badge.classList.remove("hidden");
     navLink.setAttribute("data-unread-count", text);
+  }
+
+  function isAbortError(err) {
+    if (!err) return false;
+    const name = String(err.name || "").toLowerCase();
+    if (name === "aborterror") return true;
+    const message = String(err.message || "").toLowerCase();
+    return message.includes("aborted");
+  }
+
+  function resetUnreadState() {
+    unreadTotal = 0;
+    unreadRevision = 0;
+    unreadUpdatedAt = "";
+    unreadPrimed = false;
+    waitSupported = true;
+  }
+
+  function stopPolling() {
+    waitLoopStarted = false;
+    waitLoopToken += 1;
+
+    if (timerId) {
+      window.clearInterval(timerId);
+      timerId = 0;
+    }
+    if (pullAbortController) {
+      try { pullAbortController.abort(); } catch {}
+      pullAbortController = null;
+    }
+    if (waitAbortController) {
+      try { waitAbortController.abort(); } catch {}
+      waitAbortController = null;
+    }
+    inFlight = false;
+  }
+
+  function applyChatWidgetEnabledState(enabled) {
+    const nextEnabled = enabled !== false;
+    chatWidgetEnabled = nextEnabled;
+    setChatNavVisibility(nextEnabled);
+    if (!nextEnabled) {
+      stopPolling();
+      resetUnreadState();
+      hideBadge();
+      return;
+    }
+    startPolling();
   }
 
   function isTabForegroundActive() {
@@ -210,13 +296,6 @@
     if (now - messageAlertLastAt < MESSAGE_ALERT_COOLDOWN_MS) return;
     messageAlertLastAt = now;
     playMessageAlertSound();
-
-    if (!isTabForegroundActive()) {
-      showMessageNotification(
-        "Новое сообщение",
-        "Откройте чаты, чтобы ответить."
-      );
-    }
   }
 
   function makeHeaders() {
@@ -245,14 +324,18 @@
   }
 
   async function pullUnreadCount() {
+    if (!chatWidgetEnabled) return;
     if (inFlight) return;
     inFlight = true;
+    const pullAbort = new AbortController();
+    pullAbortController = pullAbort;
     try {
       const qs = new URLSearchParams({ _ts: String(Date.now()) });
       const res = await fetch(CHAT_TEMP_API_BASE + "/unread?" + qs.toString(), {
         method: "GET",
         headers: makeHeaders(),
         cache: "no-store",
+        signal: pullAbort.signal,
       });
       if (!res.ok) {
         if (res.status === 401) hideBadge();
@@ -267,9 +350,13 @@
       unreadUpdatedAt = payload.updatedAt;
       unreadPrimed = true;
       showBadge(payload.total);
-    } catch {
+    } catch (err) {
+      if (isAbortError(err)) return;
       // Keep previous unread state on transient errors.
     } finally {
+      if (pullAbortController === pullAbort) {
+        pullAbortController = null;
+      }
       inFlight = false;
     }
   }
@@ -281,6 +368,15 @@
   }
 
   async function waitForUnreadChange() {
+    if (!chatWidgetEnabled) {
+      return {
+        changed: false,
+        timeout: true,
+        total: unreadTotal,
+        revision: unreadRevision,
+        updatedAt: unreadUpdatedAt,
+      };
+    }
     if (!waitSupported) {
       return {
         changed: false,
@@ -298,11 +394,17 @@
       _ts: String(Date.now()),
     });
 
+    const waitAbort = new AbortController();
+    waitAbortController = waitAbort;
     const res = await fetch(CHAT_TEMP_API_BASE + "/unread/wait?" + qs.toString(), {
       method: "GET",
       headers: makeHeaders(),
       cache: "no-store",
+      signal: waitAbort.signal,
     });
+    if (waitAbortController === waitAbort) {
+      waitAbortController = null;
+    }
 
     if (!res.ok) {
       if (res.status === 401) {
@@ -350,6 +452,7 @@
 
     (async function runWaitLoop() {
       while (waitLoopStarted && loopToken === waitLoopToken) {
+        if (!chatWidgetEnabled) break;
         if (!waitSupported) {
           await sleepMs(FALLBACK_POLL_MS);
           await pullUnreadCount().catch(function () {});
@@ -367,14 +470,19 @@
             unreadPrimed = true;
             showBadge(unreadTotal);
           }
-        } catch {
+        } catch (err) {
+          if (isAbortError(err)) break;
           await sleepMs(WAIT_RETRY_MS);
+        } finally {
+          waitAbortController = null;
         }
       }
     })().catch(function () {});
   }
 
   function startPolling() {
+    if (!chatWidgetEnabled) return;
+    if (isChatPageActive()) return;
     pullUnreadCount().catch(function () {});
     startWaitLoop();
     if (!timerId) {
@@ -384,26 +492,45 @@
     }
   }
 
-  startPolling();
+  applyChatWidgetEnabledState(getTenantChatWidgetEnabled());
   document.addEventListener("click", unlockAlertsOnce, { once: true, passive: true });
   document.addEventListener("touchstart", unlockAlertsOnce, { once: true, passive: true });
   document.addEventListener("keydown", unlockAlertsOnce, { once: true });
 
   document.addEventListener("visibilitychange", function () {
+    if (!chatWidgetEnabled) return;
     if (document.visibilityState === "visible") {
       pullUnreadCount().catch(function () {});
     }
   });
 
   document.addEventListener("tenantStoreChanged", function () {
-    unreadTotal = 0;
-    unreadRevision = 0;
-    unreadUpdatedAt = "";
-    unreadPrimed = false;
+    applyChatWidgetEnabledState(getTenantChatWidgetEnabled());
+    if (!chatWidgetEnabled) return;
+    resetUnreadState();
+    pullUnreadCount().catch(function () {});
+  });
+
+  document.addEventListener(TENANT_DATA_CHANGED_EVENT, function () {
+    applyChatWidgetEnabledState(getTenantChatWidgetEnabled());
+    if (!chatWidgetEnabled) return;
+    resetUnreadState();
+    pullUnreadCount().catch(function () {});
+  });
+
+  window.addEventListener("storage", function (event) {
+    if (String(event && event.key || "") !== "tenant") return;
+    const prevEnabled = chatWidgetEnabled;
+    applyChatWidgetEnabledState(getTenantChatWidgetEnabled());
+    if (!chatWidgetEnabled) return;
+    if (!prevEnabled) {
+      resetUnreadState();
+    }
     pullUnreadCount().catch(function () {});
   });
 
   document.addEventListener(CHAT_UNREAD_EVENT, function (event) {
+    if (!chatWidgetEnabled) return;
     const totalUnread = Number(event?.detail?.totalUnread);
     if (Number.isFinite(totalUnread)) {
       unreadTotal = totalUnread > 0 ? Math.trunc(totalUnread) : 0;

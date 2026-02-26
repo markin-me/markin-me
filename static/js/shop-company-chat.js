@@ -366,6 +366,8 @@
   let webPushSyncRequestedWithPermission = false;
   let webPushSyncForceRequested = false;
   let webPushSyncQueuedClientId = "";
+  let notificationPermissionPromptShownInSession = false;
+  let notificationPermissionPromptEl = null;
   const selectedMessageIds = new Set();
   const hotQuestionOrderCardsCache = new Map();
   const hotQuestionOrderCardsFetchInFlight = new Map();
@@ -999,8 +1001,10 @@
     if (!applied) return false;
     scheduleFeedViewportRestoreStabilization(snapshot);
     if (isFeedViewportRestoreSatisfied(snapshot)) {
-      pendingFeedRestoreState = null;
-      pendingFeedRestoreMutationVersion = sharedThreadMutationVersion;
+      if (!isMobileChatViewport()) {
+        pendingFeedRestoreState = null;
+        pendingFeedRestoreMutationVersion = sharedThreadMutationVersion;
+      }
     }
     return true;
   }
@@ -1083,14 +1087,104 @@
   }
 
   function requestMessageAlertNotificationPermission() {
-    if (!("Notification" in window)) return;
-    if (Notification.permission !== "default") return;
+    if (!("Notification" in window)) return Promise.resolve("unsupported");
+    if (Notification.permission !== "default") {
+      return Promise.resolve(String(Notification.permission || "default"));
+    }
     try {
       const result = Notification.requestPermission();
       if (result && typeof result.then === "function") {
-        result.catch(function () {});
+        return result
+          .then(function (permission) {
+            return String(permission || Notification.permission || "default");
+          })
+          .catch(function () {
+            return String(Notification.permission || "default");
+          });
       }
     } catch {}
+    return Promise.resolve(String(Notification.permission || "default"));
+  }
+
+  function shouldOfferNotificationPermissionPrompt() {
+    if (notificationPermissionPromptShownInSession) return false;
+    if (!overlay.classList.contains("is-open")) return false;
+    if (!isWebPushSupported()) return false;
+    if (!isWebPushSecureContext()) return false;
+    if (!("Notification" in window)) return false;
+    return String(Notification.permission || "default") === "default";
+  }
+
+  function ensureNotificationPermissionPrompt() {
+    if (notificationPermissionPromptEl && notificationPermissionPromptEl.isConnected) {
+      return notificationPermissionPromptEl;
+    }
+    if (!modalBody || !modalBody.isConnected) return null;
+    const promptHost = feed && feed.isConnected ? feed : modalBody;
+    const node = document.createElement("div");
+    node.className = "shop-company-chat-permission-prompt hidden";
+    node.setAttribute("aria-live", "polite");
+    node.innerHTML =
+      '<div class="shop-company-chat-permission-prompt__card">' +
+        '<button type="button" class="shop-company-chat-permission-prompt__close" aria-label="\u0417\u0430\u043a\u0440\u044b\u0442\u044c">' +
+          '<i class="fas fa-times"></i>' +
+        "</button>" +
+        '<div class="shop-company-chat-permission-prompt__text">\u041f\u043e\u043b\u0443\u0447\u0430\u0442\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f \u043e \u043d\u043e\u0432\u044b\u0445 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f\u0445 \u0432 \u0447\u0430\u0442\u0435?</div>' +
+        '<button type="button" class="shop-company-chat-permission-prompt__allow">\u0414\u0430</button>' +
+      "</div>";
+    promptHost.appendChild(node);
+    notificationPermissionPromptEl = node;
+
+    const closeBtn = node.querySelector(".shop-company-chat-permission-prompt__close");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", function (event) {
+        event.preventDefault();
+        hideNotificationPermissionPrompt();
+      });
+    }
+
+    const allowBtn = node.querySelector(".shop-company-chat-permission-prompt__allow");
+    if (allowBtn) {
+      allowBtn.addEventListener("click", function (event) {
+        event.preventDefault();
+        requestMessageAlertNotificationPermission()
+          .catch(function () { return String(Notification.permission || "default"); })
+          .finally(function () {
+            hideNotificationPermissionPrompt();
+            queueWebPushSubscriptionSync({
+              clientId: getActiveChatClientId(),
+              force: true,
+              immediate: true,
+            });
+          });
+      });
+    }
+
+    return node;
+  }
+
+  function hideNotificationPermissionPrompt() {
+    const prompt = (
+      notificationPermissionPromptEl
+      && notificationPermissionPromptEl.isConnected
+    )
+      ? notificationPermissionPromptEl
+      : null;
+    if (!prompt) return;
+    prompt.classList.remove("is-visible");
+    prompt.classList.add("hidden");
+  }
+
+  function maybeShowNotificationPermissionPrompt() {
+    const prompt = ensureNotificationPermissionPrompt();
+    if (!prompt) return;
+    if (!prompt.classList.contains("hidden")) return;
+    if (!shouldOfferNotificationPermissionPrompt()) return;
+    notificationPermissionPromptShownInSession = true;
+    prompt.classList.remove("hidden");
+    requestAnimationFrame(function () {
+      prompt.classList.add("is-visible");
+    });
   }
 
   function suppressIncomingAlertsFor(ms) {
@@ -1129,7 +1223,6 @@
           .catch(function () {});
       }
     }
-    requestMessageAlertNotificationPermission();
   }
 
   function playFallbackMessageAlertTone() {
@@ -4523,10 +4616,9 @@
     ensureContextMenu();
     hideChatOrderDetailsView();
     stopUnreadPolling();
-    refreshChatClientProfileIfNeeded({ pull: false });
+    const profileSwitched = refreshChatClientProfileIfNeeded({ pull: true });
     queueWebPushSubscriptionSync({
       clientId: getActiveChatClientId(),
-      requestPermission: true,
       immediate: true,
     });
     pendingFeedRestoreState = loadPersistedFeedViewportState(getActiveChatClientId());
@@ -4545,6 +4637,7 @@
     overlay.classList.add("is-open");
     overlay.setAttribute("aria-hidden", "false");
     document.body.classList.add("shop-company-chat-open");
+    maybeShowNotificationPermissionPrompt();
     lockBackgroundPageScrollForChat();
     scheduleScrollDownComposerExtraOffsetSync();
     scheduleMobileKeyboardInsetSync();
@@ -4554,7 +4647,10 @@
       setChatBootstrapLoading(true);
     }
     requestAnimationFrame(function () {
-      pullSharedThreadFromServer({ force: true })
+      const initialPullPromise = profileSwitched
+        ? Promise.resolve(false)
+        : pullSharedThreadFromServer({ force: true });
+      initialPullPromise
         .catch(function () { return false; })
         .finally(function () {
           const welcomeMessage = ensureDailyWelcomeMessage();
@@ -4575,6 +4671,12 @@
             requestAnimationFrame(function () {
               tryApplyPendingFeedRestoreState();
             });
+            window.setTimeout(function () {
+              tryApplyPendingFeedRestoreState();
+            }, 180);
+            window.setTimeout(function () {
+              tryApplyPendingFeedRestoreState();
+            }, 360);
           } else {
             window.setTimeout(function () {
               tryApplyPendingFeedRestoreState();
@@ -4603,6 +4705,7 @@
     saveFeedScrollPosition({ persist: true });
     syncVisibleChatReadState({ force: true, flushRemote: true, preserveViewport: true });
     closeAttachPreview({ focusComposer: false });
+    hideNotificationPermissionPrompt();
     hideContextMenu();
     hideReactionBar();
     hideEmojiPopover();
@@ -7314,9 +7417,15 @@
     scheduleScrollDownComposerExtraOffsetSync();
   }
 
+  function hasFocusedChatTextInput() {
+    const active = document.activeElement;
+    return active === input || active === attachPreviewCaption;
+  }
+
   function computeMobileKeyboardInset() {
     if (!overlay.classList.contains("is-open")) return 0;
     if (!shouldUseNativeMobileEmojiKeyboard()) return 0;
+    if (!hasFocusedChatTextInput()) return 0;
     const viewport = window.visualViewport;
     if (!viewport) return 0;
     const viewportHeight = Number(viewport.height || 0);
@@ -8481,7 +8590,6 @@
     if (!chatRuntimeSettings.isEnabled) return;
     event.preventDefault();
     event.stopPropagation();
-    requestMessageAlertNotificationPermission();
     initChatRuntimeSettings({ fetchRemote: true, force: true, refreshUi: true }).catch(function () {});
     openCompanyChat();
   });

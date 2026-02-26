@@ -77,6 +77,7 @@
     try {
       if (tenant) {
         localStorage.setItem("tenant", JSON.stringify(tenant));
+        document.dispatchEvent(new CustomEvent("tenantDataChanged", { detail: { tenant } }));
       }
     } catch {}
   }
@@ -1951,6 +1952,8 @@
       }
       if (tabId === "print-api") {
         ensurePrintApiReady();
+      } else {
+        stopPrintApiRefresh();
       }
       if (tabId === "system-polling") {
         loadSystemPollingSettings();
@@ -3520,6 +3523,7 @@
     }
 
     async function loadPrintApiToken(storeId) {
+      if (activeRightTabId !== "print-api") return;
       if (!settingsPrintApiToken || !storeId) return;
       try {
         const res = await authFetch(`/api/admin/tenant/print-api?store_id=${encodeURIComponent(storeId)}&_ts=${Date.now()}`);
@@ -3570,13 +3574,22 @@
 
     function startPrintApiRefresh() {
       stopPrintApiRefresh();
+      if (activeRightTabId !== "print-api") return;
       printApiRefreshTimer = setInterval(() => {
+        if (activeRightTabId !== "print-api") {
+          stopPrintApiRefresh();
+          return;
+        }
         const storeId = Number(settingsPrintApiStore && settingsPrintApiStore.value);
         if (storeId) loadPrintApiToken(storeId);
       }, 3000);
     }
 
     function ensurePrintApiReady() {
+      if (activeRightTabId !== "print-api") {
+        stopPrintApiRefresh();
+        return;
+      }
       const loadAndSelect = async () => {
         if (!storesState.loaded) {
           await loadStores();
@@ -3592,8 +3605,6 @@
       loadAndSelect();
       startPrintApiRefresh();
     }
-
-    ensurePrintApiReady();
 
     function trimOrNull(value) {
       const s = String(value ?? "").trim();
