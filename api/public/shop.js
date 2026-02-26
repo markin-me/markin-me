@@ -2632,6 +2632,84 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     }
   });
 
+  // POST /api/public/auth/link-token
+  // body: { provider: 'max' | 'tg' }
+  // headers: x-customer-token
+  router.post('/auth/link-token', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const sessionToken = str(req.headers['x-customer-token']);
+      const customer = await getCustomerByToken(tenantId, sessionToken);
+      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+
+      const provider = str(req.body?.provider || '').toLowerCase();
+      if (provider !== 'max' && provider !== 'tg') {
+        return res.status(400).json({ ok: false, error: 'BAD_PROVIDER' });
+      }
+
+      if (provider === 'max') {
+        const tenantBotId = await getTenantMaxBotId(db, tenantId);
+        const tenantBotToken = await getTenantMaxBotToken(db, tenantId);
+        if (!tenantBotId || !tenantBotToken) {
+          return res.status(409).json({ ok: false, error: 'MAX_BOT_NOT_CONFIGURED' });
+        }
+
+        const linkToken = makeLinkToken();
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        await dualWriteAuthToken(db, {
+          tenantId,
+          customerId: Number(customer.id),
+          provider: 'max',
+          purpose: 'link',
+          token: linkToken,
+          expiresAt,
+        });
+
+        return res.json({
+          ok: true,
+          provider: 'max',
+          token: linkToken,
+          link: buildMaxDeepLink(linkToken, tenantBotId),
+          expires_at: expiresAt.toISOString(),
+        });
+      }
+
+      const [rows] = await db.query(
+        'SELECT telegram_bot_username, telegram_bot_token FROM ten_tenants WHERE id=? LIMIT 1',
+        [tenantId]
+      );
+      const row = rows[0] || {};
+      const username = String(row.telegram_bot_username || '').trim().replace(/^@/, '');
+      const token = String(row.telegram_bot_token || '').trim();
+      if (!username || !token) {
+        return res.status(409).json({ ok: false, error: 'TG_BOT_NOT_CONFIGURED' });
+      }
+
+      const linkToken = makeLinkToken();
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await dualWriteAuthToken(db, {
+        tenantId,
+        customerId: Number(customer.id),
+        provider: 'tg',
+        purpose: 'link',
+        token: linkToken,
+        expiresAt,
+      });
+
+      const link = `https://t.me/${encodeURIComponent(username)}?start=${encodeURIComponent(linkToken)}`;
+      return res.json({
+        ok: true,
+        provider: 'tg',
+        token: linkToken,
+        link,
+        expires_at: expiresAt.toISOString(),
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   // GET /api/public/me/settings-bootstrap
   // Combines profile settings-related statuses for lazy loading on Settings tab.
   router.get('/me/settings-bootstrap', async (req, res) => {
@@ -4832,6 +4910,83 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const pid = Number(r.product_id);
         if (!result[pid]) result[pid] = [];
         result[pid].push(r);
+      }
+
+      res.json({ ok: true, data: result });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // Batch variants for multiple products in one request
+  router.post('/products/batch/variants', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
+      if (!ids.length) return res.json({ ok: true, data: {} });
+      if (ids.length > 200) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+
+      const placeholders = ids.map(() => '?').join(',');
+      const [variantRows] = await db.query(
+        `SELECT
+           va.product_id,
+           vg.id,
+           vg.title,
+           vg.unit_id,
+           vg.values,
+           vg.default_value_index AS group_default_value_index,
+           va.default_value_index AS assignment_default_value_index,
+           u.code AS unit_code,
+           u.title AS unit_title,
+           u.short_title AS unit_short_title
+         FROM prod_variant_assignments va
+         JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
+         LEFT JOIN prod_units u ON u.id=vg.unit_id
+         WHERE va.tenant_id=?
+           AND va.product_id IN (${placeholders})
+           AND va.is_active=1 AND vg.is_active=1
+         ORDER BY va.product_id ASC, va.sort_order ASC, vg.sort_order ASC`,
+        [tenantId, ...ids]
+      );
+
+      const groupIds = Array.from(
+        new Set(variantRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0))
+      );
+      const tiersByGroupId = new Map();
+      if (groupIds.length) {
+        const tierPlaceholders = groupIds.map(() => '?').join(',');
+        const [tiers] = await db.query(
+          `SELECT variant_group_id, min_quantity, discount_percent, sort_order
+           FROM prod_variant_discount_tiers
+           WHERE tenant_id=? AND variant_group_id IN (${tierPlaceholders})
+           ORDER BY variant_group_id ASC, sort_order ASC, min_quantity ASC`,
+          [tenantId, ...groupIds]
+        );
+        for (const t of tiers) {
+          const gid = Number(t.variant_group_id);
+          if (!tiersByGroupId.has(gid)) tiersByGroupId.set(gid, []);
+          tiersByGroupId.get(gid).push(t);
+        }
+      }
+
+      const result = {};
+      for (const v of variantRows) {
+        const pid = Number(v.product_id);
+        if (!result[pid]) result[pid] = [];
+        const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
+        const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
+        result[pid].push({
+          id: Number(v.id),
+          title: str(v.title || ""),
+          unit_id: v.unit_id ? Number(v.unit_id) : null,
+          unit_code: str(v.unit_code || ""),
+          unit_title: str(v.unit_title || ""),
+          unit_short_title: str(v.unit_short_title || ""),
+          values: safeJsonArray(v.values),
+          default_value_index: assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
+          discount_tiers: tiersByGroupId.get(Number(v.id)) || [],
+        });
       }
 
       res.json({ ok: true, data: result });
