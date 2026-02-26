@@ -1118,6 +1118,51 @@ async function readTenantUnreadTotal(tenantId) {
   return Math.trunc(total);
 }
 
+function toUnreadRevision(updatedAt) {
+  const ts = new Date(String(updatedAt || "")).getTime();
+  if (!Number.isFinite(ts) || ts <= 0) return 0;
+  return Math.trunc(ts);
+}
+
+async function readClientUnreadSnapshot(tenantId, clientId) {
+  const normalizedClientId = normalizeClientId(clientId);
+  if (!normalizedClientId) {
+    return {
+      total: 0,
+      updatedAt: "",
+      revision: 0,
+    };
+  }
+
+  const [countRows] = await db.query(
+    `SELECT COUNT(*) AS total
+       FROM chat_messages
+      WHERE tenant_id = ?
+        AND client_id = ?
+        AND direction = 'out'
+        AND is_read = 0`,
+    [Number(tenantId), Number(normalizedClientId)]
+  );
+  const totalRaw = Number(countRows?.[0]?.total || 0);
+  const total = Number.isFinite(totalRaw) && totalRaw > 0 ? Math.trunc(totalRaw) : 0;
+
+  const [threadRows] = await db.query(
+    `SELECT updated_at
+       FROM chat_threads
+      WHERE tenant_id = ? AND client_id = ?
+      LIMIT 1`,
+    [Number(tenantId), Number(normalizedClientId)]
+  );
+  const updatedAt = toIsoOrEmpty(threadRows?.[0]?.updated_at);
+  const revision = toUnreadRevision(updatedAt);
+
+  return {
+    total,
+    updatedAt,
+    revision,
+  };
+}
+
 function applyTenantUnreadTotal(tenantId, totalRaw, updatedAt = "") {
   const entry = getTenantUnreadEntry(tenantId, true);
   if (!entry) {
@@ -2978,6 +3023,21 @@ module.exports = function makeChatTempRouter() {
   router.get("/unread", async (req, res) => {
     try {
       const tenantId = getTenantId(req);
+      const actorKey = getRequestReactionActor(req);
+      if (actorKey === "in") {
+        const clientId = normalizeClientId(req.query.client_id ?? req.query.clientId ?? "");
+        const snapshot = await readClientUnreadSnapshot(tenantId, clientId);
+        return res.json({
+          ok: true,
+          data: {
+            unread_total: Number(snapshot.total || 0),
+            total: Number(snapshot.total || 0),
+            updated_at: String(snapshot.updatedAt || ""),
+            revision: Number(snapshot.revision || 0),
+          },
+        });
+      }
+
       const snapshot = await ensureTenantUnreadLoaded(tenantId);
       return res.json({
         ok: true,
@@ -2997,6 +3057,7 @@ module.exports = function makeChatTempRouter() {
   router.get("/unread/wait", async (req, res) => {
     try {
       const tenantId = getTenantId(req);
+      const actorKey = getRequestReactionActor(req);
       const timeoutMs = Number(req.query.timeout_ms || req.query.timeout || 20000);
 
       const sinceTotalRaw = Number(req.query.since_total ?? req.query.sinceTotal);
@@ -3006,6 +3067,51 @@ module.exports = function makeChatTempRouter() {
       const sinceRevisionRaw = Number(req.query.since_revision ?? req.query.sinceRevision);
       const hasSinceRevision = Number.isFinite(sinceRevisionRaw) && sinceRevisionRaw >= 0;
       const sinceRevision = hasSinceRevision ? Math.trunc(sinceRevisionRaw) : -1;
+
+      if (actorKey === "in") {
+        const clientId = normalizeClientId(req.query.client_id ?? req.query.clientId ?? "");
+        const currentSnapshot = await readClientUnreadSnapshot(tenantId, clientId);
+        const currentTotal = Number(currentSnapshot.total || 0);
+        const currentRevision = Number(currentSnapshot.revision || 0);
+        const changedNow = hasSinceRevision
+          ? (currentRevision > sinceRevision || (hasSinceTotal && currentTotal !== sinceTotal))
+          : (hasSinceTotal ? currentTotal !== sinceTotal : currentTotal > 0);
+        if (changedNow) {
+          return res.json({
+            ok: true,
+            data: {
+              changed: true,
+              unread_total: currentTotal,
+              total: currentTotal,
+              updated_at: String(currentSnapshot.updatedAt || ""),
+              revision: currentRevision,
+              timeout: false,
+            },
+          });
+        }
+
+        const waitResult = clientId
+          ? await waitForThreadChange(tenantId, clientId, timeoutMs)
+          : { timeout: true };
+        const nextSnapshot = await readClientUnreadSnapshot(tenantId, clientId);
+        const nextTotal = Number(nextSnapshot.total || 0);
+        const nextRevision = Number(nextSnapshot.revision || 0);
+        const changed = hasSinceRevision
+          ? (nextRevision > sinceRevision || (hasSinceTotal && nextTotal !== sinceTotal))
+          : (hasSinceTotal ? nextTotal !== sinceTotal : nextTotal > 0);
+
+        return res.json({
+          ok: true,
+          data: {
+            changed,
+            unread_total: nextTotal,
+            total: nextTotal,
+            updated_at: String(nextSnapshot.updatedAt || ""),
+            revision: nextRevision,
+            timeout: waitResult?.timeout === true,
+          },
+        });
+      }
 
       const currentSnapshot = await ensureTenantUnreadLoaded(tenantId);
       const currentTotal = Number(currentSnapshot.total || 0);
