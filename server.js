@@ -28,14 +28,18 @@ const makeChatTempRouter = require('./api/chatTemp');
 const { authMiddleware } = require('./api/middleware/auth');
 
 const app = express();
-const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '1.1';
+const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '1.1.2';
 const PORT = process.env.PORT || 3000;
+const TENANT_LOOKUP_CACHE_MS = Number(process.env.TENANT_LOOKUP_CACHE_MS || 60_000);
+const STATIC_FILE_VERSION_CACHE_MS = Number(process.env.STATIC_FILE_VERSION_CACHE_MS || 300_000);
 const SYSTEM_SETTINGS_DIR = path.join(__dirname, 'data');
 const SYSTEM_SETTINGS_FILE = path.join(SYSTEM_SETTINGS_DIR, 'system-settings.json');
 const runtimePollingState = {
   telegram_env_enabled: String(process.env.DISABLE_TELEGRAM_POLLING || '').trim() !== '1',
   telegram_tenant_enabled: String(process.env.DISABLE_TG_AUTH_POLLING || '').trim() !== '1',
 };
+const tenantLookupCache = new Map();
+const staticVersionCache = new Map();
 let telegramEnvPollingHandle = null;
 let telegramTenantPollingHandle = null;
 let fatalErrorLogged = false;
@@ -138,6 +142,86 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
+function getFreshCachedValue(cache, key) {
+  const entry = cache.get(key);
+  if (!entry) return { hit: false, value: null };
+  if (entry.expiresAt <= Date.now()) {
+    cache.delete(key);
+    return { hit: false, value: null };
+  }
+  return { hit: true, value: entry.value };
+}
+
+function setCachedValue(cache, key, value, ttlMs) {
+  cache.set(key, {
+    value,
+    expiresAt: Date.now() + Math.max(1, Number(ttlMs) || 1),
+  });
+}
+
+function cacheTenantRecord(tenant) {
+  if (!tenant || typeof tenant !== 'object') return;
+  const tenantId = Number(tenant.id);
+  if (Number.isFinite(tenantId) && tenantId > 0) {
+    setCachedValue(tenantLookupCache, `tenant:id:${tenantId}`, tenant, TENANT_LOOKUP_CACHE_MS);
+  }
+  const sub = helpers.strOrNull(tenant.subdomain);
+  if (sub) {
+    setCachedValue(tenantLookupCache, `tenant:sub:${sub.toLowerCase()}`, tenant, TENANT_LOOKUP_CACHE_MS);
+  }
+  const customAscii = helpers.strOrNull(tenant.custom_domain_ascii);
+  if (customAscii) {
+    setCachedValue(tenantLookupCache, `tenant:host:${customAscii.toLowerCase()}`, tenant, TENANT_LOOKUP_CACHE_MS);
+  }
+  const custom = helpers.strOrNull(tenant.custom_domain);
+  if (custom) {
+    setCachedValue(tenantLookupCache, `tenant:host:${custom.toLowerCase()}`, tenant, TENANT_LOOKUP_CACHE_MS);
+  }
+}
+
+async function findTenantById(id) {
+  const tenantId = Number(id);
+  if (!Number.isFinite(tenantId) || tenantId <= 0) return null;
+
+  const cacheKey = `tenant:id:${tenantId}`;
+  const cached = getFreshCachedValue(tenantLookupCache, cacheKey);
+  if (cached.hit) return cached.value;
+
+  const [rows] = await db.query('SELECT * FROM ten_tenants WHERE id=? LIMIT 1', [tenantId]);
+  const tenant = rows[0] || null;
+  setCachedValue(tenantLookupCache, cacheKey, tenant, TENANT_LOOKUP_CACHE_MS);
+  if (tenant) cacheTenantRecord(tenant);
+  return tenant;
+}
+
+async function findTenantBySubdomain(subdomain) {
+  const sub = helpers.strOrNull(subdomain);
+  if (!sub) return null;
+  const key = sub.toLowerCase();
+
+  const cacheKey = `tenant:sub:${key}`;
+  const cached = getFreshCachedValue(tenantLookupCache, cacheKey);
+  if (cached.hit) return cached.value;
+
+  const [rows] = await db.query('SELECT * FROM ten_tenants WHERE subdomain=? LIMIT 1', [key]);
+  const tenant = rows[0] || null;
+  setCachedValue(tenantLookupCache, cacheKey, tenant, TENANT_LOOKUP_CACHE_MS);
+  if (tenant) cacheTenantRecord(tenant);
+  return tenant;
+}
+
+function getStaticFileVersionCached(relativePath) {
+  const cacheKey = `static:version:${relativePath}`;
+  const cached = getFreshCachedValue(staticVersionCache, cacheKey);
+  if (cached.hit) return cached.value;
+
+  const filePath = path.join(__dirname, 'static', relativePath);
+  const stat = fs.statSync(filePath);
+  const version = Math.round(stat.mtimeMs || stat.mtime.getTime());
+  setCachedValue(staticVersionCache, cacheKey, version, STATIC_FILE_VERSION_CACHE_MS);
+  return version;
+}
+
 // Helper для версионирования статических ресурсов (CSS, JS) по времени изменения файла
 app.locals.assetUrl = function assetUrl(src) {
   try {
@@ -145,9 +229,7 @@ app.locals.assetUrl = function assetUrl(src) {
     if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) return src;
     if (!src.startsWith('/static/')) return src;
     const relativePath = src.split('?')[0].replace(/^\/static\//, '');
-    const filePath = path.join(__dirname, 'static', relativePath);
-    const stat = fs.statSync(filePath);
-    const version = Math.round(stat.mtimeMs || stat.mtime.getTime());
+    const version = getStaticFileVersionCached(relativePath);
     const separator = src.includes('?') ? '&' : '?';
     return `${src}${separator}v=${version}`;
   } catch (e) {
@@ -167,11 +249,7 @@ app.locals.imageUrl = function imageUrl(src) {
     if (!src.startsWith('/static/')) return src;
 
     const relativePath = src.replace(/^\/static\//, '');
-    const filePath = path.join(__dirname, 'static', relativePath);
-
-    const stat = fs.statSync(filePath);
-    const mtime = stat.mtimeMs || stat.mtime.getTime();
-    const version = Math.round(mtime);
+    const version = getStaticFileVersionCached(relativePath);
 
     const separator = src.includes('?') ? '&' : '?';
     return `${src}${separator}v=${version}`;
@@ -218,52 +296,66 @@ async function resolveTenant(req) {
   let tenant = null;
 
   if (Number.isFinite(queryTenantId) && queryTenantId > 0) {
-    const [rows] = await db.query('SELECT * FROM ten_tenants WHERE id=? LIMIT 1', [queryTenantId]);
-    tenant = rows[0] || null;
+    tenant = await findTenantById(queryTenantId);
   } else if (querySubdomain) {
-    const [rows] = await db.query('SELECT * FROM ten_tenants WHERE subdomain=? LIMIT 1', [querySubdomain.toLowerCase()]);
-    tenant = rows[0] || null;
+    tenant = await findTenantBySubdomain(querySubdomain.toLowerCase());
   } else if (host) {
-    const [custom] = await db.query(
-      'SELECT * FROM ten_tenants WHERE custom_domain_ascii=? OR custom_domain=? LIMIT 1',
-      [host, host]
-    );
-    if (custom.length) {
-      tenant = custom[0];
-    } else {
-      const sub = getSubdomain(host);
-      if (sub) {
-        const [rows] = await db.query('SELECT * FROM ten_tenants WHERE subdomain=? LIMIT 1', [sub]);
-        tenant = rows[0] || null;
-      }
-    }
+    tenant = await findTenantByHost(host);
   }
 
   if (!tenant) {
-    const [rows] = await db.query('SELECT * FROM ten_tenants WHERE id=1 LIMIT 1');
-    tenant = rows[0] || null;
+    tenant = await findTenantById(1);
   }
 
+  return tenant;
+}
+
+async function findTenantByHost(hostname) {
+  const host = normalizeHostForMatch(hostname);
+  if (!host) return null;
+
+  const cacheKey = `tenant:host:${host}`;
+  const cached = getFreshCachedValue(tenantLookupCache, cacheKey);
+  if (cached.hit) return cached.value;
+
+  // Split lookup to keep index-friendly predicates and avoid expensive OR scans.
+  const [asciiRows] = await db.query(
+    'SELECT * FROM ten_tenants WHERE custom_domain_ascii=? LIMIT 1',
+    [host]
+  );
+  let tenant = asciiRows[0] || null;
+
+  if (!tenant) {
+    const [legacyRows] = await db.query(
+      'SELECT * FROM ten_tenants WHERE custom_domain=? LIMIT 1',
+      [host]
+    );
+    tenant = legacyRows[0] || null;
+  }
+
+  if (!tenant) {
+    const sub = getSubdomain(host);
+    if (sub) {
+      tenant = await findTenantBySubdomain(sub);
+    }
+  }
+
+  setCachedValue(tenantLookupCache, cacheKey, tenant, TENANT_LOOKUP_CACHE_MS);
+  if (tenant) cacheTenantRecord(tenant);
   return tenant;
 }
 
 async function isTenantHost(req) {
   const host = normalizeHostForMatch(req.hostname);
   if (!host) return false;
-  const [custom] = await db.query(
-    'SELECT id FROM ten_tenants WHERE custom_domain_ascii=? OR custom_domain=? LIMIT 1',
-    [host, host]
-  );
-  if (custom.length) return true;
-  const sub = getSubdomain(host);
-  if (!sub) return false;
-  const [rows] = await db.query('SELECT id FROM ten_tenants WHERE subdomain=? LIMIT 1', [sub]);
-  return rows.length > 0;
+  const tenant = await findTenantByHost(host);
+  if (tenant) req._resolvedTenant = tenant;
+  return Boolean(tenant && tenant.id);
 }
 
 async function renderShop(req, res) {
   try {
-    const tenant = await resolveTenant(req);
+    const tenant = req._resolvedTenant || await resolveTenant(req);
 
     const pageTitle = (tenant && (tenant.site_name || tenant.name)) ? (tenant.site_name || tenant.name) : 'Магазин';
     const tenantId = tenant && tenant.id ? tenant.id : 1;
@@ -412,19 +504,13 @@ app.use(async (req, res, next) => {
     || req.path === '/sw.js'
     || req.path === '/max-app'
   ) return next();
-  const sub = getSubdomain(req.hostname);
-  if (sub) return renderShop(req, res);
-  // Проверка custom_domain — если домен привязан к тенанту, показываем витрину
-  const host = normalizeHostForMatch(req.hostname);
-  if (host) {
-    try {
-      const [rows] = await db.query(
-        'SELECT id FROM ten_tenants WHERE custom_domain_ascii=? OR custom_domain=? LIMIT 1',
-        [host, host]
-      );
-      if (rows.length) return renderShop(req, res);
-    } catch (e) { /* ignore */ }
-  }
+  try {
+    const tenant = await findTenantByHost(req.hostname);
+    if (tenant) {
+      req._resolvedTenant = tenant;
+      return renderShop(req, res);
+    }
+  } catch (e) { /* ignore */ }
   return next();
 });
 

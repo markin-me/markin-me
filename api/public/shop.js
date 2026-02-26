@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
 const { sendNewOrderNotification } = require('../telegramNotifications');
@@ -1097,20 +1098,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       if (!Number.isNaN(exp.getTime()) && exp.getTime() < Date.now()) return null;
     }
 
-    // Sliding session: on each valid request reset TTL to 30 days from now.
-    // This does not accumulate beyond 30 days ahead because we set from NOW().
+    // Sliding session: refresh TTL only when expiry is near.
+    // This reduces write pressure under frequent /me, /me/orders, /me/addresses calls.
     try {
       await db.query(
         `UPDATE ${sessionTable}
          SET expires_at=DATE_ADD(NOW(), INTERVAL 30 DAY)
-         WHERE id=? AND tenant_id=? AND is_active=1`,
+         WHERE id=? AND tenant_id=? AND is_active=1
+           AND (expires_at IS NULL OR expires_at < DATE_ADD(NOW(), INTERVAL 7 DAY))`,
         [Number(r.session_id), tenantId]
-      );
-      await db.query(
-        `UPDATE cust_customer_sessions
-         SET expires_at=DATE_ADD(NOW(), INTERVAL 30 DAY)
-         WHERE tenant_id=? AND token=? AND is_active=1`,
-        [tenantId, token]
       );
     } catch {}
 
@@ -1427,8 +1423,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       return {
         type: 'combo',
         combo_id: comboId,
-        combo_title: str(rawItem.combo_title || rawItem.name || '').trim() || 'РљРѕРјР±Рѕ',
-        name: str(rawItem.name || rawItem.combo_title || '').trim() || 'РљРѕРјР±Рѕ',
+        combo_title: str(rawItem.combo_title || rawItem.name || '').trim() || '\u041a\u043e\u043c\u0431\u043e',
+        name: str(rawItem.name || rawItem.combo_title || '').trim() || '\u041a\u043e\u043c\u0431\u043e',
         qty,
         price: Number(unitPrice || 0),
         line_total: Number(lineTotal || 0),
@@ -1491,7 +1487,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     return {
       type: 'product',
       product_id: productId,
-      name: str(rawItem.name || rawItem.product_name || '').trim() || 'РўРѕРІР°СЂ',
+      name: str(rawItem.name || rawItem.product_name || '').trim() || '\u0422\u043e\u0432\u0430\u0440',
       qty,
       price: Number(unitPrice || 0),
       old_price: Number(rawItem.old_price || 0),
@@ -1594,7 +1590,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         itemType: 'combo',
         productId: null,
         comboId: toPositiveIntOrNull(snapshot.combo_id),
-        title: str(snapshot.combo_title || snapshot.name || '').trim() || 'РљРѕРјР±Рѕ',
+        title: str(snapshot.combo_title || snapshot.name || '').trim() || '\u041a\u043e\u043c\u0431\u043e',
         photo: comboPhotos[0] || fallbackPhoto,
       };
     }
@@ -1603,7 +1599,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       itemType: 'product',
       productId: toPositiveIntOrNull(snapshot.product_id),
       comboId: null,
-      title: str(snapshot.name || '').trim() || 'РўРѕРІР°СЂ',
+      title: str(snapshot.name || '').trim() || '\u0422\u043e\u0432\u0430\u0440',
       photo: photos[0] || null,
     };
   }
@@ -1863,7 +1859,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
           `INSERT INTO cust_customers
            (tenant_id, name, phone, birthday, is_active, registration_date)
            VALUES (?,?,?,?,1, CURDATE())`,
-          [tenantId, 'РљР»РёРµРЅС‚', phone, birthday]
+          [tenantId, '\u041a\u043b\u0438\u0435\u043d\u0442', phone, birthday]
         );
         customerId = Number(ins.insertId);
       } else {
@@ -2835,9 +2831,34 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if (!file) return res.status(400).json({ ok: false, error: 'PHOTO_REQUIRED' });
 
         // РЎРѕР·РґР°С‘Рј WebP-РІР°СЂРёР°РЅС‚ Р°РІР°С‚Р°СЂР° (РѕСЂРёРіРёРЅР°Р» РѕСЃС‚Р°С‘С‚СЃСЏ РєР°Рє fallback)
-        await helpers.ensureWebpVariant(file.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'avatars', file.filename));
+        const originalPath = file.path || path.join(__dirname, '..', '..', 'static', 'uploads', 'avatars', file.filename);
+        const [tenantRows] = await db.query(
+          'SELECT img_webp_quality, img_main_width, img_webp_aggressive, img_delete_original FROM ten_tenants WHERE id=? LIMIT 1',
+          [tenantId]
+        );
+        const imgSettings = tenantRows[0] || {};
+        const webpQuality = imgSettings.img_webp_quality ?? 82;
+        const mainWidth = imgSettings.img_main_width ?? 1200;
+        const webpAggressive = (imgSettings.img_webp_aggressive ?? 0) == 1;
+        const deleteOriginal = (imgSettings.img_delete_original ?? 1) == 1;
 
-        const photoUrl = `/static/uploads/avatars/${file.filename.replace(/\.(jpe?g|png|gif)$/i, '.webp')}`;
+        const convertedPath = await helpers.ensureWebpVariant(originalPath, {
+          quality: webpQuality,
+          width: mainWidth,
+          aggressive: webpAggressive,
+          recompress: true,
+          forceUnique: true,
+        });
+        if (!convertedPath || !/\.webp$/i.test(String(convertedPath))) {
+          return res.status(500).json({ ok: false, error: 'IMAGE_CONVERSION_FAILED' });
+        }
+        if (deleteOriginal) {
+          const sameFile = path.resolve(String(convertedPath)) === path.resolve(String(originalPath));
+          if (!sameFile) fs.unlink(originalPath, () => {});
+        }
+        const staticRoot = path.join(__dirname, '..', '..', 'static');
+        const rel = path.relative(staticRoot, convertedPath).replace(/\\/g, '/');
+        const photoUrl = `/static/${rel}`;
 
         await db.query(
           `UPDATE cust_customers
@@ -4815,7 +4836,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       } catch (dbError) {
         console.error('DB query error in /options/groups/:id:', dbError);
         if (dbError.code === 'ETIMEDOUT' || dbError.code === 'ECONNREFUSED') {
-          return res.status(503).json({ ok: false, error: 'DB_CONNECTION_ERROR', message: 'РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ Рє Р±Р°Р·Рµ РґР°РЅРЅС‹С…' });
+          return res.status(503).json({ ok: false, error: 'DB_CONNECTION_ERROR', message: '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c\u0441\u044f \u043a \u0431\u0430\u0437\u0435 \u0434\u0430\u043d\u043d\u044b\u0445' });
         }
         throw dbError;
       }
@@ -5159,7 +5180,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       );
 
       const [timeOptions] = await db.query(
-        `SELECT id, code, title, description,
+        `SELECT id, code, title, icon, description,
                 has_time_window, starts_at, ends_at, step_minutes, lead_minutes, sort
          FROM order_time_options
          WHERE tenant_id=? AND store_id=? AND is_active=1
@@ -5341,10 +5362,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       if (authCustomer) {
         customerPhone = authCustomer.phone; // С‚РµР»РµС„РѕРЅ РЅРµ РјРµРЅСЏРµРј
-        if (!customerName) customerName = authCustomer.name || 'РљР»РёРµРЅС‚';
+        if (!customerName) customerName = authCustomer.name || '\u041a\u043b\u0438\u0435\u043d\u0442';
       } else {
         if (!customerPhone) return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
-        if (!customerName) customerName = 'РљР»РёРµРЅС‚';
+        if (!customerName) customerName = '\u041a\u043b\u0438\u0435\u043d\u0442';
       }
 
       // ensure customer exists if not authed
@@ -5660,7 +5681,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           normItems.push({
             type: 'combo',
             combo_id: it.combo_id,
-            name: it.combo_title || 'РљРѕРјР±Рѕ',
+            name: it.combo_title || '\u041a\u043e\u043c\u0431\u043e',
             qty,
             price: qty > 0 ? roundPrice(lineTotal / qty) : 0,
             old_price: oldLineTotalFromRequest > 0 && qty > 0 ? roundPrice(oldLineTotalFromRequest / qty) : 0,
@@ -6320,7 +6341,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
              WHERE tenant_id=? AND store_id=? AND id=?`,
             [
               `ORD-${orderId}`,
-              `РђРІС‚РѕСЃРїРёСЃР°РЅРёРµ РїРѕ Р·Р°РєР°Р·Сѓ #${orderId} (${publicId})`,
+              `\u0410\u0432\u0442\u043e\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043f\u043e \u0437\u0430\u043a\u0430\u0437\u0443 #${orderId} (${publicId})`,
               tenantId,
               orderStoreId,
               stockDocumentId,

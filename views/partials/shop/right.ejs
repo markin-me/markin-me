@@ -1,4 +1,4 @@
-﻿<div class="panel" id="shopCartPanel">
+<div class="panel" id="shopCartPanel">
   <div class="panel-header shop-cart-header">
     <div class="shop-cart-header-left">
       <button class="btn btn-icon shop-cart-back hidden" id="shopCartBackBtn" type="button" aria-label="Назад">
@@ -160,6 +160,18 @@
         </div>
 
         <div class="shop-checkout-footer-actions hidden" id="shopCheckoutFooterActions">
+          <input
+            class="control shop-checkout-comment shop-checkout-footer-name-input hidden"
+            id="shopCheckoutFooterNameInput"
+            type="text"
+            placeholder="Введите имя"
+          />
+          <textarea
+            class="control shop-checkout-comment shop-checkout-footer-comment-input"
+            id="shopCheckoutFooterCommentInput"
+            placeholder="Введите комментарий к заказу"
+            rows="1"
+          ></textarea>
           <button class="shop-checkout-back" id="shopCheckoutBackBtn" type="button" aria-label="Назад в корзину" title="Назад в корзину">
             <i class="fas fa-arrow-left"></i>
           </button>

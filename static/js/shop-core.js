@@ -8262,6 +8262,9 @@ async function initCore() {
     if ("scrollRestoration" in history) {
       history.scrollRestoration = "manual";
     }
+    try { bindIosBackSwipeGuard(); } catch {}
+    try { bindMobileZoomGuard(); } catch {}
+    try { bindMobilePortraitGuard(); } catch {}
     if (isShopPage()) {
       document.body.classList.add("shop-main");
     } else {
@@ -8351,3 +8354,116 @@ if (__shopHasRequiredDom) initCore();
 
 // Late-loaded on shop-late.js. Core keeps a safe no-op to avoid ReferenceError during first paint.
 function updateMobileDeliveryProgress() {}
+
+let __iosBackSwipeGuardBound = false;
+function bindIosBackSwipeGuard() {
+  if (__iosBackSwipeGuardBound) return;
+  if (!isShopPage()) return;
+
+  const ua = String(navigator.userAgent || "");
+  const isAppleTouch = /iP(hone|od|ad)/i.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  if (!isAppleTouch) return;
+
+  let startX = 0;
+  let startY = 0;
+  let tracking = false;
+  const EDGE_PX = 24;
+  const SWIPE_TRIGGER_PX = 18;
+  const VERTICAL_TOLERANCE_PX = 14;
+
+  document.addEventListener("touchstart", (event) => {
+    const touch = event.touches && event.touches[0];
+    if (!touch) return;
+    startX = touch.clientX;
+    startY = touch.clientY;
+    tracking = startX <= EDGE_PX;
+  }, { passive: true });
+
+  document.addEventListener("touchmove", (event) => {
+    if (!tracking) return;
+    const touch = event.touches && event.touches[0];
+    if (!touch) return;
+    const dx = touch.clientX - startX;
+    const dy = Math.abs(touch.clientY - startY);
+    if (dx > SWIPE_TRIGGER_PX && dy < VERTICAL_TOLERANCE_PX) {
+      event.preventDefault();
+    }
+  }, { passive: false });
+
+  document.addEventListener("touchend", () => {
+    tracking = false;
+  }, { passive: true });
+  document.addEventListener("touchcancel", () => {
+    tracking = false;
+  }, { passive: true });
+
+  __iosBackSwipeGuardBound = true;
+}
+
+let __mobileZoomGuardBound = false;
+function bindMobileZoomGuard() {
+  if (__mobileZoomGuardBound) return;
+  if (!isShopPage()) return;
+
+  const ua = String(navigator.userAgent || "");
+  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  if (!isMobile) return;
+
+  // iOS Safari pinch gesture event.
+  document.addEventListener("gesturestart", (event) => {
+    event.preventDefault();
+  }, { passive: false });
+
+  // Prevent double-tap zoom while keeping single taps intact.
+  let lastTouchEnd = 0;
+  document.addEventListener("touchend", (event) => {
+    const now = Date.now();
+    if (now - lastTouchEnd <= 300) {
+      event.preventDefault();
+    }
+    lastTouchEnd = now;
+  }, { passive: false });
+
+  __mobileZoomGuardBound = true;
+}
+
+let __mobilePortraitGuardBound = false;
+function bindMobilePortraitGuard() {
+  if (__mobilePortraitGuardBound) return;
+  if (!isShopPage()) return;
+
+  const ua = String(navigator.userAgent || "");
+  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  if (!isMobile) return;
+
+  try {
+    if (screen.orientation && typeof screen.orientation.lock === "function") {
+      screen.orientation.lock("portrait").catch(() => {});
+    }
+  } catch {}
+
+  let guard = document.getElementById("shopPortraitGuard");
+  if (!guard) {
+    guard = document.createElement("div");
+    guard.id = "shopPortraitGuard";
+    guard.className = "shop-portrait-guard hidden";
+    guard.innerHTML = '<div class="shop-portrait-guard-card">\u041f\u043e\u0432\u0435\u0440\u043d\u0438\u0442\u0435 \u0443\u0441\u0442\u0440\u043e\u0439\u0441\u0442\u0432\u043e \u0432 \u043f\u043e\u0440\u0442\u0440\u0435\u0442\u043d\u044b\u0439 \u0440\u0435\u0436\u0438\u043c</div>';
+    document.body.appendChild(guard);
+  }
+
+  const updatePortraitGuard = () => {
+    const isLandscape = window.matchMedia("(orientation: landscape)").matches;
+    const isSmallScreen = Math.min(window.innerWidth || 0, window.innerHeight || 0) <= 900;
+    const shouldBlock = isLandscape && isSmallScreen;
+    guard.classList.toggle("hidden", !shouldBlock);
+    document.body.classList.toggle("shop-portrait-guard-active", shouldBlock);
+  };
+
+  updatePortraitGuard();
+  window.addEventListener("resize", updatePortraitGuard, { passive: true });
+  window.addEventListener("orientationchange", updatePortraitGuard, { passive: true });
+
+  __mobilePortraitGuardBound = true;
+}

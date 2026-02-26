@@ -7741,6 +7741,10 @@ function applySheetAddressTitle(backMode = "cart") {
       if (elMobileCheckoutBtn) {
         elMobileCheckoutBtn.disabled = !hasItems;
       }
+      const mobileNameWrap = document.getElementById("shopMobileCheckoutNameWrap");
+      if (mobileNameWrap) mobileNameWrap.classList.add("hidden");
+      const mobileCommentWrap = document.getElementById("shopMobileCheckoutCommentWrap");
+      if (mobileCommentWrap) mobileCommentWrap.classList.add("hidden");
       updateMobileDeliveryProgress();
     }
     // Обновляем ботомщит активного заказа
@@ -14068,6 +14072,7 @@ function setBottomNavActive(tab) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "shop-checkout-select shop-checkout-time-wheel-trigger";
+    btn.setAttribute("aria-expanded", "false");
 
     const panel = document.createElement("div");
     panel.className = PANEL_CLASS;
@@ -14080,6 +14085,24 @@ function setBottomNavActive(tab) {
 
     let opts = Array.isArray(options) ? options.slice() : [];
     let current = value || (opts[0] ? opts[0].code : "");
+
+    function isOpen() {
+      return panel.classList.contains("is-open");
+    }
+
+    function setOpen(nextOpen) {
+      const willOpen = Boolean(nextOpen);
+      panel.classList.toggle("is-open", willOpen);
+      wrap.classList.toggle("is-open", willOpen);
+      btn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+      if (willOpen && opts.length > 0) {
+        const selectedIndex = getSelectedIndex();
+        scrollToIndex(selectedIndex);
+        requestAnimationFrame(() => {
+          scrollToIndex(selectedIndex);
+        });
+      }
+    }
 
     function getSelectedIndex() {
       const i = opts.findIndex(o => o.code === current);
@@ -14137,7 +14160,7 @@ function setBottomNavActive(tab) {
           current = o.code;
           scrollToIndex(i);
           updateButtonText();
-          panel.classList.remove("is-open");
+          setOpen(false);
           wrap.dispatchEvent(new Event("change"));
         });
         scrollEl.appendChild(item);
@@ -14158,7 +14181,7 @@ function setBottomNavActive(tab) {
       }
       updateButtonText();
       renderItems();
-      if (panel.classList.contains("is-open")) {
+      if (isOpen()) {
         scrollToIndex(getSelectedIndex());
       }
     }
@@ -14166,7 +14189,7 @@ function setBottomNavActive(tab) {
     function setValue(val) {
       current = val;
       updateButtonText();
-      if (panel.classList.contains("is-open")) {
+      if (isOpen()) {
         scrollToIndex(getSelectedIndex());
       }
     }
@@ -14181,7 +14204,7 @@ function setBottomNavActive(tab) {
       // Даже когда слотов нет (opts.length === 0), даём панели
       // раскрыться — так пользователь явно видит, что селектор
       // отреагировал на нажатие, а не «сломался».
-      panel.classList.toggle("is-open");
+      setOpen(!isOpen());
 
       if (scrollParent != null && prevScrollTop != null) {
         requestAnimationFrame(() => {
@@ -14194,16 +14217,12 @@ function setBottomNavActive(tab) {
         });
       }
 
-      if (panel.classList.contains("is-open") && opts.length > 0) {
-        requestAnimationFrame(() => {
-          scrollToIndex(getSelectedIndex());
-        });
-      }
+      if (isOpen() && opts.length > 0) scrollToIndex(getSelectedIndex());
     });
 
     document.addEventListener("click", (e) => {
       if (!wrap.contains(e.target)) {
-        panel.classList.remove("is-open");
+        setOpen(false);
       }
     });
 
@@ -14496,8 +14515,8 @@ function setBottomNavActive(tab) {
     // Итог товаров после всех скидок (включая клиентскую скидку)
     const orderTotal = roundPrice(Math.max(0, baseOrderTotal - customerOrderDiscountAmount));
     const checkoutTotalWithDelivery = orderTotal + getDeliveryCostForTotal(orderTotal);
-    function setCheckoutSubmitLabel() {
-      const label = `Заказать · ${money(checkoutTotalWithDelivery)}`;
+    function setCheckoutSubmitLabel(payableTotal = checkoutTotalWithDelivery) {
+      const label = `Заказать · ${money(payableTotal)}`;
       if (actions?.submitBtn) actions.submitBtn.textContent = label;
       if (elMobileCheckoutSubmitBtn) elMobileCheckoutSubmitBtn.textContent = label;
     }
@@ -14526,10 +14545,6 @@ function setBottomNavActive(tab) {
     const wrap = document.createElement("div");
     wrap.className = "shop-checkout";
 
-    const title = document.createElement("div");
-    title.className = "shop-checkout-title";
-    title.textContent = "Ваш заказ:";
-    wrap.appendChild(title);
 
     const isPlaceholderCustomerName = (rawName) => {
       const value = str(rawName || "").trim().toLowerCase();
@@ -14539,6 +14554,11 @@ function setBottomNavActive(tab) {
     const needsNameCompletion = !!me && (
       !str(me?.name || "").trim() || isPlaceholderCustomerName(me?.name)
     );
+    const isMobileCheckout = window.matchMedia("(max-width: 768px)").matches;
+    const isDesktopCheckout = !isMobileCheckout;
+    const showMobileNameInput = isMobileCheckout && needsNameCompletion;
+    const showDesktopFooterNameInput = isDesktopCheckout && needsNameCompletion;
+    const showInlineNameInCheckoutForm = !needsNameCompletion;
     // Поля имя и телефон для неавторизованных; для авторизованных без имени — только имя.
     let name = { value: me ? str(me.name || "") : "" };
     let phone = { value: me ? (me.phone || "") : "" };
@@ -14547,7 +14567,7 @@ function setBottomNavActive(tab) {
       const emptyNote = document.createElement("div");
       emptyNote.className = "shop-checkout-note muted";
       emptyNote.textContent = !me ? "Поля обязательные: имя и телефон." : "Укажите имя для оформления заказа.";
-      wrap.appendChild(emptyNote);
+      if (showInlineNameInCheckoutForm) wrap.appendChild(emptyNote);
 
       const nameRow = document.createElement("div");
       nameRow.className = "shop-checkout-grid-row";
@@ -14569,7 +14589,7 @@ function setBottomNavActive(tab) {
           nameInput.classList.remove("is-invalid");
         }
       });
-      nameWrap.appendChild(nameLabel);
+      if (showInlineNameInCheckoutForm) nameWrap.appendChild(nameLabel);
       nameWrap.appendChild(nameInput);
       name = nameInput;
 
@@ -14591,7 +14611,7 @@ function setBottomNavActive(tab) {
         phone = phoneInput;
         nameRow.appendChild(phoneWrap);
       }
-      wrap.appendChild(nameRow);
+      if (showInlineNameInCheckoutForm) wrap.appendChild(nameRow);
     }
 
     const methods = (cfg.methods || []).map(x => ({ code: x.code, title: x.title, icon: x.icon }));
@@ -14612,65 +14632,9 @@ function setBottomNavActive(tab) {
       preferredMethodCode = "delivery";
     }
     const methodDefault = pickDefaultCode(methods, preferredMethodCode, "takeaway");
-    const methodPickerRoot = document.createElement("div");
-    methodPickerRoot.className = "shop-checkout-method-picker";
-    methodPickerRoot.addEventListener("wheel", (event) => {
-      if (!event || typeof event.deltaY !== "number") return;
-      if (window.matchMedia && !window.matchMedia("(min-width: 769px)").matches) return;
-      const hasOverflowX = methodPickerRoot.scrollWidth > methodPickerRoot.clientWidth;
-      if (!hasOverflowX) return;
-      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX || 0)) return;
-      methodPickerRoot.scrollLeft += event.deltaY;
-      event.preventDefault();
-    }, { passive: false });
-    let selectedMethodCode = methodDefault;
-    let centerSnapTimer = null;
-    let isProgrammaticSnap = false;
 
-    function getMethodButtons() {
-      return Array.from(methodPickerRoot.querySelectorAll(".shop-checkout-method-pill"));
-    }
-
-    function getCenteredMethodCode() {
-      const buttons = getMethodButtons();
-      if (!buttons.length) return null;
-      const rootRect = methodPickerRoot.getBoundingClientRect();
-      const centerX = rootRect.left + (methodPickerRoot.clientWidth / 2);
-      let nearestCode = buttons[0].getAttribute("data-code");
-      let nearestDistance = Number.POSITIVE_INFINITY;
-      buttons.forEach((btn) => {
-        const rect = btn.getBoundingClientRect();
-        const btnCenter = rect.left + (rect.width / 2);
-        const distance = Math.abs(centerX - btnCenter);
-        if (distance < nearestDistance) {
-          nearestDistance = distance;
-          nearestCode = btn.getAttribute("data-code");
-        }
-      });
-      return nearestCode;
-    }
-
-    function centerMethodByCode(code, behavior = "smooth") {
-      const targetBtn = methodPickerRoot.querySelector(`.shop-checkout-method-pill[data-code="${code}"]`);
-      if (!targetBtn) return;
-      const targetLeft = targetBtn.offsetLeft + (targetBtn.offsetWidth / 2) - (methodPickerRoot.clientWidth / 2);
-      const maxLeft = Math.max(0, methodPickerRoot.scrollWidth - methodPickerRoot.clientWidth);
-      const nextLeft = Math.max(0, Math.min(maxLeft, targetLeft));
-      isProgrammaticSnap = true;
-      methodPickerRoot.scrollTo({ left: nextLeft, behavior });
-      setTimeout(() => { isProgrammaticSnap = false; }, behavior === "auto" ? 0 : 220);
-    }
-
-    function updateCarouselSidePadding() {
-      const firstBtn = methodPickerRoot.querySelector(".shop-checkout-method-pill");
-      if (!firstBtn) return;
-      const pad = Math.max(0, (methodPickerRoot.clientWidth - firstBtn.offsetWidth) / 2);
-      methodPickerRoot.style.setProperty("--carousel-side-pad", `${Math.round(pad)}px`);
-    }
-
-    function createMethodIconElement(iconRaw, code) {
-      const fallback = code === "delivery" ? "fas fa-truck" : "fas fa-store";
-      const resolvedIcon = String(iconRaw || "").trim() || fallback;
+    function createOptionIconElement(iconRaw, fallback) {
+      const resolvedIcon = String(iconRaw || "").trim() || String(fallback || "").trim() || "fas fa-circle";
       const isUrl = resolvedIcon.includes("/") || resolvedIcon.startsWith("http");
       if (isUrl) {
         const img = document.createElement("img");
@@ -14690,92 +14654,393 @@ function setBottomNavActive(tab) {
       return icon;
     }
 
-    function setMethodValue(code, opts = {}) {
-      const silent = Boolean(opts.silent);
-      const center = opts.center === true;
-      const centerBehavior = opts.centerBehavior || "smooth";
-      const deferChange = opts.deferChange === true;
-      const hasTarget = methods.some((item) => item.code === code);
-      const nextCode = hasTarget ? code : (methods[0]?.code || methodDefault || "takeaway");
-      if (!nextCode) return;
-      const applySelection = () => {
-        selectedMethodCode = nextCode;
+    function createUnifiedIconCarousel(options, cfg = {}) {
+      const items = Array.isArray(options) ? options : [];
+      const defaultCode = cfg.defaultCode || "";
+      const allowEmpty = cfg.allowEmpty === true;
+      const resolveIcon = typeof cfg.resolveIcon === "function"
+        ? cfg.resolveIcon
+        : ((code, iconRaw) => createOptionIconElement(iconRaw, "fas fa-circle"));
 
-        methodPickerRoot.querySelectorAll(".shop-checkout-method-pill").forEach((btn) => {
-          const active = btn.getAttribute("data-code") === nextCode;
+      const root = document.createElement("div");
+      root.className = "shop-checkout-method-picker";
+      const leftSpacer = document.createElement("span");
+      leftSpacer.className = "shop-checkout-method-spacer";
+      const rightSpacer = document.createElement("span");
+      rightSpacer.className = "shop-checkout-method-spacer";
+      root.appendChild(leftSpacer);
+
+      let currentCode = "";
+      let wheelLockUntil = 0;
+      let wheelFinalizeTimer = 0;
+      let mobileFinalizeTimer = 0;
+      let ensureRafId = 0;
+      let visualRafId = 0;
+      let smoothScrollRafId = 0;
+      let smoothScrollToken = 0;
+      let wheelSessionActive = false;
+      let hasUserInteracted = false;
+      const wheelScrollFactor = 0.45;
+      const centerStickyPx = 18;
+
+      function isMobileViewport() {
+        return Boolean(window.matchMedia && window.matchMedia("(max-width: 768px)").matches);
+      }
+
+      function getButtons() {
+        return Array.from(root.querySelectorAll(".shop-checkout-method-pill"));
+      }
+
+      function hasCode(code) {
+        return items.some((item) => item.code === code);
+      }
+
+      function resolveCode(code) {
+        if (allowEmpty && !code) return "";
+        if (hasCode(code)) return code;
+        if (hasCode(defaultCode)) return defaultCode;
+        return items[0]?.code || "";
+      }
+
+      function updatePadding() {
+        const firstBtn = root.querySelector(".shop-checkout-method-pill");
+        if (!firstBtn) return false;
+        if (root.clientWidth <= 0 || firstBtn.offsetWidth <= 0) return false;
+        const pad = Math.max(0, (root.clientWidth - firstBtn.offsetWidth) / 2);
+        const px = `${Math.round(pad)}px`;
+        root.style.setProperty("--carousel-side-pad", px);
+        leftSpacer.style.flexBasis = px;
+        rightSpacer.style.flexBasis = px;
+        return true;
+      }
+
+      function updateVisualFocusNow() {
+        visualRafId = 0;
+        const buttons = getButtons();
+        if (!buttons.length) return;
+        if (root.clientWidth <= 0) return;
+        const rootRect = root.getBoundingClientRect();
+        const centerX = rootRect.left + (root.clientWidth / 2);
+        buttons.forEach((btn) => {
+          const rect = btn.getBoundingClientRect();
+          const btnCenter = rect.left + (rect.width / 2);
+          const distance = Math.abs(centerX - btnCenter);
+          const influenceRadius = Math.max(rect.width * 1.35, 1);
+          const focus = Math.max(0, Math.min(1, 1 - (distance / influenceRadius)));
+          btn.style.setProperty("--carousel-focus", focus.toFixed(4));
+        });
+      }
+
+      function scheduleVisualFocusUpdate() {
+        if (visualRafId) return;
+        visualRafId = requestAnimationFrame(updateVisualFocusNow);
+      }
+
+      function getCenteredCode() {
+        const buttons = getButtons();
+        if (!buttons.length) return null;
+        const rootRect = root.getBoundingClientRect();
+        const centerX = rootRect.left + (root.clientWidth / 2);
+        let nearestCode = buttons[0].getAttribute("data-code");
+        let nearestDistance = Number.POSITIVE_INFINITY;
+        let currentDistance = Number.POSITIVE_INFINITY;
+        buttons.forEach((btn) => {
+          const code = btn.getAttribute("data-code");
+          const rect = btn.getBoundingClientRect();
+          const distance = Math.abs(centerX - (rect.left + (rect.width / 2)));
+          if (distance < nearestDistance) {
+            nearestDistance = distance;
+            nearestCode = code;
+          }
+          if (code === currentCode) {
+            currentDistance = distance;
+          }
+        });
+        if (currentCode && Number.isFinite(currentDistance) && currentDistance <= centerStickyPx) {
+          return currentCode;
+        }
+        return nearestCode;
+      }
+
+      function cancelSmoothScroll() {
+        if (smoothScrollRafId) {
+          cancelAnimationFrame(smoothScrollRafId);
+          smoothScrollRafId = 0;
+        }
+        smoothScrollToken += 1;
+      }
+
+      function smoothScrollTo(targetLeft, opts = {}) {
+        const mode = opts && typeof opts.mode === "string" ? opts.mode : "smooth";
+        const durationOverride = opts && Number.isFinite(opts.duration) ? Number(opts.duration) : null;
+        const maxLeft = Math.max(0, root.scrollWidth - root.clientWidth);
+        const clampedTarget = Math.max(0, Math.min(maxLeft, targetLeft));
+        const startLeft = root.scrollLeft;
+        const distance = Math.abs(clampedTarget - startLeft);
+        if (distance < 0.5) {
+          root.scrollLeft = clampedTarget;
+          return;
+        }
+
+        const baseDuration = mode === "soft" ? 250 : 210;
+        const adaptivePart = Math.min(90, distance * 0.22);
+        const duration = durationOverride != null
+          ? Math.max(170, Math.min(460, durationOverride))
+          : Math.max(170, Math.min(460, baseDuration + adaptivePart));
+
+        cancelSmoothScroll();
+        const token = smoothScrollToken;
+        const startTs = performance.now();
+        const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+
+        const step = (ts) => {
+          if (token !== smoothScrollToken) return;
+          const progress = Math.min(1, (ts - startTs) / duration);
+          const eased = easeOutCubic(progress);
+          root.scrollLeft = startLeft + (clampedTarget - startLeft) * eased;
+          if (progress < 1) {
+            smoothScrollRafId = requestAnimationFrame(step);
+          } else {
+            smoothScrollRafId = 0;
+          }
+        };
+
+        smoothScrollRafId = requestAnimationFrame(step);
+      }
+
+      function centerCode(code, behavior = "smooth") {
+        if (!code) return false;
+        const targetBtn = root.querySelector(`.shop-checkout-method-pill[data-code="${code}"]`);
+        if (!targetBtn) return false;
+        if (root.clientWidth <= 0 || targetBtn.offsetWidth <= 0) return false;
+        const rootRect = root.getBoundingClientRect();
+        const targetRect = targetBtn.getBoundingClientRect();
+        const rootCenterX = rootRect.left + (rootRect.width / 2);
+        const targetCenterX = targetRect.left + (targetRect.width / 2);
+        const delta = targetCenterX - rootCenterX;
+        const rawLeft = root.scrollLeft + delta;
+        const maxLeft = Math.max(0, root.scrollWidth - root.clientWidth);
+        const targetLeft = Math.max(0, Math.min(maxLeft, rawLeft));
+
+        if (behavior === "auto") {
+          cancelSmoothScroll();
+          root.scrollLeft = targetLeft;
+          scheduleVisualFocusUpdate();
+          return true;
+        }
+
+        if (behavior === "smooth") {
+          smoothScrollTo(targetLeft, { mode: "smooth" });
+          return true;
+        }
+
+        if (behavior === "soft") {
+          smoothScrollTo(targetLeft, { mode: "soft" });
+          return true;
+        }
+
+        cancelSmoothScroll();
+        root.scrollLeft = targetLeft;
+        scheduleVisualFocusUpdate();
+        return true;
+      }
+
+      function applySelection(code, opts = {}) {
+        const silent = Boolean(opts.silent);
+        const center = opts.center === true;
+        const centerBehavior = opts.centerBehavior || "smooth";
+        const prevCode = currentCode;
+        currentCode = code;
+
+        root.querySelectorAll(".shop-checkout-method-pill").forEach((btn) => {
+          const active = btn.getAttribute("data-code") === currentCode;
           btn.classList.toggle("is-active", active);
           btn.setAttribute("aria-pressed", active ? "true" : "false");
         });
 
-        if (!silent) {
-          methodPickerRoot.dispatchEvent(new Event("change", { bubbles: true }));
-        }
-      };
+        if (center) centerCode(currentCode, centerBehavior);
+        scheduleVisualFocusUpdate();
 
-      if (deferChange && center && centerBehavior !== "auto" && nextCode !== selectedMethodCode) {
-        centerMethodByCode(nextCode, centerBehavior);
-        setTimeout(() => applySelection(), 220);
-        return;
+        if (!silent && prevCode !== currentCode) {
+          root.dispatchEvent(new Event("change", { bubbles: true }));
+        }
       }
 
-      if (center) centerMethodByCode(nextCode, centerBehavior);
-      applySelection();
-    }
-
-    methods.forEach((method) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "shop-checkout-method-pill";
-      btn.setAttribute("data-code", method.code);
-      btn.setAttribute("aria-pressed", "false");
-      btn.innerHTML = `
-        <span class="shop-checkout-method-pill-icon"></span>
-        <span class="shop-checkout-method-pill-title"></span>
-      `;
-      const iconWrapEl = btn.querySelector(".shop-checkout-method-pill-icon");
-      if (iconWrapEl) {
-        const iconEl = createMethodIconElement(method.icon, method.code);
-        iconEl.setAttribute("aria-hidden", "true");
-        iconWrapEl.appendChild(iconEl);
+      function setValue(code, opts = {}) {
+        const resolved = resolveCode(code);
+        if (!resolved && !allowEmpty) return;
+        applySelection(resolved, opts);
       }
-      const titleEl = btn.querySelector(".shop-checkout-method-pill-title");
-      if (titleEl) titleEl.textContent = method.title || method.code || "";
-      btn.addEventListener("click", () => setMethodValue(method.code, { center: true, centerBehavior: "smooth", deferChange: true }));
-      methodPickerRoot.appendChild(btn);
-    });
 
-    methodPickerRoot.addEventListener("scroll", () => {
-      if (isProgrammaticSnap) return;
-      if (centerSnapTimer) clearTimeout(centerSnapTimer);
-      centerSnapTimer = setTimeout(() => {
-        const centeredCode = getCenteredMethodCode();
-        if (!centeredCode) return;
-        centerMethodByCode(centeredCode, "smooth");
-        if (centeredCode !== selectedMethodCode) {
-          setMethodValue(centeredCode, { center: false });
-        } else {
-          setMethodValue(centeredCode, { silent: true, center: false });
+      function finalizeByCenter() {
+        const centered = getCenteredCode();
+        if (!centered || centered === currentCode) return;
+        applySelection(centered, { silent: false, center: false });
+      }
+
+      function clearWheelFinalize() {
+        if (wheelFinalizeTimer) {
+          clearTimeout(wheelFinalizeTimer);
+          wheelFinalizeTimer = 0;
         }
-      }, 90);
-    });
+        wheelSessionActive = false;
+      }
 
-    const methodSelect = {
-      root: methodPickerRoot,
-      getValue: () => selectedMethodCode || methodDefault || "takeaway",
-      setValue: (code, silent) => setMethodValue(code, { silent })
-    };
-    methodSelect.setValue(methodDefault, true);
-    requestAnimationFrame(() => {
-      updateCarouselSidePadding();
-      centerMethodByCode(methodSelect.getValue(), "auto");
-    });
-    if (typeof ResizeObserver === "function") {
-      const methodCarouselResizeObserver = new ResizeObserver(() => {
-        updateCarouselSidePadding();
-        centerMethodByCode(methodSelect.getValue(), "auto");
+      function clearMobileFinalize() {
+        if (mobileFinalizeTimer) {
+          clearTimeout(mobileFinalizeTimer);
+          mobileFinalizeTimer = 0;
+        }
+      }
+
+      function scheduleWheelFinalize(delay = 220) {
+        if (wheelFinalizeTimer) clearTimeout(wheelFinalizeTimer);
+        wheelFinalizeTimer = setTimeout(() => {
+          wheelFinalizeTimer = 0;
+          wheelSessionActive = false;
+          finalizeByCenter();
+        }, delay);
+      }
+
+      function scheduleMobileFinalize(delay = 140) {
+        clearMobileFinalize();
+        mobileFinalizeTimer = setTimeout(() => {
+          mobileFinalizeTimer = 0;
+          if (wheelSessionActive) return;
+          finalizeByCenter();
+        }, delay);
+      }
+
+      function ensureCenteredNow() {
+        const padded = updatePadding();
+        if (!padded) return false;
+        if (!currentCode) return false;
+        return centerCode(currentCode, "auto");
+      }
+
+      function scheduleEnsure(attempt = 0) {
+        if (ensureRafId) cancelAnimationFrame(ensureRafId);
+        ensureRafId = requestAnimationFrame(() => {
+          const ok = ensureCenteredNow();
+          if (ok) {
+            ensureRafId = 0;
+            return;
+          }
+          if (attempt < 60) {
+            scheduleEnsure(attempt + 1);
+          } else {
+            ensureRafId = 0;
+          }
+        });
+      }
+
+      items.forEach((item) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "shop-checkout-method-pill";
+        btn.setAttribute("data-code", item.code);
+        btn.setAttribute("aria-pressed", "false");
+        btn.innerHTML = `
+          <span class="shop-checkout-method-pill-icon"></span>
+          <span class="shop-checkout-method-pill-title"></span>
+        `;
+        const iconWrap = btn.querySelector(".shop-checkout-method-pill-icon");
+        if (iconWrap) {
+          const iconEl = resolveIcon(item.code, item.icon);
+          if (iconEl) {
+            iconEl.setAttribute("aria-hidden", "true");
+            iconWrap.appendChild(iconEl);
+          }
+        }
+        const titleEl = btn.querySelector(".shop-checkout-method-pill-title");
+        if (titleEl) titleEl.textContent = item.title || item.code || "";
+        btn.addEventListener("click", () => {
+          clearWheelFinalize();
+          hasUserInteracted = true;
+          setValue(item.code, { silent: false, center: true, centerBehavior: "soft" });
+        }, { passive: true });
+        root.appendChild(btn);
       });
-      methodCarouselResizeObserver.observe(methodPickerRoot);
+      root.appendChild(rightSpacer);
+
+      root.addEventListener("pointerdown", () => {
+        clearWheelFinalize();
+        clearMobileFinalize();
+        hasUserInteracted = true;
+        cancelSmoothScroll();
+      });
+      root.addEventListener("touchstart", () => {
+        clearWheelFinalize();
+        clearMobileFinalize();
+        hasUserInteracted = true;
+        cancelSmoothScroll();
+      }, { passive: true });
+      root.addEventListener("scroll", () => {
+        scheduleVisualFocusUpdate();
+        if (wheelSessionActive) return;
+        if (!isMobileViewport()) return;
+        scheduleMobileFinalize(150);
+      }, { passive: true });
+      root.addEventListener("pointerup", () => {
+        if (wheelSessionActive) return;
+        if (isMobileViewport()) return;
+        finalizeByCenter();
+      });
+      root.addEventListener("touchend", () => {
+        if (wheelSessionActive) return;
+        scheduleMobileFinalize(150);
+      }, { passive: true });
+      root.addEventListener("wheel", (event) => {
+        if (!event || typeof event.deltaY !== "number") return;
+        if (window.matchMedia && !window.matchMedia("(min-width: 769px)").matches) return;
+        if (!items.length) return;
+        const hasOverflowX = root.scrollWidth > root.clientWidth + 1;
+        if (!hasOverflowX) return;
+        const deltaX = Number(event.deltaX || 0);
+        const deltaY = Number(event.deltaY || 0);
+        const useHorizontal = Math.abs(deltaX) > Math.abs(deltaY);
+        const rawDelta = useHorizontal ? deltaX : deltaY;
+        if (!Number.isFinite(rawDelta) || Math.abs(rawDelta) < 0.5) return;
+        const delta = rawDelta * wheelScrollFactor;
+        event.preventDefault();
+        const nextLeft = root.scrollLeft + delta;
+        hasUserInteracted = true;
+        wheelSessionActive = true;
+        cancelSmoothScroll();
+        root.scrollLeft = nextLeft;
+        scheduleWheelFinalize(220);
+      }, { passive: false });
+
+      setValue(defaultCode, { silent: true, center: false });
+      if (typeof ResizeObserver === "function") {
+        const ro = new ResizeObserver(() => {
+          if (hasUserInteracted) return;
+          scheduleEnsure();
+          scheduleVisualFocusUpdate();
+        });
+        ro.observe(root);
+      }
+      scheduleEnsure();
+      scheduleVisualFocusUpdate();
+
+      return {
+        root,
+        getValue: () => currentCode || "",
+        setValue: (code, silent) => setValue(code, { silent: Boolean(silent), center: false }),
+        ensureCentered: () => ensureCenteredNow(),
+      };
     }
+
+    function createMethodIconElement(iconRaw, code) {
+      const fallback = code === "delivery" ? "fas fa-truck" : "fas fa-store";
+      return createOptionIconElement(iconRaw, fallback);
+    }
+    const methodSelect = createUnifiedIconCarousel(methods, {
+      defaultCode: methodDefault,
+      resolveIcon: (code, iconRaw) => createMethodIconElement(iconRaw, code),
+      allowEmpty: false,
+    });
+
     function syncCheckoutMode(code) {
       const resolvedCode = code || methodDefault || "takeaway";
       window._checkoutMethodCode = resolvedCode;
@@ -14799,10 +15064,6 @@ function setBottomNavActive(tab) {
     });
 
     const methodWrap = document.createElement("div");
-    const methodLabel = document.createElement("label");
-    methodLabel.className = "field-label";
-    methodLabel.textContent = "Способ";
-    methodWrap.appendChild(methodLabel);
     methodWrap.appendChild(methodSelect.root);
 
     const addressWrap = document.createElement("div");
@@ -14963,11 +15224,137 @@ function setBottomNavActive(tab) {
     pickupWrap.appendChild(pickupLabel);
     pickupWrap.appendChild(pickupField);
 
+    const cLabel = document.createElement("label");
+    cLabel.className = "field-label";
+    cLabel.textContent = "Комментарий";
+    cLabel.style.display = "none";
+    const comment = document.createElement("input");
+    comment.className = "control shop-checkout-comment";
+    comment.type = "text";
+    comment.placeholder = "Введите комментарий к заказу";
+    comment.value = draft.comment || "";
+    wrap.appendChild(cLabel);
+    wrap.appendChild(comment);
+    const mobileNameWrap = document.getElementById("shopMobileCheckoutNameWrap");
+    const mobileNameInput = document.getElementById("shopMobileCheckoutNameInput");
+    const desktopFooterNameInput = document.getElementById("shopCheckoutFooterNameInput");
+    const mobileCommentWrap = document.getElementById("shopMobileCheckoutCommentWrap");
+    const mobileCommentInput = document.getElementById("shopMobileCheckoutCommentInput");
+    const desktopFooterCommentInput = document.getElementById("shopCheckoutFooterCommentInput");
+    const isCommentTextarea = (node) => String(node?.tagName || "").toUpperCase() === "TEXTAREA";
+    const autosizeCommentField = (field) => {
+      if (!isCommentTextarea(field)) return;
+      if (!field.classList.contains("is-expanded")) return;
+      field.style.height = "auto";
+      const minHeight = 40;
+      const maxHeight = 150;
+      const nextHeight = Math.max(minHeight, Math.min(maxHeight, field.scrollHeight || minHeight));
+      field.style.height = `${nextHeight}px`;
+      field.scrollTop = field.scrollHeight;
+    };
+    const collapseCommentField = (field) => {
+      if (!isCommentTextarea(field)) return;
+      field.classList.remove("is-expanded");
+      field.style.height = "";
+      field.scrollTop = 0;
+    };
+    const bindCommentFieldAutogrow = (field) => {
+      if (!isCommentTextarea(field)) return;
+      if (field.dataset.commentGrowBound === "1") return;
+      field.dataset.commentGrowBound = "1";
+      collapseCommentField(field);
+      field.addEventListener("focus", () => {
+        field.classList.add("is-expanded");
+        autosizeCommentField(field);
+      });
+      field.addEventListener("blur", () => {
+        collapseCommentField(field);
+      });
+      field.addEventListener("input", () => {
+        autosizeCommentField(field);
+      });
+    };
+    bindCommentFieldAutogrow(mobileCommentInput);
+    bindCommentFieldAutogrow(desktopFooterCommentInput);
+    if (mobileNameInput) {
+      mobileNameInput.value = str(name.value || "");
+      mobileNameInput.oninput = () => {
+        name.value = mobileNameInput.value || "";
+        if (str(name.value).trim()) {
+          mobileNameInput.classList.remove("is-invalid");
+        }
+      };
+      if (name && typeof name.addEventListener === "function") {
+        name.addEventListener("input", () => {
+          if (mobileNameInput.value !== name.value) mobileNameInput.value = name.value || "";
+        });
+      }
+    }
+    if (mobileCommentInput) {
+      mobileCommentInput.value = comment.value || "";
+      mobileCommentInput.oninput = () => {
+        comment.value = mobileCommentInput.value || "";
+        autosizeCommentField(mobileCommentInput);
+        if (desktopFooterCommentInput && desktopFooterCommentInput.value !== comment.value) {
+          desktopFooterCommentInput.value = comment.value;
+          autosizeCommentField(desktopFooterCommentInput);
+        }
+      };
+      comment.addEventListener("input", () => {
+        if (mobileCommentInput.value !== comment.value) mobileCommentInput.value = comment.value;
+        autosizeCommentField(mobileCommentInput);
+        if (desktopFooterCommentInput && desktopFooterCommentInput.value !== comment.value) {
+          desktopFooterCommentInput.value = comment.value;
+          autosizeCommentField(desktopFooterCommentInput);
+        }
+      });
+    }
+    if (desktopFooterCommentInput) {
+      desktopFooterCommentInput.value = comment.value || "";
+      desktopFooterCommentInput.oninput = () => {
+        comment.value = desktopFooterCommentInput.value || "";
+        autosizeCommentField(desktopFooterCommentInput);
+        if (mobileCommentInput && mobileCommentInput.value !== comment.value) {
+          mobileCommentInput.value = comment.value;
+          autosizeCommentField(mobileCommentInput);
+        }
+      };
+    }
+    if (desktopFooterNameInput) {
+      desktopFooterNameInput.value = str(name.value || "");
+      desktopFooterNameInput.oninput = () => {
+        name.value = desktopFooterNameInput.value || "";
+        if (str(name.value).trim()) {
+          desktopFooterNameInput.classList.remove("is-invalid");
+        }
+      };
+      desktopFooterNameInput.classList.toggle("hidden", !showDesktopFooterNameInput);
+    }
+    if (elCheckoutFooterActions) {
+      elCheckoutFooterActions.classList.toggle("has-name-input", !!showDesktopFooterNameInput);
+    }
+    if (isMobileCheckout) {
+      cLabel.style.display = "none";
+      comment.style.display = "none";
+      if (mobileNameWrap) mobileNameWrap.classList.toggle("hidden", !showMobileNameInput);
+      if (mobileCommentWrap) mobileCommentWrap.classList.remove("hidden");
+    } else {
+      if (mobileNameWrap) mobileNameWrap.classList.add("hidden");
+      if (mobileCommentWrap) mobileCommentWrap.classList.add("hidden");
+    }
+    if (isDesktopCheckout) {
+      cLabel.style.display = "none";
+      comment.style.display = "none";
+    }
+    const getCommentValue = () => {
+      if (isMobileCheckout && mobileCommentInput) return str(mobileCommentInput.value).trim();
+      if (isDesktopCheckout && desktopFooterCommentInput) return str(desktopFooterCommentInput.value).trim();
+      return str(comment.value).trim();
+    };
+
     const methodRow = document.createElement("div");
     methodRow.className = "shop-checkout-method-block";
     methodRow.appendChild(methodWrap);
-    methodRow.appendChild(addressWrap);
-    methodRow.appendChild(pickupWrap);
     wrap.appendChild(methodRow);
 
     function refreshAddressVisibility() {
@@ -14987,23 +15374,13 @@ function setBottomNavActive(tab) {
     refreshAddressVisibility();
     syncCheckoutMode(methodSelect.getValue());
 
-    const cLabel = document.createElement("label");
-    cLabel.className = "field-label";
-    cLabel.textContent = "Комментарий";
-    const comment = document.createElement("input");
-    comment.className = "control";
-    comment.type = "text";
-    comment.placeholder = "Комментарий";
-    comment.value = draft.comment || "";
-    wrap.appendChild(cLabel);
-    wrap.appendChild(comment);
-
     const timeLabel = document.createElement("label");
     timeLabel.className = "field-label";
     timeLabel.textContent = "Когда приготовить?";
+    timeLabel.style.display = "none";
     wrap.appendChild(timeLabel);
 
-    const timeOptions = (cfg.timeOptions || []).map(x => ({ code: x.code, title: x.title }));
+    const timeOptions = (cfg.timeOptions || []).map(x => ({ code: x.code, title: x.title, icon: x.icon }));
     const storeIsOpen = Boolean(cfg.storeIsOpen);
     const storeTimezone = cfg.storeTimezone || "+0";
     const storeHours = cfg.storeHours || [];
@@ -15054,7 +15431,20 @@ function setBottomNavActive(tab) {
       : (availableTimeOptions[0]?.code || defaultFallback);
     const timeDefault = fallbackCode;
 
-    const timeSelect = buildDropdown(availableTimeOptions, timeDefault);
+    function createTimeIconPicker(options, defaultCode) {
+      const fallbackIcons = {
+        asap: "fas fa-bolt",
+        at_time: "fas fa-clock",
+        on_date: "fas fa-calendar-day",
+      };
+      return createUnifiedIconCarousel(options, {
+        defaultCode,
+        allowEmpty: true,
+        resolveIcon: (code, iconRaw) => createOptionIconElement(iconRaw, fallbackIcons[code] || "fas fa-clock"),
+      });
+    }
+
+    const timeSelect = createTimeIconPicker(availableTimeOptions, timeDefault);
 
     // --- Hidden input для итогового значения времени ---
     const timeInput = document.createElement("input");
@@ -15079,25 +15469,43 @@ function setBottomNavActive(tab) {
     let calendarViewMonth = selectedDate.getMonth();
     let calendarOpen = false;
 
-    // Row 1: [На дату в–ѕ] + [Другой день]  (timeSelect всегда видим, btnOtherDay только при on_date)
+    // Row for "Ко времени": [Сегодня] + [слоты времени]
+    const timePickerRow = document.createElement("div");
+    timePickerRow.className = "shop-checkout-method-block";
+    timePickerRow.appendChild(timeSelect.root);
+
     const timeRow = document.createElement("div");
     timeRow.className = "shop-checkout-date-row1";
-    timeRow.appendChild(timeSelect.root);
+    timeRow.classList.add("shop-checkout-time-stack");
 
-    const btnOtherDay = document.createElement("button");
-    btnOtherDay.type = "button";
-    btnOtherDay.className = "shop-checkout-date-toggle";
-    btnOtherDay.textContent = "Выбрать день";
-    timeRow.appendChild(btnOtherDay);
+    const todayAtTimeWrap = document.createElement("div");
+    todayAtTimeWrap.className = "shop-checkout-dropdown-wrap";
+    todayAtTimeWrap.style.display = "none";
+    const todayAtTimeLabel = document.createElement("button");
+    todayAtTimeLabel.type = "button";
+    todayAtTimeLabel.className = "shop-checkout-select shop-checkout-date-display shop-checkout-time-static-label";
+    todayAtTimeLabel.textContent = "Сегодня";
+    todayAtTimeLabel.disabled = true;
+    todayAtTimeWrap.appendChild(todayAtTimeLabel);
+    timeRow.appendChild(todayAtTimeWrap);
+
+    const asapNowWrap = document.createElement("div");
+    asapNowWrap.className = "shop-checkout-dropdown-wrap";
+    asapNowWrap.classList.add("shop-checkout-time-stack-divider");
+    asapNowWrap.style.display = "none";
+    const asapNowLabel = document.createElement("button");
+    asapNowLabel.type = "button";
+    asapNowLabel.className = "shop-checkout-select shop-checkout-date-display shop-checkout-time-static-label";
+    asapNowLabel.textContent = "40-80 мин";
+    asapNowLabel.disabled = true;
+    asapNowWrap.appendChild(asapNowLabel);
+    timeRow.appendChild(asapNowWrap);
 
     // --- Секция "На дату" (Row 2 + календарь) ---
     const dateSection = document.createElement("div");
     dateSection.className = "shop-checkout-time-input--ondate";
 
     // Календарь-попover
-    const calendarWrap = document.createElement("div");
-    calendarWrap.className = "shop-checkout-date-calendar";
-
     const calPopover = document.createElement("div");
     calPopover.className = "date-popover hidden";
 
@@ -15135,23 +15543,23 @@ function setBottomNavActive(tab) {
     calGrid.className = "date-grid";
     calPopover.appendChild(calGrid);
 
-    calendarWrap.appendChild(calPopover);
-    dateSection.appendChild(calendarWrap);
-
     // Row 2: [На завтра / дд.мм] + [селектор времени]
     const dateRow2 = document.createElement("div");
     dateRow2.className = "shop-checkout-date-row2";
+    dateRow2.classList.add("shop-checkout-time-stack");
 
     const dateDisplayWrap = document.createElement("div");
-    dateDisplayWrap.className = "shop-checkout-dropdown-wrap";
+    dateDisplayWrap.className = "shop-checkout-dropdown-wrap shop-checkout-date-calendar";
     const dateDisplay = document.createElement("button");
     dateDisplay.type = "button";
     dateDisplay.className = "shop-checkout-select shop-checkout-date-display";
     dateDisplayWrap.appendChild(dateDisplay);
+    dateDisplayWrap.appendChild(calPopover);
 
     const timeSlotsDropdown = buildTimeWheelPicker([], "");
     const dateSlotsWrap = document.createElement("div");
     dateSlotsWrap.className = "shop-checkout-time-input--slots";
+    dateSlotsWrap.classList.add("shop-checkout-time-stack-divider");
     dateSlotsWrap.appendChild(timeSlotsDropdown.root);
 
     dateRow2.appendChild(dateDisplayWrap);
@@ -15161,11 +15569,13 @@ function setBottomNavActive(tab) {
     // Слоты для "Ко времени" — в том же ряду что и timeSelect
     const timeSlotsWrapAtTime = document.createElement("div");
     timeSlotsWrapAtTime.className = "shop-checkout-time-input--slots";
+    timeSlotsWrapAtTime.classList.add("shop-checkout-time-stack-divider");
     timeSlotsWrapAtTime.style.display = "none";
     const timeSlotsDropdownAtTime = buildTimeWheelPicker([], "");
     timeSlotsWrapAtTime.appendChild(timeSlotsDropdownAtTime.root);
     timeRow.appendChild(timeSlotsWrapAtTime);
 
+    wrap.appendChild(timePickerRow);
     wrap.appendChild(timeRow);
     wrap.appendChild(dateSection);
     wrap.appendChild(timeInput);
@@ -15232,16 +15642,8 @@ function setBottomNavActive(tab) {
     dateDisplay.textContent = formatDateDisplay(selectedDate);
 
     // --- Обработчики ---
-    // Клик по dateDisplay сбрасывает на "завтра"
+    // Клик по dateDisplay открывает/закрывает календарь выбора даты
     dateDisplay.addEventListener("click", () => {
-      const tmrw = new Date();
-      tmrw.setDate(tmrw.getDate() + 1);
-      setSelectedDate(tmrw);
-      calPopover.classList.add("hidden");
-      calendarOpen = false;
-    });
-
-    btnOtherDay.addEventListener("click", () => {
       if (calendarOpen) {
         calPopover.classList.add("hidden");
         calendarOpen = false;
@@ -15278,7 +15680,7 @@ function setBottomNavActive(tab) {
     });
 
     document.addEventListener("click", (e) => {
-      if (calendarOpen && !calendarWrap.contains(e.target) && !btnOtherDay.contains(e.target)) {
+      if (calendarOpen && !dateDisplayWrap.contains(e.target)) {
         calPopover.classList.add("hidden");
         calendarOpen = false;
       }
@@ -15296,12 +15698,22 @@ function setBottomNavActive(tab) {
       const config = timeOptionByCode[selectedCode];
       const hasWindow = config && Number(config.has_time_window) === 1;
       const isOnDate = selectedCode === "on_date";
-      btnOtherDay.style.display = isOnDate ? "" : "none";
+      const isAtTime = selectedCode === "at_time";
+      const isAsap = selectedCode === "asap";
+      const showAtTimePair = isAtTime && hasWindow;
+      const showAsapPair = isAsap;
+      if (todayAtTimeLabel) {
+        todayAtTimeLabel.textContent = showAtTimePair ? "Сегодня" : "Сейчас";
+      }
       dateSection.style.display = isOnDate ? "" : "none";
-      timeSlotsWrapAtTime.style.display = (hasWindow && !isOnDate) ? "" : "none";
+      todayAtTimeWrap.style.display = (showAtTimePair || showAsapPair) ? "" : "none";
+      timeSlotsWrapAtTime.style.display = showAtTimePair ? "" : "none";
+      asapNowWrap.style.display = showAsapPair ? "" : "none";
       // Когда нет соседних элементов — timeSelect на всю ширину
-      const hasNeighbor = isOnDate || (hasWindow && !isOnDate);
-      timeSelect.root.style.gridColumn = hasNeighbor ? "" : "1 / -1";
+      const hasNeighbor = showAtTimePair || showAsapPair;
+      timeRow.style.display = hasNeighbor ? "" : "none";
+      timeRow.classList.toggle("is-combined", hasNeighbor);
+      timeSlotsWrapAtTime.style.gridColumn = "";
     }
 
     function updateTimeSlotsOptions() {
@@ -15311,9 +15723,11 @@ function setBottomNavActive(tab) {
       if (selectedCode === "on_date") {
         if (!config || Number(config.has_time_window) !== 1) {
           dateSlotsWrap.style.display = "none";
+          dateRow2.classList.remove("is-combined");
           return;
         }
         dateSlotsWrap.style.display = "";
+        dateRow2.classList.add("is-combined");
         const slots = buildTimeSlots(config, selectedDate, storeTimezone);
         const slotOptions = slots.map(value => ({ code: value, title: value }));
         const preferred = timeInput.value || storedDraftTime || "";
@@ -15327,8 +15741,10 @@ function setBottomNavActive(tab) {
 
       if (!config || Number(config.has_time_window) !== 1) {
         timeSlotsDropdownAtTime.setOptions([]);
+        dateRow2.classList.remove("is-combined");
         return;
       }
+      dateRow2.classList.remove("is-combined");
       const slots = buildTimeSlots(config, null, storeTimezone);
       const slotOptions = slots.map(value => ({ code: value, title: value }));
       const preferred = timeInput.value || storedDraftTime || "";
@@ -15366,9 +15782,22 @@ function setBottomNavActive(tab) {
 
     let currentPayableTotal = getPayableTotalForMethod(methodSelect.getValue());
 
-    const payments = (cfg.payments || []).map(x => ({ code: x.code, title: x.title }));
-    const payDefault = pickDefaultCode(payments, draft.payment_code, "cash");
-    const paySelect = buildDropdown(payments, payDefault);
+    const payments = (cfg.payments || []).map(x => ({ code: x.code, title: x.title, icon: x.icon }));
+    const payDefault = "";
+    function createPaymentIconPicker(options, defaultCode) {
+      const fallbackIcons = {
+        cash: "fas fa-money-bill-wave",
+        card: "fas fa-credit-card",
+        online: "fas fa-wallet",
+        sbp: "fas fa-qrcode",
+      };
+      return createUnifiedIconCarousel(options, {
+        defaultCode,
+        allowEmpty: false,
+        resolveIcon: (code, iconRaw) => createOptionIconElement(iconRaw, fallbackIcons[code] || "fas fa-credit-card"),
+      });
+    }
+    const paySelect = createPaymentIconPicker(payments, payDefault);
 
     const changeAmounts = [500, 1000, 2000, 5000].filter(v => v > currentPayableTotal);
     const changeOptions = [
@@ -15384,16 +15813,38 @@ function setBottomNavActive(tab) {
     const payLabel = document.createElement("label");
     payLabel.className = "field-label";
     payLabel.textContent = "Оплата";
+    payLabel.style.display = "none";
     payWrap.appendChild(payLabel);
     payWrap.appendChild(paySelect.root);
+    const clearPaymentInvalidState = () => {
+      paySelect.root.classList.remove("is-invalid");
+    };
+    const markPaymentInvalidState = () => {
+      paySelect.root.classList.add("is-invalid");
+      if (typeof payWrap.scrollIntoView === "function") {
+        payWrap.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+      setTimeout(() => {
+        clearPaymentInvalidState();
+      }, 2600);
+    };
 
     const changeWrap = document.createElement("div");
     changeWrap.className = "shop-checkout-change";
     const changeLabel = document.createElement("label");
     changeLabel.className = "field-label";
     changeLabel.textContent = "Сдача";
+    changeLabel.style.display = "none";
     changeWrap.appendChild(changeLabel);
     changeWrap.appendChild(changeSelect.root);
+
+    const changeNonCashHint = document.createElement("button");
+    changeNonCashHint.type = "button";
+    changeNonCashHint.className = "shop-checkout-select shop-checkout-change-noncash";
+    changeNonCashHint.textContent = "При получении";
+    changeNonCashHint.disabled = true;
+    changeNonCashHint.style.display = "none";
+    changeWrap.appendChild(changeNonCashHint);
 
     const changeCustomInput = document.createElement("input");
     const minChangeAmount = Math.ceil(currentPayableTotal) + 1;
@@ -15412,11 +15863,12 @@ function setBottomNavActive(tab) {
     });
     changeWrap.appendChild(changeCustomInput);
 
-    const payRow = document.createElement("div");
-    payRow.className = "shop-checkout-grid-row shop-checkout-grid-row--two";
-    payRow.appendChild(payWrap);
-    payRow.appendChild(changeWrap);
-    wrap.appendChild(payRow);
+    const payMethodRow = document.createElement("div");
+    payMethodRow.className = "shop-checkout-method-block";
+    payMethodRow.appendChild(payWrap);
+    wrap.appendChild(payMethodRow);
+
+    wrap.appendChild(changeWrap);
 
     const deliveryInfoWrap = document.createElement("div");
     deliveryInfoWrap.className = "shop-checkout-delivery-info";
@@ -15707,6 +16159,7 @@ function setBottomNavActive(tab) {
       }
 
       if (totalValue) totalValue.textContent = money(payableTotal);
+      setCheckoutSubmitLabel(payableTotal);
 
       if (actions?.submitBtn) {
         const shouldBlock = isDelivery && deliveryRules.minOrder > 0 && orderTotal < deliveryRules.minOrder;
@@ -15716,10 +16169,15 @@ function setBottomNavActive(tab) {
 
     function refreshChangeVisibility() {
       const isCash = paySelect.getValue() === "cash";
-      changeWrap.style.display = isCash ? "" : "none";
+      changeWrap.style.display = "";
+      changeSelect.root.style.display = isCash ? "" : "none";
+      changeNonCashHint.style.display = isCash ? "none" : "";
       const isCustom = changeSelect.getValue() === "custom";
-      changeCustomInput.style.display = (isCash && isCustom) ? "" : "none";
+      const showCustomInput = isCash && isCustom;
+      changeCustomInput.style.display = showCustomInput ? "" : "none";
+      changeWrap.classList.toggle("is-combined", showCustomInput);
     }
+    paySelect.root.addEventListener("change", clearPaymentInvalidState);
     paySelect.root.addEventListener("change", refreshChangeVisibility);
     changeSelect.root.addEventListener("change", refreshChangeVisibility);
     refreshChangeVisibility();
@@ -15749,12 +16207,12 @@ function setBottomNavActive(tab) {
             method_user_selected: Boolean(draft.method_user_selected),
             delivery_address: str(address.value).trim() || null,
             pickup_store_id: selectedPickupStoreId || null,
-            comment: str(comment.value).trim() || null,
+            comment: getCommentValue() || null,
             address_comment: draft?.address_comment ?? null,
             time_option_code: timeSelect.getValue() || timeDefault || "asap",
             scheduled_at: timeInput.value || "",
             scheduled_date: getDateString(selectedDate),
-            payment_code: paySelect.getValue() || payDefault || "cash",
+            payment_code: paySelect.getValue() || null,
             change_from: getChangeFromValue(),
           });
           if (typeof onEditAddress === "function") onEditAddress();
@@ -15780,12 +16238,12 @@ function setBottomNavActive(tab) {
           method_user_selected: Boolean(draft.method_user_selected),
           delivery_address: str(address.value).trim() || null,
           pickup_store_id: selectedPickupStoreId || null,
-          comment: str(comment.value).trim() || null,
+          comment: getCommentValue() || null,
           address_comment: draft?.address_comment ?? null,
           time_option_code: timeSelect.getValue() || timeDefault || "asap",
           scheduled_at: timeInput.value || "",
           scheduled_date: getDateString(selectedDate),
-          payment_code: paySelect.getValue() || payDefault || "cash",
+          payment_code: paySelect.getValue() || null,
           change_from: getChangeFromValue(),
         });
 
@@ -15795,6 +16253,12 @@ function setBottomNavActive(tab) {
       });
 
     container.appendChild(wrap);
+    if (timeSelect && typeof timeSelect.ensureCentered === "function") {
+      timeSelect.ensureCentered();
+    }
+    if (paySelect && typeof paySelect.ensureCentered === "function") {
+      paySelect.ensureCentered();
+    }
 
     updateMobileDeliveryProgress();
 
@@ -15842,7 +16306,7 @@ function setBottomNavActive(tab) {
         __forceHideCheckoutDeliveryProgress = false;
         clearCartAll();
         saveCheckoutDraft({});
-        if (typeof window.updateActiveOrdersBadge === "function") { Promise.resolve(window.updateActiveOrdersBadge()).catch(() => {}); }
+        if (typeof window.updateActiveOrdersBadge === "function") { Promise.resolve(window.updateActiveOrdersBadge({ force: true })).catch(() => {}); }
         if (isSheet && window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen()) {
           window.AppModal.close("sheet");
         } else if (typeof showCartView === "function") {
@@ -15885,6 +16349,10 @@ function setBottomNavActive(tab) {
 
       // Мобильная навигация: после оформления заказа показываем
       // нижний блок корзины в режиме "успешный заказ" с кнопкой "На главную"
+      const mobileNameWrap = document.getElementById("shopMobileCheckoutNameWrap");
+      if (mobileNameWrap) mobileNameWrap.classList.add("hidden");
+      const mobileCommentWrap = document.getElementById("shopMobileCheckoutCommentWrap");
+      if (mobileCommentWrap) mobileCommentWrap.classList.add("hidden");
       const isMobile = window.matchMedia("(max-width: 768px)").matches;
       if (isMobile && elMobileCartActions && elMobileCartActionsCheckout) {
         elMobileCartActions.classList.remove("hidden");
@@ -15930,7 +16398,7 @@ function setBottomNavActive(tab) {
       actions.submitBtn.onclick = async () => {
         const resolvedItems = cartItemsResolved();
         const totals = computeCartTotals(resolvedItems);
-        const payload = {
+      const payload = {
         customer_name: str(name.value).trim(),
         customer_phone: str(phone.value).trim(),
         promo_code: str(promo.value).trim() || null,
@@ -15938,11 +16406,11 @@ function setBottomNavActive(tab) {
         delivery_address: str(address.value).trim() || null,
         delivery_address_id: (methodSelect.getValue() || methodDefault || "takeaway") === "delivery" && state.selectedAddress?.id ? Number(state.selectedAddress.id) : null,
         pickup_store_id: selectedPickupStoreId || null,
-        comment: str(comment.value).trim() || null,
+        comment: getCommentValue() || null,
         address_comment: (draft && draft.address_comment) ? str(draft.address_comment).trim() || null : null,
         time_option_code: timeSelect.getValue() || timeDefault || "asap",
         scheduled_at: null,
-        payment_code: paySelect.getValue() || payDefault || "cash",
+        payment_code: paySelect.getValue() || null,
         cutlery_qty: 0,
         change_from: getChangeFromValue(),
         items: resolvedItems.map(x => {
@@ -16007,14 +16475,23 @@ function setBottomNavActive(tab) {
 
       if (!payload.customer_name || isPlaceholderCustomerName(payload.customer_name)) {
         if (typeof showToast === "function") showToast("Введите имя");
+        if (mobileNameInput && typeof mobileNameInput.classList?.add === "function") {
+          mobileNameInput.classList.add("is-invalid");
+        }
+        if (desktopFooterNameInput && typeof desktopFooterNameInput.classList?.add === "function") {
+          desktopFooterNameInput.classList.add("is-invalid");
+        }
         if (name && typeof name.classList?.add === "function") {
           name.classList.add("is-invalid");
         }
-        if (name && typeof name.focus === "function") {
-          name.focus();
-          if (typeof name.select === "function") name.select();
-          if (typeof name.scrollIntoView === "function") {
-            name.scrollIntoView({ block: "center", behavior: "smooth" });
+        const nameFocusTarget = showMobileNameInput
+          ? mobileNameInput
+          : (showDesktopFooterNameInput ? desktopFooterNameInput : name);
+        if (nameFocusTarget && typeof nameFocusTarget.focus === "function") {
+          nameFocusTarget.focus();
+          if (typeof nameFocusTarget.select === "function") nameFocusTarget.select();
+          if (typeof nameFocusTarget.scrollIntoView === "function") {
+            nameFocusTarget.scrollIntoView({ block: "center", behavior: "smooth" });
           }
         }
         return;
@@ -16040,6 +16517,11 @@ function setBottomNavActive(tab) {
 
       if ((payload.method_code === "takeaway" || payload.method_code === "pickup") && !payload.pickup_store_id) {
         alert("Выберите точку самовывоза");
+        return;
+      }
+      if (!payload.payment_code) {
+        alert("Выберите способ оплаты");
+        markPaymentInvalidState();
         return;
       }
 
@@ -16136,7 +16618,7 @@ function setBottomNavActive(tab) {
           localStorage.setItem(LAST_ORDER_KEY, String(res.data.public_id));
           clearCartAll();
           saveCheckoutDraft({});
-          if (typeof window.updateActiveOrdersBadge === "function") { Promise.resolve(window.updateActiveOrdersBadge()).catch(() => {}); }
+          if (typeof window.updateActiveOrdersBadge === "function") { Promise.resolve(window.updateActiveOrdersBadge({ force: true })).catch(() => {}); }
           setCheckoutSubmitting(false);
           showOrderSuccess(res.data.id, res.data.public_id, orderTotalWithDelivery);
         } else {
@@ -16449,9 +16931,12 @@ function initShopLate() {
 
       // Глобальная переменная для хранения активных заказов
       window._activeOrders = [];
+      let activeOrdersBadgeLoading = false;
+      let activeOrdersBadgeLastSyncAt = 0;
+      const ACTIVE_ORDERS_BADGE_MIN_REFRESH_MS = 4000;
     
       // Активные заказы: обновление бейджа и обработчик клика
-      window.updateActiveOrdersBadge = async function updateActiveOrdersBadge() {
+      window.updateActiveOrdersBadge = async function updateActiveOrdersBadge(opts = {}) {
         const badges = [elActiveOrdersBadge, elActiveOrdersBadgeMobile, elActiveOrdersSheetCollapsed].filter(Boolean);
         if (badges.length === 0) return;
       
@@ -16487,6 +16972,13 @@ function initShopLate() {
           badges.forEach(badge => badge.classList.add("hidden"));
           return;
         }
+
+        const forceRefresh = Boolean(opts && opts.force === true);
+        if (activeOrdersBadgeLoading) return;
+        if (!forceRefresh && Date.now() - activeOrdersBadgeLastSyncAt < ACTIVE_ORDERS_BADGE_MIN_REFRESH_MS) {
+          return;
+        }
+        activeOrdersBadgeLoading = true;
       
         try {
           const token = getCustomerToken();
@@ -16496,7 +16988,7 @@ function initShopLate() {
             return;
           }
 
-          const json = await apiJson("/api/public/me/orders");
+          const json = await apiJson("/api/public/me/orders?limit=20");
           const orders = Array.isArray(json.data) ? json.data : [];
         
           // Считаем активные заказы: все заказы с нефинальными статусами
@@ -16508,6 +17000,7 @@ function initShopLate() {
 
           // Сохраняем активные заказы в глобальную переменную
           window._activeOrders = activeOrders;
+          activeOrdersBadgeLastSyncAt = Date.now();
 
           const count = activeOrders.length;
         
@@ -16571,6 +17064,8 @@ function initShopLate() {
           // Если ошибка (не авторизован и т.д.), скрываем бейджи
           badges.forEach(badge => badge.classList.add("hidden"));
           window._activeOrders = [];
+        } finally {
+          activeOrdersBadgeLoading = false;
         }
       }
 
@@ -16629,7 +17124,7 @@ function initShopLate() {
         const activeOrders = window._activeOrders || [];
         if (activeOrders.length === 0) {
           // Если нет активных заказов, обновляем и пробуем снова
-          await window.updateActiveOrdersBadge();
+          await window.updateActiveOrdersBadge({ force: true });
           const updatedOrders = window._activeOrders || [];
           if (updatedOrders.length === 0) return;
           activeOrders.push(...updatedOrders);
@@ -17171,3 +17666,4 @@ function initShopLate() {
     console.error(e);
   }
 }
+
