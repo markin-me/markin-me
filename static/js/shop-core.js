@@ -474,6 +474,17 @@
 
     const finalUrl = imageUrl || '/static/img/placeholder.png';
     const finalSizes = sizesMap[type] || sizesMap['custom'];
+    const cacheKey = [
+      usePicture ? "1" : "0",
+      finalUrl,
+      String(customSrcset || ""),
+      finalSizes,
+      className,
+      alt,
+      priority ? "1" : "0",
+    ].join("|");
+    const cachedTemplate = getOptimizedImageTemplate(cacheKey);
+    if (cachedTemplate) return cachedTemplate;
 
     // Picture ? WebP ?????? ????? URL ??? ????? ?? .webp (???? ???? ?? ???????).
     // ??? ?????? .jpg/.png ?????????? ???? img, ????? ?? ??????????? ?????????????? .webp.
@@ -494,7 +505,8 @@
       if (customSrcset) img.srcset = customSrcset;
       img.sizes = finalSizes;
       picture.appendChild(img);
-      return picture;
+      setOptimizedImageTemplate(cacheKey, picture);
+      return picture.cloneNode(true);
     }
 
     // ??????? img ??????? ? ??????????? ??????????
@@ -517,7 +529,34 @@
       img.sizes = finalSizes;
     }
 
-    return img;
+    setOptimizedImageTemplate(cacheKey, img);
+    return img.cloneNode(true);
+  }
+
+  const optimizedImageTemplateCache = new Map();
+  const OPTIMIZED_IMAGE_TEMPLATE_LIMIT = 300;
+
+  function getOptimizedImageTemplate(key) {
+    const cacheKey = String(key || "");
+    if (!cacheKey || !optimizedImageTemplateCache.has(cacheKey)) return null;
+    const node = optimizedImageTemplateCache.get(cacheKey);
+    optimizedImageTemplateCache.delete(cacheKey);
+    optimizedImageTemplateCache.set(cacheKey, node);
+    return node.cloneNode(true);
+  }
+
+  function setOptimizedImageTemplate(key, node) {
+    const cacheKey = String(key || "");
+    if (!cacheKey || !node || !node.cloneNode) return;
+    if (optimizedImageTemplateCache.has(cacheKey)) {
+      optimizedImageTemplateCache.delete(cacheKey);
+    }
+    optimizedImageTemplateCache.set(cacheKey, node.cloneNode(true));
+    while (optimizedImageTemplateCache.size > OPTIMIZED_IMAGE_TEMPLATE_LIMIT) {
+      const oldestKey = optimizedImageTemplateCache.keys().next().value;
+      if (!oldestKey) break;
+      optimizedImageTemplateCache.delete(oldestKey);
+    }
   }
 
   const preloadedImages = new Set();
@@ -836,10 +875,15 @@
       rawRow.isAvailable !== undefined ? rawRow.isAvailable : (rawRow.is_available !== undefined ? rawRow.is_available : rawRow.available),
       undefined
     );
-    if (explicitAvailable !== undefined) {
+    if (hasQty && qty === null) {
+      // null stock means unlimited availability regardless of explicit flags
+      next.isUnlimited = true;
+      next.isAvailable = true;
+      next.canFulfill = true;
+    } else if (explicitAvailable !== undefined) {
       next.isAvailable = explicitAvailable;
     } else if (hasQty) {
-      next.isAvailable = qty === null ? true : qty > 0;
+      next.isAvailable = qty > 0;
     }
 
     const explicitCanFulfill = toStockBool(
@@ -6538,6 +6582,7 @@ async function initAddresses() {
         const comboId = Number(combo.id);
         if (!Number.isFinite(comboId)) return;
         if (appendOnly && existingComboIds && existingComboIds.has(comboId)) return;
+        if (!isComboCatalogEntryAvailable(combo)) return;
         prefetchComboIds.push(comboId);
         const card = document.createElement("article");
         card.className = "sp-card sp-card--combo";
@@ -7817,6 +7862,38 @@ function removeFromCartByKey(cartKey, productId) {
       updateCartTotalsUiOnly();
       cartUiRenderedRevision = cartUiRevision;
     }
+  }
+
+  function isComboCatalogBlockProductAddable(productId) {
+    const pid = Number(productId || 0);
+    if (!Number.isFinite(pid) || pid <= 0) return false;
+    const product = state.productCache.get(pid);
+    if (!product) return true;
+
+    const stockAvailable = isProductAvailable(product);
+    if (!stockAvailable) return false;
+    if (isProductBlockedByIngredientRequirements(pid)) return false;
+
+    const remaining = getAvailableStock(pid);
+    if (!Number.isFinite(remaining)) return true;
+
+    const requiredPerUnit = calcConsumedPerUnit(product, null, null);
+    const required = Number.isFinite(requiredPerUnit) && requiredPerUnit > 0 ? requiredPerUnit : 1;
+    return remaining + 1e-9 >= required;
+  }
+
+  function isComboCatalogEntryAvailable(combo) {
+    const blocks = Array.isArray(combo?.block_product_ids) ? combo.block_product_ids : [];
+    if (!blocks.length) return true;
+
+    for (const block of blocks) {
+      const pids = Array.isArray(block)
+        ? block.map((pid) => Number(pid || 0)).filter((pid) => Number.isFinite(pid) && pid > 0)
+        : [];
+      if (!pids.length) return false;
+      if (!pids.some((pid) => isComboCatalogBlockProductAddable(pid))) return false;
+    }
+    return true;
   }
 
   function initSwipeGesture(container, content, productId, cartKey) {

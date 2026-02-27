@@ -768,6 +768,18 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     };
   }
 
+  function getTierDiscountPercentForVariantIndex(tiers, variantIndex) {
+    const list = Array.isArray(tiers) ? tiers : [];
+    const idx = Number(variantIndex);
+    if (!Number.isFinite(idx) || idx < 0) return 0;
+    // Support both 0-based and 1-based tier ordering from DB.
+    const exact = list.find((t) => Number(t?.sort_order) === idx);
+    if (exact) return Number(exact.discount_percent || 0) || 0;
+    const oneBased = list.find((t) => Number(t?.sort_order) === idx + 1);
+    if (oneBased) return Number(oneBased.discount_percent || 0) || 0;
+    return 0;
+  }
+
   async function computeDisplayPriceForProduct(product, variant, getConversionFactor, roundPrice) {
     const basePrice = Number(product.price || 0);
 
@@ -807,8 +819,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     let unitPrice = basePrice * (qtyInBase / baseQty);
 
     const tiers = Array.isArray(variant.discount_tiers) ? variant.discount_tiers : [];
-    const tier = tiers.find((t) => Number(t.sort_order) === selectedIndex);
-    const discountPercent = Number(tier?.discount_percent || 0) || 0;
+    const discountPercent = getTierDiscountPercentForVariantIndex(tiers, selectedIndex);
 
     if (discountPercent !== 0) {
       unitPrice = unitPrice * (1 - discountPercent / 100);
@@ -834,7 +845,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     if (factor == null) return roundPrice(basePrice);
 
     const tiers = Array.isArray(variant.discount_tiers) ? variant.discount_tiers : [];
-    let minPrice = basePrice;
+    let minPrice = Infinity;
 
     for (let selectedIndex = 0; selectedIndex < variant.values.length; selectedIndex++) {
       const value = variant.values[selectedIndex];
@@ -844,14 +855,14 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       if (!Number.isFinite(qtyInBase) || qtyInBase <= 0) continue;
 
       let unitPrice = basePrice * (qtyInBase / baseQty);
-      const tier = tiers.find((t) => Number(t.sort_order) === selectedIndex);
-      const discountPercent = Number(tier?.discount_percent || 0) || 0;
+      const discountPercent = getTierDiscountPercentForVariantIndex(tiers, selectedIndex);
       if (discountPercent !== 0) {
         unitPrice = unitPrice * (1 - discountPercent / 100);
       }
       if (unitPrice < minPrice) minPrice = unitPrice;
     }
 
+    if (!Number.isFinite(minPrice)) return roundPrice(basePrice);
     return roundPrice(minPrice);
   }
 
@@ -4314,6 +4325,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         image_url: combo.image_url || null,
         min_price: minPrice,
         grid_photos: gridPhotosFinal,
+        block_product_ids: setBlocks.map((sb) => {
+          const rows = blockProductsById.get(Number(sb.block_id)) || [];
+          return rows
+            .map((r) => Number(r.id || 0))
+            .filter((pid) => Number.isFinite(pid) && pid > 0);
+        }),
       };
       attachComboThumbs(entry);
       result.push(entry);

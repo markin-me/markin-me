@@ -234,9 +234,12 @@ const comboProductVariantsCache = new Map();
 const productDetailsConfigCache = new Map();
 const comboProductBatchWarmupCache = new Map();
 const comboDetailsCache = new Map();
+const comboProductPreviewSharedCache = new Map();
+const comboBlockPreviewWarmCache = new Map();
 let productDetailsPrefetchTimer = null;
 let comboDetailsPrefetchTimer = null;
 const COMBO_DETAILS_CACHE_TTL_MS = 60000;
+const COMBO_PREVIEW_SHARED_TTL_MS = 5 * 60 * 1000;
 
 function collectComboProductIds(comboData) {
   const ids = new Set();
@@ -249,6 +252,57 @@ function collectComboProductIds(comboData) {
     });
   });
   return Array.from(ids);
+}
+
+function getComboBlockPreviewCacheKey(block, discountPercent) {
+  const blockId = Number(block?.block_id || block?.id || 0);
+  const productIds = (Array.isArray(block?.products) ? block.products : [])
+    .map((prod) => Number(prod?.product_id || 0))
+    .filter((id) => Number.isFinite(id) && id > 0)
+    .sort((a, b) => a - b);
+  return `${blockId}:${Number(discountPercent || 0)}:${productIds.join(",")}`;
+}
+
+function getSharedComboProductPreview(cacheKey) {
+  const key = String(cacheKey || "");
+  if (!key) return null;
+  const entry = comboProductPreviewSharedCache.get(key);
+  if (!entry) return null;
+  if (Number(entry.expiresAt || 0) <= Date.now()) {
+    comboProductPreviewSharedCache.delete(key);
+    return null;
+  }
+  return entry.promise || null;
+}
+
+function setSharedComboProductPreview(cacheKey, promise) {
+  const key = String(cacheKey || "");
+  if (!key || !promise) return;
+  comboProductPreviewSharedCache.set(key, {
+    promise,
+    expiresAt: Date.now() + COMBO_PREVIEW_SHARED_TTL_MS,
+  });
+}
+
+function getSharedComboBlockPreviewWarm(cacheKey) {
+  const key = String(cacheKey || "");
+  if (!key) return null;
+  const entry = comboBlockPreviewWarmCache.get(key);
+  if (!entry) return null;
+  if (Number(entry.expiresAt || 0) <= Date.now()) {
+    comboBlockPreviewWarmCache.delete(key);
+    return null;
+  }
+  return entry.promise || null;
+}
+
+function setSharedComboBlockPreviewWarm(cacheKey, promise) {
+  const key = String(cacheKey || "");
+  if (!key || !promise) return;
+  comboBlockPreviewWarmCache.set(key, {
+    promise,
+    expiresAt: Date.now() + COMBO_PREVIEW_SHARED_TTL_MS,
+  });
 }
 
 async function resolveComboDetails(comboId) {
@@ -3085,8 +3139,10 @@ function buildShopProductHero(product, { onBack } = {}) {
 async function renderProductDetailsInto(container, product, { onBack, cartKey, prefillItem } = {}) {
   if (!container) return;
   const productIdForRender = Number(product?.id || 0);
+  const isMobileViewport = window.matchMedia("(max-width: 768px)").matches;
   const isStaticProductView = !cartKey && !prefillItem;
   const canReuseStaticProductView =
+    !isMobileViewport &&
     isStaticProductView &&
     Number.isFinite(productIdForRender) &&
     productIdForRender > 0 &&
@@ -4523,7 +4579,6 @@ optionGroups.forEach((group) => {
 
     if (isMobile) {
       if (!hasLiveCartSheetContext()) {
-        openCartSheetCtx = null;
         openCartSheet();
       }
       if (openCartSheetCtx?.showSheetProduct) {
@@ -4544,32 +4599,6 @@ optionGroups.forEach((group) => {
     const p = Number(price) || 0;
     const d = Number(discountPercent) || 0;
     return roundPrice(d >= 100 ? 0 : p * (1 - d / 100));
-  }
-
-  const comboMainViewPersistentCache = new Map();
-  const COMBO_MAIN_VIEW_CACHE_LIMIT = 8;
-
-  function getPersistentComboMainView(cacheKey) {
-    const key = String(cacheKey || "");
-    if (!key || !comboMainViewPersistentCache.has(key)) return null;
-    const entry = comboMainViewPersistentCache.get(key);
-    comboMainViewPersistentCache.delete(key);
-    comboMainViewPersistentCache.set(key, entry);
-    return entry;
-  }
-
-  function setPersistentComboMainView(cacheKey, entry) {
-    const key = String(cacheKey || "");
-    if (!key || !entry || !entry.viewEl) return;
-    if (comboMainViewPersistentCache.has(key)) {
-      comboMainViewPersistentCache.delete(key);
-    }
-    comboMainViewPersistentCache.set(key, entry);
-    while (comboMainViewPersistentCache.size > COMBO_MAIN_VIEW_CACHE_LIMIT) {
-      const oldestKey = comboMainViewPersistentCache.keys().next().value;
-      if (!oldestKey) break;
-      comboMainViewPersistentCache.delete(oldestKey);
-    }
   }
 
   function renderComboDetailsInto(container, combo, { onBack, cartKey, prefillItem } = {}) {
@@ -5442,6 +5471,12 @@ optionGroups.forEach((group) => {
       if (comboProductPreviewCache.has(id)) {
         return comboProductPreviewCache.get(id);
       }
+      const previewSharedKey = `${id}:${Number(discountPercent || 0)}`;
+      const sharedPreviewPromise = getSharedComboProductPreview(previewSharedKey);
+      if (sharedPreviewPromise) {
+        comboProductPreviewCache.set(id, sharedPreviewPromise);
+        return sharedPreviewPromise;
+      }
 
       const promise = (async () => {
         try {
@@ -5578,7 +5613,41 @@ optionGroups.forEach((group) => {
       })();
 
       comboProductPreviewCache.set(id, promise);
+      setSharedComboProductPreview(previewSharedKey, promise);
       return promise;
+    }
+
+    function warmBlockPickerPreviews(block) {
+      const safeBlock = block && typeof block === "object" ? block : null;
+      if (!safeBlock) return Promise.resolve(new Map());
+      const blockCacheKey = getComboBlockPreviewCacheKey(safeBlock, discountPercent);
+      const sharedWarmPromise = getSharedComboBlockPreviewWarm(blockCacheKey);
+      if (sharedWarmPromise) return sharedWarmPromise;
+
+      const localWarmPromise = (async () => {
+        const products = Array.isArray(safeBlock.products) ? safeBlock.products : [];
+        const previewEntries = await Promise.all(
+          products.map(async (prod) => {
+            const pid = Number(prod?.product_id || 0);
+            if (!Number.isFinite(pid) || pid <= 0) return null;
+            try {
+              const preview = await getComboProductPreview(pid);
+              return [pid, preview];
+            } catch {
+              return null;
+            }
+          })
+        );
+        const previewMap = new Map();
+        previewEntries.forEach((entry) => {
+          if (!entry) return;
+          previewMap.set(entry[0], entry[1]);
+        });
+        return previewMap;
+      })();
+
+      setSharedComboBlockPreviewWarm(blockCacheKey, localWarmPromise);
+      return localWarmPromise;
     }
 
     const discountBadgeText = discountPercent ? `-${discountPercent}%` : "";
@@ -5643,16 +5712,6 @@ optionGroups.forEach((group) => {
         }
       }
       const mainStateKey = buildComboMainStateKey();
-      const persistentMainCacheKey = isStaticComboView && Number.isFinite(comboIdForRender) && comboIdForRender > 0
-        ? `${comboIdForRender}:${mainStateKey}`
-        : "";
-      if (!cachedMainView && persistentMainCacheKey) {
-        const persistentEntry = getPersistentComboMainView(persistentMainCacheKey);
-        if (persistentEntry && persistentEntry.viewEl) {
-          cachedMainView = persistentEntry.viewEl;
-          cachedMainStateKey = mainStateKey;
-        }
-      }
       if (cachedMainView && cachedMainStateKey === mainStateKey) {
         container.innerHTML = "";
         container.appendChild(cachedMainView);
@@ -5868,13 +5927,6 @@ optionGroups.forEach((group) => {
       viewWrap.__comboFooterUpdate = updateFooterAction;
       cachedMainView = viewWrap;
       cachedMainStateKey = mainStateKey;
-      if (persistentMainCacheKey) {
-        setPersistentComboMainView(persistentMainCacheKey, {
-          viewEl: viewWrap,
-          comboId: comboIdForRender,
-          stateKey: mainStateKey,
-        });
-      }
       renderMainView._updateFooterAction = updateFooterAction;
       if (isStaticComboView && Number.isFinite(comboIdForRender) && comboIdForRender > 0) {
         container.__shopRenderedViewType = "combo";
@@ -5890,6 +5942,8 @@ optionGroups.forEach((group) => {
       const block = blocks[blockIndex];
       if (!block || !block.products || !block.products.length) return;
       container.__shopRenderedComboMain = false;
+      const blockPreviewWarmKey = getComboBlockPreviewCacheKey(block, discountPercent);
+      const prewarmedBlockPromise = getSharedComboBlockPreviewWarm(blockPreviewWarmKey);
       const prefetchComboPickerBlockConfig = (products) => {
         const ids = new Set();
         (Array.isArray(products) ? products : []).forEach((prod) => {
@@ -5902,6 +5956,11 @@ optionGroups.forEach((group) => {
         });
       };
       prefetchComboPickerBlockConfig(block.products);
+      if (prewarmedBlockPromise && typeof prewarmedBlockPromise.then === "function") {
+        prewarmedBlockPromise.catch(() => {});
+      } else {
+        warmBlockPickerPreviews(block).catch(() => {});
+      }
 
       // Десктоп: кнопка «Назад» возвращает на шаг назад (в основное представление комбо), а не закрывает панель
       if (!openCartSheetCtx) {
@@ -6679,6 +6738,9 @@ optionGroups.forEach((group) => {
     (async () => {
       await hydrateComboSelectionsFromDefaults();
       renderMainView();
+      blocks.forEach((block) => {
+        warmBlockPickerPreviews(block).catch(() => {});
+      });
     })();
   }
 
@@ -6706,7 +6768,6 @@ optionGroups.forEach((group) => {
 
     if (isMobile) {
       if (!hasLiveCartSheetContext()) {
-        openCartSheetCtx = null;
         openCartSheet();
       }
       if (openCartSheetCtx?.showSheetCombo) {
@@ -6754,8 +6815,6 @@ optionGroups.forEach((group) => {
       }
 
       window.AppModal.close("sheet");
-      // Принудительно обнуляем контекст, чтобы следующее открытие создало новый sheet
-      openCartSheetCtx = null;
       openProductCtx = null;
 
       // На мобильных: скрываем мобильные кнопки при закрытии sheet
@@ -7985,6 +8044,44 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 function openCartSheet() {
   if (!window.AppModal) return;
   clearProfileModalMenu();
+  if (openCartSheetCtx && openCartSheetCtx.wrapEl) {
+    if (typeof setActiveNav === "function") setActiveNav("cart");
+    setAppModalMode("shop");
+    sheetNavigationState.type = 'cart';
+    sheetNavigationState.screen = 'cart';
+    sheetNavigationState.data = null;
+    window.AppModal.open({
+      title: "Корзина",
+      content: openCartSheetCtx.wrapEl,
+      onClose: () => {
+        const titleEl = document.querySelector(".app-modal-header .app-modal-title");
+        if (titleEl) {
+          titleEl.classList.remove("hidden", "is-cart-address-title", "is-empty-address");
+          titleEl.style.cursor = "";
+          titleEl.onclick = null;
+        }
+        if (elMobileCartActions) elMobileCartActions.classList.add("hidden");
+        if (elMobileAddressActions) elMobileAddressActions.classList.add("hidden");
+        if (elMobileAddressConfirm) elMobileAddressConfirm.classList.add("hidden");
+        if (elMobileProductActions) elMobileProductActions.classList.add("hidden");
+        if (window.AppModal?.body) window.AppModal.body.classList.remove("shop-cart-sheet-body");
+        openProductCtx = null;
+        sheetNavigationState.type = null;
+        sheetNavigationState.screen = null;
+        sheetNavigationState.data = null;
+        if (typeof setActiveNav === "function") setActiveNav("menu");
+      },
+    });
+    if (window.AppModal?.body) window.AppModal.body.classList.add("shop-cart-sheet-body");
+    if (openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
+      const rendered = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
+      appendUpsellToList(openCartSheetCtx.listEl);
+      if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", rendered.items.length === 0);
+      if (openCartSheetCtx.checkoutBtn) openCartSheetCtx.checkoutBtn.disabled = rendered.items.length === 0;
+    }
+    if (typeof openCartSheetCtx.showSheetCart === "function") openCartSheetCtx.showSheetCart();
+    return;
+  }
 
   // bottom nav: подсветить "Корзина" только пока открыт sheet
   if (typeof setActiveNav === "function") setActiveNav("cart");
@@ -8300,7 +8397,6 @@ function applySheetAddressTitle(backMode = "cart") {
         elMobileProductActions.classList.add("hidden");
       }
 
-      openCartSheetCtx = null;
       if (window.AppModal?.body) window.AppModal.body.classList.remove("shop-cart-sheet-body");
       openProductCtx = null;
       // Сбрасываем состояние навигации
@@ -8329,6 +8425,7 @@ function applySheetAddressTitle(backMode = "cart") {
   if (window.AppModal?.body) window.AppModal.body.classList.add("shop-cart-sheet-body");
 
   openCartSheetCtx = {
+    wrapEl: wrap,
     listEl: list,
     totalEl: totalSpan,
     footerEl: footer,

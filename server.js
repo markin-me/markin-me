@@ -28,7 +28,7 @@ const makeChatTempRouter = require('./api/chatTemp');
 const { authMiddleware } = require('./api/middleware/auth');
 
 const app = express();
-const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '1.7';
+const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '1.8';
 const STATIC_ASSET_VERSION = String(
   process.env.STATIC_ASSET_VERSION || process.env.TG_APP_VERSION || ''
 ).trim();

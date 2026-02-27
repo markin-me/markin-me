@@ -35,7 +35,10 @@
           : (tenant.logo_light_url || tenant.logo_dark_url);
 
       if (logoImg && logo) {
-        logoImg.src = logo;
+        const currentLogoSrc = String(logoImg.getAttribute('src') || '');
+        if (currentLogoSrc !== String(logo)) {
+          logoImg.src = logo;
+        }
         logoImg.classList.remove('hidden');
         if (logoFallback) logoFallback.classList.add('hidden');
       } else if (logoImg) {
