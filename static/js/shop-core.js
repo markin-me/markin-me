@@ -5931,12 +5931,18 @@ async function initAddresses() {
             price += Number(defaultItem.price || 0);
           }
         } else if (groupType === "multiple_item" || groupType === "multiple_group") {
-          // ??? multiple ? ????????? ??? ???????? ? qty_min > 0
+          const minSelect = Math.max(0, Number(group?.min_select ?? 0));
+          if (minSelect <= 0) continue;
+
+          let selectedCount = 0;
           for (const item of (group.items || [])) {
-            const qtyMin = item.qty_min ?? 1;
-            if (qtyMin > 0 && item.price) {
-              price += Number(item.price || 0) * qtyMin;
+            if (selectedCount >= minSelect) break;
+            const qtyMin = Number(item?.qty_min ?? 0);
+            const defaultQty = qtyMin > 0 ? qtyMin : 1;
+            if (item.price) {
+              price += Number(item.price || 0) * defaultQty;
             }
+            selectedCount += 1;
           }
         }
       }
@@ -8042,28 +8048,7 @@ function updateCartBadge() {
       if (!batchIds.length) return;
 
       const byId = productsById instanceof Map ? productsById : new Map();
-      let batchData = {};
-      try {
-        const json = await apiJson('/api/public/products/batch/default-cart-config', {
-          method: 'POST',
-          body: { ids: batchIds },
-        });
-        batchData = (json && typeof json.data === "object" && json.data) ? json.data : {};
-      } catch {
-        batchData = {};
-      }
-
       await Promise.all(batchIds.map(async (pid) => {
-        const key = String(pid);
-        const cfg = batchData[key] || batchData[pid] || null;
-        if (cfg && typeof cfg === "object") {
-          upsellDefaultConfigCache.set(pid, {
-            promise: Promise.resolve(cfg),
-            data: cfg,
-            ts: Date.now(),
-          });
-          return;
-        }
         const src = byId.get(pid) || null;
         try {
           await warmUpsellDefaultConfig(pid, src);
@@ -8404,9 +8389,18 @@ function updateCartBadge() {
       }
 
       if (selectionType === "multiple_group" || selectionType === "multiple_item") {
+        const requiredCount = Number.isFinite(minSelect) ? Math.max(0, Math.floor(minSelect)) : 0;
+        if (requiredCount <= 0) {
+          return;
+        }
+
+        let selectedCount = 0;
         items.forEach((item) => {
+          if (selectedCount >= requiredCount) return;
           const qtyMin = Number(item?.qty_min ?? 0);
-          if (qtyMin > 0) addDefaultOptionItem(item, qtyMin);
+          const defaultQty = qtyMin > 0 ? qtyMin : 1;
+          addDefaultOptionItem(item, defaultQty);
+          selectedCount += 1;
         });
       }
     });

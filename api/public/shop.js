@@ -23,6 +23,15 @@ const TELEGRAM_API = 'https://api.telegram.org/bot';
 
 module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
+  const PUBLIC_CACHE_TTL_MS = Object.freeze({
+    categories: 30000,
+    cartUpsell: 15000,
+    products: 15000,
+    productsBatchCategories: 10000,
+    productById: 15000,
+  });
+  const publicResponseCache = new Map();
+  const PUBLIC_CACHE_MAX_KEYS = 2000;
 
   // ------------------------------
   // Upload: customer avatar
@@ -147,6 +156,52 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
   function str(v) {
     return v === undefined || v === null ? '' : String(v);
+  }
+
+  function stableCachePart(value) {
+    if (Array.isArray(value)) return value.map((v) => stableCachePart(v));
+    if (value && typeof value === 'object') {
+      const out = {};
+      Object.keys(value).sort().forEach((k) => {
+        out[k] = stableCachePart(value[k]);
+      });
+      return out;
+    }
+    return value;
+  }
+
+  function makePublicCacheKey(prefix, parts) {
+    return `${String(prefix || 'public')}::${JSON.stringify(stableCachePart(parts || {}))}`;
+  }
+
+  function getPublicCache(key) {
+    const hit = publicResponseCache.get(key);
+    if (!hit) return null;
+    if (hit.expiresAt <= Date.now()) {
+      publicResponseCache.delete(key);
+      return null;
+    }
+    return hit.data;
+  }
+
+  function prunePublicCacheIfNeeded() {
+    if (publicResponseCache.size <= PUBLIC_CACHE_MAX_KEYS) return;
+    const entries = Array.from(publicResponseCache.entries());
+    entries.sort((a, b) => Number(a[1]?.createdAt || 0) - Number(b[1]?.createdAt || 0));
+    const overflow = publicResponseCache.size - PUBLIC_CACHE_MAX_KEYS;
+    for (let i = 0; i < overflow; i += 1) {
+      publicResponseCache.delete(entries[i][0]);
+    }
+  }
+
+  function setPublicCache(key, data, ttlMs) {
+    const ttl = Math.max(1000, Number(ttlMs || 0));
+    publicResponseCache.set(key, {
+      data,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + ttl,
+    });
+    prunePublicCacheIfNeeded();
   }
 
   const CHAT_ASSISTANT_GENDER_MALE = 'm';
@@ -3858,6 +3913,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const cacheKey = makePublicCacheKey('categories', { tenantId, storeId });
+      const cached = getPublicCache(cacheKey);
+      if (cached) {
+        res.set('x-public-cache', 'HIT');
+        return res.json(cached);
+      }
 
       const [rows] = await db.query(
         `SELECT id, tenant_id, code, title, icon, site_visibility, is_active, sort_order
@@ -3867,7 +3928,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [tenantId]
       );
 
-      res.json({ ok: true, data: rows });
+      const payload = { ok: true, data: rows };
+      setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.categories);
+      res.set('x-public-cache', 'MISS');
+      res.json(payload);
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -4258,6 +4322,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      const cacheKey = makePublicCacheKey('cart-upsell', { tenantId, storeId });
+      const cached = getPublicCache(cacheKey);
+      if (cached) {
+        res.set('x-public-cache', 'HIT');
+        return res.json(cached);
+      }
 
       const [rows] = await db.query(
         `SELECT p.id, p.tenant_id, p.name, p.price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json,
@@ -4332,7 +4402,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
       }
 
-      res.json({ ok: true, data: rows });
+      const payload = { ok: true, data: rows };
+      setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.cartUpsell);
+      res.set('x-public-cache', 'MISS');
+      res.json(payload);
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -4348,14 +4421,26 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!Number.isFinite(categoryId)) {
         return res.status(400).json({ ok: false, error: 'BAD_CATEGORY_ID' });
       }
+      const lite = helpers.toBool(req.query.lite, false);
+      const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 0)) || 0;
+      const cacheKey = makePublicCacheKey('products', {
+        tenantId,
+        storeId,
+        categoryId,
+        lite: lite ? 1 : 0,
+        limit,
+      });
+      const cached = getPublicCache(cacheKey);
+      if (cached) {
+        res.set('x-public-cache', 'HIT');
+        return res.json(cached);
+      }
 
       // Р‘С‹СЃС‚СЂС‹Р№ "lite" СЂРµР¶РёРј РґР»СЏ РїРµСЂРІРѕРіРѕ СЌРєСЂР°РЅР° РІРёС‚СЂРёРЅС‹:
       // - РјРёРЅРёРјР°Р»СЊРЅС‹Р№ РЅР°Р±РѕСЂ РїРѕР»РµР№
       // - СѓРїСЂРѕС‰С‘РЅРЅР°СЏ РґРѕСЃС‚СѓРїРЅРѕСЃС‚СЊ (С‚РѕР»СЊРєРѕ РїРѕ stock_qty)
       // - РѕРіСЂР°РЅРёС‡РµРЅРёРµ РєРѕР»РёС‡РµСЃС‚РІР°
       // РќСѓР¶РµРЅ, С‡С‚РѕР±С‹ LCP-РєР°СЂС‚РёРЅРєР° РЅР°С‡РёРЅР°Р»Р° РіСЂСѓР·РёС‚СЊСЃСЏ СЃСЂР°Р·Сѓ, Р° РЅРµ РїРѕСЃР»Рµ С‚СЏР¶С‘Р»С‹С… РїРѕРґР·Р°РїСЂРѕСЃРѕРІ.
-      const lite = helpers.toBool(req.query.lite, false);
-      const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 0)) || 0;
       if (lite) {
         // "all"
         const [all] = await db.query(
@@ -4388,7 +4473,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
           await enrichProductsWithDisplayPrice(rows, tenantId);
           await enrichProductsWithDiscounts(rows, tenantId, storeId);
-          return res.json({ ok: true, data: rows, combos: [], category_id: categoryId, lite: true });
+          const payload = { ok: true, data: rows, combos: [], category_id: categoryId, lite: true };
+          setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.products);
+          res.set('x-public-cache', 'MISS');
+          return res.json(payload);
         }
 
         const [rows] = await db.query(
@@ -4413,7 +4501,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
         await enrichProductsWithDisplayPrice(rows, tenantId);
         await enrichProductsWithDiscounts(rows, tenantId, storeId);
-        return res.json({ ok: true, data: rows, combos: [], category_id: categoryId, lite: true });
+        const payload = { ok: true, data: rows, combos: [], category_id: categoryId, lite: true };
+        setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.products);
+        res.set('x-public-cache', 'MISS');
+        return res.json(payload);
       }
 
       // "all"
@@ -4488,7 +4579,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         await enrichProductsWithDisplayPrice(rows, tenantId);
         await enrichProductsWithDiscounts(rows, tenantId, storeId);
         const combos = await getCombosForCategoryCached(tenantId, storeId, categoryId);
-        return res.json({ ok: true, data: rows, combos, category_id: categoryId });
+        const payload = { ok: true, data: rows, combos, category_id: categoryId };
+        setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.products);
+        res.set('x-public-cache', 'MISS');
+        return res.json(payload);
       }
 
       const [rows] = await db.query(
@@ -4556,7 +4650,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       await enrichProductsWithDisplayPrice(rows, tenantId);
       await enrichProductsWithDiscounts(rows, tenantId, storeId);
       const combos = await getCombosForCategoryCached(tenantId, storeId, categoryId);
-      res.json({ ok: true, data: rows, combos, category_id: categoryId });
+      const payload = { ok: true, data: rows, combos, category_id: categoryId };
+      setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.products);
+      res.set('x-public-cache', 'MISS');
+      res.json(payload);
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -4573,6 +4670,17 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const categoryIds = rawIds.map(Number).filter(n => Number.isFinite(n) && n > 0);
       if (!categoryIds.length) return res.json({ ok: true, data: {} });
       if (categoryIds.length > 50) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+      const sortedCategoryIds = Array.from(new Set(categoryIds)).sort((a, b) => a - b);
+      const cacheKey = makePublicCacheKey('products-batch-categories', {
+        tenantId,
+        storeId,
+        categoryIds: sortedCategoryIds,
+      });
+      const cached = getPublicCache(cacheKey);
+      if (cached) {
+        res.set('x-public-cache', 'HIT');
+        return res.json(cached);
+      }
 
       // РћРїСЂРµРґРµР»СЏРµРј "all"-РєР°С‚РµРіРѕСЂРёСЋ
       const [allRows] = await db.query(
@@ -4706,7 +4814,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const combosByCategory = {};
       for (const [id, combos] of combosResults) combosByCategory[id] = combos;
 
-      res.json({ ok: true, data: productsByCategory, combos: combosByCategory });
+      const payload = { ok: true, data: productsByCategory, combos: combosByCategory };
+      setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.productsBatchCategories);
+      res.set('x-public-cache', 'MISS');
+      res.json(payload);
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -4719,6 +4830,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const storeId = helpers.getStoreId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const cacheKey = makePublicCacheKey('products-by-id', { tenantId, storeId, id });
+      const cached = getPublicCache(cacheKey);
+      if (cached) {
+        res.set('x-public-cache', 'HIT');
+        return res.json(cached);
+      }
 
       const [rows] = await db.query(
         `SELECT p.*,
@@ -4783,7 +4900,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       await enrichProductsWithDisplayPrice([p], tenantId);
       await enrichProductsWithDiscounts([p], tenantId, storeId);
 
-      res.json({ ok: true, data: p });
+      const payload = { ok: true, data: p };
+      setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.productById);
+      res.set('x-public-cache', 'MISS');
+      res.json(payload);
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });

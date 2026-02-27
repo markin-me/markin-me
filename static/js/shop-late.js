@@ -3073,6 +3073,8 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
 
 optionGroups.forEach((group) => {
   const type = getOptionGroupUiType(group);
+  const minSelect = Math.max(0, Number(group?.min_select ?? 0));
+  const isEditingSeed = !!seedItem;
 
   const stateEntry = {
     type,
@@ -3098,16 +3100,33 @@ optionGroups.forEach((group) => {
     group.items.forEach((item) => {
       if (editOptionIds.has(Number(item.id))) stateEntry.selectedIds.add(Number(item.id));
     });
+    if (!isEditingSeed && stateEntry.selectedIds.size === 0 && minSelect > 0) {
+      const toSelect = Math.min(minSelect, group.items.length);
+      for (let i = 0; i < toSelect; i += 1) {
+        const id = Number(group.items[i]?.id);
+        if (Number.isFinite(id) && id > 0) stateEntry.selectedIds.add(id);
+      }
+    }
   } else if (type === "multiple_item") {
     group.items.forEach((item) => {
       const id = Number(item.id);
-      const itemMin = item.qty_min ?? 1;
+      const itemMin = Number(item?.qty_min ?? 0);
       // В режиме редактирования берём сохранённое значение
-      const savedQty = editOptionQty.get(id) || (editOptionIds.has(id) ? itemMin : 0);
-      // Если qty_min > 0 — товар выбран по умолчанию с этим количеством
-      const q = savedQty > 0 ? savedQty : (itemMin > 0 ? itemMin : 0);
+      const savedQty = editOptionQty.get(id) || (editOptionIds.has(id) ? Math.max(1, itemMin || 1) : 0);
+      const q = savedQty > 0 ? savedQty : 0;
       if (q > 0) stateEntry.qtyById.set(id, q);
     });
+    if (!isEditingSeed && stateEntry.qtyById.size === 0 && minSelect > 0) {
+      const toSelect = Math.min(minSelect, group.items.length);
+      for (let i = 0; i < toSelect; i += 1) {
+        const item = group.items[i];
+        const id = Number(item?.id);
+        if (!Number.isFinite(id) || id <= 0) continue;
+        const itemMin = Number(item?.qty_min ?? 0);
+        const q = itemMin > 0 ? itemMin : 1;
+        stateEntry.qtyById.set(id, q);
+      }
+    }
   }
 
   // Восстанавливаем варианты из корзины для всех items
