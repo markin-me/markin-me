@@ -66,6 +66,30 @@
     }
   }
 
+  async function preloadProductOptionAssignmentsBatch(productIds) {
+    const ids = Array.isArray(productIds)
+      ? Array.from(new Set(productIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)))
+      : [];
+    if (!ids.length) return;
+
+    const missingIds = ids.filter((id) => !state.productOptionsCache.has(id));
+    if (!missingIds.length) return;
+
+    try {
+      const json = await apiJson('/api/public/products/batch/option-assignments', {
+        method: 'POST',
+        body: { ids: missingIds },
+      });
+      const data = json?.data && typeof json.data === "object" ? json.data : {};
+      missingIds.forEach((id) => {
+        const list = Array.isArray(data[id]) ? data[id] : [];
+        state.productOptionsCache.set(id, list);
+      });
+    } catch (e) {
+      console.warn("Failed to preload product option assignments batch:", e);
+    }
+  }
+
   async function loadOptionGroupDetails(groupId) {
     const gid = Number(groupId);
     if (!Number.isFinite(gid)) return null;
@@ -208,7 +232,113 @@
 const comboProductIngredientsCache = new Map();
 const comboProductVariantsCache = new Map();
 const productDetailsConfigCache = new Map();
+const comboProductBatchWarmupCache = new Map();
+const comboDetailsCache = new Map();
 let productDetailsPrefetchTimer = null;
+let comboDetailsPrefetchTimer = null;
+const COMBO_DETAILS_CACHE_TTL_MS = 60000;
+
+function collectComboProductIds(comboData) {
+  const ids = new Set();
+  const blocks = Array.isArray(comboData?.blocks) ? comboData.blocks : [];
+  blocks.forEach((block) => {
+    const products = Array.isArray(block?.products) ? block.products : [];
+    products.forEach((prod) => {
+      const pid = Number(prod?.product_id || 0);
+      if (Number.isFinite(pid) && pid > 0) ids.add(pid);
+    });
+  });
+  return Array.from(ids);
+}
+
+async function resolveComboDetails(comboId) {
+  const safeComboId = Number(comboId || 0);
+  if (!Number.isFinite(safeComboId) || safeComboId <= 0) return null;
+
+  const now = Date.now();
+  const cached = comboDetailsCache.get(safeComboId);
+  if (cached && cached.promise && Number(cached.expiresAt || 0) > now) {
+    return cached.promise;
+  }
+
+  const promise = (async () => {
+    const json = await apiJson("/api/public/combos/" + encodeURIComponent(safeComboId));
+    return json?.data || null;
+  })();
+
+  comboDetailsCache.set(safeComboId, {
+    promise,
+    expiresAt: now + COMBO_DETAILS_CACHE_TTL_MS,
+    ts: now,
+  });
+
+  try {
+    const data = await promise;
+    if (!data) comboDetailsCache.delete(safeComboId);
+    return data;
+  } catch (e) {
+    comboDetailsCache.delete(safeComboId);
+    throw e;
+  }
+}
+
+async function warmComboDetailsData(comboData, opts = {}) {
+  const ids = collectComboProductIds(comboData);
+  if (!ids.length) return;
+  await preloadComboProductsData(ids);
+  if (opts.preloadProductConfigs) {
+    prefetchProductDetailsConfig(ids, {
+      limit: Math.max(1, Math.min(24, ids.length)),
+      delayMs: 0,
+    });
+  }
+}
+
+function prefetchComboDetails(comboIds, opts = {}) {
+  const ids = Array.isArray(comboIds)
+    ? Array.from(new Set(comboIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)))
+    : [];
+  if (!ids.length) return;
+
+  const limit = Math.max(1, Number(opts.limit || 6));
+  const delayMs = Math.max(0, Number(opts.delayMs ?? 220));
+  const eager = opts.eager === true;
+  const queue = ids
+    .filter((id) => {
+      const cached = comboDetailsCache.get(id);
+      return !(cached && cached.promise && Number(cached.expiresAt || 0) > Date.now());
+    })
+    .slice(0, limit);
+  if (!queue.length) return;
+
+  const run = async () => {
+    for (const id of queue) {
+      try {
+        const comboData = await resolveComboDetails(id);
+        if (comboData) {
+          await warmComboDetailsData(comboData, {
+            preloadProductConfigs: opts.preloadProductConfigs !== false,
+          });
+        }
+      } catch {}
+    }
+  };
+
+  if (comboDetailsPrefetchTimer) {
+    clearTimeout(comboDetailsPrefetchTimer);
+    comboDetailsPrefetchTimer = null;
+  }
+  comboDetailsPrefetchTimer = setTimeout(() => {
+    comboDetailsPrefetchTimer = null;
+    if (!eager && typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(() => {
+        run().catch(() => {});
+      }, { timeout: 1200 });
+      return;
+    }
+    run().catch(() => {});
+  }, delayMs);
+}
 
 function normalizeComboVariantList(rawList) {
   const variants = Array.isArray(rawList) ? rawList : [];
@@ -279,6 +409,21 @@ async function preloadComboProductsData(productIds) {
   }
 }
 
+async function warmComboProductConfigById(productId) {
+  const pid = Number(productId || 0);
+  if (!Number.isFinite(pid) || pid <= 0) return;
+  const existing = comboProductBatchWarmupCache.get(pid);
+  if (existing) return existing;
+
+  const task = preloadComboProductsData([pid])
+    .catch(() => {})
+    .finally(() => {
+      comboProductBatchWarmupCache.delete(pid);
+    });
+  comboProductBatchWarmupCache.set(pid, task);
+  return task;
+}
+
 async function resolveProductIngredients(productId) {
   const pid = Number(productId || 0);
   if (!Number.isFinite(pid) || pid <= 0) return [];
@@ -287,6 +432,11 @@ async function resolveProductIngredients(productId) {
   }
 
   const request = (async () => {
+    await warmComboProductConfigById(pid);
+    const fromBatch = comboProductIngredientsCache.get(pid);
+    if (fromBatch && fromBatch !== request) return fromBatch;
+
+    // Fallback for old/backward paths when batch endpoint is unavailable.
     const res = await fetch(`/api/public/products/${pid}/ingredients`);
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) return [];
@@ -385,6 +535,11 @@ async function resolveProductVariants(productId) {
   }
 
   const request = (async () => {
+    await warmComboProductConfigById(pid);
+    const fromBatch = comboProductVariantsCache.get(pid);
+    if (fromBatch && fromBatch !== request) return fromBatch;
+
+    // Fallback for old/backward paths when batch endpoint is unavailable.
     const res = await apiJson(`/api/public/products/${pid}/variants`);
     return normalizeComboVariantList(Array.isArray(res.data) ? res.data : []);
   })();
@@ -441,6 +596,10 @@ function prefetchProductDetailsConfig(productIds, opts = {}) {
   if (!queue.length) return;
 
   const run = async () => {
+    await Promise.allSettled([
+      preloadProductOptionAssignmentsBatch(queue),
+      preloadComboProductsData(queue),
+    ]);
     for (const id of queue) {
       try {
         await resolveProductDetailsConfig(id);
@@ -462,6 +621,39 @@ function prefetchProductDetailsConfig(productIds, opts = {}) {
     }
     run().catch(() => {});
   }, delayMs);
+}
+
+async function warmInitialCatalogPayload(opts = {}) {
+  const productLimit = Math.max(1, Number(opts.productLimit || 12));
+  const comboLimit = Math.max(0, Number(opts.comboLimit || 6));
+  const productIds = Array.isArray(opts.productIds)
+    ? Array.from(new Set(opts.productIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))).slice(0, productLimit)
+    : [];
+  const comboIds = Array.isArray(opts.comboIds)
+    ? Array.from(new Set(opts.comboIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))).slice(0, comboLimit)
+    : [];
+
+  if (!productIds.length && !comboIds.length) return;
+
+  const productTask = (async () => {
+    if (!productIds.length) return;
+    await Promise.allSettled(productIds.map(async (id) => {
+      await resolveProductDetailsConfig(id);
+    }));
+  })();
+
+  const comboTask = (async () => {
+    if (!comboIds.length) return;
+    for (const comboId of comboIds) {
+      try {
+        const comboData = await resolveComboDetails(comboId);
+        if (!comboData) continue;
+        await warmComboDetailsData(comboData, { preloadProductConfigs: true });
+      } catch {}
+    }
+  })();
+
+  await Promise.allSettled([productTask, comboTask]);
 }
 
 function buildProductDetailsContent(
@@ -2892,6 +3084,23 @@ function buildShopProductHero(product, { onBack } = {}) {
 
 async function renderProductDetailsInto(container, product, { onBack, cartKey, prefillItem } = {}) {
   if (!container) return;
+  const productIdForRender = Number(product?.id || 0);
+  const isStaticProductView = !cartKey && !prefillItem;
+  const canReuseStaticProductView =
+    isStaticProductView &&
+    Number.isFinite(productIdForRender) &&
+    productIdForRender > 0 &&
+    container.__shopRenderedViewType === "product" &&
+    Number(container.__shopRenderedProductId || 0) === productIdForRender;
+  if (canReuseStaticProductView) return;
+
+  if (!isStaticProductView) {
+    container.__shopRenderedViewType = "";
+    container.__shopRenderedProductId = "";
+    container.__shopRenderedComboId = "";
+    container.__shopRenderedComboMain = false;
+  }
+
   container.innerHTML = "";
 
   const {
@@ -4005,6 +4214,30 @@ optionGroups.forEach((group) => {
     }
   }
 
+  function composeVariantLabelValueFirst(rawLabel, rawGroupTitle) {
+    const raw = str(rawLabel || "").trim();
+    const groupTitle = str(rawGroupTitle || "").trim();
+    if (!raw) return "";
+
+    let valuePart = raw;
+    let groupPart = groupTitle;
+    const colonPos = raw.indexOf(":");
+    if (colonPos >= 0) {
+      const left = raw.slice(0, colonPos).trim();
+      const right = raw.slice(colonPos + 1).trim();
+      if (right) {
+        valuePart = right;
+        if (!groupPart && left) groupPart = left;
+      }
+    }
+
+    if (!groupPart) return valuePart;
+    const valueLc = valuePart.toLowerCase();
+    const groupLc = groupPart.toLowerCase();
+    if (valueLc.includes(groupLc)) return valuePart;
+    return `${valuePart} ${groupPart}`.trim();
+  }
+
   function buildCurrentProductFavoriteSnapshot() {
     const selectedItems = collectSelectedOptionItems(optionGroups, selectionState);
     const ingredientQuantities = buildCurrentIngredientQuantities();
@@ -4032,7 +4265,7 @@ optionGroups.forEach((group) => {
     const variantGroupTitle = str(variants?.[0]?.title || "").trim();
     const variantValueLabel = str(variantState.label || "").trim();
     const variantLabel = hasVariantSelection
-      ? (variantGroupTitle ? `${variantGroupTitle}: ${variantValueLabel}` : variantValueLabel)
+      ? composeVariantLabelValueFirst(variantValueLabel, variantGroupTitle)
       : "";
     const variantUnitPrice = hasVariantSelection
       ? getVariantUnitPrice(product, variants, variantState)
@@ -4133,7 +4366,7 @@ optionGroups.forEach((group) => {
     const variantGroupTitle = str(variants?.[0]?.title || "").trim();
     const variantValueLabel = str(variantState.label || "").trim();
     const variantLabel = hasVariantSelection
-      ? (variantGroupTitle ? `${variantGroupTitle}: ${variantValueLabel}` : variantValueLabel)
+      ? composeVariantLabelValueFirst(variantValueLabel, variantGroupTitle)
       : "";
     const variantUnitPrice = hasVariantSelection
       ? getVariantUnitPrice(product, variants, variantState)
@@ -4224,7 +4457,6 @@ optionGroups.forEach((group) => {
     applyAutoAddRules();
     clearAutoAddDismissedIfCartEmpty();
     saveCart();
-    renderProducts();
     if (typeof scheduleSyncAllProductCardsFromCart === "function") scheduleSyncAllProductCardsFromCart();
     renderCart();
     updateCartBadge();
@@ -4274,6 +4506,13 @@ optionGroups.forEach((group) => {
     productId: product.id,
     onBack: typeof onBack === "function" ? onBack : null,
   };
+
+  if (isStaticProductView && Number.isFinite(productIdForRender) && productIdForRender > 0) {
+    container.__shopRenderedViewType = "product";
+    container.__shopRenderedProductId = productIdForRender;
+    container.__shopRenderedComboId = "";
+    container.__shopRenderedComboMain = false;
+  }
 }
 
   async function openProductDetails(productId, { cartKey, prefillItem, onBack } = {}) {
@@ -4307,8 +4546,52 @@ optionGroups.forEach((group) => {
     return roundPrice(d >= 100 ? 0 : p * (1 - d / 100));
   }
 
+  const comboMainViewPersistentCache = new Map();
+  const COMBO_MAIN_VIEW_CACHE_LIMIT = 8;
+
+  function getPersistentComboMainView(cacheKey) {
+    const key = String(cacheKey || "");
+    if (!key || !comboMainViewPersistentCache.has(key)) return null;
+    const entry = comboMainViewPersistentCache.get(key);
+    comboMainViewPersistentCache.delete(key);
+    comboMainViewPersistentCache.set(key, entry);
+    return entry;
+  }
+
+  function setPersistentComboMainView(cacheKey, entry) {
+    const key = String(cacheKey || "");
+    if (!key || !entry || !entry.viewEl) return;
+    if (comboMainViewPersistentCache.has(key)) {
+      comboMainViewPersistentCache.delete(key);
+    }
+    comboMainViewPersistentCache.set(key, entry);
+    while (comboMainViewPersistentCache.size > COMBO_MAIN_VIEW_CACHE_LIMIT) {
+      const oldestKey = comboMainViewPersistentCache.keys().next().value;
+      if (!oldestKey) break;
+      comboMainViewPersistentCache.delete(oldestKey);
+    }
+  }
+
   function renderComboDetailsInto(container, combo, { onBack, cartKey, prefillItem } = {}) {
     if (!container) return;
+    const comboIdForRender = Number(combo?.id || combo?.combo_id || 0);
+    const isStaticComboView = !cartKey && !prefillItem;
+    const canReuseStaticComboView =
+      isStaticComboView &&
+      Number.isFinite(comboIdForRender) &&
+      comboIdForRender > 0 &&
+      container.__shopRenderedViewType === "combo" &&
+      Number(container.__shopRenderedComboId || 0) === comboIdForRender &&
+      container.__shopRenderedComboMain === true;
+    if (canReuseStaticComboView) return;
+
+    if (!isStaticComboView) {
+      container.__shopRenderedViewType = "";
+      container.__shopRenderedProductId = "";
+      container.__shopRenderedComboId = "";
+      container.__shopRenderedComboMain = false;
+    }
+
     const blocks = Array.isArray(combo.blocks) ? combo.blocks : [];
     const discountPercent = Number(combo.discount_percent) || 0;
     let comboQty = 1;
@@ -4328,6 +4611,10 @@ optionGroups.forEach((group) => {
     let comboPickerRenderTimer = null;
     const COMBO_PICKER_GEAR_ROTATE_MS = 300;
     const comboProductPreviewCache = new Map();
+    let cachedMainView = null;
+    let cachedMainStateKey = "";
+    let cachedPickerView = null;
+    let cachedPickerStateKey = "";
 
     const selectedIndexByBlock = blocks.map((block) => {
       const products = block.products || [];
@@ -4727,6 +5014,32 @@ optionGroups.forEach((group) => {
       }
 
       expandedPickerProductIndex = snapshot?.expandedPickerProductIndex ?? null;
+    }
+
+    function buildComboMainStateKey() {
+      try {
+        return JSON.stringify({
+          qty: Math.max(1, Number(comboQty || 1)),
+          selectedIndexByBlock: selectedIndexByBlock.slice(),
+          selectionStateByBlock: cloneComboDraftValue(selectionStateByBlock),
+        });
+      } catch {
+        return String(Date.now());
+      }
+    }
+
+    function buildComboPickerStateKey(blockIndex) {
+      try {
+        return JSON.stringify({
+          blockIndex: Number(blockIndex || 0),
+          qty: Math.max(1, Number(comboQty || 1)),
+          selectedIndexByBlock: selectedIndexByBlock.slice(),
+          selectionStateByBlock: cloneComboDraftValue(selectionStateByBlock),
+          expandedPickerProductIndex,
+        });
+      } catch {
+        return `${Number(blockIndex || 0)}:${Date.now()}`;
+      }
     }
 
     function buildDraftComboCart(desiredQty) {
@@ -5329,6 +5642,34 @@ optionGroups.forEach((group) => {
           );
         }
       }
+      const mainStateKey = buildComboMainStateKey();
+      const persistentMainCacheKey = isStaticComboView && Number.isFinite(comboIdForRender) && comboIdForRender > 0
+        ? `${comboIdForRender}:${mainStateKey}`
+        : "";
+      if (!cachedMainView && persistentMainCacheKey) {
+        const persistentEntry = getPersistentComboMainView(persistentMainCacheKey);
+        if (persistentEntry && persistentEntry.viewEl) {
+          cachedMainView = persistentEntry.viewEl;
+          cachedMainStateKey = mainStateKey;
+        }
+      }
+      if (cachedMainView && cachedMainStateKey === mainStateKey) {
+        container.innerHTML = "";
+        container.appendChild(cachedMainView);
+        const cachedFooterUpdate = cachedMainView.__comboFooterUpdate;
+        renderMainView._updateFooterAction =
+          typeof cachedFooterUpdate === "function" ? cachedFooterUpdate : null;
+        if (typeof renderMainView._updateFooterAction === "function") {
+          renderMainView._updateFooterAction();
+        }
+        if (isStaticComboView && Number.isFinite(comboIdForRender) && comboIdForRender > 0) {
+          container.__shopRenderedViewType = "combo";
+          container.__shopRenderedProductId = "";
+          container.__shopRenderedComboId = comboIdForRender;
+          container.__shopRenderedComboMain = true;
+        }
+        return;
+      }
       container.innerHTML = "";
       const wrap = document.createElement("div");
       wrap.className = "shop-combo-detail";
@@ -5524,7 +5865,23 @@ optionGroups.forEach((group) => {
       viewWrap.appendChild(footer);
       container.appendChild(viewWrap);
 
+      viewWrap.__comboFooterUpdate = updateFooterAction;
+      cachedMainView = viewWrap;
+      cachedMainStateKey = mainStateKey;
+      if (persistentMainCacheKey) {
+        setPersistentComboMainView(persistentMainCacheKey, {
+          viewEl: viewWrap,
+          comboId: comboIdForRender,
+          stateKey: mainStateKey,
+        });
+      }
       renderMainView._updateFooterAction = updateFooterAction;
+      if (isStaticComboView && Number.isFinite(comboIdForRender) && comboIdForRender > 0) {
+        container.__shopRenderedViewType = "combo";
+        container.__shopRenderedProductId = "";
+        container.__shopRenderedComboId = comboIdForRender;
+        container.__shopRenderedComboMain = true;
+      }
     }
 
     let pickerFooterUpdate = null;
@@ -5532,6 +5889,7 @@ optionGroups.forEach((group) => {
     function renderBlockPicker(blockIndex, scrollToRestore) {
       const block = blocks[blockIndex];
       if (!block || !block.products || !block.products.length) return;
+      container.__shopRenderedComboMain = false;
       const prefetchComboPickerBlockConfig = (products) => {
         const ids = new Set();
         (Array.isArray(products) ? products : []).forEach((prod) => {
@@ -5551,6 +5909,41 @@ optionGroups.forEach((group) => {
           renderMainView();
           window._comboStepBackCallback = null;
         };
+      }
+
+      const pickerStateKey = buildComboPickerStateKey(blockIndex);
+      if (cachedPickerView && cachedPickerStateKey === pickerStateKey) {
+        container.innerHTML = "";
+        container.appendChild(cachedPickerView);
+        if (scrollToRestore) {
+          const detailEl = container.querySelector(".shop-combo-detail-scroll");
+          const listEl = container.querySelector(".shop-combo-picker-list");
+          if (detailEl && scrollToRestore.detail >= 0) detailEl.scrollTop = scrollToRestore.detail;
+          if (listEl && scrollToRestore.list >= 0) listEl.scrollTop = scrollToRestore.list;
+          if (scrollToRestore.parentEl && scrollToRestore.parentEl.isConnected && scrollToRestore.parentTop >= 0) {
+            scrollToRestore.parentEl.scrollTop = scrollToRestore.parentTop;
+          }
+        }
+        if (openCartSheetCtx) {
+          const doStepBack = () => {
+            renderMainView();
+            setSheetHeaderMode("product", {
+              onBack,
+              discountBadge: discountBadgeText,
+              favoriteBuildSnapshot: buildCurrentComboFavoriteSnapshot,
+            });
+            openCartSheetCtx.comboStepBack = null;
+            sheetNavigationState.screen = "combo";
+          };
+          openCartSheetCtx.comboStepBack = doStepBack;
+          setSheetHeaderMode("product", {
+            onBack: doStepBack,
+            discountBadge: discountBadgeText,
+            favoriteBuildSnapshot: buildCurrentComboFavoriteSnapshot,
+          });
+          sheetNavigationState.screen = "comboPicker";
+        }
+        return;
       }
 
       container.innerHTML = "";
@@ -6248,6 +6641,8 @@ optionGroups.forEach((group) => {
       viewWrap.appendChild(wrap);
       viewWrap.appendChild(footer);
       container.appendChild(viewWrap);
+      cachedPickerView = viewWrap;
+      cachedPickerStateKey = pickerStateKey;
 
       if (scrollToRestore) {
         const detailEl = container.querySelector(".shop-combo-detail-scroll");
@@ -6288,11 +6683,12 @@ optionGroups.forEach((group) => {
   }
 
   async function openComboDetails(comboId, { cartKey, prefillItem, onBack } = {}) {
+    const safeComboId = Number(comboId || 0);
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     const hasCustomOnBack = typeof onBack === "function";
-    let json;
+    let data = null;
     try {
-      json = await apiJson("/api/public/combos/" + encodeURIComponent(comboId));
+      data = await resolveComboDetails(safeComboId);
     } catch (e) {
       console.warn("openComboDetails: failed to load combo", comboId, e);
       if (String(e?.message || "") === "OUT_OF_STOCK") {
@@ -6306,23 +6702,7 @@ optionGroups.forEach((group) => {
       }
       return;
     }
-    const data = json?.data;
     if (!data) return;
-
-    try {
-      const comboProductIds = [];
-      const blocks = Array.isArray(data?.blocks) ? data.blocks : [];
-      blocks.forEach((block) => {
-        const products = Array.isArray(block?.products) ? block.products : [];
-        products.forEach((prod) => {
-          const pid = Number(prod?.product_id || 0);
-          if (Number.isFinite(pid) && pid > 0) comboProductIds.push(pid);
-        });
-      });
-      await preloadComboProductsData(comboProductIds);
-    } catch (e) {
-      console.warn("Failed to preload combo products data:", e);
-    }
 
     if (isMobile) {
       if (!hasLiveCartSheetContext()) {
@@ -6409,6 +6789,67 @@ optionGroups.forEach((group) => {
     header.querySelectorAll(".shop-profile-modal-settings, .shop-profile-menu").forEach((el) => el.remove());
   }
 
+  let categoriesSheetCache = null;
+
+  function buildCategoriesSheetSignature(categories) {
+    const safe = Array.isArray(categories) ? categories : [];
+    return safe
+      .map((c) => `${Number(c?.id || 0)}:${str(c?.title || "")}:${str(c?.icon || "")}`)
+      .join("|");
+  }
+
+  function ensureCategoriesSheetDom(categories) {
+    const safe = Array.isArray(categories) ? categories : [];
+    const signature = buildCategoriesSheetSignature(safe);
+    if (
+      categoriesSheetCache &&
+      categoriesSheetCache.wrap &&
+      categoriesSheetCache.list &&
+      categoriesSheetCache.signature === signature
+    ) {
+      return categoriesSheetCache;
+    }
+
+    const wrap = document.createElement("div");
+    wrap.className = "shop-sheet-content";
+
+    const list = document.createElement("div");
+    list.className = "shop-sheet-list";
+
+    safe.forEach((c) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "shop-sheet-row";
+      row.setAttribute("data-cat-id", String(Number(c.id || 0)));
+      row.appendChild(createCatIcon(c.icon));
+
+      const t = document.createElement("div");
+      t.className = "shop-sheet-row-title";
+      t.textContent = str(c.title);
+      row.appendChild(t);
+
+      row.addEventListener("click", () => {
+        selectCategory(c.id, c.title);
+        closeShopSheetIfOpen();
+      });
+
+      list.appendChild(row);
+    });
+
+    wrap.appendChild(list);
+    categoriesSheetCache = { signature, wrap, list };
+    return categoriesSheetCache;
+  }
+
+  function syncCategoriesSheetActiveRow(listEl) {
+    if (!listEl) return;
+    const activeId = Number(state.activeCategoryId || 0);
+    listEl.querySelectorAll(".shop-sheet-row").forEach((row) => {
+      const rowId = Number(row.getAttribute("data-cat-id") || 0);
+      row.classList.toggle("is-active", Number.isFinite(activeId) && rowId === activeId);
+    });
+  }
+
 function openCategoriesSheet() {
   if (!window.AppModal) return;
   clearProfileModalMenu();
@@ -6416,34 +6857,11 @@ function openCategoriesSheet() {
   // на время открытого шита подсвечиваем "Категории"
   setActiveNav("categories");
 
-  const wrap = document.createElement("div");
-  wrap.className = "shop-sheet-content";
-
-  const list = document.createElement("div");
-  list.className = "shop-sheet-list";
-
-  getVisibleCategories().forEach((c) => {
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = "shop-sheet-row";
-    if (Number(state.activeCategoryId) === Number(c.id)) row.classList.add("is-active");
-
-    row.appendChild(createCatIcon(c.icon));
-
-    const t = document.createElement("div");
-    t.className = "shop-sheet-row-title";
-    t.textContent = str(c.title);
-    row.appendChild(t);
-
-    row.addEventListener("click", () => {
-      selectCategory(c.id, c.title);
-      closeShopSheetIfOpen();
-    });
-
-    list.appendChild(row);
-  });
-
-  wrap.appendChild(list);
+  const visibleCategories = getVisibleCategories();
+  const cache = ensureCategoriesSheetDom(visibleCategories);
+  const wrap = cache.wrap;
+  const list = cache.list;
+  syncCategoriesSheetActiveRow(list);
 
   // Обновляем состояние навигации
   sheetNavigationState.type = 'categories';
@@ -10310,8 +10728,8 @@ function renderSheetAddressList() {
     let discountPercent = 0;
     if (Number.isFinite(safeComboId) && safeComboId > 0) {
       try {
-        const comboJson = await apiJson("/api/public/combos/" + encodeURIComponent(safeComboId));
-        discountPercent = Number(comboJson?.data?.discount_percent || 0) || 0;
+        const comboData = await resolveComboDetails(safeComboId);
+        discountPercent = Number(comboData?.discount_percent || 0) || 0;
       } catch (e) {
         console.warn("Failed to load combo for repeat pricing:", safeComboId, e);
       }
@@ -11088,7 +11506,6 @@ function renderSheetAddressList() {
     applyAutoAddRules();
     clearAutoAddDismissedIfCartEmpty();
     saveCart();
-    renderProducts();
     if (typeof scheduleSyncAllProductCardsFromCart === "function") {
       scheduleSyncAllProductCardsFromCart();
     }
@@ -11155,7 +11572,6 @@ function renderSheetAddressList() {
     applyAutoAddRules();
     clearAutoAddDismissedIfCartEmpty();
     saveCart();
-    renderProducts();
     if (typeof scheduleSyncAllProductCardsFromCart === "function") {
       scheduleSyncAllProductCardsFromCart();
     }
@@ -16689,8 +17105,13 @@ function setBottomNavActive(tab) {
         clearCartAll();
         saveCheckoutDraft({});
         if (typeof window.updateActiveOrdersBadge === "function") { Promise.resolve(window.updateActiveOrdersBadge({ force: true })).catch(() => {}); }
-        if (isSheet && window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen()) {
-          window.AppModal.close("sheet");
+        if (isSheet) {
+          if (typeof closeShopSheetIfOpen === "function") {
+            closeShopSheetIfOpen();
+          } else if (window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen()) {
+            window.AppModal.close("sheet");
+          }
+          return;
         } else if (typeof showCartView === "function") {
           showCartView();
         }
@@ -18050,5 +18471,7 @@ function initShopLate() {
 }
 
 window.prefetchProductDetailsConfig = prefetchProductDetailsConfig;
+window.prefetchComboDetails = prefetchComboDetails;
+window.warmInitialCatalogPayload = warmInitialCatalogPayload;
 
 

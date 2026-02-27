@@ -9752,6 +9752,41 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
   white-space: nowrap;
 }
 
+@keyframes shop-skeleton-wave{
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(120%); }
+}
+
+.shop-skeleton-shimmer{
+  position: relative;
+  overflow: hidden;
+  background: #eceef2;
+}
+
+.shop-skeleton-shimmer::after{
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-120%);
+  background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,.6), rgba(255,255,255,0));
+  animation: shop-skeleton-wave 1.2s linear infinite;
+}
+
+.shop-cat-item--skeleton{
+  pointer-events: none;
+}
+
+.shop-cat-item--skeleton .shop-cat-icon{
+  border-color: transparent;
+  background: transparent;
+}
+
+.shop-cat-title--skeleton{
+  width: 76%;
+  height: 12px;
+  border-radius: 999px;
+}
+
 /* ==========================================================================
    Products grid & cards
    РўСЂРµР±РѕРІР°РЅРёРµ: РЅР° РґРµСЃРєС‚РѕРїРµ 2..5 РєР°СЂС‚РѕС‡РµРє РІ СЂСЏРґ, Р±РµР· РїСѓСЃС‚РѕС‚.
@@ -9867,6 +9902,40 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 
 .sp-card.is-unavailable:hover{
   transform: none;
+}
+
+.sp-card--skeleton{
+  pointer-events: none;
+}
+
+.sp-card--skeleton:hover{
+  transform: none;
+  background: var(--color-surface);
+}
+
+.sp-card--skeleton .sp-media{
+  border-radius: 0 0 14px 14px;
+  background: transparent;
+}
+
+.sp-skel-line{
+  display: block;
+  height: 12px;
+  border-radius: 999px;
+}
+
+.sp-skel-line--title{
+  width: 82%;
+}
+
+.sp-skel-line--sub{
+  width: 58%;
+}
+
+.sp-skel-pill{
+  width: 96px;
+  height: var(--qty-pill-h);
+  border-radius: 999px;
 }
 
 .sp-media{
@@ -16467,11 +16536,14 @@ body.page-shop .sidebar-open-tab{display:none}
 
 /* ===== Cart Upsell Block ===== */
 .shop-cart-upsell{
-  padding: 12px 12px 0;
+  padding: 12px 0 0;
+  margin-left: -12px;
+  margin-right: -12px;
 }
 .shop-cart-upsell-title{
   font-size: 15px;
   font-weight: 700;
+  padding: 0 12px;
   margin-bottom: 10px;
   color: var(--color-text);
 }
@@ -16479,7 +16551,7 @@ body.page-shop .sidebar-open-tab{display:none}
   display: flex;
   gap: 8px;
   overflow-x: auto;
-  padding-bottom: 12px;
+  padding: 0 12px 12px;
   scrollbar-width: none;
 }
 .shop-cart-upsell-scroll::-webkit-scrollbar{display:none}

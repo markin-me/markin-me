@@ -2,7 +2,7 @@
 
 1.Открой PowerShell.
 2.Введи ssh a1186497@a1186497.xsph.ru (Введи пароль).
-3.Введи cd domains/markin-me.ru/public_html.
+3.Введи cd domains/markin-me.ru/public_html.   posham-admin.ru   cd domains/posham-admin.ru/public_html
 4.Введи touch tmp/restart.txt.
 5.Обнови сайт в браузере.
 
@@ -32,3 +32,9 @@ evvawewaar
 
 
 установлена ппринудительная установка светлой темы! - иметь ввиду
+
+
+Сервер FTP: 141.8.192.15
+Домашняя папка: доступны все папки
+Пользователь: a1186497@a1186497
+Пароль: evvawewaar

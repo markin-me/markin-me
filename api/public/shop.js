@@ -27,10 +27,19 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
     categories: 30000,
     cartUpsell: 15000,
     products: 15000,
-    productsBatchCategories: 10000,
+    productsBatchCategories: 30000,
+    productsBatchIngredients: 30000,
+    productsBatchVariants: 30000,
+    productsBatchOptionAssignments: 30000,
     productById: 15000,
+    comboById: 8000,
+    productIngredients: 30000,
+    productVariants: 30000,
+    productOptionAssignments: 30000,
+    optionGroupById: 8000,
   });
   const publicResponseCache = new Map();
+  const publicResponseInflight = new Map();
   const PUBLIC_CACHE_MAX_KEYS = 2000;
 
   // ------------------------------
@@ -202,6 +211,29 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       expiresAt: Date.now() + ttl,
     });
     prunePublicCacheIfNeeded();
+  }
+
+  async function loadPublicCachedPayload(cacheKey, ttlMs, loader) {
+    const cached = getPublicCache(cacheKey);
+    if (cached) return { payload: cached, cacheState: 'HIT' };
+
+    const inflight = publicResponseInflight.get(cacheKey);
+    if (inflight) {
+      const payload = await inflight;
+      return { payload, cacheState: 'WAIT' };
+    }
+
+    const task = (async () => {
+      const fresh = await loader();
+      setPublicCache(cacheKey, fresh, ttlMs);
+      return fresh;
+    })().finally(() => {
+      publicResponseInflight.delete(cacheKey);
+    });
+
+    publicResponseInflight.set(cacheKey, task);
+    const payload = await task;
+    return { payload, cacheState: 'MISS' };
   }
 
   const CHAT_ASSISTANT_GENDER_MALE = 'm';
@@ -4004,77 +4036,98 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const productIsAvailableSql = getProductIsAvailableSql('p', 's');
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const cacheKey = makePublicCacheKey('combo-by-id', { tenantId, storeId, id });
+      const { payload, cacheState } = await loadPublicCachedPayload(
+        cacheKey,
+        PUBLIC_CACHE_TTL_MS.comboById,
+        async () => {
+          const [[combo]] = await db.query(
+            `SELECT id, title, description, discount_percent, image_url
+             FROM prod_combos WHERE tenant_id=? AND id=? AND is_active=1 LIMIT 1`,
+            [tenantId, id]
+          );
+          if (!combo) {
+            const err = new Error('NOT_FOUND');
+            err.httpStatus = 404;
+            throw err;
+          }
 
-      const [[combo]] = await db.query(
-        `SELECT id, title, description, discount_percent, image_url
-         FROM prod_combos WHERE tenant_id=? AND id=? AND is_active=1 LIMIT 1`,
-        [tenantId, id]
-      );
-      if (!combo) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+          const [setBlocks] = await db.query(
+            `SELECT sb.block_id, sb.sort_order, b.title AS block_title, b.min_select, b.max_select
+             FROM prod_combo_set_blocks sb
+             JOIN prod_combo_blocks b ON b.id = sb.block_id AND b.tenant_id = sb.tenant_id
+             WHERE sb.tenant_id=? AND sb.combo_id=? ORDER BY sb.sort_order ASC, sb.id ASC`,
+            [tenantId, id]
+          );
 
-      const [setBlocks] = await db.query(
-        `SELECT sb.block_id, sb.sort_order, b.title AS block_title, b.min_select, b.max_select
-         FROM prod_combo_set_blocks sb
-         JOIN prod_combo_blocks b ON b.id = sb.block_id AND b.tenant_id = sb.tenant_id
-         WHERE sb.tenant_id=? AND sb.combo_id=? ORDER BY sb.sort_order ASC, sb.id ASC`,
-        [tenantId, id]
-      );
+          const blocks = [];
+          for (const sb of setBlocks) {
+            const [productsRaw] = await db.query(
+              `SELECT bp.product_id, bp.sort_order, bp.is_default, p.name AS product_name, p.description_short AS product_description_short, p.price, p.photos_json AS product_photos_json
+               FROM prod_combo_block_products bp
+               JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
+               LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
+               WHERE bp.tenant_id=? AND bp.block_id=? AND p.is_active=1 AND p.site_visibility=1
+                 AND ${productIsAvailableSql}
+               ORDER BY bp.sort_order ASC, bp.id ASC`,
+              [storeId, tenantId, sb.block_id, storeId, storeId, storeId]
+            );
+            const minSelect = Math.max(1, Number(sb.min_select) || 1);
+            if (!productsRaw.length) {
+              const err = new Error('OUT_OF_STOCK');
+              err.httpStatus = 409;
+              throw err;
+            }
+            const products = productsRaw.map((r) => {
+              const photos = safeJsonArray(r.product_photos_json);
+              return {
+                product_id: r.product_id,
+                product_name: r.product_name,
+                product_description_short: r.product_description_short || null,
+                price: Number(r.price) || 0,
+                sort_order: r.sort_order,
+                is_default: Number(r.is_default) === 1,
+                product_photo: photos.length ? photos[0] : null,
+              };
+            });
+            let defaultSet = false;
+            for (const p of products) {
+              const wasDefault = p.is_default;
+              p.is_default = wasDefault && !defaultSet;
+              if (wasDefault) defaultSet = true;
+            }
+            blocks.push({
+              block_id: sb.block_id,
+              block_title: sb.block_title || '',
+              min_select: minSelect,
+              max_select: Math.max(1, Number(sb.max_select) || 1),
+              products,
+            });
+          }
 
-      const blocks = [];
-      for (const sb of setBlocks) {
-        const [productsRaw] = await db.query(
-          `SELECT bp.product_id, bp.sort_order, bp.is_default, p.name AS product_name, p.description_short AS product_description_short, p.price, p.photos_json AS product_photos_json
-           FROM prod_combo_block_products bp
-           JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
-           LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
-           WHERE bp.tenant_id=? AND bp.block_id=? AND p.is_active=1 AND p.site_visibility=1
-             AND ${productIsAvailableSql}
-           ORDER BY bp.sort_order ASC, bp.id ASC`,
-          [storeId, tenantId, sb.block_id, storeId, storeId, storeId]
-        );
-        const minSelect = Math.max(1, Number(sb.min_select) || 1);
-        if (!productsRaw.length) {
-          return res.status(409).json({ ok: false, error: 'OUT_OF_STOCK' });
-        }
-        const products = productsRaw.map((r) => {
-          const photos = safeJsonArray(r.product_photos_json);
           return {
-            product_id: r.product_id,
-            product_name: r.product_name,
-            product_description_short: r.product_description_short || null,
-            price: Number(r.price) || 0,
-            sort_order: r.sort_order,
-            is_default: Number(r.is_default) === 1,
-            product_photo: photos.length ? photos[0] : null,
+            ok: true,
+            data: {
+              id: combo.id,
+              title: combo.title || '',
+              description: combo.description || '',
+              discount_percent: Number(combo.discount_percent) || 0,
+              image_url: combo.image_url || null,
+              blocks,
+            },
           };
-        });
-        let defaultSet = false;
-        for (const p of products) {
-          const wasDefault = p.is_default;
-          p.is_default = wasDefault && !defaultSet;
-          if (wasDefault) defaultSet = true;
         }
-        blocks.push({
-          block_id: sb.block_id,
-          block_title: sb.block_title || '',
-          min_select: minSelect,
-          max_select: Math.max(1, Number(sb.max_select) || 1),
-          products,
-        });
-      }
+      );
 
-      res.json({
-        ok: true,
-        data: {
-          id: combo.id,
-          title: combo.title || '',
-          description: combo.description || '',
-          discount_percent: Number(combo.discount_percent) || 0,
-          image_url: combo.image_url || null,
-          blocks,
-        },
-      });
+      res.set('x-public-cache', cacheState);
+      return res.json(payload);
     } catch (e) {
+      if (e?.httpStatus === 404 || e?.message === 'NOT_FOUND') {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      }
+      if (e?.httpStatus === 409 || e?.message === 'OUT_OF_STOCK') {
+        return res.status(409).json({ ok: false, error: 'OUT_OF_STOCK' });
+      }
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
@@ -4918,54 +4971,63 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!Number.isFinite(productId) || productId <= 0) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
+      const cacheKey = makePublicCacheKey('product-ingredients', { tenantId, storeId, productId });
+      const { payload, cacheState } = await loadPublicCachedPayload(
+        cacheKey,
+        PUBLIC_CACHE_TTL_MS.productIngredients,
+        async () => {
+          const [pcsRows] = await db.query(
+            `SELECT id FROM prod_units WHERE tenant_id=? AND code='pcs' LIMIT 1`,
+            [tenantId]
+          );
+          const pcsUnitId = pcsRows.length ? Number(pcsRows[0].id) : null;
 
-      const [pcsRows] = await db.query(
-        `SELECT id FROM prod_units WHERE tenant_id=? AND code='pcs' LIMIT 1`,
-        [tenantId]
+          const [rows] = await db.query(
+            `SELECT 
+               i.id,
+               i.ingredient_id,
+               i.quantity,
+               i.unit_id,
+               i.quantity_min,
+               i.quantity_max,
+               i.quantity_step,
+               i.price_override,
+               i.is_variable,
+               i.sort_order,
+               p.name AS ingredient_name,
+               p.price AS ingredient_price,
+               p.base_unit_id AS ingredient_base_unit_id,
+               p.base_qty AS ingredient_base_qty,
+               p.unit_id AS ingredient_unit_id,
+               p.photos_json AS ingredient_photos,
+               u.code AS unit_code,
+               u.title AS unit_title,
+               u.short_title AS unit_short_title,
+               pul.factor AS ingredient_pcs_factor
+             FROM prod_product_ingredients i
+             JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+             JOIN prod_units u ON u.id=i.unit_id
+             LEFT JOIN prod_product_unit_links pul
+               ON pul.tenant_id=i.tenant_id
+              AND pul.product_id=i.ingredient_id
+              AND pul.base_unit_id=p.base_unit_id
+              AND pul.unit_id=?
+             WHERE i.tenant_id=? AND i.product_id=?
+               AND (i.is_variable = 1 OR i.is_variable IS NULL)
+             ORDER BY i.sort_order ASC, i.id ASC`,
+            [pcsUnitId || 0, tenantId, productId]
+          );
+
+          for (const r of rows) {
+            r.ingredient_photos = safeJsonArray(r.ingredient_photos);
+          }
+
+          return { ok: true, data: rows };
+        }
       );
-      const pcsUnitId = pcsRows.length ? Number(pcsRows[0].id) : null;
 
-      const [rows] = await db.query(
-        `SELECT 
-           i.id,
-           i.ingredient_id,
-           i.quantity,
-           i.unit_id,
-           i.quantity_min,
-           i.quantity_max,
-           i.quantity_step,
-           i.price_override,
-           i.is_variable,
-           i.sort_order,
-           p.name AS ingredient_name,
-           p.price AS ingredient_price,
-           p.base_unit_id AS ingredient_base_unit_id,
-           p.base_qty AS ingredient_base_qty,
-           p.unit_id AS ingredient_unit_id,
-           p.photos_json AS ingredient_photos,
-           u.code AS unit_code,
-           u.title AS unit_title,
-           u.short_title AS unit_short_title,
-           pul.factor AS ingredient_pcs_factor
-         FROM prod_product_ingredients i
-         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
-         JOIN prod_units u ON u.id=i.unit_id
-         LEFT JOIN prod_product_unit_links pul
-           ON pul.tenant_id=i.tenant_id
-          AND pul.product_id=i.ingredient_id
-          AND pul.base_unit_id=p.base_unit_id
-          AND pul.unit_id=?
-         WHERE i.tenant_id=? AND i.product_id=?
-           AND (i.is_variable = 1 OR i.is_variable IS NULL)
-         ORDER BY i.sort_order ASC, i.id ASC`,
-        [pcsUnitId || 0, tenantId, productId]
-      );
-
-      for (const r of rows) {
-        r.ingredient_photos = safeJsonArray(r.ingredient_photos);
-      }
-
-      res.json({ ok: true, data: rows });
+      res.set('x-public-cache', cacheState);
+      return res.json(payload);
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -4979,60 +5041,74 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
       if (!ids.length) return res.json({ ok: true, data: {} });
       if (ids.length > 200) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+      const sortedIds = Array.from(new Set(ids)).sort((a, b) => a - b);
+      const cacheKey = makePublicCacheKey('products-batch-ingredients', {
+        tenantId,
+        ids: sortedIds,
+      });
 
-      const [pcsRows] = await db.query(
-        `SELECT id FROM prod_units WHERE tenant_id=? AND code='pcs' LIMIT 1`,
-        [tenantId]
+      const { payload, cacheState } = await loadPublicCachedPayload(
+        cacheKey,
+        PUBLIC_CACHE_TTL_MS.productsBatchIngredients,
+        async () => {
+          const [pcsRows] = await db.query(
+            `SELECT id FROM prod_units WHERE tenant_id=? AND code='pcs' LIMIT 1`,
+            [tenantId]
+          );
+          const pcsUnitId = pcsRows.length ? Number(pcsRows[0].id) : null;
+
+          const placeholders = sortedIds.map(() => '?').join(',');
+          const [rows] = await db.query(
+            `SELECT
+               i.product_id,
+               i.id,
+               i.ingredient_id,
+               i.quantity,
+               i.unit_id,
+               i.quantity_min,
+               i.quantity_max,
+               i.quantity_step,
+               i.price_override,
+               i.is_variable,
+               i.sort_order,
+               p.name AS ingredient_name,
+               p.price AS ingredient_price,
+               p.base_unit_id AS ingredient_base_unit_id,
+               p.base_qty AS ingredient_base_qty,
+               p.unit_id AS ingredient_unit_id,
+               p.photos_json AS ingredient_photos,
+               u.code AS unit_code,
+               u.title AS unit_title,
+               u.short_title AS unit_short_title,
+               pul.factor AS ingredient_pcs_factor
+             FROM prod_product_ingredients i
+             JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
+             JOIN prod_units u ON u.id=i.unit_id
+             LEFT JOIN prod_product_unit_links pul
+               ON pul.tenant_id=i.tenant_id
+              AND pul.product_id=i.ingredient_id
+              AND pul.base_unit_id=p.base_unit_id
+              AND pul.unit_id=?
+             WHERE i.tenant_id=? AND i.product_id IN (${placeholders})
+               AND (i.is_variable = 1 OR i.is_variable IS NULL)
+             ORDER BY i.product_id ASC, i.sort_order ASC, i.id ASC`,
+            [pcsUnitId || 0, tenantId, ...sortedIds]
+          );
+
+          const result = {};
+          for (const r of rows) {
+            r.ingredient_photos = safeJsonArray(r.ingredient_photos);
+            const pid = Number(r.product_id);
+            if (!result[pid]) result[pid] = [];
+            result[pid].push(r);
+          }
+
+          return { ok: true, data: result };
+        }
       );
-      const pcsUnitId = pcsRows.length ? Number(pcsRows[0].id) : null;
 
-      const placeholders = ids.map(() => '?').join(',');
-      const [rows] = await db.query(
-        `SELECT
-           i.product_id,
-           i.id,
-           i.ingredient_id,
-           i.quantity,
-           i.unit_id,
-           i.quantity_min,
-           i.quantity_max,
-           i.quantity_step,
-           i.price_override,
-           i.is_variable,
-           i.sort_order,
-           p.name AS ingredient_name,
-           p.price AS ingredient_price,
-           p.base_unit_id AS ingredient_base_unit_id,
-           p.base_qty AS ingredient_base_qty,
-           p.unit_id AS ingredient_unit_id,
-           p.photos_json AS ingredient_photos,
-           u.code AS unit_code,
-           u.title AS unit_title,
-           u.short_title AS unit_short_title,
-           pul.factor AS ingredient_pcs_factor
-         FROM prod_product_ingredients i
-         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
-         JOIN prod_units u ON u.id=i.unit_id
-         LEFT JOIN prod_product_unit_links pul
-           ON pul.tenant_id=i.tenant_id
-          AND pul.product_id=i.ingredient_id
-          AND pul.base_unit_id=p.base_unit_id
-          AND pul.unit_id=?
-         WHERE i.tenant_id=? AND i.product_id IN (${placeholders})
-           AND (i.is_variable = 1 OR i.is_variable IS NULL)
-         ORDER BY i.product_id ASC, i.sort_order ASC, i.id ASC`,
-        [pcsUnitId || 0, tenantId, ...ids]
-      );
-
-      const result = {};
-      for (const r of rows) {
-        r.ingredient_photos = safeJsonArray(r.ingredient_photos);
-        const pid = Number(r.product_id);
-        if (!result[pid]) result[pid] = [];
-        result[pid].push(r);
-      }
-
-      res.json({ ok: true, data: result });
+      res.set('x-public-cache', cacheState);
+      return res.json(payload);
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -5046,70 +5122,166 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
       if (!ids.length) return res.json({ ok: true, data: {} });
       if (ids.length > 200) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+      const sortedIds = Array.from(new Set(ids)).sort((a, b) => a - b);
+      const cacheKey = makePublicCacheKey('products-batch-variants', {
+        tenantId,
+        ids: sortedIds,
+      });
 
-      const placeholders = ids.map(() => '?').join(',');
-      const [variantRows] = await db.query(
-        `SELECT
-           va.product_id,
-           vg.id,
-           vg.title,
-           vg.unit_id,
-           vg.values,
-           vg.default_value_index AS group_default_value_index,
-           va.default_value_index AS assignment_default_value_index,
-           u.code AS unit_code,
-           u.title AS unit_title,
-           u.short_title AS unit_short_title
-         FROM prod_variant_assignments va
-         JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
-         LEFT JOIN prod_units u ON u.id=vg.unit_id
-         WHERE va.tenant_id=?
-           AND va.product_id IN (${placeholders})
-           AND va.is_active=1 AND vg.is_active=1
-         ORDER BY va.product_id ASC, va.sort_order ASC, vg.sort_order ASC`,
-        [tenantId, ...ids]
-      );
+      const { payload, cacheState } = await loadPublicCachedPayload(
+        cacheKey,
+        PUBLIC_CACHE_TTL_MS.productsBatchVariants,
+        async () => {
+          const placeholders = sortedIds.map(() => '?').join(',');
+          const [variantRows] = await db.query(
+            `SELECT
+               va.product_id,
+               vg.id,
+               vg.title,
+               vg.unit_id,
+               vg.values,
+               vg.default_value_index AS group_default_value_index,
+               va.default_value_index AS assignment_default_value_index,
+               u.code AS unit_code,
+               u.title AS unit_title,
+               u.short_title AS unit_short_title
+             FROM prod_variant_assignments va
+             JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
+             LEFT JOIN prod_units u ON u.id=vg.unit_id
+             WHERE va.tenant_id=?
+               AND va.product_id IN (${placeholders})
+               AND va.is_active=1 AND vg.is_active=1
+             ORDER BY va.product_id ASC, va.sort_order ASC, vg.sort_order ASC`,
+            [tenantId, ...sortedIds]
+          );
 
-      const groupIds = Array.from(
-        new Set(variantRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0))
-      );
-      const tiersByGroupId = new Map();
-      if (groupIds.length) {
-        const tierPlaceholders = groupIds.map(() => '?').join(',');
-        const [tiers] = await db.query(
-          `SELECT variant_group_id, min_quantity, discount_percent, sort_order
-           FROM prod_variant_discount_tiers
-           WHERE tenant_id=? AND variant_group_id IN (${tierPlaceholders})
-           ORDER BY variant_group_id ASC, sort_order ASC, min_quantity ASC`,
-          [tenantId, ...groupIds]
-        );
-        for (const t of tiers) {
-          const gid = Number(t.variant_group_id);
-          if (!tiersByGroupId.has(gid)) tiersByGroupId.set(gid, []);
-          tiersByGroupId.get(gid).push(t);
+          const groupIds = Array.from(
+            new Set(variantRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0))
+          );
+          const tiersByGroupId = new Map();
+          if (groupIds.length) {
+            const tierPlaceholders = groupIds.map(() => '?').join(',');
+            const [tiers] = await db.query(
+              `SELECT variant_group_id, min_quantity, discount_percent, sort_order
+               FROM prod_variant_discount_tiers
+               WHERE tenant_id=? AND variant_group_id IN (${tierPlaceholders})
+               ORDER BY variant_group_id ASC, sort_order ASC, min_quantity ASC`,
+              [tenantId, ...groupIds]
+            );
+            for (const t of tiers) {
+              const gid = Number(t.variant_group_id);
+              if (!tiersByGroupId.has(gid)) tiersByGroupId.set(gid, []);
+              tiersByGroupId.get(gid).push(t);
+            }
+          }
+
+          const result = {};
+          for (const v of variantRows) {
+            const pid = Number(v.product_id);
+            if (!result[pid]) result[pid] = [];
+            const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
+            const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
+            result[pid].push({
+              id: Number(v.id),
+              title: str(v.title || ""),
+              unit_id: v.unit_id ? Number(v.unit_id) : null,
+              unit_code: str(v.unit_code || ""),
+              unit_title: str(v.unit_title || ""),
+              unit_short_title: str(v.unit_short_title || ""),
+              values: safeJsonArray(v.values),
+              default_value_index: assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
+              discount_tiers: tiersByGroupId.get(Number(v.id)) || [],
+            });
+          }
+
+          return { ok: true, data: result };
         }
-      }
+      );
 
-      const result = {};
-      for (const v of variantRows) {
-        const pid = Number(v.product_id);
-        if (!result[pid]) result[pid] = [];
-        const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
-        const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
-        result[pid].push({
-          id: Number(v.id),
-          title: str(v.title || ""),
-          unit_id: v.unit_id ? Number(v.unit_id) : null,
-          unit_code: str(v.unit_code || ""),
-          unit_title: str(v.unit_title || ""),
-          unit_short_title: str(v.unit_short_title || ""),
-          values: safeJsonArray(v.values),
-          default_value_index: assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx,
-          discount_tiers: tiersByGroupId.get(Number(v.id)) || [],
-        });
-      }
+      res.set('x-public-cache', cacheState);
+      return res.json(payload);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
 
-      res.json({ ok: true, data: result });
+  // Batch option assignments for multiple products in one request
+  router.post('/products/batch/option-assignments', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
+      if (!ids.length) return res.json({ ok: true, data: {} });
+      if (ids.length > 200) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+
+      const sortedIds = Array.from(new Set(ids)).sort((a, b) => a - b);
+      const cacheKey = makePublicCacheKey('products-batch-option-assignments', {
+        tenantId,
+        storeId,
+        ids: sortedIds,
+      });
+
+      const { payload, cacheState } = await loadPublicCachedPayload(
+        cacheKey,
+        PUBLIC_CACHE_TTL_MS.productsBatchOptionAssignments,
+        async () => {
+          const placeholders = sortedIds.map(() => '?').join(',');
+          const [rows] = await db.query(
+            `SELECT
+               a.assign_id AS product_id,
+               a.id AS assignment_id,
+               a.group_id,
+               a.priority,
+               a.sort_order,
+               a.is_active,
+               a.selection_type AS assignment_selection_type,
+               a.min_select AS assignment_min_select,
+               a.max_select AS assignment_max_select,
+               g.title,
+               g.selection_type AS group_selection_type,
+               g.min_select AS group_min_select,
+               g.max_select AS group_max_select,
+               g.is_required,
+               g.out_of_stock_action
+             FROM prod_option_assignments a
+             JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id
+             WHERE a.tenant_id=?
+               AND a.assign_type='product'
+               AND a.assign_id IN (${placeholders})
+               AND a.is_active=1
+               AND g.is_active=1
+             ORDER BY a.assign_id ASC, a.sort_order ASC, a.id ASC`,
+            [tenantId, ...sortedIds]
+          );
+
+          const result = {};
+          sortedIds.forEach((pid) => { result[pid] = []; });
+          rows.forEach((r) => {
+            const pid = Number(r.product_id);
+            if (!Number.isFinite(pid) || pid <= 0) return;
+            if (!result[pid]) result[pid] = [];
+            result[pid].push({
+              assignment_id: Number(r.assignment_id),
+              group_id: Number(r.group_id),
+              title: str(r.title || ''),
+              selection_type: r.assignment_selection_type || r.group_selection_type || 'single',
+              min_select: r.assignment_min_select ?? r.group_min_select ?? 0,
+              max_select: r.assignment_max_select ?? r.group_max_select ?? null,
+              is_required: Number(r.is_required ?? 0) === 1,
+              is_active: Number(r.is_active || 0) === 1,
+              out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
+              priority: Number(r.priority || 0),
+              sort_order: Number(r.sort_order || 0),
+            });
+          });
+
+          return { ok: true, data: result };
+        }
+      );
+
+      res.set('x-public-cache', cacheState);
+      return res.json(payload);
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -5564,9 +5736,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
 
           if (selectionType === 'multiple_group' || selectionType === 'multiple_item' || selectionType === 'multiple') {
+            const requiredCount = Number.isFinite(minSelect) ? Math.max(0, Math.floor(minSelect)) : 0;
+            if (requiredCount <= 0) return;
+
+            let selectedCount = 0;
             items.forEach((item) => {
+              if (selectedCount >= requiredCount) return;
               const qtyMin = Number(item?.qty_min ?? 0);
-              if (qtyMin > 0) addDefaultOptionItem(item, qtyMin);
+              const defaultQty = qtyMin > 0 ? qtyMin : 1;
+              addDefaultOptionItem(item, defaultQty);
+              selectedCount += 1;
             });
           }
         });
@@ -5618,67 +5797,78 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
-      // РџСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ С‚РѕРІР°СЂ Р°РєС‚РёРІРµРЅ Рё РІРёРґРµРЅ РЅР° СЃР°Р№С‚Рµ
-      const [productCheck] = await db.query(
-        `SELECT id FROM prod_products 
-         WHERE tenant_id=? AND id=? AND is_active=1 AND site_visibility=1 
-         LIMIT 1`,
-        [tenantId, productId]
+      const cacheKey = makePublicCacheKey('product-option-assignments', { tenantId, storeId, productId });
+      const { payload, cacheState } = await loadPublicCachedPayload(
+        cacheKey,
+        PUBLIC_CACHE_TTL_MS.productOptionAssignments,
+        async () => {
+          const [productCheck] = await db.query(
+            `SELECT id FROM prod_products
+             WHERE tenant_id=? AND id=? AND is_active=1 AND site_visibility=1
+             LIMIT 1`,
+            [tenantId, productId]
+          );
+          if (!productCheck.length) {
+            const err = new Error('NOT_FOUND');
+            err.httpStatus = 404;
+            throw err;
+          }
+
+          const [rows] = await db.query(
+            `SELECT
+               a.id AS assignment_id,
+               a.group_id,
+               a.priority,
+               a.sort_order,
+               a.is_active,
+               a.selection_type AS assignment_selection_type,
+               a.min_select AS assignment_min_select,
+               a.max_select AS assignment_max_select,
+               g.title,
+               g.selection_type AS group_selection_type,
+               g.min_select AS group_min_select,
+               g.max_select AS group_max_select,
+               g.is_required,
+               g.out_of_stock_action
+             FROM prod_option_assignments a
+             JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id
+             WHERE a.tenant_id=?
+               AND a.assign_type='product'
+               AND a.assign_id=?
+               AND a.is_active=1
+               AND g.is_active=1
+             ORDER BY a.sort_order ASC, a.id ASC`,
+            [tenantId, productId]
+          );
+
+          const assignments = rows.map((r) => ({
+            assignment_id: Number(r.assignment_id),
+            group_id: Number(r.group_id),
+            title: str(r.title || ''),
+            selection_type: r.assignment_selection_type || r.group_selection_type || 'single',
+            min_select: r.assignment_min_select ?? r.group_min_select ?? 0,
+            max_select: r.assignment_max_select ?? r.group_max_select ?? null,
+            is_required: Number(r.is_required ?? 0) === 1,
+            is_active: Number(r.is_active || 0) === 1,
+            out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
+            priority: Number(r.priority || 0),
+            sort_order: Number(r.sort_order || 0),
+          }));
+
+          return { ok: true, data: assignments };
+        }
       );
-      if (!productCheck.length) {
+
+      res.set('x-public-cache', cacheState);
+      return res.json(payload);
+    } catch (e) {
+      if (e?.httpStatus === 404 || e?.message === 'NOT_FOUND') {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
-
-      // РџРѕР»СѓС‡Р°РµРј Р°РєС‚РёРІРЅС‹Рµ РЅР°Р·РЅР°С‡РµРЅРёСЏ РѕРїС†РёР№ РґР»СЏ С‚РѕРІР°СЂР°
-      const [rows] = await db.query(
-        `SELECT 
-           a.id AS assignment_id, 
-           a.group_id, 
-           a.priority, 
-           a.sort_order, 
-           a.is_active,
-           a.selection_type AS assignment_selection_type,
-           a.min_select AS assignment_min_select,
-           a.max_select AS assignment_max_select,
-           g.title, 
-           g.selection_type AS group_selection_type, 
-           g.min_select AS group_min_select, 
-           g.max_select AS group_max_select,
-           g.is_required,
-           g.out_of_stock_action
-         FROM prod_option_assignments a
-         JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id
-         WHERE a.tenant_id=? 
-           AND a.assign_type='product' 
-           AND a.assign_id=?
-           AND a.is_active=1
-           AND g.is_active=1
-         ORDER BY a.sort_order ASC, a.id ASC`,
-        [tenantId, productId]
-      );
-
-      // РќРѕСЂРјР°Р»РёР·СѓРµРј РґР°РЅРЅС‹Рµ: РёСЃРїРѕР»СЊР·СѓРµРј Р·РЅР°С‡РµРЅРёСЏ РёР· РЅР°Р·РЅР°С‡РµРЅРёСЏ, РµСЃР»Рё Р·Р°РґР°РЅС‹, РёРЅР°С‡Рµ РёР· РіСЂСѓРїРїС‹
-      const assignments = rows.map((r) => ({
-        assignment_id: Number(r.assignment_id),
-        group_id: Number(r.group_id),
-        title: str(r.title || ""),
-        selection_type: r.assignment_selection_type || r.group_selection_type || "single",
-        min_select: r.assignment_min_select ?? r.group_min_select ?? 0,
-        max_select: r.assignment_max_select ?? r.group_max_select ?? null,
-        is_required: Number(r.is_required ?? 0) === 1,
-        is_active: Number(r.is_active || 0) === 1,
-        out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
-        priority: Number(r.priority || 0),
-        sort_order: Number(r.sort_order || 0),
-      }));
-
-      res.json({ ok: true, data: assignments });
-    } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
-
   router.get('/options/groups/:id', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -5686,6 +5876,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const id = Number(req.params.id);
       if (!Number.isFinite(id) || id <= 0) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+      const cacheKey = makePublicCacheKey('option-group-by-id', { tenantId, storeId, id });
+      const cached = getPublicCache(cacheKey);
+      if (cached) {
+        res.set('x-public-cache', 'HIT');
+        return res.json(cached);
       }
 
       // РџРѕР»СѓС‡Р°РµРј РіСЂСѓРїРїСѓ РѕРїС†РёР№
@@ -5884,7 +6080,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         };
       });
 
-      res.json({
+      const payload = {
         ok: true,
         data: {
           group: {
@@ -5899,7 +6095,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           },
           items: normalizedItems,
         },
-      });
+      };
+      setPublicCache(cacheKey, payload, PUBLIC_CACHE_TTL_MS.optionGroupById);
+      res.set('x-public-cache', 'MISS');
+      res.json(payload);
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -5915,51 +6114,60 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
-      const [variants] = await db.query(
-        `SELECT 
-           vg.id,
-           vg.title,
-           vg.unit_id,
-           vg.values,
-           vg.is_active,
-           vg.sort_order,
-           vg.default_value_index AS group_default_value_index,
-           va.default_value_index AS assignment_default_value_index,
-           u.code AS unit_code,
-           u.title AS unit_title,
-           u.short_title AS unit_short_title,
-           va.sort_order AS assignment_sort_order
-         FROM prod_variant_assignments va
-         JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
-         LEFT JOIN prod_units u ON u.id=vg.unit_id
-         WHERE va.tenant_id=? AND va.product_id=?
-           AND va.is_active=1 AND vg.is_active=1
-         ORDER BY va.sort_order ASC, vg.sort_order ASC`,
-        [tenantId, productId]
+      const cacheKey = makePublicCacheKey('product-variants', { tenantId, storeId, productId });
+      const { payload, cacheState } = await loadPublicCachedPayload(
+        cacheKey,
+        PUBLIC_CACHE_TTL_MS.productVariants,
+        async () => {
+          const [variants] = await db.query(
+            `SELECT
+               vg.id,
+               vg.title,
+               vg.unit_id,
+               vg.values,
+               vg.is_active,
+               vg.sort_order,
+               vg.default_value_index AS group_default_value_index,
+               va.default_value_index AS assignment_default_value_index,
+               u.code AS unit_code,
+               u.title AS unit_title,
+               u.short_title AS unit_short_title,
+               va.sort_order AS assignment_sort_order
+             FROM prod_variant_assignments va
+             JOIN prod_variant_groups vg ON vg.id=va.variant_group_id
+             LEFT JOIN prod_units u ON u.id=vg.unit_id
+             WHERE va.tenant_id=? AND va.product_id=?
+               AND va.is_active=1 AND vg.is_active=1
+             ORDER BY va.sort_order ASC, vg.sort_order ASC`,
+            [tenantId, productId]
+          );
+
+          for (const v of variants) {
+            v.values = safeJsonArray(v.values);
+            const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
+            const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
+            v.default_value_index = assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx;
+            const [tiers] = await db.query(
+              `SELECT min_quantity, discount_percent, sort_order
+               FROM prod_variant_discount_tiers
+               WHERE tenant_id=? AND variant_group_id=?
+               ORDER BY sort_order ASC, min_quantity ASC`,
+              [tenantId, v.id]
+            );
+            v.discount_tiers = tiers;
+          }
+
+          return { ok: true, data: variants };
+        }
       );
 
-      for (const v of variants) {
-        v.values = safeJsonArray(v.values);
-        const groupDefaultIdx = v.group_default_value_index != null ? Number(v.group_default_value_index) : null;
-        const assignmentDefaultIdx = v.assignment_default_value_index != null ? Number(v.assignment_default_value_index) : null;
-        v.default_value_index = assignmentDefaultIdx != null ? assignmentDefaultIdx : groupDefaultIdx;
-        const [tiers] = await db.query(
-          `SELECT min_quantity, discount_percent, sort_order
-           FROM prod_variant_discount_tiers
-           WHERE tenant_id=? AND variant_group_id=?
-           ORDER BY sort_order ASC, min_quantity ASC`,
-          [tenantId, v.id]
-        );
-        v.discount_tiers = tiers;
-      }
-
-      res.json({ ok: true, data: variants });
+      res.set('x-public-cache', cacheState);
+      return res.json(payload);
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });
-
   function parseDeliveryTimeMinutes(value) {
     if (!value) return null;
     const [hours, mins] = String(value).split(":");

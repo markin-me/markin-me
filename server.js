@@ -28,7 +28,7 @@ const makeChatTempRouter = require('./api/chatTemp');
 const { authMiddleware } = require('./api/middleware/auth');
 
 const app = express();
-const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '1.2';
+const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '1.7';
 const STATIC_ASSET_VERSION = String(
   process.env.STATIC_ASSET_VERSION || process.env.TG_APP_VERSION || ''
 ).trim();
@@ -122,7 +122,8 @@ app.use(cookieParser());
 app.use('/static', express.static(path.join(__dirname, 'static'), {
   setHeaders(res, filePath) {
     const isImage = /\.(avif|gif|jpe?g|png|webp|svg|ico)$/i.test(filePath);
-    if (isImage) {
+    const isVersionedStaticAsset = /\.(?:js|mjs|css|map|woff2?|ttf|otf|eot)$/i.test(filePath);
+    if (isImage || isVersionedStaticAsset) {
       // Долгий кэш + валидация по ETag/Last-Modified (Express добавляет сам)
       res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     } else {
