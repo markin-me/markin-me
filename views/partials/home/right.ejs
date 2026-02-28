@@ -721,6 +721,38 @@
         </div>
       </div>
 
+      <div class="info-card settings-right-panel hidden" id="settingsNotificationsPanel">
+        <div class="settings-list-header">
+          <div class="settings-list-title">Уведомления</div>
+          <div class="settings-list-subtitle">Подключение Telegram для уведомлений и настройка филиалов.</div>
+          <button type="button" class="btn btn-icon btn-sm global-telegram-add-toggle" id="globalTelegramToggleBtn" title="Добавить Telegram">
+            <i class="fas fa-plus"></i>
+          </button>
+        </div>
+        <div class="settings-site-form">
+          <div class="global-telegram-connect hidden" id="globalTelegramConnectBlock">
+            <% if (typeof telegramBotUsername !== 'undefined' && telegramBotUsername) { %>
+            <p class="field-hint">Перейдите по ссылке: <a href="https://t.me/<%= telegramBotUsername %>" target="_blank" rel="noopener">https://t.me/<%= telegramBotUsername %></a>, отправьте команду <strong>/start</strong> и вставьте полученные ключи ниже.</p>
+            <% } else { %>
+            <p class="field-hint">Перейдите в Telegram-бота, отправьте команду <strong>/start</strong> и вставьте полученные API key и Secret key.</p>
+            <% } %>
+            <div class="field-group">
+              <label class="field-label">TELEGRAM API KEY</label>
+              <input class="control" type="text" id="globalTelegramApiKey" placeholder="Например: 915611204" />
+            </div>
+            <div class="field-group">
+              <label class="field-label">SECRET KEY</label>
+              <input class="control" type="text" id="globalTelegramSecretKey" placeholder="Ключ от бота" />
+            </div>
+            <div class="global-telegram-form-actions">
+              <button class="btn btn-primary btn-sm" type="button" id="globalTelegramAddBtn">Добавить</button>
+              <button class="btn btn-link btn-sm" type="button" id="globalTelegramCancelBtn">Отмена</button>
+            </div>
+          </div>
+          <div id="globalTelegramBindings"></div>
+        </div>
+      </div>
+
       <div class="info-card settings-right-panel hidden" id="settingsPrintApiPanel">
         <div class="settings-list-header">
           <div class="settings-list-title">API для печати на удалённом принтере</div>

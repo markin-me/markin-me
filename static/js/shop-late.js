@@ -7337,6 +7337,7 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   wrap.appendChild(list);
 
   let renderSeq = 0;
+  let lastFavoritesRenderSignature = "";
   let currentSwipedContainer = null;
   const favoritesUseSwipe = window.matchMedia("(max-width: 1100px)").matches;
 
@@ -8009,7 +8010,19 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       if (currentSeq !== renderSeq) return;
 
       const rows = Array.isArray(favorites) ? favorites : [];
+      const nextFavoritesSignature = rows
+        .map((fav) => {
+          const id = Number(fav?.id || 0);
+          const itemId = Number(fav?.item_id || fav?.item?.id || 0);
+          const updatedAt = str(fav?.updated_at || fav?.item?.updated_at || "");
+          return `${id}:${itemId}:${updatedAt}`;
+        })
+        .join("|");
+      if (!forceReload && nextFavoritesSignature && nextFavoritesSignature === lastFavoritesRenderSignature) {
+        return;
+      }
       if (!rows.length) {
+        lastFavoritesRenderSignature = "";
         renderMessage("В избранном пока ничего нет.");
         return;
       }
@@ -8248,10 +8261,12 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       });
 
       if (!repeatItems.length) {
+        lastFavoritesRenderSignature = "";
         renderMessage("В избранном пока ничего нет.");
         return;
       }
 
+      lastFavoritesRenderSignature = nextFavoritesSignature;
       const reopenFavorites = () => {
         void openFavoritesSheet({ force: false, forceOpen: true });
       };
@@ -8419,6 +8434,16 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 
 function openCartSheet() {
   if (!window.AppModal) return;
+  const buildCartSheetRenderSignature = () => {
+    const rows = cartItemsResolved().map((item) => {
+      const key = str(item?.key || "");
+      const qty = Number(item?.qty || 0);
+      const type = str(item?.type || "");
+      const selLen = Array.isArray(item?.selections) ? item.selections.length : 0;
+      return `${key}:${qty}:${type}:${selLen}`;
+    });
+    return rows.join("|");
+  };
   clearProfileModalMenu();
   let addressSheetAsyncToken = 0;
   let postModalCloseUiSyncTimer = null;
@@ -8485,10 +8510,14 @@ function openCartSheet() {
     });
     if (window.AppModal?.body) window.AppModal.body.classList.add("shop-cart-sheet-body");
     if (openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
-      const rendered = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
-      appendUpsellToList(openCartSheetCtx.listEl);
-      if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", rendered.items.length === 0);
-      if (openCartSheetCtx.checkoutBtn) openCartSheetCtx.checkoutBtn.disabled = rendered.items.length === 0;
+      const renderSignature = buildCartSheetRenderSignature();
+      if (openCartSheetCtx.lastRenderSignature !== renderSignature) {
+        const rendered = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
+        appendUpsellToList(openCartSheetCtx.listEl);
+        if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", rendered.items.length === 0);
+        if (openCartSheetCtx.checkoutBtn) openCartSheetCtx.checkoutBtn.disabled = rendered.items.length === 0;
+        openCartSheetCtx.lastRenderSignature = renderSignature;
+      }
     }
     if (typeof openCartSheetCtx.showSheetCart === "function") openCartSheetCtx.showSheetCart();
     return;
@@ -8682,6 +8711,7 @@ function openCartSheet() {
 
   const totalSpan = $(".shop-sheet-checkout-total", btn);
   const { items, total } = renderCartInto(list, totalSpan, null);
+  const initialRenderSignature = buildCartSheetRenderSignature();
   appendUpsellToList(list);
 
   footer.classList.toggle("hidden", items.length === 0);
@@ -8849,6 +8879,7 @@ function applySheetAddressTitle(backMode = "cart") {
     showSheetCombo,
     showSheetCart,
     showSheetAddressList,
+    lastRenderSignature: initialRenderSignature,
   };
 
   setCartSheetFooterMode(openCartSheetCtx, items.length ? "cart" : "hidden");
@@ -9412,7 +9443,14 @@ function showSheetAddressList(backMode) {
     };
     
     setSheetHeaderMode("product", { onBack: resolvedOnBack });
-    renderProductDetailsInto(productWrap, product, { onBack: resolvedOnBack, cartKey, prefillItem });
+    const canReuseProductView =
+      openProductCtx &&
+      Number(openProductCtx.productId || 0) > 0 &&
+      Number(openProductCtx.productId || 0) === Number(product?.id || 0) &&
+      openProductCtx.onBack === resolvedOnBack;
+    if (!canReuseProductView) {
+      renderProductDetailsInto(productWrap, product, { onBack: resolvedOnBack, cartKey, prefillItem });
+    }
     
     // На мобильных: скрываем ботомщит активного заказа при открытии карточки товара
     if (elActiveOrdersSheetCollapsed) {
@@ -9457,7 +9495,15 @@ function showSheetAddressList(backMode) {
     const comboDiscount = Number(comboData.discount_percent) || 0;
     const comboBadge = comboDiscount ? `-${comboDiscount}%` : "";
     setSheetHeaderMode("product", { onBack: resolvedOnBack, discountBadge: comboBadge });
-    renderComboDetailsInto(productWrap, comboData, { onBack: resolvedOnBack, cartKey, prefillItem });
+    const canReuseComboView =
+      openProductCtx &&
+      openProductCtx.type === "combo" &&
+      Number(openProductCtx.comboId || 0) > 0 &&
+      Number(openProductCtx.comboId || 0) === Number(comboData?.id || 0) &&
+      openProductCtx.onBack === resolvedOnBack;
+    if (!canReuseComboView) {
+      renderComboDetailsInto(productWrap, comboData, { onBack: resolvedOnBack, cartKey, prefillItem });
+    }
 
     if (elActiveOrdersSheetCollapsed) {
       elActiveOrdersSheetCollapsed.classList.add("hidden");
@@ -12864,6 +12910,10 @@ function renderSheetAddressList() {
     const ordersList = document.createElement("div");
     ordersList.className = "shop-profile-list";
     ordersPanel.appendChild(ordersList);
+    const ordersDetailsHost = document.createElement("div");
+    ordersDetailsHost.className = "shop-profile-order-details-host hidden";
+    ordersPanel.appendChild(ordersDetailsHost);
+    const orderDetailsViewCache = new Map();
 
     const PROFILE_ORDERS_PAGE_SIZE = 10;
     const profileOrdersSummary = { activeCount: 0, completedCount: 0 };
@@ -12887,6 +12937,10 @@ function renderSheetAddressList() {
     const profileOrdersState = {
       active: { offset: 0, hasMore: false, loading: false, initialized: false, observer: null, statusFinal: 0 },
       completed: { offset: 0, hasMore: false, loading: false, initialized: false, observer: null, statusFinal: 1 },
+    };
+    const ordersRowCache = {
+      active: new Map(),
+      completed: new Map(),
     };
 
     function createOrdersSection({ title, emptyText, collapsible = false, collapsed = false }) {
@@ -13845,13 +13899,25 @@ function renderSheetAddressList() {
       
       // Активируем панель заказов
       setActiveTab("orders");
+      const orderViewKey = String(orderId);
+      let detailView = orderDetailsViewCache.get(orderViewKey);
+      if (!detailView) {
+        detailView = document.createElement("div");
+        detailView.className = "shop-profile-order-details-view";
+        orderDetailsViewCache.set(orderViewKey, detailView);
+        ordersDetailsHost.appendChild(detailView);
+      }
+      Array.from(ordersDetailsHost.children).forEach((node) => node.classList.add("hidden"));
+      detailView.classList.remove("hidden");
+      ordersList.classList.add("hidden");
+      ordersDetailsHost.classList.remove("hidden");
       
       // Заменяем содержимое ordersPanel на детали заказа
-      ordersPanel.innerHTML = `<div class="muted">Загрузка…</div>`;
+      detailView.innerHTML = `<div class="muted">Загрузка…</div>`;
       
       const order = await loadOrderDetails(orderId);
       if (!order) {
-        ordersPanel.innerHTML = `<div class="muted">Не удалось загрузить детали заказа</div>`;
+        detailView.innerHTML = `<div class="muted">Не удалось загрузить детали заказа</div>`;
         return;
       }
 
@@ -13937,8 +14003,8 @@ function renderSheetAddressList() {
       
       html += `</div>`;
       
-      ordersPanel.innerHTML = html;
-      bindOrderSummaryDiscountToggles(ordersPanel);
+      detailView.innerHTML = html;
+      bindOrderSummaryDiscountToggles(detailView);
       const reopenProfileOrderDetails = () => {
         const isMobileProfile = window.matchMedia("(max-width: 768px)").matches;
         if (!isMobileProfile) {
@@ -13958,7 +14024,7 @@ function renderSheetAddressList() {
         }, 0);
       };
       bindRepeatOrderItemRows(
-        ordersPanel,
+        detailView,
         Array.isArray(order.items) ? order.items : [],
         { onBack: reopenProfileOrderDetails, enableSwipeActions: true }
       );
@@ -13971,7 +14037,7 @@ function renderSheetAddressList() {
       if (isModal) {
         const spacer = document.createElement("div");
         spacer.style.height = "200px";
-        ordersPanel.appendChild(spacer);
+        detailView.appendChild(spacer);
       }
       
       if (isModal) {
@@ -14028,8 +14094,8 @@ function renderSheetAddressList() {
       setActiveTab("orders");
       
       // Восстанавливаем ordersPanel с ordersList
-      ordersPanel.innerHTML = "";
-      ordersPanel.appendChild(ordersList);
+      ordersDetailsHost.classList.add("hidden");
+      ordersList.classList.remove("hidden");
       
       // Проверяем, открыто ли модальное окно
       const isModal = document.querySelector(".app-modal") && document.querySelector(".app-modal").getAttribute("aria-hidden") !== "true";
@@ -14072,7 +14138,16 @@ function renderSheetAddressList() {
       }
       
       // Перезагружаем список заказов
-      reloadOrders({ reset: true });
+      const activeState = profileOrdersState.active;
+      const completedState = profileOrdersState.completed;
+      const shouldReloadOrders =
+        !activeState?.initialized &&
+        !completedState?.initialized &&
+        !activeState?.loading &&
+        !completedState?.loading;
+      if (shouldReloadOrders) {
+        reloadOrders({ reset: true });
+      }
     }
 
     function collectOrderPreviewPhotos(items, maxPhotos = 40) {
@@ -14221,6 +14296,30 @@ function renderSheetAddressList() {
       updateOrdersSectionHeaders();
     }
 
+    function buildOrderRowSignature(order) {
+      const oid = Number(order?.id || 0);
+      const updatedAt = str(order?.updated_at || order?.created_at || "");
+      const statusId = Number(order?.status_id || 0);
+      const statusTitle = str(order?.status_title || "");
+      const total = Number(order?.total || order?.total_amount || 0);
+      const itemsLen = Array.isArray(order?.items) ? order.items.length : 0;
+      return `${oid}:${updatedAt}:${statusId}:${statusTitle}:${total}:${itemsLen}`;
+    }
+
+    function getCachedOrderRow(sectionKey, order) {
+      const bucket = sectionKey === "completed" ? ordersRowCache.completed : ordersRowCache.active;
+      const orderId = Number(order?.id || 0);
+      if (!Number.isFinite(orderId) || orderId <= 0) return renderProfileOrderRow(order);
+      const nextSig = buildOrderRowSignature(order);
+      const cached = bucket.get(orderId);
+      if (cached && cached.sig === nextSig && cached.node) {
+        return cached.node;
+      }
+      const nextNode = renderProfileOrderRow(order);
+      bucket.set(orderId, { sig: nextSig, node: nextNode });
+      return nextNode;
+    }
+
     function resetOrdersSection(sectionKey) {
       const section = sectionKey === "completed" ? ordersCompletedSection : ordersActiveSection;
       const state = profileOrdersState[sectionKey];
@@ -14229,7 +14328,7 @@ function renderSheetAddressList() {
       state.hasMore = false;
       state.loading = false;
       state.initialized = false;
-      section.items.innerHTML = "";
+      section.items.replaceChildren();
       section.emptyEl.classList.add("hidden");
       if (section.emptyEl?.dataset?.defaultText) {
         section.emptyEl.textContent = section.emptyEl.dataset.defaultText;
@@ -14248,7 +14347,7 @@ function renderSheetAddressList() {
 
       state.loading = true;
       if (reset) {
-        section.items.innerHTML = "";
+        section.items.replaceChildren();
         section.emptyEl.classList.add("hidden");
         if (section.emptyEl?.dataset?.defaultText) {
           section.emptyEl.textContent = section.emptyEl.dataset.defaultText;
@@ -14262,11 +14361,22 @@ function renderSheetAddressList() {
           `/api/public/me/orders?limit=${PROFILE_ORDERS_PAGE_SIZE}&offset=${state.offset}&status_is_final=${state.statusFinal}`
         );
         const list = Array.isArray(json?.data) ? json.data : [];
+        if (reset) {
+          const bucket = sectionKey === "completed" ? ordersRowCache.completed : ordersRowCache.active;
+          const actualIds = new Set(
+            list
+              .map((o) => Number(o?.id || 0))
+              .filter((id) => Number.isFinite(id) && id > 0)
+          );
+          bucket.forEach((_value, key) => {
+            if (!actualIds.has(key)) bucket.delete(key);
+          });
+        }
         const paging = json && typeof json.paging === "object" ? json.paging : null;
         const hasMore = paging ? Boolean(paging.has_more) : list.length >= PROFILE_ORDERS_PAGE_SIZE;
         applyOrdersSummary(json?.summary);
 
-        if (reset) section.items.innerHTML = "";
+        if (reset) section.items.replaceChildren();
         if (reset && !list.length) {
           section.emptyEl.classList.remove("hidden");
           state.hasMore = false;
@@ -14276,7 +14386,7 @@ function renderSheetAddressList() {
         }
 
         list.forEach((o) => {
-          section.items.appendChild(renderProfileOrderRow(o));
+          section.items.appendChild(getCachedOrderRow(sectionKey, o));
         });
 
         state.offset += list.length;
@@ -14289,7 +14399,7 @@ function renderSheetAddressList() {
         }
       } catch (e) {
         if (reset) {
-          section.items.innerHTML = "";
+          section.items.replaceChildren();
           section.emptyEl.textContent = "Ошибка загрузки заказов";
           section.emptyEl.classList.remove("hidden");
         }
@@ -18520,6 +18630,182 @@ function initShopLate() {
         }
       }
 
+      const activeOrdersRowCache = new Map();
+      const activeOrdersDetailsCache = new Map();
+      let activeOrdersSheetWrap = null;
+      let activeOrdersListView = null;
+      let activeOrdersDetailsHost = null;
+      let activeOrdersEmptyView = null;
+      let activeOrdersListSignature = "";
+
+      function ensureActiveOrdersSheetShell() {
+        if (activeOrdersSheetWrap && activeOrdersListView && activeOrdersDetailsHost && activeOrdersEmptyView) {
+          return {
+            wrap: activeOrdersSheetWrap,
+            listView: activeOrdersListView,
+            detailsHost: activeOrdersDetailsHost,
+            emptyView: activeOrdersEmptyView,
+          };
+        }
+        const wrap = document.createElement("div");
+        wrap.className = "shop-active-orders-sheet";
+        const listView = document.createElement("div");
+        listView.className = "shop-active-orders-list";
+        const detailsHost = document.createElement("div");
+        detailsHost.className = "shop-active-order-details-host hidden";
+        const emptyView = document.createElement("div");
+        emptyView.className = "muted hidden";
+        emptyView.style.padding = "20px";
+        emptyView.style.textAlign = "center";
+        emptyView.textContent = "Нет активных заказов";
+        wrap.appendChild(listView);
+        wrap.appendChild(detailsHost);
+        wrap.appendChild(emptyView);
+        activeOrdersSheetWrap = wrap;
+        activeOrdersListView = listView;
+        activeOrdersDetailsHost = detailsHost;
+        activeOrdersEmptyView = emptyView;
+        return { wrap, listView, detailsHost, emptyView };
+      }
+
+      function buildActiveOrdersListSignature(orders) {
+        return (Array.isArray(orders) ? orders : [])
+          .map((order) => {
+            const id = Number(order?.id || 0);
+            const updatedAt = str(order?.updated_at || order?.created_at || "");
+            const status = str(order?.status_title || "");
+            const total = Number(order?.total_price || 0);
+            return `${id}:${updatedAt}:${status}:${total}`;
+          })
+          .join("|");
+      }
+
+      function buildActiveOrderRowSignature(order) {
+        const id = Number(order?.id || 0);
+        const updatedAt = str(order?.updated_at || order?.created_at || "");
+        const status = str(order?.status_title || "");
+        const total = Number(order?.total_price || 0);
+        const itemsNum = Number(order?.items_count || (Array.isArray(order?.items) ? order.items.length : 0));
+        return `${id}:${updatedAt}:${status}:${total}:${itemsNum}`;
+      }
+
+      function buildActiveOrderListRow(order) {
+        const card = document.createElement("div");
+        card.className = "shop-active-order-card";
+        card.style.cursor = "pointer";
+        card.style.padding = "16px";
+        card.style.borderBottom = "1px solid var(--color-border, #e5e5e5)";
+
+        const header = document.createElement("div");
+        header.style.display = "flex";
+        header.style.justifyContent = "space-between";
+        header.style.alignItems = "center";
+        header.style.marginBottom = "8px";
+
+        const orderNum = document.createElement("div");
+        orderNum.style.fontWeight = "600";
+        orderNum.textContent = `Заказ #${order.id}`;
+
+        const status = document.createElement("div");
+        status.style.color = "var(--shop-buy, #f97316)";
+        status.style.fontSize = "14px";
+        status.textContent = order.status_title || "";
+
+        header.appendChild(orderNum);
+        header.appendChild(status);
+
+        const meta = document.createElement("div");
+        meta.style.fontSize = "13px";
+        meta.style.color = "var(--color-text-muted, #666)";
+        meta.style.marginBottom = "8px";
+        meta.textContent = new Date(order.created_at).toLocaleString("ru-RU");
+
+        const footer = document.createElement("div");
+        footer.style.display = "flex";
+        footer.style.justifyContent = "space-between";
+        footer.style.alignItems = "center";
+
+        const total = document.createElement("div");
+        total.style.fontWeight = "600";
+        total.textContent = money(order.total_price || 0);
+
+        const itemsCount = document.createElement("div");
+        itemsCount.style.fontSize = "13px";
+        itemsCount.style.color = "var(--color-text-muted, #666)";
+        const itemsNum = order.items_count || (order.items && order.items.length) || 0;
+        itemsCount.textContent = `${itemsNum} ${itemsNum === 1 ? "позиция" : itemsNum < 5 ? "позиции" : "позиций"}`;
+
+        footer.appendChild(total);
+        footer.appendChild(itemsCount);
+
+        card.appendChild(header);
+        card.appendChild(meta);
+        card.appendChild(footer);
+
+        card.addEventListener("click", async () => {
+          await showActiveOrderDetails(order.id);
+        });
+
+        return card;
+      }
+
+      function renderActiveOrdersListContent(orders) {
+        const shell = ensureActiveOrdersSheetShell();
+        const list = Array.isArray(orders) ? orders : [];
+        shell.detailsHost.classList.add("hidden");
+        shell.listView.classList.remove("hidden");
+        shell.emptyView.classList.toggle("hidden", list.length > 0);
+        if (!list.length) {
+          shell.listView.replaceChildren();
+          activeOrdersListSignature = "";
+          return;
+        }
+        const nextSignature = buildActiveOrdersListSignature(list);
+        if (activeOrdersListSignature === nextSignature) return;
+        const frag = document.createDocumentFragment();
+        const actualIds = new Set();
+        list.forEach((order) => {
+          const oid = Number(order?.id || 0);
+          const rowSig = buildActiveOrderRowSignature(order);
+          let row = null;
+          const cached = activeOrdersRowCache.get(oid);
+          if (cached && cached.sig === rowSig && cached.node) {
+            row = cached.node;
+          } else {
+            row = buildActiveOrderListRow(order);
+            if (Number.isFinite(oid) && oid > 0) {
+              activeOrdersRowCache.set(oid, { sig: rowSig, node: row });
+            }
+          }
+          if (Number.isFinite(oid) && oid > 0) actualIds.add(oid);
+          frag.appendChild(row);
+        });
+        activeOrdersRowCache.forEach((_v, key) => {
+          if (!actualIds.has(key)) activeOrdersRowCache.delete(key);
+        });
+        shell.listView.replaceChildren(frag);
+        activeOrdersListSignature = nextSignature;
+      }
+
+      function setActiveOrdersDetailsMessage(text) {
+        const shell = ensureActiveOrdersSheetShell();
+        let view = shell.detailsHost.querySelector(".shop-active-order-details");
+        if (!view) {
+          view = document.createElement("div");
+          view.className = "shop-active-order-details";
+          shell.detailsHost.appendChild(view);
+        }
+        const msg = document.createElement("div");
+        msg.className = "muted";
+        msg.style.padding = "20px";
+        msg.style.textAlign = "center";
+        msg.textContent = text;
+        view.replaceChildren(msg);
+        shell.listView.classList.add("hidden");
+        shell.emptyView.classList.add("hidden");
+        shell.detailsHost.classList.remove("hidden");
+      }
+
       // Функция обработки клика на бейдж активных заказов
       const handleActiveOrdersBadgeClick = async (e) => {
         e.preventDefault();
@@ -18605,193 +18891,18 @@ function initShopLate() {
         } else if (typeof window.queueShopMobileUiStateSync === "function") {
           window.queueShopMobileUiStateSync("showActiveOrdersList");
         }
-      
-        // Проверяем, что orders не пустой
-        if (!orders || !Array.isArray(orders) || orders.length === 0) {
-          // Пытаемся загрузить заказы заново
-          if (typeof window.updateActiveOrdersBadge === "function") {
-            window.updateActiveOrdersBadge().then(() => {
-              const updatedOrders = window._activeOrders || [];
-              if (updatedOrders.length > 0) {
-                showActiveOrdersList(updatedOrders);
-              } else {
-                // Если все еще пусто, показываем сообщение
-                if (window.AppModal.isOpen && window.AppModal.isOpen()) {
-                  const wrap = document.createElement("div");
-                  wrap.className = "shop-active-orders-sheet";
-                  wrap.innerHTML = `<div class="muted" style="padding: 20px; text-align: center;">Нет активных заказов</div>`;
-                  window.AppModal.setContent(wrap);
-                }
-              }
-            });
-          }
-          return;
-        }
-      
-        // Если модальное окно уже открыто, обновляем контент
-        if (window.AppModal.isOpen && window.AppModal.isOpen()) {
-          const wrap = document.createElement("div");
-          wrap.className = "shop-active-orders-sheet";
-        
-          const list = document.createElement("div");
-          list.className = "shop-active-orders-list";
-        
-          if (orders.length === 0) {
-            list.innerHTML = `<div class="muted" style="padding: 20px; text-align: center;">Нет активных заказов</div>`;
-          } else {
-            orders.forEach(order => {
-            const card = document.createElement("div");
-            card.className = "shop-active-order-card";
-            card.style.cursor = "pointer";
-            card.style.padding = "16px";
-            card.style.borderBottom = "1px solid var(--color-border, #e5e5e5)";
-          
-            const header = document.createElement("div");
-            header.style.display = "flex";
-            header.style.justifyContent = "space-between";
-            header.style.alignItems = "center";
-            header.style.marginBottom = "8px";
-          
-            const orderNum = document.createElement("div");
-            orderNum.style.fontWeight = "600";
-            orderNum.textContent = `Заказ #${order.id}`;
-          
-            const status = document.createElement("div");
-            status.style.color = "var(--shop-buy, #f97316)";
-            status.style.fontSize = "14px";
-            status.textContent = order.status_title || "";
-          
-            header.appendChild(orderNum);
-            header.appendChild(status);
-          
-            const meta = document.createElement("div");
-            meta.style.fontSize = "13px";
-            meta.style.color = "var(--color-text-muted, #666)";
-            meta.style.marginBottom = "8px";
-            meta.textContent = new Date(order.created_at).toLocaleString("ru-RU");
-          
-            const footer = document.createElement("div");
-            footer.style.display = "flex";
-            footer.style.justifyContent = "space-between";
-            footer.style.alignItems = "center";
-          
-            const total = document.createElement("div");
-            total.style.fontWeight = "600";
-            total.textContent = money(order.total_price || 0);
-          
-            const itemsCount = document.createElement("div");
-            itemsCount.style.fontSize = "13px";
-            itemsCount.style.color = "var(--color-text-muted, #666)";
-            const itemsNum = order.items_count || (order.items && order.items.length) || 0;
-            itemsCount.textContent = `${itemsNum} ${itemsNum === 1 ? "позиция" : itemsNum < 5 ? "позиции" : "позиций"}`;
-          
-            footer.appendChild(total);
-            footer.appendChild(itemsCount);
-          
-            card.appendChild(header);
-            card.appendChild(meta);
-            card.appendChild(footer);
-          
-            card.addEventListener("click", async () => {
-              await showActiveOrderDetails(order.id);
-            });
-          
-            list.appendChild(card);
-            });
-          }
-        
-          wrap.appendChild(list);
-        
-          // Обновляем контент и заголовок
-          window.AppModal.setTitle("Активные заказы");
-          window.AppModal.setContent(wrap);
-          setSheetHeaderMode("", {});
-        
-          // Убираем кнопку назад из хедера, если она была
-          const modalHeader = document.querySelector(".app-modal-header");
-          if (modalHeader) {
-            const backBtn = modalHeader.querySelector(".app-modal-back-btn");
-            if (backBtn) {
-              backBtn.remove();
-            }
-            const modalTitle = document.querySelector("#appModalTitle");
-            if (modalTitle) {
-              modalTitle.style.textAlign = "";
-              modalTitle.style.flex = "";
-            }
-          }
-        
-          return;
-        }
-      
-        // Если модальное окно закрыто, открываем его
-        const wrap = document.createElement("div");
-        wrap.className = "shop-active-orders-sheet";
-      
-        const list = document.createElement("div");
-        list.className = "shop-active-orders-list";
-      
-        orders.forEach(order => {
-          const card = document.createElement("div");
-          card.className = "shop-active-order-card";
-          card.style.cursor = "pointer";
-          card.style.padding = "16px";
-          card.style.borderBottom = "1px solid var(--color-border, #e5e5e5)";
-        
-          const header = document.createElement("div");
-          header.style.display = "flex";
-          header.style.justifyContent = "space-between";
-          header.style.alignItems = "center";
-          header.style.marginBottom = "8px";
-        
-          const orderNum = document.createElement("div");
-          orderNum.style.fontWeight = "600";
-          orderNum.textContent = `Заказ #${order.id}`;
-        
-          const status = document.createElement("div");
-          status.style.color = "var(--shop-buy, #f97316)";
-          status.style.fontSize = "14px";
-          status.textContent = order.status_title || "";
-        
-          header.appendChild(orderNum);
-          header.appendChild(status);
-        
-          const meta = document.createElement("div");
-          meta.style.fontSize = "13px";
-          meta.style.color = "var(--color-text-muted, #666)";
-          meta.style.marginBottom = "8px";
-          meta.textContent = new Date(order.created_at).toLocaleString("ru-RU");
-        
-          const footer = document.createElement("div");
-          footer.style.display = "flex";
-          footer.style.justifyContent = "space-between";
-          footer.style.alignItems = "center";
-        
-          const total = document.createElement("div");
-          total.style.fontWeight = "600";
-          total.textContent = money(order.total_price || 0);
-        
-          const itemsCount = document.createElement("div");
-          itemsCount.style.fontSize = "13px";
-          itemsCount.style.color = "var(--color-text-muted, #666)";
-          const itemsNum = order.items_count || (order.items && order.items.length) || 0;
-          itemsCount.textContent = `${itemsNum} ${itemsNum === 1 ? "позиция" : itemsNum < 5 ? "позиции" : "позиций"}`;
-        
-          footer.appendChild(total);
-          footer.appendChild(itemsCount);
-        
-          card.appendChild(header);
-          card.appendChild(meta);
-          card.appendChild(footer);
-        
-          card.addEventListener("click", async () => {
-            await showActiveOrderDetails(order.id);
+        const shell = ensureActiveOrdersSheetShell();
+        const list = Array.isArray(orders) ? orders : [];
+        if (!list.length && typeof window.updateActiveOrdersBadge === "function") {
+          window.updateActiveOrdersBadge().then(() => {
+            const updatedOrders = window._activeOrders || [];
+            renderActiveOrdersListContent(updatedOrders);
+          }).catch(() => {
+            renderActiveOrdersListContent([]);
           });
-        
-          list.appendChild(card);
-        });
-      
-        wrap.appendChild(list);
+        } else {
+          renderActiveOrdersListContent(list);
+        }
       
         // Обновляем состояние навигации
         sheetNavigationState.type = 'activeOrders';
@@ -18804,21 +18915,34 @@ function initShopLate() {
         }
 
         setAppModalMode("shop");
-        window.AppModal.open({
-          title: "Активные заказы",
-          content: wrap,
-          onClose: () => {
-            // Сбрасываем состояние навигации
-            sheetNavigationState.type = null;
-            sheetNavigationState.screen = null;
-            sheetNavigationState.data = null;
-            // Показываем приоткрытый bottom sheet обратно после закрытия
-            if (elActiveOrdersSheetCollapsed && typeof window.updateActiveOrdersBadge === "function") {
-              window.updateActiveOrdersBadge();
-            }
-          },
-        });
+        if (window.AppModal.isOpen && window.AppModal.isOpen()) {
+          window.AppModal.setTitle("Активные заказы");
+          window.AppModal.setContent(shell.wrap);
+        } else {
+          window.AppModal.open({
+            title: "Активные заказы",
+            content: shell.wrap,
+            onClose: () => {
+              sheetNavigationState.type = null;
+              sheetNavigationState.screen = null;
+              sheetNavigationState.data = null;
+              if (elActiveOrdersSheetCollapsed && typeof window.updateActiveOrdersBadge === "function") {
+                window.updateActiveOrdersBadge();
+              }
+            },
+          });
+        }
         setSheetHeaderMode("", {});
+        const modalHeader = document.querySelector(".app-modal-header");
+        if (modalHeader) {
+          const backBtn = modalHeader.querySelector(".app-modal-back-btn");
+          if (backBtn) backBtn.remove();
+          const modalTitle = document.querySelector("#appModalTitle");
+          if (modalTitle) {
+            modalTitle.style.textAlign = "";
+            modalTitle.style.flex = "";
+          }
+        }
       }
     
       // Показать детали активного заказа
@@ -18826,10 +18950,11 @@ function initShopLate() {
         if (!window.AppModal) return;
         resetOrderDetailsTransientUi();
         resetShopModalHeaderUi();
-      
-        const wrap = document.createElement("div");
-        wrap.className = "shop-active-order-details";
-        wrap.innerHTML = `<div class="muted" style="padding: 20px; text-align: center;">Загрузка…</div>`;
+        const shell = ensureActiveOrdersSheetShell();
+        shell.listView.classList.add("hidden");
+        shell.emptyView.classList.add("hidden");
+        shell.detailsHost.classList.remove("hidden");
+        setActiveOrdersDetailsMessage("Загрузка…");
       
         // Сохраняем список активных заказов в глобальную переменную для использования при возврате
         const activeOrders = window._activeOrders || [];
@@ -18847,20 +18972,23 @@ function initShopLate() {
         }
       
         setAppModalMode("shop");
-        window.AppModal.open({
-          title: "Детали заказа",
-          content: wrap,
-          onClose: () => {
-            // Сбрасываем состояние навигации
-            sheetNavigationState.type = null;
-            sheetNavigationState.screen = null;
-            sheetNavigationState.data = null;
-            // Показываем приоткрытый bottom sheet обратно после закрытия
-            if (elActiveOrdersSheetCollapsed && typeof window.updateActiveOrdersBadge === "function") {
-              window.updateActiveOrdersBadge();
-            }
-          },
-        });
+        if (window.AppModal.isOpen && window.AppModal.isOpen()) {
+          window.AppModal.setTitle("Детали заказа");
+          window.AppModal.setContent(shell.wrap);
+        } else {
+          window.AppModal.open({
+            title: "Детали заказа",
+            content: shell.wrap,
+            onClose: () => {
+              sheetNavigationState.type = null;
+              sheetNavigationState.screen = null;
+              sheetNavigationState.data = null;
+              if (elActiveOrdersSheetCollapsed && typeof window.updateActiveOrdersBadge === "function") {
+                window.updateActiveOrdersBadge();
+              }
+            },
+          });
+        }
         setSheetHeaderMode("", {});
       
         // Настраиваем кастомный хедер: стрелка слева, "Детали заказа" по центру, крестик справа
@@ -18896,12 +19024,7 @@ function initShopLate() {
                     if (updatedOrders.length > 0) {
                       showActiveOrdersList(updatedOrders);
                     } else {
-                      // Если все еще пусто, показываем сообщение
-                      const wrap = document.createElement("div");
-                      wrap.className = "shop-active-orders-sheet";
-                      wrap.innerHTML = `<div class="muted" style="padding: 20px; text-align: center;">Нет активных заказов</div>`;
-                      window.AppModal.setTitle("Активные заказы");
-                      window.AppModal.setContent(wrap);
+                      showActiveOrdersList([]);
                     
                       // Убираем кнопку назад из хедера
                       const modalHeader = document.querySelector(".app-modal-header");
@@ -18935,9 +19058,18 @@ function initShopLate() {
         try {
           const json = await apiJson(`/api/public/me/orders/${orderId}`);
           const order = json.data || null;
+          let detailView = shell.detailsHost.querySelector(`.shop-active-order-details[data-order-id="${Number(orderId)}"]`);
+          if (!detailView) {
+            detailView = document.createElement("div");
+            detailView.className = "shop-active-order-details";
+            detailView.setAttribute("data-order-id", String(Number(orderId)));
+            shell.detailsHost.appendChild(detailView);
+          }
+          Array.from(shell.detailsHost.children).forEach((node) => node.classList.add("hidden"));
+          detailView.classList.remove("hidden");
         
           if (!order) {
-            wrap.innerHTML = `<div class="muted" style="padding: 20px; text-align: center;">Не удалось загрузить детали заказа</div>`;
+            setActiveOrdersDetailsMessage("Не удалось загрузить детали заказа");
             return;
           }
         
@@ -19059,13 +19191,23 @@ function initShopLate() {
         
           html += `</div>`;
         
-          wrap.innerHTML = html;
-          bindOrderSummaryDiscountToggles(wrap);
+          const detailSig = `${Number(order?.id || 0)}:${str(order?.updated_at || order?.created_at || "")}:${Number(order?.total_price || 0)}:${Array.isArray(order?.items) ? order.items.length : 0}`;
+          const cachedDetail = activeOrdersDetailsCache.get(Number(order?.id || 0));
+          if (cachedDetail && cachedDetail.sig === detailSig && cachedDetail.node) {
+            detailView.replaceChildren(cachedDetail.node);
+          } else {
+            const holder = document.createElement("div");
+            holder.innerHTML = html;
+            const node = holder.firstElementChild || holder;
+            detailView.replaceChildren(node);
+            activeOrdersDetailsCache.set(Number(order?.id || 0), { sig: detailSig, node: node.cloneNode(true) });
+          }
+          bindOrderSummaryDiscountToggles(detailView);
           const reopenActiveOrderDetails = () => {
             void showActiveOrderDetails(orderId);
           };
           bindRepeatOrderItemRows(
-            wrap,
+            detailView,
             Array.isArray(order.items) ? order.items : [],
             { onBack: reopenActiveOrderDetails, enableSwipeActions: true }
           );
@@ -19073,7 +19215,7 @@ function initShopLate() {
           // Кнопка "Назад" уже настроена в хедере выше
         } catch (e) {
           console.error("Failed to load order details:", e);
-          wrap.innerHTML = `<div class="muted" style="padding: 20px; text-align: center;">Не удалось загрузить детали заказа</div>`;
+          setActiveOrdersDetailsMessage("Не удалось загрузить детали заказа");
         }
       }
 
