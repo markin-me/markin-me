@@ -236,6 +236,7 @@ const comboProductBatchWarmupCache = new Map();
 const comboDetailsCache = new Map();
 const comboProductPreviewSharedCache = new Map();
 const comboBlockPreviewWarmCache = new Map();
+const comboBlockPreviewResolvedCache = new Map();
 let productDetailsPrefetchTimer = null;
 let comboDetailsPrefetchTimer = null;
 const COMBO_DETAILS_CACHE_TTL_MS = 60000;
@@ -301,6 +302,27 @@ function setSharedComboBlockPreviewWarm(cacheKey, promise) {
   if (!key || !promise) return;
   comboBlockPreviewWarmCache.set(key, {
     promise,
+    expiresAt: Date.now() + COMBO_PREVIEW_SHARED_TTL_MS,
+  });
+}
+
+function getSharedComboBlockPreviewResolved(cacheKey) {
+  const key = String(cacheKey || "");
+  if (!key) return null;
+  const entry = comboBlockPreviewResolvedCache.get(key);
+  if (!entry) return null;
+  if (Number(entry.expiresAt || 0) <= Date.now()) {
+    comboBlockPreviewResolvedCache.delete(key);
+    return null;
+  }
+  return entry.map instanceof Map ? entry.map : null;
+}
+
+function setSharedComboBlockPreviewResolved(cacheKey, previewMap) {
+  const key = String(cacheKey || "");
+  if (!key || !(previewMap instanceof Map)) return;
+  comboBlockPreviewResolvedCache.set(key, {
+    map: previewMap,
     expiresAt: Date.now() + COMBO_PREVIEW_SHARED_TTL_MS,
   });
 }
@@ -4605,8 +4627,10 @@ optionGroups.forEach((group) => {
     if (!container) return;
     const comboIdForRender = Number(combo?.id || combo?.combo_id || 0);
     const isStaticComboView = !cartKey && !prefillItem;
+    const shouldRandomizeInitialPreset = isStaticComboView;
     const canReuseStaticComboView =
       isStaticComboView &&
+      !shouldRandomizeInitialPreset &&
       Number.isFinite(comboIdForRender) &&
       comboIdForRender > 0 &&
       container.__shopRenderedViewType === "combo" &&
@@ -4644,12 +4668,35 @@ optionGroups.forEach((group) => {
     let cachedMainStateKey = "";
     let cachedPickerView = null;
     let cachedPickerStateKey = "";
+    const pickerBlockHydrating = new Set();
+    const pickerBlockPreviewLoading = new Set();
+    const pickerDefaultsInitializedByBlock = new Set();
 
     const selectedIndexByBlock = blocks.map((block) => {
       const products = block.products || [];
       const defaultIdx = products.findIndex((p) => p.is_default);
       return defaultIdx >= 0 ? defaultIdx : 0;
     });
+
+    function randomShuffle(list) {
+      const arr = Array.isArray(list) ? list.slice() : [];
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const tmp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = tmp;
+      }
+      return arr;
+    }
+
+    function getComboBlockUniqKey(block) {
+      const products = Array.isArray(block?.products) ? block.products : [];
+      const pids = products
+        .map((p) => Number(p?.product_id || 0))
+        .filter((id) => Number.isFinite(id) && id > 0)
+        .sort((a, b) => a - b);
+      return pids.join(",");
+    }
 
     const editingComboItem = cartKey ? state.cart.find((x) => x.key === cartKey) : null;
     const seedComboItem = editingComboItem && String(editingComboItem?.type || "") === "combo"
@@ -4687,10 +4734,56 @@ optionGroups.forEach((group) => {
       });
     }
 
+    function applyRandomizedInitialSelections() {
+      if (!shouldRandomizeInitialPreset || seedComboItem) return;
+      if (!Array.isArray(blocks) || !blocks.length) return;
+
+      const blockOrder = randomShuffle(blocks.map((_b, idx) => idx));
+      const usedByGroup = new Map();
+
+      for (const blockIndex of blockOrder) {
+        const block = blocks[blockIndex];
+        const products = Array.isArray(block?.products) ? block.products : [];
+        if (!products.length) continue;
+
+        const groupKey = getComboBlockUniqKey(block);
+        const usedSet = usedByGroup.get(groupKey) || new Set();
+        if (!usedByGroup.has(groupKey)) usedByGroup.set(groupKey, usedSet);
+
+        const allIndices = randomShuffle(products.map((_p, idx) => idx));
+        const preferred = allIndices.filter((idx) => {
+          const pid = Number(products[idx]?.product_id || 0);
+          return Number.isFinite(pid) && pid > 0 && !usedSet.has(pid);
+        });
+        const fallback = allIndices.filter((idx) => !preferred.includes(idx));
+        const attempts = preferred.concat(fallback);
+
+        let chosenIdx = -1;
+        for (const idx of attempts) {
+          if (canUseComboBlockSelectionAtIndex(blockIndex, idx)) {
+            chosenIdx = idx;
+            break;
+          }
+        }
+        if (chosenIdx < 0) chosenIdx = Number(selectedIndexByBlock[blockIndex] || 0);
+
+        selectedIndexByBlock[blockIndex] = chosenIdx;
+        const chosenPid = Number(products[chosenIdx]?.product_id || 0);
+        if (Number.isFinite(chosenPid) && chosenPid > 0) usedSet.add(chosenPid);
+
+        const draftState = selectionStateByBlock[blockIndex];
+        if (draftState && Number(draftState.product_id || 0) !== chosenPid) {
+          Object.keys(draftState).forEach((k) => delete draftState[k]);
+          Object.assign(draftState, makeEmptyComboBlockState());
+        }
+      }
+    }
+
     function getSelectedProduct(blockIndex) {
       const block = blocks[blockIndex];
       if (!block || !block.products || !block.products.length) return null;
-      const idx = selectedIndexByBlock[blockIndex];
+      const rawIdx = Number(selectedIndexByBlock[blockIndex]);
+      const idx = Number.isFinite(rawIdx) ? rawIdx : 0;
       return block.products[Math.max(0, Math.min(idx, block.products.length - 1))];
     }
 
@@ -5294,7 +5387,10 @@ optionGroups.forEach((group) => {
 
     let comboHydratedOnce = false;
 
-    async function hydrateBlockSelection(blockIndex) {
+    async function hydrateBlockSelection(blockIndex, opts = {}) {
+      const options = opts && typeof opts === "object" ? opts : {};
+      const useRandomizer = options.useRandomizer === true;
+      const preferSavedState = options.preferSavedState !== false;
       const block = blocks[blockIndex];
       if (!block) return;
       const prod = getSelectedProduct(blockIndex);
@@ -5316,8 +5412,16 @@ optionGroups.forEach((group) => {
         let vIdx;
 
         // Если в состоянии уже сохранён вариант именно для этого товара — используем его.
-        if (state.product_id === productId && state.variant_value_index != null) {
+        const hasSavedStateForProduct =
+          state.product_id === productId &&
+          (state.variant_value_index != null || (Array.isArray(state.ingredients_display) && state.ingredients_display.length > 0));
+        const useSavedStateForProduct = preferSavedState && hasSavedStateForProduct;
+
+        if (useSavedStateForProduct && state.variant_value_index != null) {
           vIdx = Number(state.variant_value_index);
+        } else if (useRandomizer && values.length > 1) {
+          const shuffledVariantIdx = randomShuffle(values.map((_v, idx) => idx));
+          vIdx = Number(shuffledVariantIdx[0] ?? 0);
         } else if (vGroup?.default_value_index != null) {
           vIdx = Number(vGroup.default_value_index);
         } else {
@@ -5343,10 +5447,31 @@ optionGroups.forEach((group) => {
 
         // Базовое количество: при повторном открытии шестерёнки берём сохранённый состав
         const ingredientQty = new Map();
-        if (state.product_id === productId && Array.isArray(state.ingredients_display) && state.ingredients_display.length) {
+        if (useSavedStateForProduct && Array.isArray(state.ingredients_display) && state.ingredients_display.length) {
           state.ingredients_display.forEach((ing) => {
             const ingId = Number(ing.ingredient_id);
             if (Number.isFinite(ingId)) ingredientQty.set(ingId, Number(ing.quantity ?? ing.qty ?? 0));
+          });
+        } else if (useRandomizer) {
+          ingredients.forEach((ing) => {
+            const ingId = Number(ing.ingredient_id);
+            if (!Number.isFinite(ingId)) return;
+            const defaultQty = Number(ing.quantity ?? 1);
+            const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
+            const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
+            const min = rawMin !== null ? rawMin : (isVariable ? 0 : defaultQty);
+            const maxRaw = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
+            const max = Number.isFinite(maxRaw) ? maxRaw : defaultQty;
+            const stepRaw = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
+            const step = Number.isFinite(stepRaw) && stepRaw > 0 ? stepRaw : 1;
+            if (!Number.isFinite(min) || !Number.isFinite(max) || max < min) {
+              ingredientQty.set(ingId, defaultQty);
+              return;
+            }
+            const stepsCount = Math.max(0, Math.floor((max - min) / step));
+            const randomStep = Math.floor(Math.random() * (stepsCount + 1));
+            const randomQty = min + randomStep * step;
+            ingredientQty.set(ingId, Math.max(min, Math.min(max, randomQty)));
           });
         }
         ingredients.forEach((ing) => {
@@ -5406,7 +5531,11 @@ optionGroups.forEach((group) => {
     async function hydrateComboSelectionsFromDefaults() {
       if (comboHydratedOnce) return;
       comboHydratedOnce = true;
-      await Promise.all(blocks.map((_, blockIndex) => hydrateBlockSelection(blockIndex)));
+      applyRandomizedInitialSelections();
+      await Promise.all(blocks.map((_, blockIndex) => hydrateBlockSelection(blockIndex, {
+        useRandomizer: shouldRandomizeInitialPreset,
+        preferSavedState: true,
+      })));
     }
 
     function renderComboDetailsLines(detailsWrap, variantLabel, ingredientsDisplay, opts) {
@@ -5422,6 +5551,10 @@ optionGroups.forEach((group) => {
         return;
       }
 
+      const subDetails = document.createElement("div");
+      subDetails.className = "cart-sub-details";
+      subDetails.style.display = "block";
+
       if (label) {
         const vLine = document.createElement("div");
         vLine.className = "cart-sub-detail-item";
@@ -5429,13 +5562,13 @@ optionGroups.forEach((group) => {
         if (variantUnit) variantParts.push(variantUnit);
         if (variantGroupTitle) variantParts.push(variantGroupTitle);
         vLine.textContent = "• " + variantParts.join(" ");
-        detailsWrap.appendChild(vLine);
+        subDetails.appendChild(vLine);
       }
 
       ingList.forEach((ing) => {
-        const name = String(ing.name || "").trim();
-        const rawQty = ing.qty ?? ing.quantity;
-        const unit = String(ing.unit || "").trim();
+        const name = str(ing?.name || ing?.ingredient_name || "").trim();
+        const rawQty = ing?.qty ?? ing?.quantity;
+        const unit = str(ing?.unit || ing?.unit_short_title || ing?.unit_label || "").trim();
         const numQty = typeof rawQty === "number" ? rawQty : parseFloat(rawQty);
         if (Number.isFinite(numQty) && numQty === 0) return;
         if (!name && (rawQty == null || rawQty === "")) return;
@@ -5447,8 +5580,35 @@ optionGroups.forEach((group) => {
         if (unit) parts.push(unit);
         if (name) parts.push(name);
         line.textContent = "• " + parts.join(" ");
-        detailsWrap.appendChild(line);
+        subDetails.appendChild(line);
       });
+      detailsWrap.appendChild(subDetails);
+    }
+
+    function getComboDescriptionDetailLines(rawText) {
+      const text = str(rawText || "");
+      if (!text.trim()) return [];
+      return text
+        .split(/\r?\n/)
+        .map((line) => line.replace(/^[\u2022\-\s]+/, "").trim())
+        .filter((line) => !!line);
+    }
+
+    function renderComboFallbackDetailLines(detailsWrap, rawText) {
+      const lines = getComboDescriptionDetailLines(rawText);
+      if (!lines.length) return false;
+      detailsWrap.innerHTML = "";
+      const subDetails = document.createElement("div");
+      subDetails.className = "cart-sub-details";
+      subDetails.style.display = "block";
+      lines.forEach((textLine) => {
+        const line = document.createElement("div");
+        line.className = "cart-sub-detail-item";
+        line.textContent = "вЂў " + textLine;
+        subDetails.appendChild(line);
+      });
+      detailsWrap.appendChild(subDetails);
+      return true;
     }
 
     async function getComboProductPreview(productId) {
@@ -5621,6 +5781,8 @@ optionGroups.forEach((group) => {
       const safeBlock = block && typeof block === "object" ? block : null;
       if (!safeBlock) return Promise.resolve(new Map());
       const blockCacheKey = getComboBlockPreviewCacheKey(safeBlock, discountPercent);
+      const resolvedMap = getSharedComboBlockPreviewResolved(blockCacheKey);
+      if (resolvedMap) return Promise.resolve(resolvedMap);
       const sharedWarmPromise = getSharedComboBlockPreviewWarm(blockCacheKey);
       if (sharedWarmPromise) return sharedWarmPromise;
 
@@ -5643,6 +5805,7 @@ optionGroups.forEach((group) => {
           if (!entry) return;
           previewMap.set(entry[0], entry[1]);
         });
+        setSharedComboBlockPreviewResolved(blockCacheKey, previewMap);
         return previewMap;
       })();
 
@@ -5939,8 +6102,64 @@ optionGroups.forEach((group) => {
     let pickerFooterUpdate = null;
 
     function renderBlockPicker(blockIndex, scrollToRestore) {
+      let normalizedBlockIndex = Number(blockIndex);
+      if (!Number.isFinite(normalizedBlockIndex)) normalizedBlockIndex = 0;
+      normalizedBlockIndex = Math.floor(normalizedBlockIndex);
+      if (normalizedBlockIndex < 0 || normalizedBlockIndex >= blocks.length) {
+        normalizedBlockIndex = 0;
+      }
+      blockIndex = normalizedBlockIndex;
+
       const block = blocks[blockIndex];
       if (!block || !block.products || !block.products.length) return;
+      const shouldForceDefaultStateInPicker = isStaticComboView && !seedComboItem;
+      if (
+        shouldForceDefaultStateInPicker &&
+        !pickerDefaultsInitializedByBlock.has(Number(blockIndex)) &&
+        !pickerBlockHydrating.has(Number(blockIndex))
+      ) {
+        pickerBlockHydrating.add(Number(blockIndex));
+        Promise.resolve()
+          .then(() => hydrateBlockSelection(blockIndex, {
+            useRandomizer: false,
+            preferSavedState: false,
+          }))
+          .catch(() => {})
+          .finally(() => {
+            pickerBlockHydrating.delete(Number(blockIndex));
+            pickerDefaultsInitializedByBlock.add(Number(blockIndex));
+            renderBlockPicker(blockIndex, scrollToRestore);
+          });
+        return;
+      }
+      const selectedProdForHydrate = getSelectedProduct(blockIndex);
+      const selectedStateForHydrate = selectionStateByBlock[blockIndex] || {};
+      const selectedProductIdForHydrate = Number(selectedProdForHydrate?.product_id || 0);
+      const stateProductIdForHydrate = Number(selectedStateForHydrate?.product_id || 0);
+      const hasStateDetailsForSelected =
+        stateProductIdForHydrate === selectedProductIdForHydrate &&
+        (str(selectedStateForHydrate?.variant_label || "").trim() !== "" ||
+          (Array.isArray(selectedStateForHydrate?.ingredients_display) &&
+            selectedStateForHydrate.ingredients_display.length > 0));
+      if (
+        Number.isFinite(selectedProductIdForHydrate) &&
+        selectedProductIdForHydrate > 0 &&
+        !hasStateDetailsForSelected &&
+        !pickerBlockHydrating.has(Number(blockIndex))
+      ) {
+        pickerBlockHydrating.add(Number(blockIndex));
+        Promise.resolve()
+          .then(() => hydrateBlockSelection(blockIndex, {
+            useRandomizer: false,
+            preferSavedState: true,
+          }))
+          .catch(() => {})
+          .finally(() => {
+            pickerBlockHydrating.delete(Number(blockIndex));
+            renderBlockPicker(blockIndex, scrollToRestore);
+          });
+        return;
+      }
       container.__shopRenderedComboMain = false;
       const blockPreviewWarmKey = getComboBlockPreviewCacheKey(block, discountPercent);
       const prewarmedBlockPromise = getSharedComboBlockPreviewWarm(blockPreviewWarmKey);
@@ -5970,19 +6189,34 @@ optionGroups.forEach((group) => {
         };
       }
 
-      const pickerStateKey = buildComboPickerStateKey(blockIndex);
-      if (cachedPickerView && cachedPickerStateKey === pickerStateKey) {
-        container.innerHTML = "";
-        container.appendChild(cachedPickerView);
-        if (scrollToRestore) {
-          const detailEl = container.querySelector(".shop-combo-detail-scroll");
-          const listEl = container.querySelector(".shop-combo-picker-list");
-          if (detailEl && scrollToRestore.detail >= 0) detailEl.scrollTop = scrollToRestore.detail;
-          if (listEl && scrollToRestore.list >= 0) listEl.scrollTop = scrollToRestore.list;
-          if (scrollToRestore.parentEl && scrollToRestore.parentEl.isConnected && scrollToRestore.parentTop >= 0) {
-            scrollToRestore.parentEl.scrollTop = scrollToRestore.parentTop;
-          }
+      const resolvedPreviewMapForBlock = getSharedComboBlockPreviewResolved(blockPreviewWarmKey);
+      if (!(resolvedPreviewMapForBlock instanceof Map)) {
+        const previewLoadKey = Number(blockIndex);
+        const previewLoadTask =
+          prewarmedBlockPromise && typeof prewarmedBlockPromise.then === "function"
+            ? prewarmedBlockPromise
+            : warmBlockPickerPreviews(block);
+        if (!pickerBlockPreviewLoading.has(previewLoadKey)) {
+          pickerBlockPreviewLoading.add(previewLoadKey);
+          Promise.resolve(previewLoadTask)
+            .catch(() => {})
+            .finally(() => {
+              pickerBlockPreviewLoading.delete(previewLoadKey);
+              renderBlockPicker(blockIndex, scrollToRestore);
+            });
         }
+
+        container.innerHTML = "";
+        const loadingViewWrap = document.createElement("div");
+        loadingViewWrap.className = "shop-combo-view";
+        const loadingWrap = document.createElement("div");
+        loadingWrap.className = "shop-combo-detail shop-combo-detail--picker shop-combo-detail-scroll";
+        const loadingState = document.createElement("div");
+        loadingState.className = "shop-combo-picker-empty";
+        loadingState.textContent = "Загрузка вариантов...";
+        loadingWrap.appendChild(loadingState);
+        loadingViewWrap.appendChild(loadingWrap);
+        container.appendChild(loadingViewWrap);
         if (openCartSheetCtx) {
           const doStepBack = () => {
             renderMainView();
@@ -6005,6 +6239,8 @@ optionGroups.forEach((group) => {
         return;
       }
 
+      const pickerStateKey = buildComboPickerStateKey(blockIndex);
+
       container.innerHTML = "";
       const wrap = document.createElement("div");
       wrap.className = "shop-combo-detail shop-combo-detail--picker";
@@ -6012,7 +6248,34 @@ optionGroups.forEach((group) => {
       const listWrap = document.createElement("div");
       listWrap.className = "shop-combo-picker-list";
 
-      const currentSelected = selectedIndexByBlock[blockIndex];
+      let currentSelected = Number(selectedIndexByBlock[blockIndex]);
+      if (!Number.isFinite(currentSelected)) {
+        const defaultIdx = (Array.isArray(block.products) ? block.products : []).findIndex((p) => Number(p?.is_default) === 1);
+        currentSelected = defaultIdx >= 0 ? defaultIdx : 0;
+      }
+      currentSelected = Math.max(0, Math.min(currentSelected, block.products.length - 1));
+      selectedIndexByBlock[blockIndex] = currentSelected;
+
+      const animateOpenPickerCardCollapse = () => {
+        const expandEl = container.querySelector(".shop-combo-picker-expand");
+        if (!expandEl || expandEl.dataset.closing === "1") return false;
+        const rowEl = expandEl.closest(".shop-combo-picker-row");
+        const summaryWrap = rowEl ? rowEl.querySelector(".shop-combo-picker-mid .cart-sub-container") : null;
+        if (summaryWrap) summaryWrap.style.display = "";
+        expandEl.dataset.closing = "1";
+        const currentHeight = Math.max(0, expandEl.scrollHeight || expandEl.offsetHeight || 0);
+        expandEl.style.maxHeight = currentHeight + "px";
+        expandEl.style.opacity = "1";
+        expandEl.style.pointerEvents = "none";
+        void expandEl.offsetHeight;
+        requestAnimationFrame(() => {
+          expandEl.style.maxHeight = "0px";
+          expandEl.style.opacity = "0";
+        });
+        return true;
+      };
+
+      const prewarmedPreviewMap = getSharedComboBlockPreviewResolved(blockPreviewWarmKey);
       (block.products || []).forEach((prod, idx) => {
         const isSelected = idx === currentSelected;
         const pickerProductId = Number(prod.product_id || 0);
@@ -6072,6 +6335,8 @@ optionGroups.forEach((group) => {
             variantGroupTitle: state.variant_group_title || "",
             variantUnit: state.variant_unit || "",
           });
+        } else {
+          renderComboFallbackDetailLines(detailsWrap, prod.product_description_short || "");
         }
         if (idx === expandedPickerProductIndex) detailsWrap.style.display = "none";
         mid.appendChild(detailsWrap);
@@ -6132,7 +6397,10 @@ optionGroups.forEach((group) => {
           if (idx !== currentSelected) {
             const applied = await guardComboDraftMutation(async () => {
               selectedIndexByBlock[blockIndex] = idx;
-              await hydrateBlockSelection(blockIndex);
+              await hydrateBlockSelection(blockIndex, {
+                useRandomizer: false,
+                preferSavedState: true,
+              });
             }, {
               showToastOnOut: true,
               onReject: () => {
@@ -6141,6 +6409,7 @@ optionGroups.forEach((group) => {
             });
             if (!applied) return;
           }
+          animateOpenPickerCardCollapse();
           expandedPickerProductIndex = expandedPickerProductIndex === idx ? null : idx;
           gearBtn.classList.toggle("is-open", expandedPickerProductIndex === idx);
           if (comboPickerRenderTimer) {
@@ -6173,7 +6442,10 @@ optionGroups.forEach((group) => {
             if (idx !== currentSelected) {
               const applied = await guardComboDraftMutation(async () => {
                 selectedIndexByBlock[blockIndex] = idx;
-                await hydrateBlockSelection(blockIndex);
+                await hydrateBlockSelection(blockIndex, {
+                  useRandomizer: false,
+                  preferSavedState: true,
+                });
               }, {
                 showToastOnOut: true,
                 onReject: () => {
@@ -6182,7 +6454,12 @@ optionGroups.forEach((group) => {
               });
               if (!applied) return;
             } else {
-              try { await hydrateBlockSelection(blockIndex); } catch {}
+              try {
+                await hydrateBlockSelection(blockIndex, {
+                  useRandomizer: false,
+                  preferSavedState: true,
+                });
+              } catch {}
             }
             renderMainView();
           }
@@ -6202,7 +6479,10 @@ optionGroups.forEach((group) => {
           if (idx !== currentSelected) {
             const applied = await guardComboDraftMutation(async () => {
               selectedIndexByBlock[blockIndex] = idx;
-              await hydrateBlockSelection(blockIndex);
+              await hydrateBlockSelection(blockIndex, {
+                useRandomizer: false,
+                preferSavedState: true,
+              });
             }, {
               showToastOnOut: true,
               onReject: () => {
@@ -6211,58 +6491,119 @@ optionGroups.forEach((group) => {
             });
             if (!applied) return;
           } else {
-            try { await hydrateBlockSelection(blockIndex); } catch {}
+            try {
+              await hydrateBlockSelection(blockIndex, {
+                useRandomizer: false,
+                preferSavedState: true,
+              });
+            } catch {}
           }
           renderMainView();
         });
 
-        // Универсальная подгрузка превью: и для состава (у невыбранных, если нет state),
-        // и для решения, показывать ли шестерёнку.
-        getComboProductPreview(prod.product_id)
-          .then((preview) => {
-            if (!card.isConnected) return;
-            if (!isSelected) {
-              const candidateAllowed = canUseComboPickerCandidateWithPreview(blockIndex, idx, preview, {
-                scope: "block",
-              });
-              if (!candidateAllowed) {
-                card.remove();
-                return;
-              }
-            }
+        const previewHasRenderableDetails = (preview) => {
+          if (!preview || typeof preview !== "object") return false;
+          const label = str(preview.variant_label || "").trim();
+          if (label) return true;
+          const ingList = Array.isArray(preview.ingredients_display) ? preview.ingredients_display : [];
+          return ingList.some((ing) => {
+            const name = str(ing?.name || ing?.ingredient_name || "").trim();
+            const rawQty = ing?.qty ?? ing?.quantity;
+            const numQty = typeof rawQty === "number" ? rawQty : parseFloat(rawQty);
+            if (Number.isFinite(numQty) && numQty === 0) return false;
+            return Boolean(name || (rawQty != null && rawQty !== ""));
+          });
+        };
 
-            if (!isSelected && (!initialVariantLabel && !initialIngredientsDisplay.length)) {
-              if (!detailsWrap.isConnected) return;
-              renderComboDetailsLines(detailsWrap, preview.variant_label, preview.ingredients_display, {
-                variantGroupTitle: preview.variant_group_title || "",
-                variantUnit: preview.variant_unit || "",
-              });
-              if (preview.unit_price_override != null && Number.isFinite(preview.unit_price_override)) {
-                const newSpan = priceWrap.querySelector(".shop-combo-price");
-                if (newSpan) newSpan.textContent = moneyNoSign(preview.unit_price_override) + " ₽";
-                const oldVal = preview.unit_price_before_discount != null && Number.isFinite(preview.unit_price_before_discount) ? preview.unit_price_before_discount : 0;
-                if (oldVal > preview.unit_price_override) {
-                  let oldSpan = priceWrap.querySelector(".shop-combo-old");
-                  if (!oldSpan) {
-                    oldSpan = document.createElement("span");
-                    oldSpan.className = "shop-combo-old";
-                    priceWrap.insertBefore(oldSpan, newSpan);
-                  }
-                  oldSpan.textContent = moneyNoSign(oldVal) + " ₽";
-                } else {
-                  const oldSpan = priceWrap.querySelector(".shop-combo-old");
-                  if (oldSpan) oldSpan.remove();
+        const applyPreviewToCard = (preview) => {
+          if (!preview) return;
+          const previewVariantLabel = str(preview.variant_label || "").trim();
+          const previewIngredientsDisplay = Array.isArray(preview.ingredients_display)
+            ? preview.ingredients_display
+            : [];
+          if (!isSelected) {
+            const candidateAllowed = canUseComboPickerCandidateWithPreview(blockIndex, idx, preview, {
+              scope: "block",
+            });
+            if (!candidateAllowed) {
+              card.remove();
+              return;
+            }
+          } else if (!initialVariantLabel && !initialIngredientsDisplay.length) {
+            const selectedState = selectionStateByBlock[blockIndex] || makeEmptyComboBlockState();
+            selectedState.product_id = Number(prod.product_id || 0) || null;
+            selectedState.variant_label = previewVariantLabel;
+            selectedState.variant_group_id = preview.variant_group_id != null ? Number(preview.variant_group_id) : null;
+            selectedState.variant_value_index = preview.variant_value_index != null ? Number(preview.variant_value_index) : null;
+            selectedState.variant_group_title = str(preview.variant_group_title || "");
+            selectedState.variant_unit = str(preview.variant_unit || "");
+            selectedState.unit_id = preview.unit_id != null ? Number(preview.unit_id) : null;
+            selectedState.ingredients_display = previewIngredientsDisplay.map((ing) => cloneComboDraftValue(ing));
+            if (preview.unit_price_override != null && Number.isFinite(preview.unit_price_override)) {
+              selectedState.unit_price_override = Number(preview.unit_price_override);
+            }
+            if (preview.unit_price_before_discount != null && Number.isFinite(preview.unit_price_before_discount)) {
+              selectedState.unit_price_before_discount = Number(preview.unit_price_before_discount);
+            }
+            selectionStateByBlock[blockIndex] = selectedState;
+          }
+
+          if (!initialVariantLabel && !initialIngredientsDisplay.length) {
+            renderComboDetailsLines(detailsWrap, previewVariantLabel, previewIngredientsDisplay, {
+              variantGroupTitle: preview.variant_group_title || "",
+              variantUnit: preview.variant_unit || "",
+            });
+            if (preview.unit_price_override != null && Number.isFinite(preview.unit_price_override)) {
+              const newSpan = priceWrap.querySelector(".shop-combo-price");
+              if (newSpan) newSpan.textContent = moneyNoSign(preview.unit_price_override) + " ₽";
+              const oldVal = preview.unit_price_before_discount != null && Number.isFinite(preview.unit_price_before_discount) ? preview.unit_price_before_discount : 0;
+              if (oldVal > preview.unit_price_override) {
+                let oldSpan = priceWrap.querySelector(".shop-combo-old");
+                if (!oldSpan) {
+                  oldSpan = document.createElement("span");
+                  oldSpan.className = "shop-combo-old";
+                  priceWrap.insertBefore(oldSpan, newSpan);
                 }
+                oldSpan.textContent = moneyNoSign(oldVal) + " ₽";
+              } else {
+                const oldSpan = priceWrap.querySelector(".shop-combo-old");
+                if (oldSpan) oldSpan.remove();
               }
             }
+          }
 
-            if (!preview.hasConfigurable) {
-              if (gearBtn && gearBtn.isConnected) {
-                gearBtn.style.display = "none";
-              }
+          if (!preview.hasConfigurable) {
+            if (gearBtn && gearBtn.isConnected) {
+              gearBtn.style.display = "none";
             }
-          })
-          .catch(() => {});
+          }
+        };
+
+        const prewarmedPreview = prewarmedPreviewMap instanceof Map
+          ? prewarmedPreviewMap.get(Number(prod.product_id || 0))
+          : null;
+        if (prewarmedPreview) {
+          applyPreviewToCard(prewarmedPreview);
+          const needsFreshPreview =
+            !initialVariantLabel &&
+            !initialIngredientsDisplay.length &&
+            !previewHasRenderableDetails(prewarmedPreview);
+          if (needsFreshPreview) {
+            getComboProductPreview(prod.product_id)
+              .then((preview) => {
+                applyPreviewToCard(preview);
+              })
+              .catch(() => {});
+          }
+        } else {
+          // Универсальная подгрузка превью: и для состава (у невыбранных, если нет state),
+          // и для решения, показывать ли шестерёнку.
+          getComboProductPreview(prod.product_id)
+            .then((preview) => {
+              applyPreviewToCard(preview);
+            })
+            .catch(() => {});
+        }
 
         listWrap.appendChild(card);
 
@@ -6793,11 +7134,46 @@ optionGroups.forEach((group) => {
   // -----------------------------
   // Shop sheets
   // -----------------------------
+  function resetShopModalHeaderUi() {
+    const header = document.querySelector(".app-modal-header");
+    if (!header) return;
+
+    header.querySelectorAll(".shop-delivery-toggle-wrap").forEach((el) => el.remove());
+    const orderBackBtn = header.querySelector(".app-modal-back-btn");
+    if (orderBackBtn) orderBackBtn.remove();
+    const discountBadge = header.querySelector(".shop-sheet-discount-badge");
+    if (discountBadge) discountBadge.remove();
+
+    const titleEl =
+      header.querySelector(".app-modal-title") ||
+      header.querySelector(".modal-title") ||
+      header.querySelector("[data-modal-title]");
+    if (titleEl) {
+      titleEl.classList.remove("hidden", "is-cart-address-title", "is-empty-address");
+      titleEl.style.cursor = "";
+      titleEl.onclick = null;
+      titleEl.style.textAlign = "";
+      titleEl.style.flex = "";
+    }
+
+    const closeBtn =
+      header.querySelector(".app-modal-close") ||
+      header.querySelector("[data-modal-close]") ||
+      header.querySelector("button[aria-label='Закрыть']") ||
+      header.querySelector("button[aria-label='Close']") ||
+      header.querySelector(".modal-close") ||
+      header.querySelector(".btn-close");
+    if (closeBtn) closeBtn.classList.remove("hidden");
+
+    const sheetBackBtn = header.querySelector("#shopSheetBackBtn");
+    if (sheetBackBtn) sheetBackBtn.classList.add("hidden");
+    const sheetFavBtn = header.querySelector("#shopSheetFavBtn");
+    if (sheetFavBtn) sheetFavBtn.classList.add("hidden");
+  }
+
   function closeShopSheetIfOpen() {
     if (!window.AppModal) return;
-    // Remove delivery toggle from header if present
-    const hdrToggle = document.querySelector(".app-modal-header .shop-delivery-toggle-wrap");
-    if (hdrToggle) hdrToggle.remove();
+    resetShopModalHeaderUi();
     if (window.AppModal.isOpen()) {
       // Сбрасываем состояние просмотра деталей заказа, чтобы при переходе на другую вкладку
       // (домик → каталог) стрелка «назад» не вела в список активных заказов
@@ -6807,26 +7183,11 @@ optionGroups.forEach((group) => {
       window._isViewingOrderDetails = false;
       window._showOrdersListCallback = null;
 
-      // Убираем кнопку «назад» из хедера деталей заказа, иначе она остаётся при следующем открытии шита
-      const modalHeader = document.querySelector(".app-modal-header");
-      if (modalHeader) {
-        const orderBackBtn = modalHeader.querySelector(".app-modal-back-btn");
-        if (orderBackBtn) orderBackBtn.remove();
-      }
-
       window.AppModal.close("sheet");
       openProductCtx = null;
+      resetShopModalHeaderUi();
 
       // На мобильных: скрываем мобильные кнопки при закрытии sheet
-      if (elMobileProductActions) {
-        elMobileProductActions.classList.add("hidden");
-      }
-      if (elMobileAddressActions) {
-        elMobileAddressActions.classList.add("hidden");
-      }
-      if (elMobileAddressConfirm) {
-        elMobileAddressConfirm.classList.add("hidden");
-      }
       // Обновляем ботомщит активного заказа
       if (typeof window.updateActiveOrdersBadge === "function") {
         window.updateActiveOrdersBadge();
@@ -7930,6 +8291,11 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
     }
     cartViewMode = "favorites";
     openProductCtx = null;
+    if (typeof queueMobileUiStateSync === "function") {
+      queueMobileUiStateSync("openFavoritesSheet.desktop");
+    } else if (typeof window.queueShopMobileUiStateSync === "function") {
+      window.queueShopMobileUiStateSync("openFavoritesSheet.desktop");
+    }
 
     if (typeof setHeaderFavoritesButtonActive === "function") {
       setHeaderFavoritesButtonActive(true);
@@ -7998,6 +8364,11 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
   sheetNavigationState.type = "favorites";
   sheetNavigationState.screen = "list";
   sheetNavigationState.data = null;
+  if (typeof queueMobileUiStateSync === "function") {
+    queueMobileUiStateSync("openFavoritesSheet.mobile");
+  } else if (typeof window.queueShopMobileUiStateSync === "function") {
+    window.queueShopMobileUiStateSync("openFavoritesSheet.mobile");
+  }
 
   setAppModalMode("shop");
   setSheetHeaderMode("");
@@ -8013,6 +8384,11 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
       sheetNavigationState.type = null;
       sheetNavigationState.screen = null;
       sheetNavigationState.data = null;
+      if (typeof queueMobileUiStateSync === "function") {
+        queueMobileUiStateSync("openFavoritesSheet.mobile.onClose");
+      } else if (typeof window.queueShopMobileUiStateSync === "function") {
+        window.queueShopMobileUiStateSync("openFavoritesSheet.mobile.onClose");
+      }
       openCartSheetCtx = null;
       openProductCtx = null;
       setSheetHeaderMode("");
@@ -8044,6 +8420,43 @@ function openFavoritesSheet({ force = true, forceOpen = false } = {}) {
 function openCartSheet() {
   if (!window.AppModal) return;
   clearProfileModalMenu();
+  let addressSheetAsyncToken = 0;
+  let postModalCloseUiSyncTimer = null;
+
+  function setAddressSheetBodyState(active) {
+    try {
+      document.body.classList.toggle("shop-address-sheet-active", !!active);
+    } catch {}
+  }
+
+  function invalidateAddressSheetUiState() {
+    addressSheetAsyncToken += 1;
+    setAddressSheetBodyState(false);
+    if (elMobileAddressConfirm) {
+      elMobileAddressConfirm.classList.add("hidden");
+    }
+  }
+
+  function schedulePostModalCloseUiSync() {
+    if (postModalCloseUiSyncTimer) {
+      clearTimeout(postModalCloseUiSyncTimer);
+      postModalCloseUiSyncTimer = null;
+    }
+    postModalCloseUiSyncTimer = setTimeout(() => {
+      postModalCloseUiSyncTimer = null;
+      if (window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen()) {
+        return;
+      }
+      invalidateAddressSheetUiState();
+      if (elMobileAddressActions) {
+        elMobileAddressActions.classList.add("hidden");
+      }
+      if (typeof window.updateActiveOrdersBadge === "function") {
+        window.updateActiveOrdersBadge();
+      }
+    }, 160);
+  }
+
   if (openCartSheetCtx && openCartSheetCtx.wrapEl) {
     if (typeof setActiveNav === "function") setActiveNav("cart");
     setAppModalMode("shop");
@@ -8054,12 +8467,9 @@ function openCartSheet() {
       title: "Корзина",
       content: openCartSheetCtx.wrapEl,
       onClose: () => {
-        const titleEl = document.querySelector(".app-modal-header .app-modal-title");
-        if (titleEl) {
-          titleEl.classList.remove("hidden", "is-cart-address-title", "is-empty-address");
-          titleEl.style.cursor = "";
-          titleEl.onclick = null;
-        }
+        invalidateAddressSheetUiState();
+        cleanupCheckoutViewSubscriptions();
+        resetShopModalHeaderUi();
         if (elMobileCartActions) elMobileCartActions.classList.add("hidden");
         if (elMobileAddressActions) elMobileAddressActions.classList.add("hidden");
         if (elMobileAddressConfirm) elMobileAddressConfirm.classList.add("hidden");
@@ -8069,6 +8479,7 @@ function openCartSheet() {
         sheetNavigationState.type = null;
         sheetNavigationState.screen = null;
         sheetNavigationState.data = null;
+        schedulePostModalCloseUiSync();
         if (typeof setActiveNav === "function") setActiveNav("menu");
       },
     });
@@ -8377,10 +8788,9 @@ function applySheetAddressTitle(backMode = "cart") {
     title: "Корзина",
     content: wrap,
     onClose: () => {
-      // Remove delivery toggle from header
-      if (deliveryToggleWrap.parentNode) deliveryToggleWrap.remove();
-      const titleEl = document.querySelector(".app-modal-header .app-modal-title");
-      if (titleEl) titleEl.classList.remove("hidden");
+      invalidateAddressSheetUiState();
+      cleanupCheckoutViewSubscriptions();
+      resetShopModalHeaderUi();
 
       // Скрываем мобильные кнопки при закрытии sheet
       const isMobile = window.matchMedia("(max-width: 768px)").matches;
@@ -8393,9 +8803,6 @@ function applySheetAddressTitle(backMode = "cart") {
       if (isMobile && elMobileAddressConfirm) {
         elMobileAddressConfirm.classList.add("hidden");
       }
-      if (elMobileProductActions) {
-        elMobileProductActions.classList.add("hidden");
-      }
 
       if (window.AppModal?.body) window.AppModal.body.classList.remove("shop-cart-sheet-body");
       openProductCtx = null;
@@ -8407,6 +8814,7 @@ function applySheetAddressTitle(backMode = "cart") {
       if (typeof window.updateActiveOrdersBadge === "function") {
         window.updateActiveOrdersBadge();
       }
+      schedulePostModalCloseUiSync();
 
       clearSheetAddressTitleMode();
 
@@ -8448,7 +8856,28 @@ function applySheetAddressTitle(backMode = "cart") {
 
   let sheetEditingId = null;
 
+  function isAddressSheetListActive(mode) {
+    if (!window.AppModal || typeof window.AppModal.isOpen !== "function" || !window.AppModal.isOpen()) {
+      return false;
+    }
+    if (sheetNavigationState.type !== "cart" || sheetNavigationState.screen !== "addressList") {
+      return false;
+    }
+    if (addressWrap.classList.contains("hidden") || addressListView.classList.contains("hidden")) {
+      return false;
+    }
+    if (mode && activeToggleMode !== mode) {
+      return false;
+    }
+    return true;
+  }
+
+  function isAddressSheetAsyncStateValid(token, mode) {
+    return token === addressSheetAsyncToken && isAddressSheetListActive(mode);
+  }
+
   async function showSheetCheckout() {
+    invalidateAddressSheetUiState();
     __forceHideCheckoutDeliveryProgress = true;
     hideHeaderToggle();
     checkoutWrap.classList.remove("hidden");
@@ -8461,22 +8890,7 @@ function applySheetAddressTitle(backMode = "cart") {
     
     // Синхронизируем мобильные кнопки
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    if (isMobile) {
-      if (elMobileCartActions) {
-        elMobileCartActions.classList.remove("hidden");
-      }
-      if (elMobileCartActionsCart && elMobileCartActionsCheckout) {
-        elMobileCartActionsCart.classList.add("hidden");
-        elMobileCartActionsCheckout.classList.remove("hidden");
-      }
-      if (elMobileAddressActions) {
-        elMobileAddressActions.classList.add("hidden");
-      }
-      if (elMobileAddressConfirm) {
-        elMobileAddressConfirm.classList.add("hidden");
-      }
-      updateMobileDeliveryProgress();
-    }
+    if (isMobile) updateMobileDeliveryProgress();
 
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("");
@@ -8488,6 +8902,11 @@ function applySheetAddressTitle(backMode = "cart") {
     sheetNavigationState.type = 'cart';
     sheetNavigationState.screen = 'checkout';
     sheetNavigationState.data = null;
+    if (typeof queueMobileUiStateSync === "function") {
+      queueMobileUiStateSync("showSheetCheckout");
+    } else if (typeof window.queueShopMobileUiStateSync === "function") {
+      window.queueShopMobileUiStateSync("showSheetCheckout");
+    }
 
     // Создаем контент оформления заказа
     await openCheckoutView({
@@ -8502,6 +8921,8 @@ function applySheetAddressTitle(backMode = "cart") {
   }
 
   function showSheetCart() {
+    invalidateAddressSheetUiState();
+    cleanupCheckoutViewSubscriptions();
     __forceHideCheckoutDeliveryProgress = false;
     hideHeaderToggle();
     checkoutWrap.classList.add("hidden");
@@ -8536,27 +8957,8 @@ function applySheetAddressTitle(backMode = "cart") {
     // На мобильных: скрываем мобильные кнопки товара, показываем кнопки корзины
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (isMobile) {
-      if (elMobileProductActions) {
-        elMobileProductActions.classList.add("hidden");
-      }
+      // Managed by unified mobile bottom renderer.
       // На экране корзины всегда показываем блок (полоска прогресса видна и при пустой корзине)
-      if (elMobileCartActions) {
-        elMobileCartActions.classList.remove("hidden");
-      }
-      if (elMobileAddressActions) {
-        elMobileAddressActions.classList.add("hidden");
-      }
-      if (elMobileAddressConfirm) {
-        elMobileAddressConfirm.classList.add("hidden");
-      }
-      if (elMobileCartActionsCart && elMobileCartActionsCheckout) {
-        if (hasItems) {
-          elMobileCartActionsCart.classList.remove("hidden");
-        } else {
-          elMobileCartActionsCart.classList.add("hidden");
-        }
-        elMobileCartActionsCheckout.classList.add("hidden");
-      }
       if (elMobileCheckoutBtn) {
         elMobileCheckoutBtn.disabled = !hasItems;
       }
@@ -8578,11 +8980,18 @@ function applySheetAddressTitle(backMode = "cart") {
     sheetNavigationState.type = 'cart';
     sheetNavigationState.screen = 'cart';
     sheetNavigationState.data = null;
+    if (typeof queueMobileUiStateSync === "function") {
+      queueMobileUiStateSync("showSheetCart");
+    } else if (typeof window.queueShopMobileUiStateSync === "function") {
+      window.queueShopMobileUiStateSync("showSheetCart");
+    }
 
     openProductCtx = null;
   }
 
 function showSheetAddressList(backMode) {
+    invalidateAddressSheetUiState();
+    cleanupCheckoutViewSubscriptions();
     checkoutWrap.classList.add("hidden");
     list.classList.add("hidden");
     addressWrap.classList.remove("hidden");
@@ -8600,19 +9009,6 @@ function showSheetAddressList(backMode) {
       openCartSheetCtx.addressBackMode = resolvedBackMode;
     }
 
-    const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    if (isMobile && elMobileProductActions) {
-      elMobileProductActions.classList.add("hidden");
-    }
-    if (isMobile && elMobileCartActions) {
-      elMobileCartActions.classList.add("hidden");
-      if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
-      if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
-    }
-    if (isMobile && elMobileAddressActions) {
-      elMobileAddressActions.classList.add("hidden");
-    }
-
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("");
     setSheetHeaderMode("cart");
@@ -8624,6 +9020,12 @@ function showSheetAddressList(backMode) {
     sheetNavigationState.type = 'cart';
     sheetNavigationState.screen = 'addressList';
     sheetNavigationState.data = null;
+    if (typeof queueMobileUiStateSync === "function") {
+      queueMobileUiStateSync("showSheetAddressList");
+    } else if (typeof window.queueShopMobileUiStateSync === "function") {
+      window.queueShopMobileUiStateSync("showSheetAddressList");
+    }
+    setAddressSheetBodyState(true);
 
     // Set toggle based on current delivery mode
     const initMode = window._deliveryMode === "pickup" ? "pickup" : "delivery";
@@ -8631,6 +9033,8 @@ function showSheetAddressList(backMode) {
   }
 
   function showSheetPickupList() {
+    invalidateAddressSheetUiState();
+    cleanupCheckoutViewSubscriptions();
     hideHeaderToggle();
     checkoutWrap.classList.add("hidden");
     list.classList.add("hidden");
@@ -8640,19 +9044,6 @@ function showSheetAddressList(backMode) {
 
     setCartSheetFooterMode(openCartSheetCtx, "hidden");
 
-    const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    if (isMobile && elMobileProductActions) {
-      elMobileProductActions.classList.add("hidden");
-    }
-    if (isMobile && elMobileCartActions) {
-      elMobileCartActions.classList.add("hidden");
-      if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
-      if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
-    }
-    if (isMobile && elMobileAddressActions) {
-      elMobileAddressActions.classList.add("hidden");
-    }
-
     clearSheetAddressTitleMode();
     if (window.AppModal?.setTitle) window.AppModal.setTitle("Точка самовывоза");
     setSheetHeaderMode("cart");
@@ -8660,6 +9051,11 @@ function showSheetAddressList(backMode) {
     sheetNavigationState.type = 'cart';
     sheetNavigationState.screen = 'pickupList';
     sheetNavigationState.data = null;
+    if (typeof queueMobileUiStateSync === "function") {
+      queueMobileUiStateSync("showSheetPickupList");
+    } else if (typeof window.queueShopMobileUiStateSync === "function") {
+      window.queueShopMobileUiStateSync("showSheetPickupList");
+    }
 
     renderSheetPickupList();
   }
@@ -8909,6 +9305,9 @@ function showSheetAddressList(backMode) {
   }
 
   async function showSheetAddressForm(prefill, editingId, backMode) {
+    invalidateAddressSheetUiState();
+    cleanupCheckoutViewSubscriptions();
+    const formAsyncToken = addressSheetAsyncToken;
     hideHeaderToggle();
     sheetEditingId = editingId ? Number(editingId) : null;
     if (openCartSheetCtx) {
@@ -8923,6 +9322,9 @@ function showSheetAddressList(backMode) {
 
     // ensure stores loaded then populate city
     await ensureStoresLoaded();
+    if (formAsyncToken !== addressSheetAsyncToken || !window.AppModal || typeof window.AppModal.isOpen !== "function" || !window.AppModal.isOpen()) {
+      return;
+    }
     populateCitySelect(get("city"), prefill?.city);
 
     setVal("street", prefill?.street);
@@ -8943,20 +9345,6 @@ function showSheetAddressList(backMode) {
     setCartSheetFooterMode(openCartSheetCtx, "hidden");
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (isMobile) {
-      if (elMobileProductActions) {
-        elMobileProductActions.classList.add("hidden");
-      }
-      if (elMobileCartActions) {
-        elMobileCartActions.classList.add("hidden");
-        if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
-        if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
-      }
-      if (elMobileAddressActions) {
-        elMobileAddressActions.classList.remove("hidden");
-      }
-      if (elMobileAddressConfirm) {
-        elMobileAddressConfirm.classList.add("hidden");
-      }
       if (elMobileAddressSaveBtn) {
         elMobileAddressSaveBtn.onclick = () => {
           const saveBtn = get("save");
@@ -8979,6 +9367,11 @@ function showSheetAddressList(backMode) {
     sheetNavigationState.type = 'cart';
     sheetNavigationState.screen = 'addressForm';
     sheetNavigationState.data = null;
+    if (typeof queueMobileUiStateSync === "function") {
+      queueMobileUiStateSync("showSheetAddressForm");
+    } else if (typeof window.queueShopMobileUiStateSync === "function") {
+      window.queueShopMobileUiStateSync("showSheetAddressForm");
+    }
 
     setTimeout(() => {
       try { get("street")?.focus?.(); } catch {}
@@ -8986,6 +9379,8 @@ function showSheetAddressList(backMode) {
   }
 
   function showSheetProduct(product, { cartKey, prefillItem, onBack } = {}) {
+    invalidateAddressSheetUiState();
+    cleanupCheckoutViewSubscriptions();
     hideHeaderToggle();
     checkoutWrap.classList.add("hidden");
     list.classList.add("hidden");
@@ -9026,6 +9421,8 @@ function showSheetAddressList(backMode) {
   }
 
   function showSheetCombo(comboData, { cartKey, prefillItem, onBack } = {}) {
+    invalidateAddressSheetUiState();
+    cleanupCheckoutViewSubscriptions();
     hideHeaderToggle();
     checkoutWrap.classList.add("hidden");
     list.classList.add("hidden");
@@ -9189,7 +9586,8 @@ function renderSheetAddressList() {
   const elConfirmBar = document.getElementById("shopMobileAddressConfirm");
   const elConfirmBtn = document.getElementById("shopMobileAddressConfirmBtn");
   const isMobile = window.matchMedia("(max-width: 768px)").matches;
-  if (isMobile && elConfirmBar) {
+  if (isMobile && elConfirmBar && isAddressSheetListActive("delivery")) {
+    setAddressSheetBodyState(true);
     elConfirmBar.classList.remove("hidden");
   }
   if (elConfirmBtn) {
@@ -9258,6 +9656,7 @@ function renderSheetAddressList() {
   let activeToggleMode = "delivery";
 
   function setToggleMode(mode) {
+    invalidateAddressSheetUiState();
     activeToggleMode = mode;
     toggleDeliveryBtn.classList.toggle("is-active", mode === "delivery");
     togglePickupBtn.classList.toggle("is-active", mode === "pickup");
@@ -9411,8 +9810,12 @@ function renderSheetAddressList() {
   }
 
   async function renderInlinePickupList() {
+    const pickupAsyncToken = ++addressSheetAsyncToken;
     pickupInlineList.innerHTML = "";
     await ensureStoresLoaded();
+    if (!isAddressSheetAsyncStateValid(pickupAsyncToken, "pickup")) {
+      return;
+    }
 
     // Initialize city selector
     initMobilePickupCitySelector();
@@ -9519,7 +9922,8 @@ function renderSheetAddressList() {
     const elConfirmBar = document.getElementById("shopMobileAddressConfirm");
     const elConfirmBtn = document.getElementById("shopMobileAddressConfirmBtn");
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
-    if (isMobile && elConfirmBar) {
+    if (isMobile && elConfirmBar && isAddressSheetAsyncStateValid(pickupAsyncToken, "pickup")) {
+      setAddressSheetBodyState(true);
       elConfirmBar.classList.remove("hidden");
     }
     if (elConfirmBtn) {
@@ -10220,6 +10624,11 @@ function renderSheetAddressList() {
     sheetNavigationState.type = 'profile';
     sheetNavigationState.screen = null;
     sheetNavigationState.data = null;
+    if (typeof queueMobileUiStateSync === "function") {
+      queueMobileUiStateSync("openLoginSheet");
+    } else if (typeof window.queueShopMobileUiStateSync === "function") {
+      window.queueShopMobileUiStateSync("openLoginSheet");
+    }
     window.AppModal.open({
       title: "Вход",
       content: wrap,
@@ -10455,6 +10864,11 @@ function renderSheetAddressList() {
     if (elMobileOrderTotalBtn) {
       elMobileOrderTotalBtn.onclick = null;
     }
+    if (typeof queueMobileUiStateSync === "function") {
+      queueMobileUiStateSync("hideMobileOrderDetailsActions");
+    } else if (typeof window.queueShopMobileUiStateSync === "function") {
+      window.queueShopMobileUiStateSync("hideMobileOrderDetailsActions");
+    }
   }
 
   function showMobileOrderDetailsActions(order) {
@@ -10507,6 +10921,11 @@ function renderSheetAddressList() {
       elMobileOrderTotalBtn.onclick = () => {};
     }
     elMobileOrderDetailsActions.classList.remove("hidden");
+    if (typeof queueMobileUiStateSync === "function") {
+      queueMobileUiStateSync("showMobileOrderDetailsActions");
+    } else if (typeof window.queueShopMobileUiStateSync === "function") {
+      window.queueShopMobileUiStateSync("showMobileOrderDetailsActions");
+    }
   }
 
   function bindDesktopOrderDetailsFooter(order) {
@@ -10556,20 +10975,6 @@ function renderSheetAddressList() {
   }
 
   function resetOrderDetailsTransientUi() {
-    if (elMobileProductActions) {
-      elMobileProductActions.classList.add("hidden");
-    }
-    if (elMobileCartActions) {
-      elMobileCartActions.classList.add("hidden");
-      if (elMobileCartActionsCart) elMobileCartActionsCart.classList.add("hidden");
-      if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
-    }
-    if (elMobileAddressActions) {
-      elMobileAddressActions.classList.add("hidden");
-    }
-    if (elMobileAddressConfirm) {
-      elMobileAddressConfirm.classList.add("hidden");
-    }
     hideMobileOrderDetailsActions();
 
     if (elMobileAddToCartBtn && mobileProductActionsState?.onAddToCart) {
@@ -13420,6 +13825,16 @@ function renderSheetAddressList() {
       currentOrderId = orderId;
       resetOrderDetailsTransientUi();
       const isModalOrderDetails = document.querySelector(".app-modal") && document.querySelector(".app-modal").getAttribute("aria-hidden") !== "true";
+      if (isModalOrderDetails) {
+        sheetNavigationState.type = 'profile';
+        sheetNavigationState.screen = 'orderDetails';
+        sheetNavigationState.data = { orderId };
+        if (typeof queueMobileUiStateSync === "function") {
+          queueMobileUiStateSync("showProfileOrderDetails");
+        } else if (typeof window.queueShopMobileUiStateSync === "function") {
+          window.queueShopMobileUiStateSync("showProfileOrderDetails");
+        }
+      }
       if (!isModalOrderDetails && typeof showProfileView === "function") {
         showProfileView();
       }
@@ -13618,6 +14033,16 @@ function renderSheetAddressList() {
       
       // Проверяем, открыто ли модальное окно
       const isModal = document.querySelector(".app-modal") && document.querySelector(".app-modal").getAttribute("aria-hidden") !== "true";
+      if (isModal) {
+        sheetNavigationState.type = 'profile';
+        sheetNavigationState.screen = 'ordersList';
+        sheetNavigationState.data = null;
+        if (typeof queueMobileUiStateSync === "function") {
+          queueMobileUiStateSync("showProfileOrdersList");
+        } else if (typeof window.queueShopMobileUiStateSync === "function") {
+          window.queueShopMobileUiStateSync("showProfileOrdersList");
+        }
+      }
       if (!isModal && typeof showProfileView === "function") {
         showProfileView();
       }
@@ -14367,6 +14792,11 @@ function renderSheetAddressList() {
     sheetNavigationState.type = 'profile';
     sheetNavigationState.screen = null;
     sheetNavigationState.data = null;
+    if (typeof queueMobileUiStateSync === "function") {
+      queueMobileUiStateSync("openProfileModal");
+    } else if (typeof window.queueShopMobileUiStateSync === "function") {
+      window.queueShopMobileUiStateSync("openProfileModal");
+    }
 
     setAppModalMode("shop");
 
@@ -14490,6 +14920,11 @@ function setActiveNav(key) {
   if (typeof window.updateActiveOrdersBadge === "function") {
     window.updateActiveOrdersBadge();
   }
+  if (typeof queueMobileUiStateSync === "function") {
+    queueMobileUiStateSync(`setActiveNav:${key}`);
+  } else if (typeof window.queueShopMobileUiStateSync === "function") {
+    window.queueShopMobileUiStateSync(`setActiveNav:${key}`);
+  }
 }
 
 function bounceCartNav() {
@@ -14527,6 +14962,11 @@ function setBottomNavActive(tab) {
     if (isActive) b.setAttribute("aria-current", "page");
     else b.removeAttribute("aria-current");
   });
+  if (typeof queueMobileUiStateSync === "function") {
+    queueMobileUiStateSync(`setBottomNavActive:${tab}`);
+  } else if (typeof window.queueShopMobileUiStateSync === "function") {
+    window.queueShopMobileUiStateSync(`setBottomNavActive:${tab}`);
+  }
 }
 
 
@@ -14851,6 +15291,28 @@ function setBottomNavActive(tab) {
     return document.scrollingElement || document.documentElement || document.body;
   }
 
+  let checkoutViewCleanupSubscriptions = [];
+
+  function registerCheckoutViewCleanup(fn) {
+    if (typeof fn !== "function") return;
+    checkoutViewCleanupSubscriptions.push(fn);
+  }
+
+  function cleanupCheckoutViewSubscriptions() {
+    if (!Array.isArray(checkoutViewCleanupSubscriptions) || !checkoutViewCleanupSubscriptions.length) {
+      return;
+    }
+    const pending = checkoutViewCleanupSubscriptions.slice();
+    checkoutViewCleanupSubscriptions = [];
+    pending.forEach((cleanupFn) => {
+      try {
+        cleanupFn();
+      } catch (err) {
+        console.warn("checkout cleanup failed", err);
+      }
+    });
+  }
+
   function buildDropdown(options, value) {
     const wrap = document.createElement("div");
     wrap.className = "shop-checkout-dropdown-wrap";
@@ -14931,9 +15393,10 @@ function setBottomNavActive(tab) {
       // Теперь мы сохраняем скролл и просто раскрываем список.
     });
 
-    document.addEventListener("click", (e) => {
+    const handleOutsideClick = (e) => {
       if (!wrap.contains(e.target)) list.classList.remove("is-open");
-    });
+    };
+    document.addEventListener("click", handleOutsideClick);
 
     render();
 
@@ -14945,6 +15408,9 @@ function setBottomNavActive(tab) {
       getValue: () => current,
       setValue,
       setOptions,
+      destroy: () => {
+        document.removeEventListener("click", handleOutsideClick);
+      },
     };
   }
 
@@ -15115,11 +15581,12 @@ function setBottomNavActive(tab) {
       if (isOpen() && opts.length > 0) scrollToIndex(getSelectedIndex());
     });
 
-    document.addEventListener("click", (e) => {
+    const handleOutsideClick = (e) => {
       if (!wrap.contains(e.target)) {
         setOpen(false);
       }
-    });
+    };
+    document.addEventListener("click", handleOutsideClick);
 
     updateButtonText();
     wrap.appendChild(btn);
@@ -15132,6 +15599,13 @@ function setBottomNavActive(tab) {
       getValue: () => current,
       setValue,
       setOptions,
+      destroy: () => {
+        if (scrollEndTimer) {
+          clearTimeout(scrollEndTimer);
+          scrollEndTimer = null;
+        }
+        document.removeEventListener("click", handleOutsideClick);
+      },
     };
   }
 
@@ -15259,6 +15733,8 @@ function setBottomNavActive(tab) {
   async function openCheckoutView({ container, onBack, hasAddressEditor, isSheet, actions, onEditAddress, onEditPickup }) {
     __forceHideCheckoutDeliveryProgress = true;
     if (!container) return;
+    cleanupCheckoutViewSubscriptions();
+    const registerCheckoutCleanup = registerCheckoutViewCleanup;
 
     const items = cartItemsResolved();
     if (!items.length) {
@@ -15575,6 +16051,7 @@ function setBottomNavActive(tab) {
       let smoothScrollToken = 0;
       let wheelSessionActive = false;
       let hasUserInteracted = false;
+      let resizeObserver = null;
       const wheelScrollFactor = 0.45;
       const centerStickyPx = 18;
 
@@ -15677,11 +16154,11 @@ function setBottomNavActive(tab) {
           return;
         }
 
-        const baseDuration = mode === "soft" ? 250 : 210;
-        const adaptivePart = Math.min(90, distance * 0.22);
+        const baseDuration = mode === "soft" ? 140 : 115;
+        const adaptivePart = Math.min(65, distance * 0.16);
         const duration = durationOverride != null
-          ? Math.max(170, Math.min(460, durationOverride))
-          : Math.max(170, Math.min(460, baseDuration + adaptivePart));
+          ? Math.max(80, Math.min(270, durationOverride))
+          : Math.max(80, Math.min(270, baseDuration + adaptivePart));
 
         cancelSmoothScroll();
         const token = smoothScrollToken;
@@ -15788,7 +16265,7 @@ function setBottomNavActive(tab) {
         }
       }
 
-      function scheduleWheelFinalize(delay = 220) {
+      function scheduleWheelFinalize(delay = 170) {
         if (wheelFinalizeTimer) clearTimeout(wheelFinalizeTimer);
         wheelFinalizeTimer = setTimeout(() => {
           wheelFinalizeTimer = 0;
@@ -15797,7 +16274,7 @@ function setBottomNavActive(tab) {
         }, delay);
       }
 
-      function scheduleMobileFinalize(delay = 140) {
+      function scheduleMobileFinalize(delay = 60) {
         clearMobileFinalize();
         mobileFinalizeTimer = setTimeout(() => {
           mobileFinalizeTimer = 0;
@@ -15874,7 +16351,7 @@ function setBottomNavActive(tab) {
         scheduleVisualFocusUpdate();
         if (wheelSessionActive) return;
         if (!isMobileViewport()) return;
-        scheduleMobileFinalize(150);
+        scheduleMobileFinalize(100);
       }, { passive: true });
       root.addEventListener("pointerup", () => {
         if (wheelSessionActive) return;
@@ -15883,7 +16360,7 @@ function setBottomNavActive(tab) {
       });
       root.addEventListener("touchend", () => {
         if (wheelSessionActive) return;
-        scheduleMobileFinalize(150);
+        scheduleMobileFinalize(100);
       }, { passive: true });
       root.addEventListener("wheel", (event) => {
         if (!event || typeof event.deltaY !== "number") return;
@@ -15903,17 +16380,17 @@ function setBottomNavActive(tab) {
         wheelSessionActive = true;
         cancelSmoothScroll();
         root.scrollLeft = nextLeft;
-        scheduleWheelFinalize(220);
+        scheduleWheelFinalize(170);
       }, { passive: false });
 
       setValue(defaultCode, { silent: true, center: false });
       if (typeof ResizeObserver === "function") {
-        const ro = new ResizeObserver(() => {
+        resizeObserver = new ResizeObserver(() => {
           if (hasUserInteracted) return;
           scheduleEnsure();
           scheduleVisualFocusUpdate();
         });
-        ro.observe(root);
+        resizeObserver.observe(root);
       }
       scheduleEnsure();
       scheduleVisualFocusUpdate();
@@ -15923,6 +16400,25 @@ function setBottomNavActive(tab) {
         getValue: () => currentCode || "",
         setValue: (code, silent) => setValue(code, { silent: Boolean(silent), center: false }),
         ensureCentered: () => ensureCenteredNow(),
+        destroy: () => {
+          clearWheelFinalize();
+          clearMobileFinalize();
+          if (ensureRafId) {
+            cancelAnimationFrame(ensureRafId);
+            ensureRafId = 0;
+          }
+          if (visualRafId) {
+            cancelAnimationFrame(visualRafId);
+            visualRafId = 0;
+          }
+          cancelSmoothScroll();
+          if (resizeObserver) {
+            try {
+              resizeObserver.disconnect();
+            } catch {}
+            resizeObserver = null;
+          }
+        },
       };
     }
 
@@ -15935,6 +16431,9 @@ function setBottomNavActive(tab) {
       resolveIcon: (code, iconRaw) => createMethodIconElement(iconRaw, code),
       allowEmpty: false,
     });
+    if (methodSelect && typeof methodSelect.destroy === "function") {
+      registerCheckoutCleanup(() => methodSelect.destroy());
+    }
 
     function syncCheckoutMode(code) {
       const resolvedCode = code || methodDefault || "takeaway";
@@ -16340,6 +16839,9 @@ function setBottomNavActive(tab) {
     }
 
     const timeSelect = createTimeIconPicker(availableTimeOptions, timeDefault);
+    if (timeSelect && typeof timeSelect.destroy === "function") {
+      registerCheckoutCleanup(() => timeSelect.destroy());
+    }
 
     // --- Hidden input для итогового значения времени ---
     const timeInput = document.createElement("input");
@@ -16452,6 +16954,9 @@ function setBottomNavActive(tab) {
     dateDisplayWrap.appendChild(calPopover);
 
     const timeSlotsDropdown = buildTimeWheelPicker([], "");
+    if (timeSlotsDropdown && typeof timeSlotsDropdown.destroy === "function") {
+      registerCheckoutCleanup(() => timeSlotsDropdown.destroy());
+    }
     const dateSlotsWrap = document.createElement("div");
     dateSlotsWrap.className = "shop-checkout-time-input--slots";
     dateSlotsWrap.classList.add("shop-checkout-time-stack-divider");
@@ -16467,6 +16972,9 @@ function setBottomNavActive(tab) {
     timeSlotsWrapAtTime.classList.add("shop-checkout-time-stack-divider");
     timeSlotsWrapAtTime.style.display = "none";
     const timeSlotsDropdownAtTime = buildTimeWheelPicker([], "");
+    if (timeSlotsDropdownAtTime && typeof timeSlotsDropdownAtTime.destroy === "function") {
+      registerCheckoutCleanup(() => timeSlotsDropdownAtTime.destroy());
+    }
     timeSlotsWrapAtTime.appendChild(timeSlotsDropdownAtTime.root);
     timeRow.appendChild(timeSlotsWrapAtTime);
 
@@ -16574,11 +17082,15 @@ function setBottomNavActive(tab) {
       calendarOpen = false;
     });
 
-    document.addEventListener("click", (e) => {
+    const handleCalendarOutsideClick = (e) => {
       if (calendarOpen && !dateDisplayWrap.contains(e.target)) {
         calPopover.classList.add("hidden");
         calendarOpen = false;
       }
+    };
+    document.addEventListener("click", handleCalendarOutsideClick);
+    registerCheckoutCleanup(() => {
+      document.removeEventListener("click", handleCalendarOutsideClick);
     });
 
     // --- Логика видимости и слотов ---
@@ -16693,6 +17205,9 @@ function setBottomNavActive(tab) {
       });
     }
     const paySelect = createPaymentIconPicker(payments, payDefault);
+    if (paySelect && typeof paySelect.destroy === "function") {
+      registerCheckoutCleanup(() => paySelect.destroy());
+    }
 
     const changeAmounts = [500, 1000, 2000, 5000].filter(v => v > currentPayableTotal);
     const changeOptions = [
@@ -16703,6 +17218,9 @@ function setBottomNavActive(tab) {
     const isCustomChange = draft.change_from && !changeAmounts.includes(draft.change_from);
     const changeDefault = isCustomChange ? "custom" : (draft.change_from ? String(draft.change_from) : "");
     const changeSelect = buildTimeWheelPicker(changeOptions, changeDefault);
+    if (changeSelect && typeof changeSelect.destroy === "function") {
+      registerCheckoutCleanup(() => changeSelect.destroy());
+    }
 
     const payWrap = document.createElement("div");
     const payLabel = document.createElement("label");
@@ -17110,6 +17628,7 @@ function setBottomNavActive(tab) {
             payment_code: paySelect.getValue() || null,
             change_from: getChangeFromValue(),
           });
+          cleanupCheckoutViewSubscriptions();
           if (typeof onEditAddress === "function") onEditAddress();
           else await openAddressEditorFromCheckout();
         });
@@ -17143,6 +17662,7 @@ function setBottomNavActive(tab) {
         });
 
         // Переключаем на pickup view (sheet или panel)
+        cleanupCheckoutViewSubscriptions();
         if (typeof onEditPickup === "function") onEditPickup();
         else showPickupListView('checkout');
       });
@@ -17291,7 +17811,10 @@ function setBottomNavActive(tab) {
     }
 
     if (actions?.backBtn && typeof onBack === "function") {
-      actions.backBtn.onclick = () => onBack();
+      actions.backBtn.onclick = () => {
+        cleanupCheckoutViewSubscriptions();
+        onBack();
+      };
     }
 
     if (actions?.submitBtn) {
@@ -17744,6 +18267,24 @@ function initShopLate() {
           const result = originalClose.call(this, type);
           if (!window.AppModal.isOpen || !window.AppModal.isOpen()) {
             hasSheetHistoryEntry = false;
+            resetShopModalHeaderUi();
+            if (typeof schedulePostModalCloseUiSync === "function") {
+              schedulePostModalCloseUiSync();
+            } else {
+              try {
+                document.body.classList.remove("shop-address-sheet-active");
+              } catch {}
+              if (elMobileAddressActions) elMobileAddressActions.classList.add("hidden");
+              if (elMobileAddressConfirm) elMobileAddressConfirm.classList.add("hidden");
+              if (typeof queueMobileUiStateSync === "function") {
+                queueMobileUiStateSync("appModal.close.fallback");
+              } else if (typeof window.queueShopMobileUiStateSync === "function") {
+                window.queueShopMobileUiStateSync("appModal.close.fallback");
+              }
+              if (typeof window.updateActiveOrdersBadge === "function") {
+                window.updateActiveOrdersBadge();
+              }
+            }
           }
           return result;
         };
@@ -17870,6 +18411,11 @@ function initShopLate() {
         const isProductOpen = elMobileProductActions && !elMobileProductActions.classList.contains("hidden");
         if (isMobile && (!isShopMainPage || !isMainTabActive || isAnyModalOpen || isProductOpen)) {
           badges.forEach(badge => badge.classList.add("hidden"));
+          if (typeof queueMobileUiStateSync === "function") {
+            queueMobileUiStateSync("updateActiveOrdersBadge.prehide");
+          } else if (typeof window.queueShopMobileUiStateSync === "function") {
+            window.queueShopMobileUiStateSync("updateActiveOrdersBadge.prehide");
+          }
           return;
         }
 
@@ -17966,6 +18512,11 @@ function initShopLate() {
           window._activeOrders = [];
         } finally {
           activeOrdersBadgeLoading = false;
+          if (typeof queueMobileUiStateSync === "function") {
+            queueMobileUiStateSync("updateActiveOrdersBadge.finally");
+          } else if (typeof window.queueShopMobileUiStateSync === "function") {
+            window.queueShopMobileUiStateSync("updateActiveOrdersBadge.finally");
+          }
         }
       }
 
@@ -18015,11 +18566,9 @@ function initShopLate() {
       // Функция открытия bottom sheet с активными заказами
       async function openActiveOrdersSheet() {
         if (!window.AppModal) return;
+        resetShopModalHeaderUi();
       
         // Скрываем приоткрытый bottom sheet при открытии полноценного
-        if (elActiveOrdersSheetCollapsed) {
-          elActiveOrdersSheetCollapsed.classList.add("hidden");
-        }
       
         const activeOrders = window._activeOrders || [];
         if (activeOrders.length === 0) {
@@ -18045,11 +18594,17 @@ function initShopLate() {
       function showActiveOrdersList(orders) {
         if (!window.AppModal) return;
         resetOrderDetailsTransientUi();
+        resetShopModalHeaderUi();
       
         // Обновляем состояние навигации
         sheetNavigationState.type = 'activeOrders';
         sheetNavigationState.screen = 'list';
         sheetNavigationState.data = null;
+        if (typeof queueMobileUiStateSync === "function") {
+          queueMobileUiStateSync("showActiveOrdersList");
+        } else if (typeof window.queueShopMobileUiStateSync === "function") {
+          window.queueShopMobileUiStateSync("showActiveOrdersList");
+        }
       
         // Проверяем, что orders не пустой
         if (!orders || !Array.isArray(orders) || orders.length === 0) {
@@ -18242,6 +18797,11 @@ function initShopLate() {
         sheetNavigationState.type = 'activeOrders';
         sheetNavigationState.screen = 'list';
         sheetNavigationState.data = null;
+        if (typeof queueMobileUiStateSync === "function") {
+          queueMobileUiStateSync("showActiveOrdersList.open");
+        } else if (typeof window.queueShopMobileUiStateSync === "function") {
+          window.queueShopMobileUiStateSync("showActiveOrdersList.open");
+        }
 
         setAppModalMode("shop");
         window.AppModal.open({
@@ -18265,6 +18825,7 @@ function initShopLate() {
       async function showActiveOrderDetails(orderId) {
         if (!window.AppModal) return;
         resetOrderDetailsTransientUi();
+        resetShopModalHeaderUi();
       
         const wrap = document.createElement("div");
         wrap.className = "shop-active-order-details";
@@ -18279,6 +18840,11 @@ function initShopLate() {
         sheetNavigationState.type = 'activeOrders';
         sheetNavigationState.screen = 'details';
         sheetNavigationState.data = { orderId };
+        if (typeof queueMobileUiStateSync === "function") {
+          queueMobileUiStateSync("showActiveOrderDetails");
+        } else if (typeof window.queueShopMobileUiStateSync === "function") {
+          window.queueShopMobileUiStateSync("showActiveOrderDetails");
+        }
       
         setAppModalMode("shop");
         window.AppModal.open({
@@ -18513,16 +19079,19 @@ function initShopLate() {
 
       // Обработчик клика на десктоп бейдж
       if (elActiveOrdersBadge) {
+        elActiveOrdersBadge.removeEventListener("click", handleActiveOrdersBadgeClick);
         elActiveOrdersBadge.addEventListener("click", handleActiveOrdersBadgeClick);
       }
 
       // Обработчик клика на мобильный бейдж (старый)
       if (elActiveOrdersBadgeMobile) {
+        elActiveOrdersBadgeMobile.removeEventListener("click", handleActiveOrdersBadgeClick);
         elActiveOrdersBadgeMobile.addEventListener("click", handleActiveOrdersBadgeClick);
       }
     
       // Обработчик клика на приоткрытый bottom sheet
       if (elActiveOrdersSheetCollapsed) {
+        elActiveOrdersSheetCollapsed.removeEventListener("click", handleActiveOrdersBadgeClick);
         elActiveOrdersSheetCollapsed.addEventListener("click", handleActiveOrdersBadgeClick);
       }
 
@@ -18530,37 +19099,51 @@ function initShopLate() {
       if (elActiveOrdersBadge || elActiveOrdersBadgeMobile) {
         updateActiveOrdersBadge();
         // Обновляем каждые 30 секунд
-        setInterval(updateActiveOrdersBadge, 30000);
+        if (window.__shopActiveOrdersBadgeInterval) {
+          clearInterval(window.__shopActiveOrdersBadgeInterval);
+        }
+        window.__shopActiveOrdersBadgeInterval = setInterval(updateActiveOrdersBadge, 30000);
       
         // Обновляем при возврате на страницу
-        document.addEventListener("visibilitychange", () => {
+        if (typeof window.__shopActiveOrdersVisibilityHandler === "function") {
+          document.removeEventListener("visibilitychange", window.__shopActiveOrdersVisibilityHandler);
+        }
+        window.__shopActiveOrdersVisibilityHandler = () => {
           if (!document.hidden) {
             updateActiveOrdersBadge();
           }
-        });
+        };
+        document.addEventListener("visibilitychange", window.__shopActiveOrdersVisibilityHandler);
       
         // Обновляем при изменении URL (для SPA навигации)
-        let lastPathname = window.location.pathname;
+        window.__shopActiveOrdersLastPathname = window.location.pathname;
         const checkPathnameChange = () => {
           const currentPathname = window.location.pathname;
-          if (currentPathname !== lastPathname) {
-            lastPathname = currentPathname;
+          if (currentPathname !== window.__shopActiveOrdersLastPathname) {
+            window.__shopActiveOrdersLastPathname = currentPathname;
             updateActiveOrdersBadge();
           }
         };
       
         // Проверяем изменение URL периодически (для SPA)
-        setInterval(checkPathnameChange, 500);
+        if (window.__shopActiveOrdersPathInterval) {
+          clearInterval(window.__shopActiveOrdersPathInterval);
+        }
+        window.__shopActiveOrdersPathInterval = setInterval(checkPathnameChange, 500);
       
         // Также слушаем события popstate (кнопка назад/вперед)
         // Примечание: основной обработчик popstate для bottom sheets добавлен в секции Nav выше
         // Здесь только обновляем бейдж, если не обработали bottom sheet
-        window.addEventListener("popstate", () => {
+        if (typeof window.__shopActiveOrdersPopstateHandler === "function") {
+          window.removeEventListener("popstate", window.__shopActiveOrdersPopstateHandler);
+        }
+        window.__shopActiveOrdersPopstateHandler = () => {
           // Если bottom sheet не был обработан, просто обновляем бейдж
           if (!(window.AppModal && window.AppModal.isOpen && window.AppModal.isOpen())) {
             updateActiveOrdersBadge();
           }
-        });
+        };
+        window.addEventListener("popstate", window.__shopActiveOrdersPopstateHandler);
       }
   } catch (e) {
     console.error(e);

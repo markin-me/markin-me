@@ -767,6 +767,22 @@
     _addressPendingPickupStoreId: null,
     _selectedPickupCity: null,
   };
+  let mobileUiState = {
+    isMobile: false,
+    tab: "menu",
+    panel: "menu",
+    footerMode: "nav",
+    cartViewMode: "cart",
+    sheet: {
+      open: false,
+      type: null,
+      screen: null,
+    },
+    lastReason: "init",
+    lastUpdatedAt: Date.now(),
+  };
+  let mobileUiStateSyncQueued = false;
+  let mobileUiStateQueuedReason = "";
   let openCartSheetCtx = null;
   let categoryHeaders = [];
   let isProgrammaticCategoryScroll = false;
@@ -1195,12 +1211,329 @@
     }
   }
   
+  function isMobileViewport() {
+    return window.matchMedia("(max-width: 768px)").matches;
+  }
+
+  function isVisibleNode(el) {
+    return !!(el && !el.classList.contains("hidden"));
+  }
+
+  function getCurrentMobileTabFromDom() {
+    const active = document.querySelector(".shop-nav-btn.is-active");
+    if (!active) return null;
+    const raw = String(active.getAttribute("data-tab") || "").trim().toLowerCase();
+    if (raw === "menu" || raw === "categories" || raw === "cart" || raw === "fav" || raw === "profile") {
+      return raw;
+    }
+    return null;
+  }
+
+  function resolveMobilePanelSnapshot(sheetOpen, sheetType, sheetScreen) {
+    if (sheetOpen) {
+      if (sheetType === "cart") {
+        if (sheetScreen === "checkout") return "checkout";
+        if (sheetScreen === "addressList" || sheetScreen === "pickupList") return "address-list";
+        if (sheetScreen === "addressForm") return "address-form";
+        if (sheetScreen === "product" || sheetScreen === "combo" || sheetScreen === "comboPicker") return "product";
+        return "cart";
+      }
+      if (sheetType === "categories") return "categories";
+      if (sheetType === "profile") return sheetScreen === "orderDetails" ? "profile-order-details" : "profile";
+      if (sheetType === "favorites") return "favorites";
+      if (sheetType === "activeOrders") return sheetScreen === "details" ? "active-orders-details" : "active-orders-list";
+      return "sheet";
+    }
+
+    let mode = "";
+    try {
+      mode = String(cartViewMode || "");
+    } catch {}
+
+    if (mode === "checkout") return "checkout";
+    if (mode === "address") {
+      if (isVisibleNode(elAddressFormView)) return "address-form";
+      return "address-list";
+    }
+    if (mode === "product") return "product";
+    if (mode === "profile") return "profile";
+    if (mode === "favorites") return "favorites";
+    if (mode === "cart") return "cart";
+    return "menu";
+  }
+
+  function resolveMobileFooterModeSnapshot() {
+    if (isVisibleNode(elMobileProductActions)) return "product-actions";
+    if (isVisibleNode(elMobileAddressActions)) return "address-actions";
+    if (isVisibleNode(elMobileAddressConfirm)) return "address-confirm";
+    if (isVisibleNode(elMobileOrderDetailsActions)) return "order-details-actions";
+    if (isVisibleNode(elActiveOrdersSheetCollapsed)) return "active-orders-collapsed";
+    if (isVisibleNode(elMobileCartActions)) {
+      if (isVisibleNode(elMobileCartActionsCheckout)) return "checkout-actions";
+      if (isVisibleNode(elMobileCartActionsCart)) return "cart-actions";
+      return "cart-actions";
+    }
+    return "nav";
+  }
+
+  function resolveMobileFooterModeByPanel(panel, opts = {}) {
+    const options = opts && typeof opts === "object" ? opts : {};
+    const isCartSheetOpen = Boolean(options.sheetOpen) && String(options.sheetType || "") === "cart";
+    const panelName = String(panel || "");
+    if (panelName === "checkout") return isCartSheetOpen ? "checkout-actions" : "nav";
+    if (panelName === "cart") {
+      if (!isCartSheetOpen) return "nav";
+      const resolvedItems = cartItemsResolved();
+      const cartItemsCount = Array.isArray(resolvedItems) ? resolvedItems.length : 0;
+      return cartItemsCount > 0 ? "cart-actions" : "nav";
+    }
+    if (panelName === "address-form") return "address-actions";
+    if (panelName === "address-list") return "address-confirm";
+    if (panelName === "product") return "product-actions";
+    if (panelName === "profile-order-details") return "order-details-actions";
+    if (
+      panelName === "menu" ||
+      panelName === "categories" ||
+      panelName === "profile" ||
+      panelName === "favorites" ||
+      panelName === "active-orders-details" ||
+      panelName === "active-orders-list" ||
+      panelName === "sheet"
+    ) {
+      return "nav";
+    }
+    return null;
+  }
+
+  function renderMobileBottomByState(snapshot, reason = "renderMobileBottomByState") {
+    const stateSnapshot = snapshot && typeof snapshot === "object" ? snapshot : window.getShopMobileUiState();
+    const isMobile = Boolean(stateSnapshot && stateSnapshot.isMobile);
+    if (!isMobile) return;
+
+    const normalizeTab = (rawTab) => {
+      const t = String(rawTab || "").toLowerCase();
+      if (t === "menu" || t === "categories" || t === "cart" || t === "fav" || t === "profile") return t;
+      return "menu";
+    };
+
+    const tab = normalizeTab(stateSnapshot.tab);
+    const navMap = {
+      menu: elNavMenu,
+      categories: elNavCategories,
+      cart: elNavCart,
+      fav: elNavFav,
+      profile: elNavProfile,
+    };
+
+    Object.keys(navMap).forEach((key) => {
+      const btn = navMap[key];
+      if (!btn) return;
+      const active = key === tab;
+      btn.classList.toggle("is-active", active);
+      if (active) btn.setAttribute("aria-current", "page");
+      else btn.removeAttribute("aria-current");
+    });
+
+    const modeRaw = String(stateSnapshot.footerMode || "nav");
+    const sheetOpen = Boolean(stateSnapshot?.sheet?.open);
+    const sheetType = String(stateSnapshot?.sheet?.type || "").trim();
+    let mode = modeRaw || "nav";
+    if ((mode === "cart-actions" || mode === "checkout-actions") && !(sheetOpen && sheetType === "cart")) {
+      mode = "nav";
+    }
+    const setVisible = (el, visible) => {
+      if (!el) return;
+      el.classList.toggle("hidden", !visible);
+    };
+
+    const showProductActions = mode === "product-actions";
+    const showCartActions = mode === "cart-actions" || mode === "checkout-actions";
+    const showCartActionsCart = mode === "cart-actions";
+    const showCartActionsCheckout = mode === "checkout-actions";
+    const showAddressActions = mode === "address-actions";
+    const showAddressConfirm = mode === "address-confirm";
+    const showOrderDetailsActions = mode === "order-details-actions";
+    const showActiveOrdersCollapsed = mode === "active-orders-collapsed";
+
+    setVisible(elMobileProductActions, showProductActions);
+    setVisible(elMobileCartActions, showCartActions);
+    setVisible(elMobileCartActionsCart, showCartActionsCart);
+    setVisible(elMobileCartActionsCheckout, showCartActionsCheckout);
+    setVisible(elMobileAddressActions, showAddressActions);
+    setVisible(elMobileAddressConfirm, showAddressConfirm);
+    setVisible(elMobileOrderDetailsActions, showOrderDetailsActions);
+
+    if (elActiveOrdersSheetCollapsed) {
+      if (showActiveOrdersCollapsed) {
+        elActiveOrdersSheetCollapsed.classList.remove("hidden");
+      } else if (sheetOpen || mode !== "nav") {
+        // Collapsed active-orders bar is only allowed on main nav when no sheet is open.
+        elActiveOrdersSheetCollapsed.classList.add("hidden");
+      }
+    }
+
+    if (mode === "cart-actions" || mode === "checkout-actions") {
+      try {
+        if (typeof updateMobileDeliveryProgress === "function") updateMobileDeliveryProgress();
+      } catch {}
+    }
+
+    window.__shopMobileBottomRender = {
+      reason: String(reason || "render"),
+      mode,
+      tab,
+      ts: Date.now(),
+    };
+  }
+
+  function emitMobileUiStateChange() {
+    try {
+      document.dispatchEvent(new CustomEvent("shop:mobile-ui-state-change", {
+        detail: window.getShopMobileUiState(),
+      }));
+    } catch {}
+  }
+
+  function setMobileUiStateSnapshot(nextState, reason = "setMobileUiStateSnapshot", opts = {}) {
+    const previous = mobileUiState;
+    const next = {
+      ...previous,
+      ...(nextState || {}),
+      sheet: {
+        ...(previous.sheet || {}),
+        ...((nextState && nextState.sheet) || {}),
+      },
+      lastReason: String(reason || "state-update"),
+      lastUpdatedAt: Date.now(),
+    };
+
+    const changed =
+      previous.isMobile !== next.isMobile ||
+      previous.tab !== next.tab ||
+      previous.panel !== next.panel ||
+      previous.footerMode !== next.footerMode ||
+      previous.cartViewMode !== next.cartViewMode ||
+      (previous.sheet?.open !== next.sheet?.open) ||
+      (previous.sheet?.type !== next.sheet?.type) ||
+      (previous.sheet?.screen !== next.sheet?.screen);
+
+    mobileUiState = next;
+    window.__shopMobileUiState = next;
+    if (changed && !opts.silent) emitMobileUiStateChange();
+    return changed;
+  }
+
+  function syncMobileUiState(reason = "syncMobileUiState") {
+    const isMobile = isMobileViewport();
+    const sheetOpen = !!(window.AppModal && typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen());
+    const sheetType = String(sheetNavigationState?.type || "").trim() || null;
+    const sheetScreen = String(sheetNavigationState?.screen || "").trim() || null;
+    const panel = resolveMobilePanelSnapshot(sheetOpen, sheetType, sheetScreen);
+    const footerMode = resolveMobileFooterModeByPanel(panel, {
+      sheetOpen,
+      sheetType,
+      sheetScreen,
+    }) || resolveMobileFooterModeSnapshot();
+    const currentTab = getCurrentMobileTabFromDom();
+
+    let cartModeSnapshot = "";
+    try {
+      cartModeSnapshot = String(cartViewMode || "");
+    } catch {}
+
+    let tab = currentTab || "menu";
+    if (!currentTab) {
+      if (panel === "categories") tab = "categories";
+      else if (panel === "cart" || panel === "checkout") tab = "cart";
+      else if (panel === "profile") tab = "profile";
+      else if (panel === "favorites") tab = "fav";
+      else tab = "menu";
+    }
+
+    return setMobileUiStateSnapshot(
+      {
+        isMobile,
+        tab,
+        panel,
+        footerMode,
+        cartViewMode: cartModeSnapshot || "cart",
+        sheet: {
+          open: sheetOpen,
+          type: sheetType,
+          screen: sheetScreen,
+        },
+      },
+      reason
+    );
+  }
+
+  function queueMobileUiStateSync(reason = "queueMobileUiStateSync") {
+    mobileUiStateQueuedReason = String(reason || mobileUiStateQueuedReason || "queue");
+    if (mobileUiStateSyncQueued) return;
+    mobileUiStateSyncQueued = true;
+    const flush = () => {
+      mobileUiStateSyncQueued = false;
+      const syncReason = mobileUiStateQueuedReason || "queued-sync";
+      mobileUiStateQueuedReason = "";
+      syncMobileUiState(syncReason);
+    };
+    if (typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(flush);
+      return;
+    }
+    setTimeout(flush, 0);
+  }
+
+  window.getShopMobileUiState = function getShopMobileUiState() {
+    const snapshot = mobileUiState || {};
+    return {
+      ...snapshot,
+      sheet: {
+        ...(snapshot.sheet || {}),
+      },
+    };
+  };
+  window.syncShopMobileUiState = function syncShopMobileUiState(reason) {
+    return syncMobileUiState(String(reason || "external-sync"));
+  };
+  window.queueShopMobileUiStateSync = queueMobileUiStateSync;
+  window.renderShopMobileBottomByState = function renderShopMobileBottomByState(reason = "external-render") {
+    renderMobileBottomByState(window.getShopMobileUiState(), String(reason || "external-render"));
+  };
+
+  if (!window.__shopMobileUiViewportWatcherBound) {
+    window.__shopMobileUiViewportWatcherBound = true;
+    window.addEventListener("resize", () => queueMobileUiStateSync("viewport-resize"), { passive: true });
+    window.addEventListener("orientationchange", () => queueMobileUiStateSync("viewport-orientation"), { passive: true });
+  }
+
+  if (!window.__shopMobileUiRenderBound) {
+    window.__shopMobileUiRenderBound = true;
+    document.addEventListener("shop:mobile-ui-state-change", (event) => {
+      const detail = event && event.detail && typeof event.detail === "object"
+        ? event.detail
+        : window.getShopMobileUiState();
+      renderMobileBottomByState(detail, "shop:mobile-ui-state-change");
+    });
+  }
+
   // ??????? ???????????? ????????? ????????? ? bottom sheets ??? ????????? ?????? "?????"
-  let sheetNavigationState = {
+  const __sheetNavigationStateRaw = {
     type: null, // 'cart' | 'categories' | 'profile' | 'activeOrders' | 'order' | 'product' | null
     screen: null, // ??????? ????? ?????? sheet
     data: null, // ?????????????? ?????? (????????, cartKey ??? product)
   };
+  let sheetNavigationState = new Proxy(__sheetNavigationStateRaw, {
+    set(target, prop, value) {
+      if (target[prop] === value) return true;
+      target[prop] = value;
+      queueMobileUiStateSync(`sheetNavigationState.${String(prop)}`);
+      return true;
+    },
+    get(target, prop) {
+      return target[prop];
+    },
+  });
 
   // ??????? ????????? ?????? "?????" ?? Android
   function handleAndroidBackButton() {
@@ -1310,8 +1643,16 @@
       showSheetAddressList();
       return true;
     } else if (addressListView && !addressListView.classList.contains('hidden')) {
-      // ?? ?????? ??????? - ???????????? ? ?????????? ??????
-      showSheetCheckout();
+      const backMode = openCartSheetCtx?.addressBackMode || "cart";
+      if (backMode === "header") {
+        closeShopSheetIfOpen();
+      } else if (backMode === "profile") {
+        returnToProfileFromSheet();
+      } else if (backMode === "checkout") {
+        showSheetCheckout();
+      } else {
+        showSheetCart();
+      }
       return true;
     } else if (checkoutEl && !checkoutEl.classList.contains('hidden')) {
       // ?? ?????????? ?????? - ???????????? ? ???????
@@ -1446,6 +1787,7 @@
   let cartViewMode = "cart";
   let previousPanelMode = "cart";
   let previousPanelProductId = null;
+  queueMobileUiStateSync("cartViewMode.init");
 
   function normalizeCart(raw) {
     if (Array.isArray(raw)) {
@@ -4326,6 +4668,7 @@ function showCartView() {
   setCartFooterMode("cart");
   syncCartFooterVisibilityForCartMode(cartItemsResolved().length);
   renderCartIfDirty();
+  queueMobileUiStateSync("showCartView");
 }
 
 function showCheckoutView() {
@@ -4360,6 +4703,7 @@ function showCheckoutView() {
   }
 
   setCartFooterMode("checkout");
+  queueMobileUiStateSync("showCheckoutView");
 }
 
 function showAddressListView(backMode = "cart", opts = {}) {
@@ -4402,6 +4746,7 @@ function showAddressListView(backMode = "cart", opts = {}) {
     : (window._deliveryMode === "pickup" ? "pickup" : "delivery");
   setAddressListMode(preferredMode, { rerender: false });
   renderAddressList();
+  queueMobileUiStateSync("showAddressListView");
 }
 
 async function showAddressFormView(prefill, editingId, backMode) {
@@ -4466,6 +4811,7 @@ async function showAddressFormView(prefill, editingId, backMode) {
   }
 
   setCartFooterMode("hidden");
+  queueMobileUiStateSync("showAddressFormView");
   setTimeout(() => { try { elAddrStreet?.focus?.(); } catch {} }, 0);
 }
 
@@ -4486,6 +4832,7 @@ function showPickupListView(backMode = "checkout") {
     if (elProfileContent) elProfileContent.classList.remove("hidden");
     setCartHeader({ title: "Профиль", showAddressChip: false, showProfileActions: true, showBack: false });
     setCartFooterMode("hidden");
+    queueMobileUiStateSync("showProfileView");
   }
 
   function rememberPreviousPanel() {
@@ -4543,6 +4890,7 @@ function showProductView() {
   });
 
   setCartFooterMode("hidden");
+  queueMobileUiStateSync("showProductView");
 }
 
   async function reloadAddressesFromServer() {
@@ -5330,7 +5678,12 @@ async function initAddresses() {
   const headerAddrBtn = document.getElementById("headerAddressButton");
   if (headerAddrBtn) {
     headerAddrBtn.addEventListener("click", async () => {
-      if (!openCartSheetCtx) openCartSheet();
+      const isCartSheetOpen =
+        !!window.AppModal &&
+        typeof window.AppModal.isOpen === "function" &&
+        window.AppModal.isOpen() &&
+        sheetNavigationState.type === "cart";
+      if (!isCartSheetOpen) openCartSheet();
       if (openCartSheetCtx?.showSheetAddressList) {
         openCartSheetCtx.showSheetAddressList("header");
       }
@@ -8025,6 +8378,7 @@ function removeFromCartByKey(cartKey, productId) {
     if (!elCartList) return;
     if (!force && cartUiRenderedRevision === cartUiRevision) {
       updateMobileDeliveryProgress();
+      queueMobileUiStateSync("renderCart.noop");
       return;
     }
 
@@ -8040,6 +8394,7 @@ function removeFromCartByKey(cartKey, productId) {
     updateMobileDeliveryProgress();
     appendUpsellToList(elCartList);
     cartUiRenderedRevision = cartUiRevision;
+    queueMobileUiStateSync("renderCart.rendered");
   }
 
   function renderCartIfDirty(force = false) {
@@ -8096,6 +8451,7 @@ function updateCartBadge() {
       if (elMobileCartActionsCheckout) elMobileCartActionsCheckout.classList.add("hidden");
       updateMobileDeliveryProgress();
     }
+    queueMobileUiStateSync("clearCartAll");
   }
 
   function attachTwoStepClear(btn, onConfirm) {
@@ -9182,15 +9538,57 @@ function updateCartBadge() {
     const defaults = cachedDefaults && cachedDefaults.promise
       ? await cachedDefaults.promise
       : await warmUpsellDefaultConfig(pid, p);
-    const optionItems = Array.isArray(defaults.option_items) ? defaults.option_items : [];
+    let normalizedVariantUnitPrice = Number(defaults?.variant_unit_price || 0);
+    let normalizedVariantGroupId = defaults?.variant_group_id != null ? Number(defaults.variant_group_id) : null;
+    let normalizedVariantValueIndex = defaults?.variant_value_index != null ? Number(defaults.variant_value_index) : null;
+    let normalizedVariantLabel = str(defaults?.variant_label || "");
+
+    try {
+      const [productForVariant, variantsForVariant] = await Promise.all([
+        ensureProduct(pid),
+        resolveProductVariants(pid),
+      ]);
+      const vGroups = Array.isArray(variantsForVariant) ? variantsForVariant : [];
+      const firstVariantGroup = vGroups.length ? vGroups[0] : null;
+      const values = Array.isArray(firstVariantGroup?.values) ? firstVariantGroup.values : [];
+      if (firstVariantGroup && values.length) {
+        const rawIdx = normalizedVariantValueIndex != null
+          ? Number(normalizedVariantValueIndex)
+          : (firstVariantGroup.default_value_index != null ? Number(firstVariantGroup.default_value_index) : 0);
+        const safeIdx = Number.isFinite(rawIdx) && rawIdx >= 0 && rawIdx < values.length ? rawIdx : 0;
+        const valueLabel = formatUpsellVariantValueLabel(
+          values[safeIdx],
+          firstVariantGroup.unit_short_title || firstVariantGroup.unit_code || firstVariantGroup.unit_title || ""
+        );
+        const groupTitle = str(firstVariantGroup.title || firstVariantGroup.title_label || "").trim();
+        const recalculated = Number(getVariantUnitPrice(productForVariant, vGroups, {
+          selectedIndex: safeIdx,
+          value: values[safeIdx],
+          label: valueLabel,
+        }) || 0);
+        if (Number.isFinite(recalculated) && recalculated > 0) {
+          normalizedVariantUnitPrice = recalculated;
+        }
+        normalizedVariantGroupId = Number(firstVariantGroup.id || firstVariantGroup.variant_group_id || 0) || null;
+        normalizedVariantValueIndex = safeIdx;
+        normalizedVariantLabel = groupTitle ? `${groupTitle}: ${valueLabel}` : valueLabel;
+      } else {
+        normalizedVariantGroupId = null;
+        normalizedVariantValueIndex = null;
+        normalizedVariantLabel = "";
+      }
+    } catch {}
+
+    // Upsell flow: ignore option groups entirely (keep only product + variant + ingredients).
+    const optionItems = [];
     const ingredients = Array.isArray(defaults.ingredients) ? defaults.ingredients : [];
     const hasVariant =
-      Number.isFinite(Number(defaults.variant_group_id)) &&
-      Number.isFinite(Number(defaults.variant_value_index));
+      Number.isFinite(Number(normalizedVariantGroupId)) &&
+      Number.isFinite(Number(normalizedVariantValueIndex));
     const variantSelection = hasVariant
       ? {
-          group_id: Number(defaults.variant_group_id),
-          value_index: Number(defaults.variant_value_index),
+          group_id: Number(normalizedVariantGroupId),
+          value_index: Number(normalizedVariantValueIndex),
         }
       : null;
 
@@ -9198,27 +9596,27 @@ function updateCartBadge() {
     const existing = getCartItemByKey(key);
     if (existing) {
       existing.qty += 1;
-      existing.option_item_ids = Array.isArray(defaults.option_item_ids) ? defaults.option_item_ids : [];
+      existing.option_item_ids = [];
       existing.option_items = optionItems;
       existing.ingredients = ingredients;
       existing.ingredient_price_diff = Number(defaults.ingredient_price_diff || 0);
-      existing.variant_group_id = hasVariant ? Number(defaults.variant_group_id) : null;
-      existing.variant_value_index = hasVariant ? Number(defaults.variant_value_index) : null;
-      existing.variant_label = hasVariant ? str(defaults.variant_label || "") : "";
-      existing.variant_unit_price = hasVariant ? Number(defaults.variant_unit_price || 0) : 0;
+      existing.variant_group_id = hasVariant ? Number(normalizedVariantGroupId) : null;
+      existing.variant_value_index = hasVariant ? Number(normalizedVariantValueIndex) : null;
+      existing.variant_label = hasVariant ? str(normalizedVariantLabel || "") : "";
+      existing.variant_unit_price = hasVariant ? Number(normalizedVariantUnitPrice || 0) : 0;
     } else {
       state.cart.push({
         key: key,
         product_id: pid,
         qty: 1,
-        option_item_ids: Array.isArray(defaults.option_item_ids) ? defaults.option_item_ids : [],
+        option_item_ids: [],
         option_items: optionItems,
         ingredients: ingredients,
         ingredient_price_diff: Number(defaults.ingredient_price_diff || 0),
-        variant_group_id: hasVariant ? Number(defaults.variant_group_id) : null,
-        variant_value_index: hasVariant ? Number(defaults.variant_value_index) : null,
-        variant_label: hasVariant ? str(defaults.variant_label || "") : "",
-        variant_unit_price: hasVariant ? Number(defaults.variant_unit_price || 0) : 0,
+        variant_group_id: hasVariant ? Number(normalizedVariantGroupId) : null,
+        variant_value_index: hasVariant ? Number(normalizedVariantValueIndex) : null,
+        variant_label: hasVariant ? str(normalizedVariantLabel || "") : "",
+        variant_unit_price: hasVariant ? Number(normalizedVariantUnitPrice || 0) : 0,
         auto_add: 0,
         auto_add_group_id: null,
       });

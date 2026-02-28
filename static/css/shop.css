@@ -10560,7 +10560,7 @@ body.page-shop:not(.shop-main) .center-stack > .panel:first-child{
 }
 
 .shop-combo-picker-expand-inner{
-  padding: 12px 14px 14px;
+  padding: 12px 0 14px;
   background: var(--color-surface);
   min-width: 0;
   overflow-x: hidden;
@@ -11994,6 +11994,7 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 .shop-nav-btn{
   height: 34px;
   width: 100%;
+  min-width: 0;
   border: 0;
   background: transparent;
   border-radius: 12px;
@@ -12002,6 +12003,8 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   cursor: pointer;
   position: relative;
   color: var(--color-text-muted);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .shop-nav-btn span{
@@ -13792,7 +13795,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   cursor:pointer;
   transform:scale(calc(0.84 + (var(--carousel-focus) * 0.16)));
   opacity:calc(0.65 + (var(--carousel-focus) * 0.35));
-  transition:background-color .15s ease, color .15s ease, transform .12s linear, opacity .12s linear;
+  transition:background-color .1s ease, color .1s ease, transform .07s linear, opacity .07s linear;
   scroll-snap-align:center;
   scroll-snap-stop:always;
 }
@@ -13822,7 +13825,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   font-size:40px;
   transform:scale(calc(0.72 + (var(--carousel-focus) * 0.28)));
   transform-origin:center;
-  transition:transform .12s linear, background-color .15s ease, color .15s ease, box-shadow .15s ease;
+  transition:transform .07s linear, background-color .1s ease, color .1s ease, box-shadow .1s ease;
 }
 
 .shop-checkout-method-pill-icon-img{
@@ -14273,7 +14276,7 @@ html[data-theme="dark"] .shop-product-hero-dot.is-active{
   box-shadow: 0 8px 24px var(--overlay-bg), 0 2px 8px var(--overlay-bg);
   visibility: hidden;
   opacity: 0;
-  transition: visibility 0.2s, opacity 0.2s ease;
+  transition: visibility 0.15s, opacity 0.15s ease;
   pointer-events: none;
 }
 .shop-checkout-time-wheel-panel.is-open{
@@ -15980,11 +15983,15 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     position: fixed;
     left: 50%;
     transform: translateX(-50%);
-    bottom: env(safe-area-inset-bottom);
+    bottom: max(8px, env(safe-area-inset-bottom));
     width: min(520px, calc(100% - 24px));
     z-index: 120;
     gap: 8px;
     --shop-mobile-action-h: 44px;
+    pointer-events: none;
+  }
+  .shop-mobile-bottom-container > * {
+    pointer-events: auto;
   }
   
   
@@ -16307,6 +16314,9 @@ body.page-shop .panel-body.no-scrollbar.shop-cart-body::after{
     border-radius: 16px 16px 0 0;
     border-bottom: none;
     box-shadow: 0 10px 22px var(--overlay-bg);
+  }
+  body:not(.shop-address-sheet-active) .shop-mobile-address-confirm {
+    display: none !important;
   }
   .shop-mobile-address-confirm.hidden { display: none }
   .shop-mobile-address-confirm .shop-checkout-btn {
