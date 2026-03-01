@@ -596,6 +596,7 @@ app.get('/max-app', (req, res) => {
 app.get('/dashboard/cash', (req, res) => res.render('pages/cash'));
 app.get('/dashboard/products', (req, res) => res.render('pages/products'));
 app.get('/dashboard/orders', (req, res) => res.render('pages/orders'));
+app.get('/dashboard/new-order', (req, res) => res.render('pages/new-order'));
 app.get('/dashboard/clients', (req, res) => res.render('pages/clients', { activePage: 'clients' }));
 app.get('/dashboard/chat', (req, res) => res.render('pages/chat', { activePage: 'chat' }));
 app.get('/dashboard/team', (req, res) => res.render('pages/home', { activePage: 'team' }));

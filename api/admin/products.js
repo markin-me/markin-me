@@ -6,6 +6,18 @@ const multer = require('multer');
 
 module.exports = function makeAdminProductsRouter({ db, helpers }) {
   const router = express.Router();
+  let hasCategoryCheckoutVisibilityColumn = null;
+
+  async function ensureCategoryCheckoutVisibilityColumnKnown() {
+    if (hasCategoryCheckoutVisibilityColumn !== null) return hasCategoryCheckoutVisibilityColumn;
+    try {
+      const [rows] = await db.query("SHOW COLUMNS FROM prod_categories LIKE 'checkout_visibility'");
+      hasCategoryCheckoutVisibilityColumn = Array.isArray(rows) && rows.length > 0;
+    } catch (e) {
+      hasCategoryCheckoutVisibilityColumn = false;
+    }
+    return hasCategoryCheckoutVisibilityColumn;
+  }
 
   // Удаляет файлы фото с диска (оригинал + .webp + thumb)
   function deletePhotoFiles(urls) {
@@ -200,15 +212,22 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const cart_visibility = helpers.toBool(req.body.cart_visibility, false) ? 1 : 0;
+      const checkout_visibility = helpers.toBool(req.body.checkout_visibility, true) ? 1 : 0;
+      const hasCheckoutVisibilityColumn = await ensureCategoryCheckoutVisibilityColumnKnown();
 
       const sort_order =
         helpers.numOrNull(req.body.sort_order) ??
         (await helpers.nextSortOrderForCategories(db, tenantId, 10));
 
-      const [result] = await db.query(
-        'INSERT INTO prod_categories (tenant_id, code, title, icon, site_visibility, is_active, cart_visibility, sort_order) VALUES (?,?,?,?,?,?,?,?)',
-        [tenantId, code, title, icon, site_visibility, is_active, cart_visibility, sort_order]
-      );
+      const [result] = hasCheckoutVisibilityColumn
+        ? await db.query(
+          'INSERT INTO prod_categories (tenant_id, code, title, icon, site_visibility, is_active, cart_visibility, checkout_visibility, sort_order) VALUES (?,?,?,?,?,?,?,?,?)',
+          [tenantId, code, title, icon, site_visibility, is_active, cart_visibility, checkout_visibility, sort_order]
+        )
+        : await db.query(
+          'INSERT INTO prod_categories (tenant_id, code, title, icon, site_visibility, is_active, cart_visibility, sort_order) VALUES (?,?,?,?,?,?,?,?)',
+          [tenantId, code, title, icon, site_visibility, is_active, cart_visibility, sort_order]
+        );
 
       res.json({ ok: true, id: result.insertId });
     } catch (e) {
@@ -231,14 +250,25 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       const site_visibility = helpers.toBool(req.body.site_visibility, true) ? 1 : 0;
       const is_active = helpers.toBool(req.body.is_active, true) ? 1 : 0;
       const cart_visibility = helpers.toBool(req.body.cart_visibility, false) ? 1 : 0;
+      const checkout_visibility = helpers.toBool(req.body.checkout_visibility, true) ? 1 : 0;
       const sort_order = helpers.numOrNull(req.body.sort_order);
+      const hasCheckoutVisibilityColumn = await ensureCategoryCheckoutVisibilityColumnKnown();
 
-      await db.query(
-        `UPDATE prod_categories
-         SET code=?, title=?, icon=?, site_visibility=?, is_active=?, cart_visibility=?, sort_order=COALESCE(?, sort_order)
-         WHERE tenant_id=? AND id=?`,
-        [code, title, icon, site_visibility, is_active, cart_visibility, sort_order, tenantId, id]
-      );
+      if (hasCheckoutVisibilityColumn) {
+        await db.query(
+          `UPDATE prod_categories
+           SET code=?, title=?, icon=?, site_visibility=?, is_active=?, cart_visibility=?, checkout_visibility=?, sort_order=COALESCE(?, sort_order)
+           WHERE tenant_id=? AND id=?`,
+          [code, title, icon, site_visibility, is_active, cart_visibility, checkout_visibility, sort_order, tenantId, id]
+        );
+      } else {
+        await db.query(
+          `UPDATE prod_categories
+           SET code=?, title=?, icon=?, site_visibility=?, is_active=?, cart_visibility=?, sort_order=COALESCE(?, sort_order)
+           WHERE tenant_id=? AND id=?`,
+          [code, title, icon, site_visibility, is_active, cart_visibility, sort_order, tenantId, id]
+        );
+      }
 
       res.json({ ok: true });
     } catch (e) {

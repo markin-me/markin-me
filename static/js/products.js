@@ -14643,6 +14643,7 @@ const isViewMode = state.comboPanel.mode === "view";
       const activeInput = form.querySelector("input[name='is_active']");
       const visibilityInput = form.querySelector("input[name='site_visibility']");
       const cartVisibilityInput = form.querySelector("input[name='cart_visibility']");
+      const checkoutVisibilityInput = form.querySelector("input[name='checkout_visibility']");
 
       if (titleInput) titleInput.value = cat.title || "";
       if (codeInput) codeInput.value = cat.code || "";
@@ -14651,6 +14652,7 @@ const isViewMode = state.comboPanel.mode === "view";
       if (activeInput) activeInput.checked = Boolean(cat.is_active);
       if (visibilityInput) visibilityInput.checked = Boolean(cat.site_visibility);
       if (cartVisibilityInput) cartVisibilityInput.checked = Boolean(cat.cart_visibility);
+      if (checkoutVisibilityInput) checkoutVisibilityInput.checked = cat.checkout_visibility !== 0;
     }
 
     function renderIconPreview(value) {
@@ -14730,6 +14732,7 @@ const isViewMode = state.comboPanel.mode === "view";
         const activeInput = form.querySelector("input[name='is_active']");
         const visibilityInput = form.querySelector("input[name='site_visibility']");
         const cartVisibilityInput = form.querySelector("input[name='cart_visibility']");
+        const checkoutVisibilityInput = form.querySelector("input[name='checkout_visibility']");
 
         let iconValue = String(form.querySelector("#ce_icon")?.value || "").trim();
         if (draft.iconFile) {
@@ -14745,6 +14748,7 @@ const isViewMode = state.comboPanel.mode === "view";
           is_active: activeInput?.checked ? 1 : 0,
           site_visibility: visibilityInput?.checked ? 1 : 0,
           cart_visibility: cartVisibilityInput?.checked ? 1 : 0,
+          checkout_visibility: checkoutVisibilityInput?.checked ? 1 : 0,
         };
 
         if (!payload.title) {
@@ -14895,6 +14899,8 @@ const isViewMode = state.comboPanel.mode === "view";
           sort_order: form.sort_order.value === "" ? null : Number(form.sort_order.value),
           is_active: form.is_active.checked ? 1 : 0,
           site_visibility: form.site_visibility.checked ? 1 : 0,
+          cart_visibility: form.cart_visibility?.checked ? 1 : 0,
+          checkout_visibility: form.checkout_visibility?.checked ? 1 : 0,
         };
 
         if (!payload.title) {
@@ -14931,6 +14937,8 @@ const isViewMode = state.comboPanel.mode === "view";
       form.sort_order.value = category.sort_order != null ? String(category.sort_order) : "";
       form.is_active.checked = Boolean(category.is_active);
       form.site_visibility.checked = Boolean(category.site_visibility);
+      if (form.cart_visibility) form.cart_visibility.checked = Boolean(category.cart_visibility);
+      if (form.checkout_visibility) form.checkout_visibility.checked = category.checkout_visibility !== 0;
     }
 
     function renderIconPreview(value) {
