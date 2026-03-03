@@ -414,6 +414,52 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
   });
 
   /**
+   * PUT /api/admin/clients/:id/addresses/:addressId
+   * body: { street, house, entrance?, floor?, apartment?, comment? }
+   */
+  router.put('/:id/addresses/:addressId', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const customerId = Number(req.params.id);
+      const addressId = Number(req.params.addressId);
+      if (!Number.isFinite(customerId) || customerId <= 0 || !Number.isFinite(addressId) || addressId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      const street = helpers.strOrNull(req.body.street);
+      const house = helpers.strOrNull(req.body.house);
+      if (!street) return res.status(400).json({ ok: false, error: 'STREET_REQUIRED' });
+      if (!house) return res.status(400).json({ ok: false, error: 'HOUSE_REQUIRED' });
+      const entrance = helpers.strOrNull(req.body.entrance);
+      const floor = helpers.strOrNull(req.body.floor);
+      const apartment = helpers.strOrNull(req.body.apartment);
+      const comment = helpers.strOrNull(req.body.comment);
+
+      const [cur] = await db.query(
+        `SELECT id
+         FROM cust_customer_addresses
+         WHERE tenant_id=? AND customer_id=? AND id=? AND is_active=1
+         LIMIT 1`,
+        [tenantId, customerId, addressId]
+      );
+      if (!cur.length) {
+        return res.status(404).json({ ok: false, error: 'ADDRESS_NOT_FOUND' });
+      }
+
+      await db.query(
+        `UPDATE cust_customer_addresses
+         SET street=?, house=?, entrance=?, floor=?, apartment=?, comment=?
+         WHERE tenant_id=? AND customer_id=? AND id=?`,
+        [street, house, entrance, floor, apartment, comment, tenantId, customerId, addressId]
+      );
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
    * GET /api/admin/clients/:id/orders
    */
   router.get('/:id/orders', async (req, res) => {
