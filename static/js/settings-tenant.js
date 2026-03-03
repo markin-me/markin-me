@@ -128,6 +128,52 @@
     favicon_light_url: ""
   };
   let siteDraft = { ...siteOriginal };
+  let chatSidebarBadgeScriptPromise = null;
+
+  function ensureChatSidebarBadgeScriptLoaded() {
+    if (window.__chatSidebarBadgeLoaded === true) return Promise.resolve(true);
+    if (chatSidebarBadgeScriptPromise) return chatSidebarBadgeScriptPromise;
+
+    const scriptUrl = String(window.__chatSidebarBadgeUrl || "").trim();
+    if (!scriptUrl) return Promise.resolve(false);
+
+    const existing = document.querySelector('script[data-chat-sidebar-badge="1"]');
+    if (existing) {
+      chatSidebarBadgeScriptPromise = new Promise((resolve) => {
+        if (window.__chatSidebarBadgeLoaded === true) {
+          resolve(true);
+          return;
+        }
+        existing.addEventListener("load", () => {
+          window.__chatSidebarBadgeLoaded = true;
+          resolve(true);
+        }, { once: true });
+        existing.addEventListener("error", () => {
+          chatSidebarBadgeScriptPromise = null;
+          resolve(false);
+        }, { once: true });
+      });
+      return chatSidebarBadgeScriptPromise;
+    }
+
+    chatSidebarBadgeScriptPromise = new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.src = scriptUrl;
+      script.async = false;
+      script.dataset.chatSidebarBadge = "1";
+      script.onload = () => {
+        window.__chatSidebarBadgeLoaded = true;
+        resolve(true);
+      };
+      script.onerror = () => {
+        chatSidebarBadgeScriptPromise = null;
+        resolve(false);
+      };
+      document.body.appendChild(script);
+    });
+
+    return chatSidebarBadgeScriptPromise;
+  }
 
   function applyBrandFromTenant(tenant) {
     if (!tenant) return;
@@ -633,6 +679,9 @@
 
     applySettingsCardsFilterBySection(document.body.getAttribute("data-settings-section") || "tenant");
     syncSettingsToolbarControls(document.body.getAttribute("data-settings-section") || "tenant");
+    if ((document.body.getAttribute("data-settings-section") || "tenant") === "chats") {
+      ensureChatSidebarBadgeScriptLoaded().catch(() => {});
+    }
 
     if (settingsChatWidgetEnabledSwitch) {
       const cachedTenant = typeof getAuthTenant === "function" ? getAuthTenant() : null;
@@ -651,6 +700,9 @@
         const isSite = section === "site";
         const isChats = section === "chats";
         const isSystem = section === "system";
+        if (isChats) {
+          ensureChatSidebarBadgeScriptLoaded().catch(() => {});
+        }
         if (settingsCenterTitle) {
           settingsCenterTitle.textContent = isStores
             ? "Филиалы"

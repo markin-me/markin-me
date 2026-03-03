@@ -53,6 +53,9 @@
   const EMOJI_ATLAS_URL = "/static/assets/emoji/apple-people-atlas.webp?v=1";
   const EMOJI_ATLAS_COLUMNS = 16;
   const EMOJI_RECENT_STORAGE_KEY = "shop-company-chat-recent-emojis:v1";
+  const CHAT_ATTACHMENT_DRAFT_DB_NAME = "markin-me-chat-attachment-drafts";
+  const CHAT_ATTACHMENT_DRAFT_DB_VERSION = 1;
+  const CHAT_ATTACHMENT_DRAFT_STORE = "attachmentDrafts";
   const EMOJI_CATEGORY_META = [
     { key: "recent", label: "\u041d\u0435\u0434\u0430\u0432\u043d\u0438\u0435", iconClass: "far fa-clock" },
     { key: "people", label: "\u0421\u043c\u0430\u0439\u043b\u044b \u0438 \u043b\u044e\u0434\u0438", iconClass: "far fa-smile" },
@@ -126,6 +129,8 @@
   const CHAT_THREAD_WAIT_RETRY_MS = 1200;
   const CHAT_UNREAD_WAIT_TIMEOUT_MS = 25000;
   const CHAT_UNREAD_WAIT_RETRY_MS = 1400;
+  const CHAT_SSE_ENABLED = typeof window.EventSource === "function";
+  const CHAT_THREAD_EAGER_IMAGE_COUNT = 4;
   const CHAT_THREAD_PAGE_SIZE = 60;
   const CHAT_THREAD_PAGE_MAX_SIZE = 200;
   const CHAT_DROP_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif|heic|heif)$/i;
@@ -271,7 +276,7 @@
     }),
     quickQuestionsEnabled: true,
     operatorName: "",
-    isEnabled: true,
+    isEnabled: !openBtn.classList.contains("hidden"),
   };
   const hotQuestionAliases = {
     order: new Set([HOT_QUESTION_ORDER_KEY, HOT_QUESTION_ORDER_KEY_ALT]),
@@ -288,9 +293,11 @@
   let liveEntries = [];
   let messageSeq = 0;
   let sharedThreadUpdatedAt = "";
+  let chatWidgetDisableLock = false;
   let sharedThreadWaitLoopStarted = false;
   let sharedThreadWaitLoopToken = 0;
   let sharedThreadWaitAbortController = null;
+  let sharedThreadEventSource = null;
   let sharedMutationQueue = Promise.resolve();
   let sharedMutationPendingCount = 0;
   let sharedThreadMutationVersion = 0;
@@ -330,6 +337,9 @@
   let attachPreviewSourceFiles = [];
   let attachPreviewObjectUrls = [];
   let attachPreviewSending = false;
+  let attachmentDraftDbPromise = null;
+  let attachPreviewDraftPersistTimer = 0;
+  let attachPreviewDraftRestoreToken = 0;
   let feedDropDragDepth = 0;
   let pendingFeedNewCount = 0;
   let pendingFeedMessageIds = new Set();
@@ -345,6 +355,7 @@
   let unreadWaitLoopStarted = false;
   let unreadWaitLoopToken = 0;
   let unreadWaitAbortController = null;
+  let unreadEventSource = null;
   let peerTypingState = { active: false, text: "", updatedAt: "", expiresAt: "" };
   let peerTypingUpdatedAt = "";
   let peerTypingHideTimer = 0;
@@ -1524,6 +1535,16 @@
 
   function queueWebPushSubscriptionSync(options) {
     const opts = options || {};
+    if (chatRuntimeSettings.isEnabled === false) {
+      if (webPushSyncTimer) {
+        window.clearTimeout(webPushSyncTimer);
+        webPushSyncTimer = 0;
+      }
+      webPushSyncRequestedWithPermission = false;
+      webPushSyncForceRequested = false;
+      webPushSyncQueuedClientId = "";
+      return;
+    }
     if (opts.requestPermission === true) webPushSyncRequestedWithPermission = true;
     if (opts.force === true) webPushSyncForceRequested = true;
     const nextClientId = String(opts.clientId || "");
@@ -1550,6 +1571,7 @@
 
   async function syncWebPushSubscription(options) {
     const opts = options || {};
+    if (chatRuntimeSettings.isEnabled === false) return;
     const requestClientId = String(opts.clientId || getActiveChatClientId() || "").trim();
     if (!requestClientId) {
       webPushSyncedFingerprint = "";
@@ -1729,6 +1751,206 @@
     } catch {
       return null;
     }
+  }
+
+  function createChatDisabledAbortError() {
+    const disabledErr = new Error("CHAT_DISABLED");
+    disabledErr.name = "AbortError";
+    return disabledErr;
+  }
+
+  function canUseAttachmentDraftStorage() {
+    return typeof window !== "undefined" && !!window.indexedDB;
+  }
+
+  function openAttachmentDraftDb() {
+    if (!canUseAttachmentDraftStorage()) return Promise.resolve(null);
+    if (attachmentDraftDbPromise) return attachmentDraftDbPromise;
+
+    attachmentDraftDbPromise = new Promise(function (resolve, reject) {
+      try {
+        const request = window.indexedDB.open(
+          CHAT_ATTACHMENT_DRAFT_DB_NAME,
+          CHAT_ATTACHMENT_DRAFT_DB_VERSION
+        );
+        request.onupgradeneeded = function () {
+          const db = request.result;
+          if (!db.objectStoreNames.contains(CHAT_ATTACHMENT_DRAFT_STORE)) {
+            db.createObjectStore(CHAT_ATTACHMENT_DRAFT_STORE, { keyPath: "key" });
+          }
+        };
+        request.onsuccess = function () {
+          const db = request.result;
+          db.onversionchange = function () {
+            try { db.close(); } catch {}
+            attachmentDraftDbPromise = null;
+          };
+          resolve(db);
+        };
+        request.onerror = function () {
+          attachmentDraftDbPromise = null;
+          reject(request.error || new Error("ATTACHMENT_DRAFT_DB_OPEN_FAILED"));
+        };
+      } catch (err) {
+        attachmentDraftDbPromise = null;
+        reject(err);
+      }
+    }).catch(function () { return null; });
+
+    return attachmentDraftDbPromise;
+  }
+
+  async function readAttachmentDraftRecord(key) {
+    const draftKey = String(key || "").trim();
+    if (!draftKey) return null;
+    const db = await openAttachmentDraftDb();
+    if (!db) return null;
+    return new Promise(function (resolve) {
+      try {
+        const tx = db.transaction(CHAT_ATTACHMENT_DRAFT_STORE, "readonly");
+        const store = tx.objectStore(CHAT_ATTACHMENT_DRAFT_STORE);
+        const request = store.get(draftKey);
+        request.onsuccess = function () {
+          const result = request.result;
+          resolve(result && typeof result === "object" ? result : null);
+        };
+        request.onerror = function () { resolve(null); };
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  async function writeAttachmentDraftRecord(record) {
+    const payload = record && typeof record === "object" ? record : null;
+    const draftKey = String(payload && payload.key || "").trim();
+    if (!draftKey) return false;
+    const db = await openAttachmentDraftDb();
+    if (!db) return false;
+    return new Promise(function (resolve) {
+      try {
+        const tx = db.transaction(CHAT_ATTACHMENT_DRAFT_STORE, "readwrite");
+        const store = tx.objectStore(CHAT_ATTACHMENT_DRAFT_STORE);
+        const request = store.put({
+          key: draftKey,
+          updatedAt: Number(payload.updatedAt || Date.now()),
+          caption: String(payload.caption || ""),
+          files: Array.isArray(payload.files) ? payload.files : [],
+        });
+        request.onsuccess = function () { resolve(true); };
+        request.onerror = function () { resolve(false); };
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
+  async function deleteAttachmentDraftRecord(key) {
+    const draftKey = String(key || "").trim();
+    if (!draftKey) return false;
+    const db = await openAttachmentDraftDb();
+    if (!db) return false;
+    return new Promise(function (resolve) {
+      try {
+        const tx = db.transaction(CHAT_ATTACHMENT_DRAFT_STORE, "readwrite");
+        const store = tx.objectStore(CHAT_ATTACHMENT_DRAFT_STORE);
+        const request = store.delete(draftKey);
+        request.onsuccess = function () { resolve(true); };
+        request.onerror = function () { resolve(false); };
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
+  function normalizeStoredAttachmentDraftFile(file, fallbackIndex) {
+    if (typeof File !== "undefined" && file instanceof File) return file;
+    if (typeof File === "undefined" || !(file instanceof Blob)) return null;
+    const fileName = "chat-image-" + String(Math.max(1, Number(fallbackIndex) + 1)) + ".bin";
+    try {
+      return new File([file], fileName, {
+        type: String(file.type || "application/octet-stream"),
+        lastModified: Date.now(),
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  function buildAttachPreviewDraftKey(clientId) {
+    const activeClientId = String(clientId || getActiveChatClientId() || "").trim();
+    if (!tenantId || !activeClientId) return "";
+    return "public:" + String(tenantId) + ":" + activeClientId;
+  }
+
+  function clearAttachPreviewDraftPersistTimer() {
+    if (!attachPreviewDraftPersistTimer) return;
+    window.clearTimeout(attachPreviewDraftPersistTimer);
+    attachPreviewDraftPersistTimer = 0;
+  }
+
+  async function clearPersistedAttachPreviewDraft(options) {
+    const opts = options || {};
+    clearAttachPreviewDraftPersistTimer();
+    const key = String(opts.key || buildAttachPreviewDraftKey()).trim();
+    if (!key) return false;
+    return deleteAttachmentDraftRecord(key);
+  }
+
+  async function persistCurrentAttachPreviewDraft() {
+    clearAttachPreviewDraftPersistTimer();
+    const key = buildAttachPreviewDraftKey();
+    if (!key) return false;
+    const files = Array.isArray(attachPreviewSourceFiles)
+      ? attachPreviewSourceFiles.filter(function (file) { return file instanceof File; })
+      : [];
+    if (!files.length) {
+      await deleteAttachmentDraftRecord(key).catch(function () {});
+      return false;
+    }
+    return writeAttachmentDraftRecord({
+      key: key,
+      updatedAt: Date.now(),
+      caption: String(attachPreviewCaption.value || ""),
+      files: files,
+    });
+  }
+
+  function schedulePersistAttachPreviewDraft(delayMs) {
+    clearAttachPreviewDraftPersistTimer();
+    const key = buildAttachPreviewDraftKey();
+    if (!key) return;
+    attachPreviewDraftPersistTimer = window.setTimeout(function () {
+      attachPreviewDraftPersistTimer = 0;
+      persistCurrentAttachPreviewDraft().catch(function () {});
+    }, Math.max(0, Number(delayMs || 0)));
+  }
+
+  async function restorePersistedAttachPreviewDraft(clientId) {
+    const key = buildAttachPreviewDraftKey(clientId);
+    if (!key || chatRuntimeSettings.isEnabled === false) return false;
+    if (!overlay.classList.contains("is-open")) return false;
+    if (!attachPreviewOverlay.classList.contains("hidden")) return false;
+
+    const restoreToken = ++attachPreviewDraftRestoreToken;
+    const record = await readAttachmentDraftRecord(key);
+    if (!record || restoreToken !== attachPreviewDraftRestoreToken) return false;
+    if (buildAttachPreviewDraftKey(clientId) !== key) return false;
+
+    const files = (Array.isArray(record.files) ? record.files : [])
+      .map(function (file, index) {
+        return normalizeStoredAttachmentDraftFile(file, index);
+      })
+      .filter(function (file) { return file instanceof File; });
+    if (!files.length) {
+      await deleteAttachmentDraftRecord(key).catch(function () {});
+      return false;
+    }
+
+    return openAttachPreviewFromFiles(files, {
+      caption: String(record.caption || ""),
+      focusCaption: true,
+    });
   }
 
   function cloneDefaultChatQuickQuestionItems() {
@@ -2066,6 +2288,25 @@
     renderUnreadBadge(liveEntries);
   }
 
+  function syncTenantChatWidgetEnabledToStorage(enabled) {
+    try {
+      const tenant = getTenantFromLocalStorage();
+      const nextTenant = tenant && typeof tenant === "object" ? tenant : {};
+      nextTenant.chat_widget_enabled = enabled !== false ? 1 : 0;
+      localStorage.setItem("tenant", JSON.stringify(nextTenant));
+    } catch {}
+  }
+
+  function applyLiveChatWidgetEnabledPatch(enabled) {
+    const normalizedEnabled = enabled !== false;
+    chatWidgetDisableLock = !normalizedEnabled;
+    syncTenantChatWidgetEnabledToStorage(normalizedEnabled);
+    const localSettings = getLocalTenantChatSettings() || {};
+    localSettings.chat_widget_enabled = normalizedEnabled ? 1 : 0;
+    localSettings.is_enabled = normalizedEnabled;
+    applyChatRuntimeSettings(localSettings, { refreshUi: true });
+  }
+
   function applyChatWidgetEnabledState(isEnabled) {
     const enabled = isEnabled !== false;
     openBtn.classList.toggle("hidden", !enabled);
@@ -2077,6 +2318,13 @@
       }
       return;
     }
+    if (webPushSyncTimer) {
+      window.clearTimeout(webPushSyncTimer);
+      webPushSyncTimer = 0;
+    }
+    webPushSyncRequestedWithPermission = false;
+    webPushSyncForceRequested = false;
+    webPushSyncQueuedClientId = "";
     openBtn.setAttribute("aria-hidden", "true");
     openBtn.setAttribute("tabindex", "-1");
     openBtn.removeAttribute("data-unread-count");
@@ -2089,6 +2337,11 @@
     }
     stopSharedThreadPolling();
     stopUnreadPolling();
+  }
+
+  function handleChatFeatureDisabledByServer() {
+    chatWidgetDisableLock = true;
+    applyLiveChatWidgetEnabledPatch(false);
   }
 
   function applyChatRuntimeSettings(rawSettings, options) {
@@ -2107,6 +2360,9 @@
     ].join("|");
 
     const next = normalizeTenantChatSettings(rawSettings);
+    if (chatWidgetDisableLock && next.isEnabled !== false) {
+      next.isEnabled = false;
+    }
     chatRuntimeSettings.assistantName = next.assistantName;
     chatRuntimeSettings.assistantGender = normalizeAssistantGenderValue(next.assistantGender);
     chatRuntimeSettings.welcomeMessage = next.welcomeMessage;
@@ -2544,11 +2800,18 @@
     lastFeedViewportState = loadPersistedFeedViewportState(nextProfile.id);
     lastFeedScrollTop = Number(lastFeedViewportState && lastFeedViewportState.top);
     clearPendingFeedNewCount();
+    stopSharedThreadSseConnection();
+    stopUnreadSseConnection();
 
     hideContextMenu();
     hideReactionBar();
     hideEmojiPopover();
-    closeAttachPreview({ focusComposer: false, clearItems: true, clearCaption: true });
+    closeAttachPreview({
+      focusComposer: false,
+      clearItems: true,
+      clearCaption: true,
+      clearPersistedDraft: false,
+    });
 
     if (selectedMessageIds.size > 0) selectedMessageIds.clear();
     cancelEditingMessage();
@@ -2568,6 +2831,11 @@
     renderThread();
     updateScrollDownButton();
     renderUnreadBadge(liveEntries);
+    if (overlay.classList.contains("is-open")) {
+      startSharedThreadPolling();
+    } else {
+      startUnreadPolling();
+    }
 
     const activeClientIdAfterSwitch = String(chatClientProfile.id || "");
     queueWebPushSubscriptionSync({
@@ -2603,6 +2871,7 @@
         .catch(function () {})
         .finally(function () {
           continueWithPull();
+          restorePersistedAttachPreviewDraft(activeClientIdAfterSwitch).catch(function () {});
         });
     };
 
@@ -2694,6 +2963,41 @@
     }
   }
 
+  function buildChatSseUrl(url, actorValue, extraParams) {
+    const rawUrl = withChatActorQuery(url, actorValue);
+    try {
+      const parsed = new URL(rawUrl, window.location.origin);
+      if (tenantId) parsed.searchParams.set("tenant_id", String(tenantId));
+      Object.entries(extraParams || {}).forEach(function ([key, value]) {
+        if (value === undefined || value === null || value === "") return;
+        parsed.searchParams.set(String(key), String(value));
+      });
+      return parsed.pathname + parsed.search + parsed.hash;
+    } catch {
+      return rawUrl;
+    }
+  }
+
+  function closeChatEventSource(source) {
+    if (!source) return;
+    try {
+      source.onopen = null;
+      source.onerror = null;
+      source.onmessage = null;
+      if (typeof source.close === "function") source.close();
+    } catch {}
+  }
+
+  function parseChatSsePayload(event) {
+    if (!event || typeof event.data !== "string" || !event.data) return null;
+    try {
+      const parsed = JSON.parse(event.data);
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
   async function chatApiJson(url, opts) {
     const options = opts || {};
     const isFormDataBody = (
@@ -2708,6 +3012,10 @@
       ...(options.headers || {}),
     };
     const requestUrl = withChatActorQuery(url, "in");
+    const isChatSettingsRequest = requestUrl.indexOf(CHAT_SETTINGS_API_URL) === 0;
+    if (!isChatSettingsRequest && chatRuntimeSettings.isEnabled === false) {
+      throw createChatDisabledAbortError();
+    }
     const customerToken = getCustomerToken();
     if (customerToken) headers["x-customer-token"] = customerToken;
 
@@ -2723,7 +3031,12 @@
 
     const json = await res.json().catch(function () { return null; });
     if (!json || json.ok !== true) {
-      throw new Error((json && json.error) || ("API_ERROR (" + res.status + ")"));
+      const errorCode = String((json && json.error) || ("API_ERROR (" + res.status + ")"));
+      if (errorCode === "CHAT_DISABLED") {
+        handleChatFeatureDisabledByServer();
+        throw createChatDisabledAbortError();
+      }
+      throw new Error(errorCode);
     }
     return json;
   }
@@ -2960,6 +3273,120 @@
     if (err.name === "AbortError") return true;
     const message = String(err && err.message || "");
     return /aborted|aborterror/i.test(message);
+  }
+
+  function stopSharedThreadSseConnection() {
+    closeChatEventSource(sharedThreadEventSource);
+    sharedThreadEventSource = null;
+  }
+
+  function stopUnreadSseConnection() {
+    closeChatEventSource(unreadEventSource);
+    unreadEventSource = null;
+  }
+
+  function startSharedThreadSseConnection() {
+    if (!CHAT_SSE_ENABLED) return false;
+    const activeClientId = getActiveChatClientId();
+    if (!activeClientId) return false;
+    if (
+      sharedThreadEventSource
+      && String(sharedThreadEventSource.__clientId || "") === String(activeClientId)
+    ) {
+      return true;
+    }
+
+    stopSharedThreadSseConnection();
+
+    const source = new EventSource(
+      buildChatSseUrl(
+        CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(activeClientId) + "/stream",
+        "in"
+      )
+    );
+    source.__clientId = String(activeClientId);
+    sharedThreadEventSource = source;
+
+    source.addEventListener("thread", function (event) {
+      const payload = parseChatSsePayload(event);
+      if (!payload || sharedThreadEventSource !== source) return;
+      const currentClientId = getActiveChatClientId();
+      if (!currentClientId || String(currentClientId) !== String(activeClientId)) return;
+      if (payload.typing && typeof payload.typing === "object") {
+        applyPeerTypingState(payload.typing);
+      }
+      if (payload.changed !== true && payload.message_changed !== true) return;
+      const knownUpdatedAt = String(sharedThreadUpdatedAt || "");
+      const messageChanged = payload.message_changed === true
+        || (
+          payload.changed === true
+          && payload.typing_changed !== true
+        )
+        || (
+          payload.changed === true
+          && payload.updated_at
+          && payload.updated_at !== knownUpdatedAt
+        );
+      const shouldPullThread = messageChanged
+        || (payload.changed === true && payload.typing_changed !== true);
+      if (shouldPullThread) {
+        pullSharedThreadFromServerIfChanged({ force: true }).catch(function () {});
+      }
+    });
+
+    source.addEventListener("disabled", function () {
+      if (sharedThreadEventSource !== source) return;
+      handleChatFeatureDisabledByServer();
+      stopSharedThreadSseConnection();
+    });
+
+    source.onerror = function () {
+      if (sharedThreadEventSource !== source) return;
+    };
+
+    return true;
+  }
+
+  function startUnreadSseConnection() {
+    if (!CHAT_SSE_ENABLED) return false;
+    const activeClientId = getActiveChatClientId();
+    if (!activeClientId) return false;
+    if (
+      unreadEventSource
+      && String(unreadEventSource.__clientId || "") === String(activeClientId)
+    ) {
+      return true;
+    }
+
+    stopUnreadSseConnection();
+
+    const source = new EventSource(
+      buildChatSseUrl(
+        CHAT_TEMP_API_BASE + "/unread/stream",
+        "in",
+        { client_id: activeClientId }
+      )
+    );
+    source.__clientId = String(activeClientId);
+    unreadEventSource = source;
+
+    source.addEventListener("unread", function (event) {
+      const payload = parseChatSsePayload(event);
+      if (!payload || unreadEventSource !== source) return;
+      applyUnreadSnapshot(payload, { notify: true });
+    });
+
+    source.addEventListener("disabled", function () {
+      if (unreadEventSource !== source) return;
+      handleChatFeatureDisabledByServer();
+      stopUnreadSseConnection();
+    });
+
+    source.onerror = function () {
+      if (unreadEventSource !== source) return;
+    };
+
+    return true;
   }
 
   function enqueueSharedMutation(mutator) {
@@ -3622,6 +4049,11 @@
   }
 
   function startSharedThreadPolling() {
+    if (CHAT_SSE_ENABLED) {
+      stopUnreadSseConnection();
+      startSharedThreadSseConnection();
+      return;
+    }
     if (sharedThreadWaitLoopStarted) return;
     sharedThreadWaitLoopStarted = true;
     sharedThreadWaitLoopToken += 1;
@@ -3686,6 +4118,7 @@
   }
 
   function stopSharedThreadPolling() {
+    stopSharedThreadSseConnection();
     if (!sharedThreadWaitLoopStarted) return;
     sharedThreadWaitLoopStarted = false;
     sharedThreadWaitLoopToken += 1;
@@ -3696,6 +4129,7 @@
   }
 
   function stopUnreadPolling() {
+    stopUnreadSseConnection();
     if (!unreadWaitLoopStarted) return;
     unreadWaitLoopStarted = false;
     unreadWaitLoopToken += 1;
@@ -3708,6 +4142,11 @@
   function startUnreadPolling() {
     if (!chatRuntimeSettings.isEnabled) return;
     if (overlay.classList.contains("is-open")) return;
+    if (CHAT_SSE_ENABLED) {
+      stopSharedThreadSseConnection();
+      startUnreadSseConnection();
+      return;
+    }
     if (unreadWaitLoopStarted) return;
     unreadWaitLoopStarted = true;
     unreadWaitLoopToken += 1;
@@ -4098,6 +4537,37 @@
   function getEntryImageAttachment(entry) {
     if (!entry || typeof entry !== "object") return null;
     return isImageAttachment(entry.attachment) ? entry.attachment : null;
+  }
+
+  function isCacheableThreadImageSrc(rawValue) {
+    const value = String(rawValue || "").trim();
+    if (!value || /^data:/i.test(value) || /^blob:/i.test(value)) return false;
+    if (/^(?:\/uploads\/chat\/|\/static\/uploads\/chat\/)/i.test(value)) return true;
+    try {
+      const parsed = new URL(value, window.location.origin);
+      return parsed.origin === window.location.origin
+        && /^\/(?:uploads|static\/uploads)\/chat\//i.test(parsed.pathname);
+    } catch {
+      return false;
+    }
+  }
+
+  function applyThreadImageLoadingStrategy() {
+    if (!thread) return;
+    const images = Array.from(thread.querySelectorAll(".shop-company-chat-attachment-image")).filter(function (img) {
+      if (!(img instanceof HTMLImageElement)) return;
+      const src = String(img.getAttribute("src") || "").trim();
+      return isCacheableThreadImageSrc(src);
+    });
+    const eagerFromIndex = Math.max(0, images.length - CHAT_THREAD_EAGER_IMAGE_COUNT);
+    images.forEach(function (img, index) {
+      const eager = index >= eagerFromIndex;
+      img.loading = eager ? "eager" : "lazy";
+      img.decoding = "async";
+      try {
+        img.fetchPriority = eager ? "high" : "low";
+      } catch {}
+    });
   }
 
   function getEntryPreviewText(entry) {
@@ -4630,7 +5100,7 @@
       }
       initialized = true;
     }
-    closeAttachPreview({ focusComposer: false });
+    closeAttachPreview({ focusComposer: false, clearPersistedDraft: false });
     hideEmojiPopover();
     bindMobileKeyboardViewportSync();
     setMobileKeyboardInset(0);
@@ -4695,6 +5165,7 @@
           setChatBootstrapLoading(false);
           startSharedThreadPolling();
           syncVisibleChatReadState({ preserveViewport: true });
+          restorePersistedAttachPreviewDraft(getActiveChatClientId()).catch(function () {});
         });
     });
   }
@@ -4704,7 +5175,7 @@
     stopLocalTypingSession({ flush: true });
     saveFeedScrollPosition({ persist: true });
     syncVisibleChatReadState({ force: true, flushRemote: true, preserveViewport: true });
-    closeAttachPreview({ focusComposer: false });
+    closeAttachPreview({ focusComposer: false, clearPersistedDraft: false });
     hideNotificationPermissionPrompt();
     hideContextMenu();
     hideReactionBar();
@@ -5327,6 +5798,7 @@
     modalBody.classList.toggle("is-selection-mode", active);
     selectionToolbar.classList.toggle("hidden", !active);
     selectionCountEl.textContent = "\u0412\u044b\u0431\u0440\u0430\u043d\u043e " + count + " " + getMessagesWord(count);
+    syncRenderedMessageSelectionState();
     scheduleScrollDownComposerExtraOffsetSync();
   }
 
@@ -6119,7 +6591,7 @@
       img.className = "shop-company-chat-attachment-image";
       img.src = getAttachmentImageSrc(imageAttachment);
       img.alt = String(imageAttachment.name || "\u0424\u043e\u0442\u043e");
-      img.loading = "eager";
+      img.loading = "lazy";
       img.decoding = "async";
       attachmentWrap.appendChild(img);
       bubble.appendChild(attachmentWrap);
@@ -6247,18 +6719,173 @@
     return createMessageNode(entry);
   }
 
+  function safeRenderSignature(value) {
+    try {
+      return JSON.stringify(value);
+    } catch (_err) {
+      return String(value || "");
+    }
+  }
+
+  function setRenderDescriptor(node, key, signature) {
+    if (!node || !node.dataset) return node;
+    node.dataset.renderKey = String(key || "");
+    node.dataset.renderSignature = String(signature || "");
+    return node;
+  }
+
+  function getEntryRenderKey(entry, index) {
+    const source = entry && typeof entry === "object" ? entry : {};
+    const type = String(source.type || "message");
+    const id = String(source.id || "").trim();
+    if (type === "message" && id) return "message:" + id;
+    if (type === "options" && id) return "options:" + id;
+    if (type === "welcome" && id) return "welcome:" + id;
+    return "entry:" + type + ":" + String(index || 0);
+  }
+
+  function getEntryRenderSignature(entry) {
+    const source = entry && typeof entry === "object" ? entry : {};
+    const type = String(source.type || "message");
+    if (type === "welcome") {
+      return safeRenderSignature({
+        type: "welcome",
+        text: String(source.text || ""),
+      });
+    }
+
+    if (type === "options") {
+      return safeRenderSignature({
+        type: "options",
+        id: String(source.id || ""),
+        text: String(source.text || ""),
+        time: String(source.time || ""),
+        options: Array.isArray(source.options) ? source.options.map(function (label) {
+          return String(label || "");
+        }) : [],
+      });
+    }
+
+    const imageAttachment = getEntryImageAttachment(source);
+    const reactionItems = getEntryReactionItems(source).map(function (itemReaction) {
+      return {
+        actor: String(itemReaction && itemReaction.actor || ""),
+        reaction: String(itemReaction && itemReaction.reaction || ""),
+      };
+    });
+    const orderCards = source.role === "agent"
+      ? resolveHotQuestionOrderCardPreviews(source).map(function (preview) {
+          const item = preview && typeof preview === "object" ? preview : {};
+          return {
+            orderId: toPositiveOrderId(item.orderId || item.id),
+            statusTitle: String(item.statusTitle || item.status_title || ""),
+            totalPrice: Number(item.totalPrice || item.total_price || 0),
+            createdAt: String(item.createdAt || item.created_at || ""),
+            photos: Array.isArray(item.photos) ? item.photos.map(function (src) {
+              return String(src || "");
+            }) : [],
+          };
+        })
+      : [];
+    return safeRenderSignature({
+      type: "message",
+      id: String(source.id || ""),
+      role: String(source.role || ""),
+      author: String(source.author || ""),
+      time: String(source.time || ""),
+      text: String(source.text || ""),
+      editedAt: String(source.editedAt || ""),
+      replyTo: source.replyTo && typeof source.replyTo === "object"
+        ? {
+            id: String(source.replyTo.id || ""),
+            sender: String(source.replyTo.sender || ""),
+            text: String(source.replyTo.text || ""),
+          }
+        : null,
+      attachment: imageAttachment
+        ? {
+            src: getAttachmentImageSrc(imageAttachment),
+            name: String(imageAttachment.name || ""),
+          }
+        : null,
+      deliveryStatus: String(getOutgoingDeliveryStatus(source) || ""),
+      reactions: reactionItems,
+      orderCards: orderCards,
+    });
+  }
+
+  function syncRenderedMessageSelectionState() {
+    const hasSelection = selectedMessageIds.size > 0;
+    thread.querySelectorAll(".shop-company-chat-row[data-message-id]").forEach(function (row) {
+      const messageId = String(row.getAttribute("data-message-id") || "");
+      row.classList.toggle("is-selection-mode", hasSelection);
+      row.classList.toggle("is-selected", !!messageId && selectedMessageIds.has(messageId));
+    });
+  }
+
+  function reconcileThreadChildren(descriptors) {
+    const existingByKey = new Map();
+    Array.from(thread.children).forEach(function (node) {
+      const key = node && node.dataset ? String(node.dataset.renderKey || "") : "";
+      if (key && !existingByKey.has(key)) existingByKey.set(key, node);
+    });
+
+    let anchor = thread.firstElementChild;
+    descriptors.forEach(function (descriptor) {
+      const key = String(descriptor && descriptor.key || "");
+      const signature = String(descriptor && descriptor.signature || "");
+      if (!key || typeof descriptor.create !== "function") return;
+
+      const current = existingByKey.get(key) || null;
+      const currentSignature = current && current.dataset
+        ? String(current.dataset.renderSignature || "")
+        : "";
+      const nextNode = current && currentSignature === signature
+        ? setRenderDescriptor(current, key, signature)
+        : setRenderDescriptor(descriptor.create(), key, signature);
+
+      if (nextNode !== anchor) {
+        thread.insertBefore(nextNode, anchor);
+      } else {
+        anchor = anchor ? anchor.nextElementSibling : null;
+        return;
+      }
+
+      anchor = nextNode.nextElementSibling;
+    });
+
+    while (anchor) {
+      const next = anchor.nextElementSibling;
+      thread.removeChild(anchor);
+      anchor = next;
+    }
+  }
+
   function renderThread() {
     const entries = getAllEntries();
-    thread.innerHTML = "";
-
+    const descriptors = [];
     let prevDay = null;
-    entries.forEach(function (entry) {
+    entries.forEach(function (entry, index) {
       if (entry.day && entry.day !== prevDay) {
-        thread.appendChild(createDayNode(entry.day));
+        const dayKey = "day:" + String(entry.day || "");
+        descriptors.push({
+          key: dayKey,
+          signature: safeRenderSignature({ type: "day", label: String(entry.day || "") }),
+          create: function () {
+            return createDayNode(entry.day);
+          },
+        });
         prevDay = entry.day;
       }
-      thread.appendChild(renderEntry(entry));
+      descriptors.push({
+        key: getEntryRenderKey(entry, index),
+        signature: getEntryRenderSignature(entry),
+        create: function () {
+          return renderEntry(entry);
+        },
+      });
     });
+    reconcileThreadChildren(descriptors);
 
     if (reactionMessageId) {
       const exists = Array.from(thread.querySelectorAll("[data-message-id]")).some(function (el) {
@@ -6282,6 +6909,7 @@
     updateScrollDownButton();
     syncSelectionUi();
     renderTypingIndicator();
+    applyThreadImageLoadingStrategy();
   }
 
   function hideReactionBar() {
@@ -8201,6 +8829,7 @@
     const clearItems = opts.clearItems !== false;
     const focusComposer = opts.focusComposer !== false;
     const clearCaption = opts.clearCaption !== false;
+    const clearPersistedDraft = opts.clearPersistedDraft !== false;
 
     attachPreviewOverlay.classList.add("hidden");
     attachPreviewOverlay.setAttribute("aria-hidden", "true");
@@ -8222,6 +8851,9 @@
     if (emojiPopover.classList.contains("is-attach-preview")) hideEmojiPopover();
     attachInput.value = "";
     if (focusComposer && !input.disabled) input.focus();
+    if (clearItems && clearPersistedDraft) {
+      clearPersistedAttachPreviewDraft().catch(function () {});
+    }
   }
 
   function isMessageImageViewerOpen() {
@@ -8393,6 +9025,7 @@
   }
 
   function sendPreparedImageAttachments(attachments, options) {
+    if (chatRuntimeSettings.isEnabled === false) return 0;
     const opts = options || {};
     const list = Array.isArray(attachments)
       ? attachments.filter(function (item) { return isImageAttachment(item); })
@@ -8430,6 +9063,7 @@
   }
 
   async function sendImageAttachments(files, options) {
+    if (chatRuntimeSettings.isEnabled === false) return 0;
     const list = Array.isArray(files) ? files : [];
     if (!list.length) return 0;
 
@@ -8443,7 +9077,9 @@
     return sendPreparedImageAttachments(attachments, options);
   }
 
-  async function openAttachPreviewFromFiles(files) {
+  async function openAttachPreviewFromFiles(files, options) {
+    if (chatRuntimeSettings.isEnabled === false) return false;
+    const opts = options || {};
     const list = Array.isArray(files) ? files : [];
     if (!list.length) return false;
     if (editingMessageId) cancelEditingMessage();
@@ -8462,7 +9098,15 @@
     if (!prepared.length) return false;
     attachPreviewSourceFiles = prepared.map(function (item) { return item.file; });
     const attachments = prepared.map(function (item) { return item.attachment; });
-    return openAttachPreview(attachments);
+    const previewOptions = {
+      caption: String(opts.caption || ""),
+    };
+    if (Object.prototype.hasOwnProperty.call(opts, "focusCaption")) {
+      previewOptions.focusCaption = opts.focusCaption === true;
+    }
+    const opened = openAttachPreview(attachments, previewOptions);
+    if (opened) schedulePersistAttachPreviewDraft(0);
+    return opened;
   }
 
   function initAttachPreviewModal() {
@@ -8523,6 +9167,10 @@
       attachPreviewSendBtn.click();
     });
 
+    attachPreviewCaption.addEventListener("input", function () {
+      schedulePersistAttachPreviewDraft();
+    });
+
     attachPreviewCaption.addEventListener("focus", function () {
       scheduleMobileKeyboardInsetSyncBurst();
     });
@@ -8573,6 +9221,18 @@
       startChatRuntime();
     });
 
+  window.addEventListener("shop:tenant-chat-widget-changed", function (event) {
+    const detail = event && event.detail && typeof event.detail === "object"
+      ? event.detail
+      : {};
+    const rawEnabled =
+      detail.chat_widget_enabled
+      ?? detail.is_enabled
+      ?? detail.enabled;
+    if (rawEnabled === undefined) return;
+    applyLiveChatWidgetEnabledPatch(rawEnabled);
+  });
+
   if ("serviceWorker" in navigator && navigator.serviceWorker.ready) {
     navigator.serviceWorker.ready
       .then(function () {
@@ -8587,7 +9247,12 @@
   }
 
   openBtn.addEventListener("click", function (event) {
-    if (!chatRuntimeSettings.isEnabled) return;
+    if (!chatRuntimeSettings.isEnabled) {
+      event.preventDefault();
+      event.stopPropagation();
+      applyChatWidgetEnabledState(false);
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     initChatRuntimeSettings({ fetchRemote: true, force: true, refreshUi: true }).catch(function () {});
@@ -8639,15 +9304,21 @@
     if (!isChatTabActiveForRead()) return;
     stopUnreadPolling();
     startSharedThreadPolling();
-    pullSharedThreadFromServer({ force: true })
-      .catch(function () {
-        syncVisibleChatReadState();
-      });
+    if (!CHAT_SSE_ENABLED) {
+      pullSharedThreadFromServer({ force: true })
+        .catch(function () {
+          syncVisibleChatReadState();
+        });
+      return;
+    }
+    syncVisibleChatReadState({ preserveViewport: true });
   }
 
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState !== "visible") {
-      stopSharedThreadPolling();
+      if (!CHAT_SSE_ENABLED) {
+        stopSharedThreadPolling();
+      }
       stopLocalTypingSession({ flush: true, keepalive: true });
       if (!overlay.classList.contains("is-open")) {
         startUnreadPolling();

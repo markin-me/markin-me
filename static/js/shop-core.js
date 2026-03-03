@@ -795,6 +795,7 @@
   let stockEventsWaitLoopToken = 0;
   let stockEventsWaitSupported = true;
   let stockEventsCursor = 0;
+  let stockEventsCursorPrimed = false;
   let stockEventsWaitAbortController = null;
   let stockRefreshDebounceTimer = null;
   let stockRefreshInFlight = false;
@@ -1039,19 +1040,139 @@
     }
   }
 
+  function getStoredTenantSnapshot() {
+    try {
+      const raw = localStorage.getItem("tenant");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function normalizeTenantChatWidgetEnabled(rawValue) {
+    const normalized = String(rawValue == null ? "" : rawValue).trim().toLowerCase();
+    return !(
+      rawValue === false
+      || rawValue === 0
+      || normalized === "0"
+      || normalized === "false"
+    );
+  }
+
+  function isStorefrontChatWidgetEnabled() {
+    const tenant = getStoredTenantSnapshot();
+    if (tenant && typeof tenant === "object" && Object.prototype.hasOwnProperty.call(tenant, "chat_widget_enabled")) {
+      return normalizeTenantChatWidgetEnabled(tenant.chat_widget_enabled);
+    }
+    const button = document.getElementById("shopCompanyChatOpenBtn");
+    return !!(button && !button.classList.contains("hidden"));
+  }
+
+  function persistStorefrontChatWidgetEnabled(enabled) {
+    try {
+      const tenant = getStoredTenantSnapshot();
+      const nextTenant = tenant && typeof tenant === "object" ? tenant : {};
+      nextTenant.chat_widget_enabled = enabled !== false ? 1 : 0;
+      localStorage.setItem("tenant", JSON.stringify(nextTenant));
+    } catch {}
+  }
+
+  function syncStorefrontChatButtonVisibility(enabled) {
+    const button = document.getElementById("shopCompanyChatOpenBtn");
+    const unreadBadge = document.getElementById("shopCompanyChatUnreadBadge");
+    if (!button) return;
+    button.classList.toggle("hidden", enabled === false);
+    if (enabled === false) {
+      button.setAttribute("aria-hidden", "true");
+      button.setAttribute("tabindex", "-1");
+      button.removeAttribute("data-unread-count");
+      if (unreadBadge) {
+        unreadBadge.textContent = "";
+        unreadBadge.classList.add("hidden");
+      }
+      return;
+    }
+    button.removeAttribute("aria-hidden");
+    button.removeAttribute("tabindex");
+  }
+
+  function broadcastStorefrontChatWidgetChanged(enabled) {
+    try {
+      window.dispatchEvent(new CustomEvent("shop:tenant-chat-widget-changed", {
+        detail: {
+          chat_widget_enabled: enabled !== false ? 1 : 0,
+          is_enabled: enabled !== false,
+        },
+      }));
+    } catch {}
+  }
+
+  let chatWidgetChangeApplySeq = 0;
+
+  async function resolveStorefrontChatWidgetEnabledFromApi(fallbackEnabled) {
+    const fallback = fallbackEnabled !== false;
+    try {
+      const json = await apiJson(`/api/public/tenant/chat-settings?_ts=${Date.now()}`);
+      if (!json || json.ok !== true) return fallback;
+      const settings = json.settings && typeof json.settings === "object" ? json.settings : {};
+      const raw = settings.chat_widget_enabled
+        ?? settings.is_enabled
+        ?? settings.enabled
+        ?? settings.chat_enabled;
+      if (raw === undefined) return fallback;
+      return normalizeTenantChatWidgetEnabled(raw);
+    } catch {
+      return fallback;
+    }
+  }
+
+  async function syncStorefrontChatWidgetStateOnBoot() {
+    const cachedEnabled = isStorefrontChatWidgetEnabled();
+    syncStorefrontChatButtonVisibility(cachedEnabled);
+    if (cachedEnabled) loadShopChat();
+
+    const resolved = await resolveStorefrontChatWidgetEnabledFromApi(cachedEnabled);
+    if (resolved === cachedEnabled) return;
+
+    persistStorefrontChatWidgetEnabled(resolved);
+    syncStorefrontChatButtonVisibility(resolved);
+    if (resolved) loadShopChat();
+    broadcastStorefrontChatWidgetChanged(resolved);
+  }
+
+  async function applyTenantChatWidgetChangedEvent(evtData) {
+    const data = evtData && typeof evtData === "object" ? evtData : {};
+    const rawEnabled = data.chat_widget_enabled
+      ?? data.is_enabled
+      ?? data.enabled;
+    if (rawEnabled === undefined) return;
+    const seq = ++chatWidgetChangeApplySeq;
+    const wasEnabled = isStorefrontChatWidgetEnabled();
+    let enabled = normalizeTenantChatWidgetEnabled(rawEnabled);
+    if (enabled && !wasEnabled) {
+      enabled = await resolveStorefrontChatWidgetEnabledFromApi(false);
+    }
+    if (seq !== chatWidgetChangeApplySeq) return;
+    persistStorefrontChatWidgetEnabled(enabled);
+    syncStorefrontChatButtonVisibility(enabled);
+    if (enabled) loadShopChat();
+    broadcastStorefrontChatWidgetChanged(enabled);
+  }
+
   function ensurePublicStockEventsConnection() {
     const currentStoreId = Number(getActiveStoreId() || 0) || 1;
     stockEventsStoreId = currentStoreId;
     startPublicStockEventsWaitLoop();
   }
 
-  async function waitForPublicStockEventsChange() {
+  async function waitForPublicStockEventsChange(options = {}) {
     if (!stockEventsWaitSupported) {
       return { changed: false, cursor: Number(stockEventsCursor || 0) || 0 };
     }
     const qs = new URLSearchParams({
       since: String(Number(stockEventsCursor || 0) || 0),
       timeout_ms: "20000",
+      bootstrap_cursor: options.bootstrap === true ? "1" : "0",
       _ts: String(Date.now()),
     });
     const controller = new AbortController();
@@ -1099,6 +1220,10 @@
     pruneUnavailableCartItems();
   }
 
+  function shouldWatchPublicChangesLoop() {
+    return true;
+  }
+
   function startPublicStockEventsWaitLoop() {
     if (stockEventsWaitLoopStarted) return;
     stockEventsWaitLoopStarted = true;
@@ -1107,8 +1232,9 @@
 
     (async function runWaitLoop() {
       while (stockEventsWaitLoopStarted && token === stockEventsWaitLoopToken) {
-        if (!getCustomerToken()) {
+        if (!shouldWatchPublicChangesLoop()) {
           stockEventsCursor = 0;
+          stockEventsCursorPrimed = false;
           await new Promise((resolve) => setTimeout(resolve, 5000));
           continue;
         }
@@ -1118,16 +1244,22 @@
         }
         try {
           const prevCursor = Number(stockEventsCursor || 0) || 0;
-          const waited = await waitForPublicStockEventsChange();
+          const waited = await waitForPublicStockEventsChange({ bootstrap: !stockEventsCursorPrimed });
           if (!stockEventsWaitLoopStarted || token !== stockEventsWaitLoopToken) break;
+          stockEventsCursorPrimed = true;
           stockEventsCursor = Number(waited.cursor || stockEventsCursor || 0) || 0;
           if (!waited.changed) continue;
 
           const events = await fetchPublicStockEventsSince(prevCursor);
           for (const evt of events) {
             const eventName = String(evt?.event || "").toLowerCase();
-            if (eventName !== "stock.changed") continue;
-            await applyStockChangedEvent(evt?.data || {});
+            if (eventName === "stock.changed") {
+              await applyStockChangedEvent(evt?.data || {});
+              continue;
+            }
+            if (eventName === "tenant.chat_widget.changed") {
+              await applyTenantChatWidgetChangedEvent(evt?.data || {});
+            }
           }
         } catch (e) {
           if (e?.name === "AbortError") {
@@ -1139,6 +1271,7 @@
           }
           if (e?.httpStatus === 401 || msg === "UNAUTHORIZED") {
             stockEventsCursor = 0;
+            stockEventsCursorPrimed = false;
             await new Promise((resolve) => setTimeout(resolve, 5000));
             continue;
           }
@@ -1170,6 +1303,7 @@
     });
     document.addEventListener("tenantStoreChanged", () => {
       stockEventsCursor = 0;
+      stockEventsCursorPrimed = false;
       stockEventsWaitSupported = true;
     });
   }
@@ -10112,6 +10246,7 @@ async function initCore() {
 
     bindCategoryScrollSpy();
     bindShopWarmups();
+    syncStorefrontChatWidgetStateOnBoot().catch(function () {});
     startStockSync();
 
     // Раньше initShopLate/ensureShopLateLoaded запускались только после первого клика.

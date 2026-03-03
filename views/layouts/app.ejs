@@ -57,8 +57,12 @@
   <script src="<%= assetUrl('/static/js/current-time.js') %>"></script>
   <script src="<%= assetUrl('/static/js/theme.js') %>"></script>
   <script src="<%= assetUrl('/static/js/sidebar.js') %>"></script>
-  <% if ((activePage || '') !== 'chat') { %>
+  <% if ((activePage || '') !== 'chat' && (activePage || '') !== 'settings') { %>
     <script src="<%= assetUrl('/static/js/chat-sidebar-badge.js') %>"></script>
+  <% } else if ((activePage || '') === 'settings') { %>
+    <script>
+      window.__chatSidebarBadgeUrl = "<%= assetUrl('/static/js/chat-sidebar-badge.js') %>";
+    </script>
   <% } %>
 
   <!-- ✅ Модалка -->

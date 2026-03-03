@@ -98,11 +98,23 @@ const tenantChangeState = new Map();
 const tenantUnreadWaiters = new Map();
 const tenantUnreadState = new Map();
 const threadTypingState = new Map();
+const threadSseSubscribers = new Map();
+const tenantSseSubscribers = new Map();
+const unreadSseSubscribers = new Map();
+const clientUnreadRefreshState = new Map();
 const guestThreadCleanupState = new Map();
 const tenantPushCompanyTitleCache = new Map();
+const tenantChatWidgetState = new Map();
 let ensurePushSubscriptionsTablePromise = null;
 const CHAT_PUSH_UNIQUE_INDEX_LEGACY = "ux_chat_push_subscriptions_tenant_endpoint";
 const CHAT_PUSH_UNIQUE_INDEX_V2 = "ux_chat_push_subscriptions_tenant_actor_client_endpoint";
+const CHAT_SSE_HEARTBEAT_MS = 20000;
+const CHAT_WIDGET_STATE_TTL_MS = parsePositiveInt(
+  process.env.CHAT_WIDGET_STATE_TTL_MS,
+  10000,
+  1000,
+  5 * 60 * 1000
+);
 
 async function ensurePushSubscriptionsIndexes() {
   const [indexRows] = await db.query("SHOW INDEX FROM chat_push_subscriptions");
@@ -294,6 +306,15 @@ async function deletePushSubscriptionsForThreads(tenantId, clientIds) {
     `DELETE FROM chat_push_subscriptions
       WHERE tenant_id = ? AND client_id IN (${ids.map(() => "?").join(",")})`,
     [Number(tenantId), ...ids]
+  );
+}
+
+async function deletePushSubscriptionsForTenant(tenantId) {
+  await ensurePushSubscriptionsTable();
+  await db.query(
+    `DELETE FROM chat_push_subscriptions
+      WHERE tenant_id = ?`,
+    [Number(tenantId)]
   );
 }
 
@@ -538,21 +559,184 @@ async function isTenantChatWidgetEnabled(tenantId) {
   const key = String(tenantId || "").trim();
   if (!key) return true;
 
-  try {
-    const [rows] = await db.query(
-      `SELECT chat_widget_enabled
-         FROM ten_tenants
-        WHERE id = ?
-        LIMIT 1`,
-      [Number(key)]
-    );
-    const row = Array.isArray(rows) && rows.length ? rows[0] : null;
-    return normalizeTenantChatWidgetEnabled(row ? row.chat_widget_enabled : undefined);
-  } catch (err) {
-    const code = String(err && err.code || "");
-    if (code === "ER_BAD_FIELD_ERROR") return true;
-    throw err;
+  const cached = tenantChatWidgetState.get(key);
+  const now = Date.now();
+  if (
+    cached
+    && cached.loaded === true
+    && cached.fetchedAt > 0
+    && (now - cached.fetchedAt) < CHAT_WIDGET_STATE_TTL_MS
+  ) {
+    return cached.enabled !== false;
   }
+  if (cached && cached.loadingPromise) {
+    return cached.loadingPromise;
+  }
+
+  const entry = cached || {
+    loaded: false,
+    enabled: true,
+    fetchedAt: 0,
+    loadingPromise: null,
+  };
+
+  entry.loadingPromise = (async () => {
+    try {
+      const [rows] = await db.query(
+        `SELECT chat_widget_enabled
+           FROM ten_tenants
+          WHERE id = ?
+          LIMIT 1`,
+        [Number(key)]
+      );
+      const row = Array.isArray(rows) && rows.length ? rows[0] : null;
+      const enabled = normalizeTenantChatWidgetEnabled(row ? row.chat_widget_enabled : undefined);
+      entry.loaded = true;
+      entry.enabled = enabled;
+      entry.fetchedAt = Date.now();
+      return enabled;
+    } catch (err) {
+      const code = String(err && err.code || "");
+      if (code === "ER_BAD_FIELD_ERROR") {
+        entry.loaded = true;
+        entry.enabled = true;
+        entry.fetchedAt = Date.now();
+        return true;
+      }
+      throw err;
+    } finally {
+      entry.loadingPromise = null;
+    }
+  })();
+
+  tenantChatWidgetState.set(key, entry);
+  return entry.loadingPromise;
+}
+
+function setTenantChatWidgetEnabledCache(tenantId, enabled) {
+  const key = String(tenantId || "").trim();
+  if (!key) return;
+  tenantChatWidgetState.set(key, {
+    loaded: true,
+    enabled: enabled !== false,
+    fetchedAt: Date.now(),
+    loadingPromise: null,
+  });
+}
+
+function closeTenantSseSubscriber(subscriber) {
+  if (!subscriber) return;
+  try {
+    writeSseEvent(subscriber.res, "disabled", { disabled: true, error: "CHAT_DISABLED" });
+  } catch {}
+  stopSseHeartbeat(subscriber);
+  try { subscriber.res.end(); } catch {}
+}
+
+function disconnectTenantChatRuntime(tenantId) {
+  const tenantKey = getTenantKey(tenantId);
+  if (!tenantKey) return;
+
+  for (const [key, set] of threadWaiters.entries()) {
+    if (!String(key || "").startsWith(`${tenantKey}:`)) continue;
+    Array.from(set || []).forEach((resolve) => {
+      try {
+        resolve({
+          timeout: true,
+          disabled: true,
+          updatedAt: "",
+          messageChanged: false,
+          typingChanged: false,
+        });
+      } catch {}
+    });
+    threadWaiters.delete(key);
+  }
+
+  const tenantWaitSet = tenantWaiters.get(tenantKey);
+  if (tenantWaitSet && tenantWaitSet.size) {
+    Array.from(tenantWaitSet).forEach((resolve) => {
+      try {
+        resolve({
+          timeout: true,
+          disabled: true,
+          updatedAt: "",
+          revision: 0,
+        });
+      } catch {}
+    });
+    tenantWaiters.delete(tenantKey);
+  }
+
+  const tenantUnreadWaitSet = tenantUnreadWaiters.get(tenantKey);
+  if (tenantUnreadWaitSet && tenantUnreadWaitSet.size) {
+    Array.from(tenantUnreadWaitSet).forEach((resolve) => {
+      try {
+        resolve({
+          timeout: true,
+          disabled: true,
+          total: 0,
+          updatedAt: "",
+          revision: 0,
+        });
+      } catch {}
+    });
+    tenantUnreadWaiters.delete(tenantKey);
+  }
+
+  for (const [key, set] of threadSseSubscribers.entries()) {
+    if (!String(key || "").startsWith(`${tenantKey}:`)) continue;
+    Array.from(set || []).forEach((subscriber) => {
+      closeTenantSseSubscriber(subscriber);
+    });
+    threadSseSubscribers.delete(key);
+  }
+
+  const tenantSummarySseSet = tenantSseSubscribers.get(tenantKey);
+  if (tenantSummarySseSet && tenantSummarySseSet.size) {
+    Array.from(tenantSummarySseSet).forEach((subscriber) => {
+      closeTenantSseSubscriber(subscriber);
+    });
+    tenantSseSubscribers.delete(tenantKey);
+  }
+
+  for (const [key, set] of unreadSseSubscribers.entries()) {
+    if (key !== `out:${tenantKey}` && !String(key || "").startsWith(`in:${tenantKey}:`)) continue;
+    Array.from(set || []).forEach((subscriber) => {
+      closeTenantSseSubscriber(subscriber);
+    });
+    unreadSseSubscribers.delete(key);
+  }
+
+  for (const [key, timer] of clientUnreadRefreshState.entries()) {
+    if (!String(key || "").startsWith(`${tenantKey}:`)) continue;
+    clearTimeout(timer);
+    clientUnreadRefreshState.delete(key);
+  }
+
+  tenantChangeState.delete(tenantKey);
+  const tenantUnreadEntry = tenantUnreadState.get(tenantKey);
+  if (tenantUnreadEntry && tenantUnreadEntry.refreshTimer) {
+    clearTimeout(tenantUnreadEntry.refreshTimer);
+  }
+  tenantUnreadState.delete(tenantKey);
+  tenantPushCompanyTitleCache.delete(tenantKey);
+  guestThreadCleanupState.delete(tenantKey);
+
+  for (const key of Array.from(threadTypingState.keys())) {
+    if (String(key || "").startsWith(`${tenantKey}:`)) {
+      threadTypingState.delete(key);
+    }
+  }
+}
+
+async function handleTenantChatWidgetStateChange(tenantId, enabled) {
+  setTenantChatWidgetEnabledCache(tenantId, enabled);
+  if (enabled !== false) return;
+  disconnectTenantChatRuntime(tenantId);
+  await deletePushSubscriptionsForTenant(tenantId).catch((err) => {
+    console.error("chat-temp tenant push cleanup error:", err);
+  });
 }
 
 async function resolveGuestThreadTtlDaysForTenant(tenantId) {
@@ -995,6 +1179,143 @@ function getTenantKey(tenantId) {
   return tenant || "";
 }
 
+function getUnreadStreamKey(tenantId, actorKey, clientId = "") {
+  const tenant = getTenantKey(tenantId);
+  if (!tenant) return "";
+  if (actorKey === "in") {
+    const client = normalizeClientId(clientId);
+    if (!client) return "";
+    return `in:${tenant}:${client}`;
+  }
+  return `out:${tenant}`;
+}
+
+function writeSseEvent(res, event, payload) {
+  if (!res || typeof res.write !== "function") return false;
+  try {
+    res.write(`event: ${String(event || "message")}\n`);
+    res.write(`data: ${JSON.stringify(payload || {})}\n\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function writeSseComment(res, comment = "keepalive") {
+  if (!res || typeof res.write !== "function") return false;
+  try {
+    res.write(`: ${String(comment || "keepalive")}\n\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function removeSseSubscriber(store, key, subscriber) {
+  if (!store || !key || !subscriber) return;
+  const set = store.get(key);
+  if (!set || !set.size) return;
+  set.delete(subscriber);
+  if (!set.size) store.delete(key);
+}
+
+function createSseSubscriber(res, eventName, buildPayload) {
+  const subscriber = {
+    res,
+    eventName: String(eventName || "message"),
+    buildPayload,
+    heartbeatTimer: 0,
+  };
+
+  subscriber.send = (payload) => writeSseEvent(
+    res,
+    subscriber.eventName,
+    typeof buildPayload === "function" ? buildPayload(payload) : (payload || {})
+  );
+
+  return subscriber;
+}
+
+function addSseSubscriber(store, key, subscriber) {
+  if (!store || !key || !subscriber) return;
+  const set = store.get(key) || new Set();
+  set.add(subscriber);
+  store.set(key, set);
+}
+
+function startSseHeartbeat(subscriber) {
+  if (!subscriber || subscriber.heartbeatTimer) return;
+  subscriber.heartbeatTimer = setInterval(() => {
+    if (!writeSseComment(subscriber.res, "heartbeat")) {
+      stopSseHeartbeat(subscriber);
+    }
+  }, CHAT_SSE_HEARTBEAT_MS);
+}
+
+function stopSseHeartbeat(subscriber) {
+  if (!subscriber || !subscriber.heartbeatTimer) return;
+  clearInterval(subscriber.heartbeatTimer);
+  subscriber.heartbeatTimer = 0;
+}
+
+function initializeSseResponse(req, res) {
+  res.status(200);
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  if (typeof res.flushHeaders === "function") res.flushHeaders();
+  if (req?.socket && typeof req.socket.setTimeout === "function") {
+    req.socket.setTimeout(0);
+  }
+  writeSseComment(res, "connected");
+}
+
+function emitThreadSseEvent(tenantId, clientId, payload = {}) {
+  const key = getThreadKey(tenantId, clientId);
+  if (!key) return;
+  const set = threadSseSubscribers.get(key);
+  if (!set || !set.size) return;
+
+  Array.from(set).forEach((subscriber) => {
+    const sent = subscriber.send(payload);
+    if (!sent) {
+      stopSseHeartbeat(subscriber);
+      removeSseSubscriber(threadSseSubscribers, key, subscriber);
+    }
+  });
+}
+
+function emitTenantSseEvent(tenantId, payload = {}) {
+  const key = getTenantKey(tenantId);
+  if (!key) return;
+  const set = tenantSseSubscribers.get(key);
+  if (!set || !set.size) return;
+
+  Array.from(set).forEach((subscriber) => {
+    const sent = subscriber.send(payload);
+    if (!sent) {
+      stopSseHeartbeat(subscriber);
+      removeSseSubscriber(tenantSseSubscribers, key, subscriber);
+    }
+  });
+}
+
+function emitUnreadSseEvent(tenantId, actorKey, clientId, payload = {}) {
+  const key = getUnreadStreamKey(tenantId, actorKey, clientId);
+  if (!key) return;
+  const set = unreadSseSubscribers.get(key);
+  if (!set || !set.size) return;
+
+  Array.from(set).forEach((subscriber) => {
+    const sent = subscriber.send(payload);
+    if (!sent) {
+      stopSseHeartbeat(subscriber);
+      removeSseSubscriber(unreadSseSubscribers, key, subscriber);
+    }
+  });
+}
+
 function getTenantChangeEntry(tenantId, create = false) {
   const key = getTenantKey(tenantId);
   if (!key) return null;
@@ -1065,16 +1386,24 @@ function getTenantUnreadEntry(tenantId, create = false) {
 function notifyTenantUnreadChange(tenantId, payload = {}) {
   const key = getTenantKey(tenantId);
   if (!key) return;
-  const set = tenantUnreadWaiters.get(key);
-  if (!set || !set.size) return;
-
   const data = {
     total: Number(payload.total || 0),
     updatedAt: String(payload.updatedAt || ""),
     revision: Number(payload.revision || 0),
   };
-  Array.from(set).forEach((resolve) => {
-    try { resolve(data); } catch {}
+  const set = tenantUnreadWaiters.get(key);
+  if (set && set.size) {
+    Array.from(set).forEach((resolve) => {
+      try { resolve(data); } catch {}
+    });
+  }
+  emitUnreadSseEvent(tenantId, "out", "", {
+    changed: true,
+    unread_total: data.total,
+    total: data.total,
+    updated_at: data.updatedAt,
+    revision: data.revision,
+    timeout: false,
   });
 }
 
@@ -1197,6 +1526,40 @@ function applyTenantUnreadTotal(tenantId, totalRaw, updatedAt = "") {
     updatedAt: entry.updatedAt,
     revision: entry.revision,
   };
+}
+
+function scheduleClientUnreadSseRefresh(tenantId, clientId, options = {}) {
+  const key = getThreadKey(tenantId, clientId);
+  const streamKey = getUnreadStreamKey(tenantId, "in", clientId);
+  if (!key || !streamKey) return;
+  const listeners = unreadSseSubscribers.get(streamKey);
+  if (!listeners || !listeners.size) return;
+
+  const currentTimer = clientUnreadRefreshState.get(key);
+  if (currentTimer) return;
+
+  const delayMs = Number.isFinite(Number(options.delayMs))
+    ? Math.max(0, Math.trunc(Number(options.delayMs)))
+    : 140;
+
+  const timer = setTimeout(async () => {
+    clientUnreadRefreshState.delete(key);
+    try {
+      const snapshot = await readClientUnreadSnapshot(tenantId, clientId);
+      emitUnreadSseEvent(tenantId, "in", clientId, {
+        changed: true,
+        unread_total: Number(snapshot.total || 0),
+        total: Number(snapshot.total || 0),
+        updated_at: String(snapshot.updatedAt || ""),
+        revision: Number(snapshot.revision || 0),
+        timeout: false,
+      });
+    } catch (err) {
+      console.error("chat-temp client unread SSE refresh error:", err);
+    }
+  }, delayMs);
+
+  clientUnreadRefreshState.set(key, timer);
 }
 
 async function ensureTenantUnreadLoaded(tenantId) {
@@ -1366,13 +1729,20 @@ function notifyTenantChange(tenantId, updatedAt = "") {
   if (!key) return;
   const changed = touchTenantChange(key, updatedAt);
   const set = tenantWaiters.get(key);
-  if (!set || !set.size) return;
   const payload = {
     updatedAt: String(changed.updatedAt || ""),
     revision: Number(changed.revision || 0),
   };
-  Array.from(set).forEach((resolve) => {
-    try { resolve(payload); } catch {}
+  if (set && set.size) {
+    Array.from(set).forEach((resolve) => {
+      try { resolve(payload); } catch {}
+    });
+  }
+  emitTenantSseEvent(tenantId, {
+    changed: true,
+    updated_at: payload.updatedAt,
+    revision: payload.revision,
+    timeout: false,
   });
 }
 
@@ -1392,8 +1762,18 @@ function notifyThreadChange(tenantId, clientId, updatedAt = "", options = {}) {
         try { resolve(payload); } catch {}
       });
     }
+    emitThreadSseEvent(tenantId, clientId, {
+      client_id: Number(clientId),
+      changed: messageChanged || typingChanged,
+      message_changed: messageChanged,
+      typing_changed: typingChanged,
+      updated_at: String(updatedAt || ""),
+    });
   }
-  if (messageChanged) notifyTenantChange(tenantId, updatedAt);
+  if (messageChanged) {
+    notifyTenantChange(tenantId, updatedAt);
+    scheduleClientUnreadSseRefresh(tenantId, clientId);
+  }
 }
 
 function waitForThreadChange(tenantId, clientId, timeoutMs) {
@@ -1585,6 +1965,37 @@ async function storeChatAttachmentImage({ file, tenantId, clientId }) {
 
   const { absDir, relDir } = ensureAttachmentDir(tenantId, clientId);
   const fileId = `${Date.now()}_${crypto.randomBytes(5).toString("hex")}`;
+
+  if (sourceMime === "image/webp") {
+    try {
+      const meta = await sharp(sourceBuffer, { failOnError: false }).metadata();
+      const width = Number(meta?.width || 0);
+      const height = Number(meta?.height || 0);
+      const canReuseOriginal = (
+        width > 0
+        && height > 0
+        && width <= 1800
+        && height <= 1800
+      );
+
+      if (canReuseOriginal) {
+        const fileName = `${fileId}.webp`;
+        const absPath = path.join(absDir, fileName);
+        fs.writeFileSync(absPath, sourceBuffer);
+        const relUrlPath = `/${path.join(relDir, fileName).replace(/\\/g, "/")}`;
+
+        return sanitizeAttachment({
+          kind: "image",
+          name: String(file.originalname || "image"),
+          mime: "image/webp",
+          url: relUrlPath,
+          width,
+          height,
+          size: Number(sourceBuffer.length || 0),
+        });
+      }
+    } catch {}
+  }
 
   try {
     const pipeline = sharp(sourceBuffer, { failOnError: false }).rotate().resize({
@@ -2267,15 +2678,22 @@ async function readTenantUpdatedAt(tenantId) {
   return toIsoOrEmpty(rows?.[0]?.updated_at);
 }
 
-module.exports = function makeChatTempRouter() {
+function makeChatTempRouter() {
   const router = express.Router();
 
-  router.use((req, res, next) => {
+  router.use(async (req, res, next) => {
     try {
       const tenantId = getTenantId(req);
+      const chatEnabled = await isTenantChatWidgetEnabled(tenantId);
+      if (!chatEnabled) {
+        return res.status(403).json({ ok: false, error: "CHAT_DISABLED" });
+      }
       scheduleExpiredGuestThreadsCleanup(tenantId);
-    } catch {}
-    next();
+      return next();
+    } catch (err) {
+      console.error("chat-temp feature gate error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
   });
 
   router.post("/thread/merge", async (req, res) => {
@@ -2383,6 +2801,57 @@ module.exports = function makeChatTempRouter() {
     } catch (err) {
       console.error("chat-temp POST /thread/:clientId/typing error:", err);
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
+  });
+
+  router.get("/thread/:clientId/stream", async (req, res) => {
+    const tenantId = getTenantId(req);
+    const clientId = normalizeClientId(req.params.clientId);
+    if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
+
+    const actorKey = getRequestReactionActor(req);
+
+    try {
+      const currentMeta = await readThreadMeta(tenantId, clientId);
+      const currentUpdatedAt = toIsoOrEmpty(currentMeta?.updated_at);
+      const currentTyping = getPeerTypingForActor(tenantId, clientId, actorKey);
+      const threadKey = getThreadKey(tenantId, clientId);
+
+      initializeSseResponse(req, res);
+
+      const subscriber = createSseSubscriber(res, "thread", (payload = {}) => ({
+        client_id: Number(clientId),
+        changed: payload.changed === true,
+        message_changed: payload.message_changed === true,
+        typing_changed: payload.typing_changed === true,
+        updated_at: String(payload.updated_at || ""),
+        typing: getPeerTypingForActor(tenantId, clientId, actorKey),
+        timeout: false,
+      }));
+
+      addSseSubscriber(threadSseSubscribers, threadKey, subscriber);
+      startSseHeartbeat(subscriber);
+
+      subscriber.send({
+        changed: false,
+        message_changed: false,
+        typing_changed: Boolean(currentTyping?.updated_at),
+        updated_at: currentUpdatedAt,
+      });
+
+      const cleanup = () => {
+        stopSseHeartbeat(subscriber);
+        removeSseSubscriber(threadSseSubscribers, threadKey, subscriber);
+      };
+
+      req.on("close", cleanup);
+      res.on("close", cleanup);
+    } catch (err) {
+      console.error("chat-temp GET /thread/:clientId/stream error:", err);
+      if (!res.headersSent) {
+        return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+      }
+      try { res.end(); } catch {}
     }
   });
 
@@ -3054,6 +3523,61 @@ module.exports = function makeChatTempRouter() {
     }
   });
 
+  router.get("/unread/stream", async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const actorKey = getRequestReactionActor(req);
+      const clientId = actorKey === "in"
+        ? normalizeClientId(req.query.client_id ?? req.query.clientId ?? "")
+        : "";
+
+      if (actorKey === "in" && !clientId) {
+        return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
+      }
+
+      const snapshot = actorKey === "in"
+        ? await readClientUnreadSnapshot(tenantId, clientId)
+        : await ensureTenantUnreadLoaded(tenantId);
+      const unreadKey = getUnreadStreamKey(tenantId, actorKey, clientId);
+
+      initializeSseResponse(req, res);
+
+      const subscriber = createSseSubscriber(res, "unread", (payload = {}) => ({
+        changed: payload.changed === true,
+        unread_total: Number(payload.unread_total ?? payload.total ?? 0),
+        total: Number(payload.total ?? payload.unread_total ?? 0),
+        updated_at: String(payload.updated_at || ""),
+        revision: Number(payload.revision || 0),
+        timeout: false,
+      }));
+
+      addSseSubscriber(unreadSseSubscribers, unreadKey, subscriber);
+      startSseHeartbeat(subscriber);
+
+      subscriber.send({
+        changed: false,
+        unread_total: Number(snapshot.total || 0),
+        total: Number(snapshot.total || 0),
+        updated_at: String(snapshot.updatedAt || ""),
+        revision: Number(snapshot.revision || 0),
+      });
+
+      const cleanup = () => {
+        stopSseHeartbeat(subscriber);
+        removeSseSubscriber(unreadSseSubscribers, unreadKey, subscriber);
+      };
+
+      req.on("close", cleanup);
+      res.on("close", cleanup);
+    } catch (err) {
+      console.error("chat-temp GET /unread/stream error:", err);
+      if (!res.headersSent) {
+        return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+      }
+      try { res.end(); } catch {}
+    }
+  });
+
   router.get("/unread/wait", async (req, res) => {
     try {
       const tenantId = getTenantId(req);
@@ -3165,6 +3689,46 @@ module.exports = function makeChatTempRouter() {
     }
   });
 
+  router.get("/summaries/stream", async (req, res) => {
+    try {
+      const tenantId = getTenantId(req);
+      const currentState = await ensureTenantChangeEntryLoaded(tenantId);
+      const tenantKey = getTenantKey(tenantId);
+
+      initializeSseResponse(req, res);
+
+      const subscriber = createSseSubscriber(res, "summaries", (payload = {}) => ({
+        changed: payload.changed === true,
+        updated_at: String(payload.updated_at || ""),
+        revision: Number(payload.revision || 0),
+        timeout: false,
+      }));
+
+      addSseSubscriber(tenantSseSubscribers, tenantKey, subscriber);
+      startSseHeartbeat(subscriber);
+
+      subscriber.send({
+        changed: false,
+        updated_at: String(currentState?.updatedAt || ""),
+        revision: Number(currentState?.revision || 0),
+      });
+
+      const cleanup = () => {
+        stopSseHeartbeat(subscriber);
+        removeSseSubscriber(tenantSseSubscribers, tenantKey, subscriber);
+      };
+
+      req.on("close", cleanup);
+      res.on("close", cleanup);
+    } catch (err) {
+      console.error("chat-temp GET /summaries/stream error:", err);
+      if (!res.headersSent) {
+        return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+      }
+      try { res.end(); } catch {}
+    }
+  });
+
   router.get("/summaries/wait", async (req, res) => {
     try {
       const tenantId = getTenantId(req);
@@ -3271,4 +3835,10 @@ module.exports = function makeChatTempRouter() {
   });
 
   return router;
-};
+}
+
+makeChatTempRouter.handleTenantChatWidgetStateChange = handleTenantChatWidgetStateChange;
+makeChatTempRouter.disconnectTenantChatRuntime = disconnectTenantChatRuntime;
+makeChatTempRouter.setTenantChatWidgetEnabledCache = setTenantChatWidgetEnabledCache;
+
+module.exports = makeChatTempRouter;

@@ -4,8 +4,9 @@ const crypto = require('crypto');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const { domainToASCII } = require('url');
+const chatTempRuntime = require('../chatTemp');
 
-module.exports = function makeAdminTenantRouter({ db, helpers }) {
+module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
   const subdomainRe = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
   const tenantChatColumns = [
@@ -48,6 +49,37 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
   ];
   let tenantChatColumnsReady = false;
   let ensureTenantChatColumnsPromise = null;
+
+  async function publishTenantChatWidgetChanged(tenantId, enabled) {
+    try {
+      if (!ordersEvents || typeof ordersEvents.publish !== 'function') return;
+      const [storeRows] = await db.query(
+        `SELECT id
+         FROM ten_stores
+         WHERE tenant_id=?
+         ORDER BY id ASC`,
+        [tenantId]
+      );
+      const seen = new Set();
+      const storeIds = Array.isArray(storeRows)
+        ? storeRows
+          .map((row) => Number(row && row.id))
+          .filter((storeId) => Number.isFinite(storeId) && storeId > 0)
+        : [];
+      if (!storeIds.length) storeIds.push(1);
+      for (const storeId of storeIds) {
+        if (seen.has(storeId)) continue;
+        seen.add(storeId);
+        ordersEvents.publish(tenantId, storeId, 'tenant.chat_widget.changed', {
+          tenant_id: Number(tenantId),
+          store_id: Number(storeId),
+          chat_widget_enabled: enabled ? 1 : 0,
+        });
+      }
+    } catch (err) {
+      console.error('Ошибка публикации storefront chat_widget change:', err);
+    }
+  }
 
   function normalizeSubdomain(value) {
     if (value === undefined || value === null) return null;
@@ -1078,6 +1110,23 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         'SELECT * FROM ten_tenants WHERE id=? LIMIT 1',
         [tenantId]
       );
+      const prevChatWidgetEnabled = Number(current.chat_widget_enabled) !== 0;
+      const nextChatWidgetEnabledResolved = Number(rows?.[0]?.chat_widget_enabled) !== 0;
+
+      try {
+        if (typeof chatTempRuntime.handleTenantChatWidgetStateChange === 'function') {
+          await chatTempRuntime.handleTenantChatWidgetStateChange(
+            tenantId,
+            nextChatWidgetEnabledResolved
+          );
+        }
+      } catch (chatRuntimeErr) {
+        console.error('Ошибка синхронизации runtime чата tenant:', chatRuntimeErr);
+      }
+
+      if (prevChatWidgetEnabled !== nextChatWidgetEnabledResolved) {
+        await publishTenantChatWidgetChanged(tenantId, nextChatWidgetEnabledResolved);
+      }
 
       res.json({ ok: true, tenant: rows[0] || null });
     } catch (err) {

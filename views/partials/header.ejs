@@ -89,8 +89,8 @@
         </div>
       </div>
 
-      <% if (hasCitySelector && isCompanyChatEnabled) { %>
-        <button class="header-btn shop-company-chat-btn" id="shopCompanyChatOpenBtn" type="button" aria-label="Чат с компанией" title="Чат с компанией">
+      <% if (hasCitySelector) { %>
+        <button class="header-btn shop-company-chat-btn<%= isCompanyChatEnabled ? '' : ' hidden' %>" id="shopCompanyChatOpenBtn" type="button" aria-label="Чат с компанией" title="Чат с компанией"<% if (!isCompanyChatEnabled) { %> aria-hidden="true" tabindex="-1"<% } %>>
           <i class="fas fa-comment-dots"></i>
           <span class="shop-company-chat-unread hidden" id="shopCompanyChatUnreadBadge" aria-live="polite" aria-atomic="true"></span>
         </button>

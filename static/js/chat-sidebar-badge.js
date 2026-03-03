@@ -4,6 +4,7 @@
   if (!navLink || !badge) return;
 
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
+  const CHAT_SSE_ENABLED = typeof window.EventSource === "function";
   const CHAT_UNREAD_EVENT = "dashboard:chat-unread-changed";
   const TENANT_DATA_CHANGED_EVENT = "tenantDataChanged";
   const FALLBACK_POLL_MS = 45000;
@@ -27,6 +28,8 @@
   let messageAlertAudioUnlocked = false;
   let pullAbortController = null;
   let waitAbortController = null;
+  let unreadEventSource = null;
+  let unreadEventSourceTenantId = "";
   let chatWidgetEnabled = true;
 
   const navItem = navLink.closest("li");
@@ -50,6 +53,21 @@
     } catch {
       return true;
     }
+  }
+
+  function syncTenantChatWidgetEnabledToStorage(enabled) {
+    try {
+      const tenant = JSON.parse(localStorage.getItem("tenant") || "{}");
+      if (!tenant || typeof tenant !== "object") return;
+      tenant.chat_widget_enabled = enabled !== false ? 1 : 0;
+      localStorage.setItem("tenant", JSON.stringify(tenant));
+      document.dispatchEvent(new CustomEvent(TENANT_DATA_CHANGED_EVENT, { detail: { tenant } }));
+    } catch {}
+  }
+
+  function handleChatFeatureDisabledByServer() {
+    syncTenantChatWidgetEnabledToStorage(false);
+    applyChatWidgetEnabledState(false);
   }
 
   function setChatNavVisibility(enabled) {
@@ -150,6 +168,7 @@
       try { waitAbortController.abort(); } catch {}
       waitAbortController = null;
     }
+    stopUnreadSseConnection();
     inFlight = false;
   }
 
@@ -308,8 +327,65 @@
     return headers;
   }
 
+  function withChatActorQuery(url, actorValue) {
+    const rawUrl = String(url || "");
+    if (!rawUrl || rawUrl.indexOf(CHAT_TEMP_API_BASE) !== 0) return rawUrl;
+    const actor = String(actorValue || "").trim().toLowerCase();
+    if (!actor) return rawUrl;
+    try {
+      const parsed = new URL(rawUrl, window.location.origin);
+      if (!parsed.searchParams.has("chat_actor")) {
+        parsed.searchParams.set("chat_actor", actor);
+      }
+      return parsed.pathname + parsed.search + parsed.hash;
+    } catch {
+      const hasQuery = rawUrl.indexOf("?") !== -1;
+      const already = rawUrl.indexOf("chat_actor=") !== -1;
+      if (already) return rawUrl;
+      return rawUrl + (hasQuery ? "&" : "?") + "chat_actor=" + encodeURIComponent(actor);
+    }
+  }
+
+  function buildChatSseUrl(url, actorValue, extraParams) {
+    const rawUrl = withChatActorQuery(url, actorValue);
+    try {
+      const parsed = new URL(rawUrl, window.location.origin);
+      const tenantId = getTenantId();
+      if (tenantId) parsed.searchParams.set("tenant_id", String(tenantId));
+      Object.entries(extraParams || {}).forEach(function ([key, value]) {
+        if (value === undefined || value === null || value === "") return;
+        parsed.searchParams.set(String(key), String(value));
+      });
+      return parsed.pathname + parsed.search + parsed.hash;
+    } catch {
+      return rawUrl;
+    }
+  }
+
+  function closeChatEventSource(source) {
+    if (!source) return;
+    try {
+      source.onopen = null;
+      source.onerror = null;
+      source.onmessage = null;
+      if (typeof source.close === "function") source.close();
+    } catch {}
+  }
+
+  function parseChatSsePayload(event) {
+    if (!event || typeof event.data !== "string" || !event.data) return null;
+    try {
+      const parsed = JSON.parse(event.data);
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
   function normalizeUnreadPayload(json) {
-    const data = json && json.data && typeof json.data === "object" ? json.data : {};
+    const data = json && json.data && typeof json.data === "object"
+      ? json.data
+      : (json && typeof json === "object" ? json : {});
     const totalRaw = Number(data.unread_total ?? data.total ?? 0);
     const total = Number.isFinite(totalRaw) && totalRaw > 0 ? Math.trunc(totalRaw) : 0;
     const revisionRaw = Number(data.revision || 0);
@@ -321,6 +397,19 @@
       changed: data.changed === true,
       timeout: data.timeout === true,
     };
+  }
+
+  function applyUnreadPayload(payload, options) {
+    const normalized = normalizeUnreadPayload(payload);
+    if (!(options && options.suppressAlert === true)) {
+      maybeNotifyUnreadIncrease(normalized.total);
+    }
+    unreadTotal = normalized.total;
+    unreadRevision = normalized.revision;
+    unreadUpdatedAt = normalized.updatedAt;
+    unreadPrimed = true;
+    showBadge(normalized.total);
+    return normalized;
   }
 
   async function pullUnreadCount() {
@@ -339,17 +428,12 @@
       });
       if (!res.ok) {
         if (res.status === 401) hideBadge();
+        if (res.status === 403) handleChatFeatureDisabledByServer();
         return;
       }
       const json = await res.json().catch(function () { return null; });
       if (!json || json.ok !== true) return;
-      const payload = normalizeUnreadPayload(json);
-      maybeNotifyUnreadIncrease(payload.total);
-      unreadTotal = payload.total;
-      unreadRevision = payload.revision;
-      unreadUpdatedAt = payload.updatedAt;
-      unreadPrimed = true;
-      showBadge(payload.total);
+      applyUnreadPayload(json);
     } catch (err) {
       if (isAbortError(err)) return;
       // Keep previous unread state on transient errors.
@@ -365,6 +449,52 @@
     return new Promise(function (resolve) {
       window.setTimeout(resolve, Math.max(0, Number(ms || 0)));
     });
+  }
+
+  function stopUnreadSseConnection() {
+    closeChatEventSource(unreadEventSource);
+    unreadEventSource = null;
+    unreadEventSourceTenantId = "";
+  }
+
+  function ensureUnreadSseConnection() {
+    if (!CHAT_SSE_ENABLED || !chatWidgetEnabled) return false;
+    const tenantId = getTenantId();
+    if (!tenantId) {
+      stopUnreadSseConnection();
+      return false;
+    }
+    if (unreadEventSource && unreadEventSourceTenantId === tenantId) {
+      return true;
+    }
+
+    stopUnreadSseConnection();
+
+    const source = new EventSource(
+      buildChatSseUrl(CHAT_TEMP_API_BASE + "/unread/stream", "out")
+    );
+    unreadEventSource = source;
+    unreadEventSourceTenantId = tenantId;
+
+    source.addEventListener("unread", function (event) {
+      const payload = parseChatSsePayload(event);
+      if (!payload || unreadEventSource !== source) return;
+      applyUnreadPayload(payload, {
+        suppressAlert: payload.changed !== true,
+      });
+    });
+
+    source.addEventListener("disabled", function () {
+      if (unreadEventSource !== source) return;
+      handleChatFeatureDisabledByServer();
+      stopUnreadSseConnection();
+    });
+
+    source.onerror = function () {
+      if (unreadEventSource !== source) return;
+    };
+
+    return true;
   }
 
   async function waitForUnreadChange() {
@@ -409,6 +539,16 @@
     if (!res.ok) {
       if (res.status === 401) {
         hideBadge();
+        return {
+          changed: false,
+          timeout: true,
+          total: unreadTotal,
+          revision: unreadRevision,
+          updatedAt: unreadUpdatedAt,
+        };
+      }
+      if (res.status === 403) {
+        handleChatFeatureDisabledByServer();
         return {
           changed: false,
           timeout: true,
@@ -484,7 +624,11 @@
     if (!chatWidgetEnabled) return;
     if (isChatPageActive()) return;
     pullUnreadCount().catch(function () {});
-    startWaitLoop();
+    if (CHAT_SSE_ENABLED) {
+      ensureUnreadSseConnection();
+    } else {
+      startWaitLoop();
+    }
     if (!timerId) {
       timerId = window.setInterval(function () {
         pullUnreadCount().catch(function () {});

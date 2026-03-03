@@ -647,13 +647,22 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
 
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
-      const token = str(req.headers['x-customer-token']);
-      const customer = await getCustomerByToken(tenantId, token);
-      if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
-
       const since = Number(req.query.since || 0);
       const timeoutMs = Number(req.query.timeout_ms || req.query.timeout || 20000);
+      const bootstrapCursorRaw = str(req.query.bootstrap_cursor || req.query.bootstrap || '');
+      const bootstrapCursor = bootstrapCursorRaw === '1' || bootstrapCursorRaw.toLowerCase() === 'true';
       const cursorNow = ordersEvents.getCurrentCursor(tenantId, storeId);
+
+      if ((!Number.isFinite(since) || since <= 0) && bootstrapCursor) {
+        return res.json({
+          ok: true,
+          data: {
+            changed: false,
+            timeout: false,
+            cursor: cursorNow,
+          },
+        });
+      }
 
       if (Number.isFinite(since) && since > 0 && cursorNow > since) {
         return res.json({ ok: true, data: { changed: true, timeout: false, cursor: cursorNow } });

@@ -451,7 +451,63 @@ app.get('/manifest.json', async (req, res) => {
 const serviceWorkerScript = `
 self.addEventListener('install', function () { self.skipWaiting(); });
 self.addEventListener('activate', function (e) { e.waitUntil(self.clients.claim()); });
-self.addEventListener('fetch', function () {});
+var CHAT_IMAGE_CACHE_NAME = 'chat-images-v1';
+var CHAT_IMAGE_CACHE_MAX_ITEMS = 180;
+
+function isChatImageRequest(request) {
+  if (!request || request.method !== 'GET') return false;
+  try {
+    var url = new URL(request.url);
+    if (url.origin !== self.location.origin) return false;
+    return /^\\/(?:uploads|static\\/uploads)\\/chat\\//i.test(String(url.pathname || ''));
+  } catch (err) {
+    return false;
+  }
+}
+
+async function pruneChatImageCache(cache) {
+  try {
+    var keys = await cache.keys();
+    if (!Array.isArray(keys) || keys.length <= CHAT_IMAGE_CACHE_MAX_ITEMS) return;
+    var overflow = keys.length - CHAT_IMAGE_CACHE_MAX_ITEMS;
+    for (var i = 0; i < overflow; i += 1) {
+      await cache.delete(keys[i]);
+    }
+  } catch (err) {}
+}
+
+async function putChatImageIntoCache(cache, request, response) {
+  if (!cache || !request || !response || !response.ok) return;
+  try {
+    await cache.put(request, response.clone());
+    await pruneChatImageCache(cache);
+  } catch (err) {}
+}
+
+async function handleChatImageFetch(request) {
+  var cache = await caches.open(CHAT_IMAGE_CACHE_NAME);
+  var cached = null;
+  try {
+    cached = await cache.match(request, { ignoreVary: true });
+  } catch (err) {
+    cached = null;
+  }
+
+  if (cached) {
+    return cached;
+  }
+
+  var response = await fetch(request);
+  if (response && response.ok) {
+    putChatImageIntoCache(cache, request, response).catch(function () {});
+  }
+  return response;
+}
+
+self.addEventListener('fetch', function (event) {
+  if (!isChatImageRequest(event.request)) return;
+  event.respondWith(handleChatImageFetch(event.request));
+});
 self.addEventListener('push', function (event) {
   var payload = {};
   try {
@@ -639,7 +695,7 @@ app.use('/api/chat-temp', makeChatTempRouter());
 app.use('/api/admin/clients', authMiddleware, makeAdminClientsRouter({ db, helpers }));
 app.use('/api/admin/discounts', authMiddleware, makeAdminDiscountsRouter({ db, helpers }));
 app.use('/api/admin/orders', authMiddleware, makeAdminOrdersRouter({ db, helpers, ordersEvents }));
-app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers }));
+app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers, ordersEvents }));
 app.use('/api/admin/stock', authMiddleware, makeAdminStockRouter({ db, helpers, ordersEvents }));
 
 // товары/категории/сортировка/загрузка — оставляем старые пути /api/prod_* и /api/sort/*
