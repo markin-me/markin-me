@@ -3695,7 +3695,9 @@
     initCustomSelects(logicSelectWrap.parentElement);
   }
 
-  const initialClientOpenRequest = getClientOpenRequestFromUrl();
+  const isChatBridgeMode = !!(document.body && document.body.classList.contains("page-chat"));
+  if (!isChatBridgeMode) {
+    const initialClientOpenRequest = getClientOpenRequestFromUrl();
 
   loadCustomFilters().catch(console.error);
   loadClients()
@@ -3712,6 +3714,7 @@
     loadClients().catch(console.error);
     loadDiscounts().catch(console.error);
   });
+  }
   window.__clientsDashboardApi = {
     selectClientById(id, preferredTitle = "", options = {}) {
       return selectClient(id, preferredTitle, options);

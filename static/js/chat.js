@@ -237,6 +237,8 @@
     summariesUpdatedAt: "",
     summariesRevision: 0,
     summariesPollTimer: 0,
+    summariesSyncInFlight: null,
+    summariesSyncPendingForceThreads: false,
     activeOrdersPollTimer: 0,
     activeOrdersPollInFlight: false,
     messagesScrollRaf: 0,
@@ -1939,22 +1941,14 @@
     return Array.from(merged.values());
   }
 
-  async function pullRemoteSummaries(clientIds, options = {}) {
-    const ids = (Array.isArray(clientIds) ? clientIds : [])
-      .map((id) => normalizeClientIdKey(id))
-      .filter(Boolean);
-    if (!ids.length) return false;
+  async function applyRemoteSummariesRows(rows, options = {}) {
     const forceThreads = options.forceThreads === true;
-
-    const qs = new URLSearchParams();
-    qs.set("client_ids", ids.join(","));
-    qs.set("_ts", String(Date.now()));
-    const json = await apiJson(`${CHAT_TEMP_API_BASE}/summaries?${qs.toString()}`);
-    const rows = Array.isArray(json?.data) ? json.data : [];
+    const normalizedRows = Array.isArray(rows) ? rows : [];
+    if (!normalizedRows.length) return false;
     const previousUnreadByClient = {};
     const summaryAlerts = [];
     const hadSummaryBaseline = messageAlertSummariesPrimed;
-    rows.forEach((row) => {
+    normalizedRows.forEach((row) => {
       const key = normalizeClientIdKey(row?.client_id ?? row?.clientId ?? row?.id);
       if (!key) return;
       const previousSummary = state.remoteSummariesByClient && state.remoteSummariesByClient[key];
@@ -1966,7 +1960,7 @@
       }
       state.remoteSummariesByClient[key] = row && typeof row === "object" ? { ...row } : {};
     });
-    rows.forEach((row) => {
+    normalizedRows.forEach((row) => {
       const key = normalizeClientIdKey(row?.client_id ?? row?.clientId ?? row?.id);
       if (!key) return;
       if (Number(key) === Number(state.activeClientId)) return;
@@ -1991,7 +1985,7 @@
         allowWhenActive: true,
       });
     }
-    const latestUpdatedAt = rows.reduce((latest, row) => {
+    const latestUpdatedAt = normalizedRows.reduce((latest, row) => {
       const updatedAt = String(
         row?.updated_at
         || row?.updatedAt
@@ -2031,7 +2025,7 @@
 
     if (!changedIds.length) return false;
     applyClientFilter();
-    rows.forEach((row) => {
+    normalizedRows.forEach((row) => {
       const key = normalizeClientIdKey(row?.client_id ?? row?.clientId ?? row?.id);
       if (!key) return;
       const summaryUpdatedAt = String(row?.updated_at || row?.updatedAt || "");
@@ -2046,6 +2040,20 @@
       if (pulled) changed = true;
     }
     return changed || changedIds.length > 0;
+  }
+
+  async function pullRemoteSummaries(clientIds, options = {}) {
+    const ids = (Array.isArray(clientIds) ? clientIds : [])
+      .map((id) => normalizeClientIdKey(id))
+      .filter(Boolean);
+    if (!ids.length) return false;
+
+    const qs = new URLSearchParams();
+    qs.set("client_ids", ids.join(","));
+    qs.set("_ts", String(Date.now()));
+    const json = await apiJson(`${CHAT_TEMP_API_BASE}/summaries?${qs.toString()}`);
+    const rows = Array.isArray(json?.data) ? json.data : [];
+    return applyRemoteSummariesRows(rows, options);
   }
 
   async function waitRemoteSummariesUpdate(
@@ -2074,53 +2082,102 @@
   }
 
   async function syncRemoteSummariesSnapshot(options = {}) {
-    if (!isChatWidgetEnabledRuntime()) return;
-    const pager = ensureClientsPager();
-    const remotePage = await loadRemoteChatClientsPage({
-      limit: pager.pageSize || CHAT_CLIENTS_PAGE_SIZE,
-      offset: 0,
-    }).catch(() => null);
-    const remoteClients = Array.isArray(remotePage?.rows) ? remotePage.rows : [];
-    if (remoteClients.length) {
-      const merged = filterOpenChatClients(mergeRemoteClients(state.clients, remoteClients));
-      const prevFingerprint = stableSerialize(
-        (state.clients || []).map((client) => [Number(client.id), String(client.name || ""), String(client.phone || "")])
-      );
-      const nextFingerprint = stableSerialize(
-        (merged || []).map((client) => [Number(client.id), String(client.name || ""), String(client.phone || "")])
-      );
-      if (prevFingerprint !== nextFingerprint) {
-        state.clients = merged;
-        const activeKey = normalizeClientIdKey(state.activeClientId);
-        let activeIdentityChanged = false;
-        if (activeKey) {
-          const activeFromList = merged.find((client) => Number(client?.id) === Number(activeKey)) || null;
-          if (activeFromList) {
-            const prevActive = state.activeClient && typeof state.activeClient === "object"
-              ? state.activeClient
-              : {};
-            const nextActiveName = String(activeFromList.name || prevActive.name || "");
-            const nextActivePhone = String(activeFromList.phone || prevActive.phone || "");
-            activeIdentityChanged = (
-              normalizeClientNameIdentity(prevActive.name) !== normalizeClientNameIdentity(nextActiveName)
-              || normalizePhoneDigits(prevActive.phone) !== normalizePhoneDigits(nextActivePhone)
-            );
-            state.activeClient = {
-              ...prevActive,
-              id: Number(activeFromList.id || activeKey),
-              name: nextActiveName,
-              phone: nextActivePhone,
-            };
+    if (!isChatWidgetEnabledRuntime()) return false;
+    const forceThreads = options.forceThreads === true;
+
+    if (state.summariesSyncInFlight) {
+      if (forceThreads) state.summariesSyncPendingForceThreads = true;
+      return state.summariesSyncInFlight;
+    }
+
+    const runSnapshotOnce = async (runOptions = {}) => {
+      const pager = ensureClientsPager();
+      const remotePage = await loadRemoteChatClientsPage({
+        limit: pager.pageSize || CHAT_CLIENTS_PAGE_SIZE,
+        offset: 0,
+      }).catch(() => null);
+      const remoteClients = Array.isArray(remotePage?.rows) ? remotePage.rows : [];
+      let changed = false;
+      if (remoteClients.length) {
+        const merged = filterOpenChatClients(mergeRemoteClients(state.clients, remoteClients));
+        const prevFingerprint = stableSerialize(
+          (state.clients || []).map((client) => [Number(client.id), String(client.name || ""), String(client.phone || "")])
+        );
+        const nextFingerprint = stableSerialize(
+          (merged || []).map((client) => [Number(client.id), String(client.name || ""), String(client.phone || "")])
+        );
+        if (prevFingerprint !== nextFingerprint) {
+          state.clients = merged;
+          const activeKey = normalizeClientIdKey(state.activeClientId);
+          let activeIdentityChanged = false;
+          if (activeKey) {
+            const activeFromList = merged.find((client) => Number(client?.id) === Number(activeKey)) || null;
+            if (activeFromList) {
+              const prevActive = state.activeClient && typeof state.activeClient === "object"
+                ? state.activeClient
+                : {};
+              const nextActiveName = String(activeFromList.name || prevActive.name || "");
+              const nextActivePhone = String(activeFromList.phone || prevActive.phone || "");
+              activeIdentityChanged = (
+                normalizeClientNameIdentity(prevActive.name) !== normalizeClientNameIdentity(nextActiveName)
+                || normalizePhoneDigits(prevActive.phone) !== normalizePhoneDigits(nextActivePhone)
+              );
+              state.activeClient = {
+                ...prevActive,
+                id: Number(activeFromList.id || activeKey),
+                name: nextActiveName,
+                phone: nextActivePhone,
+              };
+            }
+          }
+          applyClientFilter();
+          if (activeIdentityChanged && Number(state.activeClientId) === Number(activeKey)) {
+            renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
           }
         }
-        applyClientFilter();
-        if (activeIdentityChanged && Number(state.activeClientId) === Number(activeKey)) {
-          renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
-        }
       }
+
+      const appliedFromRemotePage = await applyRemoteSummariesRows(remoteClients, runOptions).catch(console.error);
+      if (appliedFromRemotePage) changed = true;
+
+      const remoteClientIdSet = new Set(
+        remoteClients
+          .map((row) => normalizeClientIdKey(row?.client_id ?? row?.clientId ?? row?.id))
+          .filter(Boolean)
+      );
+      const ids = (state.clients || [])
+        .map((client) => normalizeClientIdKey(client?.id))
+        .filter((id) => !!id && !remoteClientIdSet.has(id));
+      if (ids.length) {
+        const pulled = await pullRemoteSummaries(ids, runOptions).catch((err) => {
+          console.error(err);
+          return false;
+        });
+        if (pulled) changed = true;
+      }
+
+      return changed;
+    };
+
+    state.summariesSyncInFlight = (async () => {
+      let changed = false;
+      let runForceThreads = forceThreads || state.summariesSyncPendingForceThreads === true;
+      state.summariesSyncPendingForceThreads = false;
+      do {
+        // eslint-disable-next-line no-await-in-loop
+        const loopChanged = await runSnapshotOnce({ forceThreads: runForceThreads });
+        changed = changed || loopChanged;
+        runForceThreads = state.summariesSyncPendingForceThreads === true;
+        state.summariesSyncPendingForceThreads = false;
+      } while (runForceThreads);
+      return changed;
+    })();
+
+    try {
+      return await state.summariesSyncInFlight;
+    } finally {
+      state.summariesSyncInFlight = null;
     }
-    const ids = (state.clients || []).map((client) => client.id);
-    await pullRemoteSummaries(ids, options).catch(console.error);
   }
 
   function sleepMs(ms) {
@@ -7849,10 +7906,19 @@
       mergeClientsIntoState(preparedRows, { reset });
       applyClientFilter();
 
+      const remoteSummaryIdSet = new Set(
+        remoteRows
+          .map((row) => normalizeClientIdKey(row?.client_id ?? row?.clientId ?? row?.id))
+          .filter(Boolean)
+      );
+      if (remoteRows.length) {
+        await applyRemoteSummariesRows(remoteRows, { forceThreads: false }).catch(console.error);
+      }
+
       const summaryIds = (state.clients || [])
         .map((client) => normalizeClientIdKey(client?.id))
         .filter(Boolean)
-        .filter((id) => reset || !prevIds.has(id));
+        .filter((id) => (reset || !prevIds.has(id)) && !remoteSummaryIdSet.has(id));
       if (summaryIds.length) {
         await pullRemoteSummaries(summaryIds).catch(console.error);
         applyClientFilter();
@@ -8075,7 +8141,7 @@
       if (!state.activeClientId) return;
       if (!isChatTabActiveForRead()) return;
       syncActiveThreadReadState();
-      pullThreadFromRemoteIfChanged(state.activeClientId, { skipReadMark: false, force: true }).catch(console.error);
+      pullThreadFromRemoteIfChanged(state.activeClientId, { skipReadMark: false }).catch(console.error);
     };
 
     const syncChatsOnForeground = () => {
