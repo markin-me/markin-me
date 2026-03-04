@@ -580,6 +580,16 @@ function normalizeTenantGuestThreadTtlDays(rawValue) {
   return whole;
 }
 
+function normalizeTenantThreadTtlDays(rawValue) {
+  if (rawValue === undefined || rawValue === null || rawValue === "") return null;
+  const n = Number(rawValue);
+  if (!Number.isFinite(n)) return null;
+  const whole = Math.trunc(n);
+  if (whole <= 0) return null;
+  if (whole > 365) return 365;
+  return whole;
+}
+
 async function isTenantChatWidgetEnabled(tenantId) {
   const key = String(tenantId || "").trim();
   if (!key) return true;
@@ -900,6 +910,60 @@ async function cleanupExpiredGuestThreadsForTenant(tenantId) {
   return totalDeleted;
 }
 
+async function cleanupExpiredThreadsForTenant(tenantId) {
+  const tenant = String(tenantId || "");
+  if (!tenant) return 0;
+
+  const ttlDays = await resolveThreadTtlDaysForTenant(tenant);
+  if (!ttlDays || ttlDays <= 0) return 0;
+
+  const timestamp = new Date().toISOString();
+  let totalDeleted = 0;
+
+  for (let pass = 0; pass < 5; pass += 1) {
+    const [candidateRows] = await db.query(
+      `SELECT client_id
+         FROM chat_threads
+        WHERE tenant_id = ?
+          AND updated_at < (NOW(3) - INTERVAL ? DAY)
+        ORDER BY updated_at ASC, client_id ASC
+        LIMIT ?`,
+      [Number(tenant), ttlDays, CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT]
+    );
+
+    const clientIds = (Array.isArray(candidateRows) ? candidateRows : [])
+      .map((row) => normalizeClientId(row?.client_id))
+      .filter(Boolean);
+    if (!clientIds.length) break;
+
+    const [deleteResult] = await db.query(
+      `DELETE FROM chat_threads
+        WHERE tenant_id = ? AND client_id IN (${clientIds.map(() => "?").join(",")})`,
+      [Number(tenant), ...clientIds.map((id) => Number(id))]
+    );
+    const deletedNow = Number(deleteResult?.affectedRows || 0);
+    if (deletedNow <= 0) break;
+
+    totalDeleted += deletedNow;
+    await deletePushSubscriptionsForThreads(tenant, clientIds).catch(() => {});
+    clientIds.forEach((clientId) => {
+      clearThreadTypingState(tenant, clientId);
+      notifyThreadChange(tenant, clientId, timestamp);
+    });
+
+    if (clientIds.length < CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT) break;
+  }
+
+  if (totalDeleted > 0) {
+    scheduleTenantUnreadRefresh(tenant);
+    console.info(
+      `[chat-temp] auto-removed expired chats (all) tenant=${tenant} ttl_days=${ttlDays} count=${totalDeleted}`
+    );
+  }
+
+  return totalDeleted;
+}
+
 async function cleanupOrphanedClientThreadsForTenant(tenantId) {
   const tenant = String(tenantId || "");
   if (!tenant) return 0;
@@ -992,7 +1056,10 @@ function scheduleExpiredGuestThreadsCleanup(tenantId) {
       await cleanupOrphanedClientThreadsForTenant(tenant);
     }
     if (shouldRunGuest) {
-      await cleanupExpiredGuestThreadsForTenant(tenant);
+      const removedAll = await cleanupExpiredThreadsForTenant(tenant);
+      if (!removedAll) {
+        await cleanupExpiredGuestThreadsForTenant(tenant);
+      }
     }
   })()
     .catch((err) => {
@@ -1202,6 +1269,27 @@ function getThreadKey(tenantId, clientId) {
 function getTenantKey(tenantId) {
   const tenant = normalizeClientId(tenantId);
   return tenant || "";
+}
+
+async function resolveThreadTtlDaysForTenant(tenantId) {
+  const key = String(tenantId || "").trim();
+  if (!key) return null;
+
+  try {
+    const [rows] = await db.query(
+      `SELECT chat_thread_ttl_days
+         FROM ten_tenants
+        WHERE id = ?
+        LIMIT 1`,
+      [Number(key)]
+    );
+    const row = Array.isArray(rows) && rows.length ? rows[0] : null;
+    return normalizeTenantThreadTtlDays(row ? row.chat_thread_ttl_days : null);
+  } catch (err) {
+    const code = String(err && err.code || "");
+    if (code === "ER_BAD_FIELD_ERROR") return null;
+    throw err;
+  }
 }
 
 function getUnreadStreamKey(tenantId, actorKey, clientId = "") {

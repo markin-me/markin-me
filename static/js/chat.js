@@ -928,6 +928,39 @@
     }
   }
 
+  function buildMessageFastFingerprint(message) {
+    const msg = message && typeof message === "object" ? message : {};
+    const reactionsCount = Array.isArray(msg.reactions) ? msg.reactions.length : 0;
+    return [
+      String(msg.id || ""),
+      String(msg.updated_at || ""),
+      String(msg.edited_at || ""),
+      String(msg.deleted_at || ""),
+      String(msg.read_at || ""),
+      String(msg.status || ""),
+      String(msg.direction || ""),
+      String(msg.type || ""),
+      String(msg.text || ""),
+      String(msg.file_url || ""),
+      String(msg.reply_to_id || ""),
+      String(msg.hidden || ""),
+      String(reactionsCount),
+    ].join("|");
+  }
+
+  function areThreadMessagesEqualFast(prev, next) {
+    if (prev === next) return true;
+    const a = Array.isArray(prev) ? prev : [];
+    const b = Array.isArray(next) ? next : [];
+    if (a.length !== b.length) return false;
+    for (let index = 0; index < a.length; index += 1) {
+      if (buildMessageFastFingerprint(a[index]) !== buildMessageFastFingerprint(b[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   function buildActiveOrdersSignature(orders) {
     const list = Array.isArray(orders) ? orders : [];
     const normalized = list
@@ -1397,7 +1430,7 @@
       : preserveHistory
         ? sanitizeThread(prev.concat(incomingNext))
         : sanitizeThread(incomingNext);
-    const same = stableSerialize(prev) === stableSerialize(next);
+    const same = areThreadMessagesEqualFast(prev, next);
     const remoteUpdatedAt = String(snapshot.updatedAt || "");
     const knownUpdatedAt = String(state.remoteThreadUpdatedAt[key] || "");
     const remoteIsNewer = compareIsoDates(remoteUpdatedAt, knownUpdatedAt) > 0;
@@ -7970,12 +8003,15 @@
   async function loadActiveClientData(clientId, selectedFromList = null, options = {}) {
     const requestId = ++state.requestToken;
     const isGuestClient = options && options.isGuest === true;
+    const shouldRenderThread = options && options.renderThread !== false;
     if (isGuestClient) {
       state.activeClient = buildGuestActiveClientProfile(clientId, selectedFromList);
       setActiveOrders([], { forceRender: true });
-      renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
-      restoreThreadScrollPosition(state.activeClientId);
-      saveThreadScrollPosition(state.activeClientId);
+      if (shouldRenderThread) {
+        renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
+        restoreThreadScrollPosition(state.activeClientId);
+        saveThreadScrollPosition(state.activeClientId);
+      }
       return;
     }
 
@@ -8009,18 +8045,22 @@
         }).catch(console.error);
       }
       setActiveOrders(Array.isArray(ordersJson?.data) ? ordersJson.data : [], { forceRender: true });
-      renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
-      restoreThreadScrollPosition(state.activeClientId);
-      saveThreadScrollPosition(state.activeClientId);
+      if (shouldRenderThread) {
+        renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
+        restoreThreadScrollPosition(state.activeClientId);
+        saveThreadScrollPosition(state.activeClientId);
+      }
       hydrateHeaderOrderDetails(requestId, clientId).catch(console.error);
     } catch (err) {
       if (requestId !== state.requestToken) return;
       console.error(err);
       state.activeClient = selectedFromList;
       setActiveOrders([], { forceRender: true });
-      renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
-      restoreThreadScrollPosition(state.activeClientId);
-      saveThreadScrollPosition(state.activeClientId);
+      if (shouldRenderThread) {
+        renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
+        restoreThreadScrollPosition(state.activeClientId);
+        saveThreadScrollPosition(state.activeClientId);
+      }
     }
   }
 
@@ -8090,7 +8130,7 @@
       : selectedFromList;
     setActiveOrders([], { forceRender: true });
 
-    await loadActiveClientData(id, selectedFromList, { isGuest: isGuestClient });
+    await loadActiveClientData(id, selectedFromList, { isGuest: isGuestClient, renderThread: false });
   }
 
   function mergeClientsIntoState(rows, { reset = false } = {}) {

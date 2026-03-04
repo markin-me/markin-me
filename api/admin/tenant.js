@@ -45,6 +45,10 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     {
       name: 'chat_guest_thread_ttl_days',
       sql: "smallint unsigned DEFAULT NULL COMMENT 'Guest chat TTL in days'"
+    },
+    {
+      name: 'chat_thread_ttl_days',
+      sql: "smallint unsigned DEFAULT NULL COMMENT 'All chats TTL in days (0/null = keep forever)'"
     }
   ];
   let tenantChatColumnsReady = false;
@@ -894,6 +898,19 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
           chatGuestThreadTtlDays = ttl;
         }
       }
+      let chatThreadTtlDays = undefined;
+      if (req.body.chat_thread_ttl_days !== undefined) {
+        const ttlRaw = helpers.numOrNull(req.body.chat_thread_ttl_days);
+        if (ttlRaw === null) {
+          chatThreadTtlDays = null;
+        } else {
+          const ttl = Math.trunc(Number(ttlRaw));
+          if (!Number.isFinite(ttl) || ttl < 0 || ttl > 365) {
+            return res.status(400).json({ ok: false, error: 'BAD_CHAT_THREAD_TTL_DAYS' });
+          }
+          chatThreadTtlDays = ttl === 0 ? null : ttl;
+        }
+      }
       let chatQuickQuestionsJson = undefined;
       if (req.body.chat_quick_questions_json !== undefined) {
         const rawQuestions = req.body.chat_quick_questions_json;
@@ -1080,6 +1097,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const nextChatGuestThreadTtlDays = chatGuestThreadTtlDays !== undefined
         ? chatGuestThreadTtlDays
         : (current.chat_guest_thread_ttl_days ?? null);
+      const nextChatThreadTtlDays = chatThreadTtlDays !== undefined
+        ? chatThreadTtlDays
+        : (current.chat_thread_ttl_days ?? null);
 
       if (email !== undefined && email && email !== current.email) {
         const [existsEmail] = await db.query(
@@ -1102,8 +1122,8 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await db.query(
-        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=? WHERE id=?',
-        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, tenantId]
+        'UPDATE ten_tenants SET name=?, email=?, phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_mini_app_enabled=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=?',
+        [nextName, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgMiniAppEnabled, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId]
       );
 
       const [rows] = await db.query(

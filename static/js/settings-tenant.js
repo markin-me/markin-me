@@ -816,6 +816,7 @@
     const settingsChatQuickQuestionsJson = document.getElementById("settingsChatQuickQuestionsJson");
     const settingsChatQuickQuestionsEnabledSwitch = document.getElementById("settingsChatQuickQuestionsEnabledSwitch");
     const settingsChatQuickQuestionsAddBtn = document.getElementById("settingsChatQuickQuestionsAddBtn");
+    const settingsChatThreadTtlDaysInput = document.getElementById("settingsChatThreadTtlDaysInput");
     const settingsChatGuestThreadTtlDaysInput = document.getElementById("settingsChatGuestThreadTtlDaysInput");
     const settingsChatMessageSettingsSaveBtn = document.getElementById("settingsChatMessageSettingsSaveBtn");
     const rightTabs = document.getElementById("settingsRightTabs");
@@ -964,6 +965,16 @@
       if (!Number.isFinite(parsed)) return DEFAULT_CHAT_GUEST_THREAD_TTL_DAYS;
       const whole = Math.trunc(parsed);
       if (whole < 1) return 1;
+      if (whole > 365) return 365;
+      return whole;
+    }
+
+    function normalizeChatThreadTtlDays(rawValue) {
+      if (rawValue === undefined || rawValue === null || rawValue === "") return 0;
+      const parsed = Number(rawValue);
+      if (!Number.isFinite(parsed)) return 0;
+      const whole = Math.trunc(parsed);
+      if (whole < 0) return 0;
       if (whole > 365) return 365;
       return whole;
     }
@@ -1589,6 +1600,10 @@
         );
       }
 
+      if (settingsChatThreadTtlDaysInput) {
+        const ttlDaysRaw = tenant ? tenant.chat_thread_ttl_days : undefined;
+        settingsChatThreadTtlDaysInput.value = String(normalizeChatThreadTtlDays(ttlDaysRaw));
+      }
       if (settingsChatGuestThreadTtlDaysInput) {
         const ttlDaysRaw = tenant ? tenant.chat_guest_thread_ttl_days : undefined;
         settingsChatGuestThreadTtlDaysInput.value = String(normalizeChatGuestThreadTtlDays(ttlDaysRaw));
@@ -5239,6 +5254,14 @@
       });
     }
 
+    if (settingsChatThreadTtlDaysInput) {
+      settingsChatThreadTtlDaysInput.addEventListener("blur", () => {
+        settingsChatThreadTtlDaysInput.value = String(
+          normalizeChatThreadTtlDays(settingsChatThreadTtlDaysInput.value)
+        );
+      });
+    }
+
     if (settingsChatGuestThreadTtlDaysInput) {
       settingsChatGuestThreadTtlDaysInput.addEventListener("blur", () => {
         settingsChatGuestThreadTtlDaysInput.value = String(
@@ -5249,12 +5272,21 @@
 
     if (settingsChatMessageSettingsSaveBtn && settingsChatGuestThreadTtlDaysInput) {
       settingsChatMessageSettingsSaveBtn.addEventListener("click", async () => {
+        const normalizedAllTtlDays = settingsChatThreadTtlDaysInput
+          ? normalizeChatThreadTtlDays(settingsChatThreadTtlDaysInput.value)
+          : 0;
         const normalizedTtlDays = normalizeChatGuestThreadTtlDays(settingsChatGuestThreadTtlDaysInput.value);
         await saveChatSettingsPayload(
           settingsChatMessageSettingsSaveBtn,
-          { chat_guest_thread_ttl_days: normalizedTtlDays },
-          "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0432\u0440\u0435\u043c\u044f \u0436\u0438\u0437\u043d\u0438 \u0433\u043e\u0441\u0442\u0435\u0432\u044b\u0445 \u0447\u0430\u0442\u043e\u0432.",
+          {
+            chat_thread_ttl_days: normalizedAllTtlDays,
+            chat_guest_thread_ttl_days: normalizedTtlDays,
+          },
+          "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0430\u0432\u0442\u043e\u043e\u0447\u0438\u0441\u0442\u043a\u0438 \u0447\u0430\u0442\u043e\u0432.",
           () => {
+            if (settingsChatThreadTtlDaysInput) {
+              settingsChatThreadTtlDaysInput.value = String(normalizedAllTtlDays);
+            }
             settingsChatGuestThreadTtlDaysInput.value = String(normalizedTtlDays);
           }
         );
