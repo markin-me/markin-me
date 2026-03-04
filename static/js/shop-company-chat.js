@@ -47,7 +47,8 @@
   const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64";
   const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/emoji.json";
   const EMOJI_REMOTE_DATASET_ENABLED = false;
-  const EMOJI_NATIVE_RENDER_ONLY = true;
+  const EMOJI_NATIVE_RENDER_ONLY = false;
+  const EMOJI_ATLAS_CACHE_NAME = "markinme-emoji-atlas-v1";
   const EMOJI_REACTION_POOL_LIMIT = 64;
   const EMOJI_ATLAS_ENABLED = true;
   const EMOJI_ATLAS_URL = "/static/assets/emoji/apple-people-atlas.webp?v=1";
@@ -169,6 +170,7 @@
 
   let emojiAssetsState = EMOJI_NATIVE_RENDER_ONLY ? "fallback" : "unknown";
   let emojiAtlasPreloadStarted = false;
+  let emojiAtlasRuntimeUrl = "";
   let emojiCategories = {};
   let emojiRecentList = [];
   let emojiActiveCategory = "people";
@@ -4288,12 +4290,37 @@
   }
 
   function preloadEmojiAtlas() {
+    if (EMOJI_NATIVE_RENDER_ONLY) return;
     if (shouldUseNativeMobileEmojiKeyboard()) return;
     if (!EMOJI_ATLAS_ENABLED || emojiAtlasPreloadStarted) return;
     emojiAtlasPreloadStarted = true;
-    const img = new Image();
-    img.decoding = "async";
-    img.src = EMOJI_ATLAS_URL;
+    ensureEmojiAtlasRuntimeUrl().then(function (url) {
+      const img = new Image();
+      img.decoding = "async";
+      img.src = url || EMOJI_ATLAS_URL;
+    }).catch(function () {});
+  }
+
+  async function ensureEmojiAtlasRuntimeUrl() {
+    if (emojiAtlasRuntimeUrl) return emojiAtlasRuntimeUrl;
+    try {
+      if (!("caches" in window)) return EMOJI_ATLAS_URL;
+      const cache = await caches.open(EMOJI_ATLAS_CACHE_NAME);
+      let response = await cache.match(EMOJI_ATLAS_URL, { ignoreSearch: false });
+      if (!response || !response.ok) {
+        response = await fetch(EMOJI_ATLAS_URL, { cache: "force-cache" });
+        if (response && response.ok) {
+          try { await cache.put(EMOJI_ATLAS_URL, response.clone()); } catch {}
+        }
+      }
+      if (!response || !response.ok) return EMOJI_ATLAS_URL;
+      const blob = await response.blob();
+      if (!blob || !blob.size) return EMOJI_ATLAS_URL;
+      emojiAtlasRuntimeUrl = URL.createObjectURL(blob);
+      return emojiAtlasRuntimeUrl;
+    } catch {
+      return EMOJI_ATLAS_URL;
+    }
   }
 
   function getEmojiAtlasPosition(emoji) {
@@ -4325,6 +4352,7 @@
   }
 
   function createEmojiAtlasGlyph(glyphClassName, emojiValue) {
+    if (EMOJI_NATIVE_RENDER_ONLY) return null;
     if (shouldUseNativeMobileEmojiKeyboard()) return null;
     const pos = getEmojiAtlasPosition(emojiValue);
     if (!pos) return null;
@@ -4333,7 +4361,8 @@
 
     const glyph = document.createElement("span");
     glyph.className = String(glyphClassName || "");
-    glyph.style.backgroundImage = 'url("' + EMOJI_ATLAS_URL + '")';
+    const atlasUrl = emojiAtlasRuntimeUrl || EMOJI_ATLAS_URL;
+    glyph.style.backgroundImage = 'url("' + atlasUrl + '")';
     glyph.style.backgroundRepeat = "no-repeat";
     glyph.style.backgroundSize = String(EMOJI_ATLAS_COLUMNS * 100) + "% " + String(EMOJI_ATLAS_ROWS * 100) + "%";
     glyph.style.backgroundPosition = String(xPercent) + "% " + String(yPercent) + "%";

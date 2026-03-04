@@ -2,6 +2,25 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+  function getTenantId() {
+    const meta = document.querySelector('meta[name="tenant_id"]');
+    if (meta && meta.content) {
+      const n = Number(meta.content);
+      if (Number.isFinite(n) && n > 0) return Math.trunc(n);
+    }
+    try {
+      const raw = localStorage.getItem("tenant");
+      if (raw) {
+        const tenant = JSON.parse(raw);
+        const id = Number(tenant && tenant.id);
+        if (Number.isFinite(id) && id > 0) return Math.trunc(id);
+      }
+    } catch {}
+    return 1;
+  }
+  const tenantId = getTenantId();
+  const SHARED_ORDER_DETAILS_CACHE_KEY = `dashboard:orders:details:v1:${tenantId}`;
+  const SHARED_ORDER_DETAILS_CACHE_MAX = 400;
 
   async function apiJson(url, opts = {}) {
     // Получаем токен и store_id из localStorage
@@ -41,6 +60,37 @@
       throw new Error(err);
     }
     return json;
+  }
+
+  function readSharedOrderDetailsCache() {
+    try {
+      const raw = localStorage.getItem(SHARED_ORDER_DETAILS_CACHE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function setSharedOrderDetails(order) {
+    const id = Number(order?.id || 0);
+    if (!Number.isFinite(id) || id <= 0) return;
+    const cache = readSharedOrderDetailsCache();
+    cache[String(id)] = {
+      updatedAt: Date.now(),
+      order: order && typeof order === "object" ? { ...order } : null,
+    };
+    const compacted = Object.entries(cache)
+      .sort((a, b) => Number(b?.[1]?.updatedAt || 0) - Number(a?.[1]?.updatedAt || 0))
+      .slice(0, SHARED_ORDER_DETAILS_CACHE_MAX)
+      .reduce((acc, [key, value]) => {
+        acc[key] = value;
+        return acc;
+      }, {});
+    try {
+      localStorage.setItem(SHARED_ORDER_DETAILS_CACHE_KEY, JSON.stringify(compacted));
+    } catch {}
   }
 
   // -----------------------------
@@ -1773,6 +1823,7 @@
       return;
     }
 
+    setSharedOrderDetails(order);
     showOrderInfo();
 
     setTextAll(infoEls.title, `ЗАКАЗ #${order.id}`);

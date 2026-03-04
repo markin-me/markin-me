@@ -107,9 +107,13 @@ const tenantPushCompanyTitleCache = new Map();
 const tenantChatWidgetState = new Map();
 let ensurePushSubscriptionsTablePromise = null;
 let ensureHiddenMessagesTablePromise = null;
+let ensureChatCoreIndexesPromise = null;
 const CHAT_PUSH_UNIQUE_INDEX_LEGACY = "ux_chat_push_subscriptions_tenant_endpoint";
 const CHAT_PUSH_UNIQUE_INDEX_V2 = "ux_chat_push_subscriptions_tenant_actor_client_endpoint";
 const CHAT_HIDDEN_UNIQUE_INDEX = "ux_chat_message_hidden_tenant_client_message_actor";
+const CHAT_THREADS_UPDATED_INDEX = "idx_chat_threads_tenant_updated_client";
+const CHAT_MESSAGES_TENANT_CLIENT_ID_INDEX = "idx_chat_messages_tenant_client_id";
+const CHAT_MESSAGES_UNREAD_INDEX = "idx_chat_messages_tenant_client_unread";
 const CHAT_SSE_HEARTBEAT_MS = 20000;
 const CHAT_WIDGET_STATE_TTL_MS = parsePositiveInt(
   process.env.CHAT_WIDGET_STATE_TTL_MS,
@@ -191,6 +195,57 @@ function ensureHiddenMessagesTable() {
       throw err;
     });
   return ensureHiddenMessagesTablePromise;
+}
+
+async function ensureChatCoreIndexes() {
+  if (ensureChatCoreIndexesPromise) return ensureChatCoreIndexesPromise;
+  ensureChatCoreIndexesPromise = (async () => {
+    try {
+      const [threadIndexRows] = await db.query("SHOW INDEX FROM chat_threads");
+      const threadIndexes = Array.isArray(threadIndexRows) ? threadIndexRows : [];
+      const hasThreadsUpdatedIndex = threadIndexes.some(
+        (row) => String(row?.Key_name || "") === CHAT_THREADS_UPDATED_INDEX
+      );
+      if (!hasThreadsUpdatedIndex) {
+        await db.query(
+          `ALTER TABLE chat_threads
+           ADD INDEX ${CHAT_THREADS_UPDATED_INDEX} (tenant_id, updated_at DESC, client_id DESC)`
+        );
+      }
+    } catch (err) {
+      if (String(err?.code || "") !== "ER_DUP_KEYNAME") throw err;
+    }
+
+    try {
+      const [messageIndexRows] = await db.query("SHOW INDEX FROM chat_messages");
+      const messageIndexes = Array.isArray(messageIndexRows) ? messageIndexRows : [];
+      const hasTenantClientIdIndex = messageIndexes.some(
+        (row) => String(row?.Key_name || "") === CHAT_MESSAGES_TENANT_CLIENT_ID_INDEX
+      );
+      if (!hasTenantClientIdIndex) {
+        await db.query(
+          `ALTER TABLE chat_messages
+           ADD INDEX ${CHAT_MESSAGES_TENANT_CLIENT_ID_INDEX} (tenant_id, client_id, id DESC)`
+        );
+      }
+      const hasUnreadIndex = messageIndexes.some(
+        (row) => String(row?.Key_name || "") === CHAT_MESSAGES_UNREAD_INDEX
+      );
+      if (!hasUnreadIndex) {
+        await db.query(
+          `ALTER TABLE chat_messages
+           ADD INDEX ${CHAT_MESSAGES_UNREAD_INDEX} (tenant_id, client_id, direction, is_read, message_id, id DESC)`
+        );
+      }
+    } catch (err) {
+      if (String(err?.code || "") !== "ER_DUP_KEYNAME") throw err;
+    }
+    return true;
+  })().catch((err) => {
+    ensureChatCoreIndexesPromise = null;
+    throw err;
+  });
+  return ensureChatCoreIndexesPromise;
 }
 
 function hashPushEndpoint(endpoint) {
@@ -2701,6 +2756,7 @@ async function querySummaryRows(
   selectedClientIds = [],
   { limit = null, offset = null } = {}
 ) {
+  await ensureChatCoreIndexes().catch(() => {});
   const ids = (Array.isArray(selectedClientIds) ? selectedClientIds : [])
     .map((id) => normalizeClientId(id))
     .filter(Boolean);
@@ -2737,6 +2793,7 @@ async function querySummaryRows(
         SELECT
           tenant_id,
           client_id,
+          MAX(id) AS last_message_id,
           COUNT(*) AS message_count,
           SUM(
             CASE
@@ -2754,13 +2811,9 @@ async function querySummaryRows(
       ) s
         ON s.tenant_id = t.tenant_id AND s.client_id = t.client_id
       LEFT JOIN chat_messages m
-        ON m.id = (
-          SELECT mm.id
-          FROM chat_messages mm
-          WHERE mm.tenant_id = t.tenant_id AND mm.client_id = t.client_id
-          ORDER BY mm.created_at DESC, mm.id DESC
-          LIMIT 1
-        )
+        ON m.tenant_id = t.tenant_id
+       AND m.client_id = t.client_id
+       AND m.id = s.last_message_id
       WHERE t.tenant_id = ?${idsClause}
       ORDER BY t.updated_at DESC, t.client_id DESC
       ${paginationClause}

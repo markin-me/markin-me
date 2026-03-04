@@ -17,6 +17,12 @@
     return 1;
   }
   const tenantId = getTenantId();
+  const CLIENT_DETAILS_CACHE_KEY = `dashboard:clients:details:v1:${tenantId}`;
+  const CLIENT_DETAILS_CACHE_TTL_MS = 10 * 60 * 1000;
+  const CLIENT_DETAILS_CACHE_MAX_CLIENTS = 120;
+  const SHARED_ORDER_DETAILS_CACHE_KEY = `dashboard:orders:details:v1:${tenantId}`;
+  const SHARED_ORDER_DETAILS_CACHE_TTL_MS = 15 * 60 * 1000;
+  const SHARED_ORDER_DETAILS_CACHE_MAX = 400;
 
   async function apiJson(url, opts = {}) {
     const token = localStorage.getItem('authToken');
@@ -48,6 +54,61 @@
       throw new Error(err);
     }
     return json;
+  }
+
+  async function fetchClientOrdersShared(clientId) {
+    const id = Number(clientId || 0);
+    if (!Number.isFinite(id) || id <= 0) {
+      return apiJson(`/api/admin/clients/${clientId}/orders`);
+    }
+    const shared = typeof window !== "undefined" ? window.__markinMeSharedOrdersFetcher : null;
+    if (typeof shared === "function") {
+      return shared(id, () => apiJson(`/api/admin/clients/${id}/orders`));
+    }
+    return apiJson(`/api/admin/clients/${id}/orders`);
+  }
+
+  function readSharedOrderDetailsCache() {
+    try {
+      const raw = localStorage.getItem(SHARED_ORDER_DETAILS_CACHE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function getSharedOrderDetails(orderId) {
+    const id = Number(orderId || 0);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    const cache = readSharedOrderDetailsCache();
+    const entry = cache[String(id)];
+    if (!entry || typeof entry !== "object") return null;
+    const updatedAt = Number(entry.updatedAt || 0);
+    if (!updatedAt || (Date.now() - updatedAt) > SHARED_ORDER_DETAILS_CACHE_TTL_MS) return null;
+    const order = entry.order && typeof entry.order === "object" ? entry.order : null;
+    return order ? { ...order } : null;
+  }
+
+  function setSharedOrderDetails(order) {
+    const id = Number(order?.id || 0);
+    if (!Number.isFinite(id) || id <= 0) return;
+    const cache = readSharedOrderDetailsCache();
+    cache[String(id)] = {
+      updatedAt: Date.now(),
+      order: order && typeof order === "object" ? { ...order } : null,
+    };
+    const compacted = Object.entries(cache)
+      .sort((a, b) => Number(b?.[1]?.updatedAt || 0) - Number(a?.[1]?.updatedAt || 0))
+      .slice(0, SHARED_ORDER_DETAILS_CACHE_MAX)
+      .reduce((acc, [key, value]) => {
+        acc[key] = value;
+        return acc;
+      }, {});
+    try {
+      localStorage.setItem(SHARED_ORDER_DETAILS_CACHE_KEY, JSON.stringify(compacted));
+    } catch {}
   }
 
   // -----------------------------
@@ -226,6 +287,7 @@
     customerCategories: [],
     customersList: [],
     customersById: new Map(),
+    clientDetailsCache: new Map(),
   };
   const CLIENTS_PAGE_LIMIT = 80;
   const CLIENTS_SCROLL_THRESHOLD_PX = 220;
@@ -234,6 +296,172 @@
   let orderRequestToken = 0;
   let discountCustomerSearchToken = 0;
   let discountCustomerSearchDebounce = null;
+
+  function sanitizeCachedClientForDetails(row, fallbackId = 0) {
+    const id = Number(row?.id || fallbackId || 0);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    return {
+      id,
+      name: String(row?.name || ""),
+      phone: String(row?.phone || ""),
+      birthday: String(row?.birthday || ""),
+      photo: String(row?.photo || ""),
+      total_orders: Number(row?.total_orders || 0),
+      total_spent: Number(row?.total_spent || 0),
+      last_order_date: String(row?.last_order_date || ""),
+      created_at: String(row?.created_at || ""),
+      updated_at: String(row?.updated_at || ""),
+      is_guest_chat: row?.is_guest_chat === true,
+    };
+  }
+
+  function sanitizeCachedAddresses(rows) {
+    return (Array.isArray(rows) ? rows : [])
+      .map((row) => ({
+        id: Number(row?.id || 0),
+        street: String(row?.street || ""),
+        house: String(row?.house || ""),
+        entrance: String(row?.entrance || ""),
+        floor: String(row?.floor || ""),
+        apartment: String(row?.apartment || ""),
+        comment: String(row?.comment || ""),
+        is_default: Number(row?.is_default || 0) === 1 ? 1 : 0,
+      }))
+      .filter((row) => Number.isFinite(row.id) && row.id > 0);
+  }
+
+  function sanitizeCachedOrders(rows) {
+    return (Array.isArray(rows) ? rows : [])
+      .map((row) => ({
+        id: Number(row?.id || 0),
+        public_id: String(row?.public_id || ""),
+        created_at: String(row?.created_at || ""),
+        total_price: Number(row?.total_price || 0),
+        items: row?.items ?? null,
+        status_id: Number(row?.status_id || 0),
+        status_title: String(row?.status_title || ""),
+        status_color: String(row?.status_color || ""),
+      }))
+      .filter((row) => Number.isFinite(row.id) && row.id > 0);
+  }
+
+  function sanitizeCachedDiscounts(rows) {
+    return (Array.isArray(rows) ? rows : [])
+      .map((row) => ({
+        id: Number(row?.id || 0),
+        title: String(row?.title || ""),
+        discount_type: String(row?.discount_type || ""),
+        discount_value: Number(row?.discount_value || 0),
+        link_type: String(row?.link_type || ""),
+        category_title: String(row?.category_title || ""),
+        is_active: Number(row?.is_active || 0) === 1 ? 1 : 0,
+      }))
+      .filter((row) => Number.isFinite(row.id) && row.id > 0);
+  }
+
+  function loadClientDetailsCache() {
+    try {
+      const raw = localStorage.getItem(CLIENT_DETAILS_CACHE_KEY);
+      if (!raw) return new Map();
+      const parsed = JSON.parse(raw);
+      const entries = parsed && typeof parsed === "object" ? parsed : {};
+      const out = new Map();
+      const now = Date.now();
+      Object.keys(entries).forEach((key) => {
+        const id = Number(key || 0);
+        if (!Number.isFinite(id) || id <= 0) return;
+        const item = entries[key] && typeof entries[key] === "object" ? entries[key] : null;
+        if (!item) return;
+        const updatedAt = Number(item.updatedAt || 0);
+        if (!updatedAt || (now - updatedAt) > CLIENT_DETAILS_CACHE_TTL_MS) return;
+        const cachedClient = sanitizeCachedClientForDetails(item.client, id);
+        if (!cachedClient) return;
+        out.set(String(id), {
+          updatedAt,
+          client: cachedClient,
+          addresses: sanitizeCachedAddresses(item.addresses),
+          orders: sanitizeCachedOrders(item.orders),
+          discounts: sanitizeCachedDiscounts(item.discounts),
+        });
+      });
+      return out;
+    } catch {
+      return new Map();
+    }
+  }
+
+  function saveClientDetailsCache() {
+    try {
+      const rows = Array.from(state.clientDetailsCache.entries())
+        .sort((a, b) => Number(b[1]?.updatedAt || 0) - Number(a[1]?.updatedAt || 0))
+        .slice(0, CLIENT_DETAILS_CACHE_MAX_CLIENTS);
+      const payload = {};
+      rows.forEach(([id, item]) => {
+        payload[id] = {
+          updatedAt: Number(item?.updatedAt || Date.now()),
+          client: sanitizeCachedClientForDetails(item?.client, id),
+          addresses: sanitizeCachedAddresses(item?.addresses),
+          orders: sanitizeCachedOrders(item?.orders),
+          discounts: sanitizeCachedDiscounts(item?.discounts),
+        };
+      });
+      localStorage.setItem(CLIENT_DETAILS_CACHE_KEY, JSON.stringify(payload));
+    } catch {}
+  }
+
+  function getCachedClientDetails(clientId) {
+    const key = String(Number(clientId || 0) || "");
+    if (!key) return null;
+    const entry = state.clientDetailsCache.get(key);
+    if (!entry || typeof entry !== "object") return null;
+    const updatedAt = Number(entry.updatedAt || 0);
+    if (!updatedAt || (Date.now() - updatedAt) > CLIENT_DETAILS_CACHE_TTL_MS) {
+      state.clientDetailsCache.delete(key);
+      return null;
+    }
+    return {
+      client: sanitizeCachedClientForDetails(entry.client, key),
+      addresses: sanitizeCachedAddresses(entry.addresses),
+      orders: sanitizeCachedOrders(entry.orders),
+      discounts: sanitizeCachedDiscounts(entry.discounts),
+      updatedAt,
+    };
+  }
+
+  function setCachedClientDetails(clientId, patch = {}) {
+    const key = String(Number(clientId || 0) || "");
+    if (!key) return;
+    const prev = getCachedClientDetails(key) || {
+      client: sanitizeCachedClientForDetails({ id: Number(key) }, key),
+      addresses: [],
+      orders: [],
+      discounts: [],
+      updatedAt: 0,
+    };
+    const nextClient = Object.prototype.hasOwnProperty.call(patch, "client")
+      ? sanitizeCachedClientForDetails(patch.client, key)
+      : prev.client;
+    const nextAddresses = Object.prototype.hasOwnProperty.call(patch, "addresses")
+      ? sanitizeCachedAddresses(patch.addresses)
+      : prev.addresses;
+    const nextOrders = Object.prototype.hasOwnProperty.call(patch, "orders")
+      ? sanitizeCachedOrders(patch.orders)
+      : prev.orders;
+    const nextDiscounts = Object.prototype.hasOwnProperty.call(patch, "discounts")
+      ? sanitizeCachedDiscounts(patch.discounts)
+      : prev.discounts;
+    if (!nextClient) return;
+    state.clientDetailsCache.set(key, {
+      updatedAt: Date.now(),
+      client: nextClient,
+      addresses: nextAddresses,
+      orders: nextOrders,
+      discounts: nextDiscounts,
+    });
+    saveClientDetailsCache();
+  }
+
+  state.clientDetailsCache = loadClientDetailsCache();
 
   // -----------------------------
   // Tabs state (top-level: switching between clients)
@@ -2345,10 +2573,25 @@
     });
   }
 
-  async function loadAddresses() {
+  async function loadAddresses(options = {}) {
     if (!state.activeClientId) return;
-    const json = await apiJson(`/api/admin/clients/${state.activeClientId}/addresses`);
-    state.addresses = Array.isArray(json.data) ? json.data : [];
+    const clientId = Number(state.activeClientId || 0);
+    const preferCache = options?.preferCache !== false;
+    const refresh = options?.refresh !== false;
+
+    if (preferCache) {
+      const cached = getCachedClientDetails(clientId);
+      if (cached && Array.isArray(cached.addresses)) {
+        state.addresses = cached.addresses.slice();
+        renderAddresses();
+      }
+    }
+
+    if (!refresh) return;
+    const json = await apiJson(`/api/admin/clients/${clientId}/addresses`);
+    const rows = Array.isArray(json.data) ? json.data : [];
+    state.addresses = rows;
+    setCachedClientDetails(clientId, { addresses: rows });
     renderAddresses();
   }
 
@@ -2442,18 +2685,38 @@
     clientOrderBackBtn.addEventListener("click", showOrdersList);
   }
 
-  async function loadClientOrders() {
+  async function loadClientOrders(options = {}) {
     if (!state.activeClientId) return;
+    const clientId = Number(state.activeClientId || 0);
+    const preferCache = options?.preferCache !== false;
+    const refresh = options?.refresh !== false;
     showOrdersList();
-    if (clientOrdersList) clientOrdersList.innerHTML = `<div class="muted">Загрузка…</div>`;
+
+    let usedCached = false;
+    if (preferCache) {
+      const cached = getCachedClientDetails(clientId);
+      if (cached && Array.isArray(cached.orders)) {
+        state.clientOrders = cached.orders.slice();
+        renderClientOrders();
+        usedCached = true;
+      }
+    }
+    if (!usedCached && clientOrdersList) {
+      clientOrdersList.innerHTML = `<div class="muted">Загрузка…</div>`;
+    }
+    if (!refresh) return;
 
     try {
-      const json = await apiJson(`/api/admin/clients/${state.activeClientId}/orders`);
-      state.clientOrders = Array.isArray(json.data) ? json.data : [];
+      const json = await fetchClientOrdersShared(clientId);
+      const rows = Array.isArray(json.data) ? json.data : [];
+      state.clientOrders = rows;
+      setCachedClientDetails(clientId, { orders: rows });
       renderClientOrders();
     } catch (err) {
       console.error(err);
-      if (clientOrdersList) clientOrdersList.innerHTML = `<div class="muted">Ошибка загрузки заказов</div>`;
+      if (!usedCached && clientOrdersList) {
+        clientOrdersList.innerHTML = `<div class="muted">Ошибка загрузки заказов</div>`;
+      }
     }
   }
 
@@ -2497,18 +2760,38 @@
   // -----------------------------
   // Client discounts
   // -----------------------------
-  async function loadClientDiscounts() {
+  async function loadClientDiscounts(options = {}) {
     if (!state.activeClientId) return;
-    if (clientDiscountsList) clientDiscountsList.innerHTML = `<div class="muted">Загрузка…</div>`;
+    const clientId = Number(state.activeClientId || 0);
+    const preferCache = options?.preferCache !== false;
+    const refresh = options?.refresh !== false;
+
+    let usedCached = false;
+    if (preferCache) {
+      const cached = getCachedClientDetails(clientId);
+      if (cached && Array.isArray(cached.discounts)) {
+        state.clientDiscounts = cached.discounts.slice();
+        renderClientDiscounts();
+        usedCached = true;
+      }
+    }
+    if (!usedCached && clientDiscountsList) {
+      clientDiscountsList.innerHTML = `<div class="muted">Загрузка…</div>`;
+    }
     if (clientDiscountsEmpty) clientDiscountsEmpty.classList.add('hidden');
+    if (!refresh) return;
 
     try {
-      const json = await apiJson(`/api/admin/clients/${state.activeClientId}/discounts`);
-      state.clientDiscounts = Array.isArray(json.data) ? json.data : [];
+      const json = await apiJson(`/api/admin/clients/${clientId}/discounts`);
+      const rows = Array.isArray(json.data) ? json.data : [];
+      state.clientDiscounts = rows;
+      setCachedClientDetails(clientId, { discounts: rows });
       renderClientDiscounts();
     } catch (err) {
       console.error(err);
-      if (clientDiscountsList) clientDiscountsList.innerHTML = `<div class="muted">Ошибка загрузки скидок</div>`;
+      if (!usedCached && clientDiscountsList) {
+        clientDiscountsList.innerHTML = `<div class="muted">Ошибка загрузки скидок</div>`;
+      }
     }
   }
 
@@ -3024,6 +3307,7 @@
       if (!order) return;
       state.activeOrder = order;
       state.orderCache.set(orderId, order);
+      setSharedOrderDetails(order);
       updateClientOrderInState(order);
       renderClientOrderInfo(order);
       if (state.activeContentTab === "orders" && state.activeClientId) {
@@ -3049,9 +3333,12 @@
     await ensureOrderStatusesLoaded();
 
     const cached = state.orderCache.get(id);
-    if (cached) {
-      state.activeOrder = cached;
-      renderClientOrderInfo(cached);
+    const sharedCached = getSharedOrderDetails(id);
+    const warmOrder = cached || sharedCached;
+    if (warmOrder) {
+      state.activeOrder = warmOrder;
+      state.orderCache.set(id, warmOrder);
+      renderClientOrderInfo(warmOrder);
     } else {
       showClientOrderInfoEmpty("Загрузка заказа...", "Подождите, загружаем детали заказа.");
     }
@@ -3067,6 +3354,7 @@
       }
       state.activeOrder = order;
       state.orderCache.set(id, order);
+      setSharedOrderDetails(order);
       updateClientOrderInState(order);
 
       const stillActive = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey);
@@ -3099,16 +3387,41 @@
     state.activeClientId = Number(id) || null;
     state.activeOrderId = null;
     state.activeOrder = null;
+    const activeId = Number(state.activeClientId || 0);
+    const cached = getCachedClientDetails(activeId);
+    const hasCachedAddresses = !!(cached && Array.isArray(cached.addresses) && cached.addresses.length);
+    const hasCachedOrders = !!(cached && Array.isArray(cached.orders) && cached.orders.length);
+    const hasCachedDiscounts = !!(cached && Array.isArray(cached.discounts) && cached.discounts.length);
+    const useCacheOnlyForPreload = isChatBridgeMode && !!cached;
 
     // highlight list
     $$(".order-row.is-active", document).forEach((n) => n.classList.remove("is-active"));
     const row = $(`.order-row[data-client-id="${state.activeClientId}"]`, document);
     if (row) row.classList.add("is-active");
 
-    const json = await apiJson(`/api/admin/clients/${state.activeClientId}`);
-    if (requestToken !== clientProfileRequestToken) return;
-    const loadedClient = json?.data || null;
-    setClient(loadedClient);
+    if (cached?.client) {
+      setClient(cached.client);
+      state.addresses = Array.isArray(cached.addresses) ? cached.addresses.slice() : [];
+      state.clientOrders = Array.isArray(cached.orders) ? cached.orders.slice() : [];
+      state.clientDiscounts = Array.isArray(cached.discounts) ? cached.discounts.slice() : [];
+      renderAddresses();
+      renderClientOrders();
+      renderClientDiscounts();
+    }
+
+    let loadedClient = null;
+    try {
+      const json = await apiJson(`/api/admin/clients/${state.activeClientId}`);
+      if (requestToken !== clientProfileRequestToken) return;
+      loadedClient = json?.data || null;
+      if (loadedClient) {
+        setCachedClientDetails(activeId, { client: loadedClient });
+      }
+    } catch (err) {
+      console.error(err);
+      if (requestToken !== clientProfileRequestToken) return;
+    }
+    setClient(loadedClient || cached?.client || null);
 
     // Ensure right-side tab title is the client name (not #id fallback).
     const activeTab = tabsState.tabs.find((t) => t.key === tabsState.activeKey);
@@ -3125,7 +3438,28 @@
     showOrdersList();
     setContentTab("addresses");
 
-    await loadAddresses();
+    const preloadTasks = isChatBridgeMode
+      ? [
+        loadClientOrders({
+          preferCache: true,
+          refresh: useCacheOnlyForPreload ? !hasCachedOrders : true,
+        }),
+      ]
+      : [
+        loadAddresses({
+          preferCache: true,
+          refresh: useCacheOnlyForPreload ? !hasCachedAddresses : true,
+        }),
+        loadClientOrders({
+          preferCache: true,
+          refresh: useCacheOnlyForPreload ? !hasCachedOrders : true,
+        }),
+        loadClientDiscounts({
+          preferCache: true,
+          refresh: useCacheOnlyForPreload ? !hasCachedDiscounts : true,
+        }),
+      ];
+    await Promise.allSettled(preloadTasks);
     if (requestToken !== clientProfileRequestToken) return;
 
     // Reset address form

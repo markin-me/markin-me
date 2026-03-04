@@ -19,9 +19,10 @@
   const THREAD_SYNC_LOOP_MIN_INTERVAL_MS = 350;
   const THREAD_SSE_PULL_DEBOUNCE_MS = 100;
   const CHAT_SSE_ENABLED = typeof window.EventSource === "function";
-  const ACTIVE_ORDERS_POLL_MS = 12000;
-  const ACTIVE_CLIENT_CACHE_TTL_MS = 30000;
-  const ACTIVE_ORDERS_LAZY_FETCH_DELAY_MS = 900;
+  const ENABLE_ACTIVE_THREAD_SSE = false;
+  const ACTIVE_ORDERS_POLL_MS = 60000;
+  const ACTIVE_ORDERS_VISIBILITY_REFRESH_DEBOUNCE_MS = 45000;
+  const ACTIVE_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000;
   const CHAT_AUTOSCROLL_MS = 170;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
   const CHAT_TYPING_HEARTBEAT_MS = 1800;
@@ -33,9 +34,17 @@
   const CHAT_CLIENTS_PAGE_SIZE = 20;
   const CHAT_CLIENTS_LOAD_MORE_THRESHOLD_PX = 140;
   const CHAT_CLIENTS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+  const CLIENT_DETAILS_SHARED_CACHE_TTL_MS = 10 * 60 * 1000;
+  const SHARED_ORDER_DETAILS_CACHE_TTL_MS = 15 * 60 * 1000;
+  const SHARED_ORDER_DETAILS_CACHE_MAX = 400;
   const CHAT_CLIENTS_CACHE_MAX_ROWS = 600;
-  const CHAT_FOREGROUND_SYNC_DEBOUNCE_MS = 4000;
+  const CHAT_FOREGROUND_SYNC_DEBOUNCE_MS = 30000;
+  const CHAT_READ_SYNC_MIN_INTERVAL_MS = 15000;
+  const CHAT_FOREGROUND_EVENT_DEBOUNCE_MS = 10000;
+  const CHAT_SUMMARIES_SYNC_MIN_INTERVAL_MS = 2500;
   const CHAT_THREAD_PAGE_SIZE = 60;
+  const CHAT_THREAD_BACKGROUND_SYNC_LIMIT = 20;
+  const CHAT_FULL_THREAD_PULL_COOLDOWN_MS = 30000;
   const CHAT_THREAD_EAGER_IMAGE_COUNT = 4;
   const CHAT_THREAD_LOAD_MORE_THRESHOLD_PX = 20;
   const CHAT_TOUCH_CONTEXT_LONG_PRESS_MS = 430;
@@ -53,7 +62,8 @@
   const EMOJI_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64";
   const EMOJI_DATASET_URL = "https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/emoji.json";
   const EMOJI_REMOTE_DATASET_ENABLED = false;
-  const EMOJI_NATIVE_RENDER_ONLY = true;
+  const EMOJI_NATIVE_RENDER_ONLY = false;
+  const EMOJI_ATLAS_CACHE_NAME = "markinme-emoji-atlas-v1";
   const EMOJI_REACTION_POOL_LIMIT = 64;
   const EMOJI_ATLAS_ENABLED = true;
   const EMOJI_ATLAS_URL = "/static/assets/emoji/apple-people-atlas.webp?v=1";
@@ -159,6 +169,7 @@
       headerOrder: $("#chatHeaderOrder"),
       headerName: $("#chatHeaderName"),
       headerPhone: $("#chatHeaderPhone"),
+      headerLoading: $("#chatHeaderLoading"),
       orderTitle: $("#chatOrderTitle"),
       orderStatus: $("#chatOrderStatus"),
       orderKind: $("#chatOrderKind"),
@@ -214,6 +225,7 @@
     filteredClients: [],
     activeClientId: null,
     activeClient: null,
+    activeClientDataLoading: false,
     activeOrders: [],
     activeOrdersSignature: "[]",
     headerOrderId: 0,
@@ -234,6 +246,7 @@
     clientProfileCache: new Map(),
     clientOrdersCache: new Map(),
     remoteThreadUpdatedAt: {},
+    fullThreadPullLastAtByClient: {},
     remoteSaveTimers: {},
     remoteSaveInFlight: {},
     remoteMutationQueues: {},
@@ -249,11 +262,13 @@
     summariesPollTimer: 0,
     summariesSyncInFlight: null,
     summariesSyncPendingForceThreads: false,
+    summariesLastSyncedAt: 0,
     activeOrdersPollTimer: 0,
     activeOrdersPollInFlight: false,
-    activeOrdersLazyFetchTimer: 0,
     foregroundSyncInFlight: false,
     foregroundSyncLastAt: 0,
+    readSyncLastAt: 0,
+    foregroundEventLastAt: 0,
     messagesScrollRaf: 0,
     pendingScrollNewByClient: {},
     pendingScrollMessageIdsByClient: {},
@@ -273,6 +288,7 @@
     attachPreviewSending: false,
     threadDropDragDepth: 0,
     clientsPager: null,
+    clientsLoadInFlight: null,
     threadHistoryByClient: {},
     activeThreadWaitAbortController: null,
     summariesWaitAbortController: null,
@@ -282,6 +298,7 @@
     isRealtimePaused: false,
     isBootstrapLoading: true,
     chatWidgetEnabled: true,
+    activeOrdersLastFetchedAt: 0,
   };
   state.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.store?.ui?.threadScrollTopByClient);
   state.clientsPager = createDefaultClientsPager();
@@ -322,6 +339,7 @@
     return false;
   }
   let emojiAtlasPreloadStarted = false;
+  let emojiAtlasRuntimeUrl = "";
   let unreadEventRaf = 0;
   let messageAlertAudioCtx = null;
   let messageAlertAudioUnlocked = false;
@@ -393,6 +411,22 @@
     }
   }
 
+  function setHeaderLoading(active) {
+    state.activeClientDataLoading = active === true;
+    const hasActiveClient = Number(state.activeClientId || 0) > 0;
+    const show = state.activeClientDataLoading && hasActiveClient;
+    if (dom.center.headerOrder && dom.center.headerLoading && dom.center.headerLoading.parentElement !== dom.center.headerOrder) {
+      dom.center.headerOrder.appendChild(dom.center.headerLoading);
+    }
+    if (dom.center.headerOrder) {
+      dom.center.headerOrder.classList.toggle("is-chat-header-loading", show);
+    }
+    if (dom.center.headerLoading) {
+      dom.center.headerLoading.classList.toggle("hidden", !show);
+      dom.center.headerLoading.setAttribute("aria-hidden", show ? "false" : "true");
+    }
+  }
+
   function ensureThreadHistoryState(clientId) {
     const key = normalizeClientIdKey(clientId);
     if (!key) return null;
@@ -443,6 +477,81 @@
       }
     } catch {}
     return 1;
+  }
+
+  function getSharedClientDetailsCacheKey() {
+    return `dashboard:clients:details:v1:${getTenantId()}`;
+  }
+
+  function getSharedOrderDetailsCacheKey() {
+    return `dashboard:orders:details:v1:${getTenantId()}`;
+  }
+
+  function readSharedOrderDetailsCache() {
+    try {
+      const raw = localStorage.getItem(getSharedOrderDetailsCacheKey());
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function getSharedOrderDetails(orderId) {
+    const id = Number(orderId || 0);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    const cache = readSharedOrderDetailsCache();
+    const entry = cache[String(id)];
+    if (!entry || typeof entry !== "object") return null;
+    const updatedAt = Number(entry.updatedAt || 0);
+    if (!updatedAt || (Date.now() - updatedAt) > SHARED_ORDER_DETAILS_CACHE_TTL_MS) return null;
+    const order = entry.order && typeof entry.order === "object" ? entry.order : null;
+    return order ? { ...order } : null;
+  }
+
+  function setSharedOrderDetails(order) {
+    const id = Number(order?.id || 0);
+    if (!Number.isFinite(id) || id <= 0) return;
+    const cache = readSharedOrderDetailsCache();
+    cache[String(id)] = {
+      updatedAt: Date.now(),
+      order: order && typeof order === "object" ? { ...order } : null,
+    };
+    const compacted = Object.entries(cache)
+      .sort((a, b) => Number(b?.[1]?.updatedAt || 0) - Number(a?.[1]?.updatedAt || 0))
+      .slice(0, SHARED_ORDER_DETAILS_CACHE_MAX)
+      .reduce((acc, [key, value]) => {
+        acc[key] = value;
+        return acc;
+      }, {});
+    try {
+      localStorage.setItem(getSharedOrderDetailsCacheKey(), JSON.stringify(compacted));
+    } catch {}
+  }
+
+  function getSharedClientDetailsFromLocalStorage(clientId) {
+    const id = Number(clientId || 0);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    try {
+      const raw = localStorage.getItem(getSharedClientDetailsCacheKey());
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
+      const entry = parsed[String(id)];
+      if (!entry || typeof entry !== "object") return null;
+      const updatedAt = Number(entry.updatedAt || 0);
+      if (!updatedAt || (Date.now() - updatedAt) > CLIENT_DETAILS_SHARED_CACHE_TTL_MS) return null;
+      const sharedClient = entry.client && typeof entry.client === "object" ? { ...entry.client } : null;
+      const sharedOrders = Array.isArray(entry.orders) ? entry.orders.map((row) => ({ ...row })) : [];
+      return {
+        updatedAt,
+        client: sharedClient,
+        orders: sharedOrders,
+      };
+    } catch {
+      return null;
+    }
   }
 
   function normalizeTenantChatWidgetEnabled(rawValue) {
@@ -720,6 +829,7 @@
       pauseRealtimeSync({ flushTyping: true, keepalive: true, forceTypingStop: true });
       abortAllActiveApiRequests();
       messageAlertSummariesPrimed = false;
+      setHeaderLoading(false);
       setComposerEnabled(false);
       setChatBootstrapLoading(false);
       return { enabled: false, changed: nextEnabled !== wasEnabled };
@@ -776,6 +886,29 @@
       if (already) return rawUrl;
       return rawUrl + (hasQuery ? "&" : "?") + "chat_actor=" + encodeURIComponent(actor);
     }
+  }
+
+  function getSharedClientOrdersFetcher() {
+    if (typeof window === "undefined") return null;
+    if (typeof window.__markinMeSharedOrdersFetcher === "function") {
+      return window.__markinMeSharedOrdersFetcher;
+    }
+    const inFlight = new Map();
+    window.__markinMeSharedOrdersFetcher = async (clientId, requestFactory) => {
+      const key = String(Number(clientId || 0) || "");
+      if (!key || typeof requestFactory !== "function") {
+        return requestFactory();
+      }
+      if (inFlight.has(key)) return inFlight.get(key);
+      const task = Promise.resolve()
+        .then(() => requestFactory())
+        .finally(() => {
+          inFlight.delete(key);
+        });
+      inFlight.set(key, task);
+      return task;
+    };
+    return window.__markinMeSharedOrdersFetcher;
   }
 
   function buildChatSseUrl(url, actorValue, extraParams = {}) {
@@ -1750,8 +1883,12 @@
     const key = normalizeClientIdKey(clientId);
     if (!key) return false;
     const mutationVersionBefore = getThreadMutationVersion(key);
+    const limitRaw = Number(options.limit ?? CHAT_THREAD_PAGE_SIZE);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0
+      ? Math.max(1, Math.min(200, Math.trunc(limitRaw)))
+      : CHAT_THREAD_PAGE_SIZE;
     const snapshot = await fetchRemoteThreadSnapshot(key, {
-      limit: CHAT_THREAD_PAGE_SIZE,
+      limit,
     });
     if (!snapshot) return false;
     const localChangedDuringRequest = getThreadMutationVersion(key) !== mutationVersionBefore;
@@ -1883,13 +2020,45 @@
         } catch {}
       }
 
+      const now = Date.now();
+      const lastFullPullAt = Number(state.fullThreadPullLastAtByClient?.[key] || 0);
+      if (
+        options.signalHint === true
+        && lastFullPullAt > 0
+        && (now - lastFullPullAt) < CHAT_FULL_THREAD_PULL_COOLDOWN_MS
+      ) {
+        return false;
+      }
+      state.fullThreadPullLastAtByClient[key] = now;
       return pullThreadFromRemote(key, {
         ...options,
+        limit: options.signalHint === true
+          ? Math.min(
+            Number(options.limit || CHAT_THREAD_BACKGROUND_SYNC_LIMIT),
+            CHAT_THREAD_BACKGROUND_SYNC_LIMIT
+          )
+          : options.limit,
         preserveHistory: options.signalHint === true ? false : options.preserveHistory,
       });
     } catch {
+      const now = Date.now();
+      const lastFullPullAt = Number(state.fullThreadPullLastAtByClient?.[key] || 0);
+      if (
+        options.signalHint === true
+        && lastFullPullAt > 0
+        && (now - lastFullPullAt) < CHAT_FULL_THREAD_PULL_COOLDOWN_MS
+      ) {
+        return false;
+      }
+      state.fullThreadPullLastAtByClient[key] = now;
       return pullThreadFromRemote(key, {
         ...options,
+        limit: options.signalHint === true
+          ? Math.min(
+            Number(options.limit || CHAT_THREAD_BACKGROUND_SYNC_LIMIT),
+            CHAT_THREAD_BACKGROUND_SYNC_LIMIT
+          )
+          : options.limit,
         preserveHistory: options.signalHint === true ? false : options.preserveHistory,
       });
     }
@@ -2171,6 +2340,14 @@
   async function syncRemoteSummariesSnapshot(options = {}) {
     if (!isChatWidgetEnabledRuntime()) return false;
     const forceThreads = options.forceThreads === true;
+    const now = Date.now();
+    if (
+      !forceThreads
+      && Number(state.summariesLastSyncedAt || 0) > 0
+      && (now - Number(state.summariesLastSyncedAt || 0)) < CHAT_SUMMARIES_SYNC_MIN_INTERVAL_MS
+    ) {
+      return false;
+    }
 
     if (state.summariesSyncInFlight) {
       if (forceThreads) state.summariesSyncPendingForceThreads = true;
@@ -2232,9 +2409,8 @@
           .map((row) => normalizeClientIdKey(row?.client_id ?? row?.clientId ?? row?.id))
           .filter(Boolean)
       );
-      const ids = (state.clients || [])
-        .map((client) => normalizeClientIdKey(client?.id))
-        .filter((id) => !!id && !remoteClientIdSet.has(id));
+      const activeKey = normalizeClientIdKey(state.activeClientId);
+      const ids = activeKey && !remoteClientIdSet.has(activeKey) ? [activeKey] : [];
       if (ids.length) {
         const pulled = await pullRemoteSummaries(ids, runOptions).catch((err) => {
           console.error(err);
@@ -2261,7 +2437,9 @@
     })();
 
     try {
-      return await state.summariesSyncInFlight;
+      const result = await state.summariesSyncInFlight;
+      state.summariesLastSyncedAt = Date.now();
+      return result;
     } finally {
       state.summariesSyncInFlight = null;
     }
@@ -2318,6 +2496,10 @@
   }
 
   function ensureActiveThreadSseConnection() {
+    if (!ENABLE_ACTIVE_THREAD_SSE) {
+      stopActiveThreadSseConnection();
+      return false;
+    }
     if (!CHAT_SSE_ENABLED || state.isRealtimePaused) return false;
     const activeId = normalizeClientIdKey(state.activeClientId);
     if (!activeId) {
@@ -2395,9 +2577,16 @@
         ? Math.max(0, Math.trunc(Number(payload.revision)))
         : 0;
 
-      syncRemoteSummariesSnapshot({
-        forceThreads: payload.changed !== false,
-      }).catch(console.error);
+      if (payload.changed !== false) {
+        const activeId = normalizeClientIdKey(state.activeClientId);
+        if (activeId) {
+          pullThreadFromRemoteIfChanged(activeId, {
+            skipReadMark: false,
+            force: false,
+            signalHint: true,
+          }).catch(console.error);
+        }
+      }
 
       if (nextUpdatedAt || state.summariesUpdatedAt) {
         state.summariesUpdatedAt = nextUpdatedAt;
@@ -3170,7 +3359,6 @@
     document.addEventListener("click", unlockMessageAlertsOnce, { once: true, passive: true, capture: true });
     document.addEventListener("touchstart", unlockMessageAlertsOnce, { once: true, passive: true, capture: true });
     document.addEventListener("keydown", unlockMessageAlertsOnce, { once: true });
-    queueWebPushSubscriptionSync({ immediate: true });
   }
 
   function isWebPushSupported() {
@@ -3835,12 +4023,37 @@
   }
 
   function preloadEmojiAtlas() {
+    if (EMOJI_NATIVE_RENDER_ONLY) return;
     if (shouldUseNativeMobileEmojiKeyboard()) return;
     if (!EMOJI_ATLAS_ENABLED || emojiAtlasPreloadStarted) return;
     emojiAtlasPreloadStarted = true;
-    const img = new Image();
-    img.decoding = "async";
-    img.src = EMOJI_ATLAS_URL;
+    ensureEmojiAtlasRuntimeUrl().then((url) => {
+      const img = new Image();
+      img.decoding = "async";
+      img.src = url || EMOJI_ATLAS_URL;
+    }).catch(() => {});
+  }
+
+  async function ensureEmojiAtlasRuntimeUrl() {
+    if (emojiAtlasRuntimeUrl) return emojiAtlasRuntimeUrl;
+    try {
+      if (!("caches" in window)) return EMOJI_ATLAS_URL;
+      const cache = await caches.open(EMOJI_ATLAS_CACHE_NAME);
+      let response = await cache.match(EMOJI_ATLAS_URL, { ignoreSearch: false });
+      if (!response || !response.ok) {
+        response = await fetch(EMOJI_ATLAS_URL, { cache: "force-cache" });
+        if (response && response.ok) {
+          try { await cache.put(EMOJI_ATLAS_URL, response.clone()); } catch {}
+        }
+      }
+      if (!response || !response.ok) return EMOJI_ATLAS_URL;
+      const blob = await response.blob();
+      if (!blob || !blob.size) return EMOJI_ATLAS_URL;
+      emojiAtlasRuntimeUrl = URL.createObjectURL(blob);
+      return emojiAtlasRuntimeUrl;
+    } catch {
+      return EMOJI_ATLAS_URL;
+    }
   }
 
   function getEmojiAtlasPosition(emoji) {
@@ -3874,6 +4087,7 @@
   }
 
   function createEmojiAtlasGlyph(glyphClassName, emojiValue) {
+    if (EMOJI_NATIVE_RENDER_ONLY) return null;
     if (shouldUseNativeMobileEmojiKeyboard()) return null;
     const pos = getEmojiAtlasPosition(emojiValue);
     if (!pos) return null;
@@ -3882,7 +4096,8 @@
 
     const glyph = document.createElement("span");
     glyph.className = String(glyphClassName || "");
-    glyph.style.backgroundImage = `url("${EMOJI_ATLAS_URL}")`;
+    const atlasUrl = emojiAtlasRuntimeUrl || EMOJI_ATLAS_URL;
+    glyph.style.backgroundImage = `url("${atlasUrl}")`;
     glyph.style.backgroundRepeat = "no-repeat";
     glyph.style.backgroundSize = `${EMOJI_ATLAS_COLUMNS * 100}% ${EMOJI_ATLAS_ROWS * 100}%`;
     glyph.style.backgroundPosition = `${xPercent}% ${yPercent}%`;
@@ -4487,6 +4702,14 @@
       renderChatHeader();
       return;
     }
+    const sharedCached = getSharedOrderDetails(headerOrderId);
+    if (sharedCached) {
+      state.orderDetailsCache.set(headerOrderId, sharedCached);
+      if (mergeDetailedOrderIntoActiveList(headerOrderId, sharedCached)) {
+        renderChatHeader();
+        return;
+      }
+    }
 
     try {
       const json = await apiJson(`/api/admin/orders/${headerOrderId}`);
@@ -4496,6 +4719,7 @@
       const detailedOrder = json && json.data ? json.data : null;
       if (!detailedOrder || typeof detailedOrder !== "object") return;
       state.orderDetailsCache.set(headerOrderId, detailedOrder);
+      setSharedOrderDetails(detailedOrder);
       if (!mergeDetailedOrderIntoActiveList(headerOrderId, detailedOrder)) return;
       renderChatHeader();
     } catch (err) {
@@ -4528,12 +4752,24 @@
     if (!Number.isFinite(clientId) || clientId <= 0) return false;
     if (state.activeOrdersPollInFlight) return false;
 
+    const forceRefresh = options.force === true;
+    const cachedOrders = getCachedActiveClientOrders(clientId);
+    if (!forceRefresh && Array.isArray(cachedOrders) && cachedOrders.length) {
+      const changedFromCache = setActiveOrders(cachedOrders);
+      if (changedFromCache || options.forceHydrate) {
+        hydrateHeaderOrderDetails(state.requestToken, clientId).catch(console.error);
+      }
+      return changedFromCache;
+    }
+
     state.activeOrdersPollInFlight = true;
     try {
       const ordersJson = await apiJson(`/api/admin/clients/${clientId}/orders`);
       if (Number(state.activeClientId || 0) !== clientId) return false;
       const nextOrders = Array.isArray(ordersJson?.data) ? ordersJson.data : [];
+      setCachedActiveClientOrders(clientId, nextOrders);
       const changed = setActiveOrders(nextOrders);
+      state.activeOrdersLastFetchedAt = Date.now();
       if (changed || options.forceHydrate) {
         hydrateHeaderOrderDetails(state.requestToken, clientId).catch(console.error);
       }
@@ -4597,14 +4833,15 @@
     document.addEventListener("visibilitychange", () => {
       if (!isChatWidgetEnabledRuntime()) return;
       if (document.visibilityState !== "visible") return;
-      refreshActiveOrdersForActiveClient({ force: true, forceHydrate: true }).catch(console.error);
+      const now = Date.now();
+      if (
+        now - Number(state.activeOrdersLastFetchedAt || 0)
+        < ACTIVE_ORDERS_VISIBILITY_REFRESH_DEBOUNCE_MS
+      ) {
+        return;
+      }
+      refreshActiveOrdersForActiveClient({ force: false, forceHydrate: true }).catch(console.error);
     });
-  }
-
-  function clearActiveOrdersLazyFetchTimer() {
-    if (!state.activeOrdersLazyFetchTimer) return;
-    window.clearTimeout(state.activeOrdersLazyFetchTimer);
-    state.activeOrdersLazyFetchTimer = 0;
   }
 
   function hexToRgba(hex, alpha) {
@@ -5675,6 +5912,21 @@
     });
   }
 
+  function hydrateActiveClientFromSharedCache(clientId) {
+    const shared = getSharedClientDetailsFromLocalStorage(clientId);
+    if (!shared) return false;
+    if (shared.client) {
+      state.activeClient = { ...state.activeClient, ...shared.client };
+      setCachedActiveClientProfile(clientId, state.activeClient);
+      syncClientIdentityIntoList(clientId, state.activeClient);
+    }
+    if (Array.isArray(shared.orders) && shared.orders.length) {
+      setCachedActiveClientOrders(clientId, shared.orders);
+      setActiveOrders(shared.orders, { forceRender: true });
+    }
+    return true;
+  }
+
   function syncHiddenMessagesForActor(clientId, messageIds) {
     const key = normalizeClientIdKey(clientId);
     if (!key) return;
@@ -6611,6 +6863,7 @@
   }
 
   function renderChatHeader() {
+    setHeaderLoading(state.activeClientDataLoading === true);
     const setOrderStatusView = (text, color) => {
       if (!dom.center.orderStatus) return;
       const safeText = String(text || "—").trim() || "—";
@@ -6678,6 +6931,7 @@
     };
 
     if (!state.activeClient) {
+      setHeaderLoading(false);
       setOrderHeaderFields({
         kind: "Последний заказ",
         id: "—",
@@ -8079,11 +8333,35 @@
     };
   }
 
+  function buildOptimisticActiveClientProfile(clientId, selectedFromList = null) {
+    const source = selectedFromList && typeof selectedFromList === "object" ? selectedFromList : {};
+    const id = Number(clientId || source.id || 0) || 0;
+    const fallbackName = id > 0 ? `\u041a\u043b\u0438\u0435\u043d\u0442 #${id}` : "\u041a\u043b\u0438\u0435\u043d\u0442";
+    return {
+      id,
+      name: String(source.name || "").trim() || fallbackName,
+      phone: String(source.phone || ""),
+      birthday: String(source.birthday || ""),
+      photo: String(source.photo || ""),
+      total_orders: Number(source.total_orders || 0),
+      total_spent: Number(source.total_spent || 0),
+      last_order_date: String(source.last_order_date || ""),
+      created_at: String(source.created_at || ""),
+      is_guest_chat: false,
+    };
+  }
+
   async function loadActiveClientData(clientId, selectedFromList = null, options = {}) {
     const requestId = ++state.requestToken;
     const isGuestClient = options && options.isGuest === true;
     const shouldRenderThread = options && options.renderThread !== false;
     const preferCache = options && options.preferCache === true;
+    const shouldFetchOrders = options?.fetchOrders !== false;
+    const finishHeaderLoading = () => {
+      if (requestId !== state.requestToken) return;
+      if (Number(state.activeClientId || 0) !== Number(clientId || 0)) return;
+      setHeaderLoading(false);
+    };
     if (isGuestClient) {
       state.activeClient = buildGuestActiveClientProfile(clientId, selectedFromList);
       setActiveOrders([], { forceRender: true });
@@ -8092,27 +8370,60 @@
         restoreThreadScrollPosition(state.activeClientId);
         saveThreadScrollPosition(state.activeClientId);
       }
+      finishHeaderLoading();
       return;
     }
 
+    let hadWarmCacheProfile = false;
+    let hadWarmCacheOrders = false;
     if (preferCache) {
       const cachedProfile = getCachedActiveClientProfile(clientId);
       const cachedOrders = getCachedActiveClientOrders(clientId);
       if (cachedProfile) {
         state.activeClient = cachedProfile;
         syncClientIdentityIntoList(clientId, cachedProfile);
+        hadWarmCacheProfile = true;
       }
       if (cachedOrders) {
         setActiveOrders(cachedOrders, { forceRender: true });
         hydrateHeaderOrderDetails(requestId, clientId).catch(console.error);
+        hadWarmCacheOrders = Array.isArray(cachedOrders) && cachedOrders.length > 0;
+      }
+      if (!cachedProfile || !cachedOrders || !cachedOrders.length) {
+        const hydratedFromShared = hydrateActiveClientFromSharedCache(clientId);
+        if (hydratedFromShared) {
+          const nextCachedProfile = getCachedActiveClientProfile(clientId);
+          const nextCachedOrders = getCachedActiveClientOrders(clientId);
+          hadWarmCacheProfile = hadWarmCacheProfile || !!nextCachedProfile;
+          hadWarmCacheOrders = hadWarmCacheOrders || !!(nextCachedOrders && nextCachedOrders.length);
+        }
       }
     }
 
     try {
-      const clientJson = await apiJson(`/api/admin/clients/${clientId}`);
+      const shouldFetchClientProfile = !hadWarmCacheProfile;
+      const shouldFetchOrdersFromNetwork = shouldFetchOrders && !hadWarmCacheOrders;
+      const sharedOrdersFetch = getSharedClientOrdersFetcher();
+      const ordersRefreshPromise = shouldFetchOrdersFromNetwork
+        ? Promise.resolve()
+          .then(() => (
+            sharedOrdersFetch
+              ? sharedOrdersFetch(clientId, () => apiJson(`/api/admin/clients/${clientId}/orders`))
+              : apiJson(`/api/admin/clients/${clientId}/orders`)
+          ))
+          .then((json) => ({ ok: true, json }))
+          .catch((err) => ({ ok: false, err }))
+        : null;
+
+      const clientJson = shouldFetchClientProfile
+        ? await apiJson(`/api/admin/clients/${clientId}`)
+        : { data: state.activeClient || selectedFromList || buildOptimisticActiveClientProfile(clientId, selectedFromList) };
       if (requestId !== state.requestToken) return;
 
-      state.activeClient = clientJson?.data || selectedFromList;
+      state.activeClient = clientJson?.data
+        || selectedFromList
+        || state.activeClient
+        || buildOptimisticActiveClientProfile(clientId, selectedFromList);
       if (state.activeClient && typeof state.activeClient === "object") {
         setCachedActiveClientProfile(clientId, state.activeClient);
       }
@@ -8137,27 +8448,26 @@
           phone: syncedIdentity.nextPhone,
         }).catch(console.error);
       }
-      const scheduleOrdersRefresh = () => {
-        clearActiveOrdersLazyFetchTimer();
-        state.activeOrdersLazyFetchTimer = window.setTimeout(async () => {
-          state.activeOrdersLazyFetchTimer = 0;
-          const latestRequestToken = state.requestToken;
-          if (latestRequestToken !== requestId) return;
+      if (shouldFetchOrdersFromNetwork && ordersRefreshPromise) {
+        ordersRefreshPromise.then((result) => {
+          if (state.requestToken !== requestId) return;
           if (Number(state.activeClientId || 0) !== Number(clientId)) return;
-          try {
-            const ordersJson = await apiJson(`/api/admin/clients/${clientId}/orders`);
-            if (state.requestToken !== requestId) return;
-            if (Number(state.activeClientId || 0) !== Number(clientId)) return;
-            const freshOrders = Array.isArray(ordersJson?.data) ? ordersJson.data : [];
+          if (result && result.ok) {
+            const freshOrders = Array.isArray(result.json?.data) ? result.json.data : [];
             setCachedActiveClientOrders(clientId, freshOrders);
             setActiveOrders(freshOrders, { forceRender: true });
             hydrateHeaderOrderDetails(requestId, clientId).catch(console.error);
-          } catch (err) {
-            if (!isAbortError(err)) console.error(err);
+            return;
           }
-        }, ACTIVE_ORDERS_LAZY_FETCH_DELAY_MS);
-      };
-      scheduleOrdersRefresh();
+          if (result && !result.ok && !isAbortError(result.err)) {
+            console.error(result.err);
+          }
+        }).finally(() => {
+          finishHeaderLoading();
+        });
+      } else {
+        finishHeaderLoading();
+      }
       if (shouldRenderThread) {
         renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
         restoreThreadScrollPosition(state.activeClientId);
@@ -8167,13 +8477,16 @@
     } catch (err) {
       if (requestId !== state.requestToken) return;
       console.error(err);
-      state.activeClient = selectedFromList;
+      state.activeClient = selectedFromList
+        || state.activeClient
+        || buildOptimisticActiveClientProfile(clientId, selectedFromList);
       setActiveOrders([], { forceRender: true });
       if (shouldRenderThread) {
         renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
         restoreThreadScrollPosition(state.activeClientId);
         saveThreadScrollPosition(state.activeClientId);
       }
+      finishHeaderLoading();
     }
   }
 
@@ -8181,7 +8494,6 @@
     const id = Number(clientId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
     suppressMessageAlertUntil = Date.now() + 3000;
-    clearActiveOrdersLazyFetchTimer();
     const previousActiveClientId = state.activeClientId;
     stopLocalTypingSession(previousActiveClientId, { flush: true });
     saveThreadScrollPosition(previousActiveClientId);
@@ -8203,6 +8515,7 @@
 
     state.activeClientId = id;
     state.store.lastOpenClientId = id;
+    setHeaderLoading(true);
     saveStore();
 
     ensureActiveThreadSseConnection();
@@ -8241,7 +8554,7 @@
 
     state.activeClient = isGuestClient
       ? buildGuestActiveClientProfile(id, selectedFromList)
-      : selectedFromList;
+      : (selectedFromList || buildOptimisticActiveClientProfile(id, selectedFromList));
     setActiveOrders([], { forceRender: true });
 
     loadActiveClientData(id, selectedFromList, {
@@ -8440,7 +8753,19 @@
         .filter(Boolean)
         .filter((id) => (reset || !prevIds.has(id)) && !remoteSummaryIdSet.has(id));
       if (summaryIds.length) {
-        await pullRemoteSummaries(summaryIds).catch(console.error);
+        const activeKey = normalizeClientIdKey(state.activeClientId);
+        const priorityIds = [];
+        if (activeKey && summaryIds.includes(activeKey)) {
+          priorityIds.push(activeKey);
+        }
+        if (!reset) {
+          summaryIds.forEach((id) => {
+            if (!priorityIds.includes(id) && priorityIds.length < 12) priorityIds.push(id);
+          });
+        }
+        if (priorityIds.length) {
+          await pullRemoteSummaries(priorityIds).catch(console.error);
+        }
         applyClientFilter();
       }
 
@@ -8455,6 +8780,7 @@
           stopLocalTypingSession(state.activeClientId, { flush: true });
           state.activeClientId = null;
           state.activeClient = null;
+          setHeaderLoading(false);
           setActiveOrders([], { forceRender: true });
           renderMessages();
         }
@@ -8478,6 +8804,8 @@
   async function loadClients() {
     if (!isChatWidgetEnabledRuntime()) return;
     if (!dom.left.list) return;
+    if (state.clientsLoadInFlight) return state.clientsLoadInFlight;
+
     const persistedClientId = Number(state.store?.lastOpenClientId || 0);
     if (
       persistedClientId > 0
@@ -8487,19 +8815,23 @@
       selectClient(persistedClientId).catch(console.error);
     }
     // Do not block the first paint on slow DB/API responses.
-    loadClientsPage({ reset: true, ensureSelection: true }).catch((err) => {
-      if (isAbortError(err) || !isChatWidgetEnabledRuntime()) return;
-      console.error(err);
-      dom.left.list.innerHTML = "";
-      if (dom.left.empty) {
-        dom.left.empty.textContent = "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0447\u0430\u0442\u044b";
-        dom.left.empty.classList.remove("hidden");
-      }
-    });
+    state.clientsLoadInFlight = loadClientsPage({ reset: true, ensureSelection: true })
+      .catch((err) => {
+        if (isAbortError(err) || !isChatWidgetEnabledRuntime()) return;
+        console.error(err);
+        dom.left.list.innerHTML = "";
+        if (dom.left.empty) {
+          dom.left.empty.textContent = "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0447\u0430\u0442\u044b";
+          dom.left.empty.classList.remove("hidden");
+        }
+      })
+      .finally(() => {
+        state.clientsLoadInFlight = null;
+      });
+    return state.clientsLoadInFlight;
   }
 
   function initComposer() {
-    preloadEmojiAtlas();
     if (!Object.keys(emojiCategories).length) {
       emojiCategories = normalizeEmojiCategoryMap(EMOJI_FALLBACK_CATEGORIES);
     }
@@ -8592,6 +8924,7 @@
       dom.center.emojiBtn.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
+        preloadEmojiAtlas();
         if (shouldUseNativeMobileEmojiKeyboard()) {
           hideEmojiPopover();
           if (dom.center.input) dom.center.input.focus();
@@ -8667,20 +9000,25 @@
       if (!isChatWidgetEnabledRuntime()) return;
       if (!state.activeClientId) return;
       if (!isChatTabActiveForRead()) return;
+      const now = Date.now();
+      if ((now - Number(state.readSyncLastAt || 0)) < CHAT_READ_SYNC_MIN_INTERVAL_MS) return;
+      state.readSyncLastAt = now;
       syncActiveThreadReadState();
-      pullThreadFromRemoteIfChanged(state.activeClientId, { skipReadMark: false }).catch(console.error);
     };
 
     const syncChatsOnForeground = () => {
       if (!isChatWidgetEnabledRuntime()) return;
       const now = Date.now();
+      if (now - Number(state.foregroundEventLastAt || 0) < CHAT_FOREGROUND_EVENT_DEBOUNCE_MS) return;
+      state.foregroundEventLastAt = now;
       if (state.foregroundSyncInFlight) return;
       if (now - Number(state.foregroundSyncLastAt || 0) < CHAT_FOREGROUND_SYNC_DEBOUNCE_MS) return;
       state.foregroundSyncInFlight = true;
       state.foregroundSyncLastAt = now;
-      queueWebPushSubscriptionSync({ immediate: true });
       Promise.resolve()
-        .then(() => syncRemoteSummariesSnapshot({ forceThreads: true }))
+        // Foreground switch must stay lightweight: no full clients/summaries pull here.
+        // Realtime stream and periodic loops handle list freshness separately.
+        .then(() => false)
         .then(() => syncReadOnForeground())
         .catch(console.error)
         .finally(() => {
@@ -8691,20 +9029,21 @@
 
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState !== "visible") {
-        pauseRealtimeSync({ flushTyping: true });
+        saveThreadScrollPosition(state.activeClientId);
+        saveClientsListScrollPosition();
         return;
       }
-      if (!syncChatWidgetEnabledFromTenant({ resume: true })) return;
+      if (!syncChatWidgetEnabledFromTenant()) return;
       syncChatsOnForeground();
     });
 
     window.addEventListener("focus", () => {
-      if (!syncChatWidgetEnabledFromTenant({ resume: true })) return;
+      if (!syncChatWidgetEnabledFromTenant()) return;
       syncChatsOnForeground();
     });
 
     window.addEventListener("pageshow", () => {
-      if (!syncChatWidgetEnabledFromTenant({ resume: true })) return;
+      if (!syncChatWidgetEnabledFromTenant()) return;
       syncChatsOnForeground();
     });
 
@@ -8724,8 +9063,16 @@
     });
 
     window.addEventListener("storage", (event) => {
-      if (String(event?.key || "") !== "tenant") return;
-      syncChatWidgetEnabledFromTenant({ reload: true, resume: true });
+      const key = String(event?.key || "");
+      if (key === "tenant") {
+        syncChatWidgetEnabledFromTenant({ reload: true, resume: true });
+        return;
+      }
+      if (key === getSharedClientDetailsCacheKey()) {
+        const activeId = Number(state.activeClientId || 0);
+        if (!Number.isFinite(activeId) || activeId <= 0) return;
+        hydrateActiveClientFromSharedCache(activeId);
+      }
     });
 
   }
