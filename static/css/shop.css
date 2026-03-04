@@ -7588,6 +7588,11 @@ body.page-shop .shop-company-chat-btn:hover{
   gap: 8px;
   position: relative;
   transition: transform .15s ease;
+  -webkit-touch-callout: none;
+}
+
+.shop-company-chat-row *{
+  -webkit-touch-callout: none;
 }
 
 .shop-company-chat-row.is-agent{
@@ -7609,6 +7614,9 @@ body.page-shop .shop-company-chat-btn:hover{
   position: relative;
   transition: transform 160ms cubic-bezier(.2,.8,.25,1);
   touch-action: pan-y;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .shop-company-chat-bubble.has-reaction{
@@ -7896,7 +7904,7 @@ body.page-shop .shop-company-chat-btn:hover{
 
 .shop-company-chat-attachment{
   position: relative;
-  max-width: min(320px, 72vw);
+  max-width: min(214px, 48vw) !important;
   border-radius: 12px;
   overflow: hidden;
 }
@@ -7907,6 +7915,10 @@ body.page-shop .shop-company-chat-btn:hover{
   height: auto;
   object-fit: cover;
   cursor: zoom-in;
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+  user-drag: none;
+  pointer-events: none;
 }
 
 .shop-company-chat-time{
@@ -8021,17 +8033,39 @@ body.page-shop .shop-company-chat-btn:hover{
   font-size: 30px;
   line-height: 1;
   cursor: pointer;
+  z-index: 1;
 }
 
 .shop-company-chat-reactions{
   position: absolute;
-  right: 8px;
-  bottom: -11px;
+  right: auto;
+  left: auto;
+  bottom: 6px;
   display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  max-width: calc(100% - 16px);
+  justify-content: flex-start;
+  gap: 0;
+  max-width: none;
+}
+
+.shop-company-chat-row.is-user .shop-company-chat-reactions{
+  right: calc(100% + 6px) !important;
+  left: auto !important;
+  flex-direction: row-reverse;
+}
+
+.shop-company-chat-row.is-agent .shop-company-chat-reactions{
+  left: calc(100% + 6px) !important;
+  right: auto !important;
+  flex-direction: row;
+}
+
+.shop-company-chat-row.is-agent .shop-company-chat-reaction-pill + .shop-company-chat-reaction-pill{
+  margin-left: -12px;
+}
+
+.shop-company-chat-row.is-user .shop-company-chat-reaction-pill + .shop-company-chat-reaction-pill{
+  margin-right: -12px;
 }
 
 .shop-company-chat-bubble.is-emoji-only{

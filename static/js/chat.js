@@ -17,6 +17,7 @@
   const THREAD_SYNC_WAIT_TIMEOUT_MS = 20000;
   const THREAD_SYNC_WAIT_RETRY_MS = 1200;
   const THREAD_SYNC_LOOP_MIN_INTERVAL_MS = 350;
+  const THREAD_SSE_PULL_DEBOUNCE_MS = 100;
   const CHAT_SSE_ENABLED = typeof window.EventSource === "function";
   const ACTIVE_ORDERS_POLL_MS = 4200;
   const CHAT_AUTOSCROLL_MS = 170;
@@ -32,6 +33,8 @@
   const CHAT_THREAD_PAGE_SIZE = 60;
   const CHAT_THREAD_EAGER_IMAGE_COUNT = 4;
   const CHAT_THREAD_LOAD_MORE_THRESHOLD_PX = 20;
+  const CHAT_TOUCH_CONTEXT_LONG_PRESS_MS = 430;
+  const CHAT_TOUCH_CONTEXT_MOVE_CANCEL_PX = 9;
   const CHAT_DROP_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif|heic|heif)$/i;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
   const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
@@ -294,6 +297,20 @@
       && window.matchMedia("(pointer: coarse)").matches;
     return hasTouchPoints || hasCoarsePointer;
   }
+
+  function isAndroidYandexBrowser() {
+    const ua = String((navigator && navigator.userAgent) || "");
+    if (!ua) return false;
+    return /Android/i.test(ua) && /YaBrowser/i.test(ua);
+  }
+
+  function isTouchGeneratedClick(event) {
+    if (!event) return false;
+    if (typeof event.pointerType === "string" && event.pointerType.toLowerCase() === "touch") return true;
+    const sourceCapabilities = event.sourceCapabilities;
+    if (sourceCapabilities && sourceCapabilities.firesTouchEvents) return true;
+    return false;
+  }
   let emojiAtlasPreloadStarted = false;
   let unreadEventRaf = 0;
   let messageAlertAudioCtx = null;
@@ -301,6 +318,10 @@
   let messageAlertLastAt = 0;
   let messageAlertSummariesPrimed = false;
   let suppressMessageAlertUntil = 0;
+  let suppressTouchClickUntil = 0;
+  let activeThreadSsePullTimer = 0;
+  let activeThreadSsePullInFlight = false;
+  let activeThreadSsePullPending = false;
   let webPushPublicKeyCache = "";
   let webPushPublicKeyFetched = false;
   let webPushSyncTimer = 0;
@@ -309,6 +330,7 @@
   let webPushSubscriptionVapidKey = "";
   let webPushSyncRequestedWithPermission = false;
   let webPushSyncForceRequested = false;
+  let hardContextMenuBlockBound = false;
   const activeApiAbortControllers = new Set();
   const adminPushVapidStorageKey = "dashboard_chat_push_vapid_t" + String(getTenantId());
 
@@ -1776,17 +1798,21 @@
     const key = normalizeClientIdKey(clientId);
     if (!key) return false;
     if (options.force === true) {
-      return pullThreadFromRemote(key, { ...options, preserveHistory: true });
+      return pullThreadFromRemote(key, {
+        ...options,
+        preserveHistory: options.signalHint === true ? false : true,
+      });
     }
 
     try {
       const meta = await fetchRemoteThreadMeta(key);
       const remoteUpdatedAt = String(meta?.updatedAt || "");
       const knownUpdatedAt = String(state.remoteThreadUpdatedAt[key] || "");
-      if (remoteUpdatedAt && knownUpdatedAt && remoteUpdatedAt === knownUpdatedAt) {
+      const preferSignalDiff = options.signalHint === true;
+      if (!preferSignalDiff && remoteUpdatedAt && knownUpdatedAt && remoteUpdatedAt === knownUpdatedAt) {
         return false;
       }
-      if (!remoteUpdatedAt && !knownUpdatedAt) {
+      if (!preferSignalDiff && !remoteUpdatedAt && !knownUpdatedAt) {
         return false;
       }
 
@@ -1797,14 +1823,24 @@
           if (diff) {
             const localChangedDuringRequest = getThreadMutationVersion(key) !== mutationVersionBefore;
             const applied = applyRemoteThreadDiff(diff, { ...options, localChangedDuringRequest });
-            if (applied !== null) return applied;
+            if (applied !== null) {
+              // For SSE-triggered updates prefer correctness: if diff says "no changes",
+              // force full pull because deletions may be represented only by count shrink.
+              if (!(applied === false && options.signalHint === true)) return applied;
+            }
           }
         } catch {}
       }
 
-      return pullThreadFromRemote(key, options);
+      return pullThreadFromRemote(key, {
+        ...options,
+        preserveHistory: options.signalHint === true ? false : options.preserveHistory,
+      });
     } catch {
-      return pullThreadFromRemote(key, options);
+      return pullThreadFromRemote(key, {
+        ...options,
+        preserveHistory: options.signalHint === true ? false : options.preserveHistory,
+      });
     }
   }
 
@@ -2188,11 +2224,46 @@
     closeChatEventSource(state.activeThreadEventSource);
     state.activeThreadEventSource = null;
     state.activeThreadEventSourceClientId = "";
+    if (activeThreadSsePullTimer) {
+      window.clearTimeout(activeThreadSsePullTimer);
+      activeThreadSsePullTimer = 0;
+    }
+    activeThreadSsePullPending = false;
+    activeThreadSsePullInFlight = false;
   }
 
   function stopSummariesSseConnection() {
     closeChatEventSource(state.summariesEventSource);
     state.summariesEventSource = null;
+  }
+
+  function scheduleActiveThreadSsePull(clientId) {
+    const activeId = normalizeClientIdKey(clientId);
+    if (!activeId) return;
+    activeThreadSsePullPending = true;
+    if (activeThreadSsePullTimer) return;
+    activeThreadSsePullTimer = window.setTimeout(async () => {
+      activeThreadSsePullTimer = 0;
+      if (activeThreadSsePullInFlight || state.isRealtimePaused) return;
+      if (normalizeClientIdKey(state.activeClientId) !== activeId) return;
+
+      activeThreadSsePullInFlight = true;
+      activeThreadSsePullPending = false;
+      try {
+        await pullThreadFromRemoteIfChanged(activeId, {
+          skipReadMark: false,
+          force: false,
+          signalHint: true,
+        });
+      } catch (err) {
+        console.error(err);
+      } finally {
+        activeThreadSsePullInFlight = false;
+        if (activeThreadSsePullPending && normalizeClientIdKey(state.activeClientId) === activeId) {
+          scheduleActiveThreadSsePull(activeId);
+        }
+      }
+    }, THREAD_SSE_PULL_DEBOUNCE_MS);
   }
 
   function ensureActiveThreadSseConnection() {
@@ -2239,12 +2310,7 @@
           && payload.updated_at !== knownUpdatedAt
         );
 
-      if (messageChanged) {
-        pullThreadFromRemoteIfChanged(activeId, {
-          skipReadMark: false,
-          force: true,
-        }).catch(console.error);
-      }
+      if (messageChanged) scheduleActiveThreadSsePull(activeId);
     });
 
     source.addEventListener("disabled", () => {
@@ -5497,6 +5563,18 @@
     return changed;
   }
 
+  function syncHiddenMessagesForActor(clientId, messageIds) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    const ids = (Array.isArray(messageIds) ? messageIds : [])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean);
+    if (!ids.length) return;
+    ids.forEach((messageId) => {
+      enqueueRemoteMutation(key, () => remotePatchMessage(key, messageId, { hidden: true }));
+    });
+  }
+
   function toggleThreadMessagePinned(clientId, messageId) {
     const msg = findThreadMessage(clientId, messageId);
     if (!msg) return false;
@@ -6190,6 +6268,7 @@
         if (!messageIds.length) return;
         const changed = hideThreadMessagesLocally(key, messageIds);
         if (!changed) return;
+        syncHiddenMessagesForActor(key, messageIds);
         if (Number(state.activeClientId) === Number(key)) {
           hideMessageContextMenu();
           renderMessages();
@@ -6300,6 +6379,9 @@
           ? removeThreadMessage(state.activeClientId, messageId)
           : hideThreadMessagesLocally(state.activeClientId, [messageId]);
         if (!changed) return;
+        if (!removeForBoth) {
+          syncHiddenMessagesForActor(state.activeClientId, [messageId]);
+        }
 
         if (String(state.editingMessageId || "") === String(messageId)) {
           cancelEditingMessage();
@@ -6389,6 +6471,9 @@
           selectedOwnIds.forEach((id) => localHideIds.delete(id));
         }
         hideThreadMessagesLocally(state.activeClientId, Array.from(localHideIds));
+        if (localHideIds.size) {
+          syncHiddenMessagesForActor(state.activeClientId, Array.from(localHideIds));
+        }
 
         if (state.editingMessageId && selectedIds.has(String(state.editingMessageId))) {
           cancelEditingMessage();
@@ -6625,14 +6710,14 @@
 
   function createThreadMessageNode(msg) {
     const messageId = String(msg.id || "");
-    const time = `${fmtTime(msg.createdAt) || ""}${msg.editedAt ? " вЂў РёР·Рј." : ""}`;
+    const time = `${fmtTime(msg.createdAt) || ""}${msg.editedAt ? " • изм." : ""}`;
     const outgoingStatus = msg.direction === "out" ? getOutgoingDeliveryStatus(msg) : "";
     const outgoingStatusTitle = outgoingStatus === "read"
-      ? "РџСЂРѕС‡РёС‚Р°РЅРѕ"
+      ? "Прочитано"
       : outgoingStatus === "delivered"
-        ? "Р”РѕСЃС‚Р°РІР»РµРЅРѕ"
+        ? "Доставлено"
         : outgoingStatus === "sent"
-          ? "РћС‚РїСЂР°РІР»РµРЅРѕ"
+          ? "Отправлено"
           : "";
     const classes = [
       "chat-message",
@@ -6655,7 +6740,7 @@
     const replyMarkup = reply
       ? `
         <div class="chat-message-reply-snippet"${reply.id ? ` data-chat-scroll-to-message="${escapeHtml(reply.id)}"` : ""}>
-          <div class="chat-message-reply-name">${escapeHtml(reply.sender || "РЎРѕРѕР±С‰РµРЅРёРµ")}</div>
+          <div class="chat-message-reply-name">${escapeHtml(reply.sender || "Сообщение")}</div>
           <div class="chat-message-reply-line">${escapeHtml(getReplyPreviewText(reply.text || ""))}</div>
         </div>
       `
@@ -6666,7 +6751,8 @@
           <img
             class="chat-message-attachment-image"
             src="${escapeHtml(getAttachmentImageSrc(imageAttachment))}"
-            alt="${escapeHtml(String(imageAttachment.name || "Р¤РѕС‚Рѕ"))}"
+            alt="${escapeHtml(String(imageAttachment.name || "Фото"))}"
+            draggable="false"
             loading="lazy"
             decoding="async"
           />
@@ -6690,7 +6776,7 @@
           ${outgoingStatus
             ? `<span class="chat-message-status chat-message-status--${escapeHtml(outgoingStatus)}" title="${escapeHtml(outgoingStatusTitle)}" aria-label="${escapeHtml(outgoingStatusTitle)}">${getOutgoingStatusIconMarkup(outgoingStatus)}</span>`
             : ""}
-          ${msg.pinned ? '<span class="chat-message-pin" title="Р—Р°РєСЂРµРїР»РµРЅРѕ"><i class="fas fa-thumbtack"></i></span>' : ""}
+          ${msg.pinned ? '<span class="chat-message-pin" title="Закреплено"><i class="fas fa-thumbtack"></i></span>' : ""}
         </div>
       </div>
     `;
@@ -6730,14 +6816,15 @@
       reactionsWrap.className = "chat-message-reactions";
       bubble.classList.add("has-reaction");
 
-      reactionItems.forEach((itemReaction) => {
+      reactionItems.forEach((itemReaction, reactionIndex) => {
         const reactionBtn = document.createElement("button");
         reactionBtn.type = "button";
         reactionBtn.className = "chat-message-reaction-pill";
+        reactionBtn.style.zIndex = String(10 + reactionIndex);
         reactionBtn.setAttribute("data-chat-msg-reaction-toggle", messageId);
         reactionBtn.setAttribute("data-chat-reaction-value", String(itemReaction.reaction || ""));
         reactionBtn.setAttribute("data-chat-reaction-actor", String(itemReaction.actor || ""));
-        reactionBtn.title = itemReaction.actor === CHAT_REACTION_ACTOR ? "РР·РјРµРЅРёС‚СЊ СЂРµР°РєС†РёСЋ" : "Р РµР°РєС†РёСЏ СЃРѕР±РµСЃРµРґРЅРёРєР°";
+        reactionBtn.title = itemReaction.actor === CHAT_REACTION_ACTOR ? "Изменить реакцию" : "Реакция собеседника";
         reactionBtn.setAttribute("aria-label", String(itemReaction.reaction || ""));
         setEmojiGlyph(reactionBtn, itemReaction.reaction, "chat-emoji-glyph chat-emoji-glyph--pill");
         reactionsWrap.appendChild(reactionBtn);
@@ -7432,8 +7519,53 @@
 
   function initMessageContextMenu() {
     if (!dom.center.messages || !dom.center.contextMenu) return;
+    let touchContextGesture = null;
+    let touchAttachmentTap = null;
+    const CHAT_ATTACHMENT_TAP_MAX_MS = 260;
+    const CHAT_ATTACHMENT_TAP_MOVE_CANCEL_PX = 10;
+
+    function clearTouchContextGesture() {
+      if (!touchContextGesture) return;
+      if (touchContextGesture.longPressTimer) {
+        window.clearTimeout(touchContextGesture.longPressTimer);
+      }
+      touchContextGesture = null;
+    }
+
+    dom.center.messages.addEventListener("touchstart", (event) => {
+      const target = event.target;
+      if (!target || !target.closest || event.touches.length !== 1) {
+        touchAttachmentTap = null;
+        return;
+      }
+      const attachmentWrap = target.closest(".chat-message-attachment");
+      if (!attachmentWrap) {
+        touchAttachmentTap = null;
+        return;
+      }
+      const img = attachmentWrap.querySelector(".chat-message-attachment-image");
+      if (!img) {
+        touchAttachmentTap = null;
+        return;
+      }
+      const touch = event.touches[0];
+      touchAttachmentTap = {
+        startedAt: Date.now(),
+        startX: Number(touch.clientX || 0),
+        startY: Number(touch.clientY || 0),
+        moved: false,
+        src: String(img.getAttribute("src") || ""),
+        alt: String(img.getAttribute("alt") || "Image preview"),
+      };
+    }, { passive: true, capture: true });
 
     dom.center.messages.addEventListener("click", (event) => {
+      if (Date.now() < Number(suppressTouchClickUntil || 0)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
       const replyJump = event.target.closest("[data-chat-scroll-to-message]");
       if (replyJump) {
         const targetId = replyJump.getAttribute("data-chat-scroll-to-message");
@@ -7467,12 +7599,27 @@
 
       const attachmentImage = event.target.closest(".chat-message-attachment-image");
       if (attachmentImage && !state.selectionMode) {
+        if (isAndroidYandexBrowser() || isTouchGeneratedClick(event)) return;
         hideMessageContextMenu();
         openMessageImageViewer(
           attachmentImage.getAttribute("src") || "",
           attachmentImage.getAttribute("alt") || "Image preview",
         );
         return;
+      }
+
+      const attachmentWrap = event.target.closest(".chat-message-attachment");
+      if (attachmentWrap && !state.selectionMode) {
+        if (isAndroidYandexBrowser() || isTouchGeneratedClick(event)) return;
+        const img = attachmentWrap.querySelector(".chat-message-attachment-image");
+        if (img) {
+          hideMessageContextMenu();
+          openMessageImageViewer(
+            img.getAttribute("src") || "",
+            img.getAttribute("alt") || "Image preview",
+          );
+          return;
+        }
       }
 
       if (!state.selectionMode) return;
@@ -7499,6 +7646,12 @@
       showMessageContextMenu(event.clientX, event.clientY, messageId);
     });
 
+    dom.center.messages.addEventListener("contextmenu", (event) => {
+      if (event.target && event.target.closest && event.target.closest(".chat-message")) {
+        event.preventDefault();
+      }
+    }, true);
+
     dom.center.messages.addEventListener("dblclick", (event) => {
       const messageEl = event.target.closest(".chat-message");
       if (!messageEl || !state.activeClientId) return;
@@ -7518,6 +7671,114 @@
       hideMessageContextMenu();
       renderMessages();
     });
+
+    dom.center.messages.addEventListener("selectstart", (event) => {
+      if (event.target.closest && event.target.closest(".chat-message")) {
+        event.preventDefault();
+      }
+    });
+
+    dom.center.messages.addEventListener("touchstart", (event) => {
+      if (event.touches.length !== 1) {
+        clearTouchContextGesture();
+        return;
+      }
+
+      const messageEl = event.target.closest(".chat-message[data-message-id]");
+      if (!messageEl) {
+        clearTouchContextGesture();
+        return;
+      }
+
+      if (event.target.closest(".chat-message-order-cards") || event.target.closest(".chat-message-order-card")) {
+        clearTouchContextGesture();
+        return;
+      }
+
+      const messageId = String(messageEl.getAttribute("data-message-id") || "");
+      if (!messageId || !state.activeClientId) {
+        clearTouchContextGesture();
+        return;
+      }
+
+      const touch = event.touches[0];
+      clearTouchContextGesture();
+      touchContextGesture = {
+        messageId,
+        startX: Number(touch.clientX || 0),
+        startY: Number(touch.clientY || 0),
+        lastX: Number(touch.clientX || 0),
+        lastY: Number(touch.clientY || 0),
+        longPressFired: false,
+        longPressTimer: 0,
+      };
+
+      touchContextGesture.longPressTimer = window.setTimeout(() => {
+        if (!touchContextGesture || touchContextGesture.messageId !== messageId) return;
+        touchContextGesture.longPressFired = true;
+        suppressTouchClickUntil = Math.max(suppressTouchClickUntil, Date.now() + 480);
+        if (state.selectionMode) {
+          toggleMessageSelection(messageId);
+          renderMessages();
+          return;
+        }
+        showMessageContextMenu(touchContextGesture.lastX, touchContextGesture.lastY, messageId);
+      }, CHAT_TOUCH_CONTEXT_LONG_PRESS_MS);
+    }, { passive: false });
+
+    dom.center.messages.addEventListener("touchmove", (event) => {
+      if (touchAttachmentTap && event.touches.length === 1) {
+        const touch = event.touches[0];
+        const dx = Math.abs(Number(touch.clientX || 0) - touchAttachmentTap.startX);
+        const dy = Math.abs(Number(touch.clientY || 0) - touchAttachmentTap.startY);
+        if (dx > CHAT_ATTACHMENT_TAP_MOVE_CANCEL_PX || dy > CHAT_ATTACHMENT_TAP_MOVE_CANCEL_PX) {
+          touchAttachmentTap.moved = true;
+        }
+      }
+      if (!touchContextGesture || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      const x = Number(touch.clientX || 0);
+      const y = Number(touch.clientY || 0);
+      touchContextGesture.lastX = x;
+      touchContextGesture.lastY = y;
+      const dx = Math.abs(x - touchContextGesture.startX);
+      const dy = Math.abs(y - touchContextGesture.startY);
+      if (
+        !touchContextGesture.longPressFired
+        && (dx > CHAT_TOUCH_CONTEXT_MOVE_CANCEL_PX || dy > CHAT_TOUCH_CONTEXT_MOVE_CANCEL_PX)
+      ) {
+        clearTouchContextGesture();
+      }
+    }, { passive: true });
+
+    dom.center.messages.addEventListener("touchend", () => {
+      if (touchAttachmentTap) {
+        const duration = Date.now() - Number(touchAttachmentTap.startedAt || 0);
+        const canOpen =
+          !touchAttachmentTap.moved
+          && duration > 0
+          && duration <= CHAT_ATTACHMENT_TAP_MAX_MS
+          && !state.selectionMode
+          && !!touchAttachmentTap.src;
+        if (canOpen) {
+          hideMessageContextMenu();
+          openMessageImageViewer(touchAttachmentTap.src, touchAttachmentTap.alt);
+          suppressTouchClickUntil = Math.max(suppressTouchClickUntil, Date.now() + 320);
+        }
+        touchAttachmentTap = null;
+      }
+      if (!touchContextGesture) return;
+      const longPressFired = touchContextGesture.longPressFired === true;
+      clearTouchContextGesture();
+      if (longPressFired) {
+        suppressTouchClickUntil = Math.max(suppressTouchClickUntil, Date.now() + 420);
+      }
+    }, { passive: true });
+
+    dom.center.messages.addEventListener("touchcancel", () => {
+      touchAttachmentTap = null;
+      clearTouchContextGesture();
+    }, { passive: true });
 
     dom.center.contextMenu.addEventListener("click", (event) => {
       const actionBtn = event.target.closest("[data-chat-msg-action]");
@@ -7575,6 +7836,14 @@
     });
 
     document.addEventListener("contextmenu", (event) => {
+      if (event.target && event.target.closest && event.target.closest(".chat-message-attachment-image")) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (dom.center.messages && dom.center.messages.contains(event.target)) {
+        event.preventDefault();
+      }
       if (!dom.center.contextMenu) return;
       const insideMenu = dom.center.contextMenu.contains(event.target);
       const insideReactions = dom.center.reactionBar && dom.center.reactionBar.contains(event.target);
@@ -7585,12 +7854,31 @@
       if (!insideClientMenu && !insideClientRow) hideClientContextMenu();
     });
 
+    if (!hardContextMenuBlockBound) {
+      hardContextMenuBlockBound = true;
+      window.addEventListener("contextmenu", (event) => {
+        if (!isAndroidYandexBrowser()) return;
+        if (!dom.center.messages) return;
+        const target = event.target;
+        if (!target || !(target instanceof Element)) return;
+        const inChat = dom.center.messages.contains(target);
+        const inContext = !!(dom.center.contextMenu && dom.center.contextMenu.contains(target));
+        const inReactionBar = !!(dom.center.reactionBar && dom.center.reactionBar.contains(target));
+        if (inChat && !inContext && !inReactionBar) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }, true);
+    }
+
     window.addEventListener("resize", () => {
+      clearTouchContextGesture();
       hideMessageContextMenu();
       hideClientContextMenu();
       if (isMessageImageViewerOpen()) updateMessageImageViewerLayout();
     });
     window.addEventListener("scroll", () => {
+      clearTouchContextGesture();
       hideMessageContextMenu();
       hideClientContextMenu();
     }, true);

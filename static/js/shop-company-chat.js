@@ -127,6 +127,7 @@
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
   const CHAT_THREAD_WAIT_TIMEOUT_MS = 20000;
   const CHAT_THREAD_WAIT_RETRY_MS = 1200;
+  const CHAT_THREAD_SSE_PULL_DEBOUNCE_MS = 100;
   const CHAT_UNREAD_WAIT_TIMEOUT_MS = 25000;
   const CHAT_UNREAD_WAIT_RETRY_MS = 1400;
   const CHAT_SSE_ENABLED = typeof window.EventSource === "function";
@@ -298,6 +299,9 @@
   let sharedThreadWaitLoopToken = 0;
   let sharedThreadWaitAbortController = null;
   let sharedThreadEventSource = null;
+  let sharedThreadSsePullTimer = 0;
+  let sharedThreadSsePullInFlight = false;
+  let sharedThreadSsePullPending = false;
   let sharedMutationQueue = Promise.resolve();
   let sharedMutationPendingCount = 0;
   let sharedThreadMutationVersion = 0;
@@ -328,6 +332,7 @@
   let pendingDeleteConfirm = null;
   let deleteConfirmCloseTimer = 0;
   let suppressTapUntil = 0;
+  let hardContextMenuBlockBound = false;
   let touchGesture = null;
   let orderCardMouseDrag = null;
   let replyDraft = null;
@@ -3278,11 +3283,40 @@
   function stopSharedThreadSseConnection() {
     closeChatEventSource(sharedThreadEventSource);
     sharedThreadEventSource = null;
+    if (sharedThreadSsePullTimer) {
+      clearTimeout(sharedThreadSsePullTimer);
+      sharedThreadSsePullTimer = 0;
+    }
+    sharedThreadSsePullPending = false;
+    sharedThreadSsePullInFlight = false;
   }
 
   function stopUnreadSseConnection() {
     closeChatEventSource(unreadEventSource);
     unreadEventSource = null;
+  }
+
+  function scheduleSharedThreadSsePull(clientId) {
+    const activeClientId = String(clientId || "").trim();
+    if (!activeClientId) return;
+    sharedThreadSsePullPending = true;
+    if (sharedThreadSsePullTimer) return;
+    sharedThreadSsePullTimer = setTimeout(function () {
+      sharedThreadSsePullTimer = 0;
+      if (sharedThreadSsePullInFlight || profileMergeInFlight) return;
+      if (String(getActiveChatClientId() || "") !== activeClientId) return;
+
+      sharedThreadSsePullInFlight = true;
+      sharedThreadSsePullPending = false;
+      pullSharedThreadFromServerIfChanged({ force: false, signalHint: true })
+        .catch(function () {})
+        .finally(function () {
+          sharedThreadSsePullInFlight = false;
+          if (sharedThreadSsePullPending && String(getActiveChatClientId() || "") === activeClientId) {
+            scheduleSharedThreadSsePull(activeClientId);
+          }
+        });
+    }, CHAT_THREAD_SSE_PULL_DEBOUNCE_MS);
   }
 
   function startSharedThreadSseConnection() {
@@ -3330,7 +3364,7 @@
       const shouldPullThread = messageChanged
         || (payload.changed === true && payload.typing_changed !== true);
       if (shouldPullThread) {
-        pullSharedThreadFromServerIfChanged({ force: true }).catch(function () {});
+        scheduleSharedThreadSsePull(activeClientId);
       }
     });
 
@@ -4014,7 +4048,10 @@
     const opts = options || {};
     if (profileMergeInFlight) return false;
     if (opts.force === true) {
-      return pullSharedThreadFromServer(opts);
+      return pullSharedThreadFromServer({
+        ...opts,
+        preserveHistory: opts.signalHint === true ? false : opts.preserveHistory,
+      });
     }
 
     try {
@@ -4022,10 +4059,11 @@
       if (!meta || meta.clientId !== getActiveChatClientId()) return false;
       const remoteUpdatedAt = String(meta && meta.updatedAt || "");
       const knownUpdatedAt = String(sharedThreadUpdatedAt || "");
-      if (remoteUpdatedAt && knownUpdatedAt && remoteUpdatedAt === knownUpdatedAt) {
+      const preferSignalDiff = opts.signalHint === true;
+      if (!preferSignalDiff && remoteUpdatedAt && knownUpdatedAt && remoteUpdatedAt === knownUpdatedAt) {
         return false;
       }
-      if (!remoteUpdatedAt && !knownUpdatedAt) {
+      if (!preferSignalDiff && !remoteUpdatedAt && !knownUpdatedAt) {
         return false;
       }
 
@@ -4037,14 +4075,24 @@
             if (diff.clientId !== getActiveChatClientId()) return false;
             const localChangedDuringRequest = sharedThreadMutationVersion !== mutationVersionBefore;
             const applied = applySharedThreadDiff(diff, { ...opts, localChangedDuringRequest });
-            if (applied !== null) return applied;
+            if (applied !== null) {
+              // For SSE-triggered updates prefer correctness: if diff says "no changes",
+              // force full pull because deletions may be represented only by count shrink.
+              if (!(applied === false && opts.signalHint === true)) return applied;
+            }
           }
         } catch {}
       }
 
-      return pullSharedThreadFromServer(opts);
+      return pullSharedThreadFromServer({
+        ...opts,
+        preserveHistory: opts.signalHint === true ? false : opts.preserveHistory,
+      });
     } catch {
-      return pullSharedThreadFromServer(opts);
+      return pullSharedThreadFromServer({
+        ...opts,
+        preserveHistory: opts.signalHint === true ? false : opts.preserveHistory,
+      });
     }
   }
 
@@ -5582,6 +5630,14 @@
     return true;
   }
 
+  function syncMessageHiddenForActor(messageId) {
+    const id = String(messageId || "").trim();
+    if (!id) return;
+    enqueueSharedMutation(function () {
+      return remotePatchSharedMessage(id, { hidden: true });
+    });
+  }
+
   function ensureContextMenu() {
     let menu = contextMenuEl && contextMenuEl.isConnected ? contextMenuEl : null;
 
@@ -5695,7 +5751,9 @@
             if (deleteForPeer) {
               if (removeMessageById(messageId)) return;
             }
-            hideMessageLocallyById(messageId);
+            if (hideMessageLocallyById(messageId)) {
+              syncMessageHiddenForActor(messageId);
+            }
           },
         });
       }
@@ -5849,7 +5907,9 @@
 
         selectedIds.forEach(function (messageId) {
           if (removedOwnIds.has(messageId)) return;
-          hideMessageLocallyById(messageId);
+          if (hideMessageLocallyById(messageId)) {
+            syncMessageHiddenForActor(messageId);
+          }
         });
 
         if (selectedMessageIds.size > 0) {
@@ -6591,6 +6651,7 @@
       img.className = "shop-company-chat-attachment-image";
       img.src = getAttachmentImageSrc(imageAttachment);
       img.alt = String(imageAttachment.name || "\u0424\u043e\u0442\u043e");
+      img.draggable = false;
       img.loading = "lazy";
       img.decoding = "async";
       attachmentWrap.appendChild(img);
@@ -6649,10 +6710,11 @@
       const reactionsWrap = document.createElement("div");
       reactionsWrap.className = "shop-company-chat-reactions";
 
-      reactionItems.forEach(function (itemReaction) {
+      reactionItems.forEach(function (itemReaction, reactionIndex) {
         const reaction = document.createElement("button");
         reaction.type = "button";
         reaction.className = "shop-company-chat-reaction-pill";
+        reaction.style.zIndex = String(10 + Number(reactionIndex || 0));
         reaction.dataset.messageId = String(entry.id || "");
         reaction.dataset.reactionActor = String(itemReaction.actor || "");
         reaction.title = itemReaction.actor === CHAT_REACTION_ACTOR ? "\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c \u0440\u0435\u0430\u043a\u0446\u0438\u044e" : "\u0420\u0435\u0430\u043a\u0446\u0438\u044f \u0441\u043e\u0431\u0435\u0441\u0435\u0434\u043d\u0438\u043a\u0430";
@@ -9399,6 +9461,24 @@
     touchGesture = null;
   }
 
+  function isAndroidYandexBrowser() {
+    const ua = String((navigator && navigator.userAgent) || "");
+    if (!ua) return false;
+    return /Android/i.test(ua) && /YaBrowser/i.test(ua);
+  }
+
+  let touchAttachmentTap = null;
+  const CHAT_ATTACHMENT_TAP_MAX_MS = 260;
+  const CHAT_ATTACHMENT_TAP_MOVE_CANCEL_PX = 10;
+
+  function isTouchGeneratedClick(event) {
+    if (!event) return false;
+    if (typeof event.pointerType === "string" && event.pointerType.toLowerCase() === "touch") return true;
+    const sourceCapabilities = event.sourceCapabilities;
+    if (sourceCapabilities && sourceCapabilities.firesTouchEvents) return true;
+    return false;
+  }
+
   function clearOrderCardMouseDrag(options) {
     const state = orderCardMouseDrag;
     if (!state) return;
@@ -9559,6 +9639,7 @@
 
     const attachmentImage = event.target.closest(".shop-company-chat-attachment-image");
     if (attachmentImage) {
+      if (isAndroidYandexBrowser() || isTouchGeneratedClick(event)) return;
       hideContextMenu();
       hideReactionBar();
       hideEmojiPopover();
@@ -9599,6 +9680,39 @@
     suppressTapUntil = Date.now() + 260;
     showMessageContextMenu(event.clientX, event.clientY, messageId);
   });
+
+  thread.addEventListener("touchstart", function (event) {
+    const target = event.target;
+    if (!target || !target.closest || event.touches.length !== 1) {
+      touchAttachmentTap = null;
+      return;
+    }
+    const attachmentWrap = target.closest(".shop-company-chat-attachment");
+    if (!attachmentWrap) {
+      touchAttachmentTap = null;
+      return;
+    }
+    const img = attachmentWrap.querySelector(".shop-company-chat-attachment-image");
+    if (!img) {
+      touchAttachmentTap = null;
+      return;
+    }
+    const touch = event.touches[0];
+    touchAttachmentTap = {
+      startedAt: Date.now(),
+      startX: Number(touch.clientX || 0),
+      startY: Number(touch.clientY || 0),
+      moved: false,
+      src: String(img.getAttribute("src") || ""),
+      alt: String(img.getAttribute("alt") || "Image preview"),
+    };
+  }, { passive: true, capture: true });
+
+  thread.addEventListener("contextmenu", function (event) {
+    if (event.target && event.target.closest && event.target.closest(".shop-company-chat-bubble")) {
+      event.preventDefault();
+    }
+  }, true);
 
   thread.addEventListener("dblclick", function (event) {
     const messageBubble = event.target.closest(".shop-company-chat-bubble[data-message-id]");
@@ -9670,9 +9784,17 @@
       suppressTapUntil = Date.now() + 640;
       showMessageContextMenu(touchGesture.lastX, touchGesture.lastY, messageId);
     }, LONG_PRESS_MS);
-  }, { passive: true });
+  }, { passive: false });
 
   thread.addEventListener("touchmove", function (event) {
+    if (touchAttachmentTap && event.touches.length === 1) {
+      const touch = event.touches[0];
+      const dx = Math.abs(Number(touch.clientX || 0) - touchAttachmentTap.startX);
+      const dy = Math.abs(Number(touch.clientY || 0) - touchAttachmentTap.startY);
+      if (dx > CHAT_ATTACHMENT_TAP_MOVE_CANCEL_PX || dy > CHAT_ATTACHMENT_TAP_MOVE_CANCEL_PX) {
+        touchAttachmentTap.moved = true;
+      }
+    }
     if (!touchGesture || event.touches.length !== 1) return;
 
     const touch = event.touches[0];
@@ -9717,6 +9839,23 @@
   }, { passive: false });
 
   thread.addEventListener("touchend", function () {
+    if (touchAttachmentTap) {
+      const duration = Date.now() - Number(touchAttachmentTap.startedAt || 0);
+      const canOpen =
+        !touchAttachmentTap.moved
+        && duration > 0
+        && duration <= CHAT_ATTACHMENT_TAP_MAX_MS
+        && selectedMessageIds.size === 0
+        && !!touchAttachmentTap.src;
+      if (canOpen) {
+        hideContextMenu();
+        hideReactionBar();
+        hideEmojiPopover();
+        openMessageImageViewer(touchAttachmentTap.src, touchAttachmentTap.alt);
+        suppressTapUntil = Math.max(suppressTapUntil, Date.now() + 320);
+      }
+      touchAttachmentTap = null;
+    }
     if (!touchGesture) return;
 
     if (touchGesture.longPressTimer) {
@@ -9741,6 +9880,7 @@
   }, { passive: true });
 
   thread.addEventListener("touchcancel", function () {
+    touchAttachmentTap = null;
     clearTouchGesture();
   }, { passive: true });
 
@@ -9924,6 +10064,14 @@
   });
 
   document.addEventListener("contextmenu", function (event) {
+    if (event.target && event.target.closest && event.target.closest(".shop-company-chat-attachment-image")) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (thread && thread.contains(event.target)) {
+      event.preventDefault();
+    }
     if (!contextMenuEl || contextMenuEl.classList.contains("hidden")) return;
     const insideMenu = contextMenuEl.contains(event.target);
     const insideBar = reactionBar.contains(event.target);
@@ -9933,6 +10081,23 @@
       hideReactionBar();
     }
   });
+
+  if (!hardContextMenuBlockBound) {
+    hardContextMenuBlockBound = true;
+    window.addEventListener("contextmenu", function (event) {
+      if (!isAndroidYandexBrowser()) return;
+      if (!thread) return;
+      const target = event.target;
+      if (!target || !(target instanceof Element)) return;
+      const inThread = thread.contains(target);
+      const inContext = !!(contextMenuEl && contextMenuEl.contains(target));
+      const inReactionBar = !!(reactionBar && reactionBar.contains(target));
+      if (inThread && !inContext && !inReactionBar) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }, true);
+  }
 
   document.addEventListener("keydown", function (event) {
     if (event.key !== "Escape") return;

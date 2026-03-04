@@ -106,8 +106,10 @@ const guestThreadCleanupState = new Map();
 const tenantPushCompanyTitleCache = new Map();
 const tenantChatWidgetState = new Map();
 let ensurePushSubscriptionsTablePromise = null;
+let ensureHiddenMessagesTablePromise = null;
 const CHAT_PUSH_UNIQUE_INDEX_LEGACY = "ux_chat_push_subscriptions_tenant_endpoint";
 const CHAT_PUSH_UNIQUE_INDEX_V2 = "ux_chat_push_subscriptions_tenant_actor_client_endpoint";
+const CHAT_HIDDEN_UNIQUE_INDEX = "ux_chat_message_hidden_tenant_client_message_actor";
 const CHAT_SSE_HEARTBEAT_MS = 20000;
 const CHAT_WIDGET_STATE_TTL_MS = parsePositiveInt(
   process.env.CHAT_WIDGET_STATE_TTL_MS,
@@ -166,6 +168,29 @@ function ensurePushSubscriptionsTable() {
       throw err;
     });
   return ensurePushSubscriptionsTablePromise;
+}
+
+function ensureHiddenMessagesTable() {
+  if (ensureHiddenMessagesTablePromise) return ensureHiddenMessagesTablePromise;
+  ensureHiddenMessagesTablePromise = db.query(`
+    CREATE TABLE IF NOT EXISTS chat_message_hidden (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      tenant_id BIGINT UNSIGNED NOT NULL,
+      client_id BIGINT UNSIGNED NOT NULL,
+      message_id VARCHAR(120) NOT NULL,
+      actor ENUM('in','out') NOT NULL,
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      PRIMARY KEY (id),
+      UNIQUE KEY ${CHAT_HIDDEN_UNIQUE_INDEX} (tenant_id, client_id, message_id, actor),
+      KEY idx_chat_message_hidden_lookup (tenant_id, client_id, actor, message_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `)
+    .then(() => true)
+    .catch((err) => {
+      ensureHiddenMessagesTablePromise = null;
+      throw err;
+    });
+  return ensureHiddenMessagesTablePromise;
 }
 
 function hashPushEndpoint(endpoint) {
@@ -2052,6 +2077,7 @@ async function readThreadMeta(tenantId, clientId, conn = db) {
 }
 
 async function readThreadMessages(tenantId, clientId, conn = db) {
+  await ensureHiddenMessagesTable();
   const [rows] = await conn.query(
     `SELECT message_id, direction, text, created_at, edited_at, is_read, is_pinned,
             reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json,
@@ -2067,9 +2093,10 @@ async function readThreadMessages(tenantId, clientId, conn = db) {
 async function readThreadMessagesPage(
   tenantId,
   clientId,
-  { limit = CHAT_THREAD_PAGE_DEFAULT_LIMIT, beforeId = null } = {},
+  { limit = CHAT_THREAD_PAGE_DEFAULT_LIMIT, beforeId = null, actorKey = "" } = {},
   conn = db
 ) {
+  await ensureHiddenMessagesTable();
   const safeLimit = parsePositiveInt(
     limit,
     CHAT_THREAD_PAGE_DEFAULT_LIMIT,
@@ -2079,18 +2106,27 @@ async function readThreadMessagesPage(
   const safeBeforeId = Number.isFinite(Number(beforeId)) && Number(beforeId) > 0
     ? Math.trunc(Number(beforeId))
     : 0;
+  const safeActor = actorKey === "in" ? "in" : "out";
 
   const whereBefore = safeBeforeId > 0 ? " AND id < ?" : "";
+  const whereHidden = ` AND NOT EXISTS (
+    SELECT 1
+      FROM chat_message_hidden h
+     WHERE h.tenant_id = chat_messages.tenant_id
+       AND h.client_id = chat_messages.client_id
+       AND h.message_id = chat_messages.message_id
+       AND h.actor = ?
+  )`;
   const params = safeBeforeId > 0
-    ? [tenantId, clientId, safeBeforeId, safeLimit + 1]
-    : [tenantId, clientId, safeLimit + 1];
+    ? [tenantId, clientId, safeActor, safeBeforeId, safeLimit + 1]
+    : [tenantId, clientId, safeActor, safeLimit + 1];
 
   const [rawRows] = await conn.query(
     `SELECT id AS row_id, message_id, direction, text, created_at, edited_at, is_read, is_pinned,
             reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json,
             delivery_status, delivered_at, read_at
        FROM chat_messages
-      WHERE tenant_id = ? AND client_id = ?${whereBefore}
+      WHERE tenant_id = ? AND client_id = ?${whereHidden}${whereBefore}
       ORDER BY id DESC
       LIMIT ?`,
     params
@@ -2112,11 +2148,13 @@ async function readThreadMessagesPage(
   };
 }
 
-async function readThreadMessagesSince(tenantId, clientId, sinceDate, conn = db) {
+async function readThreadMessagesSince(tenantId, clientId, sinceDate, actorKey = "", conn = db) {
+  await ensureHiddenMessagesTable();
   const since = sinceDate instanceof Date && !Number.isNaN(sinceDate.getTime())
     ? new Date(Math.max(0, sinceDate.getTime() - 1500))
     : null;
   if (!since) return [];
+  const safeActor = actorKey === "in" ? "in" : "out";
 
   const [rows] = await conn.query(
     `SELECT message_id, direction, text, created_at, edited_at, is_read, is_pinned,
@@ -2124,18 +2162,36 @@ async function readThreadMessagesSince(tenantId, clientId, sinceDate, conn = db)
             delivery_status, delivered_at, read_at
        FROM chat_messages
       WHERE tenant_id = ? AND client_id = ? AND updated_row_at > ?
+        AND NOT EXISTS (
+          SELECT 1
+            FROM chat_message_hidden h
+           WHERE h.tenant_id = chat_messages.tenant_id
+             AND h.client_id = chat_messages.client_id
+             AND h.message_id = chat_messages.message_id
+             AND h.actor = ?
+        )
       ORDER BY created_at ASC, id ASC`,
-    [tenantId, clientId, since]
+    [tenantId, clientId, since, safeActor]
   );
   return rows || [];
 }
 
-async function readThreadMessageCount(tenantId, clientId, conn = db) {
+async function readThreadMessageCount(tenantId, clientId, actorKey = "", conn = db) {
+  await ensureHiddenMessagesTable();
+  const safeActor = actorKey === "in" ? "in" : "out";
   const [rows] = await conn.query(
     `SELECT COUNT(*) AS total
        FROM chat_messages
-      WHERE tenant_id = ? AND client_id = ?`,
-    [tenantId, clientId]
+      WHERE tenant_id = ? AND client_id = ?
+        AND NOT EXISTS (
+          SELECT 1
+            FROM chat_message_hidden h
+           WHERE h.tenant_id = chat_messages.tenant_id
+             AND h.client_id = chat_messages.client_id
+             AND h.message_id = chat_messages.message_id
+             AND h.actor = ?
+        )`,
+    [tenantId, clientId, safeActor]
   );
   return Number(rows?.[0]?.total || 0);
 }
@@ -2268,6 +2324,25 @@ async function upsertSingleThreadMessage(conn, tenantId, clientId, msg) {
   );
 
   return row;
+}
+
+async function setMessageHiddenForActor(conn, tenantId, clientId, messageId, actorKey, hidden) {
+  await ensureHiddenMessagesTable();
+  const actor = actorKey === "in" ? "in" : "out";
+  if (hidden === true) {
+    await conn.query(
+      `INSERT INTO chat_message_hidden (tenant_id, client_id, message_id, actor)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE actor = VALUES(actor)`,
+      [tenantId, clientId, String(messageId || ""), actor]
+    );
+    return;
+  }
+  await conn.query(
+    `DELETE FROM chat_message_hidden
+      WHERE tenant_id = ? AND client_id = ? AND message_id = ? AND actor = ?`,
+    [tenantId, clientId, String(messageId || ""), actor]
+  );
 }
 
 async function readSingleMessageRow(tenantId, clientId, messageId, conn = db) {
@@ -3081,8 +3156,10 @@ function makeChatTempRouter() {
       }
 
       const existingMessage = mapDbMessageRowToApi(existingRow);
+      const hiddenPatchRequested = Object.prototype.hasOwnProperty.call(patch, "hidden");
+      const hiddenPatchValue = patch.hidden === true;
       const nextMessage = applyMessagePatch(existingMessage, patch, actorKey);
-      if (!nextMessage) {
+      if (!nextMessage && !hiddenPatchRequested) {
         await conn.rollback();
         conn.release();
         conn = null;
@@ -3094,7 +3171,19 @@ function makeChatTempRouter() {
         meta: sanitizeMeta(req.body?.meta || {}),
         updatedAt,
       });
-      await upsertSingleThreadMessage(conn, tenantId, clientId, nextMessage);
+      if (nextMessage) {
+        await upsertSingleThreadMessage(conn, tenantId, clientId, nextMessage);
+      }
+      if (hiddenPatchRequested) {
+        await setMessageHiddenForActor(
+          conn,
+          tenantId,
+          clientId,
+          messageId,
+          actorKey,
+          hiddenPatchValue
+        );
+      }
       await touchThreadUpdatedAt(conn, tenantId, clientId, updatedAt);
 
       const row = await readSingleMessageRow(tenantId, clientId, messageId, conn);
@@ -3109,7 +3198,7 @@ function makeChatTempRouter() {
         data: {
           client_id: Number(clientId),
           updated_at: updatedAt.toISOString(),
-          message: row ? mapDbMessageRowToApi(row) : nextMessage,
+          message: row ? mapDbMessageRowToApi(row) : (nextMessage || existingMessage),
         },
       });
     } catch (err) {
@@ -3335,6 +3424,7 @@ function makeChatTempRouter() {
     try {
       const tenantId = getTenantId(req);
       const clientId = normalizeClientId(req.params.clientId);
+      const actorKey = getRequestReactionActor(req);
       if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
 
       const sinceRaw = String(req.query.since || "").trim();
@@ -3342,9 +3432,10 @@ function makeChatTempRouter() {
       const since = new Date(sinceRaw);
       if (Number.isNaN(since.getTime())) return res.status(400).json({ ok: false, error: "SINCE_INVALID" });
 
-      const [metaRow, changedRows] = await Promise.all([
+      const [metaRow, changedRows, totalCount] = await Promise.all([
         readThreadMeta(tenantId, clientId),
-        readThreadMessagesSince(tenantId, clientId, since),
+        readThreadMessagesSince(tenantId, clientId, since, actorKey),
+        readThreadMessageCount(tenantId, clientId, actorKey),
       ]);
 
       return res.json({
@@ -3352,7 +3443,7 @@ function makeChatTempRouter() {
         data: {
           client_id: Number(clientId),
           updated_at: toIsoOrEmpty(metaRow?.updated_at),
-          message_count: -1,
+          message_count: Number(totalCount || 0),
           messages: sanitizeThread(changedRows.map(mapDbMessageRowToApi)),
         },
       });
@@ -3366,6 +3457,7 @@ function makeChatTempRouter() {
     try {
       const tenantId = getTenantId(req);
       const clientId = normalizeClientId(req.params.clientId);
+      const actorKey = getRequestReactionActor(req);
       if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
 
       const pageLimit = parsePositiveInt(
@@ -3383,6 +3475,7 @@ function makeChatTempRouter() {
         readThreadMessagesPage(tenantId, clientId, {
           limit: pageLimit,
           beforeId: pageBeforeId,
+          actorKey,
         }),
       ]);
 
