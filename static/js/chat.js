@@ -19,7 +19,9 @@
   const THREAD_SYNC_LOOP_MIN_INTERVAL_MS = 350;
   const THREAD_SSE_PULL_DEBOUNCE_MS = 100;
   const CHAT_SSE_ENABLED = typeof window.EventSource === "function";
-  const ACTIVE_ORDERS_POLL_MS = 4200;
+  const ACTIVE_ORDERS_POLL_MS = 12000;
+  const ACTIVE_CLIENT_CACHE_TTL_MS = 30000;
+  const ACTIVE_ORDERS_LAZY_FETCH_DELAY_MS = 900;
   const CHAT_AUTOSCROLL_MS = 170;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
   const CHAT_TYPING_HEARTBEAT_MS = 1800;
@@ -28,8 +30,11 @@
   const CHAT_MESSAGE_ALERT_COOLDOWN_MS = 900;
   const CHAT_PUSH_SYNC_DEBOUNCE_MS = 180;
   const CHAT_PUSH_SUBSCRIPTION_CLIENT_ID = 0;
-  const CHAT_CLIENTS_PAGE_SIZE = 50;
+  const CHAT_CLIENTS_PAGE_SIZE = 20;
   const CHAT_CLIENTS_LOAD_MORE_THRESHOLD_PX = 140;
+  const CHAT_CLIENTS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+  const CHAT_CLIENTS_CACHE_MAX_ROWS = 600;
+  const CHAT_FOREGROUND_SYNC_DEBOUNCE_MS = 4000;
   const CHAT_THREAD_PAGE_SIZE = 60;
   const CHAT_THREAD_EAGER_IMAGE_COUNT = 4;
   const CHAT_THREAD_LOAD_MORE_THRESHOLD_PX = 20;
@@ -226,6 +231,8 @@
     selectedMessageIds: new Set(),
     store: loadStore(),
     orderDetailsCache: new Map(),
+    clientProfileCache: new Map(),
+    clientOrdersCache: new Map(),
     remoteThreadUpdatedAt: {},
     remoteSaveTimers: {},
     remoteSaveInFlight: {},
@@ -244,6 +251,9 @@
     summariesSyncPendingForceThreads: false,
     activeOrdersPollTimer: 0,
     activeOrdersPollInFlight: false,
+    activeOrdersLazyFetchTimer: 0,
+    foregroundSyncInFlight: false,
+    foregroundSyncLastAt: 0,
     messagesScrollRaf: 0,
     pendingScrollNewByClient: {},
     pendingScrollMessageIdsByClient: {},
@@ -732,7 +742,12 @@
     if (runtimeState.changed || options.reload === true) {
       state.summariesUpdatedAt = "";
       state.summariesRevision = 0;
-      setChatBootstrapLoading(true);
+      const cachedClientsCount = Array.isArray(state.store?.clientsCache) ? state.store.clientsCache.length : 0;
+      const localThreadsCount = state.store && state.store.threads && typeof state.store.threads === "object"
+        ? Object.keys(state.store.threads).length
+        : 0;
+      const hasInstantBootstrapData = cachedClientsCount > 0 || localThreadsCount > 0;
+      setChatBootstrapLoading(!hasInstantBootstrapData);
       loadClients()
         .catch(console.error)
         .finally(() => {
@@ -930,7 +945,9 @@
 
   function buildMessageFastFingerprint(message) {
     const msg = message && typeof message === "object" ? message : {};
-    const reactionsCount = Array.isArray(msg.reactions) ? msg.reactions.length : 0;
+    const reactions = ensureMessageReactions(msg);
+    const reactionIn = String(reactions.in || "");
+    const reactionOut = String(reactions.out || "");
     return [
       String(msg.id || ""),
       String(msg.updated_at || ""),
@@ -944,7 +961,8 @@
       String(msg.file_url || ""),
       String(msg.reply_to_id || ""),
       String(msg.hidden || ""),
-      String(reactionsCount),
+      reactionIn,
+      reactionOut,
     ].join("|");
   }
 
@@ -2520,7 +2538,7 @@
       })().catch(console.error);
     }
 
-    if (!state.summariesPollTimer) {
+    if (!CHAT_SSE_ENABLED && !state.summariesPollTimer) {
       state.summariesPollTimer = window.setInterval(async () => {
         try {
           await syncRemoteSummariesSnapshot();
@@ -2591,6 +2609,8 @@
         threads: {},
         hiddenMessageIds: {},
         lastOpenClientId: null,
+        clientsCache: [],
+        clientsCacheUpdatedAt: 0,
         ui: {
           clientsListScrollTop: 0,
           threadScrollTopByClient: {},
@@ -2613,6 +2633,10 @@
         threads: parsed && typeof parsed.threads === "object" ? parsed.threads : {},
         hiddenMessageIds: parsed && typeof parsed.hiddenMessageIds === "object" ? parsed.hiddenMessageIds : {},
         lastOpenClientId: Number(parsed?.lastOpenClientId || 0) || null,
+        clientsCache: Array.isArray(parsed?.clientsCache) ? parsed.clientsCache : [],
+        clientsCacheUpdatedAt: Number.isFinite(Number(parsed?.clientsCacheUpdatedAt))
+          ? Math.max(0, Math.trunc(Number(parsed.clientsCacheUpdatedAt)))
+          : 0,
         ui: {
           clientsListScrollTop: toStoredScrollTop(parsedUi?.clientsListScrollTop),
           threadScrollTopByClient: sanitizeStoredThreadScrollTopByClient(resolvedThreadScrollMap),
@@ -2642,6 +2666,8 @@
         threads: {},
         hiddenMessageIds: {},
         lastOpenClientId: null,
+        clientsCache: [],
+        clientsCacheUpdatedAt: 0,
         ui: {
           clientsListScrollTop: 0,
           threadScrollTopByClient: {},
@@ -4500,7 +4526,7 @@
     if (!isChatWidgetEnabledRuntime()) return false;
     const clientId = Number(options.clientId || state.activeClientId || 0);
     if (!Number.isFinite(clientId) || clientId <= 0) return false;
-    if (state.activeOrdersPollInFlight && !options.force) return false;
+    if (state.activeOrdersPollInFlight) return false;
 
     state.activeOrdersPollInFlight = true;
     try {
@@ -4525,6 +4551,8 @@
     if (!isChatWidgetEnabledRuntime()) return;
     if (state.activeOrdersPollTimer) return;
     state.activeOrdersPollTimer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      if (!state.activeClientId) return;
       refreshActiveOrdersForActiveClient().catch(console.error);
     }, ACTIVE_ORDERS_POLL_MS);
   }
@@ -4571,6 +4599,12 @@
       if (document.visibilityState !== "visible") return;
       refreshActiveOrdersForActiveClient({ force: true, forceHydrate: true }).catch(console.error);
     });
+  }
+
+  function clearActiveOrdersLazyFetchTimer() {
+    if (!state.activeOrdersLazyFetchTimer) return;
+    window.clearTimeout(state.activeOrdersLazyFetchTimer);
+    state.activeOrdersLazyFetchTimer = 0;
   }
 
   function hexToRgba(hex, alpha) {
@@ -5594,6 +5628,51 @@
       saveStore();
     }
     return changed;
+  }
+
+  function getCachedActiveClientProfile(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return null;
+    const cached = state.clientProfileCache.get(key);
+    if (!cached || typeof cached !== "object") return null;
+    const expiresAt = Number(cached.expiresAt || 0);
+    if (Date.now() > expiresAt) {
+      state.clientProfileCache.delete(key);
+      return null;
+    }
+    return cached.value && typeof cached.value === "object" ? { ...cached.value } : null;
+  }
+
+  function getCachedActiveClientOrders(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return null;
+    const cached = state.clientOrdersCache.get(key);
+    if (!cached || typeof cached !== "object") return null;
+    const expiresAt = Number(cached.expiresAt || 0);
+    if (Date.now() > expiresAt) {
+      state.clientOrdersCache.delete(key);
+      return null;
+    }
+    return Array.isArray(cached.value) ? cached.value.map((row) => ({ ...row })) : null;
+  }
+
+  function setCachedActiveClientProfile(clientId, value) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key || !value || typeof value !== "object") return;
+    state.clientProfileCache.set(key, {
+      value: { ...value },
+      expiresAt: Date.now() + ACTIVE_CLIENT_CACHE_TTL_MS,
+    });
+  }
+
+  function setCachedActiveClientOrders(clientId, rows) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return;
+    const safeRows = Array.isArray(rows) ? rows.map((row) => ({ ...row })) : [];
+    state.clientOrdersCache.set(key, {
+      value: safeRows,
+      expiresAt: Date.now() + ACTIVE_CLIENT_CACHE_TTL_MS,
+    });
   }
 
   function syncHiddenMessagesForActor(clientId, messageIds) {
@@ -8004,6 +8083,7 @@
     const requestId = ++state.requestToken;
     const isGuestClient = options && options.isGuest === true;
     const shouldRenderThread = options && options.renderThread !== false;
+    const preferCache = options && options.preferCache === true;
     if (isGuestClient) {
       state.activeClient = buildGuestActiveClientProfile(clientId, selectedFromList);
       setActiveOrders([], { forceRender: true });
@@ -8015,14 +8095,27 @@
       return;
     }
 
+    if (preferCache) {
+      const cachedProfile = getCachedActiveClientProfile(clientId);
+      const cachedOrders = getCachedActiveClientOrders(clientId);
+      if (cachedProfile) {
+        state.activeClient = cachedProfile;
+        syncClientIdentityIntoList(clientId, cachedProfile);
+      }
+      if (cachedOrders) {
+        setActiveOrders(cachedOrders, { forceRender: true });
+        hydrateHeaderOrderDetails(requestId, clientId).catch(console.error);
+      }
+    }
+
     try {
-      const [clientJson, ordersJson] = await Promise.all([
-        apiJson(`/api/admin/clients/${clientId}`),
-        apiJson(`/api/admin/clients/${clientId}/orders`),
-      ]);
+      const clientJson = await apiJson(`/api/admin/clients/${clientId}`);
       if (requestId !== state.requestToken) return;
 
       state.activeClient = clientJson?.data || selectedFromList;
+      if (state.activeClient && typeof state.activeClient === "object") {
+        setCachedActiveClientProfile(clientId, state.activeClient);
+      }
       const syncedIdentity = syncClientIdentityIntoList(clientId, state.activeClient);
       if (syncedIdentity.changed) {
         applyClientFilter();
@@ -8044,7 +8137,27 @@
           phone: syncedIdentity.nextPhone,
         }).catch(console.error);
       }
-      setActiveOrders(Array.isArray(ordersJson?.data) ? ordersJson.data : [], { forceRender: true });
+      const scheduleOrdersRefresh = () => {
+        clearActiveOrdersLazyFetchTimer();
+        state.activeOrdersLazyFetchTimer = window.setTimeout(async () => {
+          state.activeOrdersLazyFetchTimer = 0;
+          const latestRequestToken = state.requestToken;
+          if (latestRequestToken !== requestId) return;
+          if (Number(state.activeClientId || 0) !== Number(clientId)) return;
+          try {
+            const ordersJson = await apiJson(`/api/admin/clients/${clientId}/orders`);
+            if (state.requestToken !== requestId) return;
+            if (Number(state.activeClientId || 0) !== Number(clientId)) return;
+            const freshOrders = Array.isArray(ordersJson?.data) ? ordersJson.data : [];
+            setCachedActiveClientOrders(clientId, freshOrders);
+            setActiveOrders(freshOrders, { forceRender: true });
+            hydrateHeaderOrderDetails(requestId, clientId).catch(console.error);
+          } catch (err) {
+            if (!isAbortError(err)) console.error(err);
+          }
+        }, ACTIVE_ORDERS_LAZY_FETCH_DELAY_MS);
+      };
+      scheduleOrdersRefresh();
       if (shouldRenderThread) {
         renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
         restoreThreadScrollPosition(state.activeClientId);
@@ -8068,6 +8181,7 @@
     const id = Number(clientId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
     suppressMessageAlertUntil = Date.now() + 3000;
+    clearActiveOrdersLazyFetchTimer();
     const previousActiveClientId = state.activeClientId;
     stopLocalTypingSession(previousActiveClientId, { flush: true });
     saveThreadScrollPosition(previousActiveClientId);
@@ -8091,7 +8205,6 @@
     state.store.lastOpenClientId = id;
     saveStore();
 
-    await pullThreadFromRemote(id, { skipReadMark: true, ignoreIncomingBadge: true }).catch(console.error);
     ensureActiveThreadSseConnection();
     syncActiveThreadReadState({ clientId: id });
     applyClientFilter();
@@ -8106,6 +8219,7 @@
       saveThreadScrollPosition(id);
     }
     restorePersistedAttachPreviewDraft(id).catch(console.error);
+    pullThreadFromRemote(id, { skipReadMark: true, ignoreIncomingBadge: true }).catch(console.error);
 
     const selectedFromList = state.clients.find((c) => Number(c.id) === id) || null;
     const isGuestClient = isGuestChatClient(selectedFromList);
@@ -8130,7 +8244,11 @@
       : selectedFromList;
     setActiveOrders([], { forceRender: true });
 
-    await loadActiveClientData(id, selectedFromList, { isGuest: isGuestClient, renderThread: false });
+    loadActiveClientData(id, selectedFromList, {
+      isGuest: isGuestClient,
+      renderThread: false,
+      preferCache: true,
+    }).catch(console.error);
   }
 
   function mergeClientsIntoState(rows, { reset = false } = {}) {
@@ -8164,6 +8282,72 @@
     return filtered.length ? filtered : list;
   }
 
+  function buildLocalClientsFromStoredThreads() {
+    const threads = state.store && typeof state.store.threads === "object" ? state.store.threads : {};
+    return Object.keys(threads)
+      .map((key) => normalizeClientIdKey(key))
+      .filter(Boolean)
+      .map((key) => {
+        const thread = Array.isArray(threads[key]) ? threads[key] : [];
+        const lastMessage = thread.length ? thread[thread.length - 1] : null;
+        const lastAt = String(
+          lastMessage?.createdAt
+          || lastMessage?.created_at
+          || lastMessage?.updatedAt
+          || lastMessage?.updated_at
+          || ""
+        );
+        return {
+          id: Number(key),
+          name: `Клиент #${key}`,
+          phone: "",
+          total_orders: 0,
+          created_at: lastAt || "",
+          updated_at: lastAt || "",
+          last_order_date: lastAt || "",
+          _isVirtualChatClient: true,
+        };
+      })
+      .sort((a, b) => compareIsoDates(String(b.last_order_date || ""), String(a.last_order_date || "")));
+  }
+
+  function sanitizeCachedClientRows(rows) {
+    const source = Array.isArray(rows) ? rows : [];
+    const out = [];
+    const seen = new Set();
+    source.forEach((row) => {
+      const key = normalizeClientIdKey(row?.id);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      out.push({
+        id: Number(key),
+        name: String(row?.name || `Клиент #${key}`),
+        phone: String(row?.phone || ""),
+        total_orders: Number(row?.total_orders || 0),
+        total_spent: Number(row?.total_spent || 0),
+        last_order_date: String(row?.last_order_date || ""),
+        created_at: String(row?.created_at || ""),
+        updated_at: String(row?.updated_at || ""),
+        _isVirtualChatClient: row?._isVirtualChatClient === true,
+      });
+    });
+    return out.slice(0, CHAT_CLIENTS_CACHE_MAX_ROWS);
+  }
+
+  function readCachedClientsRows() {
+    const updatedAt = Number(state.store?.clientsCacheUpdatedAt || 0);
+    if (!updatedAt) return [];
+    if (Date.now() - updatedAt > CHAT_CLIENTS_CACHE_TTL_MS) return [];
+    return sanitizeCachedClientRows(state.store?.clientsCache || []);
+  }
+
+  function writeCachedClientsRows(rows) {
+    const nextRows = sanitizeCachedClientRows(rows);
+    state.store.clientsCache = nextRows;
+    state.store.clientsCacheUpdatedAt = Date.now();
+    saveStore();
+  }
+
   async function loadClientsPage(options = {}) {
     if (!isChatWidgetEnabledRuntime()) return false;
     const reset = options.reset === true;
@@ -8173,11 +8357,15 @@
 
     if (reset) {
       resetClientsPager();
-      state.clients = [];
+      const localThreadClients = buildLocalClientsFromStoredThreads();
+      const cachedClients = readCachedClientsRows();
+      state.clients = filterOpenChatClients(mergeRemoteClients(cachedClients, localThreadClients));
       state.filteredClients = [];
       applyClientFilter();
       if (dom.left.list) {
-        dom.left.list.innerHTML = '<div class="muted" style="padding:8px;">\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u0447\u0430\u0442\u043e\u0432\u2026</div>';
+        if (!state.clients.length) {
+          dom.left.list.innerHTML = '<div class="muted" style="padding:8px;">\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u0447\u0430\u0442\u043e\u0432\u2026</div>';
+        }
       }
     }
 
@@ -8193,7 +8381,10 @@
       adminQs.set("sort", "last_desc");
 
       const [adminJson, remotePage] = await Promise.all([
-        apiJson("/api/admin/clients?" + adminQs.toString()),
+        apiJson("/api/admin/clients?" + adminQs.toString()).catch(() => ({
+          data: [],
+          total: activePager.adminTotal || 0,
+        })),
         loadRemoteChatClientsPage({
           limit: pageSize,
           offset: activePager.remoteOffset || 0,
@@ -8233,6 +8424,7 @@
       );
       mergeClientsIntoState(preparedRows, { reset });
       applyClientFilter();
+      writeCachedClientsRows(state.clients);
 
       const remoteSummaryIdSet = new Set(
         remoteRows
@@ -8286,9 +8478,16 @@
   async function loadClients() {
     if (!isChatWidgetEnabledRuntime()) return;
     if (!dom.left.list) return;
-    try {
-      await loadClientsPage({ reset: true, ensureSelection: true });
-    } catch (err) {
+    const persistedClientId = Number(state.store?.lastOpenClientId || 0);
+    if (
+      persistedClientId > 0
+      && Number(state.activeClientId || 0) !== persistedClientId
+      && Array.isArray(state.store?.threads?.[String(persistedClientId)])
+    ) {
+      selectClient(persistedClientId).catch(console.error);
+    }
+    // Do not block the first paint on slow DB/API responses.
+    loadClientsPage({ reset: true, ensureSelection: true }).catch((err) => {
       if (isAbortError(err) || !isChatWidgetEnabledRuntime()) return;
       console.error(err);
       dom.left.list.innerHTML = "";
@@ -8296,7 +8495,7 @@
         dom.left.empty.textContent = "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0447\u0430\u0442\u044b";
         dom.left.empty.classList.remove("hidden");
       }
-    }
+    });
   }
 
   function initComposer() {
@@ -8474,9 +8673,20 @@
 
     const syncChatsOnForeground = () => {
       if (!isChatWidgetEnabledRuntime()) return;
+      const now = Date.now();
+      if (state.foregroundSyncInFlight) return;
+      if (now - Number(state.foregroundSyncLastAt || 0) < CHAT_FOREGROUND_SYNC_DEBOUNCE_MS) return;
+      state.foregroundSyncInFlight = true;
+      state.foregroundSyncLastAt = now;
       queueWebPushSubscriptionSync({ immediate: true });
-      syncRemoteSummariesSnapshot({ forceThreads: true }).catch(console.error);
-      syncReadOnForeground();
+      Promise.resolve()
+        .then(() => syncRemoteSummariesSnapshot({ forceThreads: true }))
+        .then(() => syncReadOnForeground())
+        .catch(console.error)
+        .finally(() => {
+          state.foregroundSyncInFlight = false;
+          state.foregroundSyncLastAt = Date.now();
+        });
     };
 
     document.addEventListener("visibilitychange", () => {
