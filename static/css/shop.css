@@ -7946,6 +7946,10 @@ body.page-shop .shop-company-chat-btn:hover{
   overflow: hidden;
 }
 
+.shop-company-chat-row.is-user .shop-company-chat-bubble.has-attachment-only.has-reaction{
+  overflow: visible;
+}
+
 .shop-company-chat-row.is-user .shop-company-chat-bubble.has-attachment-only .shop-company-chat-attachment{
   border-radius: inherit;
 }
@@ -7953,6 +7957,10 @@ body.page-shop .shop-company-chat-btn:hover{
 .shop-company-chat-row.is-agent .shop-company-chat-bubble.has-attachment-only{
   padding: 0;
   overflow: hidden;
+}
+
+.shop-company-chat-row.is-agent .shop-company-chat-bubble.has-attachment-only.has-reaction{
+  overflow: visible;
 }
 
 .shop-company-chat-row.is-agent .shop-company-chat-bubble.has-attachment-only .shop-company-chat-attachment{

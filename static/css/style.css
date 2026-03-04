@@ -8857,6 +8857,10 @@ body.page-chat .panel{
   overflow:hidden;
 }
 
+.chat-message--out .chat-message-bubble.has-attachment-only.has-reaction{
+  overflow:visible;
+}
+
 .chat-message--out .chat-message-bubble.has-attachment-only .chat-message-attachment{
   border-radius:inherit;
 }
@@ -8864,6 +8868,10 @@ body.page-chat .panel{
 .chat-message--in .chat-message-bubble.has-attachment-only{
   padding:0;
   overflow:hidden;
+}
+
+.chat-message--in .chat-message-bubble.has-attachment-only.has-reaction{
+  overflow:visible;
 }
 
 .chat-message--in .chat-message-bubble.has-attachment-only .chat-message-attachment{
