@@ -9,6 +9,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
   let hasCategoryCheckoutVisibilityColumn = null;
   const ADMIN_CACHE_TTL_MS = Object.freeze({
     checkoutConstructorDraft: 30_000,
+    newOrderManifest: 5_000,
   });
   const adminResponseCache = new Map();
   const adminResponseInflight = new Map();
@@ -87,6 +88,46 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
       if (key.startsWith(p)) adminResponseCache.delete(key);
     }
   }
+
+  async function readTableStamp(table, whereSql, params = []) {
+    const safeTable = String(table || "").trim();
+    if (!/^[a-zA-Z0-9_]+$/.test(safeTable)) return "0:0";
+    const whereClause = String(whereSql || "1");
+    const tryQueries = [
+      `SELECT UNIX_TIMESTAMP(MAX(updated_at)) AS stamp, COUNT(*) AS cnt FROM \`${safeTable}\` WHERE ${whereClause}`,
+      `SELECT UNIX_TIMESTAMP(MAX(created_at)) AS stamp, COUNT(*) AS cnt FROM \`${safeTable}\` WHERE ${whereClause}`,
+      `SELECT MAX(id) AS stamp, COUNT(*) AS cnt FROM \`${safeTable}\` WHERE ${whereClause}`,
+    ];
+    for (const sql of tryQueries) {
+      try {
+        const [rows] = await db.query(sql, params);
+        const row = Array.isArray(rows) ? (rows[0] || {}) : {};
+        const stamp = Number(row?.stamp || 0);
+        const cnt = Number(row?.cnt || 0);
+        const safeStamp = Number.isFinite(stamp) ? stamp : 0;
+        const safeCnt = Number.isFinite(cnt) ? cnt : 0;
+        return `${safeStamp}:${safeCnt}`;
+      } catch {}
+    }
+    return "0:0";
+  }
+
+  function makeStampToken(parts) {
+    const src = JSON.stringify(Array.isArray(parts) ? parts : []);
+    return crypto.createHash("sha1").update(src).digest("hex").slice(0, 16);
+  }
+
+  router.use((req, res, next) => {
+    const method = String(req.method || "").toUpperCase();
+    const shouldWatch = method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
+    if (!shouldWatch) return next();
+    res.on("finish", () => {
+      if (res.statusCode >= 200 && res.statusCode < 400) {
+        invalidateAdminCacheByPrefix("new-order-manifest::");
+      }
+    });
+    next();
+  });
 
   async function ensureCategoryCheckoutVisibilityColumnKnown() {
     if (hasCategoryCheckoutVisibilityColumn !== null) return hasCategoryCheckoutVisibilityColumn;
@@ -276,6 +317,130 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // ------------------------------
+  // New-order lightweight data manifest
+  // GET /api/new-order/manifest
+  // ------------------------------
+  router.get('/new-order/manifest', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const cacheKey = makeAdminCacheKey("new-order-manifest", { tenantId, storeId });
+      const { payload, cacheState } = await loadAdminCachedPayload(
+        cacheKey,
+        ADMIN_CACHE_TTL_MS.newOrderManifest,
+        async () => {
+          const [
+            categoriesStamp,
+            checkoutBlocksStamp,
+            checkoutBlockCategoriesStamp,
+            productsStamp,
+            productCategoriesStamp,
+            productStocksStamp,
+            variantsAssignmentsStamp,
+            variantGroupsStamp,
+            variantDiscountTiersStamp,
+            ingredientsStamp,
+            optionAssignmentsStamp,
+            optionGroupsStamp,
+            optionItemsStamp,
+            combosStamp,
+            comboSetBlocksStamp,
+            comboBlocksStamp,
+            comboBlockProductsStamp,
+            discountsStamp,
+            discountProductsStamp,
+            unitConversionsStamp,
+            tenantStamp,
+            storesStamp,
+            orderPaymentsStamp,
+            orderDeliveryStamp,
+            orderTimeOptionsStamp,
+          ] = await Promise.all([
+            readTableStamp("prod_categories", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_checkout_constructor_blocks", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_checkout_constructor_block_categories", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_products", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_product_categories", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_product_stocks", "tenant_id=? AND store_id=?", [tenantId, storeId]),
+            readTableStamp("prod_variant_assignments", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_variant_groups", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_variant_discount_tiers", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_product_ingredients", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_option_assignments", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_option_groups", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_option_items", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_combos", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_combo_set_blocks", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_combo_blocks", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_combo_block_products", "tenant_id=?", [tenantId]),
+            readTableStamp("mkt_discounts", "tenant_id=? AND store_id=?", [tenantId, storeId]),
+            readTableStamp("mkt_discount_products", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_unit_conversions", "tenant_id=?", [tenantId]),
+            readTableStamp("ten_tenants", "id=?", [tenantId]),
+            readTableStamp("ten_stores", "tenant_id=?", [tenantId]),
+            readTableStamp("order_payments", "tenant_id=?", [tenantId]),
+            readTableStamp("order_delivery_types", "tenant_id=?", [tenantId]),
+            readTableStamp("order_time_options", "tenant_id=?", [tenantId]),
+          ]);
+
+          const domains = {
+            categories: {
+              token: makeStampToken([categoriesStamp]),
+            },
+            checkout: {
+              token: makeStampToken([checkoutBlocksStamp, checkoutBlockCategoriesStamp]),
+            },
+            products: {
+              token: makeStampToken([
+                productsStamp,
+                productCategoriesStamp,
+                productStocksStamp,
+                variantsAssignmentsStamp,
+                variantGroupsStamp,
+                variantDiscountTiersStamp,
+                ingredientsStamp,
+                optionAssignmentsStamp,
+                optionGroupsStamp,
+                optionItemsStamp,
+                combosStamp,
+                comboSetBlocksStamp,
+                comboBlocksStamp,
+                comboBlockProductsStamp,
+                discountsStamp,
+                discountProductsStamp,
+                unitConversionsStamp,
+              ]),
+            },
+            refs: {
+              token: makeStampToken([
+                tenantStamp,
+                storesStamp,
+                orderPaymentsStamp,
+                orderDeliveryStamp,
+                orderTimeOptionsStamp,
+              ]),
+            },
+          };
+
+          return {
+            ok: true,
+            data: {
+              generated_at: Date.now(),
+              domains,
+            },
+          };
+        }
+      );
+
+      res.set("x-admin-cache", cacheState);
+      return res.json(payload);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: "DB_ERROR" });
     }
   });
 

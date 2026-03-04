@@ -13,12 +13,27 @@
   const rightTabsEl = document.getElementById("newOrderTabs");
   const rightContentEl = document.getElementById("newOrderRightContent");
   const rightEmptyEl = document.getElementById("newOrderRightEmpty");
+  const rightPanelEl = document.getElementById("newOrderRightPanel");
+  const rightFooterEl = document.getElementById("newOrderRightFooter");
   if (!categoriesListEl || !productsGridEl) return;
+
+  function ensureShopCssForNewOrder() {
+    const id = "newOrderShopCss";
+    if (document.getElementById(id)) return;
+    const link = document.createElement("link");
+    link.id = id;
+    link.rel = "stylesheet";
+    link.href = "/static/css/shop.css";
+    document.head.appendChild(link);
+  }
+  ensureShopCssForNewOrder();
   const CHECKOUT_SCREEN_ID = "__checkout_screen__";
   const CHECKOUT_DRAFT_CACHE_VERSION = 1;
-  const CHECKOUT_DRAFT_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
-  const CHECKOUT_PRODUCTS_CACHE_VERSION = 1;
-  const CHECKOUT_PRODUCTS_CACHE_MAX_AGE_MS = 2 * 60 * 1000;
+  const CHECKOUT_DRAFT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+  const CHECKOUT_PRODUCTS_CACHE_VERSION = 3;
+  const CHECKOUT_PRODUCTS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+  const NEW_ORDER_CLIENT_CACHE_VERSION = 1;
+  const NEW_ORDER_CLIENT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
   const state = {
     categories: [],
@@ -28,6 +43,7 @@
     productVariants: new Map(),
     selectedVariants: new Map(),
     currentProducts: [],
+    categoryProductsCache: new Map(),
     unitConversions: [],
     productIngredients: new Map(),
     ingredientStateByProduct: new Map(),
@@ -35,6 +51,8 @@
     optionGroupDetails: new Map(),
     optionSelections: new Map(),
     optionTargetProductCache: new Map(),
+    productByIdCache: new Map(),
+    comboDetailsCache: new Map(),
     checkoutSavedDraft: { blocks: [] },
     checkoutCategoryProducts: new Map(),
     checkoutSelectedProductByCategory: new Map(),
@@ -52,6 +70,9 @@
     rightDeliveryTypes: [],
     rightPaymentTypes: [],
     rightTimeOptions: [],
+    rightDeliverySettings: null,
+    rightDeliverySettingsReady: false,
+    rightDeliverySettingsLoading: false,
     rightDatePickerMonthByOrder: new Map(),
     rightPickupStores: [],
     rightClientLookupCache: new Map(),
@@ -60,6 +81,34 @@
     rightClientAddressesByOrder: new Map(),
     rightAddressSelectedIdByOrder: new Map(),
     rightAddressEditingIdByOrder: new Map(),
+    rightCartClearConfirmUntilByOrder: new Map(),
+    rightCartClearTimerByOrder: new Map(),
+    rightCheckoutSubmittingByOrder: new Map(),
+    productModal: {
+      productId: 0,
+      qty: 1,
+      photoIndex: 0,
+      expandedOptionItems: new Set(),
+      expandedOptionGroups: new Set(),
+      mode: "add",
+      editOrderId: 0,
+      editCartItemId: 0,
+    },
+    comboModal: {
+      comboId: 0,
+      combo: null,
+      qty: 1,
+      mode: "add",
+      editOrderId: 0,
+      editCartItemId: 0,
+      selectedIndexByBlock: [],
+      selectionStateByBlock: [],
+      view: "main",
+      pickerBlockIndex: -1,
+      expandedPickerProductIndex: null,
+      pickerRenderToken: 0,
+    },
+    cacheManifest: null,
   };
 
   function isCheckoutScreenActive() {
@@ -113,9 +162,15 @@
       rightTabsEl.innerHTML = "";
       rightContentEl.innerHTML = "";
       rightContentEl.classList.add("hidden");
+      if (rightFooterEl) {
+        rightFooterEl.innerHTML = "";
+        rightFooterEl.classList.add("hidden");
+      }
       if (rightTabsHeaderEl) rightTabsHeaderEl.classList.add("hidden");
       if (rightEmptyEl) rightEmptyEl.classList.remove("hidden");
       state.rightOpenSelect = null;
+      resetAllRightCartClearState({ render: false });
+      state.rightCheckoutSubmittingByOrder.clear();
       closeRightAddressOverlay();
       return;
     }
@@ -137,9 +192,51 @@
     const active = orders.find((order) => Number(order?.id || 0) === Number(state.rightActiveOrderId || 0)) || orders[0];
     state.rightActiveOrderId = Number(active?.id || 0) || null;
     const form = active?.form || {};
-    const cartItems = Array.isArray(form?.cartItems) ? form.cartItems : [];
-    const cartSubtotal = roundPrice(cartItems.reduce((sum, item) => sum + Number(item?.sum || 0), 0));
-    const cartItemsCount = cartItems.reduce((sum, item) => sum + Math.max(1, Number(item?.qty || 1)), 0);
+    const cartSummary = getRightOrderCheckoutSummary(active);
+    const cartItems = cartSummary.cartItems;
+    const orderPayableTotal = cartSummary.payableTotal;
+    const deliveryProgressAriaValue = Math.round(cartSummary.progress);
+    const deliveryProgressLabelHtml = cartSummary.freeReached
+      ? `Бесплатная доставка <i class="fas fa-check shop-delivery-check" aria-hidden="true"></i>`
+      : `${cartSummary.deliveryCost > 0 ? `Доставка <strong>${escapeHtml(toMoney(cartSummary.deliveryCost))}</strong>. ` : ""}Ещё <strong>${escapeHtml(toMoney(cartSummary.leftForFree))}</strong> до бесплатной доставки`;
+    const clearArmedUntil = Number(state.rightCartClearConfirmUntilByOrder.get(Number(active?.id || 0)) || 0);
+    const clearArmed = clearArmedUntil > Date.now() && cartItems.length > 0;
+    if (clearArmedUntil > 0 && !clearArmed) {
+      resetRightCartClearState(Number(active?.id || 0), { render: false });
+    }
+    const checkoutSubmitting = Boolean(state.rightCheckoutSubmittingByOrder.get(Number(active?.id || 0)));
+    const checkoutDisabled = checkoutSubmitting || !cartItems.length;
+    const rightFooterHtml = `
+      <div class="shop-cart-delivery-progress ${cartSummary.showDeliveryProgress ? "" : "hidden"}">
+        <div class="shop-cart-delivery-progress-bar" role="progressbar" aria-valuenow="${deliveryProgressAriaValue}" aria-valuemin="0" aria-valuemax="100">
+          <div class="shop-cart-delivery-progress-fill" style="width:${cartSummary.progress}%"></div>
+        </div>
+        <div class="shop-cart-delivery-progress-label ${cartSummary.freeReached ? "is-free" : ""}">${deliveryProgressLabelHtml}</div>
+      </div>
+      <div class="shop-cart-footer">
+        <div class="shop-cart-footer-actions">
+          <button
+            class="shop-cart-clear ${clearArmed ? "is-confirm" : ""}"
+            data-action="right-cart-clear"
+            data-order-id="${Number(active?.id || 0)}"
+            type="button"
+            title="Очистить корзину"
+            aria-label="Очистить корзину"
+          >${clearArmed ? "Очистить" : "×"}</button>
+          <button
+            class="shop-checkout-btn"
+            data-action="right-cart-checkout"
+            data-order-id="${Number(active?.id || 0)}"
+            type="button"
+            ${checkoutDisabled ? "disabled" : ""}
+          >${checkoutSubmitting
+            ? "Отправляем..."
+            : `Оформить · <span class="shop-checkout-total">${escapeHtml(toMoney(orderPayableTotal))}</span>`
+          }</button>
+        </div>
+      </div>
+    `;
+    void ensureRightDeliverySettingsLoaded();
     const activeDeliveryTypes = (Array.isArray(state.rightDeliveryTypes) ? state.rightDeliveryTypes : [])
       .filter((item) => Number(item?.is_active || 0) === 1);
     const fallbackDeliveryType = activeDeliveryTypes.find((item) => Number(item?.is_default || 0) === 1) || activeDeliveryTypes[0] || null;
@@ -181,8 +278,7 @@
     const timeSlots = buildTimeSlotsForOptionWithDate(resolvedCookWhen, effectiveDateForTime);
     const resolvedDateTime = timeSlots.includes(currentTime) ? currentTime : (timeSlots[0] || "18:00");
 
-    const orderTotal = getCheckoutCurrentTotal();
-    const minChangeAmount = Math.max(0, roundPrice(orderTotal)) + 1;
+    const minChangeAmount = Math.max(0, roundPrice(orderPayableTotal)) + 1;
 
     const selectValues = {
       pickupMethod: resolvedPickupMethod,
@@ -340,7 +436,7 @@
                 data-action="right-input-change"
                 data-order-id="${Number(active?.id || 0)}"
                 data-field="changeAmount"
-                placeholder="Больше ${escapeHtml(String(roundPrice(orderTotal)))}"
+                placeholder="Больше ${escapeHtml(String(roundPrice(orderPayableTotal)))}"
                 autocomplete="new-password"
                 autocorrect="off"
                 autocapitalize="off"
@@ -367,8 +463,60 @@
               const qty = Math.max(1, Number(item?.qty || 1));
               const unitPrice = roundPrice(Number(item?.unit_price || 0));
               const sum = roundPrice(Number(item?.sum || unitPrice * qty));
+              const unitOldPrice = roundPrice(Number(item?.unit_price_before_discount || 0));
+              const oldSum = roundPrice(unitOldPrice * qty);
+              const hasDiscount = oldSum > sum;
+              const discountPercent = hasDiscount && oldSum > 0
+                ? Math.max(1, Math.round(((oldSum - sum) / oldSum) * 100))
+                : 0;
               const title = String(item?.name || (type === "combo" ? "Комбо" : "Товар"));
               const sections = Array.isArray(item?.sections) ? item.sections : [];
+              const optionRows = type === "product"
+                ? (() => {
+                    const optionItems = Array.isArray(item?.option_items) ? item.option_items : [];
+                    return optionItems
+                      .map((opt, optIndex) => {
+                        const groupId = Number(opt?.group_id || 0);
+                        const itemId = Number(opt?.id || 0);
+                        const qtyVal = Math.max(0, Number(opt?.qty || 0));
+                        if (!(groupId > 0) || !(itemId > 0) || qtyVal <= 0) return null;
+                        const details = state.optionGroupDetails.get(groupId);
+                        const detailItems = Array.isArray(details?.items) ? details.items : [];
+                        const detailItem = detailItems.find((x) => Number(x?.id || 0) === itemId) || null;
+                        const detailName = String(detailItem?.name || detailItem?.product_name || opt?.label || "Опция").trim();
+                        const groupType = getOptionGroupUiType({ ...(details?.group || {}), items: detailItems });
+                        const qtyMin = Math.max(0, Number(detailItem?.qty_min ?? 0));
+                        const qtyMaxRaw = Number(detailItem?.qty_max ?? 99);
+                        const qtyMax = Number.isFinite(qtyMaxRaw) && qtyMaxRaw > 0 ? qtyMaxRaw : 99;
+                        const canMinus = qtyVal > qtyMin;
+                        const canPlus = qtyVal < qtyMax;
+                        const variants = Array.isArray(detailItem?.variants) ? detailItem.variants : [];
+                        const vg = variants[0];
+                        const values = Array.isArray(vg?.values) ? vg.values : [];
+                        const selectedVariantIndex = Number.isFinite(Number(opt?.variantIndex))
+                          ? Number(opt.variantIndex)
+                          : getOptionItemDefaultVariantIndex(detailItem);
+                        const variantValues = values.map((_, idx) => String(formatOptionVariantLabel(detailItem, idx) || "").trim()).filter(Boolean);
+                        const variantLabel = values.length
+                          ? String(formatOptionVariantLabel(detailItem, selectedVariantIndex) || "").trim()
+                          : "";
+                        return {
+                          key: `opt-${optIndex}`,
+                          rowKind: "option",
+                          optionIndex: optIndex,
+                          productName: detailName,
+                          unitLabel: variantLabel,
+                          variantValues,
+                          selectedVariantIndex: Number.isFinite(selectedVariantIndex) ? selectedVariantIndex : 0,
+                          optionQty: qtyVal,
+                          showQtyControls: groupType === "multiple_item",
+                          canMinus,
+                          canPlus,
+                        };
+                      })
+                      .filter(Boolean);
+                  })()
+                : [];
               const compositionRows = type === "combo" && sections.length
                 ? sections.map((s, index) => ({
                   key: `sec-${index}`,
@@ -389,9 +537,68 @@
                   selectedVariantIndex: Number.isFinite(Number(item?.variant?.selected_index)) ? Number(item.variant.selected_index) : 0,
                   ingredients: Array.isArray(item?.ingredients) ? item.ingredients : [],
                   rowKind: "product",
+                  hasOptions: (() => {
+                    const productId = Number(item?.product_id || 0);
+                    const groups = productId > 0 ? (state.productOptionGroups.get(productId) || []) : [];
+                    const selectedOptionItems = Array.isArray(item?.option_items) ? item.option_items : [];
+                    return (Array.isArray(groups) && groups.length > 0) || selectedOptionItems.length > 0;
+                  })(),
                 }];
+              const renderedRows = [...compositionRows, ...optionRows];
               return `
-                <article class="new-order-right-cart-item" data-cart-item-id="${Number(item?.id || 0)}">
+                <div class="new-order-right-cart-item-wrap" data-cart-item-id="${Number(item?.id || 0)}">
+                  <div class="new-order-right-cart-item-tools">
+                    <button
+                      type="button"
+                      class="new-order-right-cart-item-delete"
+                      data-action="right-cart-item-delete"
+                      data-order-id="${Number(active?.id || 0)}"
+                      data-cart-item-id="${Number(item?.id || 0)}"
+                      aria-label="Удалить товар из корзины"
+                      title="Удалить товар из корзины"
+                    >
+                      <i class="fas fa-trash"></i>
+                    </button>
+                    <button
+                      type="button"
+                      class="new-order-right-cart-item-copy"
+                      data-action="right-cart-item-copy"
+                      data-order-id="${Number(active?.id || 0)}"
+                      data-cart-item-id="${Number(item?.id || 0)}"
+                      aria-label="Скопировать позицию"
+                      title="Скопировать позицию"
+                    >
+                      <i class="far fa-copy"></i>
+                    </button>
+                    ${type === "combo" && Number(item?.combo_id || 0) > 0 ? `
+                    <button
+                      type="button"
+                      class="new-order-right-cart-item-copy"
+                      data-action="right-cart-open-combo"
+                      data-order-id="${Number(active?.id || 0)}"
+                      data-cart-item-id="${Number(item?.id || 0)}"
+                      data-combo-id="${Number(item?.combo_id || 0)}"
+                      aria-label="Редактировать комбо"
+                      title="Редактировать комбо"
+                    >
+                      <i class="fas fa-sliders-h"></i>
+                    </button>
+                    ` : ""}
+                    ${qty > 1 ? `
+                    <button
+                      type="button"
+                      class="new-order-right-cart-item-split"
+                      data-action="right-cart-item-split"
+                      data-order-id="${Number(active?.id || 0)}"
+                      data-cart-item-id="${Number(item?.id || 0)}"
+                      aria-label="Разделить позицию"
+                      title="Разделить позицию"
+                    >
+                      <i class="fas fa-code-branch"></i>
+                    </button>
+                    ` : ""}
+                  </div>
+                  <article class="new-order-right-cart-item">
                   <div class="new-order-right-cart-left">
                     <div class="new-order-right-cart-thumb">${renderCartThumb(item)}</div>
                     <div class="qty-pill qty-pill--muted new-order-right-cart-qty" data-qty-wrap>
@@ -415,11 +622,11 @@
                   <div class="new-order-right-cart-item-main">
                     <div class="new-order-right-cart-item-title">${qty} х ${escapeHtml(title)}</div>
                     <div class="new-order-right-cart-item-sub">
-                      ${compositionRows.map((row) => {
-                        const baseLine = row.rowKind === "product"
-                          ? escapeHtml(row.unitLabel || "")
-                          : (row.unitLabel ? `${escapeHtml(row.unitLabel)} · ${escapeHtml(row.productName)}` : escapeHtml(row.productName));
-                        const removeBtn = row.variantValues.length > 1
+                      ${renderedRows.map((row) => {
+                        const baseLine = row.unitLabel
+                          ? `${escapeHtml(row.unitLabel)} ${escapeHtml(row.productName)}`
+                          : (row.rowKind === "option" ? escapeHtml(row.productName) : "");
+                        const removeBtn = row.rowKind === "product" && row.variantValues.length > 1
                           ? `
                             <button
                               type="button"
@@ -434,11 +641,17 @@
                             >×</button>
                           `
                           : "";
+                        const optionIcon = row.rowKind === "option"
+                          ? `<button type="button" class="new-order-right-cart-variant-chip new-order-right-cart-variant-option-icon" data-action="right-cart-open-product" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-product-id="${Number(item?.product_id || 0)}" title="Опции товара"><i class="fas fa-sliders-h"></i></button>`
+                          : "";
+                        const productOptionIcon = row.rowKind === "product" && row.hasOptions
+                          ? `<button type="button" class="new-order-right-cart-variant-chip new-order-right-cart-variant-option-icon" data-action="right-cart-open-product" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-product-id="${Number(item?.product_id || 0)}" title="Опции товара"><i class="fas fa-sliders-h"></i></button>`
+                          : "";
                         const chips = row.variantValues.length > 1
                           ? `
                             <div class="new-order-right-cart-variant-scroll no-scrollbar">
                               <div class="new-order-right-cart-variant-row">
-                                ${removeBtn}
+                                ${row.rowKind === "option" ? "" : `${removeBtn}${productOptionIcon}`}
                                 ${row.variantValues.map((label, variantIndex) => `
                                   <button
                                     type="button"
@@ -448,11 +661,35 @@
                                     data-cart-item-id="${Number(item?.id || 0)}"
                                     data-row-kind="${row.rowKind}"
                                     data-section-index="${row.sectionIndex}"
+                                    data-option-index="${Number(row.optionIndex || 0)}"
                                     data-variant-index="${variantIndex}"
                                   >${escapeHtml(label)}</button>
                                 `).join("")}
                               </div>
                             </div>
+                          `
+                          : "";
+                        const optionQtyControls = row.rowKind === "option" && row.showQtyControls
+                          ? `
+                            <div class="new-order-right-cart-ing-controls">
+                              <button type="button" class="new-order-right-cart-ing-btn${row.canMinus ? "" : " is-disabled"}" data-action="right-cart-option-qty-minus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-option-index="${Number(row.optionIndex || 0)}">−</button>
+                              <span class="new-order-right-cart-ing-qty">${Number(row.optionQty || 0)}</span>
+                              <button type="button" class="new-order-right-cart-ing-btn${row.canPlus ? "" : " is-disabled"}" data-action="right-cart-option-qty-plus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-option-index="${Number(row.optionIndex || 0)}">+</button>
+                            </div>
+                          `
+                          : "";
+                        const optionRemoveBtn = row.rowKind === "option"
+                          ? `
+                            <button
+                              type="button"
+                              class="new-order-right-cart-variant-chip new-order-right-cart-variant-remove"
+                              data-action="right-cart-option-remove"
+                              data-order-id="${Number(active?.id || 0)}"
+                              data-cart-item-id="${Number(item?.id || 0)}"
+                              data-option-index="${Number(row.optionIndex || 0)}"
+                              aria-label="Удалить опцию"
+                              title="Удалить опцию"
+                            >×</button>
                           `
                           : "";
                         const ingredientRows = Array.isArray(row.ingredients) ? row.ingredients : [];
@@ -481,22 +718,46 @@
                             </div>
                           `
                           : "";
-                        return `<div class="new-order-right-cart-composition-row">${baseLine ? `<div>${baseLine}</div>` : ""}${chips}${ingredientsHtml}</div>`;
+                        const optionTitle = row.rowKind === "option"
+                          ? `<div class="new-order-right-cart-option-title">${
+                              row.showQtyControls
+                                ? `${escapeHtml(String(Number(row.optionQty || 0)))} ${baseLine || escapeHtml(row.productName || "")}`
+                                : (baseLine || escapeHtml(row.productName || ""))
+                            }</div>`
+                          : "";
+                        const optionControlsRow = row.rowKind === "option"
+                          ? `
+                            <div class="new-order-right-cart-option-controls-row">
+                              ${optionRemoveBtn}
+                              ${optionIcon}
+                              ${row.showQtyControls ? optionQtyControls : chips}
+                            </div>
+                          `
+                          : "";
+                        const productControlsRow = row.rowKind === "product" && row.hasOptions && row.variantValues.length <= 1
+                          ? `<div class="new-order-right-cart-option-controls-row">${productOptionIcon}</div>`
+                          : "";
+                        return `<div class="new-order-right-cart-composition-row">${row.rowKind === "option" ? `${optionTitle}${optionControlsRow}` : (baseLine ? `<div>${baseLine}</div>` : "")}${row.rowKind === "option" ? "" : `${chips}${productControlsRow}`}${ingredientsHtml}</div>`;
                       }).join("")}
                     </div>
                   </div>
-                  <div class="new-order-right-cart-item-sum">${escapeHtml(toMoney(sum))}</div>
-                </article>
+                  <div class="new-order-right-cart-item-sum-wrap">
+                    ${hasDiscount ? `<div class="new-order-right-cart-item-sum-old">${escapeHtml(toMoney(oldSum))}</div>` : ""}
+                    <div class="new-order-right-cart-item-sum">${escapeHtml(toMoney(sum))}</div>
+                    ${discountPercent > 0 ? `<div class="new-order-right-cart-item-discount">-${discountPercent}%</div>` : ""}
+                  </div>
+                  </article>
+                </div>
               `;
             }).join("") : `<div class="new-order-right-cart-empty">Состав заказа пока пуст</div>`}
-          </div>
-          <div class="new-order-right-cart-total">
-            <span>Итого (${cartItemsCount})</span>
-            <strong>${escapeHtml(toMoney(cartSubtotal))}</strong>
           </div>
         </div>
       </div>
     `;
+    if (rightFooterEl) {
+      rightFooterEl.innerHTML = rightFooterHtml;
+      rightFooterEl.classList.toggle("hidden", !cartItems.length);
+    }
   }
 
   function openRightNewOrderTab() {
@@ -560,6 +821,7 @@
     } catch {
       state.rightDeliveryTypes = [];
     }
+    schedulePersistBootstrapSnapshot();
   }
 
   async function loadRightPaymentTypes() {
@@ -579,6 +841,7 @@
     } catch {
       state.rightPaymentTypes = [];
     }
+    schedulePersistBootstrapSnapshot();
   }
 
   async function loadRightTimeOptions() {
@@ -602,6 +865,7 @@
     } catch {
       state.rightTimeOptions = [];
     }
+    schedulePersistBootstrapSnapshot();
   }
 
   async function loadRightPickupStores() {
@@ -626,6 +890,7 @@
     } catch {
       state.rightPickupStores = [];
     }
+    schedulePersistBootstrapSnapshot();
   }
 
   function parseTimeToMinutes(value) {
@@ -783,6 +1048,423 @@
     return false;
   }
 
+  function isDeliveryMethodCode(code) {
+    const c = String(code || "").trim().toLowerCase();
+    if (!c) return true;
+    if (c === "delivery") return true;
+    if (c.includes("delivery") || c.includes("доставка")) return true;
+    return !isPickupLikeMethod(c);
+  }
+
+  function getRightOrderPreferredPickupStoreId() {
+    const stores = Array.isArray(state.rightPickupStores) ? state.rightPickupStores : [];
+    if (!stores.length) return 0;
+    const preferredId = getStoreIdFromStorage();
+    const preferred = stores.find((s) => Number(s?.id || 0) === preferredId)
+      || stores.find((s) => Number(s?.is_default || 0) === 1)
+      || stores[0]
+      || null;
+    const storeId = Number(preferred?.id || 0);
+    return Number.isFinite(storeId) && storeId > 0 ? storeId : 0;
+  }
+
+  async function ensureRightDeliverySettingsLoaded() {
+    if (state.rightDeliverySettingsReady || state.rightDeliverySettingsLoading) return;
+    state.rightDeliverySettingsLoading = true;
+    try {
+      const json = await apiJson("/api/public/delivery-settings");
+      state.rightDeliverySettings = json?.data || null;
+    } catch {
+      state.rightDeliverySettings = null;
+    } finally {
+      state.rightDeliverySettingsLoading = false;
+      state.rightDeliverySettingsReady = true;
+      schedulePersistBootstrapSnapshot();
+      renderRightOrderTabs();
+    }
+  }
+
+  function getRightOrderCheckoutSummary(order) {
+    const form = order?.form && typeof order.form === "object" ? order.form : {};
+    const cartItems = Array.isArray(form?.cartItems) ? form.cartItems : [];
+    const subtotal = roundPrice(cartItems.reduce((sum, item) => sum + Number(item?.sum || 0), 0));
+    const cartItemsCount = cartItems.reduce((sum, item) => sum + Math.max(1, Number(item?.qty || 1)), 0);
+    const methodCode = String(form?.pickupMethod || "").trim();
+    const isDeliveryMethod = isDeliveryMethodCode(methodCode);
+    const settings = state.rightDeliverySettings && typeof state.rightDeliverySettings === "object"
+      ? state.rightDeliverySettings
+      : null;
+    const deliveryCost = Math.max(0, Number(settings?.delivery_cost || 0));
+    const freeDeliveryFromRaw = Number(settings?.free_delivery_from);
+    const freeDeliveryFrom = Number.isFinite(freeDeliveryFromRaw) && freeDeliveryFromRaw > 0 ? freeDeliveryFromRaw : null;
+    const deliveryApplied = isDeliveryMethod
+      ? (freeDeliveryFrom != null && subtotal >= freeDeliveryFrom ? 0 : deliveryCost)
+      : 0;
+    const payableTotal = roundPrice(subtotal + deliveryApplied);
+    const progress = freeDeliveryFrom != null && freeDeliveryFrom > 0
+      ? Math.max(0, Math.min(100, (subtotal / freeDeliveryFrom) * 100))
+      : 0;
+    const freeReached = freeDeliveryFrom != null && subtotal >= freeDeliveryFrom;
+    const leftForFree = freeDeliveryFrom != null ? Math.max(0, Math.ceil(freeDeliveryFrom - subtotal)) : 0;
+    const showDeliveryProgress = isDeliveryMethod && freeDeliveryFrom != null && freeDeliveryFrom > 0 && cartItems.length > 0;
+    return {
+      cartItems,
+      cartItemsCount,
+      subtotal,
+      deliveryCost,
+      deliveryApplied,
+      freeDeliveryFrom,
+      freeReached,
+      leftForFree,
+      progress,
+      showDeliveryProgress,
+      payableTotal,
+      isDeliveryMethod,
+      methodCode,
+      settings,
+    };
+  }
+
+  function getRightOrderCheckoutSummaryByOrderId(orderId) {
+    const id = Number(orderId || 0);
+    const order = (Array.isArray(state.rightOrders) ? state.rightOrders : []).find((x) => Number(x?.id || 0) === id) || null;
+    if (!order) {
+      return {
+        cartItems: [],
+        cartItemsCount: 0,
+        subtotal: 0,
+        deliveryCost: 0,
+        deliveryApplied: 0,
+        freeDeliveryFrom: null,
+        freeReached: false,
+        leftForFree: 0,
+        progress: 0,
+        showDeliveryProgress: false,
+        payableTotal: 0,
+        isDeliveryMethod: true,
+        methodCode: "delivery",
+        settings: state.rightDeliverySettings || null,
+      };
+    }
+    return getRightOrderCheckoutSummary(order);
+  }
+
+  function getRightOrderIndexById(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return -1;
+    return (Array.isArray(state.rightOrders) ? state.rightOrders : []).findIndex((order) => Number(order?.id || 0) === id);
+  }
+
+  function resetRightCartClearState(orderId, opts = {}) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return;
+    const timer = state.rightCartClearTimerByOrder.get(id);
+    if (timer) clearTimeout(timer);
+    state.rightCartClearTimerByOrder.delete(id);
+    state.rightCartClearConfirmUntilByOrder.delete(id);
+    if (opts?.render) renderRightOrderTabs();
+  }
+
+  function resetAllRightCartClearState(opts = {}) {
+    const keys = Array.from(state.rightCartClearConfirmUntilByOrder.keys());
+    keys.forEach((key) => resetRightCartClearState(Number(key || 0), { render: false }));
+    if (opts?.render) renderRightOrderTabs();
+  }
+
+  function armRightCartClearState(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return;
+    resetRightCartClearState(id, { render: false });
+    const ttlMs = 6500;
+    const until = Date.now() + ttlMs;
+    state.rightCartClearConfirmUntilByOrder.set(id, until);
+    const timer = setTimeout(() => {
+      resetRightCartClearState(id, { render: true });
+    }, ttlMs + 10);
+    state.rightCartClearTimerByOrder.set(id, timer);
+  }
+
+  function mapCartItemIngredientsForPayload(ingredients) {
+    return (Array.isArray(ingredients) ? ingredients : [])
+      .map((row) => ({
+        ingredient_id: Number(row?.ingredient_id || 0),
+        qty: Number(row?.qty ?? row?.quantity ?? 0),
+      }))
+      .filter((row) => row.ingredient_id > 0 && Number.isFinite(row.qty) && row.qty >= 0);
+  }
+
+  function resolveOptionItemVariantGroupId(groupId, itemId) {
+    const gid = Number(groupId || 0);
+    const iid = Number(itemId || 0);
+    if (!(gid > 0) || !(iid > 0)) return null;
+    const details = state.optionGroupDetails.get(gid);
+    const items = Array.isArray(details?.items) ? details.items : [];
+    const detailItem = items.find((x) => Number(x?.id || 0) === iid) || null;
+    if (!detailItem) return null;
+    const variants = Array.isArray(detailItem?.variants) ? detailItem.variants : [];
+    const vg = variants[0] || null;
+    const vgId = Number(vg?.id || vg?.variant_group_id || 0);
+    return vgId > 0 ? vgId : null;
+  }
+
+  function getCartItemVariantGroupId(item) {
+    const directId = Number(item?.variant_group_id || item?.pricing?.variant_group_id || item?.pricing?.variant_group?.id || 0);
+    if (directId > 0) return directId;
+    const productId = Number(item?.product_id || 0);
+    if (!(productId > 0)) return null;
+    const groups = state.productVariants.get(productId) || [];
+    const vg = Array.isArray(groups) ? groups[0] : null;
+    const vgId = Number(vg?.id || vg?.variant_group_id || 0);
+    return vgId > 0 ? vgId : null;
+  }
+
+  function buildRightOrderPayloadItems(cartItems) {
+    const source = Array.isArray(cartItems) ? cartItems : [];
+    const out = [];
+
+    source.forEach((item) => {
+      const type = String(item?.type || "product");
+      const qty = Math.max(1, Number(item?.qty || 1));
+      if (type === "combo") {
+        const comboId = Number(item?.combo_id || 0);
+        const lineTotal = roundPrice(Number(item?.sum || Number(item?.unit_price || 0) * qty));
+        const oldLineTotalRaw = roundPrice(Number(item?.unit_price_before_discount || 0) * qty);
+        const oldLineTotal = oldLineTotalRaw > lineTotal ? oldLineTotalRaw : 0;
+        const seedSelections = getComboSeedSelectionsFromCartItem(item);
+        if (!(comboId > 0) && !seedSelections.length) return;
+        const selections = seedSelections.map((row) => ({
+          product_id: Number(row?.product_id || 0),
+          product_name: String(row?.product_name || ""),
+          product_photo: String(row?.product_photo || ""),
+          variant_label: String(row?.variant_label || ""),
+          variant_group_title: String(row?.variant_group_title || ""),
+          variant_unit: String(row?.variant_unit || ""),
+          variant_value_index: row?.variant_value_index != null ? Number(row.variant_value_index) : null,
+          variant_group_id: row?.variant_group_id != null ? Number(row.variant_group_id) : null,
+          ingredients_display: Array.isArray(row?.ingredients_display)
+            ? row.ingredients_display.map((ing) => ({
+              ingredient_id: ing?.ingredient_id != null ? Number(ing.ingredient_id) : null,
+              product_id: ing?.product_id != null ? Number(ing.product_id) : null,
+              quantity: ing?.quantity != null ? Number(ing.quantity) : (ing?.qty != null ? Number(ing.qty) : null),
+              qty: ing?.qty != null ? Number(ing.qty) : (ing?.quantity != null ? Number(ing.quantity) : null),
+              unit: String(ing?.unit || ""),
+              unit_id: ing?.unit_id != null ? Number(ing.unit_id) : null,
+              name: String(ing?.name || ""),
+            }))
+            : [],
+          unit_price_override: row?.unit_price_override != null ? Number(row.unit_price_override) : null,
+        })).filter((row) => Number(row.product_id || 0) > 0);
+
+        const comboPayload = {
+          type: "combo",
+          combo_title: String(item?.combo_title || item?.name || "Комбо"),
+          qty,
+          line_total: lineTotal,
+          old_line_total: oldLineTotal,
+          selections,
+        };
+        if (comboId > 0) comboPayload.combo_id = comboId;
+        out.push(comboPayload);
+        return;
+      }
+
+      const productId = Number(item?.product_id || 0);
+      if (!(productId > 0)) return;
+      const lineTotal = roundPrice(Number(item?.sum || Number(item?.unit_price || 0) * qty));
+      const originalLineTotal = roundPrice(Number(item?.unit_price_before_discount || item?.unit_price || 0) * qty);
+      const optionItemsSource = Array.isArray(item?.option_items) ? item.option_items : [];
+      const optionItems = optionItemsSource
+        .map((opt) => {
+          const optionId = Number(opt?.id || 0);
+          const optionQty = Math.max(0, Number(opt?.qty || 0));
+          if (!(optionId > 0) || !(optionQty > 0)) return null;
+          const groupId = Number(opt?.group_id || 0);
+          const variantValueIndex = Number.isFinite(Number(opt?.variantIndex)) ? Number(opt.variantIndex) : null;
+          const variantGroupId = resolveOptionItemVariantGroupId(groupId, optionId);
+          return {
+            id: optionId,
+            group_id: groupId > 0 ? groupId : null,
+            qty: optionQty,
+            variant_group_id: variantGroupId,
+            variant_value_index: variantValueIndex,
+          };
+        })
+        .filter(Boolean);
+      const optionItemIds = optionItems.map((opt) => Number(opt.id)).filter((id) => id > 0);
+      const variantGroupId = getCartItemVariantGroupId(item);
+      const variantValueIndex = Number.isFinite(Number(item?.variant?.selected_index))
+        ? Number(item.variant.selected_index)
+        : null;
+      out.push({
+        product_id: productId,
+        qty,
+        option_item_ids: optionItemIds,
+        option_items: optionItems,
+        ingredients: mapCartItemIngredientsForPayload(item?.ingredients),
+        variant_group_id: variantGroupId,
+        variant_value_index: variantValueIndex,
+        variant_label: String(item?.variant?.label || "").trim() || null,
+        line_total: lineTotal,
+        original_line_total: originalLineTotal,
+      });
+    });
+
+    return out;
+  }
+
+  function clearRightOrderCart(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return false;
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return false;
+    const order = state.rightOrders[index] || {};
+    const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+    form.cartItems = [];
+    state.rightOrders[index] = { ...order, form };
+    resetRightCartClearState(id, { render: false });
+    return true;
+  }
+
+  async function submitRightOrder(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return;
+    if (state.rightCheckoutSubmittingByOrder.get(id)) return;
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return;
+    const order = state.rightOrders[index] || {};
+    const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+    const summary = getRightOrderCheckoutSummary(order);
+    const cartItems = Array.isArray(form.cartItems) ? form.cartItems : [];
+    if (!cartItems.length) {
+      alert("Корзина пуста");
+      return;
+    }
+
+    const phoneDigits = normalizePhoneRu(form.phone);
+    if (phoneDigits.length !== 11) {
+      alert("Введите корректный номер телефона");
+      return;
+    }
+
+    const customerName = String(form.name || "").trim() || "Клиент";
+    const methodCode = String(form.pickupMethod || "").trim() || "delivery";
+    const paymentCode = String(form.paymentMethod || "").trim();
+    const timeOptionCode = String(form.cookWhen || "asap").trim() || "asap";
+    const isDeliveryMethod = isDeliveryMethodCode(methodCode);
+    const isPickupMethod = isPickupLikeMethod(methodCode);
+    const deliveryAddress = String(form.address || "").trim();
+    if (isDeliveryMethod && !deliveryAddress) {
+      alert("Введите адрес доставки");
+      return;
+    }
+    let pickupStoreId = null;
+    if (isPickupMethod) {
+      const resolvedStoreId = getRightOrderPreferredPickupStoreId();
+      if (!(resolvedStoreId > 0)) {
+        alert("Не удалось определить точку самовывоза");
+        return;
+      }
+      pickupStoreId = resolvedStoreId;
+    }
+    if (!paymentCode) {
+      alert("Выберите способ оплаты");
+      return;
+    }
+
+    const cookWhenKind = getCookWhenKind(timeOptionCode);
+    let scheduledAt = null;
+    if (cookWhenKind === "at_time" || cookWhenKind === "on_date") {
+      const timeValue = String(form.dateTime || "").trim();
+      if (!/^\d{1,2}:\d{2}$/.test(timeValue)) {
+        alert("Укажите время приготовления");
+        return;
+      }
+      const dateValue = cookWhenKind === "on_date"
+        ? String(form.scheduledDate || "").trim()
+        : formatIsoDate(getTodayDate());
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
+        alert("Укажите дату приготовления");
+        return;
+      }
+      scheduledAt = `${dateValue} ${timeValue}:00`;
+    }
+
+    let changeFrom = null;
+    if (isCashPaymentCode(paymentCode)) {
+      const changeType = String(form.changeType || "no_change").trim();
+      if (changeType !== "no_change") {
+        if (changeType === "other") {
+          const numeric = Number(String(form.changeAmount || "").replace(/[^\d]/g, ""));
+          if (!Number.isFinite(numeric) || numeric <= 0) {
+            alert("Введите сумму для сдачи");
+            return;
+          }
+          changeFrom = numeric;
+        } else {
+          const numeric = Number(String(changeType).replace(/[^\d]/g, ""));
+          changeFrom = Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+        }
+      }
+      if (changeFrom != null && changeFrom <= summary.payableTotal) {
+        alert(`Сумма для сдачи должна быть больше ${toMoney(summary.payableTotal)}`);
+        return;
+      }
+    }
+
+    const items = buildRightOrderPayloadItems(cartItems);
+    if (!items.length) {
+      alert("Не удалось собрать позиции заказа");
+      return;
+    }
+
+    const payload = {
+      customer_name: customerName,
+      customer_phone: `+${phoneDigits}`,
+      method_code: methodCode,
+      delivery_address: isDeliveryMethod ? deliveryAddress : null,
+      pickup_store_id: pickupStoreId,
+      comment: String(form.comment || "").trim() || null,
+      time_option_code: timeOptionCode,
+      scheduled_at: scheduledAt,
+      payment_code: paymentCode,
+      change_from: changeFrom,
+      items,
+    };
+
+    state.rightCheckoutSubmittingByOrder.set(id, true);
+    renderRightOrderTabs();
+    try {
+      const json = await apiJson("/api/public/orders", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      const createdPublicId = String(json?.data?.public_id || "").trim();
+      const createdId = Number(json?.data?.id || 0);
+      const latestIndex = getRightOrderIndexById(id);
+      if (latestIndex >= 0) {
+        const latestOrder = state.rightOrders[latestIndex] || {};
+        const latestForm = latestOrder.form && typeof latestOrder.form === "object" ? { ...latestOrder.form } : {};
+        latestForm.cartItems = [];
+        latestForm.comment = "";
+        latestForm.changeType = "no_change";
+        latestForm.changeAmount = "";
+        state.rightOrders[latestIndex] = { ...latestOrder, form: latestForm };
+      }
+      resetRightCartClearState(id, { render: false });
+      if (typeof window.updateActiveOrdersBadge === "function") {
+        Promise.resolve(window.updateActiveOrdersBadge({ force: true })).catch(() => {});
+      }
+      alert(createdPublicId
+        ? `Заказ #${createdPublicId} отправлен`
+        : (createdId > 0 ? "Заказ отправлен" : "Заказ создан"));
+    } catch (e) {
+      alert(`Ошибка оформления заказа: ${e?.message || "UNKNOWN"}`);
+    } finally {
+      state.rightCheckoutSubmittingByOrder.delete(id);
+      renderRightOrderTabs();
+    }
+  }
+
   function getTenantIdFromStorage() {
     try {
       const tenantRaw = localStorage.getItem("tenant");
@@ -792,6 +1474,217 @@
     } catch {
       return 0;
     }
+  }
+
+  function getStoreIdFromStorage() {
+    try {
+      const activeStoreId = Number(localStorage.getItem("activeStoreId") || 0);
+      if (Number.isFinite(activeStoreId) && activeStoreId > 0) return activeStoreId;
+    } catch {}
+    try {
+      const storeId = Number(localStorage.getItem("store_id") || 0);
+      return Number.isFinite(storeId) && storeId > 0 ? storeId : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function newOrderCacheScopeKey() {
+    return `v${NEW_ORDER_CLIENT_CACHE_VERSION}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}`;
+  }
+
+  function newOrderManifestCacheKey() {
+    return `new_order_manifest_${newOrderCacheScopeKey()}`;
+  }
+
+  function newOrderBootstrapCacheKey() {
+    return `new_order_bootstrap_${newOrderCacheScopeKey()}`;
+  }
+
+  function readJsonCache(key) {
+    try {
+      const raw = localStorage.getItem(String(key || ""));
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  function writeJsonCache(key, value) {
+    try {
+      localStorage.setItem(String(key || ""), JSON.stringify(value));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function getManifestDomainToken(manifest, domain) {
+    return String(manifest?.domains?.[domain]?.token || "").trim();
+  }
+
+  function readNewOrderManifestCache() {
+    const parsed = readJsonCache(newOrderManifestCacheKey());
+    if (!parsed || typeof parsed !== "object") return null;
+    const ts = Number(parsed.ts || 0);
+    if (!ts || Date.now() - ts > NEW_ORDER_CLIENT_CACHE_MAX_AGE_MS) return null;
+    const data = parsed.data && typeof parsed.data === "object" ? parsed.data : null;
+    if (!data) return null;
+    return data;
+  }
+
+  function writeNewOrderManifestCache(manifest) {
+    const payload = {
+      ts: Date.now(),
+      data: manifest && typeof manifest === "object" ? manifest : null,
+    };
+    writeJsonCache(newOrderManifestCacheKey(), payload);
+  }
+
+  function areManifestTokensEqual(left, right) {
+    const domains = ["categories", "products", "checkout", "refs"];
+    return domains.every((domain) => getManifestDomainToken(left, domain) === getManifestDomainToken(right, domain));
+  }
+
+  function isManifestDomainChanged(prevManifest, nextManifest, domain) {
+    return getManifestDomainToken(prevManifest, domain) !== getManifestDomainToken(nextManifest, domain);
+  }
+
+  function mapToObject(mapValue) {
+    const out = {};
+    if (!(mapValue instanceof Map)) return out;
+    mapValue.forEach((value, key) => {
+      out[String(key)] = value;
+    });
+    return out;
+  }
+
+  function objectToMap(value) {
+    const out = new Map();
+    if (!value || typeof value !== "object") return out;
+    Object.keys(value).forEach((key) => {
+      const numericKey = Number(key);
+      out.set(Number.isFinite(numericKey) ? numericKey : key, value[key]);
+    });
+    return out;
+  }
+
+  let bootstrapPersistTimer = null;
+
+  function readBootstrapSnapshot() {
+    const parsed = readJsonCache(newOrderBootstrapCacheKey());
+    if (!parsed || typeof parsed !== "object") return null;
+    const ts = Number(parsed.ts || 0);
+    if (!ts || Date.now() - ts > NEW_ORDER_CLIENT_CACHE_MAX_AGE_MS) return null;
+    const data = parsed.data && typeof parsed.data === "object" ? parsed.data : null;
+    return data || null;
+  }
+
+  function persistBootstrapSnapshot() {
+    const categoryProductsById = {};
+    state.categoryProductsCache.forEach((payload, key) => {
+      const cid = Number(key || 0);
+      if (!(cid > 0)) return;
+      const source = Array.isArray(payload?.source) ? payload.source : [];
+      const combos = Array.isArray(payload?.combos) ? payload.combos : [];
+      categoryProductsById[String(cid)] = { source, combos };
+    });
+
+    const snapshot = {
+      ts: Date.now(),
+      data: {
+        manifest: state.cacheManifest && typeof state.cacheManifest === "object" ? state.cacheManifest : null,
+        activeCategoryId: state.activeCategoryId,
+        categories: Array.isArray(state.categories) ? state.categories : [],
+        productCategories: Array.isArray(state.productCategories) ? state.productCategories : [],
+        rightDeliveryTypes: Array.isArray(state.rightDeliveryTypes) ? state.rightDeliveryTypes : [],
+        rightPaymentTypes: Array.isArray(state.rightPaymentTypes) ? state.rightPaymentTypes : [],
+        rightTimeOptions: Array.isArray(state.rightTimeOptions) ? state.rightTimeOptions : [],
+        rightDeliverySettings: state.rightDeliverySettings && typeof state.rightDeliverySettings === "object"
+          ? state.rightDeliverySettings
+          : null,
+        rightPickupStores: Array.isArray(state.rightPickupStores) ? state.rightPickupStores : [],
+        unitConversions: Array.isArray(state.unitConversions) ? state.unitConversions : [],
+        checkoutSavedDraft: state.checkoutSavedDraft && typeof state.checkoutSavedDraft === "object"
+          ? { blocks: Array.isArray(state.checkoutSavedDraft.blocks) ? state.checkoutSavedDraft.blocks : [] }
+          : { blocks: [] },
+        categoryProductsById,
+        productVariantsById: mapToObject(state.productVariants),
+        productIngredientsById: mapToObject(state.productIngredients),
+        productOptionGroupsById: mapToObject(state.productOptionGroups),
+        optionGroupDetailsById: mapToObject(state.optionGroupDetails),
+      },
+    };
+    writeJsonCache(newOrderBootstrapCacheKey(), snapshot);
+  }
+
+  function schedulePersistBootstrapSnapshot(delay = 200) {
+    if (bootstrapPersistTimer) clearTimeout(bootstrapPersistTimer);
+    bootstrapPersistTimer = setTimeout(() => {
+      bootstrapPersistTimer = null;
+      persistBootstrapSnapshot();
+    }, Math.max(0, Number(delay || 0)));
+  }
+
+  function hydrateStateFromBootstrapSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return false;
+    if (snapshot.manifest && typeof snapshot.manifest === "object") {
+      state.cacheManifest = snapshot.manifest;
+      writeNewOrderManifestCache(snapshot.manifest);
+    }
+
+    state.categories = Array.isArray(snapshot.categories) ? snapshot.categories : [];
+    state.productCategories = Array.isArray(snapshot.productCategories) ? snapshot.productCategories : [];
+    state.rightDeliveryTypes = Array.isArray(snapshot.rightDeliveryTypes) ? snapshot.rightDeliveryTypes : [];
+    state.rightPaymentTypes = Array.isArray(snapshot.rightPaymentTypes) ? snapshot.rightPaymentTypes : [];
+    state.rightTimeOptions = Array.isArray(snapshot.rightTimeOptions) ? snapshot.rightTimeOptions : [];
+    state.rightDeliverySettings = snapshot.rightDeliverySettings && typeof snapshot.rightDeliverySettings === "object"
+      ? snapshot.rightDeliverySettings
+      : null;
+    state.rightDeliverySettingsReady = Object.prototype.hasOwnProperty.call(snapshot, "rightDeliverySettings");
+    state.rightDeliverySettingsLoading = false;
+    state.rightPickupStores = Array.isArray(snapshot.rightPickupStores) ? snapshot.rightPickupStores : [];
+    state.unitConversions = Array.isArray(snapshot.unitConversions) ? snapshot.unitConversions : [];
+    state.checkoutSavedDraft = snapshot.checkoutSavedDraft && typeof snapshot.checkoutSavedDraft === "object"
+      ? { blocks: Array.isArray(snapshot.checkoutSavedDraft.blocks) ? snapshot.checkoutSavedDraft.blocks : [] }
+      : { blocks: [] };
+
+    state.categoryProductsCache.clear();
+    state.checkoutCategoryProducts.clear();
+    const categoryProductsById = snapshot.categoryProductsById && typeof snapshot.categoryProductsById === "object"
+      ? snapshot.categoryProductsById
+      : {};
+    Object.keys(categoryProductsById).forEach((key) => {
+      const categoryId = Number(key || 0);
+      if (!(categoryId > 0)) return;
+      const raw = categoryProductsById[key] || {};
+      const payload = buildCategoryPayload(raw.source, raw.combos);
+      state.categoryProductsCache.set(categoryId, payload);
+      state.checkoutCategoryProducts.set(categoryId, payload.activeOnly);
+    });
+
+    state.productVariants = objectToMap(snapshot.productVariantsById);
+    state.productIngredients = objectToMap(snapshot.productIngredientsById);
+    state.productOptionGroups = objectToMap(snapshot.productOptionGroupsById);
+    state.optionGroupDetails = objectToMap(snapshot.optionGroupDetailsById);
+
+    state.ingredientStateByProduct.clear();
+    state.productIngredients.forEach((list, productId) => {
+      const pid = Number(productId || 0);
+      if (!(pid > 0)) return;
+      state.ingredientStateByProduct.set(pid, createIngredientQtyMap(list));
+    });
+
+    const cachedActive = snapshot.activeCategoryId;
+    if (String(cachedActive) === CHECKOUT_SCREEN_ID) {
+      state.activeCategoryId = CHECKOUT_SCREEN_ID;
+    } else {
+      const activeId = Number(cachedActive || 0);
+      const hasActive = state.categories.some((c) => Number(c?.id || 0) === activeId);
+      state.activeCategoryId = hasActive ? activeId : CHECKOUT_SCREEN_ID;
+    }
+    return true;
   }
 
   function getStoreAddressForPickupLikeMethod() {
@@ -1460,8 +2353,15 @@
     return `new_order_checkout_draft_v${CHECKOUT_DRAFT_CACHE_VERSION}_t${getTenantIdFromStorage()}`;
   }
 
+  function getCachedProductsToken() {
+    const token = getManifestDomainToken(state.cacheManifest, "products")
+      || getManifestDomainToken(readNewOrderManifestCache(), "products")
+      || "na";
+    return String(token || "na").slice(0, 64);
+  }
+
   function checkoutProductsCacheKey(categoryId) {
-    return `new_order_checkout_products_v${CHECKOUT_PRODUCTS_CACHE_VERSION}_t${getTenantIdFromStorage()}_c${Number(categoryId || 0)}`;
+    return `new_order_checkout_products_v${CHECKOUT_PRODUCTS_CACHE_VERSION}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}_p${getCachedProductsToken()}_c${Number(categoryId || 0)}`;
   }
 
   function writeDraftCache(blocks) {
@@ -1588,16 +2488,11 @@
       const selectedVariantSafeIndex = Number.isFinite(selectedVariantIndex)
         ? selectedVariantIndex
         : (Number.isFinite(defaultVariantIndexRaw) ? defaultVariantIndexRaw : 0);
-      const ingredientDiff = calculateIngredientPriceDiff(selectedProductId);
-      const priceRaw = hasVariants
-        ? getVariantUnitPriceByBase(
-            selectedProduct,
-            selectedProductVariants,
-            selectedVariantSafeIndex,
-            Number(selectedProduct?.price || 0)
-          )
-        : Number(selectedProduct?.price || 0);
-      const price = roundPrice(Number(priceRaw || 0) + Number(ingredientDiff || 0));
+      const currentPricing = getCurrentProductUnitPricing(selectedProduct, selectedProductId);
+      const price = roundPrice(Number(currentPricing?.unitPrice || 0));
+      const oldPrice = currentPricing?.hasOldPrice
+        ? roundPrice(Number(currentPricing?.oldPrice || 0))
+        : 0;
       const variantLabel = hasVariants ? getSelectedVariantLabelFromChips(variantChips) : "";
       const categoryTitle = String((categoryById.get(categoryId) || {}).title || "Категория");
       const productName = String(selectedProduct?.name || "Товар");
@@ -1613,6 +2508,9 @@
         variantValues: variantChips.map((chip) => String(chip?.label || "").trim()).filter(Boolean),
         selectedVariantIndex: selectedVariantSafeIndex,
         basePrice: Number(selectedProduct?.price || 0),
+        oldBasePrice: Number(selectedProduct?.old_price || 0),
+        oldPrice: Number.isFinite(oldPrice) ? oldPrice : 0,
+        discount: selectedProduct?.discount && typeof selectedProduct.discount === "object" ? { ...selectedProduct.discount } : null,
         baseUnitId: Number(selectedProduct?.base_unit_id || selectedProduct?.unit_id || 0),
         baseQty: Number(selectedProduct?.base_qty || 1),
         variantUnitId: Number(primaryVariantGroup?.unit_id || selectedProduct?.base_unit_id || selectedProduct?.unit_id || 0),
@@ -1660,13 +2558,19 @@
       const selectedVariantIndexRaw = Number(one?.selectedVariantIndex);
       const selectedVariantIndex = Number.isFinite(selectedVariantIndexRaw) && selectedVariantIndexRaw >= 0 ? selectedVariantIndexRaw : 0;
       const variantLabel = String(one?.variantLabel || "").trim();
+      const unitPrice = roundPrice(Number(one?.price || total));
+      const unitOldPriceRaw = roundPrice(Number(one?.oldPrice || 0));
+      const unitOldPrice = unitOldPriceRaw > unitPrice ? unitOldPriceRaw : 0;
       return {
         id,
         type: "product",
         name: String(one.productName || "Товар"),
+        product_id: Number(one?.productId || 0),
+        category_name: String(one.categoryTitle || ""),
         qty: 1,
-        unit_price: total,
-        sum: total,
+        unit_price_before_discount: unitOldPrice,
+        unit_price: unitPrice,
+        sum: unitPrice,
         variant: {
           label: variantLabel,
           values: variants,
@@ -1674,6 +2578,8 @@
         },
         pricing: {
           base_price: Number(one?.basePrice || 0),
+          old_price: Number(one?.oldBasePrice || 0),
+          discount: one?.discount && typeof one.discount === "object" ? { ...one.discount } : null,
           base_unit_id: Number(one?.baseUnitId || 0),
           unit_id: Number(one?.variantUnitId || 0),
           base_qty: Number(one?.baseQty || 1),
@@ -1688,13 +2594,24 @@
         photos: [String(one.photoUrl || "")].filter(Boolean),
       };
     }
+    const sumNew = roundPrice(items.reduce((sum, item) => sum + Number(item?.price || 0), 0));
+    const sumOld = roundPrice(items.reduce((sum, item) => {
+      const itemPrice = roundPrice(Number(item?.price || 0));
+      const itemOld = roundPrice(Number(item?.oldPrice || 0));
+      return sum + Number(itemOld > itemPrice ? itemOld : itemPrice);
+    }, 0));
+    const comboDiscountPercent = sumOld > 0 && sumNew < sumOld
+      ? Number((((sumOld - sumNew) / sumOld) * 100).toFixed(6))
+      : 0;
     return {
       id,
       type: "combo",
       name: getCheckoutBlockChipTitle(safeBlock, 0, categoryById) || "Комбо",
       qty: 1,
-      unit_price: total,
-      sum: total,
+      combo_discount_percent: comboDiscountPercent,
+      unit_price_before_discount: sumOld,
+      unit_price: sumNew,
+      sum: sumNew,
       photos: items.map((item) => String(item?.photoUrl || "")).filter(Boolean).slice(0, 4),
       sections: items.map((item) => ({
         category_id: Number(item?.categoryId || 0),
@@ -1703,6 +2620,7 @@
         product_name: String(item?.productName || ""),
         photo_url: String(item?.photoUrl || ""),
         price: Number(item?.price || 0),
+        old_price: Number(item?.oldPrice || item?.price || 0),
         variant: {
           label: String(item?.variantLabel || ""),
           values: Array.isArray(item?.variantValues) ? item.variantValues.map((v) => String(v || "").trim()).filter(Boolean) : [],
@@ -1710,6 +2628,8 @@
         },
         pricing: {
           base_price: Number(item?.basePrice || 0),
+          old_price: Number(item?.oldBasePrice || 0),
+          discount: item?.discount && typeof item.discount === "object" ? { ...item.discount } : null,
           base_unit_id: Number(item?.baseUnitId || 0),
           unit_id: Number(item?.variantUnitId || 0),
           base_qty: Number(item?.baseQty || 1),
@@ -1732,12 +2652,13 @@
 
     const calcSnapshotPrice = (pricing, selectedIndex, fallbackPrice) => {
       const basePrice = Number(pricing?.base_price || 0);
+      const optionTotal = Number(pricing?.option_total || 0);
       const baseUnitId = Number(pricing?.base_unit_id || 0);
       const unitId = Number(pricing?.unit_id || 0);
       const baseQty = Number(pricing?.base_qty || 1) || 1;
       const variantGroup = pricing?.variant_group || null;
       if (!variantGroup || !Array.isArray(variantGroup.values) || !variantGroup.values.length) {
-        return roundPrice(Number(fallbackPrice || basePrice || 0));
+        return roundPrice(Number(fallbackPrice || basePrice || 0) + optionTotal);
       }
       const productLike = {
         price: basePrice,
@@ -1746,13 +2667,15 @@
         base_qty: baseQty,
       };
       const next = getVariantUnitPriceByBase(productLike, [variantGroup], Number(selectedIndex || 0), basePrice);
-      return roundPrice(Number.isFinite(Number(next)) ? Number(next) : Number(fallbackPrice || basePrice || 0));
+      const resolvedBase = Number.isFinite(Number(next)) ? Number(next) : Number(fallbackPrice || basePrice || 0);
+      return roundPrice(resolvedBase + optionTotal);
     };
 
     if (String(item.type || "") === "combo") {
       const sections = Array.isArray(item.sections) ? item.sections.map((section) => ({ ...section })) : [];
-      let nextUnitPrice = 0;
-      item.sections = sections.map((section) => {
+      const discountPercent = Number(item?.combo_discount_percent ?? item?.discount_percent ?? 0);
+      let sumOld = 0;
+      const nextSections = sections.map((section) => {
         const variant = section.variant && typeof section.variant === "object" ? { ...section.variant } : {};
         const values = Array.isArray(variant.values) ? variant.values.map((v) => String(v || "").trim()).filter(Boolean) : [];
         const rawIndex = Number(variant.selected_index);
@@ -1765,11 +2688,26 @@
           safeIndex,
           Number(section?.pricing?.base_price || 0)
         );
-        const sectionPrice = roundPrice(sectionBasePrice + ingredientDiff);
-        nextUnitPrice += sectionPrice;
-        return { ...section, price: sectionPrice, variant };
+        const sectionOldPrice = roundPrice(sectionBasePrice + ingredientDiff);
+        sumOld += sectionOldPrice;
+        return { ...section, old_price: sectionOldPrice, price: sectionOldPrice, variant };
       });
-      item.unit_price = roundPrice(nextUnitPrice);
+      const totalDiscounted = roundPrice(comboDiscountedPrice(sumOld, discountPercent));
+      let assigned = 0;
+      item.sections = nextSections.map((section, idx) => {
+        const oldPrice = roundPrice(Number(section?.old_price || 0));
+        let nextPrice = oldPrice;
+        if (sumOld > 0 && Number.isFinite(sumOld)) {
+          nextPrice = idx === nextSections.length - 1
+            ? roundPrice(totalDiscounted - assigned)
+            : roundPrice((oldPrice / sumOld) * totalDiscounted);
+          assigned += nextPrice;
+        }
+        return { ...section, price: roundPrice(Math.max(0, nextPrice)), old_price: oldPrice };
+      });
+      item.unit_price_before_discount = roundPrice(sumOld);
+      item.unit_price = roundPrice(item.sections.reduce((sum, section) => sum + Number(section?.price || 0), 0));
+      item.photos = item.sections.map((section) => String(section?.photo_url || "")).filter(Boolean).slice(0, 4);
       item.sum = roundPrice(item.unit_price * qty);
       return item;
     }
@@ -1781,15 +2719,100 @@
     variant.selected_index = safeIndex;
     if (values.length) variant.label = String(values[safeIndex] || "").trim();
     item.variant = variant;
+    const optionItems = Array.isArray(item.option_items) ? item.option_items : [];
+    const optionTotal = roundPrice(optionItems.reduce((sum, row) => {
+      const qty = Math.max(0, Number(row?.qty || 0));
+      const basePrice = Number(row?.basePrice || 0);
+      const variantDiff = Number(row?.variantDiff || 0);
+      return sum + ((basePrice + variantDiff) * qty);
+    }, 0));
+    if (item.pricing && typeof item.pricing === "object") {
+      item.pricing = { ...item.pricing, option_total: optionTotal };
+    }
+
     const ingredientDiff = calculateIngredientSnapshotDiff(item.ingredients);
     const basePrice = calcSnapshotPrice(
       item.pricing,
       safeIndex,
       Number(item?.pricing?.base_price || 0)
     );
-    item.unit_price = roundPrice(basePrice + ingredientDiff);
+    const unitBeforeDiscount = roundPrice(basePrice + ingredientDiff);
+    const discountAmount = calculateProductDiscountAmount(unitBeforeDiscount, item?.pricing?.discount);
+    const oldBasePrice = calcSnapshotPrice(
+      item.pricing && typeof item.pricing === "object"
+        ? { ...item.pricing, base_price: Number(item?.pricing?.old_price || 0) }
+        : item.pricing,
+      safeIndex,
+      Number(item?.pricing?.old_price || 0)
+    );
+    const oldFromDb = roundPrice(oldBasePrice + ingredientDiff);
+    const unitPrice = roundPrice(Math.max(0, unitBeforeDiscount - discountAmount));
+    const hasApiDiscount = discountAmount > 0;
+    const oldUnitPrice = hasApiDiscount ? unitBeforeDiscount : oldFromDb;
+    const hasOldUnitPrice = Number.isFinite(oldUnitPrice) && oldUnitPrice > unitPrice;
+    item.unit_price_before_discount = hasOldUnitPrice ? roundPrice(oldUnitPrice) : 0;
+    item.unit_price = unitPrice;
+    if (item.pricing && typeof item.pricing === "object") {
+      item.pricing = {
+        ...item.pricing,
+        unit_before_discount: unitBeforeDiscount,
+        discount_amount: roundPrice(discountAmount),
+      };
+    }
     item.sum = roundPrice(item.unit_price * qty);
     return item;
+  }
+
+  function calculateProductDiscountAmount(price, discount) {
+    const srcPrice = Number(price || 0);
+    if (!(srcPrice > 0) || !discount) return 0;
+    const discType = String(discount.discount_type || "").trim();
+    const discValue = Number(discount.discount_value || 0);
+    let discountAmount = 0;
+    if (discType === "percent") {
+      if (!(discValue > 0)) return 0;
+      discountAmount = srcPrice * (discValue / 100);
+    } else if (discType === "fixed") {
+      if (!(discValue > 0)) return 0;
+      discountAmount = discValue;
+    } else if (discType === "special_price") {
+      discountAmount = Math.max(0, srcPrice - discValue);
+    } else {
+      return 0;
+    }
+    const maxDiscountAmount = Number(discount.max_discount_amount);
+    if (Number.isFinite(maxDiscountAmount) && maxDiscountAmount > 0 && discountAmount > maxDiscountAmount) {
+      discountAmount = maxDiscountAmount;
+    }
+    if (discountAmount > srcPrice) discountAmount = srcPrice;
+    return Math.round(discountAmount * 100) / 100;
+  }
+
+  function getCurrentProductUnitPricing(product, productId) {
+    const pid = Number(productId || 0);
+    const variants = state.productVariants.get(pid) || [];
+    const selectedIndex = getResolvedVariantIndex(pid, variants);
+    const ingredientDiff = calculateIngredientPriceDiff(pid);
+    const optionDiff = calculateOptionPriceDiff(pid);
+    const variantUnit = getVariantUnitPriceByBase(product, variants, selectedIndex, Number(product?.price || 0));
+    const unitBeforeDiscount = roundPrice(Number(variantUnit || 0) + ingredientDiff + optionDiff);
+    const discountAmount = calculateProductDiscountAmount(unitBeforeDiscount, product?.discount);
+    const unitPrice = roundPrice(Math.max(0, unitBeforeDiscount - discountAmount));
+
+    const variantOld = getVariantUnitPriceByBase(product, variants, selectedIndex, Number(product?.old_price || 0));
+    const oldFromDb = roundPrice(Number(variantOld || 0) + ingredientDiff + optionDiff);
+    const hasApiDiscount = discountAmount > 0;
+    const oldPrice = hasApiDiscount ? unitBeforeDiscount : oldFromDb;
+    const hasOldPrice = Number.isFinite(oldPrice) && oldPrice > unitPrice;
+
+    return {
+      unitPrice,
+      oldPrice: hasOldPrice ? oldPrice : 0,
+      hasOldPrice,
+      unitBeforeDiscount,
+      discountAmount: roundPrice(discountAmount),
+      optionDiff: roundPrice(optionDiff),
+    };
   }
 
   function addCartItemToRightOrder(orderId, cartItem) {
@@ -1803,6 +2826,1768 @@
     list.push(cartItem);
     form.cartItems = list;
     state.rightOrders[idx] = { ...order, form };
+  }
+
+  function getProductById(productId) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return null;
+    const fromCurrent = (Array.isArray(state.currentProducts) ? state.currentProducts : []).find((p) => Number(p?.id || 0) === pid);
+    if (fromCurrent) return fromCurrent;
+    const fromCache = state.productByIdCache.get(pid);
+    if (fromCache) return fromCache;
+    for (const list of state.checkoutCategoryProducts.values()) {
+      const found = (Array.isArray(list) ? list : []).find((p) => Number(p?.id || 0) === pid);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function getSelectedOptionItemsForProduct(productId) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return [];
+    const byGroup = state.optionSelections.get(pid);
+    if (!(byGroup instanceof Map) || byGroup.size === 0) return [];
+    const out = [];
+    for (const [groupId, entry] of byGroup.entries()) {
+      const rows = Array.isArray(entry?.items) ? entry.items : [];
+      rows.forEach((row) => {
+        const id = Number(row?.id || 0);
+        if (!(id > 0)) return;
+        out.push({
+          id,
+          group_id: Number(groupId || 0),
+          label: String(row?.label || "").trim(),
+          qty: Math.max(0, Number(row?.qty || 0)),
+          basePrice: Number(row?.basePrice || 0),
+          variantDiff: Number(row?.variantDiff || 0),
+          variantIndex: Number.isFinite(Number(row?.variantIndex)) ? Number(row.variantIndex) : null,
+        });
+      });
+    }
+    return out;
+  }
+
+  function buildCartItemFromProduct(productId, qty) {
+    const pid = Number(productId || 0);
+    const safeQty = Math.max(1, Number(qty || 1));
+    if (!(pid > 0)) return null;
+    const product = getProductById(pid);
+    if (!product) return null;
+    const productVariants = state.productVariants.get(pid) || [];
+    const primaryVariantGroup = productVariants[0] || null;
+    const variantChips = getVariantChipsForProduct(pid);
+    const variantValues = variantChips.map((chip) => String(chip?.label || "").trim()).filter(Boolean);
+    const resolvedVariantIndex = getResolvedVariantIndex(pid, productVariants);
+    const selectedVariantIndex = variantValues.length
+      ? Math.max(0, Math.min(variantValues.length - 1, Number.isFinite(resolvedVariantIndex) ? resolvedVariantIndex : Number(primaryVariantGroup?.default_value_index || 0)))
+      : 0;
+    const optionItems = getSelectedOptionItemsForProduct(pid);
+    const optionTotal = roundPrice(calculateOptionPriceDiff(pid));
+    const variantLabel = variantValues.length ? String(variantValues[selectedVariantIndex] || "").trim() : "";
+    const item = {
+      id: Date.now() + Math.floor(Math.random() * 10000),
+      type: "product",
+      name: String(product?.name || "Товар"),
+      product_id: pid,
+      qty: safeQty,
+      photos: [String(getProductPhoto(product) || "")].filter(Boolean),
+      variant: {
+        label: variantLabel,
+        values: variantValues,
+        selected_index: selectedVariantIndex,
+      },
+      pricing: {
+        base_price: Number(product?.price || 0),
+        old_price: Number(product?.old_price || 0),
+        option_total: optionTotal,
+        discount: product?.discount && typeof product.discount === "object" ? { ...product.discount } : null,
+        base_unit_id: Number(product?.base_unit_id || product?.unit_id || 0),
+        unit_id: Number(primaryVariantGroup?.unit_id || product?.base_unit_id || product?.unit_id || 0),
+        base_qty: Number(product?.base_qty || 1),
+        variant_group: primaryVariantGroup ? {
+          unit_id: Number(primaryVariantGroup?.unit_id || 0),
+          default_value_index: Number(primaryVariantGroup?.default_value_index || 0),
+          values: Array.isArray(primaryVariantGroup?.values) ? [...primaryVariantGroup.values] : [],
+          discount_tiers: Array.isArray(primaryVariantGroup?.discount_tiers) ? primaryVariantGroup.discount_tiers.map((tier) => ({ ...tier })) : [],
+        } : null,
+      },
+      option_items: optionItems,
+      ingredients: buildIngredientsSnapshotForProduct(pid),
+    };
+    return recalculateCartItemTotals(item);
+  }
+
+  function getProductCardQty(productId) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return 1;
+    const rawQty = Number(state.quantities.get(pid));
+    if (!Number.isFinite(rawQty)) return 1;
+    return Math.max(1, Math.trunc(rawQty));
+  }
+
+  function setProductCardQty(productId, qtyRaw) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return;
+    const qty = Math.max(1, Math.trunc(Number(qtyRaw || 0)));
+    state.quantities.set(pid, qty);
+  }
+
+  function toSignatureNumber(value) {
+    const num = Number(value || 0);
+    if (!Number.isFinite(num)) return 0;
+    return Math.round(num * 1000000) / 1000000;
+  }
+
+  function buildProductConfigSignatureFromCartItem(item) {
+    if (!item || typeof item !== "object") return "";
+    if (String(item?.type || "product") !== "product") return "";
+    const productId = Number(item?.product_id || 0);
+    if (!(productId > 0)) return "";
+
+    const variantIndex = Number.isFinite(Number(item?.variant?.selected_index))
+      ? Number(item.variant.selected_index)
+      : 0;
+    const options = (Array.isArray(item?.option_items) ? item.option_items : [])
+      .map((row) => ({
+        groupId: Number(row?.group_id || 0),
+        itemId: Number(row?.id || 0),
+        qty: toSignatureNumber(row?.qty),
+        variantIndex: Number.isFinite(Number(row?.variantIndex)) ? Number(row.variantIndex) : null,
+      }))
+      .filter((row) => row.groupId > 0 && row.itemId > 0 && row.qty > 0)
+      .sort((a, b) => {
+        if (a.groupId !== b.groupId) return a.groupId - b.groupId;
+        if (a.itemId !== b.itemId) return a.itemId - b.itemId;
+        const aVariant = a.variantIndex == null ? -1 : a.variantIndex;
+        const bVariant = b.variantIndex == null ? -1 : b.variantIndex;
+        return aVariant - bVariant;
+      });
+    const ingredients = (Array.isArray(item?.ingredients) ? item.ingredients : [])
+      .map((row) => ({
+        ingredientId: Number(row?.ingredient_id || 0),
+        qty: toSignatureNumber(row?.qty),
+        unitId: Number(row?.unit_id || 0),
+      }))
+      .filter((row) => row.ingredientId > 0)
+      .sort((a, b) => a.ingredientId - b.ingredientId);
+
+    return JSON.stringify({
+      productId,
+      variantIndex,
+      options,
+      ingredients,
+    });
+  }
+
+  function upsertProductCardItemQtyInActiveOrder(productId, qtyRaw) {
+    const pid = Number(productId || 0);
+    const requestedQty = Math.max(0, Math.trunc(Number(qtyRaw || 0)));
+    if (!(pid > 0)) return false;
+
+    const signatureSeed = buildCartItemFromProduct(pid, 1);
+    if (!signatureSeed) return false;
+    const signature = buildProductConfigSignatureFromCartItem(signatureSeed);
+    if (!signature) return false;
+
+    if (requestedQty > 0 && !state.rightActiveOrderId) openRightNewOrderTab();
+    const orderId = Number(state.rightActiveOrderId || 0);
+    if (!(orderId > 0)) return false;
+    const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
+    if (orderIndex < 0) return false;
+
+    const order = state.rightOrders[orderIndex] || {};
+    const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+    const cartItems = Array.isArray(form.cartItems) ? form.cartItems.map((row) => ({ ...row })) : [];
+    const existingIndex = cartItems.findIndex((row) => buildProductConfigSignatureFromCartItem(row) === signature);
+
+    if (requestedQty <= 0) {
+      if (existingIndex < 0) return false;
+      cartItems.splice(existingIndex, 1);
+    } else {
+      const nextItem = buildCartItemFromProduct(pid, requestedQty);
+      if (!nextItem) return false;
+      if (existingIndex >= 0) {
+        nextItem.id = Number(cartItems[existingIndex]?.id || nextItem.id);
+        cartItems[existingIndex] = nextItem;
+      } else {
+        cartItems.push(nextItem);
+      }
+    }
+
+    form.cartItems = cartItems;
+    state.rightOrders[orderIndex] = { ...order, form };
+    return true;
+  }
+
+  function resetProductCardToDefault(productId) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return;
+    const variants = state.productVariants.get(pid) || [];
+    if (Array.isArray(variants) && variants.length) {
+      const values = Array.isArray(variants[0]?.values) ? variants[0].values : [];
+      const rawDefault = variants[0]?.default_value_index != null ? Number(variants[0].default_value_index) : 0;
+      const safeDefault = Number.isFinite(rawDefault) && rawDefault >= 0 && rawDefault < values.length ? rawDefault : 0;
+      state.selectedVariants.set(pid, safeDefault);
+    } else {
+      state.selectedVariants.delete(pid);
+    }
+
+    const ingredients = state.productIngredients.get(pid) || [];
+    const qtyMap = new Map();
+    ingredients.forEach((ing) => {
+      const ingId = Number(ing?.ingredient_id || 0);
+      if (!(ingId > 0)) return;
+      const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
+      const defaultQty = Number(ing.quantity ?? 1);
+      const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
+      const min = rawMin !== null ? rawMin : (isVariable ? 0 : defaultQty);
+      const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
+      const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
+      let initialQty = Math.max(min, Math.min(max, defaultQty));
+      if (step > 0) {
+        const stepsFromMin = Math.round((initialQty - min) / step);
+        initialQty = min + (stepsFromMin * step);
+        initialQty = Math.max(min, Math.min(max, initialQty));
+      }
+      qtyMap.set(ingId, initialQty);
+    });
+    state.ingredientStateByProduct.set(pid, qtyMap);
+
+    state.optionSelections.delete(pid);
+    state.quantities.set(pid, 1);
+  }
+
+  function quickAddProductToCart(productId) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return false;
+    if (!state.rightActiveOrderId) openRightNewOrderTab();
+    const orderId = Number(state.rightActiveOrderId || 0);
+    if (!(orderId > 0)) return false;
+    const qtyToAdd = getProductCardQty(pid);
+    const cartItem = buildCartItemFromProduct(pid, qtyToAdd);
+    if (!cartItem) return false;
+    addCartItemToRightOrder(orderId, cartItem);
+    resetProductCardToDefault(pid);
+    renderRightOrderTabs();
+    renderProducts(state.currentProducts);
+    return true;
+  }
+
+  function comboDiscountedPrice(price, discountPercent) {
+    const p = Number(price) || 0;
+    const d = Number(discountPercent) || 0;
+    return roundPrice(d >= 100 ? 0 : p * (1 - (d / 100)));
+  }
+
+  async function ensureProductById(productId) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return null;
+    const existing = getProductById(pid);
+    if (existing) {
+      state.productByIdCache.set(pid, existing);
+      return existing;
+    }
+    if (state.productByIdCache.has(pid)) return state.productByIdCache.get(pid);
+    try {
+      const json = await apiJson(`/api/public/products/${pid}`);
+      const product = json?.data || null;
+      state.productByIdCache.set(pid, product);
+      return product;
+    } catch {
+      state.productByIdCache.set(pid, null);
+      return null;
+    }
+  }
+
+  async function resolveComboDetails(comboId) {
+    const id = Number(comboId || 0);
+    if (!(id > 0)) return null;
+    if (state.comboDetailsCache.has(id)) return state.comboDetailsCache.get(id);
+    try {
+      const json = await apiJson(`/api/public/combos/${id}`);
+      const data = json?.data || null;
+      state.comboDetailsCache.set(id, data);
+      return data;
+    } catch {
+      state.comboDetailsCache.delete(id);
+      return null;
+    }
+  }
+
+  function getComboOverlayElements() {
+    const backdrop = document.getElementById("newOrderComboOverlay");
+    const list = document.getElementById("newOrderComboOverlayList");
+    const qtyValue = document.getElementById("newOrderComboOverlayQtyValue");
+    const addBtn = document.getElementById("newOrderComboOverlayAddBtn");
+    const discountBadge = document.getElementById("newOrderComboOverlayDiscount");
+    return { backdrop, list, qtyValue, addBtn, discountBadge };
+  }
+
+  function ensureComboOverlay() {
+    if (document.getElementById("newOrderComboOverlay")) return;
+    const wrap = document.createElement("div");
+    wrap.id = "newOrderComboOverlay";
+    wrap.className = "new-order-option-overlay hidden";
+    wrap.innerHTML = `
+      <div class="new-order-option-sheet new-order-product-sheet new-order-combo-sheet">
+        <div class="new-order-option-sheet-head">
+          <button class="new-order-option-sheet-back" type="button" data-action="combo-overlay-back"><i class="fas fa-arrow-left"></i></button>
+          <span id="newOrderComboOverlayDiscount" class="shop-sheet-discount-badge hidden"></span>
+        </div>
+        <div class="new-order-option-sheet-list no-scrollbar new-order-product-sheet-list" id="newOrderComboOverlayList"></div>
+        <div class="new-order-product-sheet-footer shop-pd-footer">
+          <div class="qty-pill qty-pill--muted new-order-product-sheet-qty">
+            <button class="qty-pill__btn qty-pill__btn--minus" type="button" data-action="combo-overlay-qty-minus">−</button>
+            <span class="qty-pill__center" id="newOrderComboOverlayQtyValue">1</span>
+            <button class="qty-pill__btn qty-pill__btn--plus" type="button" data-action="combo-overlay-qty-plus">+</button>
+          </div>
+          <button class="shop-checkout-btn shop-pd-action new-order-product-sheet-add shop-combo-action" type="button" id="newOrderComboOverlayAddBtn" data-action="combo-overlay-add">в корзину</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(wrap);
+  }
+
+  function resetComboModalState() {
+    state.comboModal.comboId = 0;
+    state.comboModal.combo = null;
+    state.comboModal.qty = 1;
+    state.comboModal.mode = "add";
+    state.comboModal.editOrderId = 0;
+    state.comboModal.editCartItemId = 0;
+    state.comboModal.selectedIndexByBlock = [];
+    state.comboModal.selectionStateByBlock = [];
+    state.comboModal.view = "main";
+    state.comboModal.pickerBlockIndex = -1;
+    state.comboModal.expandedPickerProductIndex = null;
+    state.comboModal.pickerRenderToken = 0;
+  }
+
+  function closeComboOverlay() {
+    const { backdrop, list } = getComboOverlayElements();
+    if (!backdrop) return;
+    backdrop.classList.add("hidden");
+    backdrop.onclick = null;
+    if (list) list.innerHTML = "";
+    resetComboModalState();
+  }
+
+  function makeEmptyComboBlockState() {
+    return {
+      product_id: null,
+      variant_label: "",
+      variant_group_id: null,
+      variant_group_title: "",
+      variant_unit: "",
+      unit_id: null,
+      variant_value_index: null,
+      ingredients_display: [],
+      unit_price_override: null,
+      unit_price_before_discount: null,
+    };
+  }
+
+  function cloneComboValue(value) {
+    if (Array.isArray(value)) return value.map((x) => cloneComboValue(x));
+    if (value && typeof value === "object") {
+      const out = {};
+      Object.keys(value).forEach((k) => { out[k] = cloneComboValue(value[k]); });
+      return out;
+    }
+    return value;
+  }
+
+  function getComboSeedSelectionsFromCartItem(item) {
+    if (!item || typeof item !== "object") return [];
+    const explicit = Array.isArray(item?.selections) ? item.selections : [];
+    if (explicit.length) return explicit.map((s) => cloneComboValue(s));
+    const sections = Array.isArray(item?.sections) ? item.sections : [];
+    if (!sections.length) return [];
+    return sections.map((section) => ({
+      product_id: Number(section?.product_id || 0),
+      product_name: String(section?.product_name || ""),
+      product_photo: String(section?.photo_url || ""),
+      variant_label: String(section?.variant?.label || ""),
+      variant_group_id: Number(section?.pricing?.variant_group?.id || section?.pricing?.variant_group_id || 0) || null,
+      variant_value_index: Number.isFinite(Number(section?.variant?.selected_index)) ? Number(section.variant.selected_index) : null,
+      unit_id: Number(section?.pricing?.unit_id || 0) || null,
+      variant_group_title: String(section?.variant_group_title || ""),
+      variant_unit: String(section?.variant_unit || ""),
+      unit_price_override: Number(section?.price || 0),
+      unit_price_before_discount: Number(section?.old_price || section?.price || 0),
+      ingredients_display: Array.isArray(section?.ingredients)
+        ? section.ingredients.map((ing) => ({
+            ingredient_id: Number(ing?.ingredient_id || 0),
+            name: String(ing?.ingredient_name || ""),
+            qty: Number(ing?.qty || 0),
+            quantity: Number(ing?.qty || 0),
+            unit: String(ing?.unit_label || ""),
+            unit_id: Number(ing?.unit_id || 0) || null,
+          }))
+        : [],
+    }));
+  }
+
+  async function hydrateComboBlockSelection(blockIndex, opts = {}) {
+    const combo = state.comboModal.combo;
+    if (!combo) return;
+    const blocks = Array.isArray(combo?.blocks) ? combo.blocks : [];
+    const block = blocks[Number(blockIndex)];
+    if (!block) return;
+    const products = Array.isArray(block?.products) ? block.products : [];
+    if (!products.length) return;
+    let selectedIdx = Number(state.comboModal.selectedIndexByBlock[blockIndex] || 0);
+    if (!Number.isFinite(selectedIdx)) selectedIdx = 0;
+    selectedIdx = Math.max(0, Math.min(products.length - 1, selectedIdx));
+    state.comboModal.selectedIndexByBlock[blockIndex] = selectedIdx;
+    const selected = products[selectedIdx];
+    const productId = Number(selected?.product_id || 0);
+    if (!(productId > 0)) return;
+    const product = await ensureProductById(productId);
+    const productLike = product || { id: productId, price: Number(selected?.price || 0) };
+    await loadVariantsForProducts([productLike]);
+    await loadIngredientsForProducts([productLike]);
+    const variants = state.productVariants.get(productId) || [];
+    const ingredients = state.productIngredients.get(productId) || [];
+    const discountPercent = Number(combo?.discount_percent || 0);
+    const preferSavedState = opts?.preferSavedState !== false;
+    const currentRaw = state.comboModal.selectionStateByBlock[blockIndex];
+    const current = currentRaw && typeof currentRaw === "object" ? currentRaw : makeEmptyComboBlockState();
+    const hasSavedForProduct =
+      preferSavedState &&
+      Number(current?.product_id || 0) === productId &&
+      (Number.isFinite(Number(current?.variant_value_index)) || (Array.isArray(current?.ingredients_display) && current.ingredients_display.length > 0));
+    const vGroup = Array.isArray(variants) && variants.length ? variants[0] : null;
+    const values = Array.isArray(vGroup?.values) ? vGroup.values : [];
+    let variantIndex = 0;
+    if (hasSavedForProduct && Number.isFinite(Number(current?.variant_value_index))) {
+      variantIndex = Number(current.variant_value_index);
+    } else if (vGroup?.default_value_index != null && Number.isFinite(Number(vGroup.default_value_index))) {
+      variantIndex = Number(vGroup.default_value_index);
+    }
+    if (values.length) variantIndex = Math.max(0, Math.min(values.length - 1, variantIndex));
+    else variantIndex = 0;
+    const variantLabel = values.length ? String(values[variantIndex] || "") : "";
+    const ingredientQty = new Map();
+    if (hasSavedForProduct && Array.isArray(current?.ingredients_display) && current.ingredients_display.length) {
+      current.ingredients_display.forEach((ing) => {
+        const ingId = Number(ing?.ingredient_id || 0);
+        if (ingId > 0) ingredientQty.set(ingId, Number(ing?.qty ?? ing?.quantity ?? 0));
+      });
+    }
+    ingredients.forEach((ing) => {
+      const ingId = Number(ing?.ingredient_id || 0);
+      if (!(ingId > 0)) return;
+      if (!ingredientQty.has(ingId)) ingredientQty.set(ingId, Number(ing?.quantity ?? 0));
+    });
+
+    const basePrice = Number(product?.price || selected?.price || 0);
+    let unitPriceBeforeDiscount = Array.isArray(variants) && variants.length
+      ? Number(getVariantUnitPriceByBase(productLike, variants, variantIndex, basePrice) || 0)
+      : basePrice;
+    ingredients.forEach((ing) => {
+      const ingId = Number(ing?.ingredient_id || 0);
+      if (!(ingId > 0)) return;
+      const currentQty = Number(ingredientQty.get(ingId) ?? 0);
+      const baseQty = Number(ing?.quantity ?? 1);
+      const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
+      const ingredientPrice = Number(ing.ingredient_price || 0);
+      const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0 ? ingredientPrice / ingredientBaseQty : (ingredientPrice > 0 ? ingredientPrice : 0);
+      const pricePerUnit = ing.price_override != null && Number(ing.price_override) >= 0 ? Number(ing.price_override) : catalogBasePrice;
+      const currentQtyInBase = getQtyInBase(ing, currentQty);
+      const baseQtyInBase = getQtyInBase(ing, baseQty);
+      const diff = (currentQtyInBase != null && baseQtyInBase != null && Number.isFinite(pricePerUnit))
+        ? pricePerUnit * (currentQtyInBase - baseQtyInBase)
+        : (Number.isFinite(pricePerUnit) ? (currentQty - baseQty) * pricePerUnit : 0);
+      unitPriceBeforeDiscount += diff;
+    });
+    unitPriceBeforeDiscount = Math.max(0, unitPriceBeforeDiscount);
+    const nextState = {
+      ...makeEmptyComboBlockState(),
+      product_id: productId,
+      variant_label: String(variantLabel || ""),
+      variant_group_id: vGroup && (vGroup.id || vGroup.variant_group_id) ? Number(vGroup.id || vGroup.variant_group_id) : null,
+      variant_group_title: String(vGroup?.title || vGroup?.title_label || ""),
+      variant_unit: String(vGroup?.unit_short_title || vGroup?.unit_title || vGroup?.unit_code || ""),
+      unit_id: vGroup?.unit_id != null ? Number(vGroup.unit_id) : null,
+      variant_value_index: Number.isFinite(Number(variantIndex)) ? Number(variantIndex) : 0,
+      unit_price_before_discount: roundPrice(unitPriceBeforeDiscount),
+      unit_price_override: roundPrice(comboDiscountedPrice(unitPriceBeforeDiscount, discountPercent)),
+      ingredients_display: ingredients.map((ing) => {
+        const ingId = Number(ing?.ingredient_id || 0);
+        const qty = Number(ingredientQty.get(ingId) ?? Number(ing?.quantity ?? 0));
+        return {
+          ingredient_id: ingId,
+          name: String(ing?.ingredient_name || ing?.name || ""),
+          qty,
+          quantity: qty,
+          unit: String(ing?.unit_short_title || ing?.unit_title || ing?.unit_code || ""),
+          unit_id: ing?.unit_id != null ? Number(ing.unit_id) : null,
+        };
+      }),
+    };
+    state.comboModal.selectionStateByBlock[blockIndex] = nextState;
+  }
+
+  async function hydrateComboSelectionsFromDefaults() {
+    const combo = state.comboModal.combo;
+    if (!combo) return;
+    const blocks = Array.isArray(combo?.blocks) ? combo.blocks : [];
+    await Promise.all(blocks.map((_block, idx) => hydrateComboBlockSelection(idx, { preferSavedState: true })));
+  }
+
+  function formatQtyPlain(value) {
+    const num = Number(value || 0);
+    if (!Number.isFinite(num)) return "0";
+    if (Number.isInteger(num)) return String(num);
+    return String(Math.round(num * 1000) / 1000).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1");
+  }
+
+  function getComboSelectedProduct(blockIndex) {
+    const combo = state.comboModal.combo;
+    if (!combo) return null;
+    const blocks = Array.isArray(combo?.blocks) ? combo.blocks : [];
+    const block = blocks[Number(blockIndex)];
+    if (!block) return null;
+    const products = Array.isArray(block?.products) ? block.products : [];
+    if (!products.length) return null;
+    const rawIdx = Number(state.comboModal.selectedIndexByBlock[Number(blockIndex)] || 0);
+    const idx = Number.isFinite(rawIdx) ? Math.max(0, Math.min(products.length - 1, rawIdx)) : 0;
+    return products[idx] || null;
+  }
+
+  function getComboVariantDisplayValues(productId) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return [];
+    const variants = state.productVariants.get(pid) || [];
+    if (!Array.isArray(variants) || !variants.length) return [];
+    const group = variants[0];
+    const values = Array.isArray(group?.values) ? group.values : [];
+    const unit = getVariantUnitLabel(group);
+    return values
+      .map((value) => {
+        const label = toVariantLabel(value);
+        if (!label) return "";
+        const hasLetters = /[a-zа-я]/i.test(label);
+        return unit && !hasLetters ? `${label} ${unit}` : label;
+      })
+      .filter(Boolean);
+  }
+
+  function buildComboIngredientSnapshot(productId, ingredientsDisplay) {
+    const pid = Number(productId || 0);
+    const base = buildIngredientsSnapshotForProduct(pid);
+    const selectedRows = Array.isArray(ingredientsDisplay) ? ingredientsDisplay : [];
+    if (!base.length || !selectedRows.length) return base;
+    const byId = new Map();
+    selectedRows.forEach((row) => {
+      const ingId = Number(row?.ingredient_id || 0);
+      if (!(ingId > 0)) return;
+      byId.set(ingId, Number(row?.qty ?? row?.quantity ?? 0));
+    });
+    return base.map((row) => {
+      const ingId = Number(row?.ingredient_id || 0);
+      if (!byId.has(ingId)) return row;
+      return { ...row, qty: Number(byId.get(ingId) || 0) };
+    });
+  }
+
+  function calculateComboOldSum() {
+    const combo = state.comboModal.combo;
+    if (!combo) return 0;
+    const blocks = Array.isArray(combo?.blocks) ? combo.blocks : [];
+    return roundPrice(
+      blocks.reduce((sum, _block, idx) => {
+        const selected = getComboSelectedProduct(idx);
+        if (!selected) return sum;
+        const rowState = state.comboModal.selectionStateByBlock[idx] || {};
+        const oldPrice = rowState.unit_price_before_discount != null && Number.isFinite(Number(rowState.unit_price_before_discount))
+          ? Number(rowState.unit_price_before_discount)
+          : Number(selected?.price || 0);
+        return sum + oldPrice;
+      }, 0)
+    );
+  }
+
+  function buildComboSelections() {
+    const combo = state.comboModal.combo;
+    if (!combo) return [];
+    const blocks = Array.isArray(combo?.blocks) ? combo.blocks : [];
+    const discountPercent = Number(combo?.discount_percent || 0);
+    const rows = blocks.map((_block, blockIndex) => {
+      const selected = getComboSelectedProduct(blockIndex);
+      if (!selected) return null;
+      const rawState = state.comboModal.selectionStateByBlock[blockIndex] || {};
+      const stateProductId = Number(rawState?.product_id || 0);
+      const selectedProductId = Number(selected?.product_id || 0);
+      const normalizedState = stateProductId === selectedProductId
+        ? rawState
+        : makeEmptyComboBlockState();
+      const oldPrice = normalizedState.unit_price_before_discount != null && Number.isFinite(Number(normalizedState.unit_price_before_discount))
+        ? Number(normalizedState.unit_price_before_discount)
+        : Number(selected?.price || 0);
+      return {
+        blockIndex,
+        block: blocks[blockIndex],
+        selected,
+        state: normalizedState,
+        oldPrice: roundPrice(oldPrice),
+      };
+    }).filter(Boolean);
+
+    if (!rows.length) return [];
+    const sumOld = roundPrice(rows.reduce((sum, row) => sum + Number(row?.oldPrice || 0), 0));
+    const discountedTotal = roundPrice(comboDiscountedPrice(sumOld, discountPercent));
+    const useProportional = sumOld > 0 && Number.isFinite(sumOld);
+    let assigned = 0;
+
+    return rows.map((row, idx) => {
+      const isLast = idx === rows.length - 1;
+      const sectionPrice = useProportional
+        ? (isLast ? roundPrice(discountedTotal - assigned) : roundPrice((Number(row.oldPrice || 0) / sumOld) * discountedTotal))
+        : roundPrice(comboDiscountedPrice(row.oldPrice, discountPercent));
+      assigned += sectionPrice;
+      return {
+        block_index: Number(row.blockIndex || 0),
+        block_id: Number(row?.block?.block_id || 0),
+        block_title: String(row?.block?.block_title || "").trim(),
+        product_id: Number(row?.selected?.product_id || 0),
+        product_name: String(row?.selected?.product_name || "").trim(),
+        product_description_short: String(row?.selected?.product_description_short || "").trim(),
+        product_photo: String(row?.selected?.product_photo || "").trim(),
+        unit_price_override: roundPrice(sectionPrice),
+        unit_price_before_discount: roundPrice(row.oldPrice),
+        variant_label: String(row?.state?.variant_label || "").trim(),
+        variant_group_id: row?.state?.variant_group_id != null ? Number(row.state.variant_group_id) : null,
+        variant_value_index: row?.state?.variant_value_index != null ? Number(row.state.variant_value_index) : null,
+        unit_id: row?.state?.unit_id != null ? Number(row.state.unit_id) : null,
+        variant_group_title: String(row?.state?.variant_group_title || "").trim(),
+        variant_unit: String(row?.state?.variant_unit || "").trim(),
+        ingredients_display: Array.isArray(row?.state?.ingredients_display)
+          ? row.state.ingredients_display.map((ing) => ({ ...ing }))
+          : [],
+      };
+    });
+  }
+
+  function renderComboDetailsLinesHtml(selection) {
+    const lineRows = [];
+    const variantLabel = String(selection?.variant_label || "").trim();
+    if (variantLabel) {
+      lineRows.push(`• ${escapeHtml(variantLabel)}`);
+    }
+    const ingredients = Array.isArray(selection?.ingredients_display) ? selection.ingredients_display : [];
+    ingredients.forEach((ing) => {
+      const qty = Number(ing?.qty ?? ing?.quantity ?? 0);
+      const name = String(ing?.name || ing?.ingredient_name || "").trim();
+      if (!name) return;
+      const unit = String(ing?.unit || ing?.unit_label || "").trim();
+      const qtyLabel = formatQtyPlain(qty);
+      lineRows.push(`• ${escapeHtml(`${qtyLabel}${unit ? ` ${unit}` : ""} ${name}`.trim())}`);
+    });
+    if (!lineRows.length) {
+      const fallback = String(selection?.product_description_short || "").trim();
+      if (!fallback) return "";
+      return `<div class="cart-sub-details"><div class="cart-sub-detail-item">${escapeHtml(fallback)}</div></div>`;
+    }
+    return `<div class="cart-sub-details">${lineRows.map((line) => `<div class="cart-sub-detail-item">${line}</div>`).join("")}</div>`;
+  }
+
+  function renderComboOverlayMain() {
+    const { list } = getComboOverlayElements();
+    if (!list) return;
+    const combo = state.comboModal.combo;
+    if (!combo) {
+      list.innerHTML = "";
+      return;
+    }
+    const blocks = Array.isArray(combo?.blocks) ? combo.blocks : [];
+    const selections = buildComboSelections();
+    const selByBlock = new Map(selections.map((row) => [Number(row?.block_index || 0), row]));
+    const rowsHtml = blocks.map((block, blockIndex) => {
+      const selected = getComboSelectedProduct(blockIndex);
+      if (!selected) return "";
+      const row = selByBlock.get(blockIndex) || {};
+      const newPrice = roundPrice(Number(row?.unit_price_override || 0));
+      const oldPrice = roundPrice(Number(row?.unit_price_before_discount || Number(selected?.price || 0)));
+      const name = String(selected?.product_name || "Товар");
+      const photo = resolveMediaUrl(selected?.product_photo || "");
+      const detailsHtml = renderComboDetailsLinesHtml({
+        ...row,
+        product_description_short: String(selected?.product_description_short || ""),
+      });
+      return `
+        <div class="cart-row shop-combo-row">
+          ${photo ? `<img class="cart-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="cart-thumb">—</div>`}
+          <div class="cart-mid shop-combo-mid">
+            <div class="cart-title">${escapeHtml(name)}</div>
+            ${detailsHtml ? `<div class="cart-sub-container">${detailsHtml}</div>` : ""}
+            <div class="shop-combo-row-bottom">
+              <button type="button" class="shop-combo-replace" data-action="combo-overlay-open-picker" data-block-index="${blockIndex}">Заменить</button>
+              ${oldPrice > newPrice ? `<span class="shop-combo-old">${escapeHtml(toMoney(oldPrice))}</span>` : ""}
+              <span class="shop-combo-price">${escapeHtml(toMoney(newPrice))}</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    list.innerHTML = `
+      <div class="shop-combo-view">
+        <div class="shop-combo-detail shop-combo-detail-scroll">
+          <div class="shop-pd-meta">
+            <div class="shop-pd-title">${escapeHtml(String(combo?.title || "Комбо"))}</div>
+          </div>
+          ${String(combo?.description || "").trim() ? `<div class="shop-combo-detail-caption">${escapeHtml(String(combo.description || "").trim())}</div>` : ""}
+          <div class="shop-combo-list">${rowsHtml || `<div class="shop-combo-picker-empty">Нет доступных товаров</div>`}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  async function ensureComboPickerProductConfig(prod) {
+    const productId = Number(prod?.product_id || 0);
+    if (!(productId > 0)) {
+      return {
+        productId: 0,
+        product: null,
+        variants: [],
+        ingredients: [],
+        hasVariants: false,
+        hasIngredients: false,
+        hasConfigurable: false,
+      };
+    }
+    const loaded = await ensureProductById(productId);
+    const product = loaded || { id: productId, price: Number(prod?.price || 0), base_qty: 1 };
+    await Promise.all([
+      loadVariantsForProducts([product]),
+      loadIngredientsForProducts([product]),
+    ]);
+    const variants = state.productVariants.get(productId) || [];
+    const ingredients = state.productIngredients.get(productId) || [];
+    const variantValues = Array.isArray(variants?.[0]?.values) ? variants[0].values : [];
+    const hasVariants = variantValues.length > 0;
+    const hasIngredients = ingredients.length > 0;
+    return {
+      productId,
+      product,
+      variants,
+      ingredients,
+      hasVariants,
+      hasIngredients,
+      hasConfigurable: hasVariants || hasIngredients,
+    };
+  }
+
+  async function selectComboPickerProduct(blockIndexRaw, productIndexRaw, opts = {}) {
+    const combo = state.comboModal.combo;
+    if (!combo) return false;
+    const blockIndex = Number(blockIndexRaw);
+    const productIndex = Number(productIndexRaw);
+    const blocks = Array.isArray(combo?.blocks) ? combo.blocks : [];
+    const block = blocks[blockIndex];
+    const products = Array.isArray(block?.products) ? block.products : [];
+    if (!Number.isFinite(blockIndex) || blockIndex < 0 || !products.length) return false;
+    if (!Number.isFinite(productIndex) || productIndex < 0 || productIndex >= products.length) return false;
+
+    const currentIndex = Number(state.comboModal.selectedIndexByBlock[blockIndex] || 0);
+    const changed = !Number.isFinite(currentIndex) || currentIndex !== productIndex;
+    if (changed) {
+      state.comboModal.selectedIndexByBlock[blockIndex] = productIndex;
+      state.comboModal.selectionStateByBlock[blockIndex] = makeEmptyComboBlockState();
+    }
+    if (changed || opts?.hydrate !== false) {
+      await hydrateComboBlockSelection(blockIndex, {
+        preferSavedState: changed ? false : opts?.preferSavedState !== false,
+      });
+    }
+    return true;
+  }
+
+  function renderComboOverlayPicker(blockIndexRaw) {
+    const { list } = getComboOverlayElements();
+    if (!list) return;
+    const combo = state.comboModal.combo;
+    if (!combo) {
+      list.innerHTML = "";
+      return;
+    }
+    const blockIndex = Number(blockIndexRaw);
+    const blocks = Array.isArray(combo?.blocks) ? combo.blocks : [];
+    const block = blocks[blockIndex];
+    if (!Number.isFinite(blockIndex) || blockIndex < 0 || !block) {
+      state.comboModal.view = "main";
+      state.comboModal.pickerBlockIndex = -1;
+      state.comboModal.expandedPickerProductIndex = null;
+      renderComboOverlayMain();
+      return;
+    }
+
+    const products = Array.isArray(block?.products) ? block.products : [];
+    if (!products.length) {
+      list.innerHTML = `
+        <div class="shop-combo-view">
+          <div class="shop-combo-detail shop-combo-detail--picker">
+            <div class="shop-pd-meta">
+              <div class="shop-pd-title">${escapeHtml(String(block?.block_title || "Выберите товар"))}</div>
+            </div>
+            <div class="shop-combo-picker-list">
+              <div class="shop-combo-picker-empty">Нет товаров в блоке</div>
+            </div>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    let selectedIdx = Number(state.comboModal.selectedIndexByBlock[blockIndex]);
+    if (!Number.isFinite(selectedIdx) || selectedIdx < 0 || selectedIdx >= products.length) {
+      const defaultIdx = products.findIndex((p) => Number(p?.is_default || 0) === 1);
+      selectedIdx = defaultIdx >= 0 ? defaultIdx : 0;
+      state.comboModal.selectedIndexByBlock[blockIndex] = selectedIdx;
+    }
+
+    const renderToken = Number(state.comboModal.pickerRenderToken || 0) + 1;
+    state.comboModal.pickerRenderToken = renderToken;
+    list.innerHTML = `<div class="shop-combo-picker-empty">Загрузка...</div>`;
+
+    void (async () => {
+      const configs = await Promise.all(products.map((prod) => ensureComboPickerProductConfig(prod)));
+      if (Number(state.comboModal.pickerRenderToken || 0) !== renderToken) return;
+      if (String(state.comboModal.view || "") !== "picker") return;
+      if (Number(state.comboModal.pickerBlockIndex) !== blockIndex) return;
+
+      const rowStateRaw = state.comboModal.selectionStateByBlock[blockIndex] || {};
+      let expandedIndex = Number(state.comboModal.expandedPickerProductIndex);
+      if (!Number.isFinite(expandedIndex) || expandedIndex < 0 || expandedIndex >= products.length) expandedIndex = null;
+      if (expandedIndex != null && expandedIndex !== selectedIdx) expandedIndex = null;
+      state.comboModal.expandedPickerProductIndex = expandedIndex;
+
+      const rowsHtml = products.map((prod, idx) => {
+        const pid = Number(prod?.product_id || 0);
+        const config = configs[idx] || {};
+        const isSelected = idx === selectedIdx;
+        const stateRow = isSelected && Number(rowStateRaw?.product_id || 0) === pid
+          ? rowStateRaw
+          : makeEmptyComboBlockState();
+        const photo = resolveMediaUrl(prod?.product_photo || "");
+        const title = String(prod?.product_name || "Товар");
+        const oldPrice = isSelected && stateRow.unit_price_before_discount != null
+          ? roundPrice(Number(stateRow.unit_price_before_discount || 0))
+          : roundPrice(Number(prod?.price || 0));
+        const newPrice = isSelected && stateRow.unit_price_override != null
+          ? roundPrice(Number(stateRow.unit_price_override || 0))
+          : roundPrice(comboDiscountedPrice(Number(prod?.price || 0), Number(combo?.discount_percent || 0)));
+
+        const detailsHtml = renderComboDetailsLinesHtml({
+          variant_label: String(stateRow?.variant_label || ""),
+          ingredients_display: Array.isArray(stateRow?.ingredients_display) ? stateRow.ingredients_display : [],
+          product_description_short: String(prod?.product_description_short || ""),
+        });
+
+        const showGear = Boolean(config?.hasConfigurable);
+        const isExpanded = isSelected && expandedIndex === idx && showGear;
+        const variants = Array.isArray(config?.variants) ? config.variants : [];
+        const vGroup = Array.isArray(variants) && variants.length ? variants[0] : null;
+        const values = Array.isArray(vGroup?.values) ? vGroup.values : [];
+        const vTitle = String(vGroup?.title || "Вариант").trim();
+        const vUnit = getVariantUnitLabel(vGroup);
+        const stateVariantIdxRaw = Number(stateRow?.variant_value_index);
+        const safeVariantIdx = values.length
+          ? Math.max(
+            0,
+            Math.min(
+              values.length - 1,
+              Number.isFinite(stateVariantIdxRaw)
+                ? stateVariantIdxRaw
+                : Number(vGroup?.default_value_index || 0)
+            )
+          )
+          : 0;
+
+        const variantsHtml = values.length ? `
+          <div class="shop-combo-picker-variants">
+            <div class="shop-combo-picker-expand-title">${escapeHtml(vTitle || "Вариант")}</div>
+            <div class="shop-combo-picker-variants-row">
+              ${values.map((value, variantIndex) => {
+                const valueLabel = toVariantLabel(value);
+                const hasLetters = /[a-zа-я]/i.test(valueLabel);
+                const chip = vUnit && !hasLetters ? `${valueLabel} ${vUnit}` : valueLabel;
+                return `<button
+                  type="button"
+                  class="shop-combo-picker-variant-btn ${variantIndex === safeVariantIdx ? "is-active" : ""}"
+                  data-action="combo-overlay-picker-variant"
+                  data-block-index="${blockIndex}"
+                  data-product-index="${idx}"
+                  data-variant-index="${variantIndex}"
+                >${escapeHtml(chip)}</button>`;
+              }).join("")}
+            </div>
+          </div>
+        ` : "";
+
+        const ingredients = Array.isArray(config?.ingredients) ? config.ingredients : [];
+        const ingredientsById = new Map();
+        if (Array.isArray(stateRow?.ingredients_display)) {
+          stateRow.ingredients_display.forEach((ing) => {
+            const ingId = Number(ing?.ingredient_id || 0);
+            if (ingId > 0) ingredientsById.set(ingId, Number(ing?.qty ?? ing?.quantity ?? 0));
+          });
+        }
+        const ingredientsRowsHtml = ingredients.map((ing) => {
+          const ingId = Number(ing?.ingredient_id || 0);
+          if (!(ingId > 0)) return "";
+          const step = Math.max(0.0001, Number(ing?.quantity_step ?? 1) || 1);
+          const minRaw = Number(ing?.quantity_min);
+          const minQty = Number.isFinite(minRaw) ? Math.max(0, minRaw) : 0;
+          const maxRaw = Number(ing?.quantity_max);
+          const hasMax = Number.isFinite(maxRaw) && maxRaw > 0;
+          const maxQty = hasMax ? maxRaw : Infinity;
+          const baseQty = Number(ing?.quantity ?? 0);
+          const rawQty = ingredientsById.has(ingId) ? Number(ingredientsById.get(ingId) || 0) : baseQty;
+          const currentQty = Math.max(minQty, Math.min(maxQty, Number.isFinite(rawQty) ? rawQty : baseQty));
+          const minusDisabled = currentQty <= minQty;
+          const plusDisabled = currentQty >= maxQty;
+          const unitLabel = String(ing?.unit_short_title || ing?.unit_title || ing?.unit_code || "").trim();
+          const qtyLabel = `${formatQtyPlain(currentQty)}${unitLabel ? ` ${unitLabel}` : ""}`;
+          const ingName = String(ing?.ingredient_name || ing?.name || "").trim();
+          const ingPhotoRaw = Array.isArray(ing?.ingredient_photos) && ing.ingredient_photos.length
+            ? ing.ingredient_photos[0]
+            : (ing?.ingredient_photo || "");
+          const ingPhoto = resolveMediaUrl(ingPhotoRaw);
+          return `
+            <div class="shop-combo-picker-ingredient-row">
+              <div class="shop-combo-picker-ingredient-img">
+                ${ingPhoto ? `<img src="${escapeHtml(ingPhoto)}" alt="" />` : ``}
+              </div>
+              <span class="shop-combo-picker-ingredient-name">${escapeHtml(ingName)}</span>
+              <div class="shop-combo-picker-ingredient-qty">
+                <button
+                  type="button"
+                  class="shop-combo-picker-ingredient-btn"
+                  data-action="combo-overlay-picker-ing-minus"
+                  data-block-index="${blockIndex}"
+                  data-product-index="${idx}"
+                  data-ingredient-id="${ingId}"
+                  data-step="${escapeHtml(String(step))}"
+                  ${minusDisabled ? "disabled" : ""}
+                >−</button>
+                <span class="shop-combo-picker-ingredient-qty-val">${escapeHtml(qtyLabel)}</span>
+                <button
+                  type="button"
+                  class="shop-combo-picker-ingredient-btn"
+                  data-action="combo-overlay-picker-ing-plus"
+                  data-block-index="${blockIndex}"
+                  data-product-index="${idx}"
+                  data-ingredient-id="${ingId}"
+                  data-step="${escapeHtml(String(step))}"
+                  ${plusDisabled ? "disabled" : ""}
+                >+</button>
+              </div>
+            </div>
+          `;
+        }).filter(Boolean).join("");
+        const ingredientsHtml = ingredientsRowsHtml ? `
+          <div class="shop-combo-picker-ingredients">
+            <div class="shop-combo-picker-expand-title">Состав (можно настроить):</div>
+            ${ingredientsRowsHtml}
+          </div>
+        ` : "";
+
+        const expandedHtml = isExpanded ? `
+          <div class="shop-combo-picker-expand" data-action="combo-overlay-picker-expand-noop">
+            <div class="shop-combo-picker-expand-inner">
+              ${variantsHtml}
+              ${ingredientsHtml}
+            </div>
+          </div>
+        ` : "";
+
+        return `
+          <div
+            class="cart-row shop-combo-picker-row ${isSelected ? "is-selected" : ""}"
+            role="button"
+            tabindex="0"
+            data-action="combo-overlay-picker-select"
+            data-block-index="${blockIndex}"
+            data-product-index="${idx}"
+          >
+            ${photo ? `<img class="cart-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="cart-thumb">—</div>`}
+            <div class="cart-mid shop-combo-picker-mid">
+              <div class="cart-title">${escapeHtml(title)}</div>
+              ${detailsHtml ? `<div class="cart-sub-container" ${isExpanded ? `style="display:none;"` : ""}>${detailsHtml}</div>` : ""}
+            </div>
+            <div class="shop-combo-picker-bottom">
+              <div class="shop-combo-picker-price">
+                ${oldPrice > newPrice ? `<span class="shop-combo-old">${escapeHtml(toMoney(oldPrice))}</span>` : ""}
+                <span class="shop-combo-price">${escapeHtml(toMoney(newPrice))}</span>
+              </div>
+              <div class="shop-combo-picker-actions">
+                ${showGear ? `
+                  <button
+                    type="button"
+                    class="shop-combo-picker-gear ${isExpanded ? "is-open" : ""}"
+                    title="Настройка состава и вариантов"
+                    data-action="combo-overlay-picker-gear"
+                    data-block-index="${blockIndex}"
+                    data-product-index="${idx}"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+                  </button>
+                ` : ``}
+                <span
+                  class="shop-combo-radio ${isSelected ? "is-selected" : ""}"
+                  aria-hidden="true"
+                  data-action="combo-overlay-picker-radio"
+                  data-block-index="${blockIndex}"
+                  data-product-index="${idx}"
+                ></span>
+              </div>
+            </div>
+            ${expandedHtml}
+          </div>
+        `;
+      }).join("");
+
+      if (Number(state.comboModal.pickerRenderToken || 0) !== renderToken) return;
+      if (String(state.comboModal.view || "") !== "picker") return;
+      if (Number(state.comboModal.pickerBlockIndex) !== blockIndex) return;
+      list.innerHTML = `
+        <div class="shop-combo-view">
+          <div class="shop-combo-detail shop-combo-detail--picker shop-combo-detail-scroll">
+            <div class="shop-pd-meta">
+              <div class="shop-pd-title">${escapeHtml(String(block?.block_title || "Выберите товар"))}</div>
+            </div>
+            <div class="shop-combo-picker-list">
+              ${rowsHtml || `<div class="shop-combo-picker-empty">Нет доступных товаров в блоке</div>`}
+            </div>
+          </div>
+        </div>
+      `;
+    })();
+  }
+
+  function renderComboOverlay() {
+    const { backdrop, qtyValue, addBtn, discountBadge } = getComboOverlayElements();
+    if (!backdrop || backdrop.classList.contains("hidden")) return;
+    const combo = state.comboModal.combo;
+    if (!combo) return;
+    const qty = Math.max(1, Number(state.comboModal.qty || 1));
+    state.comboModal.qty = qty;
+    if (qtyValue) qtyValue.textContent = String(qty);
+    const minusBtn = backdrop.querySelector("[data-action='combo-overlay-qty-minus']");
+    if (minusBtn) {
+      const disabled = qty <= 1;
+      minusBtn.disabled = disabled;
+      minusBtn.classList.toggle("is-disabled", disabled);
+    }
+    const plusBtn = backdrop.querySelector("[data-action='combo-overlay-qty-plus']");
+    if (plusBtn) {
+      plusBtn.disabled = false;
+      plusBtn.classList.remove("is-disabled");
+    }
+
+    const selections = buildComboSelections();
+    const unitOld = roundPrice(selections.reduce((sum, row) => sum + Number(row?.unit_price_before_discount || 0), 0));
+    const unitNew = roundPrice(selections.reduce((sum, row) => sum + Number(row?.unit_price_override || 0), 0));
+    const totalOld = roundPrice(unitOld * qty);
+    const totalNew = roundPrice(unitNew * qty);
+    const saveMode = String(state.comboModal.mode || "add") === "edit";
+
+    if (addBtn) {
+      addBtn.innerHTML = `
+        <span class="shop-pd-action-prices">
+          ${totalOld > totalNew ? `<span class="shop-pd-action-old">${escapeHtml(toMoney(totalOld))}</span>` : ""}
+          <span class="shop-checkout-total shop-pd-action-price">${escapeHtml(toMoney(totalNew))}</span>
+        </span>
+        <span class="shop-pd-action-label">${saveMode ? "сохранить" : "в корзину"}</span>
+      `;
+    }
+
+    const discountPercent = Number(combo?.discount_percent || 0);
+    if (discountBadge) {
+      if (discountPercent > 0) {
+        const text = Number.isInteger(discountPercent)
+          ? String(discountPercent)
+          : String(Math.round(discountPercent * 100) / 100).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1");
+        discountBadge.textContent = `Скидка ${text}%`;
+        discountBadge.classList.remove("hidden");
+      } else {
+        discountBadge.textContent = "";
+        discountBadge.classList.add("hidden");
+      }
+    }
+
+    if (String(state.comboModal.view || "main") === "picker") {
+      renderComboOverlayPicker(Number(state.comboModal.pickerBlockIndex || 0));
+    } else {
+      renderComboOverlayMain();
+    }
+  }
+
+  async function buildCartItemFromComboOverlay() {
+    const combo = state.comboModal.combo;
+    if (!combo) return null;
+    const comboId = Number(combo?.id || combo?.combo_id || state.comboModal.comboId || 0);
+    if (!(comboId > 0)) return null;
+    const qty = Math.max(1, Number(state.comboModal.qty || 1));
+    const selections = buildComboSelections();
+    if (!selections.length) return null;
+
+    const sections = await Promise.all(selections.map(async (sel) => {
+      const productId = Number(sel?.product_id || 0);
+      if (!(productId > 0)) return null;
+      const product = await ensureProductById(productId);
+      const variants = state.productVariants.get(productId) || [];
+      const vg = variants[0] || null;
+      const variantValuesDisplay = getComboVariantDisplayValues(productId);
+      const selectedVariantIndexRaw = Number(sel?.variant_value_index);
+      const safeVariantIndex = variantValuesDisplay.length
+        ? Math.max(0, Math.min(variantValuesDisplay.length - 1, Number.isFinite(selectedVariantIndexRaw) ? selectedVariantIndexRaw : Number(vg?.default_value_index || 0)))
+        : 0;
+      const variantLabel = String(sel?.variant_label || variantValuesDisplay[safeVariantIndex] || "").trim();
+      const ingredients = buildComboIngredientSnapshot(productId, sel?.ingredients_display);
+      return {
+        block_index: Number(sel?.block_index || 0),
+        block_id: Number(sel?.block_id || 0),
+        category_id: Number(sel?.block_id || 0),
+        category_name: String(sel?.block_title || "").trim(),
+        block_title: String(sel?.block_title || "").trim(),
+        product_id: productId,
+        product_name: String(sel?.product_name || product?.name || "Товар").trim(),
+        photo_url: String(sel?.product_photo || getProductPhoto(product) || "").trim(),
+        price: roundPrice(Number(sel?.unit_price_override || 0)),
+        old_price: roundPrice(Number(sel?.unit_price_before_discount || 0)),
+        variant: {
+          label: variantLabel,
+          values: variantValuesDisplay,
+          selected_index: safeVariantIndex,
+        },
+        pricing: {
+          base_price: Number(product?.price || sel?.unit_price_before_discount || 0),
+          old_price: Number(product?.old_price || 0),
+          base_unit_id: Number(product?.base_unit_id || product?.unit_id || 0),
+          unit_id: Number(sel?.unit_id || vg?.unit_id || product?.base_unit_id || product?.unit_id || 0),
+          base_qty: Number(product?.base_qty || 1),
+          variant_group: vg ? {
+            unit_id: Number(vg?.unit_id || 0),
+            default_value_index: Number(vg?.default_value_index || 0),
+            values: Array.isArray(vg?.values) ? [...vg.values] : [],
+            discount_tiers: Array.isArray(vg?.discount_tiers) ? vg.discount_tiers.map((tier) => ({ ...tier })) : [],
+          } : null,
+        },
+        ingredients: ingredients.map((row) => ({ ...row })),
+      };
+    }));
+
+    const validSections = sections.filter(Boolean);
+    if (!validSections.length) return null;
+    const comboDiscountPercent = Number(combo?.discount_percent || 0);
+    const item = {
+      id: Date.now() + Math.floor(Math.random() * 10000),
+      type: "combo",
+      combo_id: comboId,
+      combo_title: String(combo?.title || "Комбо").trim(),
+      name: String(combo?.title || "Комбо").trim(),
+      qty,
+      combo_discount_percent: comboDiscountPercent,
+      unit_price_before_discount: roundPrice(validSections.reduce((sum, section) => sum + Number(section?.old_price || section?.price || 0), 0)),
+      unit_price: roundPrice(validSections.reduce((sum, section) => sum + Number(section?.price || 0), 0)),
+      sum: 0,
+      photos: validSections.map((section) => String(section?.photo_url || "").trim()).filter(Boolean).slice(0, 4),
+      selections: selections.map((row) => ({ ...row })),
+      sections: validSections.map((section) => ({ ...section })),
+    };
+    return recalculateCartItemTotals(item);
+  }
+
+  async function openComboOverlay(comboId, opts = {}) {
+    const id = Number(comboId || 0);
+    if (!(id > 0)) return;
+    ensureComboOverlay();
+    const { backdrop, list } = getComboOverlayElements();
+    if (!backdrop) return;
+    const combo = await resolveComboDetails(id);
+    if (!combo) {
+      alert("Не удалось загрузить комбо");
+      return;
+    }
+    closeProductOverlay();
+    state.comboModal.comboId = id;
+    state.comboModal.combo = combo;
+    state.comboModal.qty = Math.max(1, Number(opts?.mode === "edit" ? opts?.cartItem?.qty : 1) || 1);
+    state.comboModal.mode = String(opts?.mode || "add") === "edit" ? "edit" : "add";
+    state.comboModal.editOrderId = Number(opts?.orderId || 0);
+    state.comboModal.editCartItemId = Number(opts?.cartItemId || 0);
+    state.comboModal.view = "main";
+    state.comboModal.pickerBlockIndex = -1;
+    state.comboModal.expandedPickerProductIndex = null;
+    state.comboModal.pickerRenderToken = 0;
+    const blocks = Array.isArray(combo?.blocks) ? combo.blocks : [];
+    state.comboModal.selectedIndexByBlock = blocks.map((block) => {
+      const products = Array.isArray(block?.products) ? block.products : [];
+      const defaultIndex = products.findIndex((row) => Number(row?.is_default || 0) === 1);
+      return defaultIndex >= 0 ? defaultIndex : 0;
+    });
+    state.comboModal.selectionStateByBlock = blocks.map(() => makeEmptyComboBlockState());
+
+    const sourceCartItem = opts?.cartItem && typeof opts.cartItem === "object" ? opts.cartItem : null;
+    if (sourceCartItem) {
+      const seedRows = getComboSeedSelectionsFromCartItem(sourceCartItem);
+      seedRows.forEach((seed, blockIndex) => {
+        if (blockIndex < 0 || blockIndex >= blocks.length) return;
+        const products = Array.isArray(blocks[blockIndex]?.products) ? blocks[blockIndex].products : [];
+        const seedProductId = Number(seed?.product_id || 0);
+        if (seedProductId > 0) {
+          const foundIdx = products.findIndex((row) => Number(row?.product_id || 0) === seedProductId);
+          if (foundIdx >= 0) state.comboModal.selectedIndexByBlock[blockIndex] = foundIdx;
+        }
+        state.comboModal.selectionStateByBlock[blockIndex] = {
+          ...makeEmptyComboBlockState(),
+          ...cloneComboValue(seed),
+          product_id: seedProductId > 0 ? seedProductId : null,
+          variant_value_index: seed?.variant_value_index != null ? Number(seed.variant_value_index) : null,
+          variant_group_id: seed?.variant_group_id != null ? Number(seed.variant_group_id) : null,
+          unit_id: seed?.unit_id != null ? Number(seed.unit_id) : null,
+          unit_price_override: seed?.unit_price_override != null ? Number(seed.unit_price_override) : null,
+          unit_price_before_discount: seed?.unit_price_before_discount != null ? Number(seed.unit_price_before_discount) : null,
+          ingredients_display: Array.isArray(seed?.ingredients_display) ? seed.ingredients_display.map((ing) => ({ ...ing })) : [],
+        };
+      });
+    }
+
+    backdrop.classList.remove("hidden");
+    backdrop.onclick = (ev) => {
+      if (ev.target === backdrop) closeComboOverlay();
+    };
+    if (list) list.innerHTML = `<div class="shop-combo-picker-empty">Загрузка...</div>`;
+    await hydrateComboSelectionsFromDefaults();
+    renderComboOverlay();
+    if (list) list.scrollTop = 0;
+  }
+
+  function getProductOverlayElements() {
+    const backdrop = document.getElementById("newOrderProductOverlay");
+    const list = document.getElementById("newOrderProductOverlayList");
+    const qtyValue = document.getElementById("newOrderProductOverlayQtyValue");
+    const addBtn = document.getElementById("newOrderProductOverlayAddBtn");
+    return { backdrop, list, qtyValue, addBtn };
+  }
+
+  function ensureProductOverlay() {
+    if (document.getElementById("newOrderProductOverlay")) return;
+    const wrap = document.createElement("div");
+    wrap.id = "newOrderProductOverlay";
+    wrap.className = "new-order-option-overlay hidden";
+    wrap.innerHTML = `
+      <div class="new-order-option-sheet new-order-product-sheet">
+        <div class="new-order-option-sheet-head">
+          <button class="new-order-option-sheet-back" type="button" data-action="product-overlay-close"><i class="fas fa-arrow-left"></i></button>
+        </div>
+        <div class="new-order-option-sheet-list no-scrollbar new-order-product-sheet-list" id="newOrderProductOverlayList"></div>
+        <div class="new-order-product-sheet-footer shop-pd-footer">
+          <div class="qty-pill qty-pill--muted new-order-product-sheet-qty">
+            <button class="qty-pill__btn qty-pill__btn--minus" type="button" data-action="product-overlay-qty-minus">−</button>
+            <span class="qty-pill__center" id="newOrderProductOverlayQtyValue">1</span>
+            <button class="qty-pill__btn qty-pill__btn--plus" type="button" data-action="product-overlay-qty-plus">+</button>
+          </div>
+          <button class="shop-checkout-btn shop-pd-action new-order-product-sheet-add" type="button" id="newOrderProductOverlayAddBtn" data-action="product-overlay-add">в корзину</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(wrap);
+  }
+
+  function closeProductOverlay() {
+    const { backdrop, list } = getProductOverlayElements();
+    if (!backdrop) return;
+    backdrop.classList.add("hidden");
+    backdrop.onclick = null;
+    if (list) list.innerHTML = "";
+    state.productModal.productId = 0;
+    state.productModal.qty = 1;
+    state.productModal.photoIndex = 0;
+    state.productModal.expandedOptionItems = new Set();
+    state.productModal.expandedOptionGroups = new Set();
+    state.productModal.mode = "add";
+    state.productModal.editOrderId = 0;
+    state.productModal.editCartItemId = 0;
+  }
+
+  function applyProductOverlayStateFromCartItem(productId, cartItem) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0) || !cartItem || typeof cartItem !== "object") return;
+    const variantIndex = Number(cartItem?.variant?.selected_index);
+    if (Number.isFinite(variantIndex) && variantIndex >= 0) {
+      state.selectedVariants.set(pid, variantIndex);
+    }
+
+    const ingRows = Array.isArray(cartItem?.ingredients) ? cartItem.ingredients : [];
+    if (ingRows.length) {
+      const qtyMap = new Map();
+      ingRows.forEach((ing) => {
+        const ingId = Number(ing?.ingredient_id || 0);
+        if (!(ingId > 0)) return;
+        qtyMap.set(ingId, Number(ing?.qty ?? 0));
+      });
+      state.ingredientStateByProduct.set(pid, qtyMap);
+    }
+
+    const optionItems = Array.isArray(cartItem?.option_items) ? cartItem.option_items : [];
+    const byGroup = new Map();
+    optionItems.forEach((row) => {
+      const groupId = Number(row?.group_id || 0);
+      const itemId = Number(row?.id || 0);
+      if (!(groupId > 0) || !(itemId > 0)) return;
+      const existing = byGroup.get(groupId) || { type: "single", items: [] };
+      existing.items.push({
+        id: itemId,
+        label: String(row?.label || "").trim(),
+        qty: Math.max(0, Number(row?.qty || 0)),
+        basePrice: Number(row?.basePrice || 0),
+        variantDiff: Number(row?.variantDiff || 0),
+        variantIndex: Number.isFinite(Number(row?.variantIndex)) ? Number(row.variantIndex) : null,
+      });
+      byGroup.set(groupId, existing);
+    });
+    state.optionSelections.set(pid, byGroup);
+  }
+
+  function getProductOverlayOptionGroupsHtml(productId) {
+    const pid = Number(productId || 0);
+    const groups = Array.isArray(state.productOptionGroups.get(pid)) ? state.productOptionGroups.get(pid) : [];
+    if (!groups.length) return "";
+    const byGroup = state.optionSelections.get(pid) || new Map();
+    const expanded = state.productModal.expandedOptionItems instanceof Set ? state.productModal.expandedOptionItems : new Set();
+    const expandedGroups = state.productModal.expandedOptionGroups instanceof Set ? state.productModal.expandedOptionGroups : new Set();
+    const blocks = groups.map((group) => {
+      const groupId = Number(group?.group_id || group?.id || 0);
+      if (!(groupId > 0)) return "";
+      const details = state.optionGroupDetails.get(groupId);
+      const items = Array.isArray(details?.items) ? details.items : [];
+      if (!items.length) return "";
+      const detailsGroup = details?.group || null;
+      const title = String(detailsGroup?.title || group?.title || "Опция").trim() || "Опция";
+      const groupType = getOptionGroupUiType({ ...(detailsGroup || group || {}), items });
+      const existing = byGroup.get(groupId);
+      const selectionItems = Array.isArray(existing?.items) ? existing.items : [];
+      const selById = new Map(selectionItems.map((x) => [Number(x?.id || 0), x]));
+      const isRequiredRaw = detailsGroup?.is_required ?? group?.is_required ?? false;
+      const isRequired = Number(isRequiredRaw) === 1 || isRequiredRaw === true || String(isRequiredRaw).toLowerCase() === "true";
+
+      if (groupType === "single") {
+        if (isRequired && selectionItems.length === 0) {
+          const firstItem = items[0];
+          if (firstItem && Number(firstItem.id || 0) > 0) {
+            const entry = {
+              id: Number(firstItem.id),
+              label: String(firstItem?.name || firstItem?.product_name || "Позиция"),
+              qty: 1,
+              basePrice: getOptionItemBasePrice(firstItem),
+              variantDiff: 0,
+            };
+            byGroup.set(groupId, { type: groupType, items: [entry] });
+            state.optionSelections.set(pid, byGroup);
+            selById.set(entry.id, entry);
+          }
+        }
+
+        const selectedItem = items.find((it) => selById.has(Number(it?.id || 0))) || null;
+        const selectedEntry = selectedItem ? (selById.get(Number(selectedItem.id)) || null) : null;
+        const defaultVariantIndex = selectedItem ? getOptionItemDefaultVariantIndex(selectedItem) : 0;
+        const activeVariantIndex = Number.isFinite(Number(selectedEntry?.variantIndex))
+          ? Number(selectedEntry.variantIndex)
+          : defaultVariantIndex;
+        const rowPrice = selectedItem
+          ? (getOptionItemBasePrice(selectedItem) + (Number.isFinite(Number(activeVariantIndex)) ? getOptionItemVariantDiff(selectedItem, Number(activeVariantIndex)) : 0))
+          : 0;
+        const selectedPhoto = selectedItem
+          ? resolveMediaUrl((Array.isArray(selectedItem?.product_photos_json) && selectedItem.product_photos_json.length) ? selectedItem.product_photos_json[0] : "")
+          : "";
+        const selectedName = selectedItem
+          ? String(selectedItem?.name || selectedItem?.product_name || "Позиция")
+          : "Выбрать";
+        const isGroupOpen = expandedGroups.has(groupId);
+
+        const listCards = [];
+        if (!isRequired) {
+          listCards.push(`
+            <div class="shop-pd-option-card is-clickable" data-action="product-overlay-opt-select-none" data-group-id="${groupId}">
+              <div class="shop-pd-option-card-content">
+                <div class="shop-pd-option-thumb">—</div>
+                <div class="shop-pd-option-info">
+                  <div class="shop-pd-option-name">Не выбирать</div>
+                </div>
+              </div>
+            </div>
+          `);
+        }
+        listCards.push(...items.map((item) => {
+          const itemId = Number(item?.id || 0);
+          if (!(itemId > 0)) return "";
+          const itemPhoto = resolveMediaUrl((Array.isArray(item?.product_photos_json) && item.product_photos_json.length) ? item.product_photos_json[0] : "");
+          const itemName = String(item?.name || item?.product_name || "Позиция");
+          const allowVariants = Boolean(detailsGroup?.allow_variants ?? group?.allow_variants ?? false);
+          const hasVariants = allowVariants && Array.isArray(item?.variants) && item.variants.length && Array.isArray(item.variants[0]?.values) && item.variants[0].values.length;
+          const key = `${groupId}:${itemId}`;
+          const variantBlockOpen = expanded.has(key);
+          const variants = hasVariants ? item.variants[0].values : [];
+          const selected = selById.get(itemId);
+          const selectedVariantIndex = Number.isFinite(Number(selected?.variantIndex))
+            ? Number(selected.variantIndex)
+            : getOptionItemDefaultVariantIndex(item);
+          const basePrice = getOptionItemBasePrice(item);
+          const variantDiff = Number.isFinite(Number(selected?.variantDiff))
+            ? Number(selected.variantDiff)
+            : (Number.isFinite(Number(selectedVariantIndex)) ? getOptionItemVariantDiff(item, Number(selectedVariantIndex)) : 0);
+          const optionPrice = basePrice + variantDiff;
+          return `
+            <div class="shop-pd-option-card is-clickable ${selById.has(itemId) ? "is-selected" : ""} ${hasVariants ? "has-variants" : ""}">
+              <div class="shop-pd-option-card-content" data-action="product-overlay-opt-select-single" data-group-id="${groupId}" data-item-id="${itemId}">
+                ${itemPhoto ? `<img class="shop-pd-option-thumb" src="${escapeHtml(itemPhoto)}" alt="" />` : `<div class="shop-pd-option-thumb">—</div>`}
+                <div class="shop-pd-option-info">
+                  <div class="shop-pd-option-name">${escapeHtml(itemName)}</div>
+                  <div class="shop-pd-option-price">${escapeHtml(toMoney(optionPrice))}</div>
+                </div>
+                ${hasVariants ? `<button type="button" class="shop-pd-option-gear-btn" data-action="product-overlay-opt-variants-toggle" data-group-id="${groupId}" data-item-id="${itemId}"><i class="fas fa-cog"></i></button>` : ``}
+              </div>
+              ${hasVariants && variantBlockOpen ? `<div class="shop-pd-option-variant-accordion is-open"><div class="shop-pd-option-variant-scroll">${variants.map((v, idx) => `<button type="button" class="shop-pd-option-variant-btn ${idx === selectedVariantIndex ? "is-selected" : ""}" data-action="product-overlay-opt-variant-select" data-group-id="${groupId}" data-item-id="${itemId}" data-variant-index="${idx}">${escapeHtml(formatOptionVariantLabel(item, idx) || toVariantLabel(v) || String(v || ""))}</button>`).join("")}</div></div>` : ""}
+            </div>
+          `;
+        }).filter(Boolean));
+
+        return `
+          <div class="shop-pd-option-accordion">
+            <div class="shop-pd-option-summary"><span>${escapeHtml(title)}</span><span></span></div>
+            ${!isGroupOpen ? `
+              <div class="shop-pd-option-cards">
+                <div class="shop-pd-option-card is-clickable" data-action="product-overlay-opt-open-group" data-group-id="${groupId}">
+                  <div class="shop-pd-option-card-content">
+                    ${selectedPhoto ? `<img class="shop-pd-option-thumb" src="${escapeHtml(selectedPhoto)}" alt="" />` : `<div class="shop-pd-option-thumb">—</div>`}
+                    <div class="shop-pd-option-info">
+                      <div class="shop-pd-option-name">${escapeHtml(selectedName)}</div>
+                      ${selectedItem ? `<div class="shop-pd-option-price">${escapeHtml(toMoney(rowPrice))}</div>` : ``}
+                    </div>
+                    <button type="button" class="shop-pd-option-edit" data-action="product-overlay-opt-open-group" data-group-id="${groupId}">Изменить &gt;</button>
+                  </div>
+                </div>
+              </div>
+            ` : ""}
+            ${isGroupOpen ? `<div class="shop-pd-option-cards">${listCards.join("")}</div>` : `<div class="shop-pd-option-cards hidden"></div>`}
+          </div>
+        `;
+      }
+
+      const cards = items.map((item) => {
+        const itemId = Number(item?.id || 0);
+        if (!(itemId > 0)) return "";
+        const selected = selById.get(itemId);
+        const selectedQty = Math.max(0, Number(selected?.qty || 0));
+        const isSelected = selectedQty > 0;
+        const photos = Array.isArray(item?.product_photos_json) ? item.product_photos_json : [];
+        const photoRaw = photos.length ? photos[0] : "";
+        const photo = resolveMediaUrl(photoRaw);
+        const name = String(item?.name || item?.product_name || "Позиция");
+        const defaultVariantIndex = getOptionItemDefaultVariantIndex(item);
+        const activeVariantIndex = Number.isFinite(Number(selected?.variantIndex)) ? Number(selected.variantIndex) : defaultVariantIndex;
+        const basePrice = getOptionItemBasePrice(item);
+        const variantDiff = Number.isFinite(Number(selected?.variantDiff))
+          ? Number(selected.variantDiff)
+          : (Number.isFinite(Number(activeVariantIndex)) ? getOptionItemVariantDiff(item, Number(activeVariantIndex)) : 0);
+        const rowPrice = basePrice + variantDiff;
+        const allowVariants = Boolean(detailsGroup?.allow_variants ?? group?.allow_variants ?? false);
+        const hasVariants = allowVariants && Array.isArray(item?.variants) && item.variants.length && Array.isArray(item.variants[0]?.values) && item.variants[0].values.length;
+        const key = `${groupId}:${itemId}`;
+        const variantBlockOpen = expanded.has(key);
+        const variants = hasVariants ? item.variants[0].values : [];
+        const selectedVariantIndex = Number.isFinite(Number(activeVariantIndex)) ? Number(activeVariantIndex) : 0;
+        const controls = groupType === "multiple_item"
+          ? (() => {
+              const qMin = Math.max(0, Number(item?.qty_min ?? 0));
+              const qMaxRaw = Number(item?.qty_max ?? 99);
+              const qMax = Number.isFinite(qMaxRaw) && qMaxRaw > 0 ? qMaxRaw : 99;
+              const minusDisabled = selectedQty <= qMin;
+              const plusDisabled = selectedQty >= qMax;
+              return `<div class="shop-pd-option-qty-controls">
+               <button type="button" class="btn btn-sm shop-pd-option-qty-btn${minusDisabled ? " is-disabled" : ""}" ${minusDisabled ? "disabled" : ""} data-action="product-overlay-opt-qty-minus" data-group-id="${groupId}" data-item-id="${itemId}">−</button>
+               <span class="shop-pd-option-qty-value">${selectedQty}</span>
+               <button type="button" class="btn btn-sm shop-pd-option-qty-btn${plusDisabled ? " is-disabled" : ""}" ${plusDisabled ? "disabled" : ""} data-action="product-overlay-opt-qty-plus" data-group-id="${groupId}" data-item-id="${itemId}">+</button>
+             </div>`;
+            })()
+          : (groupType === "single"
+              ? ``
+              : `<button type="button" class="shop-pd-option-radio ${isSelected ? "is-checked" : ""}" data-action="product-overlay-opt-toggle-item" data-group-id="${groupId}" data-item-id="${itemId}"></button>`);
+        const rowAction = hasVariants ? `data-action="product-overlay-opt-variants-toggle" data-group-id="${groupId}" data-item-id="${itemId}"` : "";
+        return `
+          <div class="shop-pd-option-card is-clickable ${isSelected ? "is-selected" : ""} ${hasVariants ? "has-variants" : ""}">
+            <div class="shop-pd-option-card-content" ${rowAction}>
+              ${photo ? `<img class="shop-pd-option-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="shop-pd-option-thumb">—</div>`}
+              <span class="shop-pd-option-info">
+                <span class="shop-pd-option-name">${escapeHtml(name)}</span>
+                <span class="shop-pd-option-price">${escapeHtml(toMoney(rowPrice))}</span>
+              </span>
+              ${hasVariants ? `<button type="button" class="shop-pd-option-gear-btn" data-action="product-overlay-opt-variants-toggle" data-group-id="${groupId}" data-item-id="${itemId}"><i class="fas fa-cog"></i></button>` : ``}
+              ${controls}
+            </div>
+            ${hasVariants && variantBlockOpen ? `<div class="shop-pd-option-variant-accordion is-open"><div class="shop-pd-option-variant-scroll">${variants.map((v, idx) => `<button type="button" class="shop-pd-option-variant-btn ${idx === selectedVariantIndex ? "is-selected" : ""}" data-action="product-overlay-opt-variant-select" data-group-id="${groupId}" data-item-id="${itemId}" data-variant-index="${idx}">${escapeHtml(formatOptionVariantLabel(item, idx) || toVariantLabel(v) || String(v || ""))}</button>`).join("")}</div></div>` : ""}
+          </div>
+        `;
+      }).filter(Boolean).join("");
+
+      return `
+        <div class="shop-pd-option-block">
+          <div class="shop-pd-section-title">${escapeHtml(title)}</div>
+          <div class="shop-pd-option-cards">${cards}</div>
+        </div>
+      `;
+    }).filter(Boolean);
+
+    return blocks.join("");
+  }
+
+  function applyProductOverlayOptionAction(productId, action, groupIdRaw, itemIdRaw, variantIndexRaw) {
+    const pid = Number(productId || 0);
+    const groupId = Number(groupIdRaw || 0);
+    const itemId = Number(itemIdRaw || 0);
+    if (!(pid > 0) || !(groupId > 0) || !(itemId > 0)) return false;
+    const details = state.optionGroupDetails.get(groupId);
+    const items = Array.isArray(details?.items) ? details.items : [];
+    const item = items.find((x) => Number(x?.id || 0) === itemId);
+    if (!item) return false;
+    const groupType = getOptionGroupUiType({ ...(details?.group || {}), items });
+    const byGroup = state.optionSelections.get(pid) || new Map();
+    const existing = byGroup.get(groupId);
+    const selectionItems = Array.isArray(existing?.items) ? existing.items.map((x) => ({ ...x })) : [];
+    const selById = new Map(selectionItems.map((x) => [Number(x?.id || 0), x]));
+    const name = String(item?.name || item?.product_name || "Позиция");
+    const entry = selById.get(itemId) || { id: itemId, label: name, qty: 0, basePrice: getOptionItemBasePrice(item), variantDiff: 0 };
+    if (!Number.isFinite(Number(entry.variantIndex))) {
+      const dIdx = getOptionItemDefaultVariantIndex(item);
+      if (Number.isFinite(Number(dIdx))) {
+        entry.variantIndex = Number(dIdx);
+        entry.variantDiff = getOptionItemVariantDiff(item, Number(dIdx));
+      }
+    }
+
+    const persistSelection = () => {
+      const nextItems = [];
+      for (const value of selById.values()) {
+        if (Number(value.qty || 0) > 0) nextItems.push(value);
+      }
+      if (groupType === "single" && nextItems.length > 1) {
+        const keep = nextItems[nextItems.length - 1];
+        byGroup.set(groupId, { type: groupType, items: [keep] });
+      } else {
+        byGroup.set(groupId, { type: groupType, items: nextItems });
+      }
+      state.optionSelections.set(pid, byGroup);
+    };
+
+    if (action === "product-overlay-opt-variants-toggle") {
+      const key = `${groupId}:${itemId}`;
+      if (state.productModal.expandedOptionItems.has(key)) {
+        state.productModal.expandedOptionItems.delete(key);
+      } else {
+        const prefix = `${groupId}:`;
+        Array.from(state.productModal.expandedOptionItems.values()).forEach((k) => {
+          if (String(k).startsWith(prefix)) state.productModal.expandedOptionItems.delete(k);
+        });
+        state.productModal.expandedOptionItems.add(key);
+        if (groupType === "single") {
+          entry.qty = 1;
+          selById.clear();
+          selById.set(itemId, entry);
+          persistSelection();
+        }
+      }
+      return true;
+    }
+    if (action === "product-overlay-opt-variant-select") {
+      const idx = Number(variantIndexRaw || 0);
+      entry.variantIndex = idx;
+      entry.variantDiff = getOptionItemVariantDiff(item, idx);
+      entry.qty = Math.max(1, Number(entry.qty || 0));
+      if (groupType === "single") {
+        selById.clear();
+      }
+      selById.set(itemId, entry);
+    } else if (action === "product-overlay-opt-toggle-item") {
+      if (groupType === "single") {
+        selById.clear();
+        entry.qty = 1;
+        selById.set(itemId, entry);
+      } else {
+        entry.qty = Number(entry.qty || 0) > 0 ? 0 : 1;
+        selById.set(itemId, entry);
+      }
+    } else if (action === "product-overlay-opt-qty-minus") {
+      const qMin = Math.max(0, Number(item?.qty_min ?? 0));
+      entry.qty = Math.max(qMin, Number(entry.qty || 0) - 1);
+      selById.set(itemId, entry);
+    } else if (action === "product-overlay-opt-qty-plus") {
+      const qMaxRaw = Number(item?.qty_max ?? 99);
+      const qMax = Number.isFinite(qMaxRaw) && qMaxRaw > 0 ? qMaxRaw : 99;
+      entry.qty = Math.min(qMax, Number(entry.qty || 0) + 1);
+      selById.set(itemId, entry);
+    } else {
+      return false;
+    }
+
+    persistSelection();
+    return true;
+  }
+
+  function getIngredientPhoto(ing) {
+    if (!ing || typeof ing !== "object") return "";
+    const photoArr = Array.isArray(ing.ingredient_photos) ? ing.ingredient_photos : [];
+    const first = photoArr[0];
+    const raw = (
+      (first && typeof first === "object" ? (first.url || first.path || first.src || "") : first)
+      || ing.ingredient_photo
+      || ing.photo
+      || ""
+    );
+    return resolveMediaUrl(raw);
+  }
+
+  function getProductOverlayIngredientRows(productId) {
+    const pid = Number(productId || 0);
+    const ingredients = state.productIngredients.get(pid) || [];
+    if (!ingredients.length) return [];
+    const qtyMap = state.ingredientStateByProduct.get(pid) || new Map();
+    return ingredients.map((ing) => {
+      const ingId = Number(ing.ingredient_id || 0);
+      const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
+      const defaultQty = Number(ing.quantity ?? 1);
+      const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
+      const min = rawMin !== null ? rawMin : (isVariable ? 0 : defaultQty);
+      const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
+      const currentQty = Number(qtyMap.get(ingId) ?? defaultQty);
+      const unitLabel = ing.unit_short_title || ing.unit_title || ing.unit_code || "";
+      const canMinus = currentQty > min;
+      const canPlus = currentQty < max;
+      const photo = getIngredientPhoto(ing);
+      return `
+        <div class="shop-pd-option-card">
+          <div class="shop-pd-option-card-content">
+            ${photo ? `<img class="shop-pd-option-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="shop-pd-option-thumb">—</div>`}
+            <div class="shop-pd-option-info">
+              <div class="shop-pd-option-name" title="${escapeHtml(ing.ingredient_name || "")}">${escapeHtml(ing.ingredient_name || "")}</div>
+            </div>
+            <div class="shop-pd-ingredient-controls">
+              <button class="btn btn-sm qty-btn qty-minus${canMinus ? "" : " is-disabled"}" type="button" ${canMinus ? "" : "disabled"} data-action="ingredient-minus" data-ingredient-id="${ingId}">−</button>
+              <div class="qty-display">${escapeHtml(String(currentQty))} ${escapeHtml(unitLabel)}</div>
+              <button class="btn btn-sm qty-btn qty-plus${canPlus ? "" : " is-disabled"}" type="button" ${canPlus ? "" : "disabled"} data-action="ingredient-plus" data-ingredient-id="${ingId}">+</button>
+            </div>
+          </div>
+        </div>
+      `;
+    });
+  }
+
+  function renderProductOverlay() {
+    const { backdrop, list, qtyValue, addBtn } = getProductOverlayElements();
+    const pid = Number(state.productModal.productId || 0);
+    const qty = Math.max(1, Number(state.productModal.qty || 1));
+    const product = getProductById(pid);
+    if (!backdrop || !list || !qtyValue || !addBtn || !product) return;
+
+    const photos = getProductPhotos(product);
+    const safePhotos = photos.length ? photos : [""];
+    const rawPhotoIndex = Number(state.productModal.photoIndex || 0);
+    const photoIndex = Math.max(0, Math.min(safePhotos.length - 1, Number.isFinite(rawPhotoIndex) ? rawPhotoIndex : 0));
+    state.productModal.photoIndex = photoIndex;
+    const photoUrl = safePhotos[photoIndex] || "";
+    const variantChips = getVariantChipsForProduct(pid);
+    const variantGroup = (state.productVariants.get(pid) || [])[0] || null;
+    const variantTitle = String(variantGroup?.title || "").trim();
+    const variantUnitLabel = String(variantGroup?.unit_short_title || variantGroup?.unit_code || variantGroup?.unit_title || "").trim();
+    const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
+    const formatVariantLabel = (raw) => {
+      const valueText = String(raw || "").trim();
+      if (!valueText) return "";
+      if (!variantUnitLabel || hasLetters(valueText)) return valueText;
+      return `${valueText} ${variantUnitLabel}`;
+    };
+    const ingredientRows = getProductOverlayIngredientRows(pid);
+    const optionGroupsHtml = getProductOverlayOptionGroupsHtml(pid);
+    const pricing = getCurrentProductUnitPricing(product, pid);
+    const unitPrice = Number(pricing.unitPrice || 0);
+    const total = roundPrice(unitPrice * qty);
+
+    qtyValue.textContent = String(qty);
+    const saveMode = String(state.productModal.mode || "add") === "edit";
+    addBtn.innerHTML = `<span class="shop-pd-action-prices">${pricing.hasOldPrice ? `<span class="shop-pd-action-old">${escapeHtml(toMoney(roundPrice(pricing.oldPrice * qty)))}</span>` : ""}<span class="shop-checkout-total shop-pd-action-price">${escapeHtml(toMoney(total))}</span></span><span class="shop-pd-action-label">${saveMode ? "сохранить" : "в корзину"}</span>`;
+
+    list.innerHTML = `
+      <div class="shop-pd">
+        <div class="shop-pd-scroll">
+          <div class="shop-product-hero">
+            <div class="shop-product-hero-media">
+              ${photoUrl ? `<img class="shop-product-hero-image" src="${escapeHtml(photoUrl)}" alt="" />` : `<div class="new-order-product-sheet-photo-placeholder"><i class="fas fa-image"></i></div>`}
+            </div>
+            ${safePhotos.length > 1 ? `<button type="button" class="shop-product-hero-arrow is-prev" data-action="product-overlay-photo-prev"><i class="fas fa-chevron-left"></i></button>` : ""}
+            ${safePhotos.length > 1 ? `<button type="button" class="shop-product-hero-arrow is-next" data-action="product-overlay-photo-next"><i class="fas fa-chevron-right"></i></button>` : ""}
+            ${safePhotos.length > 1 ? `<div class="shop-product-hero-dots">${safePhotos.map((_, idx) => `<button type="button" class="shop-product-hero-dot ${idx === photoIndex ? "is-active" : ""}" data-action="product-overlay-photo-dot" data-photo-index="${idx}"></button>`).join("")}</div>` : ""}
+          </div>
+          <div class="shop-pd-meta">
+            <div class="shop-pd-title">${escapeHtml(String(product?.name || "Товар"))}</div>
+          </div>
+          ${variantChips.length ? `<div class="shop-pd-options">${variantTitle ? `<div class="shop-pd-section-title">${escapeHtml(variantTitle)}</div>` : ""}<div class="shop-pd-option-variant-scroll">${variantChips.map((chip) => `<button class="shop-pd-option-variant-btn ${chip.isSelected ? "is-selected" : ""}" type="button" data-action="product-overlay-variant-select" data-variant-index="${chip.index}">${escapeHtml(formatVariantLabel(chip.label))}</button>`).join("")}</div></div>` : ""}
+          ${optionGroupsHtml ? `<div class="shop-pd-options">${optionGroupsHtml}</div>` : ""}
+          ${ingredientRows.length ? `<div class="shop-pd-ingredients"><div class="shop-pd-section-title">Состав (можно настроить):</div><div class="shop-pd-option-cards">${ingredientRows.join("")}</div></div>` : ""}
+        </div>
+      </div>
+    `;
+  }
+
+  async function openProductOverlay(productId, opts = {}) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return;
+    closeComboOverlay();
+    ensureProductOverlay();
+    const { backdrop, list } = getProductOverlayElements();
+    if (!backdrop) return;
+    const mode = String(opts?.mode || "add") === "edit" ? "edit" : "add";
+    const editOrderId = Number(opts?.orderId || 0);
+    const editCartItemId = Number(opts?.cartItemId || 0);
+    const sourceCartItem = opts?.cartItem && typeof opts.cartItem === "object" ? opts.cartItem : null;
+    state.productModal.productId = pid;
+    state.productModal.qty = Math.max(1, Number(mode === "edit" ? sourceCartItem?.qty : 1) || 1);
+    state.productModal.photoIndex = 0;
+    state.productModal.expandedOptionItems = new Set();
+    state.productModal.expandedOptionGroups = new Set();
+    state.productModal.mode = mode;
+    state.productModal.editOrderId = editOrderId;
+    state.productModal.editCartItemId = editCartItemId;
+    const optionGroups = Array.isArray(state.productOptionGroups.get(pid)) ? state.productOptionGroups.get(pid) : [];
+    const groupIds = optionGroups
+      .map((g) => Number(g?.group_id || g?.id || 0))
+      .filter((gid) => gid > 0);
+    const optionItemsForPrefetch = [];
+    if (groupIds.length) {
+      const detailsList = await Promise.all(groupIds.map((gid) => loadOptionGroupDetails(gid)));
+      detailsList.forEach((details) => {
+        const items = Array.isArray(details?.items) ? details.items : [];
+        if (items.length) optionItemsForPrefetch.push(...items);
+      });
+    }
+    if (optionItemsForPrefetch.length) {
+      await ensureOptionTargetProducts(optionItemsForPrefetch);
+    }
+    if (mode === "edit" && sourceCartItem) {
+      applyProductOverlayStateFromCartItem(pid, sourceCartItem);
+    }
+    backdrop.classList.remove("hidden");
+    backdrop.onclick = (e) => {
+      const closeBtn = e.target.closest("[data-action='product-overlay-close']");
+      if (closeBtn || e.target === backdrop) {
+        closeProductOverlay();
+      }
+    };
+    renderProductOverlay();
+    if (list) list.scrollTop = 0;
   }
 
   function resetCheckoutBlockSelection(block) {
@@ -1917,20 +4702,10 @@
         : `<div class="new-order-checkout-products-empty">В категории пока нет товаров</div>`;
       const selectedVariantChips = selectedProductId > 0 ? getVariantChipsForProduct(selectedProductId) : [];
       const selectedProduct = products.find((p) => Number(p?.id || 0) === selectedProductId) || null;
-      const selectedVariantIndex = Number(state.selectedVariants.get(selectedProductId));
-      const selectedProductVariants = state.productVariants.get(selectedProductId) || [];
-      const selectedIngredientDiff = selectedProductId > 0 ? calculateIngredientPriceDiff(selectedProductId) : 0;
-      const selectedVariantPrice = selectedProductId > 0
-        ? getVariantUnitPriceByBase(
-            selectedProduct,
-            selectedProductVariants,
-            Number.isFinite(selectedVariantIndex) ? selectedVariantIndex : 0,
-            Number(selectedProduct?.price || 0)
-          )
-        : 0;
-      const fallbackProductPrice = Number(selectedProduct?.price || 0);
-      const baseShown = selectedVariantChips.length ? selectedVariantPrice : fallbackProductPrice;
-      const priceToShow = roundPrice(Number(baseShown || 0) + Number(selectedIngredientDiff || 0));
+      const selectedPricing = selectedProductId > 0 && selectedProduct
+        ? getCurrentProductUnitPricing(selectedProduct, selectedProductId)
+        : { unitPrice: 0 };
+      const priceToShow = roundPrice(Number(selectedPricing?.unitPrice || 0));
       const inlineActionsHtml = isLastSection
         ? `
           <div class="new-order-checkout-inline-actions">
@@ -2039,6 +4814,7 @@
     const selectedIds = getAllCategoryIdsFromBlocks(getCheckoutBlocks());
     if (!selectedIds.length) {
       state.checkoutCategoryProducts.clear();
+      schedulePersistBootstrapSnapshot(0);
       renderCheckoutEditorContent();
       return;
     }
@@ -2056,11 +4832,18 @@
         allProducts.push(...(state.checkoutCategoryProducts.get(cid) || []));
         return;
       }
+      const categoryPayload = state.categoryProductsCache.get(cid);
+      if (categoryPayload && Array.isArray(categoryPayload.activeOnly)) {
+        state.checkoutCategoryProducts.set(cid, categoryPayload.activeOnly);
+        allProducts.push(...categoryPayload.activeOnly);
+        return;
+      }
       const cached = readCategoryProductsCache(cid);
       if (Array.isArray(cached)) {
-        const activeCached = cached.filter((p) => Number(p?.is_active || 0) === 1 && isSiteVisibleProduct(p));
-        state.checkoutCategoryProducts.set(cid, activeCached);
-        allProducts.push(...activeCached);
+        const payload = buildCategoryPayload(cached, []);
+        state.categoryProductsCache.set(cid, payload);
+        state.checkoutCategoryProducts.set(cid, payload.activeOnly);
+        allProducts.push(...payload.activeOnly);
         return;
       }
       missingIds.push(cid);
@@ -2068,28 +4851,33 @@
 
     await Promise.all(missingIds.map(async (categoryId) => {
       try {
-        const json = await apiJson(`/api/prod_products?category_id=${encodeURIComponent(String(categoryId))}&list=1`);
+        const json = await apiJson(`/api/public/products?category_id=${encodeURIComponent(String(categoryId))}`);
         const source = Array.isArray(json?.data) ? json.data : [];
-        const active = source.filter((p) => Number(p?.is_active || 0) === 1 && isSiteVisibleProduct(p));
-        state.checkoutCategoryProducts.set(categoryId, active);
+        const combos = Array.isArray(json?.combos) ? json.combos : [];
+        const payload = buildCategoryPayload(source, combos);
+        state.categoryProductsCache.set(categoryId, payload);
+        state.checkoutCategoryProducts.set(categoryId, payload.activeOnly);
         writeCategoryProductsCache(categoryId, source);
-        allProducts.push(...active);
+        allProducts.push(...payload.activeOnly);
       } catch {
         state.checkoutCategoryProducts.set(categoryId, []);
       }
     }));
     await loadVariantsForProducts(allProducts);
     await loadIngredientsForProducts(allProducts);
+    await loadOptionsForProducts(allProducts);
     state.checkoutIngredientsPopoverKey = null;
     state.checkoutIngredientsPopoverPos = null;
+    schedulePersistBootstrapSnapshot(0);
 
     renderCheckoutEditorContent();
   }
 
-  async function loadCheckoutDraftFromApi() {
-    const cached = readDraftCache();
+  async function loadCheckoutDraftFromApi(force = false) {
+    const cached = force ? null : readDraftCache();
     if (cached && Array.isArray(cached.blocks)) {
       state.checkoutSavedDraft = { blocks: cached.blocks };
+      schedulePersistBootstrapSnapshot();
       return;
     }
     const json = await apiJson("/api/checkout-constructor/draft");
@@ -2097,6 +4885,7 @@
     const normalized = blocks.map(normalizeBlock).filter(Boolean);
     state.checkoutSavedDraft = { blocks: normalized };
     writeDraftCache(normalized);
+    schedulePersistBootstrapSnapshot();
   }
 
   async function saveCheckoutDraftToApi(sourceDraft) {
@@ -2106,6 +4895,7 @@
       body: JSON.stringify(payload),
     });
     writeDraftCache(payload.blocks);
+    schedulePersistBootstrapSnapshot();
   }
 
   async function apiJson(url, opts = {}) {
@@ -2137,6 +4927,14 @@
 
   function looksLikeUrl(value) {
     return /^(https?:)?\/\//i.test(value) || /^\/(static|uploads)\//i.test(value);
+  }
+
+  function resolveMediaUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (looksLikeUrl(raw)) return raw;
+    const clean = raw.startsWith("/") ? raw.slice(1) : raw;
+    return `/uploads/${clean}`;
   }
 
   function escapeHtml(value) {
@@ -2183,6 +4981,15 @@
     const n = roundPrice(Number(value || 0));
     const safe = Number.isFinite(n) ? n : 0;
     return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(safe)} ₽`;
+  }
+
+  function formatDiscountPercentLabel(value) {
+    const num = Number(value || 0);
+    if (!Number.isFinite(num) || num <= 0) return "";
+    const rounded = Math.round(num * 100) / 100;
+    return String(rounded)
+      .replace(/\.0+$/, "")
+      .replace(/(\.\d*[1-9])0+$/, "$1");
   }
 
   function parseVariantValueNumber(value) {
@@ -2340,7 +5147,8 @@
 
   function getOptionItemBasePrice(item) {
     if (!item) return 0;
-    if (item.price != null && Number.isFinite(Number(item.price))) return Number(item.price);
+    const direct = Number(item.price);
+    if (Number.isFinite(direct)) return direct;
     if (item.price_mode === "fixed") return Number(item.price_value || 0);
     return Number(item.product_price || 0);
   }
@@ -2353,7 +5161,7 @@
     if (!unique.length) return;
     await Promise.all(unique.map(async (pid) => {
       try {
-        const json = await apiJson(`/api/prod_products/${pid}`);
+        const json = await apiJson(`/api/public/products/${pid}`);
         const product = json?.data || null;
         state.optionTargetProductCache.set(pid, product);
       } catch {
@@ -2425,6 +5233,20 @@
     if (!vg || !Array.isArray(vg.values) || !vg.values.length) return 0;
     const unit = getOptionItemVariantUnitPrice(item, selectedIdx);
     return unit - getOptionItemBasePrice(item);
+  }
+
+  function formatOptionVariantLabel(item, variantIndex) {
+    const variants = Array.isArray(item?.variants) ? item.variants : [];
+    const vg = variants[0];
+    const values = Array.isArray(vg?.values) ? vg.values : [];
+    const idx = Number(variantIndex);
+    if (!Number.isFinite(idx) || idx < 0 || idx >= values.length) return "";
+    const rawValue = values[idx];
+    const valueLabel = toVariantLabel(rawValue);
+    if (!valueLabel) return "";
+    const unit = getVariantUnitLabel(vg);
+    const hasLetters = /[a-zа-я]/i.test(valueLabel);
+    return unit && !hasLetters ? `${valueLabel} ${unit}` : valueLabel;
   }
 
   function applyQuickSingleOptionSelection(productId, groupId, itemId, variantIndexRaw) {
@@ -2639,11 +5461,17 @@
     const byGroup = state.optionSelections.get(pid);
     if (!(byGroup instanceof Map) || byGroup.size === 0) return 0;
     let total = 0;
-    for (const entry of byGroup.values()) {
+    for (const [groupIdRaw, entry] of byGroup.entries()) {
+      const groupId = Number(groupIdRaw || 0);
+      const details = groupId > 0 ? state.optionGroupDetails.get(groupId) : null;
+      const items = Array.isArray(details?.items) ? details.items : [];
+      const itemsById = new Map(items.map((it) => [Number(it?.id || 0), it]));
       const selections = Array.isArray(entry?.items) ? entry.items : [];
       for (const s of selections) {
         const qty = Math.max(0, Number(s?.qty || 0));
-        const basePrice = Number(s?.basePrice || 0);
+        const selectedId = Number(s?.id || 0);
+        const selectedItem = itemsById.get(selectedId);
+        const basePrice = selectedItem ? getOptionItemBasePrice(selectedItem) : Number(s?.basePrice || 0);
         const variantDiff = Number(s?.variantDiff || 0);
         total += (basePrice + variantDiff) * qty;
       }
@@ -2651,16 +5479,36 @@
     return total;
   }
 
-  function getProductPhoto(product) {
-    if (Array.isArray(product?.photos) && product.photos.length) return String(product.photos[0] || "").trim();
-    if (Array.isArray(product?.photos_json) && product.photos_json.length) return String(product.photos_json[0] || "").trim();
+  function getProductPhotos(product) {
+    const out = [];
+    const pushPhoto = (val) => {
+      const raw = val && typeof val === "object"
+        ? (val.url || val.path || val.src || val.photo || "")
+        : val;
+      const src = resolveMediaUrl(raw);
+      if (!src) return;
+      if (!out.includes(src)) out.push(src);
+    };
+    if (Array.isArray(product?.photos)) product.photos.forEach(pushPhoto);
+    if (Array.isArray(product?.photos_json)) product.photos_json.forEach(pushPhoto);
+    if (Array.isArray(product?.grid_photos)) product.grid_photos.forEach(pushPhoto);
+    if (Array.isArray(product?.grid_photos_thumb)) product.grid_photos_thumb.forEach(pushPhoto);
     if (typeof product?.photos_json === "string" && product.photos_json.trim()) {
       try {
         const parsed = JSON.parse(product.photos_json);
-        if (Array.isArray(parsed) && parsed.length) return String(parsed[0] || "").trim();
+        if (Array.isArray(parsed)) parsed.forEach(pushPhoto);
       } catch {}
     }
-    return "";
+    pushPhoto(product?.image_thumb);
+    pushPhoto(product?.image_url);
+    pushPhoto(product?.image);
+    pushPhoto(product?.photo);
+    return out;
+  }
+
+  function getProductPhoto(product) {
+    const photos = getProductPhotos(product);
+    return photos[0] || "";
   }
 
   function renderCategoryIcon(icon) {
@@ -2759,39 +5607,87 @@
     const restoreQueue = [];
     list.forEach((product) => {
       const pid = Number(product?.id || 0);
-      const qty = Number(state.quantities.get(pid) || 0);
+      const isComboCard = String(product?.type || "").toLowerCase() === "combo" || Number(product?.is_combo || 0) === 1;
+      const qty = getProductCardQty(pid);
       const photoUrl = getProductPhoto(product);
-      const selectedIndex = Number(state.selectedVariants.get(pid));
-      const variants = state.productVariants.get(pid) || [];
-      const ingredientDiff = calculateIngredientPriceDiff(pid);
-      const optionDiff = calculateOptionPriceDiff(pid);
-      const price = roundPrice(getVariantUnitPriceByBase(product, variants, selectedIndex, Number(product?.price || 0)) + ingredientDiff + optionDiff);
-      const oldPrice = roundPrice(getVariantUnitPriceByBase(product, variants, selectedIndex, Number(product?.old_price || 0)) + ingredientDiff + optionDiff);
-      const hasOldPrice = Number.isFinite(oldPrice) && oldPrice > 0 && oldPrice > price;
+      const pricing = getCurrentProductUnitPricing(product, pid);
+      const price = Number(pricing.unitPrice || 0);
+      const oldPrice = Number(pricing.oldPrice || 0);
+      const hasOldPrice = Boolean(pricing.hasOldPrice);
+      const discountPercent = hasOldPrice && oldPrice > price
+        ? Math.max(1, Math.round(((oldPrice - price) / oldPrice) * 100))
+        : 0;
       const variantChips = getVariantChipsForProduct(pid);
       const ingredientRows = getIngredientRowsForProduct(pid);
-      const optionRows = getOptionRowsForProduct(pid);
+      const optionGroups = Array.isArray(state.productOptionGroups.get(pid)) ? state.productOptionGroups.get(pid) : [];
+      const primaryOptionGroup = optionGroups[0] || null;
+      const hasOptions = optionGroups.length > 0 && Number(primaryOptionGroup?.group_id || primaryOptionGroup?.id || 0) > 0;
+      const primaryOptionGroupId = Number(primaryOptionGroup?.group_id || primaryOptionGroup?.id || 0);
+      const primaryOptionGroupTitle = String(primaryOptionGroup?.title || "Опции").trim() || "Опции";
 
       const card = document.createElement("article");
       card.className = "new-order-product-card";
+      if (isComboCard) {
+        const comboId = Number(product?.combo_id || product?.id || 0);
+        const comboPrice = Number(product?.min_price ?? product?.price ?? 0);
+        const comboDiscountPercent = Math.max(0, Number(product?.discount_percent || 0));
+        const comboDiscountLabel = formatDiscountPercentLabel(comboDiscountPercent);
+        card.setAttribute("data-combo-id", String(comboId));
+        card.setAttribute("tabindex", "0");
+        card.innerHTML = `
+          ${comboDiscountLabel ? `<span class="shop-sheet-discount-badge new-order-card-discount-badge">-${escapeHtml(comboDiscountLabel)}%</span>` : ""}
+          <div class="new-order-product-content no-scrollbar">
+            <div class="new-order-product-photo-wrap">
+              ${photoUrl ? `<img class="new-order-product-photo" src="${escapeHtml(photoUrl)}" alt="" />` : `<div class="new-order-product-photo-placeholder"><i class="fas fa-image"></i></div>`}
+            </div>
+            <div class="new-order-product-main">
+              <div class="new-order-product-title" title="${escapeHtml(product?.title || product?.name || "Комбо")}">${escapeHtml(product?.title || product?.name || "Комбо")}</div>
+              ${String(product?.description || "").trim() ? `<div class="new-order-product-subtitle">${escapeHtml(String(product.description || "").trim())}</div>` : ""}
+            </div>
+          </div>
+          <div class="new-order-product-bottom">
+            <button class="new-order-add-btn" type="button" data-action="combo-open" data-combo-id="${comboId}" title="Добавить комбо">
+              <span class="new-order-add-price">${escapeHtml(toMoney(comboPrice))}</span>
+              <span class="new-order-add-plus">+</span>
+            </button>
+          </div>
+        `;
+        productsGridEl.appendChild(card);
+        return;
+      }
       card.setAttribute("data-product-id", String(pid));
       card.innerHTML = `
-        <div class="new-order-product-photo-wrap">
-          ${photoUrl ? `<img class="new-order-product-photo" src="${escapeHtml(photoUrl)}" alt="" />` : `<div class="new-order-product-photo-placeholder"><i class="fas fa-image\"></i></div>`}
+        ${discountPercent > 0 ? `<span class="shop-sheet-discount-badge new-order-card-discount-badge">-${escapeHtml(formatDiscountPercentLabel(discountPercent))}%</span>` : ""}
+        <div class="new-order-product-content no-scrollbar">
+          <div class="new-order-product-photo-wrap">
+            ${photoUrl ? `<img class="new-order-product-photo" src="${escapeHtml(photoUrl)}" alt="" />` : `<div class="new-order-product-photo-placeholder"><i class="fas fa-image\"></i></div>`}
+          </div>
+          <div class="new-order-product-main">
+            <div class="new-order-product-title" title="${escapeHtml(product?.name || "Товар")}">${escapeHtml(product?.name || "Товар")}</div>
+            ${variantChips.length ? `<div class="new-order-product-variants no-scrollbar">${variantChips.map((chip) => `<button class="new-order-variant-chip${chip.isSelected ? " is-selected" : ""}" type="button" data-action="variant-select" data-variant-index="${chip.index}" title="${escapeHtml(chip.label)}">${escapeHtml(chip.label)}</button>`).join("")}</div>` : ""}
+            ${ingredientRows.length ? `<div class="new-order-ingredients">${ingredientRows.join("")}</div>` : ""}
+          </div>
         </div>
-        <div class="new-order-product-main">
-          <div class="new-order-product-title" title="${escapeHtml(product?.name || "Товар")}">${escapeHtml(product?.name || "Товар")}</div>
-          ${variantChips.length ? `<div class="new-order-product-variants no-scrollbar">${variantChips.map((chip) => `<button class="new-order-variant-chip${chip.isSelected ? " is-selected" : ""}" type="button" data-action="variant-select" data-variant-index="${chip.index}" title="${escapeHtml(chip.label)}">${escapeHtml(chip.label)}</button>`).join("")}</div>` : ""}
-          ${ingredientRows.length ? `<div class="new-order-ingredients">${ingredientRows.join("")}</div>` : ""}
-        </div>
-        ${optionRows.length ? `<div class="new-order-options">${optionRows.join("")}</div>` : ""}
         <div class="new-order-product-bottom">
           <div class="qty-pill qty-pill--muted" data-qty-wrap>
-            <button class="qty-pill__btn qty-pill__btn--minus" type="button" data-action="qty-minus">−</button>
+            <button class="qty-pill__btn qty-pill__btn--minus${qty <= 1 ? " is-disabled" : ""}" type="button" data-action="qty-minus">−</button>
             <span class="qty-pill__center" data-qty-value>${qty}</span>
             <button class="qty-pill__btn qty-pill__btn--plus" type="button" data-action="qty-plus">+</button>
           </div>
-          <button class="new-order-add-btn" type="button" title="Добавить в заказ">
+          ${hasOptions ? `
+            <button
+              class="new-order-options-btn"
+              type="button"
+              data-action="product-options-open"
+              data-group-id="${primaryOptionGroupId}"
+              data-group-title="${escapeHtml(primaryOptionGroupTitle)}"
+              title="Опции"
+            >
+              <i class="fas fa-sliders-h"></i>
+              <span>Опции</span>
+            </button>
+          ` : ""}
+          <button class="new-order-add-btn" type="button" data-action="product-add-quick" title="Добавить в заказ">
             <span class="new-order-add-old ${hasOldPrice ? "" : "hidden"}">${hasOldPrice ? escapeHtml(toMoney(oldPrice)) : ""}</span>
             <span class="new-order-add-price">${escapeHtml(toMoney(price))}</span>
             <span class="new-order-add-plus">+</span>
@@ -3036,10 +5932,12 @@
         items: Array.isArray(data.items) ? data.items : [],
       };
       state.optionGroupDetails.set(gid, normalized);
+      schedulePersistBootstrapSnapshot();
       return normalized;
     } catch {
       const fallback = { group: null, items: [] };
       state.optionGroupDetails.set(gid, fallback);
+      schedulePersistBootstrapSnapshot();
       return fallback;
     }
   }
@@ -3436,23 +6334,85 @@
     return "";
   }
 
+  function normalizeUnitLabelShort(raw) {
+    const src = String(raw || "").trim();
+    if (!src) return "";
+    const key = src.toLowerCase();
+    const dict = {
+      "грамм": "г",
+      "грамма": "г",
+      "граммов": "г",
+      "гр": "г",
+      "г": "г",
+      "килограмм": "кг",
+      "килограмма": "кг",
+      "килограммов": "кг",
+      "кг": "кг",
+      "штука": "шт",
+      "штук": "шт",
+      "шт": "шт",
+      "литр": "л",
+      "литра": "л",
+      "л": "л",
+      "миллилитр": "мл",
+      "миллилитров": "мл",
+      "мл": "мл",
+      "gram": "g",
+      "g": "g",
+      "kg": "kg",
+      "pcs": "шт",
+      "pc": "шт",
+      "piece": "шт",
+      "l": "l",
+      "ml": "ml",
+    };
+    return dict[key] || src;
+  }
+
+  function getVariantUnitLabel(group) {
+    const direct = String(group?.unit_short_title || group?.unit_title || group?.unit_code || "").trim();
+    if (direct) return normalizeUnitLabelShort(direct);
+    const title = String(group?.title || "").trim();
+    const m = title.match(/\(([^)]+)\)/);
+    if (m && m[1]) return normalizeUnitLabelShort(m[1]);
+    return "";
+  }
+
+  function getResolvedVariantIndex(productId, variantsRaw) {
+    const pid = Number(productId || 0);
+    const variants = Array.isArray(variantsRaw) ? variantsRaw : [];
+    if (!(pid > 0) || !variants.length) return 0;
+    const values = Array.isArray(variants[0]?.values) ? variants[0].values : [];
+    if (!values.length) return 0;
+
+    const selectedRaw = Number(state.selectedVariants.get(pid));
+    if (Number.isFinite(selectedRaw) && selectedRaw >= 0 && selectedRaw < values.length) {
+      return selectedRaw;
+    }
+
+    const defaultRaw = variants[0]?.default_value_index != null ? Number(variants[0].default_value_index) : 0;
+    const safeDefault = Number.isFinite(defaultRaw) && defaultRaw >= 0 && defaultRaw < values.length ? defaultRaw : 0;
+    state.selectedVariants.set(pid, safeDefault);
+    return safeDefault;
+  }
+
   function getVariantChipsForProduct(productId) {
-    const groups = state.productVariants.get(Number(productId));
+    const pid = Number(productId || 0);
+    const groups = state.productVariants.get(pid);
     if (!Array.isArray(groups) || !groups.length) return [];
 
     const chips = [];
-    const selectedIndex = Number(state.selectedVariants.get(Number(productId)));
+    const selectedIndex = getResolvedVariantIndex(pid, groups);
     for (const group of groups) {
       const values = Array.isArray(group?.values) ? group.values : [];
-      const defaultIndex = Number.isFinite(Number(group?.default_value_index)) ? Number(group.default_value_index) : -1;
-      const unit = String(group?.unit_short_title || group?.unit_title || group?.unit_code || "").trim();
+      const unit = getVariantUnitLabel(group);
       values.forEach((value, index) => {
         const label = toVariantLabel(value);
         if (!label) return;
         chips.push({
           label: unit ? `${label} ${unit}` : label,
           index,
-          isSelected: Number.isFinite(selectedIndex) ? index === selectedIndex : index === defaultIndex,
+          isSelected: index === selectedIndex,
         });
       });
     }
@@ -3468,11 +6428,17 @@
     const missingIds = uniqueIds.filter((id) => !state.productVariants.has(id));
     if (!missingIds.length) return;
 
-    await Promise.all(
-      missingIds.map(async (id) => {
-        try {
-          const json = await apiJson(`/api/admin/products/${id}/variants`);
-          const variants = Array.isArray(json?.data) ? json.data : [];
+    const chunkSize = 200;
+    for (let i = 0; i < missingIds.length; i += chunkSize) {
+      const chunk = missingIds.slice(i, i + chunkSize);
+      try {
+        const json = await apiJson("/api/public/products/batch/variants", {
+          method: "POST",
+          body: JSON.stringify({ ids: chunk }),
+        });
+        const data = json && typeof json.data === "object" && json.data ? json.data : {};
+        chunk.forEach((id) => {
+          const variants = Array.isArray(data[String(id)]) ? data[String(id)] : [];
           state.productVariants.set(id, variants);
           if (!state.selectedVariants.has(id) && variants.length) {
             const values = Array.isArray(variants[0]?.values) ? variants[0].values : [];
@@ -3480,11 +6446,36 @@
             const safeDefault = Number.isFinite(rawDefault) && rawDefault >= 0 && rawDefault < values.length ? rawDefault : 0;
             state.selectedVariants.set(id, safeDefault);
           }
-        } catch {
+        });
+      } catch {
+        chunk.forEach((id) => {
           state.productVariants.set(id, []);
-        }
-      })
-    );
+        });
+      }
+    }
+    schedulePersistBootstrapSnapshot();
+  }
+
+  function createIngredientQtyMap(list) {
+    const qtyMap = new Map();
+    (Array.isArray(list) ? list : []).forEach((ing) => {
+      const ingId = Number(ing?.ingredient_id || 0);
+      if (!Number.isFinite(ingId) || ingId <= 0) return;
+      const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
+      const defaultQty = Number(ing.quantity ?? 1);
+      const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
+      const min = rawMin !== null ? rawMin : (isVariable ? 0 : defaultQty);
+      const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
+      const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
+      let initialQty = Math.max(min, Math.min(max, defaultQty));
+      if (step > 0) {
+        const stepsFromMin = Math.round((initialQty - min) / step);
+        initialQty = min + (stepsFromMin * step);
+        initialQty = Math.max(min, Math.min(max, initialQty));
+      }
+      qtyMap.set(ingId, initialQty);
+    });
+    return qtyMap;
   }
 
   async function loadIngredientsForProducts(products) {
@@ -3495,43 +6486,30 @@
     const missingIds = uniqueIds.filter((id) => !state.productIngredients.has(id));
     if (!missingIds.length) return;
 
-    try {
-      const json = await apiJson("/api/public/products/batch/ingredients", {
-        method: "POST",
-        body: JSON.stringify({ ids: missingIds }),
-      });
-      const data = json && typeof json.data === "object" && json.data ? json.data : {};
-
-      missingIds.forEach((id) => {
-        const list = Array.isArray(data[String(id)]) ? data[String(id)] : [];
-        state.productIngredients.set(id, list);
-        if (!state.ingredientStateByProduct.has(id)) {
-          const qtyMap = new Map();
-          list.forEach((ing) => {
-            const ingId = Number(ing?.ingredient_id || 0);
-            if (!Number.isFinite(ingId) || ingId <= 0) return;
-            const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
-            const defaultQty = Number(ing.quantity ?? 1);
-            const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
-            const min = rawMin !== null ? rawMin : (isVariable ? 0 : defaultQty);
-            const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
-            const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
-            let initialQty = Math.max(min, Math.min(max, defaultQty));
-            if (step > 0) {
-              const stepsFromMin = Math.round((initialQty - min) / step);
-              initialQty = min + (stepsFromMin * step);
-              initialQty = Math.max(min, Math.min(max, initialQty));
-            }
-            qtyMap.set(ingId, initialQty);
-          });
-          state.ingredientStateByProduct.set(id, qtyMap);
-        }
-      });
-    } catch {
-      missingIds.forEach((id) => {
-        state.productIngredients.set(id, []);
-      });
+    const chunkSize = 200;
+    for (let i = 0; i < missingIds.length; i += chunkSize) {
+      const chunk = missingIds.slice(i, i + chunkSize);
+      try {
+        const json = await apiJson("/api/public/products/batch/ingredients", {
+          method: "POST",
+          body: JSON.stringify({ ids: chunk }),
+        });
+        const data = json && typeof json.data === "object" && json.data ? json.data : {};
+        chunk.forEach((id) => {
+          const list = Array.isArray(data[String(id)]) ? data[String(id)] : [];
+          state.productIngredients.set(id, list);
+          if (!state.ingredientStateByProduct.has(id)) {
+            const qtyMap = createIngredientQtyMap(list);
+            state.ingredientStateByProduct.set(id, qtyMap);
+          }
+        });
+      } catch {
+        chunk.forEach((id) => {
+          state.productIngredients.set(id, []);
+        });
+      }
     }
+    schedulePersistBootstrapSnapshot();
   }
 
   async function loadOptionsForProducts(products) {
@@ -3541,21 +6519,26 @@
     const uniqueIds = [...new Set(ids)];
     const missingIds = uniqueIds.filter((id) => !state.productOptionGroups.has(id));
     if (!missingIds.length) return;
-    try {
-      const json = await apiJson("/api/public/products/batch/option-assignments", {
-        method: "POST",
-        body: JSON.stringify({ ids: missingIds }),
-      });
-      const data = json && typeof json.data === "object" && json.data ? json.data : {};
-      missingIds.forEach((id) => {
-        const rows = Array.isArray(data[String(id)]) ? data[String(id)] : [];
-        state.productOptionGroups.set(id, rows);
-      });
-    } catch {
-      missingIds.forEach((id) => {
-        state.productOptionGroups.set(id, []);
-      });
+    const chunkSize = 200;
+    for (let i = 0; i < missingIds.length; i += chunkSize) {
+      const chunk = missingIds.slice(i, i + chunkSize);
+      try {
+        const json = await apiJson("/api/public/products/batch/option-assignments", {
+          method: "POST",
+          body: JSON.stringify({ ids: chunk }),
+        });
+        const data = json && typeof json.data === "object" && json.data ? json.data : {};
+        chunk.forEach((id) => {
+          const rows = Array.isArray(data[String(id)]) ? data[String(id)] : [];
+          state.productOptionGroups.set(id, rows);
+        });
+      } catch {
+        chunk.forEach((id) => {
+          state.productOptionGroups.set(id, []);
+        });
+      }
     }
+    schedulePersistBootstrapSnapshot();
   }
 
   async function loadOptionDetailsForProducts(products) {
@@ -3582,25 +6565,110 @@
     } catch {
       state.unitConversions = [];
     }
+    schedulePersistBootstrapSnapshot();
   }
 
-  async function loadProductsForCategory(categoryId) {
-    if (!Number.isFinite(Number(categoryId))) return;
+  function buildComboCardsFromPayload(combos) {
+    return (Array.isArray(combos) ? combos : [])
+      .filter((c) => Number(c?.is_active ?? 1) === 1)
+      .map((c, idx) => ({
+        id: 100000000 + Number(c?.id || idx + 1),
+        combo_id: Number(c?.id || 0),
+        type: "combo",
+        is_combo: 1,
+        title: String(c?.title || c?.name || "Комбо"),
+        name: String(c?.title || c?.name || "Комбо"),
+        description: String(c?.description || ""),
+        discount_percent: Number(c?.discount_percent || 0),
+        min_price: Number(c?.min_price || 0),
+        price: Number(c?.min_price || 0),
+        image_thumb: c?.image_thumb || null,
+        image_url: c?.image_url || null,
+        grid_photos: Array.isArray(c?.grid_photos) ? c.grid_photos : [],
+        grid_photos_thumb: Array.isArray(c?.grid_photos_thumb) ? c.grid_photos_thumb : [],
+      }));
+  }
+
+  function buildCategoryPayload(productsSource, combosSource) {
+    const source = Array.isArray(productsSource) ? productsSource : [];
+    const combos = Array.isArray(combosSource) ? combosSource : [];
+    const activeOnly = source.filter((p) => Number(p?.is_active || 0) === 1 && isSiteVisibleProduct(p));
+    const comboCards = buildComboCardsFromPayload(combos);
+    return {
+      source,
+      combos,
+      activeOnly,
+      comboCards,
+      currentProducts: [...activeOnly, ...comboCards],
+    };
+  }
+
+  async function preloadAllCategoryProducts(categoryIds) {
+    const ids = [...new Set((Array.isArray(categoryIds) ? categoryIds : [])
+      .map((id) => Number(id || 0))
+      .filter((id) => Number.isFinite(id) && id > 0))];
+    if (!ids.length) return;
     try {
+      const json = await apiJson("/api/public/products/batch/categories", {
+        method: "POST",
+        body: JSON.stringify({ category_ids: ids }),
+      });
+      const productsByCategory = json && typeof json.data === "object" && json.data ? json.data : {};
+      const combosByCategory = json && typeof json.combos === "object" && json.combos ? json.combos : {};
+      const allProducts = [];
+      ids.forEach((cid) => {
+        const source = Array.isArray(productsByCategory[String(cid)]) ? productsByCategory[String(cid)] : [];
+        const combos = Array.isArray(combosByCategory[String(cid)]) ? combosByCategory[String(cid)] : [];
+        const payload = buildCategoryPayload(source, combos);
+        state.categoryProductsCache.set(cid, payload);
+        state.checkoutCategoryProducts.set(cid, payload.activeOnly);
+        allProducts.push(...payload.activeOnly);
+        writeCategoryProductsCache(cid, source);
+      });
+      await loadVariantsForProducts(allProducts);
+      await loadIngredientsForProducts(allProducts);
+      await loadOptionsForProducts(allProducts);
+      schedulePersistBootstrapSnapshot(0);
+    } catch {}
+  }
+
+  async function loadProductsForCategory(categoryId, opts = {}) {
+    if (!Number.isFinite(Number(categoryId))) return;
+    const preferCache = opts.preferCache !== false;
+    try {
+      const cid = Number(categoryId || 0);
+      if (preferCache && state.categoryProductsCache.has(cid)) {
+        const cachedPayload = state.categoryProductsCache.get(cid);
+        if (cachedPayload && Array.isArray(cachedPayload.activeOnly)) {
+          state.checkoutCategoryProducts.set(cid, cachedPayload.activeOnly);
+        }
+        state.currentProducts = Array.isArray(cachedPayload?.currentProducts) ? cachedPayload.currentProducts : [];
+        await loadVariantsForProducts(cachedPayload?.activeOnly || []);
+        await loadIngredientsForProducts(cachedPayload?.activeOnly || []);
+        await loadOptionsForProducts(cachedPayload?.activeOnly || []);
+        renderProducts(state.currentProducts);
+        return;
+      }
+
       productsGridEl.innerHTML = "";
       if (productsEmptyEl) {
         productsEmptyEl.textContent = "Загрузка товаров...";
         productsEmptyEl.classList.remove("hidden");
       }
-      const json = await apiJson(`/api/prod_products?category_id=${encodeURIComponent(String(categoryId))}&list=1`);
-      const source = Array.isArray(json.data) ? json.data : [];
-      const activeOnly = source.filter((p) => Number(p?.is_active || 0) === 1 && isSiteVisibleProduct(p));
-      state.currentProducts = activeOnly;
-      await loadVariantsForProducts(activeOnly);
-      await loadIngredientsForProducts(activeOnly);
-      await loadOptionsForProducts(activeOnly);
-      await loadOptionDetailsForProducts(activeOnly);
-      renderProducts(activeOnly);
+      const json = await apiJson(`/api/public/products?category_id=${encodeURIComponent(String(categoryId))}`);
+      const source = Array.isArray(json?.data) ? json.data : [];
+      const combos = Array.isArray(json?.combos) ? json.combos : [];
+      const payload = buildCategoryPayload(source, combos);
+      state.categoryProductsCache.set(cid, payload);
+      state.checkoutCategoryProducts.set(cid, payload.activeOnly);
+      state.currentProducts = payload.currentProducts;
+      await loadVariantsForProducts(payload.activeOnly);
+      await loadIngredientsForProducts(payload.activeOnly);
+      await loadOptionsForProducts(payload.activeOnly);
+      await loadOptionDetailsForProducts(payload.activeOnly);
+      writeCategoryProductsCache(cid, payload.source);
+      schedulePersistBootstrapSnapshot(0);
+      renderProducts(state.currentProducts);
     } catch (e) {
       if (productsEmptyEl) {
         productsEmptyEl.textContent = "Ошибка загрузки товаров";
@@ -3636,6 +6704,7 @@
       if (!rawCategoryId) return;
       if (rawCategoryId === CHECKOUT_SCREEN_ID) {
         state.activeCategoryId = CHECKOUT_SCREEN_ID;
+        schedulePersistBootstrapSnapshot(0);
         void loadCheckoutProductsForSelectedCategories();
         renderCategories();
         renderMainContentMode();
@@ -3648,12 +6717,14 @@
         state.checkoutDraft = null;
       }
       state.activeCategoryId = cid;
+      schedulePersistBootstrapSnapshot(0);
       renderCategories();
       renderMainContentMode();
       loadProductsForCategory(cid);
     });
 
-    if (rightContentEl) {
+    const rightInteractionEl = rightPanelEl || rightContentEl;
+    if (rightInteractionEl) {
       const isCommentTextarea = (node) => String(node?.tagName || "").toUpperCase() === "TEXTAREA";
       const autosizeCommentField = (field) => {
         if (!isCommentTextarea(field)) return;
@@ -3688,7 +6759,15 @@
         });
       };
 
-      rightContentEl.addEventListener("click", (e) => {
+      rightInteractionEl.addEventListener("click", (e) => {
+        if (state.rightCartClearConfirmUntilByOrder.size) {
+          const anyActionTarget = e.target.closest("[data-action]");
+          const clearActionTarget = e.target.closest("[data-action='right-cart-clear'][data-order-id]");
+          if (anyActionTarget && !clearActionTarget) {
+            resetAllRightCartClearState({ render: false });
+          }
+        }
+
         const addressEditBtn = e.target.closest(".new-order-right-address-edit");
         if (addressEditBtn) {
           const formRoot = addressEditBtn.closest(".new-order-right-form[data-order-id]");
@@ -3714,6 +6793,7 @@
           const cartItemId = Number(cartVariantBtn.getAttribute("data-cart-item-id") || 0);
           const rowKind = String(cartVariantBtn.getAttribute("data-row-kind") || "");
           const sectionIndex = Number(cartVariantBtn.getAttribute("data-section-index") || 0);
+          const optionIndex = Number(cartVariantBtn.getAttribute("data-option-index") || -1);
           const variantIndex = Number(cartVariantBtn.getAttribute("data-variant-index") || -1);
           if (!(orderId > 0) || !(cartItemId > 0) || !rowKind || !Number.isFinite(variantIndex) || variantIndex < 0) return;
           const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
@@ -3736,17 +6816,93 @@
             sections[safeSectionIndex] = section;
             item.sections = sections;
           } else {
-            const variant = item?.variant && typeof item.variant === "object" ? { ...item.variant } : {};
-            const values = Array.isArray(variant?.values) ? variant.values : [];
-            if (!values.length || variantIndex >= values.length) return;
-            variant.selected_index = variantIndex;
-            variant.label = String(values[variantIndex] || "").trim();
-            item.variant = variant;
+            if (rowKind === "option") {
+              const optionItems = Array.isArray(item.option_items) ? item.option_items.map((x) => ({ ...x })) : [];
+              if (!(optionIndex >= 0) || optionIndex >= optionItems.length) return;
+              const opt = { ...optionItems[optionIndex] };
+              const groupId = Number(opt?.group_id || 0);
+              const itemId = Number(opt?.id || 0);
+              const details = state.optionGroupDetails.get(groupId);
+              const detailItems = Array.isArray(details?.items) ? details.items : [];
+              const detailItem = detailItems.find((x) => Number(x?.id || 0) === itemId);
+              if (!detailItem) return;
+              const variants = Array.isArray(detailItem?.variants) ? detailItem.variants : [];
+              const vg = variants[0];
+              const values = Array.isArray(vg?.values) ? vg.values : [];
+              if (!values.length || variantIndex >= values.length) return;
+              opt.variantIndex = variantIndex;
+              opt.variantDiff = getOptionItemVariantDiff(detailItem, variantIndex);
+              optionItems[optionIndex] = opt;
+              item.option_items = optionItems;
+            } else {
+              const variant = item?.variant && typeof item.variant === "object" ? { ...item.variant } : {};
+              const values = Array.isArray(variant?.values) ? variant.values : [];
+              if (!values.length || variantIndex >= values.length) return;
+              variant.selected_index = variantIndex;
+              variant.label = String(values[variantIndex] || "").trim();
+              item.variant = variant;
+            }
           }
           cartItems[itemIndex] = recalculateCartItemTotals(item);
           form.cartItems = cartItems;
           state.rightOrders[orderIndex] = { ...order, form };
           renderRightOrderTabs();
+          return;
+        }
+
+        const cartOpenProductBtn = e.target.closest("[data-action='right-cart-open-product'][data-order-id][data-cart-item-id]");
+        if (cartOpenProductBtn) {
+          const orderId = Number(cartOpenProductBtn.getAttribute("data-order-id") || 0);
+          const cartItemId = Number(cartOpenProductBtn.getAttribute("data-cart-item-id") || 0);
+          const productId = Number(cartOpenProductBtn.getAttribute("data-product-id") || 0);
+          if (!(orderId > 0) || !(cartItemId > 0)) return;
+          let pid = productId;
+          if (!(pid > 0)) {
+            const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
+            if (orderIndex >= 0) {
+              const order = state.rightOrders[orderIndex] || {};
+              const form = order.form && typeof order.form === "object" ? order.form : {};
+              const cartItems = Array.isArray(form.cartItems) ? form.cartItems : [];
+              const item = cartItems.find((x) => Number(x?.id || 0) === cartItemId);
+              pid = Number(item?.product_id || 0);
+            }
+          }
+          if (pid > 0) {
+            const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
+            const sourceItem = orderIndex >= 0
+              ? ((Array.isArray(state.rightOrders[orderIndex]?.form?.cartItems) ? state.rightOrders[orderIndex].form.cartItems : []).find((x) => Number(x?.id || 0) === cartItemId) || null)
+              : null;
+            void openProductOverlay(pid, {
+              mode: "edit",
+              orderId,
+              cartItemId,
+              cartItem: sourceItem,
+            });
+          }
+          return;
+        }
+
+        const cartOpenComboBtn = e.target.closest("[data-action='right-cart-open-combo'][data-order-id][data-cart-item-id]");
+        if (cartOpenComboBtn) {
+          const orderId = Number(cartOpenComboBtn.getAttribute("data-order-id") || 0);
+          const cartItemId = Number(cartOpenComboBtn.getAttribute("data-cart-item-id") || 0);
+          let comboId = Number(cartOpenComboBtn.getAttribute("data-combo-id") || 0);
+          if (!(orderId > 0) || !(cartItemId > 0)) return;
+          const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
+          if (orderIndex < 0) return;
+          const order = state.rightOrders[orderIndex] || {};
+          const form = order.form && typeof order.form === "object" ? order.form : {};
+          const cartItems = Array.isArray(form.cartItems) ? form.cartItems : [];
+          const sourceItem = cartItems.find((x) => Number(x?.id || 0) === cartItemId) || null;
+          if (!sourceItem || String(sourceItem?.type || "") !== "combo") return;
+          if (!(comboId > 0)) comboId = Number(sourceItem?.combo_id || 0);
+          if (!(comboId > 0)) return;
+          void openComboOverlay(comboId, {
+            mode: "edit",
+            orderId,
+            cartItemId,
+            cartItem: sourceItem,
+          });
           return;
         }
 
@@ -3784,6 +6940,160 @@
           return;
         }
 
+        const cartOptionQtyBtn = e.target.closest("[data-action='right-cart-option-qty-minus'], [data-action='right-cart-option-qty-plus']");
+        if (cartOptionQtyBtn) {
+          const action = String(cartOptionQtyBtn.getAttribute("data-action") || "");
+          const orderId = Number(cartOptionQtyBtn.getAttribute("data-order-id") || 0);
+          const cartItemId = Number(cartOptionQtyBtn.getAttribute("data-cart-item-id") || 0);
+          const optionIndex = Number(cartOptionQtyBtn.getAttribute("data-option-index") || -1);
+          if (!(orderId > 0) || !(cartItemId > 0) || !(optionIndex >= 0)) return;
+          const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
+          if (orderIndex < 0) return;
+          const order = state.rightOrders[orderIndex] || {};
+          const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+          const cartItems = Array.isArray(form.cartItems) ? form.cartItems.map((x) => ({ ...x })) : [];
+          const itemIndex = cartItems.findIndex((x) => Number(x?.id || 0) === cartItemId);
+          if (itemIndex < 0) return;
+          const item = { ...cartItems[itemIndex] };
+          if (String(item?.type || "") === "combo") return;
+          const optionItems = Array.isArray(item.option_items) ? item.option_items.map((x) => ({ ...x })) : [];
+          if (optionIndex >= optionItems.length) return;
+          const opt = { ...optionItems[optionIndex] };
+          const groupId = Number(opt?.group_id || 0);
+          const itemId = Number(opt?.id || 0);
+          const details = state.optionGroupDetails.get(groupId);
+          const detailItems = Array.isArray(details?.items) ? details.items : [];
+          const detailItem = detailItems.find((x) => Number(x?.id || 0) === itemId);
+          const qMin = Math.max(0, Number(detailItem?.qty_min ?? 0));
+          const qMaxRaw = Number(detailItem?.qty_max ?? 99);
+          const qMax = Number.isFinite(qMaxRaw) && qMaxRaw > 0 ? qMaxRaw : 99;
+          const currentQty = Math.max(0, Number(opt?.qty || 0));
+          const nextQty = action === "right-cart-option-qty-plus"
+            ? Math.min(qMax, currentQty + 1)
+            : Math.max(qMin, currentQty - 1);
+          if (nextQty === currentQty) return;
+          opt.qty = nextQty;
+          optionItems[optionIndex] = opt;
+          item.option_items = optionItems.filter((x) => Math.max(0, Number(x?.qty || 0)) > 0);
+          cartItems[itemIndex] = recalculateCartItemTotals(item);
+          form.cartItems = cartItems;
+          state.rightOrders[orderIndex] = { ...order, form };
+          renderRightOrderTabs();
+          return;
+        }
+
+        const cartOptionRemoveBtn = e.target.closest("[data-action='right-cart-option-remove'][data-order-id][data-cart-item-id][data-option-index]");
+        if (cartOptionRemoveBtn) {
+          const orderId = Number(cartOptionRemoveBtn.getAttribute("data-order-id") || 0);
+          const cartItemId = Number(cartOptionRemoveBtn.getAttribute("data-cart-item-id") || 0);
+          const optionIndex = Number(cartOptionRemoveBtn.getAttribute("data-option-index") || -1);
+          if (!(orderId > 0) || !(cartItemId > 0) || !(optionIndex >= 0)) return;
+          const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
+          if (orderIndex < 0) return;
+          const order = state.rightOrders[orderIndex] || {};
+          const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+          const cartItems = Array.isArray(form.cartItems) ? form.cartItems.map((x) => ({ ...x })) : [];
+          const itemIndex = cartItems.findIndex((x) => Number(x?.id || 0) === cartItemId);
+          if (itemIndex < 0) return;
+          const item = { ...cartItems[itemIndex] };
+          if (String(item?.type || "") === "combo") return;
+          const optionItems = Array.isArray(item.option_items) ? item.option_items.map((x) => ({ ...x })) : [];
+          if (optionIndex >= optionItems.length) return;
+          optionItems.splice(optionIndex, 1);
+          item.option_items = optionItems;
+          cartItems[itemIndex] = recalculateCartItemTotals(item);
+          form.cartItems = cartItems;
+          state.rightOrders[orderIndex] = { ...order, form };
+          renderRightOrderTabs();
+          return;
+        }
+
+        const cartItemDeleteBtn = e.target.closest("[data-action='right-cart-item-delete'][data-order-id][data-cart-item-id]");
+        if (cartItemDeleteBtn) {
+          const orderId = Number(cartItemDeleteBtn.getAttribute("data-order-id") || 0);
+          const cartItemId = Number(cartItemDeleteBtn.getAttribute("data-cart-item-id") || 0);
+          if (!(orderId > 0) || !(cartItemId > 0)) return;
+          const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
+          if (orderIndex < 0) return;
+          const order = state.rightOrders[orderIndex] || {};
+          const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+          const cartItems = Array.isArray(form.cartItems) ? form.cartItems.map((item) => ({ ...item })) : [];
+          const nextItems = cartItems.filter((item) => Number(item?.id || 0) !== cartItemId);
+          if (nextItems.length === cartItems.length) return;
+          form.cartItems = nextItems;
+          state.rightOrders[orderIndex] = { ...order, form };
+          renderRightOrderTabs();
+          return;
+        }
+
+        const cartItemCopyBtn = e.target.closest("[data-action='right-cart-item-copy'][data-order-id][data-cart-item-id]");
+        if (cartItemCopyBtn) {
+          const orderId = Number(cartItemCopyBtn.getAttribute("data-order-id") || 0);
+          const cartItemId = Number(cartItemCopyBtn.getAttribute("data-cart-item-id") || 0);
+          if (!(orderId > 0) || !(cartItemId > 0)) return;
+          const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
+          if (orderIndex < 0) return;
+          const order = state.rightOrders[orderIndex] || {};
+          const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+          const cartItems = Array.isArray(form.cartItems) ? form.cartItems.map((item) => ({ ...item })) : [];
+          const itemIndex = cartItems.findIndex((item) => Number(item?.id || 0) === cartItemId);
+          if (itemIndex < 0) return;
+
+          const sourceItem = cartItems[itemIndex];
+          let copiedItem = null;
+          try {
+            copiedItem = JSON.parse(JSON.stringify(sourceItem));
+          } catch {
+            copiedItem = { ...sourceItem };
+          }
+          copiedItem.id = Date.now() + Math.floor(Math.random() * 10000);
+          copiedItem.qty = 1;
+          copiedItem = recalculateCartItemTotals(copiedItem);
+
+          cartItems.splice(itemIndex + 1, 0, copiedItem);
+          form.cartItems = cartItems;
+          state.rightOrders[orderIndex] = { ...order, form };
+          renderRightOrderTabs();
+          return;
+        }
+
+        const cartItemSplitBtn = e.target.closest("[data-action='right-cart-item-split'][data-order-id][data-cart-item-id]");
+        if (cartItemSplitBtn) {
+          const orderId = Number(cartItemSplitBtn.getAttribute("data-order-id") || 0);
+          const cartItemId = Number(cartItemSplitBtn.getAttribute("data-cart-item-id") || 0);
+          if (!(orderId > 0) || !(cartItemId > 0)) return;
+          const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
+          if (orderIndex < 0) return;
+          const order = state.rightOrders[orderIndex] || {};
+          const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+          const cartItems = Array.isArray(form.cartItems) ? form.cartItems.map((item) => ({ ...item })) : [];
+          const itemIndex = cartItems.findIndex((item) => Number(item?.id || 0) === cartItemId);
+          if (itemIndex < 0) return;
+
+          const sourceItem = { ...cartItems[itemIndex] };
+          const sourceQty = Math.max(1, Number(sourceItem?.qty || 1));
+          if (sourceQty <= 1) return;
+
+          sourceItem.qty = sourceQty - 1;
+          cartItems[itemIndex] = recalculateCartItemTotals(sourceItem);
+
+          let splitItem = null;
+          try {
+            splitItem = JSON.parse(JSON.stringify(sourceItem));
+          } catch {
+            splitItem = { ...sourceItem };
+          }
+          splitItem.id = Date.now() + Math.floor(Math.random() * 10000);
+          splitItem.qty = 1;
+          splitItem = recalculateCartItemTotals(splitItem);
+
+          cartItems.splice(itemIndex + 1, 0, splitItem);
+          form.cartItems = cartItems;
+          state.rightOrders[orderIndex] = { ...order, form };
+          renderRightOrderTabs();
+          return;
+        }
+
         const cartRowRemoveBtn = e.target.closest("[data-action='right-cart-row-remove'][data-order-id][data-cart-item-id][data-row-kind]");
         if (cartRowRemoveBtn) {
           const orderId = Number(cartRowRemoveBtn.getAttribute("data-order-id") || 0);
@@ -3799,43 +7109,8 @@
           const itemIndex = cartItems.findIndex((item) => Number(item?.id || 0) === cartItemId);
           if (itemIndex < 0) return;
           const item = { ...cartItems[itemIndex] };
-
-          if (rowKind === "combo") {
-            const sections = Array.isArray(item.sections)
-              ? item.sections.map((section) => ({ ...section, variant: section?.variant && typeof section.variant === "object" ? { ...section.variant } : {} }))
-              : [];
-            const safeSectionIndex = Number.isFinite(sectionIndex) ? sectionIndex : 0;
-            if (safeSectionIndex < 0 || safeSectionIndex >= sections.length) return;
-            sections.splice(safeSectionIndex, 1);
-            if (!sections.length) {
-              cartItems.splice(itemIndex, 1);
-            } else {
-              if (sections.length === 1) {
-                const single = sections[0] || {};
-                const nextItem = {
-                  ...item,
-                  type: "product",
-                  name: String(single?.product_name || item?.name || "Товар"),
-                  photos: [String(single?.photo_url || "")].filter(Boolean),
-                  ingredients: Array.isArray(single?.ingredients) ? single.ingredients.map((ing) => ({ ...ing })) : [],
-                  variant: single?.variant && typeof single.variant === "object"
-                    ? { ...single.variant }
-                    : { label: "" },
-                  pricing: single?.pricing && typeof single.pricing === "object"
-                    ? { ...single.pricing }
-                    : null,
-                };
-                delete nextItem.sections;
-                cartItems[itemIndex] = recalculateCartItemTotals(nextItem);
-              } else {
-                item.sections = sections;
-                item.photos = sections.map((section) => String(section?.photo_url || "")).filter(Boolean).slice(0, 4);
-                cartItems[itemIndex] = recalculateCartItemTotals(item);
-              }
-            }
-          } else {
-            cartItems.splice(itemIndex, 1);
-          }
+          if (rowKind === "combo" || String(item?.type || "") === "combo") return;
+          cartItems.splice(itemIndex, 1);
 
           form.cartItems = cartItems;
           state.rightOrders[orderIndex] = { ...order, form };
@@ -3895,6 +7170,36 @@
           form.cartItems = cartItems;
           state.rightOrders[orderIndex] = { ...order, form };
           renderRightOrderTabs();
+          return;
+        }
+
+        const cartClearBtn = e.target.closest("[data-action='right-cart-clear'][data-order-id]");
+        if (cartClearBtn) {
+          const orderId = Number(cartClearBtn.getAttribute("data-order-id") || 0);
+          if (!(orderId > 0)) return;
+          const idx = getRightOrderIndexById(orderId);
+          if (idx < 0) return;
+          const order = state.rightOrders[idx] || {};
+          const form = order.form && typeof order.form === "object" ? order.form : {};
+          const cartItems = Array.isArray(form.cartItems) ? form.cartItems : [];
+          if (!cartItems.length) return;
+          const armedUntil = Number(state.rightCartClearConfirmUntilByOrder.get(orderId) || 0);
+          const armed = armedUntil > Date.now();
+          if (!armed) {
+            armRightCartClearState(orderId);
+            renderRightOrderTabs();
+            return;
+          }
+          clearRightOrderCart(orderId);
+          renderRightOrderTabs();
+          return;
+        }
+
+        const checkoutBtn = e.target.closest("[data-action='right-cart-checkout'][data-order-id]");
+        if (checkoutBtn) {
+          const orderId = Number(checkoutBtn.getAttribute("data-order-id") || 0);
+          if (!(orderId > 0)) return;
+          void submitRightOrder(orderId);
           return;
         }
 
@@ -3986,7 +7291,7 @@
         renderRightOrderTabs();
       });
 
-      rightContentEl.addEventListener("input", (e) => {
+      rightInteractionEl.addEventListener("input", (e) => {
         const input = e.target.closest("[data-action='right-input-change'][data-order-id][data-field]");
         if (!input) return;
         const orderId = Number(input.getAttribute("data-order-id") || 0);
@@ -4002,7 +7307,8 @@
           }
         }
         if (field === "changeAmount") {
-          const total = Math.max(0, roundPrice(getCheckoutCurrentTotal()));
+          const summary = getRightOrderCheckoutSummaryByOrderId(orderId);
+          const total = Math.max(0, roundPrice(summary.payableTotal || 0));
           const minAllowed = total + 1;
           const numeric = Number(String(input.value || "").replace(/[^\d]/g, ""));
           if (!Number.isFinite(numeric) || numeric <= 0) {
@@ -4020,7 +7326,7 @@
         }
       });
 
-      rightContentEl.addEventListener("keydown", (e) => {
+      rightInteractionEl.addEventListener("keydown", (e) => {
         const input = e.target.closest("[data-action='right-input-change'][data-field='phone']");
         if (!input) return;
         if (e.key !== "Backspace") return;
@@ -4041,7 +7347,7 @@
         if (orderId > 0) updateRightOrderFormField(orderId, "phone", nextValue);
       });
 
-      rightContentEl.addEventListener("focusin", (e) => {
+      rightInteractionEl.addEventListener("focusin", (e) => {
         const commentField = e.target.closest(".new-order-right-comment[data-action='right-input-change']");
         if (commentField) bindCommentFieldAutogrow(commentField);
         const noAutofillInput = e.target.closest("[data-no-autofill='1']");
@@ -4058,7 +7364,7 @@
         }
       });
 
-      rightContentEl.addEventListener(
+      rightInteractionEl.addEventListener(
         "wheel",
         (e) => {
           const row = e.target.closest(".new-order-right-cart-variant-scroll");
@@ -4086,11 +7392,23 @@
           if (isCheckoutScreenActive()) renderCheckoutEditorContent();
         }
       }
-      if (!state.rightOpenSelect) return;
       const target = e.target instanceof Element ? e.target : null;
-      if (target && (target.closest(".new-order-right-select-wrap") || target.closest(".new-order-right-calendar") || target.closest("[data-action='right-select-toggle']"))) return;
-      state.rightOpenSelect = null;
-      renderRightOrderTabs();
+      let shouldRenderRight = false;
+      if (state.rightCartClearConfirmUntilByOrder.size) {
+        const clickedClear = target?.closest("[data-action='right-cart-clear'][data-order-id]");
+        if (!clickedClear) {
+          resetAllRightCartClearState({ render: false });
+          shouldRenderRight = true;
+        }
+      }
+      if (state.rightOpenSelect) {
+        const keepSelectOpen = target && (target.closest(".new-order-right-select-wrap") || target.closest(".new-order-right-calendar") || target.closest("[data-action='right-select-toggle']"));
+        if (!keepSelectOpen) {
+          state.rightOpenSelect = null;
+          shouldRenderRight = true;
+        }
+      }
+      if (shouldRenderRight) renderRightOrderTabs();
     });
 
     if (settingsBtnEl) {
@@ -4188,11 +7506,13 @@
           const closeBtn = e.target.closest("[data-action='right-order-tab-close'][data-order-id]");
           if (closeBtn) {
             const orderId = Number(closeBtn.getAttribute("data-order-id") || 0);
-            if (!(orderId > 0)) return;
-            const idx = state.rightOrders.findIndex((o) => Number(o?.id || 0) === orderId);
-            if (idx < 0) return;
-            const wasActive = Number(state.rightActiveOrderId || 0) === orderId;
-            state.rightOrders.splice(idx, 1);
+          if (!(orderId > 0)) return;
+          const idx = state.rightOrders.findIndex((o) => Number(o?.id || 0) === orderId);
+          if (idx < 0) return;
+          resetRightCartClearState(orderId, { render: false });
+          state.rightCheckoutSubmittingByOrder.delete(orderId);
+          const wasActive = Number(state.rightActiveOrderId || 0) === orderId;
+          state.rightOrders.splice(idx, 1);
             if (!state.rightOrders.length) {
               state.rightActiveOrderId = null;
             } else if (wasActive) {
@@ -4428,16 +7748,34 @@
     productsGridEl.addEventListener("click", (e) => {
       const actionBtn = e.target.closest("[data-action]");
       if (!actionBtn) return;
+      const action = String(actionBtn.getAttribute("data-action") || "");
+      if (action === "combo-open") {
+        const comboId = Number(actionBtn.getAttribute("data-combo-id") || actionBtn.closest("[data-combo-id]")?.getAttribute("data-combo-id") || 0);
+        if (comboId > 0) void openComboOverlay(comboId);
+        return;
+      }
       const card = e.target.closest("[data-product-id]");
       if (!card) return;
       const pid = Number(card.getAttribute("data-product-id") || 0);
       if (!Number.isFinite(pid) || pid <= 0) return;
-      const action = actionBtn.getAttribute("data-action") || "";
       if (action === "variant-select") {
         const variantIndex = Number(actionBtn.getAttribute("data-variant-index"));
         if (!Number.isFinite(variantIndex) || variantIndex < 0) return;
+        const currentIndex = Number(state.selectedVariants.get(pid));
+        if (Number.isFinite(currentIndex) && currentIndex === variantIndex) {
+          quickAddProductToCart(pid);
+          return;
+        }
         state.selectedVariants.set(pid, variantIndex);
         renderProducts(state.currentProducts);
+        return;
+      }
+      if (action === "product-add-quick") {
+        quickAddProductToCart(pid);
+        return;
+      }
+      if (action === "product-open") {
+        void openProductOverlay(pid);
         return;
       }
       if (action === "option-open") {
@@ -4446,6 +7784,10 @@
         const titleEl = block ? block.querySelector(".new-order-option-title") : null;
         const title = titleEl ? titleEl.textContent : "Опция";
         void openOptionOverlay(pid, groupId, title);
+        return;
+      }
+      if (action === "product-options-open") {
+        void openProductOverlay(pid);
         return;
       }
       if (action === "option-quick-toggle") {
@@ -4494,11 +7836,452 @@
         renderProducts(state.currentProducts);
         return;
       }
-      const currentQty = Number(state.quantities.get(pid) || 0);
-      const nextQty = action === "qty-plus" ? currentQty + 1 : Math.max(0, currentQty - 1);
-      state.quantities.set(pid, nextQty);
-      const qtyEl = card.querySelector("[data-qty-value]");
-      if (qtyEl) qtyEl.textContent = String(nextQty);
+      if (action === "qty-minus" || action === "qty-plus") {
+        const currentQty = getProductCardQty(pid);
+        const delta = action === "qty-plus" ? 1 : -1;
+        const nextQty = Math.max(1, currentQty + delta);
+        if (nextQty === currentQty) return;
+        setProductCardQty(pid, nextQty);
+        renderProducts(state.currentProducts);
+        return;
+      }
+    });
+
+    productsGridEl.addEventListener("click", (e) => {
+      const card = e.target.closest(".new-order-product-card[data-product-id]");
+      const interactive = e.target.closest("[data-action], button, input, textarea, select, a");
+      if (interactive) return;
+      if (card) {
+        const pid = Number(card.getAttribute("data-product-id") || 0);
+        if (!(pid > 0)) return;
+        void openProductOverlay(pid);
+        return;
+      }
+      const comboCard = e.target.closest(".new-order-product-card[data-combo-id]");
+      if (!comboCard) return;
+      const comboId = Number(comboCard.getAttribute("data-combo-id") || 0);
+      if (!(comboId > 0)) return;
+      void openComboOverlay(comboId);
+    });
+
+    productsGridEl.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      const comboCard = e.target.closest(".new-order-product-card[data-combo-id]");
+      if (!comboCard) return;
+      const interactive = e.target.closest("[data-action], button, input, textarea, select, a");
+      if (interactive) return;
+      const comboId = Number(comboCard.getAttribute("data-combo-id") || 0);
+      if (!(comboId > 0)) return;
+      e.preventDefault();
+      void openComboOverlay(comboId);
+    });
+
+    document.addEventListener("click", (e) => {
+      const overlay = document.getElementById("newOrderComboOverlay");
+      if (!overlay || overlay.classList.contains("hidden")) return;
+      const actionNode = e.target.closest("[data-action]");
+      if (!actionNode) return;
+      const action = String(actionNode.getAttribute("data-action") || "");
+      if (!action.startsWith("combo-overlay-")) return;
+      const closePickerToMain = () => {
+        state.comboModal.view = "main";
+        state.comboModal.pickerBlockIndex = -1;
+        state.comboModal.expandedPickerProductIndex = null;
+        renderComboOverlay();
+        const { list } = getComboOverlayElements();
+        if (list) list.scrollTop = 0;
+      };
+
+      if (action === "combo-overlay-back") {
+        if (String(state.comboModal.view || "main") === "picker") {
+          state.comboModal.view = "main";
+          state.comboModal.pickerBlockIndex = -1;
+          state.comboModal.expandedPickerProductIndex = null;
+          renderComboOverlay();
+          return;
+        }
+        closeComboOverlay();
+        return;
+      }
+
+      if (action === "combo-overlay-open-picker") {
+        const blockIndex = Number(actionNode.getAttribute("data-block-index") || 0);
+        void (async () => {
+          const safeBlockIndex = Number.isFinite(blockIndex) ? blockIndex : 0;
+          state.comboModal.view = "picker";
+          state.comboModal.pickerBlockIndex = safeBlockIndex;
+          state.comboModal.expandedPickerProductIndex = null;
+          await hydrateComboBlockSelection(safeBlockIndex, { preferSavedState: true });
+          renderComboOverlay();
+          const { list } = getComboOverlayElements();
+          if (list) list.scrollTop = 0;
+        })();
+        return;
+      }
+
+      if (action === "combo-overlay-picker-expand-noop") {
+        return;
+      }
+
+      if (action === "combo-overlay-picker-gear") {
+        const blockIndex = Number(actionNode.getAttribute("data-block-index") || 0);
+        const productIndex = Number(actionNode.getAttribute("data-product-index") || 0);
+        void (async () => {
+          const selected = await selectComboPickerProduct(blockIndex, productIndex, {
+            hydrate: true,
+            preferSavedState: true,
+          });
+          if (!selected) return;
+          const currentExpanded = Number(state.comboModal.expandedPickerProductIndex);
+          state.comboModal.expandedPickerProductIndex = Number.isFinite(currentExpanded) && currentExpanded === productIndex
+            ? null
+            : productIndex;
+          renderComboOverlay();
+        })();
+        return;
+      }
+
+      if (action === "combo-overlay-picker-radio" || action === "combo-overlay-picker-select") {
+        const blockIndex = Number(actionNode.getAttribute("data-block-index") || 0);
+        const productIndex = Number(actionNode.getAttribute("data-product-index") || 0);
+        void (async () => {
+          const selected = await selectComboPickerProduct(blockIndex, productIndex, {
+            hydrate: true,
+            preferSavedState: true,
+          });
+          if (!selected) return;
+          closePickerToMain();
+        })();
+        return;
+      }
+
+      if (action === "combo-overlay-picker-variant") {
+        const blockIndex = Number(actionNode.getAttribute("data-block-index") || 0);
+        const productIndex = Number(actionNode.getAttribute("data-product-index") || 0);
+        const variantIndex = Number(actionNode.getAttribute("data-variant-index") || 0);
+        void (async () => {
+          const selected = await selectComboPickerProduct(blockIndex, productIndex, {
+            hydrate: true,
+            preferSavedState: true,
+          });
+          if (!selected) return;
+          const selectedProduct = getComboSelectedProduct(blockIndex);
+          const productId = Number(selectedProduct?.product_id || 0);
+          if (!(productId > 0)) return;
+          const variants = state.productVariants.get(productId) || [];
+          const group = Array.isArray(variants) && variants.length ? variants[0] : null;
+          const values = Array.isArray(group?.values) ? group.values : [];
+          if (!values.length) return;
+          if (!Number.isFinite(variantIndex) || variantIndex < 0 || variantIndex >= values.length) return;
+          const rowState = state.comboModal.selectionStateByBlock[blockIndex] || makeEmptyComboBlockState();
+          rowState.product_id = productId;
+          rowState.variant_value_index = variantIndex;
+          rowState.variant_label = String(values[variantIndex] || "");
+          state.comboModal.selectionStateByBlock[blockIndex] = rowState;
+          await hydrateComboBlockSelection(blockIndex, { preferSavedState: true });
+          state.comboModal.view = "picker";
+          state.comboModal.pickerBlockIndex = blockIndex;
+          state.comboModal.expandedPickerProductIndex = productIndex;
+          renderComboOverlay();
+        })();
+        return;
+      }
+
+      if (action === "combo-overlay-picker-ing-minus" || action === "combo-overlay-picker-ing-plus") {
+        const blockIndex = Number(actionNode.getAttribute("data-block-index") || 0);
+        const productIndex = Number(actionNode.getAttribute("data-product-index") || 0);
+        const ingredientId = Number(actionNode.getAttribute("data-ingredient-id") || 0);
+        const deltaRaw = Number(actionNode.getAttribute("data-step") || 1);
+        const delta = action === "combo-overlay-picker-ing-plus" ? Math.abs(deltaRaw || 1) : -Math.abs(deltaRaw || 1);
+        void (async () => {
+          if (!(ingredientId > 0) || !Number.isFinite(delta) || delta === 0) return;
+          const selected = await selectComboPickerProduct(blockIndex, productIndex, {
+            hydrate: true,
+            preferSavedState: true,
+          });
+          if (!selected) return;
+          const selectedProduct = getComboSelectedProduct(blockIndex);
+          const productId = Number(selectedProduct?.product_id || 0);
+          if (!(productId > 0)) return;
+          const ingredients = state.productIngredients.get(productId) || [];
+          const ingredient = ingredients.find((row) => Number(row?.ingredient_id || 0) === ingredientId);
+          if (!ingredient) return;
+          const step = Math.max(0.0001, Number(ingredient?.quantity_step ?? Math.abs(delta)) || 1);
+          const minRaw = Number(ingredient?.quantity_min);
+          const minQty = Number.isFinite(minRaw) ? Math.max(0, minRaw) : 0;
+          const maxRaw = Number(ingredient?.quantity_max);
+          const hasMax = Number.isFinite(maxRaw) && maxRaw > 0;
+          const maxQty = hasMax ? maxRaw : Infinity;
+
+          const rowState = state.comboModal.selectionStateByBlock[blockIndex] || makeEmptyComboBlockState();
+          const nextIngredients = Array.isArray(rowState.ingredients_display)
+            ? rowState.ingredients_display.map((row) => ({ ...row }))
+            : [];
+          let idx = nextIngredients.findIndex((row) => Number(row?.ingredient_id || 0) === ingredientId);
+          if (idx < 0) {
+            const baseQty = Number(ingredient?.quantity ?? 0);
+            nextIngredients.push({
+              ingredient_id: ingredientId,
+              name: String(ingredient?.ingredient_name || ingredient?.name || ""),
+              qty: baseQty,
+              quantity: baseQty,
+              unit: String(ingredient?.unit_short_title || ingredient?.unit_title || ingredient?.unit_code || ""),
+              unit_id: ingredient?.unit_id != null ? Number(ingredient.unit_id) : null,
+            });
+            idx = nextIngredients.length - 1;
+          }
+          const currentQtyRaw = Number(nextIngredients[idx]?.qty ?? nextIngredients[idx]?.quantity ?? 0);
+          const currentQty = Number.isFinite(currentQtyRaw) ? currentQtyRaw : Number(ingredient?.quantity ?? 0);
+          let nextQty = currentQty + (delta > 0 ? step : -step);
+          nextQty = Math.max(minQty, Math.min(maxQty, nextQty));
+          if (!Number.isFinite(nextQty) || nextQty === currentQty) return;
+
+          rowState.product_id = productId;
+          rowState.ingredients_display = nextIngredients;
+          rowState.ingredients_display[idx].qty = nextQty;
+          rowState.ingredients_display[idx].quantity = nextQty;
+          state.comboModal.selectionStateByBlock[blockIndex] = rowState;
+          await hydrateComboBlockSelection(blockIndex, { preferSavedState: true });
+          state.comboModal.view = "picker";
+          state.comboModal.pickerBlockIndex = blockIndex;
+          state.comboModal.expandedPickerProductIndex = productIndex;
+          renderComboOverlay();
+        })();
+        return;
+      }
+
+      if (action === "combo-overlay-qty-minus" || action === "combo-overlay-qty-plus") {
+        const delta = action === "combo-overlay-qty-plus" ? 1 : -1;
+        state.comboModal.qty = Math.max(1, Number(state.comboModal.qty || 1) + delta);
+        renderComboOverlay();
+        return;
+      }
+
+      if (action === "combo-overlay-add") {
+        const mode = String(state.comboModal.mode || "add");
+        const orderId = Number(state.comboModal.editOrderId || state.rightActiveOrderId || 0);
+        const cartItemId = Number(state.comboModal.editCartItemId || 0);
+        void (async () => {
+          const cartItem = await buildCartItemFromComboOverlay();
+          if (!cartItem) return;
+          if (mode === "edit" && orderId > 0 && cartItemId > 0) {
+            const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
+            if (orderIndex >= 0) {
+              const order = state.rightOrders[orderIndex] || {};
+              const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+              const cartItems = Array.isArray(form.cartItems) ? form.cartItems.map((x) => ({ ...x })) : [];
+              const idx = cartItems.findIndex((x) => Number(x?.id || 0) === cartItemId);
+              if (idx >= 0) {
+                cartItem.id = cartItemId;
+                cartItems[idx] = cartItem;
+                form.cartItems = cartItems;
+                state.rightOrders[orderIndex] = { ...order, form };
+                renderRightOrderTabs();
+                closeComboOverlay();
+                return;
+              }
+            }
+          }
+          if (!state.rightActiveOrderId) openRightNewOrderTab();
+          const activeOrderId = Number(state.rightActiveOrderId || 0);
+          if (!(activeOrderId > 0)) return;
+          addCartItemToRightOrder(activeOrderId, cartItem);
+          renderRightOrderTabs();
+          closeComboOverlay();
+        })();
+        return;
+      }
+    });
+
+    document.addEventListener("keydown", (e) => {
+      const overlay = document.getElementById("newOrderComboOverlay");
+      if (!overlay || overlay.classList.contains("hidden")) return;
+      if (e.key !== "Escape") return;
+      if (String(state.comboModal.view || "main") === "picker") {
+        state.comboModal.view = "main";
+        state.comboModal.pickerBlockIndex = -1;
+        state.comboModal.expandedPickerProductIndex = null;
+        renderComboOverlay();
+        return;
+      }
+      closeComboOverlay();
+    });
+
+    document.addEventListener("click", (e) => {
+      const overlay = document.getElementById("newOrderProductOverlay");
+      if (!overlay || overlay.classList.contains("hidden")) return;
+      const actionNode = e.target.closest("[data-action]");
+      if (!actionNode) return;
+      const action = String(actionNode.getAttribute("data-action") || "");
+      const pid = Number(state.productModal.productId || 0);
+      if (!(pid > 0)) return;
+
+      if (action === "product-overlay-close") {
+        closeProductOverlay();
+        return;
+      }
+      if (action === "product-overlay-photo-prev" || action === "product-overlay-photo-next") {
+        const product = getProductById(pid);
+        const photos = getProductPhotos(product);
+        if (photos.length > 1) {
+          const delta = action === "product-overlay-photo-next" ? 1 : -1;
+          const next = (Number(state.productModal.photoIndex || 0) + delta + photos.length) % photos.length;
+          state.productModal.photoIndex = next;
+          renderProductOverlay();
+        }
+        return;
+      }
+      if (action === "product-overlay-photo-dot") {
+        const product = getProductById(pid);
+        const photos = getProductPhotos(product);
+        if (photos.length > 1) {
+          const idx = Number(actionNode.getAttribute("data-photo-index") || -1);
+          if (Number.isFinite(idx) && idx >= 0 && idx < photos.length) {
+            state.productModal.photoIndex = idx;
+            renderProductOverlay();
+          }
+        }
+        return;
+      }
+      if (action === "product-overlay-qty-minus" || action === "product-overlay-qty-plus") {
+        const delta = action === "product-overlay-qty-plus" ? 1 : -1;
+        state.productModal.qty = Math.max(1, Number(state.productModal.qty || 1) + delta);
+        renderProductOverlay();
+        return;
+      }
+      if (action === "product-overlay-variant-select") {
+        const variantIndex = Number(actionNode.getAttribute("data-variant-index") || -1);
+        if (Number.isFinite(variantIndex) && variantIndex >= 0) {
+          state.selectedVariants.set(pid, variantIndex);
+          renderProductOverlay();
+        }
+        return;
+      }
+      if (action === "product-overlay-options-open") {
+        const groupId = Number(actionNode.getAttribute("data-group-id") || 0);
+        const title = String(actionNode.getAttribute("data-group-title") || "Опции");
+        if (groupId > 0) {
+          void openOptionOverlay(pid, groupId, title);
+          window.setTimeout(() => {
+            if (!document.getElementById("newOrderProductOverlay")?.classList.contains("hidden")) {
+              renderProductOverlay();
+            }
+          }, 0);
+        }
+        return;
+      }
+      if (
+        action === "product-overlay-opt-open-group" ||
+        action === "product-overlay-opt-select-none" ||
+        action === "product-overlay-opt-select-single" ||
+        action === "product-overlay-opt-variants-toggle" ||
+        action === "product-overlay-opt-variant-select" ||
+        action === "product-overlay-opt-toggle-item" ||
+        action === "product-overlay-opt-qty-minus" ||
+        action === "product-overlay-opt-qty-plus"
+      ) {
+        const groupId = Number(actionNode.getAttribute("data-group-id") || 0);
+        const itemId = Number(actionNode.getAttribute("data-item-id") || 0);
+        const variantIndex = Number(actionNode.getAttribute("data-variant-index") || 0);
+        if (action === "product-overlay-opt-open-group") {
+          if (groupId > 0) {
+            state.productModal.expandedOptionGroups.add(groupId);
+            renderProductOverlay();
+          }
+          return;
+        }
+        if (action === "product-overlay-opt-select-none") {
+          if (groupId > 0) {
+            const byGroup = state.optionSelections.get(pid) || new Map();
+            const details = state.optionGroupDetails.get(groupId);
+            const items = Array.isArray(details?.items) ? details.items : [];
+            const groupType = getOptionGroupUiType({ ...(details?.group || {}), items });
+            byGroup.set(groupId, { type: groupType, items: [] });
+            state.optionSelections.set(pid, byGroup);
+            state.productModal.expandedOptionGroups.delete(groupId);
+            renderProductOverlay();
+            renderProducts(state.currentProducts);
+          }
+          return;
+        }
+        if (action === "product-overlay-opt-select-single") {
+          if (groupId > 0 && itemId > 0) {
+            const details = state.optionGroupDetails.get(groupId);
+            const items = Array.isArray(details?.items) ? details.items : [];
+            const found = items.find((x) => Number(x?.id || 0) === itemId);
+            if (found) {
+              const defaultVariantIndex = getOptionItemDefaultVariantIndex(found);
+              const hasVariantDefault = Number.isFinite(Number(defaultVariantIndex));
+              const byGroup = state.optionSelections.get(pid) || new Map();
+              byGroup.set(groupId, {
+                type: "single",
+                items: [{
+                  id: itemId,
+                  label: String(found?.name || found?.product_name || "Позиция"),
+                  qty: 1,
+                  basePrice: getOptionItemBasePrice(found),
+                  variantDiff: hasVariantDefault ? getOptionItemVariantDiff(found, Number(defaultVariantIndex)) : 0,
+                  ...(hasVariantDefault ? { variantIndex: Number(defaultVariantIndex) } : {}),
+                }],
+              });
+              state.optionSelections.set(pid, byGroup);
+              state.productModal.expandedOptionGroups.delete(groupId);
+              state.productModal.expandedOptionItems.delete(`${groupId}:${itemId}`);
+              renderProductOverlay();
+              renderProducts(state.currentProducts);
+            }
+          }
+          return;
+        }
+        const changed = applyProductOverlayOptionAction(pid, action, groupId, itemId, variantIndex);
+        if (!changed) return;
+        renderProductOverlay();
+        renderProducts(state.currentProducts);
+        return;
+      }
+      if (action === "product-overlay-add") {
+        const qty = Math.max(1, Number(state.productModal.qty || 1));
+        const mode = String(state.productModal.mode || "add");
+        const cartItem = buildCartItemFromProduct(pid, qty);
+        if (!cartItem) return;
+        if (mode === "edit") {
+          const orderId = Number(state.productModal.editOrderId || 0);
+          const cartItemId = Number(state.productModal.editCartItemId || 0);
+          if (orderId > 0 && cartItemId > 0) {
+            const orderIndex = state.rightOrders.findIndex((order) => Number(order?.id || 0) === orderId);
+            if (orderIndex >= 0) {
+              const order = state.rightOrders[orderIndex] || {};
+              const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+              const cartItems = Array.isArray(form.cartItems) ? form.cartItems.map((x) => ({ ...x })) : [];
+              const idx = cartItems.findIndex((x) => Number(x?.id || 0) === cartItemId);
+              if (idx >= 0) {
+                cartItem.id = cartItemId;
+                cartItems[idx] = cartItem;
+                form.cartItems = cartItems;
+                state.rightOrders[orderIndex] = { ...order, form };
+                renderRightOrderTabs();
+                closeProductOverlay();
+                return;
+              }
+            }
+          }
+        }
+        if (!state.rightActiveOrderId) openRightNewOrderTab();
+        if (!state.rightActiveOrderId) return;
+        addCartItemToRightOrder(state.rightActiveOrderId, cartItem);
+        renderRightOrderTabs();
+        closeProductOverlay();
+        return;
+      }
+      if (action === "ingredient-minus" || action === "ingredient-plus") {
+        const ingId = Number(actionNode.getAttribute("data-ingredient-id") || 0);
+        if (!(ingId > 0)) return;
+        const changed = adjustIngredientQty(pid, ingId, action === "ingredient-plus" ? 1 : -1);
+        if (!changed) return;
+        renderProductOverlay();
+        renderProducts(state.currentProducts);
+        return;
+      }
     });
 
     productsGridEl.addEventListener(
@@ -4539,40 +8322,151 @@
     );
   }
 
-  async function load() {
+  async function fetchNewOrderManifest() {
     try {
-      await loadUnitConversions();
-      await loadRightDeliveryTypes();
-      await loadRightPaymentTypes();
-      await loadRightTimeOptions();
-      await loadRightPickupStores();
+      const json = await apiJson("/api/new-order/manifest");
+      return json && typeof json.data === "object" && json.data ? json.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function loadCategoriesFromApi() {
+    const json = await apiJson("/api/prod_categories");
+    const source = Array.isArray(json?.data) ? json.data : [];
+    state.productCategories = source
+      .filter((c) => Number(c?.is_active || 0) === 1)
+      .sort((a, b) => (Number(a?.sort_order || 0) - Number(b?.sort_order || 0)) || (Number(a?.id || 0) - Number(b?.id || 0)));
+    state.categories = source
+      .filter((c) => Number(c?.is_active || 0) === 1 && isCheckoutVisible(c))
+      .sort((a, b) => (Number(a?.sort_order || 0) - Number(b?.sort_order || 0)) || (Number(a?.id || 0) - Number(b?.id || 0)));
+    schedulePersistBootstrapSnapshot(0);
+  }
+
+  async function loadRefsFromApi() {
+    await loadUnitConversions();
+    await loadRightDeliveryTypes();
+    await loadRightPaymentTypes();
+    await loadRightTimeOptions();
+    await loadRightPickupStores();
+    schedulePersistBootstrapSnapshot(0);
+  }
+
+  function ensureValidActiveCategory() {
+    if (String(state.activeCategoryId) === CHECKOUT_SCREEN_ID) return;
+    const activeId = Number(state.activeCategoryId || 0);
+    const hasActive = Array.isArray(state.categories)
+      && state.categories.some((c) => Number(c?.id || 0) === activeId);
+    if (!hasActive) state.activeCategoryId = CHECKOUT_SCREEN_ID;
+  }
+
+  function getPreloadCategoryIds() {
+    return [...new Set((Array.isArray(state.categories) ? state.categories : [])
+      .map((c) => Number(c?.id || 0))
+      .filter((id) => Number.isFinite(id) && id > 0))];
+  }
+
+  async function renderActiveCategoryContent() {
+    ensureValidActiveCategory();
+    if (String(state.activeCategoryId) === CHECKOUT_SCREEN_ID) {
+      await loadCheckoutProductsForSelectedCategories();
+    } else if (state.activeCategoryId) {
+      await loadProductsForCategory(state.activeCategoryId, { preferCache: true });
+    } else if (productsEmptyEl) {
+      productsEmptyEl.textContent = "Нет доступных категорий";
+      productsEmptyEl.classList.remove("hidden");
+    }
+    renderMainContentMode();
+    if (!state.rightActiveOrderId) openRightNewOrderTab();
+    renderRightOrderTabs();
+  }
+
+  async function syncDataByManifest(nextManifest, prevManifest, forceFull = false) {
+    const categoriesChanged = forceFull || isManifestDomainChanged(prevManifest, nextManifest, "categories");
+    const productsChanged = forceFull || isManifestDomainChanged(prevManifest, nextManifest, "products");
+    const checkoutChanged = forceFull || isManifestDomainChanged(prevManifest, nextManifest, "checkout");
+    const refsChanged = forceFull || isManifestDomainChanged(prevManifest, nextManifest, "refs");
+
+    if (categoriesChanged || !state.categories.length || !state.productCategories.length) {
+      await loadCategoriesFromApi();
+    }
+    ensureValidActiveCategory();
+
+    if (
+      refsChanged
+      || !state.unitConversions.length
+      || !state.rightDeliveryTypes.length
+      || !state.rightPaymentTypes.length
+      || !state.rightTimeOptions.length
+      || !state.rightPickupStores.length
+    ) {
+      await loadRefsFromApi();
+    }
+
+    if (checkoutChanged || !Array.isArray(state.checkoutSavedDraft?.blocks)) {
       try {
-        await loadCheckoutDraftFromApi();
+        await loadCheckoutDraftFromApi(checkoutChanged || forceFull);
       } catch {
         state.checkoutSavedDraft = { blocks: [] };
       }
-      const json = await apiJson("/api/prod_categories");
-      const source = Array.isArray(json.data) ? json.data : [];
-      state.productCategories = source
-        .filter((c) => Number(c?.is_active || 0) === 1)
-        .sort((a, b) => (Number(a?.sort_order || 0) - Number(b?.sort_order || 0)) || (Number(a?.id || 0) - Number(b?.id || 0)));
-      state.categories = source
-        .filter((c) => Number(c?.is_active || 0) === 1 && isCheckoutVisible(c))
-        .sort((a, b) => (Number(a?.sort_order || 0) - Number(b?.sort_order || 0)) || (Number(a?.id || 0) - Number(b?.id || 0)));
+    }
 
-      state.activeCategoryId = CHECKOUT_SCREEN_ID;
-      renderCategories();
+    if (productsChanged || !state.categoryProductsCache.size) {
+      state.categoryProductsCache.clear();
+      state.checkoutCategoryProducts.clear();
+      await preloadAllCategoryProducts(getPreloadCategoryIds());
+    }
 
-      if (String(state.activeCategoryId) === CHECKOUT_SCREEN_ID) {
-        await loadCheckoutProductsForSelectedCategories();
-      } else if (state.activeCategoryId) {
-        await loadProductsForCategory(state.activeCategoryId);
-      } else if (productsEmptyEl) {
-        productsEmptyEl.textContent = "Нет доступных категорий";
-        productsEmptyEl.classList.remove("hidden");
+    schedulePersistBootstrapSnapshot(0);
+  }
+
+  async function load() {
+    try {
+      const cachedManifest = readNewOrderManifestCache();
+      if (cachedManifest) state.cacheManifest = cachedManifest;
+
+      const bootstrapSnapshot = readBootstrapSnapshot();
+      const hydrated = hydrateStateFromBootstrapSnapshot(bootstrapSnapshot);
+      if (!state.activeCategoryId) state.activeCategoryId = CHECKOUT_SCREEN_ID;
+
+      if (hydrated) {
+        if (!Array.isArray(state.unitConversions) || !state.unitConversions.length) {
+          await loadUnitConversions();
+        }
+        renderCategories();
+        await renderActiveCategoryContent();
       }
-      renderMainContentMode();
-      renderRightOrderTabs();
+
+      const freshManifest = await fetchNewOrderManifest();
+      const prevManifest = state.cacheManifest || cachedManifest || null;
+      const nextManifest = freshManifest || state.cacheManifest || cachedManifest || null;
+      if (freshManifest) {
+        state.cacheManifest = freshManifest;
+        writeNewOrderManifestCache(freshManifest);
+      }
+
+      if (!nextManifest) {
+        if (!hydrated) {
+          await loadRefsFromApi();
+          await loadCategoriesFromApi();
+          try {
+            await loadCheckoutDraftFromApi();
+          } catch {
+            state.checkoutSavedDraft = { blocks: [] };
+          }
+          await preloadAllCategoryProducts(getPreloadCategoryIds());
+        }
+      } else {
+        const manifestChanged = !areManifestTokensEqual(prevManifest, nextManifest);
+        if (!hydrated || manifestChanged) {
+          await syncDataByManifest(nextManifest, prevManifest, !hydrated);
+        }
+      }
+
+      ensureValidActiveCategory();
+      renderCategories();
+      await renderActiveCategoryContent();
+      schedulePersistBootstrapSnapshot(0);
     } catch (e) {
       if (categoriesEmptyEl) {
         categoriesEmptyEl.textContent = "Ошибка загрузки категорий";
@@ -4583,6 +8477,7 @@
         productsEmptyEl.classList.remove("hidden");
       }
       renderMainContentMode();
+      if (!state.rightActiveOrderId) openRightNewOrderTab();
       renderRightOrderTabs();
     }
   }
