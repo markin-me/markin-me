@@ -2886,6 +2886,31 @@
     }
   }
 
+  function pickBestOrderItemPhoto(item) {
+    const source = item && typeof item === "object" ? item : {};
+    const candidates = [];
+    const push = (value) => {
+      const url = String(value || "").trim();
+      if (!url) return;
+      candidates.push(url);
+    };
+
+    // explicit single-photo fields that may already point to optimized assets
+    push(source.photo_webp);
+    push(source.product_photo_webp);
+    push(source.photo);
+    push(source.product_photo);
+
+    // list fields
+    (Array.isArray(source.photos) ? source.photos : []).forEach(push);
+    (Array.isArray(source.images) ? source.images : []).forEach(push);
+    (Array.isArray(source.product_photos) ? source.product_photos : []).forEach(push);
+
+    if (!candidates.length) return "";
+    const webp = candidates.find((url) => /\.webp(?:\?|$)/i.test(String(url || "")));
+    return String(webp || candidates[0] || "").trim();
+  }
+
   function roundMoney(value) {
     const n = Number(value || 0);
     if (!Number.isFinite(n)) return 0;
@@ -3007,9 +3032,9 @@
       if (!(oldLineTotal > lineTotal) && oldPrice > 0) oldLineTotal = roundMoney(oldPrice * qty);
       const showOldPrice = oldLineTotal > lineTotal;
 
-      const photos = Array.isArray(item?.photos) ? item.photos.filter(Boolean) : [];
-      const photoHtml = photos.length
-        ? `<div class="order-item-photo-small"><img src="${escapeHtml(photos[0])}" alt="${escapeHtml(name)}"></div>`
+      const photoSrc = pickBestOrderItemPhoto(item);
+      const photoHtml = photoSrc
+        ? `<div class="order-item-photo-small"><img src="${escapeHtml(photoSrc)}" alt="${escapeHtml(name)}"></div>`
         : "";
 
       const compositionHtml = renderOrderItemComposition(item);
@@ -3220,7 +3245,7 @@
         : (order.address || "—"))
       : (order.address || "—");
     const deliveryInterval = formatScheduleText(order);
-    const isUrgent = Boolean(order.is_urgent || order.urgent || String(order.time_option_code || "").toLowerCase() === "asap");
+    const isUrgent = Boolean(order.is_urgent || order.urgent || String(order.time_option_code || "").toLowerCase() === "urgent");
     const addressComment = isPickup ? "" : String(order.address_comment || "").trim();
     const orderComment = String(order.comment || "").trim();
 
@@ -3367,9 +3392,19 @@
     }
   }
 
-  function openOrderTab(orderId) {
+  function openOrderTab(orderId, options = {}) {
     const id = Number(orderId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
+    const opts = options && typeof options === "object" ? options : {};
+    const tabKey = buildTabKey("order", id);
+    const isAlreadyActive = tabsState.activeKey === tabKey;
+    if (isAlreadyActive && opts.forceRefresh !== true) {
+      if (isMobile()) openSheet();
+      return;
+    }
+    if (opts.forceRefresh === true) {
+      try { state.orderCache.delete(id); } catch {}
+    }
     ensureTab({
       type: "order",
       id,
@@ -3559,6 +3594,9 @@
       ),
     });
 
+    if (opts.forceRefresh === true) {
+      activateOrderById(id).catch(console.error);
+    }
     if (isMobile()) openSheet();
   }
 
@@ -4062,8 +4100,8 @@
     refreshDiscounts() {
       return loadDiscounts();
     },
-    openOrderById(orderId) {
-      return openOrderTab(orderId);
+    openOrderById(orderId, options = {}) {
+      return openOrderTab(orderId, options);
     },
   };
 })();

@@ -6,7 +6,44 @@ self.addEventListener("activate", function (event) {
   event.waitUntil(self.clients.claim());
 });
 
-self.addEventListener("fetch", function () {});
+var IMAGE_CACHE_NAME = "markinme-images-v1";
+
+function isCacheableImageRequest(requestUrl, request) {
+  if (!requestUrl || !request) return false;
+  if (request.method !== "GET") return false;
+  if (request.destination !== "image") return false;
+  if (requestUrl.origin !== self.location.origin) return false;
+  return /\/(?:uploads|static\/uploads)\//i.test(requestUrl.pathname);
+}
+
+self.addEventListener("fetch", function (event) {
+  var request = event.request;
+  var requestUrl;
+  try {
+    requestUrl = new URL(request.url);
+  } catch (_err) {
+    return;
+  }
+  if (!isCacheableImageRequest(requestUrl, request)) return;
+
+  event.respondWith(
+    caches.open(IMAGE_CACHE_NAME).then(function (cache) {
+      return cache.match(request).then(function (cachedResponse) {
+        if (cachedResponse) return cachedResponse;
+        return fetch(request).then(function (networkResponse) {
+          if (
+            networkResponse
+            && networkResponse.status === 200
+            && networkResponse.type === "basic"
+          ) {
+            cache.put(request, networkResponse.clone());
+          }
+          return networkResponse;
+        });
+      });
+    })
+  );
+});
 
 self.addEventListener("push", function (event) {
   var payload = {};

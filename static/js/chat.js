@@ -25,10 +25,12 @@
   const ACTIVE_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000;
   const CHAT_AUTOSCROLL_MS = 170;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
+  const CHAT_STICKY_BOTTOM_THRESHOLD_PX = 18;
   const CHAT_TYPING_HEARTBEAT_MS = 1800;
   const CHAT_TYPING_IDLE_STOP_MS = 2600;
   const CHAT_TYPING_BLUR_STOP_MS = 320;
   const CHAT_MESSAGE_ALERT_COOLDOWN_MS = 900;
+  const CHAT_UNANSWERED_ALERT_DELAY_MS = 5000;
   const CHAT_PUSH_SYNC_DEBOUNCE_MS = 180;
   const CHAT_PUSH_SUBSCRIPTION_CLIENT_ID = 0;
   const CHAT_CLIENTS_PAGE_SIZE = 20;
@@ -229,6 +231,7 @@
     activeOrders: [],
     activeOrdersSignature: "[]",
     headerOrderId: 0,
+    headerOrderSnapshot: null,
     q: "",
     requestToken: 0,
     editingMessageId: null,
@@ -273,6 +276,7 @@
     pendingScrollNewByClient: {},
     pendingScrollMessageIdsByClient: {},
     threadScrollTopByClient: {},
+    threadPinnedBottomByClient: {},
     peerTypingByClient: {},
     peerTypingUpdatedAtByClient: {},
     peerTypingHideTimers: {},
@@ -299,8 +303,11 @@
     isBootstrapLoading: true,
     chatWidgetEnabled: true,
     activeOrdersLastFetchedAt: 0,
+    activeOrdersHydratedClientId: 0,
+    rightPanelOrderId: 0,
   };
   state.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.store?.ui?.threadScrollTopByClient);
+  state.threadPinnedBottomByClient = sanitizeStoredThreadPinnedBottomByClient(state.store?.ui?.threadPinnedBottomByClient);
   state.clientsPager = createDefaultClientsPager();
 
   let emojiCategories = {};
@@ -312,6 +319,29 @@
   let attachmentDraftDbPromise = null;
   let attachPreviewDraftPersistTimer = 0;
   let attachPreviewDraftRestoreToken = 0;
+  let uiStatePersistTimer = 0;
+  let pinnedBottomLayoutSyncRaf = 0;
+
+  function schedulePinnedBottomLayoutSync() {
+    if (pinnedBottomLayoutSyncRaf) return;
+    pinnedBottomLayoutSyncRaf = window.requestAnimationFrame(() => {
+      pinnedBottomLayoutSyncRaf = 0;
+      const activeId = normalizeClientIdKey(state.activeClientId);
+      if (!activeId) return;
+      if (!isThreadPinnedBottomPreferred(activeId)) return;
+      scrollMessagesToBottom({ behavior: "auto", keepPending: true });
+      saveThreadScrollPosition(activeId);
+    });
+  }
+
+  function enforcePinnedBottomForActiveThread(reason = "") {
+    const activeId = normalizeClientIdKey(state.activeClientId);
+    if (!activeId) return false;
+    if (!isThreadPinnedBottomPreferred(activeId)) return false;
+    scrollMessagesToBottom({ behavior: "auto", keepPending: true });
+    saveThreadScrollPosition(activeId);
+    return true;
+  }
 
   function shouldUseNativeMobileEmojiKeyboard() {
     const narrowViewport = typeof window.matchMedia === "function"
@@ -346,10 +376,14 @@
   let messageAlertLastAt = 0;
   let messageAlertSummariesPrimed = false;
   let suppressMessageAlertUntil = 0;
+  const unansweredAlertTimerByClient = Object.create(null);
+  const unansweredAlertSeqByClient = Object.create(null);
+  const unansweredAlertLastNotifiedIncomingByClient = Object.create(null);
   let suppressTouchClickUntil = 0;
   let activeThreadSsePullTimer = 0;
   let activeThreadSsePullInFlight = false;
   let activeThreadSsePullPending = false;
+  let headerLoadingSafetyTimer = 0;
   let webPushPublicKeyCache = "";
   let webPushPublicKeyFetched = false;
   let webPushSyncTimer = 0;
@@ -551,6 +585,36 @@
       };
     } catch {
       return null;
+    }
+  }
+
+  function setSharedClientDetailsToLocalStorage(clientId, payload = {}) {
+    const id = Number(clientId || 0);
+    if (!Number.isFinite(id) || id <= 0) return false;
+    const key = String(id);
+    try {
+      const cacheKey = getSharedClientDetailsCacheKey();
+      const raw = localStorage.getItem(cacheKey);
+      const parsed = raw ? JSON.parse(raw) : {};
+      const cache = parsed && typeof parsed === "object" ? parsed : {};
+      const prev = cache[key] && typeof cache[key] === "object" ? cache[key] : {};
+      const prevClient = prev.client && typeof prev.client === "object" ? prev.client : null;
+      const prevOrders = Array.isArray(prev.orders) ? prev.orders : [];
+      const nextClient = payload.client && typeof payload.client === "object"
+        ? { ...payload.client }
+        : prevClient;
+      const nextOrders = Array.isArray(payload.orders)
+        ? payload.orders.map((row) => ({ ...row }))
+        : prevOrders;
+      cache[key] = {
+        updatedAt: Date.now(),
+        client: nextClient,
+        orders: nextOrders,
+      };
+      localStorage.setItem(cacheKey, JSON.stringify(cache));
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -911,6 +975,54 @@
     return window.__markinMeSharedOrdersFetcher;
   }
 
+  function buildFreshClientOrdersUrl(clientId) {
+    const id = Number(clientId || 0);
+    if (!Number.isFinite(id) || id <= 0) return `/api/admin/clients/${clientId}/orders`;
+    return `/api/admin/clients/${id}/orders?_=${Date.now()}`;
+  }
+
+  async function fetchClientOrdersFresh(clientId) {
+    return apiJson(buildFreshClientOrdersUrl(clientId), {
+      cache: "no-store",
+      headers: {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        Pragma: "no-cache",
+      },
+    });
+  }
+
+  function buildFreshHeaderOrderCandidateUrl(clientId) {
+    const id = Number(clientId || 0);
+    if (!Number.isFinite(id) || id <= 0) return `/api/admin/clients/${clientId}/orders/header-candidate`;
+    return `/api/admin/clients/${id}/orders/header-candidate?_=${Date.now()}`;
+  }
+
+  async function fetchHeaderOrderCandidateFresh(clientId) {
+    return apiJson(buildFreshHeaderOrderCandidateUrl(clientId), {
+      cache: "no-store",
+      headers: {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        Pragma: "no-cache",
+      },
+    });
+  }
+
+  function buildFreshOrderDetailsUrl(orderId) {
+    const id = Number(orderId || 0);
+    if (!Number.isFinite(id) || id <= 0) return `/api/admin/orders/${orderId}`;
+    return `/api/admin/orders/${id}?_=${Date.now()}`;
+  }
+
+  async function fetchOrderDetailsFresh(orderId) {
+    return apiJson(buildFreshOrderDetailsUrl(orderId), {
+      cache: "no-store",
+      headers: {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        Pragma: "no-cache",
+      },
+    });
+  }
+
   function buildChatSseUrl(url, actorValue, extraParams = {}) {
     const rawUrl = withChatActorQuery(url, actorValue);
     const tenantId = getTenantId();
@@ -989,6 +1101,7 @@
       const res = await fetch(requestUrl, {
         method: opts.method || "GET",
         headers,
+        cache: opts.cache || "default",
         keepalive: opts.keepalive === true,
         signal: requestAbortController.signal,
         body: opts.body
@@ -1059,7 +1172,11 @@
     const lastMessageText = String(source.last_message_text ?? source.lastMessageText ?? "");
     const safeMessageCount = Number.isFinite(messageCount) && messageCount > 0 ? Math.trunc(messageCount) : 0;
     const safeUnreadCount = Number.isFinite(unreadCount) && unreadCount > 0 ? Math.trunc(unreadCount) : 0;
-    return [safeMessageCount, safeUnreadCount, lastMessageAt, lastMessageText].join("|");
+    const typingActive = source.typing_active === true || source.typingActive === true;
+    const typingText = String(source.typing_text ?? source.typingText ?? "");
+    const typingUpdatedAt = String(source.typing_updated_at ?? source.typingUpdatedAt ?? "");
+    const typingExpiresAt = String(source.typing_expires_at ?? source.typingExpiresAt ?? "");
+    return [safeMessageCount, safeUnreadCount, lastMessageAt, lastMessageText, typingActive ? "1" : "0", typingText, typingUpdatedAt, typingExpiresAt].join("|");
   }
 
   function hasPendingRemoteSave(clientId) {
@@ -1150,6 +1267,10 @@
     const changed = signature !== state.activeOrdersSignature;
     state.activeOrders = list;
     state.activeOrdersSignature = signature;
+    if (!list.length) {
+      state.activeOrdersHydratedClientId = 0;
+      state.headerOrderSnapshot = null;
+    }
 
     if (changed || options.forceRender) {
       renderChatHeader();
@@ -1199,6 +1320,15 @@
       updatedAt,
       expiresAt,
     };
+  }
+
+
+  function isPeerTypingInfoActiveNow(info) {
+    const normalized = normalizePeerTypingInfo(info);
+    if (!normalized.active || !String(normalized.text || "").trim()) return false;
+    const until = new Date(String(normalized.expiresAt || "")).getTime();
+    if (!Number.isFinite(until)) return normalized.active === true;
+    return until > Date.now();
   }
 
   function ensurePeerTypingIndicatorNode() {
@@ -1277,6 +1407,7 @@
         updatedAt: current.updatedAt,
         expiresAt: "",
       };
+      updateClientRowPreview(key);
       if (Number(state.activeClientId) === Number(key)) renderPeerTypingIndicator();
     }, delay);
   }
@@ -1306,6 +1437,7 @@
         expiresAt: "",
       };
       clearPeerTypingHideTimer(key);
+      updateClientRowPreview(key);
       if (Number(state.activeClientId) === Number(key)) renderPeerTypingIndicator();
       return;
     }
@@ -1316,6 +1448,7 @@
     } else {
       clearPeerTypingHideTimer(key);
     }
+    updateClientRowPreview(key);
     if (Number(state.activeClientId) === Number(key)) renderPeerTypingIndicator();
   }
 
@@ -1589,7 +1722,13 @@
     const remoteIsNewer = compareIsoDates(remoteUpdatedAt, knownUpdatedAt) > 0;
     const localChangedDuringRequest = options.localChangedDuringRequest === true;
     const isActiveThread = Number(state.activeClientId) === Number(key);
+    const shouldMarkRead = Number(state.activeClientId) === Number(key)
+      && !options.skipReadMark
+      && isChatTabActiveForRead();
     const wasPinnedToBottom = isActiveThread ? shouldKeepMessagesPinnedToBottom() : false;
+    // During live thread updates rely only on current viewport position.
+    // Persisted pinned preference is for restore/open, not for auto-scroll on incoming events.
+    const preferPinnedBottom = isActiveThread ? wasPinnedToBottom : false;
 
     if (!same && !options.force) {
       if (hasPendingRemoteSave(key)) return false;
@@ -1600,16 +1739,13 @@
     if (appendOlder || !preserveHistory) {
       updateThreadHistoryFromSnapshot(key, snapshot);
     }
-    const shouldMarkRead = Number(state.activeClientId) === Number(key)
-      && !options.skipReadMark
-      && isChatTabActiveForRead();
     let hiddenChanged = pruneHiddenMessageIds(key);
     if (same) {
       let changed = markThreadDelivered(key);
       if (shouldMarkRead) {
-        const readChanged = markThreadRead(key);
+        const readChanged = markVisibleThreadMessagesRead(key);
         changed = readChanged || changed;
-        if (readChanged && isActiveThread) renderMessages({ disableAutoPin: true });
+        if (readChanged) emitUnreadChangedSoon();
       }
       const finalChanged = changed || hiddenChanged;
       if (finalChanged) applyClientFilter();
@@ -1642,20 +1778,68 @@
         .slice()
         .reverse()
         .find((msg) => msg && appendedIdSet.has(String(msg.id || "")));
-      maybeNotifyIncomingMessage({
+      scheduleUnansweredIncomingNotification({
+        clientId: key,
+        incomingMessageId: String(latestIncoming?.id || ""),
         title: `Новое сообщение: ${getClientDisplayName(key)}`,
         body: getMessagePreviewText(latestIncoming) || "Откройте чат, чтобы ответить.",
-        allowWhenActive: !isActiveThread || !wasPinnedToBottom,
+        allowWhenActive: !isActiveThread,
       });
     }
 
     if (isActiveThread) {
-      if (shouldMarkRead) markThreadRead(key);
+      if (shouldMarkRead) {
+        const readChanged = markVisibleThreadMessagesRead(key);
+        if (readChanged) emitUnreadChangedSoon();
+      }
       const hasIncomingAppended = appendedIncomingMessageIds.length > 0;
+      const wrap = dom.center.messagesWrap;
+      const preserveViewport = hasIncomingAppended && !!wrap;
+      let anchorMessageId = "";
+      let anchorOffset = 0;
+      if (preserveViewport && wrap && dom.center.messages) {
+        const wrapRect = wrap.getBoundingClientRect();
+        const topEdge = wrapRect.top + 4;
+        const candidates = Array.from(
+          dom.center.messages.querySelectorAll(".chat-message[data-message-id]")
+        );
+        const anchorNode = candidates.find((node) => {
+          const rect = node.getBoundingClientRect();
+          return rect.bottom > topEdge;
+        }) || null;
+        if (anchorNode) {
+          anchorMessageId = String(anchorNode.getAttribute("data-message-id") || "");
+          anchorOffset = anchorNode.getBoundingClientRect().top - wrapRect.top;
+        }
+      }
+      // Do not auto-scroll on new client incoming messages:
+      // keep current viewport position exactly where the operator left it.
+      const keepPinned = hasIncomingAppended ? false : (preferPinnedBottom && !appendOlder);
       renderMessages({
-        disableAutoPin: appendOlder || !hasIncomingAppended,
-        smoothScroll: !appendOlder && hasIncomingAppended,
+        disableAutoPin: appendOlder || hasIncomingAppended || (!hasIncomingAppended && !keepPinned),
+        forceScrollBottom: keepPinned,
+        smoothScroll: !appendOlder && keepPinned,
+        skipPinnedBottomEnforce: hasIncomingAppended,
       });
+      if (preserveViewport && wrap) {
+        if (anchorMessageId && dom.center.messages) {
+          const escapedAnchorId = typeof CSS !== "undefined" && CSS && typeof CSS.escape === "function"
+            ? CSS.escape(anchorMessageId)
+            : anchorMessageId.replace(/["\\]/g, "\\$&");
+          const nextAnchor = dom.center.messages.querySelector(
+            `.chat-message[data-message-id="${escapedAnchorId}"]`
+          );
+          if (nextAnchor) {
+            const wrapRect = wrap.getBoundingClientRect();
+            const nextOffset = nextAnchor.getBoundingClientRect().top - wrapRect.top;
+            const delta = nextOffset - anchorOffset;
+            if (Number.isFinite(delta) && Math.abs(delta) > 0.5) {
+              wrap.scrollTop = Math.max(0, wrap.scrollTop + delta);
+            }
+          }
+        }
+        saveThreadScrollPosition(key);
+      }
     }
     applyClientFilter();
     return true;
@@ -2229,6 +2413,13 @@
       summaryAlerts.push({
         clientId: key,
         unread: nextUnread,
+        lastMessageId: String(
+          row?.last_message_message_id
+          ?? row?.lastMessageMessageId
+          ?? row?.last_message_id
+          ?? row?.lastMessageId
+          ?? ""
+        ).trim(),
         updatedAt: String(row?.updated_at || row?.updatedAt || row?.last_message_at || row?.lastMessageAt || ""),
         preview: String(row?.last_message_text || row?.lastMessageText || "").replace(/\s+/g, " ").trim(),
       });
@@ -2237,7 +2428,9 @@
     if (summaryAlerts.length > 0) {
       summaryAlerts.sort((a, b) => compareIsoDates(b.updatedAt, a.updatedAt));
       const newestAlert = summaryAlerts[0];
-      maybeNotifyIncomingMessage({
+      scheduleUnansweredIncomingNotification({
+        clientId: newestAlert.clientId,
+        incomingMessageId: String(newestAlert.lastMessageId || ""),
         title: `Новое сообщение: ${getClientDisplayName(newestAlert.clientId)}`,
         body: newestAlert.preview || `Непрочитанных: ${newestAlert.unread}`,
         allowWhenActive: true,
@@ -2588,6 +2781,9 @@
             signalHint: true,
           }).catch(console.error);
         }
+        // Keep left chat list in sync for non-active clients too:
+        // typing preview, last message preview and unread badge.
+        syncRemoteSummariesSnapshot({ forceThreads: false }).catch(console.error);
       }
 
       if (nextUpdatedAt || state.summariesUpdatedAt) {
@@ -2617,10 +2813,14 @@
 
     if (CHAT_SSE_ENABLED) {
       ensureSummariesSseConnection();
-      ensureActiveThreadSseConnection();
+      if (ENABLE_ACTIVE_THREAD_SSE) {
+        ensureActiveThreadSseConnection();
+      } else {
+        stopActiveThreadSseConnection();
+      }
     }
 
-    if (!CHAT_SSE_ENABLED && !state.activeThreadWaitLoopStarted) {
+    if ((!CHAT_SSE_ENABLED || !ENABLE_ACTIVE_THREAD_SSE) && !state.activeThreadWaitLoopStarted) {
       state.activeThreadWaitLoopStarted = true;
       state.activeThreadWaitLoopToken += 1;
       const loopToken = state.activeThreadWaitLoopToken;
@@ -2805,6 +3005,7 @@
         ui: {
           clientsListScrollTop: 0,
           threadScrollTopByClient: {},
+          threadPinnedBottomByClient: {},
         },
       };
       const raw = localStorage.getItem(CHAT_STORAGE_KEY);
@@ -2816,6 +3017,9 @@
         : {};
       const uiThreadScrollMap = parsedUi && typeof parsedUi.threadScrollTopByClient === "object"
         ? parsedUi.threadScrollTopByClient
+        : {};
+      const uiThreadPinnedBottomMap = parsedUi && typeof parsedUi.threadPinnedBottomByClient === "object"
+        ? parsedUi.threadPinnedBottomByClient
         : {};
       const resolvedThreadScrollMap = Object.keys(uiThreadScrollMap).length
         ? uiThreadScrollMap
@@ -2831,6 +3035,7 @@
         ui: {
           clientsListScrollTop: toStoredScrollTop(parsedUi?.clientsListScrollTop),
           threadScrollTopByClient: sanitizeStoredThreadScrollTopByClient(resolvedThreadScrollMap),
+          threadPinnedBottomByClient: sanitizeStoredThreadPinnedBottomByClient(uiThreadPinnedBottomMap),
         },
       };
       let changed = false;
@@ -2862,6 +3067,7 @@
         ui: {
           clientsListScrollTop: 0,
           threadScrollTopByClient: {},
+          threadPinnedBottomByClient: {},
         },
       };
     }
@@ -2885,6 +3091,17 @@
     return out;
   }
 
+  function sanitizeStoredThreadPinnedBottomByClient(rawMap) {
+    const source = rawMap && typeof rawMap === "object" ? rawMap : {};
+    const out = {};
+    Object.keys(source).forEach((key) => {
+      const id = normalizeClientIdKey(key);
+      if (!id) return;
+      out[id] = source[key] === true;
+    });
+    return out;
+  }
+
   function ensureUiStoreState() {
     if (!state.store || typeof state.store !== "object") {
       state.store = {
@@ -2899,6 +3116,9 @@
     if (!state.store.ui.threadScrollTopByClient || typeof state.store.ui.threadScrollTopByClient !== "object") {
       state.store.ui.threadScrollTopByClient = {};
     }
+    if (!state.store.ui.threadPinnedBottomByClient || typeof state.store.ui.threadPinnedBottomByClient !== "object") {
+      state.store.ui.threadPinnedBottomByClient = {};
+    }
     if (!Number.isFinite(Number(state.store.ui.clientsListScrollTop))) {
       state.store.ui.clientsListScrollTop = 0;
     }
@@ -2909,11 +3129,13 @@
     if (!dom.left.list) return;
     const ui = ensureUiStoreState();
     ui.clientsListScrollTop = toStoredScrollTop(dom.left.list.scrollTop);
+    scheduleUiStatePersist();
   }
 
   function syncUiStateIntoStore() {
     const ui = ensureUiStoreState();
     ui.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.threadScrollTopByClient);
+    ui.threadPinnedBottomByClient = sanitizeStoredThreadPinnedBottomByClient(state.threadPinnedBottomByClient);
     if (dom.left.list) {
       ui.clientsListScrollTop = toStoredScrollTop(dom.left.list.scrollTop);
     } else {
@@ -2926,6 +3148,26 @@
       syncUiStateIntoStore();
       localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(state.store));
     } catch {}
+  }
+
+  function scheduleUiStatePersist(delayMs = 220) {
+    const delay = Math.max(0, Number(delayMs) || 0);
+    if (uiStatePersistTimer) {
+      window.clearTimeout(uiStatePersistTimer);
+      uiStatePersistTimer = 0;
+    }
+    uiStatePersistTimer = window.setTimeout(() => {
+      uiStatePersistTimer = 0;
+      saveStore();
+    }, delay);
+  }
+
+  function flushUiStatePersist() {
+    if (uiStatePersistTimer) {
+      window.clearTimeout(uiStatePersistTimer);
+      uiStatePersistTimer = 0;
+    }
+    saveStore();
   }
 
   function ensureThread(clientId) {
@@ -3074,11 +3316,161 @@
     return compareIsoDates(summaryLast.createdAt, localLast.createdAt) > 0 ? summaryLast : localLast;
   }
 
+  function getClientTypingPreviewText(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return "";
+
+    const summary = getRemoteSummaryForClient(key);
+    const summaryLastAt = String(
+      summary?.last_message_at
+      ?? summary?.lastMessageAt
+      ?? summary?.updated_at
+      ?? summary?.updatedAt
+      ?? ""
+    );
+    const shouldSuppressTyping = (typingUpdatedAt) => {
+      const typingAt = String(typingUpdatedAt || "").trim();
+      if (!typingAt || !summaryLastAt) return false;
+      return compareIsoDates(summaryLastAt, typingAt) >= 0;
+    };
+
+    const liveInfo = normalizePeerTypingInfo(state.peerTypingByClient[key]);
+    if (isPeerTypingInfoActiveNow(liveInfo) && !shouldSuppressTyping(liveInfo.updatedAt)) {
+      return String(liveInfo.text || "").trim();
+    }
+    if (liveInfo.active) {
+      state.peerTypingByClient[key] = {
+        active: false,
+        text: "",
+        updatedAt: String(liveInfo.updatedAt || ""),
+        expiresAt: "",
+      };
+    }
+
+    const summaryInfo = normalizePeerTypingInfo({
+      active: summary?.typing_active === true || summary?.typingActive === true,
+      text: String(summary?.typing_text ?? summary?.typingText ?? ""),
+      updated_at: String(summary?.typing_updated_at ?? summary?.typingUpdatedAt ?? ""),
+      expires_at: String(summary?.typing_expires_at ?? summary?.typingExpiresAt ?? ""),
+    });
+    if (!isPeerTypingInfoActiveNow(summaryInfo)) return "";
+    if (shouldSuppressTyping(summaryInfo.updatedAt)) return "";
+    return String(summaryInfo.text || "").trim();
+  }
+
+
+
+  function getClientPreviewText(clientId) {
+    const typingPreview = getClientTypingPreviewText(clientId);
+    if (typingPreview) return typingPreview;
+    const lastMsg = getLastMessage(clientId);
+    return getMessagePreviewText(lastMsg) || "Нет сообщений";
+  }
+
+  function updateClientRowPreview(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key || !dom.left.list) return;
+    const selectorId = (typeof CSS !== "undefined" && CSS && typeof CSS.escape === "function")
+      ? CSS.escape(String(key))
+      : String(key).replace(/["\\]/g, "\\$&");
+    const row = dom.left.list.querySelector(`.chat-client-row[data-client-id="${selectorId}"]`);
+    if (!row) return;
+    const previewEl = $(".chat-client-preview", row);
+    if (!previewEl) return;
+    const typingPreview = getClientTypingPreviewText(key);
+    const preview = getClientPreviewText(key);
+    previewEl.textContent = "";
+    previewEl.classList.toggle("is-typing", !!typingPreview);
+    if (hasEmojiInText(preview)) {
+      renderEmojiMessageText(previewEl, preview, "chat-emoji-glyph chat-emoji-glyph--preview");
+      return;
+    }
+    previewEl.textContent = preview;
+  }
+
+  function collectUnansweredIncomingIds(thread) {
+    const list = Array.isArray(thread) ? thread : [];
+    const unresolved = [];
+    let pendingBotReplies = 0;
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      const msg = list[i];
+      if (!msg) continue;
+      const direction = String(msg.direction || "").toLowerCase();
+      if (direction === "out") {
+        if (isAssistantOrSystemThreadMessageId(msg.id)) pendingBotReplies += 1;
+        continue;
+      }
+      if (direction !== "in") continue;
+      if (pendingBotReplies > 0) {
+        pendingBotReplies -= 1;
+        continue;
+      }
+      const id = String(msg.id || "").trim();
+      if (id) unresolved.push(id);
+    }
+    return unresolved;
+  }
+
+  function countUnansweredClientMessages(clientId) {
+    return collectUnansweredIncomingIds(getVisibleThread(clientId)).length;
+  }
+
   function getUnreadCount(clientId) {
+    const key = normalizeClientIdKey(clientId);
     const summary = getRemoteSummaryForClient(clientId);
+    const hasLocalThread = !!(key && Array.isArray(state.store?.threads?.[key]));
+    if (hasLocalThread && Number(state.activeClientId) === Number(key)) {
+      return getVisibleThread(key).filter((msg) => msg && msg.direction === "in" && !isMessageRead(msg)).length;
+    }
     const unread = Number(summary?.unread_count ?? summary?.unreadCount ?? 0);
     if (Number.isFinite(unread) && unread >= 0) return Math.trunc(unread);
-    return getVisibleThread(clientId).filter((msg) => msg.direction === "in" && !isMessageRead(msg)).length;
+    if (hasLocalThread) {
+      return getVisibleThread(key).filter((msg) => msg && msg.direction === "in" && !isMessageRead(msg)).length;
+    }
+    return 0;
+  }
+
+  function clearRemoteSummaryUnreadCount(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+    if (!state.remoteSummariesByClient || typeof state.remoteSummariesByClient !== "object") return false;
+    const summary = state.remoteSummariesByClient[key];
+    if (!summary || typeof summary !== "object") return false;
+    const unreadRaw = Number(summary.unread_count ?? summary.unreadCount ?? 0);
+    const unread = Number.isFinite(unreadRaw) && unreadRaw > 0 ? Math.trunc(unreadRaw) : 0;
+    if (unread <= 0) return false;
+    state.remoteSummariesByClient[key] = {
+      ...summary,
+      unread_count: 0,
+      unreadCount: 0,
+    };
+    return true;
+  }
+
+  function syncRemoteSummaryPreviewFromLocalThread(clientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+    if (!state.remoteSummariesByClient || typeof state.remoteSummariesByClient !== "object") {
+      state.remoteSummariesByClient = {};
+    }
+
+    const current = state.remoteSummariesByClient[key];
+    const base = current && typeof current === "object"
+      ? { ...current }
+      : { client_id: Number(key), clientId: Number(key) };
+
+    const thread = getVisibleThread(key);
+    const lastMsg = Array.isArray(thread) && thread.length ? thread[thread.length - 1] : null;
+    const nextText = lastMsg ? String(getMessagePreviewText(lastMsg) || "").trim() : "";
+    const nextAt = lastMsg ? String(lastMsg.createdAt || "") : "";
+
+    base.last_message_text = nextText;
+    base.lastMessageText = nextText;
+    base.last_message_at = nextAt;
+    base.lastMessageAt = nextAt;
+    state.remoteSummariesByClient[key] = base;
+    state.remoteSummaryFingerprints[key] = buildSummaryFingerprint(base);
+    return true;
   }
 
   function getTotalUnreadCount() {
@@ -3338,6 +3730,90 @@
     if (String(webPushSyncedFingerprint || "").trim()) return true;
     if (String(webPushSubscriptionVapidKey || "").trim()) return true;
     return webPushSyncInFlight === true;
+  }
+
+  function resolveUnansweredIncomingMessage(thread, incomingMessageId = "") {
+    const list = Array.isArray(thread) ? thread : [];
+    if (!list.length) return null;
+    const anchorId = String(incomingMessageId || "").trim();
+    const unresolvedIds = new Set(collectUnansweredIncomingIds(list));
+
+    if (anchorId) {
+      const idx = list.findIndex((msg) => String(msg?.id || "") === anchorId);
+      if (idx < 0) return null;
+      if (String(list[idx]?.direction || "").toLowerCase() !== "in") return null;
+      if (!unresolvedIds.has(anchorId)) return null;
+      return list[idx];
+    }
+
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      const msg = list[i];
+      if (String(msg?.direction || "").toLowerCase() !== "in") continue;
+      const id = String(msg?.id || "").trim();
+      if (!id || !unresolvedIds.has(id)) continue;
+      return msg;
+    }
+    return null;
+  }
+
+  async function evaluateAndNotifyUnansweredIncoming(options = {}) {
+    const key = normalizeClientIdKey(options.clientId);
+    if (!key) return;
+
+    let probeThread = null;
+    try {
+      const snapshot = await fetchRemoteThreadSnapshot(key, {
+        limit: Math.max(CHAT_THREAD_PAGE_SIZE, CHAT_THREAD_BACKGROUND_SYNC_LIMIT),
+      });
+      if (snapshot && Array.isArray(snapshot.messages)) {
+        probeThread = sanitizeThread(snapshot.messages);
+      }
+    } catch {}
+
+    const localThread = getVisibleThread(key);
+    const threadForCheck = Array.isArray(probeThread) && probeThread.length
+      ? probeThread
+      : localThread;
+    let candidate = resolveUnansweredIncomingMessage(threadForCheck, options.incomingMessageId);
+    if (!candidate && probeThread && String(options.incomingMessageId || "").trim()) {
+      candidate = resolveUnansweredIncomingMessage(localThread, options.incomingMessageId);
+    }
+    if (!candidate) return;
+
+    const candidateId = String(candidate.id || "");
+    if (candidateId && unansweredAlertLastNotifiedIncomingByClient[key] === candidateId) return;
+
+    maybeNotifyIncomingMessage({
+      title: options.title,
+      body: options.body || getMessagePreviewText(candidate),
+      allowWhenActive: options.allowWhenActive === true,
+    });
+    if (candidateId) unansweredAlertLastNotifiedIncomingByClient[key] = candidateId;
+  }
+
+  function scheduleUnansweredIncomingNotification(options = {}) {
+    const key = normalizeClientIdKey(options.clientId);
+    if (!key) return;
+    if (unansweredAlertTimerByClient[key]) {
+      window.clearTimeout(unansweredAlertTimerByClient[key]);
+      delete unansweredAlertTimerByClient[key];
+    }
+
+    const seq = (Number(unansweredAlertSeqByClient[key] || 0) + 1);
+    unansweredAlertSeqByClient[key] = seq;
+    const delay = Math.max(0, Number(options.delayMs || CHAT_UNANSWERED_ALERT_DELAY_MS) || 0);
+    unansweredAlertTimerByClient[key] = window.setTimeout(async () => {
+      if (seq !== Number(unansweredAlertSeqByClient[key] || 0)) return;
+      if (!unansweredAlertTimerByClient[key]) return;
+      delete unansweredAlertTimerByClient[key];
+      await evaluateAndNotifyUnansweredIncoming({
+        clientId: key,
+        incomingMessageId: String(options.incomingMessageId || ""),
+        title: String(options.title || ""),
+        body: String(options.body || ""),
+        allowWhenActive: options.allowWhenActive === true,
+      });
+    }, delay);
   }
 
   function maybeNotifyIncomingMessage(options = {}) {
@@ -3644,43 +4120,82 @@
   }
 
   function markThreadRead(clientId) {
-    const thread = getThread(clientId);
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+    const unreadIds = getThread(key)
+      .filter((msg) => msg && msg.direction === "in" && !isMessageRead(msg))
+      .map((msg) => String(msg.id || ""))
+      .filter(Boolean);
+    return markThreadReadByIds(key, unreadIds);
+  }
+
+  function markThreadReadByIds(clientId, messageIds) {
+    const key = normalizeClientIdKey(clientId);
+    const ids = Array.isArray(messageIds) ? messageIds.map((id) => String(id || "")).filter(Boolean) : [];
+    if (!key || !ids.length) return false;
+    const idSet = new Set(ids);
+    const thread = getThread(key);
     let changed = false;
     const changedIds = [];
     const nowIso = new Date().toISOString();
     thread.forEach((msg) => {
       if (!msg || msg.direction !== "in") return;
+      const id = String(msg.id || "");
+      if (!id || !idSet.has(id)) return;
       if (isMessageRead(msg)) return;
       msg.read = true;
       msg.deliveryStatus = "read";
       msg.deliveredAt = msg.deliveredAt || nowIso;
       msg.readAt = msg.readAt || nowIso;
-      changedIds.push(String(msg.id || ""));
+      changedIds.push(id);
       changed = true;
     });
     if (changed) {
-      markThreadMutated(clientId);
+      markThreadMutated(key);
       saveStore();
-      enqueueRemoteMutation(clientId, () => remoteMarkMessagesRead(clientId, changedIds));
+      enqueueRemoteMutation(key, () => remoteMarkMessagesRead(key, changedIds));
     }
     return changed;
+  }
+
+  function collectVisibleIncomingUnreadMessageIds(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key || Number(state.activeClientId) !== Number(key)) return [];
+    if (!dom.center.messagesWrap || !dom.center.messages) return [];
+
+    const wrapRect = dom.center.messagesWrap.getBoundingClientRect();
+    const topEdge = wrapRect.top + 6;
+    const bottomEdge = wrapRect.bottom - 6;
+    if (bottomEdge <= topEdge) return [];
+
+    const out = [];
+    dom.center.messages.querySelectorAll('.chat-message.chat-message--in[data-message-id]').forEach((node) => {
+      const rect = node.getBoundingClientRect();
+      const isVisible = rect.bottom > topEdge && rect.top < bottomEdge;
+      if (!isVisible) return;
+      const id = String(node.getAttribute("data-message-id") || "");
+      if (!id) return;
+      const msg = findThreadMessage(key, id);
+      if (!msg || isMessageRead(msg)) return;
+      out.push(id);
+    });
+    return out;
+  }
+
+  function markVisibleThreadMessagesRead(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+    return markThreadReadByIds(key, collectVisibleIncomingUnreadMessageIds(key));
   }
 
   function syncActiveThreadReadState(options = {}) {
     const id = Number(options.clientId || state.activeClientId || 0);
     if (!Number.isFinite(id) || id <= 0) return false;
     if (!isChatTabActiveForRead()) return false;
-    const changed = markThreadRead(id);
-    if (!changed) {
-      const summary = getRemoteSummaryForClient(id);
-      const unread = Number(summary?.unread_count ?? summary?.unreadCount ?? 0);
-      if (Number.isFinite(unread) && unread > 0) {
-        enqueueRemoteMutation(id, () => remoteMarkMessagesRead(id, []));
-      }
-    }
+    const changed = markVisibleThreadMessagesRead(id);
     if (changed || options.forceRender) {
       applyClientFilter();
-      if (Number(state.activeClientId) === id) renderMessages();
+      if (options.forceRender && Number(state.activeClientId) === id) renderMessages();
     }
     if (changed) emitUnreadChangedSoon();
     return changed;
@@ -3743,6 +4258,7 @@
 
   function applyThreadImageLoadingStrategy() {
     if (!dom.center.messages) return;
+    const activeId = normalizeClientIdKey(state.activeClientId);
     const images = Array.from(dom.center.messages.querySelectorAll(".chat-message-attachment-image")).filter((img) => {
       if (!(img instanceof HTMLImageElement)) return;
       const src = String(img.getAttribute("src") || "").trim();
@@ -3756,6 +4272,18 @@
       try {
         img.fetchPriority = eager ? "high" : "low";
       } catch {}
+      if (img.dataset.bottomPinBound !== "1") {
+        img.dataset.bottomPinBound = "1";
+        const alignBottomIfNeeded = () => {
+          if (!activeId) return;
+          if (normalizeClientIdKey(state.activeClientId) !== activeId) return;
+          if (!isThreadPinnedBottomPreferred(activeId)) return;
+          scrollMessagesToBottom({ behavior: "auto", keepPending: true });
+          saveThreadScrollPosition(activeId);
+        };
+        img.addEventListener("load", alignBottomIfNeeded, { passive: true });
+        img.addEventListener("error", alignBottomIfNeeded, { passive: true });
+      }
     });
   }
 
@@ -4569,9 +5097,41 @@
     return "fa-credit-card";
   }
 
-  function isFinalStatus(statusTitle) {
-    const title = String(statusTitle || "").toLowerCase();
-    return title.includes("выполн") || title.includes("заверш") || title.includes("достав") || title.includes("отмен") || title.includes("cancel") || title.includes("done");
+  function isCancelledOrderStatus(order) {
+    const isFinalRaw = order?.status_is_final ?? order?.statusIsFinal;
+    const isFinal = Number(isFinalRaw) === 1 || isFinalRaw === true;
+    const code = String(order?.status_code || order?.statusCode || "").toLowerCase();
+    const title = String(order?.status_title || order?.statusTitle || "").toLowerCase();
+    if (!isFinal && !code && !title) return false;
+    return code.includes("cancel")
+      || code.includes("reject")
+      || /\bотмен/.test(title)
+      || title.includes("cancel");
+  }
+
+  function isCompletedOrderStatus(order) {
+    const isFinalRaw = order?.status_is_final ?? order?.statusIsFinal;
+    const isFinal = Number(isFinalRaw) === 1 || isFinalRaw === true;
+    const code = String(order?.status_code || order?.statusCode || "").toLowerCase();
+    const title = String(order?.status_title || order?.statusTitle || "").toLowerCase();
+    if (isFinal && !isCancelledOrderStatus(order)) return true;
+    return code.includes("deliver")
+      || code.includes("complete")
+      || code.includes("done")
+      || code.includes("finish")
+      || /\bвыполн/.test(title)
+      || /\bзаверш/.test(title)
+      || /\bдоставлен/.test(title)
+      || /\bдоставлено/.test(title)
+      || /\bвыполнен/.test(title)
+      || /\bвыполнено/.test(title);
+  }
+
+  function isActiveOrderStatus(order) {
+    if (!order || typeof order !== "object") return false;
+    if (isCancelledOrderStatus(order)) return false;
+    if (isCompletedOrderStatus(order)) return false;
+    return true;
   }
 
   function getSortedOrdersForHeader(orders) {
@@ -4587,25 +5147,19 @@
 
   function getHeaderOrderCandidate(orders) {
     const sorted = getSortedOrdersForHeader(orders);
-    const currentOrder = sorted.find((o) => !isFinalStatus(o && o.status_title));
+    const latestActive = sorted.find((o) => isActiveOrderStatus(o));
+    const latestCompleted = sorted.find((o) => isCompletedOrderStatus(o));
+    const latestCancelled = sorted.find((o) => isCancelledOrderStatus(o));
     const latestOrder = sorted[0] || null;
     return {
       sortedOrders: sorted,
-      currentOrder: currentOrder || null,
+      currentOrder: latestActive || null,
+      latestActive: latestActive || null,
+      latestCompleted: latestCompleted || null,
+      latestCancelled: latestCancelled || null,
       latestOrder: latestOrder || null,
-      headerOrder: currentOrder || latestOrder || null,
+      headerOrder: latestActive || latestCompleted || latestCancelled || latestOrder || null,
     };
-  }
-
-  function hasOrderHeaderDetailsPayload(order) {
-    if (!order || typeof order !== "object") return false;
-    const hasAddressField = Object.prototype.hasOwnProperty.call(order, "address")
-      || Object.prototype.hasOwnProperty.call(order, "pickup_store_address");
-    const hasCommentField = Object.prototype.hasOwnProperty.call(order, "comment")
-      || Object.prototype.hasOwnProperty.call(order, "address_comment");
-    const hasStatusColor = Object.prototype.hasOwnProperty.call(order, "status_color");
-    const hasPaymentCode = Object.prototype.hasOwnProperty.call(order, "payment_code");
-    return hasAddressField && hasCommentField && hasStatusColor && hasPaymentCode;
   }
 
   function mergeDetailedOrderIntoActiveList(orderId, detailedOrder) {
@@ -4692,29 +5246,18 @@
     const activeClientId = Number(clientId || state.activeClientId || 0);
     if (!Number.isFinite(activeClientId) || activeClientId <= 0) return;
 
+    const snapshotOrderId = Number(state.headerOrderSnapshot?.id || 0);
     const candidate = getHeaderOrderCandidate(state.activeOrders);
-    const headerOrder = candidate.headerOrder;
-    const headerOrderId = Number(headerOrder && headerOrder.id || 0);
+    const headerOrder = snapshotOrderId > 0
+      ? (state.headerOrderSnapshot || candidate.headerOrder)
+      : candidate.headerOrder;
+    const headerOrderId = snapshotOrderId > 0
+      ? snapshotOrderId
+      : Number(headerOrder && headerOrder.id || 0);
     if (!Number.isFinite(headerOrderId) || headerOrderId <= 0) return;
 
-    if (hasOrderHeaderDetailsPayload(headerOrder)) return;
-
-    const cached = state.orderDetailsCache.get(headerOrderId);
-    if (cached && mergeDetailedOrderIntoActiveList(headerOrderId, cached)) {
-      renderChatHeader();
-      return;
-    }
-    const sharedCached = getSharedOrderDetails(headerOrderId);
-    if (sharedCached) {
-      state.orderDetailsCache.set(headerOrderId, sharedCached);
-      if (mergeDetailedOrderIntoActiveList(headerOrderId, sharedCached)) {
-        renderChatHeader();
-        return;
-      }
-    }
-
     try {
-      const json = await apiJson(`/api/admin/orders/${headerOrderId}`);
+      const json = await fetchOrderDetailsFresh(headerOrderId);
       if (requestId !== state.requestToken) return;
       if (Number(state.activeClientId || 0) !== activeClientId) return;
 
@@ -4722,7 +5265,10 @@
       if (!detailedOrder || typeof detailedOrder !== "object") return;
       state.orderDetailsCache.set(headerOrderId, detailedOrder);
       setSharedOrderDetails(detailedOrder);
-      if (!mergeDetailedOrderIntoActiveList(headerOrderId, detailedOrder)) return;
+      if (Number(state.headerOrderSnapshot?.id || 0) === headerOrderId) {
+        state.headerOrderSnapshot = { ...state.headerOrderSnapshot, ...detailedOrder };
+      }
+      mergeDetailedOrderIntoActiveList(headerOrderId, detailedOrder);
       renderChatHeader();
     } catch (err) {
       console.error(err);
@@ -4754,23 +5300,30 @@
     if (!Number.isFinite(clientId) || clientId <= 0) return false;
     if (state.activeOrdersPollInFlight) return false;
 
-    const forceRefresh = options.force === true;
-    const cachedOrders = getCachedActiveClientOrders(clientId);
-    if (!forceRefresh && Array.isArray(cachedOrders) && cachedOrders.length) {
-      const changedFromCache = setActiveOrders(cachedOrders);
-      if (changedFromCache || options.forceHydrate) {
-        hydrateHeaderOrderDetails(state.requestToken, clientId).catch(console.error);
-      }
-      return changedFromCache;
-    }
-
     state.activeOrdersPollInFlight = true;
     try {
-      const ordersJson = await apiJson(`/api/admin/clients/${clientId}/orders`);
+      const ordersJson = await fetchClientOrdersFresh(clientId);
       if (Number(state.activeClientId || 0) !== clientId) return false;
       const nextOrders = Array.isArray(ordersJson?.data) ? ordersJson.data : [];
       setCachedActiveClientOrders(clientId, nextOrders);
-      const changed = setActiveOrders(nextOrders);
+      const changed = setActiveOrders(nextOrders, { forceRightOrderRefresh: true });
+      try {
+        const candidateJson = await fetchHeaderOrderCandidateFresh(clientId);
+        if (Number(state.activeClientId || 0) === clientId) {
+          const candidateOrder = candidateJson && candidateJson.data && typeof candidateJson.data === "object"
+            ? candidateJson.data
+            : null;
+          if (candidateOrder && Number(candidateOrder.id || 0) > 0) {
+            state.headerOrderSnapshot = { ...candidateOrder };
+            upsertActiveOrder(candidateOrder);
+          } else {
+            state.headerOrderSnapshot = null;
+          }
+        }
+      } catch (candidateErr) {
+        if (!isAbortError(candidateErr)) console.error(candidateErr);
+      }
+      state.activeOrdersHydratedClientId = Number(clientId || 0);
       state.activeOrdersLastFetchedAt = Date.now();
       if (changed || options.forceHydrate) {
         hydrateHeaderOrderDetails(state.requestToken, clientId).catch(console.error);
@@ -4822,9 +5375,11 @@
       const ownerClientId = getOrderClientId(order);
       const existsInActive = (Array.isArray(state.activeOrders) ? state.activeOrders : [])
         .some((item) => Number(item?.id || 0) === orderId);
+      const hydratedForActiveClient = Number(state.activeOrdersHydratedClientId || 0) === activeClientId;
 
       if (ownerClientId > 0 && ownerClientId !== activeClientId && !existsInActive) return;
       if (ownerClientId <= 0 && !existsInActive) return;
+      if (!hydratedForActiveClient && !existsInActive) return;
 
       const changed = upsertActiveOrder(order);
       if (changed) {
@@ -4884,7 +5439,7 @@
     const active = Number(state.activeClientId) === Number(client.id);
     const unread = getUnreadCount(client.id);
     const lastMsg = getLastMessage(client.id);
-    const preview = getMessagePreviewText(lastMsg) || "Нет сообщений";
+    const preview = getClientPreviewText(client.id);
     const timeText = lastMsg?.createdAt ? fmtClientRowTime(lastMsg.createdAt) : "";
     const status = lastMsg?.direction === "out" ? getOutgoingDeliveryStatus(lastMsg) : "";
     const statusTitle = status === "read"
@@ -4914,7 +5469,7 @@
             : ""}
         </span>
         <span class="chat-client-bottom">
-          <span class="chat-client-preview">${escapeHtml(preview)}</span>
+          <span class="chat-client-preview${getClientTypingPreviewText(client.id) ? " is-typing" : ""}">${escapeHtml(preview)}</span>
           ${unread > 0 ? `<span class="chat-client-unread">${escapeHtml(unreadText)}</span>` : ""}
         </span>
       </span>
@@ -5455,9 +6010,14 @@
   function shouldKeepMessagesPinnedToBottom() {
     if (!dom.center.messagesWrap) return false;
     const wrap = dom.center.messagesWrap;
-    // Use a strict threshold to avoid false "stick to bottom" when user
-    // is reading slightly above the latest messages.
-    return (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) <= 2;
+    return (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) <= CHAT_STICKY_BOTTOM_THRESHOLD_PX;
+  }
+
+  function isThreadPinnedBottomPreferred(clientId = state.activeClientId) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return false;
+    return state.threadPinnedBottomByClient[key] === true
+      || state.store?.ui?.threadPinnedBottomByClient?.[key] === true;
   }
 
   function getPendingScrollMessageIdSet(clientId = state.activeClientId) {
@@ -5555,15 +6115,31 @@
     const wrap = dom.center.messagesWrap;
     if (!key || !wrap) return;
     const nextTop = toStoredScrollTop(wrap.scrollTop);
+    const pinnedBottom = shouldKeepMessagesPinnedToBottom();
     state.threadScrollTopByClient[key] = nextTop;
+    state.threadPinnedBottomByClient[key] = pinnedBottom;
     const ui = ensureUiStoreState();
     ui.threadScrollTopByClient[key] = nextTop;
+    ui.threadPinnedBottomByClient[key] = pinnedBottom;
+    scheduleUiStatePersist();
   }
 
   function restoreThreadScrollPosition(clientId = state.activeClientId) {
     const key = normalizeClientIdKey(clientId);
     const wrap = dom.center.messagesWrap;
     if (!key || !wrap) return false;
+    const pinnedBottom = state.threadPinnedBottomByClient[key] === true
+      || state.store?.ui?.threadPinnedBottomByClient?.[key] === true;
+    if (pinnedBottom) {
+      const maxTop = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
+      wrap.scrollTop = maxTop;
+      state.threadPinnedBottomByClient[key] = true;
+      state.threadScrollTopByClient[key] = maxTop;
+      const ui = ensureUiStoreState();
+      ui.threadPinnedBottomByClient[key] = true;
+      ui.threadScrollTopByClient[key] = maxTop;
+      return true;
+    }
     const fallbackTop = Number(state.store?.ui?.threadScrollTopByClient?.[key]);
     const raw = Number.isFinite(Number(state.threadScrollTopByClient[key]))
       ? Number(state.threadScrollTopByClient[key])
@@ -5842,6 +6418,7 @@
     state.selectedMessageIds.delete(String(messageId));
     if (state.selectedMessageIds.size === 0) setSelectionMode(false);
     markThreadMutated(clientId);
+    syncRemoteSummaryPreviewFromLocalThread(clientId);
     saveStore();
     enqueueRemoteMutation(clientId, () => remoteDeleteMessage(clientId, messageId));
     return true;
@@ -5864,6 +6441,7 @@
     if (state.selectedMessageIds.size === 0) setSelectionMode(false);
     if (changed) {
       markThreadMutated(clientId);
+      syncRemoteSummaryPreviewFromLocalThread(clientId);
       saveStore();
     }
     return changed;
@@ -5922,10 +6500,7 @@
       setCachedActiveClientProfile(clientId, state.activeClient);
       syncClientIdentityIntoList(clientId, state.activeClient);
     }
-    if (Array.isArray(shared.orders) && shared.orders.length) {
-      setCachedActiveClientOrders(clientId, shared.orders);
-      setActiveOrders(shared.orders, { forceRender: true });
-    }
+    // Header orders must come from fresh API only (no shared-cache hydration).
     return true;
   }
 
@@ -6502,6 +7077,7 @@
     delete state.pendingScrollNewByClient[key];
     delete state.pendingScrollMessageIdsByClient[key];
     delete state.threadScrollTopByClient[key];
+    delete state.threadPinnedBottomByClient[key];
     delete state.peerTypingByClient[key];
     delete state.peerTypingUpdatedAtByClient[key];
     delete state.threadHistoryByClient[key];
@@ -6513,6 +7089,9 @@
     const ui = ensureUiStoreState();
     if (ui?.threadScrollTopByClient && typeof ui.threadScrollTopByClient === "object") {
       delete ui.threadScrollTopByClient[key];
+    }
+    if (ui?.threadPinnedBottomByClient && typeof ui.threadPinnedBottomByClient === "object") {
+      delete ui.threadPinnedBottomByClient[key];
     }
 
     if (Number(state.store?.lastOpenClientId || 0) === idNum) {
@@ -6604,6 +7183,7 @@
         if (removeForBoth) {
           state.store.threads[key] = [];
           hiddenMap[key] = [];
+          syncRemoteSummaryPreviewFromLocalThread(key);
           saveStore();
 
           const saveTimer = state.remoteSaveTimers[key];
@@ -6627,7 +7207,7 @@
             renderMessages();
           }
           applyClientFilter();
-          deleteRemoteThread(key).catch(console.error);
+          enqueueRemoteMutation(key, () => pushThreadToRemote(key)).catch(console.error);
           return;
         }
 
@@ -6639,6 +7219,7 @@
           hideMessageContextMenu();
           renderMessages();
         }
+        syncRemoteSummaryPreviewFromLocalThread(key);
         applyClientFilter();
       },
     });
@@ -6858,6 +7439,7 @@
             enqueueRemoteMutation(state.activeClientId, () => remoteDeleteMessage(state.activeClientId, id));
           });
         }
+        syncRemoteSummaryPreviewFromLocalThread(state.activeClientId);
         renderMessages();
         applyClientFilter();
       },
@@ -6934,6 +7516,7 @@
 
     if (!state.activeClient) {
       setHeaderLoading(false);
+      state.headerOrderSnapshot = null;
       setOrderHeaderFields({
         kind: "Последний заказ",
         id: "—",
@@ -6957,11 +7540,16 @@
 
     const candidate = getHeaderOrderCandidate(state.activeOrders);
     const currentOrder = candidate.currentOrder;
-    const pinnedHeaderOrderId = Number(state.headerOrderId || 0);
-    const pinnedHeaderOrder = (Array.isArray(candidate.sortedOrders) && pinnedHeaderOrderId > 0)
-      ? candidate.sortedOrders.find((order) => Number(order?.id || 0) === pinnedHeaderOrderId)
+    const snapshotOrderId = Number(state.headerOrderSnapshot?.id || 0);
+    const snapshotFromList = snapshotOrderId > 0
+      ? (Array.isArray(candidate.sortedOrders)
+        ? candidate.sortedOrders.find((order) => Number(order?.id || 0) === snapshotOrderId) || null
+        : null)
       : null;
-    const headerOrder = pinnedHeaderOrder || candidate.headerOrder;
+    const snapshotOrder = snapshotFromList
+      ? { ...state.headerOrderSnapshot, ...snapshotFromList }
+      : (snapshotOrderId > 0 ? state.headerOrderSnapshot : null);
+    const headerOrder = snapshotOrder || candidate.headerOrder;
 
     if (!headerOrder) {
       state.headerOrderId = 0;
@@ -7259,6 +7847,7 @@
     const disableAutoPin = options.disableAutoPin === true;
     const smoothScroll = options.smoothScroll !== false;
     const skipSaveScrollPosition = options.skipSaveScrollPosition === true;
+    const skipPinnedBottomEnforce = options.skipPinnedBottomEnforce === true;
     const keepPinnedBeforeRender = shouldKeepMessagesPinnedToBottom();
 
     if (!state.activeClientId) {
@@ -7342,6 +7931,9 @@
     updateMessagesScrollDownButton();
     renderPeerTypingIndicator();
     applyThreadImageLoadingStrategy();
+    if (!skipPinnedBottomEnforce) {
+      enforcePinnedBottomForActiveThread("renderMessages:end");
+    }
   }
 
   function sendMessage(text, options = {}) {
@@ -8303,6 +8895,18 @@
     clientsRightApi.openOrderById(id);
   }
 
+  function syncRightOrderPanelById(orderId, options = {}) {
+    const id = Number(orderId || 0);
+    if (!Number.isFinite(id) || id <= 0) return false;
+    const opts = options && typeof options === "object" ? options : {};
+    if (opts.force !== true && Number(state.rightPanelOrderId || 0) === id) return false;
+    const clientsRightApi = getClientsRightApi();
+    if (!clientsRightApi || typeof clientsRightApi.openOrderById !== "function") return false;
+    clientsRightApi.openOrderById(id, { forceRefresh: opts.forceRefresh === true });
+    state.rightPanelOrderId = id;
+    return true;
+  }
+
   function initHeaderOrderOpenAction() {
     if (!dom.center.headerOrder || dom.center.headerOrder.dataset.boundOpenOrder === "1") return;
     dom.center.headerOrder.dataset.boundOpenOrder = "1";
@@ -8357,9 +8961,22 @@
     const requestId = ++state.requestToken;
     const isGuestClient = options && options.isGuest === true;
     const shouldRenderThread = options && options.renderThread !== false;
-    const preferCache = options && options.preferCache === true;
     const shouldFetchOrders = options?.fetchOrders !== false;
+    if (headerLoadingSafetyTimer) {
+      window.clearTimeout(headerLoadingSafetyTimer);
+      headerLoadingSafetyTimer = 0;
+    }
+    headerLoadingSafetyTimer = window.setTimeout(() => {
+      if (requestId !== state.requestToken) return;
+      if (Number(state.activeClientId || 0) !== Number(clientId || 0)) return;
+      setHeaderLoading(false);
+      headerLoadingSafetyTimer = 0;
+    }, 10000);
     const finishHeaderLoading = () => {
+      if (headerLoadingSafetyTimer) {
+        window.clearTimeout(headerLoadingSafetyTimer);
+        headerLoadingSafetyTimer = 0;
+      }
       if (requestId !== state.requestToken) return;
       if (Number(state.activeClientId || 0) !== Number(clientId || 0)) return;
       setHeaderLoading(false);
@@ -8367,6 +8984,7 @@
     if (isGuestClient) {
       state.activeClient = buildGuestActiveClientProfile(clientId, selectedFromList);
       setActiveOrders([], { forceRender: true });
+      state.activeOrdersHydratedClientId = 0;
       if (shouldRenderThread) {
         renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
         restoreThreadScrollPosition(state.activeClientId);
@@ -8376,46 +8994,10 @@
       return;
     }
 
-    let hadWarmCacheProfile = false;
-    let hadWarmCacheOrders = false;
-    if (preferCache) {
-      const cachedProfile = getCachedActiveClientProfile(clientId);
-      const cachedOrders = getCachedActiveClientOrders(clientId);
-      if (cachedProfile) {
-        state.activeClient = cachedProfile;
-        syncClientIdentityIntoList(clientId, cachedProfile);
-        hadWarmCacheProfile = true;
-      }
-      if (cachedOrders) {
-        setActiveOrders(cachedOrders, { forceRender: true });
-        hydrateHeaderOrderDetails(requestId, clientId).catch(console.error);
-        hadWarmCacheOrders = Array.isArray(cachedOrders) && cachedOrders.length > 0;
-      }
-      if (!cachedProfile || !cachedOrders || !cachedOrders.length) {
-        const hydratedFromShared = hydrateActiveClientFromSharedCache(clientId);
-        if (hydratedFromShared) {
-          const nextCachedProfile = getCachedActiveClientProfile(clientId);
-          const nextCachedOrders = getCachedActiveClientOrders(clientId);
-          hadWarmCacheProfile = hadWarmCacheProfile || !!nextCachedProfile;
-          hadWarmCacheOrders = hadWarmCacheOrders || !!(nextCachedOrders && nextCachedOrders.length);
-        }
-      }
-    }
-
     try {
-      const shouldFetchClientProfile = !hadWarmCacheProfile;
-      const shouldFetchOrdersFromNetwork = shouldFetchOrders && !hadWarmCacheOrders;
-      const sharedOrdersFetch = getSharedClientOrdersFetcher();
-      const ordersRefreshPromise = shouldFetchOrdersFromNetwork
-        ? Promise.resolve()
-          .then(() => (
-            sharedOrdersFetch
-              ? sharedOrdersFetch(clientId, () => apiJson(`/api/admin/clients/${clientId}/orders`))
-              : apiJson(`/api/admin/clients/${clientId}/orders`)
-          ))
-          .then((json) => ({ ok: true, json }))
-          .catch((err) => ({ ok: false, err }))
-        : null;
+      // Stale-while-revalidate: show cache instantly, but always revalidate from API.
+      const shouldFetchClientProfile = true;
+      const shouldFetchOrdersFromNetwork = shouldFetchOrders === true;
 
       const clientJson = shouldFetchClientProfile
         ? await apiJson(`/api/admin/clients/${clientId}`)
@@ -8428,6 +9010,7 @@
         || buildOptimisticActiveClientProfile(clientId, selectedFromList);
       if (state.activeClient && typeof state.activeClient === "object") {
         setCachedActiveClientProfile(clientId, state.activeClient);
+        setSharedClientDetailsToLocalStorage(clientId, { client: state.activeClient });
       }
       const syncedIdentity = syncClientIdentityIntoList(clientId, state.activeClient);
       if (syncedIdentity.changed) {
@@ -8450,32 +9033,43 @@
           phone: syncedIdentity.nextPhone,
         }).catch(console.error);
       }
-      if (shouldFetchOrdersFromNetwork && ordersRefreshPromise) {
-        ordersRefreshPromise.then((result) => {
+      if (shouldFetchOrdersFromNetwork) {
+        try {
+          const ordersJson = await fetchClientOrdersFresh(clientId);
           if (state.requestToken !== requestId) return;
           if (Number(state.activeClientId || 0) !== Number(clientId)) return;
-          if (result && result.ok) {
-            const freshOrders = Array.isArray(result.json?.data) ? result.json.data : [];
-            setCachedActiveClientOrders(clientId, freshOrders);
-            setActiveOrders(freshOrders, { forceRender: true });
-            hydrateHeaderOrderDetails(requestId, clientId).catch(console.error);
-            return;
+          const freshOrders = Array.isArray(ordersJson?.data) ? ordersJson.data : [];
+          setCachedActiveClientOrders(clientId, freshOrders);
+          setSharedClientDetailsToLocalStorage(clientId, { orders: freshOrders });
+          setActiveOrders(freshOrders, { forceRender: true, forceRightOrderRefresh: true });
+          try {
+            const candidateJson = await fetchHeaderOrderCandidateFresh(clientId);
+            if (state.requestToken === requestId && Number(state.activeClientId || 0) === Number(clientId || 0)) {
+              const candidateOrder = candidateJson && candidateJson.data && typeof candidateJson.data === "object"
+                ? candidateJson.data
+                : null;
+              if (candidateOrder && Number(candidateOrder.id || 0) > 0) {
+                state.headerOrderSnapshot = { ...candidateOrder };
+                upsertActiveOrder(candidateOrder);
+              } else {
+                state.headerOrderSnapshot = null;
+              }
+            }
+          } catch (candidateErr) {
+            if (!isAbortError(candidateErr)) console.error(candidateErr);
           }
-          if (result && !result.ok && !isAbortError(result.err)) {
-            console.error(result.err);
-          }
-        }).finally(() => {
-          finishHeaderLoading();
-        });
-      } else {
-        finishHeaderLoading();
+          state.activeOrdersHydratedClientId = Number(clientId || 0);
+          await hydrateHeaderOrderDetails(requestId, clientId).catch(console.error);
+        } catch (err) {
+          if (!isAbortError(err)) console.error(err);
+        }
       }
+      finishHeaderLoading();
       if (shouldRenderThread) {
         renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
         restoreThreadScrollPosition(state.activeClientId);
         saveThreadScrollPosition(state.activeClientId);
       }
-      hydrateHeaderOrderDetails(requestId, clientId).catch(console.error);
     } catch (err) {
       if (requestId !== state.requestToken) return;
       console.error(err);
@@ -8499,6 +9093,7 @@
     const previousActiveClientId = state.activeClientId;
     stopLocalTypingSession(previousActiveClientId, { flush: true });
     saveThreadScrollPosition(previousActiveClientId);
+    flushUiStatePersist();
 
     closeAttachPreview({ focusComposer: false, clearPersistedDraft: false });
     cancelEditingMessage();
@@ -8517,11 +9112,12 @@
 
     state.activeClientId = id;
     state.store.lastOpenClientId = id;
+    state.rightPanelOrderId = 0;
+    state.headerOrderSnapshot = null;
     setHeaderLoading(true);
     saveStore();
 
     ensureActiveThreadSseConnection();
-    syncActiveThreadReadState({ clientId: id });
     applyClientFilter();
     renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
     if (!restoreThreadScrollPosition(id)) {
@@ -8533,6 +9129,7 @@
       updateMessagesScrollDownButton();
       saveThreadScrollPosition(id);
     }
+    syncActiveThreadReadState({ clientId: id });
     restorePersistedAttachPreviewDraft(id).catch(console.error);
     pullThreadFromRemote(id, { skipReadMark: true, ignoreIncomingBadge: true }).catch(console.error);
 
@@ -8558,11 +9155,11 @@
       ? buildGuestActiveClientProfile(id, selectedFromList)
       : (selectedFromList || buildOptimisticActiveClientProfile(id, selectedFromList));
     setActiveOrders([], { forceRender: true });
+    state.activeOrdersHydratedClientId = 0;
 
     loadActiveClientData(id, selectedFromList, {
       isGuest: isGuestClient,
       renderThread: false,
-      preferCache: true,
     }).catch(console.error);
   }
 
@@ -8979,12 +9576,38 @@
         if (dom.center.messagesWrap && dom.center.messagesWrap.scrollTop <= CHAT_THREAD_LOAD_MORE_THRESHOLD_PX) {
           loadOlderMessages(state.activeClientId).catch(console.error);
         }
+        syncActiveThreadReadState();
         syncPendingScrollCountByViewport(state.activeClientId);
         if (shouldKeepMessagesPinnedToBottom()) {
           clearPendingScrollNewCount();
         }
         updateMessagesScrollDownButton();
       });
+    }
+    if (dom.center.messages && dom.center.messages.dataset.pinnedBottomSyncBound !== "1") {
+      dom.center.messages.dataset.pinnedBottomSyncBound = "1";
+      // Capture phase is required: "load" on img does not bubble.
+      dom.center.messages.addEventListener("load", (event) => {
+        if (!(event.target instanceof HTMLImageElement)) return;
+        schedulePinnedBottomLayoutSync();
+      }, true);
+      dom.center.messages.addEventListener("error", (event) => {
+        if (!(event.target instanceof HTMLImageElement)) return;
+        schedulePinnedBottomLayoutSync();
+      }, true);
+    }
+    if (dom.center.messages && typeof ResizeObserver === "function" && dom.center.messages.dataset.pinnedBottomResizeBound !== "1") {
+      dom.center.messages.dataset.pinnedBottomResizeBound = "1";
+      const observer = new ResizeObserver(() => {
+        schedulePinnedBottomLayoutSync();
+      });
+      observer.observe(dom.center.messages);
+    }
+    if (dom.center.messagesWrap && dom.center.messagesWrap.dataset.pinnedBottomWindowResizeBound !== "1") {
+      dom.center.messagesWrap.dataset.pinnedBottomWindowResizeBound = "1";
+      window.addEventListener("resize", () => {
+        schedulePinnedBottomLayoutSync();
+      }, { passive: true });
     }
     if (dom.center.scrollDownBtn && dom.center.scrollDownBtn.dataset.bound !== "1") {
       dom.center.scrollDownBtn.dataset.bound = "1";
@@ -9040,6 +9663,7 @@
       if (document.visibilityState !== "visible") {
         saveThreadScrollPosition(state.activeClientId);
         saveClientsListScrollPosition();
+        flushUiStatePersist();
         return;
       }
       if (!syncChatWidgetEnabledFromTenant()) return;
@@ -9060,7 +9684,7 @@
       pauseRealtimeSync({ flushTyping: true, keepalive: true });
       saveThreadScrollPosition(state.activeClientId);
       saveClientsListScrollPosition();
-      saveStore();
+      flushUiStatePersist();
     });
 
     document.addEventListener("tenantStoreChanged", () => {
@@ -9080,7 +9704,7 @@
       if (key === getSharedClientDetailsCacheKey()) {
         const activeId = Number(state.activeClientId || 0);
         if (!Number.isFinite(activeId) || activeId <= 0) return;
-        hydrateActiveClientFromSharedCache(activeId);
+        // Header orders are API-driven; ignore shared-cache updates here.
       }
     });
 
@@ -9088,3 +9712,5 @@
 
   init();
 })();
+
+

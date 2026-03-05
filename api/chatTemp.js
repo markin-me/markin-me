@@ -45,6 +45,12 @@ const CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT = parsePositiveInt(
 const CHAT_ORPHAN_THREAD_CLEANUP_BATCH_LIMIT = CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT;
 const CHAT_PUSH_ENDPOINT_MAX_LENGTH = 1024;
 const CHAT_PUSH_COMPANY_TITLE_CACHE_TTL_MS = 60 * 1000;
+const CHAT_ADMIN_PUSH_UNANSWERED_DELAY_MS = parsePositiveInt(
+  process.env.CHAT_ADMIN_PUSH_UNANSWERED_DELAY_MS,
+  5000,
+  0,
+  15000
+);
 const CHAT_UPLOAD_RELATIVE_DIR = path.join("static", "uploads", "chat");
 const CHAT_UPLOAD_ABSOLUTE_DIR = path.join(__dirname, "..", CHAT_UPLOAD_RELATIVE_DIR);
 const CHAT_ALLOWED_IMAGE_MIME = new Set([
@@ -468,6 +474,87 @@ function resolvePushSenderActor(message, fallbackActor) {
   return fallbackActor === "in" ? "in" : "out";
 }
 
+async function isIncomingMessageUnansweredByBot(tenantId, clientId, messageId) {
+  const safeMessageId = normalizeMessageId(messageId);
+  const safeClientId = normalizeClientId(clientId);
+  if (!safeMessageId || !safeClientId) return false;
+  const typingEntry = getThreadTypingEntry(tenantId, safeClientId);
+  const outTyping = typingEntry && typingEntry.out ? typingEntry.out : null;
+  if (outTyping?.active === true && Number(outTyping?.expiresAtMs || 0) > Date.now()) {
+    return false;
+  }
+
+  const [rows] = await db.query(
+    `
+      SELECT
+        id,
+        message_id,
+        direction,
+        is_read
+      FROM chat_messages
+      WHERE tenant_id = ?
+        AND client_id = ?
+        AND (
+          direction = 'in'
+          OR (
+            direction = 'out'
+            AND (
+              message_id LIKE 'assistant-auto-%'
+              OR message_id LIKE 'daily-welcome-%'
+            )
+          )
+        )
+      ORDER BY id DESC
+    `,
+    [Number(tenantId), Number(safeClientId)]
+  );
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return false;
+
+  let pendingBotReplies = 0;
+  for (const row of list) {
+    const direction = String(row?.direction || "").toLowerCase();
+    const id = String(row?.message_id || "");
+    if (direction === "out") {
+      pendingBotReplies += 1;
+      continue;
+    }
+    if (direction !== "in") continue;
+    const isTarget = id === safeMessageId;
+    if (isTarget && Number(row?.is_read || 0) === 1) return false;
+    if (pendingBotReplies > 0) {
+      pendingBotReplies -= 1;
+      if (isTarget) return false;
+      continue;
+    }
+    if (isTarget) return true;
+  }
+  return false;
+}
+
+function waitMs(timeoutMs) {
+  const ms = Math.max(0, Math.trunc(Number(timeoutMs) || 0));
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function shouldNotifyAdminPushForIncoming(tenantId, clientId, messageId) {
+  const waitBudget = Math.max(0, Number(CHAT_ADMIN_PUSH_UNANSWERED_DELAY_MS || 0));
+  const pollStepMs = 350;
+  const startedAt = Date.now();
+
+  while (true) {
+    const stillUnanswered = await isIncomingMessageUnansweredByBot(tenantId, clientId, messageId);
+    if (!stillUnanswered) return false;
+
+    const elapsed = Date.now() - startedAt;
+    const remaining = waitBudget - elapsed;
+    if (remaining <= 0) return true;
+
+    await waitMs(Math.min(pollStepMs, remaining));
+  }
+}
+
 function normalizeTenantPushCompanyTitle(rawValue) {
   return String(rawValue || "")
     .replace(/\s+/g, " ")
@@ -592,6 +679,12 @@ async function notifyPushPeerAboutMessage(tenantId, clientId, senderActor, messa
     if (!chatEnabled) return;
   }
   if (!shouldNotifyPushForPeer(peerActor, message)) return;
+  if (peerActor === "out") {
+    const incomingMessageId = String(message && message.id || "").trim();
+    if (!incomingMessageId) return;
+    const shouldNotify = await shouldNotifyAdminPushForIncoming(tenantId, clientId, incomingMessageId);
+    if (!shouldNotify) return;
+  }
   const subscriptions = await listPushSubscriptionsForThread(tenantId, clientId, peerActor);
   if (!subscriptions.length) return;
   const messageIdRaw = String(message && message.id ? message.id : "").trim();
@@ -1615,6 +1708,131 @@ async function readTenantUnreadTotal(tenantId) {
   return Math.trunc(total);
 }
 
+async function readTenantUnansweredUnreadTotal(tenantId) {
+  const [rows] = await db.query(
+    `
+      SELECT
+        m.client_id AS client_id,
+        COUNT(*) AS total
+      FROM chat_messages m
+      WHERE m.tenant_id = ?
+        AND m.direction = 'in'
+        AND m.is_read = 0
+        AND m.message_id NOT LIKE 'assistant-auto-%'
+        AND m.message_id NOT LIKE 'daily-welcome-%'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM chat_messages r
+          WHERE r.tenant_id = m.tenant_id
+            AND r.client_id = m.client_id
+            AND r.id > m.id
+            AND r.direction = 'out'
+            AND (
+              r.message_id LIKE 'assistant-auto-%'
+              OR r.message_id LIKE 'daily-welcome-%'
+            )
+          LIMIT 1
+        )
+      GROUP BY m.client_id
+    `,
+    [Number(tenantId)]
+  );
+  const nowMs = Date.now();
+  let total = 0;
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const clientId = normalizeClientId(row?.client_id);
+    if (!clientId) return;
+    const typingEntry = getThreadTypingEntry(tenantId, clientId);
+    const outTyping = typingEntry && typingEntry.out ? typingEntry.out : null;
+    const botTypingActive = outTyping?.active === true && Number(outTyping?.expiresAtMs || 0) > nowMs;
+    if (botTypingActive) return;
+    const countRaw = Number(row?.total || 0);
+    if (!Number.isFinite(countRaw) || countRaw <= 0) return;
+    total += Math.trunc(countRaw);
+  });
+  return total > 0 ? total : 0;
+}
+
+function computeUnansweredCountFromRowsDesc(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return 0;
+  let pendingBotReplies = 0;
+  let unanswered = 0;
+  for (const row of list) {
+    const direction = String(row?.direction || "").toLowerCase();
+    if (direction === "out") {
+      pendingBotReplies += 1;
+      continue;
+    }
+    if (direction !== "in") continue;
+    if (pendingBotReplies > 0) {
+      pendingBotReplies -= 1;
+      continue;
+    }
+    unanswered += 1;
+  }
+  return unanswered;
+}
+
+async function queryUnansweredCountByClient(tenantId, clientIds = []) {
+  const safeTenantId = Number(tenantId);
+  if (!Number.isFinite(safeTenantId) || safeTenantId <= 0) return new Map();
+  const ids = (Array.isArray(clientIds) ? clientIds : [])
+    .map((id) => normalizeClientId(id))
+    .filter(Boolean);
+  const hasClientFilter = ids.length > 0;
+  const clientClause = hasClientFilter
+    ? ` AND client_id IN (${ids.map(() => "?").join(",")})`
+    : "";
+
+  const [rows] = await db.query(
+    `
+      SELECT
+        client_id,
+        direction,
+        message_id
+      FROM chat_messages
+      WHERE tenant_id = ?
+        AND (
+          direction = 'in'
+          OR (
+            direction = 'out'
+            AND (
+              message_id LIKE 'assistant-auto-%'
+              OR message_id LIKE 'daily-welcome-%'
+            )
+          )
+        )
+        ${clientClause}
+      ORDER BY client_id ASC, id DESC
+    `,
+    hasClientFilter
+      ? [safeTenantId, ...ids.map((id) => Number(id))]
+      : [safeTenantId]
+  );
+
+  const byClientRows = new Map();
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const key = normalizeClientId(row?.client_id);
+    if (!key) return;
+    const arr = byClientRows.get(key) || [];
+    arr.push(row);
+    byClientRows.set(key, arr);
+  });
+
+  const counts = new Map();
+  byClientRows.forEach((clientRows, clientIdKey) => {
+    counts.set(clientIdKey, computeUnansweredCountFromRowsDesc(clientRows));
+  });
+  if (hasClientFilter) {
+    ids.forEach((id) => {
+      const key = String(id);
+      if (!counts.has(key)) counts.set(key, 0);
+    });
+  }
+  return counts;
+}
+
 function toUnreadRevision(updatedAt) {
   const ts = new Date(String(updatedAt || "")).getTime();
   if (!Number.isFinite(ts) || ts <= 0) return 0;
@@ -1938,8 +2156,10 @@ function notifyThreadChange(tenantId, clientId, updatedAt = "", options = {}) {
       updated_at: String(updatedAt || ""),
     });
   }
-  if (messageChanged) {
+  if (messageChanged || typingChanged) {
     notifyTenantChange(tenantId, updatedAt);
+  }
+  if (messageChanged) {
     scheduleClientUnreadSseRefresh(tenantId, clientId);
   }
 }
@@ -2090,11 +2310,19 @@ function getSummaryLastPreviewText(row) {
 }
 
 function mapSummaryRow(row) {
+  const lastMessageIdRaw = Number(row.last_message_id ?? row.lastMessageId ?? 0);
+  const lastMessageId = Number.isFinite(lastMessageIdRaw) && lastMessageIdRaw > 0
+    ? Math.trunc(lastMessageIdRaw)
+    : 0;
   return {
     client_id: Number(row.client_id),
     updated_at: toIsoOrEmpty(row.updated_at),
     message_count: Number(row.message_count || 0),
     unread_count: Number(row.unread_count || 0),
+    last_message_id: lastMessageId,
+    lastMessageId: lastMessageId,
+    last_message_message_id: String(row.last_message_message_id ?? row.lastMessageMessageId ?? ""),
+    lastMessageMessageId: String(row.last_message_message_id ?? row.lastMessageMessageId ?? ""),
     last_message_at: toIsoOrEmpty(row.last_message_at),
     last_message_text: getSummaryLastPreviewText(row),
     meta: sanitizeMetaFromDbRow(row),
@@ -2786,8 +3014,10 @@ async function querySummaryRows(
         COALESCE(NULLIF(TRIM(t.meta_name), ''), NULLIF(TRIM(c.name), '')) AS meta_name,
         COALESCE(NULLIF(TRIM(t.meta_phone), ''), NULLIF(TRIM(c.phone), '')) AS meta_phone,
         t.meta_last_welcome_day,
+        COALESCE(s.last_message_id, 0) AS last_message_id,
         COALESCE(s.message_count, 0) AS message_count,
         COALESCE(s.unread_count, 0) AS unread_count,
+        m.message_id AS last_message_message_id,
         m.created_at AS last_message_at,
         m.text AS last_message_text,
         m.attachment_json AS last_attachment_json
@@ -2911,6 +3141,7 @@ async function querySummaryRowsForPage(tenantId, { limit, offset } = {}) {
       `
         SELECT
           id,
+          message_id,
           client_id,
           created_at,
           text,
@@ -2931,10 +3162,13 @@ async function querySummaryRowsForPage(tenantId, { limit, offset } = {}) {
     const clientIdKey = normalizeClientId(row?.client_id);
     const aggregate = clientIdKey ? aggregateByClient.get(clientIdKey) : null;
     const lastMessage = clientIdKey ? lastMessageByClient.get(clientIdKey) : null;
+    const lastMessageId = Number(aggregate?.last_message_id || 0);
     return {
       ...row,
+      last_message_id: Number.isFinite(lastMessageId) && lastMessageId > 0 ? Math.trunc(lastMessageId) : 0,
       message_count: Number(aggregate?.message_count || 0),
       unread_count: Number(aggregate?.unread_count || 0),
+      last_message_message_id: String(lastMessage?.message_id || ""),
       last_message_at: lastMessage?.created_at || null,
       last_message_text: lastMessage?.text || "",
       last_attachment_json: lastMessage?.attachment_json || "",
@@ -2942,7 +3176,7 @@ async function querySummaryRowsForPage(tenantId, { limit, offset } = {}) {
   });
 }
 
-async function listSummaries(tenantId, selectedClientIds = []) {
+async function listSummaries(tenantId, selectedClientIds = [], actorKey = "out") {
   const ids = (Array.isArray(selectedClientIds) ? selectedClientIds : [])
     .map((id) => normalizeClientId(id))
     .filter(Boolean);
@@ -2951,10 +3185,11 @@ async function listSummaries(tenantId, selectedClientIds = []) {
   const parsedRows = rows
     .map(mapSummaryRow)
     .filter((row) => Number.isFinite(Number(row.client_id)) && Number(row.client_id) > 0);
+  const typedRows = enrichSummaryRowsWithTyping(tenantId, parsedRows, actorKey);
 
-  if (!ids.length) return parsedRows;
+  if (!ids.length) return typedRows;
 
-  const byId = new Map(parsedRows.map((row) => [String(row.client_id), row]));
+  const byId = new Map(typedRows.map((row) => [String(row.client_id), row]));
   return ids.map((id) => {
     const existing = byId.get(String(id));
     if (existing) return existing;
@@ -2965,12 +3200,40 @@ async function listSummaries(tenantId, selectedClientIds = []) {
       unread_count: 0,
       last_message_at: "",
       last_message_text: "",
+      typing_active: false,
+      typing_text: "",
+      typing_updated_at: "",
+      typing_expires_at: "",
+      typingActive: false,
+      typingText: "",
+      typingUpdatedAt: "",
+      typingExpiresAt: "",
       meta: {},
     };
   });
 }
 
-async function listSummariesPage(tenantId, { limit, offset } = {}) {
+function enrichSummaryRowsWithTyping(tenantId, rows, actorKey = "out") {
+  const actor = actorKey === "in" ? "in" : "out";
+  return (Array.isArray(rows) ? rows : []).map((row) => {
+    const clientId = normalizeClientId(row?.client_id ?? row?.clientId);
+    if (!clientId) return row;
+    const peerTyping = getPeerTypingForActor(tenantId, clientId, actor);
+    return {
+      ...row,
+      typing_active: peerTyping?.active === true,
+      typing_text: String(peerTyping?.text || ""),
+      typing_updated_at: String(peerTyping?.updated_at || ""),
+      typing_expires_at: String(peerTyping?.expires_at || ""),
+      typingActive: peerTyping?.active === true,
+      typingText: String(peerTyping?.text || ""),
+      typingUpdatedAt: String(peerTyping?.updated_at || ""),
+      typingExpiresAt: String(peerTyping?.expires_at || ""),
+    };
+  });
+}
+
+async function listSummariesPage(tenantId, { limit, offset, actorKey = "out" } = {}) {
   const safeLimit = parsePositiveInt(
     limit,
     CHAT_SUMMARIES_PAGE_DEFAULT_LIMIT,
@@ -2993,13 +3256,14 @@ async function listSummariesPage(tenantId, { limit, offset } = {}) {
   const mappedRows = (Array.isArray(rows) ? rows : [])
     .map(mapSummaryRow)
     .filter((row) => Number.isFinite(Number(row.client_id)) && Number(row.client_id) > 0);
+  const typedRows = enrichSummaryRowsWithTyping(tenantId, mappedRows, actorKey);
 
   return {
-    rows: mappedRows,
+    rows: typedRows,
     total,
     limit: safeLimit,
     offset: safeOffset,
-    hasMore: safeOffset + mappedRows.length < total,
+    hasMore: safeOffset + typedRows.length < total,
   };
 }
 
@@ -3861,11 +4125,13 @@ function makeChatTempRouter() {
       }
 
       const snapshot = await ensureTenantUnreadLoaded(tenantId);
+      const unansweredTotal = await readTenantUnansweredUnreadTotal(tenantId);
       return res.json({
         ok: true,
         data: {
           unread_total: Number(snapshot.total || 0),
           total: Number(snapshot.total || 0),
+          unanswered_total: Number(unansweredTotal || 0),
           updated_at: String(snapshot.updatedAt || ""),
           revision: Number(snapshot.revision || 0),
         },
@@ -3891,6 +4157,9 @@ function makeChatTempRouter() {
       const snapshot = actorKey === "in"
         ? await readClientUnreadSnapshot(tenantId, clientId)
         : await ensureTenantUnreadLoaded(tenantId);
+      const unansweredTotal = actorKey === "out"
+        ? await readTenantUnansweredUnreadTotal(tenantId)
+        : 0;
       const unreadKey = getUnreadStreamKey(tenantId, actorKey, clientId);
 
       initializeSseResponse(req, res);
@@ -3899,6 +4168,9 @@ function makeChatTempRouter() {
         changed: payload.changed === true,
         unread_total: Number(payload.unread_total ?? payload.total ?? 0),
         total: Number(payload.total ?? payload.unread_total ?? 0),
+        unanswered_total: payload.unanswered_total != null
+          ? Number(payload.unanswered_total)
+          : undefined,
         updated_at: String(payload.updated_at || ""),
         revision: Number(payload.revision || 0),
         timeout: false,
@@ -3911,6 +4183,7 @@ function makeChatTempRouter() {
         changed: false,
         unread_total: Number(snapshot.total || 0),
         total: Number(snapshot.total || 0),
+        unanswered_total: Number(unansweredTotal || 0),
         updated_at: String(snapshot.updatedAt || ""),
         revision: Number(snapshot.revision || 0),
       });
@@ -3993,6 +4266,7 @@ function makeChatTempRouter() {
       const currentSnapshot = await ensureTenantUnreadLoaded(tenantId);
       const currentTotal = Number(currentSnapshot.total || 0);
       const currentRevision = Number(currentSnapshot.revision || 0);
+      const currentUnansweredTotal = await readTenantUnansweredUnreadTotal(tenantId);
 
       const changedNow = hasSinceRevision
         ? currentRevision > sinceRevision
@@ -4004,6 +4278,7 @@ function makeChatTempRouter() {
             changed: true,
             unread_total: currentTotal,
             total: currentTotal,
+            unanswered_total: currentUnansweredTotal,
             updated_at: String(currentSnapshot.updatedAt || ""),
             revision: currentRevision,
             timeout: false,
@@ -4020,6 +4295,7 @@ function makeChatTempRouter() {
         ? Math.max(0, Math.trunc(Number(waitResult.revision)))
         : Math.max(0, Math.trunc(Number(nextEntry.revision || 0)));
       const nextUpdatedAt = String(waitResult?.updatedAt || nextEntry.updatedAt || "");
+      const nextUnansweredTotal = await readTenantUnansweredUnreadTotal(tenantId);
 
       const changed = hasSinceRevision
         ? nextRevision > sinceRevision
@@ -4031,6 +4307,7 @@ function makeChatTempRouter() {
           changed,
           unread_total: nextTotal,
           total: nextTotal,
+          unanswered_total: nextUnansweredTotal,
           updated_at: nextUpdatedAt,
           revision: nextRevision,
           timeout: waitResult?.timeout === true,
@@ -4138,6 +4415,7 @@ function makeChatTempRouter() {
   router.get("/summaries", async (req, res) => {
     try {
       const tenantId = getTenantId(req);
+      const actorKey = getRequestReactionActor(req);
       const idsRaw = String(req.query.client_ids || "").trim();
       const selectedIds = idsRaw
         ? idsRaw.split(",").map((part) => normalizeClientId(part)).filter(Boolean)
@@ -4147,6 +4425,7 @@ function makeChatTempRouter() {
         const page = await listSummariesPage(tenantId, {
           limit: req.query.limit,
           offset: req.query.offset,
+          actorKey,
         });
         return res.json({
           ok: true,
@@ -4158,7 +4437,7 @@ function makeChatTempRouter() {
         });
       }
 
-      const summaries = await listSummaries(tenantId, selectedIds);
+      const summaries = await listSummaries(tenantId, selectedIds, actorKey);
       return res.json({ ok: true, data: summaries });
     } catch (err) {
       console.error("chat-temp GET /summaries error:", err);
@@ -4169,9 +4448,11 @@ function makeChatTempRouter() {
   router.get("/clients", async (req, res) => {
     try {
       const tenantId = getTenantId(req);
+      const actorKey = getRequestReactionActor(req);
       const page = await listSummariesPage(tenantId, {
         limit: req.query.limit,
         offset: req.query.offset,
+        actorKey,
       });
       return res.json({
         ok: true,

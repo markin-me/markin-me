@@ -414,6 +414,59 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
   });
 
   /**
+   * GET /api/admin/clients/:id/orders/header-candidate
+   * Priority:
+   *   1) latest active (non-final)
+   *   2) latest completed (final, non-cancelled)
+   *   3) latest cancelled
+   */
+  router.get('/:id/orders/header-candidate', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const customerId = Number(req.params.id);
+      if (!Number.isFinite(customerId) || customerId <= 0) {
+        return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      }
+
+      const [rows] = await db.query(
+        `SELECT
+           o.id, o.public_id,
+           DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+           o.total_price, o.items, o.status_id,
+           s.code AS status_code,
+           s.title AS status_title,
+           s.color AS status_color,
+           COALESCE(s.is_final, 0) AS status_is_final
+         FROM order_orders o
+         LEFT JOIN order_statuses s
+           ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+         WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
+         ORDER BY
+           CASE
+             WHEN COALESCE(s.is_final, 0)=0 THEN 0
+             WHEN (
+               LOWER(COALESCE(s.code, '')) IN ('canceled', 'cancelled')
+               OR LOWER(COALESCE(s.title, '')) LIKE 'отмен%%'
+               OR LOWER(COALESCE(s.title, '')) LIKE 'cancel%%'
+             ) THEN 2
+             ELSE 1
+           END ASC,
+           o.created_at DESC,
+           o.id DESC
+         LIMIT 1`,
+        [tenantId, storeId, customerId]
+      );
+
+      const row = rows[0] || null;
+      res.json({ ok: true, data: row || null });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  /**
    * GET /api/admin/clients/:id/orders
    */
   router.get('/:id/orders', async (req, res) => {

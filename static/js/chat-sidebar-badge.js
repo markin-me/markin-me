@@ -11,6 +11,7 @@
   const WAIT_TIMEOUT_MS = 25000;
   const WAIT_RETRY_MS = 1200;
   const MESSAGE_ALERT_COOLDOWN_MS = 900;
+  const MESSAGE_ALERT_DELAY_MS = 5000;
 
   let timerId = 0;
   let inFlight = false;
@@ -21,6 +22,7 @@
   let unreadTotal = 0;
   let unreadRevision = 0;
   let unreadUpdatedAt = "";
+  let unansweredTotal = 0;
   let unreadPrimed = false;
 
   let messageAlertLastAt = 0;
@@ -31,6 +33,8 @@
   let unreadEventSource = null;
   let unreadEventSourceTenantId = "";
   let chatWidgetEnabled = true;
+  let delayedAlertTimerId = 0;
+  let delayedAlertSeq = 0;
 
   const navItem = navLink.closest("li");
 
@@ -148,8 +152,13 @@
     unreadTotal = 0;
     unreadRevision = 0;
     unreadUpdatedAt = "";
+    unansweredTotal = 0;
     unreadPrimed = false;
     waitSupported = true;
+    if (delayedAlertTimerId) {
+      window.clearTimeout(delayedAlertTimerId);
+      delayedAlertTimerId = 0;
+    }
   }
 
   function stopPolling() {
@@ -310,11 +319,7 @@
   function maybeNotifyUnreadIncrease(nextTotal) {
     if (!unreadPrimed) return;
     if (!Number.isFinite(nextTotal) || nextTotal <= unreadTotal) return;
-
-    const now = Date.now();
-    if (now - messageAlertLastAt < MESSAGE_ALERT_COOLDOWN_MS) return;
-    messageAlertLastAt = now;
-    playMessageAlertSound();
+    scheduleDelayedMessageAlert();
   }
 
   function makeHeaders() {
@@ -390,13 +395,68 @@
     const total = Number.isFinite(totalRaw) && totalRaw > 0 ? Math.trunc(totalRaw) : 0;
     const revisionRaw = Number(data.revision || 0);
     const revision = Number.isFinite(revisionRaw) && revisionRaw > 0 ? Math.trunc(revisionRaw) : 0;
+    const hasUnanswered = data.unanswered_total != null || data.unansweredTotal != null;
+    const unansweredRaw = Number(data.unanswered_total ?? data.unansweredTotal);
+    const unanswered = hasUnanswered
+      ? (Number.isFinite(unansweredRaw) && unansweredRaw > 0 ? Math.trunc(unansweredRaw) : 0)
+      : null;
     return {
       total,
       revision,
+      unanswered,
       updatedAt: String(data.updated_at || ""),
       changed: data.changed === true,
       timeout: data.timeout === true,
     };
+  }
+
+  async function fetchUnreadSnapshotOnce() {
+    const qs = new URLSearchParams({ _ts: String(Date.now()) });
+    const res = await fetch(CHAT_TEMP_API_BASE + "/unread?" + qs.toString(), {
+      method: "GET",
+      headers: makeHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const json = await res.json().catch(function () { return null; });
+    if (!json || json.ok !== true) return null;
+    return normalizeUnreadPayload(json);
+  }
+
+  function scheduleDelayedMessageAlert() {
+    const baselineUnanswered = Number(unansweredTotal || 0);
+    const seq = Number(delayedAlertSeq || 0) + 1;
+    delayedAlertSeq = seq;
+    if (delayedAlertTimerId) {
+      window.clearTimeout(delayedAlertTimerId);
+      delayedAlertTimerId = 0;
+    }
+
+    delayedAlertTimerId = window.setTimeout(async function () {
+      if (seq !== delayedAlertSeq) return;
+      delayedAlertTimerId = 0;
+      let snapshot = null;
+      try {
+        snapshot = await fetchUnreadSnapshotOnce();
+      } catch {}
+      if (!snapshot) return;
+
+      unreadTotal = snapshot.total;
+      unreadRevision = snapshot.revision;
+      unreadUpdatedAt = snapshot.updatedAt;
+      unreadPrimed = true;
+      showBadge(unreadTotal);
+
+      const nextUnanswered = Number(snapshot.unanswered || 0);
+      const increased = nextUnanswered > baselineUnanswered;
+      unansweredTotal = nextUnanswered;
+      if (!increased || nextUnanswered <= 0) return;
+
+      const now = Date.now();
+      if (now - messageAlertLastAt < MESSAGE_ALERT_COOLDOWN_MS) return;
+      messageAlertLastAt = now;
+      playMessageAlertSound();
+    }, MESSAGE_ALERT_DELAY_MS);
   }
 
   function applyUnreadPayload(payload, options) {
@@ -407,6 +467,9 @@
     unreadTotal = normalized.total;
     unreadRevision = normalized.revision;
     unreadUpdatedAt = normalized.updatedAt;
+    if (Number.isFinite(Number(normalized.unanswered))) {
+      unansweredTotal = Math.max(0, Math.trunc(Number(normalized.unanswered)));
+    }
     unreadPrimed = true;
     showBadge(normalized.total);
     return normalized;

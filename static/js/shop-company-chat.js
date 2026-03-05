@@ -142,6 +142,8 @@
   const CHAT_TYPING_HEARTBEAT_MS = 1800;
   const CHAT_TYPING_IDLE_STOP_MS = 2600;
   const CHAT_TYPING_BLUR_STOP_MS = 320;
+  const CHAT_ASSISTANT_QUICK_REPLY_DELAY_MIN_MS = 1600;
+  const CHAT_ASSISTANT_QUICK_REPLY_DELAY_MAX_MS = 2400;
   const CHAT_MESSAGE_ALERT_COOLDOWN_MS = 900;
   const CHAT_PUSH_SYNC_DEBOUNCE_MS = 180;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
@@ -370,6 +372,9 @@
   let localTypingStopTimer = 0;
   let localTypingActive = false;
   let localTypingPhrase = "";
+  let assistantHotReplyTimer = 0;
+  let assistantHotReplyToken = 0;
+  let assistantTypingEmulationUntilMs = 0;
   let messageAlertAudioCtx = null;
   let messageAlertAudioUnlocked = false;
   let messageAlertUnlockAttempted = false;
@@ -544,6 +549,12 @@
   function applyPeerTypingState(rawTyping, options) {
     const opts = options || {};
     const info = normalizePeerTypingInfo(rawTyping);
+    const nowMs = Date.now();
+    const fromEmulation = opts.source === "assistant-emulation";
+    const emulationActive = assistantTypingEmulationUntilMs > nowMs;
+    if (!fromEmulation && !opts.forceInactive && emulationActive) {
+      return;
+    }
     const nextUpdatedAt = String(info.updatedAt || peerTypingUpdatedAt || "");
     if (nextUpdatedAt) peerTypingUpdatedAt = nextUpdatedAt;
     if (opts.forceInactive === true) {
@@ -3924,7 +3935,9 @@
         .map(mapSharedMessageToEntry)
         .filter(Boolean);
       const localChangedDuringRequest = sharedThreadMutationVersion !== localMutationVersionBeforePull;
-      const preserveHistory = opts.preserveHistory !== false && Array.isArray(liveEntries) && liveEntries.length > 0;
+      const preserveHistory = opts.force === true
+        ? false
+        : (opts.preserveHistory !== false && Array.isArray(liveEntries) && liveEntries.length > 0);
       return applySharedRemoteEntries(mappedEntries, updatedAt, {
         ...opts,
         localChangedDuringRequest,
@@ -8373,13 +8386,41 @@
 
     renderThread();
     scrollToBottom(false);
-    enqueueSharedMutation(function () {
-      return remoteCreateSharedMessage(message);
-    });
+    if (opts.persistRemote !== false) {
+      enqueueSharedMutation(function () {
+        return remoteCreateSharedMessage(message);
+      });
+    }
 
     if (role === "user") {
       scheduleOutgoingDeliveryProgress(message.id);
     }
+    return message.id;
+  }
+
+  function updateMessageAttachmentById(messageId, attachment, options) {
+    const id = String(messageId || "").trim();
+    const entry = findMessageEntry(id);
+    if (!entry || entry.type !== "message") return false;
+    const nextAttachment = isImageAttachment(attachment) ? attachment : null;
+    const prevAttachment = isImageAttachment(entry.attachment) ? entry.attachment : null;
+    const sameSrc = String(getAttachmentImageSrc(prevAttachment) || "") === String(getAttachmentImageSrc(nextAttachment) || "");
+    if (sameSrc) return true;
+
+    entry.attachment = nextAttachment;
+    markSharedThreadMutated();
+
+    const opts = options || {};
+    const prevTop = feed.scrollTop;
+    const wasNearBottom = feed.scrollHeight - feed.clientHeight - feed.scrollTop < 40;
+    renderThread();
+    if (wasNearBottom || opts.keepBottom === true) {
+      scrollToBottom(false);
+    } else {
+      feed.scrollTop = prevTop;
+      updateScrollDownButton();
+    }
+    return true;
   }
 
   function normalizeHotQuestionKey(value) {
@@ -8807,16 +8848,64 @@
     };
   }
 
-  function scheduleAssistantHotQuestionReply(userText) {
+  function emulateAssistantTypingBeforeReply(activeClientId, callback) {
+    if (assistantHotReplyTimer) {
+      window.clearTimeout(assistantHotReplyTimer);
+      assistantHotReplyTimer = 0;
+    }
+    const replyDelayMs = Math.max(
+      CHAT_ASSISTANT_QUICK_REPLY_DELAY_MIN_MS,
+      Math.min(
+        CHAT_ASSISTANT_QUICK_REPLY_DELAY_MAX_MS,
+        Math.round(
+          CHAT_ASSISTANT_QUICK_REPLY_DELAY_MIN_MS
+          + (Math.random() * (CHAT_ASSISTANT_QUICK_REPLY_DELAY_MAX_MS - CHAT_ASSISTANT_QUICK_REPLY_DELAY_MIN_MS))
+        )
+      )
+    );
+    assistantHotReplyToken += 1;
+    const token = assistantHotReplyToken;
+    const startedAt = new Date();
+    const updatedAt = startedAt.toISOString();
+    const expiresAt = new Date(startedAt.getTime() + replyDelayMs + 200).toISOString();
+    assistantTypingEmulationUntilMs = startedAt.getTime() + replyDelayMs + 220;
+    applyPeerTypingState({
+      active: true,
+      text: getRandomTypingPhrase(),
+      updatedAt: updatedAt,
+      expiresAt: expiresAt,
+    }, { source: "assistant-emulation" });
+    assistantHotReplyTimer = window.setTimeout(function () {
+      assistantHotReplyTimer = 0;
+      if (token !== assistantHotReplyToken) return;
+      assistantTypingEmulationUntilMs = 0;
+      applyPeerTypingState({
+        active: false,
+        text: "",
+        updatedAt: new Date().toISOString(),
+        expiresAt: "",
+      }, { source: "assistant-emulation" });
+      if (String(getActiveChatClientId() || "") !== String(activeClientId || "")) return;
+      callback();
+    }, replyDelayMs);
+  }
+
+  function scheduleAssistantHotQuestionReply(userText, options) {
+    const opts = options && typeof options === "object" ? options : {};
     const normalized = normalizeHotQuestionKey(userText);
     if (!normalized) return;
 
     const activeClientId = String(getActiveChatClientId() || "");
     if (!activeClientId) return;
+    const userMessageId = String(opts.userMessageId || "").trim();
+    const markQuickQuestionRead = opts.quickQuestion === true && !!userMessageId;
 
     const phoneCandidate = extractPhoneCandidateFromHotQuestionText(userText);
     if (phoneCandidate) {
-      window.setTimeout(function () {
+      emulateAssistantTypingBeforeReply(activeClientId, function () {
+        if (markQuickQuestionRead) {
+          setMessageDeliveryStatus(userMessageId, "read");
+        }
         buildWhereIsOrderAutoReplyPayload({ phone: phoneCandidate })
           .then(function (payload) {
             pushAssistantAutoReply(
@@ -8827,12 +8916,15 @@
             );
           })
           .catch(function () {});
-      }, 420);
+      });
       return;
     }
 
     if (isWhereIsOrderHotQuestion(normalized)) {
-      window.setTimeout(function () {
+      emulateAssistantTypingBeforeReply(activeClientId, function () {
+        if (markQuickQuestionRead) {
+          setMessageDeliveryStatus(userMessageId, "read");
+        }
         buildWhereIsOrderAutoReplyPayload()
           .then(function (payload) {
             pushAssistantAutoReply(
@@ -8843,7 +8935,7 @@
             );
           })
           .catch(function () {});
-      }, 420);
+      });
       return;
     }
 
@@ -8855,9 +8947,12 @@
     if (quickReply && quickReply.text) {
       const suffixSource = String(quickReply.id || "custom");
       const suffixSafe = suffixSource.replace(/[^\w-]+/g, "").slice(0, 32) || "custom";
-      window.setTimeout(function () {
+      emulateAssistantTypingBeforeReply(activeClientId, function () {
+        if (markQuickQuestionRead) {
+          setMessageDeliveryStatus(userMessageId, "read");
+        }
         pushAssistantAutoReply(activeClientId, quickReply.text, "quick-" + suffixSafe);
-      }, 360);
+      });
       return;
     }
   }
@@ -8890,10 +8985,13 @@
     hideContextMenu();
     hideReactionBar();
     hideEmojiPopover();
-    pushLiveMessage("user", trimmed, { replyTo: replySnapshot, attachment: attachment });
+    const userMessageId = pushLiveMessage("user", trimmed, { replyTo: replySnapshot, attachment: attachment });
     playOutgoingMessageSendTone();
     if (trimmed) {
-      scheduleAssistantHotQuestionReply(trimmed);
+      scheduleAssistantHotQuestionReply(trimmed, {
+        quickQuestion: opts.quickQuestion === true,
+        userMessageId: String(userMessageId || ""),
+      });
     }
     stopLocalTypingSession({ flush: true });
     clearReplyDraft();
@@ -9153,19 +9251,108 @@
     return sent;
   }
 
-  async function sendImageAttachments(files, options) {
+  function buildOptimisticImageAttachmentFromFile(file) {
+    if (!(file instanceof File)) return null;
+    if (!isLikelyImageFile(file)) return null;
+    let objectUrl = "";
+    try {
+      objectUrl = URL.createObjectURL(file);
+    } catch {
+      return null;
+    }
+    return {
+      kind: "image",
+      name: String(file.name || "image"),
+      mime: String(file.type || "image/*"),
+      url: String(objectUrl || ""),
+      width: 0,
+      height: 0,
+      size: Number(file.size || 0),
+    };
+  }
+
+  async function buildInlineImageAttachmentFromFile(file) {
+    if (!(file instanceof File)) return null;
+    if (!isLikelyImageFile(file)) return null;
+    const dataUrl = await readFileAsDataUrl(file);
+    const dataUrlText = String(dataUrl || "");
+    if (!dataUrlText || dataUrlText.length > MAX_IMAGE_DATA_URL_LENGTH) return null;
+    const imageSize = await getImageSizeFromDataUrl(dataUrlText);
+    return {
+      kind: "image",
+      name: String(file.name || "image"),
+      mime: String(getDataUrlMime(dataUrlText) || file.type || "image/*"),
+      dataUrl: dataUrlText,
+      url: "",
+      width: Number(imageSize && imageSize.width || 0),
+      height: Number(imageSize && imageSize.height || 0),
+      size: Number(file.size || estimateDataUrlSizeBytes(dataUrlText)),
+    };
+  }
+
+  function sendImageAttachments(files, options) {
     if (chatRuntimeSettings.isEnabled === false) return 0;
     const list = Array.isArray(files) ? files : [];
     if (!list.length) return 0;
+    if (editingMessageId) cancelEditingMessage();
+    const opts = options || {};
+    const captionText = normalizeComposerText(opts.caption || "");
+    const replySnapshot = replyDraft && replyDraft.id
+      ? {
+          id: String(replyDraft.id),
+          sender: String(replyDraft.sender || ""),
+          text: String(replyDraft.text || ""),
+        }
+      : null;
 
-    const prepared = await Promise.all(
-      list.map(function (file) {
-        return buildImageAttachmentFromFile(file).catch(function () { return null; });
-      })
-    );
-    const attachments = prepared.filter(function (item) { return !!item; });
+    const tasks = [];
+    let sent = 0;
+    list.forEach(function (file) {
+      const optimisticAttachment = buildOptimisticImageAttachmentFromFile(file);
+      if (!optimisticAttachment) return;
+      const messageId = pushLiveMessage("user", sent === 0 ? captionText : "", {
+        replyTo: sent === 0 ? replySnapshot : null,
+        attachment: optimisticAttachment,
+        persistRemote: false,
+      });
+      sent += 1;
+      tasks.push({ messageId: String(messageId || ""), file: file, previewUrl: String(optimisticAttachment.url || "") });
+    });
+    if (!sent) return 0;
 
-    return sendPreparedImageAttachments(attachments, options);
+    stopLocalTypingSession({ flush: true });
+    hideContextMenu();
+    hideReactionBar();
+    hideEmojiPopover();
+    clearReplyDraft();
+    playOutgoingMessageSendTone();
+
+    Promise.allSettled(tasks.map(async function (task) {
+      if (!task || !task.messageId || !(task.file instanceof File)) return;
+      let finalAttachment = null;
+      try {
+        finalAttachment = await uploadSharedImageAttachment(task.file);
+      } catch {}
+      if (!isImageAttachment(finalAttachment)) {
+        try {
+          finalAttachment = await buildInlineImageAttachmentFromFile(task.file);
+        } catch {}
+      }
+      if (!isImageAttachment(finalAttachment)) return;
+
+      const nextSrc = String(getAttachmentImageSrc(finalAttachment) || "");
+      updateMessageAttachmentById(task.messageId, finalAttachment);
+      if (task.previewUrl && task.previewUrl !== nextSrc) {
+        try { URL.revokeObjectURL(task.previewUrl); } catch {}
+      }
+      const entry = findMessageEntry(task.messageId);
+      if (!entry) return;
+      enqueueSharedMutation(function () {
+        return remoteCreateSharedMessage(entry);
+      });
+    })).catch(function () {});
+
+    return sent;
   }
 
   async function openAttachPreviewFromFiles(files, options) {
@@ -9239,7 +9426,7 @@
       attachPreviewSendBtn.disabled = true;
       try {
         const sent = sourceFiles.length
-          ? await sendImageAttachments(sourceFiles, { caption: caption })
+          ? sendImageAttachments(sourceFiles, { caption: caption })
           : sendPreparedImageAttachments(attachPreviewItems, { caption: caption });
         if (sent > 0) {
           closeAttachPreview({ clearCaption: true });
@@ -9620,7 +9807,7 @@
 
     const quickButton = event.target.closest("[data-quick-label]");
     if (quickButton) {
-      sendUserMessage(quickButton.dataset.quickLabel || "");
+      sendUserMessage(quickButton.dataset.quickLabel || "", { quickQuestion: true });
       return;
     }
 
