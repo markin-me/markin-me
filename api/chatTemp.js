@@ -2761,12 +2761,15 @@ async function querySummaryRows(
     .map((id) => normalizeClientId(id))
     .filter(Boolean);
   const idsClause = ids.length ? ` AND t.client_id IN (${ids.map(() => "?").join(",")})` : "";
+  const messageIdsClause = ids.length ? ` AND client_id IN (${ids.map(() => "?").join(",")})` : "";
   const hasPagination = !ids.length
     && Number.isFinite(Number(limit))
     && Number.isFinite(Number(offset));
   const paginationClause = hasPagination ? " LIMIT ? OFFSET ?" : "";
 
-  const params = [tenantId, tenantId];
+  const params = [tenantId];
+  if (ids.length) params.push(...ids);
+  params.push(tenantId);
   if (ids.length) params.push(...ids);
   if (hasPagination) {
     params.push(
@@ -2780,8 +2783,8 @@ async function querySummaryRows(
       SELECT
         t.client_id,
         t.updated_at,
-        t.meta_name,
-        t.meta_phone,
+        COALESCE(NULLIF(TRIM(t.meta_name), ''), NULLIF(TRIM(c.name), '')) AS meta_name,
+        COALESCE(NULLIF(TRIM(t.meta_phone), ''), NULLIF(TRIM(c.phone), '')) AS meta_phone,
         t.meta_last_welcome_day,
         COALESCE(s.message_count, 0) AS message_count,
         COALESCE(s.unread_count, 0) AS unread_count,
@@ -2789,6 +2792,9 @@ async function querySummaryRows(
         m.text AS last_message_text,
         m.attachment_json AS last_attachment_json
       FROM chat_threads t
+      LEFT JOIN cust_customers c
+        ON c.tenant_id = t.tenant_id
+       AND c.id = t.client_id
       LEFT JOIN (
         SELECT
           tenant_id,
@@ -2806,7 +2812,7 @@ async function querySummaryRows(
             END
           ) AS unread_count
         FROM chat_messages
-        WHERE tenant_id = ?
+        WHERE tenant_id = ?${messageIdsClause}
         GROUP BY tenant_id, client_id
       ) s
         ON s.tenant_id = t.tenant_id AND s.client_id = t.client_id
@@ -2821,6 +2827,119 @@ async function querySummaryRows(
     params
   );
   return rows || [];
+}
+
+async function querySummaryRowsForPage(tenantId, { limit, offset } = {}) {
+  await ensureChatCoreIndexes().catch(() => {});
+  const safeLimit = parsePositiveInt(
+    limit,
+    CHAT_SUMMARIES_PAGE_DEFAULT_LIMIT,
+    1,
+    CHAT_SUMMARIES_PAGE_MAX_LIMIT
+  );
+  const safeOffset = Math.max(0, Math.trunc(Number(offset) || 0));
+
+  const [threadRows] = await db.query(
+    `
+      SELECT
+        chat_threads.client_id,
+        chat_threads.updated_at,
+        COALESCE(NULLIF(TRIM(chat_threads.meta_name), ''), NULLIF(TRIM(cust.name), '')) AS meta_name,
+        COALESCE(NULLIF(TRIM(chat_threads.meta_phone), ''), NULLIF(TRIM(cust.phone), '')) AS meta_phone,
+        chat_threads.meta_last_welcome_day
+      FROM chat_threads
+      LEFT JOIN cust_customers cust
+        ON cust.tenant_id = chat_threads.tenant_id
+       AND cust.id = chat_threads.client_id
+      WHERE chat_threads.tenant_id = ?
+      ORDER BY chat_threads.updated_at DESC, chat_threads.client_id DESC
+      LIMIT ? OFFSET ?
+    `,
+    [tenantId, safeLimit, safeOffset]
+  );
+
+  const rows = Array.isArray(threadRows) ? threadRows : [];
+  const clientIds = rows
+    .map((row) => normalizeClientId(row?.client_id))
+    .filter(Boolean);
+  if (!clientIds.length) return [];
+
+  const clientPlaceholders = clientIds.map(() => "?").join(",");
+  const [aggregateRows] = await db.query(
+    `
+      SELECT
+        client_id,
+        MAX(id) AS last_message_id,
+        COUNT(*) AS message_count,
+        SUM(
+          CASE
+            WHEN direction = 'in'
+              AND is_read = 0
+              AND message_id NOT LIKE 'assistant-auto-%'
+              AND message_id NOT LIKE 'daily-welcome-%'
+            THEN 1
+            ELSE 0
+          END
+        ) AS unread_count
+      FROM chat_messages
+      WHERE tenant_id = ? AND client_id IN (${clientPlaceholders})
+      GROUP BY client_id
+    `,
+    [tenantId, ...clientIds]
+  );
+
+  const aggregateByClient = new Map();
+  const lastMessageIds = [];
+  (Array.isArray(aggregateRows) ? aggregateRows : []).forEach((row) => {
+    const clientIdKey = normalizeClientId(row?.client_id);
+    if (!clientIdKey) return;
+    const messageCount = Number(row?.message_count || 0);
+    const unreadCount = Number(row?.unread_count || 0);
+    const lastMessageId = Number(row?.last_message_id || 0);
+    aggregateByClient.set(clientIdKey, {
+      message_count: Number.isFinite(messageCount) && messageCount > 0 ? Math.trunc(messageCount) : 0,
+      unread_count: Number.isFinite(unreadCount) && unreadCount > 0 ? Math.trunc(unreadCount) : 0,
+      last_message_id: Number.isFinite(lastMessageId) && lastMessageId > 0 ? Math.trunc(lastMessageId) : 0,
+    });
+    if (lastMessageId > 0) lastMessageIds.push(lastMessageId);
+  });
+
+  const lastMessageByClient = new Map();
+  if (lastMessageIds.length) {
+    const messagePlaceholders = lastMessageIds.map(() => "?").join(",");
+    const [lastMessageRows] = await db.query(
+      `
+        SELECT
+          id,
+          client_id,
+          created_at,
+          text,
+          attachment_json
+        FROM chat_messages
+        WHERE tenant_id = ? AND id IN (${messagePlaceholders})
+      `,
+      [tenantId, ...lastMessageIds]
+    );
+    (Array.isArray(lastMessageRows) ? lastMessageRows : []).forEach((row) => {
+      const clientIdKey = normalizeClientId(row?.client_id);
+      if (!clientIdKey) return;
+      lastMessageByClient.set(clientIdKey, row);
+    });
+  }
+
+  return rows.map((row) => {
+    const clientIdKey = normalizeClientId(row?.client_id);
+    const aggregate = clientIdKey ? aggregateByClient.get(clientIdKey) : null;
+    const lastMessage = clientIdKey ? lastMessageByClient.get(clientIdKey) : null;
+    return {
+      ...row,
+      message_count: Number(aggregate?.message_count || 0),
+      unread_count: Number(aggregate?.unread_count || 0),
+      last_message_at: lastMessage?.created_at || null,
+      last_message_text: lastMessage?.text || "",
+      last_attachment_json: lastMessage?.attachment_json || "",
+    };
+  });
 }
 
 async function listSummaries(tenantId, selectedClientIds = []) {
@@ -2861,7 +2980,7 @@ async function listSummariesPage(tenantId, { limit, offset } = {}) {
   const safeOffset = Math.max(0, Math.trunc(Number(offset) || 0));
 
   const [rows, countRows] = await Promise.all([
-    querySummaryRows(tenantId, [], { limit: safeLimit, offset: safeOffset }),
+    querySummaryRowsForPage(tenantId, { limit: safeLimit, offset: safeOffset }),
     db.query(
       `SELECT COUNT(*) AS total
          FROM chat_threads

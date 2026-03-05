@@ -7688,6 +7688,20 @@ body.page-shop .shop-company-chat-btn:hover{
   margin-bottom: 3px;
 }
 
+/* Keep author label readable above image-only bubbles */
+.shop-company-chat-bubble.has-attachment-only .shop-company-chat-author{
+  display: block;
+  margin: 0;
+  padding: 7px 10px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shop-company-chat-row.is-user .shop-company-chat-bubble.has-attachment-only .shop-company-chat-author{
+  color: rgba(255, 255, 255, 0.9);
+}
+
 .shop-company-chat-reply-snippet{
   margin-bottom: 8px;
   border-radius: 10px;

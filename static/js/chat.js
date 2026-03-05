@@ -1153,6 +1153,8 @@
 
     if (changed || options.forceRender) {
       renderChatHeader();
+      // Order cards are rendered inside message bubbles, so refresh the thread view too.
+      renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
     }
     return changed;
   }
@@ -8717,6 +8719,11 @@
       const remoteTotal = Number.isFinite(remoteTotalRaw) && remoteTotalRaw >= 0 ? Math.trunc(remoteTotalRaw) : 0;
       const remoteHasMoreFlag = remotePage?.hasMore === true;
 
+      if (adminRows.length === 0 && remoteRows.length === 0 && !reset) {
+        activePager.hasMore = false;
+        return false;
+      }
+
       activePager.adminOffset += adminRows.length;
       activePager.remoteOffset += remoteRows.length;
       activePager.adminTotal = adminTotal;
@@ -8827,6 +8834,8 @@
       })
       .finally(() => {
         state.clientsLoadInFlight = null;
+        // If first page doesn't fill the viewport, continue paging in background.
+        maybeLoadMoreClientsByScroll();
       });
     return state.clientsLoadInFlight;
   }
