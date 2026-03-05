@@ -1,10 +1,16 @@
-<div class="panel orders-stages">
-  <div class="panel-header">
-    <div class="panel-title">Этапы</div>
-  </div>
+<div id="ordersLeftPane">
+  <div class="panel orders-stages">
+    <div class="panel-header">
+      <div class="panel-title">Этапы</div>
+    </div>
 
-  <div class="panel-body no-scrollbar">
-    <!-- JS отрисует сюда: "Все" + статусы с бейджами -->
-    <div class="stage-list" id="ordersStagesList"></div>
+    <div class="panel-body no-scrollbar">
+      <!-- JS отрисует сюда: "Все" + статусы с бейджами -->
+      <div class="stage-list" id="ordersStagesList"></div>
+    </div>
   </div>
+</div>
+
+<div class="hidden" id="ordersCheckoutLeftPane">
+  <%- include('../new-order/left') %>
 </div>

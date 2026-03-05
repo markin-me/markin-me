@@ -16095,7 +16095,12 @@ function setBottomNavActive(tab) {
       if (showInlineNameInCheckoutForm) wrap.appendChild(nameRow);
     }
 
-    const methods = (cfg.methods || []).map(x => ({ code: x.code, title: x.title, icon: x.icon }));
+    const methods = (cfg.methods || []).map((x) => ({
+      code: x.code,
+      title: x.title,
+      icon: x.icon,
+      require_client_data: Number(x?.require_client_data ?? 1),
+    }));
     const methodUserSelected = Boolean(draft.method_user_selected);
     // Determine preferred method: from draft, or from delivery mode toggle
     let preferredMethodCode = methodUserSelected ? draft.method_code : null;
@@ -16113,6 +16118,11 @@ function setBottomNavActive(tab) {
       preferredMethodCode = "delivery";
     }
     const methodDefault = pickDefaultCode(methods, preferredMethodCode, "takeaway");
+    const isMethodClientDataRequired = (methodCode) => {
+      const code = String(methodCode || methodDefault || "").trim();
+      const methodMeta = methods.find((m) => m.code === code) || null;
+      return Number(methodMeta?.require_client_data ?? 1) !== 0;
+    };
 
     function createOptionIconElement(iconRaw, fallback) {
       const resolvedIcon = String(iconRaw || "").trim() || String(fallback || "").trim() || "fas fa-circle";
@@ -18005,8 +18015,18 @@ function setBottomNavActive(tab) {
       };
 
       const isAuthed = !!(getCustomerToken() && me);
+      const requireClientData = isMethodClientDataRequired(payload.method_code);
 
-      if (!payload.customer_name || isPlaceholderCustomerName(payload.customer_name)) {
+      if (!requireClientData) {
+        if (!str(payload.customer_name).trim() || isPlaceholderCustomerName(payload.customer_name)) {
+          payload.customer_name = null;
+        }
+        if (!str(payload.customer_phone).trim()) {
+          payload.customer_phone = null;
+        }
+      }
+
+      if (requireClientData && (!payload.customer_name || isPlaceholderCustomerName(payload.customer_name))) {
         if (typeof showToast === "function") showToast("Введите имя");
         if (mobileNameInput && typeof mobileNameInput.classList?.add === "function") {
           mobileNameInput.classList.add("is-invalid");
@@ -18031,10 +18051,17 @@ function setBottomNavActive(tab) {
       }
 
       if (!isAuthed) {
-        const normPhone = normalizePhone(payload.customer_phone);
-        if (!normPhone || normPhone.length !== 11 || !normPhone.startsWith("7")) {
+        const rawPhone = str(payload.customer_phone).trim();
+        const hasPhone = !!rawPhone;
+        const normPhone = hasPhone ? normalizePhone(rawPhone) : null;
+        if ((requireClientData || hasPhone) && (!normPhone || normPhone.length !== 11 || !normPhone.startsWith("7"))) {
           alert("Введите телефон (РФ): +7XXXXXXXXXX");
           return;
+        }
+        if (normPhone) {
+          payload.customer_phone = `+${normPhone}`;
+        } else if (!requireClientData) {
+          payload.customer_phone = null;
         }
       }
 
@@ -18074,7 +18101,7 @@ function setBottomNavActive(tab) {
 
       setCheckoutSubmitting(true);
 
-      if (isAuthed && needsNameCompletion) {
+      if (isAuthed && needsNameCompletion && requireClientData && payload.customer_name) {
         try {
           await apiJson("/api/public/me", { method: "PUT", body: { name: payload.customer_name } });
         } catch (e) {

@@ -9,6 +9,7 @@
   const checkoutContentEl = document.getElementById("newOrderCheckoutContent");
   const checkoutAddCategoryBtnEl = document.getElementById("newOrderCheckoutAddCategoryBtn");
   const checkoutBlockChipsEl = document.getElementById("newOrderCheckoutBlockChips");
+  const newOrderToolbarEl = document.getElementById("newOrderToolbar");
   const rightTabsHeaderEl = document.getElementById("newOrderTabsHeader");
   const rightTabsEl = document.getElementById("newOrderTabs");
   const rightContentEl = document.getElementById("newOrderRightContent");
@@ -27,6 +28,132 @@
     document.head.appendChild(link);
   }
   ensureShopCssForNewOrder();
+  const UTF8_MOJIBAKE_ATTRS = ["title", "aria-label", "placeholder"];
+  const UTF8_MOJIBAKE_DECODER = typeof TextDecoder === "function"
+    ? new TextDecoder("utf-8", { fatal: true })
+    : null;
+  const UTF8_MOJIBAKE_CP1251_EXTRA = new Map([
+    [0x0402, 0x80], [0x0403, 0x81], [0x201A, 0x82], [0x0453, 0x83], [0x201E, 0x84], [0x2026, 0x85], [0x2020, 0x86], [0x2021, 0x87],
+    [0x20AC, 0x88], [0x2030, 0x89], [0x0409, 0x8A], [0x2039, 0x8B], [0x040A, 0x8C], [0x040C, 0x8D], [0x040B, 0x8E], [0x040F, 0x8F],
+    [0x0452, 0x90], [0x2018, 0x91], [0x2019, 0x92], [0x201C, 0x93], [0x201D, 0x94], [0x2022, 0x95], [0x2013, 0x96], [0x2014, 0x97],
+    [0x2122, 0x99], [0x0459, 0x9A], [0x203A, 0x9B], [0x045A, 0x9C], [0x045C, 0x9D], [0x045B, 0x9E], [0x045F, 0x9F],
+    [0x00A0, 0xA0], [0x040E, 0xA1], [0x045E, 0xA2], [0x0408, 0xA3], [0x00A4, 0xA4], [0x0490, 0xA5], [0x00A6, 0xA6], [0x00A7, 0xA7],
+    [0x0401, 0xA8], [0x00A9, 0xA9], [0x0404, 0xAA], [0x00AB, 0xAB], [0x00AC, 0xAC], [0x00AD, 0xAD], [0x00AE, 0xAE], [0x0407, 0xAF],
+    [0x00B0, 0xB0], [0x00B1, 0xB1], [0x0406, 0xB2], [0x0456, 0xB3], [0x0491, 0xB4], [0x00B5, 0xB5], [0x00B6, 0xB6], [0x00B7, 0xB7],
+    [0x0451, 0xB8], [0x2116, 0xB9], [0x0454, 0xBA], [0x00BB, 0xBB], [0x0458, 0xBC], [0x0405, 0xBD], [0x0455, 0xBE], [0x0457, 0xBF],
+  ]);
+  let utf8MojibakeObserver = null;
+  let utf8MojibakeRepairInProgress = false;
+
+  function getUtf8MojibakeScore(value) {
+    const source = String(value || "");
+    const matches = source.match(/(?:\u0420[\u0400-\u04FF\u0080-\u009F]|\u0421[\u0400-\u04FF]|\u0432[\u0400-\u04FF\u2018-\u2026\u20AC\u2116\u00B9-\u00BE]|\u0413[\u0400-\u04FF\u2013-\u2014\u00D7]|\u00D0.|\u00D1.)/gu);
+    return matches ? matches.length : 0;
+  }
+
+  function toCp1251Byte(codePoint) {
+    if (!Number.isFinite(codePoint)) return null;
+    if (codePoint <= 0x7F) return codePoint;
+    if (codePoint >= 0x0080 && codePoint <= 0x009F) return codePoint;
+    if (codePoint >= 0x0410 && codePoint <= 0x044F) return codePoint - 0x350;
+    if (codePoint >= 0x00A0 && codePoint <= 0x00BF) return codePoint;
+    return UTF8_MOJIBAKE_CP1251_EXTRA.get(codePoint) ?? null;
+  }
+
+  function encodeCp1251(value) {
+    const source = String(value || "");
+    if (!source) return new Uint8Array(0);
+    const bytes = [];
+    for (const ch of source) {
+      const byte = toCp1251Byte(ch.codePointAt(0));
+      if (byte == null) return null;
+      bytes.push(byte);
+    }
+    return Uint8Array.from(bytes);
+  }
+
+  function repairUtf8Mojibake(value) {
+    const source = String(value || "");
+    const sourceScore = getUtf8MojibakeScore(source);
+    if (!source || !sourceScore || !UTF8_MOJIBAKE_DECODER) return source;
+    const bytes = encodeCp1251(source);
+    if (!bytes) return source;
+    try {
+      const decoded = UTF8_MOJIBAKE_DECODER.decode(bytes);
+      if (!decoded || decoded === source) return source;
+      return getUtf8MojibakeScore(decoded) < sourceScore ? decoded : source;
+    } catch {
+      return source;
+    }
+  }
+
+  function repairUtf8MojibakeNode(node) {
+    if (!node) return;
+    if (node.nodeType === Node.TEXT_NODE) {
+      const current = String(node.nodeValue || "");
+      const repaired = repairUtf8Mojibake(current);
+      if (repaired !== current) node.nodeValue = repaired;
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const el = node;
+    UTF8_MOJIBAKE_ATTRS.forEach((attr) => {
+      const current = el.getAttribute(attr);
+      if (current == null) return;
+      const repaired = repairUtf8Mojibake(current);
+      if (repaired !== current) el.setAttribute(attr, repaired);
+    });
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      const repairedValue = repairUtf8Mojibake(el.value);
+      if (repairedValue !== el.value) {
+        el.value = repairedValue;
+        el.defaultValue = repairedValue;
+      }
+      const repairedPlaceholder = repairUtf8Mojibake(el.placeholder);
+      if (repairedPlaceholder !== el.placeholder) el.placeholder = repairedPlaceholder;
+    }
+    const children = el.childNodes;
+    for (let i = 0; i < children.length; i += 1) repairUtf8MojibakeNode(children[i]);
+  }
+
+  function runUtf8MojibakeRepair(fn) {
+    if (utf8MojibakeRepairInProgress) return;
+    utf8MojibakeRepairInProgress = true;
+    try {
+      fn();
+    } finally {
+      utf8MojibakeRepairInProgress = false;
+    }
+  }
+
+  function startUtf8MojibakeRepair() {
+    if (utf8MojibakeObserver || typeof MutationObserver !== "function" || !document.body) return;
+    runUtf8MojibakeRepair(() => repairUtf8MojibakeNode(document.body));
+    utf8MojibakeObserver = new MutationObserver((mutations) => {
+      runUtf8MojibakeRepair(() => {
+        mutations.forEach((mutation) => {
+          if (mutation.type === "characterData") {
+            repairUtf8MojibakeNode(mutation.target);
+            return;
+          }
+          if (mutation.type === "attributes") {
+            repairUtf8MojibakeNode(mutation.target);
+            return;
+          }
+          mutation.addedNodes.forEach((addedNode) => repairUtf8MojibakeNode(addedNode));
+        });
+      });
+    });
+    utf8MojibakeObserver.observe(document.body, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: UTF8_MOJIBAKE_ATTRS,
+    });
+  }
+
+  startUtf8MojibakeRepair();
   const CHECKOUT_SCREEN_ID = "__checkout_screen__";
   const CHECKOUT_DRAFT_CACHE_VERSION = 1;
   const CHECKOUT_DRAFT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -70,6 +197,7 @@
     rightDeliveryTypes: [],
     rightPaymentTypes: [],
     rightTimeOptions: [],
+    rightOrderStatuses: [],
     rightDeliverySettings: null,
     rightDeliverySettingsReady: false,
     rightDeliverySettingsLoading: false,
@@ -77,13 +205,19 @@
     rightPickupStores: [],
     rightClientLookupCache: new Map(),
     rightClientLookupReqSeq: 0,
+    rightClientDiscountsByClientId: new Map(),
+    rightClientDiscountsLoadingByClientId: new Set(),
     rightAddressDraftByOrder: new Map(),
     rightClientAddressesByOrder: new Map(),
     rightAddressSelectedIdByOrder: new Map(),
     rightAddressEditingIdByOrder: new Map(),
     rightCartClearConfirmUntilByOrder: new Map(),
     rightCartClearTimerByOrder: new Map(),
+    rightDiscountBreakdownOpenByOrder: new Map(),
     rightCheckoutSubmittingByOrder: new Map(),
+    tenantRounding: null,
+    tenantRoundingLoaded: false,
+    tenantRoundingPromise: null,
     productModal: {
       productId: 0,
       qty: 1,
@@ -111,6 +245,16 @@
     cacheManifest: null,
   };
 
+  let resolveLoadReady = null;
+  const loadReadyPromise = new Promise((resolve) => {
+    resolveLoadReady = resolve;
+  });
+  function markLoadReady() {
+    if (!resolveLoadReady) return;
+    resolveLoadReady();
+    resolveLoadReady = null;
+  }
+
   function isCheckoutScreenActive() {
     return String(state.activeCategoryId) === CHECKOUT_SCREEN_ID;
   }
@@ -120,19 +264,22 @@
     const icon = settingsBtnEl.querySelector("i");
     if (state.checkoutEditMode) {
       if (icon) icon.className = "fas fa-check";
-      settingsBtnEl.setAttribute("aria-label", "Сохранить черновик экрана оформления");
-      settingsBtnEl.setAttribute("title", "Сохранить черновик");
+      settingsBtnEl.setAttribute("aria-label", "РЎРѕС…СЂР°РЅРёС‚СЊ С‡РµСЂРЅРѕРІРёРє СЌРєСЂР°РЅР° РѕС„РѕСЂРјР»РµРЅРёСЏ");
+      settingsBtnEl.setAttribute("title", "РЎРѕС…СЂР°РЅРёС‚СЊ С‡РµСЂРЅРѕРІРёРє");
       if (cancelEditBtnEl) cancelEditBtnEl.classList.remove("hidden");
       return;
     }
     if (icon) icon.className = "fas fa-cog";
-    settingsBtnEl.setAttribute("aria-label", "Редактировать экран оформления");
-    settingsBtnEl.setAttribute("title", "Редактировать экран оформления");
+    settingsBtnEl.setAttribute("aria-label", "Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ СЌРєСЂР°РЅ РѕС„РѕСЂРјР»РµРЅРёСЏ");
+    settingsBtnEl.setAttribute("title", "Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ СЌРєСЂР°РЅ РѕС„РѕСЂРјР»РµРЅРёСЏ");
     if (cancelEditBtnEl) cancelEditBtnEl.classList.add("hidden");
   }
 
   function renderMainContentMode() {
     const checkoutScreenActive = isCheckoutScreenActive();
+    if (newOrderToolbarEl) {
+      newOrderToolbarEl.classList.toggle("is-checkout-screen", checkoutScreenActive);
+    }
     if (checkoutScreenActive) {
       productsGridEl.innerHTML = "";
       productsGridEl.classList.add("hidden");
@@ -171,6 +318,8 @@
       state.rightOpenSelect = null;
       resetAllRightCartClearState({ render: false });
       state.rightCheckoutSubmittingByOrder.clear();
+      state.rightDiscountBreakdownOpenByOrder.clear();
+      state.rightClientDiscountsLoadingByClientId.clear();
       closeRightAddressOverlay();
       return;
     }
@@ -180,18 +329,33 @@
       const isActive = orderId === Number(state.rightActiveOrderId || 0);
       return `
         <div class="product-tab ${isActive ? "is-active" : ""}" data-action="right-order-tab-select" data-order-id="${orderId}">
-          <span class="product-tab-title">${escapeHtml(String(order?.title || "Новый заказ"))}</span>
-          <button class="product-tab-close" type="button" data-action="right-order-tab-close" data-order-id="${orderId}" aria-label="Закрыть">×</button>
+          <span class="product-tab-title">${escapeHtml(String(order?.title || "РќРѕРІС‹Р№ Р·Р°РєР°Р·"))}</span>
+          <button class="product-tab-close" type="button" data-action="right-order-tab-close" data-order-id="${orderId}" aria-label="Р—Р°РєСЂС‹С‚СЊ">×</button>
         </div>
       `;
     }).join("");
     rightContentEl.classList.remove("hidden");
-    if (rightTabsHeaderEl) rightTabsHeaderEl.classList.remove("hidden");
-    if (rightEmptyEl) rightEmptyEl.classList.add("hidden");
-
     const active = orders.find((order) => Number(order?.id || 0) === Number(state.rightActiveOrderId || 0)) || orders[0];
     state.rightActiveOrderId = Number(active?.id || 0) || null;
+    const activeMode = String(active?.mode || "add").toLowerCase();
+    const isEditCheckout = activeMode === "edit" && Number(active?.editOrderId || 0) > 0;
+    if (rightTabsHeaderEl) {
+      rightTabsHeaderEl.classList.toggle("hidden", isEditCheckout);
+    }
+    if (rightEmptyEl) rightEmptyEl.classList.add("hidden");
     const form = active?.form || {};
+    const activeClientId = Number(form?.clientId || 0);
+    if (
+      activeClientId > 0
+      && !state.rightClientDiscountsByClientId.has(activeClientId)
+      && !state.rightClientDiscountsLoadingByClientId.has(activeClientId)
+    ) {
+      void ensureRightClientDiscountsLoaded(activeClientId).then(() => {
+        if (Number(state.rightActiveOrderId || 0) === Number(active?.id || 0)) {
+          renderRightOrderTabs();
+        }
+      });
+    }
     const cartSummary = getRightOrderCheckoutSummary(active);
     const cartItems = cartSummary.cartItems;
     const orderPayableTotal = cartSummary.payableTotal;
@@ -200,12 +364,91 @@
       ? `Бесплатная доставка <i class="fas fa-check shop-delivery-check" aria-hidden="true"></i>`
       : `${cartSummary.deliveryCost > 0 ? `Доставка <strong>${escapeHtml(toMoney(cartSummary.deliveryCost))}</strong>. ` : ""}Ещё <strong>${escapeHtml(toMoney(cartSummary.leftForFree))}</strong> до бесплатной доставки`;
     const clearArmedUntil = Number(state.rightCartClearConfirmUntilByOrder.get(Number(active?.id || 0)) || 0);
-    const clearArmed = clearArmedUntil > Date.now() && cartItems.length > 0;
+    const clearActionEnabled = isEditCheckout || cartItems.length > 0;
+    const clearArmed = clearArmedUntil > Date.now() && clearActionEnabled;
     if (clearArmedUntil > 0 && !clearArmed) {
       resetRightCartClearState(Number(active?.id || 0), { render: false });
     }
+    const clearBtnClass = isEditCheckout
+      ? `shop-cart-clear is-edit-cancel ${clearArmed ? "is-confirm" : ""}`
+      : `shop-cart-clear ${clearArmed ? "is-confirm" : ""}`;
+    const clearBtnTitle = isEditCheckout
+      ? (clearArmed ? "\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c \u043e\u0442\u043c\u0435\u043d\u0443 \u0440\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f" : "\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c \u0440\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435")
+      : "\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c \u043a\u043e\u0440\u0437\u0438\u043d\u0443";
+    const clearBtnLabel = clearBtnTitle;
+    const clearBtnText = isEditCheckout
+      ? (clearArmed ? "\u041e\u0442\u043c\u0435\u043d\u0430" : `<i class="fas fa-arrow-left" aria-hidden="true"></i>`)
+      : (clearArmed ? "\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c" : "\u00d7");
     const checkoutSubmitting = Boolean(state.rightCheckoutSubmittingByOrder.get(Number(active?.id || 0)));
+    const checkoutActionLabel = isEditCheckout
+      ? "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c"
+      : "\u041e\u0444\u043e\u0440\u043c\u0438\u0442\u044c";
+    const checkoutSubmittingLabel = isEditCheckout
+      ? "\u0421\u043e\u0445\u0440\u0430\u043d\u044f\u0435\u043c..."
+      : "\u041e\u0442\u043f\u0440\u0430\u0432\u043b\u044f\u0435\u043c...";
     const checkoutDisabled = checkoutSubmitting || !cartItems.length;
+    const activeOrderStatuses = (Array.isArray(state.rightOrderStatuses) ? state.rightOrderStatuses : [])
+      .filter((item) => Number(item?.id || 0) > 0);
+    const currentOrderStatusId = Number(form.orderStatusId || 0);
+    const currentOrderStatusTitle = String(form.orderStatusTitle || form.orderStatusInitialTitle || "").trim();
+    const defaultOrderStatusId = Number(activeOrderStatuses[0]?.id || 0);
+    const resolvedOrderStatusId = currentOrderStatusId > 0
+      ? currentOrderStatusId
+      : (defaultOrderStatusId > 0 ? defaultOrderStatusId : 0);
+    if (isEditCheckout && resolvedOrderStatusId > 0 && currentOrderStatusId <= 0) {
+      updateRightOrderFormField(Number(active?.id || 0), "orderStatusId", resolvedOrderStatusId);
+    }
+    if (isEditCheckout && resolvedOrderStatusId > 0 && Number(form.orderStatusInitialId || 0) <= 0) {
+      updateRightOrderFormField(Number(active?.id || 0), "orderStatusInitialId", resolvedOrderStatusId);
+    }
+    const selectedOrderStatusMeta = activeOrderStatuses.find((item) => Number(item?.id || 0) === resolvedOrderStatusId) || null;
+    if (isEditCheckout && selectedOrderStatusMeta) {
+      const selectedOrderStatusTitle = String(selectedOrderStatusMeta?.title || "").trim();
+      if (selectedOrderStatusTitle && selectedOrderStatusTitle !== currentOrderStatusTitle) {
+        updateRightOrderFormField(Number(active?.id || 0), "orderStatusTitle", selectedOrderStatusTitle);
+      }
+    }
+    const statusIsOpen = isEditCheckout
+      && Number(state.rightOpenSelect?.orderId || 0) === Number(active?.id || 0)
+      && String(state.rightOpenSelect?.field || "") === "orderStatusId";
+    const statusCurrentLabel = String(selectedOrderStatusMeta?.title || currentOrderStatusTitle || "\u0421\u0442\u0430\u0442\u0443\u0441").trim();
+    const statusMenuItemsHtml = activeOrderStatuses.length
+      ? activeOrderStatuses.map((status) => `
+                <button
+                  type="button"
+                  class="new-order-right-select-option ${Number(status?.id || 0) === resolvedOrderStatusId ? "is-selected" : ""}"
+                  data-action="right-select-option"
+                  data-order-id="${Number(active?.id || 0)}"
+                  data-field="orderStatusId"
+                  data-value="${Number(status?.id || 0)}"
+                >${escapeHtml(String(status?.title || "").trim())}</button>
+              `).join("")
+      : `
+              <button
+                type="button"
+                class="new-order-right-select-option is-selected"
+                disabled
+              >${escapeHtml(statusCurrentLabel)}</button>
+            `;
+    const statusSelectHtml = isEditCheckout ? `
+          <div class="new-order-right-select-wrap new-order-right-footer-status-wrap is-drop-up ${statusIsOpen ? "is-open" : ""}">
+            <button
+              type="button"
+              class="new-order-right-select-trigger new-order-right-footer-status-trigger"
+              data-action="right-select-toggle"
+              data-order-id="${Number(active?.id || 0)}"
+              data-field="orderStatusId"
+            >
+              <span>${escapeHtml(statusCurrentLabel)}</span>
+              <i class="fas fa-chevron-down"></i>
+            </button>
+            ${statusIsOpen ? `
+            <div class="new-order-right-select-menu no-scrollbar">
+              ${statusMenuItemsHtml}
+            </div>
+            ` : ""}
+          </div>
+    ` : "";
     const rightFooterHtml = `
       <div class="shop-cart-delivery-progress ${cartSummary.showDeliveryProgress ? "" : "hidden"}">
         <div class="shop-cart-delivery-progress-bar" role="progressbar" aria-valuenow="${deliveryProgressAriaValue}" aria-valuemin="0" aria-valuemax="100">
@@ -216,13 +459,13 @@
       <div class="shop-cart-footer">
         <div class="shop-cart-footer-actions">
           <button
-            class="shop-cart-clear ${clearArmed ? "is-confirm" : ""}"
+            class="${clearBtnClass}"
             data-action="right-cart-clear"
             data-order-id="${Number(active?.id || 0)}"
             type="button"
-            title="Очистить корзину"
-            aria-label="Очистить корзину"
-          >${clearArmed ? "Очистить" : "×"}</button>
+            title="${clearBtnTitle}"
+            aria-label="${clearBtnLabel}"
+          >${clearBtnText}</button>
           <button
             class="shop-checkout-btn"
             data-action="right-cart-checkout"
@@ -230,9 +473,10 @@
             type="button"
             ${checkoutDisabled ? "disabled" : ""}
           >${checkoutSubmitting
-            ? "Отправляем..."
-            : `Оформить · <span class="shop-checkout-total">${escapeHtml(toMoney(orderPayableTotal))}</span>`
+            ? checkoutSubmittingLabel
+            : `${checkoutActionLabel} · <span class="shop-checkout-total">${escapeHtml(toMoney(orderPayableTotal))}</span>`
           }</button>
+          ${statusSelectHtml}
         </div>
       </div>
     `;
@@ -295,7 +539,7 @@
       scheduledDate: { [resolvedDate]: formatDateHuman(resolvedDate) },
       dateTime: Object.fromEntries(timeSlots.map((t) => [t, t])),
       paymentMethod: paymentMethodLabels,
-      changeType: { no_change: "Сдача не нужна", "500": "500", "1000": "1000", "2000": "2000", "5000": "5000", other: "Другая сумма" },
+      changeType: { no_change: "РЎРґР°С‡Р° РЅРµ РЅСѓР¶РЅР°", "500": "500", "1000": "1000", "2000": "2000", "5000": "5000", other: "Р”СЂСѓРіР°СЏ СЃСѓРјРјР°" },
     };
     const options = {
       pickupMethod: pickupMethodOptions,
@@ -311,7 +555,7 @@
       return `
         <div class="new-order-right-select-wrap ${isOpen ? "is-open" : ""}">
           <button type="button" class="new-order-right-select-trigger" data-action="right-select-toggle" data-order-id="${orderId}" data-field="${field}">
-            <span>${escapeHtml(labels[field]?.[value] || value || "Выбрать")}</span>
+            <span>${escapeHtml(labels[field]?.[value] || value || "Р’С‹Р±СЂР°С‚СЊ")}</span>
             <i class="fas fa-chevron-down"></i>
           </button>
           ${isOpen ? `
@@ -326,6 +570,12 @@
         </div>
       `;
     };
+    const rightSummaryHtml = buildRightOrderSummaryCardHtml(
+      active,
+      cartSummary,
+      labels.paymentMethod?.[selectValues.paymentMethod] || selectValues.paymentMethod || "",
+      selectValues.paymentMethod
+    );
     const renderCartThumb = (item) => {
       const photos = Array.isArray(item?.photos) ? item.photos.filter(Boolean).slice(0, 4) : [];
       if (!photos.length) return `<span class="new-order-right-cart-thumb-placeholder"><i class="fas fa-image"></i></span>`;
@@ -346,25 +596,25 @@
       <div class="new-order-right-form" data-order-id="${Number(active?.id || 0)}" autocomplete="off">
         <div class="new-order-right-form-row">
           <label class="new-order-right-form-field">
-            <span class="new-order-right-form-label">Номер телефона</span>
+            <span class="new-order-right-form-label">РќРѕРјРµСЂ С‚РµР»РµС„РѕРЅР°</span>
             <input class="control new-order-right-phone" type="text" inputmode="tel" value="${escapeHtml(formatPhoneRuInput(String(form.phone || "")))}" data-action="right-input-change" data-order-id="${Number(active?.id || 0)}" data-field="phone" placeholder="+7 (999) 999-99-99" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" readonly data-no-autofill="1" name="noaf_phone_${Number(active?.id || 0)}" />
           </label>
           <label class="new-order-right-form-field">
-            <span class="new-order-right-form-label">Имя</span>
-            <input class="control" type="text" value="${escapeHtml(String(form.name || ""))}" data-action="right-input-change" data-order-id="${Number(active?.id || 0)}" data-field="name" placeholder="Имя клиента" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" readonly data-no-autofill="1" name="noaf_name_${Number(active?.id || 0)}" />
+            <span class="new-order-right-form-label">РРјСЏ</span>
+            <input class="control" type="text" value="${escapeHtml(String(form.name || ""))}" data-action="right-input-change" data-order-id="${Number(active?.id || 0)}" data-field="name" placeholder="РРјСЏ РєР»РёРµРЅС‚Р°" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" readonly data-no-autofill="1" name="noaf_name_${Number(active?.id || 0)}" />
           </label>
         </div>
 
         <div class="new-order-right-form-row">
           <div class="new-order-right-form-field">
-            <span class="new-order-right-form-label">Способ получения</span>
+            <span class="new-order-right-form-label">РЎРїРѕСЃРѕР± РїРѕР»СѓС‡РµРЅРёСЏ</span>
             ${renderSelect("pickupMethod", Number(active?.id || 0))}
           </div>
           <label class="new-order-right-form-field">
-            <span class="new-order-right-form-label">Адрес</span>
+            <span class="new-order-right-form-label">РђРґСЂРµСЃ</span>
             <span class="new-order-right-address-wrap">
-              <input class="control" type="text" value="${escapeHtml(String(form.address || ""))}" data-action="right-input-change" data-order-id="${Number(active?.id || 0)}" data-field="address" placeholder="Введите адрес" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" readonly data-no-autofill="1" name="noaf_address_${Number(active?.id || 0)}" />
-              <button type="button" class="new-order-right-address-edit" title="Добавить адрес" aria-label="Добавить адрес">
+              <input class="control" type="text" value="${escapeHtml(String(form.address || ""))}" data-action="right-input-change" data-order-id="${Number(active?.id || 0)}" data-field="address" placeholder="Р’РІРµРґРёС‚Рµ Р°РґСЂРµСЃ" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" readonly data-no-autofill="1" name="noaf_address_${Number(active?.id || 0)}" />
+              <button type="button" class="new-order-right-address-edit" title="Р”РѕР±Р°РІРёС‚СЊ Р°РґСЂРµСЃ" aria-label="Р”РѕР±Р°РІРёС‚СЊ Р°РґСЂРµСЃ">
                 <i class="fas fa-pen"></i>
               </button>
             </span>
@@ -373,26 +623,26 @@
 
         <div class="new-order-right-form-row ${cookWhenKind !== "asap" ? "is-three-cols" : ""}">
           <div class="new-order-right-form-field">
-            <span class="new-order-right-form-label">Когда приготовить</span>
+            <span class="new-order-right-form-label">РљРѕРіРґР° РїСЂРёРіРѕС‚РѕРІРёС‚СЊ</span>
             ${renderSelect("cookWhen", Number(active?.id || 0))}
           </div>
           ${cookWhenKind === "asap" ? `
             <div class="new-order-right-form-field">
-              <span class="new-order-right-form-label">Дата и время</span>
-              <div class="new-order-right-time-hint is-single"><span>40-80 мин</span></div>
+              <span class="new-order-right-form-label">Р”Р°С‚Р° Рё РІСЂРµРјСЏ</span>
+              <div class="new-order-right-time-hint is-single"><span>40-80 РјРёРЅ</span></div>
             </div>
           ` : cookWhenKind === "at_time" ? `
             <div class="new-order-right-form-field">
-              <span class="new-order-right-form-label">Дата</span>
-              <button type="button" class="new-order-right-select-trigger is-static" disabled><span>Сегодня</span></button>
+              <span class="new-order-right-form-label">Р”Р°С‚Р°</span>
+              <button type="button" class="new-order-right-select-trigger is-static" disabled><span>РЎРµРіРѕРґРЅСЏ</span></button>
             </div>
             <div class="new-order-right-form-field">
-              <span class="new-order-right-form-label">Время</span>
+              <span class="new-order-right-form-label">Р’СЂРµРјСЏ</span>
               ${renderSelect("dateTime", Number(active?.id || 0))}
             </div>
           ` : `
             <div class="new-order-right-form-field">
-              <span class="new-order-right-form-label">Дата</span>
+              <span class="new-order-right-form-label">Р”Р°С‚Р°</span>
               <div class="new-order-right-select-wrap ${Number(state.rightOpenSelect?.orderId || 0) === Number(active?.id || 0) && String(state.rightOpenSelect?.field || "") === "scheduledDate" ? "is-open" : ""}">
                 <button type="button" class="new-order-right-select-trigger" data-action="right-select-toggle" data-order-id="${Number(active?.id || 0)}" data-field="scheduledDate">
                   <span>${escapeHtml(formatDateHuman(selectValues.scheduledDate))}</span>
@@ -405,7 +655,7 @@
               </div>
             </div>
             <div class="new-order-right-form-field">
-              <span class="new-order-right-form-label">Время</span>
+              <span class="new-order-right-form-label">Р’СЂРµРјСЏ</span>
               ${renderSelect("dateTime", Number(active?.id || 0))}
             </div>
           `}
@@ -413,12 +663,12 @@
 
         <div class="new-order-right-form-row ${isCashPayment && String(selectValues.changeType) === "other" ? "is-payment-three-cols" : ""}">
           <div class="new-order-right-form-field">
-            <span class="new-order-right-form-label">Способ оплаты</span>
+            <span class="new-order-right-form-label">РЎРїРѕСЃРѕР± РѕРїР»Р°С‚С‹</span>
             ${renderSelect("paymentMethod", Number(active?.id || 0))}
           </div>
           ${isCashPayment ? `
             <div class="new-order-right-form-field">
-              <span class="new-order-right-form-label">Сдача</span>
+              <span class="new-order-right-form-label">РЎРґР°С‡Р°</span>
               ${String(selectValues.changeType) === "other" ? `
                 ${renderSelect("changeType", Number(active?.id || 0))}
               ` : renderSelect("changeType", Number(active?.id || 0))}
@@ -426,7 +676,7 @@
           ` : `<div class="new-order-right-form-field"></div>`}
           ${isCashPayment && String(selectValues.changeType) === "other" ? `
             <div class="new-order-right-form-field">
-              <span class="new-order-right-form-label">Сумма</span>
+              <span class="new-order-right-form-label">РЎСѓРјРјР°</span>
               <input
                 class="control new-order-right-change-input"
                 type="number"
@@ -436,7 +686,7 @@
                 data-action="right-input-change"
                 data-order-id="${Number(active?.id || 0)}"
                 data-field="changeAmount"
-                placeholder="Больше ${escapeHtml(String(roundPrice(orderPayableTotal)))}"
+                placeholder="Р‘РѕР»СЊС€Рµ ${escapeHtml(String(roundPrice(orderPayableTotal)))}"
                 autocomplete="new-password"
                 autocorrect="off"
                 autocapitalize="off"
@@ -450,8 +700,8 @@
         </div>
 
         <label class="new-order-right-form-field is-comment">
-          <span class="new-order-right-form-label">Комментарий</span>
-          <textarea class="control new-order-right-comment" data-action="right-input-change" data-order-id="${Number(active?.id || 0)}" data-field="comment" placeholder="Введите комментарий к заказу" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" readonly data-no-autofill="1" name="noaf_comment_${Number(active?.id || 0)}">${escapeHtml(String(form.comment || ""))}</textarea>
+          <span class="new-order-right-form-label">РљРѕРјРјРµРЅС‚Р°СЂРёР№</span>
+          <textarea class="control new-order-right-comment" data-action="right-input-change" data-order-id="${Number(active?.id || 0)}" data-field="comment" placeholder="Р’РІРµРґРёС‚Рµ РєРѕРјРјРµРЅС‚Р°СЂРёР№ Рє Р·Р°РєР°Р·Сѓ" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" readonly data-no-autofill="1" name="noaf_comment_${Number(active?.id || 0)}">${escapeHtml(String(form.comment || ""))}</textarea>
         </label>
 
         <div class="new-order-right-divider"></div>
@@ -469,7 +719,7 @@
               const discountPercent = hasDiscount && oldSum > 0
                 ? Math.max(1, Math.round(((oldSum - sum) / oldSum) * 100))
                 : 0;
-              const title = String(item?.name || (type === "combo" ? "Комбо" : "Товар"));
+              const title = String(item?.name || (type === "combo" ? "РљРѕРјР±Рѕ" : "РўРѕРІР°СЂ"));
               const sections = Array.isArray(item?.sections) ? item.sections : [];
               const optionRows = type === "product"
                 ? (() => {
@@ -483,7 +733,7 @@
                         const details = state.optionGroupDetails.get(groupId);
                         const detailItems = Array.isArray(details?.items) ? details.items : [];
                         const detailItem = detailItems.find((x) => Number(x?.id || 0) === itemId) || null;
-                        const detailName = String(detailItem?.name || detailItem?.product_name || opt?.label || "Опция").trim();
+                        const detailName = String(detailItem?.name || detailItem?.product_name || opt?.label || "РћРїС†РёСЏ").trim();
                         const groupType = getOptionGroupUiType({ ...(details?.group || {}), items: detailItems });
                         const qtyMin = Math.max(0, Number(detailItem?.qty_min ?? 0));
                         const qtyMaxRaw = Number(detailItem?.qty_max ?? 99);
@@ -531,7 +781,7 @@
                 : [{
                   key: "product-main",
                   sectionIndex: 0,
-                  productName: String(item?.name || "Товар").trim(),
+                  productName: String(item?.name || "РўРѕРІР°СЂ").trim(),
                   unitLabel: String(item?.variant?.label || "").trim(),
                   variantValues: Array.isArray(item?.variant?.values) ? item.variant.values.map((v) => String(v || "").trim()).filter(Boolean) : [],
                   selectedVariantIndex: Number.isFinite(Number(item?.variant?.selected_index)) ? Number(item.variant.selected_index) : 0,
@@ -544,7 +794,152 @@
                     return (Array.isArray(groups) && groups.length > 0) || selectedOptionItems.length > 0;
                   })(),
                 }];
-              const renderedRows = [...compositionRows, ...optionRows];
+              const renderCompositionRowHtml = (row) => {
+                const comboLineText = row.rowKind === "combo"
+                  ? [String(row.unitLabel || "").trim(), String(row.productName || "").trim()].filter(Boolean).join(" ").trim()
+                  : "";
+                const baseLineRaw = row.rowKind === "combo"
+                  ? (comboLineText ? `1 x ${comboLineText}` : `1 x ${String(row.productName || "—").trim() || "—"}`)
+                  : (row.unitLabel
+                    ? `${String(row.unitLabel || "").trim()} ${String(row.productName || "").trim()}`.trim()
+                    : (row.rowKind === "option" ? String(row.productName || "").trim() : ""));
+                const baseLine = baseLineRaw ? escapeHtml(baseLineRaw) : "";
+                const cartItemIsCombo = String(item?.type || "") === "combo";
+                const isCheckoutComposedCombo = cartItemIsCombo && Number(item?.combo_id || 0) <= 0;
+                const comboRequireAll = getCartItemCheckoutRequireAll(item);
+                const canRemoveComboSection = row.rowKind === "combo"
+                  && isCheckoutComposedCombo
+                  && comboRequireAll === false
+                  && Number.isFinite(Number(row.sectionIndex))
+                  && Number(row.sectionIndex) >= 0;
+                const canRemoveProductRow = row.rowKind === "product" && row.variantValues.length > 1;
+                const removeBtn = (canRemoveProductRow || canRemoveComboSection)
+                  ? `
+                    <button
+                      type="button"
+                      class="new-order-right-cart-variant-chip new-order-right-cart-variant-remove"
+                      data-action="right-cart-row-remove"
+                      data-order-id="${Number(active?.id || 0)}"
+                      data-cart-item-id="${Number(item?.id || 0)}"
+                      data-row-kind="${row.rowKind}"
+                      data-section-index="${row.sectionIndex}"
+                      aria-label="РЈРґР°Р»РёС‚СЊ РїРѕР·РёС†РёСЋ"
+                      title="РЈРґР°Р»РёС‚СЊ РїРѕР·РёС†РёСЋ"
+                    >×</button>
+                  `
+                  : "";
+                const optionIcon = row.rowKind === "option"
+                  ? `<button type="button" class="new-order-right-cart-variant-chip new-order-right-cart-variant-option-icon" data-action="right-cart-open-product" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-product-id="${Number(item?.product_id || 0)}" title="РћРїС†РёРё С‚РѕРІР°СЂР°"><i class="fas fa-sliders-h"></i></button>`
+                  : "";
+                const productOptionIcon = row.rowKind === "product" && row.hasOptions
+                  ? `<button type="button" class="new-order-right-cart-variant-chip new-order-right-cart-variant-option-icon" data-action="right-cart-open-product" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-product-id="${Number(item?.product_id || 0)}" title="РћРїС†РёРё С‚РѕРІР°СЂР°"><i class="fas fa-sliders-h"></i></button>`
+                  : "";
+                const chips = row.variantValues.length > 1
+                  ? `
+                    <div class="new-order-right-cart-variant-scroll no-scrollbar">
+                      <div class="new-order-right-cart-variant-row">
+                        ${row.rowKind === "option" ? "" : `${removeBtn}${productOptionIcon}`}
+                        ${row.variantValues.map((label, variantIndex) => `
+                          <button
+                            type="button"
+                            class="new-order-right-cart-variant-chip ${variantIndex === row.selectedVariantIndex ? "is-selected" : ""}"
+                            data-action="right-cart-variant-select"
+                            data-order-id="${Number(active?.id || 0)}"
+                            data-cart-item-id="${Number(item?.id || 0)}"
+                            data-row-kind="${row.rowKind}"
+                            data-section-index="${row.sectionIndex}"
+                            data-option-index="${Number(row.optionIndex || 0)}"
+                            data-variant-index="${variantIndex}"
+                          >${escapeHtml(label)}</button>
+                        `).join("")}
+                      </div>
+                    </div>
+                  `
+                  : "";
+                const optionQtyControls = row.rowKind === "option" && row.showQtyControls
+                  ? `
+                    <div class="new-order-right-cart-ing-controls">
+                      <button type="button" class="new-order-right-cart-ing-btn${row.canMinus ? "" : " is-disabled"}" data-action="right-cart-option-qty-minus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-option-index="${Number(row.optionIndex || 0)}">−</button>
+                      <span class="new-order-right-cart-ing-qty">${Number(row.optionQty || 0)}</span>
+                      <button type="button" class="new-order-right-cart-ing-btn${row.canPlus ? "" : " is-disabled"}" data-action="right-cart-option-qty-plus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-option-index="${Number(row.optionIndex || 0)}">+</button>
+                    </div>
+                  `
+                  : "";
+                const optionRemoveBtn = row.rowKind === "option"
+                  ? `
+                    <button
+                      type="button"
+                      class="new-order-right-cart-variant-chip new-order-right-cart-variant-remove"
+                      data-action="right-cart-option-remove"
+                      data-order-id="${Number(active?.id || 0)}"
+                      data-cart-item-id="${Number(item?.id || 0)}"
+                      data-option-index="${Number(row.optionIndex || 0)}"
+                      aria-label="РЈРґР°Р»РёС‚СЊ РѕРїС†РёСЋ"
+                      title="РЈРґР°Р»РёС‚СЊ РѕРїС†РёСЋ"
+                    >×</button>
+                  `
+                  : "";
+                const ingredientRows = Array.isArray(row.ingredients) ? row.ingredients : [];
+                const ingredientsHtml = ingredientRows.length
+                  ? `
+                    <div class="new-order-right-cart-ingredients">
+                      ${ingredientRows.map((ing, ingIndex) => {
+                        const ingName = String(ing?.ingredient_name || "").trim();
+                        const qty = Number(ing?.qty || 0);
+                        const unitLabel = String(ing?.unit_label || "").trim();
+                        const min = Number(ing?.qty_min ?? 0);
+                        const max = Number(ing?.qty_max ?? qty);
+                        const canMinus = qty > min;
+                        const canPlus = qty < max;
+                        return `
+                          <div class="new-order-right-cart-ing-row">
+                            <div class="new-order-right-cart-ing-controls">
+                              <button type="button" class="new-order-right-cart-ing-btn${canMinus ? "" : " is-disabled"}" data-action="right-cart-ingredient-minus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-row-kind="${row.rowKind}" data-section-index="${row.sectionIndex}" data-ingredient-index="${ingIndex}">−</button>
+                              <span class="new-order-right-cart-ing-qty">${escapeHtml(String(qty))}${unitLabel ? ` ${escapeHtml(unitLabel)}` : ""}</span>
+                              <button type="button" class="new-order-right-cart-ing-btn${canPlus ? "" : " is-disabled"}" data-action="right-cart-ingredient-plus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-row-kind="${row.rowKind}" data-section-index="${row.sectionIndex}" data-ingredient-index="${ingIndex}">+</button>
+                            </div>
+                            <div class="new-order-right-cart-ing-name" title="${escapeHtml(ingName)}">${escapeHtml(ingName)}</div>
+                          </div>
+                        `;
+                      }).join("")}
+                    </div>
+                  `
+                  : "";
+                const optionTitle = row.rowKind === "option"
+                  ? `<div class="new-order-right-cart-option-title">${
+                      row.showQtyControls
+                        ? `${escapeHtml(String(Number(row.optionQty || 0)))} ${baseLine || escapeHtml(row.productName || "")}`
+                        : (baseLine || escapeHtml(row.productName || ""))
+                    }</div>`
+                  : "";
+                const optionControlsRow = row.rowKind === "option"
+                  ? `
+                    <div class="new-order-right-cart-option-controls-row">
+                      ${optionRemoveBtn}
+                      ${optionIcon}
+                      ${row.showQtyControls ? optionQtyControls : chips}
+                    </div>
+                  `
+                  : "";
+                const productControlsRow = row.rowKind !== "option" && row.variantValues.length <= 1 && (removeBtn || productOptionIcon)
+                  ? `<div class="new-order-right-cart-option-controls-row">${removeBtn}${productOptionIcon}</div>`
+                  : "";
+                const rowClass = row.rowKind === "combo"
+                  ? "new-order-right-cart-composition-row new-order-right-cart-combo-row"
+                  : "new-order-right-cart-composition-row";
+                const comboTitleClass = row.rowKind === "combo" ? "new-order-right-cart-combo-title" : "";
+                return `<div class="${rowClass}">${row.rowKind === "option" ? `${optionTitle}${optionControlsRow}` : (baseLine ? `<div class="${comboTitleClass}">${baseLine}</div>` : "")}${row.rowKind === "option" ? "" : `${chips}${productControlsRow}`}${ingredientsHtml}</div>`;
+              };
+              const compositionBodyHtml = type === "combo" && compositionRows.length
+                ? `
+                  ${compositionRows.map((row, idx) => `
+                    <div class="new-order-right-cart-combo-section${idx > 0 ? " is-separated" : ""}">
+                      ${renderCompositionRowHtml(row)}
+                    </div>
+                  `).join("")}
+                  ${optionRows.length ? `<div class="new-order-right-cart-combo-section is-separated">${optionRows.map((row) => renderCompositionRowHtml(row)).join("")}</div>` : ""}
+                `
+                : [...compositionRows, ...optionRows].map((row) => renderCompositionRowHtml(row)).join("");
               return `
                 <div class="new-order-right-cart-item-wrap" data-cart-item-id="${Number(item?.id || 0)}">
                   <div class="new-order-right-cart-item-tools">
@@ -554,8 +949,8 @@
                       data-action="right-cart-item-delete"
                       data-order-id="${Number(active?.id || 0)}"
                       data-cart-item-id="${Number(item?.id || 0)}"
-                      aria-label="Удалить товар из корзины"
-                      title="Удалить товар из корзины"
+                      aria-label="РЈРґР°Р»РёС‚СЊ С‚РѕРІР°СЂ РёР· РєРѕСЂР·РёРЅС‹"
+                      title="РЈРґР°Р»РёС‚СЊ С‚РѕРІР°СЂ РёР· РєРѕСЂР·РёРЅС‹"
                     >
                       <i class="fas fa-trash"></i>
                     </button>
@@ -565,8 +960,8 @@
                       data-action="right-cart-item-copy"
                       data-order-id="${Number(active?.id || 0)}"
                       data-cart-item-id="${Number(item?.id || 0)}"
-                      aria-label="Скопировать позицию"
-                      title="Скопировать позицию"
+                      aria-label="РЎРєРѕРїРёСЂРѕРІР°С‚СЊ РїРѕР·РёС†РёСЋ"
+                      title="РЎРєРѕРїРёСЂРѕРІР°С‚СЊ РїРѕР·РёС†РёСЋ"
                     >
                       <i class="far fa-copy"></i>
                     </button>
@@ -578,8 +973,8 @@
                       data-order-id="${Number(active?.id || 0)}"
                       data-cart-item-id="${Number(item?.id || 0)}"
                       data-combo-id="${Number(item?.combo_id || 0)}"
-                      aria-label="Редактировать комбо"
-                      title="Редактировать комбо"
+                      aria-label="Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ РєРѕРјР±Рѕ"
+                      title="Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ РєРѕРјР±Рѕ"
                     >
                       <i class="fas fa-sliders-h"></i>
                     </button>
@@ -591,8 +986,8 @@
                       data-action="right-cart-item-split"
                       data-order-id="${Number(active?.id || 0)}"
                       data-cart-item-id="${Number(item?.id || 0)}"
-                      aria-label="Разделить позицию"
-                      title="Разделить позицию"
+                      aria-label="Р Р°Р·РґРµР»РёС‚СЊ РїРѕР·РёС†РёСЋ"
+                      title="Р Р°Р·РґРµР»РёС‚СЊ РїРѕР·РёС†РёСЋ"
                     >
                       <i class="fas fa-code-branch"></i>
                     </button>
@@ -620,125 +1015,9 @@
                     </div>
                   </div>
                   <div class="new-order-right-cart-item-main">
-                    <div class="new-order-right-cart-item-title">${qty} х ${escapeHtml(title)}</div>
+                    <div class="new-order-right-cart-item-title">${qty} × ${escapeHtml(title)}</div>
                     <div class="new-order-right-cart-item-sub">
-                      ${renderedRows.map((row) => {
-                        const baseLine = row.unitLabel
-                          ? `${escapeHtml(row.unitLabel)} ${escapeHtml(row.productName)}`
-                          : (row.rowKind === "option" ? escapeHtml(row.productName) : "");
-                        const removeBtn = row.rowKind === "product" && row.variantValues.length > 1
-                          ? `
-                            <button
-                              type="button"
-                              class="new-order-right-cart-variant-chip new-order-right-cart-variant-remove"
-                              data-action="right-cart-row-remove"
-                              data-order-id="${Number(active?.id || 0)}"
-                              data-cart-item-id="${Number(item?.id || 0)}"
-                              data-row-kind="${row.rowKind}"
-                              data-section-index="${row.sectionIndex}"
-                              aria-label="Удалить позицию"
-                              title="Удалить позицию"
-                            >×</button>
-                          `
-                          : "";
-                        const optionIcon = row.rowKind === "option"
-                          ? `<button type="button" class="new-order-right-cart-variant-chip new-order-right-cart-variant-option-icon" data-action="right-cart-open-product" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-product-id="${Number(item?.product_id || 0)}" title="Опции товара"><i class="fas fa-sliders-h"></i></button>`
-                          : "";
-                        const productOptionIcon = row.rowKind === "product" && row.hasOptions
-                          ? `<button type="button" class="new-order-right-cart-variant-chip new-order-right-cart-variant-option-icon" data-action="right-cart-open-product" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-product-id="${Number(item?.product_id || 0)}" title="Опции товара"><i class="fas fa-sliders-h"></i></button>`
-                          : "";
-                        const chips = row.variantValues.length > 1
-                          ? `
-                            <div class="new-order-right-cart-variant-scroll no-scrollbar">
-                              <div class="new-order-right-cart-variant-row">
-                                ${row.rowKind === "option" ? "" : `${removeBtn}${productOptionIcon}`}
-                                ${row.variantValues.map((label, variantIndex) => `
-                                  <button
-                                    type="button"
-                                    class="new-order-right-cart-variant-chip ${variantIndex === row.selectedVariantIndex ? "is-selected" : ""}"
-                                    data-action="right-cart-variant-select"
-                                    data-order-id="${Number(active?.id || 0)}"
-                                    data-cart-item-id="${Number(item?.id || 0)}"
-                                    data-row-kind="${row.rowKind}"
-                                    data-section-index="${row.sectionIndex}"
-                                    data-option-index="${Number(row.optionIndex || 0)}"
-                                    data-variant-index="${variantIndex}"
-                                  >${escapeHtml(label)}</button>
-                                `).join("")}
-                              </div>
-                            </div>
-                          `
-                          : "";
-                        const optionQtyControls = row.rowKind === "option" && row.showQtyControls
-                          ? `
-                            <div class="new-order-right-cart-ing-controls">
-                              <button type="button" class="new-order-right-cart-ing-btn${row.canMinus ? "" : " is-disabled"}" data-action="right-cart-option-qty-minus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-option-index="${Number(row.optionIndex || 0)}">−</button>
-                              <span class="new-order-right-cart-ing-qty">${Number(row.optionQty || 0)}</span>
-                              <button type="button" class="new-order-right-cart-ing-btn${row.canPlus ? "" : " is-disabled"}" data-action="right-cart-option-qty-plus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-option-index="${Number(row.optionIndex || 0)}">+</button>
-                            </div>
-                          `
-                          : "";
-                        const optionRemoveBtn = row.rowKind === "option"
-                          ? `
-                            <button
-                              type="button"
-                              class="new-order-right-cart-variant-chip new-order-right-cart-variant-remove"
-                              data-action="right-cart-option-remove"
-                              data-order-id="${Number(active?.id || 0)}"
-                              data-cart-item-id="${Number(item?.id || 0)}"
-                              data-option-index="${Number(row.optionIndex || 0)}"
-                              aria-label="Удалить опцию"
-                              title="Удалить опцию"
-                            >×</button>
-                          `
-                          : "";
-                        const ingredientRows = Array.isArray(row.ingredients) ? row.ingredients : [];
-                        const ingredientsHtml = ingredientRows.length
-                          ? `
-                            <div class="new-order-right-cart-ingredients">
-                              ${ingredientRows.map((ing, ingIndex) => {
-                                const ingName = String(ing?.ingredient_name || "").trim();
-                                const qty = Number(ing?.qty || 0);
-                                const unitLabel = String(ing?.unit_label || "").trim();
-                                const min = Number(ing?.qty_min ?? 0);
-                                const max = Number(ing?.qty_max ?? qty);
-                                const canMinus = qty > min;
-                                const canPlus = qty < max;
-                                return `
-                                  <div class="new-order-right-cart-ing-row">
-                                    <div class="new-order-right-cart-ing-controls">
-                                      <button type="button" class="new-order-right-cart-ing-btn${canMinus ? "" : " is-disabled"}" data-action="right-cart-ingredient-minus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-row-kind="${row.rowKind}" data-section-index="${row.sectionIndex}" data-ingredient-index="${ingIndex}">−</button>
-                                      <span class="new-order-right-cart-ing-qty">${escapeHtml(String(qty))}${unitLabel ? ` ${escapeHtml(unitLabel)}` : ""}</span>
-                                      <button type="button" class="new-order-right-cart-ing-btn${canPlus ? "" : " is-disabled"}" data-action="right-cart-ingredient-plus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-row-kind="${row.rowKind}" data-section-index="${row.sectionIndex}" data-ingredient-index="${ingIndex}">+</button>
-                                    </div>
-                                    <div class="new-order-right-cart-ing-name" title="${escapeHtml(ingName)}">${escapeHtml(ingName)}</div>
-                                  </div>
-                                `;
-                              }).join("")}
-                            </div>
-                          `
-                          : "";
-                        const optionTitle = row.rowKind === "option"
-                          ? `<div class="new-order-right-cart-option-title">${
-                              row.showQtyControls
-                                ? `${escapeHtml(String(Number(row.optionQty || 0)))} ${baseLine || escapeHtml(row.productName || "")}`
-                                : (baseLine || escapeHtml(row.productName || ""))
-                            }</div>`
-                          : "";
-                        const optionControlsRow = row.rowKind === "option"
-                          ? `
-                            <div class="new-order-right-cart-option-controls-row">
-                              ${optionRemoveBtn}
-                              ${optionIcon}
-                              ${row.showQtyControls ? optionQtyControls : chips}
-                            </div>
-                          `
-                          : "";
-                        const productControlsRow = row.rowKind === "product" && row.hasOptions && row.variantValues.length <= 1
-                          ? `<div class="new-order-right-cart-option-controls-row">${productOptionIcon}</div>`
-                          : "";
-                        return `<div class="new-order-right-cart-composition-row">${row.rowKind === "option" ? `${optionTitle}${optionControlsRow}` : (baseLine ? `<div>${baseLine}</div>` : "")}${row.rowKind === "option" ? "" : `${chips}${productControlsRow}`}${ingredientsHtml}</div>`;
-                      }).join("")}
+                      ${compositionBodyHtml}
                     </div>
                   </div>
                   <div class="new-order-right-cart-item-sum-wrap">
@@ -749,8 +1028,9 @@
                   </article>
                 </div>
               `;
-            }).join("") : `<div class="new-order-right-cart-empty">Состав заказа пока пуст</div>`}
+            }).join("") : `<div class="new-order-right-cart-empty">РЎРѕСЃС‚Р°РІ Р·Р°РєР°Р·Р° РїРѕРєР° РїСѓСЃС‚</div>`}
           </div>
+          ${rightSummaryHtml}
         </div>
       </div>
     `;
@@ -760,10 +1040,14 @@
     }
   }
 
-  function openRightNewOrderTab() {
+  function buildRightOrderDraft(orderId, title, opts = {}) {
+    const id = Number(orderId || 0) > 0 ? Number(orderId || 0) : Date.now() + Math.floor(Math.random() * 10000);
+    const fallbackTitle = String(title || "").trim();
+    const mode = String(opts?.mode || "add").toLowerCase() === "edit" ? "edit" : "add";
+    const editOrderIdRaw = Number(opts?.editOrderId || 0);
+    const editOrderId = mode === "edit" && Number.isFinite(editOrderIdRaw) && editOrderIdRaw > 0 ? editOrderIdRaw : 0;
     const nextNumber = (Array.isArray(state.rightOrders) ? state.rightOrders.length : 0) + 1;
-    const id = Date.now() + Math.floor(Math.random() * 10000);
-    const title = nextNumber === 1 ? "Новый заказ" : `Новый заказ ${nextNumber}`;
+    const resolvedTitle = fallbackTitle || (nextNumber === 1 ? "РќРѕРІС‹Р№ Р·Р°РєР°Р·" : `РќРѕРІС‹Р№ Р·Р°РєР°Р· ${nextNumber}`);
     const activeDeliveryTypes = (Array.isArray(state.rightDeliveryTypes) ? state.rightDeliveryTypes : [])
       .filter((item) => Number(item?.is_active || 0) === 1);
     const defaultDeliveryType = activeDeliveryTypes.find((item) => Number(item?.is_default || 0) === 1) || activeDeliveryTypes[0] || null;
@@ -773,14 +1057,19 @@
     const defaultPaymentCode = String((activePaymentTypes[0] || {}).code || "cash");
     const activeTimeOptions = (Array.isArray(state.rightTimeOptions) ? state.rightTimeOptions : [])
       .filter((item) => Number(item?.is_active || 0) === 1);
+    const activeOrderStatuses = Array.isArray(state.rightOrderStatuses) ? state.rightOrderStatuses : [];
     const defaultCookWhenCode = String((activeTimeOptions[0] || {}).code || "asap");
+    const defaultOrderStatusId = Number((activeOrderStatuses[0] || {}).id || 0) || null;
     const defaultCookWhenKind = getCookWhenKind(defaultCookWhenCode);
     const defaultScheduledDate = defaultCookWhenKind === "on_date" ? getTomorrowIsoDate() : formatIsoDate(getTodayDate());
     const defaultTime = buildTimeSlotsForOptionWithDate(defaultCookWhenCode, defaultScheduledDate)[0] || "18:00";
 
-    state.rightOrders.push({
+    return {
       id,
-      title,
+      title: resolvedTitle,
+      mode,
+      editOrderId,
+      storeId: Number(opts?.storeId || 0) > 0 ? Number(opts.storeId) : null,
       form: {
         phone: "+7",
         clientId: null,
@@ -790,17 +1079,73 @@
         cookWhen: defaultCookWhenCode,
         scheduledDate: defaultScheduledDate,
         dateTime: defaultTime,
+        orderStatusId: defaultOrderStatusId,
+        orderStatusInitialId: defaultOrderStatusId,
+        orderStatusTitle: "",
+        orderStatusInitialTitle: "",
         paymentMethod: defaultPaymentCode,
         changeType: "no_change",
         changeAmount: "",
         comment: "",
         cartItems: [],
       },
-    });
-    void applyReceiveMethodAddress(id);
-    state.rightActiveOrderId = id;
+    };
+  }
+
+  function normalizeRightOrderDraft(sourceDraft) {
+    const src = sourceDraft && typeof sourceDraft === "object" ? sourceDraft : {};
+    const base = buildRightOrderDraft(
+      Number(src?.id || 0),
+      String(src?.title || "").trim(),
+      {
+        mode: String(src?.mode || "add"),
+        editOrderId: Number(src?.editOrderId || 0),
+      }
+    );
+    const form = src.form && typeof src.form === "object"
+      ? { ...base.form, ...src.form }
+      : { ...base.form };
+    form.cartItems = Array.isArray(form.cartItems) ? form.cartItems : [];
+    form.orderStatusId = Number(form.orderStatusId || 0) > 0 ? Number(form.orderStatusId) : null;
+    form.orderStatusInitialId = Number(form.orderStatusInitialId || 0) > 0 ? Number(form.orderStatusInitialId) : form.orderStatusId;
+    form.orderStatusTitle = String(form.orderStatusTitle || "").trim();
+    form.orderStatusInitialTitle = String(form.orderStatusInitialTitle || "").trim() || form.orderStatusTitle;
+    return {
+      ...base,
+      ...src,
+      id: Number(src?.id || base.id),
+      title: String(src?.title || base.title || "").trim() || base.title,
+      mode: base.mode,
+      editOrderId: base.editOrderId,
+      storeId: Number(src?.storeId || base.storeId || 0) > 0 ? Number(src?.storeId || base.storeId) : null,
+      form,
+    };
+  }
+
+  function openRightNewOrderTab(opts = {}) {
+    const preferredId = Number(opts?.id || 0);
+    const preferredTitle = String(opts?.title || "").trim();
+    const draft = buildRightOrderDraft(preferredId, preferredTitle);
+    state.rightOrders.push(draft);
+    void applyReceiveMethodAddress(Number(draft.id || 0));
+    state.rightActiveOrderId = Number(draft.id || 0) || null;
     state.rightOpenSelect = null;
     renderRightOrderTabs();
+    return Number(draft.id || 0) || null;
+  }
+
+  function normalizeRightDeliveryTypeRef(item) {
+    return {
+      id: Number(item?.id || 0),
+      code: String(item?.code || "").trim(),
+      title: String(item?.title || "").trim(),
+      // Fallback to active for legacy cached snapshots without this field.
+      is_active: Number(item?.is_active ?? 1),
+      is_default: Number(item?.is_default || 0),
+      require_client_data: Number(item?.require_client_data ?? 1),
+      show_on_site: Number(item?.show_on_site ?? 1),
+      sort: Number(item?.sort || 0),
+    };
   }
 
   async function loadRightDeliveryTypes() {
@@ -808,14 +1153,7 @@
       const json = await apiJson("/api/admin/tenant/order-delivery-types");
       const items = Array.isArray(json?.items) ? json.items : [];
       state.rightDeliveryTypes = items
-        .map((item) => ({
-          id: Number(item?.id || 0),
-          code: String(item?.code || "").trim(),
-          title: String(item?.title || "").trim(),
-          is_active: Number(item?.is_active || 0),
-          is_default: Number(item?.is_default || 0),
-          sort: Number(item?.sort || 0),
-        }))
+        .map(normalizeRightDeliveryTypeRef)
         .filter((item) => item.code)
         .sort((a, b) => (a.sort - b.sort) || (a.id - b.id));
     } catch {
@@ -864,6 +1202,25 @@
         .sort((a, b) => (a.sort - b.sort) || (a.id - b.id));
     } catch {
       state.rightTimeOptions = [];
+    }
+    schedulePersistBootstrapSnapshot();
+  }
+
+  async function loadRightOrderStatuses() {
+    try {
+      const json = await apiJson("/api/admin/orders/statuses");
+      const items = Array.isArray(json?.data) ? json.data : [];
+      state.rightOrderStatuses = items
+        .map((item) => ({
+          id: Number(item?.id || 0),
+          code: String(item?.code || "").trim(),
+          title: String(item?.title || "").trim(),
+          sort: Number(item?.sort || 0),
+        }))
+        .filter((item) => item.id > 0 && item.title)
+        .sort((a, b) => (a.sort - b.sort) || (a.id - b.id));
+    } catch {
+      state.rightOrderStatuses = [];
     }
     schedulePersistBootstrapSnapshot();
   }
@@ -926,7 +1283,7 @@
 
   function formatDateHuman(isoDate) {
     const [y, m, d] = String(isoDate || "").split("-").map((x) => Number(x));
-    if (!y || !m || !d) return "Завтра";
+    if (!y || !m || !d) return "Р—Р°РІС‚СЂР°";
     const dt = new Date(y, m - 1, d);
     return dt.toLocaleDateString("ru-RU", { day: "2-digit", month: "long" });
   }
@@ -939,14 +1296,14 @@
 
   function getCookWhenKind(code) {
     const c = String(code || "").trim().toLowerCase();
-    if (c === "on_date" || c.includes("date") || c.includes("дата")) return "on_date";
-    if (c === "at_time" || c.includes("time") || c.includes("время")) return "at_time";
+    if (c === "on_date" || c.includes("date") || c.includes("РґР°С‚Р°")) return "on_date";
+    if (c === "at_time" || c.includes("time") || c.includes("РІСЂРµРјСЏ")) return "at_time";
     return "asap";
   }
 
   function isCashPaymentCode(code) {
     const c = String(code || "").trim().toLowerCase();
-    return c === "cash" || c.includes("нал") || c.includes("cash");
+    return c === "cash" || c.includes("РЅР°Р»") || c.includes("cash");
   }
 
   function renderDatePickerCalendar(orderId, selectedIsoDate) {
@@ -980,7 +1337,7 @@
           <button type="button" class="new-order-right-calendar-nav" data-action="right-date-month-next" data-order-id="${Number(orderId || 0)}"><i class="fas fa-chevron-right"></i></button>
         </div>
         <div class="new-order-right-calendar-weekdays">
-          <span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span>
+          <span>РџРЅ</span><span>Р’С‚</span><span>РЎСЂ</span><span>Р§С‚</span><span>РџС‚</span><span>РЎР±</span><span>Р’СЃ</span>
         </div>
         <div class="new-order-right-calendar-grid">${cells.join("")}</div>
       </div>
@@ -1044,7 +1401,7 @@
     if (!c) return false;
     if (c === "delivery") return false;
     if (c.includes("pickup") || c.includes("takeaway") || c.includes("dine") || c.includes("hall")) return true;
-    if (c.includes("самовывоз") || c.includes("ссобой") || c.includes("с собой") || c.includes("взале") || c.includes("в зале")) return true;
+    if (c.includes("СЃР°РјРѕРІС‹РІРѕР·") || c.includes("СЃСЃРѕР±РѕР№") || c.includes("СЃ СЃРѕР±РѕР№") || c.includes("РІР·Р°Р»Рµ") || c.includes("РІ Р·Р°Р»Рµ")) return true;
     return false;
   }
 
@@ -1052,7 +1409,7 @@
     const c = String(code || "").trim().toLowerCase();
     if (!c) return true;
     if (c === "delivery") return true;
-    if (c.includes("delivery") || c.includes("доставка")) return true;
+    if (c.includes("delivery") || c.includes("РґРѕСЃС‚Р°РІРєР°")) return true;
     return !isPickupLikeMethod(c);
   }
 
@@ -1084,11 +1441,222 @@
     }
   }
 
+  function parseRightDiscountDays(value) {
+    if (Array.isArray(value)) return value.map((x) => Number(x)).filter((x) => Number.isFinite(x));
+    const raw = String(value || "").trim();
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.map((x) => Number(x)).filter((x) => Number.isFinite(x)) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function parseRightDiscountTimeToMinutes(value) {
+    const raw = String(value || "").trim();
+    const match = raw.match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return null;
+    const hh = Number(match[1]);
+    const mm = Number(match[2]);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+    return hh * 60 + mm;
+  }
+
+  function isRightClientDiscountActive(discount) {
+    if (!discount || typeof discount !== "object") return false;
+    const isActiveRaw = discount?.is_active;
+    if (!(isActiveRaw === true || Number(isActiveRaw || 0) === 1)) return false;
+
+    const now = new Date();
+    const startRaw = String(discount?.starts_at || "").trim();
+    if (startRaw) {
+      const start = new Date(startRaw);
+      if (!Number.isNaN(start.getTime()) && start > now) return false;
+    }
+    const endRaw = String(discount?.ends_at || "").trim();
+    if (endRaw) {
+      const end = new Date(endRaw);
+      if (!Number.isNaN(end.getTime()) && end < now) return false;
+    }
+
+    const scheduleDays = parseRightDiscountDays(discount?.schedule_days);
+    if (scheduleDays.length > 0) {
+      const currentDay = now.getDay();
+      if (!scheduleDays.includes(currentDay)) return false;
+    }
+
+    const timeStart = parseRightDiscountTimeToMinutes(discount?.schedule_time_start);
+    const timeEnd = parseRightDiscountTimeToMinutes(discount?.schedule_time_end);
+    if (timeStart != null || timeEnd != null) {
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      if (timeStart != null && currentMinutes < timeStart) return false;
+      if (timeEnd != null && currentMinutes > timeEnd) return false;
+    }
+
+    const usageLimit = Number(discount?.usage_limit || 0);
+    const usageCount = Number(discount?.usage_count || 0);
+    if (usageLimit > 0 && usageCount >= usageLimit) return false;
+
+    return true;
+  }
+
+  function calculateRightDiscountPreview(price, discount) {
+    const srcPrice = roundPrice(Number(price || 0));
+    if (!(srcPrice > 0) || !discount) return 0;
+    const discountType = String(discount?.discount_type || "").trim();
+    const discountValue = Number(discount?.discount_value || 0);
+    if (!(discountValue > 0)) return 0;
+
+    let discountAmount = 0;
+    if (discountType === "percent") {
+      discountAmount = srcPrice * (discountValue / 100);
+    } else if (discountType === "fixed") {
+      discountAmount = discountValue;
+    } else if (discountType === "special_price") {
+      discountAmount = Math.max(0, srcPrice - discountValue);
+    } else {
+      return 0;
+    }
+
+    const maxDiscountAmount = Number(discount?.max_discount_amount);
+    if (Number.isFinite(maxDiscountAmount) && maxDiscountAmount > 0 && discountAmount > maxDiscountAmount) {
+      discountAmount = maxDiscountAmount;
+    }
+    if (discountAmount > srcPrice) discountAmount = srcPrice;
+    return roundPrice(discountAmount);
+  }
+
+  function applyBestRightOrderDiscountsPreview(discounts, price) {
+    const source = Array.isArray(discounts) ? discounts : [];
+    const basePrice = roundPrice(Number(price || 0));
+    if (!source.length || !(basePrice > 0)) {
+      return { totalDiscount: 0, appliedDiscounts: [] };
+    }
+
+    const stackable = source.filter((d) => Number(d?.is_stackable || 0) === 1 || d?.is_stackable === true);
+    const nonStackable = source.filter((d) => !(Number(d?.is_stackable || 0) === 1 || d?.is_stackable === true));
+
+    let bestNonStackable = null;
+    let bestNonStackableAmount = 0;
+    nonStackable.forEach((discount) => {
+      const amount = calculateRightDiscountPreview(basePrice, discount);
+      if (amount > bestNonStackableAmount) {
+        bestNonStackableAmount = amount;
+        bestNonStackable = discount;
+      }
+    });
+
+    let stackableTotal = 0;
+    const stackableApplied = [];
+    stackable.forEach((discount) => {
+      const leftPrice = roundPrice(Math.max(0, basePrice - stackableTotal));
+      if (!(leftPrice > 0)) return;
+      const amount = calculateRightDiscountPreview(leftPrice, discount);
+      if (!(amount > 0)) return;
+      stackableTotal = roundPrice(stackableTotal + amount);
+      stackableApplied.push({ ...discount, discountAmount: amount });
+    });
+
+    if (bestNonStackableAmount > stackableTotal) {
+      return {
+        totalDiscount: roundPrice(Math.min(basePrice, bestNonStackableAmount)),
+        appliedDiscounts: bestNonStackable ? [{ ...bestNonStackable, discountAmount: bestNonStackableAmount }] : [],
+      };
+    }
+
+    return {
+      totalDiscount: roundPrice(Math.min(basePrice, stackableTotal)),
+      appliedDiscounts: stackableApplied,
+    };
+  }
+
+  function normalizeRightClientDiscountRow(row) {
+    const src = row && typeof row === "object" ? row : {};
+    return {
+      id: Number(src?.id || 0),
+      title: String(src?.title || "").trim(),
+      discount_type: String(src?.discount_type || "").trim(),
+      discount_value: Number(src?.discount_value || 0),
+      apply_to: String(src?.apply_to || "").trim(),
+      is_active: src?.is_active === true ? 1 : Number(src?.is_active || 0),
+      starts_at: String(src?.starts_at || "").trim(),
+      ends_at: String(src?.ends_at || "").trim(),
+      min_order_amount: Number(src?.min_order_amount || 0),
+      max_discount_amount: src?.max_discount_amount == null ? null : Number(src.max_discount_amount || 0),
+      is_stackable: src?.is_stackable === true ? 1 : Number(src?.is_stackable || 0),
+      usage_limit: Number(src?.usage_limit || 0),
+      usage_count: Number(src?.usage_count || 0),
+      schedule_days: src?.schedule_days ?? null,
+      schedule_time_start: String(src?.schedule_time_start || "").trim(),
+      schedule_time_end: String(src?.schedule_time_end || "").trim(),
+    };
+  }
+
+  async function ensureRightClientDiscountsLoaded(clientId) {
+    const id = Number(clientId || 0);
+    if (!(id > 0)) return [];
+    if (state.rightClientDiscountsByClientId.has(id)) {
+      const cached = state.rightClientDiscountsByClientId.get(id);
+      return Array.isArray(cached) ? cached : [];
+    }
+    if (state.rightClientDiscountsLoadingByClientId.has(id)) return [];
+    state.rightClientDiscountsLoadingByClientId.add(id);
+    try {
+      const json = await apiJson(`/api/admin/clients/${id}/discounts`);
+      const rows = Array.isArray(json?.data) ? json.data : [];
+      const normalized = rows.map((row) => normalizeRightClientDiscountRow(row)).filter((row) => row.id > 0);
+      state.rightClientDiscountsByClientId.set(id, normalized);
+      return normalized;
+    } catch {
+      state.rightClientDiscountsByClientId.set(id, []);
+      return [];
+    } finally {
+      state.rightClientDiscountsLoadingByClientId.delete(id);
+    }
+  }
+
+  function getRightOrderCustomerDiscountSummary(order, subtotalAfterItemDiscounts) {
+    const form = order?.form && typeof order.form === "object" ? order.form : {};
+    const clientId = Number(form?.clientId || 0);
+    if (!(clientId > 0)) {
+      return { amount: 0, titles: [], appliedDiscounts: [] };
+    }
+    const discounts = state.rightClientDiscountsByClientId.get(clientId);
+    const source = Array.isArray(discounts) ? discounts : [];
+    if (!source.length) {
+      return { amount: 0, titles: [], appliedDiscounts: [] };
+    }
+    const orderDiscounts = source.filter((discount) => {
+      if (String(discount?.apply_to || "").toLowerCase() !== "order") return false;
+      if (!isRightClientDiscountActive(discount)) return false;
+      const minOrderAmount = Number(discount?.min_order_amount || 0);
+      if (minOrderAmount > 0 && Number(subtotalAfterItemDiscounts || 0) < minOrderAmount) return false;
+      return true;
+    });
+    if (!orderDiscounts.length) {
+      return { amount: 0, titles: [], appliedDiscounts: [] };
+    }
+    const preview = applyBestRightOrderDiscountsPreview(orderDiscounts, subtotalAfterItemDiscounts);
+    const amount = roundPrice(Math.max(0, Number(preview?.totalDiscount || 0)));
+    const appliedDiscounts = Array.isArray(preview?.appliedDiscounts) ? preview.appliedDiscounts : [];
+    const titles = [...new Set(
+      appliedDiscounts
+        .map((row) => String(row?.title || "").trim())
+        .filter(Boolean)
+    )];
+    return { amount, titles, appliedDiscounts };
+  }
+
   function getRightOrderCheckoutSummary(order) {
     const form = order?.form && typeof order.form === "object" ? order.form : {};
     const cartItems = Array.isArray(form?.cartItems) ? form.cartItems : [];
     const subtotal = roundPrice(cartItems.reduce((sum, item) => sum + Number(item?.sum || 0), 0));
     const cartItemsCount = cartItems.reduce((sum, item) => sum + Math.max(1, Number(item?.qty || 1)), 0);
+    const customerDiscountSummary = getRightOrderCustomerDiscountSummary(order, subtotal);
+    const customerOrderDiscount = roundPrice(Number(customerDiscountSummary?.amount || 0));
+    const subtotalAfterCustomerDiscount = roundPrice(Math.max(0, subtotal - customerOrderDiscount));
     const methodCode = String(form?.pickupMethod || "").trim();
     const isDeliveryMethod = isDeliveryMethodCode(methodCode);
     const settings = state.rightDeliverySettings && typeof state.rightDeliverySettings === "object"
@@ -1098,19 +1666,23 @@
     const freeDeliveryFromRaw = Number(settings?.free_delivery_from);
     const freeDeliveryFrom = Number.isFinite(freeDeliveryFromRaw) && freeDeliveryFromRaw > 0 ? freeDeliveryFromRaw : null;
     const deliveryApplied = isDeliveryMethod
-      ? (freeDeliveryFrom != null && subtotal >= freeDeliveryFrom ? 0 : deliveryCost)
+      ? (freeDeliveryFrom != null && subtotalAfterCustomerDiscount >= freeDeliveryFrom ? 0 : deliveryCost)
       : 0;
-    const payableTotal = roundPrice(subtotal + deliveryApplied);
+    const payableTotal = roundPrice(subtotalAfterCustomerDiscount + deliveryApplied);
     const progress = freeDeliveryFrom != null && freeDeliveryFrom > 0
-      ? Math.max(0, Math.min(100, (subtotal / freeDeliveryFrom) * 100))
+      ? Math.max(0, Math.min(100, (subtotalAfterCustomerDiscount / freeDeliveryFrom) * 100))
       : 0;
-    const freeReached = freeDeliveryFrom != null && subtotal >= freeDeliveryFrom;
-    const leftForFree = freeDeliveryFrom != null ? Math.max(0, Math.ceil(freeDeliveryFrom - subtotal)) : 0;
+    const freeReached = freeDeliveryFrom != null && subtotalAfterCustomerDiscount >= freeDeliveryFrom;
+    const leftForFree = freeDeliveryFrom != null ? Math.max(0, Math.ceil(freeDeliveryFrom - subtotalAfterCustomerDiscount)) : 0;
     const showDeliveryProgress = isDeliveryMethod && freeDeliveryFrom != null && freeDeliveryFrom > 0 && cartItems.length > 0;
     return {
       cartItems,
       cartItemsCount,
       subtotal,
+      subtotalAfterCustomerDiscount,
+      customerOrderDiscount,
+      customerOrderDiscountTitles: Array.isArray(customerDiscountSummary?.titles) ? customerDiscountSummary.titles : [],
+      customerOrderAppliedDiscounts: Array.isArray(customerDiscountSummary?.appliedDiscounts) ? customerDiscountSummary.appliedDiscounts : [],
       deliveryCost,
       deliveryApplied,
       freeDeliveryFrom,
@@ -1125,6 +1697,198 @@
     };
   }
 
+  function getRightOrderPaymentIconClass(code) {
+    const raw = String(code || "").trim().toLowerCase();
+    if (!raw) return "fa-credit-card";
+    if (raw.includes("cash") || raw.includes("\u043d\u0430\u043b")) return "fa-money-bill-wave";
+    if (raw.includes("online") || raw.includes("\u043e\u043d\u043b\u0430\u0439\u043d")) return "fa-globe";
+    if (raw.includes("card") || raw.includes("qr") || raw.includes("\u043a\u0430\u0440\u0442")) return "fa-credit-card";
+    return "fa-credit-card";
+  }
+
+  function isRightOrderAutoAddItem(item) {
+    if (Number(item?.auto_add || 0) === 1) return true;
+    const name = String(item?.name || item?.product_name || "").trim().toLowerCase();
+    return name === "\u043f\u0440\u0438\u0431\u043e\u0440\u044b";
+  }
+
+  function getRightOrderCartLineTotal(item) {
+    const lineTotal = Number(item?.sum ?? item?.line_total ?? item?.total ?? item?.total_price);
+    if (Number.isFinite(lineTotal)) return roundPrice(lineTotal);
+    const unitPrice = Number(item?.unit_price || item?.price || 0);
+    const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+    return roundPrice(unitPrice * qty);
+  }
+
+  function buildRightOrderDiscountSummaryFromCart(cartItems, subtotal, opts = {}) {
+    const source = Array.isArray(cartItems) ? cartItems : [];
+    const subtotalAfterDiscount = roundPrice(Number(subtotal || 0));
+    const customerOrderDiscount = roundPrice(Math.max(0, Number(opts?.customerOrderDiscount || 0)));
+    const orderDiscountTitles = Array.isArray(opts?.orderDiscountTitles)
+      ? opts.orderDiscountTitles.map((x) => String(x || "").trim()).filter(Boolean)
+      : [];
+
+    let comboDiscount = 0;
+    let productDiscount = 0;
+    let autoAddDiscount = 0;
+
+    source.forEach((item) => {
+      const lineTotal = getRightOrderCartLineTotal(item);
+      const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+      const oldLineTotalRaw = Number(item?.old_line_total || item?.discount?.original_line_total || 0);
+      const oldUnitPrice = Number(item?.unit_price_before_discount || item?.old_price || 0);
+      const oldLineFromUnit = oldUnitPrice > 0 ? roundPrice(oldUnitPrice * qty) : 0;
+
+      let originalLineTotal = lineTotal;
+      if (oldLineTotalRaw > originalLineTotal) originalLineTotal = roundPrice(oldLineTotalRaw);
+      if (oldLineFromUnit > originalLineTotal) originalLineTotal = oldLineFromUnit;
+
+      const lineDiscount = roundPrice(Math.max(0, originalLineTotal - lineTotal));
+      if (!(lineDiscount > 0)) return;
+
+      if (String(item?.type || "") === "combo") {
+        comboDiscount += lineDiscount;
+      } else if (isRightOrderAutoAddItem(item)) {
+        autoAddDiscount += lineDiscount;
+      } else {
+        productDiscount += lineDiscount;
+      }
+    });
+
+    comboDiscount = roundPrice(comboDiscount);
+    productDiscount = roundPrice(productDiscount);
+    autoAddDiscount = roundPrice(autoAddDiscount);
+
+    const totalDiscount = roundPrice(comboDiscount + productDiscount + autoAddDiscount + customerOrderDiscount);
+    const subtotalBeforeDiscount = roundPrice(Math.max(0, subtotalAfterDiscount + totalDiscount));
+
+    const breakdown = [
+      { title: "\u041a\u043e\u043c\u0431\u043e", amount: comboDiscount },
+      { title: "\u0422\u043e\u0432\u0430\u0440\u043d\u044b\u0435 \u0441\u043a\u0438\u0434\u043a\u0438", amount: productDiscount },
+      { title: "\u0410\u0432\u0442\u043e\u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u0438\u0435", amount: autoAddDiscount },
+      { title: "\u041a\u043b\u0438\u0435\u043d\u0442\u0441\u043a\u0430\u044f \u0441\u043a\u0438\u0434\u043a\u0430", amount: customerOrderDiscount },
+    ].filter((entry) => Number(entry.amount || 0) > 0);
+
+    return {
+      subtotalBeforeDiscount,
+      totalDiscount,
+      breakdown,
+      orderDiscountTitles,
+    };
+  }
+
+  function renderRightOrderDiscountBreakdownHtml(summary) {
+    if (!summary) return "";
+    const rows = Array.isArray(summary?.breakdown) ? summary.breakdown : [];
+    let html = "";
+    rows.forEach((entry) => {
+      html += `<div class="order-summary-discount-breakdown-row">`;
+      html += `<span class="order-summary-discount-breakdown-label">${escapeHtml(String(entry?.title || "\u0421\u043a\u0438\u0434\u043a\u0430"))}</span>`;
+      html += `<span class="order-summary-discount-breakdown-value">-${escapeHtml(toMoney(Number(entry?.amount || 0)))}</span>`;
+      html += `</div>`;
+    });
+    const titles = Array.isArray(summary?.orderDiscountTitles) ? summary.orderDiscountTitles : [];
+    if (titles.length > 0) {
+      html += `<div class="order-summary-discount-breakdown-note">\u0421\u043a\u0438\u0434\u043a\u0430 \u043a\u043b\u0438\u0435\u043d\u0442\u0430: ${escapeHtml(titles.join(", "))}</div>`;
+    }
+    return html;
+  }
+
+  function resolveRightOrderChangeFrom(form, paymentCode) {
+    if (!isCashPaymentCode(paymentCode)) return 0;
+    const changeType = String(form?.changeType || "no_change").trim();
+    if (changeType === "no_change") return 0;
+    if (changeType === "other") {
+      const numeric = Number(String(form?.changeAmount || "").replace(/[^\d]/g, ""));
+      return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+    }
+    const numeric = Number(String(changeType).replace(/[^\d]/g, ""));
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+  }
+
+  function buildRightOrderSummaryCardHtml(order, cartSummary, paymentLabel, paymentCode) {
+    const orderId = Number(order?.id || 0);
+    const cartItems = Array.isArray(cartSummary?.cartItems) ? cartSummary.cartItems : [];
+    if (!cartItems.length) return "";
+
+    const discountSummary = buildRightOrderDiscountSummaryFromCart(cartItems, cartSummary?.subtotalAfterCustomerDiscount, {
+      customerOrderDiscount: cartSummary?.customerOrderDiscount,
+      orderDiscountTitles: cartSummary?.customerOrderDiscountTitles,
+    });
+    const discountAmount = roundPrice(Number(discountSummary?.totalDiscount || 0));
+    const hasDiscount = discountAmount > 0;
+    const breakdownRows = Array.isArray(discountSummary?.breakdown) ? discountSummary.breakdown : [];
+    const breakdownTitles = Array.isArray(discountSummary?.orderDiscountTitles) ? discountSummary.orderDiscountTitles : [];
+    const hasBreakdown = hasDiscount && (breakdownRows.length > 0 || breakdownTitles.length > 0);
+    const isBreakdownOpen = hasBreakdown && state.rightDiscountBreakdownOpenByOrder.get(orderId) === true;
+    if (!hasBreakdown && orderId > 0) state.rightDiscountBreakdownOpenByOrder.delete(orderId);
+
+    const form = order?.form && typeof order.form === "object" ? order.form : {};
+    const changeFrom = resolveRightOrderChangeFrom(form, paymentCode);
+    const showChange = changeFrom > 0;
+    const total = roundPrice(Number(cartSummary?.payableTotal || 0));
+    const changeAmount = showChange ? roundPrice(Math.max(0, changeFrom - total)) : 0;
+    const showDeliveryRow = Boolean(cartSummary?.isDeliveryMethod);
+    const deliveryCost = roundPrice(Number(cartSummary?.deliveryApplied || 0));
+    const payTitle = String(paymentLabel || "").trim() || "\u2014";
+    const payIconClass = getRightOrderPaymentIconClass(paymentCode);
+
+    return `
+      <div class="info-card order-summary">
+        <div class="order-summary-title">\u0421\u0443\u043c\u043c\u044b:</div>
+        <div class="order-summary-row">
+          <span class="order-summary-label">\u041e\u043f\u043b\u0430\u0442\u0430</span>
+          <span class="order-summary-value">
+            <span class="order-summary-pay-icon"><i class="fas ${escapeHtml(payIconClass)}"></i></span>
+            <span>${escapeHtml(payTitle)}</span>
+          </span>
+        </div>
+        <div class="order-summary-row ${showChange ? "" : "hidden"}">
+          <span class="order-summary-label">\u0421\u0434\u0430\u0447\u0430 \u0441</span>
+          <span class="order-summary-value">${escapeHtml(toMoney(changeFrom))}</span>
+        </div>
+        <div class="order-summary-row ${showChange ? "" : "hidden"}">
+          <span class="order-summary-label">\u0421\u0434\u0430\u0447\u0430</span>
+          <span class="order-summary-value">${escapeHtml(toMoney(changeAmount))}</span>
+        </div>
+        <div class="order-summary-row ${hasDiscount ? "" : "hidden"}">
+          <span class="order-summary-label">\u0421\u0443\u043c\u043c\u0430 \u0442\u043e\u0432\u0430\u0440\u043e\u0432</span>
+          <span class="order-summary-value">${escapeHtml(toMoney(Number(discountSummary?.subtotalBeforeDiscount || 0)))}</span>
+        </div>
+        <div class="order-summary-row ${hasDiscount ? "" : "hidden"}">
+          <span class="order-summary-discount-label-wrap">
+            <span class="order-summary-label">\u0421\u043a\u0438\u0434\u043a\u0430</span>
+            <button
+              class="order-summary-discount-info-btn ${hasBreakdown ? "" : "hidden"}"
+              type="button"
+              data-action="right-order-discount-toggle"
+              data-order-id="${orderId}"
+              aria-label="\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c \u0440\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0443 \u0441\u043a\u0438\u0434\u043a\u0438"
+              aria-expanded="${isBreakdownOpen ? "true" : "false"}"
+            >
+              <i class="fas fa-info"></i>
+            </button>
+          </span>
+          <span class="order-summary-value order-summary-discount">-${escapeHtml(toMoney(discountAmount))}</span>
+        </div>
+        <div
+          class="order-summary-discount-breakdown ${hasBreakdown && isBreakdownOpen ? "is-open" : "hidden"}"
+          data-right-discount-breakdown="1"
+          aria-hidden="${hasBreakdown && isBreakdownOpen ? "false" : "true"}"
+        >${hasBreakdown ? renderRightOrderDiscountBreakdownHtml(discountSummary) : ""}</div>
+        <div class="order-summary-row ${showDeliveryRow ? "" : "hidden"}">
+          <span class="order-summary-label">\u0414\u043e\u0441\u0442\u0430\u0432\u043a\u0430</span>
+          <span class="order-summary-value">${escapeHtml(toMoney(deliveryCost))}</span>
+        </div>
+        <div class="order-summary-divider"></div>
+        <div class="order-summary-total-row">
+          <span class="order-summary-total-label">\u0418\u0422\u041e\u0413\u041e</span>
+          <span class="order-summary-total-value">${escapeHtml(toMoney(total))}</span>
+        </div>
+      </div>
+    `;
+  }
+
   function getRightOrderCheckoutSummaryByOrderId(orderId) {
     const id = Number(orderId || 0);
     const order = (Array.isArray(state.rightOrders) ? state.rightOrders : []).find((x) => Number(x?.id || 0) === id) || null;
@@ -1133,6 +1897,10 @@
         cartItems: [],
         cartItemsCount: 0,
         subtotal: 0,
+        subtotalAfterCustomerDiscount: 0,
+        customerOrderDiscount: 0,
+        customerOrderDiscountTitles: [],
+        customerOrderAppliedDiscounts: [],
         deliveryCost: 0,
         deliveryApplied: 0,
         freeDeliveryFrom: null,
@@ -1257,7 +2025,7 @@
 
         const comboPayload = {
           type: "combo",
-          combo_title: String(item?.combo_title || item?.name || "Комбо"),
+          combo_title: String(item?.combo_title || item?.name || "РљРѕРјР±Рѕ"),
           qty,
           line_total: lineTotal,
           old_line_total: oldLineTotal,
@@ -1312,6 +2080,28 @@
     return out;
   }
 
+  let rightCheckoutSendingOverlay = null;
+
+  function ensureRightCheckoutSendingOverlay() {
+    if (rightCheckoutSendingOverlay && rightCheckoutSendingOverlay.isConnected) return rightCheckoutSendingOverlay;
+    const overlay = document.createElement("div");
+    overlay.className = "shop-checkout-sending-overlay hidden";
+    overlay.innerHTML = `
+      <div class="shop-checkout-sending-card">
+        <div class="shop-checkout-sending-spinner" aria-hidden="true"></div>
+        <div class="shop-checkout-sending-text">\u041f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435, \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u044f\u0435\u043c \u0437\u0430\u043a\u0430\u0437...</div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    rightCheckoutSendingOverlay = overlay;
+    return overlay;
+  }
+
+  function setRightCheckoutSendingOverlayVisible(visible) {
+    const overlay = ensureRightCheckoutSendingOverlay();
+    overlay.classList.toggle("hidden", !visible);
+  }
+
   function clearRightOrderCart(orderId) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return false;
@@ -1333,57 +2123,93 @@
     if (index < 0) return;
     const order = state.rightOrders[index] || {};
     const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+    const submitMode = String(order?.mode || "add").toLowerCase();
+    const editOrderId = Number(order?.editOrderId || 0);
+    const isEditSubmit = submitMode === "edit" && editOrderId > 0;
     const summary = getRightOrderCheckoutSummary(order);
     const cartItems = Array.isArray(form.cartItems) ? form.cartItems : [];
     if (!cartItems.length) {
-      alert("Корзина пуста");
+      alert("РљРѕСЂР·РёРЅР° РїСѓСЃС‚Р°");
       return;
     }
 
     const phoneDigits = normalizePhoneRu(form.phone);
-    if (phoneDigits.length !== 11) {
-      alert("Введите корректный номер телефона");
+    const activeDeliveryTypes = (Array.isArray(state.rightDeliveryTypes) ? state.rightDeliveryTypes : [])
+      .filter((item) => Number(item?.is_active || 0) === 1);
+    const deliveryMethodOptions = activeDeliveryTypes.map((item) => String(item?.code || "")).filter(Boolean);
+    const fallbackDeliveryMethod = String((activeDeliveryTypes.find((item) => Number(item?.is_default || 0) === 1) || activeDeliveryTypes[0] || {}).code || "delivery");
+    const rawMethodCode = String(form.pickupMethod || "").trim();
+    const methodCode = deliveryMethodOptions.includes(rawMethodCode) ? rawMethodCode : fallbackDeliveryMethod;
+    const methodMeta = activeDeliveryTypes.find((item) => String(item?.code || "") === methodCode) || null;
+    const requireClientData = Number(methodMeta?.require_client_data ?? 1) !== 0;
+    const hasPhoneValue = phoneDigits.length > 1;
+    if (requireClientData && phoneDigits.length !== 11) {
+      alert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u044b\u0439 \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430");
+      return;
+    }
+    if (!requireClientData && hasPhoneValue && phoneDigits.length !== 11) {
+      alert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u044b\u0439 \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430");
       return;
     }
 
-    const customerName = String(form.name || "").trim() || "Клиент";
-    const methodCode = String(form.pickupMethod || "").trim() || "delivery";
-    const paymentCode = String(form.paymentMethod || "").trim();
-    const timeOptionCode = String(form.cookWhen || "asap").trim() || "asap";
+    const customerNameRaw = String(form.name || "").trim();
+    const customerName = customerNameRaw || (requireClientData ? "\u041a\u043b\u0438\u0435\u043d\u0442" : null);
+    const customerPhone = hasPhoneValue && phoneDigits.length === 11 ? `+${phoneDigits}` : null;
+
+    const activePaymentTypes = (Array.isArray(state.rightPaymentTypes) ? state.rightPaymentTypes : [])
+      .filter((item) => Number(item?.is_active || 0) === 1);
+    const paymentMethodOptions = activePaymentTypes.map((item) => String(item?.code || "")).filter(Boolean);
+    const fallbackPaymentCode = paymentMethodOptions[0] || "cash";
+    const rawPaymentCode = String(form.paymentMethod || "").trim();
+    const paymentCode = paymentMethodOptions.includes(rawPaymentCode) ? rawPaymentCode : fallbackPaymentCode;
+
+    const activeTimeOptions = (Array.isArray(state.rightTimeOptions) ? state.rightTimeOptions : [])
+      .filter((item) => Number(item?.is_active || 0) === 1);
+    const cookWhenOptions = activeTimeOptions.map((item) => String(item?.code || "")).filter(Boolean);
+    const fallbackCookWhenCode = cookWhenOptions[0] || "asap";
+    const rawTimeOptionCode = String(form.cookWhen || "asap").trim() || "asap";
+    const timeOptionCode = cookWhenOptions.includes(rawTimeOptionCode) ? rawTimeOptionCode : fallbackCookWhenCode;
     const isDeliveryMethod = isDeliveryMethodCode(methodCode);
     const isPickupMethod = isPickupLikeMethod(methodCode);
     const deliveryAddress = String(form.address || "").trim();
     if (isDeliveryMethod && !deliveryAddress) {
-      alert("Введите адрес доставки");
+      alert("Р’РІРµРґРёС‚Рµ Р°РґСЂРµСЃ РґРѕСЃС‚Р°РІРєРё");
       return;
     }
     let pickupStoreId = null;
     if (isPickupMethod) {
       const resolvedStoreId = getRightOrderPreferredPickupStoreId();
       if (!(resolvedStoreId > 0)) {
-        alert("Не удалось определить точку самовывоза");
+        alert("РќРµ СѓРґР°Р»РѕСЃСЊ РѕРїСЂРµРґРµР»РёС‚СЊ С‚РѕС‡РєСѓ СЃР°РјРѕРІС‹РІРѕР·Р°");
         return;
       }
       pickupStoreId = resolvedStoreId;
     }
     if (!paymentCode) {
-      alert("Выберите способ оплаты");
+      alert("Р’С‹Р±РµСЂРёС‚Рµ СЃРїРѕСЃРѕР± РѕРїР»Р°С‚С‹");
       return;
     }
 
     const cookWhenKind = getCookWhenKind(timeOptionCode);
     let scheduledAt = null;
     if (cookWhenKind === "at_time" || cookWhenKind === "on_date") {
-      const timeValue = String(form.dateTime || "").trim();
+      const currentDateValue = String(form.scheduledDate || "").trim();
+      const baseDateValue = /^\d{4}-\d{2}-\d{2}$/.test(currentDateValue)
+        ? currentDateValue
+        : (cookWhenKind === "on_date" ? getTomorrowIsoDate() : formatIsoDate(getTodayDate()));
+      const slotsDateValue = cookWhenKind === "on_date" ? baseDateValue : formatIsoDate(getTodayDate());
+      const timeSlots = buildTimeSlotsForOptionWithDate(timeOptionCode, slotsDateValue);
+      const currentTimeValue = String(form.dateTime || "").trim();
+      const timeValue = timeSlots.includes(currentTimeValue) ? currentTimeValue : (timeSlots[0] || currentTimeValue);
       if (!/^\d{1,2}:\d{2}$/.test(timeValue)) {
-        alert("Укажите время приготовления");
+        alert("РЈРєР°Р¶РёС‚Рµ РІСЂРµРјСЏ РїСЂРёРіРѕС‚РѕРІР»РµРЅРёСЏ");
         return;
       }
       const dateValue = cookWhenKind === "on_date"
-        ? String(form.scheduledDate || "").trim()
+        ? baseDateValue
         : formatIsoDate(getTodayDate());
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
-        alert("Укажите дату приготовления");
+        alert("РЈРєР°Р¶РёС‚Рµ РґР°С‚Сѓ РїСЂРёРіРѕС‚РѕРІР»РµРЅРёСЏ");
         return;
       }
       scheduledAt = `${dateValue} ${timeValue}:00`;
@@ -1396,7 +2222,7 @@
         if (changeType === "other") {
           const numeric = Number(String(form.changeAmount || "").replace(/[^\d]/g, ""));
           if (!Number.isFinite(numeric) || numeric <= 0) {
-            alert("Введите сумму для сдачи");
+            alert("Р’РІРµРґРёС‚Рµ СЃСѓРјРјСѓ РґР»СЏ СЃРґР°С‡Рё");
             return;
           }
           changeFrom = numeric;
@@ -1406,22 +2232,28 @@
         }
       }
       if (changeFrom != null && changeFrom <= summary.payableTotal) {
-        alert(`Сумма для сдачи должна быть больше ${toMoney(summary.payableTotal)}`);
+        alert(`РЎСѓРјРјР° РґР»СЏ СЃРґР°С‡Рё РґРѕР»Р¶РЅР° Р±С‹С‚СЊ Р±РѕР»СЊС€Рµ ${toMoney(summary.payableTotal)}`);
         return;
       }
     }
 
     const items = buildRightOrderPayloadItems(cartItems);
     if (!items.length) {
-      alert("Не удалось собрать позиции заказа");
+      alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР±СЂР°С‚СЊ РїРѕР·РёС†РёРё Р·Р°РєР°Р·Р°");
       return;
     }
+    const selectedOrderStatusId = isEditSubmit ? Number(form.orderStatusId || 0) : 0;
+    const initialOrderStatusId = isEditSubmit ? Number(form.orderStatusInitialId || 0) : 0;
 
     const payload = {
       customer_name: customerName,
-      customer_phone: `+${phoneDigits}`,
+      customer_phone: customerPhone,
+      customer_id: Number(form.clientId || 0) > 0 ? Number(form.clientId) : null,
       method_code: methodCode,
       delivery_address: isDeliveryMethod ? deliveryAddress : null,
+      delivery_address_id: isDeliveryMethod
+        ? (Number(state.rightAddressSelectedIdByOrder.get(id) || 0) > 0 ? Number(state.rightAddressSelectedIdByOrder.get(id) || 0) : null)
+        : null,
       pickup_store_id: pickupStoreId,
       comment: String(form.comment || "").trim() || null,
       time_option_code: timeOptionCode,
@@ -1432,16 +2264,37 @@
     };
 
     state.rightCheckoutSubmittingByOrder.set(id, true);
+    setRightCheckoutSendingOverlayVisible(true);
     renderRightOrderTabs();
     try {
-      const json = await apiJson("/api/public/orders", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-      const createdPublicId = String(json?.data?.public_id || "").trim();
-      const createdId = Number(json?.data?.id || 0);
+      let submittedPublicId = "";
+      let submittedId = 0;
+      if (isEditSubmit) {
+        const editStoreId = Number(order?.storeId || 0) > 0 ? Number(order.storeId) : null;
+        const json = await apiJson(`/api/admin/orders/${editOrderId}`, {
+          method: "PUT",
+          headers: editStoreId ? { "x-store-id": String(editStoreId) } : undefined,
+          body: JSON.stringify(payload),
+        });
+        if (selectedOrderStatusId > 0 && selectedOrderStatusId !== initialOrderStatusId) {
+          await apiJson(`/api/admin/orders/${editOrderId}/status`, {
+            method: "PUT",
+            headers: editStoreId ? { "x-store-id": String(editStoreId) } : undefined,
+            body: JSON.stringify({ status_id: selectedOrderStatusId }),
+          });
+        }
+        submittedId = Number(json?.data?.id || editOrderId || 0);
+        submittedPublicId = String(json?.data?.public_id || "").trim();
+      } else {
+        const json = await apiJson("/api/public/orders", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        submittedPublicId = String(json?.data?.public_id || "").trim();
+        submittedId = Number(json?.data?.id || 0);
+      }
       const latestIndex = getRightOrderIndexById(id);
-      if (latestIndex >= 0) {
+      if (!isEditSubmit && latestIndex >= 0) {
         const latestOrder = state.rightOrders[latestIndex] || {};
         const latestForm = latestOrder.form && typeof latestOrder.form === "object" ? { ...latestOrder.form } : {};
         latestForm.cartItems = [];
@@ -1454,13 +2307,26 @@
       if (typeof window.updateActiveOrdersBadge === "function") {
         Promise.resolve(window.updateActiveOrdersBadge({ force: true })).catch(() => {});
       }
-      alert(createdPublicId
-        ? `Заказ #${createdPublicId} отправлен`
-        : (createdId > 0 ? "Заказ отправлен" : "Заказ создан"));
+      document.dispatchEvent(
+        new CustomEvent("neworder:order-submitted", {
+          detail: {
+            draftOrderId: id,
+            createdOrderId: !isEditSubmit && submittedId > 0 ? submittedId : null,
+            createdOrderPublicId: !isEditSubmit ? (submittedPublicId || null) : null,
+            updatedOrderId: isEditSubmit && submittedId > 0 ? submittedId : null,
+            updatedOrderPublicId: isEditSubmit ? (submittedPublicId || null) : null,
+            submittedMode: isEditSubmit ? "edit" : "create",
+          },
+        })
+      );
     } catch (e) {
-      alert(`Ошибка оформления заказа: ${e?.message || "UNKNOWN"}`);
+      const action = isEditSubmit
+        ? "\u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u044f"
+        : "\u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u044f";
+      alert(`\u041e\u0448\u0438\u0431\u043a\u0430 ${action} \u0437\u0430\u043a\u0430\u0437\u0430: ${e?.message || "UNKNOWN"}`);
     } finally {
       state.rightCheckoutSubmittingByOrder.delete(id);
+      setRightCheckoutSendingOverlayVisible(false);
       renderRightOrderTabs();
     }
   }
@@ -1601,6 +2467,7 @@
         rightDeliveryTypes: Array.isArray(state.rightDeliveryTypes) ? state.rightDeliveryTypes : [],
         rightPaymentTypes: Array.isArray(state.rightPaymentTypes) ? state.rightPaymentTypes : [],
         rightTimeOptions: Array.isArray(state.rightTimeOptions) ? state.rightTimeOptions : [],
+        rightOrderStatuses: Array.isArray(state.rightOrderStatuses) ? state.rightOrderStatuses : [],
         rightDeliverySettings: state.rightDeliverySettings && typeof state.rightDeliverySettings === "object"
           ? state.rightDeliverySettings
           : null,
@@ -1636,9 +2503,13 @@
 
     state.categories = Array.isArray(snapshot.categories) ? snapshot.categories : [];
     state.productCategories = Array.isArray(snapshot.productCategories) ? snapshot.productCategories : [];
-    state.rightDeliveryTypes = Array.isArray(snapshot.rightDeliveryTypes) ? snapshot.rightDeliveryTypes : [];
+    state.rightDeliveryTypes = (Array.isArray(snapshot.rightDeliveryTypes) ? snapshot.rightDeliveryTypes : [])
+      .map(normalizeRightDeliveryTypeRef)
+      .filter((item) => item.code)
+      .sort((a, b) => (a.sort - b.sort) || (a.id - b.id));
     state.rightPaymentTypes = Array.isArray(snapshot.rightPaymentTypes) ? snapshot.rightPaymentTypes : [];
     state.rightTimeOptions = Array.isArray(snapshot.rightTimeOptions) ? snapshot.rightTimeOptions : [];
+    state.rightOrderStatuses = Array.isArray(snapshot.rightOrderStatuses) ? snapshot.rightOrderStatuses : [];
     state.rightDeliverySettings = snapshot.rightDeliverySettings && typeof snapshot.rightDeliverySettings === "object"
       ? snapshot.rightDeliverySettings
       : null;
@@ -1735,12 +2606,12 @@
 
   function formatClientAddressLine(address) {
     if (!address || typeof address !== "object") return "";
-    const street = String(address.street || "").trim();
-    const house = String(address.house || "").trim();
-    const entrance = String(address.entrance || "").trim();
-    const floor = String(address.floor || "").trim();
-    const apartment = String(address.apartment || "").trim();
-    const comment = String(address.comment || "").trim();
+    const street = repairUtf8Mojibake(String(address.street || "").trim());
+    const house = repairUtf8Mojibake(String(address.house || "").trim());
+    const entrance = repairUtf8Mojibake(String(address.entrance || "").trim());
+    const floor = repairUtf8Mojibake(String(address.floor || "").trim());
+    const apartment = repairUtf8Mojibake(String(address.apartment || "").trim());
+    const comment = repairUtf8Mojibake(String(address.comment || "").trim());
     const base = [street, house ? `д. ${house}` : ""].filter(Boolean).join(", ");
     const details = [
       entrance ? `под. ${entrance}` : "",
@@ -1766,11 +2637,16 @@
       const rows = Array.isArray(listJson?.data) ? listJson.data : [];
       const match = rows.find((client) => normalizePhoneDigits(client?.phone) === normalizedDigits) || rows[0] || null;
       if (!match || !(Number(match?.id || 0) > 0)) {
-        payload = { found: false, clientId: 0, name: "", address: "", addresses: [] };
+        payload = { found: false, clientId: 0, name: "", address: "", addresses: [], discounts: [] };
       } else {
         const clientId = Number(match.id);
-        const addressesJson = await apiJson(`/api/admin/clients/${clientId}/addresses`);
+        const [addressesJson, discountsJson] = await Promise.all([
+          apiJson(`/api/admin/clients/${clientId}/addresses`),
+          apiJson(`/api/admin/clients/${clientId}/discounts`).catch(() => ({ data: [] })),
+        ]);
         const addresses = Array.isArray(addressesJson?.data) ? addressesJson.data : [];
+        const discountsRaw = Array.isArray(discountsJson?.data) ? discountsJson.data : [];
+        const discounts = discountsRaw.map((row) => normalizeRightClientDiscountRow(row)).filter((row) => row.id > 0);
         const primaryAddress = addresses.find((item) => Number(item?.is_default || 0) === 1) || addresses[0] || null;
         payload = {
           found: true,
@@ -1778,6 +2654,7 @@
           name: String(match?.name || "").trim(),
           address: formatClientAddressLine(primaryAddress),
           addresses,
+          discounts,
         };
       }
       state.rightClientLookupCache.set(cacheKey, payload);
@@ -1793,6 +2670,8 @@
       form.name = payload.name || form.name || "";
       form.address = payload.address || form.address || "";
       state.rightClientAddressesByOrder.set(Number(orderId || 0), Array.isArray(payload.addresses) ? payload.addresses : []);
+      const discounts = Array.isArray(payload.discounts) ? payload.discounts : [];
+      state.rightClientDiscountsByClientId.set(Number(payload.clientId || 0), discounts);
     } else {
       form.clientId = null;
       state.rightClientAddressesByOrder.set(Number(orderId || 0), []);
@@ -1905,15 +2784,16 @@
 
   function normalizeClientAddressRow(row) {
     const item = row && typeof row === "object" ? row : {};
+    const text = (value) => repairUtf8Mojibake(String(value || "").trim());
     return {
       id: Number(item.id || 0),
-      city: String(item.city || "").trim(),
-      street: String(item.street || "").trim(),
-      house: String(item.house || "").trim(),
-      entrance: String(item.entrance || "").trim(),
-      floor: String(item.floor || "").trim(),
-      apartment: String(item.apartment || "").trim(),
-      comment: String(item.comment || "").trim(),
+      city: text(item.city),
+      street: text(item.street),
+      house: text(item.house),
+      entrance: text(item.entrance),
+      floor: text(item.floor),
+      apartment: text(item.apartment),
+      comment: text(item.comment),
       is_default: Number(item.is_default || 0),
     };
   }
@@ -1933,7 +2813,7 @@
 
   function formatClientAddressShort(row, forcedCity = "") {
     const a = normalizeClientAddressRow(row);
-    const city = String(forcedCity || a.city || getDefaultRightAddressCity()).trim();
+    const city = repairUtf8Mojibake(String(forcedCity || a.city || getDefaultRightAddressCity()).trim());
     const parts = [
       city,
       [a.street, a.house].filter(Boolean).join(" "),
@@ -2013,11 +2893,11 @@
     const cityForRows = String(currentDraft?.city || getDefaultRightAddressCity()).trim();
     list.innerHTML = rows.map((a) => `
       <div class="new-order-right-address-row ${Number(a.id) === selectedId ? "is-selected" : ""}" data-address-id="${Number(a.id)}">
-        <button type="button" class="new-order-right-address-radio" data-action="right-address-select" data-address-id="${Number(a.id)}" aria-label="Выбрать адрес"></button>
+        <button type="button" class="new-order-right-address-radio" data-action="right-address-select" data-address-id="${Number(a.id)}" aria-label="Р’С‹Р±СЂР°С‚СЊ Р°РґСЂРµСЃ"></button>
         <div class="new-order-right-address-row-main">${escapeHtml(formatClientAddressShort(a, cityForRows))}</div>
         <div class="new-order-right-address-row-actions">
-          <button type="button" class="new-order-right-address-row-btn" data-action="right-address-edit-item" data-address-id="${Number(a.id)}" aria-label="Редактировать"><i class="fas fa-pen"></i></button>
-          <button type="button" class="new-order-right-address-row-btn is-danger" data-action="right-address-del-item" data-address-id="${Number(a.id)}" aria-label="Удалить"><i class="fas fa-times"></i></button>
+          <button type="button" class="new-order-right-address-row-btn" data-action="right-address-edit-item" data-address-id="${Number(a.id)}" aria-label="Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ"><i class="fas fa-pen"></i></button>
+          <button type="button" class="new-order-right-address-row-btn is-danger" data-action="right-address-del-item" data-address-id="${Number(a.id)}" aria-label="РЈРґР°Р»РёС‚СЊ"><i class="fas fa-times"></i></button>
         </div>
       </div>
     `).join("");
@@ -2038,7 +2918,7 @@
       : (cities[0] || getDefaultRightAddressCity());
 
     wrapEl.dataset.value = current;
-    valueEl.textContent = current || "—";
+    valueEl.textContent = current || "вЂ”";
     dropdown.innerHTML = "";
 
     cities.forEach((c) => {
@@ -2090,19 +2970,19 @@
 
   function getDefaultRightAddressCity() {
     const tenant = getTenantFromStorage();
-    const direct = String(tenant?.city || tenant?.city_name || "").trim();
+    const direct = repairUtf8Mojibake(String(tenant?.city || tenant?.city_name || "").trim());
     if (direct) return direct;
     return "Новоалтайск";
   }
 
   function buildRightAddressLine(parts) {
-    const city = String(parts?.city || "").trim();
-    const street = String(parts?.street || "").trim();
-    const house = String(parts?.house || "").trim();
-    const entrance = String(parts?.entrance || "").trim();
-    const floor = String(parts?.floor || "").trim();
-    const apartment = String(parts?.apartment || "").trim();
-    const comment = String(parts?.comment || "").trim();
+    const city = repairUtf8Mojibake(String(parts?.city || "").trim());
+    const street = repairUtf8Mojibake(String(parts?.street || "").trim());
+    const house = repairUtf8Mojibake(String(parts?.house || "").trim());
+    const entrance = repairUtf8Mojibake(String(parts?.entrance || "").trim());
+    const floor = repairUtf8Mojibake(String(parts?.floor || "").trim());
+    const apartment = repairUtf8Mojibake(String(parts?.apartment || "").trim());
+    const comment = repairUtf8Mojibake(String(parts?.comment || "").trim());
     const head = [city ? `г. ${city}` : "", street ? `ул. ${street}` : "", house ? `д. ${house}` : ""].filter(Boolean).join(", ");
     const details = [entrance ? `под. ${entrance}` : "", floor ? `эт. ${floor}` : "", apartment ? `кв. ${apartment}` : ""].filter(Boolean).join(", ");
     return [head, details, comment].filter(Boolean).join(", ");
@@ -2111,13 +2991,13 @@
   function fillRightAddressInputs(draft) {
     const { city, street, house, entrance, floor, apartment, comment } = getRightAddressOverlayElements();
     if (!city || !street || !house || !entrance || !floor || !apartment || !comment) return;
-    initRightAddressCitySelect(city, String(draft?.city || ""));
-    street.value = String(draft?.street || "");
-    house.value = String(draft?.house || "");
-    entrance.value = String(draft?.entrance || "");
-    floor.value = String(draft?.floor || "");
-    apartment.value = String(draft?.apartment || "");
-    comment.value = String(draft?.comment || "");
+    initRightAddressCitySelect(city, repairUtf8Mojibake(String(draft?.city || "")));
+    street.value = repairUtf8Mojibake(String(draft?.street || ""));
+    house.value = repairUtf8Mojibake(String(draft?.house || ""));
+    entrance.value = repairUtf8Mojibake(String(draft?.entrance || ""));
+    floor.value = repairUtf8Mojibake(String(draft?.floor || ""));
+    apartment.value = repairUtf8Mojibake(String(draft?.apartment || ""));
+    comment.value = repairUtf8Mojibake(String(draft?.comment || ""));
   }
 
   function readRightAddressInputs() {
@@ -2308,9 +3188,9 @@
     if (customTitle) return customTitle;
     const ids = Array.isArray(block?.categoryIds) ? block.categoryIds : [];
     const firstTitle = String((categoryById.get(Number(ids[0] || 0)) || {}).title || "").trim();
-    if (!ids.length) return `Блок ${blockIndex + 1}`;
-    if (ids.length === 1) return firstTitle || `Блок ${blockIndex + 1}`;
-    return firstTitle ? `${firstTitle} +${ids.length - 1}` : `Блок ${blockIndex + 1}`;
+    if (!ids.length) return `Р‘Р»РѕРє ${blockIndex + 1}`;
+    if (ids.length === 1) return firstTitle || `Р‘Р»РѕРє ${blockIndex + 1}`;
+    return firstTitle ? `${firstTitle} +${ids.length - 1}` : `Р‘Р»РѕРє ${blockIndex + 1}`;
   }
 
   function renderCheckoutBlockChips(blocks, categoryById) {
@@ -2437,6 +3317,44 @@
     return getCheckoutBlocks().find((block) => Number(block?.id || 0) === id) || null;
   }
 
+  function inferCheckoutRequireAllByCategoryIds(categoryIds) {
+    const target = [...new Set((Array.isArray(categoryIds) ? categoryIds : [])
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0))]
+      .sort((a, b) => a - b);
+    if (!target.length) return null;
+    const blocks = getCheckoutBlocks();
+    const matches = blocks.filter((block) => {
+      const ids = [...new Set((Array.isArray(block?.categoryIds) ? block.categoryIds : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0))]
+        .sort((a, b) => a - b);
+      if (ids.length < target.length) return false;
+      return target.every((id) => ids.includes(id));
+    });
+    if (!matches.length) return null;
+    if (matches.some((block) => block && block.requireAll === false)) return false;
+    return true;
+  }
+
+  function getCartItemCheckoutRequireAll(item) {
+    if (!item || typeof item !== "object") return null;
+    if (Object.prototype.hasOwnProperty.call(item, "checkout_require_all")) {
+      return Boolean(item.checkout_require_all);
+    }
+    const blockId = Number(item?.checkout_block_id || 0);
+    if (blockId > 0) {
+      const block = getCheckoutBlockById(blockId);
+      if (block) return Boolean(block.requireAll);
+    }
+    const sections = Array.isArray(item?.sections) ? item.sections : [];
+    const categoryIds = sections
+      .map((section) => Number(section?.category_id || 0))
+      .filter((id) => id > 0);
+    if (!categoryIds.length) return null;
+    return inferCheckoutRequireAllByCategoryIds(categoryIds);
+  }
+
   function getAllCategoryIdsFromBlocks(blocks) {
     const ids = [];
     (Array.isArray(blocks) ? blocks : []).forEach((block) => {
@@ -2451,6 +3369,10 @@
 
   function getCheckoutIngredientsPopoverKey(sectionKey, productId) {
     return `${String(sectionKey || "")}__${Number(productId || 0)}`;
+  }
+
+  function isProductAvailableFlag(product) {
+    return Number(product?.is_available ?? 1) === 1;
   }
 
   function getSelectedVariantLabelFromChips(chips) {
@@ -2470,14 +3392,20 @@
       if (!products.length) return;
 
       const savedSelectedProductId = Number(state.checkoutSelectedProductByCategory.get(sectionKey) || 0);
-      const defaultSelectedProductId = safeBlock.requireAll ? Number(products[0]?.id || 0) : 0;
-      const selectedProductId = products.some((p) => Number(p?.id || 0) === savedSelectedProductId)
+      const firstAvailableProductId = safeBlock.requireAll
+        ? Number((products.find((p) => isProductAvailableFlag(p)) || {}).id || 0)
+        : 0;
+      const selectedProductId = products.some((p) => Number(p?.id || 0) === savedSelectedProductId && isProductAvailableFlag(p))
         ? savedSelectedProductId
-        : defaultSelectedProductId;
+        : firstAvailableProductId;
+      if (!(selectedProductId > 0)) {
+        state.checkoutSelectedProductByCategory.delete(sectionKey);
+        return;
+      }
       if (!Number.isFinite(selectedProductId) || selectedProductId <= 0) return;
 
       const selectedProduct = products.find((p) => Number(p?.id || 0) === selectedProductId) || null;
-      if (!selectedProduct) return;
+      if (!selectedProduct || !isProductAvailableFlag(selectedProduct)) return;
       const selectedVariantIndex = Number(state.selectedVariants.get(selectedProductId));
       const selectedProductVariants = state.productVariants.get(selectedProductId) || [];
       const primaryVariantGroup = selectedProductVariants[0] || null;
@@ -2494,8 +3422,8 @@
         ? roundPrice(Number(currentPricing?.oldPrice || 0))
         : 0;
       const variantLabel = hasVariants ? getSelectedVariantLabelFromChips(variantChips) : "";
-      const categoryTitle = String((categoryById.get(categoryId) || {}).title || "Категория");
-      const productName = String(selectedProduct?.name || "Товар");
+      const categoryTitle = String((categoryById.get(categoryId) || {}).title || "РљР°С‚РµРіРѕСЂРёСЏ");
+      const productName = String(selectedProduct?.name || "РўРѕРІР°СЂ");
 
       state.checkoutSelectedProductByCategory.set(sectionKey, selectedProductId);
       items.push({
@@ -2564,7 +3492,10 @@
       return {
         id,
         type: "product",
-        name: String(one.productName || "Товар"),
+        name: String(one.productName || "РўРѕРІР°СЂ"),
+        checkout_block_id: Number(safeBlock?.id || 0) || null,
+        checkout_require_all: Boolean(safeBlock?.requireAll),
+        checkout_category_ids: Array.isArray(safeBlock?.categoryIds) ? [...safeBlock.categoryIds] : [],
         product_id: Number(one?.productId || 0),
         category_name: String(one.categoryTitle || ""),
         qty: 1,
@@ -2606,7 +3537,10 @@
     return {
       id,
       type: "combo",
-      name: getCheckoutBlockChipTitle(safeBlock, 0, categoryById) || "Комбо",
+      name: getCheckoutBlockChipTitle(safeBlock, 0, categoryById) || "РљРѕРјР±Рѕ",
+      checkout_block_id: Number(safeBlock?.id || 0) || null,
+      checkout_require_all: Boolean(safeBlock?.requireAll),
+      checkout_category_ids: Array.isArray(safeBlock?.categoryIds) ? [...safeBlock.categoryIds] : [],
       qty: 1,
       combo_discount_percent: comboDiscountPercent,
       unit_price_before_discount: sumOld,
@@ -2887,7 +3821,7 @@
     const item = {
       id: Date.now() + Math.floor(Math.random() * 10000),
       type: "product",
-      name: String(product?.name || "Товар"),
+      name: String(product?.name || "РўРѕРІР°СЂ"),
       product_id: pid,
       qty: safeQty,
       photos: [String(getProductPhoto(product) || "")].filter(Boolean),
@@ -3141,7 +4075,7 @@
             <span class="qty-pill__center" id="newOrderComboOverlayQtyValue">1</span>
             <button class="qty-pill__btn qty-pill__btn--plus" type="button" data-action="combo-overlay-qty-plus">+</button>
           </div>
-          <button class="shop-checkout-btn shop-pd-action new-order-product-sheet-add shop-combo-action" type="button" id="newOrderComboOverlayAddBtn" data-action="combo-overlay-add">в корзину</button>
+          <button class="shop-checkout-btn shop-pd-action new-order-product-sheet-add shop-combo-action" type="button" id="newOrderComboOverlayAddBtn" data-action="combo-overlay-add">РІ РєРѕСЂР·РёРЅСѓ</button>
         </div>
       </div>
     `;
@@ -3200,32 +4134,74 @@
   function getComboSeedSelectionsFromCartItem(item) {
     if (!item || typeof item !== "object") return [];
     const explicit = Array.isArray(item?.selections) ? item.selections : [];
-    if (explicit.length) return explicit.map((s) => cloneComboValue(s));
     const sections = Array.isArray(item?.sections) ? item.sections : [];
-    if (!sections.length) return [];
-    return sections.map((section) => ({
-      product_id: Number(section?.product_id || 0),
-      product_name: String(section?.product_name || ""),
-      product_photo: String(section?.photo_url || ""),
-      variant_label: String(section?.variant?.label || ""),
-      variant_group_id: Number(section?.pricing?.variant_group?.id || section?.pricing?.variant_group_id || 0) || null,
-      variant_value_index: Number.isFinite(Number(section?.variant?.selected_index)) ? Number(section.variant.selected_index) : null,
-      unit_id: Number(section?.pricing?.unit_id || 0) || null,
-      variant_group_title: String(section?.variant_group_title || ""),
-      variant_unit: String(section?.variant_unit || ""),
-      unit_price_override: Number(section?.price || 0),
-      unit_price_before_discount: Number(section?.old_price || section?.price || 0),
-      ingredients_display: Array.isArray(section?.ingredients)
+    if (!sections.length) {
+      return explicit.length ? explicit.map((s) => cloneComboValue(s)) : [];
+    }
+
+    const maxLength = Math.max(sections.length, explicit.length);
+    const out = [];
+    for (let idx = 0; idx < maxLength; idx += 1) {
+      const section = sections[idx];
+      const fallbackRaw = explicit[idx];
+      const fallback = fallbackRaw && typeof fallbackRaw === "object" ? fallbackRaw : null;
+      if (!section || typeof section !== "object") {
+        if (fallback) out.push(cloneComboValue(fallback));
+        continue;
+      }
+
+      const variant = section?.variant && typeof section.variant === "object" ? section.variant : {};
+      const pricing = section?.pricing && typeof section.pricing === "object" ? section.pricing : {};
+      const variantGroup = pricing?.variant_group && typeof pricing.variant_group === "object"
+        ? pricing.variant_group
+        : {};
+      const mappedIngredients = Array.isArray(section?.ingredients)
         ? section.ingredients.map((ing) => ({
-            ingredient_id: Number(ing?.ingredient_id || 0),
-            name: String(ing?.ingredient_name || ""),
-            qty: Number(ing?.qty || 0),
-            quantity: Number(ing?.qty || 0),
-            unit: String(ing?.unit_label || ""),
+            ingredient_id: Number(ing?.ingredient_id || 0) || null,
+            product_id: Number(ing?.ingredient_id || 0) || null,
+            quantity: Number(ing?.qty ?? ing?.quantity ?? 0),
+            qty: Number(ing?.qty ?? ing?.quantity ?? 0),
+            unit: String(ing?.unit_label || ing?.unit || ""),
             unit_id: Number(ing?.unit_id || 0) || null,
+            name: String(ing?.ingredient_name || ing?.name || ""),
           }))
-        : [],
-    }));
+        : [];
+
+      const next = {
+        block_index: Number.isFinite(Number(fallback?.block_index)) ? Number(fallback.block_index) : idx,
+        block_id: Number(section?.block_id || section?.category_id || fallback?.block_id || 0) || null,
+        block_title: String(section?.block_title || section?.category_name || fallback?.block_title || ""),
+        product_id: Number(section?.product_id || fallback?.product_id || 0),
+        product_name: String(section?.product_name || fallback?.product_name || ""),
+        product_photo: String(section?.photo_url || fallback?.product_photo || ""),
+        variant_label: String(variant?.label || fallback?.variant_label || ""),
+        variant_group_id: Number(
+          pricing?.variant_group_id
+          || variantGroup?.id
+          || variantGroup?.variant_group_id
+          || fallback?.variant_group_id
+          || 0
+        ) || null,
+        variant_value_index: Number.isFinite(Number(variant?.selected_index))
+          ? Number(variant.selected_index)
+          : (Number.isFinite(Number(fallback?.variant_value_index)) ? Number(fallback.variant_value_index) : null),
+        unit_id: Number(pricing?.unit_id || fallback?.unit_id || 0) || null,
+        variant_group_title: String(section?.variant_group_title || variantGroup?.title || fallback?.variant_group_title || ""),
+        variant_unit: String(section?.variant_unit || fallback?.variant_unit || getVariantUnitLabel(variantGroup) || ""),
+        unit_price_override: Number.isFinite(Number(section?.price))
+          ? Number(section.price)
+          : (Number.isFinite(Number(fallback?.unit_price_override)) ? Number(fallback.unit_price_override) : null),
+        unit_price_before_discount: Number.isFinite(Number(section?.old_price))
+          ? Number(section.old_price)
+          : (Number.isFinite(Number(fallback?.unit_price_before_discount)) ? Number(fallback.unit_price_before_discount) : null),
+        ingredients_display: mappedIngredients.length
+          ? mappedIngredients
+          : (Array.isArray(fallback?.ingredients_display) ? fallback.ingredients_display.map((ing) => cloneComboValue(ing)) : []),
+      };
+      out.push(next);
+    }
+
+    return out.filter((row) => Number(row?.product_id || 0) > 0);
   }
 
   async function hydrateComboBlockSelection(blockIndex, opts = {}) {
@@ -3368,7 +4344,7 @@
       .map((value) => {
         const label = toVariantLabel(value);
         if (!label) return "";
-        const hasLetters = /[a-zа-я]/i.test(label);
+        const hasLetters = /[a-zР°-СЏ]/i.test(label);
         return unit && !hasLetters ? `${label} ${unit}` : label;
       })
       .filter(Boolean);
@@ -3380,15 +4356,23 @@
     const selectedRows = Array.isArray(ingredientsDisplay) ? ingredientsDisplay : [];
     if (!base.length || !selectedRows.length) return base;
     const byId = new Map();
+    const byName = new Map();
     selectedRows.forEach((row) => {
+      const qty = Number(row?.qty ?? row?.quantity ?? 0);
+      if (!Number.isFinite(qty)) return;
       const ingId = Number(row?.ingredient_id || 0);
-      if (!(ingId > 0)) return;
-      byId.set(ingId, Number(row?.qty ?? row?.quantity ?? 0));
+      if (ingId > 0) byId.set(ingId, qty);
+      const nameKey = normalizeCompareToken(row?.name || row?.ingredient_name || "");
+      if (nameKey) byName.set(nameKey, qty);
     });
     return base.map((row) => {
       const ingId = Number(row?.ingredient_id || 0);
-      if (!byId.has(ingId)) return row;
-      return { ...row, qty: Number(byId.get(ingId) || 0) };
+      if (byId.has(ingId)) return { ...row, qty: Number(byId.get(ingId) || 0) };
+      const nameKey = normalizeCompareToken(row?.ingredient_name || row?.name || "");
+      if (nameKey && byName.has(nameKey)) {
+        return { ...row, qty: Number(byName.get(nameKey) || 0) };
+      }
+      return row;
     });
   }
 
@@ -3510,7 +4494,7 @@
       const row = selByBlock.get(blockIndex) || {};
       const newPrice = roundPrice(Number(row?.unit_price_override || 0));
       const oldPrice = roundPrice(Number(row?.unit_price_before_discount || Number(selected?.price || 0)));
-      const name = String(selected?.product_name || "Товар");
+      const name = String(selected?.product_name || "РўРѕРІР°СЂ");
       const photo = resolveMediaUrl(selected?.product_photo || "");
       const detailsHtml = renderComboDetailsLinesHtml({
         ...row,
@@ -3518,12 +4502,12 @@
       });
       return `
         <div class="cart-row shop-combo-row">
-          ${photo ? `<img class="cart-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="cart-thumb">—</div>`}
+          ${photo ? `<img class="cart-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="cart-thumb">вЂ”</div>`}
           <div class="cart-mid shop-combo-mid">
             <div class="cart-title">${escapeHtml(name)}</div>
             ${detailsHtml ? `<div class="cart-sub-container">${detailsHtml}</div>` : ""}
             <div class="shop-combo-row-bottom">
-              <button type="button" class="shop-combo-replace" data-action="combo-overlay-open-picker" data-block-index="${blockIndex}">Заменить</button>
+              <button type="button" class="shop-combo-replace" data-action="combo-overlay-open-picker" data-block-index="${blockIndex}">Р—Р°РјРµРЅРёС‚СЊ</button>
               ${oldPrice > newPrice ? `<span class="shop-combo-old">${escapeHtml(toMoney(oldPrice))}</span>` : ""}
               <span class="shop-combo-price">${escapeHtml(toMoney(newPrice))}</span>
             </div>
@@ -3536,10 +4520,10 @@
       <div class="shop-combo-view">
         <div class="shop-combo-detail shop-combo-detail-scroll">
           <div class="shop-pd-meta">
-            <div class="shop-pd-title">${escapeHtml(String(combo?.title || "Комбо"))}</div>
+            <div class="shop-pd-title">${escapeHtml(String(combo?.title || "РљРѕРјР±Рѕ"))}</div>
           </div>
           ${String(combo?.description || "").trim() ? `<div class="shop-combo-detail-caption">${escapeHtml(String(combo.description || "").trim())}</div>` : ""}
-          <div class="shop-combo-list">${rowsHtml || `<div class="shop-combo-picker-empty">Нет доступных товаров</div>`}</div>
+          <div class="shop-combo-list">${rowsHtml || `<div class="shop-combo-picker-empty">РќРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… С‚РѕРІР°СЂРѕРІ</div>`}</div>
         </div>
       </div>
     `;
@@ -3630,10 +4614,10 @@
         <div class="shop-combo-view">
           <div class="shop-combo-detail shop-combo-detail--picker">
             <div class="shop-pd-meta">
-              <div class="shop-pd-title">${escapeHtml(String(block?.block_title || "Выберите товар"))}</div>
+              <div class="shop-pd-title">${escapeHtml(String(block?.block_title || "Р’С‹Р±РµСЂРёС‚Рµ С‚РѕРІР°СЂ"))}</div>
             </div>
             <div class="shop-combo-picker-list">
-              <div class="shop-combo-picker-empty">Нет товаров в блоке</div>
+              <div class="shop-combo-picker-empty">РќРµС‚ С‚РѕРІР°СЂРѕРІ РІ Р±Р»РѕРєРµ</div>
             </div>
           </div>
         </div>
@@ -3650,7 +4634,7 @@
 
     const renderToken = Number(state.comboModal.pickerRenderToken || 0) + 1;
     state.comboModal.pickerRenderToken = renderToken;
-    list.innerHTML = `<div class="shop-combo-picker-empty">Загрузка...</div>`;
+    list.innerHTML = `<div class="shop-combo-picker-empty">Р—Р°РіСЂСѓР·РєР°...</div>`;
 
     void (async () => {
       const configs = await Promise.all(products.map((prod) => ensureComboPickerProductConfig(prod)));
@@ -3672,7 +4656,7 @@
           ? rowStateRaw
           : makeEmptyComboBlockState();
         const photo = resolveMediaUrl(prod?.product_photo || "");
-        const title = String(prod?.product_name || "Товар");
+        const title = String(prod?.product_name || "РўРѕРІР°СЂ");
         const oldPrice = isSelected && stateRow.unit_price_before_discount != null
           ? roundPrice(Number(stateRow.unit_price_before_discount || 0))
           : roundPrice(Number(prod?.price || 0));
@@ -3691,7 +4675,7 @@
         const variants = Array.isArray(config?.variants) ? config.variants : [];
         const vGroup = Array.isArray(variants) && variants.length ? variants[0] : null;
         const values = Array.isArray(vGroup?.values) ? vGroup.values : [];
-        const vTitle = String(vGroup?.title || "Вариант").trim();
+        const vTitle = String(vGroup?.title || "Р’Р°СЂРёР°РЅС‚").trim();
         const vUnit = getVariantUnitLabel(vGroup);
         const stateVariantIdxRaw = Number(stateRow?.variant_value_index);
         const safeVariantIdx = values.length
@@ -3708,11 +4692,11 @@
 
         const variantsHtml = values.length ? `
           <div class="shop-combo-picker-variants">
-            <div class="shop-combo-picker-expand-title">${escapeHtml(vTitle || "Вариант")}</div>
+            <div class="shop-combo-picker-expand-title">${escapeHtml(vTitle || "Р’Р°СЂРёР°РЅС‚")}</div>
             <div class="shop-combo-picker-variants-row">
               ${values.map((value, variantIndex) => {
                 const valueLabel = toVariantLabel(value);
-                const hasLetters = /[a-zа-я]/i.test(valueLabel);
+                const hasLetters = /[a-zР°-СЏ]/i.test(valueLabel);
                 const chip = vUnit && !hasLetters ? `${valueLabel} ${vUnit}` : valueLabel;
                 return `<button
                   type="button"
@@ -3790,7 +4774,7 @@
         }).filter(Boolean).join("");
         const ingredientsHtml = ingredientsRowsHtml ? `
           <div class="shop-combo-picker-ingredients">
-            <div class="shop-combo-picker-expand-title">Состав (можно настроить):</div>
+            <div class="shop-combo-picker-expand-title">РЎРѕСЃС‚Р°РІ (РјРѕР¶РЅРѕ РЅР°СЃС‚СЂРѕРёС‚СЊ):</div>
             ${ingredientsRowsHtml}
           </div>
         ` : "";
@@ -3813,7 +4797,7 @@
             data-block-index="${blockIndex}"
             data-product-index="${idx}"
           >
-            ${photo ? `<img class="cart-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="cart-thumb">—</div>`}
+            ${photo ? `<img class="cart-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="cart-thumb">вЂ”</div>`}
             <div class="cart-mid shop-combo-picker-mid">
               <div class="cart-title">${escapeHtml(title)}</div>
               ${detailsHtml ? `<div class="cart-sub-container" ${isExpanded ? `style="display:none;"` : ""}>${detailsHtml}</div>` : ""}
@@ -3828,7 +4812,7 @@
                   <button
                     type="button"
                     class="shop-combo-picker-gear ${isExpanded ? "is-open" : ""}"
-                    title="Настройка состава и вариантов"
+                    title="РќР°СЃС‚СЂРѕР№РєР° СЃРѕСЃС‚Р°РІР° Рё РІР°СЂРёР°РЅС‚РѕРІ"
                     data-action="combo-overlay-picker-gear"
                     data-block-index="${blockIndex}"
                     data-product-index="${idx}"
@@ -3857,10 +4841,10 @@
         <div class="shop-combo-view">
           <div class="shop-combo-detail shop-combo-detail--picker shop-combo-detail-scroll">
             <div class="shop-pd-meta">
-              <div class="shop-pd-title">${escapeHtml(String(block?.block_title || "Выберите товар"))}</div>
+              <div class="shop-pd-title">${escapeHtml(String(block?.block_title || "Р’С‹Р±РµСЂРёС‚Рµ С‚РѕРІР°СЂ"))}</div>
             </div>
             <div class="shop-combo-picker-list">
-              ${rowsHtml || `<div class="shop-combo-picker-empty">Нет доступных товаров в блоке</div>`}
+              ${rowsHtml || `<div class="shop-combo-picker-empty">РќРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… С‚РѕРІР°СЂРѕРІ РІ Р±Р»РѕРєРµ</div>`}
             </div>
           </div>
         </div>
@@ -3901,7 +4885,7 @@
           ${totalOld > totalNew ? `<span class="shop-pd-action-old">${escapeHtml(toMoney(totalOld))}</span>` : ""}
           <span class="shop-checkout-total shop-pd-action-price">${escapeHtml(toMoney(totalNew))}</span>
         </span>
-        <span class="shop-pd-action-label">${saveMode ? "сохранить" : "в корзину"}</span>
+        <span class="shop-pd-action-label">${saveMode ? "СЃРѕС…СЂР°РЅРёС‚СЊ" : "РІ РєРѕСЂР·РёРЅСѓ"}</span>
       `;
     }
 
@@ -3911,7 +4895,7 @@
         const text = Number.isInteger(discountPercent)
           ? String(discountPercent)
           : String(Math.round(discountPercent * 100) / 100).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1");
-        discountBadge.textContent = `Скидка ${text}%`;
+        discountBadge.textContent = `РЎРєРёРґРєР° ${text}%`;
         discountBadge.classList.remove("hidden");
       } else {
         discountBadge.textContent = "";
@@ -3955,7 +4939,7 @@
         category_name: String(sel?.block_title || "").trim(),
         block_title: String(sel?.block_title || "").trim(),
         product_id: productId,
-        product_name: String(sel?.product_name || product?.name || "Товар").trim(),
+        product_name: String(sel?.product_name || product?.name || "РўРѕРІР°СЂ").trim(),
         photo_url: String(sel?.product_photo || getProductPhoto(product) || "").trim(),
         price: roundPrice(Number(sel?.unit_price_override || 0)),
         old_price: roundPrice(Number(sel?.unit_price_before_discount || 0)),
@@ -3988,8 +4972,8 @@
       id: Date.now() + Math.floor(Math.random() * 10000),
       type: "combo",
       combo_id: comboId,
-      combo_title: String(combo?.title || "Комбо").trim(),
-      name: String(combo?.title || "Комбо").trim(),
+      combo_title: String(combo?.title || "РљРѕРјР±Рѕ").trim(),
+      name: String(combo?.title || "РљРѕРјР±Рѕ").trim(),
       qty,
       combo_discount_percent: comboDiscountPercent,
       unit_price_before_discount: roundPrice(validSections.reduce((sum, section) => sum + Number(section?.old_price || section?.price || 0), 0)),
@@ -4010,7 +4994,7 @@
     if (!backdrop) return;
     const combo = await resolveComboDetails(id);
     if (!combo) {
-      alert("Не удалось загрузить комбо");
+      alert("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РєРѕРјР±Рѕ");
       return;
     }
     closeProductOverlay();
@@ -4061,7 +5045,7 @@
     backdrop.onclick = (ev) => {
       if (ev.target === backdrop) closeComboOverlay();
     };
-    if (list) list.innerHTML = `<div class="shop-combo-picker-empty">Загрузка...</div>`;
+    if (list) list.innerHTML = `<div class="shop-combo-picker-empty">Р—Р°РіСЂСѓР·РєР°...</div>`;
     await hydrateComboSelectionsFromDefaults();
     renderComboOverlay();
     if (list) list.scrollTop = 0;
@@ -4092,7 +5076,7 @@
             <span class="qty-pill__center" id="newOrderProductOverlayQtyValue">1</span>
             <button class="qty-pill__btn qty-pill__btn--plus" type="button" data-action="product-overlay-qty-plus">+</button>
           </div>
-          <button class="shop-checkout-btn shop-pd-action new-order-product-sheet-add" type="button" id="newOrderProductOverlayAddBtn" data-action="product-overlay-add">в корзину</button>
+          <button class="shop-checkout-btn shop-pd-action new-order-product-sheet-add" type="button" id="newOrderProductOverlayAddBtn" data-action="product-overlay-add">РІ РєРѕСЂР·РёРЅСѓ</button>
         </div>
       </div>
     `;
@@ -4168,7 +5152,7 @@
       const items = Array.isArray(details?.items) ? details.items : [];
       if (!items.length) return "";
       const detailsGroup = details?.group || null;
-      const title = String(detailsGroup?.title || group?.title || "Опция").trim() || "Опция";
+      const title = String(detailsGroup?.title || group?.title || "РћРїС†РёСЏ").trim() || "РћРїС†РёСЏ";
       const groupType = getOptionGroupUiType({ ...(detailsGroup || group || {}), items });
       const existing = byGroup.get(groupId);
       const selectionItems = Array.isArray(existing?.items) ? existing.items : [];
@@ -4182,7 +5166,7 @@
           if (firstItem && Number(firstItem.id || 0) > 0) {
             const entry = {
               id: Number(firstItem.id),
-              label: String(firstItem?.name || firstItem?.product_name || "Позиция"),
+              label: String(firstItem?.name || firstItem?.product_name || "РџРѕР·РёС†РёСЏ"),
               qty: 1,
               basePrice: getOptionItemBasePrice(firstItem),
               variantDiff: 0,
@@ -4206,8 +5190,8 @@
           ? resolveMediaUrl((Array.isArray(selectedItem?.product_photos_json) && selectedItem.product_photos_json.length) ? selectedItem.product_photos_json[0] : "")
           : "";
         const selectedName = selectedItem
-          ? String(selectedItem?.name || selectedItem?.product_name || "Позиция")
-          : "Выбрать";
+          ? String(selectedItem?.name || selectedItem?.product_name || "РџРѕР·РёС†РёСЏ")
+          : "Р’С‹Р±СЂР°С‚СЊ";
         const isGroupOpen = expandedGroups.has(groupId);
 
         const listCards = [];
@@ -4215,9 +5199,9 @@
           listCards.push(`
             <div class="shop-pd-option-card is-clickable" data-action="product-overlay-opt-select-none" data-group-id="${groupId}">
               <div class="shop-pd-option-card-content">
-                <div class="shop-pd-option-thumb">—</div>
+                <div class="shop-pd-option-thumb">вЂ”</div>
                 <div class="shop-pd-option-info">
-                  <div class="shop-pd-option-name">Не выбирать</div>
+                  <div class="shop-pd-option-name">РќРµ РІС‹Р±РёСЂР°С‚СЊ</div>
                 </div>
               </div>
             </div>
@@ -4245,7 +5229,7 @@
           return `
             <div class="shop-pd-option-card is-clickable ${selById.has(itemId) ? "is-selected" : ""} ${hasVariants ? "has-variants" : ""}">
               <div class="shop-pd-option-card-content" data-action="product-overlay-opt-select-single" data-group-id="${groupId}" data-item-id="${itemId}">
-                ${itemPhoto ? `<img class="shop-pd-option-thumb" src="${escapeHtml(itemPhoto)}" alt="" />` : `<div class="shop-pd-option-thumb">—</div>`}
+                ${itemPhoto ? `<img class="shop-pd-option-thumb" src="${escapeHtml(itemPhoto)}" alt="" />` : `<div class="shop-pd-option-thumb">вЂ”</div>`}
                 <div class="shop-pd-option-info">
                   <div class="shop-pd-option-name">${escapeHtml(itemName)}</div>
                   <div class="shop-pd-option-price">${escapeHtml(toMoney(optionPrice))}</div>
@@ -4264,12 +5248,12 @@
               <div class="shop-pd-option-cards">
                 <div class="shop-pd-option-card is-clickable" data-action="product-overlay-opt-open-group" data-group-id="${groupId}">
                   <div class="shop-pd-option-card-content">
-                    ${selectedPhoto ? `<img class="shop-pd-option-thumb" src="${escapeHtml(selectedPhoto)}" alt="" />` : `<div class="shop-pd-option-thumb">—</div>`}
+                    ${selectedPhoto ? `<img class="shop-pd-option-thumb" src="${escapeHtml(selectedPhoto)}" alt="" />` : `<div class="shop-pd-option-thumb">вЂ”</div>`}
                     <div class="shop-pd-option-info">
                       <div class="shop-pd-option-name">${escapeHtml(selectedName)}</div>
                       ${selectedItem ? `<div class="shop-pd-option-price">${escapeHtml(toMoney(rowPrice))}</div>` : ``}
                     </div>
-                    <button type="button" class="shop-pd-option-edit" data-action="product-overlay-opt-open-group" data-group-id="${groupId}">Изменить &gt;</button>
+                    <button type="button" class="shop-pd-option-edit" data-action="product-overlay-opt-open-group" data-group-id="${groupId}">РР·РјРµРЅРёС‚СЊ &gt;</button>
                   </div>
                 </div>
               </div>
@@ -4288,7 +5272,7 @@
         const photos = Array.isArray(item?.product_photos_json) ? item.product_photos_json : [];
         const photoRaw = photos.length ? photos[0] : "";
         const photo = resolveMediaUrl(photoRaw);
-        const name = String(item?.name || item?.product_name || "Позиция");
+        const name = String(item?.name || item?.product_name || "РџРѕР·РёС†РёСЏ");
         const defaultVariantIndex = getOptionItemDefaultVariantIndex(item);
         const activeVariantIndex = Number.isFinite(Number(selected?.variantIndex)) ? Number(selected.variantIndex) : defaultVariantIndex;
         const basePrice = getOptionItemBasePrice(item);
@@ -4322,7 +5306,7 @@
         return `
           <div class="shop-pd-option-card is-clickable ${isSelected ? "is-selected" : ""} ${hasVariants ? "has-variants" : ""}">
             <div class="shop-pd-option-card-content" ${rowAction}>
-              ${photo ? `<img class="shop-pd-option-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="shop-pd-option-thumb">—</div>`}
+              ${photo ? `<img class="shop-pd-option-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="shop-pd-option-thumb">вЂ”</div>`}
               <span class="shop-pd-option-info">
                 <span class="shop-pd-option-name">${escapeHtml(name)}</span>
                 <span class="shop-pd-option-price">${escapeHtml(toMoney(rowPrice))}</span>
@@ -4360,7 +5344,7 @@
     const existing = byGroup.get(groupId);
     const selectionItems = Array.isArray(existing?.items) ? existing.items.map((x) => ({ ...x })) : [];
     const selById = new Map(selectionItems.map((x) => [Number(x?.id || 0), x]));
-    const name = String(item?.name || item?.product_name || "Позиция");
+    const name = String(item?.name || item?.product_name || "РџРѕР·РёС†РёСЏ");
     const entry = selById.get(itemId) || { id: itemId, label: name, qty: 0, basePrice: getOptionItemBasePrice(item), variantDiff: 0 };
     if (!Number.isFinite(Number(entry.variantIndex))) {
       const dIdx = getOptionItemDefaultVariantIndex(item);
@@ -4471,7 +5455,7 @@
       return `
         <div class="shop-pd-option-card">
           <div class="shop-pd-option-card-content">
-            ${photo ? `<img class="shop-pd-option-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="shop-pd-option-thumb">—</div>`}
+            ${photo ? `<img class="shop-pd-option-thumb" src="${escapeHtml(photo)}" alt="" />` : `<div class="shop-pd-option-thumb">вЂ”</div>`}
             <div class="shop-pd-option-info">
               <div class="shop-pd-option-name" title="${escapeHtml(ing.ingredient_name || "")}">${escapeHtml(ing.ingredient_name || "")}</div>
             </div>
@@ -4503,7 +5487,7 @@
     const variantGroup = (state.productVariants.get(pid) || [])[0] || null;
     const variantTitle = String(variantGroup?.title || "").trim();
     const variantUnitLabel = String(variantGroup?.unit_short_title || variantGroup?.unit_code || variantGroup?.unit_title || "").trim();
-    const hasLetters = (v) => /[a-zа-я]/i.test(String(v || ""));
+    const hasLetters = (v) => /[a-zР°-СЏ]/i.test(String(v || ""));
     const formatVariantLabel = (raw) => {
       const valueText = String(raw || "").trim();
       if (!valueText) return "";
@@ -4532,11 +5516,11 @@
             ${safePhotos.length > 1 ? `<div class="shop-product-hero-dots">${safePhotos.map((_, idx) => `<button type="button" class="shop-product-hero-dot ${idx === photoIndex ? "is-active" : ""}" data-action="product-overlay-photo-dot" data-photo-index="${idx}"></button>`).join("")}</div>` : ""}
           </div>
           <div class="shop-pd-meta">
-            <div class="shop-pd-title">${escapeHtml(String(product?.name || "Товар"))}</div>
+            <div class="shop-pd-title">${escapeHtml(String(product?.name || "РўРѕРІР°СЂ"))}</div>
           </div>
           ${variantChips.length ? `<div class="shop-pd-options">${variantTitle ? `<div class="shop-pd-section-title">${escapeHtml(variantTitle)}</div>` : ""}<div class="shop-pd-option-variant-scroll">${variantChips.map((chip) => `<button class="shop-pd-option-variant-btn ${chip.isSelected ? "is-selected" : ""}" type="button" data-action="product-overlay-variant-select" data-variant-index="${chip.index}">${escapeHtml(formatVariantLabel(chip.label))}</button>`).join("")}</div></div>` : ""}
           ${optionGroupsHtml ? `<div class="shop-pd-options">${optionGroupsHtml}</div>` : ""}
-          ${ingredientRows.length ? `<div class="shop-pd-ingredients"><div class="shop-pd-section-title">Состав (можно настроить):</div><div class="shop-pd-option-cards">${ingredientRows.join("")}</div></div>` : ""}
+          ${ingredientRows.length ? `<div class="shop-pd-ingredients"><div class="shop-pd-section-title">РЎРѕСЃС‚Р°РІ (РјРѕР¶РЅРѕ РЅР°СЃС‚СЂРѕРёС‚СЊ):</div><div class="shop-pd-option-cards">${ingredientRows.join("")}</div></div>` : ""}
         </div>
       </div>
     `;
@@ -4599,7 +5583,9 @@
       const products = Array.isArray(state.checkoutCategoryProducts.get(categoryId))
         ? state.checkoutCategoryProducts.get(categoryId)
         : [];
-      const defaultProductId = safeBlock.requireAll ? Number(products[0]?.id || 0) : 0;
+      const defaultProductId = safeBlock.requireAll
+        ? Number((products.find((p) => isProductAvailableFlag(p)) || {}).id || 0)
+        : 0;
       if (defaultProductId > 0) {
         state.checkoutSelectedProductByCategory.set(sectionKey, defaultProductId);
         const variants = state.productVariants.get(defaultProductId) || [];
@@ -4658,38 +5644,42 @@
       const isLastSection = sectionIndex === block.categoryIds.length - 1;
       const sectionKey = getCheckoutSectionKey(block.id, categoryId);
       const cat = categoryById.get(categoryId) || null;
-      const catTitle = String(cat?.title || "Категория");
+      const catTitle = String(cat?.title || "РљР°С‚РµРіРѕСЂРёСЏ");
       const products = Array.isArray(state.checkoutCategoryProducts.get(categoryId)) ? state.checkoutCategoryProducts.get(categoryId) : [];
       const savedSelectedProductId = Number(state.checkoutSelectedProductByCategory.get(sectionKey) || 0);
-      const defaultSelectedProductId = block.requireAll ? Number(products[0]?.id || 0) : 0;
-      const selectedProductId = products.some((p) => Number(p?.id || 0) === savedSelectedProductId)
+      const firstAvailableProductId = block.requireAll
+        ? Number((products.find((p) => isProductAvailableFlag(p)) || {}).id || 0)
+        : 0;
+      const selectedProductId = products.some((p) => Number(p?.id || 0) === savedSelectedProductId && isProductAvailableFlag(p))
         ? savedSelectedProductId
-        : defaultSelectedProductId;
+        : firstAvailableProductId;
       if (selectedProductId > 0) state.checkoutSelectedProductByCategory.set(sectionKey, selectedProductId);
+      else state.checkoutSelectedProductByCategory.delete(sectionKey);
       const productsHtml = products.length
         ? products.map((product) => {
             const photoUrl = getProductPhoto(product);
-            const name = String(product?.name || "Товар");
+            const name = String(product?.name || "РўРѕРІР°СЂ");
             const productId = Number(product?.id || 0);
+            const isUnavailable = !isProductAvailableFlag(product);
             const hasComposition = Array.isArray(state.productIngredients.get(productId)) && (state.productIngredients.get(productId) || []).length > 0;
             const popoverKey = getCheckoutIngredientsPopoverKey(sectionKey, productId);
-            const isCompositionOpen = state.checkoutIngredientsPopoverKey === popoverKey;
+            const isCompositionOpen = !isUnavailable && state.checkoutIngredientsPopoverKey === popoverKey;
             const compositionRows = isCompositionOpen ? getCheckoutIngredientRowsForProduct(productId, sectionKey) : [];
             const popoverPos = state.checkoutIngredientsPopoverPos || null;
             const popoverStyle = popoverPos
               ? `left:${Math.round(Number(popoverPos.left || 0))}px;top:${Math.round(Number(popoverPos.top || 0))}px;width:200px;`
               : "";
             return `
-              <article class="new-order-checkout-product-item ${productId === selectedProductId ? "is-selected" : ""} ${hasComposition ? "has-composition" : ""}" data-product-id="${productId}" data-category-id="${categoryId}" data-section-key="${sectionKey}">
+              <article class="new-order-checkout-product-item ${productId === selectedProductId ? "is-selected" : ""} ${hasComposition ? "has-composition" : ""} ${isUnavailable ? "is-unavailable" : ""}" data-product-id="${productId}" data-category-id="${categoryId}" data-section-key="${sectionKey}" data-is-available="${isUnavailable ? "0" : "1"}">
                 <span class="new-order-checkout-product-photo-wrap">
                   ${photoUrl ? `<img class="new-order-checkout-product-photo" src="${escapeHtml(photoUrl)}" alt="" />` : `<span class="new-order-checkout-product-photo-placeholder"><i class="fas fa-image"></i></span>`}
                 </span>
                 <span class="new-order-checkout-product-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
                 ${hasComposition ? `
-                  <button type="button" class="new-order-checkout-composition-btn" data-action="checkout-composition-toggle" data-product-id="${productId}" data-section-key="${sectionKey}" aria-label="Настроить состав" title="Настроить состав">⚙</button>
+                  <button type="button" class="new-order-checkout-composition-btn" data-action="checkout-composition-toggle" data-product-id="${productId}" data-section-key="${sectionKey}" aria-label="РќР°СЃС‚СЂРѕРёС‚СЊ СЃРѕСЃС‚Р°РІ" title="РќР°СЃС‚СЂРѕРёС‚СЊ СЃРѕСЃС‚Р°РІ"${isUnavailable ? " disabled" : ""}>вљ™</button>
                   ${isCompositionOpen ? `
                     <div class="new-order-checkout-composition-popover" style="${popoverStyle}">
-                      <div class="new-order-checkout-composition-popover-head">Состав</div>
+                      <div class="new-order-checkout-composition-popover-head">РЎРѕСЃС‚Р°РІ</div>
                       <div class="new-order-checkout-composition-list no-scrollbar">
                         ${compositionRows.join("")}
                       </div>
@@ -4699,7 +5689,7 @@
               </article>
             `;
           }).join("")
-        : `<div class="new-order-checkout-products-empty">В категории пока нет товаров</div>`;
+        : `<div class="new-order-checkout-products-empty">Р’ РєР°С‚РµРіРѕСЂРёРё РїРѕРєР° РЅРµС‚ С‚РѕРІР°СЂРѕРІ</div>`;
       const selectedVariantChips = selectedProductId > 0 ? getVariantChipsForProduct(selectedProductId) : [];
       const selectedProduct = products.find((p) => Number(p?.id || 0) === selectedProductId) || null;
       const selectedPricing = selectedProductId > 0 && selectedProduct
@@ -4711,7 +5701,7 @@
           <div class="new-order-checkout-inline-actions">
             <span class="new-order-checkout-block-total">${escapeHtml(toMoney(blockSelection.total))}</span>
             <button type="button" class="new-order-checkout-add-to-cart-btn" data-action="checkout-block-add" data-block-id="${block.id}">
-              Добавить в корзину
+              Р”РѕР±Р°РІРёС‚СЊ РІ РєРѕСЂР·РёРЅСѓ
             </button>
           </div>
         `
@@ -4756,22 +5746,22 @@
           ${state.checkoutEditMode ? `
             <div class="new-order-checkout-block-actions">
               ${blockIndex > 0 ? `
-                <button type="button" class="new-order-checkout-block-action-btn" data-action="checkout-block-move-up" data-block-id="${block.id}" aria-label="Сдвинуть блок вверх" title="Сдвинуть вверх">
+                <button type="button" class="new-order-checkout-block-action-btn" data-action="checkout-block-move-up" data-block-id="${block.id}" aria-label="РЎРґРІРёРЅСѓС‚СЊ Р±Р»РѕРє РІРІРµСЂС…" title="РЎРґРІРёРЅСѓС‚СЊ РІРІРµСЂС…">
                   <i class="fas fa-chevron-up"></i>
                 </button>
               ` : ""}
               ${blockIndex < blocks.length - 1 ? `
-                <button type="button" class="new-order-checkout-block-action-btn" data-action="checkout-block-move-down" data-block-id="${block.id}" aria-label="Сдвинуть блок вниз" title="Сдвинуть вниз">
+                <button type="button" class="new-order-checkout-block-action-btn" data-action="checkout-block-move-down" data-block-id="${block.id}" aria-label="РЎРґРІРёРЅСѓС‚СЊ Р±Р»РѕРє РІРЅРёР·" title="РЎРґРІРёРЅСѓС‚СЊ РІРЅРёР·">
                   <i class="fas fa-chevron-down"></i>
                 </button>
               ` : ""}
-              <button type="button" class="new-order-checkout-block-action-btn new-order-checkout-block-drag-handle" data-action="checkout-block-drag-handle" data-block-id="${block.id}" aria-label="Перетащить блок" title="Перетащить блок" draggable="true">
+              <button type="button" class="new-order-checkout-block-action-btn new-order-checkout-block-drag-handle" data-action="checkout-block-drag-handle" data-block-id="${block.id}" aria-label="РџРµСЂРµС‚Р°С‰РёС‚СЊ Р±Р»РѕРє" title="РџРµСЂРµС‚Р°С‰РёС‚СЊ Р±Р»РѕРє" draggable="true">
                 <i class="fas fa-grip-lines"></i>
               </button>
-              <button type="button" class="new-order-checkout-block-action-btn" data-action="checkout-block-edit" data-block-id="${block.id}" aria-label="Изменить блок" title="Изменить блок">
+              <button type="button" class="new-order-checkout-block-action-btn" data-action="checkout-block-edit" data-block-id="${block.id}" aria-label="РР·РјРµРЅРёС‚СЊ Р±Р»РѕРє" title="РР·РјРµРЅРёС‚СЊ Р±Р»РѕРє">
                 <i class="fas fa-pen"></i>
               </button>
-              <button type="button" class="new-order-checkout-block-action-btn is-danger" data-action="checkout-block-delete" data-block-id="${block.id}" aria-label="Удалить блок" title="Удалить блок">
+              <button type="button" class="new-order-checkout-block-action-btn is-danger" data-action="checkout-block-delete" data-block-id="${block.id}" aria-label="РЈРґР°Р»РёС‚СЊ Р±Р»РѕРє" title="РЈРґР°Р»РёС‚СЊ Р±Р»РѕРє">
                 <i class="fas fa-times"></i>
               </button>
             </div>
@@ -4938,7 +5928,7 @@
   }
 
   function escapeHtml(value) {
-    return String(value || "")
+    return repairUtf8Mojibake(String(value || ""))
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
@@ -4955,15 +5945,78 @@
     }
   }
 
-  function getPriceRoundingSettings() {
-    const tenant = getTenantFromStorage();
-    const modeRaw = tenant?.price_rounding_mode;
+  function normalizePriceRoundingSettings(source) {
+    const modeRaw = source && typeof source === "object"
+      ? (typeof source.price_rounding_mode === "string" ? source.price_rounding_mode : source.mode)
+      : "none";
     const mode = typeof modeRaw === "string" ? modeRaw : "none";
     const allowed = new Set(["none", "down", "up", "nearest"]);
     const safeMode = allowed.has(mode) ? mode : "none";
-    const precisionRaw = Number(tenant?.price_rounding_precision);
+    const precisionValue = source && typeof source === "object"
+      ? (Object.prototype.hasOwnProperty.call(source, "price_rounding_precision") ? source.price_rounding_precision : source.precision)
+      : null;
+    const precisionRaw = Number(precisionValue);
     const precision = precisionRaw === 0 ? 0 : 2;
     return { mode: safeMode, precision };
+  }
+
+  function updateTenantRoundingStorage(nextSettings) {
+    if (!nextSettings || typeof nextSettings !== "object") return;
+    try {
+      const current = getTenantFromStorage();
+      const tenant = current && typeof current === "object" ? { ...current } : {};
+      tenant.price_rounding_mode = String(nextSettings.mode || "none");
+      tenant.price_rounding_precision = Number(nextSettings.precision) === 0 ? 0 : 2;
+      localStorage.setItem("tenant", JSON.stringify(tenant));
+    } catch {}
+  }
+
+  async function ensureTenantPriceRoundingSettings() {
+    if (state.tenantRoundingLoaded && state.tenantRounding) return state.tenantRounding;
+    if (state.tenantRoundingPromise) return state.tenantRoundingPromise;
+
+    const storedTenant = getTenantFromStorage();
+    const hasStoredRounding = !!(
+      storedTenant &&
+      typeof storedTenant === "object" &&
+      typeof storedTenant.price_rounding_mode === "string" &&
+      (Number(storedTenant.price_rounding_precision) === 0 || Number(storedTenant.price_rounding_precision) === 2)
+    );
+    if (hasStoredRounding) {
+      state.tenantRounding = normalizePriceRoundingSettings(storedTenant);
+      state.tenantRoundingLoaded = true;
+      return state.tenantRounding;
+    }
+
+    state.tenantRoundingPromise = (async () => {
+      const fallback = normalizePriceRoundingSettings(storedTenant);
+      try {
+        const json = await apiJson("/api/admin/tenant");
+        const tenant = json?.tenant && typeof json.tenant === "object" ? json.tenant : null;
+        if (tenant) {
+          const next = normalizePriceRoundingSettings(tenant);
+          state.tenantRounding = next;
+          updateTenantRoundingStorage(next);
+        } else {
+          state.tenantRounding = fallback;
+        }
+      } catch {
+        state.tenantRounding = fallback;
+      } finally {
+        state.tenantRoundingLoaded = true;
+        state.tenantRoundingPromise = null;
+      }
+      return state.tenantRounding;
+    })();
+
+    return state.tenantRoundingPromise;
+  }
+
+  function getPriceRoundingSettings() {
+    if (state.tenantRounding && typeof state.tenantRounding === "object") {
+      return normalizePriceRoundingSettings(state.tenantRounding);
+    }
+    return normalizePriceRoundingSettings(getTenantFromStorage());
   }
 
   function roundPrice(value) {
@@ -5245,7 +6298,7 @@
     const valueLabel = toVariantLabel(rawValue);
     if (!valueLabel) return "";
     const unit = getVariantUnitLabel(vg);
-    const hasLetters = /[a-zа-я]/i.test(valueLabel);
+    const hasLetters = /[a-zР°-СЏ]/i.test(valueLabel);
     return unit && !hasLetters ? `${valueLabel} ${unit}` : valueLabel;
   }
 
@@ -5538,7 +6591,7 @@
     checkoutRow.setAttribute("data-category-id", CHECKOUT_SCREEN_ID);
     checkoutRow.innerHTML = `
       <span class="stage-icon"><i class="fas fa-desktop"></i></span>
-      <span class="stage-meta stage-text"><b>Экран оформления</b></span>
+      <span class="stage-meta stage-text"><b>Р­РєСЂР°РЅ РѕС„РѕСЂРјР»РµРЅРёСЏ</b></span>
       <span class="acc-spacer"></span>
     `;
     categoriesListEl.appendChild(checkoutRow);
@@ -5557,7 +6610,7 @@
       row.setAttribute("data-category-id", String(cat.id));
       row.innerHTML = `
         ${renderCategoryIcon(cat.icon)}
-        <span class="stage-meta stage-text"><b>${escapeHtml(cat.title || "Категория")}</b></span>
+        <span class="stage-meta stage-text"><b>${escapeHtml(cat.title || "РљР°С‚РµРіРѕСЂРёСЏ")}</b></span>
         <span class="acc-spacer"></span>
       `;
       categoriesListEl.appendChild(row);
@@ -5597,7 +6650,7 @@
 
     if (!list.length) {
       if (productsEmptyEl) {
-        productsEmptyEl.textContent = "Товаров в категории пока нет";
+        productsEmptyEl.textContent = "РўРѕРІР°СЂРѕРІ РІ РєР°С‚РµРіРѕСЂРёРё РїРѕРєР° РЅРµС‚";
         productsEmptyEl.classList.remove("hidden");
       }
       return;
@@ -5608,6 +6661,7 @@
     list.forEach((product) => {
       const pid = Number(product?.id || 0);
       const isComboCard = String(product?.type || "").toLowerCase() === "combo" || Number(product?.is_combo || 0) === 1;
+      const isUnavailable = !isProductAvailableFlag(product);
       const qty = getProductCardQty(pid);
       const photoUrl = getProductPhoto(product);
       const pricing = getCurrentProductUnitPricing(product, pid);
@@ -5623,17 +6677,18 @@
       const primaryOptionGroup = optionGroups[0] || null;
       const hasOptions = optionGroups.length > 0 && Number(primaryOptionGroup?.group_id || primaryOptionGroup?.id || 0) > 0;
       const primaryOptionGroupId = Number(primaryOptionGroup?.group_id || primaryOptionGroup?.id || 0);
-      const primaryOptionGroupTitle = String(primaryOptionGroup?.title || "Опции").trim() || "Опции";
+      const primaryOptionGroupTitle = String(primaryOptionGroup?.title || "РћРїС†РёРё").trim() || "РћРїС†РёРё";
 
       const card = document.createElement("article");
-      card.className = "new-order-product-card";
+      card.className = `new-order-product-card${isUnavailable ? " is-unavailable" : ""}`;
+      card.setAttribute("data-is-available", isUnavailable ? "0" : "1");
       if (isComboCard) {
         const comboId = Number(product?.combo_id || product?.id || 0);
         const comboPrice = Number(product?.min_price ?? product?.price ?? 0);
         const comboDiscountPercent = Math.max(0, Number(product?.discount_percent || 0));
         const comboDiscountLabel = formatDiscountPercentLabel(comboDiscountPercent);
         card.setAttribute("data-combo-id", String(comboId));
-        card.setAttribute("tabindex", "0");
+        card.setAttribute("tabindex", isUnavailable ? "-1" : "0");
         card.innerHTML = `
           ${comboDiscountLabel ? `<span class="shop-sheet-discount-badge new-order-card-discount-badge">-${escapeHtml(comboDiscountLabel)}%</span>` : ""}
           <div class="new-order-product-content no-scrollbar">
@@ -5641,12 +6696,12 @@
               ${photoUrl ? `<img class="new-order-product-photo" src="${escapeHtml(photoUrl)}" alt="" />` : `<div class="new-order-product-photo-placeholder"><i class="fas fa-image"></i></div>`}
             </div>
             <div class="new-order-product-main">
-              <div class="new-order-product-title" title="${escapeHtml(product?.title || product?.name || "Комбо")}">${escapeHtml(product?.title || product?.name || "Комбо")}</div>
+              <div class="new-order-product-title" title="${escapeHtml(product?.title || product?.name || "РљРѕРјР±Рѕ")}">${escapeHtml(product?.title || product?.name || "РљРѕРјР±Рѕ")}</div>
               ${String(product?.description || "").trim() ? `<div class="new-order-product-subtitle">${escapeHtml(String(product.description || "").trim())}</div>` : ""}
             </div>
           </div>
           <div class="new-order-product-bottom">
-            <button class="new-order-add-btn" type="button" data-action="combo-open" data-combo-id="${comboId}" title="Добавить комбо">
+            <button class="new-order-add-btn" type="button" data-action="combo-open" data-combo-id="${comboId}" title="Р”РѕР±Р°РІРёС‚СЊ РєРѕРјР±Рѕ"${isUnavailable ? " disabled aria-disabled=\"true\"" : ""}>
               <span class="new-order-add-price">${escapeHtml(toMoney(comboPrice))}</span>
               <span class="new-order-add-plus">+</span>
             </button>
@@ -5663,16 +6718,16 @@
             ${photoUrl ? `<img class="new-order-product-photo" src="${escapeHtml(photoUrl)}" alt="" />` : `<div class="new-order-product-photo-placeholder"><i class="fas fa-image\"></i></div>`}
           </div>
           <div class="new-order-product-main">
-            <div class="new-order-product-title" title="${escapeHtml(product?.name || "Товар")}">${escapeHtml(product?.name || "Товар")}</div>
+            <div class="new-order-product-title" title="${escapeHtml(product?.name || "РўРѕРІР°СЂ")}">${escapeHtml(product?.name || "РўРѕРІР°СЂ")}</div>
             ${variantChips.length ? `<div class="new-order-product-variants no-scrollbar">${variantChips.map((chip) => `<button class="new-order-variant-chip${chip.isSelected ? " is-selected" : ""}" type="button" data-action="variant-select" data-variant-index="${chip.index}" title="${escapeHtml(chip.label)}">${escapeHtml(chip.label)}</button>`).join("")}</div>` : ""}
             ${ingredientRows.length ? `<div class="new-order-ingredients">${ingredientRows.join("")}</div>` : ""}
           </div>
         </div>
         <div class="new-order-product-bottom">
           <div class="qty-pill qty-pill--muted" data-qty-wrap>
-            <button class="qty-pill__btn qty-pill__btn--minus${qty <= 1 ? " is-disabled" : ""}" type="button" data-action="qty-minus">−</button>
+            <button class="qty-pill__btn qty-pill__btn--minus${qty <= 1 ? " is-disabled" : ""}" type="button" data-action="qty-minus"${isUnavailable ? " disabled" : ""}>−</button>
             <span class="qty-pill__center" data-qty-value>${qty}</span>
-            <button class="qty-pill__btn qty-pill__btn--plus" type="button" data-action="qty-plus">+</button>
+            <button class="qty-pill__btn qty-pill__btn--plus" type="button" data-action="qty-plus"${isUnavailable ? " disabled" : ""}>+</button>
           </div>
           ${hasOptions ? `
             <button
@@ -5681,13 +6736,14 @@
               data-action="product-options-open"
               data-group-id="${primaryOptionGroupId}"
               data-group-title="${escapeHtml(primaryOptionGroupTitle)}"
-              title="Опции"
+              title="РћРїС†РёРё"
+              ${isUnavailable ? "disabled" : ""}
             >
               <i class="fas fa-sliders-h"></i>
-              <span>Опции</span>
+              <span>РћРїС†РёРё</span>
             </button>
           ` : ""}
-          <button class="new-order-add-btn" type="button" data-action="product-add-quick" title="Добавить в заказ">
+          <button class="new-order-add-btn" type="button" data-action="product-add-quick" title="Р”РѕР±Р°РІРёС‚СЊ РІ Р·Р°РєР°Р·"${isUnavailable ? " disabled aria-disabled=\"true\"" : ""}>
             <span class="new-order-add-old ${hasOldPrice ? "" : "hidden"}">${hasOldPrice ? escapeHtml(toMoney(oldPrice)) : ""}</span>
             <span class="new-order-add-price">${escapeHtml(toMoney(price))}</span>
             <span class="new-order-add-plus">+</span>
@@ -5824,12 +6880,12 @@
 
     return groups.map((group) => {
       const groupId = Number(group?.group_id || group?.id || 0);
-      const title = String(group?.title || "Опция").trim();
+      const title = String(group?.title || "РћРїС†РёСЏ").trim();
       const selected = selectedByGroup.get(groupId);
       const selectedItems = Array.isArray(selected?.items) ? selected.items : [];
       let selectedLabel = "";
       if (selectedItems.length === 1) selectedLabel = String(selectedItems[0]?.label || "").trim();
-      else if (selectedItems.length > 1) selectedLabel = `Выбрано: ${selectedItems.length}`;
+      else if (selectedItems.length > 1) selectedLabel = `Р’С‹Р±СЂР°РЅРѕ: ${selectedItems.length}`;
       const details = state.optionGroupDetails.get(groupId);
       const detailsGroup = details?.group || null;
       const selectionType = String(detailsGroup?.selection_type || group?.selection_type || "single");
@@ -5853,7 +6909,7 @@
         : detailItems;
       const tiles = shouldShowAddCard
         ? `
-          <button class="new-order-option-tile new-order-option-tile--add" type="button" data-action="option-open" data-group-id="${groupId}" title="Добавить опцию">
+          <button class="new-order-option-tile new-order-option-tile--add" type="button" data-action="option-open" data-group-id="${groupId}" title="Р”РѕР±Р°РІРёС‚СЊ РѕРїС†РёСЋ">
             <span class="new-order-option-add-plus">+</span>
           </button>
         `
@@ -5861,7 +6917,7 @@
         ? renderItems.map((item) => {
             const itemId = Number(item?.id || 0);
             const isSelected = selectedIds.has(itemId);
-            const name = String(item?.name || item?.product_name || "Позиция");
+            const name = String(item?.name || item?.product_name || "РџРѕР·РёС†РёСЏ");
             const selectedEntry = selectedByItemId.get(itemId) || null;
             const selectedQty = Math.max(0, Number(selectedEntry?.qty || 0));
             const variants = Array.isArray(item?.variants) ? item.variants : [];
@@ -5877,7 +6933,7 @@
             const qMax = Number.isFinite(qMaxRaw) && qMaxRaw > 0 ? qMaxRaw : 99;
             const qtyControlsHtml = isMultipleItem
               ? `<div class="new-order-option-tile-qty">
-                   <button class="new-order-option-tile-qty-btn${selectedQty <= 0 ? " is-disabled" : ""}" type="button" data-action="option-quick-qty-minus" data-group-id="${groupId}" data-item-id="${itemId}">−</button>
+                  <button class="new-order-option-tile-qty-btn${selectedQty <= 0 ? " is-disabled" : ""}" type="button" data-action="option-quick-qty-minus" data-group-id="${groupId}" data-item-id="${itemId}">−</button>
                    <span class="new-order-option-tile-qty-value">${selectedQty}</span>
                    <button class="new-order-option-tile-qty-btn${selectedQty >= qMax ? " is-disabled" : ""}" type="button" data-action="option-quick-qty-plus" data-group-id="${groupId}" data-item-id="${itemId}">+</button>
                  </div>`
@@ -5907,8 +6963,8 @@
           }).join("")
         : `
           <button class="new-order-option-tile is-placeholder" type="button" data-action="option-open" data-group-id="${groupId}" title="${escapeHtml(title)}">
-            <span class="new-order-option-tile-name">${selectedLabel ? escapeHtml(selectedLabel) : "Выбрать"}</span>
-            <span class="new-order-option-tile-edit">Изменить &gt;</span>
+            <span class="new-order-option-tile-name">${selectedLabel ? escapeHtml(selectedLabel) : "Р’С‹Р±СЂР°С‚СЊ"}</span>
+            <span class="new-order-option-tile-edit">РР·РјРµРЅРёС‚СЊ &gt;</span>
           </button>
         `;
       return `
@@ -5958,7 +7014,7 @@
       <div class="new-order-option-sheet">
         <div class="new-order-option-sheet-head">
           <button class="new-order-option-sheet-back" type="button" data-action="option-overlay-close"><i class="fas fa-arrow-left"></i></button>
-          <div class="new-order-option-sheet-title" id="newOrderOptionOverlayTitle">Опция</div>
+          <div class="new-order-option-sheet-title" id="newOrderOptionOverlayTitle">РћРїС†РёСЏ</div>
         </div>
         <div class="new-order-option-sheet-list no-scrollbar" id="newOrderOptionOverlayList"></div>
       </div>
@@ -5994,21 +7050,21 @@
       <div class="new-order-option-sheet">
         <div class="new-order-option-sheet-head">
           <button class="new-order-option-sheet-back" type="button" data-action="checkout-categories-overlay-close"><i class="fas fa-arrow-left"></i></button>
-          <div class="new-order-option-sheet-title" id="newOrderCheckoutCategoriesOverlayTitle">Категории</div>
+          <div class="new-order-option-sheet-title" id="newOrderCheckoutCategoriesOverlayTitle">РљР°С‚РµРіРѕСЂРёРё</div>
         </div>
         <div class="new-order-option-sheet-list no-scrollbar" id="newOrderCheckoutCategoriesOverlayList"></div>
         <div class="new-order-checkout-categories-footer">
           <label class="new-order-right-form-field">
-            <input id="newOrderCheckoutBlockTitleInput" class="control" type="text" placeholder="Название блока" maxlength="120" />
+            <input id="newOrderCheckoutBlockTitleInput" class="control" type="text" placeholder="РќР°Р·РІР°РЅРёРµ Р±Р»РѕРєР°" maxlength="120" />
           </label>
           <label class="switch new-order-checkout-categories-switch">
             <input id="newOrderCheckoutRequireAllInput" class="switch-input" type="checkbox" checked />
             <span class="switch-ui" aria-hidden="true"></span>
-            <span class="switch-text">Обязательно выбирать все товары</span>
+            <span class="switch-text">РћР±СЏР·Р°С‚РµР»СЊРЅРѕ РІС‹Р±РёСЂР°С‚СЊ РІСЃРµ С‚РѕРІР°СЂС‹</span>
           </label>
           <div class="new-order-checkout-categories-actions">
-          <button class="new-order-checkout-categories-action-btn is-save" type="button" id="newOrderCheckoutCategoriesSaveBtn">Сохранить</button>
-          <button class="new-order-checkout-categories-action-btn is-cancel" type="button" id="newOrderCheckoutCategoriesCancelBtn">Отмена</button>
+          <button class="new-order-checkout-categories-action-btn is-save" type="button" id="newOrderCheckoutCategoriesSaveBtn">РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+          <button class="new-order-checkout-categories-action-btn is-cancel" type="button" id="newOrderCheckoutCategoriesCancelBtn">РћС‚РјРµРЅР°</button>
           </div>
         </div>
       </div>
@@ -6031,7 +7087,7 @@
     const editingBlock = getCheckoutBlockById(blockId);
     state.checkoutEditingBlockId = editingBlock ? Number(editingBlock.id) : null;
 
-    title.textContent = "Категории";
+    title.textContent = "РљР°С‚РµРіРѕСЂРёРё";
     const rows = (Array.isArray(state.productCategories) ? state.productCategories : [])
       .filter((c) => Number(c?.is_active || 0) === 1);
     const initialSelected = new Set(
@@ -6045,12 +7101,12 @@
 
     function renderRows() {
       if (!rows.length) {
-        list.innerHTML = `<div class="new-order-option-sheet-empty">Нет доступных категорий</div>`;
+        list.innerHTML = `<div class="new-order-option-sheet-empty">РќРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… РєР°С‚РµРіРѕСЂРёР№</div>`;
         return;
       }
 
       list.innerHTML = rows.map((cat) => {
-        const name = String(cat?.title || "Категория");
+        const name = String(cat?.title || "РљР°С‚РµРіРѕСЂРёСЏ");
         const categoryId = Number(cat?.id || 0);
         const isSelected = selected.has(categoryId);
         return `
@@ -6131,13 +7187,13 @@
     const { backdrop, title, list } = getOptionOverlayElements();
     if (!backdrop || !title || !list) return;
 
-    title.textContent = String(fallbackTitle || "Опция");
-    list.innerHTML = `<div class="new-order-option-sheet-empty">Загрузка...</div>`;
+    title.textContent = String(fallbackTitle || "РћРїС†РёСЏ");
+    list.innerHTML = `<div class="new-order-option-sheet-empty">Р—Р°РіСЂСѓР·РєР°...</div>`;
     backdrop.classList.remove("hidden");
 
     const details = await loadOptionGroupDetails(gid);
     const group = details?.group || null;
-    const sheetTitle = String(group?.title || fallbackTitle || "Опция");
+    const sheetTitle = String(group?.title || fallbackTitle || "РћРїС†РёСЏ");
     title.textContent = sheetTitle;
     const items = Array.isArray(details?.items) ? details.items : [];
     await ensureOptionTargetProducts(items);
@@ -6176,7 +7232,7 @@
 
     function renderList() {
       if (!items.length) {
-        list.innerHTML = `<div class="new-order-option-sheet-empty">В этой опции нет позиций</div>`;
+        list.innerHTML = `<div class="new-order-option-sheet-empty">Р’ СЌС‚РѕР№ РѕРїС†РёРё РЅРµС‚ РїРѕР·РёС†РёР№</div>`;
         return;
       }
       list.innerHTML = items.map((item) => {
@@ -6186,7 +7242,7 @@
         const isSelected = selectedQty > 0;
         const photos = Array.isArray(item?.product_photos_json) ? item.product_photos_json : [];
         const photo = photos.length ? String(photos[0] || "").trim() : "";
-        const name = String(item?.name || item?.product_name || "Позиция");
+        const name = String(item?.name || item?.product_name || "РџРѕР·РёС†РёСЏ");
         const defaultVariantIndex = getOptionItemDefaultVariantIndex(item);
         const activeVariantIndex = Number.isFinite(Number(selected?.variantIndex)) ? Number(selected.variantIndex) : defaultVariantIndex;
         const basePrice = getOptionItemBasePrice(item);
@@ -6240,7 +7296,7 @@
       const itemId = Number(targetBtn.getAttribute("data-item-id") || 0);
       const item = items.find((x) => Number(x?.id || 0) === itemId);
       if (!item || !Number.isFinite(itemId) || itemId <= 0) return;
-      const name = String(item?.name || item?.product_name || "Позиция");
+      const name = String(item?.name || item?.product_name || "РџРѕР·РёС†РёСЏ");
       const entry = selById.get(itemId) || { id: itemId, label: name, qty: 0, basePrice: getOptionItemBasePrice(item), variantDiff: 0 };
       if (!Number.isFinite(Number(entry.variantIndex))) {
         const dIdx = getOptionItemDefaultVariantIndex(item);
@@ -6576,10 +7632,11 @@
         combo_id: Number(c?.id || 0),
         type: "combo",
         is_combo: 1,
-        title: String(c?.title || c?.name || "Комбо"),
-        name: String(c?.title || c?.name || "Комбо"),
+        title: String(c?.title || c?.name || "РљРѕРјР±Рѕ"),
+        name: String(c?.title || c?.name || "РљРѕРјР±Рѕ"),
         description: String(c?.description || ""),
         discount_percent: Number(c?.discount_percent || 0),
+        is_available: Number(c?.is_available ?? 1) === 1 ? 1 : 0,
         min_price: Number(c?.min_price || 0),
         price: Number(c?.min_price || 0),
         image_thumb: c?.image_thumb || null,
@@ -6652,7 +7709,7 @@
 
       productsGridEl.innerHTML = "";
       if (productsEmptyEl) {
-        productsEmptyEl.textContent = "Загрузка товаров...";
+        productsEmptyEl.textContent = "Р—Р°РіСЂСѓР·РєР° С‚РѕРІР°СЂРѕРІ...";
         productsEmptyEl.classList.remove("hidden");
       }
       const json = await apiJson(`/api/public/products?category_id=${encodeURIComponent(String(categoryId))}`);
@@ -6671,7 +7728,7 @@
       renderProducts(state.currentProducts);
     } catch (e) {
       if (productsEmptyEl) {
-        productsEmptyEl.textContent = "Ошибка загрузки товаров";
+        productsEmptyEl.textContent = "РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё С‚РѕРІР°СЂРѕРІ";
         productsEmptyEl.classList.remove("hidden");
       }
     }
@@ -6766,6 +7823,26 @@
           if (anyActionTarget && !clearActionTarget) {
             resetAllRightCartClearState({ render: false });
           }
+        }
+
+        const discountToggleBtn = e.target.closest("[data-action='right-order-discount-toggle'][data-order-id]");
+        if (discountToggleBtn) {
+          e.preventDefault();
+          e.stopPropagation();
+          const orderId = Number(discountToggleBtn.getAttribute("data-order-id") || 0);
+          const summaryCard = discountToggleBtn.closest(".order-summary");
+          const breakdown = summaryCard ? summaryCard.querySelector("[data-right-discount-breakdown='1']") : null;
+          if (!breakdown) return;
+          const willOpen = !breakdown.classList.contains("is-open");
+          breakdown.classList.toggle("is-open", willOpen);
+          breakdown.classList.toggle("hidden", !willOpen);
+          breakdown.setAttribute("aria-hidden", willOpen ? "false" : "true");
+          discountToggleBtn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+          if (orderId > 0) {
+            if (willOpen) state.rightDiscountBreakdownOpenByOrder.set(orderId, true);
+            else state.rightDiscountBreakdownOpenByOrder.delete(orderId);
+          }
+          return;
         }
 
         const addressEditBtn = e.target.closest(".new-order-right-address-edit");
@@ -7109,7 +8186,40 @@
           const itemIndex = cartItems.findIndex((item) => Number(item?.id || 0) === cartItemId);
           if (itemIndex < 0) return;
           const item = { ...cartItems[itemIndex] };
-          if (rowKind === "combo" || String(item?.type || "") === "combo") return;
+          if (rowKind === "combo" && String(item?.type || "") === "combo") {
+            const isCheckoutComposedCombo = Number(item?.combo_id || 0) <= 0;
+            const comboRequireAll = getCartItemCheckoutRequireAll(item);
+            if (!isCheckoutComposedCombo || comboRequireAll !== false) return;
+            const sections = Array.isArray(item.sections) ? item.sections.map((section) => ({ ...section })) : [];
+            const safeSectionIndex = Number.isFinite(sectionIndex) ? sectionIndex : -1;
+            if (!(safeSectionIndex >= 0) || safeSectionIndex >= sections.length) return;
+            sections.splice(safeSectionIndex, 1);
+            if (!sections.length) {
+              cartItems.splice(itemIndex, 1);
+              form.cartItems = cartItems;
+              state.rightOrders[orderIndex] = { ...order, form };
+              renderRightOrderTabs();
+              return;
+            }
+            item.sections = sections;
+            if (Array.isArray(item.selections)) {
+              const filteredSelections = item.selections
+                .map((row) => ({ ...row }))
+                .filter((_row, idx) => idx !== safeSectionIndex)
+                .map((row, idx) => ({ ...row, block_index: idx }));
+              item.selections = filteredSelections;
+            }
+            item.photos = sections
+              .map((section) => String(section?.photo_url || "").trim())
+              .filter(Boolean)
+              .slice(0, 4);
+            cartItems[itemIndex] = recalculateCartItemTotals(item);
+            form.cartItems = cartItems;
+            state.rightOrders[orderIndex] = { ...order, form };
+            renderRightOrderTabs();
+            return;
+          }
+          if (String(item?.type || "") === "combo") return;
           cartItems.splice(itemIndex, 1);
 
           form.cartItems = cartItems;
@@ -7180,11 +8290,28 @@
           const idx = getRightOrderIndexById(orderId);
           if (idx < 0) return;
           const order = state.rightOrders[idx] || {};
+          const submitMode = String(order?.mode || "add").toLowerCase();
+          const editOrderId = Number(order?.editOrderId || 0);
+          const isEditCancelMode = submitMode === "edit" && editOrderId > 0;
           const form = order.form && typeof order.form === "object" ? order.form : {};
           const cartItems = Array.isArray(form.cartItems) ? form.cartItems : [];
-          if (!cartItems.length) return;
           const armedUntil = Number(state.rightCartClearConfirmUntilByOrder.get(orderId) || 0);
           const armed = armedUntil > Date.now();
+          if (isEditCancelMode) {
+            if (!armed) {
+              armRightCartClearState(orderId);
+              renderRightOrderTabs();
+              return;
+            }
+            resetRightCartClearState(orderId, { render: false });
+            document.dispatchEvent(
+              new CustomEvent("neworder:edit-cancel", {
+                detail: { orderId: editOrderId },
+              })
+            );
+            return;
+          }
+          if (!cartItems.length) return;
           if (!armed) {
             armRightCartClearState(orderId);
             renderRightOrderTabs();
@@ -7236,6 +8363,16 @@
               updateRightOrderFormField(orderId, "changeType", "no_change");
               updateRightOrderFormField(orderId, "changeAmount", "");
             }
+            if (field === "orderStatusId") {
+              const selectedStatusId = Number(value || 0);
+              const selectedStatusTitle = String(
+                (Array.isArray(state.rightOrderStatuses) ? state.rightOrderStatuses : [])
+                  .find((item) => Number(item?.id || 0) === selectedStatusId)?.title || ""
+              ).trim();
+              if (selectedStatusTitle) {
+                updateRightOrderFormField(orderId, "orderStatusTitle", selectedStatusTitle);
+              }
+            }
             state.rightOpenSelect = null;
             renderRightOrderTabs();
           }
@@ -7278,6 +8415,16 @@
         const orderId = Number(toggleBtn.getAttribute("data-order-id") || 0);
         const field = String(toggleBtn.getAttribute("data-field") || "");
         if (!(orderId > 0) || !field) return;
+        if (field === "orderStatusId") {
+          const statuses = Array.isArray(state.rightOrderStatuses) ? state.rightOrderStatuses : [];
+          if (statuses.length <= 1) {
+            void loadRightOrderStatuses().then(() => {
+              const stillOpen = Number(state.rightOpenSelect?.orderId || 0) === orderId
+                && String(state.rightOpenSelect?.field || "") === field;
+              if (stillOpen) renderRightOrderTabs();
+            }).catch(() => {});
+          }
+        }
         const isSameOpen = Number(state.rightOpenSelect?.orderId || 0) === orderId
           && String(state.rightOpenSelect?.field || "") === field;
         state.rightOpenSelect = isSameOpen ? null : { orderId, field };
@@ -7314,7 +8461,7 @@
           if (!Number.isFinite(numeric) || numeric <= 0) {
             input.setCustomValidity("");
           } else if (numeric < minAllowed) {
-            input.setCustomValidity(`Минимальная сумма: ${minAllowed}`);
+            input.setCustomValidity(`РњРёРЅРёРјР°Р»СЊРЅР°СЏ СЃСѓРјРјР°: ${minAllowed}`);
           } else {
             input.setCustomValidity("");
           }
@@ -7427,7 +8574,7 @@
           try {
             await saveCheckoutDraftToApi(draftToSave);
           } catch (e) {
-            alert("Не удалось сохранить черновик экрана оформления");
+            alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ С‡РµСЂРЅРѕРІРёРє СЌРєСЂР°РЅР° РѕС„РѕСЂРјР»РµРЅРёСЏ");
             return;
           }
           state.checkoutSavedDraft = draftToSave;
@@ -7510,9 +8657,11 @@
           const idx = state.rightOrders.findIndex((o) => Number(o?.id || 0) === orderId);
           if (idx < 0) return;
           resetRightCartClearState(orderId, { render: false });
+          state.rightDiscountBreakdownOpenByOrder.delete(orderId);
           state.rightCheckoutSubmittingByOrder.delete(orderId);
           const wasActive = Number(state.rightActiveOrderId || 0) === orderId;
           state.rightOrders.splice(idx, 1);
+          const becameEmpty = state.rightOrders.length === 0;
             if (!state.rightOrders.length) {
               state.rightActiveOrderId = null;
             } else if (wasActive) {
@@ -7522,6 +8671,9 @@
             state.rightOpenSelect = null;
             closeRightAddressOverlay();
             renderRightOrderTabs();
+            if (becameEmpty) {
+              document.dispatchEvent(new CustomEvent("neworder:right-tabs-empty"));
+            }
             return;
           }
 
@@ -7585,6 +8737,8 @@
         if (compositionToggleBtn) {
           e.preventDefault();
           e.stopPropagation();
+          const compositionCard = compositionToggleBtn.closest(".new-order-checkout-product-item[data-product-id][data-section-key]");
+          if (compositionCard && compositionCard.classList.contains("is-unavailable")) return;
           const productId = Number(compositionToggleBtn.getAttribute("data-product-id") || 0);
           const sectionKey = String(compositionToggleBtn.getAttribute("data-section-key") || "").trim();
           if (!(productId > 0) || !sectionKey) return;
@@ -7637,6 +8791,7 @@
 
         const productCard = e.target.closest(".new-order-checkout-product-item[data-product-id][data-section-key]");
         if (productCard) {
+          if (productCard.classList.contains("is-unavailable")) return;
           const productId = Number(productCard.getAttribute("data-product-id") || 0);
           const sectionKey = String(productCard.getAttribute("data-section-key") || "").trim();
           if (productId > 0 && sectionKey) {
@@ -7741,6 +8896,10 @@
     const addBtnEl = document.getElementById("newOrderAddBtn");
     if (addBtnEl) {
       addBtnEl.addEventListener("click", () => {
+        if (document.body.classList.contains("page-orders")) {
+          document.dispatchEvent(new CustomEvent("orders:new-draft-tab-request"));
+          return;
+        }
         openRightNewOrderTab();
       });
     }
@@ -7750,12 +8909,15 @@
       if (!actionBtn) return;
       const action = String(actionBtn.getAttribute("data-action") || "");
       if (action === "combo-open") {
-        const comboId = Number(actionBtn.getAttribute("data-combo-id") || actionBtn.closest("[data-combo-id]")?.getAttribute("data-combo-id") || 0);
+        const comboCard = actionBtn.closest(".new-order-product-card[data-combo-id]");
+        if (comboCard && comboCard.classList.contains("is-unavailable")) return;
+        const comboId = Number(actionBtn.getAttribute("data-combo-id") || comboCard?.getAttribute("data-combo-id") || 0);
         if (comboId > 0) void openComboOverlay(comboId);
         return;
       }
       const card = e.target.closest("[data-product-id]");
       if (!card) return;
+      if (card.classList.contains("is-unavailable")) return;
       const pid = Number(card.getAttribute("data-product-id") || 0);
       if (!Number.isFinite(pid) || pid <= 0) return;
       if (action === "variant-select") {
@@ -7782,7 +8944,7 @@
         const groupId = Number(actionBtn.getAttribute("data-group-id") || 0);
         const block = actionBtn.closest(".new-order-option-block");
         const titleEl = block ? block.querySelector(".new-order-option-title") : null;
-        const title = titleEl ? titleEl.textContent : "Опция";
+        const title = titleEl ? titleEl.textContent : "РћРїС†РёСЏ";
         void openOptionOverlay(pid, groupId, title);
         return;
       }
@@ -7797,7 +8959,7 @@
         if (!applied) {
           const block = actionBtn.closest(".new-order-option-block");
           const titleEl = block ? block.querySelector(".new-order-option-title") : null;
-          const title = titleEl ? titleEl.textContent : "Опция";
+          const title = titleEl ? titleEl.textContent : "РћРїС†РёСЏ";
           void openOptionOverlay(pid, groupId, title);
         }
         return;
@@ -7810,7 +8972,7 @@
         if (!applied) {
           const block = actionBtn.closest(".new-order-option-block");
           const titleEl = block ? block.querySelector(".new-order-option-title") : null;
-          const title = titleEl ? titleEl.textContent : "Опция";
+          const title = titleEl ? titleEl.textContent : "РћРїС†РёСЏ";
           void openOptionOverlay(pid, groupId, title);
         }
         return;
@@ -7823,7 +8985,7 @@
         if (!applied) {
           const block = actionBtn.closest(".new-order-option-block");
           const titleEl = block ? block.querySelector(".new-order-option-title") : null;
-          const title = titleEl ? titleEl.textContent : "Опция";
+          const title = titleEl ? titleEl.textContent : "РћРїС†РёСЏ";
           void openOptionOverlay(pid, groupId, title);
         }
         return;
@@ -7853,12 +9015,14 @@
       if (interactive) return;
       if (card) {
         const pid = Number(card.getAttribute("data-product-id") || 0);
+        if (card.classList.contains("is-unavailable")) return;
         if (!(pid > 0)) return;
         void openProductOverlay(pid);
         return;
       }
       const comboCard = e.target.closest(".new-order-product-card[data-combo-id]");
       if (!comboCard) return;
+      if (comboCard.classList.contains("is-unavailable")) return;
       const comboId = Number(comboCard.getAttribute("data-combo-id") || 0);
       if (!(comboId > 0)) return;
       void openComboOverlay(comboId);
@@ -7868,6 +9032,7 @@
       if (e.key !== "Enter" && e.key !== " ") return;
       const comboCard = e.target.closest(".new-order-product-card[data-combo-id]");
       if (!comboCard) return;
+      if (comboCard.classList.contains("is-unavailable")) return;
       const interactive = e.target.closest("[data-action], button, input, textarea, select, a");
       if (interactive) return;
       const comboId = Number(comboCard.getAttribute("data-combo-id") || 0);
@@ -8159,7 +9324,7 @@
       }
       if (action === "product-overlay-options-open") {
         const groupId = Number(actionNode.getAttribute("data-group-id") || 0);
-        const title = String(actionNode.getAttribute("data-group-title") || "Опции");
+        const title = String(actionNode.getAttribute("data-group-title") || "РћРїС†РёРё");
         if (groupId > 0) {
           void openOptionOverlay(pid, groupId, title);
           window.setTimeout(() => {
@@ -8217,7 +9382,7 @@
                 type: "single",
                 items: [{
                   id: itemId,
-                  label: String(found?.name || found?.product_name || "Позиция"),
+                  label: String(found?.name || found?.product_name || "РџРѕР·РёС†РёСЏ"),
                   qty: 1,
                   basePrice: getOptionItemBasePrice(found),
                   variantDiff: hasVariantDefault ? getOptionItemVariantDiff(found, Number(defaultVariantIndex)) : 0,
@@ -8348,6 +9513,7 @@
     await loadRightDeliveryTypes();
     await loadRightPaymentTypes();
     await loadRightTimeOptions();
+    await loadRightOrderStatuses();
     await loadRightPickupStores();
     schedulePersistBootstrapSnapshot(0);
   }
@@ -8373,7 +9539,7 @@
     } else if (state.activeCategoryId) {
       await loadProductsForCategory(state.activeCategoryId, { preferCache: true });
     } else if (productsEmptyEl) {
-      productsEmptyEl.textContent = "Нет доступных категорий";
+      productsEmptyEl.textContent = "РќРµС‚ РґРѕСЃС‚СѓРїРЅС‹С… РєР°С‚РµРіРѕСЂРёР№";
       productsEmptyEl.classList.remove("hidden");
     }
     renderMainContentMode();
@@ -8398,6 +9564,7 @@
       || !state.rightDeliveryTypes.length
       || !state.rightPaymentTypes.length
       || !state.rightTimeOptions.length
+      || !state.rightOrderStatuses.length
       || !state.rightPickupStores.length
     ) {
       await loadRefsFromApi();
@@ -8420,8 +9587,893 @@
     schedulePersistBootstrapSnapshot(0);
   }
 
+  function deepCloneJson(value, fallback = null) {
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch {
+      return fallback;
+    }
+  }
+
+  function mapOfMapsToObject(source) {
+    const out = {};
+    if (!(source instanceof Map)) return out;
+    source.forEach((inner, key) => {
+      const topKey = String(key);
+      if (inner instanceof Map) {
+        out[topKey] = mapToObject(inner);
+      } else if (inner && typeof inner === "object") {
+        out[topKey] = deepCloneJson(inner, {});
+      }
+    });
+    return out;
+  }
+
+  function objectToMapOfMaps(source) {
+    const out = new Map();
+    if (!source || typeof source !== "object") return out;
+    Object.keys(source).forEach((key) => {
+      const topNum = Number(key);
+      const topKey = Number.isFinite(topNum) ? topNum : key;
+      const value = source[key];
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        out.set(topKey, objectToMap(value));
+      }
+    });
+    return out;
+  }
+
+  function serializeOptionSelectionsMap(source) {
+    const out = {};
+    if (!(source instanceof Map)) return out;
+    source.forEach((groupMap, productId) => {
+      if (!(groupMap instanceof Map)) return;
+      const groupOut = {};
+      groupMap.forEach((entry, groupId) => {
+        groupOut[String(groupId)] = deepCloneJson(entry, null);
+      });
+      out[String(productId)] = groupOut;
+    });
+    return out;
+  }
+
+  function deserializeOptionSelectionsMap(source) {
+    const out = new Map();
+    if (!source || typeof source !== "object") return out;
+    Object.keys(source).forEach((productKey) => {
+      const groupRaw = source[productKey];
+      if (!groupRaw || typeof groupRaw !== "object") return;
+      const groupMap = new Map();
+      Object.keys(groupRaw).forEach((groupKey) => {
+        const gidNum = Number(groupKey);
+        const gid = Number.isFinite(gidNum) ? gidNum : groupKey;
+        const value = deepCloneJson(groupRaw[groupKey], null);
+        if (value && typeof value === "object") groupMap.set(gid, value);
+      });
+      const pidNum = Number(productKey);
+      const pid = Number.isFinite(pidNum) ? pidNum : productKey;
+      out.set(pid, groupMap);
+    });
+    return out;
+  }
+
+  function normalizeCompareToken(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function firstOrderVariant(item) {
+    const list = Array.isArray(item?.variants) ? item.variants : [];
+    return list[0] || null;
+  }
+
+  function resolveOrderVariantIndex(productId, orderItem) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return 0;
+    const groups = state.productVariants.get(pid) || [];
+    const chips = getVariantChipsForProduct(pid);
+    if (!chips.length) return 0;
+
+    const firstVariant = firstOrderVariant(orderItem);
+    const explicitIndex = Number(
+      firstVariant?.variant_value_index ??
+      firstVariant?.selected_index ??
+      orderItem?.variant_value_index ??
+      orderItem?.variant_index
+    );
+    if (Number.isFinite(explicitIndex) && explicitIndex >= 0 && explicitIndex < chips.length) {
+      return explicitIndex;
+    }
+
+    const orderVariantLabel = String(
+      firstVariant?.label ||
+      firstVariant?.value ||
+      orderItem?.variant_label ||
+      ""
+    ).trim();
+    const orderVariantUnit = String(
+      firstVariant?.unit ||
+      firstVariant?.unit_short_title ||
+      firstVariant?.unitLabel ||
+      orderItem?.variant_unit ||
+      ""
+    ).trim();
+    const orderVariantGroup = String(firstVariant?.group_title || "").trim();
+    const orderToken = normalizeCompareToken([orderVariantLabel, orderVariantUnit, orderVariantGroup].filter(Boolean).join(" "));
+    if (orderToken) {
+      const matched = chips.find((chip) => {
+        const labelToken = normalizeCompareToken(chip?.label || "");
+        return labelToken === orderToken || labelToken.startsWith(orderToken) || orderToken.startsWith(labelToken);
+      });
+      if (matched && Number.isFinite(Number(matched.index))) {
+        return Number(matched.index);
+      }
+    }
+
+    const rawDefault = groups[0]?.default_value_index != null ? Number(groups[0].default_value_index) : 0;
+    return Number.isFinite(rawDefault) && rawDefault >= 0 ? rawDefault : 0;
+  }
+
+  function buildIngredientQtyMapFromOrder(productId, orderItem) {
+    const pid = Number(productId || 0);
+    const catalogIngredients = state.productIngredients.get(pid) || [];
+    const defaultQtyMap = createIngredientQtyMap(catalogIngredients);
+    const fromOrder = Array.isArray(orderItem?.ingredients) ? orderItem.ingredients : [];
+    if (!fromOrder.length) return defaultQtyMap;
+
+    const orderById = new Map();
+    const orderByName = new Map();
+    fromOrder.forEach((row) => {
+      const ingId = Number(row?.ingredient_id || 0);
+      const qty = Number(row?.quantity ?? row?.qty ?? 0);
+      const nameKey = normalizeCompareToken(row?.name || row?.ingredient_name || "");
+      if (ingId > 0 && Number.isFinite(qty)) orderById.set(ingId, qty);
+      if (nameKey && Number.isFinite(qty)) orderByName.set(nameKey, qty);
+    });
+
+    catalogIngredients.forEach((row) => {
+      const ingId = Number(row?.ingredient_id || 0);
+      if (!(ingId > 0)) return;
+      if (orderById.has(ingId)) {
+        defaultQtyMap.set(ingId, Number(orderById.get(ingId)));
+        return;
+      }
+      const nameKey = normalizeCompareToken(row?.ingredient_name || row?.name || "");
+      if (nameKey && orderByName.has(nameKey)) {
+        defaultQtyMap.set(ingId, Number(orderByName.get(nameKey)));
+      }
+    });
+    return defaultQtyMap;
+  }
+
+  function resolveOptionVariantIndex(detailItem, optionRow) {
+    const variants = Array.isArray(detailItem?.variants) ? detailItem.variants : [];
+    const values = Array.isArray(variants[0]?.values) ? variants[0].values : [];
+    if (!values.length) return null;
+
+    const explicit = Number(
+      optionRow?.variant_index ??
+      optionRow?.variantIndex ??
+      optionRow?.variant_value_index
+    );
+    if (Number.isFinite(explicit) && explicit >= 0 && explicit < values.length) return explicit;
+
+    const rawLabel = String(optionRow?.variant_label || optionRow?.variantLabel || "").trim();
+    const rawUnit = String(optionRow?.variant_unit || optionRow?.variantUnit || "").trim();
+    const rawToken = normalizeCompareToken([rawLabel, rawUnit].filter(Boolean).join(" "));
+    if (rawToken) {
+      for (let idx = 0; idx < values.length; idx += 1) {
+        const label = String(formatOptionVariantLabel(detailItem, idx) || toVariantLabel(values[idx]) || "").trim();
+        const labelToken = normalizeCompareToken(label);
+        if (labelToken === rawToken || labelToken.startsWith(rawToken) || rawToken.startsWith(labelToken)) {
+          return idx;
+        }
+      }
+    }
+
+    return getOptionItemDefaultVariantIndex(detailItem);
+  }
+
+  async function buildOptionSelectionMapFromOrder(productId, orderItem, product) {
+    const pid = Number(productId || 0);
+    const options = Array.isArray(orderItem?.options) ? orderItem.options : [];
+    if (!(pid > 0) || !options.length) return new Map();
+
+    const groups = state.productOptionGroups.get(pid) || [];
+    await loadOptionDetailsForProducts([product]);
+
+    const byGroup = new Map();
+    const allGroups = Array.isArray(groups) ? groups : [];
+    const findByNameInGroup = (detailItems, titleToken) => (
+      detailItems.find((x) => normalizeCompareToken(x?.name || x?.product_name || "") === titleToken) || null
+    );
+
+    for (const opt of options) {
+      const qtyRaw = Number(opt?.qty ?? opt?.quantity ?? 0);
+      if (!(qtyRaw > 0)) continue;
+      const optionIdRaw = Number(opt?.id || opt?.option_item_id || opt?.item_id || 0);
+      let groupId = Number(opt?.group_id || opt?.option_group_id || 0);
+      let detailItem = null;
+      let detailItems = [];
+      let detailGroup = null;
+
+      if (groupId > 0) {
+        const details = state.optionGroupDetails.get(groupId);
+        detailItems = Array.isArray(details?.items) ? details.items : [];
+        detailGroup = details?.group || null;
+        if (optionIdRaw > 0) {
+          detailItem = detailItems.find((x) => Number(x?.id || 0) === optionIdRaw) || null;
+        }
+      }
+
+      if (!detailItem) {
+        const optTitleToken = normalizeCompareToken(opt?.title || opt?.name || opt?.label || "");
+        for (const group of allGroups) {
+          const gid = Number(group?.group_id || group?.id || 0);
+          if (!(gid > 0)) continue;
+          const details = state.optionGroupDetails.get(gid);
+          const items = Array.isArray(details?.items) ? details.items : [];
+          const byId = optionIdRaw > 0 ? (items.find((x) => Number(x?.id || 0) === optionIdRaw) || null) : null;
+          const byName = !byId && optTitleToken ? findByNameInGroup(items, optTitleToken) : null;
+          const found = byId || byName;
+          if (found) {
+            groupId = gid;
+            detailItem = found;
+            detailItems = items;
+            detailGroup = details?.group || null;
+            break;
+          }
+        }
+      }
+
+      if (!(groupId > 0) || !detailItem) continue;
+
+      const groupUiType = getOptionGroupUiType({ ...(detailGroup || {}), items: detailItems });
+      const entryType = groupUiType === "multiple_item"
+        ? "multiple_item"
+        : (groupUiType === "multiple_group" ? "multiple_group" : "single");
+      const existing = byGroup.get(groupId) || { type: entryType, items: [] };
+      const selectedVariantIndex = resolveOptionVariantIndex(detailItem, opt);
+      const hasVariant = Number.isFinite(Number(selectedVariantIndex));
+      const rowQty = entryType === "single" || entryType === "multiple_group"
+        ? 1
+        : Math.max(0, Number(qtyRaw));
+      const nextRow = {
+        id: Number(detailItem?.id || 0),
+        label: String(detailItem?.name || detailItem?.product_name || opt?.title || "РћРїС†РёСЏ"),
+        qty: rowQty,
+        basePrice: getOptionItemBasePrice(detailItem),
+        variantDiff: hasVariant ? getOptionItemVariantDiff(detailItem, Number(selectedVariantIndex)) : 0,
+        ...(hasVariant ? { variantIndex: Number(selectedVariantIndex) } : {}),
+      };
+
+      if (entryType === "single") {
+        byGroup.set(groupId, { type: "single", items: [nextRow] });
+      } else if (entryType === "multiple_group") {
+        byGroup.set(groupId, {
+          type: "multiple_group",
+          items: [...existing.items.filter((row) => Number(row?.id || 0) !== Number(nextRow.id)), nextRow],
+        });
+      } else {
+        byGroup.set(groupId, { type: "multiple_item", items: [...existing.items, nextRow] });
+      }
+    }
+
+    return byGroup;
+  }
+
+  function buildFallbackCartProductItem(orderItem) {
+    const qty = Math.max(1, Number(orderItem?.qty || orderItem?.quantity || 1));
+    const lineTotal = roundPrice(Number(orderItem?.line_total ?? orderItem?.total ?? orderItem?.total_price ?? orderItem?.price ?? 0));
+    const unitPrice = qty > 0 ? roundPrice(lineTotal / qty) : 0;
+    const oldLineTotal = roundPrice(Number(orderItem?.discount?.original_line_total || orderItem?.old_line_total || 0));
+    const oldUnitPrice = oldLineTotal > lineTotal && qty > 0 ? roundPrice(oldLineTotal / qty) : 0;
+
+    const variants = Array.isArray(orderItem?.variants) ? orderItem.variants : [];
+    const firstVariant = variants[0] || null;
+    const variantLabel = String(firstVariant?.label || firstVariant?.value || orderItem?.variant_label || "").trim();
+    return {
+      id: Date.now() + Math.floor(Math.random() * 10000),
+      type: "product",
+      name: String(orderItem?.product_name || orderItem?.name || "РўРѕРІР°СЂ"),
+      product_id: Number(orderItem?.product_id || 0),
+      qty,
+      photos: (Array.isArray(orderItem?.photos) ? orderItem.photos : []).filter(Boolean).slice(0, 4),
+      variant: {
+        label: variantLabel,
+        values: variantLabel ? [variantLabel] : [],
+        selected_index: 0,
+      },
+      pricing: {
+        base_price: unitPrice,
+        old_price: oldUnitPrice || unitPrice,
+        option_total: 0,
+        discount: null,
+        base_unit_id: Number(firstVariant?.unit_id || 0),
+        unit_id: Number(firstVariant?.unit_id || 0),
+        base_qty: 1,
+        variant_group: null,
+      },
+      option_items: [],
+      ingredients: [],
+      unit_price_before_discount: oldUnitPrice > unitPrice ? oldUnitPrice : 0,
+      unit_price: unitPrice,
+      sum: lineTotal,
+    };
+  }
+
+  async function buildCartItemFromOrderProduct(orderItem) {
+    const productId = Number(orderItem?.product_id || 0);
+    if (!(productId > 0)) return buildFallbackCartProductItem(orderItem);
+
+    const product = await ensureProductById(productId);
+    if (!product) return buildFallbackCartProductItem(orderItem);
+
+    await loadVariantsForProducts([product]);
+    await loadIngredientsForProducts([product]);
+    await loadOptionsForProducts([product]);
+    await loadOptionDetailsForProducts([product]);
+
+    const selectedVariantIndex = resolveOrderVariantIndex(productId, orderItem);
+    state.selectedVariants.set(productId, selectedVariantIndex);
+    state.ingredientStateByProduct.set(productId, buildIngredientQtyMapFromOrder(productId, orderItem));
+    const optionSelectionMap = await buildOptionSelectionMapFromOrder(productId, orderItem, product);
+    if (optionSelectionMap.size) state.optionSelections.set(productId, optionSelectionMap);
+    else state.optionSelections.delete(productId);
+
+    const qty = Math.max(1, Number(orderItem?.qty || orderItem?.quantity || 1));
+    const cartItem = buildCartItemFromProduct(productId, qty);
+    if (!cartItem) return buildFallbackCartProductItem(orderItem);
+    cartItem.id = Date.now() + Math.floor(Math.random() * 10000);
+    return cartItem;
+  }
+
+  function normalizeComboSelectionIngredients(rawList) {
+    const source = Array.isArray(rawList) ? rawList : [];
+    return source.map((ing) => {
+      const qty = Number(ing?.qty ?? ing?.quantity ?? 0);
+      return {
+        ingredient_id: Number(ing?.ingredient_id || 0),
+        name: String(ing?.name || ing?.ingredient_name || ""),
+        qty,
+        quantity: qty,
+        unit: String(ing?.unit || ing?.unit_label || ""),
+        unit_id: Number(ing?.unit_id || 0) || null,
+      };
+    }).filter((row) => row.ingredient_id > 0 || row.name);
+  }
+
+  async function buildComboCartItemFromOrderItem(orderItem) {
+    const qty = Math.max(1, Number(orderItem?.qty || orderItem?.quantity || 1));
+    const lineTotal = roundPrice(Number(orderItem?.line_total ?? orderItem?.total ?? orderItem?.total_price ?? 0));
+    const oldLineTotalRaw = roundPrice(Number(orderItem?.old_line_total || orderItem?.discount?.original_line_total || 0));
+    const unitPrice = qty > 0 ? roundPrice(lineTotal / qty) : 0;
+    const unitOldPrice = oldLineTotalRaw > lineTotal && qty > 0 ? roundPrice(oldLineTotalRaw / qty) : unitPrice;
+    const explicitDiscount = Number(orderItem?.combo_discount_percent ?? orderItem?.discount_percent ?? 0);
+    const calculatedDiscount = unitOldPrice > unitPrice && unitOldPrice > 0
+      ? Number((((unitOldPrice - unitPrice) / unitOldPrice) * 100).toFixed(6))
+      : 0;
+    const comboDiscountPercent = explicitDiscount > 0 ? explicitDiscount : calculatedDiscount;
+
+    const explicitSelections = Array.isArray(orderItem?.selections) ? orderItem.selections : [];
+    let mappedSelections = explicitSelections.length
+      ? explicitSelections.map((row) => ({
+          product_id: Number(row?.product_id || 0),
+          product_name: String(row?.product_name || ""),
+          product_photo: String(row?.product_photo || row?.photo_url || ""),
+          variant_label: String(row?.variant_label || ""),
+          variant_group_id: Number(row?.variant_group_id || 0) || null,
+          variant_group_title: String(row?.variant_group_title || ""),
+          variant_unit: String(row?.variant_unit || ""),
+          variant_value_index: Number.isFinite(Number(row?.variant_value_index)) ? Number(row.variant_value_index) : null,
+          unit_id: Number(row?.unit_id || 0) || null,
+          unit_price_override: Number(row?.unit_price_override ?? row?.price ?? 0),
+          unit_price_before_discount: Number(row?.unit_price_before_discount ?? row?.old_price ?? row?.unit_price_override ?? row?.price ?? 0),
+          ingredients_display: normalizeComboSelectionIngredients(row?.ingredients_display),
+        }))
+      : [];
+
+    const comboId = Number(orderItem?.combo_id || 0);
+    const sectionsSource = Array.isArray(orderItem?.sections) ? orderItem.sections : [];
+    const fallbackSections = sectionsSource.length
+      ? sectionsSource
+      : mappedSelections.map((row) => ({
+          category_id: Number(row?.block_id || 0),
+          category_name: String(row?.block_title || ""),
+          product_id: row.product_id,
+          product_name: row.product_name,
+          photo_url: row.product_photo,
+          price: row.unit_price_override,
+          old_price: row.unit_price_before_discount,
+          variant: {
+            label: row.variant_label,
+            values: row.variant_label ? [row.variant_label] : [],
+            selected_index: Number.isFinite(Number(row.variant_value_index)) ? Number(row.variant_value_index) : 0,
+          },
+          pricing: {
+            base_price: Number(row.unit_price_before_discount || row.unit_price_override || 0),
+            old_price: Number(row.unit_price_before_discount || row.unit_price_override || 0),
+            option_total: 0,
+            discount: null,
+            base_unit_id: Number(row.unit_id || 0),
+            unit_id: Number(row.unit_id || 0),
+            base_qty: 1,
+            variant_group: null,
+          },
+          ingredients: normalizeComboSelectionIngredients(row.ingredients_display).map((ing) => ({
+            ingredient_id: Number(ing?.ingredient_id || 0),
+            ingredient_name: String(ing?.name || ""),
+            qty: Number(ing?.qty || 0),
+            default_qty: Number(ing?.qty || 0),
+            qty_min: 0,
+            qty_max: Number(ing?.qty || 0),
+            qty_step: 1,
+            unit_label: String(ing?.unit || ""),
+            unit_id: Number(ing?.unit_id || 0) || 0,
+            ingredient_base_unit_id: Number(ing?.unit_id || 0) || 0,
+            price_per_unit: 0,
+          })),
+        }));
+
+    let sections = fallbackSections.map((section, sectionIndex) => {
+      const fallback = mappedSelections[sectionIndex] && typeof mappedSelections[sectionIndex] === "object"
+        ? mappedSelections[sectionIndex]
+        : null;
+      const variant = section?.variant && typeof section.variant === "object" ? section.variant : {};
+      const variantLabel = String(variant?.label || section?.variant_label || "").trim();
+      const sectionPrice = Number(section?.price || section?.unit_price_override || 0);
+      const sectionOld = Number(section?.old_price || section?.unit_price_before_discount || sectionPrice);
+      return {
+        category_id: Number(section?.category_id || fallback?.block_id || 0),
+        category_name: String(section?.category_name || fallback?.block_title || ""),
+        product_id: Number(section?.product_id || 0),
+        product_name: String(section?.product_name || ""),
+        photo_url: String(section?.photo_url || section?.product_photo || ""),
+        price: roundPrice(sectionPrice),
+        old_price: roundPrice(sectionOld),
+        variant: {
+          label: variantLabel,
+          values: Array.isArray(variant?.values) ? variant.values.map((v) => String(v || "").trim()).filter(Boolean) : (variantLabel ? [variantLabel] : []),
+          selected_index: Number.isFinite(Number(variant?.selected_index)) ? Number(variant.selected_index) : 0,
+        },
+        pricing: {
+          base_price: roundPrice(Number(section?.pricing?.base_price || sectionOld || sectionPrice)),
+          old_price: roundPrice(Number(section?.pricing?.old_price || sectionOld || sectionPrice)),
+          option_total: 0,
+          discount: null,
+          base_unit_id: Number(section?.pricing?.base_unit_id || section?.pricing?.unit_id || 0),
+          unit_id: Number(section?.pricing?.unit_id || 0),
+          base_qty: Number(section?.pricing?.base_qty || 1),
+          variant_group: section?.pricing?.variant_group ? deepCloneJson(section.pricing.variant_group, null) : null,
+        },
+        ingredients: (Array.isArray(section?.ingredients) ? section.ingredients : []).map((ing) => ({
+          ingredient_id: Number(ing?.ingredient_id || 0),
+          ingredient_name: String(ing?.ingredient_name || ing?.name || ""),
+          qty: Number(ing?.qty || ing?.quantity || 0),
+          default_qty: Number(ing?.default_qty ?? ing?.qty ?? ing?.quantity ?? 0),
+          qty_min: Number(ing?.qty_min ?? 0),
+          qty_max: Number(ing?.qty_max ?? ing?.qty ?? ing?.quantity ?? 0),
+          qty_step: Number(ing?.qty_step || 1),
+          unit_label: String(ing?.unit_label || ing?.unit || ""),
+          unit_id: Number(ing?.unit_id || 0),
+          ingredient_base_unit_id: Number(ing?.ingredient_base_unit_id || ing?.unit_id || 0),
+          price_per_unit: Number(ing?.price_per_unit || 0),
+        })),
+      };
+    });
+
+    if (!sectionsSource.length) {
+      try {
+        const hydratedSections = [];
+        const hydratedSelections = [];
+        const addHydratedRow = ({
+          blockIndex,
+          blockId,
+          blockTitle,
+          productId,
+          product,
+          selectedProduct,
+          seed,
+        }) => {
+          const variantGroups = state.productVariants.get(productId) || [];
+          const variantGroup = Array.isArray(variantGroups) && variantGroups.length ? variantGroups[0] : null;
+          const variantValues = getComboVariantDisplayValues(productId);
+          const seededVariantIndex = Number(seed?.variant_value_index);
+          const defaultVariantIndex = variantGroup?.default_value_index != null
+            ? Number(variantGroup.default_value_index)
+            : 0;
+          let selectedVariantIndex = Number.isFinite(seededVariantIndex) ? seededVariantIndex : defaultVariantIndex;
+          if (!Number.isFinite(selectedVariantIndex) || selectedVariantIndex < 0) selectedVariantIndex = 0;
+          if (variantValues.length) {
+            const hasExplicitIndex = Number.isFinite(seededVariantIndex) && seededVariantIndex >= 0 && seededVariantIndex < variantValues.length;
+            if (!hasExplicitIndex) {
+              const seededLabelToken = normalizeCompareToken(seed?.variant_label || "");
+              if (seededLabelToken) {
+                const matchedIndex = variantValues.findIndex((label) => {
+                  const token = normalizeCompareToken(label);
+                  return token && (token === seededLabelToken || token.startsWith(seededLabelToken) || seededLabelToken.startsWith(token));
+                });
+                if (matchedIndex >= 0) selectedVariantIndex = matchedIndex;
+              }
+            }
+            selectedVariantIndex = Math.max(0, Math.min(variantValues.length - 1, selectedVariantIndex));
+          } else {
+            selectedVariantIndex = 0;
+          }
+
+          const ingredientsSnapshot = buildComboIngredientSnapshot(productId, seed?.ingredients_display);
+          const variantLabel = String(seed?.variant_label || variantValues[selectedVariantIndex] || "").trim();
+          const seededOldPrice = Number(seed?.unit_price_before_discount);
+          const seededPrice = Number(seed?.unit_price_override);
+          const fallbackOldPrice = Number(product?.price || selectedProduct?.price || seededPrice || 0);
+          const sectionOldPrice = roundPrice(
+            Number.isFinite(seededOldPrice) && seededOldPrice > 0
+              ? seededOldPrice
+              : fallbackOldPrice
+          );
+          const sectionPrice = roundPrice(
+            Number.isFinite(seededPrice) && seededPrice >= 0
+              ? seededPrice
+              : comboDiscountedPrice(sectionOldPrice, comboDiscountPercent)
+          );
+          const variantGroupId = Number(variantGroup?.id || variantGroup?.variant_group_id || 0) || null;
+          const variantGroupTitle = String(
+            seed?.variant_group_title
+            || variantGroup?.title
+            || variantGroup?.title_label
+            || ""
+          ).trim();
+          const variantUnit = String(seed?.variant_unit || getVariantUnitLabel(variantGroup) || "").trim();
+          const unitId = Number(
+            seed?.unit_id
+            || variantGroup?.unit_id
+            || product?.base_unit_id
+            || product?.unit_id
+            || 0
+          ) || null;
+          const photoUrl = String(seed?.product_photo || selectedProduct?.product_photo || getProductPhoto(product) || "").trim();
+          const productName = String(seed?.product_name || product?.name || selectedProduct?.product_name || "Товар").trim();
+          const safeBlockId = Number(blockId || 0);
+          const safeBlockTitle = String(blockTitle || "").trim();
+
+          hydratedSections.push({
+            category_id: safeBlockId,
+            category_name: safeBlockTitle,
+            product_id: productId,
+            product_name: productName,
+            photo_url: photoUrl,
+            price: sectionPrice,
+            old_price: sectionOldPrice,
+            variant_group_title: variantGroupTitle,
+            variant_unit: variantUnit,
+            variant: {
+              label: variantLabel,
+              values: variantValues,
+              selected_index: selectedVariantIndex,
+            },
+            pricing: {
+              base_price: roundPrice(Number(product?.price || sectionOldPrice || sectionPrice)),
+              old_price: roundPrice(Number(product?.old_price || sectionOldPrice || sectionPrice)),
+              option_total: 0,
+              discount: null,
+              base_unit_id: Number(product?.base_unit_id || product?.unit_id || unitId || 0),
+              unit_id: Number(unitId || product?.base_unit_id || product?.unit_id || 0),
+              base_qty: Number(product?.base_qty || 1),
+              variant_group: variantGroup ? {
+                id: variantGroupId,
+                variant_group_id: variantGroupId,
+                title: variantGroupTitle,
+                unit_id: Number(variantGroup?.unit_id || 0),
+                default_value_index: Number(variantGroup?.default_value_index || 0),
+                values: Array.isArray(variantGroup?.values) ? [...variantGroup.values] : [],
+                discount_tiers: Array.isArray(variantGroup?.discount_tiers)
+                  ? variantGroup.discount_tiers.map((tier) => ({ ...tier }))
+                  : [],
+              } : null,
+            },
+            ingredients: Array.isArray(ingredientsSnapshot)
+              ? ingredientsSnapshot.map((ing) => ({ ...ing }))
+              : [],
+          });
+
+          hydratedSelections.push({
+            block_index: Number.isFinite(Number(blockIndex)) ? Number(blockIndex) : 0,
+            block_id: safeBlockId > 0 ? safeBlockId : null,
+            block_title: safeBlockTitle,
+            product_id: productId,
+            product_name: productName,
+            product_photo: photoUrl,
+            variant_label: variantLabel,
+            variant_group_id: variantGroupId,
+            variant_group_title: variantGroupTitle,
+            variant_unit: variantUnit,
+            variant_value_index: selectedVariantIndex,
+            unit_id: unitId,
+            unit_price_override: sectionPrice,
+            unit_price_before_discount: sectionOldPrice,
+            ingredients_display: Array.isArray(ingredientsSnapshot)
+              ? ingredientsSnapshot.map((ing) => ({
+                ingredient_id: Number(ing?.ingredient_id || 0),
+                name: String(ing?.ingredient_name || ing?.name || ""),
+                qty: Number(ing?.qty ?? ing?.quantity ?? 0),
+                quantity: Number(ing?.qty ?? ing?.quantity ?? 0),
+                unit: String(ing?.unit_label || ing?.unit || ""),
+                unit_id: Number(ing?.unit_id || 0) || null,
+              }))
+              : [],
+          });
+        };
+
+        if (comboId > 0) {
+          const combo = await resolveComboDetails(comboId);
+          const blocks = Array.isArray(combo?.blocks) ? combo.blocks : [];
+          if (blocks.length) {
+            const usedSelectionIndexes = new Set();
+            for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
+              const block = blocks[blockIndex] || {};
+              const blockProducts = Array.isArray(block?.products) ? block.products : [];
+              if (!blockProducts.length) continue;
+
+              const blockId = Number(block?.block_id || block?.id || 0);
+              let seedIndex = mappedSelections.findIndex((row, idx) => (
+                !usedSelectionIndexes.has(idx)
+                && blockId > 0
+                && Number(row?.block_id || 0) === blockId
+              ));
+              if (seedIndex < 0 && blockIndex < mappedSelections.length && !usedSelectionIndexes.has(blockIndex)) {
+                seedIndex = blockIndex;
+              }
+              if (seedIndex < 0) {
+                seedIndex = mappedSelections.findIndex((row, idx) => (
+                  !usedSelectionIndexes.has(idx)
+                  && Number(row?.product_id || 0) > 0
+                  && blockProducts.some((p) => Number(p?.product_id || 0) === Number(row?.product_id || 0))
+                ));
+              }
+              const seed = seedIndex >= 0 ? mappedSelections[seedIndex] : null;
+              if (seedIndex >= 0) usedSelectionIndexes.add(seedIndex);
+
+              const seededProductId = Number(seed?.product_id || 0);
+              const selectedProduct = blockProducts.find((p) => Number(p?.product_id || 0) === seededProductId)
+                || blockProducts.find((p) => Number(p?.is_default || 0) === 1)
+                || blockProducts[0]
+                || null;
+              const productId = Number(selectedProduct?.product_id || seededProductId || 0);
+              if (!(productId > 0)) continue;
+
+              const product = await ensureProductById(productId);
+              const productLike = product || {
+                id: productId,
+                price: Number(
+                  selectedProduct?.price
+                  || seed?.unit_price_before_discount
+                  || seed?.unit_price_override
+                  || 0
+                ),
+              };
+              await loadVariantsForProducts([productLike]);
+              await loadIngredientsForProducts([productLike]);
+
+              addHydratedRow({
+                blockIndex,
+                blockId,
+                blockTitle: String(block?.block_title || block?.title || "").trim(),
+                productId,
+                product,
+                selectedProduct,
+                seed,
+              });
+            }
+          }
+        }
+
+        if (!hydratedSections.length && mappedSelections.length) {
+          for (let idx = 0; idx < mappedSelections.length; idx += 1) {
+            const seed = mappedSelections[idx] || {};
+            const productId = Number(seed?.product_id || 0);
+            if (!(productId > 0)) continue;
+            const product = await ensureProductById(productId);
+            const productLike = product || {
+              id: productId,
+              price: Number(seed?.unit_price_before_discount || seed?.unit_price_override || 0),
+            };
+            await loadVariantsForProducts([productLike]);
+            await loadIngredientsForProducts([productLike]);
+
+            addHydratedRow({
+              blockIndex: Number.isFinite(Number(seed?.block_index)) ? Number(seed.block_index) : idx,
+              blockId: Number(seed?.block_id || 0),
+              blockTitle: String(seed?.block_title || "").trim(),
+              productId,
+              product,
+              selectedProduct: null,
+              seed,
+            });
+          }
+        }
+
+        if (hydratedSections.length) {
+          sections = hydratedSections;
+          mappedSelections = hydratedSelections;
+        }
+      } catch {}
+    }
+
+    const comboCartItem = {
+      id: Date.now() + Math.floor(Math.random() * 10000),
+      type: "combo",
+      combo_id: comboId,
+      name: String(orderItem?.name || orderItem?.combo_title || "РљРѕРјР±Рѕ"),
+      qty,
+      combo_discount_percent: comboDiscountPercent,
+      unit_price_before_discount: roundPrice(unitOldPrice),
+      unit_price: roundPrice(unitPrice),
+      sum: roundPrice(lineTotal),
+      photos: (Array.isArray(orderItem?.photos) ? orderItem.photos : []).filter(Boolean).slice(0, 4),
+      selections: mappedSelections,
+      sections,
+    };
+    if (!(comboId > 0)) {
+      const checkoutCategoryIds = [...new Set(
+        (Array.isArray(sections) ? sections : [])
+          .map((section) => Number(section?.category_id || 0))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      )];
+      if (checkoutCategoryIds.length) {
+        comboCartItem.checkout_category_ids = checkoutCategoryIds;
+        const inferredRequireAll = inferCheckoutRequireAllByCategoryIds(checkoutCategoryIds);
+        if (inferredRequireAll !== null) {
+          comboCartItem.checkout_require_all = Boolean(inferredRequireAll);
+        }
+      }
+    }
+    return comboCartItem;
+  }
+
+  async function buildDraftSessionFromOrder(order, opts = {}) {
+    const src = order && typeof order === "object" ? order : {};
+    const orderId = Number(src?.id || 0);
+    const titleFromOpts = String(opts?.title || "").trim();
+    const draft = buildRightOrderDraft(
+      Number(opts?.draftOrderId || 0),
+      titleFromOpts || (orderId > 0 ? `№${orderId}` : "РќРѕРІС‹Р№ Р·Р°РєР°Р·"),
+      {
+        mode: "edit",
+        editOrderId: orderId > 0 ? orderId : 0,
+        storeId: Number(src?.store_id || src?.storeId || 0) > 0 ? Number(src?.store_id || src?.storeId) : null,
+      }
+    );
+
+    const orderItems = Array.isArray(src?.items) ? src.items : [];
+    const cartItems = [];
+    for (const orderItem of orderItems) {
+      if (String(orderItem?.type || "") === "combo") {
+        cartItems.push(await buildComboCartItemFromOrderItem(orderItem));
+        continue;
+      }
+      cartItems.push(await buildCartItemFromOrderProduct(orderItem));
+    }
+
+    const phoneRaw = String(src?.customer_phone || "").trim();
+    const normalizedPhone = normalizePhoneRu(phoneRaw);
+    const parsedScheduled = String(src?.scheduled_at || "").trim();
+    const scheduleMatch = parsedScheduled.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/);
+    const scheduledDate = scheduleMatch ? scheduleMatch[1] : formatIsoDate(getTodayDate());
+    const scheduledTime = scheduleMatch ? scheduleMatch[2] : "18:00";
+    const timeOptionCode = String(src?.time_option_code || "asap").trim() || "asap";
+    const changeFrom = Number(src?.change_from || 0);
+    const statusId = Number(src?.status_id || 0);
+    const statusTitle = String(src?.status_title || src?.status?.title || "").trim();
+    const knownChangeValues = new Set([500, 1000, 2000, 5000]);
+    const changeType = changeFrom > 0
+      ? (knownChangeValues.has(changeFrom) ? String(changeFrom) : "other")
+      : "no_change";
+
+    draft.form = {
+      ...draft.form,
+      phone: normalizedPhone.length ? `+${normalizedPhone}` : "+7",
+      clientId: Number(src?.customer_id || 0) || null,
+      name: String(src?.customer_name || "").trim(),
+      pickupMethod: String(src?.method_code || draft.form.pickupMethod || "delivery").trim() || "delivery",
+      address: String(src?.address || "").trim(),
+      cookWhen: timeOptionCode,
+      scheduledDate,
+      dateTime: scheduledTime,
+      orderStatusId: statusId > 0 ? statusId : null,
+      orderStatusInitialId: statusId > 0 ? statusId : null,
+      orderStatusTitle: statusTitle,
+      orderStatusInitialTitle: statusTitle,
+      paymentMethod: String(src?.payment_code || draft.form.paymentMethod || "cash").trim() || "cash",
+      changeType,
+      changeAmount: changeType === "other" ? String(Math.max(0, changeFrom)) : "",
+      comment: String(src?.comment || "").trim(),
+      cartItems,
+    };
+
+    return {
+      activeCategoryId: CHECKOUT_SCREEN_ID,
+      quantities: {},
+      selectedVariants: {},
+      ingredientStateByProduct: {},
+      optionSelections: {},
+      rightOrders: [draft],
+      rightActiveOrderId: Number(draft.id || 0) || null,
+    };
+  }
+
+  function captureCheckoutSession() {
+    return {
+      activeCategoryId: state.activeCategoryId,
+      quantities: mapToObject(state.quantities),
+      selectedVariants: mapToObject(state.selectedVariants),
+      ingredientStateByProduct: mapOfMapsToObject(state.ingredientStateByProduct),
+      optionSelections: serializeOptionSelectionsMap(state.optionSelections),
+      rightOrders: deepCloneJson(Array.isArray(state.rightOrders) ? state.rightOrders : [], []),
+      rightActiveOrderId: Number(state.rightActiveOrderId || 0) || null,
+    };
+  }
+
+  async function restoreCheckoutSession(session) {
+    const src = session && typeof session === "object" ? session : {};
+    const activeCategoryRaw = src.activeCategoryId;
+    if (String(activeCategoryRaw) === CHECKOUT_SCREEN_ID) state.activeCategoryId = CHECKOUT_SCREEN_ID;
+    else state.activeCategoryId = Number(activeCategoryRaw || 0) || CHECKOUT_SCREEN_ID;
+
+    state.quantities = objectToMap(src.quantities || {});
+    state.selectedVariants = objectToMap(src.selectedVariants || {});
+    state.ingredientStateByProduct = objectToMapOfMaps(src.ingredientStateByProduct || {});
+    state.optionSelections = deserializeOptionSelectionsMap(src.optionSelections || {});
+    state.rightOrders = Array.isArray(src.rightOrders)
+      ? deepCloneJson(src.rightOrders, []).map((row) => normalizeRightOrderDraft(row))
+      : [];
+    state.rightActiveOrderId = Number(src.rightActiveOrderId || 0) || null;
+    state.rightOpenSelect = null;
+    closeRightAddressOverlay();
+
+    if (!state.rightOrders.length) {
+      openRightNewOrderTab();
+    } else if (!state.rightActiveOrderId || !state.rightOrders.some((row) => Number(row?.id || 0) === Number(state.rightActiveOrderId || 0))) {
+      state.rightActiveOrderId = Number(state.rightOrders[0]?.id || 0) || null;
+    }
+
+    ensureValidActiveCategory();
+    renderCategories();
+    await renderActiveCategoryContent();
+    renderRightOrderTabs();
+  }
+
+  function buildBlankDraftSession(opts = {}) {
+    const draft = buildRightOrderDraft(Number(opts?.id || 0), String(opts?.title || "").trim());
+    return {
+      activeCategoryId: CHECKOUT_SCREEN_ID,
+      quantities: {},
+      selectedVariants: {},
+      ingredientStateByProduct: {},
+      optionSelections: {},
+      rightOrders: [draft],
+      rightActiveOrderId: Number(draft.id || 0) || null,
+    };
+  }
+
+  window.NewOrderBridge = {
+    ready: () => loadReadyPromise,
+    captureSession: () => captureCheckoutSession(),
+    restoreSession: async (session) => {
+      await loadReadyPromise;
+      await restoreCheckoutSession(session);
+    },
+    createBlankSession: (opts = {}) => buildBlankDraftSession(opts),
+    createSessionFromOrder: async (order, opts = {}) => {
+      await loadReadyPromise;
+      return buildDraftSessionFromOrder(order, opts);
+    },
+  };
+
   async function load() {
     try {
+      await ensureTenantPriceRoundingSettings();
       const cachedManifest = readNewOrderManifestCache();
       if (cachedManifest) state.cacheManifest = cachedManifest;
 
@@ -8469,19 +10521,22 @@
       schedulePersistBootstrapSnapshot(0);
     } catch (e) {
       if (categoriesEmptyEl) {
-        categoriesEmptyEl.textContent = "Ошибка загрузки категорий";
+        categoriesEmptyEl.textContent = "РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё РєР°С‚РµРіРѕСЂРёР№";
         categoriesEmptyEl.classList.remove("hidden");
       }
       if (productsEmptyEl) {
-        productsEmptyEl.textContent = "Ошибка загрузки";
+        productsEmptyEl.textContent = "РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё";
         productsEmptyEl.classList.remove("hidden");
       }
       renderMainContentMode();
       if (!state.rightActiveOrderId) openRightNewOrderTab();
       renderRightOrderTabs();
+    } finally {
+      markLoadReady();
     }
   }
 
   bindEvents();
   load();
 })();
+

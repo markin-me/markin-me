@@ -23,6 +23,8 @@ const TELEGRAM_API = 'https://api.telegram.org/bot';
 
 module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
+  let orderDeliveryTypeColumnsReady = false;
+  let ensureOrderDeliveryTypeColumnsPromise = null;
   const PUBLIC_CACHE_TTL_MS = Object.freeze({
     categories: 30000,
     cartUpsell: 15000,
@@ -41,6 +43,54 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const publicResponseCache = new Map();
   const publicResponseInflight = new Map();
   const PUBLIC_CACHE_MAX_KEYS = 2000;
+
+  async function ensureOrderDeliveryTypeColumns() {
+    if (orderDeliveryTypeColumnsReady) return true;
+    if (ensureOrderDeliveryTypeColumnsPromise) return ensureOrderDeliveryTypeColumnsPromise;
+
+    ensureOrderDeliveryTypeColumnsPromise = (async () => {
+      const [columnRows] = await db.query('SHOW COLUMNS FROM order_delivery_types');
+      const existing = new Set((columnRows || []).map((row) => String(row?.Field || '').trim()).filter(Boolean));
+      const requiredColumns = [
+        {
+          name: 'require_client_data',
+          sql: "TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'Обязательны ли данные клиента (имя/телефон)'",
+        },
+        {
+          name: 'show_on_site',
+          sql: "TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'Показывать способ на сайте'",
+        },
+      ];
+
+      for (const column of requiredColumns) {
+        if (existing.has(column.name)) continue;
+        try {
+          await db.query(`ALTER TABLE order_delivery_types ADD COLUMN \`${column.name}\` ${column.sql}`);
+          existing.add(column.name);
+        } catch (err) {
+          if (String(err?.code || '') === 'ER_DUP_FIELDNAME') {
+            existing.add(column.name);
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      orderDeliveryTypeColumnsReady = requiredColumns.every((column) => existing.has(column.name));
+      return orderDeliveryTypeColumnsReady;
+    })()
+      .catch((err) => {
+        ensureOrderDeliveryTypeColumnsPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (orderDeliveryTypeColumnsReady) {
+          ensureOrderDeliveryTypeColumnsPromise = null;
+        }
+      });
+
+    return ensureOrderDeliveryTypeColumnsPromise;
+  }
 
   // ------------------------------
   // Upload: customer avatar
@@ -4212,15 +4262,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!blockIds.length) continue;
 
       const [allBlockProductsRaw] = await db.query(
-        `SELECT bp.block_id, p.id, p.price, p.photos_json, p.base_unit_id, p.base_qty, p.unit_id
+        `SELECT bp.block_id, p.id, p.price, p.photos_json, p.base_unit_id, p.base_qty, p.unit_id,
+                CASE WHEN ${productIsAvailableSql} THEN 1 ELSE 0 END AS is_available
          FROM prod_combo_block_products bp
          JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
          LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
          WHERE bp.tenant_id=? AND bp.block_id IN (${blockIds.map(() => '?').join(',')})
            AND p.is_active=1 AND p.site_visibility=1
-           AND ${productIsAvailableSql}
          ORDER BY bp.block_id ASC, bp.sort_order ASC, bp.id ASC`,
-        [storeId, tenantId, ...blockIds, storeId, storeId, storeId]
+        [storeId, storeId, storeId, storeId, tenantId, ...blockIds]
       );
 
       const blockProductsById = new Map();
@@ -4288,9 +4338,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           comboIsAvailable = false;
           break;
         }
+        const availableProductsRaw = blockProductsRaw.filter((row) => Number(row?.is_available || 0) === 1);
+        if (availableProductsRaw.length < minSelect) {
+          comboIsAvailable = false;
+        }
+        const pricingCandidatesRaw = availableProductsRaw.length >= minSelect
+          ? availableProductsRaw
+          : blockProductsRaw;
 
         const productsWithMinPrice = await Promise.all(
-          blockProductsRaw.map(async (r) => {
+          pricingCandidatesRaw.map(async (r) => {
             const variant = variantByProductId.get(Number(r.id));
             const minP = await computeMinPriceForProduct(r, variant, getConversionFactor, roundPrice);
             return { ...r, minPrice: minP };
@@ -4309,8 +4366,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         minPriceSum += roundPrice(blockSum);
       }
 
-      if (!comboIsAvailable) continue;
-
       const discountPercent = Number(combo.discount_percent) || 0;
       const minPrice = discountPercent > 0
         ? roundPrice(minPriceSum * (1 - discountPercent / 100))
@@ -4322,6 +4377,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         title: combo.title || '',
         description: combo.description || '',
         discount_percent: discountPercent,
+        is_available: comboIsAvailable ? 1 : 0,
         image_url: combo.image_url || null,
         min_price: minPrice,
         grid_photos: gridPhotosFinal,
@@ -6243,6 +6299,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
+      await ensureOrderDeliveryTypeColumns();
 
       const [statuses] = await db.query(
         `SELECT id, code, title, subtitle, icon, color, sort
@@ -6262,9 +6319,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       // РџР•Р Р•РРњР•РќРћР’РђРќРћ: order_delivery_types (Р±С‹РІС€Р°СЏ order_methods)
       const [methods] = await db.query(
-        `SELECT id, code, title, icon, sort, is_default
+        `SELECT id, code, title, icon, sort, is_default, require_client_data
          FROM order_delivery_types
-         WHERE tenant_id=? AND store_id=? AND is_active=1
+         WHERE tenant_id=? AND store_id=? AND is_active=1 AND show_on_site=1
          ORDER BY is_default DESC, sort ASC, id ASC`,
         [tenantId, storeId]
       );
@@ -6384,6 +6441,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       let orderStoreId = storeId;
+      await ensureOrderDeliveryTypeColumns();
 
       const [tenantRows] = await db.query(
         'SELECT price_rounding_mode, price_rounding_precision, order_stock_deduct_mode, order_stock_deduct_status_id FROM ten_tenants WHERE id=? LIMIT 1',
@@ -6444,6 +6502,16 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!deliveryTypeId) return res.status(500).json({ ok: false, error: 'NO_METHODS' });
       if (!timeOptionId) return res.status(500).json({ ok: false, error: 'NO_TIME_OPTIONS' });
 
+      const [deliveryTypeRows] = await db.query(
+        `SELECT require_client_data
+         FROM order_delivery_types
+         WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1
+         LIMIT 1`,
+        [tenantId, storeId, deliveryTypeId]
+      );
+      const selectedDeliveryType = Array.isArray(deliveryTypeRows) ? deliveryTypeRows[0] : null;
+      const requireClientData = Number(selectedDeliveryType?.require_client_data ?? 1) !== 0;
+
       // customer data:
       let customerId = authCustomer?.id || null;
 
@@ -6452,14 +6520,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       if (authCustomer) {
         customerPhone = authCustomer.phone; // С‚РµР»РµС„РѕРЅ РЅРµ РјРµРЅСЏРµРј
-        if (!customerName) customerName = authCustomer.name || '\u041a\u043b\u0438\u0435\u043d\u0442';
+        if (!customerName) customerName = authCustomer.name || (requireClientData ? '\u041a\u043b\u0438\u0435\u043d\u0442' : null);
       } else {
-        if (!customerPhone) return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
-        if (!customerName) customerName = '\u041a\u043b\u0438\u0435\u043d\u0442';
+        if (requireClientData && !customerPhone) return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
+        if (!customerName) customerName = requireClientData ? '\u041a\u043b\u0438\u0435\u043d\u0442' : null;
       }
 
       // ensure customer exists if not authed
-      if (!customerId) {
+      if (!customerId && customerPhone) {
         const [ex] = await db.query(
           `SELECT id FROM cust_customers WHERE tenant_id=? AND phone=? LIMIT 1`,
           [tenantId, customerPhone]
@@ -6950,7 +7018,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             
             for (const cartIng of cartIngredients) {
               const ingId = Number(cartIng.ingredient_id);
-              const ingQty = Number(cartIng.quantity ?? 1);
+              const ingQtyRaw = Number(cartIng.qty ?? cartIng.quantity ?? 0);
+              if (!Number.isFinite(ingQtyRaw)) continue;
+              const ingQty = Math.max(0, ingQtyRaw);
               const ingInfo = ingMap.get(ingId);
               if (!ingInfo) continue;
 

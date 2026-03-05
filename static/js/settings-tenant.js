@@ -4060,6 +4060,7 @@
       row.setAttribute("draggable", "true");
       row.dataset.id = String(item.id);
       if (type === "order-time-options") row.classList.add("settings-row--time-option");
+      if (type === "order-delivery") row.classList.add("settings-row--delivery");
 
       if (cfg.hasIcon === false) {
         row.classList.add("settings-row--no-icon");
@@ -4101,6 +4102,22 @@
             return;
           }
           await loadSettingsList(type);
+        }));
+      }
+
+      if (type === "order-delivery") {
+        switches.appendChild(createSwitch("Клиент обязателен", Number(item.require_client_data ?? 1) === 1, async (checked) => {
+          const data = await updateSettingsItem(type, item.id, { require_client_data: checked ? 1 : 0 });
+          if (!data || !data.ok) {
+            alert("Не удалось сохранить обязательность данных клиента.");
+          }
+        }));
+
+        switches.appendChild(createSwitch("На сайте", Number(item.show_on_site ?? 1) === 1, async (checked) => {
+          const data = await updateSettingsItem(type, item.id, { show_on_site: checked ? 1 : 0 });
+          if (!data || !data.ok) {
+            alert("Не удалось сохранить видимость на сайте.");
+          }
         }));
       }
 

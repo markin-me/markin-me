@@ -1103,6 +1103,20 @@ body.page-home .page-col-right .panel{
 .toolbar-title-text{display:grid;gap:2px}
 .toolbar-title-text .muted{font-size:12px}
 .toolbar-left,.toolbar-right{display:flex;align-items:center;gap:8px}
+.new-order-toolbar{
+  align-items:center;
+}
+.new-order-toolbar-left{
+  flex:1 1 auto;
+  min-width:0;
+}
+.new-order-toolbar-right{
+  flex:0 0 auto;
+  margin-left:auto;
+}
+.new-order-toolbar.is-checkout-screen .new-order-toolbar-title{
+  display:none;
+}
 
 .date-filter{position:relative}
 .date-popover{
@@ -1815,6 +1829,36 @@ body.page-orders .orders-list .order-row.js-order{
   flex-wrap: nowrap;
   gap: 10px;
 }
+.settings-row--delivery{
+  grid-template-columns:54px minmax(160px,1fr);
+  grid-template-areas:
+    "icon title"
+    "icon switches";
+  align-items:start;
+}
+.settings-row--delivery .settings-row-icon{
+  grid-area:icon;
+}
+.settings-row--delivery .settings-row-title{
+  grid-area:title;
+}
+.settings-row--delivery .settings-row-switches{
+  grid-area:switches;
+  justify-content:flex-start;
+  align-items:flex-start;
+  flex-wrap:nowrap;
+  gap:12px;
+  margin-top:4px;
+}
+.settings-row--delivery .settings-row-switches .switch{
+  align-items:flex-start;
+  gap:4px;
+}
+.settings-row--delivery .settings-row-switches .switch-text{
+  font-size:11px;
+  font-weight:400;
+  line-height:1.1;
+}
 
 .settings-row-wrapper .settings-row-time-details {
   display: grid;
@@ -2048,6 +2092,29 @@ body.page-orders .orders-list .order-client-phone-text{
   transition:opacity var(--dur-fast) var(--ease-smooth);
   font-size:inherit;
   color:var(--color-white);
+}
+.order-payment-btn-icon{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:18px;
+  height:18px;
+  flex:0 0 18px;
+}
+.order-payment-btn-icon img{
+  width:100%;
+  height:100%;
+  object-fit:contain;
+  display:block;
+}
+.order-payment-btn-icon i{
+  font-size:14px;
+  line-height:1;
+}
+.order-payment-btn-total{
+  display:inline-flex;
+  align-items:center;
+  justify-content:flex-end;
 }
 .order-payment-btn:hover{opacity:.9}
 .order-payment-card{
@@ -11744,6 +11811,14 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
 .shop-mobile-cart-actions-checkout.is-order-success .shop-checkout-back{
   display: none !important;
 }
+.shop-checkout-footer-actions.is-order-success{
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "submit";
+}
+.shop-checkout-footer-actions.is-order-success .shop-checkout-footer-comment-input,
+.shop-checkout-footer-actions.is-order-success .shop-checkout-footer-name-input{
+  display: none !important;
+}
 .shop-checkout-footer-actions.is-order-success .shop-checkout-submit-btn,
 .shop-mobile-cart-actions-checkout.is-order-success .shop-checkout-submit-btn{
   flex: 1;
@@ -11789,6 +11864,21 @@ html[data-theme="dark"] .qty-pill--muted .qty-pill__btn:hover{
   padding: 0 16px;
   font-size: 14px;
   font-weight: 800;
+}
+
+.shop-cart-clear.is-edit-cancel{
+  border-color: var(--color-border);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+
+.shop-cart-clear.is-edit-cancel:hover{
+  background: var(--color-surface-3);
+  border-color: var(--color-border-strong);
+}
+
+.shop-cart-clear.is-edit-cancel .fa-arrow-left{
+  font-size: 17px;
 }
 
 .shop-checkout-btn{

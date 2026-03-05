@@ -768,8 +768,10 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
 
       // Скидки привязанные напрямую к клиенту
       const [directDiscounts] = await db.query(
-        `SELECT DISTINCT d.id, d.title, d.discount_type, d.discount_value, 
+        `SELECT DISTINCT d.id, d.title, d.discount_type, d.discount_value,
                 d.apply_to, d.is_active, d.starts_at, d.ends_at,
+                d.min_order_amount, d.max_discount_amount, d.is_stackable, d.priority,
+                d.usage_limit, d.usage_count, d.schedule_days, d.schedule_time_start, d.schedule_time_end,
                 'direct' AS link_type
          FROM mkt_discounts d
          JOIN mkt_discount_customers dc ON dc.discount_id = d.id AND dc.tenant_id = d.tenant_id
@@ -781,6 +783,8 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       const [categoryDiscounts] = await db.query(
         `SELECT DISTINCT d.id, d.title, d.discount_type, d.discount_value,
                 d.apply_to, d.is_active, d.starts_at, d.ends_at,
+                d.min_order_amount, d.max_discount_amount, d.is_stackable, d.priority,
+                d.usage_limit, d.usage_count, d.schedule_days, d.schedule_time_start, d.schedule_time_end,
                 'category' AS link_type, cc.title AS category_title
          FROM mkt_discounts d
          JOIN mkt_discount_customers dc ON dc.discount_id = d.id AND dc.tenant_id = d.tenant_id
