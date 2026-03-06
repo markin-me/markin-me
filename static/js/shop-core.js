@@ -9437,10 +9437,9 @@ function updateCartBadge() {
         variantValues[safeIdx],
         firstVariantGroup.unit_short_title || firstVariantGroup.unit_code || firstVariantGroup.unit_title || ""
       );
-      const groupTitle = str(firstVariantGroup.title || firstVariantGroup.title_label || "").trim();
       variantGroupId = Number(firstVariantGroup.id || firstVariantGroup.variant_group_id || 0) || null;
       variantValueIndex = safeIdx;
-      variantLabel = groupTitle ? `${groupTitle}: ${valueLabel}` : valueLabel;
+      variantLabel = valueLabel;
       variantUnitPrice = Number(
         getVariantUnitPrice(product, variants, {
           selectedIndex: safeIdx,
@@ -9609,7 +9608,6 @@ function updateCartBadge() {
           values[safeIdx],
           firstVariantGroup.unit_short_title || firstVariantGroup.unit_code || firstVariantGroup.unit_title || ""
         );
-        const groupTitle = str(firstVariantGroup.title || firstVariantGroup.title_label || "").trim();
         const recalculated = Number(getVariantUnitPrice(productForVariant, vGroups, {
           selectedIndex: safeIdx,
           value: values[safeIdx],
@@ -9620,7 +9618,7 @@ function updateCartBadge() {
         }
         normalizedVariantGroupId = Number(firstVariantGroup.id || firstVariantGroup.variant_group_id || 0) || null;
         normalizedVariantValueIndex = safeIdx;
-        normalizedVariantLabel = groupTitle ? `${groupTitle}: ${valueLabel}` : valueLabel;
+        normalizedVariantLabel = valueLabel;
       } else {
         normalizedVariantGroupId = null;
         normalizedVariantValueIndex = null;
