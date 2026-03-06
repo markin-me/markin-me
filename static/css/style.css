@@ -11625,16 +11625,31 @@ body.page-chat .panel{
   display:flex;
   align-items:stretch;
   gap:8px;
+  min-width:0;
+  max-width:100%;
   overflow-x:auto;
   overflow-y:hidden;
   scrollbar-width:none;
   -webkit-overflow-scrolling:touch;
-  scroll-snap-type:x proximity;
+  scroll-snap-type:none;
+  touch-action:pan-x;
+  overscroll-behavior-x:contain;
+  cursor:grab;
 }
 
 .chat-message-order-cards::-webkit-scrollbar{
   width:0;
   height:0;
+}
+
+.chat-message-order-cards.is-mouse-dragging{
+  cursor:grabbing;
+  user-select:none;
+  scroll-snap-type:none;
+}
+
+.chat-message-order-cards.is-mouse-dragging *{
+  user-select:none;
 }
 
 .chat-message-order-card{

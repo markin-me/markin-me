@@ -8724,8 +8724,17 @@
     if (!dom.center.messages || !dom.center.contextMenu) return;
     let touchContextGesture = null;
     let touchAttachmentTap = null;
+    let orderCardMouseDrag = null;
+    let orderCardTouchPan = null;
+    let suppressOrderCardClickUntil = 0;
     const CHAT_ATTACHMENT_TAP_MAX_MS = 260;
     const CHAT_ATTACHMENT_TAP_MOVE_CANCEL_PX = 10;
+    const CHAT_ORDER_CARD_MOUSE_DRAG_START_PX = 5;
+    const CHAT_ORDER_CARD_TOUCH_PAN_START_PX = 6;
+    const CHAT_ORDER_CARD_MOUSE_DRAG_SUPPRESS_CLICK_MS = 240;
+    const CHAT_ORDER_CARD_MOUSE_DRAG_FACTOR = 0.42;
+    const CHAT_ORDER_CARD_TOUCH_PAN_FACTOR = 0.42;
+    const CHAT_ORDER_CARD_WHEEL_FACTOR = 0.38;
 
     function clearTouchContextGesture() {
       if (!touchContextGesture) return;
@@ -8733,6 +8742,51 @@
         window.clearTimeout(touchContextGesture.longPressTimer);
       }
       touchContextGesture = null;
+    }
+
+    function clearOrderCardMouseDrag(options) {
+      if (!orderCardMouseDrag) return;
+      const opts = options || {};
+      const strip = orderCardMouseDrag.strip;
+      if (strip && strip.classList) {
+        strip.classList.remove("is-mouse-dragging");
+      }
+      if (opts.suppressClick === true && orderCardMouseDrag.didDrag === true) {
+        suppressOrderCardClickUntil = Math.max(
+          suppressOrderCardClickUntil,
+          Date.now() + CHAT_ORDER_CARD_MOUSE_DRAG_SUPPRESS_CLICK_MS,
+        );
+      }
+      orderCardMouseDrag = null;
+    }
+
+    function clearOrderCardTouchPan(options) {
+      if (!orderCardTouchPan) return;
+      const opts = options || {};
+      const strip = orderCardTouchPan.strip;
+      if (strip && strip.classList) {
+        strip.classList.remove("is-mouse-dragging");
+      }
+      if (opts.suppressClick === true && orderCardTouchPan.didDrag === true) {
+        suppressOrderCardClickUntil = Math.max(
+          suppressOrderCardClickUntil,
+          Date.now() + CHAT_ORDER_CARD_MOUSE_DRAG_SUPPRESS_CLICK_MS,
+        );
+      }
+      orderCardTouchPan = null;
+    }
+
+    function resolveOrderCardScrollStrip(target) {
+      const targetEl = target && target.closest ? target : null;
+      if (!targetEl) return null;
+      const strip = targetEl.closest(".chat-message-order-cards")
+        || (targetEl.closest(".chat-message-bubble--order-card")
+          ? targetEl.closest(".chat-message-bubble--order-card").querySelector(".chat-message-order-cards")
+          : null);
+      if (!strip) return null;
+      const maxLeft = Math.max(0, strip.scrollWidth - strip.clientWidth);
+      if (maxLeft <= 0) return null;
+      return strip;
     }
 
     dom.center.messages.addEventListener("touchstart", (event) => {
@@ -8778,6 +8832,11 @@
 
       const orderCard = event.target.closest("[data-chat-order-card-id]");
       if (orderCard) {
+        if (Date.now() < suppressOrderCardClickUntil) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         if (!state.selectionMode) {
           const orderId = Number(orderCard.getAttribute("data-chat-order-card-id") || 0);
           if (Number.isFinite(orderId) && orderId > 0) {
@@ -8893,8 +8952,19 @@
         return;
       }
 
-      if (event.target.closest(".chat-message-order-cards") || event.target.closest(".chat-message-order-card")) {
+      const orderStrip = resolveOrderCardScrollStrip(event.target);
+      if (orderStrip) {
         clearTouchContextGesture();
+        const touch = event.touches[0];
+        clearOrderCardTouchPan();
+        orderCardTouchPan = {
+          strip: orderStrip,
+          startX: Number(touch.clientX || 0),
+          startY: Number(touch.clientY || 0),
+          startLeft: Math.max(0, Number(orderStrip.scrollLeft || 0)),
+          active: false,
+          didDrag: false,
+        };
         return;
       }
 
@@ -8930,6 +9000,43 @@
     }, { passive: false });
 
     dom.center.messages.addEventListener("touchmove", (event) => {
+      if (orderCardTouchPan) {
+        if (event.touches.length !== 1) {
+          clearOrderCardTouchPan();
+          return;
+        }
+        const touch = event.touches[0];
+        const x = Number(touch.clientX || 0);
+        const y = Number(touch.clientY || 0);
+        const dx = x - orderCardTouchPan.startX;
+        const dy = y - orderCardTouchPan.startY;
+        const absX = Math.abs(dx);
+        const absY = Math.abs(dy);
+
+        if (!orderCardTouchPan.active) {
+          if (absX < CHAT_ORDER_CARD_TOUCH_PAN_START_PX && absY < CHAT_ORDER_CARD_TOUCH_PAN_START_PX) return;
+          if (absY > absX) {
+            clearOrderCardTouchPan();
+            return;
+          }
+          orderCardTouchPan.active = true;
+          orderCardTouchPan.strip.classList.add("is-mouse-dragging");
+        }
+
+        event.preventDefault();
+        const maxLeft = Math.max(0, orderCardTouchPan.strip.scrollWidth - orderCardTouchPan.strip.clientWidth);
+        const nextLeft = Math.max(
+          0,
+          Math.min(maxLeft, orderCardTouchPan.startLeft - (dx * CHAT_ORDER_CARD_TOUCH_PAN_FACTOR)),
+        );
+        const prevLeft = Math.max(0, Number(orderCardTouchPan.strip.scrollLeft || 0));
+        if (Math.abs(nextLeft - prevLeft) > 0.1) {
+          orderCardTouchPan.strip.scrollLeft = nextLeft;
+          orderCardTouchPan.didDrag = true;
+        }
+        return;
+      }
+
       if (touchAttachmentTap && event.touches.length === 1) {
         const touch = event.touches[0];
         const dx = Math.abs(Number(touch.clientX || 0) - touchAttachmentTap.startX);
@@ -8952,9 +9059,14 @@
       ) {
         clearTouchContextGesture();
       }
-    }, { passive: true });
+    }, { passive: false });
 
     dom.center.messages.addEventListener("touchend", () => {
+      if (orderCardTouchPan) {
+        const shouldSuppressClick = orderCardTouchPan.didDrag === true;
+        clearOrderCardTouchPan({ suppressClick: shouldSuppressClick });
+        return;
+      }
       if (touchAttachmentTap) {
         const duration = Date.now() - Number(touchAttachmentTap.startedAt || 0);
         const canOpen =
@@ -8979,9 +9091,93 @@
     }, { passive: true });
 
     dom.center.messages.addEventListener("touchcancel", () => {
+      clearOrderCardTouchPan();
       touchAttachmentTap = null;
       clearTouchContextGesture();
     }, { passive: true });
+
+    dom.center.messages.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      const orderStrip = resolveOrderCardScrollStrip(event.target);
+      if (!orderStrip) return;
+
+      clearOrderCardMouseDrag();
+      orderCardMouseDrag = {
+        strip: orderStrip,
+        startX: Number(event.clientX || 0),
+        startY: Number(event.clientY || 0),
+        startLeft: Math.max(0, Number(orderStrip.scrollLeft || 0)),
+        active: false,
+        didDrag: false,
+      };
+    });
+
+    document.addEventListener("mousemove", (event) => {
+      const dragState = orderCardMouseDrag;
+      if (!dragState || !dragState.strip || !dragState.strip.isConnected) return;
+
+      const dx = Number(event.clientX || 0) - dragState.startX;
+      const dy = Number(event.clientY || 0) - dragState.startY;
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+
+      if (!dragState.active) {
+        if (absX < CHAT_ORDER_CARD_MOUSE_DRAG_START_PX && absY < CHAT_ORDER_CARD_MOUSE_DRAG_START_PX) return;
+        if (absY > absX) {
+          clearOrderCardMouseDrag();
+          return;
+        }
+        dragState.active = true;
+        dragState.strip.classList.add("is-mouse-dragging");
+      }
+
+      event.preventDefault();
+      const maxLeft = Math.max(0, dragState.strip.scrollWidth - dragState.strip.clientWidth);
+      const nextLeft = Math.max(
+        0,
+        Math.min(maxLeft, dragState.startLeft - (dx * CHAT_ORDER_CARD_MOUSE_DRAG_FACTOR)),
+      );
+      const prevLeft = Math.max(0, Number(dragState.strip.scrollLeft || 0));
+      if (Math.abs(nextLeft - prevLeft) > 0.1) {
+        dragState.strip.scrollLeft = nextLeft;
+        dragState.didDrag = true;
+      }
+    });
+
+    document.addEventListener("mouseup", () => {
+      if (!orderCardMouseDrag) return;
+      const shouldSuppressClick = orderCardMouseDrag.didDrag === true;
+      clearOrderCardMouseDrag({ suppressClick: shouldSuppressClick });
+    });
+
+    dom.center.messages.addEventListener("dragstart", (event) => {
+      if (!resolveOrderCardScrollStrip(event.target)) return;
+      event.preventDefault();
+    });
+
+    dom.center.messages.addEventListener("wheel", (event) => {
+      const orderStrip = resolveOrderCardScrollStrip(event.target);
+      if (!orderStrip) return;
+
+      const deltaX = Number(event.deltaX || 0);
+      const deltaY = Number(event.deltaY || 0);
+      if (Math.abs(deltaX) < 0.01 && Math.abs(deltaY) < 0.01) return;
+
+      const prefersHorizontal = event.shiftKey || Math.abs(deltaX) > Math.abs(deltaY);
+      const horizontalDelta = prefersHorizontal
+        ? (deltaX + (event.shiftKey ? deltaY : 0))
+        : deltaY;
+      if (Math.abs(horizontalDelta) < 0.01) return;
+      const slowedDelta = horizontalDelta * CHAT_ORDER_CARD_WHEEL_FACTOR;
+      if (Math.abs(slowedDelta) < 0.01) return;
+
+      const maxLeft = Math.max(0, orderStrip.scrollWidth - orderStrip.clientWidth);
+      const prevLeft = Math.max(0, Number(orderStrip.scrollLeft || 0));
+      const nextLeft = Math.max(0, Math.min(maxLeft, prevLeft + slowedDelta));
+      if (Math.abs(nextLeft - prevLeft) < 0.1) return;
+      orderStrip.scrollLeft = nextLeft;
+      event.preventDefault();
+    }, { passive: false });
 
     dom.center.contextMenu.addEventListener("click", (event) => {
       const actionBtn = event.target.closest("[data-chat-msg-action]");
