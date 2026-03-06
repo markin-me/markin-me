@@ -2102,6 +2102,162 @@
     overlay.classList.toggle("hidden", !visible);
   }
 
+  let newOrderAlertOverlay = null;
+  let newOrderAlertTextEl = null;
+  let newOrderAlertHideTimer = null;
+
+  function ensureNewOrderAlertStyles() {
+    const styleId = "newOrderInlineAlertStyles";
+    if (document.getElementById(styleId)) return;
+    const style = document.createElement("style");
+    style.id = styleId;
+    style.textContent = `
+      .new-order-alert-overlay{
+        position:fixed;
+        inset:0;
+        z-index:12050;
+        display:flex;
+        align-items:flex-start;
+        justify-content:center;
+        padding:84px 12px 12px;
+        background:rgba(15,23,42,.18);
+        opacity:0;
+        pointer-events:none;
+        transition:opacity .18s ease;
+      }
+      .new-order-alert-overlay.hidden{display:none;}
+      .new-order-alert-overlay.is-visible{
+        opacity:1;
+        pointer-events:auto;
+      }
+      .new-order-alert-card{
+        position:relative;
+        width:min(560px, calc(100vw - 24px));
+        background:#fff;
+        border-radius:16px;
+        box-shadow:0 20px 48px rgba(15,23,42,.22);
+        padding:18px 20px 16px;
+        display:grid;
+        gap:14px;
+      }
+      .new-order-alert-close{
+        position:absolute;
+        top:10px;
+        right:10px;
+        width:24px;
+        height:24px;
+        border:none;
+        border-radius:999px;
+        background:transparent;
+        color:#9ca3af;
+        font-size:18px;
+        line-height:1;
+        cursor:pointer;
+      }
+      .new-order-alert-text{
+        color:#0f172a;
+        font-size:27px;
+        line-height:1.4;
+        text-align:center;
+        white-space:pre-wrap;
+      }
+      .new-order-alert-actions{
+        display:flex;
+        justify-content:center;
+      }
+      .new-order-alert-btn{
+        min-width:80px;
+        height:34px;
+        border:none;
+        border-radius:999px;
+        padding:0 24px;
+        background:#f97316;
+        color:#fff;
+        font-weight:800;
+        font-size:17px;
+        cursor:pointer;
+      }
+      .new-order-alert-btn:hover{filter:brightness(.95);}
+      @media (max-width: 768px){
+        .new-order-alert-overlay{padding-top:72px;}
+        .new-order-alert-card{border-radius:14px;}
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function hideNewOrderAlert() {
+    const overlay = newOrderAlertOverlay;
+    if (!overlay) return;
+    if (newOrderAlertHideTimer) {
+      clearTimeout(newOrderAlertHideTimer);
+      newOrderAlertHideTimer = null;
+    }
+    overlay.classList.remove("is-visible");
+    newOrderAlertHideTimer = window.setTimeout(() => {
+      overlay.classList.add("hidden");
+      newOrderAlertHideTimer = null;
+    }, 180);
+  }
+
+  function ensureNewOrderAlert() {
+    if (newOrderAlertOverlay && newOrderAlertOverlay.isConnected) return newOrderAlertOverlay;
+    ensureNewOrderAlertStyles();
+    const overlay = document.createElement("div");
+    overlay.className = "new-order-alert-overlay hidden";
+    overlay.innerHTML = `
+      <div class="new-order-alert-card" role="dialog" aria-modal="true" aria-live="polite">
+        <button type="button" class="new-order-alert-close" aria-label="\u0417\u0430\u043a\u0440\u044b\u0442\u044c">\u00D7</button>
+        <div class="new-order-alert-text"></div>
+        <div class="new-order-alert-actions">
+          <button type="button" class="new-order-alert-btn">\u0414\u0430</button>
+        </div>
+      </div>
+    `;
+    const closeBtn = overlay.querySelector(".new-order-alert-close");
+    const actionBtn = overlay.querySelector(".new-order-alert-btn");
+    newOrderAlertTextEl = overlay.querySelector(".new-order-alert-text");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        hideNewOrderAlert();
+      });
+    }
+    if (actionBtn) {
+      actionBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        hideNewOrderAlert();
+      });
+    }
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) hideNewOrderAlert();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && newOrderAlertOverlay && !newOrderAlertOverlay.classList.contains("hidden")) {
+        hideNewOrderAlert();
+      }
+    });
+    document.body.appendChild(overlay);
+    newOrderAlertOverlay = overlay;
+    return overlay;
+  }
+
+  function showNewOrderAlert(message) {
+    const overlay = ensureNewOrderAlert();
+    if (!overlay) return;
+    if (newOrderAlertHideTimer) {
+      clearTimeout(newOrderAlertHideTimer);
+      newOrderAlertHideTimer = null;
+    }
+    if (newOrderAlertTextEl) {
+      newOrderAlertTextEl.textContent = String(message || "");
+    }
+    overlay.classList.remove("hidden");
+    requestAnimationFrame(() => {
+      overlay.classList.add("is-visible");
+    });
+  }
+
   function clearRightOrderCart(orderId) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return false;
@@ -2129,7 +2285,7 @@
     const summary = getRightOrderCheckoutSummary(order);
     const cartItems = Array.isArray(form.cartItems) ? form.cartItems : [];
     if (!cartItems.length) {
-      alert("РљРѕСЂР·РёРЅР° РїСѓСЃС‚Р°");
+      showNewOrderAlert("\u041a\u043e\u0440\u0437\u0438\u043d\u0430 \u043f\u0443\u0441\u0442\u0430");
       return;
     }
 
@@ -2144,11 +2300,11 @@
     const requireClientData = Number(methodMeta?.require_client_data ?? 1) !== 0;
     const hasPhoneValue = phoneDigits.length > 1;
     if (requireClientData && phoneDigits.length !== 11) {
-      alert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u044b\u0439 \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430");
+      showNewOrderAlert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u044b\u0439 \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430");
       return;
     }
     if (!requireClientData && hasPhoneValue && phoneDigits.length !== 11) {
-      alert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u044b\u0439 \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430");
+      showNewOrderAlert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u044b\u0439 \u043d\u043e\u043c\u0435\u0440 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430");
       return;
     }
 
@@ -2173,20 +2329,20 @@
     const isPickupMethod = isPickupLikeMethod(methodCode);
     const deliveryAddress = String(form.address || "").trim();
     if (isDeliveryMethod && !deliveryAddress) {
-      alert("Р’РІРµРґРёС‚Рµ Р°РґСЂРµСЃ РґРѕСЃС‚Р°РІРєРё");
+      showNewOrderAlert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0430\u0434\u0440\u0435\u0441 \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0438");
       return;
     }
     let pickupStoreId = null;
     if (isPickupMethod) {
       const resolvedStoreId = getRightOrderPreferredPickupStoreId();
       if (!(resolvedStoreId > 0)) {
-        alert("РќРµ СѓРґР°Р»РѕСЃСЊ РѕРїСЂРµРґРµР»РёС‚СЊ С‚РѕС‡РєСѓ СЃР°РјРѕРІС‹РІРѕР·Р°");
+        showNewOrderAlert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0438\u0442\u044c \u0442\u043e\u0447\u043a\u0443 \u0441\u0430\u043c\u043e\u0432\u044b\u0432\u043e\u0437\u0430");
         return;
       }
       pickupStoreId = resolvedStoreId;
     }
     if (!paymentCode) {
-      alert("Р’С‹Р±РµСЂРёС‚Рµ СЃРїРѕСЃРѕР± РѕРїР»Р°С‚С‹");
+      showNewOrderAlert("\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u043f\u043e\u0441\u043e\u0431 \u043e\u043f\u043b\u0430\u0442\u044b");
       return;
     }
 
@@ -2202,14 +2358,14 @@
       const currentTimeValue = String(form.dateTime || "").trim();
       const timeValue = timeSlots.includes(currentTimeValue) ? currentTimeValue : (timeSlots[0] || currentTimeValue);
       if (!/^\d{1,2}:\d{2}$/.test(timeValue)) {
-        alert("РЈРєР°Р¶РёС‚Рµ РІСЂРµРјСЏ РїСЂРёРіРѕС‚РѕРІР»РµРЅРёСЏ");
+        showNewOrderAlert("\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u0432\u0440\u0435\u043c\u044f \u043f\u0440\u0438\u0433\u043e\u0442\u043e\u0432\u043b\u0435\u043d\u0438\u044f");
         return;
       }
       const dateValue = cookWhenKind === "on_date"
         ? baseDateValue
         : formatIsoDate(getTodayDate());
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
-        alert("РЈРєР°Р¶РёС‚Рµ РґР°С‚Сѓ РїСЂРёРіРѕС‚РѕРІР»РµРЅРёСЏ");
+        showNewOrderAlert("\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u0434\u0430\u0442\u0443 \u043f\u0440\u0438\u0433\u043e\u0442\u043e\u0432\u043b\u0435\u043d\u0438\u044f");
         return;
       }
       scheduledAt = `${dateValue} ${timeValue}:00`;
@@ -2222,7 +2378,7 @@
         if (changeType === "other") {
           const numeric = Number(String(form.changeAmount || "").replace(/[^\d]/g, ""));
           if (!Number.isFinite(numeric) || numeric <= 0) {
-            alert("Р’РІРµРґРёС‚Рµ СЃСѓРјРјСѓ РґР»СЏ СЃРґР°С‡Рё");
+            showNewOrderAlert("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443 \u0434\u043b\u044f \u0441\u0434\u0430\u0447\u0438");
             return;
           }
           changeFrom = numeric;
@@ -2232,14 +2388,14 @@
         }
       }
       if (changeFrom != null && changeFrom <= summary.payableTotal) {
-        alert(`РЎСѓРјРјР° РґР»СЏ СЃРґР°С‡Рё РґРѕР»Р¶РЅР° Р±С‹С‚СЊ Р±РѕР»СЊС€Рµ ${toMoney(summary.payableTotal)}`);
+        showNewOrderAlert(`\u0421\u0443\u043c\u043c\u0430 \u0434\u043b\u044f \u0441\u0434\u0430\u0447\u0438 \u0434\u043e\u043b\u0436\u043d\u0430 \u0431\u044b\u0442\u044c \u0431\u043e\u043b\u044c\u0448\u0435 ${toMoney(summary.payableTotal)}`);
         return;
       }
     }
 
     const items = buildRightOrderPayloadItems(cartItems);
     if (!items.length) {
-      alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР±СЂР°С‚СЊ РїРѕР·РёС†РёРё Р·Р°РєР°Р·Р°");
+      showNewOrderAlert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0431\u0440\u0430\u0442\u044c \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u0437\u0430\u043a\u0430\u0437\u0430");
       return;
     }
     const selectedOrderStatusId = isEditSubmit ? Number(form.orderStatusId || 0) : 0;
@@ -2323,7 +2479,7 @@
       const action = isEditSubmit
         ? "\u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u044f"
         : "\u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u044f";
-      alert(`\u041e\u0448\u0438\u0431\u043a\u0430 ${action} \u0437\u0430\u043a\u0430\u0437\u0430: ${e?.message || "UNKNOWN"}`);
+      showNewOrderAlert(`\u041e\u0448\u0438\u0431\u043a\u0430 ${action} \u0437\u0430\u043a\u0430\u0437\u0430: ${e?.message || "UNKNOWN"}`);
     } finally {
       state.rightCheckoutSubmittingByOrder.delete(id);
       setRightCheckoutSendingOverlayVisible(false);
@@ -4994,7 +5150,7 @@
     if (!backdrop) return;
     const combo = await resolveComboDetails(id);
     if (!combo) {
-      alert("РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РєРѕРјР±Рѕ");
+      showNewOrderAlert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u043a\u043e\u043c\u0431\u043e");
       return;
     }
     closeProductOverlay();
@@ -5696,6 +5852,9 @@
         ? getCurrentProductUnitPricing(selectedProduct, selectedProductId)
         : { unitPrice: 0 };
       const priceToShow = roundPrice(Number(selectedPricing?.unitPrice || 0));
+      const selectedVariantStockLabel = selectedProductId > 0 && selectedProduct
+        ? getCheckoutSelectedVariantStockLabel(selectedProductId, selectedProduct)
+        : "";
       const inlineActionsHtml = isLastSection
         ? `
           <div class="new-order-checkout-inline-actions">
@@ -5707,8 +5866,11 @@
         `
         : "";
       const variantsHtml = `
-        <div class="new-order-checkout-variants-wrap ${selectedVariantChips.length ? "" : "is-empty"} ${isLastSection ? "has-inline-actions" : ""}">
+        <div class="new-order-checkout-variants-wrap ${selectedVariantChips.length ? "" : "is-empty"} ${selectedVariantStockLabel ? "has-stock" : ""} ${isLastSection ? "has-inline-actions" : ""}">
           <div class="new-order-checkout-variants-price">${priceToShow > 0 ? escapeHtml(toMoney(priceToShow)) : ""}</div>
+          ${selectedVariantStockLabel
+            ? `<div class="new-order-checkout-variants-stock">Остаток: ${escapeHtml(selectedVariantStockLabel)}</div>`
+            : ""}
           <div class="new-order-checkout-variants-scroll no-scrollbar" data-section-key="${sectionKey}">
             <div class="new-order-checkout-variants-row">
               ${selectedVariantChips.length
@@ -7475,6 +7637,39 @@
     return chips.slice(0, 60);
   }
 
+  function getCheckoutSelectedVariantStockLabel(productId, product) {
+    const pid = Number(productId || product?.id || 0);
+    if (!(pid > 0) || !product || typeof product !== "object") return "";
+    const stockRaw = product?.stock_qty;
+    if (stockRaw == null || stockRaw === "") return "";
+    const stockQty = Number(stockRaw);
+    if (!Number.isFinite(stockQty) || stockQty <= 0) return "";
+
+    const groups = state.productVariants.get(pid) || [];
+    const group = Array.isArray(groups) && groups.length ? groups[0] : null;
+    const unitFromGroup = getVariantUnitLabel(group);
+    const unitFromProduct = normalizeUnitLabelShort(
+      String(product?.unit_short_title || product?.unit_title || product?.unit_code || "").trim()
+    );
+
+    let displayQty = stockQty;
+    const baseUnitId = Number(product?.base_unit_id || product?.unit_id || group?.unit_id || 0);
+    const variantUnitId = Number(group?.unit_id || baseUnitId || 0);
+    if (baseUnitId && variantUnitId && baseUnitId !== variantUnitId) {
+      const factor = getConversionFactor(baseUnitId, variantUnitId);
+      if (factor != null) {
+        const converted = stockQty * Number(factor || 0);
+        if (Number.isFinite(converted)) displayQty = converted;
+      }
+    }
+
+    if (!(displayQty > 0)) return "";
+    const unitLabel = String(unitFromGroup || unitFromProduct || "").trim();
+    const valueText = formatQtyPlain(displayQty);
+    if (!valueText) return "";
+    return [valueText, unitLabel].filter(Boolean).join(" ").trim();
+  }
+
   async function loadVariantsForProducts(products) {
     const ids = (Array.isArray(products) ? products : [])
       .map((p) => Number(p?.id || 0))
@@ -8574,7 +8769,7 @@
           try {
             await saveCheckoutDraftToApi(draftToSave);
           } catch (e) {
-            alert("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ С‡РµСЂРЅРѕРІРёРє СЌРєСЂР°РЅР° РѕС„РѕСЂРјР»РµРЅРёСЏ");
+            showNewOrderAlert("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0447\u0435\u0440\u043d\u043e\u0432\u0438\u043a \u044d\u043a\u0440\u0430\u043d\u0430 \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u044f");
             return;
           }
           state.checkoutSavedDraft = draftToSave;

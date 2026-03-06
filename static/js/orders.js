@@ -152,6 +152,8 @@
     orders: [],
     activeOrderId: null,
     draggingOrderId: null,
+    draggingOrderIds: [],
+    selectedOrderIds: new Set(),
     lastEventId: null,
     storeTimezone: "+0",
     tenantSounds: {},
@@ -163,6 +165,7 @@
       viewMonth: null,
     },
   };
+  let orderDragGhostEl = null;
 
   const tabsState = {
     tabs: [],
@@ -506,9 +509,69 @@
 
   function syncActiveOrderRowState() {
     $$(".order-row.is-active").forEach((el) => el.classList.remove("is-active"));
-    if (!elOrdersList || !state.activeOrderId) return;
-    const row = $(`.order-row[data-order-id="${state.activeOrderId}"]`, elOrdersList);
-    if (row) row.classList.add("is-active");
+  }
+
+  function normalizeSelectedOrderIds() {
+    if (!(state.selectedOrderIds instanceof Set)) {
+      state.selectedOrderIds = new Set();
+      return;
+    }
+    const existing = new Set((Array.isArray(state.orders) ? state.orders : []).map((row) => Number(row?.id || 0)));
+    Array.from(state.selectedOrderIds).forEach((idRaw) => {
+      const id = Number(idRaw || 0);
+      if (!(id > 0) || !existing.has(id)) state.selectedOrderIds.delete(idRaw);
+    });
+  }
+
+  function isOrderMultiSelected(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return false;
+    return state.selectedOrderIds instanceof Set && state.selectedOrderIds.has(id);
+  }
+
+  function applyOrderMultiSelectionState(row, orderId) {
+    if (!row) return;
+    const id = Number(orderId || row?.getAttribute("data-order-id") || 0);
+    const selected = isOrderMultiSelected(id);
+    row.classList.toggle("is-multi-selected", selected);
+    const checkbox = $('[data-role="order-multi-checkbox"]', row);
+    if (checkbox) checkbox.checked = selected;
+  }
+
+  function toggleOrderMultiSelection(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return false;
+    if (!(state.selectedOrderIds instanceof Set)) state.selectedOrderIds = new Set();
+    if (state.selectedOrderIds.has(id)) {
+      state.selectedOrderIds.delete(id);
+      return false;
+    }
+    state.selectedOrderIds.add(id);
+    return true;
+  }
+
+  function getDraggingOrderIdsFromEvent(event) {
+    if (Array.isArray(state.draggingOrderIds) && state.draggingOrderIds.length) {
+      return [...new Set(state.draggingOrderIds.map((id) => Number(id || 0)).filter((id) => id > 0))];
+    }
+
+    let parsed = [];
+    try {
+      const rawJson = event?.dataTransfer?.getData("application/x-order-ids") || "";
+      if (rawJson) {
+        const list = JSON.parse(rawJson);
+        if (Array.isArray(list)) parsed = list;
+      }
+    } catch {}
+
+    if (!parsed.length) {
+      try {
+        const one = Number(event?.dataTransfer?.getData("text/plain") || 0);
+        if (one > 0) parsed = [one];
+      } catch {}
+    }
+
+    return [...new Set(parsed.map((id) => Number(id || 0)).filter((id) => id > 0))];
   }
 
   function normalizeTabMode(mode) {
@@ -634,6 +697,31 @@
         console.error(err);
       }
     }
+  }
+
+  function bindOrderTabsWheelScroll() {
+    if (!orderTabsEls.length) return;
+    orderTabsEls.forEach((tabsEl) => {
+      if (!tabsEl || tabsEl.dataset.wheelBound === "1") return;
+      const onWheel = (event) => {
+        const maxScrollLeft = Math.max(0, tabsEl.scrollWidth - tabsEl.clientWidth);
+        if (maxScrollLeft <= 0) return;
+
+        const deltaX = Number(event.deltaX || 0);
+        const deltaY = Number(event.deltaY || 0);
+        const primaryDelta = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
+        if (!primaryDelta) return;
+
+        const current = tabsEl.scrollLeft || 0;
+        const next = Math.max(0, Math.min(maxScrollLeft, current + primaryDelta));
+        if (Math.abs(next - current) < 0.5) return;
+
+        event.preventDefault();
+        tabsEl.scrollLeft = next;
+      };
+      tabsEl.addEventListener("wheel", onWheel, { passive: false });
+      tabsEl.dataset.wheelBound = "1";
+    });
   }
 
   function renderOrderTabs() {
@@ -1420,6 +1508,57 @@
       return `${cleanLabel} ${cleanUnit}`.trim();
     };
 
+    const normalizeVariantUnitLabel = (unitRaw) => {
+      const raw = String(unitRaw || "").trim();
+      if (!raw) return "";
+      const key = raw.toLowerCase();
+      const dict = {
+        "штук": "шт",
+        "штука": "шт",
+        "шт": "шт",
+        "грамм": "г",
+        "грамма": "г",
+        "гр": "г",
+        "г": "г",
+        "килограмм": "кг",
+        "килограмма": "кг",
+        "кг": "кг",
+        "миллилитр": "мл",
+        "миллилитра": "мл",
+        "мл": "мл",
+        "литр": "л",
+        "литра": "л",
+        "л": "л",
+      };
+      const safeDict = {
+        "\u0448\u0442\u0443\u043a": "\u0448\u0442",
+        "\u0448\u0442\u0443\u043a\u0430": "\u0448\u0442",
+        "\u0448\u0442": "\u0448\u0442",
+        "\u0433\u0440\u0430\u043c\u043c": "\u0433",
+        "\u0433\u0440\u0430\u043c\u043c\u0430": "\u0433",
+        "\u0433\u0440": "\u0433",
+        "\u0433": "\u0433",
+        "\u043a\u0438\u043b\u043e\u0433\u0440\u0430\u043c\u043c": "\u043a\u0433",
+        "\u043a\u0438\u043b\u043e\u0433\u0440\u0430\u043c\u043c\u0430": "\u043a\u0433",
+        "\u043a\u0433": "\u043a\u0433",
+        "\u043c\u0438\u043b\u043b\u0438\u043b\u0438\u0442\u0440": "\u043c\u043b",
+        "\u043c\u0438\u043b\u043b\u0438\u043b\u0438\u0442\u0440\u0430": "\u043c\u043b",
+        "\u043c\u043b": "\u043c\u043b",
+        "\u043b\u0438\u0442\u0440": "\u043b",
+        "\u043b\u0438\u0442\u0440\u0430": "\u043b",
+        "\u043b": "\u043b",
+      };
+      return safeDict[key] || dict[key] || raw;
+    };
+
+    const extractVariantUnitFromGroupTitle = (groupTitleRaw) => {
+      const groupTitle = String(groupTitleRaw || "").trim();
+      if (!groupTitle) return "";
+      const match = groupTitle.match(/\(([^)]+)\)\s*$/);
+      if (!match) return "";
+      return normalizeVariantUnitLabel(String(match[1] || "").trim());
+    };
+
     const formatQtyUnitName = (qtyRaw, unitRaw, nameRaw) => {
       const qtyNum = Number(qtyRaw);
       const qtyText = Number.isFinite(qtyNum)
@@ -1521,10 +1660,42 @@
       const variants = Array.isArray(it?.variants) ? it.variants : [];
       variants.forEach((v) => {
         const value = String(v?.label || v?.value || "").trim();
-        const unit = String(v?.unit || v?.unit_short_title || v?.unitLabel || "").trim();
+        const unit = String(
+          v?.unit ||
+          v?.unit_short_title ||
+          v?.unitLabel ||
+          v?.unit_title ||
+          extractVariantUnitFromGroupTitle(v?.group_title || v?.groupTitle || "")
+        ).trim();
         let line = mergeVariantUnit(value, unit);
         if (line) variantLines.push(line);
       });
+      const rawFallbackVariantLabel = String(it?.variant_label || it?.variantLabel || "").trim();
+      let fallbackVariantValue = rawFallbackVariantLabel;
+      if (fallbackVariantValue.includes(":")) {
+        const valueOnly = String(fallbackVariantValue.split(":").slice(1).join(":")).trim();
+        fallbackVariantValue = valueOnly || fallbackVariantValue;
+      }
+      const fallbackVariantLine = mergeVariantUnit(
+        fallbackVariantValue,
+        it?.variant_unit ||
+        it?.variantUnit ||
+        extractVariantUnitFromGroupTitle(variants[0]?.group_title || variants[0]?.groupTitle || "")
+      );
+      if (!variantLines.length && fallbackVariantLine) {
+        variantLines.push(fallbackVariantLine);
+      } else if (variantLines.length && fallbackVariantLine) {
+        const primaryLine = String(variantLines[0] || "").trim();
+        const primaryLower = primaryLine.toLowerCase();
+        const fallbackLower = fallbackVariantLine.toLowerCase();
+        if (
+          primaryLine &&
+          fallbackLower !== primaryLower &&
+          fallbackLower.startsWith(`${primaryLower} `)
+        ) {
+          variantLines[0] = fallbackVariantLine;
+        }
+      }
       const primaryVariantLine = variantLines.length ? variantLines[0] : "";
       const titleText = [primaryVariantLine, nameRaw].filter(Boolean).join(" ").trim() || nameRaw;
       const titleHtml = `${qty} x ${escapeHtml(titleText)}`;
@@ -1794,13 +1965,63 @@
   }
 
   async function updateOrderStatus(orderId, statusId) {
-    await apiJson(`/api/admin/orders/${orderId}/status`, {
-      method: "PUT",
-      body: { status_id: statusId },
-    });
-    await loadStatuses();
-    renderStages();
-    await loadAndRenderOrders(true);
+    const id = Number(orderId || 0);
+    const nextStatusId = Number(statusId || 0);
+    if (!(id > 0) || !(nextStatusId > 0)) return;
+
+    const orderIdx = state.orders.findIndex((row) => Number(row?.id || 0) === id);
+    const prevOrder = orderIdx >= 0 ? state.orders[orderIdx] : null;
+    const prevStatusId = Number(prevOrder?.status_id || 0);
+    const targetStatusMeta = getStatusMetaById(nextStatusId) || null;
+    let optimisticApplied = false;
+    let optimisticOrder = null;
+
+    if (prevOrder && prevStatusId !== nextStatusId) {
+      optimisticOrder = { ...prevOrder, status_id: nextStatusId };
+      if (targetStatusMeta) {
+        if (targetStatusMeta.title != null) optimisticOrder.status_title = targetStatusMeta.title;
+        if (targetStatusMeta.code != null) optimisticOrder.status_code = targetStatusMeta.code;
+        if (targetStatusMeta.color != null) optimisticOrder.status_color = targetStatusMeta.color;
+      }
+
+      state.orders[orderIdx] = optimisticOrder;
+      const countersChanged = applyStageCountersDelta(prevOrder, optimisticOrder);
+      if (countersChanged) renderStages();
+      renderOrders();
+      setStatusControlsDisabled(true);
+      if (tabsState.tabs.length) {
+        syncTabsWithLatestOrders();
+      } else if (state.activeOrderId) {
+        const activeOrder = state.orders.find((row) => Number(row?.id || 0) === Number(state.activeOrderId || 0)) || null;
+        if (activeOrder) setInfo(activeOrder);
+      }
+      optimisticApplied = true;
+    }
+
+    try {
+      await apiJson(`/api/admin/orders/${id}/status`, {
+        method: "PUT",
+        body: { status_id: nextStatusId },
+      });
+      scheduleStageRefresh();
+    } catch (err) {
+      if (optimisticApplied && prevOrder) {
+        const rollbackIdx = state.orders.findIndex((row) => Number(row?.id || 0) === id);
+        if (rollbackIdx >= 0) {
+          state.orders[rollbackIdx] = prevOrder;
+        } else {
+          state.orders.push(prevOrder);
+        }
+      }
+      try {
+        await loadStatuses();
+        renderStages();
+        await loadAndRenderOrders(true);
+      } catch (syncErr) {
+        console.error(syncErr);
+      }
+      throw err;
+    }
   }
 
   async function cycleActiveOrderStatus() {
@@ -2373,41 +2594,141 @@
     });
   }
 
+  function clearStageDropover() {
+    if (!elStagesList) return;
+    $$(".stage-item.is-dropover", elStagesList).forEach((btn) => {
+      btn.classList.remove("is-dropover");
+    });
+  }
+
+  function setStageDropover(stageBtn) {
+    if (!elStagesList || !stageBtn) return;
+    $$(".stage-item.is-dropover", elStagesList).forEach((btn) => {
+      if (btn !== stageBtn) btn.classList.remove("is-dropover");
+    });
+    stageBtn.classList.add("is-dropover");
+  }
+
+  function removeOrderDragGhost() {
+    if (orderDragGhostEl && orderDragGhostEl.parentNode) {
+      orderDragGhostEl.parentNode.removeChild(orderDragGhostEl);
+    }
+    orderDragGhostEl = null;
+  }
+
+  function buildOrderDragGhost(orderIds) {
+    const ids = Array.isArray(orderIds)
+      ? orderIds.map((id) => Number(id || 0)).filter((id) => id > 0)
+      : [];
+    const uniqueIds = [...new Set(ids)];
+    if (!uniqueIds.length) return null;
+
+    const cardSize = 56;
+    const gap = 6;
+    const indentStep = 4;
+
+    const ghostStack = document.createElement("div");
+    ghostStack.className = "order-drag-ghost-stack";
+
+    const maxIndent = indentStep * Math.max(uniqueIds.length - 1, 0);
+    ghostStack.style.width = `${cardSize + maxIndent}px`;
+    ghostStack.style.height = `${(cardSize + gap) * uniqueIds.length - gap}px`;
+
+    uniqueIds.forEach((id, index) => {
+      const card = document.createElement("div");
+      card.className = "order-drag-ghost";
+      card.style.left = `${index * indentStep}px`;
+      card.style.top = `${index * (cardSize + gap)}px`;
+      card.textContent = String(id);
+      ghostStack.appendChild(card);
+    });
+
+    return ghostStack;
+  }
+
   function wireDragTargets() {
     if (!elStagesList) return;
 
     $$(".stage-item", elStagesList).forEach((stageBtn) => {
       stageBtn.addEventListener("dragover", (e) => {
+        if (!Array.isArray(state.draggingOrderIds) || !state.draggingOrderIds.length) return;
         e.preventDefault();
-        stageBtn.classList.add("is-dropover");
+        setStageDropover(stageBtn);
       });
       stageBtn.addEventListener("dragleave", () => {
+        if (!Array.isArray(state.draggingOrderIds) || !state.draggingOrderIds.length) {
+          stageBtn.classList.remove("is-dropover");
+          return;
+        }
         stageBtn.classList.remove("is-dropover");
       });
       stageBtn.addEventListener("drop", async (e) => {
         e.preventDefault();
-        stageBtn.classList.remove("is-dropover");
+        clearStageDropover();
 
         const statusIdRaw = stageBtn.getAttribute("data-status-id");
         const statusId = Number(statusIdRaw);
 
         if (!Number.isFinite(statusId) || statusId <= 0) return;
 
-        let orderId = null;
-        try { orderId = Number(e.dataTransfer.getData("text/plain")); } catch {}
-        if (!Number.isFinite(orderId) || orderId <= 0) return;
+        const orderIds = getDraggingOrderIdsFromEvent(e);
+        if (!orderIds.length) return;
 
         try {
-          await apiJson(`/api/admin/orders/${orderId}/status`, {
-            method: "PUT",
-            body: { status_id: statusId },
-          });
+          const targetStatusMeta = getStatusMetaById(statusId) || null;
+          const requestOrderIds = [];
+          let countersChanged = false;
 
-          await loadStatuses();
-          renderStages();
-          await loadAndRenderOrders(true);
+          for (const orderId of orderIds) {
+            const idNum = Number(orderId || 0);
+            if (!(idNum > 0)) continue;
+
+            const idx = state.orders.findIndex((row) => Number(row?.id || 0) === idNum);
+            const current = idx >= 0 ? state.orders[idx] : null;
+            if (current && Number(current?.status_id || 0) === statusId) continue;
+
+            requestOrderIds.push(idNum);
+            if (!current) continue;
+
+            const optimisticOrder = { ...current, status_id: statusId };
+            if (targetStatusMeta) {
+              if (targetStatusMeta.title != null) optimisticOrder.status_title = targetStatusMeta.title;
+              if (targetStatusMeta.code != null) optimisticOrder.status_code = targetStatusMeta.code;
+              if (targetStatusMeta.color != null) optimisticOrder.status_color = targetStatusMeta.color;
+            }
+
+            state.orders[idx] = optimisticOrder;
+            countersChanged = applyStageCountersDelta(current, optimisticOrder) || countersChanged;
+          }
+          if (!requestOrderIds.length) return;
+
+          requestOrderIds.forEach((id) => state.selectedOrderIds.delete(Number(id)));
+
+          if (countersChanged) renderStages();
+          renderOrders();
+          if (tabsState.tabs.length) {
+            syncTabsWithLatestOrders();
+          } else if (state.activeOrderId) {
+            const activeOrder = state.orders.find((row) => Number(row?.id || 0) === Number(state.activeOrderId || 0)) || null;
+            if (activeOrder) setInfo(activeOrder);
+          }
+
+          await Promise.all(
+            requestOrderIds.map((orderId) => apiJson(`/api/admin/orders/${orderId}/status`, {
+              method: "PUT",
+              body: { status_id: statusId },
+            }))
+          );
+          scheduleStageRefresh();
         } catch (err) {
           console.error(err);
+          try {
+            await loadStatuses();
+            renderStages();
+            await loadAndRenderOrders(true);
+          } catch (syncErr) {
+            console.error(syncErr);
+          }
         }
       });
     });
@@ -2482,10 +2803,27 @@
     updateOrderRow(row, order);
 
     row.addEventListener("dragstart", (e) => {
-      state.draggingOrderId = Number(order.id) || null;
+      const currentOrderId = Number(order.id) || 0;
+      const selectedIds = Array.from(state.selectedOrderIds || [])
+        .map((id) => Number(id || 0))
+        .filter((id) => id > 0);
+      const draggingIds = (selectedIds.length > 1 && selectedIds.includes(currentOrderId))
+        ? [...new Set(selectedIds)]
+        : [currentOrderId];
+      state.draggingOrderIds = draggingIds;
+      state.draggingOrderId = draggingIds[0] || null;
       try {
         e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", String(order.id));
+        e.dataTransfer.setData("text/plain", String(state.draggingOrderId || currentOrderId));
+        e.dataTransfer.setData("application/x-order-ids", JSON.stringify(draggingIds));
+        removeOrderDragGhost();
+        const ghost = buildOrderDragGhost(draggingIds);
+        if (ghost) {
+          document.body.appendChild(ghost);
+          orderDragGhostEl = ghost;
+          e.dataTransfer.setDragImage(ghost, 28, 28);
+          setTimeout(removeOrderDragGhost, 0);
+        }
       } catch {}
       row.classList.add("is-dragging");
     });
@@ -2493,10 +2831,14 @@
     row.addEventListener("dragend", () => {
       row.classList.remove("is-dragging");
       state.draggingOrderId = null;
+      state.draggingOrderIds = [];
+      clearStageDropover();
+      removeOrderDragGhost();
     });
 
     row.addEventListener("dragover", (e) => {
       if (state.activeStatusId === "all") return;
+      if (Array.isArray(state.draggingOrderIds) && state.draggingOrderIds.length > 1) return;
       e.preventDefault();
       row.classList.add("is-dropover");
     });
@@ -2508,6 +2850,7 @@
       e.preventDefault();
       row.classList.remove("is-dropover");
 
+      if (Array.isArray(state.draggingOrderIds) && state.draggingOrderIds.length > 1) return;
       const draggedId = state.draggingOrderId;
       const targetId = Number(row.getAttribute("data-order-id"));
       if (!draggedId || !targetId || draggedId === targetId) return;
@@ -2539,6 +2882,8 @@
 
   function updateOrderRow(row, order) {
     row.setAttribute("data-order-id", String(order.id));
+    const orderId = Number(order?.id || 0);
+    const multiSelected = isOrderMultiSelected(orderId);
 
     const timeIconHtml = renderOrderTimeIcon(order);
     const stageCycleBtnHtml = renderOrderStatusCycleButton(order);
@@ -2584,8 +2929,23 @@
 
     row.innerHTML = `
       <div class="order-col order-id">
-        <div class="order-id-num">${escapeHtml(order.id)}</div>
-        <div class="order-id-time">${escapeHtml(formatTime(order.created_at))}</div>
+        <label
+          class="order-id-select-hit"
+          data-action="order-multi-select"
+          data-order-id="${escapeHtml(order.id)}"
+          title="Выбрать заказ"
+        >
+          <input
+            type="checkbox"
+            class="order-id-select-checkbox"
+            data-role="order-multi-checkbox"
+            aria-label="Выбрать заказ №${escapeHtml(order.id)}"
+            tabindex="-1"
+            ${multiSelected ? "checked" : ""}
+          />
+          <div class="order-id-num">${escapeHtml(order.id)}</div>
+          <div class="order-id-time">${escapeHtml(formatTime(order.created_at))}</div>
+        </label>
       </div>
 
       <div class="order-col order-indicators">
@@ -2614,17 +2974,15 @@
       </div>
     `;
 
-    if (state.activeOrderId && Number(state.activeOrderId) === Number(order.id)) {
-      row.classList.add("is-active");
-    } else {
-      row.classList.remove("is-active");
-    }
+    row.classList.remove("is-active");
+    applyOrderMultiSelectionState(row, orderId);
   }
 
   function renderOrders() {
     if (!elOrdersList) return;
     elOrdersList.innerHTML = "";
 
+    normalizeSelectedOrderIds();
     const list = state.orders || [];
     const filtered = list.filter(orderMatchesFilters);
     if (!filtered.length) {
@@ -2653,6 +3011,7 @@
 
   function upsertOrderRow(order) {
     if (!elOrdersList) return;
+    normalizeSelectedOrderIds();
     const existingRow = $(`.order-row[data-order-id="${order.id}"]`, elOrdersList);
     const shouldRender = orderMatchesFilters(order);
 
@@ -3390,6 +3749,18 @@
       return;
     }
 
+    const multiSelectToggle = e.target.closest('[data-action="order-multi-select"]');
+    if (multiSelectToggle) {
+      e.preventDefault();
+      e.stopPropagation();
+      const orderId = Number(multiSelectToggle.getAttribute("data-order-id") || 0);
+      if (!(orderId > 0)) return;
+      toggleOrderMultiSelection(orderId);
+      const row = multiSelectToggle.closest(".js-order");
+      if (row) applyOrderMultiSelectionState(row, orderId);
+      return;
+    }
+
     const row = e.target.closest(".js-order");
     if (!row) return;
     const orderId = Number(row.getAttribute("data-order-id")) || null;
@@ -3674,6 +4045,57 @@
       return `${cleanLabel} ${cleanUnit}`.trim();
     }
 
+    function normalizeVariantUnitLabel(unitRaw) {
+      const raw = String(unitRaw || "").trim();
+      if (!raw) return "";
+      const key = raw.toLowerCase();
+      const dict = {
+        "штук": "шт",
+        "штука": "шт",
+        "шт": "шт",
+        "грамм": "г",
+        "грамма": "г",
+        "гр": "г",
+        "г": "г",
+        "килограмм": "кг",
+        "килограмма": "кг",
+        "кг": "кг",
+        "миллилитр": "мл",
+        "миллилитра": "мл",
+        "мл": "мл",
+        "литр": "л",
+        "литра": "л",
+        "л": "л",
+      };
+      const safeDict = {
+        "\u0448\u0442\u0443\u043a": "\u0448\u0442",
+        "\u0448\u0442\u0443\u043a\u0430": "\u0448\u0442",
+        "\u0448\u0442": "\u0448\u0442",
+        "\u0433\u0440\u0430\u043c\u043c": "\u0433",
+        "\u0433\u0440\u0430\u043c\u043c\u0430": "\u0433",
+        "\u0433\u0440": "\u0433",
+        "\u0433": "\u0433",
+        "\u043a\u0438\u043b\u043e\u0433\u0440\u0430\u043c\u043c": "\u043a\u0433",
+        "\u043a\u0438\u043b\u043e\u0433\u0440\u0430\u043c\u043c\u0430": "\u043a\u0433",
+        "\u043a\u0433": "\u043a\u0433",
+        "\u043c\u0438\u043b\u043b\u0438\u043b\u0438\u0442\u0440": "\u043c\u043b",
+        "\u043c\u0438\u043b\u043b\u0438\u043b\u0438\u0442\u0440\u0430": "\u043c\u043b",
+        "\u043c\u043b": "\u043c\u043b",
+        "\u043b\u0438\u0442\u0440": "\u043b",
+        "\u043b\u0438\u0442\u0440\u0430": "\u043b",
+        "\u043b": "\u043b",
+      };
+      return safeDict[key] || dict[key] || raw;
+    }
+
+    function extractVariantUnitFromGroupTitle(groupTitleRaw) {
+      const groupTitle = String(groupTitleRaw || "").trim();
+      if (!groupTitle) return "";
+      const match = groupTitle.match(/\(([^)]+)\)\s*$/);
+      if (!match) return "";
+      return normalizeVariantUnitLabel(String(match[1] || "").trim());
+    }
+
     function formatQtyUnitName(qtyRaw, unitRaw, nameRaw) {
       const qtyNum = Number(qtyRaw);
       const qtyText = Number.isFinite(qtyNum)
@@ -3748,7 +4170,13 @@
       const variantLines = [];
       variants.forEach((v) => {
         const value = String(v?.label || v?.value || "").trim();
-        const unit = String(v?.unit || v?.unit_short_title || v?.unitLabel || "").trim();
+        const unit = String(
+          v?.unit ||
+          v?.unit_short_title ||
+          v?.unitLabel ||
+          v?.unit_title ||
+          extractVariantUnitFromGroupTitle(v?.group_title || v?.groupTitle || "")
+        ).trim();
         let formatted = mergeVariantUnit(value, unit);
         if (formatted) variantLines.push(formatted);
       });
@@ -4098,6 +4526,7 @@
       ensureDateStateInitialized();
       renderCalendar();
       updateDateLabel();
+      bindOrderTabsWheelScroll();
 
       let shouldReloadFromApi = true;
       const hasWarmCache =

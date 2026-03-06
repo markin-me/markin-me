@@ -3478,6 +3478,102 @@
     return `${optQty}шт ${name}`;
   }
 
+  function mergeVariantUnitForOrder(labelRaw, unitRaw) {
+    const cleanLabel = str(labelRaw || "").trim();
+    const cleanUnit = str(unitRaw || "").trim();
+    if (!cleanLabel) return cleanUnit;
+    if (!cleanUnit) return cleanLabel;
+    const escapedUnit = cleanUnit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const measureMatch = cleanLabel.match(new RegExp(`^\\s*([\\d.,]+\\s*${escapedUnit})(?:\\b|\\s|$)`, "i"));
+    if (measureMatch && str(measureMatch[1] || "").trim()) {
+      return str(measureMatch[1] || "").trim();
+    }
+    const labelLower = cleanLabel.toLowerCase();
+    const unitLower = cleanUnit.toLowerCase();
+    if (labelLower.endsWith(` ${unitLower}`) || labelLower === unitLower) return cleanLabel;
+    return `${cleanLabel} ${cleanUnit}`.trim();
+  }
+
+  function isDefaultVariantLabelForOrder(valueRaw) {
+    const value = str(valueRaw || "").trim().toLowerCase();
+    return value === "не указано" || value === "не указано:";
+  }
+
+  function normalizeVariantDisplayLineForOrder(lineRaw, groupTitleRaw) {
+    let line = str(lineRaw || "").trim();
+    if (!line) return "";
+
+    const groupTitle = str(groupTitleRaw || "").trim();
+    if (groupTitle) {
+      const escapedGroupTitle = groupTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      line = line.replace(new RegExp(`\\s+${escapedGroupTitle}(?:\\s*\\([^)]*\\))?\\s*$`, "i"), "").trim();
+    }
+
+    if (!line) return "";
+    const compactMatch = line.match(/^([\d.,]+\s+[^\s()]+)\s+.+$/);
+    if (compactMatch && (groupTitle || line.includes("("))) {
+      return str(compactMatch[1] || "").trim();
+    }
+    return line;
+  }
+
+  function buildVariantDisplayLineForOrder(labelRaw, unitRaw, groupTitleRaw) {
+    const rawLabel = str(labelRaw || "").trim();
+    const rawUnit = str(unitRaw || "").trim();
+
+    let line = mergeVariantUnitForOrder(rawLabel, rawUnit);
+    if (!line && rawLabel) {
+      if (rawLabel.includes(":")) {
+        const valueOnly = str(rawLabel.split(":").slice(1).join(":")).trim();
+        line = valueOnly || rawLabel;
+      } else {
+        line = rawLabel;
+      }
+    }
+    line = normalizeVariantDisplayLineForOrder(line, groupTitleRaw);
+    if (!line) return "";
+    if (isDefaultVariantLabelForOrder(line)) return "";
+    return line;
+  }
+
+  function formatQtyUnitNameForOrder(qtyRaw, unitRaw, nameRaw) {
+    const qtyNum = Number(qtyRaw);
+    const qtyText = Number.isFinite(qtyNum)
+      ? String(Number.isInteger(qtyNum) ? qtyNum : Number(qtyNum.toFixed(3)))
+      : str(qtyRaw ?? "").trim();
+    const unitText = str(unitRaw || "").trim();
+    const nameText = str(nameRaw || "").trim();
+    return [qtyText, unitText, nameText].filter(Boolean).join(" ").trim();
+  }
+
+  function formatIngredientLineForOrder(ing) {
+    const rawQty = ing?.qty ?? ing?.quantity;
+    const numQty = Number(rawQty);
+    if (!Number.isFinite(numQty) || numQty <= 0) return "";
+    const unitText = str(
+      ing?.unit ||
+      ing?.unit_label ||
+      ing?.unitLabel ||
+      ing?.unit_short_title ||
+      ing?.unit_title ||
+      ""
+    ).trim();
+    const nameText = str(ing?.name || ing?.ingredient_name || ing?.ingredientName || "").trim();
+    return formatQtyUnitNameForOrder(rawQty, unitText, nameText);
+  }
+
+  function formatOptionLineForOrder(opt) {
+    const qtyText = Math.max(1, Number(opt?.qty || opt?.quantity || 1));
+    const title = str(opt?.title || opt?.name || "").trim();
+    if (!title) return "";
+    const variantLine = buildVariantDisplayLineForOrder(
+      opt?.variant_label || opt?.variantLabel,
+      opt?.variant_unit || opt?.variantUnit,
+      opt?.variant_group_title || opt?.group_title || ""
+    );
+    return variantLine ? `${variantLine} ${title}`.trim() : `${qtyText} ${title}`.trim();
+  }
+
   // ?????????????? ?????? ?????? - ???????? ? ?????????? ??????? ??? ????????????? ? bottom sheet
   function normalizeFavoriteOptionItemsFromCart(optionItems) {
     const items = Array.isArray(optionItems) ? optionItems : [];
@@ -3661,7 +3757,6 @@
   }
 
   window.formatOrderItem = function formatOrderItem(item) {
-    // ?????: ??? ?? ??????, ??? ? ??????? ? ? ??????? ? ???????? ????? ? ????????? ?????? ??? ??????? ? 0
     if (item.type === "combo") {
       const selections = Array.isArray(item.selections) ? item.selections : [];
       const selectionPhotos = selections
@@ -3670,9 +3765,9 @@
       const fallbackPhotos = Array.isArray(item.photos) ? item.photos.filter(Boolean) : [];
       const photos = (selectionPhotos.length ? selectionPhotos : fallbackPhotos).slice(0, 4);
       const comboGridOrder = [0, 2, 3, 1];
-      const itemQty = Number(item.qty || item.quantity || 1);
-      const comboQtySuffix = itemQty > 1 ? ` × ${itemQty}` : "";
-      const itemName = `${escapeHtml(item.name || item.combo_title || "Комбо")}${comboQtySuffix}`;
+      const itemQty = Math.max(1, Number(item.qty || item.quantity || 1));
+      const comboTitle = str(item.name || item.combo_title || "Комбо").trim() || "Комбо";
+
       let html = `<div class="cart-row cart-row--combo">`;
       html += `<div class="cart-combo-thumb">`;
       for (let i = 0; i < 4; i += 1) {
@@ -3685,45 +3780,43 @@
         html += `</div>`;
       }
       html += `</div>`;
+
       html += `<div class="cart-mid">`;
-      html += `<div class="cart-title">${itemName}</div>`;
+      html += `<div class="cart-title">${itemQty} x ${escapeHtml(comboTitle)}</div>`;
       if (selections.length) {
         html += `<div class="cart-sub-container cart-combo-details" style="margin-top: 4px; padding-left: 8px;">`;
         selections.forEach((sel) => {
-          const productName = str(sel.product_name || "?").trim();
+          const productName = str(sel?.product_name || "").trim();
+          const variantLine = buildVariantDisplayLineForOrder(
+            sel?.variant_label,
+            sel?.variant_unit,
+            sel?.variant_group_title
+          );
+          const primaryLine = [variantLine, productName].filter(Boolean).join(" ").trim() || (productName || "Товар");
+
           html += `<div class="cart-combo-detail-block">`;
-          html += `<div class="cart-combo-detail-name" style="font-weight: 600;">1 × ${escapeHtml(productName)}</div>`;
-          const vParts = [sel.variant_label, sel.variant_unit, sel.variant_group_title].filter(Boolean);
-          if (vParts.length) {
-            html += `<div class="cart-sub-detail-item" style="font-size: 0.9em; color: var(--color-text-muted, #666); margin-top: 2px;">• ${escapeHtml(vParts.join(" "))}</div>`;
-          }
-          const ingredientsDisplay = Array.isArray(sel.ingredients_display) ? sel.ingredients_display : [];
+          html += `<div class="cart-combo-detail-name" style="font-weight: 600;">1 x ${escapeHtml(primaryLine)}</div>`;
+
+          const ingredientsDisplay = Array.isArray(sel?.ingredients_display) ? sel.ingredients_display : [];
           ingredientsDisplay.forEach((ing) => {
-            const rawQty = ing.qty ?? ing.quantity;
-            const numQty = typeof rawQty === "number" ? rawQty : parseFloat(rawQty);
-            if (!Number.isFinite(numQty) || numQty <= 0) return; // ?? ?????????? ???????? ? 0
-            const name = str(ing.name || "").trim();
-            if (!name && (rawQty == null || rawQty === "")) return;
-            const unit = str(ing.unit || "").trim();
-            const parts = [];
-            if (rawQty != null && rawQty !== "") parts.push(String(rawQty));
-            if (unit) parts.push(unit);
-            if (name) parts.push(name);
-            html += `<div class="cart-sub-detail-item" style="font-size: 0.9em; color: var(--color-text-muted, #666); margin-top: 2px;">• ${escapeHtml(parts.join(" "))}</div>`;
+            const line = formatIngredientLineForOrder(ing);
+            if (!line) return;
+            html += `<div class="cart-sub-detail-item" style="font-size: 0.9em; color: var(--color-text-muted, #666); margin-top: 2px;">&bull; ${escapeHtml(line)}</div>`;
           });
+
           html += `</div>`;
         });
         html += `</div>`;
       }
       html += `</div>`;
-      // Цена комбо с возможной зачёркнутой старой ценой
+
       const comboLineTotalRaw = Number(item.line_total);
       const comboLineTotal = Number.isFinite(comboLineTotalRaw)
         ? comboLineTotalRaw
         : Number(item.price || 0);
       const comboOldLineTotal = Number(item.old_line_total || 0);
       const comboShowOld = comboOldLineTotal > comboLineTotal;
-      const comboPriceHtml = comboShowOld 
+      const comboPriceHtml = comboShowOld
         ? `<span class="cart-old">${money(comboOldLineTotal)}</span>${money(comboLineTotal)}`
         : money(comboLineTotal);
       html += `<div class="cart-right"><div class="cart-price">${comboPriceHtml}</div></div>`;
@@ -3731,123 +3824,83 @@
       return html;
     }
 
-    // ??????? ?????: ?????????? ?????? ??? ? ???????, ?? ????? ?????????
     const photos = Array.isArray(item.photos) ? item.photos.filter(Boolean) : [];
     const mainPhoto = photos[0] || "/static/img/placeholder.png";
-    
-    // ????????? ???????? ? ?????????? ???????: ???????? ? ????? ? ???????? ????? ? ???????????
-    const variantParts = [];
-    const optionParts = [];
-    const ingredientParts = [];
-    
-    // 1. ???????? ?????? (???????)
-    if (item.variants && Array.isArray(item.variants) && item.variants.length > 0) {
-      item.variants.forEach(v => {
-        if (v.label || v.value) {
-          const groupTitle = str(v.group_title || "");
-          const variantValue = str(v.label || v.value || "");
-          // ??????: ???????? ????????_?????? (???????? "200? ????")
-          const formatted = [variantValue, groupTitle].filter(Boolean).join(" ").trim();
-          if (formatted) variantParts.push(formatted);
-        }
-      });
+    const itemQty = Math.max(1, Number(item.qty || item.quantity || 1));
+    const productName = str(item.name || "Товар").trim() || "Товар";
+
+    const variantLines = [];
+    const variants = Array.isArray(item.variants) ? item.variants : [];
+    variants.forEach((v) => {
+      const line = buildVariantDisplayLineForOrder(
+        v?.label || v?.value,
+        v?.unit || v?.unit_short_title || v?.unitLabel || "",
+        v?.group_title || ""
+      );
+      if (line) variantLines.push(line);
+    });
+    if (!variantLines.length) {
+      const fallbackVariant = buildVariantDisplayLineForOrder(
+        item?.variant_label,
+        item?.variant_unit || item?.variantUnit || "",
+        item?.variant_group_title || ""
+      );
+      if (fallbackVariant) variantLines.push(fallbackVariant);
     }
-    
-    // 2. ????? (???????)
-    if (item.options && Array.isArray(item.options) && item.options.length > 0) {
-      item.options.forEach(opt => {
-        if (Number(opt.qty ?? opt.quantity ?? 0) <= 0) return; // ?? ?????????? ????? В корзине пусто??????
-        const formatted = formatOption({
-          title: opt.title || opt.name,
-          qty: opt.qty || opt.quantity,
-          variant_label: opt.variant_label || opt.variantLabel
-        });
-        if (formatted) optionParts.push(formatted);
-      });
-    }
-    
-    // 3. ??????????? (????????)
-    if (item.ingredients && Array.isArray(item.ingredients) && item.ingredients.length > 0) {
-      item.ingredients.forEach(ing => {
-        // ???????????? ??? ???????: ing.name ? ing.ingredient_name
-        // ? JSON ?? ?? ???????????? ing.name
-        const ingredientName = ing.ingredient_name || ing.name || ing.ingredientName;
-        if (!ingredientName) return; // ?????????? ???? ??? ????????
-        
-        const quantity = ing.quantity ?? ing.qty ?? 1;
-        if (Number(quantity) <= 0) return; // ?? ?????????? ??????? В корзине пусто??????
-        // ??????? ????????? ????? ???? ? ?????? ?????
-        // ? JSON ?? ?В корзине пусто ?????????????, ?????????? "?" ?? ????????? ??В корзине пусто???????
-        let unitLabel = ing.unit_label || ing.unit || ing.unitLabel || ing.unit_short_title || ing.unit_title || "";
-        
-        // ???? ??????? ?? ???????, ???????? ?????????? ?? ??????????
-        // ???? quantity > 10, ???????? ??? ??????
-        if (!unitLabel && quantity > 10) {
-          unitLabel = "г";
-        } else if (!unitLabel) {
-          unitLabel = "шт";
-        }
-        
-        const formatted = formatIngredient({
-          ingredient_name: ingredientName,
-          quantity: quantity,
-          unit_label: unitLabel
-        });
-        if (formatted) ingredientParts.push(formatted);
-      });
-    }
-    
-    // ?????????? ??? ????????
-    const allParts = [...variantParts, ...optionParts, ...ingredientParts];
-    
-    // ??????? HTML ??? ? ???????
+
+    const primaryVariantLine = variantLines.length ? variantLines[0] : "";
+    const titleBase = [primaryVariantLine, productName].filter(Boolean).join(" ").trim() || productName;
+
+    const detailLines = [];
+    if (variantLines.length > 1) detailLines.push(...variantLines.slice(1));
+
+    const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+    ingredients.forEach((ing) => {
+      const line = formatIngredientLineForOrder(ing);
+      if (line) detailLines.push(line);
+    });
+
+    const options = Array.isArray(item.options) ? item.options : [];
+    options.forEach((opt) => {
+      if (Number(opt?.qty ?? opt?.quantity ?? 0) <= 0) return;
+      const line = formatOptionLineForOrder(opt);
+      if (line) detailLines.push(line);
+    });
+
     let html = `<div class="cart-row">`;
-    
-    // ????
     html += `<img class="cart-thumb" src="${escapeHtml(mainPhoto)}" alt="" />`;
-    
-    // ??????? ????? ? ????????? ? ????????
     html += `<div class="cart-mid">`;
-    
-    // ???????? ?????? ? ??????????? (? ?????, ??? ? ???????)
-    const itemQty = Number(item.qty || item.quantity || 1);
-    const itemQtySuffix = itemQty > 1 ? ` × ${itemQty}` : "";
-    const itemName = `${escapeHtml(item.name || "Товар")}${itemQtySuffix}`;
-    html += `<div class="cart-title">${itemName}</div>`;
-    
-    // ?????? (????????? ?????)
-    if (allParts.length > 0) {
+    html += `<div class="cart-title">${itemQty} x ${escapeHtml(titleBase)}</div>`;
+
+    if (detailLines.length > 0) {
       html += `<div class="cart-sub-container">`;
       html += `<div class="cart-sub-details" style="display: block; margin-top: 4px; padding-left: 8px;">`;
-      allParts.forEach(part => {
-        html += `<div class="cart-sub-detail-item" style="font-size: 0.9em; color: var(--color-text-muted, #666); margin-top: 2px;">• ${escapeHtml(part)}</div>`;
+      detailLines.forEach((line) => {
+        html += `<div class="cart-sub-detail-item" style="font-size: 0.9em; color: var(--color-text-muted, #666); margin-top: 2px;">&bull; ${escapeHtml(line)}</div>`;
       });
       html += `</div>`;
       html += `</div>`;
     }
-    
+
     html += `</div>`;
-    
-    // Цена товара с возможной зачёркнутой старой ценой
+
     const itemLineTotalRaw = Number(item.line_total);
     const itemLineTotal = Number.isFinite(itemLineTotalRaw)
       ? itemLineTotalRaw
       : Number(item.price || 0);
-    // Старая цена: из discount.original_line_total или old_price * qty
     const discountOriginal = item.discount?.original_line_total;
     const itemOldPrice = Number(item.old_price || 0);
     const qtyForOldPrice = Number(item.qty || item.quantity || 1);
     const itemOldLineTotal = discountOriginal || (itemOldPrice > 0 ? itemOldPrice * qtyForOldPrice : 0);
     const itemShowOld = itemOldLineTotal > itemLineTotal;
-    const itemPriceHtml = itemShowOld 
+    const itemPriceHtml = itemShowOld
       ? `<span class="cart-old">${money(itemOldLineTotal)}</span>${money(itemLineTotal)}`
       : money(itemLineTotal);
     html += `<div class="cart-right">`;
     html += `<div class="cart-price">${itemPriceHtml}</div>`;
     html += `</div>`;
-    
+
     html += `</div>`;
-    
     return html;
   };
 
@@ -7395,49 +7448,38 @@ async function initAddresses() {
         mid.className = "cart-mid";
         const t = document.createElement("div");
         t.className = "cart-title";
-        t.textContent = comboTitle + (qty > 1 ? " × " + qty : "");
+        const comboTitleText = str(comboTitle || "Комбо");
+        t.textContent = `${qty} x ${comboTitleText}`;
         mid.appendChild(t);
 
         const subContainer = document.createElement("div");
         subContainer.className = "cart-sub-container cart-combo-details";
         (selections || []).forEach((sel) => {
           const productName = String(sel.product_name || "").trim();
-          const variantLabel = String(sel.variant_label || "").trim();
-          const variantGroupTitle = String(sel.variant_group_title || "").trim();
-          const variantUnit = String(sel.variant_unit || "").trim();
+          const variantLine = buildVariantDisplayLineForOrder(
+            sel?.variant_label,
+            sel?.variant_unit,
+            sel?.variant_group_title
+          );
+          const primaryLine = [variantLine, productName].filter(Boolean).join(" ").trim() || (productName || "Товар");
           const ingredientsDisplay = Array.isArray(sel.ingredients_display) ? sel.ingredients_display : [];
           const selBlock = document.createElement("div");
           selBlock.className = "cart-combo-detail-block";
           const nameLine = document.createElement("div");
           nameLine.className = "cart-combo-detail-name";
-          nameLine.textContent = "1 × " + (productName || "Товар");
+          nameLine.textContent = "1 x " + primaryLine;
           selBlock.appendChild(nameLine);
           const detailsWrap = document.createElement("div");
           detailsWrap.className = "cart-sub-details";
-          if (variantLabel || variantGroupTitle || variantUnit) {
-            const vParts = [variantLabel, variantUnit, variantGroupTitle].filter(Boolean);
-            const vLine = document.createElement("div");
-            vLine.className = "cart-sub-detail-item";
-            vLine.textContent = "• " + vParts.join(" ");
-            detailsWrap.appendChild(vLine);
-          }
           ingredientsDisplay.forEach((ing) => {
-            const name = String(ing.name || "").trim();
-            const rawQty = ing.qty ?? ing.quantity;
-            const numQty = typeof rawQty === "number" ? rawQty : parseFloat(rawQty);
-            if (Number.isFinite(numQty) && numQty === 0) return;
-            if (!name && (rawQty == null || rawQty === "")) return;
-            const unit = String(ing.unit || "").trim();
-            const parts = [];
-            if (rawQty != null && rawQty !== "") parts.push(String(rawQty));
-            if (unit) parts.push(unit);
-            if (name) parts.push(name);
+            const lineText = formatIngredientLineForOrder(ing);
+            if (!lineText) return;
             const line = document.createElement("div");
             line.className = "cart-sub-detail-item";
-            line.textContent = "• " + parts.join(" ");
+            line.textContent = "\u2022 " + lineText;
             detailsWrap.appendChild(line);
           });
-          selBlock.appendChild(detailsWrap);
+          if (detailsWrap.childNodes.length) selBlock.appendChild(detailsWrap);
           subContainer.appendChild(selBlock);
         });
         mid.appendChild(subContainer);
@@ -7500,7 +7542,7 @@ async function initAddresses() {
           const cartItem = state.cart.find((x) => x.key === key);
           const newQty = Math.max(1, Number(cartItem?.qty || 0));
           center.textContent = String(newQty);
-          t.textContent = comboTitle + (newQty > 1 ? " × " + newQty : "");
+          t.textContent = `${newQty} x ${comboTitleText}`;
           // Минус не блокируем на qty = 1 — он должен работать как удаление
           btnMinus.classList.toggle("is-disabled", newQty <= 0);
           pr.textContent = money(roundPrice(unitPrice * newQty));
@@ -7669,7 +7711,14 @@ async function initAddresses() {
 
       const t = document.createElement("div");
       t.className = "cart-title";
-      t.textContent = `${str(product.name)}${qty > 1 ? ` × ${qty}` : ""}`;
+      const productNameText = str(product?.name || item?.name || "Товар");
+      const primaryVariantLine = buildVariantDisplayLineForOrder(
+        variantLabel,
+        item?.variant_unit || item?.variantUnit || "",
+        item?.variant_group_title || ""
+      );
+      const titleBase = [primaryVariantLine, productNameText].filter(Boolean).join(" ").trim() || productNameText;
+      t.textContent = `${qty} x ${titleBase}`;
       mid.appendChild(t);
 
       // ????????? ???????? ? ?????????? ???????: ???????? ? ??????????? ? ?????
@@ -7695,7 +7744,7 @@ async function initAddresses() {
       if (Array.isArray(cartIngredients) && cartIngredients.length > 0) {
         cartIngredients.forEach(ing => {
           if (Number(ing.quantity ?? ing.qty ?? 0) <= 0) return;
-          const formatted = formatIngredient(ing);
+          const formatted = formatIngredientLineForOrder(ing);
           if (formatted) ingredientParts.push(formatted);
         });
       }
@@ -7704,7 +7753,7 @@ async function initAddresses() {
       if (Array.isArray(optionItems) && optionItems.length > 0) {
         optionItems.forEach(opt => {
           if (Number(opt.qty ?? opt.quantity ?? 0) <= 0) return;
-          const formatted = formatOption(opt);
+          const formatted = formatOptionLineForOrder(opt);
           if (formatted) optionParts.push(formatted);
         });
       }
@@ -7714,7 +7763,7 @@ async function initAddresses() {
       }
       
       // ?????????? ??? ????????
-      const allParts = [...variantParts, ...ingredientParts, ...optionParts];
+      const allParts = [...ingredientParts, ...optionParts];
       
       // ??????? ????????? ??? ???????? (????? ???????????)
       const subContainer = document.createElement("div");
@@ -7731,7 +7780,7 @@ async function initAddresses() {
         allParts.forEach(part => {
           const detailItem = document.createElement("div");
           detailItem.className = "cart-sub-detail-item";
-          detailItem.textContent = `• ${part}`;
+          detailItem.textContent = `\u2022 ${part}`;
           detailItem.style.fontSize = "0.9em";
           detailItem.style.color = "var(--color-text-muted, #666)";
           detailItem.style.marginTop = "2px";
@@ -7764,7 +7813,7 @@ async function initAddresses() {
         if (newQty <= 0) return 0;
 
         center.textContent = String(newQty);
-        t.textContent = `${str(product.name)}${newQty > 1 ? ` \u00D7 ${newQty}` : ""}`;
+        t.textContent = `${newQty} x ${titleBase}`;
 
         const resolvedItems = cartItemsResolved();
         const currentItemResolved = resolvedItems.find((x) => String(x?.key || "") === String(key || ""));
