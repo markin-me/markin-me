@@ -393,6 +393,10 @@
       : (json && typeof json === "object" ? json : {});
     const totalRaw = Number(data.unread_total ?? data.total ?? 0);
     const total = Number.isFinite(totalRaw) && totalRaw > 0 ? Math.trunc(totalRaw) : 0;
+    const unreadChatsRaw = Number(data.unread_chats_total ?? data.unreadChatsTotal ?? 0);
+    const unreadChatsTotal = Number.isFinite(unreadChatsRaw) && unreadChatsRaw > 0
+      ? Math.trunc(unreadChatsRaw)
+      : 0;
     const revisionRaw = Number(data.revision || 0);
     const revision = Number.isFinite(revisionRaw) && revisionRaw > 0 ? Math.trunc(revisionRaw) : 0;
     const hasUnanswered = data.unanswered_total != null || data.unansweredTotal != null;
@@ -402,6 +406,7 @@
       : null;
     return {
       total,
+      unreadChatsTotal,
       revision,
       unanswered,
       updatedAt: String(data.updated_at || ""),
@@ -445,7 +450,7 @@
       unreadRevision = snapshot.revision;
       unreadUpdatedAt = snapshot.updatedAt;
       unreadPrimed = true;
-      showBadge(unreadTotal);
+      showBadge(snapshot.unreadChatsTotal);
 
       const nextUnanswered = Number(snapshot.unanswered || 0);
       const increased = nextUnanswered > baselineUnanswered;
@@ -471,7 +476,7 @@
       unansweredTotal = Math.max(0, Math.trunc(Number(normalized.unanswered)));
     }
     unreadPrimed = true;
-    showBadge(normalized.total);
+    showBadge(normalized.unreadChatsTotal);
     return normalized;
   }
 
@@ -738,10 +743,9 @@
 
   document.addEventListener(CHAT_UNREAD_EVENT, function (event) {
     if (!chatWidgetEnabled) return;
-    const totalUnread = Number(event?.detail?.totalUnread);
-    if (Number.isFinite(totalUnread)) {
-      unreadTotal = totalUnread > 0 ? Math.trunc(totalUnread) : 0;
-      showBadge(unreadTotal);
+    const totalUnreadChats = Number(event?.detail?.totalUnreadChats);
+    if (Number.isFinite(totalUnreadChats)) {
+      showBadge(totalUnreadChats > 0 ? Math.trunc(totalUnreadChats) : 0);
       return;
     }
     pullUnreadCount().catch(function () {});

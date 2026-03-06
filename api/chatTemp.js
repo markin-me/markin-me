@@ -1779,6 +1779,7 @@ function getTenantUnreadEntry(tenantId, create = false) {
     entry = {
       loaded: false,
       total: 0,
+      unreadChatsTotal: 0,
       updatedAt: "",
       revision: 0,
       loadingPromise: null,
@@ -1794,6 +1795,7 @@ function notifyTenantUnreadChange(tenantId, payload = {}) {
   if (!key) return;
   const data = {
     total: Number(payload.total || 0),
+    unreadChatsTotal: Number(payload.unreadChatsTotal || 0),
     updatedAt: String(payload.updatedAt || ""),
     revision: Number(payload.revision || 0),
   };
@@ -1807,6 +1809,7 @@ function notifyTenantUnreadChange(tenantId, payload = {}) {
     changed: true,
     unread_total: data.total,
     total: data.total,
+    unread_chats_total: data.unreadChatsTotal,
     updated_at: data.updatedAt,
     revision: data.revision,
     timeout: false,
@@ -1837,9 +1840,11 @@ function waitForTenantUnreadChange(tenantId, timeoutMs) {
   });
 }
 
-async function readTenantUnreadTotal(tenantId) {
+async function readTenantUnreadStats(tenantId) {
   const [rows] = await db.query(
-    `SELECT COUNT(*) AS total
+    `SELECT
+        COUNT(*) AS total,
+        COUNT(DISTINCT client_id) AS unread_chats_total
        FROM chat_messages
       WHERE tenant_id = ?
         AND direction = 'in'
@@ -1848,9 +1853,13 @@ async function readTenantUnreadTotal(tenantId) {
         AND message_id NOT LIKE 'daily-welcome-%'`,
     [Number(tenantId)]
   );
-  const total = Number(rows?.[0]?.total || 0);
-  if (!Number.isFinite(total) || total < 0) return 0;
-  return Math.trunc(total);
+  const totalRaw = Number(rows?.[0]?.total || 0);
+  const unreadChatsRaw = Number(rows?.[0]?.unread_chats_total || 0);
+  const total = Number.isFinite(totalRaw) && totalRaw > 0 ? Math.trunc(totalRaw) : 0;
+  const unreadChatsTotal = Number.isFinite(unreadChatsRaw) && unreadChatsRaw > 0
+    ? Math.trunc(unreadChatsRaw)
+    : 0;
+  return { total, unreadChatsTotal };
 }
 
 async function readTenantUnansweredUnreadTotal(tenantId) {
@@ -2023,22 +2032,29 @@ async function readClientUnreadSnapshot(tenantId, clientId) {
   };
 }
 
-function applyTenantUnreadTotal(tenantId, totalRaw, updatedAt = "") {
+function applyTenantUnreadStats(tenantId, statsRaw, updatedAt = "") {
   const entry = getTenantUnreadEntry(tenantId, true);
   if (!entry) {
     return {
       changed: false,
       total: 0,
+      unreadChatsTotal: 0,
       updatedAt: "",
       revision: 0,
     };
   }
 
-  const total = Number(totalRaw);
+  const total = Number(statsRaw?.total);
+  const unreadChatsTotal = Number(statsRaw?.unreadChatsTotal);
   const nextTotal = Number.isFinite(total) && total > 0 ? Math.trunc(total) : 0;
+  const nextUnreadChatsTotal = Number.isFinite(unreadChatsTotal) && unreadChatsTotal > 0
+    ? Math.trunc(unreadChatsTotal)
+    : 0;
   const prevTotal = Number(entry.total || 0);
-  const changed = !entry.loaded || prevTotal !== nextTotal;
+  const prevUnreadChatsTotal = Number(entry.unreadChatsTotal || 0);
+  const changed = !entry.loaded || prevTotal !== nextTotal || prevUnreadChatsTotal !== nextUnreadChatsTotal;
   entry.total = nextTotal;
+  entry.unreadChatsTotal = nextUnreadChatsTotal;
   entry.updatedAt = String(updatedAt || "").trim() || new Date().toISOString();
   entry.loaded = true;
 
@@ -2046,6 +2062,7 @@ function applyTenantUnreadTotal(tenantId, totalRaw, updatedAt = "") {
     entry.revision = Number(entry.revision || 0) + 1;
     notifyTenantUnreadChange(tenantId, {
       total: entry.total,
+      unreadChatsTotal: entry.unreadChatsTotal,
       updatedAt: entry.updatedAt,
       revision: entry.revision,
     });
@@ -2054,6 +2071,7 @@ function applyTenantUnreadTotal(tenantId, totalRaw, updatedAt = "") {
   return {
     changed,
     total: entry.total,
+    unreadChatsTotal: entry.unreadChatsTotal,
     updatedAt: entry.updatedAt,
     revision: entry.revision,
   };
@@ -2097,12 +2115,14 @@ async function ensureTenantUnreadLoaded(tenantId) {
   const entry = getTenantUnreadEntry(tenantId, true);
   if (!entry) return {
     total: 0,
+    unreadChatsTotal: 0,
     updatedAt: "",
     revision: 0,
   };
   if (entry.loaded) {
     return {
       total: Number(entry.total || 0),
+      unreadChatsTotal: Number(entry.unreadChatsTotal || 0),
       updatedAt: String(entry.updatedAt || ""),
       revision: Number(entry.revision || 0),
     };
@@ -2111,14 +2131,15 @@ async function ensureTenantUnreadLoaded(tenantId) {
     await entry.loadingPromise;
     return {
       total: Number(entry.total || 0),
+      unreadChatsTotal: Number(entry.unreadChatsTotal || 0),
       updatedAt: String(entry.updatedAt || ""),
       revision: Number(entry.revision || 0),
     };
   }
 
-  entry.loadingPromise = readTenantUnreadTotal(tenantId)
-    .then((total) => {
-      applyTenantUnreadTotal(tenantId, total, new Date().toISOString());
+  entry.loadingPromise = readTenantUnreadStats(tenantId)
+    .then((stats) => {
+      applyTenantUnreadStats(tenantId, stats, new Date().toISOString());
     })
     .catch((err) => {
       console.error("chat-temp unread warmup error:", err);
@@ -2131,6 +2152,7 @@ async function ensureTenantUnreadLoaded(tenantId) {
   await entry.loadingPromise;
   return {
     total: Number(entry.total || 0),
+    unreadChatsTotal: Number(entry.unreadChatsTotal || 0),
     updatedAt: String(entry.updatedAt || ""),
     revision: Number(entry.revision || 0),
   };
@@ -2151,8 +2173,8 @@ function scheduleTenantUnreadRefresh(tenantId, options = {}) {
     const current = getTenantUnreadEntry(tenantId);
     if (current) current.refreshTimer = 0;
     try {
-      const total = await readTenantUnreadTotal(tenantId);
-      applyTenantUnreadTotal(tenantId, total, new Date().toISOString());
+      const stats = await readTenantUnreadStats(tenantId);
+      applyTenantUnreadStats(tenantId, stats, new Date().toISOString());
     } catch (err) {
       console.error("chat-temp unread refresh error:", err);
     }
@@ -4457,6 +4479,7 @@ function makeChatTempRouter() {
         data: {
           unread_total: Number(snapshot.total || 0),
           total: Number(snapshot.total || 0),
+          unread_chats_total: Number(snapshot.unreadChatsTotal || 0),
           unanswered_total: Number(unansweredTotal || 0),
           updated_at: String(snapshot.updatedAt || ""),
           revision: Number(snapshot.revision || 0),
@@ -4494,6 +4517,7 @@ function makeChatTempRouter() {
         changed: payload.changed === true,
         unread_total: Number(payload.unread_total ?? payload.total ?? 0),
         total: Number(payload.total ?? payload.unread_total ?? 0),
+        unread_chats_total: Number(payload.unread_chats_total ?? payload.unreadChatsTotal ?? 0),
         unanswered_total: payload.unanswered_total != null
           ? Number(payload.unanswered_total)
           : undefined,
@@ -4509,6 +4533,7 @@ function makeChatTempRouter() {
         changed: false,
         unread_total: Number(snapshot.total || 0),
         total: Number(snapshot.total || 0),
+        unread_chats_total: Number(snapshot.unreadChatsTotal || 0),
         unanswered_total: Number(unansweredTotal || 0),
         updated_at: String(snapshot.updatedAt || ""),
         revision: Number(snapshot.revision || 0),
@@ -4591,6 +4616,7 @@ function makeChatTempRouter() {
 
       const currentSnapshot = await ensureTenantUnreadLoaded(tenantId);
       const currentTotal = Number(currentSnapshot.total || 0);
+      const currentUnreadChatsTotal = Number(currentSnapshot.unreadChatsTotal || 0);
       const currentRevision = Number(currentSnapshot.revision || 0);
       const currentUnansweredTotal = await readTenantUnansweredUnreadTotal(tenantId);
 
@@ -4604,6 +4630,7 @@ function makeChatTempRouter() {
             changed: true,
             unread_total: currentTotal,
             total: currentTotal,
+            unread_chats_total: currentUnreadChatsTotal,
             unanswered_total: currentUnansweredTotal,
             updated_at: String(currentSnapshot.updatedAt || ""),
             revision: currentRevision,
@@ -4617,6 +4644,9 @@ function makeChatTempRouter() {
       const nextTotal = Number.isFinite(Number(waitResult?.total))
         ? Math.max(0, Math.trunc(Number(waitResult.total)))
         : Math.max(0, Math.trunc(Number(nextEntry.total || 0)));
+      const nextUnreadChatsTotal = Number.isFinite(Number(waitResult?.unreadChatsTotal))
+        ? Math.max(0, Math.trunc(Number(waitResult.unreadChatsTotal)))
+        : Math.max(0, Math.trunc(Number(nextEntry.unreadChatsTotal || 0)));
       const nextRevision = Number.isFinite(Number(waitResult?.revision))
         ? Math.max(0, Math.trunc(Number(waitResult.revision)))
         : Math.max(0, Math.trunc(Number(nextEntry.revision || 0)));
@@ -4633,6 +4663,7 @@ function makeChatTempRouter() {
           changed,
           unread_total: nextTotal,
           total: nextTotal,
+          unread_chats_total: nextUnreadChatsTotal,
           unanswered_total: nextUnansweredTotal,
           updated_at: nextUpdatedAt,
           revision: nextRevision,

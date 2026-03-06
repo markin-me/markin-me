@@ -7084,6 +7084,10 @@ body.page-shop .shop-company-chat-btn:hover{
   transition: padding-bottom 280ms cubic-bezier(.22,.76,.24,1);
 }
 
+.shop-company-chat-overlay.is-mobile-keyboard-open .shop-company-chat-modal__body{
+  transition: padding-bottom 220ms cubic-bezier(.22,.76,.24,1);
+}
+
 .shop-company-chat-modal__body .chat-attach-preview-overlay{
   position: fixed;
   inset: 0;

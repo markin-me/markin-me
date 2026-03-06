@@ -1902,7 +1902,8 @@
       }
       const hasIncomingAppended = appendedIncomingMessageIds.length > 0;
       const wrap = dom.center.messagesWrap;
-      const preserveViewport = hasIncomingAppended && !!wrap;
+      const shouldAutoScrollIncoming = hasIncomingAppended && preferPinnedBottom && !appendOlder;
+      const preserveViewport = hasIncomingAppended && !shouldAutoScrollIncoming && !!wrap;
       let anchorMessageId = "";
       let anchorOffset = 0;
       if (preserveViewport && wrap && dom.center.messages) {
@@ -1920,14 +1921,15 @@
           anchorOffset = anchorNode.getBoundingClientRect().top - wrapRect.top;
         }
       }
-      // Do not auto-scroll on new client incoming messages:
-      // keep current viewport position exactly where the operator left it.
-      const keepPinned = hasIncomingAppended ? false : (preferPinnedBottom && !appendOlder);
+      // Auto-scroll only when operator was already at the bottom in active chat.
+      const keepPinned = hasIncomingAppended
+        ? shouldAutoScrollIncoming
+        : (preferPinnedBottom && !appendOlder);
       renderMessages({
-        disableAutoPin: appendOlder || hasIncomingAppended || (!hasIncomingAppended && !keepPinned),
+        disableAutoPin: appendOlder || !keepPinned,
         forceScrollBottom: keepPinned,
         smoothScroll: !appendOlder && keepPinned,
-        skipPinnedBottomEnforce: hasIncomingAppended,
+        skipPinnedBottomEnforce: hasIncomingAppended && !shouldAutoScrollIncoming,
       });
       if (preserveViewport && wrap) {
         if (anchorMessageId && dom.center.messages) {
@@ -3734,6 +3736,28 @@
     return total;
   }
 
+  function getTotalUnreadChatsCount() {
+    const keys = new Set();
+    Object.keys(state.store.threads || {}).forEach((key) => {
+      const normalized = normalizeClientIdKey(key);
+      if (normalized) keys.add(normalized);
+    });
+    (state.clients || []).forEach((client) => {
+      const normalized = normalizeClientIdKey(client?.id);
+      if (normalized) keys.add(normalized);
+    });
+    Object.keys(state.remoteSummariesByClient || {}).forEach((key) => {
+      const normalized = normalizeClientIdKey(key);
+      if (normalized) keys.add(normalized);
+    });
+
+    let total = 0;
+    keys.forEach((key) => {
+      if (getUnreadCount(key) > 0) total += 1;
+    });
+    return total;
+  }
+
   function emitUnreadChangedSoon() {
     if (unreadEventRaf) return;
     const schedule = typeof requestAnimationFrame === "function"
@@ -3742,9 +3766,10 @@
     unreadEventRaf = schedule(() => {
       unreadEventRaf = 0;
       const totalUnread = getTotalUnreadCount();
+      const totalUnreadChats = getTotalUnreadChatsCount();
       document.dispatchEvent(
         new CustomEvent(CHAT_UNREAD_EVENT, {
-          detail: { totalUnread },
+          detail: { totalUnread, totalUnreadChats },
         })
       );
     });
@@ -4857,7 +4882,6 @@
 
   function createEmojiAtlasGlyph(glyphClassName, emojiValue) {
     if (EMOJI_NATIVE_RENDER_ONLY) return null;
-    if (shouldUseNativeMobileEmojiKeyboard()) return null;
     const pos = getEmojiAtlasPosition(emojiValue);
     if (!pos) return null;
     const xPercent = EMOJI_ATLAS_COLUMNS > 1 ? (pos.col / (EMOJI_ATLAS_COLUMNS - 1)) * 100 : 0;
@@ -4874,17 +4898,39 @@
     return glyph;
   }
 
+  function createEmojiAssetGlyph(glyphClassName, emojiValue) {
+    if (EMOJI_NATIVE_RENDER_ONLY) return null;
+    const assetUrl = getEmojiAssetUrl(emojiValue);
+    if (!assetUrl) return null;
+    const glyph = document.createElement("span");
+    glyph.className = String(glyphClassName || "");
+    glyph.style.backgroundImage = `url("${assetUrl}")`;
+    glyph.style.backgroundRepeat = "no-repeat";
+    glyph.style.backgroundSize = "contain";
+    glyph.style.backgroundPosition = "center";
+    glyph.setAttribute("aria-hidden", "true");
+    return glyph;
+  }
+
   function appendNativeEmojiGlyph(target, emoji, glyphClassName) {
     if (!target) return;
     const value = String(emoji || "");
     if (!value) return;
     const cls = String(glyphClassName || "");
     const atlasGlyph = createEmojiAtlasGlyph(cls, value);
-    if (!atlasGlyph) {
+    if (atlasGlyph) {
+      target.appendChild(atlasGlyph);
+      return;
+    }
+    const assetGlyph = createEmojiAssetGlyph(cls, value);
+    if (assetGlyph) {
+      target.appendChild(assetGlyph);
+      return;
+    }
+    {
       target.appendChild(document.createTextNode(value));
       return;
     }
-    target.appendChild(atlasGlyph);
   }
 
   function setEmojiGlyph(target, emoji, glyphClassName) {

@@ -137,6 +137,7 @@
   const CHAT_THREAD_PAGE_MAX_SIZE = 200;
   const CHAT_DROP_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif|heic|heif)$/i;
   const CHAT_AUTOSCROLL_MS = 170;
+  const CHAT_KEYBOARD_INSET_ANIMATION_MS = 220;
   const CHAT_EMOJI_SHEET_SETTLE_MS = 280;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
   const CHAT_TYPING_HEARTBEAT_MS = 500;
@@ -3981,6 +3982,7 @@
 
     const prevTop = feed.scrollTop;
     const isChatOpen = overlay.classList.contains("is-open");
+    const wasPinnedToBottom = isChatOpen ? shouldKeepFeedPinnedToBottom() : false;
     liveEntries = entries;
     sharedThreadUpdatedAt = remoteUpdatedAt;
     renderThread();
@@ -3989,7 +3991,12 @@
       applyPeerTypingState(null, { forceInactive: true });
       maybeNotifyIncomingAgentMessage(latestIncomingAgentEntry);
     }
-    feed.scrollTop = prevTop;
+    const shouldAutoScrollIncoming = isChatOpen && hasIncomingAgentMessages && wasPinnedToBottom;
+    if (shouldAutoScrollIncoming) {
+      scrollToBottom(false);
+    } else {
+      feed.scrollTop = prevTop;
+    }
     tryApplyPendingFeedRestoreState();
     updateScrollDownButton();
     if (isChatOpen && hasIncomingAgentMessages) {
@@ -4472,7 +4479,6 @@
 
   function createEmojiAtlasGlyph(glyphClassName, emojiValue) {
     if (EMOJI_NATIVE_RENDER_ONLY) return null;
-    if (shouldUseNativeMobileEmojiKeyboard()) return null;
     const pos = getEmojiAtlasPosition(emojiValue);
     if (!pos) return null;
     const xPercent = EMOJI_ATLAS_COLUMNS > 1 ? (pos.col / (EMOJI_ATLAS_COLUMNS - 1)) * 100 : 0;
@@ -4485,6 +4491,20 @@
     glyph.style.backgroundRepeat = "no-repeat";
     glyph.style.backgroundSize = String(EMOJI_ATLAS_COLUMNS * 100) + "% " + String(EMOJI_ATLAS_ROWS * 100) + "%";
     glyph.style.backgroundPosition = String(xPercent) + "% " + String(yPercent) + "%";
+    glyph.setAttribute("aria-hidden", "true");
+    return glyph;
+  }
+
+  function createEmojiAssetGlyph(glyphClassName, emojiValue) {
+    if (EMOJI_NATIVE_RENDER_ONLY) return null;
+    const assetUrl = getEmojiAssetUrl(emojiValue);
+    if (!assetUrl) return null;
+    const glyph = document.createElement("span");
+    glyph.className = String(glyphClassName || "");
+    glyph.style.backgroundImage = 'url("' + assetUrl + '")';
+    glyph.style.backgroundRepeat = "no-repeat";
+    glyph.style.backgroundSize = "contain";
+    glyph.style.backgroundPosition = "center";
     glyph.setAttribute("aria-hidden", "true");
     return glyph;
   }
@@ -4530,11 +4550,16 @@
     if (!val) return;
     const cls = String(className || "");
     const atlasGlyph = createEmojiAtlasGlyph(cls, val);
-    if (!atlasGlyph) {
-      host.appendChild(document.createTextNode(val));
+    if (atlasGlyph) {
+      host.appendChild(atlasGlyph);
       return;
     }
-    host.appendChild(atlasGlyph);
+    const assetGlyph = createEmojiAssetGlyph(cls, val);
+    if (assetGlyph) {
+      host.appendChild(assetGlyph);
+      return;
+    }
+    host.appendChild(document.createTextNode(val));
   }
 
   function setEmojiGlyph(target, emoji, glyphClassName) {
@@ -8247,6 +8272,7 @@
     const rounded = Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0;
     const next = rounded < 8 ? 0 : rounded;
     const prev = Number(overlay.dataset.keyboardInset || 0);
+    const feedBottomDistanceBefore = getFeedBottomDistanceSnapshot();
     if (prev === next) {
       scheduleScrollDownComposerExtraOffsetSync();
       return;
@@ -8255,6 +8281,13 @@
     overlay.style.setProperty("--shop-chat-mobile-keyboard-inset", String(next) + "px");
     overlay.classList.toggle("is-mobile-keyboard-open", next > 0);
     scheduleScrollDownComposerExtraOffsetSync();
+    if (feedBottomDistanceBefore != null) {
+      if (isAndroidMobileBrowser()) {
+        applyFeedBottomDistanceSnapshot(feedBottomDistanceBefore);
+      } else {
+        stabilizeFeedBottomDistance(feedBottomDistanceBefore, CHAT_KEYBOARD_INSET_ANIMATION_MS);
+      }
+    }
   }
 
   function hasFocusedChatTextInput() {
@@ -8268,10 +8301,13 @@
     if (!hasFocusedChatTextInput()) return 0;
     const viewport = window.visualViewport;
     if (!viewport) return 0;
+    const viewportOffsetTop = Number(viewport.offsetTop || 0);
     const viewportHeight = Number(viewport.height || 0);
     if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return 0;
+    if (!Number.isFinite(viewportOffsetTop) || viewportOffsetTop < 0) return 0;
     const rect = overlay.getBoundingClientRect();
-    const overlap = Number(rect && rect.bottom || 0) - viewportHeight;
+    const viewportBottom = viewportOffsetTop + viewportHeight;
+    const overlap = Number(rect && rect.bottom || 0) - viewportBottom;
     if (!Number.isFinite(overlap) || overlap <= 0) return 0;
     return overlap;
   }
@@ -8290,6 +8326,10 @@
 
   function scheduleMobileKeyboardInsetSyncBurst() {
     scheduleMobileKeyboardInsetSync();
+    if (isAndroidMobileBrowser()) {
+      window.setTimeout(scheduleMobileKeyboardInsetSync, 40);
+      return;
+    }
     window.setTimeout(scheduleMobileKeyboardInsetSync, 60);
     window.setTimeout(scheduleMobileKeyboardInsetSync, 180);
     window.setTimeout(scheduleMobileKeyboardInsetSync, 320);
@@ -9789,6 +9829,12 @@
     const ua = String((navigator && navigator.userAgent) || "");
     if (!ua) return false;
     return /Android/i.test(ua) && /YaBrowser/i.test(ua);
+  }
+
+  function isAndroidMobileBrowser() {
+    const ua = String((navigator && navigator.userAgent) || "");
+    if (!ua) return false;
+    return /Android/i.test(ua);
   }
 
   let touchAttachmentTap = null;

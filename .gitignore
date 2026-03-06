@@ -23,3 +23,4 @@ migrations/001-add-multitenancy.sql
 migrations/002-add-tenant-password.sql
 db-test.js
 server.log
+.env.production
