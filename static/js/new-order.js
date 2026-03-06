@@ -215,6 +215,15 @@
     rightCartClearTimerByOrder: new Map(),
     rightDiscountBreakdownOpenByOrder: new Map(),
     rightCheckoutSubmittingByOrder: new Map(),
+    rightAutoAddDismissedByOrder: new Map(),
+    autoAdd: {
+      groups: [],
+      items: [],
+      byGroupId: new Map(),
+      byProductId: new Map(),
+    },
+    autoAddLoaded: false,
+    autoAddLoadPromise: null,
     tenantRounding: null,
     tenantRoundingLoaded: false,
     tenantRoundingPromise: null,
@@ -319,6 +328,7 @@
       resetAllRightCartClearState({ render: false });
       state.rightCheckoutSubmittingByOrder.clear();
       state.rightDiscountBreakdownOpenByOrder.clear();
+      state.rightAutoAddDismissedByOrder.clear();
       state.rightClientDiscountsLoadingByClientId.clear();
       closeRightAddressOverlay();
       return;
@@ -335,7 +345,10 @@
       `;
     }).join("");
     rightContentEl.classList.remove("hidden");
-    const active = orders.find((order) => Number(order?.id || 0) === Number(state.rightActiveOrderId || 0)) || orders[0];
+    const requestedActiveId = Number(state.rightActiveOrderId || 0);
+    let activeIndex = orders.findIndex((order) => Number(order?.id || 0) === requestedActiveId);
+    if (activeIndex < 0) activeIndex = 0;
+    let active = orders[activeIndex] || orders[0];
     state.rightActiveOrderId = Number(active?.id || 0) || null;
     const activeMode = String(active?.mode || "add").toLowerCase();
     const isEditCheckout = activeMode === "edit" && Number(active?.editOrderId || 0) > 0;
@@ -343,7 +356,19 @@
       rightTabsHeaderEl.classList.toggle("hidden", isEditCheckout);
     }
     if (rightEmptyEl) rightEmptyEl.classList.add("hidden");
-    const form = active?.form || {};
+    let form = active?.form && typeof active.form === "object" ? active.form : {};
+    const activeOrderId = Number(active?.id || 0);
+    if (activeOrderId > 0) {
+      const normalizedCart = normalizeRightOrderCartItemsWithAutoAdd(
+        activeOrderId,
+        Array.isArray(form?.cartItems) ? form.cartItems : []
+      );
+      const nextForm = { ...form, cartItems: normalizedCart };
+      const nextActive = { ...active, form: nextForm };
+      state.rightOrders[activeIndex] = nextActive;
+      active = nextActive;
+      form = nextForm;
+    }
     const activeClientId = Number(form?.clientId || 0);
     if (
       activeClientId > 0
@@ -711,11 +736,14 @@
             ${cartItems.length ? cartItems.map((item) => {
               const type = String(item?.type || "product");
               const qty = Math.max(1, Number(item?.qty || 1));
+              const qtyEditable = isRightOrderAutoQtyEditable(item);
+              const autoFreeQty = getRightOrderAutoFreeQty(item);
+              const isAutoAddItem = isRightOrderAutoAddItem(item);
               const unitPrice = roundPrice(Number(item?.unit_price || 0));
-              const sum = roundPrice(Number(item?.sum || unitPrice * qty));
+              const sum = getRightOrderCartLineTotal(item);
               const unitOldPrice = roundPrice(Number(item?.unit_price_before_discount || 0));
               const oldSum = roundPrice(unitOldPrice * qty);
-              const hasDiscount = oldSum > sum;
+              const hasDiscount = !isAutoAddItem && oldSum > sum;
               const discountPercent = hasDiscount && oldSum > 0
                 ? Math.max(1, Math.round(((oldSum - sum) / oldSum) * 100))
                 : 0;
@@ -940,6 +968,9 @@
                   ${optionRows.length ? `<div class="new-order-right-cart-combo-section is-separated">${optionRows.map((row) => renderCompositionRowHtml(row)).join("")}</div>` : ""}
                 `
                 : [...compositionRows, ...optionRows].map((row) => renderCompositionRowHtml(row)).join("");
+              const autoFreeLineHtml = autoFreeQty > 0
+                ? `<div class="new-order-right-cart-composition-row">• Бесплатно: ${escapeHtml(formatQtyPlain(autoFreeQty))} шт.</div>`
+                : "";
               return `
                 <div class="new-order-right-cart-item-wrap" data-cart-item-id="${Number(item?.id || 0)}">
                   <div class="new-order-right-cart-item-tools">
@@ -998,26 +1029,28 @@
                     <div class="new-order-right-cart-thumb">${renderCartThumb(item)}</div>
                     <div class="qty-pill qty-pill--muted new-order-right-cart-qty" data-qty-wrap>
                       <button
-                        class="qty-pill__btn qty-pill__btn--minus${qty <= 0 ? " is-disabled" : ""}"
+                        class="qty-pill__btn qty-pill__btn--minus${(qty <= 0 || !qtyEditable) ? " is-disabled" : ""}"
                         type="button"
                         data-action="right-cart-qty-minus"
                         data-order-id="${Number(active?.id || 0)}"
                         data-cart-item-id="${Number(item?.id || 0)}"
+                        ${qtyEditable ? "" : "disabled aria-disabled=\"true\""}
                       >−</button>
                       <span class="qty-pill__center" data-qty-value>${qty}</span>
                       <button
-                        class="qty-pill__btn qty-pill__btn--plus"
+                        class="qty-pill__btn qty-pill__btn--plus${!qtyEditable ? " is-disabled" : ""}"
                         type="button"
                         data-action="right-cart-qty-plus"
                         data-order-id="${Number(active?.id || 0)}"
                         data-cart-item-id="${Number(item?.id || 0)}"
+                        ${qtyEditable ? "" : "disabled aria-disabled=\"true\""}
                       >+</button>
                     </div>
                   </div>
                   <div class="new-order-right-cart-item-main">
                     <div class="new-order-right-cart-item-title">${qty} × ${escapeHtml(title)}</div>
                     <div class="new-order-right-cart-item-sub">
-                      ${compositionBodyHtml}
+                      ${compositionBodyHtml}${autoFreeLineHtml}
                     </div>
                   </div>
                   <div class="new-order-right-cart-item-sum-wrap">
@@ -1248,6 +1281,89 @@
       state.rightPickupStores = [];
     }
     schedulePersistBootstrapSnapshot();
+  }
+
+  async function loadRightAutoAdd(opts = {}) {
+    const force = opts?.force === true;
+    if (state.autoAddLoaded && !force) return;
+    if (state.autoAddLoadPromise) return state.autoAddLoadPromise;
+    state.autoAddLoadPromise = (async () => {
+      try {
+        const json = await apiJson("/api/public/auto-add");
+        const groups = Array.isArray(json?.data?.groups) ? json.data.groups : [];
+        const items = Array.isArray(json?.data?.items) ? json.data.items : [];
+
+        state.autoAdd.groups = groups;
+        state.autoAdd.items = items;
+        state.autoAdd.byGroupId = new Map(
+          groups
+            .map((g) => [Number(g?.id || 0), g])
+            .filter(([gid]) => Number.isFinite(gid) && gid > 0)
+        );
+        state.autoAdd.byProductId = new Map(
+          items
+            .map((it) => [Number(it?.product_id || 0), it])
+            .filter(([pid]) => Number.isFinite(pid) && pid > 0)
+        );
+
+        const ruleProductIds = [];
+        const hintedProducts = [];
+        items.forEach((rule) => {
+          const groupId = Number(rule?.group_id || 0);
+          if (!rule?.group && groupId > 0) {
+            rule.group = state.autoAdd.byGroupId.get(groupId) || null;
+          }
+          const productId = Number(rule?.product_id || rule?.product?.id || 0);
+          if (!(productId > 0)) return;
+          ruleProductIds.push(productId);
+          const hinted = rule?.product && typeof rule.product === "object"
+            ? { ...rule.product, id: Number(rule.product?.id || productId) }
+            : null;
+          if (hinted && Number(hinted?.id || 0) > 0) {
+            state.productByIdCache.set(Number(hinted.id), hinted);
+            hintedProducts.push(hinted);
+          }
+        });
+
+        const uniqueRuleIds = [...new Set(ruleProductIds)];
+        const missingRuleIds = uniqueRuleIds.filter((pid) => !getProductById(pid));
+        const fetchedProducts = [];
+        if (missingRuleIds.length) {
+          const settled = await Promise.allSettled(missingRuleIds.map((pid) => ensureProductById(pid)));
+          settled.forEach((entry) => {
+            if (entry.status !== "fulfilled") return;
+            if (entry.value && typeof entry.value === "object") fetchedProducts.push(entry.value);
+          });
+        }
+
+        const preloadProductsMap = new Map();
+        [...hintedProducts, ...fetchedProducts].forEach((product) => {
+          const pid = Number(product?.id || 0);
+          if (!(pid > 0)) return;
+          preloadProductsMap.set(pid, product);
+        });
+        const preloadProducts = Array.from(preloadProductsMap.values());
+        if (preloadProducts.length) {
+          await loadVariantsForProducts(preloadProducts);
+          await loadIngredientsForProducts(preloadProducts);
+        }
+        state.autoAddLoaded = true;
+      } catch {
+        const hasCachedRules = Array.isArray(state.autoAdd?.groups) && state.autoAdd.groups.length
+          || (Array.isArray(state.autoAdd?.items) && state.autoAdd.items.length);
+        if (!hasCachedRules) {
+          state.autoAdd.groups = [];
+          state.autoAdd.items = [];
+          state.autoAdd.byGroupId = new Map();
+          state.autoAdd.byProductId = new Map();
+          state.autoAddLoaded = false;
+        }
+      } finally {
+        state.autoAddLoadPromise = null;
+      }
+      schedulePersistBootstrapSnapshot();
+    })();
+    return state.autoAddLoadPromise;
   }
 
   function parseTimeToMinutes(value) {
@@ -1649,10 +1765,567 @@
     return { amount, titles, appliedDiscounts };
   }
 
+  function rightAutoAddDismissedKey(groupId, productId) {
+    return `${Number(groupId || 0)}:${Number(productId || 0)}`;
+  }
+
+  function getRightAutoAddDismissedSet(orderId, { create = false } = {}) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return null;
+    const existing = state.rightAutoAddDismissedByOrder.get(id);
+    if (existing instanceof Set) return existing;
+    if (!create) return null;
+    const created = new Set();
+    state.rightAutoAddDismissedByOrder.set(id, created);
+    return created;
+  }
+
+  function clearRightAutoAddDismissed(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return false;
+    return state.rightAutoAddDismissedByOrder.delete(id);
+  }
+
+  function markRightAutoAddDismissed(orderId, groupId, productId) {
+    const gid = Number(groupId || 0);
+    const pid = Number(productId || 0);
+    if (!(gid > 0) || !(pid > 0)) return;
+    const set = getRightAutoAddDismissedSet(orderId, { create: true });
+    if (!set) return;
+    set.add(rightAutoAddDismissedKey(gid, pid));
+  }
+
+  function isRightAutoAddDismissed(orderId, groupId, productId) {
+    const set = getRightAutoAddDismissedSet(orderId, { create: false });
+    if (!set) return false;
+    return set.has(rightAutoAddDismissedKey(groupId, productId));
+  }
+
+  function clearRightAutoAddDismissedEntry(orderId, groupId, productId) {
+    const set = getRightAutoAddDismissedSet(orderId, { create: false });
+    if (!set) return false;
+    const key = rightAutoAddDismissedKey(groupId, productId);
+    const removed = set.delete(key);
+    if (set.size === 0) clearRightAutoAddDismissed(orderId);
+    return removed;
+  }
+
+  function clearRightAutoAddDismissedIfCartEmpty(orderId, cartItems) {
+    const hasRows = (Array.isArray(cartItems) ? cartItems : []).some((item) => Math.max(0, Number(item?.qty || 0)) > 0);
+    if (!hasRows) clearRightAutoAddDismissed(orderId);
+  }
+
+  function getRightAutoRuleByProductId(productId) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return null;
+    if (!(state.autoAdd?.byProductId instanceof Map)) return null;
+    return state.autoAdd.byProductId.get(pid) || null;
+  }
+
+  function parseRightAutoRuleAmount(value) {
+    if (value == null || value === "") return 0;
+    const direct = Number(value);
+    if (Number.isFinite(direct)) return direct;
+    const normalized = String(value).trim().replace(",", ".");
+    const fallback = Number(normalized);
+    return Number.isFinite(fallback) ? fallback : 0;
+  }
+
+  function getRightAutoAddDesiredQty(rule) {
+    const minQty = Math.max(0, Number(rule?.min_qty || 0));
+    const defaultQty = Math.max(0, Number(rule?.default_qty || 0));
+    const desired = Math.max(minQty, defaultQty);
+    return desired > 0 ? desired : 1;
+  }
+
+  function calcRightAutoFreeQty(rule, baseTotal) {
+    if (!rule) return 0;
+    let freeQty = Math.max(0, parseRightAutoRuleAmount(rule.free_first_qty));
+    const amountStep = parseRightAutoRuleAmount(rule.free_per_amount);
+    const stepQty = Math.max(0, parseRightAutoRuleAmount(rule.free_per_amount_qty));
+    if (amountStep > 0 && stepQty > 0 && baseTotal > 0) {
+      freeQty += Math.floor(baseTotal / amountStep) * stepQty;
+    }
+    const maxFree = rule.max_free_qty != null ? Number(rule.max_free_qty) : null;
+    if (maxFree != null && Number.isFinite(maxFree)) {
+      freeQty = Math.min(freeQty, Math.max(0, maxFree));
+    }
+    return freeQty;
+  }
+
+  function isRightOrderPlainCartItem(item) {
+    if (!item || String(item?.type || "product") === "combo") return false;
+    const optionItems = Array.isArray(item?.option_items) ? item.option_items : [];
+    if (optionItems.length > 0) return false;
+    const ingredients = Array.isArray(item?.ingredients) ? item.ingredients : [];
+    const hasCustomIngredients = ingredients.some((row) => {
+      const qty = Number(row?.qty ?? row?.quantity ?? 0);
+      const defaultQty = Number(row?.default_qty ?? qty);
+      if (!Number.isFinite(qty) || !Number.isFinite(defaultQty)) return false;
+      return Math.abs(qty - defaultQty) > 0.000001;
+    });
+    if (hasCustomIngredients) return false;
+    const selectedVariantIndex = Number(item?.variant?.selected_index);
+    const defaultVariantIndex = Number(item?.pricing?.variant_group?.default_value_index);
+    if (Number.isFinite(selectedVariantIndex) && Number.isFinite(defaultVariantIndex) && selectedVariantIndex !== defaultVariantIndex) {
+      return false;
+    }
+    return true;
+  }
+
+  function buildDefaultIngredientsSnapshotForProduct(productId) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return [];
+    const ingredients = state.productIngredients.get(pid) || [];
+    return ingredients.map((ing) => {
+      const defaultQty = Number(ing.quantity ?? 1);
+      const isVariable = ing.is_variable == null ? true : Number(ing.is_variable) === 1;
+      const rawMin = ing.quantity_min != null && Number.isFinite(Number(ing.quantity_min)) ? Number(ing.quantity_min) : null;
+      const min = rawMin !== null ? rawMin : (isVariable ? 0 : defaultQty);
+      const max = ing.quantity_max != null ? Number(ing.quantity_max) : defaultQty;
+      const step = ing.quantity_step != null ? Number(ing.quantity_step) : 1;
+      const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
+      const ingredientPrice = Number(ing.ingredient_price || 0);
+      const catalogBasePrice = ingredientBaseQty > 0 && ingredientPrice > 0 ? ingredientPrice / ingredientBaseQty : (ingredientPrice > 0 ? ingredientPrice : 0);
+      const pricePerUnit = ing.price_override != null && Number(ing.price_override) >= 0 ? Number(ing.price_override) : catalogBasePrice;
+      return {
+        ingredient_id: Number(ing.ingredient_id || 0),
+        ingredient_name: String(ing.ingredient_name || ""),
+        qty: defaultQty,
+        default_qty: defaultQty,
+        qty_min: min,
+        qty_max: max,
+        qty_step: step,
+        unit_label: String(ing.unit_short_title || ing.unit_title || ing.unit_code || "").trim(),
+        unit_id: Number(ing.unit_id || ing.ingredient_unit_id || 0),
+        ingredient_base_unit_id: Number(ing.ingredient_base_unit_id || ing.ingredient_unit_id || ing.unit_id || 0),
+        price_per_unit: Number(pricePerUnit || 0),
+      };
+    });
+  }
+
+  function buildPlainAutoAddCartItem(productId, qty) {
+    const pid = Number(productId || 0);
+    if (!(pid > 0)) return null;
+    const product = getProductById(pid);
+    if (!product) return null;
+    if (!isProductAvailableFlag(product)) return null;
+    const safeQty = Math.max(1, Number(qty || 1));
+    const productVariants = state.productVariants.get(pid) || [];
+    const primaryVariantGroup = productVariants[0] || null;
+    const values = Array.isArray(primaryVariantGroup?.values) ? primaryVariantGroup.values : [];
+    const rawDefault = primaryVariantGroup?.default_value_index != null ? Number(primaryVariantGroup.default_value_index) : 0;
+    const selectedVariantIndex = values.length
+      ? Math.max(0, Math.min(values.length - 1, Number.isFinite(rawDefault) ? rawDefault : 0))
+      : 0;
+    const variantValues = values.map((value) => String(value || "").trim()).filter(Boolean);
+    const variantLabel = variantValues.length ? String(variantValues[selectedVariantIndex] || "").trim() : "";
+
+    const item = {
+      id: Date.now() + Math.floor(Math.random() * 10000),
+      type: "product",
+      name: String(product?.name || "Товар"),
+      product_id: pid,
+      qty: safeQty,
+      photos: [String(getProductPhoto(product) || "")].filter(Boolean),
+      variant: {
+        label: variantLabel,
+        values: variantValues,
+        selected_index: selectedVariantIndex,
+      },
+      pricing: {
+        base_price: Number(product?.price || 0),
+        old_price: Number(product?.old_price || 0),
+        option_total: 0,
+        discount: product?.discount && typeof product.discount === "object" ? { ...product.discount } : null,
+        base_unit_id: Number(product?.base_unit_id || product?.unit_id || 0),
+        unit_id: Number(primaryVariantGroup?.unit_id || product?.base_unit_id || product?.unit_id || 0),
+        base_qty: Number(product?.base_qty || 1),
+        variant_group: primaryVariantGroup ? {
+          unit_id: Number(primaryVariantGroup?.unit_id || 0),
+          default_value_index: Number(primaryVariantGroup?.default_value_index || 0),
+          values: Array.isArray(primaryVariantGroup?.values) ? [...primaryVariantGroup.values] : [],
+          discount_tiers: Array.isArray(primaryVariantGroup?.discount_tiers) ? primaryVariantGroup.discount_tiers.map((tier) => ({ ...tier })) : [],
+        } : null,
+      },
+      option_items: [],
+      ingredients: buildDefaultIngredientsSnapshotForProduct(pid),
+      auto_add: 1,
+      auto_add_group_id: null,
+    };
+    return recalculateCartItemTotals(item);
+  }
+
+  function calcRightCartSnapshotUnitPrice(pricing, selectedIndex, fallbackPrice) {
+    const basePrice = Number(pricing?.base_price || 0);
+    const optionTotal = Number(pricing?.option_total || 0);
+    const baseUnitId = Number(pricing?.base_unit_id || 0);
+    const unitId = Number(pricing?.unit_id || 0);
+    const baseQty = Number(pricing?.base_qty || 1) || 1;
+    const variantGroup = pricing?.variant_group || null;
+    if (!variantGroup || !Array.isArray(variantGroup.values) || !variantGroup.values.length) {
+      return roundPrice(Number(fallbackPrice || basePrice || 0) + optionTotal);
+    }
+    const productLike = {
+      price: basePrice,
+      base_unit_id: baseUnitId,
+      unit_id: baseUnitId || unitId,
+      base_qty: baseQty,
+    };
+    const next = getVariantUnitPriceByBase(productLike, [variantGroup], Number(selectedIndex || 0), basePrice);
+    const resolvedBase = Number.isFinite(Number(next)) ? Number(next) : Number(fallbackPrice || basePrice || 0);
+    return roundPrice(resolvedBase + optionTotal);
+  }
+
+  function getRightAutoItemUnitParts(item) {
+    if (!item || String(item?.type || "product") === "combo") {
+      return { baseProductUnit: 0, optionTotal: 0, ingredientDiff: 0, baseUnit: 0 };
+    }
+    const optionItems = Array.isArray(item?.option_items) ? item.option_items : [];
+    const optionTotal = roundPrice(optionItems.reduce((sum, row) => {
+      const qty = Math.max(0, Number(row?.qty || 0));
+      const basePrice = Number(row?.basePrice || 0);
+      const variantDiff = Number(row?.variantDiff || 0);
+      return sum + ((basePrice + variantDiff) * qty);
+    }, 0));
+    const ingredientDiff = roundPrice(calculateIngredientSnapshotDiff(item?.ingredients));
+    const selectedVariantIndex = Number.isFinite(Number(item?.variant?.selected_index))
+      ? Number(item.variant.selected_index)
+      : 0;
+    const pricing = item?.pricing && typeof item.pricing === "object" ? item.pricing : null;
+    let baseProductUnit = Number(item?.unit_price_before_discount || item?.unit_price || 0);
+    if (pricing) {
+      baseProductUnit = calcRightCartSnapshotUnitPrice(
+        { ...pricing, option_total: 0 },
+        selectedVariantIndex,
+        Number(pricing?.base_price || baseProductUnit)
+      );
+    }
+    if (!Number.isFinite(baseProductUnit)) baseProductUnit = 0;
+    const baseUnit = roundPrice(baseProductUnit + optionTotal + ingredientDiff);
+    return {
+      baseProductUnit: roundPrice(baseProductUnit),
+      optionTotal,
+      ingredientDiff,
+      baseUnit,
+    };
+  }
+
+  function computeRightAutoNonAutoTotal(items) {
+    return (Array.isArray(items) ? items : []).reduce((sum, item) => {
+      const qty = Math.max(0, Number(item?.qty || 0));
+      if (!qty) return sum;
+      if (String(item?.type || "") === "combo") {
+        const unitBefore = Number(item?.unit_price_before_discount || item?.unit_price || 0);
+        return sum + roundPrice(unitBefore * qty);
+      }
+      if (Number(item?.auto_add || 0) === 1) return sum;
+      const parts = getRightAutoItemUnitParts(item);
+      return sum + roundPrice(parts.baseUnit * qty);
+    }, 0);
+  }
+
+  function computeRightAutoEligibleTotal(items) {
+    return (Array.isArray(items) ? items : []).reduce((sum, item) => {
+      const qty = Math.max(0, Number(item?.qty || 0));
+      if (!qty) return sum;
+      if (String(item?.type || "") === "combo") {
+        const unitBefore = Number(item?.unit_price_before_discount || item?.unit_price || 0);
+        return sum + roundPrice(unitBefore * qty);
+      }
+      const isAuto = Number(item?.auto_add || 0) === 1;
+      const parts = getRightAutoItemUnitParts(item);
+      if (!isAuto) {
+        return sum + roundPrice(parts.baseUnit * qty);
+      }
+      const rule = getRightAutoRuleByProductId(item?.product_id);
+      if (!rule) {
+        return sum + roundPrice(parts.baseUnit * qty);
+      }
+      const priceOverride = (rule.price_override != null && Number(rule.price_override) > 0)
+        ? Number(rule.price_override)
+        : parts.baseProductUnit;
+      const unitPrice = roundPrice(priceOverride + parts.optionTotal + parts.ingredientDiff);
+      return sum + roundPrice(unitPrice * qty);
+    }, 0);
+  }
+
+  function applyRightAutoPricingToCartItem(item, totals) {
+    if (!item || String(item?.type || "") === "combo") return item;
+    const next = { ...item };
+    const rule = getRightAutoRuleByProductId(next?.product_id);
+    const isAuto = Number(next?.auto_add || 0) === 1;
+    if (!rule || !isAuto) {
+      next.auto_add = isAuto ? 1 : 0;
+      next.auto_add_group_id = isAuto ? (Number(next?.auto_add_group_id || 0) || null) : null;
+      delete next.auto_add_free_qty;
+      delete next.auto_add_paid_qty;
+      return next;
+    }
+    const parts = getRightAutoItemUnitParts(next);
+    const group = rule.group || null;
+    const nonAutoTotal = Number(totals?.nonAutoTotal || 0);
+    const autoEligibleTotal = Number(totals?.autoEligibleTotal || nonAutoTotal);
+    const baseTotal = group && Number(group.include_auto_in_total || 0) === 1 ? autoEligibleTotal : nonAutoTotal;
+    const priceOverride = (rule.price_override != null && Number(rule.price_override) > 0)
+      ? Number(rule.price_override)
+      : parts.baseProductUnit;
+    const unitPrice = roundPrice(priceOverride + parts.optionTotal + parts.ingredientDiff);
+    const qty = Math.max(0, Number(next?.qty || 0));
+    const freeQty = calcRightAutoFreeQty(rule, baseTotal);
+    const paidQty = Math.max(0, qty - freeQty);
+    next.auto_add = 1;
+    next.auto_add_group_id = Number(next?.auto_add_group_id || rule.group_id || 0) || null;
+    next.auto_add_free_qty = Math.max(0, freeQty);
+    next.auto_add_paid_qty = paidQty;
+    next.unit_price_before_discount = unitPrice;
+    next.unit_price = unitPrice;
+    next.sum = roundPrice(unitPrice * paidQty);
+    if (next.pricing && typeof next.pricing === "object") {
+      next.pricing = {
+        ...next.pricing,
+        unit_before_discount: unitPrice,
+        discount_amount: 0,
+        discount: null,
+      };
+    }
+    return next;
+  }
+
+  function isRightOrderAutoQtyEditable(item) {
+    if (Number(item?.auto_add || 0) !== 1) return true;
+    const rule = getRightAutoRuleByProductId(item?.product_id);
+    const group = rule?.group || null;
+    return Number(group?.allow_customer_qty ?? 1) === 1;
+  }
+
+  function markRightOrderAutoAddDismissedByCartItem(orderId, item) {
+    if (Number(item?.auto_add || 0) !== 1) return;
+    const pid = Number(item?.product_id || 0);
+    if (!(pid > 0)) return;
+    const rule = getRightAutoRuleByProductId(pid);
+    const groupId = Number(item?.auto_add_group_id || rule?.group_id || 0);
+    if (!(groupId > 0)) return;
+    markRightAutoAddDismissed(orderId, groupId, pid);
+  }
+
+  function normalizeRightOrderCartItemsWithAutoAdd(orderId, cartItemsRaw) {
+    const orderNum = Number(orderId || 0);
+    const source = Array.isArray(cartItemsRaw) ? cartItemsRaw : [];
+    let cartItems = source
+      .map((item) => (item && typeof item === "object" ? recalculateCartItemTotals(item) : null))
+      .filter((item) => item && Math.max(0, Number(item?.qty || 0)) > 0);
+
+    const groups = Array.isArray(state.autoAdd?.groups) ? state.autoAdd.groups : [];
+    const rules = Array.isArray(state.autoAdd?.items) ? state.autoAdd.items : [];
+    if (!groups.length || !rules.length) {
+      clearRightAutoAddDismissedIfCartEmpty(orderNum, cartItems);
+      return cartItems.map((item) => applyRightAutoPricingToCartItem(item, null));
+    }
+
+    const hasBaseItems = cartItems.some((item) => {
+      const qty = Math.max(0, Number(item?.qty || 0));
+      if (!qty) return false;
+      if (String(item?.type || "") === "combo") return true;
+      return Number(item?.auto_add || 0) !== 1;
+    });
+
+    if (!hasBaseItems) {
+      cartItems = cartItems.filter((item) => {
+        const qty = Math.max(0, Number(item?.qty || 0));
+        if (!qty) return false;
+        if (String(item?.type || "") === "combo") return true;
+        return Number(item?.auto_add || 0) !== 1;
+      });
+      clearRightAutoAddDismissed(orderNum);
+      return cartItems.map((item) => applyRightAutoPricingToCartItem(item, null));
+    }
+
+    const itemsByGroup = new Map();
+    rules.forEach((rule) => {
+      const gid = Number(rule?.group_id || 0);
+      if (!(gid > 0)) return;
+      if (!itemsByGroup.has(gid)) itemsByGroup.set(gid, []);
+      itemsByGroup.get(gid).push(rule);
+    });
+
+    const totals = {
+      nonAutoTotal: computeRightAutoNonAutoTotal(cartItems),
+      autoEligibleTotal: computeRightAutoEligibleTotal(cartItems),
+    };
+
+    const sortedGroups = groups
+      .slice()
+      .sort((a, b) => (a?.sort_order ?? 0) - (b?.sort_order ?? 0) || Number(a?.id || 0) - Number(b?.id || 0));
+
+    sortedGroups.forEach((group) => {
+      const groupId = Number(group?.id || 0);
+      if (!(groupId > 0)) return;
+      const groupRules = (itemsByGroup.get(groupId) || []).slice().sort(
+        (a, b) => (a?.sort_order ?? 0) - (b?.sort_order ?? 0) || Number(a?.id || 0) - Number(b?.id || 0)
+      );
+      if (!groupRules.length) return;
+
+      const baseTotal = Number(group?.include_auto_in_total || 0) === 1 ? totals.autoEligibleTotal : totals.nonAutoTotal;
+      const minAmount = group?.min_cart_amount != null ? Number(group.min_cart_amount) : null;
+      const maxAmount = group?.max_cart_amount != null ? Number(group.max_cart_amount) : null;
+      const eligible = (minAmount == null || baseTotal >= minAmount) && (maxAmount == null || baseTotal <= maxAmount);
+
+      if (!eligible) {
+        groupRules.forEach((rule) => {
+          const pid = Number(rule?.product_id || 0);
+          if (!(pid > 0)) return;
+          cartItems = cartItems.filter((entry) => {
+            const sameProduct = Number(entry?.product_id || 0) === pid;
+            const isAuto = Number(entry?.auto_add || 0) === 1;
+            return !(sameProduct && isAuto);
+          });
+        });
+        return;
+      }
+
+      const allowQty = Number(group?.allow_customer_qty ?? 1) === 1;
+      groupRules.forEach((rule) => {
+        const pid = Number(rule?.product_id || 0);
+        if (!(pid > 0)) return;
+        const product = getProductById(pid);
+        if (product && !isProductAvailableFlag(product)) return;
+
+        const matching = cartItems.filter((entry) => String(entry?.type || "") !== "combo" && Number(entry?.product_id || 0) === pid);
+        let selected = matching.find((entry) => Number(entry?.auto_add || 0) === 1) || null;
+        if (!selected) selected = matching.find((entry) => isRightOrderPlainCartItem(entry)) || null;
+        if (!selected && matching.length === 1) selected = matching[0] || null;
+
+        const dismissed = isRightAutoAddDismissed(orderNum, groupId, pid);
+        if (selected && dismissed) clearRightAutoAddDismissedEntry(orderNum, groupId, pid);
+        if (!selected && dismissed) return;
+
+        if (selected && Number(selected?.auto_add || 0) !== 1) {
+          selected.auto_add = 1;
+          selected.auto_add_group_id = groupId;
+        } else if (selected && Number(selected?.auto_add_group_id || 0) !== groupId) {
+          selected.auto_add_group_id = groupId;
+        }
+
+        if (matching.length > 1 && selected) {
+          const removable = new Set();
+          matching.forEach((candidate) => {
+            if (candidate === selected) return;
+            if (Number(candidate?.auto_add || 0) === 1 || isRightOrderPlainCartItem(candidate)) {
+              removable.add(candidate);
+            }
+          });
+          if (removable.size) {
+            cartItems = cartItems.filter((candidate) => !removable.has(candidate));
+          }
+        }
+
+        const minQty = Math.max(0, Number(rule?.min_qty || 0));
+        const defaultQty = Math.max(0, Number(rule?.default_qty || 0));
+        const maxQty = rule?.max_qty != null ? Math.max(0, Number(rule.max_qty)) : null;
+        const desiredQty = Math.max(minQty, defaultQty);
+
+        if (!selected && desiredQty > 0) {
+          const created = buildPlainAutoAddCartItem(pid, desiredQty);
+          if (created) {
+            created.auto_add = 1;
+            created.auto_add_group_id = groupId;
+            cartItems.push(created);
+            selected = created;
+          }
+        }
+
+        if (!selected) return;
+
+        let nextQty = Math.max(0, Number(selected?.qty || 0));
+        if (!allowQty) {
+          nextQty = desiredQty;
+        } else {
+          if (minQty > 0 && nextQty < minQty) nextQty = minQty;
+          if (maxQty != null && nextQty > maxQty) nextQty = maxQty;
+        }
+        if (maxQty != null && nextQty > maxQty) nextQty = maxQty;
+
+        selected.qty = nextQty;
+        if (nextQty <= 0) {
+          cartItems = cartItems.filter((entry) => entry !== selected);
+        }
+      });
+
+      const maxGroupQty = group?.max_items_qty != null ? Number(group.max_items_qty) : null;
+      if (maxGroupQty != null && Number.isFinite(maxGroupQty)) {
+        const groupItems = groupRules.map((rule) => {
+          const pid = Number(rule?.product_id || 0);
+          if (!(pid > 0)) return null;
+          const item = cartItems.find((entry) => Number(entry?.product_id || 0) === pid && Number(entry?.auto_add || 0) === 1);
+          if (!item) return null;
+          return { rule, item };
+        }).filter(Boolean);
+
+        const totalQty = groupItems.reduce((sum, entry) => sum + Math.max(0, Number(entry?.item?.qty || 0)), 0);
+        let overflow = totalQty - maxGroupQty;
+        if (overflow > 0) {
+          const sortedItems = groupItems.slice().sort((a, b) => {
+            const aSort = a?.rule?.sort_order ?? 0;
+            const bSort = b?.rule?.sort_order ?? 0;
+            return bSort - aSort || Number(b?.rule?.id || 0) - Number(a?.rule?.id || 0);
+          });
+          sortedItems.forEach((entry) => {
+            if (overflow <= 0) return;
+            const minQty = Math.max(0, Number(entry?.rule?.min_qty || 0));
+            const currentQty = Math.max(0, Number(entry?.item?.qty || 0));
+            const reducible = Math.max(0, currentQty - minQty);
+            if (reducible <= 0) return;
+            const reduceBy = Math.min(reducible, overflow);
+            const nextQty = currentQty - reduceBy;
+            entry.item.qty = nextQty;
+            overflow -= reduceBy;
+            if (nextQty <= 0 && minQty <= 0 && Number(entry?.rule?.default_qty || 0) <= 0) {
+              cartItems = cartItems.filter((candidate) => candidate !== entry.item);
+            }
+          });
+        }
+      }
+    });
+
+    cartItems = cartItems
+      .map((item) => recalculateCartItemTotals(item))
+      .filter((item) => item && Math.max(0, Number(item?.qty || 0)) > 0);
+
+    const totalsAfter = {
+      nonAutoTotal: computeRightAutoNonAutoTotal(cartItems),
+      autoEligibleTotal: computeRightAutoEligibleTotal(cartItems),
+    };
+    cartItems = cartItems.map((item) => applyRightAutoPricingToCartItem(item, totalsAfter));
+    cartItems = cartItems
+      .map((item, index) => ({
+        item,
+        index,
+        autoRank: isRightOrderAutoAddItem(item) ? 1 : 0,
+      }))
+      .sort((a, b) => a.autoRank - b.autoRank || a.index - b.index)
+      .map((entry) => entry.item);
+    clearRightAutoAddDismissedIfCartEmpty(orderNum, cartItems);
+    return cartItems;
+  }
+
+  function updateRightOrderCartItems(orderId, cartItems, opts = {}) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return false;
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return false;
+    const order = state.rightOrders[index] || {};
+    const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+    form.cartItems = normalizeRightOrderCartItemsWithAutoAdd(id, cartItems);
+    state.rightOrders[index] = { ...order, form };
+    if (opts?.render) renderRightOrderTabs();
+    return true;
+  }
+
   function getRightOrderCheckoutSummary(order) {
     const form = order?.form && typeof order.form === "object" ? order.form : {};
     const cartItems = Array.isArray(form?.cartItems) ? form.cartItems : [];
-    const subtotal = roundPrice(cartItems.reduce((sum, item) => sum + Number(item?.sum || 0), 0));
+    const subtotal = roundPrice(cartItems.reduce((sum, item) => sum + getRightOrderCartLineTotal(item), 0));
     const cartItemsCount = cartItems.reduce((sum, item) => sum + Math.max(1, Number(item?.qty || 1)), 0);
     const customerDiscountSummary = getRightOrderCustomerDiscountSummary(order, subtotal);
     const customerOrderDiscount = roundPrice(Number(customerDiscountSummary?.amount || 0));
@@ -1712,11 +2385,36 @@
     return name === "\u043f\u0440\u0438\u0431\u043e\u0440\u044b";
   }
 
+  function getRightOrderAutoFreeQty(item) {
+    if (!isRightOrderAutoAddItem(item)) return 0;
+    const explicitFree = Number(item?.auto_add_free_qty);
+    if (Number.isFinite(explicitFree) && explicitFree > 0) return explicitFree;
+    const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+    const paidQty = Number(item?.auto_add_paid_qty);
+    if (Number.isFinite(paidQty)) {
+      return Math.max(0, qty - Math.max(0, paidQty));
+    }
+    const lineTotal = getRightOrderCartLineTotal(item);
+    return Math.abs(lineTotal) < 0.000001 ? qty : 0;
+  }
+
   function getRightOrderCartLineTotal(item) {
+    const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+    const unitPrice = Number(item?.unit_price || item?.price || 0);
+    if (isRightOrderAutoAddItem(item)) {
+      const paidQtyRaw = Number(item?.auto_add_paid_qty);
+      if (Number.isFinite(paidQtyRaw)) {
+        const paidQty = Math.max(0, Math.min(qty, paidQtyRaw));
+        return roundPrice(unitPrice * paidQty);
+      }
+      const freeQtyRaw = Number(item?.auto_add_free_qty);
+      if (Number.isFinite(freeQtyRaw)) {
+        const paidQty = Math.max(0, qty - Math.max(0, freeQtyRaw));
+        return roundPrice(unitPrice * paidQty);
+      }
+    }
     const lineTotal = Number(item?.sum ?? item?.line_total ?? item?.total ?? item?.total_price);
     if (Number.isFinite(lineTotal)) return roundPrice(lineTotal);
-    const unitPrice = Number(item?.unit_price || item?.price || 0);
-    const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
     return roundPrice(unitPrice * qty);
   }
 
@@ -1730,8 +2428,6 @@
 
     let comboDiscount = 0;
     let productDiscount = 0;
-    let autoAddDiscount = 0;
-
     source.forEach((item) => {
       const lineTotal = getRightOrderCartLineTotal(item);
       const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
@@ -1749,7 +2445,7 @@
       if (String(item?.type || "") === "combo") {
         comboDiscount += lineDiscount;
       } else if (isRightOrderAutoAddItem(item)) {
-        autoAddDiscount += lineDiscount;
+        return;
       } else {
         productDiscount += lineDiscount;
       }
@@ -1757,15 +2453,13 @@
 
     comboDiscount = roundPrice(comboDiscount);
     productDiscount = roundPrice(productDiscount);
-    autoAddDiscount = roundPrice(autoAddDiscount);
 
-    const totalDiscount = roundPrice(comboDiscount + productDiscount + autoAddDiscount + customerOrderDiscount);
+    const totalDiscount = roundPrice(comboDiscount + productDiscount + customerOrderDiscount);
     const subtotalBeforeDiscount = roundPrice(Math.max(0, subtotalAfterDiscount + totalDiscount));
 
     const breakdown = [
       { title: "\u041a\u043e\u043c\u0431\u043e", amount: comboDiscount },
       { title: "\u0422\u043e\u0432\u0430\u0440\u043d\u044b\u0435 \u0441\u043a\u0438\u0434\u043a\u0438", amount: productDiscount },
-      { title: "\u0410\u0432\u0442\u043e\u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u0438\u0435", amount: autoAddDiscount },
       { title: "\u041a\u043b\u0438\u0435\u043d\u0442\u0441\u043a\u0430\u044f \u0441\u043a\u0438\u0434\u043a\u0430", amount: customerOrderDiscount },
     ].filter((entry) => Number(entry.amount || 0) > 0);
 
@@ -2038,7 +2732,7 @@
 
       const productId = Number(item?.product_id || 0);
       if (!(productId > 0)) return;
-      const lineTotal = roundPrice(Number(item?.sum || Number(item?.unit_price || 0) * qty));
+      const lineTotal = getRightOrderCartLineTotal(item);
       const originalLineTotal = roundPrice(Number(item?.unit_price_before_discount || item?.unit_price || 0) * qty);
       const optionItemsSource = Array.isArray(item?.option_items) ? item.option_items : [];
       const optionItems = optionItemsSource
@@ -2072,6 +2766,8 @@
         variant_group_id: variantGroupId,
         variant_value_index: variantValueIndex,
         variant_label: String(item?.variant?.label || "").trim() || null,
+        auto_add: Number(item?.auto_add || 0) === 1 ? 1 : 0,
+        auto_add_group_id: Number(item?.auto_add_group_id || 0) > 0 ? Number(item.auto_add_group_id) : null,
         line_total: lineTotal,
         original_line_total: originalLineTotal,
       });
@@ -2261,12 +2957,8 @@
   function clearRightOrderCart(orderId) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return false;
-    const index = getRightOrderIndexById(id);
-    if (index < 0) return false;
-    const order = state.rightOrders[index] || {};
-    const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
-    form.cartItems = [];
-    state.rightOrders[index] = { ...order, form };
+    if (!updateRightOrderCartItems(id, [], { render: false })) return false;
+    clearRightAutoAddDismissed(id);
     resetRightCartClearState(id, { render: false });
     return true;
   }
@@ -2277,8 +2969,11 @@
     if (state.rightCheckoutSubmittingByOrder.get(id)) return;
     const index = getRightOrderIndexById(id);
     if (index < 0) return;
-    const order = state.rightOrders[index] || {};
+    let order = state.rightOrders[index] || {};
     const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+    form.cartItems = normalizeRightOrderCartItemsWithAutoAdd(id, Array.isArray(form.cartItems) ? form.cartItems : []);
+    state.rightOrders[index] = { ...order, form };
+    order = state.rightOrders[index] || order;
     const submitMode = String(order?.mode || "add").toLowerCase();
     const editOrderId = Number(order?.editOrderId || 0);
     const isEditSubmit = submitMode === "edit" && editOrderId > 0;
@@ -2453,6 +3148,7 @@
       if (!isEditSubmit && latestIndex >= 0) {
         const latestOrder = state.rightOrders[latestIndex] || {};
         const latestForm = latestOrder.form && typeof latestOrder.form === "object" ? { ...latestOrder.form } : {};
+        clearRightAutoAddDismissed(id);
         latestForm.cartItems = [];
         latestForm.comment = "";
         latestForm.changeType = "no_change";
@@ -2628,6 +3324,10 @@
           ? state.rightDeliverySettings
           : null,
         rightPickupStores: Array.isArray(state.rightPickupStores) ? state.rightPickupStores : [],
+        autoAdd: {
+          groups: Array.isArray(state.autoAdd?.groups) ? state.autoAdd.groups : [],
+          items: Array.isArray(state.autoAdd?.items) ? state.autoAdd.items : [],
+        },
         unitConversions: Array.isArray(state.unitConversions) ? state.unitConversions : [],
         checkoutSavedDraft: state.checkoutSavedDraft && typeof state.checkoutSavedDraft === "object"
           ? { blocks: Array.isArray(state.checkoutSavedDraft.blocks) ? state.checkoutSavedDraft.blocks : [] }
@@ -2672,6 +3372,29 @@
     state.rightDeliverySettingsReady = Object.prototype.hasOwnProperty.call(snapshot, "rightDeliverySettings");
     state.rightDeliverySettingsLoading = false;
     state.rightPickupStores = Array.isArray(snapshot.rightPickupStores) ? snapshot.rightPickupStores : [];
+    const autoAddSnapshot = snapshot.autoAdd && typeof snapshot.autoAdd === "object" ? snapshot.autoAdd : null;
+    const autoAddGroups = Array.isArray(autoAddSnapshot?.groups) ? autoAddSnapshot.groups : [];
+    const autoAddItems = Array.isArray(autoAddSnapshot?.items) ? autoAddSnapshot.items : [];
+    state.autoAdd.groups = autoAddGroups;
+    state.autoAdd.items = autoAddItems;
+    state.autoAdd.byGroupId = new Map(
+      autoAddGroups
+        .map((group) => [Number(group?.id || 0), group])
+        .filter(([gid]) => Number.isFinite(gid) && gid > 0)
+    );
+    state.autoAdd.byProductId = new Map(
+      autoAddItems
+        .map((item) => [Number(item?.product_id || 0), item])
+        .filter(([pid]) => Number.isFinite(pid) && pid > 0)
+    );
+    autoAddItems.forEach((rule) => {
+      const groupId = Number(rule?.group_id || 0);
+      if (!rule?.group && groupId > 0) {
+        rule.group = state.autoAdd.byGroupId.get(groupId) || null;
+      }
+    });
+    state.autoAddLoaded = autoAddGroups.length > 0 || autoAddItems.length > 0;
+    state.autoAddLoadPromise = null;
     state.unitConversions = Array.isArray(snapshot.unitConversions) ? snapshot.unitConversions : [];
     state.checkoutSavedDraft = snapshot.checkoutSavedDraft && typeof snapshot.checkoutSavedDraft === "object"
       ? { blocks: Array.isArray(snapshot.checkoutSavedDraft.blocks) ? snapshot.checkoutSavedDraft.blocks : [] }
@@ -3914,8 +4637,7 @@
     const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
     const list = Array.isArray(form.cartItems) ? [...form.cartItems] : [];
     list.push(cartItem);
-    form.cartItems = list;
-    state.rightOrders[idx] = { ...order, form };
+    updateRightOrderCartItems(id, list, { render: false });
   }
 
   function getProductById(productId) {
@@ -4003,6 +4725,8 @@
       },
       option_items: optionItems,
       ingredients: buildIngredientsSnapshotForProduct(pid),
+      auto_add: 0,
+      auto_add_group_id: null,
     };
     return recalculateCartItemTotals(item);
   }
@@ -4092,6 +4816,7 @@
 
     if (requestedQty <= 0) {
       if (existingIndex < 0) return false;
+      markRightOrderAutoAddDismissedByCartItem(orderId, cartItems[existingIndex]);
       cartItems.splice(existingIndex, 1);
     } else {
       const nextItem = buildCartItemFromProduct(pid, requestedQty);
@@ -4104,9 +4829,7 @@
       }
     }
 
-    form.cartItems = cartItems;
-    state.rightOrders[orderIndex] = { ...order, form };
-    return true;
+    return updateRightOrderCartItems(orderId, cartItems, { render: false });
   }
 
   function resetProductCardToDefault(productId) {
@@ -8116,9 +8839,7 @@
             }
           }
           cartItems[itemIndex] = recalculateCartItemTotals(item);
-          form.cartItems = cartItems;
-          state.rightOrders[orderIndex] = { ...order, form };
-          renderRightOrderTabs();
+          updateRightOrderCartItems(orderId, cartItems, { render: true });
           return;
         }
 
@@ -8192,23 +8913,21 @@
           const itemIndex = cartItems.findIndex((item) => Number(item?.id || 0) === cartItemId);
           if (itemIndex < 0) return;
           const item = { ...cartItems[itemIndex] };
+          if (!isRightOrderAutoQtyEditable(item)) return;
           const currentQty = Math.max(1, Number(item?.qty || 1));
           const nextQty = action === "right-cart-qty-plus"
             ? currentQty + 1
             : Math.max(0, currentQty - 1);
           if (nextQty === currentQty) return;
           if (nextQty <= 0) {
+            markRightOrderAutoAddDismissedByCartItem(orderId, item);
             cartItems.splice(itemIndex, 1);
-            form.cartItems = cartItems;
-            state.rightOrders[orderIndex] = { ...order, form };
-            renderRightOrderTabs();
+            updateRightOrderCartItems(orderId, cartItems, { render: true });
             return;
           }
           item.qty = nextQty;
           cartItems[itemIndex] = recalculateCartItemTotals(item);
-          form.cartItems = cartItems;
-          state.rightOrders[orderIndex] = { ...order, form };
-          renderRightOrderTabs();
+          updateRightOrderCartItems(orderId, cartItems, { render: true });
           return;
         }
 
@@ -8248,9 +8967,7 @@
           optionItems[optionIndex] = opt;
           item.option_items = optionItems.filter((x) => Math.max(0, Number(x?.qty || 0)) > 0);
           cartItems[itemIndex] = recalculateCartItemTotals(item);
-          form.cartItems = cartItems;
-          state.rightOrders[orderIndex] = { ...order, form };
-          renderRightOrderTabs();
+          updateRightOrderCartItems(orderId, cartItems, { render: true });
           return;
         }
 
@@ -8274,9 +8991,7 @@
           optionItems.splice(optionIndex, 1);
           item.option_items = optionItems;
           cartItems[itemIndex] = recalculateCartItemTotals(item);
-          form.cartItems = cartItems;
-          state.rightOrders[orderIndex] = { ...order, form };
-          renderRightOrderTabs();
+          updateRightOrderCartItems(orderId, cartItems, { render: true });
           return;
         }
 
@@ -8290,11 +9005,11 @@
           const order = state.rightOrders[orderIndex] || {};
           const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
           const cartItems = Array.isArray(form.cartItems) ? form.cartItems.map((item) => ({ ...item })) : [];
+          const removedItem = cartItems.find((item) => Number(item?.id || 0) === cartItemId) || null;
           const nextItems = cartItems.filter((item) => Number(item?.id || 0) !== cartItemId);
           if (nextItems.length === cartItems.length) return;
-          form.cartItems = nextItems;
-          state.rightOrders[orderIndex] = { ...order, form };
-          renderRightOrderTabs();
+          markRightOrderAutoAddDismissedByCartItem(orderId, removedItem);
+          updateRightOrderCartItems(orderId, nextItems, { render: true });
           return;
         }
 
@@ -8323,9 +9038,7 @@
           copiedItem = recalculateCartItemTotals(copiedItem);
 
           cartItems.splice(itemIndex + 1, 0, copiedItem);
-          form.cartItems = cartItems;
-          state.rightOrders[orderIndex] = { ...order, form };
-          renderRightOrderTabs();
+          updateRightOrderCartItems(orderId, cartItems, { render: true });
           return;
         }
 
@@ -8360,9 +9073,7 @@
           splitItem = recalculateCartItemTotals(splitItem);
 
           cartItems.splice(itemIndex + 1, 0, splitItem);
-          form.cartItems = cartItems;
-          state.rightOrders[orderIndex] = { ...order, form };
-          renderRightOrderTabs();
+          updateRightOrderCartItems(orderId, cartItems, { render: true });
           return;
         }
 
@@ -8391,9 +9102,7 @@
             sections.splice(safeSectionIndex, 1);
             if (!sections.length) {
               cartItems.splice(itemIndex, 1);
-              form.cartItems = cartItems;
-              state.rightOrders[orderIndex] = { ...order, form };
-              renderRightOrderTabs();
+              updateRightOrderCartItems(orderId, cartItems, { render: true });
               return;
             }
             item.sections = sections;
@@ -8409,17 +9118,13 @@
               .filter(Boolean)
               .slice(0, 4);
             cartItems[itemIndex] = recalculateCartItemTotals(item);
-            form.cartItems = cartItems;
-            state.rightOrders[orderIndex] = { ...order, form };
-            renderRightOrderTabs();
+            updateRightOrderCartItems(orderId, cartItems, { render: true });
             return;
           }
           if (String(item?.type || "") === "combo") return;
+          markRightOrderAutoAddDismissedByCartItem(orderId, item);
           cartItems.splice(itemIndex, 1);
-
-          form.cartItems = cartItems;
-          state.rightOrders[orderIndex] = { ...order, form };
-          renderRightOrderTabs();
+          updateRightOrderCartItems(orderId, cartItems, { render: true });
           return;
         }
 
@@ -8472,9 +9177,7 @@
           }
 
           cartItems[itemIndex] = recalculateCartItemTotals(item);
-          form.cartItems = cartItems;
-          state.rightOrders[orderIndex] = { ...order, form };
-          renderRightOrderTabs();
+          updateRightOrderCartItems(orderId, cartItems, { render: true });
           return;
         }
 
@@ -8854,6 +9557,7 @@
           resetRightCartClearState(orderId, { render: false });
           state.rightDiscountBreakdownOpenByOrder.delete(orderId);
           state.rightCheckoutSubmittingByOrder.delete(orderId);
+          clearRightAutoAddDismissed(orderId);
           const wasActive = Number(state.rightActiveOrderId || 0) === orderId;
           state.rightOrders.splice(idx, 1);
           const becameEmpty = state.rightOrders.length === 0;
@@ -9434,9 +10138,7 @@
               if (idx >= 0) {
                 cartItem.id = cartItemId;
                 cartItems[idx] = cartItem;
-                form.cartItems = cartItems;
-                state.rightOrders[orderIndex] = { ...order, form };
-                renderRightOrderTabs();
+                updateRightOrderCartItems(orderId, cartItems, { render: true });
                 closeComboOverlay();
                 return;
               }
@@ -9617,9 +10319,7 @@
               if (idx >= 0) {
                 cartItem.id = cartItemId;
                 cartItems[idx] = cartItem;
-                form.cartItems = cartItems;
-                state.rightOrders[orderIndex] = { ...order, form };
-                renderRightOrderTabs();
+                updateRightOrderCartItems(orderId, cartItems, { render: true });
                 closeProductOverlay();
                 return;
               }
@@ -9710,6 +10410,7 @@
     await loadRightTimeOptions();
     await loadRightOrderStatuses();
     await loadRightPickupStores();
+    await loadRightAutoAdd({ force: true });
     schedulePersistBootstrapSnapshot(0);
   }
 
@@ -9761,6 +10462,7 @@
       || !state.rightTimeOptions.length
       || !state.rightOrderStatuses.length
       || !state.rightPickupStores.length
+      || !state.autoAddLoaded
     ) {
       await loadRefsFromApi();
     }
@@ -10060,6 +10762,9 @@
   }
 
   function buildFallbackCartProductItem(orderItem) {
+    const autoAdd = Number(orderItem?.auto_add || 0) === 1 ? 1 : 0;
+    const autoAddGroupIdRaw = Number(orderItem?.auto_add_group_id || 0);
+    const autoAddGroupId = autoAdd && autoAddGroupIdRaw > 0 ? autoAddGroupIdRaw : null;
     const qty = Math.max(1, Number(orderItem?.qty || orderItem?.quantity || 1));
     const lineTotal = roundPrice(Number(orderItem?.line_total ?? orderItem?.total ?? orderItem?.total_price ?? orderItem?.price ?? 0));
     const unitPrice = qty > 0 ? roundPrice(lineTotal / qty) : 0;
@@ -10093,6 +10798,8 @@
       },
       option_items: [],
       ingredients: [],
+      auto_add: autoAdd,
+      auto_add_group_id: autoAddGroupId,
       unit_price_before_discount: oldUnitPrice > unitPrice ? oldUnitPrice : 0,
       unit_price: unitPrice,
       sum: lineTotal,
@@ -10122,6 +10829,10 @@
     const cartItem = buildCartItemFromProduct(productId, qty);
     if (!cartItem) return buildFallbackCartProductItem(orderItem);
     cartItem.id = Date.now() + Math.floor(Math.random() * 10000);
+    cartItem.auto_add = Number(orderItem?.auto_add || 0) === 1 ? 1 : 0;
+    cartItem.auto_add_group_id = cartItem.auto_add === 1 && Number(orderItem?.auto_add_group_id || 0) > 0
+      ? Number(orderItem.auto_add_group_id)
+      : null;
     return cartItem;
   }
 
@@ -10624,6 +11335,7 @@
       ? deepCloneJson(src.rightOrders, []).map((row) => normalizeRightOrderDraft(row))
       : [];
     state.rightActiveOrderId = Number(src.rightActiveOrderId || 0) || null;
+    state.rightAutoAddDismissedByOrder.clear();
     state.rightOpenSelect = null;
     closeRightAddressOverlay();
 
@@ -10680,6 +11392,7 @@
         if (!Array.isArray(state.unitConversions) || !state.unitConversions.length) {
           await loadUnitConversions();
         }
+        await loadRightAutoAdd({ force: true });
         renderCategories();
         await renderActiveCategoryContent();
       }

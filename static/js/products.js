@@ -252,11 +252,11 @@
     if (optionEmpty) optionEmpty.classList.add("hidden");
     
     // For product/category edit: hide combo-set and other panels; show editor without destroying static content (avoids overlap when switching tabs)
-    if (productInfoBody && (state.type === "product-edit" || state.type === "product-view" || state.type === "category-edit")) {
+    if (productInfoBody && (state.type === "product-edit" || state.type === "product-view" || state.type === "category-edit" || state.type === "category-view")) {
       const comboSetInfo = document.getElementById("comboSetInfo");
       if (comboSetInfo) comboSetInfo.classList.add("hidden");
-      const existingEditor = productInfoBody.querySelector(".product-editor-wrapper");
-      if (existingEditor) existingEditor.classList.add("hidden");
+      const existingEditors = productInfoBody.querySelectorAll(".product-editor-wrapper");
+      existingEditors.forEach((editor) => editor.classList.add("hidden"));
     } else if (productInfoBody && (state.type === "option-picker" || state.type === "ingredient-picker" || state.type === "option-edit")) {
       productInfoBody.innerHTML = "";
     }
@@ -327,7 +327,7 @@
     }
 
     // Show appropriate content based on state type
-    if (state.type === "product-edit" || state.type === "product-view" || state.type === "category-edit") {
+    if (state.type === "product-edit" || state.type === "product-view" || state.type === "category-edit" || state.type === "category-view") {
       if (state.content) {
         // Ensure productInfoBody exists; do not clear body so combo-set tab can switch back without losing DOM
         const body = productInfoBody || document.querySelector("#productInfoBody");
@@ -424,6 +424,7 @@
   // Store editing states for multiple products
   const editingProducts = new Map(); // Map<productId, { navigationState, draft, ... }>
   const editingCategories = new Map(); // Map<categoryId, { navigationState }>
+  const categoryViewStates = new Map(); // Map<categoryId, { wrapper, form, ... }>
   const editingOptions = new Map(); // Map<optionGroupId, { mode, optionDraft, snapshotData }>
   const editingVariants = new Map(); // Map<variantGroupId, { mode, variantDraft, snapshotData }>
   const editingCombos = new Map(); // Map<comboTabId, { mode, blockDraft, products }>
@@ -437,6 +438,11 @@
     productsTotal: 0,
     productsHasMore: true,
     productsLoading: false,
+    productsByCategoryCache: new Map(),
+    productDetailsCache: new Map(),
+    productViewCache: new Map(),
+    comboSetDetailsCache: new Map(),
+    comboRowPhotosCache: new Map(),
     currentCategoryId: null,
     allCategoryId: null,
     selectedProductId: null,
@@ -567,6 +573,357 @@
   const PRODUCTS_PAGE_LIMIT = 80;
   const PRODUCTS_SCROLL_THRESHOLD_PX = 220;
   let productsRequestToken = 0;
+  const PRODUCTS_CACHE_VERSION = 1;
+  const PRODUCTS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+  let productsCachePersistTimer = null;
+
+  function getStoreIdFromStorage() {
+    try {
+      const storeId = Number(localStorage.getItem("activeStoreId") || 0);
+      return Number.isFinite(storeId) && storeId > 0 ? storeId : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function productsCacheKey() {
+    return `products_bootstrap_v${PRODUCTS_CACHE_VERSION}_t${TENANT_ID}_s${getStoreIdFromStorage()}`;
+  }
+
+  function readProductsBootstrapCache() {
+    try {
+      const raw = localStorage.getItem(productsCacheKey());
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      const ts = Number(parsed?.ts || 0);
+      if (!(ts > 0) || Date.now() - ts > PRODUCTS_CACHE_MAX_AGE_MS) return null;
+      return parsed?.data && typeof parsed.data === "object" ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function persistProductsCacheNow() {
+    const payload = {
+      ts: Date.now(),
+      data: {
+        mode: String(state.mode || "products"),
+        categories: Array.isArray(state.categories) ? state.categories : [],
+        allCategoryId: Number.isFinite(Number(state.allCategoryId)) ? Number(state.allCategoryId) : null,
+        currentCategoryId: Number.isFinite(Number(state.currentCategoryId)) ? Number(state.currentCategoryId) : null,
+        products: Array.isArray(state.products) ? state.products : [],
+        productsOffset: Math.max(0, Number(state.productsOffset || 0)),
+        productsTotal: Math.max(0, Number(state.productsTotal || 0)),
+        productsHasMore: Boolean(state.productsHasMore),
+        combosInCategory: Array.isArray(state.combosInCategory) ? state.combosInCategory : [],
+        selectedProductId: Number.isFinite(Number(state.selectedProductId)) ? Number(state.selectedProductId) : null,
+        selectedProductIds: Array.from(state.selectedProductIds || [])
+          .map((id) => Number(id || 0))
+          .filter((id) => id > 0),
+        units: Array.isArray(state.units) ? state.units : [],
+        unitConversions: Array.isArray(state.unitConversions) ? state.unitConversions : [],
+        productsByCategoryCache: Array.from(state.productsByCategoryCache instanceof Map ? state.productsByCategoryCache.entries() : [])
+          .map(([key, value]) => ({
+            key: String(key || ""),
+            products: Array.isArray(value?.products) ? value.products : [],
+            productsOffset: Math.max(0, Number(value?.productsOffset || 0)),
+            productsTotal: Math.max(0, Number(value?.productsTotal || 0)),
+            productsHasMore: Boolean(value?.productsHasMore),
+            combosInCategory: Array.isArray(value?.combosInCategory) ? value.combosInCategory : [],
+            ts: Number(value?.ts || 0) || 0,
+          }))
+          .filter((row) => row.key),
+        productDetailsCache: Array.from(state.productDetailsCache instanceof Map ? state.productDetailsCache.entries() : [])
+          .map(([id, value]) => ({
+            id: Number(id || 0),
+            product: value?.product && typeof value.product === "object" ? value.product : null,
+            categories: Array.isArray(value?.categories) ? value.categories : [],
+            optionAssignments: Array.isArray(value?.optionAssignments) ? value.optionAssignments : [],
+            ts: Number(value?.ts || 0) || 0,
+          }))
+          .filter((row) => row.id > 0),
+      },
+    };
+
+    try {
+      localStorage.setItem(productsCacheKey(), JSON.stringify(payload));
+    } catch {}
+  }
+
+  function schedulePersistProductsCache(delay = 180) {
+    if (productsCachePersistTimer) clearTimeout(productsCachePersistTimer);
+    productsCachePersistTimer = setTimeout(() => {
+      productsCachePersistTimer = null;
+      persistProductsCacheNow();
+    }, Math.max(0, Number(delay || 0)));
+  }
+
+  function hydrateProductsFromCache(cache) {
+    if (!cache || typeof cache !== "object") return false;
+
+    const cachedCategories = Array.isArray(cache.categories) ? cache.categories : [];
+    const cachedProducts = Array.isArray(cache.products) ? cache.products : [];
+    const cachedCombos = Array.isArray(cache.combosInCategory) ? cache.combosInCategory : [];
+    const cachedUnits = Array.isArray(cache.units) ? cache.units : [];
+    const cachedUnitConversions = Array.isArray(cache.unitConversions) ? cache.unitConversions : [];
+    const cachedByCategoryRows = Array.isArray(cache.productsByCategoryCache) ? cache.productsByCategoryCache : [];
+    const cachedProductDetailsRows = Array.isArray(cache.productDetailsCache) ? cache.productDetailsCache : [];
+
+    if (!cachedCategories.length && !cachedProducts.length) return false;
+
+    state.categories = cachedCategories;
+    state.allCategoryId = Number(cache.allCategoryId || 0) || (state.categories.find((c) => c.code === "all") || {}).id || null;
+    const cachedCategoryId = Number(cache.currentCategoryId || 0);
+    state.currentCategoryId = cachedCategoryId > 0
+      ? cachedCategoryId
+      : (state.allCategoryId || (state.categories[0] && state.categories[0].id) || null);
+    state.products = cachedProducts;
+    state.productsOffset = Math.max(0, Number(cache.productsOffset || cachedProducts.length || 0));
+    state.productsTotal = Math.max(state.productsOffset, Number(cache.productsTotal || cachedProducts.length || 0));
+    state.productsHasMore = Boolean(cache.productsHasMore);
+    state.productsLoading = false;
+    state.combosInCategory = cachedCombos;
+    state.selectedProductId = Number(cache.selectedProductId || 0) || null;
+    state.selectedProductIds = new Set(
+      (Array.isArray(cache.selectedProductIds) ? cache.selectedProductIds : [])
+        .map((id) => Number(id || 0))
+        .filter((id) => id > 0)
+    );
+    state.units = cachedUnits;
+    state.unitConversions = cachedUnitConversions;
+    state.productsByCategoryCache = new Map();
+    cachedByCategoryRows.forEach((row) => {
+      const key = String(row?.key || "").trim();
+      if (!key) return;
+      state.productsByCategoryCache.set(key, {
+        products: Array.isArray(row?.products) ? row.products : [],
+        productsOffset: Math.max(0, Number(row?.productsOffset || 0)),
+        productsTotal: Math.max(0, Number(row?.productsTotal || 0)),
+        productsHasMore: Boolean(row?.productsHasMore),
+        combosInCategory: Array.isArray(row?.combosInCategory) ? row.combosInCategory : [],
+        ts: Number(row?.ts || 0) || 0,
+      });
+    });
+    state.productDetailsCache = new Map();
+    cachedProductDetailsRows.forEach((row) => {
+      const id = Number(row?.id || 0);
+      if (!(id > 0)) return;
+      state.productDetailsCache.set(id, {
+        product: row?.product && typeof row.product === "object" ? row.product : null,
+        categories: Array.isArray(row?.categories) ? row.categories : [],
+        optionAssignments: Array.isArray(row?.optionAssignments) ? row.optionAssignments : [],
+        ts: Number(row?.ts || 0) || 0,
+      });
+    });
+    if (
+      state.currentCategoryId &&
+      Array.isArray(state.products) &&
+      state.products.length &&
+      !state.productsByCategoryCache.has(normalizeCategoryCacheKey(state.currentCategoryId))
+    ) {
+      setCachedCategoryProducts(state.currentCategoryId, {
+        products: state.products,
+        productsOffset: state.productsOffset,
+        productsTotal: state.productsTotal,
+        productsHasMore: state.productsHasMore,
+        combosInCategory: state.combosInCategory,
+      });
+    }
+
+    if (state.selectedProductId && !state.products.some((product) => Number(product?.id || 0) === Number(state.selectedProductId))) {
+      state.selectedProductId = null;
+    }
+
+    return true;
+  }
+
+  function normalizeCategoryCacheKey(categoryId) {
+    const id = Number(categoryId || 0);
+    return Number.isFinite(id) && id > 0 ? String(id) : "0";
+  }
+
+  function getCachedCategoryProducts(categoryId) {
+    if (!(state.productsByCategoryCache instanceof Map)) {
+      state.productsByCategoryCache = new Map();
+      return null;
+    }
+    const key = normalizeCategoryCacheKey(categoryId);
+    const cached = state.productsByCategoryCache.get(key);
+    if (!cached || typeof cached !== "object") return null;
+    return {
+      products: Array.isArray(cached.products) ? cached.products : [],
+      productsOffset: Math.max(0, Number(cached.productsOffset || 0)),
+      productsTotal: Math.max(0, Number(cached.productsTotal || 0)),
+      productsHasMore: Boolean(cached.productsHasMore),
+      combosInCategory: Array.isArray(cached.combosInCategory) ? cached.combosInCategory : [],
+    };
+  }
+
+  function setCachedCategoryProducts(categoryId, payload) {
+    if (!(state.productsByCategoryCache instanceof Map)) {
+      state.productsByCategoryCache = new Map();
+    }
+    const key = normalizeCategoryCacheKey(categoryId);
+    state.productsByCategoryCache.set(key, {
+      products: Array.isArray(payload?.products) ? payload.products : [],
+      productsOffset: Math.max(0, Number(payload?.productsOffset || 0)),
+      productsTotal: Math.max(0, Number(payload?.productsTotal || 0)),
+      productsHasMore: Boolean(payload?.productsHasMore),
+      combosInCategory: Array.isArray(payload?.combosInCategory) ? payload.combosInCategory : [],
+      ts: Date.now(),
+    });
+  }
+
+  function getCachedProductDetails(productId) {
+    if (!(state.productDetailsCache instanceof Map)) {
+      state.productDetailsCache = new Map();
+      return null;
+    }
+    const id = Number(productId || 0);
+    if (!(id > 0)) return null;
+    const cached = state.productDetailsCache.get(id);
+    if (!cached || typeof cached !== "object") return null;
+    return {
+      product: cached.product && typeof cached.product === "object" ? cached.product : null,
+      categories: Array.isArray(cached.categories) ? cached.categories : [],
+      optionAssignments: Array.isArray(cached.optionAssignments) ? cached.optionAssignments : [],
+    };
+  }
+
+  function setCachedProductDetails(productId, payload) {
+    if (!(state.productDetailsCache instanceof Map)) {
+      state.productDetailsCache = new Map();
+    }
+    const id = Number(productId || 0);
+    if (!(id > 0)) return;
+    state.productDetailsCache.set(id, {
+      product: payload?.product && typeof payload.product === "object" ? payload.product : null,
+      categories: Array.isArray(payload?.categories) ? payload.categories : [],
+      optionAssignments: Array.isArray(payload?.optionAssignments) ? payload.optionAssignments : [],
+      ts: Date.now(),
+    });
+  }
+
+  function clearCachedProductDetails(productId) {
+    const id = Number(productId || 0);
+    if (!(id > 0)) return;
+    if (state.productDetailsCache instanceof Map) {
+      state.productDetailsCache.delete(id);
+    }
+  }
+
+  function getCachedProductView(productId) {
+    if (!(state.productViewCache instanceof Map)) {
+      state.productViewCache = new Map();
+      return null;
+    }
+    const id = Number(productId || 0);
+    if (!(id > 0)) return null;
+    const cached = state.productViewCache.get(id);
+    return cached instanceof HTMLElement ? cached : null;
+  }
+
+  function setCachedProductView(productId, element) {
+    if (!(state.productViewCache instanceof Map)) {
+      state.productViewCache = new Map();
+    }
+    const id = Number(productId || 0);
+    if (!(id > 0)) return;
+    if (!(element instanceof HTMLElement)) return;
+    state.productViewCache.set(id, element);
+  }
+
+  function clearCachedProductView(productId) {
+    if (!(state.productViewCache instanceof Map)) {
+      state.productViewCache = new Map();
+      return;
+    }
+    const id = Number(productId || 0);
+    if (id > 0) {
+      state.productViewCache.delete(id);
+      return;
+    }
+    state.productViewCache.clear();
+  }
+
+  function getCachedComboSetDetails(comboId) {
+    if (!(state.comboSetDetailsCache instanceof Map)) {
+      state.comboSetDetailsCache = new Map();
+      return null;
+    }
+    const id = Number(comboId || 0);
+    if (!(id > 0)) return null;
+    const cached = state.comboSetDetailsCache.get(id);
+    if (!cached || typeof cached !== "object") return null;
+    return {
+      combo: cached.combo && typeof cached.combo === "object" ? cached.combo : null,
+      blocks: Array.isArray(cached.blocks) ? cached.blocks : [],
+    };
+  }
+
+  function setCachedComboSetDetails(comboId, payload) {
+    if (!(state.comboSetDetailsCache instanceof Map)) {
+      state.comboSetDetailsCache = new Map();
+    }
+    const id = Number(comboId || 0);
+    if (!(id > 0)) return;
+    state.comboSetDetailsCache.set(id, {
+      combo: payload?.combo && typeof payload.combo === "object" ? payload.combo : null,
+      blocks: Array.isArray(payload?.blocks) ? payload.blocks : [],
+      ts: Date.now(),
+    });
+  }
+
+  function clearCachedComboSetDetails(comboId) {
+    if (!(state.comboSetDetailsCache instanceof Map)) {
+      state.comboSetDetailsCache = new Map();
+      return;
+    }
+    const id = Number(comboId || 0);
+    if (id > 0) {
+      state.comboSetDetailsCache.delete(id);
+      return;
+    }
+    state.comboSetDetailsCache.clear();
+  }
+
+  function getCachedComboRowPhotos(comboId) {
+    if (!(state.comboRowPhotosCache instanceof Map)) {
+      state.comboRowPhotosCache = new Map();
+      return null;
+    }
+    const id = Number(comboId || 0);
+    if (!(id > 0)) return null;
+    const cached = state.comboRowPhotosCache.get(id);
+    return Array.isArray(cached) ? cached.slice(0, 4) : null;
+  }
+
+  function setCachedComboRowPhotos(comboId, urls) {
+    if (!(state.comboRowPhotosCache instanceof Map)) {
+      state.comboRowPhotosCache = new Map();
+    }
+    const id = Number(comboId || 0);
+    if (!(id > 0)) return;
+    const normalized = Array(4).fill(null).map((_, index) => {
+      const value = Array.isArray(urls) ? urls[index] : null;
+      const text = value == null ? "" : String(value).trim();
+      return text || null;
+    });
+    state.comboRowPhotosCache.set(id, normalized);
+  }
+
+  function clearCachedComboRowPhotos(comboId) {
+    if (!(state.comboRowPhotosCache instanceof Map)) {
+      state.comboRowPhotosCache = new Map();
+      return;
+    }
+    const id = Number(comboId || 0);
+    if (id > 0) {
+      state.comboRowPhotosCache.delete(id);
+      return;
+    }
+    state.comboRowPhotosCache.clear();
+  }
 
   // ---------------- API ----------------
 
@@ -1150,6 +1507,7 @@
     showDetailsEmpty();
     syncActiveMenuItems();
     syncProductsBulkFooter();
+    schedulePersistProductsCache();
   }
 
   function enterCategoriesMode() {
@@ -1366,6 +1724,7 @@
     if (!state.currentCategoryId) {
       state.currentCategoryId = state.allCategoryId || (state.categories[0] && state.categories[0].id) || null;
     }
+    schedulePersistProductsCache();
   }
 
   async function loadCombosForCategory(categoryId) {
@@ -1385,6 +1744,7 @@
     } catch (e) {
       state.combosInCategory = [];
     }
+    schedulePersistProductsCache();
   }
 
   function buildProductsListQuery(categoryId, offset, limit) {
@@ -1432,6 +1792,14 @@
         state.productsLoading = false;
         syncProductsBulkFooter();
         syncProductRowsSortability();
+        setCachedCategoryProducts(cid, {
+          products: state.products,
+          productsOffset: state.productsOffset,
+          productsTotal: state.productsTotal,
+          productsHasMore: state.productsHasMore,
+          combosInCategory: state.combosInCategory,
+        });
+        schedulePersistProductsCache();
         if (state.mode === "products") {
           maybeLoadMoreProductsOnScroll();
         }
@@ -1454,7 +1822,7 @@
     }
   }
 
-  async function loadProducts(categoryId) {
+  async function loadProducts(categoryId, { forceReload = false } = {}) {
     const cid = categoryId || state.currentCategoryId;
     productsRequestToken += 1;
     clearProductsBulkSelection();
@@ -1466,7 +1834,23 @@
       state.productsLoading = false;
       state.combosInCategory = [];
       renderProductsList();
+      schedulePersistProductsCache();
       return;
+    }
+
+    if (!forceReload) {
+      const cached = getCachedCategoryProducts(cid);
+      if (cached) {
+        state.products = Array.isArray(cached.products) ? cached.products : [];
+        state.productsOffset = Math.max(0, Number(cached.productsOffset || 0));
+        state.productsTotal = Math.max(state.productsOffset, Number(cached.productsTotal || 0));
+        state.productsHasMore = Boolean(cached.productsHasMore);
+        state.productsLoading = false;
+        state.combosInCategory = Array.isArray(cached.combosInCategory) ? cached.combosInCategory : [];
+        renderProductsList();
+        schedulePersistProductsCache();
+        return;
+      }
     }
 
     state.products = [];
@@ -1481,6 +1865,14 @@
     renderProductsList();
     await loadMoreProducts();
     await ensureProductsScrollable();
+    setCachedCategoryProducts(cid, {
+      products: state.products,
+      productsOffset: state.productsOffset,
+      productsTotal: state.productsTotal,
+      productsHasMore: state.productsHasMore,
+      combosInCategory: state.combosInCategory,
+    });
+    schedulePersistProductsCache();
   }
 
   function maybeLoadMoreProductsOnScroll() {
@@ -1551,9 +1943,30 @@
     return details;
   }
 
-  async function loadProductOptionAssignments(productId) {
-    const res = await apiGetProductOptionAssignments(productId);
+  async function loadProductOptionAssignments(productId, { forceReload = false } = {}) {
+    const id = Number(productId || 0);
+    if (!(id > 0)) {
+      state.selectedProductOptionAssignments = [];
+      return;
+    }
+
+    if (!forceReload) {
+      const cached = getCachedProductDetails(id);
+      if (cached) {
+        state.selectedProductOptionAssignments = Array.isArray(cached.optionAssignments) ? cached.optionAssignments : [];
+        return;
+      }
+    }
+
+    const res = await apiGetProductOptionAssignments(id);
     state.selectedProductOptionAssignments = Array.isArray(res.data) ? res.data : [];
+    const cached = getCachedProductDetails(id);
+    setCachedProductDetails(id, {
+      product: cached?.product || state.products.find((x) => Number(x?.id || 0) === id) || null,
+      categories: cached?.categories || state.selectedProductCategories || [],
+      optionAssignments: state.selectedProductOptionAssignments,
+    });
+    schedulePersistProductsCache();
   }
 
   async function ensureOptionGroupDetails(groupId) {
@@ -1574,11 +1987,13 @@
   async function loadUnitsManagement() {
     const res = await apiGetUnits({ all: true });
     state.units = Array.isArray(res.data) ? res.data : [];
+    schedulePersistProductsCache();
   }
 
   async function loadUnitConversions() {
     const res = await apiGetUnitConversions();
     state.unitConversions = Array.isArray(res.data) ? res.data : [];
+    schedulePersistProductsCache();
   }
 
   async function loadUnitDetails(id) {
@@ -4224,10 +4639,15 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     $$(".order-row.combo-row[data-combo-id]", root).forEach((row) => {
       if (row.dataset.boundClick === "1") return;
       row.dataset.boundClick = "1";
-      row.addEventListener("click", () => {
+      row.addEventListener("click", async () => {
         const comboId = Number(row.dataset.comboId);
         if (!Number.isFinite(comboId)) return;
-        openComboSetView(comboId);
+        const tabKey = buildTabKey("combo-set", String(comboId));
+        if (tabsState.tabs.some((t) => t.key === tabKey)) {
+          await setActiveTabKey(tabKey);
+          return;
+        }
+        await openComboSetView(comboId);
       });
     });
   }
@@ -4773,6 +5193,110 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     categoryIconPlaceholder.innerHTML = v ? `<i class="${escapeHtml(v)}"></i>` : "Нет изображения";
   }
 
+  function getOrCreateCategoryViewState(categoryId) {
+    const id = Number(categoryId || 0);
+    if (!(id > 0)) return null;
+    const existing = categoryViewStates.get(id);
+    if (existing && existing.wrapper instanceof HTMLElement && existing.form instanceof HTMLFormElement) {
+      return existing;
+    }
+
+    const template = document.querySelector("#tplCategoryEditor");
+    if (!template) return null;
+    const content = template.content.cloneNode(true);
+    const wrapper = document.createElement("div");
+    wrapper.className = "product-editor-wrapper category-editor-wrapper category-editor-view-wrapper";
+    wrapper.appendChild(content);
+    const form = wrapper.querySelector("#categoryEditorForm");
+    if (!form) return null;
+
+    const viewState = {
+      id,
+      wrapper,
+      form,
+      iconPreview: wrapper.querySelector("#ceIconPreview"),
+      iconPlaceholder: wrapper.querySelector("#ceIconPlaceholder"),
+      iconUploadBtn: wrapper.querySelector("#ceIconUploadBtn"),
+      iconDeleteBtn: wrapper.querySelector("#ceIconDeleteBtn"),
+    };
+
+    // View mode: same layout as edit mode, but controls are inactive.
+    $$("input, select, textarea, button", form).forEach((el) => {
+      if (el.tagName === "BUTTON") {
+        el.disabled = true;
+      } else if (el.tagName === "SELECT" || el.type === "checkbox" || el.type === "radio" || el.type === "file") {
+        el.disabled = true;
+      } else {
+        el.readOnly = true;
+      }
+    });
+
+    if (viewState.iconUploadBtn) {
+      viewState.iconUploadBtn.classList.remove("hidden");
+      viewState.iconUploadBtn.disabled = true;
+    }
+    if (viewState.iconDeleteBtn) {
+      viewState.iconDeleteBtn.classList.remove("hidden");
+      viewState.iconDeleteBtn.disabled = true;
+    }
+
+    categoryViewStates.set(id, viewState);
+    return viewState;
+  }
+
+  function renderCategoryViewState(cat) {
+    if (!cat || !Number.isFinite(Number(cat.id))) return false;
+    const id = Number(cat.id);
+    const viewState = getOrCreateCategoryViewState(id);
+    if (!viewState) return false;
+
+    const form = viewState.form;
+    const titleInput = form.querySelector("#ce_title");
+    const codeInput = form.querySelector("#ce_code");
+    const iconInput = form.querySelector("#ce_icon");
+    const sortInput = form.querySelector("#ce_sort");
+    const activeInput = form.querySelector("input[name='is_active']");
+    const visibilityInput = form.querySelector("input[name='site_visibility']");
+    const cartVisibilityInput = form.querySelector("input[name='cart_visibility']");
+    const checkoutVisibilityInput = form.querySelector("input[name='checkout_visibility']");
+
+    if (titleInput) titleInput.value = cat.title || "";
+    if (codeInput) codeInput.value = cat.code || "";
+    if (iconInput) iconInput.value = cat.icon || "";
+    if (sortInput) sortInput.value = cat.sort_order != null ? String(cat.sort_order) : "";
+    if (activeInput) activeInput.checked = Boolean(cat.is_active);
+    if (visibilityInput) visibilityInput.checked = Boolean(cat.site_visibility);
+    if (cartVisibilityInput) cartVisibilityInput.checked = Boolean(cat.cart_visibility);
+    if (checkoutVisibilityInput) checkoutVisibilityInput.checked = cat.checkout_visibility !== 0;
+
+    const iconValue = String(cat.icon || "").trim();
+    if (viewState.iconPreview && viewState.iconPlaceholder) {
+      if (looksLikeUrl(iconValue)) {
+        viewState.iconPreview.src = iconValue;
+        viewState.iconPreview.classList.remove("hidden");
+        viewState.iconPlaceholder.classList.add("hidden");
+        viewState.iconPlaceholder.textContent = "No image";
+      } else {
+        viewState.iconPreview.src = "";
+        viewState.iconPreview.classList.add("hidden");
+        viewState.iconPlaceholder.classList.remove("hidden");
+        viewState.iconPlaceholder.innerHTML = iconValue ? `<i class="${escapeHtml(iconValue)}"></i>` : "No image";
+      }
+    }
+
+    const navigationState = {
+      type: "category-view",
+      category: cat,
+      content: viewState.wrapper,
+      savedTitle: cat.title || "",
+      savedSku: "Category",
+      tabKey: buildTabKey("category", id),
+    };
+    currentNavigationState = navigationState;
+    showNavigationState(navigationState);
+    return true;
+  }
+
   function showCategoryDetails(cat) {
     if (!cat) return;
 
@@ -4797,6 +5321,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       return;
     }
 
+    state.selectedCategoryId = Number(cat.id) || null;
     state.optionPanel.returnTo = null;
     productTitle.textContent = cat.title || "—";
     productSku.textContent = "Категория";
@@ -4808,6 +5333,22 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
     // Open tab for category
     openCategoryTab(cat, { activate: false });
+    if (renderCategoryViewState(cat)) {
+      productEmpty && productEmpty.classList.add("hidden");
+      categoryEmpty && categoryEmpty.classList.add("hidden");
+      if (productInfoHeader) productInfoHeader.classList.remove("hidden");
+      setHeaderMode("product");
+      showProductFooterView();
+      const isMobileView = window.matchMedia("(max-width: 768px)").matches;
+      if (isMobileView && sheetHost && productInfo) {
+        sheetHost.innerHTML = "";
+        sheetHost.appendChild(productInfo);
+        openSheet();
+      } else {
+        closeSheet();
+      }
+      return;
+    }
     
     // Show footer in view mode
     showProductFooterView();
@@ -8266,10 +8807,12 @@ const isViewMode = state.comboPanel.mode === "view";
           await apiDeleteProduct(productId);
           // Удаляем из списка
           state.products = state.products.filter((p) => p.id !== productId);
+          clearCachedProductView(productId);
+          clearCachedProductDetails(productId);
           state.selectedProductId = null;
           clearProductSelection();
           // Перезагружаем товары для текущей категории
-          await loadProducts(state.currentCategoryId);
+          await loadProducts(state.currentCategoryId, { forceReload: true });
           renderProductsList();
           return true;
         } catch (e) {
@@ -8433,24 +8976,48 @@ const isViewMode = state.comboPanel.mode === "view";
     });
   }
 
-  async function openComboSetView(comboId) {
-    if (!Number.isFinite(comboId)) return;
+  async function openComboSetView(comboId, { forceReload = false } = {}) {
+    const id = Number(comboId);
+    if (!Number.isFinite(id)) return;
+    if (forceReload) {
+      clearCachedComboSetDetails(id);
+      clearCachedComboRowPhotos(id);
+    }
+    const tabKey = buildTabKey("combo-set", String(id));
+    if (
+      !forceReload &&
+      tabsState.activeKey === tabKey &&
+      state.comboSetPanel?.mode === "view" &&
+      Number(state.comboSetPanel?.comboId) === id
+    ) {
+      return;
+    }
     try {
-      const [comboRes, blocksRes] = await Promise.all([
-        apiGetCombo(comboId),
-        apiGetComboSetBlocks(comboId),
-      ]);
-      const combo = comboRes?.data;
+      let combo = null;
+      let blocks = [];
+      const cached = !forceReload ? getCachedComboSetDetails(id) : null;
+      if (cached?.combo) {
+        combo = cached.combo;
+        blocks = Array.isArray(cached.blocks) ? cached.blocks : [];
+      } else {
+        const [comboRes, blocksRes] = await Promise.all([
+          apiGetCombo(id),
+          apiGetComboSetBlocks(id),
+        ]);
+        combo = comboRes?.data;
+        if (!combo) return;
+        const blocksRows = Array.isArray(blocksRes?.data) ? blocksRes.data : [];
+        blocks = blocksRows.map((r) => ({
+          block_id: r.block_id,
+          block_title: r.block_title,
+          sort_order: r.sort_order ?? 0,
+        }));
+        setCachedComboSetDetails(id, { combo, blocks });
+      }
       if (!combo) return;
-      const blocksRows = Array.isArray(blocksRes?.data) ? blocksRes.data : [];
-      const blocks = blocksRows.map((r) => ({
-        block_id: r.block_id,
-        block_title: r.block_title,
-        sort_order: r.sort_order ?? 0,
-      }));
       state.comboSetPanel = state.comboSetPanel || {};
       state.comboSetPanel.mode = "view";
-      state.comboSetPanel.comboId = comboId;
+      state.comboSetPanel.comboId = id;
       state.comboSetPanel.combo = combo;
       state.comboSetPanel.blocks = blocks;
       state.comboSetPanel.blockPickerOpen = false;
@@ -8463,7 +9030,7 @@ const isViewMode = state.comboPanel.mode === "view";
       state.comboSetPanel.formInitialized = true;
       ensureTab({
         type: "combo-set",
-        id: String(comboId),
+        id: String(id),
         title: (combo.title || "").trim() || "Комбо",
         onActivate: activateComboSetTab,
         activate: true,
@@ -8474,24 +9041,39 @@ const isViewMode = state.comboPanel.mode === "view";
     }
   }
 
-  async function openComboSetEdit(comboId) {
-    if (!Number.isFinite(comboId)) return;
+  async function openComboSetEdit(comboId, { forceReload = false } = {}) {
+    const id = Number(comboId);
+    if (!Number.isFinite(id)) return;
+    if (forceReload) {
+      clearCachedComboSetDetails(id);
+      clearCachedComboRowPhotos(id);
+    }
     try {
-      const [comboRes, blocksRes] = await Promise.all([
-        apiGetCombo(comboId),
-        apiGetComboSetBlocks(comboId),
-      ]);
-      const combo = comboRes?.data;
+      let combo = null;
+      let blocks = [];
+      const cached = !forceReload ? getCachedComboSetDetails(id) : null;
+      if (cached?.combo) {
+        combo = cached.combo;
+        blocks = Array.isArray(cached.blocks) ? cached.blocks : [];
+      } else {
+        const [comboRes, blocksRes] = await Promise.all([
+          apiGetCombo(id),
+          apiGetComboSetBlocks(id),
+        ]);
+        combo = comboRes?.data;
+        if (!combo) return;
+        const blocksRows = Array.isArray(blocksRes?.data) ? blocksRes.data : [];
+        blocks = blocksRows.map((r) => ({
+          block_id: r.block_id,
+          block_title: r.block_title,
+          sort_order: r.sort_order ?? 0,
+        }));
+        setCachedComboSetDetails(id, { combo, blocks });
+      }
       if (!combo) return;
-      const blocksRows = Array.isArray(blocksRes?.data) ? blocksRes.data : [];
-      const blocks = blocksRows.map((r) => ({
-        block_id: r.block_id,
-        block_title: r.block_title,
-        sort_order: r.sort_order ?? 0,
-      }));
       state.comboSetPanel = state.comboSetPanel || {};
       state.comboSetPanel.mode = "edit";
-      state.comboSetPanel.comboId = comboId;
+      state.comboSetPanel.comboId = id;
       state.comboSetPanel.combo = combo;
       state.comboSetPanel.blocks = blocks;
       state.comboSetPanel.blockPickerOpen = false;
@@ -8504,7 +9086,7 @@ const isViewMode = state.comboPanel.mode === "view";
       state.comboSetPanel.formInitialized = true;
       ensureTab({
         type: "combo-set",
-        id: String(comboId),
+        id: String(id),
         title: (combo.title || "").trim() || "Комбо",
         onActivate: activateComboSetTab,
         activate: true,
@@ -8631,6 +9213,8 @@ const isViewMode = state.comboPanel.mode === "view";
 
   async function getFirstFourBlockPhotosForCombo(comboId) {
     if (!Number.isFinite(comboId)) return [null, null, null, null];
+    const cached = getCachedComboRowPhotos(comboId);
+    if (cached) return cached;
     try {
       const blocksRes = await apiGetComboSetBlocks(comboId);
       const blocks = Array.isArray(blocksRes?.data) ? blocksRes.data : [];
@@ -8650,7 +9234,9 @@ const isViewMode = state.comboPanel.mode === "view";
         }
       }
       while (urls.length < 4) urls.push(null);
-      return urls.slice(0, 4);
+      const normalized = urls.slice(0, 4);
+      setCachedComboRowPhotos(comboId, normalized);
+      return normalized;
     } catch (e) {
       return [null, null, null, null];
     }
@@ -9705,9 +10291,11 @@ const isViewMode = state.comboPanel.mode === "view";
           if (activeKey && activeKey.startsWith("combo-set:")) {
             closeTab(activeKey);
           }
-          if (state.mode === "products") await refreshProductsOnly();
+          if (state.mode === "products") await refreshProductsOnly(true);
           if (Number.isFinite(newComboId)) {
-            await openComboSetView(newComboId);
+            clearCachedComboSetDetails(newComboId);
+            clearCachedComboRowPhotos(newComboId);
+            await openComboSetView(newComboId, { forceReload: true });
           }
           return;
         }
@@ -9744,10 +10332,15 @@ const isViewMode = state.comboPanel.mode === "view";
       const code = (combo?.category_code || "").trim();
       const catByCode = state.categories.find((c) => String(c.code || "").trim() === code);
       state.comboSetPanel.categoryIds = catByCode ? [Number(catByCode.id)] : [];
+      setCachedComboSetDetails(comboId, {
+        combo: state.comboSetPanel.combo,
+        blocks: state.comboSetPanel.blocks,
+      });
+      clearCachedComboRowPhotos(comboId);
       const tab = tabsState.tabs.find((t) => t.key === `combo-set:${comboId}`);
       if (tab && combo?.title) tab.title = (combo.title || "").trim() || "Комбо";
       activateComboSetTab();
-      if (state.mode === "products") await refreshProductsOnly();
+      if (state.mode === "products") await refreshProductsOnly(true);
     } catch (e) {
       console.error("saveComboSet update", e);
       if (typeof toast !== "undefined") toast("Ошибка сохранения");
@@ -10029,6 +10622,10 @@ const isViewMode = state.comboPanel.mode === "view";
   async function setActiveTabKey(key, { activate = true } = {}) {
     const tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) return;
+    if (tabsState.activeKey === key) {
+      renderTabs();
+      return;
+    }
     
     // Сохраняем состояние редактирования и футера текущего активного таба перед переключением
     if (tabsState.activeKey && tabsState.activeKey !== key) {
@@ -10287,10 +10884,32 @@ const isViewMode = state.comboPanel.mode === "view";
     renderTabs();
   }
 
-  async function openProductById(productId) {
+  async function openProductById(productId, { forceReload = false } = {}) {
     if (!Number.isFinite(Number(productId))) return;
     const id = Number(productId);
+    if (forceReload) {
+      clearCachedProductView(id);
+      clearCachedProductDetails(id);
+    }
+    const activeProductTabKey = buildTabKey("product", id);
+    if (
+      !forceReload &&
+      Number(state.selectedProductId) === id &&
+      tabsState.activeKey === activeProductTabKey &&
+      !editingProducts.has(id)
+    ) {
+      if (productsList) {
+        $$(".order-row", productsList).forEach((x) =>
+          x.classList.toggle("is-active", Number(x.dataset.id) === id)
+        );
+      }
+      return;
+    }
+    const cachedDetails = !forceReload ? getCachedProductDetails(id) : null;
     let p = state.products.find((x) => Number(x.id) === id);
+    if (!p && cachedDetails?.product) {
+      p = cachedDetails.product;
+    }
     if (!p) {
       // Товар из другой категории — загружаем по API (чтобы табы работали при смене категории)
       try {
@@ -10308,10 +10927,30 @@ const isViewMode = state.comboPanel.mode === "view";
         x.classList.toggle("is-active", Number(x.dataset.id) === id)
       );
     }
+
+    if (cachedDetails && !forceReload) {
+      state.selectedProductCategories = Array.isArray(cachedDetails.categories) ? cachedDetails.categories : [];
+      state.selectedProductOptionAssignments = Array.isArray(cachedDetails.optionAssignments) ? cachedDetails.optionAssignments : [];
+      showProductDetails(p);
+      setCachedProductDetails(id, {
+        product: p,
+        categories: state.selectedProductCategories,
+        optionAssignments: state.selectedProductOptionAssignments,
+      });
+      schedulePersistProductsCache();
+      return;
+    }
+
     const catRes = await api(`/api/prod_products/${id}/categories?tenant_id=${TENANT_ID}`);
     state.selectedProductCategories = Array.isArray(catRes.data) ? catRes.data : [];
-    await loadProductOptionAssignments(id);
+    await loadProductOptionAssignments(id, { forceReload: true });
     showProductDetails(p);
+    setCachedProductDetails(id, {
+      product: p,
+      categories: state.selectedProductCategories,
+      optionAssignments: state.selectedProductOptionAssignments,
+    });
+    schedulePersistProductsCache();
   }
 
   function openProductTab(product, { activate = true } = {}) {
@@ -10419,20 +11058,22 @@ const isViewMode = state.comboPanel.mode === "view";
 
   function openCategoryTab(category, { activate = true } = {}) {
     if (!category || !category.id) return;
+    const categoryId = Number(category.id);
     ensureTab({
       type: "category",
-      id: category.id,
+      id: categoryId,
       title: category.title || "Категория",
       onActivate: () => {
-        state.selectedCategoryId = category.id;
+        state.selectedCategoryId = categoryId;
         // Check if this category is being edited
-        if (editingCategories.has(category.id)) {
-          const editingState = editingCategories.get(category.id);
+        if (editingCategories.has(categoryId)) {
+          const editingState = editingCategories.get(categoryId);
           pushNavigationState(editingState.navigationState);
           showProductFooterEdit();
           return;
         }
-        showCategoryDetails(category);
+        const latestCategory = state.categories.find((c) => Number(c.id) === categoryId) || category;
+        showCategoryDetails(latestCategory);
       },
       activate,
     });
@@ -10541,6 +11182,7 @@ const isViewMode = state.comboPanel.mode === "view";
     if (categoriesMainList) $$(".order-row", categoriesMainList).forEach((x) => x.classList.remove("is-active"));
     if (optionsGroupsList) $$(".options-row", optionsGroupsList).forEach((x) => x.classList.remove("is-active"));
     if (autoAddGroupsList) $$(".options-row", autoAddGroupsList).forEach((x) => x.classList.remove("is-active"));
+    schedulePersistProductsCache();
   }
 
   // ---------------- Modal: product (chips + photos) ----------------
@@ -10553,6 +11195,18 @@ const isViewMode = state.comboPanel.mode === "view";
     const useHost = Boolean(host);
     const tabId = product && product.id ? product.id : `new-${Date.now()}`;
     const tabKey = buildTabKey("product", tabId);
+    const viewProductId = isView && Number.isFinite(Number(product?.id)) ? Number(product.id) : null;
+
+    if (isView && useHost && viewProductId && host) {
+      const cachedView = getCachedProductView(viewProductId);
+      if (cachedView) {
+        host.innerHTML = "";
+        host.appendChild(cachedView);
+        if (productTitle) productTitle.textContent = product?.name || "-";
+        if (productSku) productSku.textContent = product?.sku ? `SKU: ${product.sku}` : "SKU: -";
+        return;
+      }
+    }
 
     const defaultSelected = new Set();
     if (state.allCategoryId) defaultSelected.add(state.allCategoryId);
@@ -10676,6 +11330,9 @@ const isViewMode = state.comboPanel.mode === "view";
     if (useHost && host) {
       host.innerHTML = "";
       host.appendChild(wrapper);
+      if (isView && viewProductId) {
+        setCachedProductView(viewProductId, wrapper);
+      }
     }
 
     // Create navigation state
@@ -10930,7 +11587,7 @@ const isViewMode = state.comboPanel.mode === "view";
             if (!updatedProduct && productId) {
               try {
                 // First try: reload products from current category
-                await refreshProductsOnly();
+                await refreshProductsOnly(true);
                 updatedProduct = state.products.find(p => p.id === productId);
                 
                 // Second try: if still not found, load from "all" category
@@ -10967,6 +11624,8 @@ const isViewMode = state.comboPanel.mode === "view";
                 },
                 activate: false,
               });
+              clearCachedProductView(updatedProduct.id);
+              clearCachedProductDetails(updatedProduct.id);
               showProductDetails(updatedProduct);
               showProductFooterView();
             } else {
@@ -10984,7 +11643,7 @@ const isViewMode = state.comboPanel.mode === "view";
             currentNavigationState = null;
             // New product - find it and show details
             try {
-              await refreshProductsOnly();
+              await refreshProductsOnly(true);
             } catch (e) {
               console.error('Failed to refresh products', e);
             }
@@ -14620,6 +15279,7 @@ const isViewMode = state.comboPanel.mode === "view";
     if (!template) return;
     const content = template.content.cloneNode(true);
     const wrapper = document.createElement("div");
+    wrapper.className = "product-editor-wrapper category-editor-wrapper";
     wrapper.appendChild(content);
 
     // Get form and UI elements
@@ -14721,7 +15381,7 @@ const isViewMode = state.comboPanel.mode === "view";
       category: cat,
       content: wrapper,
       savedTitle: isEdit && cat ? cat.title : null,
-      savedSku: "Категория",
+      savedSku: "Category",
       tabKey: tabKey,
       onSave: async () => {
         if (!form) return false;
@@ -15060,8 +15720,8 @@ const isViewMode = state.comboPanel.mode === "view";
 
   // ---------------- Refresh ----------------
 
-  async function refreshProductsOnly() {
-    await loadProducts(state.currentCategoryId);
+  async function refreshProductsOnly(forceReload = false) {
+    await loadProducts(state.currentCategoryId, { forceReload: Boolean(forceReload) });
     if (state.selectedProductId && !state.productsHasMore && !state.products.some((p) => p.id === state.selectedProductId)) {
       clearProductSelection();
     }
@@ -15133,7 +15793,7 @@ const isViewMode = state.comboPanel.mode === "view";
       return;
     }
     if (state.mode === "products") {
-      await refreshProductsOnly();
+      await refreshProductsOnly(true);
     }
   }
 
@@ -15529,10 +16189,12 @@ const isViewMode = state.comboPanel.mode === "view";
           (async () => {
             try {
               await apiDeleteCombo(comboId);
+              clearCachedComboSetDetails(comboId);
+              clearCachedComboRowPhotos(comboId);
               if (typeof toast !== "undefined") toast("Комбо-набор удалён");
               closeComboSetPanel();
               if (tabsState.activeKey && tabsState.activeKey.startsWith("combo-set:")) closeTab(tabsState.activeKey);
-              await refreshProductsOnly();
+              await refreshProductsOnly(true);
               showDetailsEmpty();
             } catch (e) {
               console.error("deleteCombo", e);
@@ -15547,7 +16209,7 @@ const isViewMode = state.comboPanel.mode === "view";
               if (typeof toast !== "undefined") toast("Комбо-набор удалён");
               closeComboSetPanel();
               if (tabsState.activeKey && tabsState.activeKey.startsWith("combo-set:")) closeTab(tabsState.activeKey);
-              await refreshProductsOnly();
+              await refreshProductsOnly(true);
               showDetailsEmpty();
             } catch (e) {
               console.error("deleteCombo", e);
@@ -15666,12 +16328,14 @@ const isViewMode = state.comboPanel.mode === "view";
             (async () => {
               try {
                 await apiDeleteCombo(comboId);
+                clearCachedComboSetDetails(comboId);
+                clearCachedComboRowPhotos(comboId);
                 if (typeof toast !== "undefined") toast("Комбо-набор удалён");
                 closeComboSetPanel();
                 if (tabsState.activeKey && tabsState.activeKey.startsWith("combo-set:")) {
                   closeTab(tabsState.activeKey);
                 }
-                await refreshProductsOnly();
+                await refreshProductsOnly(true);
                 showDetailsEmpty();
               } catch (e) {
                 console.error("deleteCombo", e);
@@ -17740,11 +18404,20 @@ const isViewMode = state.comboPanel.mode === "view";
     }
     bindEvents();
 
+    const cachedBootstrap = readProductsBootstrapCache();
+    const hydratedFromCache = hydrateProductsFromCache(cachedBootstrap);
+    if (hydratedFromCache) {
+      enterProductsMode(state.currentCategoryId);
+      renderCategoriesNav();
+      renderProductsList();
+      schedulePersistProductsCache(0);
+    }
+
     await loadUnitsManagement();
     await loadUnitConversions();
     await refreshAll();
     enterProductsMode(state.currentCategoryId);
-    await refreshProductsOnly();
+    schedulePersistProductsCache(0);
 
     // ✅ гарантированно "до конца"
     requestAnimationFrame(refreshOpenAccordions);
