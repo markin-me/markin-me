@@ -15,20 +15,22 @@
   const THREAD_SYNC_SUMMARY_POLL_MS = 15000;
   const THREAD_SYNC_SUMMARY_WAIT_TIMEOUT_MS = 25000;
   const THREAD_SYNC_WAIT_TIMEOUT_MS = 20000;
-  const THREAD_SYNC_WAIT_RETRY_MS = 1200;
-  const THREAD_SYNC_LOOP_MIN_INTERVAL_MS = 350;
+  const THREAD_SYNC_WAIT_RETRY_MS = 250;
+  const THREAD_SYNC_LOOP_MIN_INTERVAL_MS = 120;
   const THREAD_SSE_PULL_DEBOUNCE_MS = 100;
+  const SUMMARIES_SSE_PULL_DEBOUNCE_MS = 450;
   const CHAT_SSE_ENABLED = typeof window.EventSource === "function";
-  const ENABLE_ACTIVE_THREAD_SSE = false;
+  const ENABLE_ACTIVE_THREAD_SSE = true;
   const ACTIVE_ORDERS_POLL_MS = 60000;
   const ACTIVE_ORDERS_VISIBILITY_REFRESH_DEBOUNCE_MS = 45000;
   const ACTIVE_CLIENT_CACHE_TTL_MS = 10 * 60 * 1000;
   const CHAT_AUTOSCROLL_MS = 170;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
   const CHAT_STICKY_BOTTOM_THRESHOLD_PX = 18;
-  const CHAT_TYPING_HEARTBEAT_MS = 1800;
-  const CHAT_TYPING_IDLE_STOP_MS = 2600;
-  const CHAT_TYPING_BLUR_STOP_MS = 320;
+  const CHAT_TYPING_HEARTBEAT_MS = 500;
+  const CHAT_TYPING_IDLE_STOP_MS = 2800;
+  const CHAT_TYPING_BLUR_STOP_MS = 180;
+  const CHAT_TYPING_EXPIRE_GRACE_MS = 3600;
   const CHAT_MESSAGE_ALERT_COOLDOWN_MS = 900;
   const CHAT_UNANSWERED_ALERT_DELAY_MS = 5000;
   const CHAT_PUSH_SYNC_DEBOUNCE_MS = 180;
@@ -43,9 +45,10 @@
   const CHAT_FOREGROUND_SYNC_DEBOUNCE_MS = 30000;
   const CHAT_READ_SYNC_MIN_INTERVAL_MS = 15000;
   const CHAT_FOREGROUND_EVENT_DEBOUNCE_MS = 10000;
-  const CHAT_SUMMARIES_SYNC_MIN_INTERVAL_MS = 2500;
+  const CHAT_SUMMARIES_SYNC_MIN_INTERVAL_MS = 900;
   const CHAT_THREAD_PAGE_SIZE = 60;
   const CHAT_THREAD_BACKGROUND_SYNC_LIMIT = 20;
+  const CHAT_THREAD_SYNC_COALESCE_MS = 350;
   const CHAT_FULL_THREAD_PULL_COOLDOWN_MS = 30000;
   const CHAT_THREAD_EAGER_IMAGE_COUNT = 4;
   const CHAT_THREAD_LOAD_MORE_THRESHOLD_PX = 20;
@@ -249,6 +252,9 @@
     clientProfileCache: new Map(),
     clientOrdersCache: new Map(),
     remoteThreadUpdatedAt: {},
+    remoteThreadSyncInFlight: {},
+    remoteThreadSyncPendingByClient: {},
+    remoteThreadSyncLastAtByClient: {},
     fullThreadPullLastAtByClient: {},
     remoteSaveTimers: {},
     remoteSaveInFlight: {},
@@ -282,9 +288,13 @@
     peerTypingHideTimers: {},
     localTypingHeartbeatTimer: 0,
     localTypingStopTimer: 0,
+    localTypingWatchTimer: 0,
     localTypingClientId: "",
     localTypingActive: false,
     localTypingPhrase: "",
+    localTypingLastActivityAt: 0,
+    localTypingLastText: "",
+    localTypingPushChain: Promise.resolve(),
     attachPreviewItems: [],
     attachPreviewActiveIndex: 0,
     attachPreviewSourceFiles: [],
@@ -299,6 +309,9 @@
     activeThreadEventSource: null,
     activeThreadEventSourceClientId: "",
     summariesEventSource: null,
+    summariesSsePullTimer: 0,
+    summariesSsePullPending: false,
+    summariesSsePullInFlight: false,
     isRealtimePaused: false,
     isBootstrapLoading: true,
     chatWidgetEnabled: true,
@@ -1326,9 +1339,18 @@
   function isPeerTypingInfoActiveNow(info) {
     const normalized = normalizePeerTypingInfo(info);
     if (!normalized.active || !String(normalized.text || "").trim()) return false;
-    const until = new Date(String(normalized.expiresAt || "")).getTime();
-    if (!Number.isFinite(until)) return normalized.active === true;
+    const until = getPeerTypingEffectiveUntilMs(normalized);
+    if (!Number.isFinite(until)) return false;
     return until > Date.now();
+  }
+
+  function getPeerTypingEffectiveUntilMs(info) {
+    const normalized = normalizePeerTypingInfo(info);
+    const expiresAtMs = new Date(String(normalized.expiresAt || "")).getTime();
+    if (Number.isFinite(expiresAtMs) && expiresAtMs > Date.now()) return expiresAtMs;
+    const updatedAtMs = new Date(String(normalized.updatedAt || "")).getTime();
+    if (!Number.isFinite(updatedAtMs)) return expiresAtMs;
+    return updatedAtMs + CHAT_TYPING_EXPIRE_GRACE_MS;
   }
 
   function ensurePeerTypingIndicatorNode() {
@@ -1357,8 +1379,9 @@
     const node = ensurePeerTypingIndicatorNode();
     if (!node) return;
     const activeKey = normalizeClientIdKey(state.activeClientId);
-    const info = activeKey ? state.peerTypingByClient[activeKey] : null;
-    const shouldShow = !!(info && info.active && info.text);
+    const info = activeKey ? normalizePeerTypingInfo(state.peerTypingByClient[activeKey]) : null;
+    const activeNow = !!(info && isPeerTypingInfoActiveNow(info));
+    const shouldShow = activeNow;
     if (!shouldShow) {
       node.textContent = "";
       node.classList.add("is-hidden");
@@ -1390,17 +1413,18 @@
     const key = normalizeClientIdKey(clientId);
     if (!key) return;
     clearPeerTypingHideTimer(key);
-    const expiresAt = String(info && info.expiresAt || "");
-    if (!expiresAt) return;
-    const until = new Date(expiresAt).getTime();
+    const until = getPeerTypingEffectiveUntilMs(info);
     if (!Number.isFinite(until)) return;
     const delay = Math.max(0, until - Date.now() + 80);
     state.peerTypingHideTimers[key] = window.setTimeout(() => {
       delete state.peerTypingHideTimers[key];
       const current = normalizePeerTypingInfo(state.peerTypingByClient[key]);
       if (!current.active) return;
-      const currentUntil = new Date(String(current.expiresAt || "")).getTime();
-      if (Number.isFinite(currentUntil) && currentUntil > Date.now()) return;
+      const currentUntil = getPeerTypingEffectiveUntilMs(current);
+      if (Number.isFinite(currentUntil) && currentUntil > Date.now()) {
+        schedulePeerTypingAutoHide(key, current);
+        return;
+      }
       state.peerTypingByClient[key] = {
         active: false,
         text: "",
@@ -1469,6 +1493,21 @@
     }
   }
 
+  function queueLocalTypingStatePush(clientId, active, phrase = "", options = {}) {
+    const key = normalizeClientIdKey(clientId);
+    if (!key) return Promise.resolve();
+    const chain = state.localTypingPushChain && typeof state.localTypingPushChain.then === "function"
+      ? state.localTypingPushChain
+      : Promise.resolve();
+    const next = chain
+      .then(() => pushThreadTypingState(key, active, phrase, options))
+      .catch((err) => {
+        console.error(err);
+      });
+    state.localTypingPushChain = next;
+    return next;
+  }
+
   function clearLocalTypingTimers() {
     if (state.localTypingHeartbeatTimer) {
       window.clearTimeout(state.localTypingHeartbeatTimer);
@@ -1478,6 +1517,34 @@
       window.clearTimeout(state.localTypingStopTimer);
       state.localTypingStopTimer = 0;
     }
+    if (state.localTypingWatchTimer) {
+      window.clearTimeout(state.localTypingWatchTimer);
+      state.localTypingWatchTimer = 0;
+    }
+  }
+
+  function scheduleLocalTypingWatch() {
+    if (!state.localTypingActive || !dom.center.input) return;
+    if (state.localTypingWatchTimer) window.clearTimeout(state.localTypingWatchTimer);
+    state.localTypingWatchTimer = window.setTimeout(() => {
+      state.localTypingWatchTimer = 0;
+      if (!state.localTypingActive || !dom.center.input) return;
+      const key = normalizeClientIdKey(state.localTypingClientId);
+      if (!key || Number(state.activeClientId) !== Number(key)) {
+        stopLocalTypingSession(key, { flush: true });
+        return;
+      }
+      const currentText = normalizeComposerText(dom.center.input.value);
+      if (!currentText) {
+        stopLocalTypingSession(key, { flush: true });
+        return;
+      }
+      if (currentText !== String(state.localTypingLastText || "")) {
+        state.localTypingLastText = currentText;
+        state.localTypingLastActivityAt = Date.now();
+      }
+      scheduleLocalTypingWatch();
+    }, 120);
   }
 
   function scheduleLocalTypingHeartbeat() {
@@ -1488,22 +1555,45 @@
     state.localTypingHeartbeatTimer = window.setTimeout(() => {
       const activeKey = normalizeClientIdKey(state.localTypingClientId);
       if (!state.localTypingActive || !activeKey || !dom.center.input) return;
-      const hasText = !!normalizeComposerText(dom.center.input.value);
+      const currentText = normalizeComposerText(dom.center.input.value);
+      const hasText = !!currentText;
       if (!hasText || Number(state.activeClientId) !== Number(activeKey)) {
         stopLocalTypingSession(activeKey, { flush: true });
         return;
       }
-      pushThreadTypingState(activeKey, true, state.localTypingPhrase).catch(console.error);
+      if (currentText !== String(state.localTypingLastText || "")) {
+        state.localTypingLastText = currentText;
+        state.localTypingLastActivityAt = Date.now();
+      }
+      const lastActivityAt = Number(state.localTypingLastActivityAt || 0);
+      if (
+        Number.isFinite(CHAT_TYPING_IDLE_STOP_MS)
+        && CHAT_TYPING_IDLE_STOP_MS > 0
+        && lastActivityAt > 0
+        && (Date.now() - lastActivityAt) >= CHAT_TYPING_IDLE_STOP_MS
+      ) {
+        stopLocalTypingSession(activeKey, { flush: true });
+        return;
+      }
+      queueLocalTypingStatePush(activeKey, true, state.localTypingPhrase);
       scheduleLocalTypingHeartbeat();
     }, CHAT_TYPING_HEARTBEAT_MS);
   }
 
   function scheduleLocalTypingStop(delayMs = CHAT_TYPING_IDLE_STOP_MS) {
     if (state.localTypingStopTimer) window.clearTimeout(state.localTypingStopTimer);
+    const rawTimeout = Number(delayMs ?? CHAT_TYPING_IDLE_STOP_MS);
+    if (!Number.isFinite(rawTimeout) || rawTimeout <= 0) return;
+    const timeout = Math.max(80, rawTimeout);
     state.localTypingStopTimer = window.setTimeout(() => {
+      const lastActivityAt = Number(state.localTypingLastActivityAt || 0);
+      if (lastActivityAt > 0 && (Date.now() - lastActivityAt) < timeout) {
+        scheduleLocalTypingStop(timeout);
+        return;
+      }
       const key = normalizeClientIdKey(state.localTypingClientId || state.activeClientId);
       stopLocalTypingSession(key, { flush: true });
-    }, Math.max(80, Number(delayMs || CHAT_TYPING_IDLE_STOP_MS)));
+    }, timeout);
   }
 
   function stopLocalTypingSession(clientId, options = {}) {
@@ -1514,13 +1604,16 @@
     state.localTypingActive = false;
     state.localTypingPhrase = "";
     state.localTypingClientId = "";
+    state.localTypingLastActivityAt = 0;
+    state.localTypingLastText = "";
 
     if (opts.flush !== false && key && (wasActive || opts.force === true)) {
-      pushThreadTypingState(key, false, "", { keepalive: opts.keepalive === true }).catch(console.error);
+      queueLocalTypingStatePush(key, false, "", { keepalive: opts.keepalive === true });
     }
   }
 
-  function handleComposerTypingActivity() {
+  function handleComposerTypingActivity(options = {}) {
+    const opts = options || {};
     if (!dom.center.input) return;
     const key = normalizeClientIdKey(state.activeClientId);
     if (!key) {
@@ -1528,8 +1621,9 @@
       return;
     }
 
-    const hasText = !!normalizeComposerText(dom.center.input.value);
-    if (!hasText) {
+    const currentText = normalizeComposerText(dom.center.input.value);
+    const hasText = !!currentText;
+    if (!hasText && opts.allowEmpty !== true) {
       stopLocalTypingSession(key, { flush: true });
       return;
     }
@@ -1542,11 +1636,25 @@
       state.localTypingActive = true;
       state.localTypingClientId = key;
       state.localTypingPhrase = getRandomTypingPhrase();
-      pushThreadTypingState(key, true, state.localTypingPhrase).catch(console.error);
+      queueLocalTypingStatePush(key, true, state.localTypingPhrase);
     }
 
+    state.localTypingLastText = currentText;
+    state.localTypingLastActivityAt = Date.now();
     scheduleLocalTypingHeartbeat();
+    scheduleLocalTypingWatch();
     scheduleLocalTypingStop(CHAT_TYPING_IDLE_STOP_MS);
+  }
+
+  function isTypingKeyEvent(event) {
+    if (!event) return false;
+    if (event.ctrlKey || event.metaKey || event.altKey) return false;
+    if (event.isComposing === true) return true;
+    const key = String(event.key || "");
+    if (!key) return false;
+    if (key === "Backspace" || key === "Delete" || key === "Process" || key === "Unidentified") return true;
+    if (String(event.code || "") === "Space") return true;
+    return key.length === 1;
   }
 
   async function fetchRemoteThreadSnapshot(clientId, options = {}) {
@@ -2171,83 +2279,116 @@
   async function pullThreadFromRemoteIfChanged(clientId, options = {}) {
     const key = normalizeClientIdKey(clientId);
     if (!key) return false;
-    if (options.force === true) {
-      return pullThreadFromRemote(key, {
-        ...options,
-        preserveHistory: options.signalHint === true ? false : true,
-      });
+    const existingInFlight = state.remoteThreadSyncInFlight[key];
+    if (existingInFlight) {
+      const pending = state.remoteThreadSyncPendingByClient[key] || {};
+      if (options.force === true) pending.force = true;
+      if (options.signalHint === true) pending.signalHint = true;
+      if (options.skipReadMark === true) pending.skipReadMark = true;
+      state.remoteThreadSyncPendingByClient[key] = pending;
+      return existingInFlight;
     }
 
-    try {
-      const meta = await fetchRemoteThreadMeta(key);
-      const remoteUpdatedAt = String(meta?.updatedAt || "");
-      const knownUpdatedAt = String(state.remoteThreadUpdatedAt[key] || "");
-      const preferSignalDiff = options.signalHint === true;
-      if (!preferSignalDiff && remoteUpdatedAt && knownUpdatedAt && remoteUpdatedAt === knownUpdatedAt) {
-        return false;
-      }
-      if (!preferSignalDiff && !remoteUpdatedAt && !knownUpdatedAt) {
-        return false;
+    const now = Date.now();
+    const lastSyncAt = Number(state.remoteThreadSyncLastAtByClient[key] || 0);
+    if (
+      options.force !== true
+      && lastSyncAt > 0
+      && (now - lastSyncAt) < CHAT_THREAD_SYNC_COALESCE_MS
+    ) {
+      return false;
+    }
+
+    const runOptions = { ...options };
+    const runPromise = (async () => {
+      if (runOptions.force === true) {
+        return pullThreadFromRemote(key, {
+          ...runOptions,
+          preserveHistory: runOptions.signalHint === true ? false : true,
+        });
       }
 
-      if (knownUpdatedAt) {
-        const mutationVersionBefore = getThreadMutationVersion(key);
-        try {
-          const diff = await fetchRemoteThreadDiff(key, knownUpdatedAt);
-          if (diff) {
-            const localChangedDuringRequest = getThreadMutationVersion(key) !== mutationVersionBefore;
-            const applied = applyRemoteThreadDiff(diff, { ...options, localChangedDuringRequest });
-            if (applied !== null) {
-              // For SSE-triggered updates prefer correctness: if diff says "no changes",
-              // force full pull because deletions may be represented only by count shrink.
-              if (!(applied === false && options.signalHint === true)) return applied;
+      try {
+        const meta = await fetchRemoteThreadMeta(key);
+        const remoteUpdatedAt = String(meta?.updatedAt || "");
+        const knownUpdatedAt = String(state.remoteThreadUpdatedAt[key] || "");
+        const preferSignalDiff = runOptions.signalHint === true;
+        if (!preferSignalDiff && remoteUpdatedAt && knownUpdatedAt && remoteUpdatedAt === knownUpdatedAt) {
+          return false;
+        }
+        if (!preferSignalDiff && !remoteUpdatedAt && !knownUpdatedAt) {
+          return false;
+        }
+
+        if (knownUpdatedAt) {
+          const mutationVersionBefore = getThreadMutationVersion(key);
+          try {
+            const diff = await fetchRemoteThreadDiff(key, knownUpdatedAt);
+            if (diff) {
+              const localChangedDuringRequest = getThreadMutationVersion(key) !== mutationVersionBefore;
+              const applied = applyRemoteThreadDiff(diff, { ...runOptions, localChangedDuringRequest });
+              if (applied !== null) {
+                if (!(applied === false && runOptions.signalHint === true)) return applied;
+              }
             }
-          }
-        } catch {}
-      }
+          } catch {}
+        }
 
-      const now = Date.now();
-      const lastFullPullAt = Number(state.fullThreadPullLastAtByClient?.[key] || 0);
-      if (
-        options.signalHint === true
-        && lastFullPullAt > 0
-        && (now - lastFullPullAt) < CHAT_FULL_THREAD_PULL_COOLDOWN_MS
-      ) {
-        return false;
+        const nowTs = Date.now();
+        const lastFullPullAt = Number(state.fullThreadPullLastAtByClient?.[key] || 0);
+        if (
+          runOptions.signalHint === true
+          && lastFullPullAt > 0
+          && (nowTs - lastFullPullAt) < CHAT_FULL_THREAD_PULL_COOLDOWN_MS
+        ) {
+          return false;
+        }
+        state.fullThreadPullLastAtByClient[key] = nowTs;
+        return pullThreadFromRemote(key, {
+          ...runOptions,
+          limit: runOptions.signalHint === true
+            ? Math.min(
+              Number(runOptions.limit || CHAT_THREAD_BACKGROUND_SYNC_LIMIT),
+              CHAT_THREAD_BACKGROUND_SYNC_LIMIT
+            )
+            : runOptions.limit,
+          preserveHistory: runOptions.signalHint === true ? false : runOptions.preserveHistory,
+        });
+      } catch {
+        const nowTs = Date.now();
+        const lastFullPullAt = Number(state.fullThreadPullLastAtByClient?.[key] || 0);
+        if (
+          runOptions.signalHint === true
+          && lastFullPullAt > 0
+          && (nowTs - lastFullPullAt) < CHAT_FULL_THREAD_PULL_COOLDOWN_MS
+        ) {
+          return false;
+        }
+        state.fullThreadPullLastAtByClient[key] = nowTs;
+        return pullThreadFromRemote(key, {
+          ...runOptions,
+          limit: runOptions.signalHint === true
+            ? Math.min(
+              Number(runOptions.limit || CHAT_THREAD_BACKGROUND_SYNC_LIMIT),
+              CHAT_THREAD_BACKGROUND_SYNC_LIMIT
+            )
+            : runOptions.limit,
+          preserveHistory: runOptions.signalHint === true ? false : runOptions.preserveHistory,
+        });
       }
-      state.fullThreadPullLastAtByClient[key] = now;
-      return pullThreadFromRemote(key, {
-        ...options,
-        limit: options.signalHint === true
-          ? Math.min(
-            Number(options.limit || CHAT_THREAD_BACKGROUND_SYNC_LIMIT),
-            CHAT_THREAD_BACKGROUND_SYNC_LIMIT
-          )
-          : options.limit,
-        preserveHistory: options.signalHint === true ? false : options.preserveHistory,
-      });
-    } catch {
-      const now = Date.now();
-      const lastFullPullAt = Number(state.fullThreadPullLastAtByClient?.[key] || 0);
-      if (
-        options.signalHint === true
-        && lastFullPullAt > 0
-        && (now - lastFullPullAt) < CHAT_FULL_THREAD_PULL_COOLDOWN_MS
-      ) {
-        return false;
-      }
-      state.fullThreadPullLastAtByClient[key] = now;
-      return pullThreadFromRemote(key, {
-        ...options,
-        limit: options.signalHint === true
-          ? Math.min(
-            Number(options.limit || CHAT_THREAD_BACKGROUND_SYNC_LIMIT),
-            CHAT_THREAD_BACKGROUND_SYNC_LIMIT
-          )
-          : options.limit,
-        preserveHistory: options.signalHint === true ? false : options.preserveHistory,
-      });
-    }
+    })();
+
+    state.remoteThreadSyncInFlight[key] = runPromise;
+    return runPromise.finally(() => {
+      delete state.remoteThreadSyncInFlight[key];
+      state.remoteThreadSyncLastAtByClient[key] = Date.now();
+      const pending = state.remoteThreadSyncPendingByClient[key];
+      if (!pending) return;
+      delete state.remoteThreadSyncPendingByClient[key];
+      window.setTimeout(() => {
+        pullThreadFromRemoteIfChanged(key, pending).catch(console.error);
+      }, 0);
+    });
   }
 
   async function loadRemoteChatClientsPage(options = {}) {
@@ -2409,6 +2550,43 @@
       const nextUnreadRaw = Number(row?.unread_count ?? row?.unreadCount ?? 0);
       const nextUnread = Number.isFinite(nextUnreadRaw) && nextUnreadRaw > 0 ? Math.trunc(nextUnreadRaw) : 0;
       const prevUnread = Number(previousUnreadByClient[key] || 0);
+      const nextLastAt = String(
+        row?.last_message_at
+        ?? row?.lastMessageAt
+        ?? row?.updated_at
+        ?? row?.updatedAt
+        ?? ""
+      ).trim();
+      const liveTyping = normalizePeerTypingInfo(state.peerTypingByClient[key]);
+      const summaryTypingActive = row?.typing_active === true || row?.typingActive === true;
+      const summaryTypingUpdatedAt = String(
+        row?.typing_updated_at
+        ?? row?.typingUpdatedAt
+        ?? ""
+      ).trim();
+      const summaryTypingExpiresAt = String(
+        row?.typing_expires_at
+        ?? row?.typingExpiresAt
+        ?? ""
+      ).trim();
+      const shouldDropTypingByExplicitSummaryStop = (
+        liveTyping.active
+        && !summaryTypingActive
+        && !summaryTypingExpiresAt
+        && !!summaryTypingUpdatedAt
+        && !!String(liveTyping.updatedAt || "").trim()
+        && compareIsoDates(summaryTypingUpdatedAt, String(liveTyping.updatedAt || "").trim()) >= 0
+      );
+      if (shouldDropTypingByExplicitSummaryStop) {
+        clearPeerTypingHideTimer(key);
+        state.peerTypingByClient[key] = {
+          active: false,
+          text: "",
+          updatedAt: String(liveTyping.updatedAt || ""),
+          expiresAt: "",
+        };
+        updateClientRowPreview(key);
+      }
       if (!hadSummaryBaseline || nextUnread <= prevUnread) return;
       summaryAlerts.push({
         clientId: key,
@@ -2524,10 +2702,16 @@
     });
     return {
       changed: json?.data?.changed === true,
+      messageChanged: json?.data?.message_changed === true,
+      typingChanged: json?.data?.typing_changed === true,
+      clientId: normalizeClientIdKey(json?.data?.client_id),
       updatedAt: String(json?.data?.updated_at || ""),
       revision: Number.isFinite(Number(json?.data?.revision))
         ? Math.max(0, Math.trunc(Number(json.data.revision)))
         : 0,
+      typing: json?.data?.typing && typeof json?.data?.typing === "object"
+        ? json.data.typing
+        : null,
       timeout: json?.data?.timeout === true,
     };
   }
@@ -2659,6 +2843,40 @@
   function stopSummariesSseConnection() {
     closeChatEventSource(state.summariesEventSource);
     state.summariesEventSource = null;
+    if (state.summariesSsePullTimer) {
+      window.clearTimeout(state.summariesSsePullTimer);
+      state.summariesSsePullTimer = 0;
+    }
+    state.summariesSsePullPending = false;
+    state.summariesSsePullInFlight = false;
+  }
+
+  function scheduleSummariesSsePull(options = {}) {
+    const forceThreads = options.forceThreads === true;
+    if (forceThreads) state.summariesSyncPendingForceThreads = true;
+    state.summariesSsePullPending = true;
+    if (state.summariesSsePullTimer) return;
+
+    state.summariesSsePullTimer = window.setTimeout(async () => {
+      state.summariesSsePullTimer = 0;
+      if (state.summariesSsePullInFlight || state.isRealtimePaused) return;
+      state.summariesSsePullInFlight = true;
+      state.summariesSsePullPending = false;
+      try {
+        await syncRemoteSummariesSnapshot({
+          forceThreads: state.summariesSyncPendingForceThreads === true,
+        });
+      } catch (err) {
+        console.error(err);
+      } finally {
+        state.summariesSsePullInFlight = false;
+        if (state.summariesSsePullPending) {
+          scheduleSummariesSsePull({
+            forceThreads: state.summariesSyncPendingForceThreads === true,
+          });
+        }
+      }
+    }, SUMMARIES_SSE_PULL_DEBOUNCE_MS);
   }
 
   function scheduleActiveThreadSsePull(clientId) {
@@ -2772,7 +2990,20 @@
         ? Math.max(0, Math.trunc(Number(payload.revision)))
         : 0;
 
-      if (payload.changed !== false) {
+      const payloadClientId = normalizeClientIdKey(payload.client_id);
+      const activeClientId = normalizeClientIdKey(state.activeClientId);
+      const typingOnlyChange = payload.typing_changed === true && payload.message_changed !== true;
+      if (typingOnlyChange && payloadClientId) {
+        if (
+          payloadClientId !== activeClientId
+          && payload.typing
+          && typeof payload.typing === "object"
+        ) {
+          applyPeerTypingState(payloadClientId, payload.typing);
+        }
+      }
+
+      if (payload.changed !== false && !typingOnlyChange) {
         const activeId = normalizeClientIdKey(state.activeClientId);
         if (activeId) {
           pullThreadFromRemoteIfChanged(activeId, {
@@ -2783,7 +3014,7 @@
         }
         // Keep left chat list in sync for non-active clients too:
         // typing preview, last message preview and unread badge.
-        syncRemoteSummariesSnapshot({ forceThreads: false }).catch(console.error);
+        scheduleSummariesSsePull({ forceThreads: true });
       }
 
       if (nextUpdatedAt || state.summariesUpdatedAt) {
@@ -2904,9 +3135,21 @@
             const nextRevision = Number.isFinite(Number(waited?.revision))
               ? Math.max(0, Math.trunc(Number(waited.revision)))
               : 0;
-            // Always pull summaries after wait returns to prevent stale UI
-            // on installations where updated_at has second-level precision.
-            await syncRemoteSummariesSnapshot({ forceThreads: waited?.timeout !== true }).catch(console.error);
+            const waitedClientId = normalizeClientIdKey(waited?.clientId);
+            const activeClientId = normalizeClientIdKey(state.activeClientId);
+            const typingOnlyChange = waited?.typingChanged === true && waited?.messageChanged !== true;
+            if (typingOnlyChange && waitedClientId) {
+              if (
+                waitedClientId !== activeClientId
+                && waited?.typing
+                && typeof waited.typing === "object"
+              ) {
+                applyPeerTypingState(waitedClientId, waited.typing);
+              }
+            } else {
+              // Pull summaries when messages changed or when reason is unknown.
+              await syncRemoteSummariesSnapshot({ forceThreads: waited?.timeout !== true }).catch(console.error);
+            }
             if (nextUpdatedAt || state.summariesUpdatedAt) {
               state.summariesUpdatedAt = nextUpdatedAt;
             }
@@ -2957,6 +3200,12 @@
       try { state.summariesWaitAbortController.abort(); } catch {}
       state.summariesWaitAbortController = null;
     }
+    if (state.summariesSsePullTimer) {
+      window.clearTimeout(state.summariesSsePullTimer);
+      state.summariesSsePullTimer = 0;
+    }
+    state.summariesSsePullPending = false;
+    state.summariesSsePullInFlight = false;
 
     if (state.summariesPollTimer) {
       window.clearInterval(state.summariesPollTimer);
@@ -3324,8 +3573,6 @@
     const summaryLastAt = String(
       summary?.last_message_at
       ?? summary?.lastMessageAt
-      ?? summary?.updated_at
-      ?? summary?.updatedAt
       ?? ""
     );
     const shouldSuppressTyping = (typingUpdatedAt) => {
@@ -3335,16 +3582,8 @@
     };
 
     const liveInfo = normalizePeerTypingInfo(state.peerTypingByClient[key]);
-    if (isPeerTypingInfoActiveNow(liveInfo) && !shouldSuppressTyping(liveInfo.updatedAt)) {
+    if (isPeerTypingInfoActiveNow(liveInfo)) {
       return String(liveInfo.text || "").trim();
-    }
-    if (liveInfo.active) {
-      state.peerTypingByClient[key] = {
-        active: false,
-        text: "",
-        updatedAt: String(liveInfo.updatedAt || ""),
-        expiresAt: "",
-      };
     }
 
     const summaryInfo = normalizePeerTypingInfo({
@@ -7069,6 +7308,10 @@
     }
 
     delete state.remoteThreadUpdatedAt[key];
+    delete state.remoteThreadSyncInFlight[key];
+    delete state.remoteThreadSyncPendingByClient[key];
+    delete state.remoteThreadSyncLastAtByClient[key];
+    delete state.fullThreadPullLastAtByClient[key];
     delete state.remoteSummaryFingerprints[key];
     delete state.remoteSummariesByClient[key];
     delete state.remoteSaveInFlight[key];
@@ -9507,9 +9750,23 @@
         if (event.key === "Escape" && state.replyDraft) {
           clearComposerReply();
         }
+
+        if (isTypingKeyEvent(event)) handleComposerTypingActivity({ allowEmpty: true });
       });
 
       dom.center.input.addEventListener("input", () => {
+        handleComposerTypingActivity();
+      });
+      dom.center.input.addEventListener("beforeinput", () => {
+        handleComposerTypingActivity({ allowEmpty: true });
+      });
+      dom.center.input.addEventListener("compositionstart", () => {
+        handleComposerTypingActivity();
+      });
+      dom.center.input.addEventListener("compositionupdate", () => {
+        handleComposerTypingActivity();
+      });
+      dom.center.input.addEventListener("compositionend", () => {
         handleComposerTypingActivity();
       });
       dom.center.input.addEventListener("blur", () => {

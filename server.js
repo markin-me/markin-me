@@ -34,7 +34,7 @@ const STATIC_ASSET_VERSION = String(
 ).trim();
 const PORT = process.env.PORT || 3000;
 const TENANT_LOOKUP_CACHE_MS = Number(process.env.TENANT_LOOKUP_CACHE_MS || 60_000);
-const STATIC_FILE_VERSION_CACHE_MS = Number(process.env.STATIC_FILE_VERSION_CACHE_MS || 300_000);
+const STATIC_FILE_VERSION_CACHE_MS = Number(process.env.STATIC_FILE_VERSION_CACHE_MS || 15_000);
 const SYSTEM_SETTINGS_DIR = path.join(__dirname, 'data');
 const SYSTEM_SETTINGS_FILE = path.join(SYSTEM_SETTINGS_DIR, 'system-settings.json');
 const runtimePollingState = {

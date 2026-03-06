@@ -9282,16 +9282,32 @@ body.page-shop.shop-company-chat-open{
     transform: translateY(0);
   }
 
+  .shop-company-chat-modal__header{
+    min-height: 64px;
+    padding: 12px;
+    border-bottom: 1px solid var(--color-border);
+  }
+
   .shop-company-chat-modal__title{
-    font-size: 18px;
+    font-size: 16px;
+    line-height: 1.2;
+  }
+
+  .shop-company-chat-modal__close,
+  .shop-company-chat-modal__back{
+    top: 50%;
+    width: 40px;
+    height: 40px;
+    font-size: 16px;
+    transform: translateY(-50%);
+  }
+
+  .shop-company-chat-modal__close{
+    right: 12px;
   }
 
   .shop-company-chat-modal__back{
-    left: 10px;
-    top: 10px;
-    width: 36px;
-    height: 36px;
-    font-size: 15px;
+    left: 12px;
   }
 
   .shop-company-chat-order-view{

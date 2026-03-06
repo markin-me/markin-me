@@ -11,8 +11,14 @@ const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
 const MAX_MESSAGES_PER_THREAD = 1000;
 const CHAT_LONG_POLL_MAX_TIMEOUT_MS = 25000;
 const CHAT_LONG_POLL_MIN_TIMEOUT_MS = 1000;
-const CHAT_TYPING_TTL_MS = 7000;
+const CHAT_TYPING_TTL_MS = 4500;
 const CHAT_TYPING_TEXT_MAX_LENGTH = 120;
+const CHAT_TYPING_HEARTBEAT_COALESCE_MS = parsePositiveInt(
+  process.env.CHAT_TYPING_HEARTBEAT_COALESCE_MS,
+  200,
+  0,
+  5000
+);
 const CHAT_UPLOAD_MAX_FILE_BYTES = 20 * 1024 * 1024;
 const CHAT_SUMMARIES_PAGE_DEFAULT_LIMIT = 50;
 const CHAT_SUMMARIES_PAGE_MAX_LIMIT = 200;
@@ -104,6 +110,8 @@ const tenantChangeState = new Map();
 const tenantUnreadWaiters = new Map();
 const tenantUnreadState = new Map();
 const threadTypingState = new Map();
+const threadTypingExpireTimers = new Map();
+const threadTypingCoalesceState = new Map();
 const threadSseSubscribers = new Map();
 const tenantSseSubscribers = new Map();
 const unreadSseSubscribers = new Map();
@@ -111,9 +119,11 @@ const clientUnreadRefreshState = new Map();
 const guestThreadCleanupState = new Map();
 const tenantPushCompanyTitleCache = new Map();
 const tenantChatWidgetState = new Map();
+const typingDbTtlCleanupState = new Map();
 let ensurePushSubscriptionsTablePromise = null;
 let ensureHiddenMessagesTablePromise = null;
 let ensureChatCoreIndexesPromise = null;
+let ensureChatThreadTypingColumnsPromise = null;
 const CHAT_PUSH_UNIQUE_INDEX_LEGACY = "ux_chat_push_subscriptions_tenant_endpoint";
 const CHAT_PUSH_UNIQUE_INDEX_V2 = "ux_chat_push_subscriptions_tenant_actor_client_endpoint";
 const CHAT_HIDDEN_UNIQUE_INDEX = "ux_chat_message_hidden_tenant_client_message_actor";
@@ -121,6 +131,12 @@ const CHAT_THREADS_UPDATED_INDEX = "idx_chat_threads_tenant_updated_client";
 const CHAT_MESSAGES_TENANT_CLIENT_ID_INDEX = "idx_chat_messages_tenant_client_id";
 const CHAT_MESSAGES_UNREAD_INDEX = "idx_chat_messages_tenant_client_unread";
 const CHAT_SSE_HEARTBEAT_MS = 20000;
+const CHAT_TYPING_DB_TTL_CLEANUP_MIN_INTERVAL_MS = parsePositiveInt(
+  process.env.CHAT_TYPING_DB_TTL_CLEANUP_MIN_INTERVAL_MS,
+  1500,
+  200,
+  60000
+);
 const CHAT_WIDGET_STATE_TTL_MS = parsePositiveInt(
   process.env.CHAT_WIDGET_STATE_TTL_MS,
   10000,
@@ -252,6 +268,126 @@ async function ensureChatCoreIndexes() {
     throw err;
   });
   return ensureChatCoreIndexesPromise;
+}
+
+async function ensureChatThreadTypingColumns() {
+  if (ensureChatThreadTypingColumnsPromise) return ensureChatThreadTypingColumnsPromise;
+  ensureChatThreadTypingColumnsPromise = (async () => {
+    const [columnRows] = await db.query("SHOW COLUMNS FROM chat_threads");
+    const existing = new Set(
+      (Array.isArray(columnRows) ? columnRows : []).map((row) => String(row?.Field || "").toLowerCase())
+    );
+    const definitions = [
+      { name: "typing_in_active", ddl: "TINYINT(1) NOT NULL DEFAULT 0" },
+      { name: "typing_in_text", ddl: "VARCHAR(120) NOT NULL DEFAULT ''" },
+      { name: "typing_in_updated_at", ddl: "DATETIME(3) NULL DEFAULT NULL" },
+      { name: "typing_in_expires_at", ddl: "DATETIME(3) NULL DEFAULT NULL" },
+      { name: "typing_out_active", ddl: "TINYINT(1) NOT NULL DEFAULT 0" },
+      { name: "typing_out_text", ddl: "VARCHAR(120) NOT NULL DEFAULT ''" },
+      { name: "typing_out_updated_at", ddl: "DATETIME(3) NULL DEFAULT NULL" },
+      { name: "typing_out_expires_at", ddl: "DATETIME(3) NULL DEFAULT NULL" },
+    ];
+
+    for (const column of definitions) {
+      if (existing.has(column.name)) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await db.query(`ALTER TABLE chat_threads ADD COLUMN ${column.name} ${column.ddl}`);
+    }
+    return true;
+  })().catch((err) => {
+    ensureChatThreadTypingColumnsPromise = null;
+    throw err;
+  });
+  return ensureChatThreadTypingColumnsPromise;
+}
+
+async function cleanupExpiredThreadTypingFlagsForTenant(tenantId) {
+  const tenantKey = getTenantKey(tenantId);
+  if (!tenantKey) return;
+  const nowMs = Date.now();
+  const currentState = typingDbTtlCleanupState.get(tenantKey) || {
+    running: false,
+    pending: false,
+    lastRunAt: 0,
+  };
+  if (currentState.running) {
+    currentState.pending = true;
+    typingDbTtlCleanupState.set(tenantKey, currentState);
+    return;
+  }
+  if (nowMs - Number(currentState.lastRunAt || 0) < CHAT_TYPING_DB_TTL_CLEANUP_MIN_INTERVAL_MS) {
+    return;
+  }
+
+  currentState.running = true;
+  currentState.pending = false;
+  currentState.lastRunAt = nowMs;
+  typingDbTtlCleanupState.set(tenantKey, currentState);
+
+  try {
+    await db.query(
+      `
+        UPDATE chat_threads
+        SET
+          typing_in_active = CASE
+            WHEN typing_in_active = 1 AND typing_in_expires_at IS NOT NULL AND typing_in_expires_at <= NOW(3)
+              THEN 0
+            ELSE typing_in_active
+          END,
+          typing_in_text = CASE
+            WHEN typing_in_active = 1 AND typing_in_expires_at IS NOT NULL AND typing_in_expires_at <= NOW(3)
+              THEN ''
+            ELSE typing_in_text
+          END,
+          typing_in_expires_at = CASE
+            WHEN typing_in_active = 1 AND typing_in_expires_at IS NOT NULL AND typing_in_expires_at <= NOW(3)
+              THEN NULL
+            ELSE typing_in_expires_at
+          END,
+          typing_in_updated_at = CASE
+            WHEN typing_in_active = 1 AND typing_in_expires_at IS NOT NULL AND typing_in_expires_at <= NOW(3)
+              THEN NULL
+            ELSE typing_in_updated_at
+          END,
+          typing_out_active = CASE
+            WHEN typing_out_active = 1 AND typing_out_expires_at IS NOT NULL AND typing_out_expires_at <= NOW(3)
+              THEN 0
+            ELSE typing_out_active
+          END,
+          typing_out_text = CASE
+            WHEN typing_out_active = 1 AND typing_out_expires_at IS NOT NULL AND typing_out_expires_at <= NOW(3)
+              THEN ''
+            ELSE typing_out_text
+          END,
+          typing_out_expires_at = CASE
+            WHEN typing_out_active = 1 AND typing_out_expires_at IS NOT NULL AND typing_out_expires_at <= NOW(3)
+              THEN NULL
+            ELSE typing_out_expires_at
+          END,
+          typing_out_updated_at = CASE
+            WHEN typing_out_active = 1 AND typing_out_expires_at IS NOT NULL AND typing_out_expires_at <= NOW(3)
+              THEN NULL
+            ELSE typing_out_updated_at
+          END
+        WHERE tenant_id = ?
+          AND (
+            (typing_in_active = 1 AND typing_in_expires_at IS NOT NULL AND typing_in_expires_at <= NOW(3))
+            OR (typing_out_active = 1 AND typing_out_expires_at IS NOT NULL AND typing_out_expires_at <= NOW(3))
+          )
+      `,
+      [Number(tenantId)]
+    );
+  } finally {
+    currentState.running = false;
+    const shouldRepeat = currentState.pending === true;
+    currentState.pending = false;
+    typingDbTtlCleanupState.set(tenantKey, currentState);
+    if (shouldRepeat) {
+      setTimeout(() => {
+        cleanupExpiredThreadTypingFlagsForTenant(tenantId).catch(() => {});
+      }, CHAT_TYPING_DB_TTL_CLEANUP_MIN_INTERVAL_MS);
+    }
+  }
 }
 
 function hashPushEndpoint(endpoint) {
@@ -910,6 +1046,15 @@ function disconnectTenantChatRuntime(tenantId) {
     if (String(key || "").startsWith(`${tenantKey}:`)) {
       threadTypingState.delete(key);
     }
+  }
+  for (const [timerKey, timer] of Array.from(threadTypingExpireTimers.entries())) {
+    if (!String(timerKey || "").startsWith(`${tenantKey}:`)) continue;
+    try { clearTimeout(timer); } catch {}
+    threadTypingExpireTimers.delete(timerKey);
+  }
+  for (const coalesceKey of Array.from(threadTypingCoalesceState.keys())) {
+    if (!String(coalesceKey || "").startsWith(`${tenantKey}:`)) continue;
+    threadTypingCoalesceState.delete(coalesceKey);
   }
 }
 
@@ -2030,6 +2175,75 @@ function getEmptyTypingActorState(actor) {
   };
 }
 
+function getThreadTypingExpireTimerKey(tenantId, clientId, actorKey) {
+  const key = getThreadKey(tenantId, clientId);
+  if (!key) return "";
+  const actor = actorKey === "in" ? "in" : "out";
+  return `${key}:${actor}`;
+}
+
+function getThreadTypingCoalesceKey(tenantId, clientId, actorKey) {
+  return getThreadTypingExpireTimerKey(tenantId, clientId, actorKey);
+}
+
+function clearThreadTypingExpireTimer(tenantId, clientId, actorKey) {
+  const timerKey = getThreadTypingExpireTimerKey(tenantId, clientId, actorKey);
+  if (!timerKey) return;
+  const timer = threadTypingExpireTimers.get(timerKey);
+  if (timer) {
+    try { clearTimeout(timer); } catch {}
+    threadTypingExpireTimers.delete(timerKey);
+  }
+}
+
+function scheduleThreadTypingExpireTimer(tenantId, clientId, actorKey, expiresAtMs) {
+  const actor = actorKey === "in" ? "in" : "out";
+  const safeTenantId = normalizeClientId(tenantId);
+  const safeClientId = normalizeClientId(clientId);
+  if (!safeTenantId || !safeClientId) return;
+  const until = Number(expiresAtMs || 0);
+  if (!Number.isFinite(until) || until <= 0) return;
+
+  clearThreadTypingExpireTimer(safeTenantId, safeClientId, actor);
+  const delay = Math.max(0, until - Date.now() + 30);
+  const timerKey = getThreadTypingExpireTimerKey(safeTenantId, safeClientId, actor);
+  if (!timerKey) return;
+
+  const timer = setTimeout(() => {
+    threadTypingExpireTimers.delete(timerKey);
+    const entry = getThreadTypingEntry(safeTenantId, safeClientId);
+    if (!entry || !entry[actor]) return;
+    const current = entry[actor];
+    const currentExpiresAtMs = Number(current.expiresAtMs || 0);
+    if (current.active !== true) return;
+    if (!Number.isFinite(currentExpiresAtMs) || currentExpiresAtMs > Date.now()) return;
+
+    const nowIso = new Date().toISOString();
+    entry[actor] = {
+      active: false,
+      text: "",
+      updatedAt: nowIso,
+      expiresAtMs: 0,
+    };
+    threadTypingCoalesceState.delete(getThreadTypingCoalesceKey(safeTenantId, safeClientId, actor));
+    persistThreadTypingState(safeTenantId, safeClientId, actor, {
+      actor,
+      active: false,
+      text: "",
+      updated_at: nowIso,
+      expires_at: "",
+    }).catch(() => {});
+    notifyThreadChange(safeTenantId, safeClientId, "", {
+      messageChanged: false,
+      typingChanged: true,
+    });
+  }, delay);
+  if (timer && typeof timer.unref === "function") {
+    try { timer.unref(); } catch {}
+  }
+  threadTypingExpireTimers.set(timerKey, timer);
+}
+
 function getThreadTypingEntry(tenantId, clientId, create = false) {
   const key = getThreadKey(tenantId, clientId);
   if (!key) return null;
@@ -2080,6 +2294,7 @@ function setThreadTypingForActor(tenantId, clientId, actorKey, active, text) {
       updatedAt: nowIso,
       expiresAtMs,
     };
+    scheduleThreadTypingExpireTimer(tenantId, clientId, actor, expiresAtMs);
     return {
       actor,
       active: true,
@@ -2095,6 +2310,7 @@ function setThreadTypingForActor(tenantId, clientId, actorKey, active, text) {
     updatedAt: nowIso,
     expiresAtMs: 0,
   };
+  clearThreadTypingExpireTimer(tenantId, clientId, actor);
   return {
     actor,
     active: false,
@@ -2107,17 +2323,27 @@ function setThreadTypingForActor(tenantId, clientId, actorKey, active, text) {
 function clearThreadTypingState(tenantId, clientId) {
   const key = getThreadKey(tenantId, clientId);
   if (!key) return;
+  clearThreadTypingExpireTimer(tenantId, clientId, "in");
+  clearThreadTypingExpireTimer(tenantId, clientId, "out");
+  threadTypingCoalesceState.delete(getThreadTypingCoalesceKey(tenantId, clientId, "in"));
+  threadTypingCoalesceState.delete(getThreadTypingCoalesceKey(tenantId, clientId, "out"));
   threadTypingState.delete(key);
 }
 
-function notifyTenantChange(tenantId, updatedAt = "") {
+function notifyTenantChange(tenantId, updatedAt = "", options = {}) {
   const key = getTenantKey(tenantId);
   if (!key) return;
   const changed = touchTenantChange(key, updatedAt);
+  const messageChanged = options?.messageChanged === true;
+  const typingChanged = options?.typingChanged === true;
+  const clientId = normalizeClientId(options?.clientId);
   const set = tenantWaiters.get(key);
   const payload = {
     updatedAt: String(changed.updatedAt || ""),
     revision: Number(changed.revision || 0),
+    messageChanged,
+    typingChanged,
+    clientId: clientId ? Number(clientId) : 0,
   };
   if (set && set.size) {
     Array.from(set).forEach((resolve) => {
@@ -2126,10 +2352,52 @@ function notifyTenantChange(tenantId, updatedAt = "") {
   }
   emitTenantSseEvent(tenantId, {
     changed: true,
+    message_changed: messageChanged,
+    typing_changed: typingChanged,
+    client_id: clientId ? Number(clientId) : 0,
     updated_at: payload.updatedAt,
     revision: payload.revision,
     timeout: false,
   });
+}
+
+async function persistThreadTypingState(tenantId, clientId, actorKey, typingState) {
+  const safeClientId = normalizeClientId(clientId);
+  if (!safeClientId) return;
+  await ensureChatThreadTypingColumns();
+
+  const actor = actorKey === "in" ? "in" : "out";
+  const colPrefix = actor === "in" ? "typing_in" : "typing_out";
+  const state = typingState && typeof typingState === "object" ? typingState : {};
+  const active = state.active === true;
+  const text = active ? sanitizeTypingText(state.text) : "";
+  const updatedAt = active
+    ? toDbDateOrNull(state.updated_at || new Date().toISOString(), true)
+    : null;
+  const expiresAt = active
+    ? toDbDateOrNull(state.expires_at || "", false)
+    : null;
+
+  await db.query(
+    `
+      INSERT INTO chat_threads
+        (tenant_id, client_id, updated_at, ${colPrefix}_active, ${colPrefix}_text, ${colPrefix}_updated_at, ${colPrefix}_expires_at)
+      VALUES (?, ?, NOW(3), ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        ${colPrefix}_active = VALUES(${colPrefix}_active),
+        ${colPrefix}_text = VALUES(${colPrefix}_text),
+        ${colPrefix}_updated_at = VALUES(${colPrefix}_updated_at),
+        ${colPrefix}_expires_at = VALUES(${colPrefix}_expires_at)
+    `,
+    [
+      Number(tenantId),
+      Number(safeClientId),
+      active ? 1 : 0,
+      text,
+      updatedAt,
+      expiresAt,
+    ]
+  );
 }
 
 function notifyThreadChange(tenantId, clientId, updatedAt = "", options = {}) {
@@ -2157,7 +2425,11 @@ function notifyThreadChange(tenantId, clientId, updatedAt = "", options = {}) {
     });
   }
   if (messageChanged || typingChanged) {
-    notifyTenantChange(tenantId, updatedAt);
+    notifyTenantChange(tenantId, updatedAt, {
+      messageChanged,
+      typingChanged,
+      clientId: Number(clientId || 0),
+    });
   }
   if (messageChanged) {
     scheduleClientUnreadSseRefresh(tenantId, clientId);
@@ -2309,11 +2581,18 @@ function getSummaryLastPreviewText(row) {
   return "";
 }
 
-function mapSummaryRow(row) {
+function mapSummaryRow(row, actorKey = "out") {
   const lastMessageIdRaw = Number(row.last_message_id ?? row.lastMessageId ?? 0);
   const lastMessageId = Number.isFinite(lastMessageIdRaw) && lastMessageIdRaw > 0
     ? Math.trunc(lastMessageIdRaw)
     : 0;
+  const peerPrefix = actorKey === "in" ? "typing_out" : "typing_in";
+  const typingUpdatedAt = toIsoOrEmpty(row?.[`${peerPrefix}_updated_at`]);
+  const typingExpiresAt = toIsoOrEmpty(row?.[`${peerPrefix}_expires_at`]);
+  const typingFlag = Number(row?.[`${peerPrefix}_active`] || 0) === 1;
+  const typingUntilMs = typingExpiresAt ? new Date(typingExpiresAt).getTime() : 0;
+  const typingActiveNow = typingFlag && Number.isFinite(typingUntilMs) && typingUntilMs > Date.now();
+  const typingText = typingActiveNow ? sanitizeTypingText(row?.[`${peerPrefix}_text`]) : "";
   return {
     client_id: Number(row.client_id),
     updated_at: toIsoOrEmpty(row.updated_at),
@@ -2325,6 +2604,14 @@ function mapSummaryRow(row) {
     lastMessageMessageId: String(row.last_message_message_id ?? row.lastMessageMessageId ?? ""),
     last_message_at: toIsoOrEmpty(row.last_message_at),
     last_message_text: getSummaryLastPreviewText(row),
+    typing_active: typingActiveNow,
+    typing_text: typingText,
+    typing_updated_at: typingUpdatedAt,
+    typing_expires_at: typingExpiresAt,
+    typingActive: typingActiveNow,
+    typingText: typingText,
+    typingUpdatedAt: typingUpdatedAt,
+    typingExpiresAt: typingExpiresAt,
     meta: sanitizeMetaFromDbRow(row),
   };
 }
@@ -2985,6 +3272,8 @@ async function querySummaryRows(
   { limit = null, offset = null } = {}
 ) {
   await ensureChatCoreIndexes().catch(() => {});
+  await ensureChatThreadTypingColumns().catch(() => {});
+  await cleanupExpiredThreadTypingFlagsForTenant(tenantId).catch(() => {});
   const ids = (Array.isArray(selectedClientIds) ? selectedClientIds : [])
     .map((id) => normalizeClientId(id))
     .filter(Boolean);
@@ -3014,6 +3303,14 @@ async function querySummaryRows(
         COALESCE(NULLIF(TRIM(t.meta_name), ''), NULLIF(TRIM(c.name), '')) AS meta_name,
         COALESCE(NULLIF(TRIM(t.meta_phone), ''), NULLIF(TRIM(c.phone), '')) AS meta_phone,
         t.meta_last_welcome_day,
+        t.typing_in_active,
+        t.typing_in_text,
+        t.typing_in_updated_at,
+        t.typing_in_expires_at,
+        t.typing_out_active,
+        t.typing_out_text,
+        t.typing_out_updated_at,
+        t.typing_out_expires_at,
         COALESCE(s.last_message_id, 0) AS last_message_id,
         COALESCE(s.message_count, 0) AS message_count,
         COALESCE(s.unread_count, 0) AS unread_count,
@@ -3061,6 +3358,8 @@ async function querySummaryRows(
 
 async function querySummaryRowsForPage(tenantId, { limit, offset } = {}) {
   await ensureChatCoreIndexes().catch(() => {});
+  await ensureChatThreadTypingColumns().catch(() => {});
+  await cleanupExpiredThreadTypingFlagsForTenant(tenantId).catch(() => {});
   const safeLimit = parsePositiveInt(
     limit,
     CHAT_SUMMARIES_PAGE_DEFAULT_LIMIT,
@@ -3076,7 +3375,15 @@ async function querySummaryRowsForPage(tenantId, { limit, offset } = {}) {
         chat_threads.updated_at,
         COALESCE(NULLIF(TRIM(chat_threads.meta_name), ''), NULLIF(TRIM(cust.name), '')) AS meta_name,
         COALESCE(NULLIF(TRIM(chat_threads.meta_phone), ''), NULLIF(TRIM(cust.phone), '')) AS meta_phone,
-        chat_threads.meta_last_welcome_day
+        chat_threads.meta_last_welcome_day,
+        chat_threads.typing_in_active,
+        chat_threads.typing_in_text,
+        chat_threads.typing_in_updated_at,
+        chat_threads.typing_in_expires_at,
+        chat_threads.typing_out_active,
+        chat_threads.typing_out_text,
+        chat_threads.typing_out_updated_at,
+        chat_threads.typing_out_expires_at
       FROM chat_threads
       LEFT JOIN cust_customers cust
         ON cust.tenant_id = chat_threads.tenant_id
@@ -3183,13 +3490,12 @@ async function listSummaries(tenantId, selectedClientIds = [], actorKey = "out")
   const rows = await querySummaryRows(tenantId, ids);
 
   const parsedRows = rows
-    .map(mapSummaryRow)
+    .map((row) => mapSummaryRow(row, actorKey))
     .filter((row) => Number.isFinite(Number(row.client_id)) && Number(row.client_id) > 0);
-  const typedRows = enrichSummaryRowsWithTyping(tenantId, parsedRows, actorKey);
 
-  if (!ids.length) return typedRows;
+  if (!ids.length) return parsedRows;
 
-  const byId = new Map(typedRows.map((row) => [String(row.client_id), row]));
+  const byId = new Map(parsedRows.map((row) => [String(row.client_id), row]));
   return ids.map((id) => {
     const existing = byId.get(String(id));
     if (existing) return existing;
@@ -3209,26 +3515,6 @@ async function listSummaries(tenantId, selectedClientIds = [], actorKey = "out")
       typingUpdatedAt: "",
       typingExpiresAt: "",
       meta: {},
-    };
-  });
-}
-
-function enrichSummaryRowsWithTyping(tenantId, rows, actorKey = "out") {
-  const actor = actorKey === "in" ? "in" : "out";
-  return (Array.isArray(rows) ? rows : []).map((row) => {
-    const clientId = normalizeClientId(row?.client_id ?? row?.clientId);
-    if (!clientId) return row;
-    const peerTyping = getPeerTypingForActor(tenantId, clientId, actor);
-    return {
-      ...row,
-      typing_active: peerTyping?.active === true,
-      typing_text: String(peerTyping?.text || ""),
-      typing_updated_at: String(peerTyping?.updated_at || ""),
-      typing_expires_at: String(peerTyping?.expires_at || ""),
-      typingActive: peerTyping?.active === true,
-      typingText: String(peerTyping?.text || ""),
-      typingUpdatedAt: String(peerTyping?.updated_at || ""),
-      typingExpiresAt: String(peerTyping?.expires_at || ""),
     };
   });
 }
@@ -3254,16 +3540,15 @@ async function listSummariesPage(tenantId, { limit, offset, actorKey = "out" } =
 
   const total = Number(countRows?.[0]?.[0]?.total || countRows?.[0]?.total || 0);
   const mappedRows = (Array.isArray(rows) ? rows : [])
-    .map(mapSummaryRow)
+    .map((row) => mapSummaryRow(row, actorKey))
     .filter((row) => Number.isFinite(Number(row.client_id)) && Number(row.client_id) > 0);
-  const typedRows = enrichSummaryRowsWithTyping(tenantId, mappedRows, actorKey);
 
   return {
-    rows: typedRows,
+    rows: mappedRows,
     total,
     limit: safeLimit,
     offset: safeOffset,
-    hasMore: safeOffset + typedRows.length < total,
+    hasMore: safeOffset + mappedRows.length < total,
   };
 }
 
@@ -3368,6 +3653,7 @@ function makeChatTempRouter() {
       if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
 
       const actorKey = getRequestReactionActor(req);
+      const actor = actorKey === "in" ? "in" : "out";
       const requestedActive = req.body?.typing === true || req.body?.active === true;
       const requestedText = sanitizeTypingText(
         req.body?.text
@@ -3376,6 +3662,14 @@ function makeChatTempRouter() {
         || ""
       );
 
+      const previousEntry = getThreadTypingEntry(tenantId, clientId);
+      const previousActorState = previousEntry && previousEntry[actor]
+        ? { ...previousEntry[actor] }
+        : { active: false, text: "", expiresAtMs: 0 };
+      const previousActiveNow = previousActorState.active === true
+        && Number(previousActorState.expiresAtMs || 0) > Date.now();
+      const previousText = sanitizeTypingText(previousActorState.text || "");
+
       const selfTyping = setThreadTypingForActor(
         tenantId,
         clientId,
@@ -3383,11 +3677,42 @@ function makeChatTempRouter() {
         requestedActive,
         requestedText
       );
+      const nowMs = Date.now();
+      const coalesceKey = getThreadTypingCoalesceKey(tenantId, clientId, actor);
+      const coalesceState = threadTypingCoalesceState.get(coalesceKey) || {
+        lastPersistAt: 0,
+        lastNotifyAt: 0,
+      };
+      const nextActive = selfTyping?.active === true;
+      const nextText = sanitizeTypingText(selfTyping?.text || "");
+      const isHeartbeat = nextActive && previousActiveNow && previousText === nextText;
+
+      let shouldPersist = true;
+      let shouldNotify = true;
+      if (isHeartbeat) {
+        shouldPersist = (nowMs - Number(coalesceState.lastPersistAt || 0)) >= CHAT_TYPING_HEARTBEAT_COALESCE_MS;
+        shouldNotify = (nowMs - Number(coalesceState.lastNotifyAt || 0)) >= CHAT_TYPING_HEARTBEAT_COALESCE_MS;
+      }
+
+      if (shouldPersist) {
+        await persistThreadTypingState(tenantId, clientId, actorKey, selfTyping);
+        coalesceState.lastPersistAt = nowMs;
+      }
+
       const peerTyping = getPeerTypingForActor(tenantId, clientId, actorKey);
-      notifyThreadChange(tenantId, clientId, "", {
-        messageChanged: false,
-        typingChanged: true,
-      });
+      if (shouldNotify) {
+        notifyThreadChange(tenantId, clientId, "", {
+          messageChanged: false,
+          typingChanged: true,
+        });
+        coalesceState.lastNotifyAt = nowMs;
+      }
+
+      if (nextActive) {
+        threadTypingCoalesceState.set(coalesceKey, coalesceState);
+      } else {
+        threadTypingCoalesceState.delete(coalesceKey);
+      }
 
       return res.json({
         ok: true,
@@ -3624,7 +3949,8 @@ function makeChatTempRouter() {
       await conn.commit();
       conn.release();
       conn = null;
-      setThreadTypingForActor(tenantId, clientId, actorKey, false, "");
+      const stoppedTypingState = setThreadTypingForActor(tenantId, clientId, actorKey, false, "");
+      await persistThreadTypingState(tenantId, clientId, actorKey, stoppedTypingState);
       notifyThreadChange(tenantId, clientId, updatedAt.toISOString(), {
         messageChanged: true,
         typingChanged: true,
@@ -4322,6 +4648,7 @@ function makeChatTempRouter() {
   router.get("/summaries/stream", async (req, res) => {
     try {
       const tenantId = getTenantId(req);
+      const actorKey = getRequestReactionActor(req);
       const currentState = await ensureTenantChangeEntryLoaded(tenantId);
       const tenantKey = getTenantKey(tenantId);
 
@@ -4329,8 +4656,14 @@ function makeChatTempRouter() {
 
       const subscriber = createSseSubscriber(res, "summaries", (payload = {}) => ({
         changed: payload.changed === true,
+        message_changed: payload.message_changed === true,
+        typing_changed: payload.typing_changed === true,
+        client_id: Number(payload.client_id || 0),
         updated_at: String(payload.updated_at || ""),
         revision: Number(payload.revision || 0),
+        typing: Number(payload.client_id || 0) > 0
+          ? getPeerTypingForActor(tenantId, Number(payload.client_id || 0), actorKey)
+          : null,
         timeout: false,
       }));
 
@@ -4339,8 +4672,12 @@ function makeChatTempRouter() {
 
       subscriber.send({
         changed: false,
+        message_changed: false,
+        typing_changed: false,
+        client_id: 0,
         updated_at: String(currentState?.updatedAt || ""),
         revision: Number(currentState?.revision || 0),
+        typing: null,
       });
 
       const cleanup = () => {
@@ -4362,6 +4699,7 @@ function makeChatTempRouter() {
   router.get("/summaries/wait", async (req, res) => {
     try {
       const tenantId = getTenantId(req);
+      const actorKey = getRequestReactionActor(req);
       const since = String(req.query.since || "").trim();
       const sinceRevisionRaw = Number(req.query.since_revision ?? req.query.sinceRevision);
       const hasSinceRevision = Number.isFinite(sinceRevisionRaw) && sinceRevisionRaw >= 0;
@@ -4380,8 +4718,12 @@ function makeChatTempRouter() {
           ok: true,
           data: {
             changed: true,
+            message_changed: false,
+            typing_changed: false,
+            client_id: 0,
             updated_at: currentUpdatedAt,
             revision: currentRevision,
+            typing: null,
             timeout: false,
           },
         });
@@ -4401,8 +4743,14 @@ function makeChatTempRouter() {
         ok: true,
         data: {
           changed,
+          message_changed: waitResult?.messageChanged === true,
+          typing_changed: waitResult?.typingChanged === true,
+          client_id: Number(waitResult?.clientId || 0),
           updated_at: nextUpdatedAt,
           revision: nextRevision,
+          typing: Number(waitResult?.clientId || 0) > 0
+            ? getPeerTypingForActor(tenantId, Number(waitResult?.clientId || 0), actorKey)
+            : null,
           timeout: waitResult?.timeout === true,
         },
       });

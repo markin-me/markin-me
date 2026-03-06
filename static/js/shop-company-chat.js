@@ -139,9 +139,10 @@
   const CHAT_AUTOSCROLL_MS = 170;
   const CHAT_EMOJI_SHEET_SETTLE_MS = 280;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
-  const CHAT_TYPING_HEARTBEAT_MS = 1800;
-  const CHAT_TYPING_IDLE_STOP_MS = 2600;
-  const CHAT_TYPING_BLUR_STOP_MS = 320;
+  const CHAT_TYPING_HEARTBEAT_MS = 500;
+  const CHAT_TYPING_IDLE_STOP_MS = 2800;
+  const CHAT_TYPING_BLUR_STOP_MS = 180;
+  const CHAT_TYPING_EXPIRE_GRACE_MS = 3600;
   const CHAT_ASSISTANT_QUICK_REPLY_DELAY_MIN_MS = 1600;
   const CHAT_ASSISTANT_QUICK_REPLY_DELAY_MAX_MS = 2400;
   const CHAT_MESSAGE_ALERT_COOLDOWN_MS = 900;
@@ -370,8 +371,12 @@
   let peerTypingHideTimer = 0;
   let localTypingHeartbeatTimer = 0;
   let localTypingStopTimer = 0;
+  let localTypingWatchTimer = 0;
   let localTypingActive = false;
   let localTypingPhrase = "";
+  let localTypingLastActivityAt = 0;
+  let localTypingLastText = "";
+  let localTypingPushChain = Promise.resolve();
   let assistantHotReplyTimer = 0;
   let assistantHotReplyToken = 0;
   let assistantTypingEmulationUntilMs = 0;
@@ -472,6 +477,23 @@
     };
   }
 
+  function getPeerTypingEffectiveUntilMs(rawInfo) {
+    const info = normalizePeerTypingInfo(rawInfo);
+    const expiresAtMs = new Date(String(info.expiresAt || "")).getTime();
+    if (Number.isFinite(expiresAtMs) && expiresAtMs > Date.now()) return expiresAtMs;
+    const updatedAtMs = new Date(String(info.updatedAt || "")).getTime();
+    if (!Number.isFinite(updatedAtMs)) return expiresAtMs;
+    return updatedAtMs + CHAT_TYPING_EXPIRE_GRACE_MS;
+  }
+
+  function isPeerTypingInfoActiveNow(rawInfo) {
+    const info = normalizePeerTypingInfo(rawInfo);
+    if (!info.active || !String(info.text || "").trim()) return false;
+    const until = getPeerTypingEffectiveUntilMs(info);
+    if (!Number.isFinite(until)) return false;
+    return until > Date.now();
+  }
+
   function ensureTypingIndicatorNode() {
     if (typingIndicator && typingIndicator.isConnected) return typingIndicator;
     const existing = thread.querySelector("#shopCompanyChatTypingIndicator");
@@ -498,7 +520,9 @@
     const keepBottom = shouldKeepFeedPinnedToBottom();
     const node = ensureTypingIndicatorNode();
     if (!node) return;
-    const canShow = overlay.classList.contains("is-open") && peerTypingState.active && peerTypingState.text;
+    const info = normalizePeerTypingInfo(peerTypingState);
+    const activeNow = isPeerTypingInfoActiveNow(info);
+    const canShow = overlay.classList.contains("is-open") && activeNow;
     const textNode = node.querySelector(".shop-company-chat-typing-indicator");
     if (!canShow) {
       if (textNode) textNode.textContent = "";
@@ -510,7 +534,7 @@
       }
       return;
     }
-    if (textNode) textNode.textContent = String(peerTypingState.text || "").trim();
+    if (textNode) textNode.textContent = String(info.text || "").trim();
     node.classList.remove("is-hidden");
     if (keepBottom) {
       scrollToBottom(false);
@@ -527,19 +551,22 @@
 
   function schedulePeerTypingAutoHide() {
     clearPeerTypingHideTimer();
-    const expiresAt = String(peerTypingState.expiresAt || "");
-    if (!expiresAt) return;
-    const until = new Date(expiresAt).getTime();
+    const until = getPeerTypingEffectiveUntilMs(peerTypingState);
     if (!Number.isFinite(until)) return;
     const delay = Math.max(0, until - Date.now() + 80);
     peerTypingHideTimer = window.setTimeout(function () {
       peerTypingHideTimer = 0;
-      const currentUntil = new Date(String(peerTypingState.expiresAt || "")).getTime();
-      if (Number.isFinite(currentUntil) && currentUntil > Date.now()) return;
+      const currentInfo = normalizePeerTypingInfo(peerTypingState);
+      if (!currentInfo.active) return;
+      const currentUntil = getPeerTypingEffectiveUntilMs(currentInfo);
+      if (Number.isFinite(currentUntil) && currentUntil > Date.now()) {
+        schedulePeerTypingAutoHide();
+        return;
+      }
       peerTypingState = {
         active: false,
         text: "",
-        updatedAt: String(peerTypingState.updatedAt || ""),
+        updatedAt: String(currentInfo.updatedAt || ""),
         expiresAt: "",
       };
       renderTypingIndicator();
@@ -584,6 +611,33 @@
       window.clearTimeout(localTypingStopTimer);
       localTypingStopTimer = 0;
     }
+    if (localTypingWatchTimer) {
+      window.clearTimeout(localTypingWatchTimer);
+      localTypingWatchTimer = 0;
+    }
+  }
+
+  function scheduleLocalTypingWatch() {
+    if (!localTypingActive) return;
+    if (localTypingWatchTimer) window.clearTimeout(localTypingWatchTimer);
+    localTypingWatchTimer = window.setTimeout(function () {
+      localTypingWatchTimer = 0;
+      if (!localTypingActive) return;
+      if (!overlay.classList.contains("is-open")) {
+        stopLocalTypingSession({ flush: true });
+        return;
+      }
+      const currentText = normalizeComposerText(input.value);
+      if (!currentText) {
+        stopLocalTypingSession({ flush: true });
+        return;
+      }
+      if (currentText !== String(localTypingLastText || "")) {
+        localTypingLastText = currentText;
+        localTypingLastActivityAt = Date.now();
+      }
+      scheduleLocalTypingWatch();
+    }, 120);
   }
 
   async function remoteSetTypingState(active, phrase, options) {
@@ -607,6 +661,19 @@
     }
   }
 
+  function queueLocalTypingStatePush(active, phrase, options) {
+    const chain = localTypingPushChain && typeof localTypingPushChain.then === "function"
+      ? localTypingPushChain
+      : Promise.resolve();
+    const next = chain
+      .then(function () {
+        return remoteSetTypingState(active, phrase, options);
+      })
+      .catch(function () {});
+    localTypingPushChain = next;
+    return next;
+  }
+
   function scheduleLocalTypingHeartbeat() {
     if (!localTypingActive) return;
     if (localTypingHeartbeatTimer) window.clearTimeout(localTypingHeartbeatTimer);
@@ -616,19 +683,40 @@
         stopLocalTypingSession({ flush: true });
         return;
       }
-      if (!normalizeComposerText(input.value)) {
+      const currentText = normalizeComposerText(input.value);
+      if (!currentText) {
         stopLocalTypingSession({ flush: true });
         return;
       }
-      remoteSetTypingState(true, localTypingPhrase).catch(function () {});
+      if (currentText !== String(localTypingLastText || "")) {
+        localTypingLastText = currentText;
+        localTypingLastActivityAt = Date.now();
+      }
+      const lastActivityAt = Number(localTypingLastActivityAt || 0);
+      if (
+        Number.isFinite(CHAT_TYPING_IDLE_STOP_MS)
+        && CHAT_TYPING_IDLE_STOP_MS > 0
+        && lastActivityAt > 0
+        && (Date.now() - lastActivityAt) >= CHAT_TYPING_IDLE_STOP_MS
+      ) {
+        stopLocalTypingSession({ flush: true });
+        return;
+      }
+      queueLocalTypingStatePush(true, localTypingPhrase);
       scheduleLocalTypingHeartbeat();
     }, CHAT_TYPING_HEARTBEAT_MS);
   }
 
   function scheduleLocalTypingStop(delayMs) {
     if (localTypingStopTimer) window.clearTimeout(localTypingStopTimer);
-    const timeout = Math.max(80, Number(delayMs || CHAT_TYPING_IDLE_STOP_MS));
+    const rawTimeout = Number(delayMs ?? CHAT_TYPING_IDLE_STOP_MS);
+    if (!Number.isFinite(rawTimeout) || rawTimeout <= 0) return;
+    const timeout = Math.max(80, rawTimeout);
     localTypingStopTimer = window.setTimeout(function () {
+      if (localTypingLastActivityAt > 0 && (Date.now() - localTypingLastActivityAt) < timeout) {
+        scheduleLocalTypingStop(timeout);
+        return;
+      }
       stopLocalTypingSession({ flush: true });
     }, timeout);
   }
@@ -639,25 +727,43 @@
     clearLocalTypingTimers();
     localTypingActive = false;
     localTypingPhrase = "";
+    localTypingLastActivityAt = 0;
+    localTypingLastText = "";
     if (opts.flush !== false && wasActive) {
-      remoteSetTypingState(false, "", { keepalive: opts.keepalive === true }).catch(function () {});
+      queueLocalTypingStatePush(false, "", { keepalive: opts.keepalive === true });
     }
   }
 
-  function handleComposerTypingActivity() {
+  function handleComposerTypingActivity(options) {
+    const opts = options || {};
     if (!overlay.classList.contains("is-open")) return;
-    const hasText = !!normalizeComposerText(input.value);
-    if (!hasText) {
+    const currentText = normalizeComposerText(input.value);
+    const hasText = !!currentText;
+    if (!hasText && opts.allowEmpty !== true) {
       stopLocalTypingSession({ flush: true });
       return;
     }
     if (!localTypingActive) {
       localTypingActive = true;
       localTypingPhrase = getRandomTypingPhrase();
-      remoteSetTypingState(true, localTypingPhrase).catch(function () {});
+      queueLocalTypingStatePush(true, localTypingPhrase);
     }
+    localTypingLastText = currentText;
+    localTypingLastActivityAt = Date.now();
     scheduleLocalTypingHeartbeat();
+    scheduleLocalTypingWatch();
     scheduleLocalTypingStop(CHAT_TYPING_IDLE_STOP_MS);
+  }
+
+  function isTypingKeyEvent(event) {
+    if (!event) return false;
+    if (event.ctrlKey || event.metaKey || event.altKey) return false;
+    if (event.isComposing === true) return true;
+    const key = String(event.key || "");
+    if (!key) return false;
+    if (key === "Backspace" || key === "Delete" || key === "Process" || key === "Unidentified") return true;
+    if (String(event.code || "") === "Space") return true;
+    return key.length === 1;
   }
 
   function addPendingFeedMessageIds(ids) {
@@ -7873,6 +7979,8 @@
     const sync = function (options) {
       const opts = options || {};
       const stickToBottom = opts.stickToBottom === true;
+      const wasNearBottom = shouldKeepFeedPinnedToBottom();
+      const keepBottomPinned = stickToBottom || wasNearBottom;
 
       const inputStyles = window.getComputedStyle(input);
       const minHeight = parseFloat(inputStyles.minHeight) || 45;
@@ -7890,7 +7998,7 @@
         preview.textContent = "";
         input.classList.remove("is-rich-emoji-preview");
         scheduleScrollDownComposerExtraOffsetSync();
-        if (stickToBottom) scrollToBottom(true);
+        if (keepBottomPinned) scrollToBottom(stickToBottom);
         return;
       }
 
@@ -7900,7 +8008,7 @@
       preview.style.transform = "translate(" + (-Math.max(0, input.scrollLeft)) + "px, " + (-Math.max(0, input.scrollTop)) + "px)";
       scheduleScrollDownComposerExtraOffsetSync();
 
-      if (stickToBottom) scrollToBottom(true);
+      if (keepBottomPinned) scrollToBottom(stickToBottom);
     };
 
     input.__syncEmojiPreview = sync;
@@ -9747,9 +9855,23 @@
       event.preventDefault();
       clearReplyDraft();
     }
+
+    if (isTypingKeyEvent(event)) handleComposerTypingActivity({ allowEmpty: true });
   });
 
   input.addEventListener("input", function () {
+    handleComposerTypingActivity();
+  });
+  input.addEventListener("beforeinput", function () {
+    handleComposerTypingActivity({ allowEmpty: true });
+  });
+  input.addEventListener("compositionstart", function () {
+    handleComposerTypingActivity();
+  });
+  input.addEventListener("compositionupdate", function () {
+    handleComposerTypingActivity();
+  });
+  input.addEventListener("compositionend", function () {
     handleComposerTypingActivity();
   });
 
