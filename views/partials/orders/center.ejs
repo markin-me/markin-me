@@ -1,11 +1,17 @@
-<div class="center-stack">
-  <!-- Toolbar как отдельный "остров" -->
-  <div class="panel toolbar-island">
-    <%- include('./subheader') %>
-  </div>
+<div id="ordersCenterPane">
+  <div class="center-stack">
+    <!-- Toolbar как отдельный "остров" -->
+    <div class="panel toolbar-island">
+      <%- include('./subheader') %>
+    </div>
 
-  <!-- Основной список (скролл внутри panel-body) -->
-  <div class="panel orders-center orders-center-panel">
-    <%- include('./list') %>
+    <!-- Основной список (скролл внутри panel-body) -->
+    <div class="panel orders-center orders-center-panel">
+      <%- include('./list') %>
+    </div>
   </div>
+</div>
+
+<div class="hidden" id="ordersCheckoutCenterPane">
+  <%- include('../new-order/center') %>
 </div>

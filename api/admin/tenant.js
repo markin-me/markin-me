@@ -53,6 +53,8 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
   ];
   let tenantChatColumnsReady = false;
   let ensureTenantChatColumnsPromise = null;
+  let orderDeliveryTypeColumnsReady = false;
+  let ensureOrderDeliveryTypeColumnsPromise = null;
 
   async function publishTenantChatWidgetChanged(tenantId, enabled) {
     try {
@@ -462,6 +464,54 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     return ensureTenantChatColumnsPromise;
   }
 
+  async function ensureOrderDeliveryTypeColumns() {
+    if (orderDeliveryTypeColumnsReady) return true;
+    if (ensureOrderDeliveryTypeColumnsPromise) return ensureOrderDeliveryTypeColumnsPromise;
+
+    ensureOrderDeliveryTypeColumnsPromise = (async () => {
+      const [columnRows] = await db.query('SHOW COLUMNS FROM order_delivery_types');
+      const existing = new Set((columnRows || []).map((row) => String(row?.Field || '').trim()).filter(Boolean));
+      const requiredColumns = [
+        {
+          name: 'require_client_data',
+          sql: "TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'Обязательны ли данные клиента (имя/телефон)'",
+        },
+        {
+          name: 'show_on_site',
+          sql: "TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'Показывать способ на сайте'",
+        },
+      ];
+
+      for (const column of requiredColumns) {
+        if (existing.has(column.name)) continue;
+        try {
+          await db.query(`ALTER TABLE order_delivery_types ADD COLUMN \`${column.name}\` ${column.sql}`);
+          existing.add(column.name);
+        } catch (err) {
+          if (String(err?.code || '') === 'ER_DUP_FIELDNAME') {
+            existing.add(column.name);
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      orderDeliveryTypeColumnsReady = requiredColumns.every((column) => existing.has(column.name));
+      return orderDeliveryTypeColumnsReady;
+    })()
+      .catch((err) => {
+        ensureOrderDeliveryTypeColumnsPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (orderDeliveryTypeColumnsReady) {
+          ensureOrderDeliveryTypeColumnsPromise = null;
+        }
+      });
+
+    return ensureOrderDeliveryTypeColumnsPromise;
+  }
+
   const listConfigs = {
     'order-statuses': {
       table: 'order_statuses',
@@ -474,7 +524,12 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents }) {
     'order-delivery': {
       table: 'order_delivery_types',
       hasFinal: false,
-      defaultField: 'is_default'
+      defaultField: 'is_default',
+      detailFields: ['require_client_data', 'show_on_site'],
+      patchFields: {
+        require_client_data: (value) => (helpers.toBool(value, true) ? 1 : 0),
+        show_on_site: (value) => (helpers.toBool(value, true) ? 1 : 0),
+      }
     },
     'order-time-options': {
       table: 'order_time_options',
@@ -1476,9 +1531,10 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
     try {
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
+      await ensureOrderDeliveryTypeColumns();
 
       const [rows] = await db.query(
-        `SELECT id, code, title, icon, sort, is_active, is_default
+        `SELECT id, code, title, icon, sort, is_active, is_default, require_client_data, show_on_site
          FROM order_delivery_types
          WHERE tenant_id=? AND store_id=1
          ORDER BY sort ASC, id ASC`,
@@ -1519,6 +1575,9 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       if (!id) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
       if (!cfg) return res.status(400).json({ ok: false, error: 'TYPE_INVALID' });
+      if (type === 'order-delivery') {
+        await ensureOrderDeliveryTypeColumns();
+      }
 
       const title = req.body.title !== undefined ? helpers.strOrNull(req.body.title) : undefined;
       const icon = cfg.hasIcon !== false && req.body.icon !== undefined ? helpers.strOrNull(req.body.icon) : undefined;
@@ -1691,6 +1750,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const baseIconFields = ['id', 'code', 'title', 'icon', 'sort', 'is_active'];
       if (cfg.hasFinal) baseIconFields.push('is_final');
       if (cfg.defaultField) baseIconFields.push(cfg.defaultField);
+      if (cfg.detailFields) baseIconFields.push(...cfg.detailFields);
       const fields = baseIconFields.join(', ');
       const [rows] = await db.query(
         `SELECT ${fields} FROM ${cfg.table} WHERE tenant_id=? AND store_id=1 AND id=? LIMIT 1`,

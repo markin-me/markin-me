@@ -7,6 +7,127 @@ const multer = require('multer');
 module.exports = function makeAdminProductsRouter({ db, helpers }) {
   const router = express.Router();
   let hasCategoryCheckoutVisibilityColumn = null;
+  const ADMIN_CACHE_TTL_MS = Object.freeze({
+    checkoutConstructorDraft: 30_000,
+    newOrderManifest: 5_000,
+  });
+  const adminResponseCache = new Map();
+  const adminResponseInflight = new Map();
+  const ADMIN_CACHE_MAX_KEYS = 500;
+
+  function stableCachePart(value) {
+    if (Array.isArray(value)) return value.map((v) => stableCachePart(v));
+    if (value && typeof value === "object") {
+      const out = {};
+      Object.keys(value).sort().forEach((k) => {
+        out[k] = stableCachePart(value[k]);
+      });
+      return out;
+    }
+    return value;
+  }
+
+  function makeAdminCacheKey(prefix, parts) {
+    return `${String(prefix || "admin")}::${JSON.stringify(stableCachePart(parts || {}))}`;
+  }
+
+  function getAdminCache(key) {
+    const hit = adminResponseCache.get(key);
+    if (!hit) return null;
+    if (hit.expiresAt <= Date.now()) {
+      adminResponseCache.delete(key);
+      return null;
+    }
+    return hit.data;
+  }
+
+  function pruneAdminCacheIfNeeded() {
+    if (adminResponseCache.size <= ADMIN_CACHE_MAX_KEYS) return;
+    const entries = Array.from(adminResponseCache.entries());
+    entries.sort((a, b) => Number(a[1]?.createdAt || 0) - Number(b[1]?.createdAt || 0));
+    const overflow = adminResponseCache.size - ADMIN_CACHE_MAX_KEYS;
+    for (let i = 0; i < overflow; i += 1) adminResponseCache.delete(entries[i][0]);
+  }
+
+  function setAdminCache(key, data, ttlMs) {
+    const ttl = Math.max(1000, Number(ttlMs || 0));
+    adminResponseCache.set(key, {
+      data,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + ttl,
+    });
+    pruneAdminCacheIfNeeded();
+  }
+
+  async function loadAdminCachedPayload(cacheKey, ttlMs, loader) {
+    const cached = getAdminCache(cacheKey);
+    if (cached) return { payload: cached, cacheState: "HIT" };
+
+    const inflight = adminResponseInflight.get(cacheKey);
+    if (inflight) {
+      const payload = await inflight;
+      return { payload, cacheState: "WAIT" };
+    }
+
+    const task = (async () => {
+      const fresh = await loader();
+      setAdminCache(cacheKey, fresh, ttlMs);
+      return fresh;
+    })().finally(() => {
+      adminResponseInflight.delete(cacheKey);
+    });
+    adminResponseInflight.set(cacheKey, task);
+    const payload = await task;
+    return { payload, cacheState: "MISS" };
+  }
+
+  function invalidateAdminCacheByPrefix(prefix) {
+    const p = String(prefix || "");
+    if (!p) return;
+    for (const key of adminResponseCache.keys()) {
+      if (key.startsWith(p)) adminResponseCache.delete(key);
+    }
+  }
+
+  async function readTableStamp(table, whereSql, params = []) {
+    const safeTable = String(table || "").trim();
+    if (!/^[a-zA-Z0-9_]+$/.test(safeTable)) return "0:0";
+    const whereClause = String(whereSql || "1");
+    const tryQueries = [
+      `SELECT UNIX_TIMESTAMP(MAX(updated_at)) AS stamp, COUNT(*) AS cnt FROM \`${safeTable}\` WHERE ${whereClause}`,
+      `SELECT UNIX_TIMESTAMP(MAX(created_at)) AS stamp, COUNT(*) AS cnt FROM \`${safeTable}\` WHERE ${whereClause}`,
+      `SELECT MAX(id) AS stamp, COUNT(*) AS cnt FROM \`${safeTable}\` WHERE ${whereClause}`,
+    ];
+    for (const sql of tryQueries) {
+      try {
+        const [rows] = await db.query(sql, params);
+        const row = Array.isArray(rows) ? (rows[0] || {}) : {};
+        const stamp = Number(row?.stamp || 0);
+        const cnt = Number(row?.cnt || 0);
+        const safeStamp = Number.isFinite(stamp) ? stamp : 0;
+        const safeCnt = Number.isFinite(cnt) ? cnt : 0;
+        return `${safeStamp}:${safeCnt}`;
+      } catch {}
+    }
+    return "0:0";
+  }
+
+  function makeStampToken(parts) {
+    const src = JSON.stringify(Array.isArray(parts) ? parts : []);
+    return crypto.createHash("sha1").update(src).digest("hex").slice(0, 16);
+  }
+
+  router.use((req, res, next) => {
+    const method = String(req.method || "").toUpperCase();
+    const shouldWatch = method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
+    if (!shouldWatch) return next();
+    res.on("finish", () => {
+      if (res.statusCode >= 200 && res.statusCode < 400) {
+        invalidateAdminCacheByPrefix("new-order-manifest::");
+      }
+    });
+    next();
+  });
 
   async function ensureCategoryCheckoutVisibilityColumnKnown() {
     if (hasCategoryCheckoutVisibilityColumn !== null) return hasCategoryCheckoutVisibilityColumn;
@@ -196,6 +317,262 @@ module.exports = function makeAdminProductsRouter({ db, helpers }) {
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  // ------------------------------
+  // New-order lightweight data manifest
+  // GET /api/new-order/manifest
+  // ------------------------------
+  router.get('/new-order/manifest', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const cacheKey = makeAdminCacheKey("new-order-manifest", { tenantId, storeId });
+      const { payload, cacheState } = await loadAdminCachedPayload(
+        cacheKey,
+        ADMIN_CACHE_TTL_MS.newOrderManifest,
+        async () => {
+          const [
+            categoriesStamp,
+            checkoutBlocksStamp,
+            checkoutBlockCategoriesStamp,
+            productsStamp,
+            productCategoriesStamp,
+            productStocksStamp,
+            variantsAssignmentsStamp,
+            variantGroupsStamp,
+            variantDiscountTiersStamp,
+            ingredientsStamp,
+            optionAssignmentsStamp,
+            optionGroupsStamp,
+            optionItemsStamp,
+            combosStamp,
+            comboSetBlocksStamp,
+            comboBlocksStamp,
+            comboBlockProductsStamp,
+            discountsStamp,
+            discountProductsStamp,
+            unitConversionsStamp,
+            tenantStamp,
+            storesStamp,
+            orderPaymentsStamp,
+            orderDeliveryStamp,
+            orderTimeOptionsStamp,
+          ] = await Promise.all([
+            readTableStamp("prod_categories", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_checkout_constructor_blocks", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_checkout_constructor_block_categories", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_products", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_product_categories", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_product_stocks", "tenant_id=? AND store_id=?", [tenantId, storeId]),
+            readTableStamp("prod_variant_assignments", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_variant_groups", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_variant_discount_tiers", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_product_ingredients", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_option_assignments", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_option_groups", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_option_items", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_combos", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_combo_set_blocks", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_combo_blocks", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_combo_block_products", "tenant_id=?", [tenantId]),
+            readTableStamp("mkt_discounts", "tenant_id=? AND store_id=?", [tenantId, storeId]),
+            readTableStamp("mkt_discount_products", "tenant_id=?", [tenantId]),
+            readTableStamp("prod_unit_conversions", "tenant_id=?", [tenantId]),
+            readTableStamp("ten_tenants", "id=?", [tenantId]),
+            readTableStamp("ten_stores", "tenant_id=?", [tenantId]),
+            readTableStamp("order_payments", "tenant_id=?", [tenantId]),
+            readTableStamp("order_delivery_types", "tenant_id=?", [tenantId]),
+            readTableStamp("order_time_options", "tenant_id=?", [tenantId]),
+          ]);
+
+          const domains = {
+            categories: {
+              token: makeStampToken([categoriesStamp]),
+            },
+            checkout: {
+              token: makeStampToken([checkoutBlocksStamp, checkoutBlockCategoriesStamp]),
+            },
+            products: {
+              token: makeStampToken([
+                productsStamp,
+                productCategoriesStamp,
+                productStocksStamp,
+                variantsAssignmentsStamp,
+                variantGroupsStamp,
+                variantDiscountTiersStamp,
+                ingredientsStamp,
+                optionAssignmentsStamp,
+                optionGroupsStamp,
+                optionItemsStamp,
+                combosStamp,
+                comboSetBlocksStamp,
+                comboBlocksStamp,
+                comboBlockProductsStamp,
+                discountsStamp,
+                discountProductsStamp,
+                unitConversionsStamp,
+              ]),
+            },
+            refs: {
+              token: makeStampToken([
+                tenantStamp,
+                storesStamp,
+                orderPaymentsStamp,
+                orderDeliveryStamp,
+                orderTimeOptionsStamp,
+              ]),
+            },
+          };
+
+          return {
+            ok: true,
+            data: {
+              generated_at: Date.now(),
+              domains,
+            },
+          };
+        }
+      );
+
+      res.set("x-admin-cache", cacheState);
+      return res.json(payload);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // ------------------------------
+  // Checkout constructor draft (tenant-level)
+  // GET /api/checkout-constructor/draft
+  // PUT /api/checkout-constructor/draft
+  // ------------------------------
+  router.get('/checkout-constructor/draft', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const cacheKey = makeAdminCacheKey("checkout-constructor-draft", { tenantId });
+      const { payload, cacheState } = await loadAdminCachedPayload(
+        cacheKey,
+        ADMIN_CACHE_TTL_MS.checkoutConstructorDraft,
+        async () => {
+          const [blocksRows] = await db.query(
+            `SELECT id, title, require_all, sort_order
+             FROM prod_checkout_constructor_blocks
+             WHERE tenant_id=? AND is_active=1
+             ORDER BY sort_order ASC, id ASC`,
+            [tenantId]
+          );
+
+          const blockIds = blocksRows.map((r) => Number(r.id)).filter((id) => Number.isFinite(id) && id > 0);
+          let categoriesRows = [];
+          if (blockIds.length) {
+            const [catRows] = await db.query(
+              `SELECT block_id, category_id, sort_order
+               FROM prod_checkout_constructor_block_categories
+               WHERE tenant_id=? AND block_id IN (?)
+               ORDER BY sort_order ASC, id ASC`,
+              [tenantId, blockIds]
+            );
+            categoriesRows = Array.isArray(catRows) ? catRows : [];
+          }
+
+          const categoriesByBlock = new Map();
+          categoriesRows.forEach((row) => {
+            const blockId = Number(row.block_id || 0);
+            const categoryId = Number(row.category_id || 0);
+            if (!(blockId > 0) || !(categoryId > 0)) return;
+            if (!categoriesByBlock.has(blockId)) categoriesByBlock.set(blockId, []);
+            categoriesByBlock.get(blockId).push(categoryId);
+          });
+
+          const blocks = blocksRows.map((row) => {
+            const id = Number(row.id || 0);
+            return {
+              id,
+              title: String(row.title || ''),
+              requireAll: Number(row.require_all || 0) !== 0,
+              categoryIds: categoriesByBlock.get(id) || [],
+            };
+          });
+          return { ok: true, data: { blocks } };
+        }
+      );
+      res.set("x-admin-cache", cacheState);
+      res.json(payload);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.put('/checkout-constructor/draft', async (req, res) => {
+    const conn = await db.getConnection();
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const inputBlocks = Array.isArray(req.body?.blocks) ? req.body.blocks : [];
+      const normalizedBlocks = inputBlocks
+        .map((block, index) => {
+          const rawCategoryIds = Array.isArray(block?.categoryIds) ? block.categoryIds : [];
+          const categoryIds = [...new Set(
+            rawCategoryIds
+              .map((id) => Number(id))
+              .filter((id) => Number.isFinite(id) && id > 0)
+          )];
+          if (!categoryIds.length) return null;
+          return {
+            title: String(block?.title || '').trim().slice(0, 120),
+            requireAll: block?.requireAll == null ? true : !!block.requireAll,
+            sortOrder: Number.isFinite(Number(block?.sortOrder)) ? Number(block.sortOrder) : (index + 1) * 10,
+            categoryIds,
+          };
+        })
+        .filter(Boolean);
+
+      await conn.beginTransaction();
+
+      await conn.query('DELETE FROM prod_checkout_constructor_block_categories WHERE tenant_id=?', [tenantId]);
+      await conn.query('DELETE FROM prod_checkout_constructor_blocks WHERE tenant_id=?', [tenantId]);
+
+      if (normalizedBlocks.length) {
+        const allCategoryIds = [...new Set(normalizedBlocks.flatMap((b) => b.categoryIds))];
+        const [allowedRows] = await conn.query(
+          'SELECT id FROM prod_categories WHERE tenant_id=? AND id IN (?)',
+          [tenantId, allCategoryIds]
+        );
+        const allowed = new Set((Array.isArray(allowedRows) ? allowedRows : []).map((r) => Number(r.id || 0)));
+
+        for (let i = 0; i < normalizedBlocks.length; i += 1) {
+          const block = normalizedBlocks[i];
+          const sortOrder = Number.isFinite(Number(block.sortOrder)) ? Number(block.sortOrder) : (i + 1) * 10;
+          const [insertBlock] = await conn.query(
+            `INSERT INTO prod_checkout_constructor_blocks (tenant_id, title, require_all, sort_order, is_active)
+             VALUES (?, ?, ?, ?, 1)`,
+            [tenantId, block.title || null, block.requireAll ? 1 : 0, sortOrder]
+          );
+          const blockId = Number(insertBlock.insertId || 0);
+          const filteredCategoryIds = block.categoryIds.filter((id) => allowed.has(Number(id)));
+          for (let j = 0; j < filteredCategoryIds.length; j += 1) {
+            const categoryId = Number(filteredCategoryIds[j]);
+            await conn.query(
+              `INSERT INTO prod_checkout_constructor_block_categories (tenant_id, block_id, category_id, sort_order)
+               VALUES (?, ?, ?, ?)`,
+              [tenantId, blockId, categoryId, (j + 1) * 10]
+            );
+          }
+        }
+      }
+
+      await conn.commit();
+      invalidateAdminCacheByPrefix("checkout-constructor-draft::");
+      res.json({ ok: true });
+    } catch (e) {
+      try { await conn.rollback(); } catch {}
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      conn.release();
     }
   });
 

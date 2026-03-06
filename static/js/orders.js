@@ -99,9 +99,18 @@
   const elStagesList = $("#ordersStagesList");
   const elOrdersList = $("#ordersList");
   const elEmptyHint = $("#ordersEmptyHint");
+  const ordersAddBtn = $("#ordersAddBtn");
   const orderTabsHeader = $("#orderTabsHeader");
-  const orderTabs = $("#orderTabs");
+  const orderTabsHeaderCheckout = $("#orderTabsHeaderCheckout");
+  const orderTabsHeaders = [orderTabsHeader, orderTabsHeaderCheckout].filter(Boolean);
+  const orderTabsEls = [$("#orderTabs"), $("#orderTabsCheckout")].filter(Boolean);
   const orderInfoFooter = $("#orderInfoFooter");
+  const ordersLeftPane = $("#ordersLeftPane");
+  const ordersCenterPane = $("#ordersCenterPane");
+  const ordersRightPane = $("#ordersRightPane");
+  const ordersCheckoutLeftPane = $("#ordersCheckoutLeftPane");
+  const ordersCheckoutCenterPane = $("#ordersCheckoutCenterPane");
+  const ordersCheckoutRightPane = $("#ordersCheckoutRightPane");
 
   const infoEls = {
     empty: $$('[data-info="empty"]'),
@@ -209,6 +218,10 @@
     tabs: [],
     activeKey: null,
   };
+
+  const ORDERS_CACHE_VERSION = 2;
+  const ORDERS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+  let ordersCachePersistTimer = null;
 
   // -----------------------------
   // Helpers
@@ -548,15 +561,140 @@
     if (row) row.classList.add("is-active");
   }
 
-  function renderOrderTabs() {
-    if (!orderTabsHeader || !orderTabs) return;
-    const hasTabs = tabsState.tabs.length > 0;
-    orderTabsHeader.classList.toggle("hidden", !hasTabs);
-    if (!hasTabs) {
-      orderTabs.innerHTML = "";
+  function normalizeTabMode(mode) {
+    const raw = String(mode || "view").toLowerCase();
+    if (raw === "edit" || raw === "new") return raw;
+    return "view";
+  }
+
+  function isCheckoutTab(tab) {
+    return !!tab && tab.type === "order" && normalizeTabMode(tab.mode) !== "view";
+  }
+
+  function setOrdersCheckoutLayoutEnabled(enabled) {
+    const checkout = Boolean(enabled);
+    document.body.classList.toggle("orders-checkout-mode", checkout);
+    ordersLeftPane?.classList.toggle("hidden", checkout);
+    ordersCenterPane?.classList.toggle("hidden", checkout);
+    ordersRightPane?.classList.toggle("hidden", checkout);
+    ordersCheckoutLeftPane?.classList.toggle("hidden", !checkout);
+    ordersCheckoutCenterPane?.classList.toggle("hidden", !checkout);
+    ordersCheckoutRightPane?.classList.toggle("hidden", !checkout);
+  }
+
+  function getNewOrderBridge() {
+    const bridge = window.NewOrderBridge;
+    if (!bridge || typeof bridge !== "object") return null;
+    if (typeof bridge.captureSession !== "function") return null;
+    if (typeof bridge.restoreSession !== "function") return null;
+    return bridge;
+  }
+
+  async function getReadyNewOrderBridge() {
+    const bridge = getNewOrderBridge();
+    if (!bridge) return null;
+    if (typeof bridge.ready === "function") {
+      try {
+        await bridge.ready();
+      } catch {}
+    }
+    return bridge;
+  }
+
+  function captureCheckoutSessionForTab(tab) {
+    if (!isCheckoutTab(tab)) return;
+    if (tab.checkoutSessionHydrating) return;
+    const bridge = getNewOrderBridge();
+    if (!bridge) return;
+    try {
+      const snapshot = bridge.captureSession();
+      if (snapshot && typeof snapshot === "object") {
+        tab.checkoutSession = snapshot;
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function ensureCheckoutSessionForTab(tab) {
+    if (!isCheckoutTab(tab)) return null;
+    const bridge = await getReadyNewOrderBridge();
+    if (!bridge) return null;
+    const mode = normalizeTabMode(tab.mode);
+    const forceRebuildFromOrder = mode === "edit" && tab.checkoutSessionHydrating === true;
+    if (!forceRebuildFromOrder && tab.checkoutSession && typeof tab.checkoutSession === "object") return tab.checkoutSession;
+
+    if (mode === "edit") {
+      const sourceOrder = tab.order || state.orders.find((o) => Number(o.id) === Number(tab.orderId)) || null;
+      if (sourceOrder && typeof bridge.createSessionFromOrder === "function") {
+        try {
+          tab.checkoutSession = await bridge.createSessionFromOrder(sourceOrder, {
+            title: tab.title,
+            orderId: Number(sourceOrder.id || 0),
+          });
+          tab.checkoutSessionHydrating = false;
+          return tab.checkoutSession;
+        } catch (err) {
+          console.error(err);
+          tab.checkoutSessionHydrating = false;
+        }
+      }
+    }
+
+    if (typeof bridge.createBlankSession === "function") {
+      tab.checkoutSession = bridge.createBlankSession({ title: tab.title });
+    } else {
+      tab.checkoutSession = null;
+    }
+    tab.checkoutSessionHydrating = false;
+    return tab.checkoutSession;
+  }
+
+  async function applyTabModeLayout(tab) {
+    if (!tab || tab.type !== "order") {
+      setOrdersCheckoutLayoutEnabled(false);
       return;
     }
-    orderTabs.innerHTML = tabsState.tabs.map((tab) => {
+
+    const mode = normalizeTabMode(tab.mode);
+    if (mode === "view") {
+      setOrdersCheckoutLayoutEnabled(false);
+      return;
+    }
+
+    setOrdersCheckoutLayoutEnabled(true);
+    const bridge = await getReadyNewOrderBridge();
+    if (!bridge) return;
+    const session = await ensureCheckoutSessionForTab(tab);
+    if (session && typeof bridge.restoreSession === "function") {
+      await bridge.restoreSession(session);
+      tab.checkoutSessionHydrating = false;
+      try {
+        const restored = bridge.captureSession && bridge.captureSession();
+        const rightOrders = Array.isArray(restored?.rightOrders) ? restored.rightOrders : [];
+        if (!rightOrders.length && typeof bridge.createBlankSession === "function") {
+          const fallbackSession = bridge.createBlankSession({ title: tab.title });
+          if (fallbackSession && typeof fallbackSession === "object") {
+            tab.checkoutSession = fallbackSession;
+            await bridge.restoreSession(fallbackSession);
+            tab.checkoutSessionHydrating = false;
+          }
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  }
+
+  function renderOrderTabs() {
+    if (!orderTabsEls.length) return;
+    const hasTabs = tabsState.tabs.length > 0;
+    orderTabsHeaders.forEach((header) => header.classList.toggle("hidden", !hasTabs));
+    if (!hasTabs) {
+      orderTabsEls.forEach((el) => { el.innerHTML = ""; });
+      return;
+    }
+    const html = tabsState.tabs.map((tab) => {
       const isActive = tab.key === tabsState.activeKey;
       return `
         <div class="product-tab ${isActive ? "is-active" : ""}" data-order-tab-key="${escapeHtml(tab.key)}">
@@ -565,23 +703,63 @@
         </div>
       `;
     }).join("");
+    orderTabsEls.forEach((el) => { el.innerHTML = html; });
+  }
+
+  function goToOrdersHomeView() {
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+    if (activeTab) captureCheckoutSessionForTab(activeTab);
+    tabsState.activeKey = null;
+    state.activeOrderId = null;
+    setOrdersCheckoutLayoutEnabled(false);
+    renderOrderTabs();
+    syncActiveOrderRowState();
+    setInfo(null);
+    schedulePersistOrdersCache();
   }
 
   function setActiveOrderTab(key, { openMobile = false } = {}) {
+    const prevTab = tabsState.tabs.find((t) => t.key === tabsState.activeKey) || null;
+    if (prevTab) captureCheckoutSessionForTab(prevTab);
+
     const tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) return;
     tabsState.activeKey = key;
+
+    if (tab.type === "order") {
+      tab.mode = normalizeTabMode(tab.mode);
+    }
 
     if (tab.type === "client") {
       state.activeOrderId = null;
       renderOrderTabs();
       syncActiveOrderRowState();
+      setOrdersCheckoutLayoutEnabled(false);
       activateClientTab(tab, { openMobile }).catch(console.error);
+      schedulePersistOrdersCache();
       return;
     }
 
-    state.activeOrderId = tab.orderId;
-    const orderFromState = state.orders.find((o) => Number(o.id) === Number(tab.orderId));
+    if (isCheckoutTab(tab)) {
+      state.activeOrderId = null;
+      renderOrderTabs();
+      syncActiveOrderRowState();
+      applyTabModeLayout(tab)
+        .then(() => {
+          if (openMobile && isMobile()) openSheet();
+        })
+        .catch(console.error)
+        .finally(() => {
+          schedulePersistOrdersCache();
+        });
+      return;
+    }
+
+    setOrdersCheckoutLayoutEnabled(false);
+    state.activeOrderId = tab.orderId ? Number(tab.orderId) : null;
+    const orderFromState = tab.orderId
+      ? state.orders.find((o) => Number(o.id) === Number(tab.orderId))
+      : null;
     if (orderFromState) {
       tab.order = { ...tab.order, ...orderFromState };
       tab.title = buildOrderTabTitle(tab.order);
@@ -592,6 +770,7 @@
     setInfo(orderFromState || tab.order || null);
 
     if (openMobile && isMobile()) openSheet();
+    schedulePersistOrdersCache();
   }
 
   function ensureOrderTab(order, { activate = true, openMobile = false } = {}) {
@@ -600,21 +779,102 @@
     const key = buildOrderTabKey(orderId);
     let tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) {
-      tab = { key, type: "order", orderId, title: buildOrderTabTitle(order), order: { ...order } };
+      tab = {
+        key,
+        type: "order",
+        mode: "view",
+        orderId,
+        title: buildOrderTabTitle(order),
+        order: { ...order },
+        checkoutSession: null,
+      };
       tabsState.tabs.push(tab);
     } else {
       tab.type = "order";
       tab.order = { ...tab.order, ...order };
-      tab.title = buildOrderTabTitle(tab.order);
+      tab.orderId = orderId;
+      if (normalizeTabMode(tab.mode) === "view") {
+        tab.title = buildOrderTabTitle(tab.order);
+      }
     }
 
     if (activate) {
       setActiveOrderTab(key, { openMobile });
     } else {
       renderOrderTabs();
+      schedulePersistOrdersCache();
     }
 
     return tab;
+  }
+
+  async function ensureFullOrderById(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return null;
+    const fromState = state.orders.find((order) => Number(order?.id) === id) || null;
+    const knownStoreId = Number(fromState?.store_id || fromState?.storeId || 0);
+    if (fromState && Array.isArray(fromState.items) && fromState.items.length && knownStoreId > 0) return fromState;
+    try {
+      const json = await apiJson(`/api/admin/orders/${id}`);
+      const fullOrder = json?.data || null;
+      if (!fullOrder || !Number.isFinite(Number(fullOrder.id))) return fromState;
+      const idx = state.orders.findIndex((order) => Number(order?.id) === Number(fullOrder.id));
+      if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...fullOrder };
+      else state.orders.unshift(fullOrder);
+      renderOrders();
+      return state.orders.find((order) => Number(order?.id) === Number(fullOrder.id)) || fullOrder;
+    } catch (err) {
+      console.error(err);
+      return fromState;
+    }
+  }
+
+  async function openEditOrderTab(orderId) {
+    const id = Number(orderId || 0);
+    if (!(id > 0)) return;
+    const baseOrder = await ensureFullOrderById(id);
+    if (!baseOrder) return;
+
+    const tab = ensureOrderTab(baseOrder, { activate: false });
+    if (!tab) return;
+    tab.mode = "edit";
+    tab.title = `№${id}`;
+    tab.order = { ...tab.order, ...baseOrder };
+    tab.checkoutSession = null;
+    tab.checkoutSessionHydrating = true;
+    setActiveOrderTab(tab.key, { openMobile: true });
+    schedulePersistOrdersCache();
+  }
+
+  async function openNewDraftTab() {
+    const key = `new:${Date.now()}:${Math.floor(Math.random() * 1000)}`;
+    const nextNumber = tabsState.tabs.filter((tab) => tab.type === "order" && normalizeTabMode(tab.mode) === "new").length + 1;
+    const title = nextNumber === 1 ? "Новый заказ" : `Новый заказ ${nextNumber}`;
+    let checkoutSession = null;
+    try {
+      const bridge = await getReadyNewOrderBridge();
+      if (bridge && typeof bridge.createBlankSession === "function") {
+        checkoutSession = bridge.createBlankSession({ title });
+      }
+    } catch (err) {
+      console.error(err);
+    }
+    const tab = {
+      key,
+      type: "order",
+      mode: "new",
+      orderId: null,
+      title,
+      order: null,
+      checkoutSession,
+    };
+    const activeIdx = tabsState.activeKey
+      ? tabsState.tabs.findIndex((row) => row.key === tabsState.activeKey)
+      : -1;
+    const insertIdx = activeIdx >= 0 ? activeIdx + 1 : tabsState.tabs.length;
+    tabsState.tabs.splice(insertIdx, 0, tab);
+    setActiveOrderTab(key, { openMobile: true });
+    schedulePersistOrdersCache();
   }
 
   async function findClientIdByPhone(phoneValue) {
@@ -685,6 +945,7 @@
       setActiveOrderTab(key, { openMobile });
     } else {
       renderOrderTabs();
+      schedulePersistOrdersCache();
     }
 
     return tab;
@@ -695,15 +956,20 @@
       tabsState.activeKey = null;
       renderOrderTabs();
       if (!state.activeOrderId) setInfo(null);
+      setOrdersCheckoutLayoutEnabled(false);
       return;
     }
 
     tabsState.tabs.forEach((tab) => {
       if (tab.type !== "order") return;
+      tab.mode = normalizeTabMode(tab.mode);
+      if (!Number.isFinite(Number(tab.orderId)) || Number(tab.orderId) <= 0) return;
       const fresh = state.orders.find((o) => Number(o.id) === Number(tab.orderId));
       if (fresh) {
         tab.order = { ...tab.order, ...fresh };
-        tab.title = buildOrderTabTitle(tab.order);
+        if (tab.mode === "view") {
+          tab.title = buildOrderTabTitle(tab.order);
+        }
       }
     });
 
@@ -712,18 +978,33 @@
     }
 
     const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
-    state.activeOrderId = activeTab?.type === "order" ? activeTab.orderId : null;
+    state.activeOrderId = activeTab?.type === "order" && normalizeTabMode(activeTab.mode) === "view"
+      ? activeTab.orderId
+      : null;
 
     renderOrderTabs();
     syncActiveOrderRowState();
 
     if (!activeTab) {
       setInfo(null);
+      setOrdersCheckoutLayoutEnabled(false);
       return;
     }
 
     if (activeTab.type === "client") {
+      setOrdersCheckoutLayoutEnabled(false);
       activateClientTab(activeTab).catch(console.error);
+      schedulePersistOrdersCache();
+      return;
+    }
+
+    if (isCheckoutTab(activeTab)) {
+      setInfo(null);
+      // During background orders polling we must not restore checkout session again,
+      // otherwise in-progress draft edits are overwritten by stale tab snapshot.
+      captureCheckoutSessionForTab(activeTab);
+      setOrdersCheckoutLayoutEnabled(true);
+      schedulePersistOrdersCache();
       return;
     }
 
@@ -734,11 +1015,14 @@
       renderOrderTabs();
     }
     setInfo(freshActive || activeTab.order || null);
+    schedulePersistOrdersCache();
   }
 
   function closeOrderTab(key) {
     const idx = tabsState.tabs.findIndex((tab) => tab.key === key);
     if (idx < 0) return;
+    const tabToClose = tabsState.tabs[idx];
+    captureCheckoutSessionForTab(tabToClose);
     const wasActive = tabsState.activeKey === key;
     tabsState.tabs.splice(idx, 1);
 
@@ -748,7 +1032,9 @@
       renderOrderTabs();
       syncActiveOrderRowState();
       setInfo(null);
+      setOrdersCheckoutLayoutEnabled(false);
       closeSheet();
+      schedulePersistOrdersCache();
       return;
     }
 
@@ -762,6 +1048,186 @@
 
     renderOrderTabs();
     syncActiveOrderRowState();
+    schedulePersistOrdersCache();
+  }
+
+  function getTenantIdFromStorage() {
+    try {
+      const tenantRaw = localStorage.getItem("tenant");
+      const tenant = tenantRaw ? JSON.parse(tenantRaw) : null;
+      const id = Number(tenant?.id || 0);
+      return Number.isFinite(id) && id > 0 ? id : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function getStoreIdFromStorage() {
+    try {
+      const activeStoreId = Number(localStorage.getItem("activeStoreId") || 0);
+      if (Number.isFinite(activeStoreId) && activeStoreId > 0) return activeStoreId;
+    } catch {}
+    return 0;
+  }
+
+  function ordersCacheKey() {
+    return `orders_bootstrap_v${ORDERS_CACHE_VERSION}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}`;
+  }
+
+  function readOrdersBootstrapCache() {
+    try {
+      const raw = localStorage.getItem(ordersCacheKey());
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      const ts = Number(parsed?.ts || 0);
+      if (!(ts > 0) || Date.now() - ts > ORDERS_CACHE_MAX_AGE_MS) return null;
+      return parsed?.data && typeof parsed.data === "object" ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function serializeTabForCache(tab) {
+    if (!tab || typeof tab !== "object") return null;
+    const type = String(tab.type || "");
+    if (type !== "order" && type !== "client") return null;
+    const out = {
+      key: String(tab.key || ""),
+      type,
+      title: String(tab.title || "").trim(),
+    };
+    if (type === "order") {
+      out.mode = normalizeTabMode(tab.mode);
+      const orderId = Number(tab.orderId || 0);
+      out.orderId = Number.isFinite(orderId) && orderId > 0 ? orderId : null;
+      out.order = tab.order && typeof tab.order === "object" ? tab.order : null;
+      out.checkoutSession = tab.checkoutSession && typeof tab.checkoutSession === "object" ? tab.checkoutSession : null;
+    } else {
+      const clientId = Number(tab.clientId || 0);
+      out.clientId = Number.isFinite(clientId) && clientId > 0 ? clientId : null;
+      out.fallbackName = String(tab.fallbackName || "").trim();
+      out.fallbackPhone = String(tab.fallbackPhone || "").trim();
+      out.activeContentTab = String(tab.activeContentTab || "addresses");
+      out.client = tab.client && typeof tab.client === "object" ? tab.client : null;
+      out.addresses = Array.isArray(tab.addresses) ? tab.addresses : null;
+      out.orders = Array.isArray(tab.orders) ? tab.orders : null;
+      out.discounts = Array.isArray(tab.discounts) ? tab.discounts : null;
+    }
+    return out.key ? out : null;
+  }
+
+  function restoreTabsFromCache(payload) {
+    const rows = Array.isArray(payload?.tabs) ? payload.tabs : [];
+    const restored = rows
+      .map((row) => {
+        if (!row || typeof row !== "object") return null;
+        const type = String(row.type || "");
+        const key = String(row.key || "").trim();
+        if (!key || (type !== "order" && type !== "client")) return null;
+        if (type === "order") {
+          return {
+            key,
+            type: "order",
+            mode: normalizeTabMode(row.mode),
+            orderId: Number.isFinite(Number(row.orderId)) && Number(row.orderId) > 0 ? Number(row.orderId) : null,
+            title: String(row.title || "").trim() || "Заказ",
+            order: row.order && typeof row.order === "object" ? row.order : null,
+            checkoutSession: row.checkoutSession && typeof row.checkoutSession === "object" ? row.checkoutSession : null,
+          };
+        }
+        return {
+          key,
+          type: "client",
+          clientId: Number.isFinite(Number(row.clientId)) && Number(row.clientId) > 0 ? Number(row.clientId) : null,
+          title: String(row.title || "").trim() || "Клиент",
+          fallbackName: String(row.fallbackName || "").trim(),
+          fallbackPhone: String(row.fallbackPhone || "").trim(),
+          activeContentTab: String(row.activeContentTab || "addresses"),
+          client: row.client && typeof row.client === "object" ? row.client : null,
+          addresses: Array.isArray(row.addresses) ? row.addresses : null,
+          orders: Array.isArray(row.orders) ? row.orders : null,
+          discounts: Array.isArray(row.discounts) ? row.discounts : null,
+          loading: false,
+          error: null,
+        };
+      })
+      .filter(Boolean);
+
+    tabsState.tabs = restored;
+    const activeKey = String(payload?.activeKey || "").trim();
+    tabsState.activeKey = restored.some((tab) => tab.key === activeKey)
+      ? activeKey
+      : (restored[restored.length - 1]?.key || null);
+  }
+
+  function persistOrdersCacheNow() {
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+    if (activeTab) captureCheckoutSessionForTab(activeTab);
+
+    const payload = {
+      ts: Date.now(),
+      data: {
+        statuses: Array.isArray(state.statuses) ? state.statuses : [],
+        activeStatusId: state.activeStatusId,
+        orders: Array.isArray(state.orders) ? state.orders : [],
+        lastEventId: Number(state.lastEventId || 0) || null,
+        storeTimezone: String(state.storeTimezone || "+0"),
+        date: {
+          start: state.date.start ? toDateKey(state.date.start) : null,
+          end: state.date.end ? toDateKey(state.date.end) : null,
+          viewYear: Number(state.date.viewYear || 0) || null,
+          viewMonth: Number(state.date.viewMonth || 0) || null,
+        },
+      },
+    };
+
+    try {
+      localStorage.setItem(ordersCacheKey(), JSON.stringify(payload));
+    } catch {}
+  }
+
+  function schedulePersistOrdersCache(delay = 140) {
+    if (ordersCachePersistTimer) clearTimeout(ordersCachePersistTimer);
+    ordersCachePersistTimer = setTimeout(() => {
+      ordersCachePersistTimer = null;
+      persistOrdersCacheNow();
+    }, Math.max(0, Number(delay || 0)));
+  }
+
+  function hydrateOrdersFromCache(cache) {
+    if (!cache || typeof cache !== "object") return false;
+    state.statuses = Array.isArray(cache.statuses) ? cache.statuses : [];
+    state.activeStatusId = cache.activeStatusId != null ? cache.activeStatusId : "all";
+    state.orders = Array.isArray(cache.orders) ? cache.orders : [];
+    state.activeOrderId = null;
+    state.lastEventId = Number.isFinite(Number(cache.lastEventId)) && Number(cache.lastEventId) > 0
+      ? Number(cache.lastEventId)
+      : null;
+    state.storeTimezone = String(cache.storeTimezone || state.storeTimezone || "+0");
+
+    const start = parseDateKey(cache?.date?.start);
+    const end = parseDateKey(cache?.date?.end);
+    if (start && end) {
+      state.date.start = start;
+      state.date.end = end;
+    }
+    const viewYear = Number(cache?.date?.viewYear);
+    const viewMonth = Number(cache?.date?.viewMonth);
+    if (Number.isFinite(viewYear) && Number.isFinite(viewMonth)) {
+      state.date.viewYear = viewYear;
+      state.date.viewMonth = viewMonth;
+    }
+
+    tabsState.tabs = [];
+    tabsState.activeKey = null;
+    renderCalendar();
+    updateDateLabel();
+    renderStages();
+    renderOrders();
+    setOrdersCheckoutLayoutEnabled(false);
+    setInfo(null);
+    renderOrderTabs();
+    return true;
   }
 
   function initials(name) {
@@ -971,7 +1437,7 @@
   }
 
   function itemsToHtml(items) {
-    if (!Array.isArray(items) || !items.length) return '<div class="muted">?</div>';
+    if (!Array.isArray(items) || !items.length) return '<div class="muted">-</div>';
 
     const sorted = items.slice().sort((a, b) => {
       const aAuto = isAutoAddItem(a);
@@ -981,88 +1447,103 @@
       return 0;
     });
 
-    return sorted
-      .map((it, itemIdx) => {
-        // Комбо: как в корзине — название комбо и вложенный состав (селекции с вариантами и ингредиентами)
-        if (it.type === "combo") {
-          const name = escapeHtml(it.name || it.combo_title || "Комбо");
-          const qty = Math.max(1, Number(it.qty || it.quantity || 0));
-          const lineTotal = Number(it.line_total ?? it.total ?? it.total_price ?? 0);
-          const oldLineTotal = Number(it.old_line_total) || 0;
-          const showOldPrice = oldLineTotal > lineTotal;
-          const priceHtml = showOldPrice
-            ? `<span class="order-item-old-price">${money(oldLineTotal)}</span><span class="order-item-price-current">${money(lineTotal)}</span>`
-            : `<span class="order-item-price-current">${money(lineTotal)}</span>`;
-          const titleHtml = `${name} × ${qty}`;
-          const bulletPrefix = "• ";
+    const toCleanPhotos = (value) => (
+      (Array.isArray(value) ? value : [])
+        .map((src) => String(src || "").trim())
+        .filter(Boolean)
+        .slice(0, 4)
+    );
 
-          const photos = Array.isArray(it.photos) ? it.photos.filter(Boolean) : [];
-          const hasPhotos = photos.length > 0;
-          const uniqueId = `order-item-${itemIdx}-${Date.now()}`;
-          let photosHtml = "";
-          if (hasPhotos) {
-            photosHtml = `
-              <div class="order-item-photos" data-item-photos="${uniqueId}">
-                <div class="order-item-photo-main">
-                  <img class="order-item-photo-img" src="${escapeHtml(photos[0])}" alt="${escapeHtml(name)}" data-photo-idx="0" />
-                  ${photos.length > 1 ? `
-                    <button class="order-item-photo-nav order-item-photo-prev" type="button" aria-label="Предыдущее фото"><i class="fas fa-chevron-left"></i></button>
-                    <button class="order-item-photo-nav order-item-photo-next" type="button" aria-label="Следующее фото"><i class="fas fa-chevron-right"></i></button>
-                  ` : ""}
-                </div>
-                ${photos.length > 1 ? `
-                  <div class="order-item-photo-thumbs-wrapper">
-                    <button class="order-item-thumbs-nav order-item-thumbs-prev" type="button" aria-label="Листать влево"><i class="fas fa-chevron-left"></i></button>
-                    <div class="order-item-photo-thumbs" data-thumbs="${uniqueId}">
-                      ${photos.map((photo, idx) => `
-                        <button class="order-item-photo-thumb ${idx === 0 ? "is-active" : ""}" type="button" data-thumb-idx="${idx}">
-                          <img src="${escapeHtml(photo)}" alt="" />
-                        </button>
-                      `).join("")}
-                    </div>
-                    <button class="order-item-thumbs-nav order-item-thumbs-next" type="button" aria-label="Листать вправо"><i class="fas fa-chevron-right"></i></button>
-                  </div>
-                ` : ""}
-              </div>
-            `;
-          }
-          const photoHtml = hasPhotos
-            ? `<div class="order-item-photo-small"><img src="${escapeHtml(photos[0])}" alt="${escapeHtml(name)}" /></div>`
-            : "";
+    const mergeVariantUnit = (label, unit) => {
+      const cleanLabel = String(label || "").trim();
+      const cleanUnit = String(unit || "").trim();
+      if (!cleanLabel) return cleanUnit;
+      if (!cleanUnit) return cleanLabel;
+      const escapedUnit = cleanUnit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const measureMatch = cleanLabel.match(new RegExp(`^\\s*([\\d.,]+\\s*${escapedUnit})(?:\\b|\\s|$)`, "i"));
+      if (measureMatch && String(measureMatch[1] || "").trim()) {
+        return String(measureMatch[1] || "").trim();
+      }
+      const labelLower = cleanLabel.toLowerCase();
+      const unitLower = cleanUnit.toLowerCase();
+      if (labelLower.endsWith(` ${unitLower}`) || labelLower === unitLower) return cleanLabel;
+      return `${cleanLabel} ${cleanUnit}`.trim();
+    };
 
-          const selections = Array.isArray(it.selections) ? it.selections : [];
-          const comboDetailsHtml = selections.length
-            ? `<div class="order-item-composition">
-                ${selections.map((sel) => {
-                  const productName = escapeHtml(sel.product_name || "—");
-                  const nameLine = `<div class="order-item-composition-item order-item-composition-item-primary">1 × ${productName}</div>`;
-                  const vParts = [sel.variant_label, sel.variant_unit, sel.variant_group_title].filter(Boolean);
-                  const variantLine = vParts.length
-                    ? `<div class="order-item-composition-item">${bulletPrefix}${escapeHtml(vParts.join(" "))}</div>`
-                    : "";
-                  const ingredientsDisplay = Array.isArray(sel.ingredients_display) ? sel.ingredients_display : [];
-                  const ingLines = ingredientsDisplay
-                    .map((ing) => {
-                      const ingName = escapeHtml(ing.name || "");
-                      const rawQty = ing.qty ?? ing.quantity;
-                      const numQty = typeof rawQty === "number" ? rawQty : parseFloat(rawQty);
-                      if (Number(numQty) <= 0) return ""; // не показываем позиции с количеством 0
-                      if (!ingName && (rawQty == null || rawQty === "")) return "";
-                      const unit = String(ing.unit || "").trim();
-                      const parts = [];
-                      if (rawQty != null && rawQty !== "") parts.push(String(rawQty));
-                      if (unit) parts.push(unit);
-                      if (ingName) parts.push(ingName);
-                      return `<div class="order-item-composition-item">${bulletPrefix}${escapeHtml(parts.join(" "))}</div>`;
-                    })
-                    .filter(Boolean)
-                    .join("");
-                  return nameLine + variantLine + ingLines;
-                }).join("")}
-              </div>`
-            : "";
+    const formatQtyUnitName = (qtyRaw, unitRaw, nameRaw) => {
+      const qtyNum = Number(qtyRaw);
+      const qtyText = Number.isFinite(qtyNum)
+        ? String(Number.isInteger(qtyNum) ? qtyNum : Number(qtyNum.toFixed(3)))
+        : String(qtyRaw ?? "").trim();
+      const unitText = String(unitRaw || "").trim();
+      const nameText = String(nameRaw || "").trim();
+      return [qtyText, unitText, nameText].filter(Boolean).join(" ").trim();
+    };
 
-          const base = `
+    const renderThumbHtml = (photosRaw, altRaw) => {
+      const photos = toCleanPhotos(photosRaw);
+      if (!photos.length) return "";
+      const alt = escapeHtml(String(altRaw || ""));
+      if (photos.length === 1) {
+        return `<div class="order-item-photo-small"><img src="${escapeHtml(photos[0])}" alt="${alt}" /></div>`;
+      }
+      const p1 = photos[0] || "";
+      const p2 = photos[1] || "";
+      const p3 = photos[2] || "";
+      const p4 = photos[3] || "";
+      const slots = [p1, p3, p4, p2];
+      return `
+        <div class="order-item-photo-small">
+          <span class="new-order-right-cart-thumb-grid">
+            ${slots.map((src) => src
+              ? `<img src="${escapeHtml(src)}" alt="" />`
+              : `<span class="new-order-right-cart-thumb-cell-empty"></span>`
+            ).join("")}
+          </span>
+        </div>
+      `;
+    };
+
+    const compositionPrimaryLine = (text) => `<div class="order-item-composition-item order-item-composition-item-primary">${escapeHtml(String(text || "").trim())}</div>`;
+    const compositionSubLine = (text) => `<div class="order-item-composition-item order-item-composition-item-sub">&bull; ${escapeHtml(String(text || "").trim())}</div>`;
+
+    return sorted.map((it, itemIdx) => {
+      if (String(it?.type || "") === "combo") {
+        const nameRaw = String(it?.name || it?.combo_title || "Combo");
+        const name = escapeHtml(nameRaw);
+        const qty = Math.max(1, Number(it?.qty || it?.quantity || 0));
+        const lineTotal = Number(it?.line_total ?? it?.total ?? it?.total_price ?? 0);
+        const oldLineTotal = Number(it?.old_line_total || 0);
+        const showOldPrice = oldLineTotal > lineTotal;
+        const priceHtml = showOldPrice
+          ? `<span class="order-item-old-price">${money(oldLineTotal)}</span><span class="order-item-price-current">${money(lineTotal)}</span>`
+          : `<span class="order-item-price-current">${money(lineTotal)}</span>`;
+        const titleHtml = `${qty} x ${name}`;
+        const photoHtml = renderThumbHtml(it?.photos, nameRaw);
+
+        const selections = Array.isArray(it?.selections) ? it.selections : [];
+        const compositionRows = [];
+        selections.forEach((sel) => {
+          const productName = String(sel?.product_name || "").trim();
+          const variantHead = mergeVariantUnit(sel?.variant_label, sel?.variant_unit);
+          const primaryLine = [variantHead, productName].filter(Boolean).join(" ").trim();
+          if (primaryLine) compositionRows.push(compositionPrimaryLine(`1 x ${primaryLine}`));
+
+          const ingredientsDisplay = Array.isArray(sel?.ingredients_display) ? sel.ingredients_display : [];
+          ingredientsDisplay.forEach((ing) => {
+            const ingQty = ing?.qty ?? ing?.quantity;
+            const ingNumQty = Number(ingQty);
+            if (!Number.isFinite(ingNumQty) || ingNumQty <= 0) return;
+            const text = formatQtyUnitName(ingQty, ing?.unit, ing?.name);
+            if (text) compositionRows.push(compositionSubLine(text));
+          });
+        });
+        const comboDetailsHtml = compositionRows.length
+          ? `<div class="order-item-composition">${compositionRows.join("")}</div>`
+          : "";
+
+        return `
+          <div class="order-item order-item--combo" data-item-idx="${itemIdx}">
             <div class="order-item-line">
               ${photoHtml}
               <div class="order-item-content">
@@ -1073,129 +1554,61 @@
                 </div>
               </div>
             </div>
-          `;
-          return `<div class="order-item order-item--combo" data-item-idx="${itemIdx}">${base}</div>`;
-        }
+          </div>
+        `;
+      }
 
-        const name = escapeHtml(it.product_name || it.name || "Товар");
-        const qty = Math.max(1, Number(it.qty || it.quantity || 0));
-        const price = Number(it.price || 0);
-        const lineTotal = Number(it.line_total ?? it.total ?? it.total_price ?? price * qty ?? 0);
-        const discountOriginal = it.discount?.original_line_total;
-        const oldLineTotal = discountOriginal || 0;
-        const showOldPrice = oldLineTotal > lineTotal;
-        const priceHtml = showOldPrice
-          ? `<span class="order-item-old-price">${money(oldLineTotal)}</span><span class="order-item-price-current">${money(lineTotal)}</span>`
-          : `<span class="order-item-price-current">${money(lineTotal)}</span>`;
-        const titleHtml = `${name} × ${qty}`;
-        const bulletPrefix = "• ";
+      const nameRaw = String(it?.product_name || it?.name || "Item");
+      const qty = Math.max(1, Number(it?.qty || it?.quantity || 0));
+      const price = Number(it?.price || 0);
+      const lineTotal = Number(it?.line_total ?? it?.total ?? it?.total_price ?? price * qty ?? 0);
+      const oldLineTotal = Number(it?.discount?.original_line_total || 0);
+      const showOldPrice = oldLineTotal > lineTotal;
+      const priceHtml = showOldPrice
+        ? `<span class="order-item-old-price">${money(oldLineTotal)}</span><span class="order-item-price-current">${money(lineTotal)}</span>`
+        : `<span class="order-item-price-current">${money(lineTotal)}</span>`;
+      const variantLines = [];
+      const variants = Array.isArray(it?.variants) ? it.variants : [];
+      variants.forEach((v) => {
+        const value = String(v?.label || v?.value || "").trim();
+        const unit = String(v?.unit || v?.unit_short_title || v?.unitLabel || "").trim();
+        let line = mergeVariantUnit(value, unit);
+        if (line) variantLines.push(line);
+      });
+      const primaryVariantLine = variantLines.length ? variantLines[0] : "";
+      const titleText = [primaryVariantLine, nameRaw].filter(Boolean).join(" ").trim() || nameRaw;
+      const titleHtml = `${qty} x ${escapeHtml(titleText)}`;
+      const photoHtml = renderThumbHtml(it?.photos, nameRaw);
 
-        const photos = Array.isArray(it.photos) ? it.photos.filter(Boolean) : [];
-        const hasPhotos = photos.length > 0;
-        const uniqueId = `order-item-${itemIdx}-${Date.now()}`;
+      const lines = [];
+      if (variantLines.length > 1) lines.push(...variantLines.slice(1));
 
-        let photosHtml = "";
-        if (hasPhotos) {
-          photosHtml = `
-            <div class="order-item-photos" data-item-photos="${uniqueId}">
-              <div class="order-item-photo-main">
-                <img class="order-item-photo-img" src="${escapeHtml(photos[0])}" alt="${escapeHtml(name)}" data-photo-idx="0" />
-                ${photos.length > 1 ? `
-                  <button class="order-item-photo-nav order-item-photo-prev" type="button" aria-label="Предыдущее фото">
-                    <i class="fas fa-chevron-left"></i>
-                  </button>
-                  <button class="order-item-photo-nav order-item-photo-next" type="button" aria-label="Следующее фото">
-                    <i class="fas fa-chevron-right"></i>
-                  </button>
-                ` : ""}
-              </div>
-              ${photos.length > 1 ? `
-                <div class="order-item-photo-thumbs-wrapper">
-                  <button class="order-item-thumbs-nav order-item-thumbs-prev" type="button" aria-label="Листать миниатюры влево">
-                    <i class="fas fa-chevron-left"></i>
-                  </button>
-                  <div class="order-item-photo-thumbs" data-thumbs="${uniqueId}">
-                    ${photos.map((photo, idx) => `
-                      <button class="order-item-photo-thumb ${idx === 0 ? "is-active" : ""}" type="button" data-thumb-idx="${idx}">
-                        <img src="${escapeHtml(photo)}" alt="" />
-                      </button>
-                    `).join("")}
-                  </div>
-                  <button class="order-item-thumbs-nav order-item-thumbs-next" type="button" aria-label="Листать миниатюры вправо">
-                    <i class="fas fa-chevron-right"></i>
-                  </button>
-                </div>
-              ` : ""}
-            </div>
-          `;
-        }
+      const ingredients = (Array.isArray(it?.ingredients) ? it.ingredients : [])
+        .filter((ing) => Number(ing?.quantity ?? ing?.qty ?? 0) > 0);
+      ingredients.forEach((ing) => {
+        const ingQty = ing?.quantity ?? ing?.qty;
+        const ingUnit = ing?.unit_label || ing?.unit || ing?.unitLabel || ing?.unit_short_title || ing?.unit_title || "";
+        const ingName = ing?.name || "Ingredient";
+        const line = formatQtyUnitName(ingQty, ingUnit, ingName);
+        if (line) lines.push(line);
+      });
 
-        const photoHtml = hasPhotos
-          ? `<div class="order-item-photo-small"><img src="${escapeHtml(photos[0])}" alt="${escapeHtml(name)}" /></div>`
-          : "";
+      const options = (Array.isArray(it?.options) ? it.options : [])
+        .filter((opt) => Number(opt?.qty ?? opt?.quantity ?? 0) > 0);
+      options.forEach((opt) => {
+        const variant = mergeVariantUnit(opt?.variant_label || opt?.variantLabel, opt?.variant_unit || opt?.variantUnit);
+        const qtyText = Math.max(1, Number(opt?.qty || opt?.quantity || 1));
+        const title = String(opt?.title || "Option").trim();
+        const line = variant ? `${variant} ${title}`.trim() : `${qtyText} ${title}`.trim();
+        if (line) lines.push(line);
+      });
 
-        const variants = Array.isArray(it.variants) ? it.variants : [];
-        const variantsHtml = variants.length
-          ? `<div class="order-item-composition">
-              ${variants.map((v) => {
-                const groupTitle = escapeHtml(v.group_title || "Вариант");
-                const variantValue = escapeHtml(v.label || v.value || "");
-                const variantValueTrimmed = variantValue.trim();
-                const groupTitleTrimmed = groupTitle.trim();
-                let formatted;
-                if (variantValueTrimmed && groupTitleTrimmed) {
-                  const variantLower = variantValueTrimmed.toLowerCase();
-                  const groupLower = groupTitleTrimmed.toLowerCase();
-                  if (variantLower.endsWith(" " + groupLower) || variantLower.endsWith(groupLower)) {
-                    formatted = variantValue;
-                  } else {
-                    formatted = `${variantValue} ${groupTitle}`.trim();
-                  }
-                } else {
-                  formatted = `${variantValue} ${groupTitle}`.trim();
-                }
-                return `<div class="order-item-composition-item">${bulletPrefix}${formatted}</div>`;
-              }).join("")}
-            </div>`
-          : "";
+      const subHtml = lines.length
+        ? `<div class="order-item-composition">${lines.map(compositionSubLine).join("")}</div>`
+        : "";
 
-        const ingredients = Array.isArray(it.ingredients) ? it.ingredients : [];
-        const ingredientsFiltered = ingredients.filter((ing) => Number(ing.quantity ?? ing.qty ?? 0) > 0);
-        const ingredientsHtml = ingredientsFiltered.length
-          ? `<div class="order-item-composition">
-              ${ingredientsFiltered.map((ing) => {
-                const ingName = escapeHtml(ing.name || "Ингредиент");
-                const ingQty = Number(ing.quantity ?? ing.qty ?? 0);
-                let ingUnit = escapeHtml(ing.unit_label || ing.unit || ing.unitLabel || ing.unit_short_title || ing.unit_title || "");
-                if (!ingUnit) ingUnit = ingQty > 10 ? "г" : "шт";
-                const formatted = `${ingQty}${ingUnit} ${ingName}`;
-                return `<div class="order-item-composition-item">${bulletPrefix}${formatted}</div>`;
-              }).join("")}
-            </div>`
-          : "";
-
-        const options = Array.isArray(it.options) ? it.options : [];
-        const optionsFiltered = options.filter((opt) => Number(opt.qty ?? opt.quantity ?? 0) > 0);
-        const optionsHtml = optionsFiltered.length
-          ? `<div class="order-item-composition">
-              ${optionsFiltered.map((opt) => {
-                const optName = escapeHtml(opt.title || "Опция");
-                const variantLabel = escapeHtml((opt.variant_label || opt.variantLabel || "").trim());
-                let formatted;
-                if (variantLabel) {
-                  formatted = `${variantLabel} ${optName}`;
-                } else {
-                  const optQty = Math.max(1, Number(opt.qty || 1));
-                  formatted = `${optQty}шт ${optName}`;
-                }
-                return `<div class="order-item-composition-item">${bulletPrefix}${formatted}</div>`;
-              }).join("")}
-            </div>`
-          : "";
-
-        const subHtml = variantsHtml + ingredientsHtml + optionsHtml;
-
-        const base = `
+      return `
+        <div class="order-item" data-item-idx="${itemIdx}">
           <div class="order-item-line">
             ${photoHtml}
             <div class="order-item-content">
@@ -1206,14 +1619,10 @@
               </div>
             </div>
           </div>
-        `;
-
-        return `<div class="order-item" data-item-idx="${itemIdx}">${base}</div>`;
-      })
-      .join("");
+        </div>
+      `;
+    }).join("");
   }
-
-  // Инициализация листания фото для товаров в заказе
   function initOrderItemPhotos() {
     if (!infoEls.itemsList || !infoEls.itemsList.length) return;
     
@@ -1314,6 +1723,23 @@
     if (c.includes("card")) return "fa-credit-card";
     if (c.includes("online")) return "fa-globe";
     return "fa-credit-card";
+  }
+
+  function resolveOrderPaymentIcon(order) {
+    const stored = String(order?.payment_icon || "").trim();
+    if (stored) return stored;
+    return normalizeIconClass(paymentIcon(order?.payment_code));
+  }
+
+  function renderOrderPaymentIcon(order) {
+    const iconValue = resolveOrderPaymentIcon(order);
+    if (!iconValue) return `<i class="fas ${escapeHtml(paymentIcon(order?.payment_code))}"></i>`;
+    if (isIconUrl(iconValue)) {
+      return `<img src="${escapeHtml(iconValue)}" alt="" loading="lazy">`;
+    }
+    const iconClass = normalizeIconClass(iconValue);
+    if (!iconClass) return `<i class="fas ${escapeHtml(paymentIcon(order?.payment_code))}"></i>`;
+    return `<i class="${escapeHtml(iconClass)}"></i>`;
   }
 
   function setTextAll(list, value) {
@@ -2065,6 +2491,7 @@
 
     syncActiveStage();
     wireDragTargets();
+    schedulePersistOrdersCache();
   }
 
   // -----------------------------
@@ -2199,11 +2626,12 @@
         </div>
       `;
 
-    const payment = order.payment_title || "";
+    const payment = String(order.payment_title || "").trim();
     const totalText = money(order.total_price || 0);
     const paymentCode = (order.payment_code || "").toLowerCase();
     const isCash = paymentCode.includes("cash");
-    const isCard = paymentCode.includes("card") || (!isCash && paymentCode);
+    const paymentIconHtml = renderOrderPaymentIcon(order);
+    const paymentTitleAttr = payment ? ` title="${escapeHtml(payment)}"` : "";
 
     row.innerHTML = `
       <div class="order-col order-id">
@@ -2230,8 +2658,9 @@
       </div>
 
       <div class="order-col order-total">
-        <button class="order-payment-btn ${isCash ? "order-payment-cash" : "order-payment-card"}" type="button">
-          <i class="fas ${paymentIcon(order.payment_code)}"></i> ${escapeHtml(totalText)}
+        <button class="order-payment-btn ${isCash ? "order-payment-cash" : "order-payment-card"}" type="button"${paymentTitleAttr}>
+          <span class="order-payment-btn-icon">${paymentIconHtml}</span>
+          <span class="order-payment-btn-total">${escapeHtml(totalText)}</span>
         </button>
       </div>
     `;
@@ -2255,6 +2684,7 @@
         setInfo(null);
       }
       syncActiveOrderRowState();
+      schedulePersistOrdersCache();
       return;
     }
     if (elEmptyHint) elEmptyHint.classList.add("hidden");
@@ -2269,6 +2699,7 @@
     } else if (!state.activeOrderId) {
       setInfo(null);
     }
+    schedulePersistOrdersCache();
   }
 
   function upsertOrderRow(order) {
@@ -2296,9 +2727,11 @@
       return;
     }
     state.activeOrderId = null;
+    setOrdersCheckoutLayoutEnabled(false);
     syncActiveOrderRowState();
     renderOrderTabs();
     setInfo(null);
+    schedulePersistOrdersCache();
   }
 
   // -----------------------------
@@ -2339,6 +2772,7 @@
 
     if (tabsState.tabs.length) {
       syncTabsWithLatestOrders();
+      schedulePersistOrdersCache();
       return;
     }
 
@@ -2353,6 +2787,7 @@
         setInfo(null);
       }
     }
+    schedulePersistOrdersCache();
   }
 
   // -----------------------------
@@ -2651,6 +3086,7 @@
       const url = state.tenantSounds && state.tenantSounds.sound_order_cancelled_url;
       if (url) playNotificationSound(url);
     }
+    schedulePersistOrdersCache();
   }
 
   async function fetchChanges() {
@@ -2808,6 +3244,10 @@
     }
   });
 
+  document.addEventListener("orders:new-draft-tab-request", () => {
+    void openNewDraftTab();
+  });
+
   // -----------------------------
   // Click handlers
   // -----------------------------
@@ -2824,6 +3264,34 @@
     if (tabEl) {
       const key = tabEl.getAttribute("data-order-tab-key");
       if (key) setActiveOrderTab(key, { openMobile: true });
+      return;
+    }
+
+    const tabsHomeBtn = e.target.closest('[data-action="order-tabs-home"]');
+    if (tabsHomeBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      goToOrdersHomeView();
+      return;
+    }
+
+    const addNewDraftBtn = e.target.closest("#ordersAddBtn");
+    if (addNewDraftBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      await openNewDraftTab();
+      return;
+    }
+
+    const editOrderBtn = e.target.closest('[data-action="order-edit"]');
+    if (editOrderBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+      const orderId = Number(activeTab?.orderId || state.activeOrderId || 0);
+      if (orderId > 0) {
+        await openEditOrderTab(orderId);
+      }
       return;
     }
 
@@ -2980,6 +3448,41 @@
     const order = state.orders.find((o) => Number(o.id) === Number(orderId));
     if (!order) return;
     ensureOrderTab(order, { activate: true, openMobile: true });
+  });
+
+  document.addEventListener("neworder:right-tabs-empty", () => {
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+    if (!activeTab || !isCheckoutTab(activeTab)) return;
+    closeOrderTab(activeTab.key);
+  });
+
+  document.addEventListener("neworder:edit-cancel", (evt) => {
+    const editOrderId = Number(evt?.detail?.orderId || 0);
+    let targetTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+    if (!targetTab || !isCheckoutTab(targetTab) || normalizeTabMode(targetTab.mode) !== "edit") {
+      targetTab = tabsState.tabs.find((tab) => (
+        tab?.type === "order"
+        && normalizeTabMode(tab?.mode) === "edit"
+        && Number(tab?.orderId || 0) === editOrderId
+      )) || null;
+    }
+    if (!targetTab || !Number(targetTab?.orderId || 0)) return;
+    targetTab.mode = "view";
+    targetTab.checkoutSession = null;
+    targetTab.checkoutSessionHydrating = false;
+    const currentOrder = state.orders.find((row) => Number(row?.id || 0) === Number(targetTab.orderId || 0)) || null;
+    if (currentOrder) {
+      targetTab.order = { ...targetTab.order, ...currentOrder };
+      targetTab.title = buildOrderTabTitle(targetTab.order);
+    }
+    setActiveOrderTab(targetTab.key, { openMobile: true });
+  });
+
+  document.addEventListener("neworder:order-submitted", () => {
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+    if (!activeTab || !isCheckoutTab(activeTab)) return;
+    closeOrderTab(activeTab.key);
+    pollOrdersList().catch(console.error);
   });
 
   closeButtons.forEach((btn) => btn.addEventListener("click", clearSelection));
@@ -3200,152 +3703,169 @@
       return 0;
     }) : [];
 
-    let itemsHtml = '';
-    if (receiptItems.length) {
-      receiptItems.forEach(item => {
-        // Комбо: тот же состав, что в админке и у клиента; позиции с количеством 0 не показываем
-        if (item.type === 'combo') {
-          const name = escapeHtml(item.name || item.combo_title || 'Комбо');
-          const qty = Math.max(1, Number(item.quantity || item.qty || 1));
-          const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? 0);
-          const oldLineTotal = Number(item.old_line_total) || 0;
-          const showOldPrice = oldLineTotal > lineTotal;
-          const priceStr = showOldPrice
-            ? `<span class="receipt-old-price">${receiptTotalStr(oldLineTotal)}</span>${receiptTotalStr(lineTotal)}`
-            : receiptTotalStr(lineTotal);
-          const qtyStr = `${qty} Х`;
-          const bulletPrefix = '• ';
-          let compositionHtml = '';
-          const selections = Array.isArray(item.selections) ? item.selections : [];
-          selections.forEach((sel) => {
-            const productName = escapeHtml(sel.product_name || '—');
-            compositionHtml += `<div class="receipt-composition-item" style="font-weight: bold;">1 × ${productName}</div>`;
-            const vParts = [sel.variant_label, sel.variant_unit, sel.variant_group_title].filter(Boolean);
-            if (vParts.length) {
-              compositionHtml += `<div class="receipt-composition-item">${bulletPrefix}${escapeHtml(vParts.join(' '))}</div>`;
-            }
-            const ingredientsDisplay = Array.isArray(sel.ingredients_display) ? sel.ingredients_display : [];
-            ingredientsDisplay.forEach((ing) => {
-              const rawQty = ing.qty ?? ing.quantity;
-              const numQty = typeof rawQty === 'number' ? rawQty : parseFloat(rawQty);
-              if (!Number.isFinite(numQty) || numQty <= 0) return;
-              const ingName = escapeHtml(ing.name || '');
-              const unit = escapeHtml(String(ing.unit || '').trim());
-              const parts = [];
-              if (rawQty != null && rawQty !== '') parts.push(String(rawQty));
-              if (unit) parts.push(unit);
-              if (ingName) parts.push(ingName);
-              compositionHtml += `<div class="receipt-composition-item">${bulletPrefix}${escapeHtml(parts.join(' '))}</div>`;
-            });
-          });
-          itemsHtml += `
-          <div class="receipt-item">
-            <div class="receipt-item-row">
-              <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
-              <span class="receipt-item-name">${name}</span>
-              ${priceStr ? `<span class="receipt-item-price">${priceStr}</span>` : ''}
-            </div>
-            ${compositionHtml ? '<div class="receipt-composition">' + compositionHtml + '</div>' : ''}
-          </div>
-        `;
-          return;
-        }
+    const comboItems = receiptItems.filter((item) => String(item?.type || "") === "combo");
+    const productItems = receiptItems.filter((item) => String(item?.type || "") !== "combo");
+    const itemGroups = [];
+    if (comboItems.length) itemGroups.push({ key: "combo", title: "КОМБО", items: comboItems });
+    if (productItems.length) itemGroups.push({ key: "product", title: "ТОВАРЫ", items: productItems });
 
-        const name = escapeHtml(item.product_name || item.name || 'Товар');
-        const qty = Math.max(1, Number(item.quantity || item.qty || 1));
-        const basePrice = parseFloat(item.price || 0);
-        const lineTotal = Number(item.line_total ?? item.total ?? item.total_price ?? (basePrice * qty) ?? 0);
-        const discountOriginal = item.discount?.original_line_total;
-        const oldLineTotal = discountOriginal || 0;
-        const showOldPrice = oldLineTotal > lineTotal;
-        const priceStr = showOldPrice
-          ? `<span class="receipt-old-price">${receiptTotalStr(oldLineTotal)}</span>${receiptTotalStr(lineTotal)}`
-          : receiptTotalStr(lineTotal);
-        const qtyStr = `${qty} Х`;
-        const bulletPrefix = '• ';
-
-        // Варианты товара (первыми)
-        const variants = Array.isArray(item.variants) ? item.variants : [];
-        let variantsHtml = '';
-        if (variants.length) {
-          variantsHtml = '<div class="receipt-composition">';
-          variants.forEach((v) => {
-            const groupTitle = escapeHtml(v.group_title || "Вариант");
-            const variantValue = escapeHtml(v.label || v.value || "");
-            const variantValueTrimmed = variantValue.trim();
-            const groupTitleTrimmed = groupTitle.trim();
-            let formatted;
-            if (variantValueTrimmed && groupTitleTrimmed) {
-              const variantLower = variantValueTrimmed.toLowerCase();
-              const groupLower = groupTitleTrimmed.toLowerCase();
-              if (variantLower.endsWith(" " + groupLower) || variantLower.endsWith(groupLower)) {
-                formatted = variantValue;
-              } else {
-                formatted = `${variantValue} ${groupTitle}`.trim();
-              }
-            } else {
-              formatted = `${variantValue} ${groupTitle}`.trim();
-            }
-            variantsHtml += `<div class="receipt-composition-item">${bulletPrefix}${formatted}</div>`;
-          });
-          variantsHtml += '</div>';
-        }
-
-        // Ингредиенты товара (вторыми) — не показываем с количеством 0
-        const ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
-        const ingredientsFilteredReceipt = ingredients.filter((ing) => Number(ing.quantity ?? ing.qty ?? 0) > 0);
-        let ingredientsHtml = '';
-        if (ingredientsFilteredReceipt.length) {
-          ingredientsHtml = '<div class="receipt-composition">';
-          ingredientsFilteredReceipt.forEach((ing) => {
-            const ingName = escapeHtml(ing.name || "Ингредиент");
-            const ingQty = Number(ing.quantity ?? ing.qty ?? 0);
-            let ingUnit = escapeHtml(ing.unit_label || ing.unit || ing.unitLabel || ing.unit_short_title || ing.unit_title || "");
-            if (!ingUnit) {
-              ingUnit = ingQty > 10 ? "г" : "шт";
-            }
-            const formatted = `${ingQty}${ingUnit} ${ingName}`;
-            ingredientsHtml += `<div class="receipt-composition-item">${bulletPrefix}${formatted}</div>`;
-          });
-          ingredientsHtml += '</div>';
-        }
-
-        // Опции товара (третьими) — не показываем с количеством 0
-        const options = Array.isArray(item.options) ? item.options : [];
-        const optionsFilteredReceipt = options.filter((opt) => Number(opt.qty ?? opt.quantity ?? 0) > 0);
-        let optionsHtml = '';
-        if (optionsFilteredReceipt.length) {
-          optionsHtml = '<div class="receipt-composition">';
-          optionsFilteredReceipt.forEach((opt) => {
-            const optName = escapeHtml(opt.title || "Опция");
-            const variantLabel = escapeHtml((opt.variant_label || opt.variantLabel || "").trim());
-            let formatted;
-            if (variantLabel) {
-              formatted = `${variantLabel} ${optName}`;
-            } else {
-              const optQty = Math.max(1, Number(opt.qty || 1));
-              formatted = `${optQty}шт ${optName}`;
-            }
-            optionsHtml += `<div class="receipt-composition-item">${bulletPrefix}${formatted}</div>`;
-          });
-          optionsHtml += '</div>';
-        }
-
-        itemsHtml += `
-          <div class="receipt-item">
-            <div class="receipt-item-row">
-              <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
-              <span class="receipt-item-name">${name}</span>
-              ${priceStr ? `<span class="receipt-item-price">${priceStr}</span>` : ''}
-            </div>
-            ${variantsHtml}
-            ${ingredientsHtml}
-            ${optionsHtml}
-          </div>
-        `;
-      });
+    function mergeVariantUnit(label, unit) {
+      const cleanLabel = String(label || "").trim();
+      const cleanUnit = String(unit || "").trim();
+      if (!cleanLabel) return cleanUnit;
+      if (!cleanUnit) return cleanLabel;
+      const escapedUnit = cleanUnit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const measureMatch = cleanLabel.match(new RegExp(`^\\s*([\\d.,]+\\s*${escapedUnit})(?:\\b|\\s|$)`, "i"));
+      if (measureMatch && String(measureMatch[1] || "").trim()) {
+        return String(measureMatch[1] || "").trim();
+      }
+      const labelLower = cleanLabel.toLowerCase();
+      const unitLower = cleanUnit.toLowerCase();
+      if (labelLower.endsWith(` ${unitLower}`) || labelLower === unitLower) return cleanLabel;
+      return `${cleanLabel} ${cleanUnit}`.trim();
     }
 
+    function formatQtyUnitName(qtyRaw, unitRaw, nameRaw) {
+      const qtyNum = Number(qtyRaw);
+      const qtyText = Number.isFinite(qtyNum)
+        ? String(Number.isInteger(qtyNum) ? qtyNum : Number(qtyNum.toFixed(3)))
+        : String(qtyRaw ?? "").trim();
+      const unitText = String(unitRaw || "").trim();
+      const nameText = String(nameRaw || "").trim();
+      return [qtyText, unitText, nameText].filter(Boolean).join(" ").trim();
+    }
+
+    function renderLinePrice(item, fallbackTotal = 0) {
+      const lineTotal = Number(item?.line_total ?? item?.total ?? item?.total_price ?? fallbackTotal);
+      const oldLineTotal = Number(item?.old_line_total || item?.discount?.original_line_total || 0);
+      const showOldPrice = oldLineTotal > lineTotal;
+      return showOldPrice
+        ? `<span class="receipt-old-price">${receiptTotalStr(oldLineTotal)}</span>${receiptTotalStr(lineTotal)}`
+        : receiptTotalStr(lineTotal);
+    }
+
+    function renderComboItem(item) {
+      const name = escapeHtml(item?.name || item?.combo_title || "Комбо");
+      const qty = Math.max(1, Number(item?.quantity || item?.qty || 1));
+      const qtyStr = `${qty} x`;
+      const priceStr = renderLinePrice(item, 0);
+      const selections = Array.isArray(item?.selections) ? item.selections : [];
+      const compositionLines = [];
+
+      selections.forEach((sel) => {
+        const productName = String(sel?.product_name || "").trim() || "Товар";
+        const variantHead = mergeVariantUnit(sel?.variant_label, sel?.variant_unit);
+        const primaryLine = [variantHead, productName].filter(Boolean).join(" ").trim();
+        if (primaryLine) {
+          compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--group">1 x ${escapeHtml(primaryLine)}</div>`);
+        }
+
+        const ingredientsDisplay = Array.isArray(sel?.ingredients_display) ? sel.ingredients_display : [];
+        ingredientsDisplay.forEach((ing) => {
+          const ingQty = ing?.qty ?? ing?.quantity;
+          const ingNumQty = Number(ingQty);
+          if (!Number.isFinite(ingNumQty) || ingNumQty <= 0) return;
+          const line = formatQtyUnitName(ingQty, ing?.unit, ing?.name);
+          if (!line) return;
+          compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
+        });
+      });
+
+      const compositionHtml = compositionLines.length
+        ? `<div class="receipt-composition">${compositionLines.join("")}</div>`
+        : "";
+
+      return `
+        <div class="receipt-item">
+          <div class="receipt-item-row">
+            <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
+            <span class="receipt-item-name">${name}</span>
+            ${priceStr ? `<span class="receipt-item-price">${priceStr}</span>` : ""}
+          </div>
+          ${compositionHtml}
+        </div>
+      `;
+    }
+
+    function renderProductItem(item) {
+      const rawName = String(item?.product_name || item?.name || "Товар").trim() || "Товар";
+      const qty = Math.max(1, Number(item?.quantity || item?.qty || 1));
+      const basePrice = parseFloat(item?.price || 0);
+      const qtyStr = `${qty} x`;
+      const priceStr = renderLinePrice(item, basePrice * qty);
+      const compositionLines = [];
+
+      const variants = Array.isArray(item?.variants) ? item.variants : [];
+      const variantLines = [];
+      variants.forEach((v) => {
+        const value = String(v?.label || v?.value || "").trim();
+        const unit = String(v?.unit || v?.unit_short_title || v?.unitLabel || "").trim();
+        let formatted = mergeVariantUnit(value, unit);
+        if (formatted) variantLines.push(formatted);
+      });
+
+      const primaryVariantLine = variantLines.length ? variantLines[0] : "";
+      const titleLine = [primaryVariantLine, rawName].filter(Boolean).join(" ").trim() || rawName;
+      const name = escapeHtml(titleLine);
+      if (variantLines.length > 1) {
+        variantLines.slice(1).forEach((line) => {
+          compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
+        });
+      }
+
+      const ingredients = (Array.isArray(item?.ingredients) ? item.ingredients : [])
+        .filter((ing) => Number(ing?.quantity ?? ing?.qty ?? 0) > 0);
+      ingredients.forEach((ing) => {
+        const line = formatQtyUnitName(
+          ing?.quantity ?? ing?.qty,
+          ing?.unit_label || ing?.unit || ing?.unitLabel || ing?.unit_short_title || ing?.unit_title || "",
+          ing?.name || "Ингредиент"
+        );
+        if (line) compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
+      });
+
+      const options = (Array.isArray(item?.options) ? item.options : [])
+        .filter((opt) => Number(opt?.qty ?? opt?.quantity ?? 0) > 0);
+      options.forEach((opt) => {
+        const variant = mergeVariantUnit(opt?.variant_label || opt?.variantLabel, opt?.variant_unit || opt?.variantUnit);
+        const title = String(opt?.title || "Опция").trim();
+        const line = variant
+          ? `${variant} ${title}`.trim()
+          : `${Math.max(1, Number(opt?.qty || opt?.quantity || 1))} ${title}`.trim();
+        if (line) compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
+      });
+
+      const compositionHtml = compositionLines.length
+        ? `<div class="receipt-composition">${compositionLines.join("")}</div>`
+        : "";
+
+      return `
+        <div class="receipt-item">
+          <div class="receipt-item-row">
+            <span class="receipt-item-qty">${escapeHtml(qtyStr)}</span>
+            <span class="receipt-item-name">${name}</span>
+            ${priceStr ? `<span class="receipt-item-price">${priceStr}</span>` : ""}
+          </div>
+          ${compositionHtml}
+        </div>
+      `;
+    }
+
+    let itemsHtml = "";
+    if (itemGroups.length) {
+      itemsHtml = itemGroups.map((group, idx) => {
+        const bodyHtml = group.items
+          .map((item) => group.key === "combo" ? renderComboItem(item) : renderProductItem(item))
+          .join("");
+        return `
+          <div class="receipt-items-group receipt-items-group--${group.key}">
+            <div class="receipt-items-group-title">${group.title}</div>
+            <div class="receipt-items-group-list">${bodyHtml}</div>
+          </div>
+          ${idx < itemGroups.length - 1 ? '<div class="receipt-items-type-divider"></div>' : ''}
+        `;
+      }).join("");
+    }
     const receiptDiscountSummary = buildOrderDiscountSummary(order);
     const discountAmount = Number(receiptDiscountSummary.totalDiscount || 0);
     const subtotal = Number(receiptDiscountSummary.subtotalBeforeDiscount || 0);
@@ -3418,8 +3938,32 @@
       font-weight: bold;
       margin-bottom: 5px;
     }
+    .receipt-items-group {
+      margin: 0;
+      padding: 0;
+    }
+    .receipt-items-group-title {
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: .2px;
+      margin: 2px 0 5px;
+    }
+    .receipt-items-group-list {
+      margin: 0;
+      padding: 0 0 0 2px;
+    }
+    .receipt-items-type-divider {
+      border-top: 1px dashed #000;
+      margin: 8px 0;
+    }
     .receipt-item {
-      margin: 5px 0;
+      margin: 0;
+      padding: 3px 0 2px;
+    }
+    .receipt-item + .receipt-item {
+      border-top: 1px dotted #000;
+      margin-top: 3px;
+      padding-top: 4px;
     }
     .receipt-item-row {
       display: flex;
@@ -3439,11 +3983,18 @@
       text-align: right;
     }
     .receipt-composition {
-      margin: 3px 0 3px 15px;
+      margin: 2px 0 1px;
       font-size: 9pt;
     }
     .receipt-composition-item {
-      margin: 2px 0;
+      margin: 1px 0;
+      word-wrap: break-word;
+    }
+    .receipt-composition-item--group {
+      margin-left: 8px;
+    }
+    .receipt-composition-item--sub {
+      margin-left: 16px;
     }
     .receipt-total {
       text-align: center;
@@ -3551,39 +4102,97 @@
   // -----------------------------
   // Init
   // -----------------------------
-  async function init() {
+  async function loadStoreTimezone() {
     try {
-      // Load store timezone from API (not from localStorage)
-      try {
-        const response = await apiJson('/api/admin/tenant/current-time');
-        if (response.ok && response.data) {
-          state.storeTimezone = response.data.storeTimezone || "+0";
-        } else {
-          state.storeTimezone = "+0";
-        }
-      } catch (err) {
-        console.error("Failed to load store timezone:", err);
-        state.storeTimezone = "+0";
+      const response = await apiJson("/api/admin/tenant/current-time");
+      if (response?.data?.storeTimezone != null) {
+        state.storeTimezone = String(response.data.storeTimezone || "+0");
       }
+    } catch (err) {
+      console.error("Failed to load store timezone:", err);
+      if (!state.storeTimezone) state.storeTimezone = "+0";
+    }
+  }
 
-      // Initialize date filter with store's current date
-      const storeNow = getStoreDateNow(state.storeTimezone);
+  function ensureDateStateInitialized() {
+    if (!state.date.start || !state.date.end) {
+      const storeNow = getStoreDateNow(state.storeTimezone || "+0");
       state.date.start = storeNow;
       state.date.end = storeNow;
-      state.date.viewYear = storeNow.getFullYear();
-      state.date.viewMonth = storeNow.getMonth();
+    }
+    if (!Number.isFinite(Number(state.date.viewYear)) || !Number.isFinite(Number(state.date.viewMonth))) {
+      const baseDate = state.date.start || getStoreDateNow(state.storeTimezone || "+0");
+      state.date.viewYear = baseDate.getFullYear();
+      state.date.viewMonth = baseDate.getMonth();
+    }
+  }
 
+  function ensureActiveStatusSelection() {
+    const sortedStatuses = getSortedStatuses();
+    if (!sortedStatuses.length) {
+      state.activeStatusId = "all";
+      return;
+    }
+    const activeNumeric = Number(state.activeStatusId);
+    const hasCurrent = sortedStatuses.some((status) => Number(status.id) === activeNumeric);
+    if (state.activeStatusId === "all" || !hasCurrent) {
+      state.activeStatusId = sortedStatuses[0].id;
+    }
+  }
+
+  async function init() {
+    try {
+      const cachedBootstrap = readOrdersBootstrapCache();
+      const hydratedFromCache = hydrateOrdersFromCache(cachedBootstrap);
+
+      await loadStoreTimezone();
+      ensureDateStateInitialized();
       renderCalendar();
       updateDateLabel();
 
-      await loadStatuses();
-      // По умолчанию выбран этап "Новые" (первый статус по сортировке)
-      const sortedStatuses = [...state.statuses].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || a.id - b.id);
-      if (sortedStatuses.length) {
-        state.activeStatusId = sortedStatuses[0].id;
+      let shouldReloadFromApi = true;
+      const hasWarmCache =
+        hydratedFromCache &&
+        Array.isArray(state.orders) &&
+        state.orders.length > 0 &&
+        Array.isArray(state.statuses) &&
+        state.statuses.length > 0;
+
+      if (hasWarmCache && Number(state.lastEventId || 0) > 0) {
+        try {
+          const waitResult = await waitOrdersChanges(state.lastEventId, 1200);
+          if (waitResult.changed) {
+            shouldReloadFromApi = true;
+          } else {
+            shouldReloadFromApi = false;
+            if (Number.isFinite(waitResult.cursor) && waitResult.cursor > 0) {
+              state.lastEventId = waitResult.cursor;
+            }
+          }
+        } catch {
+          shouldReloadFromApi = true;
+        }
       }
-      renderStages();
-      await loadAndRenderOrders(false);
+
+      if (shouldReloadFromApi) {
+        try {
+          await loadStatuses();
+          ensureActiveStatusSelection();
+          renderStages();
+          await loadAndRenderOrders(Boolean(tabsState.tabs.length || state.activeOrderId));
+        } catch (refreshErr) {
+          console.error(refreshErr);
+          ensureActiveStatusSelection();
+          renderStages();
+          renderOrders();
+          schedulePersistOrdersCache(0);
+        }
+      } else {
+        ensureActiveStatusSelection();
+        renderStages();
+        renderOrders();
+        schedulePersistOrdersCache(0);
+      }
 
       try {
         const tenantRes = await apiJson("/api/admin/tenant");
@@ -3610,14 +4219,37 @@
 
   init();
 
+  window.addEventListener("beforeunload", () => {
+    try {
+      persistOrdersCacheNow();
+    } catch {}
+  });
   // Слушать изменение филиала: переподключить SSE к каналу нового филиала и перезагрузить заказы
   document.addEventListener('tenantStoreChanged', (event) => {
     console.log('Филиал изменен:', event.detail.store);
     state.clientsCache.clear();
     state.lastEventId = null;
-    loadAndRenderOrders(false);
+    tabsState.tabs = [];
+    tabsState.activeKey = null;
+    state.activeOrderId = null;
+    setOrdersCheckoutLayoutEnabled(false);
+    renderOrderTabs();
+    setInfo(null);
+    closeSheet();
+    loadStoreTimezone()
+      .then(() => {
+        ensureDateStateInitialized();
+        renderCalendar();
+        updateDateLabel();
+        return loadStatuses();
+      })
+      .then(() => {
+        ensureActiveStatusSelection();
+        renderStages();
+        return loadAndRenderOrders(false);
+      })
+      .catch(console.error);
     stopOrdersPolling();
     startOrdersPolling();
   });
 })();
-

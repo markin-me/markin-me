@@ -1,13 +1,24 @@
 ﻿<div class="center-stack">
   <div class="panel toolbar-island">
-    <div class="toolbar">
-      <div class="toolbar-left">
-        <div class="toolbar-title">
+    <div class="toolbar new-order-toolbar" id="newOrderToolbar">
+      <div class="toolbar-left new-order-toolbar-left">
+        <div class="toolbar-title new-order-toolbar-title" id="newOrderToolbarTitle">
           <i class="fas fa-plus-circle"></i>
           <span>Новый заказ</span>
         </div>
+        <div class="new-order-checkout-block-chips hidden no-scrollbar" id="newOrderCheckoutBlockChips"></div>
       </div>
-      <div class="toolbar-right"></div>
+      <div class="toolbar-right new-order-toolbar-right">
+        <button class="btn btn-ghost btn-icon" type="button" id="newOrderSettingsBtn" aria-label="Настройки нового заказа">
+          <i class="fas fa-cog"></i>
+        </button>
+        <button class="btn btn-ghost btn-icon hidden" type="button" id="newOrderCancelEditBtn" aria-label="Отменить изменения">
+          <i class="fas fa-times"></i>
+        </button>
+        <button class="btn btn-primary" type="button" id="newOrderAddBtn" aria-label="Добавить">
+          <i class="fas fa-plus"></i>
+        </button>
+      </div>
     </div>
   </div>
 
@@ -15,6 +26,12 @@
     <div class="panel-body no-scrollbar">
       <div class="new-order-products-grid" id="newOrderProductsGrid"></div>
       <div class="empty-hint hidden" id="newOrderProductsEmpty">Здесь будет список товаров</div>
+      <div class="new-order-checkout-editor hidden" id="newOrderCheckoutEditor">
+        <div class="new-order-checkout-content" id="newOrderCheckoutContent"></div>
+        <button class="new-order-checkout-add-btn" type="button" id="newOrderCheckoutAddCategoryBtn" aria-label="Добавить категорию">
+          <i class="fas fa-plus"></i>
+        </button>
+      </div>
     </div>
   </div>
 </div>
