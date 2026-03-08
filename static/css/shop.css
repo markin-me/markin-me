@@ -7452,6 +7452,8 @@ body.page-shop .shop-company-chat-btn:hover{
 .shop-company-chat-feed{
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
   position: relative;
   overflow-y: auto;
   overflow-x: hidden;
@@ -7632,8 +7634,11 @@ body.page-shop .shop-company-chat-btn:hover{
 }
 
 .shop-company-chat-thread{
+  min-height: 100%;
+  margin-top: auto;
   display: flex;
   flex-direction: column;
+  justify-content: flex-end;
   gap: 10px;
 }
 
@@ -7883,7 +7888,7 @@ body.page-shop .shop-company-chat-btn:hover{
   overflow-y: hidden;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
-  scroll-snap-type: x proximity;
+  scroll-snap-type: none;
   touch-action: pan-x;
   overscroll-behavior-x: contain;
   cursor: grab;
@@ -7918,7 +7923,6 @@ body.page-shop .shop-company-chat-btn:hover{
   cursor: pointer;
   text-align: left;
   color: var(--color-text);
-  scroll-snap-align: start;
 }
 
 .shop-company-chat-order-card:hover{

@@ -124,6 +124,7 @@ let ensurePushSubscriptionsTablePromise = null;
 let ensureHiddenMessagesTablePromise = null;
 let ensureChatCoreIndexesPromise = null;
 let ensureChatThreadTypingColumnsPromise = null;
+let ensureChatMessageOrderCardsColumnPromise = null;
 const CHAT_PUSH_UNIQUE_INDEX_LEGACY = "ux_chat_push_subscriptions_tenant_endpoint";
 const CHAT_PUSH_UNIQUE_INDEX_V2 = "ux_chat_push_subscriptions_tenant_actor_client_endpoint";
 const CHAT_HIDDEN_UNIQUE_INDEX = "ux_chat_message_hidden_tenant_client_message_actor";
@@ -219,6 +220,28 @@ function ensureHiddenMessagesTable() {
   return ensureHiddenMessagesTablePromise;
 }
 
+function ensureChatMessageOrderCardsColumn() {
+  if (ensureChatMessageOrderCardsColumnPromise) return ensureChatMessageOrderCardsColumnPromise;
+  ensureChatMessageOrderCardsColumnPromise = (async () => {
+    const [columnRows] = await db.query("SHOW COLUMNS FROM chat_messages");
+    const existing = new Set(
+      (Array.isArray(columnRows) ? columnRows : []).map((row) => String(row?.Field || "").toLowerCase())
+    );
+    if (!existing.has("order_cards_json")) {
+      await db.query(`
+        ALTER TABLE chat_messages
+        ADD COLUMN order_cards_json MEDIUMTEXT NULL AFTER attachment_json
+      `);
+    }
+    return true;
+  })().catch((err) => {
+    if (String(err?.code || "") === "ER_DUP_FIELDNAME") return true;
+    ensureChatMessageOrderCardsColumnPromise = null;
+    throw err;
+  });
+  return ensureChatMessageOrderCardsColumnPromise;
+}
+
 async function ensureChatCoreIndexes() {
   if (ensureChatCoreIndexesPromise) return ensureChatCoreIndexesPromise;
   ensureChatCoreIndexesPromise = (async () => {
@@ -262,6 +285,7 @@ async function ensureChatCoreIndexes() {
     } catch (err) {
       if (String(err?.code || "") !== "ER_DUP_KEYNAME") throw err;
     }
+    await ensureChatMessageOrderCardsColumn();
     return true;
   })().catch((err) => {
     ensureChatCoreIndexesPromise = null;
@@ -1448,6 +1472,99 @@ function sanitizeAttachment(raw) {
   };
 }
 
+function sanitizeOrderCardPhoto(raw) {
+  const src = String(raw || "").trim();
+  if (!src) return "";
+  if (
+    /^https?:\/\//i.test(src)
+    || /^\//.test(src)
+    || /^data:image\/[a-z0-9.+-]+;base64,/i.test(src)
+  ) {
+    return src.slice(0, 2048);
+  }
+  return "";
+}
+
+function sanitizeOrderCardItemValue(value, depth = 0) {
+  if (depth > 4 || value === null || typeof value === "undefined") return null;
+  if (typeof value === "string") return value.slice(0, 500);
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value === "boolean") return value;
+  if (Array.isArray(value)) {
+    const out = [];
+    value.slice(0, depth === 0 ? 60 : 20).forEach((item) => {
+      const safeItem = sanitizeOrderCardItemValue(item, depth + 1);
+      if (safeItem !== null) out.push(safeItem);
+    });
+    return out;
+  }
+  if (typeof value === "object") {
+    const out = {};
+    Object.keys(value).slice(0, 40).forEach((key) => {
+      const safeKey = String(key || "").trim().slice(0, 80);
+      if (!safeKey) return;
+      const safeValue = sanitizeOrderCardItemValue(value[key], depth + 1);
+      if (safeValue !== null) out[safeKey] = safeValue;
+    });
+    return out;
+  }
+  return null;
+}
+
+function sanitizeOrderCardItems(rawItems) {
+  if (!Array.isArray(rawItems)) return [];
+  const out = [];
+  rawItems.slice(0, 60).forEach((item) => {
+    const safeItem = sanitizeOrderCardItemValue(item, 0);
+    if (safeItem && typeof safeItem === "object") out.push(safeItem);
+  });
+  return out;
+}
+
+function sanitizeOrderCards(rawCards) {
+  if (!Array.isArray(rawCards)) return [];
+  const seen = new Set();
+  const out = [];
+
+  rawCards.forEach((card) => {
+    if (!card || typeof card !== "object" || out.length >= 12) return;
+    const id = Number(card.id || card.orderId || card.order_id || 0);
+    const safeId = Number.isFinite(id) && id > 0 ? Math.trunc(id) : 0;
+    if (!safeId || seen.has(safeId)) return;
+    seen.add(safeId);
+
+    const photos = [];
+    (Array.isArray(card.photos) ? card.photos : []).slice(0, 8).forEach((photo) => {
+      const safePhoto = sanitizeOrderCardPhoto(photo);
+      if (safePhoto) photos.push(safePhoto);
+    });
+
+    const totalPriceRaw = Number(card.totalPrice ?? card.total_price ?? 0);
+    const cutleryQtyRaw = Number(card.cutleryQty ?? card.cutlery_qty ?? 0);
+    out.push({
+      id: safeId,
+      publicId: String(card.publicId || card.public_id || "").slice(0, 120),
+      statusTitle: String(card.statusTitle || card.status_title || "").slice(0, 160),
+      totalPrice: Number.isFinite(totalPriceRaw) ? totalPriceRaw : 0,
+      createdAt: toIsoOrEmpty(card.createdAt || card.created_at || ""),
+      photos,
+      items: sanitizeOrderCardItems(
+        Array.isArray(card.items) ? card.items : (Array.isArray(card.orderItems) ? card.orderItems : [])
+      ),
+      methodTitle: String(card.methodTitle || card.method_title || "").slice(0, 160),
+      timeOptionTitle: String(card.timeOptionTitle || card.time_option_title || "").slice(0, 160),
+      scheduledAt: toIsoOrEmpty(card.scheduledAt || card.scheduled_at || ""),
+      address: String(card.address || "").slice(0, 500),
+      cutleryQty: Number.isFinite(cutleryQtyRaw) && cutleryQtyRaw > 0
+        ? Math.min(999, Math.trunc(cutleryQtyRaw))
+        : 0,
+      comment: String(card.comment || "").slice(0, 1000),
+    });
+  });
+
+  return out;
+}
+
 function sanitizeMessage(raw) {
   if (!raw || typeof raw !== "object") return null;
   const id = String(raw.id || "").trim().slice(0, 120);
@@ -1477,6 +1594,7 @@ function sanitizeMessage(raw) {
     reactions,
     replyTo: sanitizeReply(raw.replyTo),
     attachment: sanitizeAttachment(raw.attachment),
+    orderCards: sanitizeOrderCards(raw.orderCards),
     deliveryStatus,
     deliveredAt: raw.deliveredAt ? toIsoOrNow(raw.deliveredAt) : "",
     readAt: raw.readAt ? toIsoOrNow(raw.readAt) : "",
@@ -2588,6 +2706,7 @@ function mapDbMessageRowToApi(row) {
     reactions,
     replyTo: sanitizeReply(parseJsonObject(row.reply_to_json)),
     attachment: sanitizeAttachment(parseJsonObject(row.attachment_json)),
+    orderCards: sanitizeOrderCards(parseJsonObject(row.order_cards_json)),
     deliveryStatus: String(row.delivery_status || "").toLowerCase().slice(0, 16),
     deliveredAt: row.delivered_at ? toIsoOrNow(row.delivered_at) : "",
     readAt: row.read_at ? toIsoOrNow(row.read_at) : "",
@@ -2758,9 +2877,10 @@ async function readThreadMeta(tenantId, clientId, conn = db) {
 
 async function readThreadMessages(tenantId, clientId, conn = db) {
   await ensureHiddenMessagesTable();
+  await ensureChatMessageOrderCardsColumn();
   const [rows] = await conn.query(
     `SELECT message_id, direction, text, created_at, edited_at, is_read, is_pinned,
-            reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json,
+            reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json, order_cards_json,
             delivery_status, delivered_at, read_at
        FROM chat_messages
       WHERE tenant_id = ? AND client_id = ?
@@ -2777,6 +2897,7 @@ async function readThreadMessagesPage(
   conn = db
 ) {
   await ensureHiddenMessagesTable();
+  await ensureChatMessageOrderCardsColumn();
   const safeLimit = parsePositiveInt(
     limit,
     CHAT_THREAD_PAGE_DEFAULT_LIMIT,
@@ -2803,7 +2924,7 @@ async function readThreadMessagesPage(
 
   const [rawRows] = await conn.query(
     `SELECT id AS row_id, message_id, direction, text, created_at, edited_at, is_read, is_pinned,
-            reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json,
+            reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json, order_cards_json,
             delivery_status, delivered_at, read_at
        FROM chat_messages
       WHERE tenant_id = ? AND client_id = ?${whereHidden}${whereBefore}
@@ -2830,6 +2951,7 @@ async function readThreadMessagesPage(
 
 async function readThreadMessagesSince(tenantId, clientId, sinceDate, actorKey = "", conn = db) {
   await ensureHiddenMessagesTable();
+  await ensureChatMessageOrderCardsColumn();
   const since = sinceDate instanceof Date && !Number.isNaN(sinceDate.getTime())
     ? new Date(Math.max(0, sinceDate.getTime() - 1500))
     : null;
@@ -2838,7 +2960,7 @@ async function readThreadMessagesSince(tenantId, clientId, sinceDate, actorKey =
 
   const [rows] = await conn.query(
     `SELECT message_id, direction, text, created_at, edited_at, is_read, is_pinned,
-            reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json,
+            reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json, order_cards_json,
             delivery_status, delivered_at, read_at
        FROM chat_messages
       WHERE tenant_id = ? AND client_id = ? AND updated_row_at > ?
@@ -2935,6 +3057,7 @@ function mapApiMessageToDbRow(tenantId, clientId, msg) {
   const reactions = sanitizeReactions(message.reactions);
   const safeReply = sanitizeReply(message.replyTo);
   const safeAttachment = sanitizeAttachment(message.attachment);
+  const safeOrderCards = sanitizeOrderCards(message.orderCards);
 
   return {
     messageId: String(message.id || "").slice(0, 120),
@@ -2949,6 +3072,7 @@ function mapApiMessageToDbRow(tenantId, clientId, msg) {
     reactionOut: String(reactions.out || "").slice(0, 20),
     replyToJson: safeReply ? JSON.stringify(safeReply) : null,
     attachmentJson: safeAttachment ? JSON.stringify(safeAttachment) : null,
+    orderCardsJson: safeOrderCards.length ? JSON.stringify(safeOrderCards) : null,
     deliveryStatus: String(message.deliveryStatus || "").toLowerCase().slice(0, 16),
     deliveredAt: toDbDateOrNull(message.deliveredAt, false),
     readAt: toDbDateOrNull(message.readAt, false),
@@ -2958,6 +3082,7 @@ function mapApiMessageToDbRow(tenantId, clientId, msg) {
 }
 
 async function upsertSingleThreadMessage(conn, tenantId, clientId, msg) {
+  await ensureChatMessageOrderCardsColumn();
   const row = mapApiMessageToDbRow(tenantId, clientId, msg);
   if (!row) throw new Error("MESSAGE_INVALID");
 
@@ -2965,8 +3090,8 @@ async function upsertSingleThreadMessage(conn, tenantId, clientId, msg) {
     `INSERT INTO chat_messages (
       tenant_id, client_id, message_id, direction, text, created_at, edited_at,
       is_read, is_pinned, reaction_legacy, reaction_in, reaction_out,
-      reply_to_json, attachment_json, delivery_status, delivered_at, read_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      reply_to_json, attachment_json, order_cards_json, delivery_status, delivered_at, read_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
       direction = VALUES(direction),
       text = VALUES(text),
@@ -2979,6 +3104,7 @@ async function upsertSingleThreadMessage(conn, tenantId, clientId, msg) {
       reaction_out = VALUES(reaction_out),
       reply_to_json = VALUES(reply_to_json),
       attachment_json = VALUES(attachment_json),
+      order_cards_json = VALUES(order_cards_json),
       delivery_status = VALUES(delivery_status),
       delivered_at = VALUES(delivered_at),
       read_at = VALUES(read_at)`,
@@ -2997,6 +3123,7 @@ async function upsertSingleThreadMessage(conn, tenantId, clientId, msg) {
       row.reactionOut,
       row.replyToJson,
       row.attachmentJson,
+      row.orderCardsJson,
       row.deliveryStatus,
       row.deliveredAt,
       row.readAt,
@@ -3026,9 +3153,10 @@ async function setMessageHiddenForActor(conn, tenantId, clientId, messageId, act
 }
 
 async function readSingleMessageRow(tenantId, clientId, messageId, conn = db) {
+  await ensureChatMessageOrderCardsColumn();
   const [rows] = await conn.query(
     `SELECT message_id, direction, text, created_at, edited_at, is_read, is_pinned,
-            reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json,
+            reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json, order_cards_json,
             delivery_status, delivered_at, read_at
        FROM chat_messages
       WHERE tenant_id = ? AND client_id = ? AND message_id = ?
@@ -3097,11 +3225,15 @@ function applyMessagePatch(existingMessage, patchInput, actorKey = "out") {
   if (Object.prototype.hasOwnProperty.call(patch, "attachment")) {
     next.attachment = sanitizeAttachment(patch.attachment);
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "orderCards")) {
+    next.orderCards = sanitizeOrderCards(patch.orderCards);
+  }
 
   return sanitizeMessage(next);
 }
 
 async function replaceThreadMessages(conn, tenantId, clientId, messages) {
+  await ensureChatMessageOrderCardsColumn();
   await conn.query(
     `DELETE FROM chat_messages
       WHERE tenant_id = ? AND client_id = ?`,
@@ -3115,10 +3247,10 @@ async function replaceThreadMessages(conn, tenantId, clientId, messages) {
     INSERT INTO chat_messages (
       tenant_id, client_id, message_id, direction, text, created_at, edited_at,
       is_read, is_pinned, reaction_legacy, reaction_in, reaction_out,
-      reply_to_json, attachment_json, delivery_status, delivered_at, read_at
+      reply_to_json, attachment_json, order_cards_json, delivery_status, delivered_at, read_at
     ) VALUES
   `;
-  const rowPlaceholder = "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+  const rowPlaceholder = "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
   const MAX_BATCH_ROWS = 120;
   const MAX_BATCH_BYTES = 2 * 1024 * 1024;
 
@@ -3144,28 +3276,32 @@ async function replaceThreadMessages(conn, tenantId, clientId, messages) {
   let batchBytes = 0;
 
   for (const msg of list) {
-    const reactions = sanitizeReactions(msg.reactions);
-    const safeReply = sanitizeReply(msg.replyTo);
-    const safeAttachment = sanitizeAttachment(msg.attachment);
+    const safeMessage = sanitizeMessage(msg);
+    if (!safeMessage) continue;
+    const reactions = sanitizeReactions(safeMessage.reactions);
+    const safeReply = sanitizeReply(safeMessage.replyTo);
+    const safeAttachment = sanitizeAttachment(safeMessage.attachment);
+    const safeOrderCards = sanitizeOrderCards(safeMessage.orderCards);
 
     const row = [
       tenantId,
       clientId,
-      String(msg.id || "").slice(0, 120),
-      String(msg.direction || "").toLowerCase() === "out" ? "out" : "in",
-      String(msg.text || "").slice(0, 5000),
-      toDbDateOrNull(msg.createdAt, true),
-      toDbDateOrNull(msg.editedAt, false),
-      msg.read === true ? 1 : 0,
-      msg.pinned === true ? 1 : 0,
-      String(msg.reaction || "").slice(0, 20),
+      String(safeMessage.id || "").slice(0, 120),
+      String(safeMessage.direction || "").toLowerCase() === "out" ? "out" : "in",
+      String(safeMessage.text || "").slice(0, 5000),
+      toDbDateOrNull(safeMessage.createdAt, true),
+      toDbDateOrNull(safeMessage.editedAt, false),
+      safeMessage.read === true ? 1 : 0,
+      safeMessage.pinned === true ? 1 : 0,
+      String(safeMessage.reaction || "").slice(0, 20),
       String(reactions.in || "").slice(0, 20),
       String(reactions.out || "").slice(0, 20),
       safeReply ? JSON.stringify(safeReply) : null,
       safeAttachment ? JSON.stringify(safeAttachment) : null,
-      String(msg.deliveryStatus || "").toLowerCase().slice(0, 16),
-      toDbDateOrNull(msg.deliveredAt, false),
-      toDbDateOrNull(msg.readAt, false),
+      safeOrderCards.length ? JSON.stringify(safeOrderCards) : null,
+      String(safeMessage.deliveryStatus || "").toLowerCase().slice(0, 16),
+      toDbDateOrNull(safeMessage.deliveredAt, false),
+      toDbDateOrNull(safeMessage.readAt, false),
     ];
 
     const rowBytes = estimateRowBytes(row);

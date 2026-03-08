@@ -367,6 +367,7 @@
   let hardContextMenuBlockBound = false;
   let touchGesture = null;
   let orderCardMouseDrag = null;
+  let orderCardTouchPan = null;
   let replyDraft = null;
   let replyUi = null;
   let attachPreviewItems = [];
@@ -438,7 +439,11 @@
   const LONG_PRESS_MS = 430;
   const SWIPE_REPLY_TRIGGER = 72;
   const ORDER_CARD_MOUSE_DRAG_START_PX = 5;
+  const ORDER_CARD_TOUCH_PAN_START_PX = 6;
   const ORDER_CARD_MOUSE_DRAG_SUPPRESS_CLICK_MS = 240;
+  const ORDER_CARD_MOUSE_DRAG_FACTOR = 1;
+  const ORDER_CARD_TOUCH_PAN_FACTOR = 1;
+  const ORDER_CARD_WHEEL_FACTOR = 1;
 
   function ensureUnreadBadge() {
     if (unreadBadge && unreadBadge.isConnected) return unreadBadge;
@@ -3326,6 +3331,7 @@
       read: message.read === true,
       deliveredAt: String(message.deliveredAt || ""),
       readAt: String(message.readAt || ""),
+      orderCards: cacheHotQuestionOrderPreviews(message.orderCards),
     };
   }
 
@@ -3418,6 +3424,7 @@
       deliveryStatus: status,
       deliveredAt: String(entry.deliveredAt || ""),
       readAt: String(entry.readAt || ""),
+      orderCards: cacheHotQuestionOrderPreviews(entry.orderCards),
     };
   }
 
@@ -6886,7 +6893,7 @@
       bubble.appendChild(text);
     }
 
-    const orderCardNode = entry.role === "agent" ? createHotQuestionOrderCardNode(entry) : null;
+    const orderCardNode = createHotQuestionOrderCardNode(entry);
     if (orderCardNode) {
       bubble.classList.add("shop-company-chat-bubble--order-card");
       bubble.appendChild(orderCardNode);
@@ -7055,20 +7062,22 @@
         reaction: String(itemReaction && itemReaction.reaction || ""),
       };
     });
-    const orderCards = source.role === "agent"
-      ? resolveHotQuestionOrderCardPreviews(source).map(function (preview) {
-          const item = preview && typeof preview === "object" ? preview : {};
-          return {
-            orderId: toPositiveOrderId(item.orderId || item.id),
-            statusTitle: String(item.statusTitle || item.status_title || ""),
-            totalPrice: Number(item.totalPrice || item.total_price || 0),
-            createdAt: String(item.createdAt || item.created_at || ""),
-            photos: Array.isArray(item.photos) ? item.photos.map(function (src) {
-              return String(src || "");
-            }) : [],
-          };
-        })
-      : [];
+    const orderCards = resolveHotQuestionOrderCardPreviews(source).map(function (resolved) {
+      const item = resolved && typeof resolved === "object"
+        ? (resolved.preview && typeof resolved.preview === "object" ? resolved.preview : resolved)
+        : {};
+      return {
+        orderId: toPositiveOrderId(
+          (resolved && typeof resolved === "object" ? resolved.orderId : 0) || item.id
+        ),
+        statusTitle: String(item.statusTitle || item.status_title || ""),
+        totalPrice: Number(item.totalPrice || item.total_price || 0),
+        createdAt: String(item.createdAt || item.created_at || ""),
+        photos: Array.isArray(item.photos) ? item.photos.map(function (src) {
+          return String(src || "");
+        }) : [],
+      };
+    });
     return safeRenderSignature({
       type: "message",
       id: String(source.id || ""),
@@ -8563,6 +8572,7 @@
     const opts = options || {};
     const trimmed = normalizeComposerText(text);
     const attachment = isImageAttachment(opts.attachment) ? opts.attachment : null;
+    const orderCards = cacheHotQuestionOrderPreviews(opts.orderCards);
     if (!trimmed && !attachment) return;
     const replyTo = opts.replyTo && opts.replyTo.id
       ? {
@@ -8587,9 +8597,9 @@
       time: formatTimeFromIso(createdAt),
       text: trimmed,
       attachment: attachment,
-      author: role === "agent"
-        ? String(opts.author || resolveAgentAuthorNameByMessageId(messageId))
-        : "",
+      author: String(
+        opts.author || (role === "agent" ? resolveAgentAuthorNameByMessageId(messageId) : "")
+      ),
       replyTo: replyTo,
       reaction: "",
       reactions: { in: "", out: "" },
@@ -8598,6 +8608,7 @@
       read: role === "user" ? false : true,
       deliveredAt: "",
       readAt: "",
+      orderCards: orderCards,
       _sharedDirection: direction,
     };
 
@@ -8757,18 +8768,32 @@
     const source = rawOrder && typeof rawOrder === "object" ? rawOrder : {};
     const id = toPositiveOrderId(source.id);
     if (!id) return null;
+    const items = Array.isArray(source.items)
+      ? source.items
+      : (Array.isArray(source.orderItems) ? source.orderItems : []);
+    const itemPhotos = collectHotQuestionOrderPreviewPhotos(items, HOT_QUESTION_ORDER_CARD_PHOTOS_MAX);
+    const directPhotos = Array.isArray(source.photos)
+      ? source.photos
+        .map(function (photo) { return String(photo || "").trim(); })
+        .filter(Boolean)
+        .slice(0, HOT_QUESTION_ORDER_CARD_PHOTOS_MAX)
+      : [];
     const preview = {
       id: id,
-      publicId: String(source.public_id || "").trim(),
+      publicId: String(source.public_id || source.publicId || "").trim(),
       statusTitle: String(
         source.status_title || source.statusTitle || HOT_QUESTION_ORDER_STATUS_UNKNOWN
       ).trim() || HOT_QUESTION_ORDER_STATUS_UNKNOWN,
       totalPrice: Number(source.total_price ?? source.totalPrice ?? 0),
       createdAt: String(source.created_at || source.createdAt || ""),
-      photos: collectHotQuestionOrderPreviewPhotos(source.items || source.orderItems, HOT_QUESTION_ORDER_CARD_PHOTOS_MAX),
-      items: Array.isArray(source.items)
-        ? source.items
-        : (Array.isArray(source.orderItems) ? source.orderItems : []),
+      photos: itemPhotos.length ? itemPhotos : directPhotos,
+      items: items,
+      methodTitle: String(source.method_title || source.methodTitle || ""),
+      timeOptionTitle: String(source.time_option_title || source.timeOptionTitle || ""),
+      scheduledAt: String(source.scheduled_at || source.scheduledAt || ""),
+      address: String(source.address || ""),
+      cutleryQty: Number(source.cutlery_qty ?? source.cutleryQty ?? 0),
+      comment: String(source.comment || ""),
     };
     return preview;
   }
@@ -8828,28 +8853,40 @@
 
   function resolveHotQuestionOrderCardPreviews(entry) {
     const source = entry && typeof entry === "object" ? entry : {};
-    const ids = [];
+    const resolved = [];
     const seen = new Set();
+
+    cacheHotQuestionOrderPreviews(source.orderCards).forEach(function (preview) {
+      const orderId = toPositiveOrderId(preview && preview.id);
+      if (!orderId || seen.has(orderId)) return;
+      seen.add(orderId);
+      resolved.push({
+        orderId: orderId,
+        preview: preview,
+      });
+    });
 
     resolveHotQuestionOrderCardIdsByMessageId(source.id).forEach(function (orderId) {
       if (!orderId || seen.has(orderId)) return;
       seen.add(orderId);
-      ids.push(orderId);
-    });
-    if (!ids.length) return [];
-
-    extractHotQuestionOrderIdsFromText(source.text).forEach(function (id) {
-      if (!id || seen.has(id)) return;
-      seen.add(id);
-      ids.push(id);
-    });
-
-    return ids.map(function (orderId) {
-      return {
+      resolved.push({
         orderId: orderId,
         preview: hotQuestionOrderCardsCache.get(orderId) || null,
-      };
+      });
     });
+
+    if (resolved.length > 0) {
+      extractHotQuestionOrderIdsFromText(source.text).forEach(function (id) {
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        resolved.push({
+          orderId: id,
+          preview: hotQuestionOrderCardsCache.get(id) || null,
+        });
+      });
+    }
+
+    return resolved;
   }
 
   async function fetchHotQuestionOrderPreviewById(orderId) {
@@ -9032,9 +9069,10 @@
     if (orderIds.length) {
       suffix += "-o" + orderIds.join("_");
     }
-    pushLiveMessage("agent", readyText, {
+    pushLiveMessage(isAdminClientChatMode ? "user" : "agent", readyText, {
       messageId: makeAssistantMessageId(suffix),
       author: String(chatRuntimeSettings.assistantName || DEFAULT_CHAT_ASSISTANT_NAME),
+      orderCards: opts.orderCards,
     });
   }
 
@@ -9207,7 +9245,7 @@
     hideEmojiPopover();
     const userMessageId = pushLiveMessage("user", trimmed, { replyTo: replySnapshot, attachment: attachment });
     playOutgoingMessageSendTone();
-    if (trimmed && !isAdminClientChatMode) {
+    if (trimmed) {
       scheduleAssistantHotQuestionReply(trimmed, {
         quickQuestion: opts.quickQuestion === true,
         userMessageId: String(userMessageId || ""),
@@ -9938,6 +9976,23 @@
     orderCardMouseDrag = null;
   }
 
+  function clearOrderCardTouchPan(options) {
+    const state = orderCardTouchPan;
+    if (!state) return;
+    const opts = options || {};
+    const strip = state.strip;
+    if (strip && strip.classList) {
+      strip.classList.remove("is-mouse-dragging");
+    }
+    if (opts.suppressClick === true && state.didDrag === true) {
+      suppressTapUntil = Math.max(
+        suppressTapUntil,
+        Date.now() + ORDER_CARD_MOUSE_DRAG_SUPPRESS_CLICK_MS
+      );
+    }
+    orderCardTouchPan = null;
+  }
+
   renderReplyDraftUi();
 
   composer.addEventListener("submit", function (event) {
@@ -10194,26 +10249,39 @@
 
   thread.addEventListener("touchstart", function (event) {
     if (event.touches.length !== 1) {
+      clearOrderCardTouchPan();
       clearTouchGesture();
+      return;
+    }
+
+    const orderStrip = event.target && event.target.closest
+      ? event.target.closest(".shop-company-chat-order-card-strip")
+      : null;
+    if (orderStrip) {
+      clearTouchGesture();
+      const touch = event.touches[0];
+      clearOrderCardTouchPan();
+      orderCardTouchPan = {
+        strip: orderStrip,
+        startX: Number(touch.clientX || 0),
+        startY: Number(touch.clientY || 0),
+        startLeft: Math.max(0, Number(orderStrip.scrollLeft || 0)),
+        active: false,
+        didDrag: false,
+      };
       return;
     }
 
     const bubble = event.target.closest(".shop-company-chat-bubble[data-message-id]");
     if (!bubble) {
-      clearTouchGesture();
-      return;
-    }
-    const inOrderCards =
-      !!event.target.closest(".shop-company-chat-order-card-strip")
-      || !!event.target.closest(".shop-company-chat-order-card")
-      || bubble.classList.contains("shop-company-chat-bubble--order-card");
-    if (inOrderCards) {
+      clearOrderCardTouchPan();
       clearTouchGesture();
       return;
     }
 
     const messageId = String(bubble.getAttribute("data-message-id") || "");
     if (!messageId) {
+      clearOrderCardTouchPan();
       clearTouchGesture();
       return;
     }
@@ -10244,6 +10312,43 @@
   }, { passive: false });
 
   thread.addEventListener("touchmove", function (event) {
+    if (orderCardTouchPan) {
+      if (event.touches.length !== 1) {
+        clearOrderCardTouchPan();
+        return;
+      }
+      const touch = event.touches[0];
+      const x = Number(touch.clientX || 0);
+      const y = Number(touch.clientY || 0);
+      const dx = x - orderCardTouchPan.startX;
+      const dy = y - orderCardTouchPan.startY;
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+
+      if (!orderCardTouchPan.active) {
+        if (absX < ORDER_CARD_TOUCH_PAN_START_PX && absY < ORDER_CARD_TOUCH_PAN_START_PX) return;
+        if (absY > absX) {
+          clearOrderCardTouchPan();
+          return;
+        }
+        orderCardTouchPan.active = true;
+        orderCardTouchPan.strip.classList.add("is-mouse-dragging");
+      }
+
+      event.preventDefault();
+      const maxLeft = Math.max(0, orderCardTouchPan.strip.scrollWidth - orderCardTouchPan.strip.clientWidth);
+      const nextLeft = Math.max(
+        0,
+        Math.min(maxLeft, orderCardTouchPan.startLeft - (dx * ORDER_CARD_TOUCH_PAN_FACTOR))
+      );
+      const prevLeft = Math.max(0, Number(orderCardTouchPan.strip.scrollLeft || 0));
+      if (Math.abs(nextLeft - prevLeft) > 0.1) {
+        orderCardTouchPan.strip.scrollLeft = nextLeft;
+        orderCardTouchPan.didDrag = true;
+      }
+      return;
+    }
+
     if (touchAttachmentTap && event.touches.length === 1) {
       const touch = event.touches[0];
       const dx = Math.abs(Number(touch.clientX || 0) - touchAttachmentTap.startX);
@@ -10296,6 +10401,11 @@
   }, { passive: false });
 
   thread.addEventListener("touchend", function () {
+    if (orderCardTouchPan) {
+      const shouldSuppressClick = orderCardTouchPan.didDrag === true;
+      clearOrderCardTouchPan({ suppressClick: shouldSuppressClick });
+      return;
+    }
     if (touchAttachmentTap) {
       const duration = Date.now() - Number(touchAttachmentTap.startedAt || 0);
       const canOpen =
@@ -10337,6 +10447,7 @@
   }, { passive: true });
 
   thread.addEventListener("touchcancel", function () {
+    clearOrderCardTouchPan();
     touchAttachmentTap = null;
     clearTouchGesture();
   }, { passive: true });
@@ -10382,7 +10493,7 @@
 
     event.preventDefault();
     const maxLeft = Math.max(0, state.strip.scrollWidth - state.strip.clientWidth);
-    const nextLeft = Math.max(0, Math.min(maxLeft, state.startLeft - dx));
+    const nextLeft = Math.max(0, Math.min(maxLeft, state.startLeft - (dx * ORDER_CARD_MOUSE_DRAG_FACTOR)));
     const prevLeft = Math.max(0, Number(state.strip.scrollLeft || 0));
     if (Math.abs(nextLeft - prevLeft) > 0.1) {
       state.strip.scrollLeft = nextLeft;
@@ -10417,11 +10528,12 @@
     const horizontalDelta = prefersHorizontal
       ? (deltaX + (event.shiftKey ? deltaY : 0))
       : deltaY;
+    const slowedDelta = horizontalDelta * ORDER_CARD_WHEEL_FACTOR;
 
-    if (Math.abs(horizontalDelta) >= 0.01) {
+    if (Math.abs(slowedDelta) >= 0.01) {
       const maxLeft = Math.max(0, orderStrip.scrollWidth - orderStrip.clientWidth);
       const prevLeft = Math.max(0, Number(orderStrip.scrollLeft || 0));
-      const nextLeft = Math.max(0, Math.min(maxLeft, prevLeft + horizontalDelta));
+      const nextLeft = Math.max(0, Math.min(maxLeft, prevLeft + slowedDelta));
       if (Math.abs(nextLeft - prevLeft) > 0.1) {
         orderStrip.scrollLeft = nextLeft;
         event.preventDefault();

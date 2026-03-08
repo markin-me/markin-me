@@ -8783,9 +8783,9 @@
     const CHAT_ORDER_CARD_MOUSE_DRAG_START_PX = 5;
     const CHAT_ORDER_CARD_TOUCH_PAN_START_PX = 6;
     const CHAT_ORDER_CARD_MOUSE_DRAG_SUPPRESS_CLICK_MS = 240;
-    const CHAT_ORDER_CARD_MOUSE_DRAG_FACTOR = 0.42;
-    const CHAT_ORDER_CARD_TOUCH_PAN_FACTOR = 0.42;
-    const CHAT_ORDER_CARD_WHEEL_FACTOR = 0.38;
+    const CHAT_ORDER_CARD_MOUSE_DRAG_FACTOR = 1;
+    const CHAT_ORDER_CARD_TOUCH_PAN_FACTOR = 1;
+    const CHAT_ORDER_CARD_WHEEL_FACTOR = 1;
 
     function clearTouchContextGesture() {
       if (!touchContextGesture) return;

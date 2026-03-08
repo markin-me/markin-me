@@ -2486,18 +2486,23 @@
   let companyChatRuntimePromise = null;
   let companyChatRuntimePreloadStarted = false;
   let companyChatWarmupScheduled = false;
+  const COMPANY_CHAT_STYLESHEET_URL = "/static/css/shop.css?v=20260308c";
+  const COMPANY_CHAT_RUNTIME_URL = "/static/js/shop-company-chat.js?admin_mode=2&v=20260308d";
   function ensureCompanyChatStylesheetLoaded() {
     if (companyChatStylesheetPromise) return companyChatStylesheetPromise;
     companyChatStylesheetPromise = new Promise((resolve) => {
       const existing = document.getElementById("shopCompanyChatStylesheet");
-      if (existing) {
+      if (existing && String(existing.getAttribute("href") || "") === COMPANY_CHAT_STYLESHEET_URL) {
         resolve();
         return;
+      }
+      if (existing && existing.parentNode) {
+        existing.parentNode.removeChild(existing);
       }
       const link = document.createElement("link");
       link.id = "shopCompanyChatStylesheet";
       link.rel = "stylesheet";
-      link.href = "/static/css/shop.css";
+      link.href = COMPANY_CHAT_STYLESHEET_URL;
       link.onload = () => resolve();
       link.onerror = () => resolve();
       document.head.appendChild(link);
@@ -2509,12 +2514,15 @@
     if (companyChatRuntimePromise) return companyChatRuntimePromise;
     companyChatRuntimePromise = new Promise((resolve) => {
       const existing = document.querySelector('script[data-shop-company-chat-runtime="1"]');
-      if (existing) {
+      if (existing && String(existing.getAttribute("src") || "") === COMPANY_CHAT_RUNTIME_URL) {
         resolve();
         return;
       }
+      if (existing && existing.parentNode) {
+        existing.parentNode.removeChild(existing);
+      }
       const script = document.createElement("script");
-      script.src = "/static/js/shop-company-chat.js?admin_mode=2";
+      script.src = COMPANY_CHAT_RUNTIME_URL;
       script.async = false;
       script.defer = false;
       script.dataset.shopCompanyChatRuntime = "1";
@@ -2529,11 +2537,14 @@
     if (companyChatRuntimePreloadStarted) return;
     companyChatRuntimePreloadStarted = true;
     const existing = document.querySelector('link[data-shop-company-chat-runtime-preload="1"]');
-    if (existing) return;
+    if (existing && String(existing.getAttribute("href") || "") === COMPANY_CHAT_RUNTIME_URL) return;
+    if (existing && existing.parentNode) {
+      existing.parentNode.removeChild(existing);
+    }
     const link = document.createElement("link");
     link.rel = "preload";
     link.as = "script";
-    link.href = "/static/js/shop-company-chat.js?admin_mode=2";
+    link.href = COMPANY_CHAT_RUNTIME_URL;
     link.dataset.shopCompanyChatRuntimePreload = "1";
     document.head.appendChild(link);
   }
