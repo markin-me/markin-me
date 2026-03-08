@@ -2418,7 +2418,7 @@
     if (state.activeClientId && Number(state.activeClientId) === Number(c.id)) {
       row.classList.add("is-active");
     }
-    row.style.gridTemplateColumns = '64px minmax(200px, 1fr) 80px';
+    row.style.gridTemplateColumns = '64px minmax(200px, 1fr) 126px';
     row.innerHTML = `
       <div class="order-main">
         <div class="order-num">${escapeHtml(c.id)}</div>
@@ -2429,11 +2429,127 @@
         <div class="order-line muted"><i class="fas fa-phone"></i> <span class="client-phone" style="white-space:nowrap;display:inline-block;overflow:hidden;text-overflow:ellipsis;max-width:220px;">${escapeHtml(formatPhoneDigitsToRU(c.phone))}</span></div>
       </div>
       <div class="order-actions">
+        <button
+          class="icon-btn clients-chat-hint-btn"
+          type="button"
+          aria-label="Написать клиенту"
+          title="Написать клиенту"
+          tabindex="-1"
+        >
+          <i class="fas fa-comment-dots" aria-hidden="true"></i>
+        </button>
         <div class="pill pill-strong" style="padding:6px 10px;font-size:13px;height:32px;min-width:40px;max-width:80px;box-sizing:border-box;overflow:hidden;text-align:center;">${escapeHtml(Number(c.total_orders || 0))}</div>
       </div>
     `;
+    const chatHintBtn = row.querySelector(".clients-chat-hint-btn");
+    if (chatHintBtn) {
+      chatHintBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openCompanyChatBottomsheetForClient(c);
+      });
+    }
     row.addEventListener("click", () => selectClient(c.id));
     return row;
+  }
+
+  function openCompanyChatBottomsheetForClient(client) {
+    const clientId = Number(client && client.id || 0);
+    if (!Number.isFinite(clientId) || clientId <= 0) return;
+
+    const normalizedName = String(client && client.name || "").trim() || ("Клиент #" + String(clientId));
+    const normalizedPhone = String(client && client.phone || "").trim();
+    try {
+      window.__shopCompanyChatActor = "out";
+      window.__shopCompanyChatClientProfile = {
+        id: Math.trunc(clientId),
+        name: normalizedName,
+        phone: normalizedPhone,
+      };
+    } catch {}
+
+    ensureCompanyChatStylesheetLoaded()
+      .catch(() => {})
+      .then(() => ensureCompanyChatRuntimeLoaded())
+      .catch(() => {})
+      .finally(() => {
+        const openBtn = document.getElementById("shopCompanyChatOpenBtn");
+        if (openBtn) {
+          openBtn.click();
+          return;
+        }
+        console.warn("[clients] company chat open button not found");
+      });
+  }
+
+  let companyChatStylesheetPromise = null;
+  let companyChatRuntimePromise = null;
+  let companyChatRuntimePreloadStarted = false;
+  let companyChatWarmupScheduled = false;
+  function ensureCompanyChatStylesheetLoaded() {
+    if (companyChatStylesheetPromise) return companyChatStylesheetPromise;
+    companyChatStylesheetPromise = new Promise((resolve) => {
+      const existing = document.getElementById("shopCompanyChatStylesheet");
+      if (existing) {
+        resolve();
+        return;
+      }
+      const link = document.createElement("link");
+      link.id = "shopCompanyChatStylesheet";
+      link.rel = "stylesheet";
+      link.href = "/static/css/shop.css";
+      link.onload = () => resolve();
+      link.onerror = () => resolve();
+      document.head.appendChild(link);
+    });
+    return companyChatStylesheetPromise;
+  }
+
+  function ensureCompanyChatRuntimeLoaded() {
+    if (companyChatRuntimePromise) return companyChatRuntimePromise;
+    companyChatRuntimePromise = new Promise((resolve) => {
+      const existing = document.querySelector('script[data-shop-company-chat-runtime="1"]');
+      if (existing) {
+        resolve();
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = "/static/js/shop-company-chat.js?admin_mode=2";
+      script.async = false;
+      script.defer = false;
+      script.dataset.shopCompanyChatRuntime = "1";
+      script.onload = () => resolve();
+      script.onerror = () => resolve();
+      document.body.appendChild(script);
+    });
+    return companyChatRuntimePromise;
+  }
+
+  function preloadCompanyChatRuntimeAsset() {
+    if (companyChatRuntimePreloadStarted) return;
+    companyChatRuntimePreloadStarted = true;
+    const existing = document.querySelector('link[data-shop-company-chat-runtime-preload="1"]');
+    if (existing) return;
+    const link = document.createElement("link");
+    link.rel = "preload";
+    link.as = "script";
+    link.href = "/static/js/shop-company-chat.js?admin_mode=2";
+    link.dataset.shopCompanyChatRuntimePreload = "1";
+    document.head.appendChild(link);
+  }
+
+  function scheduleCompanyChatWarmup() {
+    if (companyChatWarmupScheduled) return;
+    companyChatWarmupScheduled = true;
+    const warmup = () => {
+      ensureCompanyChatStylesheetLoaded().catch(() => {});
+      preloadCompanyChatRuntimeAsset();
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(warmup, { timeout: 1200 });
+      return;
+    }
+    window.setTimeout(warmup, 500);
   }
 
   function renderClients() {
@@ -4079,6 +4195,7 @@
       clearClientOpenRequestFromUrl();
     });
   loadDiscounts().catch(console.error);
+  scheduleCompanyChatWarmup();
 
   document.addEventListener('tenantStoreChanged', (event) => {
     console.log('Филиал изменен (clients):', event.detail.store);

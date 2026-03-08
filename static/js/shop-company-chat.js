@@ -156,7 +156,33 @@
   const IMAGE_OPTIMIZE_INITIAL_QUALITY = 0.86;
   const IMAGE_OPTIMIZE_MIN_QUALITY = 0.58;
   const IMAGE_OPTIMIZE_SCALE_STEP = 0.84;
-  const CHAT_REACTION_ACTOR = "in";
+  const isAdminClientChatMode = !!(document.body && document.body.classList.contains("page-clients"));
+  function getChatActor() {
+    if (isAdminClientChatMode) return "out";
+    return "in";
+  }
+  const CHAT_REACTION_ACTOR = getChatActor();
+  function getAdminChatModalTitle() {
+    const profile = chatClientProfile && typeof chatClientProfile === "object" ? chatClientProfile : null;
+    const name = String(profile && profile.name || "").trim();
+    const phone = String(profile && profile.phone || "").trim();
+    if (name) return name;
+    if (phone) return phone;
+    return initialModalTitleText;
+  }
+  function syncModalTitleWithActiveProfile() {
+    if (!modalTitle || chatOrderDetailsActive) return;
+    if (!isAdminClientChatMode) {
+      modalTitle.textContent = initialModalTitleText;
+      return;
+    }
+    modalTitle.textContent = getAdminChatModalTitle();
+  }
+  function getDirectionForRole(role) {
+    const actor = getChatActor();
+    if (role === "user") return actor === "out" ? "out" : "in";
+    return actor === "out" ? "in" : "out";
+  }
   const CHAT_TYPING_PHRASES = [
     "\u043f\u0435\u0447\u0430\u0442\u0430\u0435\u0442",
     "\u043d\u0430\u0431\u0438\u0440\u0430\u0435\u0442 \u043e\u0442\u0432\u0435\u0442",
@@ -2704,6 +2730,18 @@
 
   function resolveChatClientProfile(options) {
     const opts = options || {};
+    const forced = isAdminClientChatMode ? window.__shopCompanyChatClientProfile : null;
+    if (forced && typeof forced === "object") {
+      const forcedId = Number(forced.id);
+      if (Number.isFinite(forcedId) && forcedId > 0) {
+        return {
+          id: Math.trunc(forcedId),
+          name: String(forced.name || "\u041a\u043b\u0438\u0435\u043d\u0442"),
+          phone: String(forced.phone || ""),
+          isGuest: false,
+        };
+      }
+    }
     const customer = getCustomerCache();
     const token = getCustomerToken();
     const directId = Number(customer && customer.id);
@@ -2853,6 +2891,7 @@
 
     if (isSameChatClientProfile(currentProfile, nextProfile)) {
       chatClientProfile = nextProfile;
+      syncModalTitleWithActiveProfile();
       const profileNameChanged = normalizeNameIdentity(currentProfile.name) !== normalizeNameIdentity(nextProfile.name);
       const profilePhoneChanged = normalizePhoneIdentity(currentProfile.phone) !== normalizePhoneIdentity(nextProfile.phone);
       if (profileNameChanged || profilePhoneChanged) {
@@ -2904,6 +2943,7 @@
     renderTypingIndicator();
 
     chatClientProfile = nextProfile;
+    syncModalTitleWithActiveProfile();
     localHiddenMessagesKey = buildLocalHiddenMessagesKey(chatClientProfile.id);
     localHiddenMessageIds = loadLocalHiddenMessageIds();
 
@@ -3132,11 +3172,11 @@
     const headers = {
       "x-tenant-id": String(tenantId),
       "x-store-id": String(getActiveStoreId()),
-      "x-chat-actor": "in",
+      "x-chat-actor": getChatActor(),
       ...(options.body && !isFormDataBody ? { "Content-Type": "application/json" } : {}),
       ...(options.headers || {}),
     };
-    const requestUrl = withChatActorQuery(url, "in");
+    const requestUrl = withChatActorQuery(url, getChatActor());
     const isChatSettingsRequest = requestUrl.indexOf(CHAT_SETTINGS_API_URL) === 0;
     if (!isChatSettingsRequest && chatRuntimeSettings.isEnabled === false) {
       throw createChatDisabledAbortError();
@@ -3236,7 +3276,11 @@
     const isDailyWelcome = /^daily-welcome-\d{4}-\d{2}-\d{2}$/.test(messageId);
     const direction = String(message.direction || "").toLowerCase() === "out" ? "out" : "in";
     const createdAt = String(message.createdAt || new Date().toISOString());
-    const role = direction === "in" ? "user" : "agent";
+    const role = (function resolveRoleByDirection() {
+      const actor = getChatActor();
+      if (actor === "out") return direction === "out" ? "user" : "agent";
+      return direction === "in" ? "user" : "agent";
+    })();
     const editedAt = String(message.editedAt || "");
     const reactions = sanitizeReactionsMap(message.reactions);
     const legacyReaction = String(message.reaction || "").trim();
@@ -3254,7 +3298,7 @@
             || getDefaultChatWelcomeMessageByGender(chatRuntimeSettings.assistantGender)
           )
         : String(message.text || ""),
-      author: role === "agent" ? resolveAgentAuthorNameByMessageId(messageId) : "",
+      author: direction === "out" ? resolveAgentAuthorNameByMessageId(messageId) : "",
       replyTo: message.replyTo && typeof message.replyTo === "object"
         ? {
             id: String(message.replyTo.id || ""),
@@ -3328,7 +3372,7 @@
     if (!entry || typeof entry !== "object") return null;
     const id = String(entry.id || "").trim();
     if (!id) return null;
-    const direction = entry.role === "user" ? "in" : "out";
+    const direction = getDirectionForRole(entry.role);
     const status = (function resolveStatus() {
       if (direction === "in") return getOutgoingDeliveryStatus(entry);
       const raw = String(entry.deliveryStatus || "").toLowerCase();
@@ -3455,7 +3499,7 @@
     const source = new EventSource(
       buildChatSseUrl(
         CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(activeClientId) + "/stream",
-        "in"
+        getChatActor()
       )
     );
     source.__clientId = String(activeClientId);
@@ -3517,7 +3561,7 @@
     const source = new EventSource(
       buildChatSseUrl(
         CHAT_TEMP_API_BASE + "/unread/stream",
-        "in",
+        getChatActor(),
         { client_id: activeClientId }
       )
     );
@@ -5308,6 +5352,7 @@
     hideChatOrderDetailsView();
     stopUnreadPolling();
     const profileSwitched = refreshChatClientProfileIfNeeded({ pull: true });
+    syncModalTitleWithActiveProfile();
     queueWebPushSubscriptionSync({
       clientId: getActiveChatClientId(),
       immediate: true,
@@ -5455,6 +5500,7 @@
   }
 
   function ensureDailyWelcomeMessage() {
+    if (isAdminClientChatMode) return null;
     if (chatRuntimeSettings.welcomeEnabled === false) return null;
 
     const dayKey = getLocalDayKey(new Date());
@@ -5512,7 +5558,7 @@
   }
 
   function getAllEntries() {
-    const quickQuestionsFeatureEnabled = chatRuntimeSettings.quickQuestionsEnabled !== false;
+    const quickQuestionsFeatureEnabled = !isAdminClientChatMode && chatRuntimeSettings.quickQuestionsEnabled !== false;
     const rawEntries = baseEntries
       .slice(visibleStart)
       .concat(liveEntries)
@@ -6668,6 +6714,7 @@
       chatOrderBackBtn.classList.add("hidden");
     }
     modalTitle.textContent = chatOrderDetailsPrevTitle || initialModalTitleText;
+    syncModalTitleWithActiveProfile();
     updateScrollDownButton();
   }
 
@@ -8005,7 +8052,8 @@
       const opts = options || {};
       const stickToBottom = opts.stickToBottom === true;
       const wasNearBottom = shouldKeepFeedPinnedToBottom();
-      const keepBottomPinned = stickToBottom || wasNearBottom;
+      const prevBottomDistance = getFeedBottomDistanceSnapshot();
+      const prevComposerHeight = getElementOuterHeightPx(composer);
 
       const inputStyles = window.getComputedStyle(input);
       const minHeight = parseFloat(inputStyles.minHeight) || 45;
@@ -8017,13 +8065,32 @@
       input.style.height = nextHeight + "px";
       input.style.overflowY = fullHeight > maxHeight + 1 ? "auto" : "hidden";
 
+      const nextComposerHeight = getElementOuterHeightPx(composer);
+      const composerHeightDelta = Math.max(0, nextComposerHeight - prevComposerHeight);
+      const keepBottomPinned = (
+        stickToBottom
+        || wasNearBottom
+        || (
+          Number.isFinite(prevBottomDistance)
+          && prevBottomDistance <= Math.max(40, composerHeightDelta + 24)
+        )
+      );
+      const targetBottomDistance = keepBottomPinned && Number.isFinite(prevBottomDistance)
+        ? Math.max(0, prevBottomDistance)
+        : null;
+
       const value = String(input.value || "");
       if (!value || !hasEmojiInText(value)) {
         preview.classList.add("hidden");
         preview.textContent = "";
         input.classList.remove("is-rich-emoji-preview");
-        scheduleScrollDownComposerExtraOffsetSync();
-        if (keepBottomPinned) scrollToBottom(stickToBottom);
+        syncScrollDownComposerExtraOffsetNow();
+        if (targetBottomDistance != null) {
+          stabilizeFeedBottomDistance(targetBottomDistance, 140);
+          saveFeedScrollPosition({ force: true });
+        } else {
+          updateScrollDownButton();
+        }
         return;
       }
 
@@ -8031,9 +8098,14 @@
       input.classList.add("is-rich-emoji-preview");
       renderEmojiMessageText(preview, value, "shop-company-chat-emoji-glyph shop-company-chat-emoji-glyph--input-inline");
       preview.style.transform = "translate(" + (-Math.max(0, input.scrollLeft)) + "px, " + (-Math.max(0, input.scrollTop)) + "px)";
-      scheduleScrollDownComposerExtraOffsetSync();
+      syncScrollDownComposerExtraOffsetNow();
 
-      if (keepBottomPinned) scrollToBottom(stickToBottom);
+      if (targetBottomDistance != null) {
+        stabilizeFeedBottomDistance(targetBottomDistance, 140);
+        saveFeedScrollPosition({ force: true });
+      } else {
+        updateScrollDownButton();
+      }
     };
 
     input.__syncEmojiPreview = sync;
@@ -8502,7 +8574,7 @@
 
     messageSeq += 1;
     const createdAt = new Date().toISOString();
-    const direction = role === "user" ? "in" : "out";
+    const direction = getDirectionForRole(role);
     const status = role === "user" ? "sent" : "";
     const messageId = String(
       opts.messageId || (Date.now() + "-" + messageSeq + "-" + Math.random().toString(36).slice(2, 7))
@@ -9135,7 +9207,7 @@
     hideEmojiPopover();
     const userMessageId = pushLiveMessage("user", trimmed, { replyTo: replySnapshot, attachment: attachment });
     playOutgoingMessageSendTone();
-    if (trimmed) {
+    if (trimmed && !isAdminClientChatMode) {
       scheduleAssistantHotQuestionReply(trimmed, {
         quickQuestion: opts.quickQuestion === true,
         userMessageId: String(userMessageId || ""),
@@ -9975,6 +10047,7 @@
 
     const quickButton = event.target.closest("[data-quick-label]");
     if (quickButton) {
+      if (isAdminClientChatMode) return;
       sendUserMessage(quickButton.dataset.quickLabel || "", { quickQuestion: true });
       return;
     }

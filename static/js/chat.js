@@ -6382,7 +6382,12 @@
     let changed = false;
     Array.from(set).forEach((id) => {
       const node = nodeById.get(id);
-      if (!node) return;
+      if (!node) {
+        // Message is no longer in DOM/thread (reloaded, trimmed, hidden): drop stale pending id.
+        set.delete(id);
+        changed = true;
+        return;
+      }
       const rect = node.getBoundingClientRect();
       const isVisible = rect.bottom > topEdge && rect.top < bottomEdge;
       if (!isVisible) return;
