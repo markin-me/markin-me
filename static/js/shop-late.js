@@ -4294,26 +4294,14 @@ optionGroups.forEach((group) => {
 
   function composeVariantLabelValueFirst(rawLabel, rawGroupTitle) {
     const raw = str(rawLabel || "").trim();
-    const groupTitle = str(rawGroupTitle || "").trim();
     if (!raw) return "";
 
-    let valuePart = raw;
-    let groupPart = groupTitle;
     const colonPos = raw.indexOf(":");
     if (colonPos >= 0) {
-      const left = raw.slice(0, colonPos).trim();
       const right = raw.slice(colonPos + 1).trim();
-      if (right) {
-        valuePart = right;
-        if (!groupPart && left) groupPart = left;
-      }
+      if (right) return right;
     }
-
-    if (!groupPart) return valuePart;
-    const valueLc = valuePart.toLowerCase();
-    const groupLc = groupPart.toLowerCase();
-    if (valueLc.includes(groupLc)) return valuePart;
-    return `${valuePart} ${groupPart}`.trim();
+    return raw;
   }
 
   function buildCurrentProductFavoriteSnapshot() {
@@ -11068,14 +11056,12 @@ function renderSheetAddressList() {
 
   function buildRepeatVariantLabel(rawLabel, rawGroupTitle) {
     const value = str(rawLabel || "").trim();
-    const groupTitle = str(rawGroupTitle || "").trim();
     if (!value) return "";
-    if (!groupTitle) return value;
-    if (value.includes(":")) return value;
-    const valueLc = value.toLowerCase();
-    const groupLc = groupTitle.toLowerCase();
-    if (valueLc.includes(groupLc)) return value;
-    return `${groupTitle}: ${value}`;
+    if (value.includes(":")) {
+      const right = value.split(":").slice(1).join(":").trim();
+      return right || value;
+    }
+    return value;
   }
 
   function normalizeRepeatOptionItems(optionItems) {
