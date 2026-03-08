@@ -3,6 +3,36 @@ const express = require('express');
 module.exports = function makeAdminClientsRouter({ db, helpers }) {
   const router = express.Router();
 
+  function getClientsDatasetSql(baseWhereSql) {
+    return `
+      SELECT
+        c.id, c.tenant_id,
+        c.name, c.phone, c.birthday,
+        c.photo,
+        COALESCE(order_metrics.total_orders, 0) AS total_orders,
+        COALESCE(order_metrics.total_spent, 0) AS total_spent,
+        order_metrics.last_order_date AS last_order_date,
+        c.registration_date,
+        c.is_active,
+        c.created_at, c.updated_at
+      FROM cust_customers c
+      LEFT JOIN (
+        SELECT
+          tenant_id,
+          customer_id,
+          COUNT(*) AS total_orders,
+          COALESCE(SUM(COALESCE(total_price, 0)), 0) AS total_spent,
+          MAX(created_at) AS last_order_date
+        FROM order_orders
+        WHERE tenant_id=? AND is_active=1 AND customer_id IS NOT NULL
+        GROUP BY tenant_id, customer_id
+      ) order_metrics
+        ON order_metrics.tenant_id = c.tenant_id
+       AND order_metrics.customer_id = c.id
+      WHERE ${baseWhereSql}
+    `;
+  }
+
   /**
    * Вспомогательная функция для построения WHERE clause из условий фильтра
    */
@@ -87,6 +117,36 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
     };
   }
 
+  function normalizeFilterConditions(rawConditions) {
+    try {
+      const parsed = typeof rawConditions === 'string'
+        ? JSON.parse(rawConditions)
+        : rawConditions;
+      return parsed && typeof parsed === 'object'
+        ? parsed
+        : { logic: 'AND', rules: [] };
+    } catch {
+      return { logic: 'AND', rules: [] };
+    }
+  }
+
+  async function getCustomFilterCount(tenantId, conditions) {
+    const normalized = normalizeFilterConditions(conditions);
+    const { whereClause, params } = buildFilterWhereClause(normalized, tenantId);
+    const clientsDatasetSql = getClientsDatasetSql('c.tenant_id=?');
+    const [countRows] = await db.query(
+      `SELECT COUNT(*) AS c
+       FROM (${clientsDatasetSql}) clients
+       WHERE 1=1${whereClause}`,
+      [tenantId, tenantId, ...params]
+    );
+
+    return {
+      conditions: normalized,
+      count: Number(countRows?.[0]?.c || 0),
+    };
+  }
+
   /**
    * GET /api/admin/clients
    * query:
@@ -127,16 +187,16 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
       };
       const orderBy = orderByMap[sortRaw] || orderByMap.last_desc;
 
-      const where = ['tenant_id=?'];
+      const where = ['c.tenant_id=?'];
       const params = [tenantId];
 
       if (isActive !== null) {
-        where.push('is_active=?');
+        where.push('c.is_active=?');
         params.push(isActive);
       }
 
       if (qText) {
-        where.push('(name LIKE ? OR phone LIKE ?)');
+        where.push('(c.name LIKE ? OR c.phone LIKE ?)');
         params.push(`%${qText}%`, `%${qPhone || qText}%`);
       }
 
@@ -158,6 +218,9 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         }
       }
 
+      const clientsDatasetSql = getClientsDatasetSql(where.join(' AND '));
+      const clientsDatasetParams = [tenantId, ...params];
+
       const [rows] = await db.query(
         `SELECT
            id, tenant_id,
@@ -166,18 +229,18 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
            total_orders, total_spent, last_order_date,
            is_active,
            created_at, updated_at
-         FROM cust_customers
-         WHERE ${where.join(' AND ')}${customFilterClause}
+         FROM (${clientsDatasetSql}) clients
+         WHERE 1=1${customFilterClause}
          ORDER BY ${orderBy}
          LIMIT ? OFFSET ?`,
-        [...params, ...customFilterParams, limit, offset]
+        [...clientsDatasetParams, ...customFilterParams, limit, offset]
       );
 
       const [cntRows] = await db.query(
         `SELECT COUNT(*) AS c
-         FROM cust_customers
-         WHERE ${where.join(' AND ')}${customFilterClause}`,
-        [...params, ...customFilterParams]
+         FROM (${clientsDatasetSql}) clients
+         WHERE 1=1${customFilterClause}`,
+        [...clientsDatasetParams, ...customFilterParams]
       );
 
       res.json({
@@ -204,6 +267,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
+      const clientDatasetSql = getClientsDatasetSql('c.tenant_id=? AND c.id=?');
       const [rows] = await db.query(
         `SELECT
            id, tenant_id,
@@ -212,10 +276,9 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
            total_orders, total_spent, last_order_date,
            is_active,
            created_at, updated_at
-         FROM cust_customers
-         WHERE tenant_id=? AND id=?
+         FROM (${clientDatasetSql}) clients
          LIMIT 1`,
-        [tenantId, id]
+        [tenantId, tenantId, id]
       );
 
       if (!rows.length) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
@@ -637,30 +700,33 @@ module.exports = function makeAdminClientsRouter({ db, helpers }) {
 
       // Подсчитываем количество клиентов для каждого фильтра
       const filtersWithCounts = await Promise.all(rows.map(async (filter) => {
-        let conditions;
-        try {
-          conditions = typeof filter.conditions === 'string' 
-            ? JSON.parse(filter.conditions) 
-            : (filter.conditions || { logic: 'AND', rules: [] });
-        } catch (e) {
-          conditions = { logic: 'AND', rules: [] };
-        }
-        
-        const { whereClause, params } = buildFilterWhereClause(conditions, tenantId);
-        
-        const [countRows] = await db.query(
-          `SELECT COUNT(*) AS c FROM cust_customers WHERE tenant_id=? AND store_id=? ${whereClause}`,
-          [tenantId, storeId, ...params]
-        );
+        const result = await getCustomFilterCount(tenantId, filter.conditions);
         
         return {
           ...filter,
-          conditions,
-          count: Number(countRows?.[0]?.c || 0)
+          conditions: result.conditions,
+          count: result.count
         };
       }));
 
       res.json({ ok: true, data: filtersWithCounts });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
+  router.post('/filters/preview-count', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const result = await getCustomFilterCount(tenantId, req.body?.conditions);
+      res.json({
+        ok: true,
+        data: {
+          count: result.count,
+          conditions: result.conditions,
+        },
+      });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });

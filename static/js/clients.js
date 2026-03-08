@@ -296,6 +296,11 @@
   let orderRequestToken = 0;
   let discountCustomerSearchToken = 0;
   let discountCustomerSearchDebounce = null;
+  const clientOrderMetricsRequests = new Map();
+  let customFilterCountsRequestToken = 0;
+  let filterDraftCountPreview = null;
+  let filterDraftCountRequestToken = 0;
+  let filterDraftCountTimer = null;
 
   function sanitizeCachedClientForDetails(row, fallbackId = 0) {
     const id = Number(row?.id || fallbackId || 0);
@@ -343,6 +348,323 @@
         status_color: String(row?.status_color || ""),
       }))
       .filter((row) => Number.isFinite(row.id) && row.id > 0);
+  }
+
+  function computeClientMetricsFromOrders(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    let totalOrders = 0;
+    let totalSpent = 0;
+    let lastOrderTs = 0;
+    let lastOrderDate = "";
+    list.forEach((row) => {
+      totalOrders += 1;
+      totalSpent += Number(row?.total_price || 0) || 0;
+      const createdAt = String(row?.created_at || "");
+      const ts = createdAt ? new Date(createdAt).getTime() : 0;
+      if (ts > lastOrderTs) {
+        lastOrderTs = ts;
+        lastOrderDate = createdAt;
+      }
+    });
+    return {
+      total_orders: totalOrders,
+      total_spent: totalSpent,
+      last_order_date: lastOrderDate,
+    };
+  }
+
+  function updateClientRowMetrics(clientId, metrics) {
+    const id = Number(clientId || 0);
+    if (!Number.isFinite(id) || id <= 0 || !metrics || typeof metrics !== "object") return;
+
+    const totalOrders = Math.max(0, Number(metrics.total_orders || 0));
+    const totalSpent = Math.max(0, Number(metrics.total_spent || 0));
+    const lastOrderDate = String(metrics.last_order_date || "");
+
+    const list = Array.isArray(state.clients) ? state.clients : [];
+    const idx = list.findIndex((row) => Number(row?.id || 0) === id);
+    if (idx >= 0) {
+      const prev = list[idx] || {};
+      list[idx] = {
+        ...prev,
+        total_orders: totalOrders,
+        total_spent: totalSpent,
+        last_order_date: lastOrderDate,
+      };
+    }
+
+    const rowEl = $(`.order-row[data-client-id="${id}"]`, document);
+    const pillEl = rowEl ? $(".order-actions .pill", rowEl) : null;
+    if (pillEl) {
+      pillEl.textContent = String(totalOrders);
+    }
+
+    const cached = getCachedClientDetails(id);
+    const baseClient =
+      cached?.client
+      || (state.activeClient && Number(state.activeClient.id || 0) === id ? state.activeClient : null)
+      || (idx >= 0 ? list[idx] : null)
+      || { id };
+    setCachedClientDetails(id, {
+      client: {
+        ...baseClient,
+        total_orders: totalOrders,
+        total_spent: totalSpent,
+        last_order_date: lastOrderDate,
+      },
+    });
+
+    if (state.activeClient && Number(state.activeClient.id || 0) === id) {
+      setClient({
+        ...state.activeClient,
+        total_orders: totalOrders,
+        total_spent: totalSpent,
+        last_order_date: lastOrderDate,
+      });
+    }
+
+    refreshCustomFilterCountsFromClientList();
+  }
+
+  async function ensureClientOrderMetrics(clientId, options = {}) {
+    const id = Number(clientId || 0);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    if (clientOrderMetricsRequests.has(id)) {
+      return clientOrderMetricsRequests.get(id);
+    }
+
+    const request = (async () => {
+      const cached = getCachedClientDetails(id);
+      if (!options.force && cached && Array.isArray(cached.orders) && cached.orders.length) {
+        const metrics = computeClientMetricsFromOrders(cached.orders);
+        updateClientRowMetrics(id, metrics);
+        return metrics;
+      }
+
+      const json = await fetchClientOrdersShared(id);
+      const rows = Array.isArray(json?.data) ? json.data : [];
+      const metrics = computeClientMetricsFromOrders(rows);
+      setCachedClientDetails(id, { orders: rows });
+      updateClientRowMetrics(id, metrics);
+      return metrics;
+    })()
+      .catch((err) => {
+        console.error(err);
+        return null;
+      })
+      .finally(() => {
+        clientOrderMetricsRequests.delete(id);
+      });
+
+    clientOrderMetricsRequests.set(id, request);
+    return request;
+  }
+
+  function reconcileClientListOrderMetrics(items) {
+    const rows = Array.isArray(items) ? items : [];
+    if (!rows.length) return;
+    const candidates = rows.filter((row) => Number(row?.id || 0) > 0 && Number(row?.total_orders || 0) <= 0);
+    if (!candidates.length) return;
+
+    const limit = state.q ? 20 : 8;
+    const run = async () => {
+      for (const row of candidates.slice(0, limit)) {
+        await ensureClientOrderMetrics(row.id);
+      }
+    };
+
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(() => { run().catch(console.error); }, { timeout: 1200 });
+      return;
+    }
+    window.setTimeout(() => { run().catch(console.error); }, 60);
+  }
+
+  function getRelativeDateFilterValue(rawValue) {
+    if (typeof rawValue !== "string" || !/^-\d+d$/.test(rawValue)) return null;
+    const days = Number.parseInt(rawValue.slice(1, -1), 10);
+    if (!Number.isFinite(days) || days < 0) return null;
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    now.setDate(now.getDate() - days);
+    return now.getTime();
+  }
+
+  function evaluateCustomFilterRule(client, rule) {
+    if (!rule || typeof rule !== "object") return null;
+    const field = String(rule.field || "").trim();
+    const operator = String(rule.operator || "").trim();
+    const numericFields = new Set(["total_orders", "total_spent", "is_active"]);
+    const dateFields = new Set(["last_order_date", "registration_date", "created_at"]);
+    const supported = new Set(["=", "!=", ">=", "<=", ">", "<"]);
+    if ((!numericFields.has(field) && !dateFields.has(field)) || !supported.has(operator)) {
+      return null;
+    }
+
+    let left = client?.[field];
+    let right = rule.value;
+
+    if (numericFields.has(field)) {
+      if (right === "" || right == null) return null;
+      left = Number(left || 0);
+      right = Number(right);
+      if (!Number.isFinite(right)) return null;
+    } else if (dateFields.has(field)) {
+      const relativeTs = getRelativeDateFilterValue(right);
+      const leftTs = left ? new Date(left).getTime() : NaN;
+      const rightTs = relativeTs ?? (right ? new Date(right).getTime() : NaN);
+      if (!Number.isFinite(leftTs) || !Number.isFinite(rightTs)) return false;
+      left = leftTs;
+      right = rightTs;
+    }
+
+    switch (operator) {
+      case "=": return left === right;
+      case "!=": return left !== right;
+      case ">=": return left >= right;
+      case "<=": return left <= right;
+      case ">": return left > right;
+      case "<": return left < right;
+      default: return null;
+    }
+  }
+
+  function doesClientMatchCustomFilter(client, conditions) {
+    const rules = Array.isArray(conditions?.rules) ? conditions.rules : [];
+    const validResults = rules
+      .map((rule) => evaluateCustomFilterRule(client, rule))
+      .filter((result) => result !== null);
+    if (!validResults.length) return true;
+    if (String(conditions?.logic || "").toUpperCase() === "OR") {
+      return validResults.some(Boolean);
+    }
+    return validResults.every(Boolean);
+  }
+
+  function refreshCustomFilterCountsFromClientList() {
+    if (!state.editingFilterId || state.editingFilterId === 'new') return;
+    scheduleFilterDraftCountPreview();
+  }
+
+  function getDisplayedFilterCount(filter) {
+    const filterId = Number(filter?.id || 0);
+    const editingFilterId = Number(state.editingFilterId || 0);
+    if (
+      filterId > 0 &&
+      editingFilterId > 0 &&
+      filterId === editingFilterId &&
+      Number.isFinite(filterDraftCountPreview)
+    ) {
+      return Math.max(0, Number(filterDraftCountPreview || 0));
+    }
+    return Math.max(0, Number(filter?.count || 0));
+  }
+
+  function clearFilterDraftCountPreview(options = {}) {
+    filterDraftCountRequestToken += 1;
+    filterDraftCountPreview = null;
+    if (filterDraftCountTimer) {
+      window.clearTimeout(filterDraftCountTimer);
+      filterDraftCountTimer = null;
+    }
+    if (options.render === true) {
+      renderFilters();
+      if (state.currentView === 'filter-categories') {
+        renderFilterCategoriesList();
+      }
+    }
+  }
+
+  async function refreshSavedCustomFilterCounts() {
+    const token = ++customFilterCountsRequestToken;
+    const filterIds = [...new Set((state.customFilters || [])
+      .map((filter) => Number(filter?.id || 0))
+      .filter((id) => Number.isFinite(id) && id > 0))];
+    if (!filterIds.length) return;
+
+    const results = await Promise.all(filterIds.map(async (id) => {
+      try {
+        const json = await apiJson(`/api/admin/clients?filter_id=${id}&limit=1&offset=0`);
+        return { id, count: Math.max(0, Number(json?.total || 0)) };
+      } catch (err) {
+        console.error(err);
+        return null;
+      }
+    }));
+    if (token !== customFilterCountsRequestToken) return;
+
+    let changed = false;
+    const resultMap = new Map(results.filter(Boolean).map((item) => [item.id, item.count]));
+    state.customFilters = (state.customFilters || []).map((filter) => {
+      const id = Number(filter?.id || 0);
+      if (!resultMap.has(id)) return filter;
+      const nextCount = resultMap.get(id);
+      if (Number(filter?.count || 0) === nextCount && Number(filter?.server_count || 0) === nextCount) {
+        return filter;
+      }
+      changed = true;
+      return {
+        ...filter,
+        count: nextCount,
+        server_count: nextCount,
+      };
+    });
+
+    if (changed) {
+      renderFilters();
+      if (state.currentView === 'filter-categories') {
+        renderFilterCategoriesList();
+      }
+    }
+  }
+
+  async function refreshFilterDraftCountPreview() {
+    const editingFilterId = Number(state.editingFilterId || 0);
+    if (!(editingFilterId > 0)) {
+      clearFilterDraftCountPreview({ render: true });
+      return;
+    }
+
+    const data = collectFilterFormData({ requireTitle: false });
+    if (!data) return;
+
+    const requestToken = ++filterDraftCountRequestToken;
+    try {
+      const json = await apiJson('/api/admin/clients/filters/preview-count', {
+        method: 'POST',
+        body: { conditions: data.conditions },
+      });
+      if (requestToken !== filterDraftCountRequestToken || Number(state.editingFilterId || 0) !== editingFilterId) {
+        return;
+      }
+      filterDraftCountPreview = Math.max(0, Number(json?.data?.count || 0));
+      renderFilters();
+      if (state.currentView === 'filter-categories') {
+        renderFilterCategoriesList();
+      }
+    } catch (err) {
+      console.error(err);
+      if (requestToken !== filterDraftCountRequestToken) return;
+      filterDraftCountPreview = null;
+      renderFilters();
+      if (state.currentView === 'filter-categories') {
+        renderFilterCategoriesList();
+      }
+    }
+  }
+
+  function scheduleFilterDraftCountPreview(immediate = false) {
+    if (filterDraftCountTimer) {
+      window.clearTimeout(filterDraftCountTimer);
+      filterDraftCountTimer = null;
+    }
+    if (immediate) {
+      refreshFilterDraftCountPreview().catch(console.error);
+      return;
+    }
+    filterDraftCountTimer = window.setTimeout(() => {
+      refreshFilterDraftCountPreview().catch(console.error);
+    }, 180);
   }
 
   function sanitizeCachedDiscounts(rows) {
@@ -953,6 +1275,7 @@
 
     // Кастомные категории клиентов
     state.customFilters.forEach((filter) => {
+      const displayedCount = getDisplayedFilterCount(filter);
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "stage-item";
@@ -960,7 +1283,7 @@
       btn.classList.toggle("is-active", state.activeFilter === "custom" && state.activeCustomFilterId === filter.id);
       btn.innerHTML = `
         <span class="stage-meta stage-text"><b>${escapeHtml(filter.title)}</b></span>
-        <span class="stage-count">${escapeHtml(filter.count || 0)}</span>
+        <span class="stage-count">${escapeHtml(displayedCount)}</span>
       `;
       btn.addEventListener("click", () => {
         state.activeFilter = "custom";
@@ -1957,13 +2280,18 @@
   async function loadCustomFilters() {
     try {
       const json = await apiJson('/api/admin/clients/filters/list');
-      state.customFilters = Array.isArray(json.data) ? json.data : [];
+      state.customFilters = (Array.isArray(json.data) ? json.data : []).map((filter) => ({
+        ...filter,
+        server_count: Number(filter?.count || 0),
+        count: Number(filter?.count || 0),
+      }));
     } catch (e) {
       console.error('Failed to load custom filters:', e);
       state.customFilters = [];
     }
     // Обновляем список фильтров в левой панели
     renderFilters();
+    refreshSavedCustomFilterCounts().catch(console.error);
   }
 
   // Переключение между views
@@ -2006,6 +2334,7 @@
     // Загружаем данные
     if (viewName === 'filter-categories') {
       renderFilterCategoriesList();
+      refreshSavedCustomFilterCounts().catch(console.error);
     } else if (viewName === 'discounts') {
       renderDiscountsList();
     } else if (viewName === 'clients') {
@@ -2049,6 +2378,7 @@
     if (elFilterCategoriesEmpty) elFilterCategoriesEmpty.classList.add('hidden');
 
     state.customFilters.forEach((filter) => {
+      const displayedCount = getDisplayedFilterCount(filter);
       const row = document.createElement('div');
       row.className = 'order-row';
       row.setAttribute('role', 'button');
@@ -2060,12 +2390,10 @@
       const isTabOpen = tabsState.tabs.some(t => t.key === tabKey);
       if (isTabOpen && tabsState.activeKey === tabKey) row.classList.add('is-active');
 
-      const rulesCount = filter.conditions?.rules?.length || 0;
-
       row.innerHTML = `
         <div class="order-icon"><i class="fas ${escapeHtml(filter.icon || 'fa-filter')}"></i></div>
         <div class="order-mid"><strong>${escapeHtml(filter.title)}</strong></div>
-        <div class="order-actions"><span class="pill">${rulesCount}</span></div>
+        <div class="order-actions"><span class="pill">${displayedCount}</span></div>
       `;
 
       row.addEventListener('click', () => openFilterEditor(filter));
@@ -2089,6 +2417,7 @@
   function activateFilterEditor(filter = null) {
     const isNew = filter === null;
     state.editingFilterId = isNew ? 'new' : filter.id;
+    filterDraftCountPreview = isNew ? null : Math.max(0, Number(filter?.count || 0));
 
     // Заполняем форму
     const titleInput = $('#fe_title');
@@ -2130,6 +2459,10 @@
 
     // Обновляем список чтобы подсветить выбранный
     renderFilterCategoriesList();
+    renderFilters();
+    if (!isNew) {
+      scheduleFilterDraftCountPreview(true);
+    }
   }
 
   function renderFilterRules(rules) {
@@ -2246,13 +2579,25 @@
 
     // Переключение типа ввода в зависимости от поля
     elFilterRulesContainer.querySelectorAll('.rule-field').forEach(wrap => {
-      wrap.addEventListener('cs-change', handleFieldChange);
+      wrap.addEventListener('cs-change', (e) => {
+        handleFieldChange(e);
+        scheduleFilterDraftCountPreview();
+      });
+    });
+
+    elFilterRulesContainer.querySelectorAll('.rule-operator').forEach(wrap => {
+      wrap.addEventListener('cs-change', () => scheduleFilterDraftCountPreview());
+    });
+
+    elFilterRulesContainer.querySelectorAll('.rule-value, .rule-value-days').forEach(input => {
+      input.addEventListener('input', () => scheduleFilterDraftCountPreview());
     });
 
     // Удаление правила
     elFilterRulesContainer.querySelectorAll('.rule-remove').forEach(btn => {
       btn.onclick = () => {
         btn.closest('.filter-rule-row')?.remove();
+        scheduleFilterDraftCountPreview();
       };
     });
   }
@@ -2268,13 +2613,14 @@
     if (dateInput) dateInput.classList.toggle('hidden', !isDate);
   }
 
-  function collectFilterFormData() {
+  function collectFilterFormData(options = {}) {
     const titleInput = $('#fe_title');
     const logicWrap = $('#fe_logic');
     const isActiveInput = $('#fe_is_active');
+    const requireTitle = options?.requireTitle !== false;
 
     const title = titleInput?.value?.trim();
-    if (!title) {
+    if (requireTitle && !title) {
       titleInput?.focus();
       return null;
     }
@@ -2302,7 +2648,7 @@
     }
 
     return {
-      title,
+      title: title || '',
       conditions: {
         logic: logicWrap?.dataset?.value || 'AND',
         rules,
@@ -2333,7 +2679,7 @@
         });
         savedId = state.editingFilterId;
       }
-      
+      clearFilterDraftCountPreview();
       await loadCustomFilters();
       renderFilterCategoriesList();
       
@@ -2376,7 +2722,7 @@
       
       // Закрываем таб удалённой категории
       await closeTab(tabKey);
-      
+      clearFilterDraftCountPreview();
       await loadCustomFilters();
       renderFilterCategoriesList();
     } catch (e) {
@@ -2486,8 +2832,8 @@
   let companyChatRuntimePromise = null;
   let companyChatRuntimePreloadStarted = false;
   let companyChatWarmupScheduled = false;
-  const COMPANY_CHAT_STYLESHEET_URL = "/static/css/shop.css?v=20260308c";
-  const COMPANY_CHAT_RUNTIME_URL = "/static/js/shop-company-chat.js?admin_mode=2&v=20260308d";
+  const COMPANY_CHAT_STYLESHEET_URL = "/static/css/shop.css?v=20260308e";
+  const COMPANY_CHAT_RUNTIME_URL = "/static/js/shop-company-chat.js?admin_mode=2&v=20260308f";
   function ensureCompanyChatStylesheetLoaded() {
     if (companyChatStylesheetPromise) return companyChatStylesheetPromise;
     companyChatStylesheetPromise = new Promise((resolve) => {
@@ -2584,6 +2930,7 @@
     items.forEach((c) => {
       elList.appendChild(buildClientRow(c));
     });
+    reconcileClientListOrderMetrics(items);
   }
 
   // -----------------------------
@@ -2825,6 +3172,9 @@
       if (cached && Array.isArray(cached.orders)) {
         state.clientOrders = cached.orders.slice();
         renderClientOrders();
+        if (cached.orders.length) {
+          updateClientRowMetrics(clientId, computeClientMetricsFromOrders(cached.orders));
+        }
         usedCached = true;
       }
     }
@@ -2838,6 +3188,7 @@
       const rows = Array.isArray(json.data) ? json.data : [];
       state.clientOrders = rows;
       setCachedClientDetails(clientId, { orders: rows });
+      updateClientRowMetrics(clientId, computeClientMetricsFromOrders(rows));
       renderClientOrders();
     } catch (err) {
       console.error(err);
@@ -3713,7 +4064,7 @@
     ensureTab({
       type: 'client',
       id: clientId,
-      title,
+      title: title || '',
       onActivate: () => (
         isGuestChatClient
           ? openGuestClientById(clientId, title)
@@ -3808,6 +4159,7 @@
       state.clientsHasMore = chunk.length > 0 && state.clients.length < state.clientsTotal;
 
       appendClients(append);
+      refreshCustomFilterCountsFromClientList();
     } finally {
       if (token === clientsRequestToken) {
         state.clientsLoading = false;
@@ -3841,6 +4193,7 @@
     state.clientsTotal = 0;
     state.clientsHasMore = true;
     renderClients();
+    refreshCustomFilterCountsFromClientList();
 
     await loadTotals();
     renderFilters();
@@ -3998,6 +4351,7 @@
       const html = renderRuleRow(elFilterRulesContainer.querySelectorAll('.filter-rule-row').length, { field: 'total_orders', operator: '>=', value: '' });
       elFilterRulesContainer.insertAdjacentHTML('beforeend', html);
       bindRuleRowEvents();
+      scheduleFilterDraftCountPreview();
     });
   }
 
@@ -4192,6 +4546,12 @@
   const logicSelectWrap = $('#fe_logic');
   if (logicSelectWrap) {
     initCustomSelects(logicSelectWrap.parentElement);
+    logicSelectWrap.addEventListener('cs-change', () => scheduleFilterDraftCountPreview());
+  }
+
+  const filterTitleInput = $('#fe_title');
+  if (filterTitleInput) {
+    filterTitleInput.addEventListener('input', () => scheduleFilterDraftCountPreview());
   }
 
   const isChatBridgeMode = !!(document.body && document.body.classList.contains("page-chat"));

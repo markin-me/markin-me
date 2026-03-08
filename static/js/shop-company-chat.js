@@ -10293,10 +10293,12 @@
       bubble: bubble,
       startX: touch.clientX,
       startY: touch.clientY,
+      startTop: Math.max(0, Number(feed.scrollTop || 0)),
       lastX: touch.clientX,
       lastY: touch.clientY,
       swipeLocked: false,
       swipeRejected: false,
+      scrollLocked: false,
       swipeShift: 0,
       replyTriggered: false,
       longPressFired: false,
@@ -10309,7 +10311,7 @@
       suppressTapUntil = Date.now() + 640;
       showMessageContextMenu(touchGesture.lastX, touchGesture.lastY, messageId);
     }, LONG_PRESS_MS);
-  }, { passive: false });
+  }, { passive: true });
 
   thread.addEventListener("touchmove", function (event) {
     if (orderCardTouchPan) {
@@ -10375,10 +10377,30 @@
     if (touchGesture.longPressFired) return;
     if (touchGesture.swipeRejected) return;
 
+    if (touchGesture.scrollLocked) {
+      event.preventDefault();
+      const prevTop = Math.max(0, Number(feed.scrollTop || 0));
+      const nextTop = clampFeedScrollTop(touchGesture.startTop - dy);
+      if (Math.abs(nextTop - prevTop) > 0.1) {
+        feed.scrollTop = nextTop;
+      }
+      return;
+    }
+
     if (!touchGesture.swipeLocked) {
       if (absX < 10 && absY < 10) return;
-      if (absY > absX || dx <= 0) {
-        touchGesture.swipeRejected = true;
+      if (absY > absX) {
+        touchGesture.scrollLocked = true;
+        event.preventDefault();
+        const prevTop = Math.max(0, Number(feed.scrollTop || 0));
+        const nextTop = clampFeedScrollTop(touchGesture.startTop - dy);
+        if (Math.abs(nextTop - prevTop) > 0.1) {
+          feed.scrollTop = nextTop;
+        }
+        return;
+      }
+      if (dx <= 0) {
+        clearTouchGesture();
         return;
       }
       touchGesture.swipeLocked = true;
@@ -10525,19 +10547,19 @@
     if (Math.abs(deltaX) < 0.01 && Math.abs(deltaY) < 0.01) return;
 
     const prefersHorizontal = event.shiftKey || Math.abs(deltaX) > Math.abs(deltaY);
-    const horizontalDelta = prefersHorizontal
-      ? (deltaX + (event.shiftKey ? deltaY : 0))
-      : deltaY;
-    const slowedDelta = horizontalDelta * ORDER_CARD_WHEEL_FACTOR;
+    if (prefersHorizontal) {
+      const horizontalDelta = deltaX + (event.shiftKey ? deltaY : 0);
+      const slowedDelta = horizontalDelta * ORDER_CARD_WHEEL_FACTOR;
 
-    if (Math.abs(slowedDelta) >= 0.01) {
-      const maxLeft = Math.max(0, orderStrip.scrollWidth - orderStrip.clientWidth);
-      const prevLeft = Math.max(0, Number(orderStrip.scrollLeft || 0));
-      const nextLeft = Math.max(0, Math.min(maxLeft, prevLeft + slowedDelta));
-      if (Math.abs(nextLeft - prevLeft) > 0.1) {
-        orderStrip.scrollLeft = nextLeft;
-        event.preventDefault();
-        return;
+      if (Math.abs(slowedDelta) >= 0.01) {
+        const maxLeft = Math.max(0, orderStrip.scrollWidth - orderStrip.clientWidth);
+        const prevLeft = Math.max(0, Number(orderStrip.scrollLeft || 0));
+        const nextLeft = Math.max(0, Math.min(maxLeft, prevLeft + slowedDelta));
+        if (Math.abs(nextLeft - prevLeft) > 0.1) {
+          orderStrip.scrollLeft = nextLeft;
+          event.preventDefault();
+          return;
+        }
       }
     }
 
@@ -10550,6 +10572,26 @@
       feed.scrollTop = nextTop;
       event.preventDefault();
     }
+  }, { passive: false });
+
+  feed.addEventListener("wheel", function (event) {
+    if (event.defaultPrevented) return;
+    const targetEl = event.target && event.target.closest ? event.target : null;
+    if (targetEl && targetEl.closest(".shop-company-chat-order-card-strip")) return;
+
+    const deltaX = Number(event.deltaX || 0);
+    const deltaY = Number(event.deltaY || 0);
+    if (Math.abs(deltaY) < 0.01) return;
+    if (Math.abs(deltaX) > Math.abs(deltaY)) return;
+
+    const maxTop = Math.max(0, feed.scrollHeight - feed.clientHeight);
+    if (maxTop <= 0) return;
+
+    const prevTop = Math.max(0, Number(feed.scrollTop || 0));
+    const nextTop = Math.max(0, Math.min(maxTop, prevTop + deltaY));
+    if (Math.abs(nextTop - prevTop) < 0.1) return;
+    feed.scrollTop = nextTop;
+    event.preventDefault();
   }, { passive: false });
 
   reactionBar.addEventListener("click", function (event) {

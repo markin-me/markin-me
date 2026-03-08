@@ -2038,6 +2038,12 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         `SELECT id, tenant_id, store_id, token, is_active, created_at, updated_at, last_used_at,
                 printer_name, agent_name, agent_version, last_heartbeat_at, agent_running,
                 IF(
+                  last_heartbeat_at IS NOT NULL
+                  AND last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),
+                  1,
+                  0
+                ) AS agent_online,
+                IF(
                   agent_running=1
                   AND last_heartbeat_at IS NOT NULL
                   AND last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),
@@ -2090,6 +2096,12 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const [rows] = await db.query(
         `SELECT id, tenant_id, store_id, token, is_active, created_at, updated_at, last_used_at,
                 printer_name, agent_name, agent_version, last_heartbeat_at, agent_running,
+                IF(
+                  last_heartbeat_at IS NOT NULL
+                  AND last_heartbeat_at >= DATE_SUB(NOW(), INTERVAL 15 SECOND),
+                  1,
+                  0
+                ) AS agent_online,
                 IF(
                   agent_running=1
                   AND last_heartbeat_at IS NOT NULL

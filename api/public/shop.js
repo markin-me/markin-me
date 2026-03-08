@@ -25,6 +25,36 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
   let orderDeliveryTypeColumnsReady = false;
   let ensureOrderDeliveryTypeColumnsPromise = null;
+  async function syncCustomerOrderMetrics(queryable, tenantId, customerIds) {
+    const ids = [...new Set((Array.isArray(customerIds) ? customerIds : [customerIds])
+      .map((value) => Number(value || 0))
+      .filter((value) => Number.isFinite(value) && value > 0))];
+    if (!ids.length) return;
+
+    const placeholders = ids.map(() => '?').join(',');
+    await queryable.query(
+      `UPDATE cust_customers c
+       LEFT JOIN (
+         SELECT
+           tenant_id,
+           customer_id,
+           COUNT(*) AS total_orders,
+           COALESCE(SUM(COALESCE(total_price, 0)), 0) AS total_spent,
+           MAX(created_at) AS last_order_date
+         FROM order_orders
+         WHERE tenant_id=? AND is_active=1 AND customer_id IN (${placeholders})
+         GROUP BY tenant_id, customer_id
+       ) order_metrics
+         ON order_metrics.tenant_id = c.tenant_id
+        AND order_metrics.customer_id = c.id
+       SET
+         c.total_orders = COALESCE(order_metrics.total_orders, 0),
+         c.total_spent = COALESCE(order_metrics.total_spent, 0),
+         c.last_order_date = order_metrics.last_order_date
+       WHERE c.tenant_id=? AND c.id IN (${placeholders})`,
+      [tenantId, ...ids, tenantId, ...ids]
+    );
+  }
   const PUBLIC_CACHE_TTL_MS = Object.freeze({
     categories: 30000,
     cartUpsell: 15000,
@@ -7517,6 +7547,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             ]
           );
         }
+
+        await syncCustomerOrderMetrics(conn, tenantId, customerId);
 
         await conn.commit();
       } catch (txErr) {
