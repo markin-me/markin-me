@@ -4,28 +4,24 @@
   </div>
 
   <div class="panel-body no-scrollbar" id="clientInfoBody">
-    <!-- Empty state для клиентов -->
     <div id="clientEmpty" class="empty-state">
       <div class="empty-icon"><i class="fas fa-mouse-pointer"></i></div>
       <div class="empty-title">Выберите клиента</div>
       <div class="empty-text">Нажмите на клиента в списке для просмотра подробной информации</div>
     </div>
 
-    <!-- Empty state для категорий -->
     <div id="filterCategoryEmpty" class="empty-state hidden">
       <div class="empty-icon"><i class="fas fa-filter"></i></div>
       <div class="empty-title">Выберите категорию</div>
       <div class="empty-text">Нажмите на категорию слева, чтобы увидеть детали</div>
     </div>
 
-    <!-- Empty state для скидок -->
     <div id="discountEmpty" class="empty-state hidden">
       <div class="empty-icon"><i class="fas fa-percentage"></i></div>
       <div class="empty-title">Выберите скидку</div>
       <div class="empty-text">Нажмите на скидку слева или создайте новую</div>
     </div>
 
-    <!-- Форма редактирования фильтра/категории -->
     <div id="filterEditorWrap" class="hidden">
       <form id="filterEditorForm" class="form-grid" autocomplete="off">
         <div class="field-wrap">
@@ -67,7 +63,6 @@
       </form>
     </div>
 
-    <!-- Форма редактирования скидки -->
     <div id="discountEditorWrap" class="hidden">
       <form id="discountEditorForm" class="form-grid" autocomplete="off">
         <div class="field-wrap">
@@ -75,43 +70,342 @@
           <input class="control" id="de_title" name="title" type="text" placeholder="Например: Скидка 10% на всё" required />
         </div>
 
-        <div class="form-row-2">
+        <div class="field-wrap">
+          <div class="discount-choice-grid" data-discount-choice-group="de_mechanic_type">
+            <button class="cash-payment-method-pill discount-choice-pill" type="button" data-discount-choice-value="simple_discount" aria-pressed="false">
+              <span class="cash-payment-method-pill-icon"><i class="fas fa-percent"></i></span>
+              <span class="cash-payment-method-pill-title">Скидка</span>
+            </button>
+            <button class="cash-payment-method-pill discount-choice-pill" type="button" data-discount-choice-value="buy_x_get_y" aria-pressed="false">
+              <span class="cash-payment-method-pill-icon"><i class="fas fa-gift"></i></span>
+              <span class="cash-payment-method-pill-title">5+1</span>
+            </button>
+            <button class="cash-payment-method-pill discount-choice-pill" type="button" data-discount-choice-value="threshold" aria-pressed="false">
+              <span class="cash-payment-method-pill-icon"><i class="fas fa-layer-group"></i></span>
+              <span class="cash-payment-method-pill-title">Пороговая</span>
+            </button>
+          </div>
+          <select class="control hidden" id="de_mechanic_type" name="mechanic_type">
+            <option value="simple_discount">Скидка</option>
+            <option value="buy_x_get_y">5+1</option>
+            <option value="threshold">Пороговая</option>
+          </select>
+        </div>
+
+        <div class="discount-editor-section" id="de_simple_wrap">
+          <div class="discount-editor-section-title">Основное</div>
+
           <div class="field-wrap">
-            <label class="field-label" for="de_discount_type">Тип скидки</label>
-            <select class="control" id="de_discount_type" name="discount_type">
+            <div class="discount-choice-grid" data-discount-choice-group="de_simple_variant">
+              <button class="cash-payment-method-pill discount-choice-pill" type="button" data-discount-choice-value="promo_code" aria-pressed="false">
+                <span class="cash-payment-method-pill-icon"><i class="fas fa-ticket-alt"></i></span>
+                <span class="cash-payment-method-pill-title">Промокод</span>
+              </button>
+              <button class="cash-payment-method-pill discount-choice-pill" type="button" data-discount-choice-value="percent" aria-pressed="false">
+                <span class="cash-payment-method-pill-icon"><i class="fas fa-percent"></i></span>
+                <span class="cash-payment-method-pill-title">Процент</span>
+              </button>
+              <button class="cash-payment-method-pill discount-choice-pill" type="button" data-discount-choice-value="fixed" aria-pressed="false">
+                <span class="cash-payment-method-pill-icon"><i class="fas fa-money-bill-wave"></i></span>
+                <span class="cash-payment-method-pill-title">Фикс. сумма</span>
+              </button>
+              <button class="cash-payment-method-pill discount-choice-pill" type="button" data-discount-choice-value="special_price" aria-pressed="false">
+                <span class="cash-payment-method-pill-icon"><i class="fas fa-tag"></i></span>
+                <span class="cash-payment-method-pill-title">Спеццена</span>
+              </button>
+            </div>
+            <select class="control hidden" id="de_simple_variant" name="simple_variant">
+              <option value="promo_code">Промокод</option>
+              <option value="percent">Процент</option>
+              <option value="fixed">Фикс. сумма</option>
+              <option value="special_price">Спеццена</option>
+            </select>
+            <select class="control hidden" id="de_discount_type" name="discount_type">
               <option value="percent">Процент (%)</option>
               <option value="fixed">Фиксированная сумма (₽)</option>
               <option value="special_price">Специальная цена</option>
             </select>
           </div>
-          <div class="field-wrap">
-            <label class="field-label" for="de_discount_value">Значение *</label>
-            <input class="control" id="de_discount_value" name="discount_value" type="number" step="0.01" min="0" placeholder="10" required />
+
+          <div id="de_simple_regular_wrap">
+            <div class="discount-editor-inline-row">
+              <div class="field-wrap">
+                <label class="field-label" for="de_apply_to">Применяется к</label>
+                <select class="control hidden discount-editor-native-select" id="de_apply_to" name="apply_to">
+                  <option value="order">Весь заказ</option>
+                  <option value="product">Конкретный товар</option>
+                  <option value="category">Категория товаров</option>
+                  <option value="combo">Комбо</option>
+                </select>
+              </div>
+
+              <div class="field-wrap">
+                <label class="field-label" for="de_discount_value">Значение *</label>
+                <input class="control" id="de_discount_value" name="discount_value" type="number" step="0.01" min="0" placeholder="10" />
+              </div>
+            </div>
+
+            <div class="field-wrap" id="de_products_wrap">
+              <label class="field-label">Товары</label>
+              <div class="discount-chips-wrap">
+                <div class="discount-chips" id="de_products_chips"></div>
+                <button type="button" class="btn btn-sm" id="de_add_products_btn">
+                  <i class="fas fa-plus"></i> Добавить товары
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="field-wrap">
-          <label class="field-label" for="de_apply_to">Применяется к</label>
-          <select class="control" id="de_apply_to" name="apply_to">
-            <option value="order">Весь заказ</option>
-            <option value="product">Конкретный товар</option>
-            <option value="category">Категория товаров</option>
-            <option value="combo">Комбо</option>
-          </select>
-        </div>
+        <div class="discount-editor-section hidden" id="de_buy_x_get_y_wrap">
+          <div class="discount-editor-section-title">Условия</div>
 
-        <!-- Выбранные товары (чипсы) -->
-        <div class="field-wrap" id="de_products_wrap">
-          <label class="field-label">Товары</label>
-          <div class="discount-chips-wrap">
-            <div class="discount-chips" id="de_products_chips"></div>
-            <button type="button" class="btn btn-sm" id="de_add_products_btn">
-              <i class="fas fa-plus"></i> Добавить товары
-            </button>
+          <div class="form-row-2">
+            <div class="field-wrap">
+              <label class="field-label" for="de_buy_qty">Сколько покупаем</label>
+              <input class="control" id="de_buy_qty" type="number" min="1" step="1" value="5" />
+            </div>
+            <div class="field-wrap">
+              <label class="field-label" for="de_reward_qty">Сколько даем</label>
+              <input class="control" id="de_reward_qty" type="number" min="1" step="1" value="1" />
+            </div>
+          </div>
+
+          <div class="form-row-2">
+            <div class="field-wrap">
+              <label class="field-label" for="de_buy_qualifying_mode">Что участвует</label>
+              <select class="control hidden discount-editor-native-select" id="de_buy_qualifying_mode">
+                <option value="same_sku">Одинаковые товары</option>
+                <option value="pool">Товары из списка</option>
+              </select>
+            </div>
+            <div class="field-wrap">
+              <label class="field-label" for="de_buy_repeat_mode">Повторы</label>
+              <select class="control hidden discount-editor-native-select" id="de_buy_repeat_mode">
+                <option value="single">Один раз за заказ</option>
+                <option value="repeat">Кратно условию</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field-wrap hidden" id="de_buy_condition_products_wrap">
+            <label class="field-label">Список товаров для условия</label>
+            <div class="discount-chips-wrap">
+              <div class="discount-chips" id="de_buy_condition_products_chips"></div>
+              <button type="button" class="btn btn-sm" id="de_add_buy_condition_products_btn">
+                <i class="fas fa-plus"></i> Добавить товары
+              </button>
+            </div>
+          </div>
+
+          <div class="discount-editor-section-title">Награда</div>
+
+          <div class="form-row-2">
+            <div class="field-wrap">
+              <label class="field-label" for="de_buy_reward_source">Откуда брать награду</label>
+              <select class="control hidden discount-editor-native-select" id="de_buy_reward_source">
+                <option value="same_pool">Из того же набора</option>
+                <option value="reward_list">Из отдельного списка</option>
+              </select>
+            </div>
+            <div class="field-wrap">
+              <label class="field-label" for="de_buy_reward_kind">Тип награды</label>
+              <select class="control hidden discount-editor-native-select" id="de_buy_reward_kind">
+                <option value="gift">Подарок</option>
+                <option value="product_discount">Товар со скидкой</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field-wrap hidden" id="de_buy_reward_products_wrap">
+            <label class="field-label">Товары-награды</label>
+            <div class="discount-chips-wrap">
+              <div class="discount-chips" id="de_buy_reward_products_chips"></div>
+              <button type="button" class="btn btn-sm" id="de_add_buy_reward_products_btn">
+                <i class="fas fa-plus"></i> Добавить товары
+              </button>
+            </div>
+          </div>
+
+          <div class="form-row-2 hidden" id="de_buy_reward_discount_wrap">
+            <div class="field-wrap">
+              <label class="field-label" for="de_buy_reward_discount_type">Тип скидки</label>
+              <select class="control hidden discount-editor-native-select" id="de_buy_reward_discount_type">
+                <option value="percent">Процент (%)</option>
+                <option value="fixed">Фиксированная сумма (₽)</option>
+                <option value="special_price">Специальная цена</option>
+              </select>
+            </div>
+            <div class="field-wrap">
+              <label class="field-label" for="de_buy_reward_discount_value">Значение</label>
+              <input class="control" id="de_buy_reward_discount_value" type="number" step="0.01" min="0" placeholder="10" />
+            </div>
           </div>
         </div>
 
-        <!-- Выбранные клиенты (чипсы) -->
+        <div class="discount-editor-section hidden" id="de_threshold_wrap">
+          <div class="discount-editor-section-title">Условия</div>
+
+          <div class="form-row-2">
+            <div class="field-wrap">
+              <label class="field-label" for="de_threshold_basis">Как считать порог</label>
+              <select class="control hidden discount-editor-native-select" id="de_threshold_basis">
+                <option value="before_discounts">До скидок</option>
+                <option value="after_discounts">После скидок</option>
+              </select>
+            </div>
+            <div class="field-wrap">
+              <label class="field-label" for="de_threshold_apply_mode">Как применять ступени</label>
+              <select class="control hidden discount-editor-native-select" id="de_threshold_apply_mode">
+                <option value="best_only">Только лучшая ступень</option>
+                <option value="cumulative">Суммировать ступени</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="discount-editor-section-title">Ступени</div>
+          <div class="discount-threshold-list" id="de_threshold_tiers_list"></div>
+          <button type="button" class="btn btn-sm" id="de_add_threshold_tier_btn">
+            <i class="fas fa-plus"></i> Добавить ступень
+          </button>
+        </div>
+
+        <div class="discount-promo-panel hidden" id="de_promo_wrap">
+          <div class="discount-promo-panel-title">Настройки промокода</div>
+
+          <div class="field-wrap hidden">
+            <label class="field-label" for="de_promo_code_mode">Режим кодов</label>
+            <select class="control hidden" id="de_promo_code_mode" name="promo_code_mode">
+              <option value="shared">Общий</option>
+              <option value="unique">Уникальный</option>
+            </select>
+          </div>
+
+          <div class="discount-promo-mode-chips" data-discount-choice-group="de_promo_code_mode" id="de_promo_code_mode_chips">
+            <button class="shop-chip-btn discount-promo-apply-chip" type="button" data-discount-choice-value="shared" aria-pressed="false">Общий</button>
+            <button class="shop-chip-btn discount-promo-apply-chip" type="button" data-discount-choice-value="unique" aria-pressed="false">Уникальный</button>
+          </div>
+
+          <div id="de_promo_shared_wrap">
+            <div class="discount-editor-inline-row">
+              <div class="field-wrap">
+                <label class="field-label" for="de_promo_shared_code">Промокод *</label>
+                <input class="control" id="de_promo_shared_code" name="shared_code" type="text" maxlength="64" placeholder="SPRING10" />
+              </div>
+              <div class="field-wrap">
+                <label class="field-label" for="de_promo_shared_usage_limit">Лимит на код</label>
+                <input class="control" id="de_promo_shared_usage_limit" name="shared_code_usage_limit" type="number" min="0" placeholder="100" />
+              </div>
+            </div>
+            <div class="field-hint">Код хранится в верхнем регистре и должен быть уникальным.</div>
+          </div>
+
+          <div class="hidden" id="de_promo_unique_wrap">
+            <div class="discount-editor-inline-row discount-editor-inline-row--generator">
+              <div class="field-wrap">
+                <label class="field-label" for="de_promo_unique_usage_limit">Лимит на один код</label>
+                <input class="control" id="de_promo_unique_usage_limit" name="unique_code_usage_limit" type="number" min="1" placeholder="1" />
+              </div>
+              <div class="field-wrap">
+                <label class="field-label" for="de_promo_generate_count">Количество</label>
+                <input class="control" id="de_promo_generate_count" type="number" min="1" max="500" value="10" />
+              </div>
+              <div class="discount-editor-action-cell">
+                <button type="button" class="btn btn-sm discount-editor-icon-btn" id="de_promo_generate_btn" title="Сгенерировать коды" aria-label="Сгенерировать коды">
+                  <i class="fas fa-plus"></i>
+                </button>
+              </div>
+            </div>
+            <div class="field-hint">По умолчанию каждый уникальный код можно использовать 1 раз.</div>
+            <div class="discount-promo-hint" id="de_promo_generate_hint">Сначала сохраните акцию, затем можно будет сгенерировать коды.</div>
+
+            <div class="discount-promo-codes hidden" id="de_promo_codes_wrap">
+              <div class="discount-info-section-title">Список уникальных кодов</div>
+              <div class="discount-promo-list" id="de_promo_codes_list"></div>
+            </div>
+          </div>
+
+          <div class="discount-promo-panel-title">Награда по промокоду</div>
+
+          <div class="discount-promo-reward-chips" data-discount-choice-group="de_promo_reward_type" id="de_promo_reward_type_chips">
+            <button class="shop-chip-btn discount-promo-apply-chip" type="button" data-discount-choice-value="discount" aria-pressed="false">Скидка</button>
+            <button class="shop-chip-btn discount-promo-apply-chip" type="button" data-discount-choice-value="product" aria-pressed="false">Товар</button>
+          </div>
+
+          <div class="discount-promo-apply-row" id="de_promo_discount_row">
+            <div class="field-wrap hidden" id="de_promo_apply_to_wrap">
+              <label class="field-label" for="de_promo_apply_to">Применяется к</label>
+              <select class="control hidden" id="de_promo_apply_to" name="promo_apply_to">
+                <option value="order">Весь заказ</option>
+                <option value="product">Товар</option>
+                <option value="category">Категория</option>
+                <option value="combo" hidden>Комбо</option>
+              </select>
+            </div>
+            <div class="discount-promo-apply-chips" data-discount-choice-group="de_promo_apply_to" id="de_promo_apply_to_chips">
+              <button class="shop-chip-btn discount-promo-apply-chip" type="button" data-discount-choice-value="order" aria-pressed="false">Весь заказ</button>
+              <button class="shop-chip-btn discount-promo-apply-chip" type="button" data-discount-choice-value="product" aria-pressed="false">Товар</button>
+              <button class="shop-chip-btn discount-promo-apply-chip" type="button" data-discount-choice-value="category" aria-pressed="false">Категория</button>
+            </div>
+          </div>
+
+          <div class="discount-editor-inline-row" id="de_promo_reward_row">
+            <div class="field-wrap hidden">
+              <label class="field-label" for="de_promo_reward_type">Награда</label>
+              <select class="control hidden" id="de_promo_reward_type" name="promo_reward_type">
+                <option value="discount">Скидка</option>
+                <option value="product">Товар</option>
+              </select>
+            </div>
+
+            <div class="field-wrap" id="de_promo_reward_variant_discount_wrap">
+              <label class="field-label" for="de_promo_discount_type">Вариант</label>
+              <select class="control hidden discount-editor-native-select" id="de_promo_discount_type" name="promo_discount_type">
+                <option value="percent">Процент (%)</option>
+                <option value="fixed">Фиксированная сумма (₽)</option>
+              </select>
+            </div>
+
+            <div class="field-wrap hidden" id="de_promo_reward_variant_product_wrap">
+              <label class="field-label" for="de_promo_product_reward_type">Вариант</label>
+              <select class="control hidden discount-editor-native-select" id="de_promo_product_reward_type" name="promo_product_reward_type">
+                <option value="gift">Товар в подарок</option>
+                <option value="product_discount">Товар со скидкой</option>
+              </select>
+            </div>
+
+            <div class="field-wrap" id="de_promo_discount_value_wrap">
+              <label class="field-label" for="de_promo_discount_value">Значение *</label>
+              <input class="control" id="de_promo_discount_value" type="number" step="0.01" min="0" placeholder="10" />
+            </div>
+          </div>
+
+          <div class="discount-editor-inline-row hidden" id="de_promo_product_discount_row">
+            <div class="field-wrap" id="de_promo_product_discount_type_wrap">
+              <label class="field-label" for="de_promo_product_discount_type">Тип скидки</label>
+              <select class="control hidden discount-editor-native-select" id="de_promo_product_discount_type" name="promo_product_discount_type">
+                <option value="percent">Процент (%)</option>
+                <option value="fixed">Фиксированная сумма (₽)</option>
+              </select>
+            </div>
+
+            <div class="field-wrap" id="de_promo_product_discount_value_wrap">
+              <label class="field-label" for="de_promo_product_discount_value">Значение *</label>
+              <input class="control" id="de_promo_product_discount_value" type="number" step="0.01" min="0" placeholder="10" />
+            </div>
+          </div>
+
+          <div class="field-wrap hidden" id="de_promo_products_wrap">
+            <label class="field-label">Товары</label>
+            <div class="discount-chips-wrap">
+              <div class="discount-chips" id="de_promo_products_chips"></div>
+              <button type="button" class="btn btn-sm" id="de_add_promo_products_btn">
+                <i class="fas fa-plus"></i> Добавить товары
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div class="field-wrap" id="de_customers_wrap">
           <label class="field-label">Клиенты</label>
           <div class="discount-chips-wrap">
@@ -121,6 +415,8 @@
             </button>
           </div>
         </div>
+
+        <div class="discount-editor-section-title">Ограничения</div>
 
         <div class="form-row-2">
           <div class="field-wrap">
@@ -202,7 +498,6 @@
       </form>
     </div>
 
-    <!-- Picker для товаров -->
     <div id="discountProductPicker" class="hidden">
       <div class="option-picker-panel">
         <div class="option-picker-tabs" id="discountPickerTabs"></div>
@@ -219,7 +514,6 @@
       </div>
     </div>
 
-    <!-- Picker для клиентов -->
     <div id="discountCustomerPicker" class="hidden">
       <div class="option-picker-panel">
         <div class="option-picker-tabs" id="discountCustomerPickerTabs"></div>
@@ -236,7 +530,6 @@
       </div>
     </div>
 
-    <!-- Инфо-панель скидки (когда выбрана скидка, но редактирование не активно) -->
     <div id="discountInfoWrap" class="hidden">
       <div class="discount-info-header">
         <div class="discount-info-icon"><i class="fas fa-percentage"></i></div>
@@ -246,7 +539,7 @@
       <div class="discount-info-stats">
         <div class="discount-info-stat">
           <div class="discount-info-stat-value" id="discountInfoValue">—</div>
-          <div class="discount-info-stat-label">Размер скидки</div>
+          <div class="discount-info-stat-label" id="discountInfoValueLabel">Размер акции</div>
         </div>
         <div class="discount-info-stat">
           <div class="discount-info-stat-value" id="discountInfoUsageCount">0</div>
@@ -255,8 +548,20 @@
       </div>
       <div class="discount-info-details">
         <div class="discount-info-row">
+          <span class="discount-info-row-label">Механика:</span>
+          <span class="discount-info-row-value" id="discountInfoMechanic">—</span>
+        </div>
+        <div class="discount-info-row" id="discountInfoApplyToRow">
           <span class="discount-info-row-label">Применяется к:</span>
           <span class="discount-info-row-value" id="discountInfoApplyTo">—</span>
+        </div>
+        <div class="discount-info-row hidden" id="discountInfoPromoModeRow">
+          <span class="discount-info-row-label">Режим кодов:</span>
+          <span class="discount-info-row-value" id="discountInfoPromoMode">—</span>
+        </div>
+        <div class="discount-info-row hidden" id="discountInfoPromoSummaryRow">
+          <span class="discount-info-row-label">Промокод:</span>
+          <span class="discount-info-row-value" id="discountInfoPromoSummary">—</span>
         </div>
         <div class="discount-info-row">
           <span class="discount-info-row-label">Период:</span>
@@ -286,7 +591,7 @@
       <%- include('../orders/info_content', { includeClientProfile: false }) %>
     </div>
   </div>
-  <!-- Footer для редактирования фильтра -->
+
   <div class="panel-footer hidden" id="filterEditorFooter">
     <button type="button" class="btn btn-danger" id="filterDeleteBtn">
       <i class="fas fa-trash"></i>
@@ -294,7 +599,6 @@
     <button type="button" class="btn btn-primary" id="filterSaveBtn">Редактировать</button>
   </div>
 
-  <!-- Footer для редактирования скидки -->
   <div class="panel-footer hidden" id="discountEditorFooter">
     <button type="button" class="btn btn-danger" id="discountDeleteBtn">
       <i class="fas fa-trash"></i>
@@ -302,10 +606,8 @@
     <button type="button" class="btn btn-primary" id="discountSaveBtn">Сохранить</button>
   </div>
 
-  <!-- Footer для picker'а товаров/клиентов -->
   <div class="panel-footer hidden" id="discountPickerFooter">
     <button type="button" class="btn" id="discountPickerCancelBtn">Отменить</button>
     <button type="button" class="btn btn-primary" id="discountPickerApplyBtn">Применить</button>
   </div>
 </div>
-
