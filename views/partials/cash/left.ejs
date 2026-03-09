@@ -1,20 +1,24 @@
-<div class="panel cash-stages">
+<div class="panel cash-filters-panel">
   <div class="panel-header">
-    <div class="panel-title">Разделы кассы</div>
+    <div class="panel-title">Касса</div>
   </div>
 
   <div class="panel-body no-scrollbar">
-    <!-- Здесь позже будут фильтры/этапы чеков -->
-    <div class="stage-list" id="cashStagesList">
-      <button class="stage-item is-active" type="button" data-cash-section="receipts">
-        <span class="stage-icon">
-          <i class="fas fa-receipt"></i>
-        </span>
+    <div class="stage-list cash-stage-list" id="cashJournalFilters">
+      <button class="stage-item is-active" type="button" data-cash-section="orders">
+        <span class="stage-icon"><i class="fas fa-layer-group"></i></span>
         <span class="stage-text">
-          <strong>Чеки</strong>
+          <strong>Журнал заказов</strong>
+          <small>Заказы и оплаты</small>
+        </span>
+      </button>
+      <button class="stage-item" type="button" data-cash-section="money">
+        <span class="stage-icon"><i class="fas fa-wallet"></i></span>
+        <span class="stage-text">
+          <strong>Движение денег</strong>
+          <small>Приход и расход</small>
         </span>
       </button>
     </div>
   </div>
 </div>
-

@@ -28,6 +28,7 @@
     document.head.appendChild(link);
   }
   ensureShopCssForNewOrder();
+  const sharedOrderPayment = window.SharedOrderPayment || null;
   const UTF8_MOJIBAKE_ATTRS = ["title", "aria-label", "placeholder"];
   const UTF8_MOJIBAKE_DECODER = typeof TextDecoder === "function"
     ? new TextDecoder("utf-8", { fatal: true })
@@ -492,14 +493,24 @@
             aria-label="${clearBtnLabel}"
           >${clearBtnText}</button>
           <button
-            class="shop-checkout-btn"
+            class="shop-checkout-btn shop-checkout-btn--secondary"
             data-action="right-cart-checkout"
             data-order-id="${Number(active?.id || 0)}"
             type="button"
             ${checkoutDisabled ? "disabled" : ""}
           >${checkoutSubmitting
             ? checkoutSubmittingLabel
-            : `${checkoutActionLabel} · <span class="shop-checkout-total">${escapeHtml(toMoney(orderPayableTotal))}</span>`
+            : checkoutActionLabel
+          }</button>
+          <button
+            class="shop-checkout-btn shop-checkout-btn--payment"
+            data-action="right-cart-checkout-paid"
+            data-order-id="${Number(active?.id || 0)}"
+            type="button"
+            ${checkoutDisabled ? "disabled" : ""}
+          >${checkoutSubmitting
+            ? "Принимаем оплату..."
+            : "Принять оплату и оформить"
           }</button>
           ${statusSelectHtml}
         </div>
@@ -2963,7 +2974,112 @@
     return true;
   }
 
-  async function submitRightOrder(orderId) {
+  function formatRightPaymentModalDateTime(value) {
+    const raw = String(value || "").trim();
+    const resolved = raw ? new Date(raw.replace(" ", "T")) : new Date();
+    const date = Number.isNaN(resolved.getTime()) ? new Date() : resolved;
+    return date.toLocaleString("ru-RU", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  function buildRightPaymentModalOrder(order, summary) {
+    const form = order?.form && typeof order.form === "object" ? order.form : {};
+    const phoneDigits = normalizePhoneRu(form.phone);
+    const activePaymentTypes = (Array.isArray(state.rightPaymentTypes) ? state.rightPaymentTypes : [])
+      .filter((item) => Number(item?.is_active || 0) === 1);
+    const rawPaymentCode = String(form.paymentMethod || "").trim();
+    const paymentCode = String(
+      (activePaymentTypes.find((item) => String(item?.code || "").trim() === rawPaymentCode) || activePaymentTypes[0] || {}).code
+      || rawPaymentCode
+      || "cash"
+    ).trim();
+    const paymentTitle = String(
+      (activePaymentTypes.find((item) => String(item?.code || "").trim() === paymentCode) || {}).title
+      || paymentCode
+      || ""
+    ).trim();
+    let changeFrom = null;
+    if (isCashPaymentCode(paymentCode)) {
+      const changeType = String(form.changeType || "no_change").trim();
+      if (changeType === "other") {
+        const numeric = Number(String(form.changeAmount || "").replace(/[^\d]/g, ""));
+        changeFrom = Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+      } else if (changeType !== "no_change") {
+        const numeric = Number(String(changeType).replace(/[^\d]/g, ""));
+        changeFrom = Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+      }
+    }
+    return {
+      id: 0,
+      public_id: "",
+      order_heading: String(order?.title || "").trim() || "Новый заказ",
+      created_at: new Date().toISOString().slice(0, 19).replace("T", " "),
+      customer_name: String(form.name || "").trim() || "Клиент",
+      customer_phone: phoneDigits.length === 11 ? `+${phoneDigits}` : "—",
+      total_price: Number(summary?.payableTotal || 0) || 0,
+      payment_code: paymentCode,
+      payment_title: paymentTitle,
+      change_from: changeFrom,
+      is_paid: 0,
+    };
+  }
+
+  function syncRightOrderFormPayment(orderId, paymentPayload) {
+    const id = Number(orderId || 0);
+    if (!(id > 0) || !paymentPayload || typeof paymentPayload !== "object") return;
+    const index = getRightOrderIndexById(id);
+    if (index < 0) return;
+    const order = state.rightOrders[index] || {};
+    const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+    const paymentCode = String(paymentPayload.payment_code || form.paymentMethod || "").trim();
+    const changeFrom = Number(paymentPayload.change_from || 0);
+    form.paymentMethod = paymentCode || form.paymentMethod || "cash";
+    if (!isCashPaymentCode(paymentCode)) {
+      form.changeType = "no_change";
+      form.changeAmount = "";
+    } else if (changeFrom > 0) {
+      const serialized = String(Math.round(changeFrom));
+      if (["500", "1000", "2000", "5000"].includes(serialized) && Number(serialized) === Number(changeFrom)) {
+        form.changeType = serialized;
+        form.changeAmount = "";
+      } else {
+        form.changeType = "other";
+        form.changeAmount = serialized;
+      }
+    } else {
+      form.changeType = "no_change";
+      form.changeAmount = "";
+    }
+    state.rightOrders[index] = { ...order, form };
+  }
+
+  async function openRightOrderPaymentDraft(order) {
+    if (!sharedOrderPayment || typeof sharedOrderPayment.open !== "function") {
+      showNewOrderAlert("Не удалось открыть модалку оплаты");
+      return null;
+    }
+    const summary = getRightOrderCheckoutSummary(order);
+    return sharedOrderPayment.open({
+      order: buildRightPaymentModalOrder(order, summary),
+      apiJson,
+      money: toMoney,
+      formatDateTimeNumeric: formatRightPaymentModalDateTime,
+      collectPayloadOnly: true,
+      getOrderId: () => 0,
+      isPaidOrder: () => false,
+      onError: (err) => {
+        console.error("new-order payment modal error:", err);
+      },
+    });
+  }
+
+  async function submitRightOrder(orderId, options = {}) {
+    const withPayment = options?.withPayment === true;
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
     if (state.rightCheckoutSubmittingByOrder.get(id)) return;
@@ -3114,12 +3230,23 @@
       items,
     };
 
+    if (withPayment) {
+      const paymentPayload = await openRightOrderPaymentDraft(order);
+      if (!paymentPayload) return;
+      payload.payment_code = String(paymentPayload.payment_code || payload.payment_code || "").trim() || payload.payment_code;
+      payload.change_from = isCashPaymentCode(payload.payment_code)
+        ? (Number(paymentPayload.change_from || 0) > 0 ? Number(paymentPayload.change_from || 0) : null)
+        : null;
+      syncRightOrderFormPayment(id, paymentPayload);
+    }
+
     state.rightCheckoutSubmittingByOrder.set(id, true);
     setRightCheckoutSendingOverlayVisible(true);
     renderRightOrderTabs();
     try {
       let submittedPublicId = "";
       let submittedId = 0;
+      let paymentStepError = null;
       if (isEditSubmit) {
         const editStoreId = Number(order?.storeId || 0) > 0 ? Number(order.storeId) : null;
         const json = await apiJson(`/api/admin/orders/${editOrderId}`, {
@@ -3143,6 +3270,20 @@
         });
         submittedPublicId = String(json?.data?.public_id || "").trim();
         submittedId = Number(json?.data?.id || 0);
+      }
+      if (withPayment && submittedId > 0) {
+        try {
+          await apiJson(`/api/admin/orders/${submittedId}/paid`, {
+            method: "PUT",
+            body: JSON.stringify({
+              is_paid: 1,
+              payment_code: payload.payment_code,
+              change_from: payload.change_from,
+            }),
+          });
+        } catch (error) {
+          paymentStepError = error;
+        }
       }
       const latestIndex = getRightOrderIndexById(id);
       if (!isEditSubmit && latestIndex >= 0) {
@@ -3171,6 +3312,9 @@
           },
         })
       );
+      if (paymentStepError) {
+        showNewOrderAlert(`${isEditSubmit ? "Заказ сохранен" : "Заказ оформлен"}, но принять оплату не удалось: ${paymentStepError?.message || "UNKNOWN"}`);
+      }
     } catch (e) {
       const action = isEditSubmit
         ? "\u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u044f"
@@ -9225,6 +9369,14 @@
           const orderId = Number(checkoutBtn.getAttribute("data-order-id") || 0);
           if (!(orderId > 0)) return;
           void submitRightOrder(orderId);
+          return;
+        }
+
+        const checkoutPaidBtn = e.target.closest("[data-action='right-cart-checkout-paid'][data-order-id]");
+        if (checkoutPaidBtn) {
+          const orderId = Number(checkoutPaidBtn.getAttribute("data-order-id") || 0);
+          if (!(orderId > 0)) return;
+          void submitRightOrder(orderId, { withPayment: true });
           return;
         }
 

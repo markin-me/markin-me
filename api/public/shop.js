@@ -1371,6 +1371,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
         DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
         o.delivery_type_id,
         o.payment_id,
+        o.is_paid,
         o.time_option_id,
         o.status_id,
 
@@ -1448,6 +1449,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents }) {
       scheduled_at: r.scheduled_at,
       delivery_type_id: r.delivery_type_id,
       payment_id: r.payment_id,
+      is_paid: Number(r.is_paid || 0) === 1 ? 1 : 0,
       time_option_id: r.time_option_id,
       status_id: r.status_id,
 

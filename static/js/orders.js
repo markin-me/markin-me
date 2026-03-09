@@ -105,6 +105,7 @@
   const orderTabsHeaders = [orderTabsHeader, orderTabsHeaderCheckout].filter(Boolean);
   const orderTabsEls = [$("#orderTabs"), $("#orderTabsCheckout")].filter(Boolean);
   const orderInfoFooter = $("#orderInfoFooter");
+  const orderInfoPaymentBtn = $("#orderInfoPaymentBtn");
   const ordersLeftPane = $("#ordersLeftPane");
   const ordersCenterPane = $("#ordersCenterPane");
   const ordersRightPane = $("#ordersRightPane");
@@ -176,6 +177,35 @@
   const clientEditNameBtn = $("#clientEditNameBtn");
   const clientAddrToggleBtn = $("#clientAddrToggleBtn");
   const clientAddrFormCard = $("#clientAddrFormCard");
+  const sharedOrderPanel = window.SharedOrderPanel || null;
+  const sharedOrderPayment = window.SharedOrderPayment || null;
+  const sharedOrderInfoRenderer = sharedOrderPanel && ordersRightPane
+    ? sharedOrderPanel.createInfoRenderer({
+        root: ordersRightPane,
+        footerEl: orderInfoFooter,
+        clientInfoWrap,
+        enableClientLink: true,
+        helpers: {
+          money,
+          formatDateTime,
+          formatDateTimeNumeric,
+          formatScheduleText,
+          totalQty,
+          buildOrderDiscountSummary,
+          renderOrderDiscountBreakdownHtml,
+          renderOrderPaymentIcon,
+          paymentIcon,
+          getDisplayOrder,
+          itemsToHtml,
+        },
+        renderInlineStatusMenus,
+        afterRender() {
+          setTimeout(() => {
+            initOrderItemPhotos();
+          }, 0);
+        },
+      })
+    : null;
 
   const closeButtons = $$('[data-action="order-close"]');
 
@@ -408,13 +438,53 @@
     return "fas fa-circle";
   }
 
+  function renderOrderStatusIcon(statusMeta) {
+    const iconValue = resolveOrderStatusIcon(statusMeta);
+    return isIconUrl(iconValue)
+      ? `<img src="${escapeHtml(iconValue)}" alt="" loading="lazy">`
+      : `<i class="${escapeHtml(normalizeIconClass(iconValue) || "fas fa-circle")}"></i>`;
+  }
+
+  function normalizeStatusCode(statusMeta) {
+    return String(statusMeta?.code || "").trim().toLowerCase();
+  }
+
+  function isDeliveredStatusMeta(statusMeta) {
+    return normalizeStatusCode(statusMeta) === "delivered";
+  }
+
+  function isCanceledStatusMeta(statusMeta) {
+    const code = normalizeStatusCode(statusMeta);
+    return code === "canceled" || code === "cancelled";
+  }
+
+  function isFinalStatusMeta(statusMeta) {
+    return Number(statusMeta?.is_final || 0) === 1 || isCanceledStatusMeta(statusMeta);
+  }
+
+  function isForbiddenStatusTransition(fromStatus, toStatus) {
+    return isDeliveredStatusMeta(fromStatus) && isCanceledStatusMeta(toStatus);
+  }
+
   function getNextStatusMetaForOrder(order) {
     const sortedStatuses = getSortedStatuses();
     if (!sortedStatuses.length) return null;
     const currentStatusId = Number(order?.status_id || 0);
     const currentIndex = sortedStatuses.findIndex((status) => Number(status.id) === currentStatusId);
+    const currentStatus = currentIndex >= 0 ? sortedStatuses[currentIndex] : null;
     if (currentIndex < 0) return sortedStatuses[0];
-    return sortedStatuses[(currentIndex + 1) % sortedStatuses.length];
+    if (isFinalStatusMeta(currentStatus)) return null;
+    const maxOffset = isDeliveredStatusMeta(currentStatus)
+      ? Math.max(0, sortedStatuses.length - currentIndex - 1)
+      : sortedStatuses.length;
+    for (let offset = 1; offset <= maxOffset; offset += 1) {
+      const candidate = sortedStatuses[(currentIndex + offset) % sortedStatuses.length];
+      if (!candidate) continue;
+      if (Number(candidate.id) === Number(currentStatus?.id || 0)) break;
+      if (isForbiddenStatusTransition(currentStatus, candidate)) continue;
+      return candidate;
+    }
+    return null;
   }
 
   function renderOrderStatusCycleButton(order) {
@@ -442,7 +512,80 @@
         title="${titleAttr}"
         aria-label="${titleAttr}"
       >
-        ${iconHtml}
+        <span class="order-stage-btn-icon-wrap">
+          ${iconHtml}
+        </span>
+        <span class="order-stage-btn-content">
+          <span class="order-stage-btn-current">${escapeHtml(currentTitle)} <span class="order-stage-btn-arrow">-&gt;</span></span>
+          <span class="order-stage-btn-next">${escapeHtml(nextTitle)}</span>
+        </span>
+      </button>
+    `;
+  }
+
+  function renderOrderStatusHoverCycleButton(order) {
+    if (!order) return "";
+    const currentStatus = getStatusMetaById(order.status_id) || getSortedStatuses()[0] || null;
+    const nextStatus = getNextStatusMetaForOrder(order);
+    const nextStatusId = Number(nextStatus?.id || 0);
+    if (!currentStatus) return "";
+
+    const currentTitle = String(currentStatus.title || "").trim() || "Р­С‚Р°Рї";
+    const isFinal = isFinalStatusMeta(currentStatus);
+    const canCycle = !isFinal && Number.isFinite(nextStatusId) && nextStatusId > 0 && nextStatusId !== Number(currentStatus?.id || 0);
+    const nextTitle = canCycle ? (String(nextStatus.title || "").trim() || currentTitle) : currentTitle;
+    const titleText = canCycle
+      ? `${currentTitle} -> ${nextTitle}`
+      : "\u0424\u0438\u043D\u0430\u043B\u044C\u043D\u044B\u0439 \u0441\u0442\u0430\u0442\u0443\u0441";
+    const nextNote = "\u0421\u043C\u0435\u043D\u0438\u0442\u044C";
+    const currentIconHtml = renderOrderStatusIcon(currentStatus);
+    const nextIconHtml = canCycle ? renderOrderStatusIcon(nextStatus) : "";
+    if (sharedOrderPanel && typeof sharedOrderPanel.buildOrderStageCycleButtonHtml === "function") {
+      return sharedOrderPanel.buildOrderStageCycleButtonHtml({
+        orderId: order.id,
+        canCycle,
+        currentTitle,
+        nextTitle,
+        titleText,
+        nextNote,
+        currentIconHtml,
+        nextIconHtml,
+        nextStatusId,
+      });
+    }
+    const disabledAttr = canCycle ? "" : " disabled";
+    const nextStatusAttr = canCycle ? ` data-next-status-id="${escapeHtml(nextStatusId)}"` : "";
+
+    return `
+      <button
+        class="order-stage-btn${canCycle ? "" : " is-static"}"
+        type="button"
+        data-action="order-row-status-next"
+        data-order-id="${escapeHtml(order.id)}"${nextStatusAttr}
+        title="${escapeHtml(titleText)}"
+        aria-label="${escapeHtml(titleText)}"${disabledAttr}
+      >
+        <span class="order-stage-btn-icon-shell" aria-hidden="true">
+          <span class="order-stage-btn-icon-wrap order-stage-btn-icon-current">
+            ${currentIconHtml}
+          </span>
+          ${canCycle ? `
+          <span class="order-stage-btn-icon-wrap order-stage-btn-icon-next">
+            ${nextIconHtml}
+          </span>
+          ` : ""}
+        </span>
+        <span class="order-stage-btn-content">
+          <span class="order-stage-btn-panel order-stage-btn-panel-current">
+            <span class="order-stage-btn-current">${escapeHtml(currentTitle)}</span>
+          </span>
+          ${canCycle ? `
+          <span class="order-stage-btn-panel order-stage-btn-panel-next" aria-hidden="true">
+            <span class="order-stage-btn-next">${escapeHtml(nextTitle)}</span>
+            <span class="order-stage-btn-meta">${nextNote}</span>
+          </span>
+          ` : ""}
+        </span>
       </button>
     `;
   }
@@ -496,13 +639,24 @@
       }
     }
 
-    let streetIdx = tokens.findIndex((token) => looksLikeStreetToken(token));
-    if (streetIdx < 0) streetIdx = 0;
-    let streetPart = tokens[streetIdx] || "";
+    const explicitStreetIdx = tokens.findIndex((token) => looksLikeStreetToken(token) && !normalizeHouseToken(token));
+    const houseIdx = tokens.findIndex((token) => !!normalizeHouseToken(token));
+    let streetPart = explicitStreetIdx >= 0 ? (tokens[explicitStreetIdx] || "") : "";
+
+    if (!streetPart) {
+      const beforeHouse = (houseIdx >= 0 ? tokens.slice(0, houseIdx) : tokens)
+        .filter((token) => !isMetaAddressToken(token) && !normalizeHouseToken(token));
+      if (beforeHouse.length) streetPart = beforeHouse[beforeHouse.length - 1] || "";
+    }
+
+    if (!streetPart) {
+      const fallbackStreetIdx = tokens.findIndex((token) => !isMetaAddressToken(token) && looksLikeStreetToken(token));
+      if (fallbackStreetIdx >= 0) streetPart = tokens[fallbackStreetIdx] || "";
+    }
 
     if (streetPart && !/\d/.test(streetPart)) {
-      const next = tokens[streetIdx + 1] || "";
-      const house = normalizeHouseToken(next);
+      const houseToken = houseIdx >= 0 ? tokens[houseIdx] || "" : "";
+      const house = normalizeHouseToken(houseToken);
       if (house) streetPart = `${streetPart} ${house}`.trim();
     }
 
@@ -750,6 +904,10 @@
   }
 
   function bindOrderTabsWheelScroll() {
+    if (sharedOrderPanel) {
+      sharedOrderPanel.bindTabsWheelScroll(orderTabsEls);
+      return;
+    }
     if (!orderTabsEls.length) return;
     orderTabsEls.forEach((tabsEl) => {
       if (!tabsEl || tabsEl.dataset.wheelBound === "1") return;
@@ -775,6 +933,15 @@
   }
 
   function renderOrderTabs() {
+    if (sharedOrderPanel) {
+      sharedOrderPanel.renderTabs({
+        headers: orderTabsHeaders,
+        tabsEls: orderTabsEls,
+        tabs: tabsState.tabs,
+        activeKey: tabsState.activeKey,
+      });
+      return;
+    }
     if (!orderTabsEls.length) return;
     const hasTabs = tabsState.tabs.length > 0;
     orderTabsHeaders.forEach((header) => header.classList.toggle("hidden", !hasTabs));
@@ -1896,6 +2063,80 @@
     return "fa-credit-card";
   }
 
+  function getOrderNumber(order) {
+    const orderId = Number(order?.id || 0);
+    if (Number.isFinite(orderId) && orderId > 0) return String(orderId);
+    const publicId = String(order?.public_id || "").trim();
+    return publicId || "—";
+  }
+
+  function isPaidOrder(order) {
+    return Number(order?.is_paid || 0) === 1;
+  }
+
+  function getOrderRefundState(order) {
+    if (sharedOrderPayment?.getRefundState) return sharedOrderPayment.getRefundState(order);
+    return String(order?.refund_state || "").trim().toLowerCase();
+  }
+
+  function getOrderRefundStateTitle(order) {
+    if (sharedOrderPayment?.getRefundStateTitle) return sharedOrderPayment.getRefundStateTitle(order);
+    const state = getOrderRefundState(order);
+    if (state === "full") return "Возвращено";
+    if (state === "partial") return "Частичный возврат";
+    return "";
+  }
+
+  function getOrderRefundableTotal(order) {
+    const explicit = Number(order?.refundable_total);
+    if (Number.isFinite(explicit)) return explicit;
+    if (!isPaidOrder(order)) return 0;
+    return Number(order?.total_price || 0) || 0;
+  }
+
+  function hasOrderRefundableBalance(order) {
+    return isPaidOrder(order) && getOrderRefundableTotal(order) > 0.001;
+  }
+
+  function isOrderFullyRefunded(order) {
+    if (!isPaidOrder(order)) return false;
+    const refundedTotal = Number(order?.refunded_total || 0) || 0;
+    return getOrderRefundState(order) === "full" || (refundedTotal > 0 && getOrderRefundableTotal(order) <= 0.001);
+  }
+
+  function hasOrderRefunds(order) {
+    const refundedTotal = Number(order?.refunded_total || 0) || 0;
+    const refundsCount = Number(order?.refunds_count || 0) || 0;
+    return refundedTotal > 0 || refundsCount > 0;
+  }
+
+  function getDisplayOrder(order) {
+    if (!order || !hasOrderRefunds(order)) return order;
+    const remainingOrder = order?.remaining_order;
+    if (!remainingOrder || typeof remainingOrder !== "object") return order;
+    return {
+      ...order,
+      ...remainingOrder,
+    };
+  }
+
+  function getOrderDisplayTotal(order) {
+    const displayOrder = getDisplayOrder(order) || order;
+    return Number(displayOrder?.total_price || displayOrder?.total || 0) || 0;
+  }
+
+  function isOrderPrintable(order) {
+    const displayOrder = getDisplayOrder(order);
+    return !!displayOrder && Array.isArray(displayOrder.items) && displayOrder.items.length > 0;
+  }
+
+  function getOrderPaymentActionLabel(order) {
+    if (!order || !Number(order?.id || 0)) return "Принять оплату";
+    if (!isPaidOrder(order)) return "Принять оплату";
+    if (isOrderFullyRefunded(order)) return "Возвращено";
+    return "Оплачено / Возврат";
+  }
+
   function resolveOrderPaymentIcon(order) {
     const stored = String(order?.payment_icon || "").trim();
     if (stored) return stored;
@@ -1960,6 +2201,48 @@
     return activeTab?.order || null;
   }
 
+  function syncOrderPaymentFooter(order) {
+    if (!orderInfoPaymentBtn) return;
+    const hasOrder = Number(order?.id || 0) > 0;
+    orderInfoPaymentBtn.disabled = !hasOrder || isOrderFullyRefunded(order);
+    orderInfoPaymentBtn.textContent = getOrderPaymentActionLabel(order);
+  }
+
+  async function openOrderPaymentDialog(order) {
+    const orderId = Number(order?.id || 0);
+    if (!(orderId > 0) || isOrderFullyRefunded(order)) return;
+
+    if (!sharedOrderPayment || typeof sharedOrderPayment.open !== "function") {
+      if (isPaidOrder(order)) return;
+      try {
+        const json = await apiJson(`/api/admin/orders/${orderId}/paid`, {
+          method: "PUT",
+          body: { is_paid: 1 },
+        });
+        if (json?.data) handleOrderEvent(json.data);
+      } catch (err) {
+        console.error("orders payment update error:", err);
+      }
+      return;
+    }
+
+    return sharedOrderPayment.open({
+      order,
+      apiJson,
+      money,
+      formatDateTimeNumeric,
+      getOrderId: (row) => Number(row?.id || 0),
+      getOrderNumber,
+      isPaidOrder,
+      onSuccess(updatedOrder) {
+        if (updatedOrder) handleOrderEvent(updatedOrder);
+      },
+      onError(err) {
+        console.error("orders payment modal error:", err);
+      },
+    });
+  }
+
   function setStatusControlsDisabled(disabled) {
     $$('[data-action="order-status-next"]').forEach((btn) => {
       btn.disabled = disabled;
@@ -1990,7 +2273,8 @@
 
     const sortedStatuses = getSortedStatuses();
     const currentStatusId = Number(order?.status_id || 0);
-    const optionsHtml = sortedStatuses.map((status) => {
+    const currentStatus = getStatusMetaById(currentStatusId) || null;
+    const optionsHtml = sortedStatuses.filter((status) => !isForbiddenStatusTransition(currentStatus, status)).map((status) => {
       const statusId = Number(status.id);
       const title = escapeHtml(status.title || "—");
       const isSelected = statusId === currentStatusId ? " is-selected" : "";
@@ -2022,7 +2306,9 @@
     const orderIdx = state.orders.findIndex((row) => Number(row?.id || 0) === id);
     const prevOrder = orderIdx >= 0 ? state.orders[orderIdx] : null;
     const prevStatusId = Number(prevOrder?.status_id || 0);
+    const prevStatusMeta = getStatusMetaById(prevStatusId) || null;
     const targetStatusMeta = getStatusMetaById(nextStatusId) || null;
+    if (isForbiddenStatusTransition(prevStatusMeta, targetStatusMeta)) return;
     let optimisticApplied = false;
     let optimisticOrder = null;
 
@@ -2079,14 +2365,7 @@
     const orderId = Number(order?.id || state.activeOrderId || 0);
     if (!Number.isFinite(orderId) || orderId <= 0) return;
 
-    const sortedStatuses = getSortedStatuses();
-    if (!sortedStatuses.length) return;
-
-    const currentStatusId = Number(order?.status_id || 0);
-    const currentIndex = sortedStatuses.findIndex((status) => Number(status.id) === currentStatusId);
-    const nextStatus = currentIndex >= 0
-      ? sortedStatuses[(currentIndex + 1) % sortedStatuses.length]
-      : sortedStatuses[0];
+    const nextStatus = getNextStatusMetaForOrder(order);
     const nextStatusId = Number(nextStatus?.id || 0);
     if (!Number.isFinite(nextStatusId) || nextStatusId <= 0) return;
 
@@ -2129,6 +2408,10 @@
   hideOrderClientEditingControls();
 
   function showEmptyInfo() {
+    if (sharedOrderInfoRenderer) {
+      sharedOrderInfoRenderer.showEmpty();
+      return;
+    }
     setHiddenAll(infoEls.empty, false);
     setHiddenAll(infoEls.content, true);
     if (clientInfoWrap) clientInfoWrap.classList.add("hidden");
@@ -2136,6 +2419,10 @@
   }
 
   function showOrderInfo() {
+    if (sharedOrderInfoRenderer) {
+      sharedOrderInfoRenderer.showOrder();
+      return;
+    }
     setHiddenAll(infoEls.empty, true);
     setHiddenAll(infoEls.content, false);
     if (clientInfoWrap) clientInfoWrap.classList.add("hidden");
@@ -2433,6 +2720,11 @@
   }
 
   function setInfo(order) {
+    syncOrderPaymentFooter(order);
+    if (sharedOrderInfoRenderer) {
+      sharedOrderInfoRenderer.setOrder(order);
+      return;
+    }
     if (!order) {
       showEmptyInfo();
       setTextAll(infoEls.title, "Заказ не выбран");
@@ -2675,21 +2967,22 @@
     if (!uniqueIds.length) return null;
 
     const cardSize = 56;
-    const gap = 6;
-    const indentStep = 4;
+    const stackStep = 12;
+    const snakeOffset = 10;
 
     const ghostStack = document.createElement("div");
     ghostStack.className = "order-drag-ghost-stack";
 
-    const maxIndent = indentStep * Math.max(uniqueIds.length - 1, 0);
+    const maxIndent = uniqueIds.length > 1 ? snakeOffset : 0;
     ghostStack.style.width = `${cardSize + maxIndent}px`;
-    ghostStack.style.height = `${(cardSize + gap) * uniqueIds.length - gap}px`;
+    ghostStack.style.height = `${cardSize + stackStep * Math.max(uniqueIds.length - 1, 0)}px`;
 
     uniqueIds.forEach((id, index) => {
       const card = document.createElement("div");
       card.className = "order-drag-ghost";
-      card.style.left = `${index * indentStep}px`;
-      card.style.top = `${index * (cardSize + gap)}px`;
+      card.style.left = `${index % 2 === 0 ? 0 : snakeOffset}px`;
+      card.style.top = `${index * stackStep}px`;
+      card.style.zIndex = String(index + 1);
       card.textContent = String(id);
       ghostStack.appendChild(card);
     });
@@ -2845,7 +3138,7 @@
 
   function buildOrderRow(order) {
     const row = document.createElement("div");
-    row.className = "order-row js-order";
+    row.className = "order-row order-list-card js-order";
     row.setAttribute("role", "button");
     row.setAttribute("tabindex", "0");
     row.setAttribute("draggable", "true");
@@ -2936,48 +3229,103 @@
     const orderId = Number(order?.id || 0);
     const multiSelected = isOrderMultiSelected(orderId);
 
-    const timeIconHtml = renderOrderTimeIcon(order);
-    const stageCycleBtnHtml = renderOrderStatusCycleButton(order);
+    const timeIconHtml = sharedOrderPanel && typeof sharedOrderPanel.renderOrderTimeIcon === "function"
+      ? sharedOrderPanel.renderOrderTimeIcon(order)
+      : renderOrderTimeIcon(order);
+    const stageCycleBtnHtml = renderOrderStatusHoverCycleButton(order);
     const addressCommentDisplay = order.comment || "Нет комментария";
     const rawAddress = order.address ||
       (order.pickup_store_address
         ? (order.pickup_store_name ? `${order.pickup_store_name}, ${order.pickup_store_address}` : order.pickup_store_address)
         : "?"
       );
-    const shortAddressDisplay = shortAddressForList(rawAddress);
+    const shortAddressDisplay = sharedOrderPanel && typeof sharedOrderPanel.shortAddressForList === "function"
+      ? sharedOrderPanel.shortAddressForList(rawAddress)
+      : shortAddressForList(rawAddress);
 
     const customerId = Number(order.customer_id || 0);
     const customerPhoneRaw = String(order.customer_phone || "").trim();
     const customerPhone = customerPhoneRaw === "?" ? "" : customerPhoneRaw;
     const canOpenClient = (Number.isFinite(customerId) && customerId > 0) || !!customerPhone;
-    const clientPhoneLineHtml = canOpenClient
-      ? `
-        <button
-          type="button"
-          class="order-client-phone muted order-client-phone-link"
-          data-action="open-client"
-          data-client-id="${customerId > 0 ? customerId : ""}"
-          data-client-phone="${escapeHtml(customerPhone)}"
-          data-client-name="${escapeHtml(order.customer_name || "")}"
-        >
-          <i class="fas fa-phone"></i>
-          <span class="order-client-phone-text">${escapeHtml(order.customer_phone || "?")}</span>
-        </button>
-      `
-      : `
-        <div class="order-client-phone muted">
-          <i class="fas fa-phone"></i>
-          <span class="order-client-phone-text">${escapeHtml(order.customer_phone || "?")}</span>
-        </div>
-      `;
+    const clientPhoneLineHtml = sharedOrderPanel && typeof sharedOrderPanel.buildOrderClientPhoneHtml === "function"
+      ? sharedOrderPanel.buildOrderClientPhoneHtml({
+        phoneText: order.customer_phone || "?",
+        canLink: canOpenClient,
+        linkAttrsHtml: canOpenClient
+          ? ` data-action="open-client" data-client-id="${customerId > 0 ? customerId : ""}" data-client-phone="${escapeHtml(customerPhone)}" data-client-name="${escapeHtml(order.customer_name || "")}"`
+          : "",
+      })
+      : (canOpenClient
+        ? `
+          <button
+            type="button"
+            class="order-client-phone muted order-client-phone-link"
+            data-action="open-client"
+            data-client-id="${customerId > 0 ? customerId : ""}"
+            data-client-phone="${escapeHtml(customerPhone)}"
+            data-client-name="${escapeHtml(order.customer_name || "")}"
+          >
+            <i class="fas fa-phone"></i>
+            <span class="order-client-phone-text">${escapeHtml(order.customer_phone || "?")}</span>
+          </button>
+        `
+        : `
+          <div class="order-client-phone muted">
+            <i class="fas fa-phone"></i>
+            <span class="order-client-phone-text">${escapeHtml(order.customer_phone || "?")}</span>
+          </div>
+        `
+      );
 
     const payment = String(order.payment_title || "").trim();
-    const totalText = money(order.total_price || 0);
+    const totalText = money(getOrderDisplayTotal(order));
     const paymentCode = (order.payment_code || "").toLowerCase();
     const isCash = paymentCode.includes("cash");
+    const isFullyRefunded = isOrderFullyRefunded(order);
     const paymentIconHtml = renderOrderPaymentIcon(order);
-    const paymentTitleAttr = payment ? ` title="${escapeHtml(payment)}"` : "";
+    const paymentStatusText = isFullyRefunded ? "Возврат" : (isPaidOrder(order) ? "Оплачено" : "Не оплачено");
+    const paymentStateClass = isFullyRefunded
+      ? "order-payment-refund"
+      : (isPaidOrder(order) ? "order-payment-paid" : "order-payment-unpaid");
+    const paymentTypeClass = isCash ? "order-payment-cash" : "order-payment-card";
+    const paymentHtml = sharedOrderPanel && typeof sharedOrderPanel.buildOrderPaymentButtonHtml === "function"
+      ? sharedOrderPanel.buildOrderPaymentButtonHtml({
+        paymentTypeClass,
+        paymentStateClass,
+        paymentTitle: payment,
+        paymentIconHtml,
+        totalText,
+        statusText: paymentStatusText,
+      })
+      : `
+        <button class="order-payment-btn ${paymentTypeClass} ${paymentStateClass}" type="button"${payment ? ` title="${escapeHtml(payment)}"` : ""}>
+          <span class="order-payment-btn-icon">${paymentIconHtml}</span>
+          <span class="order-payment-btn-content">
+            <span class="order-payment-btn-total">${escapeHtml(totalText)}</span>
+            <span class="order-payment-btn-status">${escapeHtml(paymentStatusText)}</span>
+          </span>
+        </button>
+      `;
 
+    if (sharedOrderPanel && typeof sharedOrderPanel.buildOrderListRowInnerHtml === "function") {
+      row.innerHTML = sharedOrderPanel.buildOrderListRowInnerHtml({
+        orderId,
+        orderNumberText: String(order.id || ""),
+        createdAtText: formatTime(order.created_at),
+        showMultiSelect: true,
+        multiSelected,
+        customerName: order.customer_name || "?",
+        customerPhoneHtml: clientPhoneLineHtml,
+        timeIconHtml,
+        addressText: shortAddressDisplay,
+        addressCommentText: addressCommentDisplay,
+        stageHtml: stageCycleBtnHtml,
+        paymentHtml,
+      });
+      row.classList.remove("is-active");
+      applyOrderMultiSelectionState(row, orderId);
+      return;
+    }
     row.innerHTML = `
       <div class="order-col order-id">
         <label
@@ -3018,9 +3366,12 @@
       </div>
 
       <div class="order-col order-total">
-        <button class="order-payment-btn ${isCash ? "order-payment-cash" : "order-payment-card"}" type="button"${paymentTitleAttr}>
+        <button class="order-payment-btn ${isCash ? "order-payment-cash" : "order-payment-card"} ${paymentStateClass}" type="button"${payment ? ` title="${escapeHtml(payment)}"` : ""}>
           <span class="order-payment-btn-icon">${paymentIconHtml}</span>
-          <span class="order-payment-btn-total">${escapeHtml(totalText)}</span>
+          <span class="order-payment-btn-content">
+            <span class="order-payment-btn-total">${escapeHtml(totalText)}</span>
+            <span class="order-payment-btn-status">${escapeHtml(paymentStatusText)}</span>
+          </span>
         </button>
       </div>
     `;
@@ -3642,6 +3993,17 @@
       return;
     }
 
+    const markPaidBtn = e.target.closest('[data-action="order-mark-paid"]');
+    if (markPaidBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const activeOrder = getActiveOrder();
+      if (activeOrder) {
+        await openOrderPaymentDialog(activeOrder);
+      }
+      return;
+    }
+
     const editOrderBtn = e.target.closest('[data-action="order-edit"]');
     if (editOrderBtn) {
       e.preventDefault();
@@ -3694,6 +4056,7 @@
     if (rowStageBtn) {
       e.preventDefault();
       e.stopPropagation();
+      if (rowStageBtn.disabled) return;
       const orderId = Number(rowStageBtn.getAttribute("data-order-id") || 0);
       const nextStatusId = Number(rowStageBtn.getAttribute("data-next-status-id") || 0);
       if (!Number.isFinite(orderId) || orderId <= 0) return;
@@ -3980,12 +4343,14 @@
     
     const order = state.orders.find((o) => Number(o.id) === Number(orderId));
     if (!order) return;
+    if (!isOrderPrintable(order)) return;
     
     printOrderReceipt(order);
   });
 
   // Функция печати чека через системную печать браузера
   function printOrderReceipt(order) {
+    if (!isOrderPrintable(order)) return;
     // Создаем HTML для чека
     const receiptHtml = generateReceiptHTML(order);
     
@@ -4028,8 +4393,10 @@
 
   // Функция генерации HTML для чека
   function generateReceiptHTML(order) {
+    const receiptOrder = getDisplayOrder(order) || order;
+    const hasRefunds = hasOrderRefunds(order);
     // Время в базе уже в timezone филиала
-    const createdAtStr = String(order.created_at).replace(' ', 'T');
+    const createdAtStr = String(receiptOrder.created_at).replace(' ', 'T');
     const date = new Date(createdAtStr);
 
     const day = String(date.getDate()).padStart(2, '0');
@@ -4040,24 +4407,24 @@
 
     const dateStr = `${day}.${month}.${year}, ${hours}:${minutes}`;
 
-    const methodTitle = order.method_title || (order.method_code === "pickup" ? "Самовывоз" : "Доставка");
-    const deliverySectionTitle = order.method_code === "pickup" ? "Самовывоз:" : "Доставка:";
-    let address = order.address;
-    if (!address && order.pickup_store_address) {
-      address = order.pickup_store_name
-        ? `${order.pickup_store_name}, ${order.pickup_store_address}`
-        : order.pickup_store_address;
+    const methodTitle = receiptOrder.method_title || (receiptOrder.method_code === "pickup" ? "Самовывоз" : "Доставка");
+    const deliverySectionTitle = receiptOrder.method_code === "pickup" ? "Самовывоз:" : "Доставка:";
+    let address = receiptOrder.address;
+    if (!address && receiptOrder.pickup_store_address) {
+      address = receiptOrder.pickup_store_name
+        ? `${receiptOrder.pickup_store_name}, ${receiptOrder.pickup_store_address}`
+        : receiptOrder.pickup_store_address;
     }
-    const isUrgent = order.is_urgent || order.urgent || order.time_option_code === "urgent";
-    const total = parseFloat(order.total_price || order.total || 0);
-    const deliveryCost = Number(order.delivery_cost || 0);
-    const changeFromRaw = order.change_from;
+    const isUrgent = receiptOrder.is_urgent || receiptOrder.urgent || receiptOrder.time_option_code === "urgent";
+    const total = parseFloat(receiptOrder.total_price || receiptOrder.total || 0);
+    const deliveryCost = Number(receiptOrder.delivery_cost || 0);
+    const changeFromRaw = receiptOrder.change_from;
     const changeFrom = Number.isFinite(Number(changeFromRaw)) ? Number(changeFromRaw) : 0;
-    const paymentTitle = order.payment_method_title || order.payment_title || "";
-    const paymentCode = order.payment_code || "";
+    const paymentTitle = receiptOrder.payment_method_title || receiptOrder.payment_title || "";
+    const paymentCode = receiptOrder.payment_code || "";
     const changeAmount = Math.max(0, changeFrom - total);
-    const showChange = changeAmount > 0;
-    const scheduleText = formatScheduleText(order, { includeTitle: true });
+    const showChange = !hasRefunds && changeAmount > 0;
+    const scheduleText = formatScheduleText(receiptOrder, { includeTitle: true });
 
     function receiptTotalStr(val) {
       const n = Number(val);
@@ -4066,7 +4433,7 @@
       return Math.round(n) === n ? String(Math.round(n)) : n.toFixed(2);
     }
 
-    const receiptItems = Array.isArray(order.items) ? order.items.slice().sort((a, b) => {
+    const receiptItems = Array.isArray(receiptOrder.items) ? receiptOrder.items.slice().sort((a, b) => {
       const aAuto = isAutoAddItem(a);
       const bAuto = isAutoAddItem(b);
       if (aAuto && !bAuto) return 1;
@@ -4293,8 +4660,10 @@
           ${idx < itemGroups.length - 1 ? '<div class="receipt-items-type-divider"></div>' : ''}
         `;
       }).join("");
+    } else {
+      itemsHtml = '<div class="receipt-empty">\u0412\u0441\u0435 \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0435\u043d\u044b.</div>';
     }
-    const receiptDiscountSummary = buildOrderDiscountSummary(order);
+    const receiptDiscountSummary = buildOrderDiscountSummary(receiptOrder);
     const discountAmount = Number(receiptDiscountSummary.totalDiscount || 0);
     const subtotal = Number(receiptDiscountSummary.subtotalBeforeDiscount || 0);
 
@@ -4466,10 +4835,14 @@
       text-decoration: line-through;
       margin-right: 4px;
     }
+    .receipt-empty {
+      text-align: center;
+      padding: 8px 0;
+    }
   </style>
 </head>
 <body>
-  <div class="receipt-header">ЗАКАЗ #${order.id}</div>
+  <div class="receipt-header">ЗАКАЗ #${receiptOrder.id}</div>
   <div class="receipt-date">${dateStr}</div>
   
   <div class="receipt-divider"></div>
@@ -4481,8 +4854,8 @@
   ` : ''}
   
   <div class="receipt-section">
-    ${order.customer_name ? `<div>${escapeHtml(order.customer_name)}</div>` : ''}
-    ${order.customer_phone ? `<div>${escapeHtml(order.customer_phone)}</div>` : ''}
+    ${receiptOrder.customer_name ? `<div>${escapeHtml(receiptOrder.customer_name)}</div>` : ''}
+    ${receiptOrder.customer_phone ? `<div>${escapeHtml(receiptOrder.customer_phone)}</div>` : ''}
   </div>
   
   <div class="receipt-section">
@@ -4490,14 +4863,14 @@
     <div>${escapeHtml(address || "—")}</div>
   </div>
   
-  ${(order.address_comment && order.address_comment.trim()) ? `
+  ${(receiptOrder.address_comment && receiptOrder.address_comment.trim()) ? `
   <div class="receipt-section">
-    <div>${escapeHtml(order.address_comment)}</div>
+    <div>${escapeHtml(receiptOrder.address_comment)}</div>
   </div>
   ` : ''}
-  ${(order.comment && order.comment.trim()) ? `
+  ${(receiptOrder.comment && receiptOrder.comment.trim()) ? `
   <div class="receipt-section">
-    <div>${escapeHtml(order.comment)}</div>
+    <div>${escapeHtml(receiptOrder.comment)}</div>
   </div>
   ` : ''}
   
