@@ -2033,7 +2033,7 @@
         let title = '';
         if (type === 'category') {
           const cat = state.customerCategories.find(c => c.id === id);
-          title = cat?.title || `Категория #${id}`;
+          title = cat?.title || `Выборка #${id}`;
         } else {
           const cust = state.customersById.get(id) || state.customersList.find(c => c.id === id);
           title = cust?.name || cust?.phone || `Клиент #${id}`;
@@ -2070,7 +2070,7 @@
     const activeId = state.discountPickerCategoryId;
     
     let html = `<button type="button" class="option-picker-tab ${activeId === null ? 'is-active' : ''}" data-cat-id="">Все клиенты</button>`;
-    html += `<button type="button" class="option-picker-tab ${activeId === 'categories' ? 'is-active' : ''}" data-cat-id="categories">Категории</button>`;
+    html += `<button type="button" class="option-picker-tab ${activeId === 'categories' ? 'is-active' : ''}" data-cat-id="categories">Выборки</button>`;
     
     elDiscountCustomerPickerTabs.innerHTML = html;
   }
@@ -2133,7 +2133,7 @@
     
     const categories = state.customerCategories;
     if (categories.length === 0) {
-      elDiscountCustomerPickerList.innerHTML = '<div class="option-picker-empty">Категории не найдены</div>';
+      elDiscountCustomerPickerList.innerHTML = '<div class="option-picker-empty">Выборки не найдены</div>';
       return;
     }
     
@@ -2307,7 +2307,7 @@
     if (elToolbarText) {
       const titles = {
         'clients': 'Клиенты',
-        'filter-categories': 'Категории',
+        'filter-categories': 'Выборки',
         'discounts': 'Скидки'
       };
       elToolbarText.textContent = titles[viewName] || 'Клиенты';
@@ -2404,7 +2404,7 @@
   function openFilterEditor(filter = null) {
     const isNew = filter === null;
     const tabId = isNew ? 'new' : filter.id;
-    const tabTitle = isNew ? 'Новая категория' : (filter.title || 'Категория');
+    const tabTitle = isNew ? 'Новая выборка' : (filter.title || 'Выборка');
     
     ensureTab({
       type: 'category',
@@ -2708,7 +2708,7 @@
     if (state.editingFilterId === 'new' || !state.editingFilterId) return;
 
     const filter = state.customFilters.find(f => f.id === state.editingFilterId);
-    if (!confirm('Удалить категорию "' + (filter?.title || '') + '"?')) return;
+    if (!confirm('Удалить выборку "' + (filter?.title || '') + '"?')) return;
 
     const tabKey = buildTabKey('category', state.editingFilterId);
 
@@ -2833,7 +2833,7 @@
   let companyChatRuntimePreloadStarted = false;
   let companyChatWarmupScheduled = false;
   const COMPANY_CHAT_STYLESHEET_URL = "/static/css/shop.css?v=20260308e";
-  const COMPANY_CHAT_RUNTIME_URL = "/static/js/shop-company-chat.js?admin_mode=2&v=20260308f";
+  const COMPANY_CHAT_RUNTIME_URL = "/static/js/shop-company-chat.js?admin_mode=2&typing_hotfix=14&v=20260308g";
   function ensureCompanyChatStylesheetLoaded() {
     if (companyChatStylesheetPromise) return companyChatStylesheetPromise;
     companyChatStylesheetPromise = new Promise((resolve) => {

@@ -6298,6 +6298,26 @@
     return (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) <= CHAT_STICKY_BOTTOM_THRESHOLD_PX;
   }
 
+  function getMessagesBottomDistanceSnapshot() {
+    const wrap = dom.center.messagesWrap;
+    if (!wrap) return null;
+    const distance = Number(wrap.scrollHeight || 0) - Number(wrap.clientHeight || 0) - Number(wrap.scrollTop || 0);
+    if (!Number.isFinite(distance)) return null;
+    return Math.max(0, distance);
+  }
+
+  function applyMessagesBottomDistanceSnapshot(distance) {
+    const wrap = dom.center.messagesWrap;
+    if (!wrap) return false;
+    const raw = Number(distance);
+    if (!Number.isFinite(raw)) return false;
+    const maxTop = Math.max(0, Number(wrap.scrollHeight || 0) - Number(wrap.clientHeight || 0));
+    const nextTop = Math.max(0, Math.min(maxTop, maxTop - Math.max(0, raw)));
+    wrap.scrollTop = nextTop;
+    updateMessagesScrollDownButton();
+    return true;
+  }
+
   function isThreadPinnedBottomPreferred(clientId = state.activeClientId) {
     const key = normalizeClientIdKey(clientId);
     if (!key) return false;
@@ -6549,6 +6569,11 @@
 
     const sync = (options = {}) => {
       const stickToBottom = options && options.stickToBottom === true;
+      const wrap = dom.center.messagesWrap;
+      const composer = input.closest(".chat-main-composer");
+      const wasNearBottom = shouldKeepMessagesPinnedToBottom();
+      const prevBottomDistance = getMessagesBottomDistanceSnapshot();
+      const prevComposerHeight = composer ? Number(composer.getBoundingClientRect().height || 0) : 0;
 
       const inputStyles = window.getComputedStyle(input);
       const minHeight = parseFloat(inputStyles.minHeight) || 45;
@@ -6561,7 +6586,22 @@
         preview.classList.add("hidden");
         preview.textContent = "";
         input.classList.remove("is-rich-emoji-preview");
-        if (stickToBottom) scrollMessagesToBottom({ behavior: "smooth-fast" });
+        const nextComposerHeight = composer ? Number(composer.getBoundingClientRect().height || 0) : prevComposerHeight;
+        const composerHeightDelta = Math.abs(nextComposerHeight - prevComposerHeight);
+        const keepBottomPinned = (
+          stickToBottom
+          || wasNearBottom
+          || (
+            Number.isFinite(prevBottomDistance)
+            && prevBottomDistance <= Math.max(CHAT_STICKY_BOTTOM_THRESHOLD_PX + 12, composerHeightDelta + 24)
+          )
+        );
+        if (keepBottomPinned && wrap && Number.isFinite(prevBottomDistance)) {
+          applyMessagesBottomDistanceSnapshot(prevBottomDistance);
+          saveThreadScrollPosition(state.activeClientId);
+        } else {
+          updateMessagesScrollDownButton();
+        }
         return;
       }
 
@@ -6570,12 +6610,27 @@
       const nextHeight = Math.max(minHeight, Math.min(maxHeight, fullHeight));
       input.style.height = `${nextHeight}px`;
       input.style.overflowY = fullHeight > maxHeight + 1 ? "auto" : "hidden";
+      const nextComposerHeight = composer ? Number(composer.getBoundingClientRect().height || 0) : prevComposerHeight;
+      const composerHeightDelta = Math.abs(nextComposerHeight - prevComposerHeight);
+      const keepBottomPinned = (
+        stickToBottom
+        || wasNearBottom
+        || (
+          Number.isFinite(prevBottomDistance)
+          && prevBottomDistance <= Math.max(CHAT_STICKY_BOTTOM_THRESHOLD_PX + 12, composerHeightDelta + 24)
+        )
+      );
 
       if (!value || !hasEmojiInText(value)) {
         preview.classList.add("hidden");
         preview.textContent = "";
         input.classList.remove("is-rich-emoji-preview");
-        if (stickToBottom) scrollMessagesToBottom({ behavior: "smooth-fast" });
+        if (keepBottomPinned && wrap && Number.isFinite(prevBottomDistance)) {
+          applyMessagesBottomDistanceSnapshot(prevBottomDistance);
+          saveThreadScrollPosition(state.activeClientId);
+        } else {
+          updateMessagesScrollDownButton();
+        }
         return;
       }
 
@@ -6584,7 +6639,12 @@
       renderEmojiMessageText(preview, value, "chat-emoji-glyph chat-emoji-glyph--input-inline");
       preview.style.transform = `translate(${-Math.max(0, input.scrollLeft)}px, ${-Math.max(0, input.scrollTop)}px)`;
 
-      if (stickToBottom) scrollMessagesToBottom({ behavior: "smooth-fast" });
+      if (keepBottomPinned && wrap && Number.isFinite(prevBottomDistance)) {
+        applyMessagesBottomDistanceSnapshot(prevBottomDistance);
+        saveThreadScrollPosition(state.activeClientId);
+      } else {
+        updateMessagesScrollDownButton();
+      }
     };
 
     input.__syncEmojiPreview = sync;

@@ -10513,6 +10513,106 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   height:40px;
 }
 
+/* ================= Clients filter editor ================= */
+
+.client-info-panel #clientInfoBody{
+  padding:16px;
+}
+
+.client-info-panel #filterEditorWrap:not(.hidden),
+.client-info-panel #discountEditorWrap:not(.hidden),
+.client-info-panel #discountInfoWrap:not(.hidden),
+.client-info-panel #clientInfoWrap:not(.hidden),
+.client-info-panel #clientOrderInfoWrap:not(.hidden){
+  display:flex;
+  flex-direction:column;
+  gap:16px;
+  min-height:100%;
+}
+
+.client-info-panel #filterEditorForm,
+.client-info-panel #discountEditorForm{
+  gap:18px;
+}
+
+.client-info-panel #filterEditorForm .field-wrap,
+.client-info-panel #discountEditorForm .field-wrap{
+  display:grid;
+  gap:8px;
+  align-content:start;
+}
+
+.client-info-panel #filterEditorForm .field-wrap > .field-label,
+.client-info-panel #discountEditorForm .field-wrap > .field-label{
+  position:static;
+  top:auto;
+  left:auto;
+  padding:0;
+  margin:0;
+  background:transparent;
+  font-size:12px;
+  line-height:1.25;
+  color:var(--color-text-muted);
+}
+
+.client-info-panel #filterEditorForm .form-row-2,
+.client-info-panel #discountEditorForm .form-row-2{
+  align-items:start;
+}
+
+.client-info-panel #filterRulesContainer{
+  display:grid;
+  gap:12px;
+}
+
+.client-info-panel .filter-rule-row{
+  display:grid;
+  grid-template-columns:minmax(0, 1fr) minmax(108px, .78fr) 32px;
+  gap:8px;
+  align-items:start;
+  margin-bottom:0;
+}
+
+.client-info-panel .filter-rule-row .rule-field{
+  grid-column:1 / 4;
+}
+
+.client-info-panel .filter-rule-row .rule-operator{
+  grid-column:1;
+}
+
+.client-info-panel .filter-rule-row .rule-value,
+.client-info-panel .filter-rule-row .rule-date-input{
+  min-width:0;
+}
+
+.client-info-panel .filter-rule-row .rule-value{
+  grid-column:2;
+}
+
+.client-info-panel .filter-rule-row .rule-date-input{
+  grid-column:2 / 4;
+  min-height:36px;
+  min-width:0;
+}
+
+.client-info-panel .filter-rule-row .rule-remove{
+  grid-column:3;
+  grid-row:2;
+  align-self:center;
+  justify-self:end;
+}
+
+.client-info-panel .panel-footer{
+  padding:14px 16px;
+}
+
+@media (max-width: 1480px){
+  .client-info-panel .filter-rule-row{
+    grid-template-columns:minmax(0, 1fr) minmax(96px, .72fr) 32px;
+  }
+}
+
 /* ── Filter category row (compact single line) ── */
 .filter-category-row{
   display:flex;

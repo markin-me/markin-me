@@ -8075,7 +8075,8 @@
       input.style.overflowY = fullHeight > maxHeight + 1 ? "auto" : "hidden";
 
       const nextComposerHeight = getElementOuterHeightPx(composer);
-      const composerHeightDelta = Math.max(0, nextComposerHeight - prevComposerHeight);
+      const composerHeightDelta = Math.abs(nextComposerHeight - prevComposerHeight);
+      const composerHeightChanged = composerHeightDelta > 0.5;
       const keepBottomPinned = (
         stickToBottom
         || wasNearBottom
@@ -8095,7 +8096,11 @@
         input.classList.remove("is-rich-emoji-preview");
         syncScrollDownComposerExtraOffsetNow();
         if (targetBottomDistance != null) {
-          stabilizeFeedBottomDistance(targetBottomDistance, 140);
+          if (composerHeightChanged) {
+            applyFeedBottomDistanceSnapshot(targetBottomDistance);
+          } else {
+            stabilizeFeedBottomDistance(targetBottomDistance, 140);
+          }
           saveFeedScrollPosition({ force: true });
         } else {
           updateScrollDownButton();
@@ -8110,7 +8115,11 @@
       syncScrollDownComposerExtraOffsetNow();
 
       if (targetBottomDistance != null) {
-        stabilizeFeedBottomDistance(targetBottomDistance, 140);
+        if (composerHeightChanged) {
+          applyFeedBottomDistanceSnapshot(targetBottomDistance);
+        } else {
+          stabilizeFeedBottomDistance(targetBottomDistance, 140);
+        }
         saveFeedScrollPosition({ force: true });
       } else {
         updateScrollDownButton();
