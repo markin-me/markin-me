@@ -1,4 +1,5 @@
 const express = require("express");
+const { buildOrderRefundState } = require("./helpers/orderRefunds");
 
 module.exports = function makePrintApiRouter({ db, helpers }) {
   const router = express.Router();
@@ -79,6 +80,112 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       timezone,
       nowSql: helpers.formatUtcDateTime(shiftedNowMs),
       staleBeforeSql: helpers.formatUtcDateTime(shiftedNowMs - 5 * 60 * 1000),
+    };
+  }
+
+  async function fetchRefundRecordsForOrder(tenantId, storeId, orderId, storeTimezone) {
+    if (!(Number(tenantId) > 0) || !(Number(storeId) > 0) || !(Number(orderId) > 0)) return [];
+    try {
+      const [rows] = await db.query(
+        `
+        SELECT
+          r.id AS refund_id,
+          r.order_id,
+          r.payment_id,
+          r.payment_code,
+          r.payment_title,
+          r.payment_icon,
+          r.items_total,
+          r.delivery_amount,
+          r.total_amount,
+          r.comment,
+          r.is_full,
+          r.created_by_user_id,
+          r.created_by_name,
+          r.created_by_email,
+          DATE_FORMAT(r.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+          ri.id AS refund_item_id,
+          ri.source_item_index,
+          ri.refunded_qty,
+          ri.unit_price,
+          ri.line_amount,
+          ri.item_snapshot
+        FROM order_refunds r
+        LEFT JOIN order_refund_items ri
+          ON ri.tenant_id=r.tenant_id
+         AND ri.store_id=r.store_id
+         AND ri.refund_id=r.id
+        WHERE r.tenant_id=? AND r.store_id=? AND r.order_id=?
+        ORDER BY r.created_at DESC, r.id DESC, ri.id ASC
+        `,
+        [tenantId, storeId, orderId]
+      );
+
+      const refunds = [];
+      for (const row of rows) {
+        const refundId = Number(row?.refund_id || 0);
+        if (!(refundId > 0)) continue;
+        let refund = refunds.find((item) => Number(item?.id || 0) === refundId) || null;
+        if (!refund) {
+          refund = {
+            id: refundId,
+            order_id: Number(row?.order_id || 0) || null,
+            payment_id: Number(row?.payment_id || 0) || null,
+            payment_code: row?.payment_code || null,
+            payment_title: row?.payment_title || null,
+            payment_icon: row?.payment_icon || null,
+            items_total: Number(row?.items_total || 0) || 0,
+            delivery_amount: Number(row?.delivery_amount || 0) || 0,
+            total_amount: Number(row?.total_amount || 0) || 0,
+            comment: row?.comment || null,
+            is_full: Number(row?.is_full || 0) === 1 ? 1 : 0,
+            created_by_user_id: Number(row?.created_by_user_id || 0) || null,
+            created_by_name: row?.created_by_name || null,
+            created_by_email: row?.created_by_email || null,
+            created_at: storeTimezone
+              ? helpers.utcToStoreDateTime(row?.created_at, storeTimezone)
+              : row?.created_at,
+            items: [],
+          };
+          refunds.push(refund);
+        }
+
+        const refundItemId = Number(row?.refund_item_id || 0);
+        if (!(refundItemId > 0)) continue;
+        let itemSnapshot = {};
+        try {
+          const parsed = row?.item_snapshot ? JSON.parse(row.item_snapshot) : {};
+          if (parsed && typeof parsed === "object") itemSnapshot = parsed;
+        } catch {}
+        refund.items.push({
+          id: refundItemId,
+          source_item_index: Number(row?.source_item_index || 0),
+          refunded_qty: Number(row?.refunded_qty || 0) || 0,
+          unit_price: Number(row?.unit_price || 0) || 0,
+          line_amount: Number(row?.line_amount || 0) || 0,
+          item_snapshot: itemSnapshot,
+        });
+      }
+
+      return refunds;
+    } catch (err) {
+      if (String(err?.code || "") === "ER_NO_SUCH_TABLE") return [];
+      throw err;
+    }
+  }
+
+  function hasOrderRefunds(order) {
+    const refundedTotal = Number(order?.refunded_total || 0) || 0;
+    const refundsCount = Number(order?.refunds_count || 0) || 0;
+    return refundedTotal > 0 || refundsCount > 0;
+  }
+
+  function getDisplayOrder(order) {
+    if (!order || !hasOrderRefunds(order)) return order;
+    if (!order.remaining_order || typeof order.remaining_order !== "object") return order;
+    return {
+      ...order,
+      ...order.remaining_order,
     };
   }
 
@@ -218,6 +325,13 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     order.time_option_code = order.timeOptionCode ?? null;
     order.pickup_store_name = order.pickupStoreName ?? null;
     order.pickup_store_address = order.pickupStoreAddress ?? null;
+    Object.assign(
+      order,
+      buildOrderRefundState(
+        order,
+        await fetchRefundRecordsForOrder(tenantId, storeId, orderId, storeTimezone)
+      )
+    );
 
     return generateReceiptHtmlForOrder(order, storeTimezone);
   }
@@ -779,7 +893,9 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
 
   function generateReceiptHtmlForOrder(order, storeTimezone) {
     try {
-      const createdAtRaw = String(order.created_at || "");
+      const receiptOrder = getDisplayOrder(order) || order;
+      const hasRefunds = hasOrderRefunds(order);
+      const createdAtRaw = String(receiptOrder.created_at || "");
       const createdAtDate = parseLocalDate(createdAtRaw);
       const day = createdAtDate ? String(createdAtDate.getDate()).padStart(2, "0") : "";
       const month = createdAtDate ? String(createdAtDate.getMonth() + 1).padStart(2, "0") : "";
@@ -788,22 +904,22 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       const minutes = createdAtDate ? String(createdAtDate.getMinutes()).padStart(2, "0") : "";
       const dateStr = createdAtDate ? `${day}.${month}.${year}, ${hours}:${minutes}` : createdAtRaw;
 
-      const methodTitle = order.method_title || (order.method_code === "pickup" ? "Самовывоз" : "Доставка");
-      let address = order.address;
-      if (!address && order.pickup_store_address) {
-        address = order.pickup_store_name
-          ? `${order.pickup_store_name}, ${order.pickup_store_address}`
-          : order.pickup_store_address;
+      const methodTitle = receiptOrder.method_title || (receiptOrder.method_code === "pickup" ? "Самовывоз" : "Доставка");
+      let address = receiptOrder.address;
+      if (!address && receiptOrder.pickup_store_address) {
+        address = receiptOrder.pickup_store_name
+          ? `${receiptOrder.pickup_store_name}, ${receiptOrder.pickup_store_address}`
+          : receiptOrder.pickup_store_address;
       }
-      const isUrgent = order.is_urgent || order.urgent || order.time_option_code === "urgent";
-      const total = parseFloat(order.total_price || order.total || 0);
-      const deliveryCost = Number(order.delivery_cost || 0);
-      const changeFromRaw = order.change_from;
+      const isUrgent = receiptOrder.is_urgent || receiptOrder.urgent || receiptOrder.time_option_code === "urgent";
+      const total = parseFloat(receiptOrder.total_price || receiptOrder.total || 0);
+      const deliveryCost = Number(receiptOrder.delivery_cost || 0);
+      const changeFromRaw = receiptOrder.change_from;
       const changeFrom = Number.isFinite(Number(changeFromRaw)) ? Number(changeFromRaw) : 0;
-      const paymentTitle = order.payment_method_title || order.payment_title || "";
+      const paymentTitle = receiptOrder.payment_method_title || receiptOrder.payment_title || "";
       const changeAmount = Math.max(0, changeFrom - total);
-      const showChange = changeAmount > 0;
-      const scheduleText = formatScheduleText(order, storeTimezone, { includeTitle: true });
+      const showChange = !hasRefunds && changeAmount > 0;
+      const scheduleText = formatScheduleText(receiptOrder, storeTimezone, { includeTitle: true });
 
       function receiptTotalStr(val) {
         const n = Number(val);
@@ -812,8 +928,8 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
         return Math.round(n) === n ? String(Math.round(n)) : n.toFixed(2);
       }
 
-      const receiptItems = Array.isArray(order.items)
-        ? order.items.slice().sort((a, b) => {
+      const receiptItems = Array.isArray(receiptOrder.items)
+        ? receiptOrder.items.slice().sort((a, b) => {
             const aAuto = isAutoAddItem(a);
             const bAuto = isAutoAddItem(b);
             if (aAuto && !bAuto) return 1;
@@ -964,7 +1080,11 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
         });
       }
 
-      const receiptDiscountSummary = buildOrderDiscountSummary(order);
+      if (!receiptItems.length) {
+        itemsHtml = '<div class="receipt-empty">\u0412\u0441\u0435 \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0435\u043d\u044b.</div>';
+      }
+
+      const receiptDiscountSummary = buildOrderDiscountSummary(receiptOrder);
       const discountAmount = Number(receiptDiscountSummary.totalDiscount || 0);
       const subtotal = Number(receiptDiscountSummary.subtotalBeforeDiscount || 0);
 
@@ -973,7 +1093,7 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Чек заказа #${order.id}</title>
+  <title>Чек заказа #${receiptOrder.id}</title>
   <style>
     @media print {
       @page {
@@ -1105,10 +1225,14 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
       text-decoration: line-through;
       margin-right: 4px;
     }
+    .receipt-empty {
+      text-align: center;
+      padding: 8px 0;
+    }
   </style>
 </head>
 <body>
-  <div class="receipt-header">ЗАКАЗ #${order.id}</div>
+  <div class="receipt-header">ЗАКАЗ #${receiptOrder.id}</div>
   <div class="receipt-date">${dateStr}</div>
   
   <div class="receipt-divider"></div>
@@ -1120,8 +1244,8 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
   ` : ""}
   
   <div class="receipt-section">
-    ${order.customer_name ? `<div>${escapeHtml(order.customer_name)}</div>` : ""}
-    ${order.customer_phone ? `<div>${escapeHtml(order.customer_phone)}</div>` : ""}
+    ${receiptOrder.customer_name ? `<div>${escapeHtml(receiptOrder.customer_name)}</div>` : ""}
+    ${receiptOrder.customer_phone ? `<div>${escapeHtml(receiptOrder.customer_phone)}</div>` : ""}
   </div>
   
   <div class="receipt-section">
@@ -1129,14 +1253,14 @@ module.exports = function makePrintApiRouter({ db, helpers }) {
     <div>${escapeHtml(address || "—")}</div>
   </div>
   
-  ${(order.address_comment && order.address_comment.trim()) ? `
+  ${(receiptOrder.address_comment && receiptOrder.address_comment.trim()) ? `
   <div class="receipt-section">
-    <div>${escapeHtml(order.address_comment)}</div>
+    <div>${escapeHtml(receiptOrder.address_comment)}</div>
   </div>
   ` : ""}
-  ${(order.comment && order.comment.trim()) ? `
+  ${(receiptOrder.comment && receiptOrder.comment.trim()) ? `
   <div class="receipt-section">
-    <div>${escapeHtml(order.comment)}</div>
+    <div>${escapeHtml(receiptOrder.comment)}</div>
   </div>
   ` : ""}
   

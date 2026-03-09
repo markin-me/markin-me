@@ -1,20 +1,36 @@
-<div class="panel cash-info">
-  <div class="panel-body no-scrollbar">
-    <div class="cash-info-empty" id="cashInfoEmpty">
-      Выберите чек слева
-    </div>
-
-    <div class="cash-info-content hidden" id="cashInfoContent">
-      <div class="panel-header cash-tabs-header hidden" id="cashTabsHeader">
-        <div class="cash-tabs" id="cashTabs"></div>
+<div id="cashOrdersRightPane">
+  <div class="panel orders-info cash-info">
+    <div class="panel-header product-tabs-header" id="cashOrderTabsHeader">
+      <div class="product-tabs-header-inner">
+        <button class="product-tabs-home" type="button" data-action="order-tabs-home" aria-label="Сводка кассы">
+          <i class="fas fa-home"></i>
+        </button>
+        <div class="product-tabs" id="cashOrderTabs"></div>
       </div>
-
-      <div class="cash-receipt-scroll">
-        <div class="cash-receipt-box" id="cashReceiptBox">
-          <!-- Содержимое чека будет подставлено из JS -->
+    </div>
+    <div class="panel-body no-scrollbar">
+      <div class="cash-balance-summary" id="cashSidebarSummary"></div>
+      <div class="hidden" id="cashOrderInfoRoot">
+        <%- include('../orders/info_content') %>
+      </div>
+    </div>
+    <div class="panel-footer order-info-footer hidden" id="cashOrderInfoFooter">
+      <div class="order-footer-actions">
+        <button class="order-footer-status-pill order-payment-pill" type="button" data-cash-action="mark-paid" id="cashOrderPaymentBtn" aria-label="Оплата заказа">
+          <span>Принять оплату</span>
+        </button>
+        <button class="order-footer-status-pill" type="button" data-action="order-status-next" aria-label="Статус заказа">
+          <span data-info="order-status">—</span>
+        </button>
+        <div class="order-head-actions order-footer-icon-actions">
+          <button class="icon-btn order-footer-icon-btn" type="button" data-action="order-edit" aria-label="Редактировать">
+            <i class="fas fa-pen"></i>
+          </button>
+          <button class="icon-btn order-footer-icon-btn" type="button" data-action="order-print" aria-label="Печать">
+            <i class="fas fa-print"></i>
+          </button>
         </div>
       </div>
     </div>
   </div>
 </div>
-

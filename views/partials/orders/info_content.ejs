@@ -8,6 +8,7 @@
   <div class="info-card order-info-head">
     <div class="order-head-top">
       <div class="order-head-title-row">
+        <span class="order-refund-badge hidden" data-info="refund-badge">Возврат</span>
         <span class="order-head-title" data-info="order-title">ЗАКАЗ #—</span>
         <span class="order-head-meta muted" data-info="order-meta">—</span>
       </div>
@@ -117,10 +118,26 @@
       <span class="order-summary-label">Доставка</span>
       <span class="order-summary-value" data-info="delivery-cost">—</span>
     </div>
+    <div class="order-summary-row hidden" data-info="refund-state-row">
+      <span class="order-summary-label">Возврат</span>
+      <span class="order-summary-value" data-info="refund-state">—</span>
+    </div>
+    <div class="order-summary-row hidden" data-info="refunded-total-row">
+      <span class="order-summary-label">Возвращено</span>
+      <span class="order-summary-value order-summary-refund is-negative" data-info="refunded-total">—</span>
+    </div>
+    <div class="order-summary-row hidden" data-info="refundable-total-row">
+      <span class="order-summary-label">Доступно к возврату</span>
+      <span class="order-summary-value" data-info="refundable-total">—</span>
+    </div>
     <div class="order-summary-divider"></div>
     <div class="order-summary-total-row">
       <span class="order-summary-total-label">ИТОГО</span>
       <span class="order-summary-total-value" data-info="order-total">—</span>
+    </div>
+    <div class="order-refund-history hidden" data-info="refund-history-block">
+      <div class="order-refund-history-title">История возвратов</div>
+      <div class="order-refund-history-list" data-info="refund-history"></div>
     </div>
     <div class="order-summary-thanks">Спасибо за заказ!</div>
   </div>

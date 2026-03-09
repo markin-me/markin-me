@@ -3,11 +3,18 @@ const express = require("express");
 const { sendOrderToPrintBot } = require("../printPush");
 const { applyStockDeductionForOrderItems } = require("../helpers/orderStock");
 const discountHelpers = require("../helpers/discounts");
+const {
+  roundMoney,
+  buildOrderRefundState,
+  buildRefundPlan,
+} = require("../helpers/orderRefunds");
 
 module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   const router = express.Router();
   let orderDeliveryTypeColumnsReady = false;
   let ensureOrderDeliveryTypeColumnsPromise = null;
+  let refundTablesReady = false;
+  let ensureRefundTablesPromise = null;
 
   async function ensureOrderDeliveryTypeColumns() {
     if (orderDeliveryTypeColumnsReady) return true;
@@ -55,6 +62,204 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       });
 
     return ensureOrderDeliveryTypeColumnsPromise;
+  }
+
+  async function ensureRefundTables() {
+    if (refundTablesReady) return true;
+    if (ensureRefundTablesPromise) return ensureRefundTablesPromise;
+
+    ensureRefundTablesPromise = (async () => {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS order_refunds (
+          id INT NOT NULL AUTO_INCREMENT,
+          tenant_id INT NOT NULL,
+          store_id INT NOT NULL,
+          order_id INT NOT NULL,
+          payment_id INT DEFAULT NULL,
+          payment_code VARCHAR(50) NOT NULL,
+          payment_title VARCHAR(100) DEFAULT NULL,
+          payment_icon VARCHAR(255) DEFAULT NULL,
+          items_total DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+          delivery_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+          total_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+          comment TEXT DEFAULT NULL,
+          is_full TINYINT(1) NOT NULL DEFAULT 0,
+          created_by_user_id INT DEFAULT NULL,
+          created_by_name VARCHAR(150) DEFAULT NULL,
+          created_by_email VARCHAR(150) DEFAULT NULL,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          KEY idx_order_refunds_order (tenant_id, store_id, order_id),
+          KEY idx_order_refunds_created (tenant_id, store_id, created_at)
+        )
+      `);
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS order_refund_items (
+          id INT NOT NULL AUTO_INCREMENT,
+          tenant_id INT NOT NULL,
+          store_id INT NOT NULL,
+          order_id INT NOT NULL,
+          refund_id INT NOT NULL,
+          source_item_index INT NOT NULL,
+          item_snapshot LONGTEXT NOT NULL,
+          refunded_qty DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+          unit_price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+          line_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          KEY idx_order_refund_items_refund (tenant_id, store_id, refund_id),
+          KEY idx_order_refund_items_order (tenant_id, store_id, order_id, source_item_index)
+        )
+      `);
+      refundTablesReady = true;
+      return true;
+    })()
+      .catch((err) => {
+        ensureRefundTablesPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        if (refundTablesReady) ensureRefundTablesPromise = null;
+      });
+
+    return ensureRefundTablesPromise;
+  }
+
+  async function fetchRefundRecordsMap(executor, tenantId, storeId, orderIds, opts = {}) {
+    await ensureRefundTables();
+    const ids = [...new Set(
+      (Array.isArray(orderIds) ? orderIds : [])
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0)
+    )];
+    const refundMap = new Map();
+    if (!ids.length) return refundMap;
+
+    const storeTimezone = opts.storeTimezone ?? null;
+    const placeholders = ids.map(() => "?").join(",");
+    const [rows] = await executor.query(
+      `
+      SELECT
+        r.id AS refund_id,
+        r.order_id,
+        r.payment_id,
+        r.payment_code,
+        r.payment_title,
+        r.payment_icon,
+        r.items_total,
+        r.delivery_amount,
+        r.total_amount,
+        r.comment,
+        r.is_full,
+        r.created_by_user_id,
+        r.created_by_name,
+        r.created_by_email,
+        DATE_FORMAT(r.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+        ri.id AS refund_item_id,
+        ri.source_item_index,
+        ri.refunded_qty,
+        ri.unit_price,
+        ri.line_amount,
+        ri.item_snapshot
+      FROM order_refunds r
+      LEFT JOIN order_refund_items ri
+        ON ri.tenant_id=r.tenant_id
+       AND ri.store_id=r.store_id
+       AND ri.refund_id=r.id
+      WHERE r.tenant_id=? AND r.store_id=? AND r.order_id IN (${placeholders})
+      ORDER BY r.created_at DESC, r.id DESC, ri.id ASC
+      `,
+      [tenantId, storeId, ...ids]
+    );
+
+    for (const row of rows) {
+      const orderId = Number(row?.order_id || 0);
+      if (!(orderId > 0)) continue;
+      if (!refundMap.has(orderId)) refundMap.set(orderId, []);
+      const list = refundMap.get(orderId);
+      const refundId = Number(row?.refund_id || 0);
+      let refund = list.find((item) => Number(item?.id || 0) === refundId) || null;
+      if (!refund) {
+        refund = {
+          id: refundId,
+          order_id: orderId,
+          payment_id: Number(row?.payment_id || 0) || null,
+          payment_code: row?.payment_code || null,
+          payment_title: row?.payment_title || null,
+          payment_icon: row?.payment_icon || null,
+          items_total: roundMoney(row?.items_total || 0),
+          delivery_amount: roundMoney(row?.delivery_amount || 0),
+          total_amount: roundMoney(row?.total_amount || 0),
+          comment: row?.comment || null,
+          is_full: Number(row?.is_full || 0) === 1 ? 1 : 0,
+          created_by_user_id: Number(row?.created_by_user_id || 0) || null,
+          created_by_name: row?.created_by_name || null,
+          created_by_email: row?.created_by_email || null,
+          created_at: storeTimezone
+            ? helpers.utcToStoreDateTime(row?.created_at, storeTimezone)
+            : row?.created_at,
+          items: [],
+        };
+        list.push(refund);
+      }
+
+      const refundItemId = Number(row?.refund_item_id || 0);
+      if (!(refundItemId > 0)) continue;
+      let itemSnapshot = {};
+      try {
+        const parsed = row?.item_snapshot ? JSON.parse(row.item_snapshot) : {};
+        if (parsed && typeof parsed === "object") itemSnapshot = parsed;
+      } catch {}
+      refund.items.push({
+        id: refundItemId,
+        source_item_index: Number(row?.source_item_index || 0),
+        refunded_qty: Number(row?.refunded_qty || 0),
+        unit_price: roundMoney(row?.unit_price || 0),
+        line_amount: roundMoney(row?.line_amount || 0),
+        item_snapshot: itemSnapshot,
+      });
+    }
+
+    return refundMap;
+  }
+
+  async function attachRefundDataToOrders(executor, tenantId, storeId, orders, opts = {}) {
+    await ensureRefundTables();
+    const list = Array.isArray(orders) ? orders : [];
+    if (!list.length) return list;
+    const refundMap = await fetchRefundRecordsMap(executor, tenantId, storeId, list.map((order) => order?.id), opts);
+    return list.map((order) => ({
+      ...order,
+      ...buildOrderRefundState(order, refundMap.get(Number(order?.id || 0)) || []),
+    }));
+  }
+
+  async function resolveRefundActorSnapshot(conn, tenantId, req) {
+    const userId = Number(req.user?.userId || 0) || null;
+    const fallbackEmail = String(req.user?.email || "").trim() || null;
+    if (!(userId > 0)) {
+      return {
+        createdByUserId: null,
+        createdByName: fallbackEmail || "Оператор",
+        createdByEmail: fallbackEmail,
+      };
+    }
+
+    const [rows] = await conn.query(
+      `SELECT name, email
+         FROM app_users
+        WHERE tenant_id=? AND id=?
+        LIMIT 1`,
+      [tenantId, userId]
+    );
+    const row = rows[0] || null;
+    return {
+      createdByUserId: userId,
+      createdByName: String(row?.name || "").trim() || fallbackEmail || "Оператор",
+      createdByEmail: String(row?.email || fallbackEmail || "").trim() || null,
+    };
   }
 
   function publishStockChanged(tenantId, storeId, payload = {}) {
@@ -134,6 +339,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
         o.delivery_type_id,
         o.payment_id,
+        o.is_paid,
         o.time_option_id,
         o.status_id,
         o.pickup_store_id,
@@ -203,7 +409,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       deliveryCost = stored && stored > 0 ? stored : computed;
     }
 
-    return {
+    const basePayload = {
       id: r.id,
       store_id: r.store_id,
       public_id: r.public_id || null,
@@ -225,6 +431,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       scheduled_at: r.scheduled_at,
       delivery_type_id: r.delivery_type_id,
       payment_id: r.payment_id,
+      is_paid: Number(r.is_paid || 0) === 1 ? 1 : 0,
       time_option_id: r.time_option_id,
       status_id: r.status_id,
 
@@ -249,6 +456,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       pickup_store_name: r.pickupStoreName ?? null,
       pickup_store_address: r.pickupStoreAddress ?? null,
     };
+    const [payload] = await attachRefundDataToOrders(db, tenantId, storeId, [basePayload], { storeTimezone });
+    return payload || basePayload;
   }
 
   // ---------------------------
@@ -367,6 +576,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
           o.delivery_type_id,
           o.payment_id,
+          o.is_paid,
           o.time_option_id,
           o.status_id,
 
@@ -414,7 +624,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         [...params, limit, offset]
       );
 
-      const data = rows.map((r) => {
+      const baseData = rows.map((r) => {
         let items = [];
         try {
           const parsed = r.items ? JSON.parse(r.items) : [];
@@ -451,6 +661,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           delivery_cost: deliveryCost,
           discount_amount: Number(r.discount_amount || 0),
           discounts_json: discountsJson,
+          is_paid: Number(r.is_paid || 0) === 1 ? 1 : 0,
 
           status_code: r.statusCode ?? null,
           status_title: r.statusTitle ?? null,
@@ -474,6 +685,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           pickup_store_address: r.pickupStoreAddress ?? null,
         };
       });
+      const data = await attachRefundDataToOrders(db, tenantId, storeId, baseData, { storeTimezone });
 
       res.json({ ok: true, data });
     } catch (e) {
@@ -582,6 +794,324 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   });
 
   // ---------------------------
+  // change paid flag
+  // ---------------------------
+  // PUT /api/admin/orders/:id/paid
+  router.put("/:id/paid", async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const id = Number(req.params.id);
+      const isPaidRaw = Number(req.body?.is_paid);
+      const hasPaymentCode = Object.prototype.hasOwnProperty.call(req.body || {}, "payment_code");
+      const hasChangeFrom = Object.prototype.hasOwnProperty.call(req.body || {}, "change_from");
+      if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ ok: false, error: "BAD_ID" });
+      }
+      if (!(isPaidRaw === 0 || isPaidRaw === 1)) {
+        return res.status(400).json({ ok: false, error: "BAD_IS_PAID" });
+      }
+
+      const [existingRows] = await db.query(
+        `SELECT o.id,
+                o.total_price,
+                o.change_from,
+                o.payment_id,
+                p.code AS payment_code
+           FROM order_orders o
+      LEFT JOIN order_payments p
+             ON p.tenant_id=o.tenant_id
+            AND p.store_id=o.store_id
+            AND p.id=o.payment_id
+          WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1
+          LIMIT 1`,
+        [tenantId, storeId, id]
+      );
+      if (!existingRows.length) {
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      }
+
+      const existing = existingRows[0] || {};
+      let nextPaymentId = Number(existing.payment_id || 0) > 0 ? Number(existing.payment_id) : null;
+      let effectivePaymentCode = String(existing.payment_code || "").trim().toLowerCase();
+
+      if (hasPaymentCode) {
+        const paymentCode = String(req.body?.payment_code || "").trim();
+        if (!paymentCode) {
+          return res.status(400).json({ ok: false, error: "BAD_PAYMENT_CODE" });
+        }
+        const [paymentRows] = await db.query(
+          `SELECT id, code
+             FROM order_payments
+            WHERE tenant_id=? AND store_id=? AND code=? AND is_active=1
+            LIMIT 1`,
+          [tenantId, storeId, paymentCode]
+        );
+        if (!paymentRows.length) {
+          return res.status(400).json({ ok: false, error: "BAD_PAYMENT_CODE" });
+        }
+        nextPaymentId = Number(paymentRows[0]?.id || 0) > 0 ? Number(paymentRows[0].id) : null;
+        effectivePaymentCode = String(paymentRows[0]?.code || paymentCode).trim().toLowerCase();
+      }
+
+      const totalPrice = Number(existing.total_price || 0);
+      const isCashPayment = effectivePaymentCode.includes("cash") || effectivePaymentCode.includes("нал");
+      let nextChangeFrom = Number(existing.change_from || 0) > 0 ? Number(existing.change_from) : null;
+
+      if (!isCashPayment) {
+        nextChangeFrom = null;
+      } else if (hasChangeFrom) {
+        const rawChangeFrom = req.body?.change_from;
+        if (rawChangeFrom == null || rawChangeFrom === "") {
+          nextChangeFrom = null;
+        } else {
+          const numericChangeFrom = Number(rawChangeFrom);
+          if (!Number.isFinite(numericChangeFrom) || numericChangeFrom <= 0) {
+            nextChangeFrom = null;
+          } else if (numericChangeFrom <= totalPrice) {
+            return res.status(400).json({ ok: false, error: "BAD_CHANGE_FROM" });
+          } else {
+            nextChangeFrom = numericChangeFrom;
+          }
+        }
+      }
+
+      const [result] = await db.query(
+        `UPDATE order_orders
+         SET is_paid=?,
+             payment_id=?,
+             change_from=?
+         WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1`,
+        [isPaidRaw, nextPaymentId, nextChangeFrom, tenantId, storeId, id]
+      );
+      if (!Number(result?.affectedRows || 0)) {
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      }
+
+      const payload = await fetchOrderPayload(tenantId, storeId, id);
+      if (!payload) {
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      }
+      if (ordersEvents && typeof ordersEvents.publish === "function") {
+        ordersEvents.publish(tenantId, storeId, "order.updated", payload);
+      }
+
+      res.json({ ok: true, data: payload });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // ---------------------------
+  // create refund
+  // ---------------------------
+  // POST /api/admin/orders/:id/refunds
+  router.post("/:id/refunds", async (req, res) => {
+    const conn = await db.getConnection();
+    let transactionStarted = false;
+    let connectionReleased = false;
+    const safeRelease = () => {
+      if (!connectionReleased) {
+        conn.release();
+        connectionReleased = true;
+      }
+    };
+
+    try {
+      await ensureRefundTables();
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const id = Number(req.params.id);
+      const paymentCode = String(req.body?.payment_code || "").trim();
+      const comment = helpers.strOrNull(req.body?.comment);
+      const itemsInput = Array.isArray(req.body?.items) ? req.body.items : [];
+
+      if (!Number.isFinite(id) || id <= 0) {
+        safeRelease();
+        return res.status(400).json({ ok: false, error: "BAD_ID" });
+      }
+      if (!paymentCode) {
+        safeRelease();
+        return res.status(400).json({ ok: false, error: "BAD_PAYMENT_CODE" });
+      }
+
+      await conn.beginTransaction();
+      transactionStarted = true;
+
+      const [orderRows] = await conn.query(
+        `
+        SELECT
+          o.id,
+          o.items,
+          o.total_price,
+          o.delivery_cost,
+          o.is_paid
+        FROM order_orders o
+        WHERE o.tenant_id=? AND o.store_id=? AND o.id=? AND o.is_active=1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [tenantId, storeId, id]
+      );
+      if (!orderRows.length) {
+        await conn.rollback();
+        transactionStarted = false;
+        safeRelease();
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      }
+
+      const orderRow = orderRows[0] || {};
+      let items = [];
+      try {
+        const parsed = orderRow.items ? JSON.parse(orderRow.items) : [];
+        if (Array.isArray(parsed)) items = parsed;
+      } catch {}
+
+      const [paymentRows] = await conn.query(
+        `
+        SELECT id, code, title, icon
+        FROM order_payments
+        WHERE tenant_id=? AND store_id=? AND code=? AND is_active=1
+        LIMIT 1
+        `,
+        [tenantId, storeId, paymentCode]
+      );
+      if (!paymentRows.length) {
+        await conn.rollback();
+        transactionStarted = false;
+        safeRelease();
+        return res.status(400).json({ ok: false, error: "BAD_PAYMENT_CODE" });
+      }
+
+      const refundMap = await fetchRefundRecordsMap(conn, tenantId, storeId, [id]);
+      const orderForRefund = {
+        id,
+        items,
+        total_price: roundMoney(orderRow.total_price || 0),
+        delivery_cost: roundMoney(orderRow.delivery_cost || 0),
+        is_paid: Number(orderRow.is_paid || 0) === 1 ? 1 : 0,
+      };
+      const refundPlan = buildOrderRefundState(orderForRefund, refundMap.get(id) || []);
+      const plannedRefund = buildRefundPlan(orderForRefund, refundMap.get(id) || [], itemsInput);
+
+      if (!plannedRefund.ok) {
+        await conn.rollback();
+        transactionStarted = false;
+        safeRelease();
+        const errorCode = String(plannedRefund.error || "BAD_REFUND_ITEMS");
+        const statusCode = errorCode === "ORDER_NOT_PAID" || errorCode === "NOT_REFUNDABLE"
+          ? 409
+          : 400;
+        return res.status(statusCode).json({ ok: false, error: errorCode, data: refundPlan });
+      }
+
+      const payment = paymentRows[0] || {};
+      const actor = await resolveRefundActorSnapshot(conn, tenantId, req);
+      const [refundResult] = await conn.query(
+        `
+        INSERT INTO order_refunds (
+          tenant_id,
+          store_id,
+          order_id,
+          payment_id,
+          payment_code,
+          payment_title,
+          payment_icon,
+          items_total,
+          delivery_amount,
+          total_amount,
+          comment,
+          is_full,
+          created_by_user_id,
+          created_by_name,
+          created_by_email
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          tenantId,
+          storeId,
+          id,
+          Number(payment.id || 0) || null,
+          String(payment.code || paymentCode).trim(),
+          String(payment.title || paymentCode).trim() || null,
+          String(payment.icon || "").trim() || null,
+          roundMoney(plannedRefund.items_total || 0),
+          roundMoney(plannedRefund.delivery_amount || 0),
+          roundMoney(plannedRefund.total_amount || 0),
+          comment,
+          Number(plannedRefund.is_full || 0) === 1 ? 1 : 0,
+          actor.createdByUserId,
+          actor.createdByName,
+          actor.createdByEmail,
+        ]
+      );
+
+      const refundId = Number(refundResult?.insertId || 0);
+      if (!(refundId > 0)) {
+        throw new Error("REFUND_INSERT_FAILED");
+      }
+
+      if (Array.isArray(plannedRefund.items) && plannedRefund.items.length) {
+        const placeholders = plannedRefund.items.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+        const params = [];
+        plannedRefund.items.forEach((item) => {
+          params.push(
+            tenantId,
+            storeId,
+            id,
+            refundId,
+            Number(item.source_item_index || 0),
+            JSON.stringify(item.item_snapshot || {}),
+            Number(item.refunded_qty || 0),
+            roundMoney(item.unit_price || 0),
+            roundMoney(item.line_amount || 0)
+          );
+        });
+        await conn.query(
+          `
+          INSERT INTO order_refund_items (
+            tenant_id,
+            store_id,
+            order_id,
+            refund_id,
+            source_item_index,
+            item_snapshot,
+            refunded_qty,
+            unit_price,
+            line_amount
+          ) VALUES ${placeholders}
+          `,
+          params
+        );
+      }
+
+      await conn.commit();
+      transactionStarted = false;
+      safeRelease();
+
+      const payload = await fetchOrderPayload(tenantId, storeId, id);
+      if (!payload) {
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      }
+      if (ordersEvents && typeof ordersEvents.publish === "function") {
+        ordersEvents.publish(tenantId, storeId, "order.updated", payload);
+      }
+
+      res.status(201).json({ ok: true, data: payload });
+    } catch (e) {
+      if (transactionStarted) {
+        try {
+          await conn.rollback();
+        } catch {}
+      }
+      safeRelease();
+      console.error(e);
+      res.status(500).json({ ok: false, error: "DB_ERROR" });
+    }
+  });
+
+  // ---------------------------
   // change status
   // ---------------------------
   // PUT /api/admin/orders/:id/status
@@ -614,7 +1144,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       transactionStarted = true;
 
       const [statusRows] = await conn.query(
-        `SELECT id
+        `SELECT id, code
          FROM order_statuses
          WHERE tenant_id=? AND store_id=? AND id=?
          LIMIT 1`,
@@ -628,7 +1158,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       }
 
       const [orderRows] = await conn.query(
-        `SELECT id, public_id, items, stock_deducted_at, stock_document_id
+        `SELECT id, public_id, items, status_id, stock_deducted_at, stock_document_id
          FROM order_orders
          WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1
          LIMIT 1
@@ -642,6 +1172,28 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
 
+      const orderRow = orderRows[0];
+      const currentStatusId = Number(orderRow?.status_id || 0);
+      let currentStatusCode = "";
+      if (currentStatusId > 0) {
+        const [currentStatusRows] = await conn.query(
+          `SELECT code
+           FROM order_statuses
+           WHERE tenant_id=? AND store_id=? AND id=?
+           LIMIT 1`,
+          [tenantId, storeId, currentStatusId]
+        );
+        currentStatusCode = String(currentStatusRows[0]?.code || "").trim().toLowerCase();
+      }
+      const targetStatusCode = String(statusRows[0]?.code || "").trim().toLowerCase();
+      const isCanceledTarget = targetStatusCode === "canceled" || targetStatusCode === "cancelled";
+      if (currentStatusCode === "delivered" && isCanceledTarget) {
+        await conn.rollback();
+        transactionStarted = false;
+        safeRelease();
+        return res.status(409).json({ ok: false, error: "INVALID_STATUS_TRANSITION" });
+      }
+
       const [tenantRows] = await conn.query(
         `SELECT order_stock_deduct_mode, order_stock_deduct_status_id
          FROM ten_tenants
@@ -649,7 +1201,6 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
          LIMIT 1`,
         [tenantId]
       );
-      const orderRow = orderRows[0];
       const deductMode = String(tenantRows[0]?.order_stock_deduct_mode || "on_create").trim();
       let deductStatusId = Number(tenantRows[0]?.order_stock_deduct_status_id || 0) || null;
 

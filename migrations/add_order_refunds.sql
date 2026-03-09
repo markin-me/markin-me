@@ -1,0 +1,41 @@
+CREATE TABLE IF NOT EXISTS `order_refunds` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `tenant_id` INT NOT NULL,
+  `store_id` INT NOT NULL,
+  `order_id` INT NOT NULL,
+  `payment_id` INT DEFAULT NULL,
+  `payment_code` VARCHAR(50) NOT NULL,
+  `payment_title` VARCHAR(100) DEFAULT NULL,
+  `payment_icon` VARCHAR(255) DEFAULT NULL,
+  `items_total` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `delivery_amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `total_amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `comment` TEXT DEFAULT NULL,
+  `is_full` TINYINT(1) NOT NULL DEFAULT 0,
+  `created_by_user_id` INT DEFAULT NULL,
+  `created_by_name` VARCHAR(150) DEFAULT NULL,
+  `created_by_email` VARCHAR(150) DEFAULT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_order_refunds_order` (`tenant_id`, `store_id`, `order_id`),
+  KEY `idx_order_refunds_created` (`tenant_id`, `store_id`, `created_at`)
+);
+
+CREATE TABLE IF NOT EXISTS `order_refund_items` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `tenant_id` INT NOT NULL,
+  `store_id` INT NOT NULL,
+  `order_id` INT NOT NULL,
+  `refund_id` INT NOT NULL,
+  `source_item_index` INT NOT NULL,
+  `item_snapshot` LONGTEXT NOT NULL,
+  `refunded_qty` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `unit_price` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `line_amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_order_refund_items_refund` (`tenant_id`, `store_id`, `refund_id`),
+  KEY `idx_order_refund_items_order` (`tenant_id`, `store_id`, `order_id`, `source_item_index`)
+);
