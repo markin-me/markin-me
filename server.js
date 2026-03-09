@@ -449,9 +449,108 @@ app.get('/manifest.json', async (req, res) => {
 
 // Service Worker для PWA (Android / установка на домашний экран)
 const serviceWorkerScript = `
-self.addEventListener('install', function () { self.skipWaiting(); });
-self.addEventListener('activate', function (e) { e.waitUntil(self.clients.claim()); });
-self.addEventListener('fetch', function () {});
+var SW_VERSION = 'admin-shell-v3';
+var STATIC_CACHE = 'admin-static-' + SW_VERSION;
+var PAGE_CACHE = 'admin-pages-' + SW_VERSION;
+var PRECACHE_URLS = [
+  '/manifest.json',
+  '/static/css/style.css',
+  '/static/js/auth.js',
+  '/static/js/current-time.js',
+  '/static/js/theme.js',
+  '/static/js/sidebar.js',
+  '/static/js/admin-mobile-nav.js',
+  '/static/js/chat-sidebar-badge.js',
+  '/static/js/appModal.js'
+];
+
+function shouldCacheResponse(response) {
+  return !!response && (response.ok || response.type === 'opaqueredirect');
+}
+
+async function cacheStaticAssets() {
+  var cache = await caches.open(STATIC_CACHE);
+  await cache.addAll(PRECACHE_URLS);
+}
+
+async function cacheFirst(request) {
+  var cache = await caches.open(STATIC_CACHE);
+  var cached = await cache.match(request);
+  if (cached) return cached;
+
+  var response = await fetch(request);
+  if (shouldCacheResponse(response)) {
+    cache.put(request, response.clone()).catch(function () {});
+  }
+  return response;
+}
+
+async function networkFirst(request) {
+  var cache = await caches.open(PAGE_CACHE);
+  try {
+    var response = await fetch(request);
+    if (shouldCacheResponse(response)) {
+      cache.put(request, response.clone()).catch(function () {});
+    }
+    return response;
+  } catch (err) {
+    var cached = await cache.match(request);
+    if (cached) return cached;
+    throw err;
+  }
+}
+
+self.addEventListener('install', function (event) {
+  event.waitUntil(
+    cacheStaticAssets().catch(function () {}).then(function () {
+      return self.skipWaiting();
+    })
+  );
+});
+
+self.addEventListener('activate', function (event) {
+  event.waitUntil(
+    caches.keys().then(function (keys) {
+      return Promise.all(
+        keys.map(function (key) {
+          if (key === STATIC_CACHE || key === PAGE_CACHE) return Promise.resolve();
+          return caches.delete(key);
+        })
+      );
+    }).then(function () {
+      return self.clients.claim();
+    })
+  );
+});
+
+self.addEventListener('fetch', function (event) {
+  var request = event.request;
+  if (!request || request.method !== 'GET') return;
+
+  var url;
+  try {
+    url = new URL(request.url);
+  } catch (err) {
+    return;
+  }
+
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.indexOf('/api/') === 0) return;
+
+  if (
+    url.pathname.indexOf('/static/') === 0
+    || url.pathname === '/manifest.json'
+    || url.pathname === '/sw.js'
+  ) {
+    event.respondWith(cacheFirst(request));
+    return;
+  }
+
+  if (request.mode === 'navigate' && url.pathname.indexOf('/dashboard') === 0) {
+    event.respondWith(networkFirst(request));
+  }
+});
+
 self.addEventListener('push', function (event) {
   var payload = {};
   try {
@@ -596,6 +695,7 @@ app.get('/max-app', (req, res) => {
 app.get('/dashboard/cash', (req, res) => res.render('pages/cash'));
 app.get('/dashboard/products', (req, res) => res.render('pages/products'));
 app.get('/dashboard/orders', (req, res) => res.render('pages/orders'));
+app.get('/dashboard/courier-screen', (req, res) => res.render('pages/courier-screen'));
 app.get('/dashboard/new-order', (req, res) => res.render('pages/new-order'));
 app.get('/dashboard/clients', (req, res) => res.render('pages/clients', { activePage: 'clients' }));
 app.get('/dashboard/chat', (req, res) => res.render('pages/chat', { activePage: 'chat' }));

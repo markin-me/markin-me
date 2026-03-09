@@ -24,11 +24,59 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
 </head>
 
-<body class="<%= pageClass || '' %>">
+<%
+  const appActivePage = activePage || '';
+  const appTenantChatWidgetRaw = (typeof tenant !== 'undefined' && tenant) ? tenant.chat_widget_enabled : undefined;
+  const appTenantChatWidgetNorm = String(appTenantChatWidgetRaw == null ? '' : appTenantChatWidgetRaw).trim().toLowerCase();
+  const isAppChatNavEnabled = !(
+    appTenantChatWidgetRaw === 0
+    || appTenantChatWidgetRaw === false
+    || appTenantChatWidgetNorm === '0'
+    || appTenantChatWidgetNorm === 'false'
+  );
+  const adminNavItems = [
+    { key: 'cash', href: '/dashboard/cash', icon: 'fa-cash-register', label: 'Касса', ariaLabel: 'Касса' },
+    { key: 'products', href: '/dashboard/products', icon: 'fa-box', label: 'Товары', ariaLabel: 'Товары' },
+    {
+      key: 'orders',
+      href: '/dashboard/orders',
+      icon: 'fa-shopping-cart',
+      label: 'Заказы',
+      ariaLabel: 'Заказы',
+      desktopId: 'sidebarOrdersNavLink',
+      desktopLinkClasses: 'nav-item--chat nav-item--orders',
+      desktopBadgeId: 'sidebarOrdersUnreadBadge'
+    },
+    { key: 'courier-screen', href: '/dashboard/courier-screen', icon: 'fa-truck', label: 'Экран курьера', ariaLabel: 'Экран курьера' },
+    { key: 'new-order', href: '/dashboard/new-order', icon: 'fa-plus-circle', label: 'Новый заказ', ariaLabel: 'Новый заказ' },
+    { key: 'clients', href: '/dashboard/clients', icon: 'fa-bullhorn', label: 'Маркетинг', ariaLabel: 'Маркетинг' },
+    { key: 'team', href: '/dashboard/team', icon: 'fa-user-tie', label: 'Команда', ariaLabel: 'Команда' },
+    {
+      key: 'chat',
+      href: '/dashboard/chat',
+      icon: 'fa-comments',
+      label: 'Чаты',
+      ariaLabel: 'Чаты',
+      hidden: !isAppChatNavEnabled,
+      desktopId: 'sidebarChatNavLink',
+      desktopLinkClasses: 'nav-item--chat',
+      desktopBadgeId: 'sidebarChatUnreadBadge',
+      mobileId: 'mobileChatNavLink',
+      mobileBadgeId: 'mobileChatUnreadBadge'
+    },
+    { key: 'settings', href: '/dashboard/settings', icon: 'fa-cog', label: 'Настройки', ariaLabel: 'Настройки' }
+  ];
+%>
+
+<body
+  class="<%= pageClass || '' %>"
+  data-admin-active-page="<%= appActivePage %>"
+  data-admin-chat-enabled="<%= isAppChatNavEnabled ? '1' : '0' %>"
+>
   <%- include('../partials/header') %>
 
   <div class="main-container app-grid">
-    <%- include('../partials/sidebar', { activePage: activePage || '' }) %>
+    <%- include('../partials/sidebar', { activePage: appActivePage, adminNavItems: adminNavItems }) %>
 
     <section class="page-col page-col-left">
       <%- include(leftPartial) %>
@@ -42,6 +90,8 @@
       <%- include(rightPartial) %>
     </section>
   </div>
+
+  <%- include('../partials/mobile-admin-nav') %>
 
   <div id="sidebarOverlay" class="sidebar-overlay"></div>
 
@@ -57,7 +107,8 @@
   <script src="<%= assetUrl('/static/js/current-time.js') %>"></script>
   <script src="<%= assetUrl('/static/js/theme.js') %>"></script>
   <script src="<%= assetUrl('/static/js/sidebar.js') %>"></script>
-  <% if ((activePage || '') !== 'chat') { %>
+  <script src="<%= assetUrl('/static/js/admin-mobile-nav.js') %>"></script>
+  <% if (appActivePage !== 'chat') { %>
     <script src="<%= assetUrl('/static/js/chat-sidebar-badge.js') %>"></script>
   <% } %>
 

@@ -29,8 +29,17 @@
   }
 
   applyCollapsedFromStorage();
+  if (isMobile()) {
+    requestAnimationFrame(() => {
+      closeMobileSidebar();
+    });
+  }
 
   function openMobileSidebar() {
+    if (isMobile()) {
+      closeMobileSidebar();
+      return;
+    }
     requestAnimationFrame(() => {
       sidebar.classList.add('is-open');
       overlay.classList.add('is-active');
@@ -96,9 +105,20 @@
   });
 
   window.addEventListener('resize', () => {
+    if (isMobile()) {
+      closeMobileSidebar();
+      return;
+    }
+
     if (!isMobile()) {
       closeMobileSidebar();
       applyCollapsedFromStorage();
+    }
+  });
+
+  window.addEventListener('pageshow', () => {
+    if (isMobile()) {
+      closeMobileSidebar();
     }
   });
 })();
