@@ -1,7 +1,27 @@
 (function () {
-  const navLink = document.getElementById("sidebarChatNavLink");
-  const badge = document.getElementById("sidebarChatUnreadBadge");
-  if (!navLink || !badge) return;
+  const targets = [
+    {
+      navLink: document.getElementById("sidebarChatNavLink"),
+      badge: document.getElementById("sidebarChatUnreadBadge"),
+    },
+    {
+      navLink: document.getElementById("mobileChatNavLink"),
+      badge: document.getElementById("mobileChatUnreadBadge"),
+    },
+  ]
+    .map(function (target) {
+      if (!target.navLink || !target.badge) return null;
+      return {
+        navLink: target.navLink,
+        badge: target.badge,
+        navItem: target.navLink.closest("li") || target.navLink.closest(".admin-mobile-nav-item") || null,
+      };
+    })
+    .filter(function (target) {
+      return !!target;
+    });
+
+  if (!targets.length) return;
 
   const CHAT_TEMP_API_BASE = "/api/chat-temp";
   const CHAT_UNREAD_EVENT = "dashboard:chat-unread-changed";
@@ -29,8 +49,6 @@
   let waitAbortController = null;
   let chatWidgetEnabled = true;
 
-  const navItem = navLink.closest("li");
-
   function normalizeChatWidgetEnabled(rawValue) {
     if (rawValue === undefined || rawValue === null || rawValue === "") return true;
     if (rawValue === false || rawValue === 0) return false;
@@ -54,12 +72,14 @@
 
   function setChatNavVisibility(enabled) {
     const hidden = enabled !== true;
-    if (navItem) {
-      navItem.classList.toggle("hidden", hidden);
-    } else {
-      navLink.classList.toggle("hidden", hidden);
-    }
-    navLink.setAttribute("aria-hidden", hidden ? "true" : "false");
+    targets.forEach(function (target) {
+      if (target.navItem) {
+        target.navItem.classList.toggle("hidden", hidden);
+      } else {
+        target.navLink.classList.toggle("hidden", hidden);
+      }
+      target.navLink.setAttribute("aria-hidden", hidden ? "true" : "false");
+    });
   }
 
   function getTenantId() {
@@ -83,7 +103,12 @@
 
   function isChatPageActive() {
     try {
-      if (navLink.classList.contains("active-nav")) return true;
+      const hasActiveNav = targets.some(function (target) {
+        return target.navLink.classList.contains("active-nav")
+          || target.navLink.classList.contains("is-active")
+          || target.navLink.getAttribute("aria-current") === "page";
+      });
+      if (hasActiveNav) return true;
       const path = String(window.location.pathname || "");
       if (/^\/dashboard\/chat(?:\/|$)/i.test(path)) return true;
       return document.body.classList.contains("page-chat");
@@ -94,16 +119,16 @@
 
   if (isChatPageActive()) {
     setChatNavVisibility(getTenantChatWidgetEnabled());
-    badge.textContent = "";
-    badge.classList.add("hidden");
-    navLink.removeAttribute("data-unread-count");
+    hideBadge();
     return;
   }
 
   function hideBadge() {
-    badge.textContent = "";
-    badge.classList.add("hidden");
-    navLink.removeAttribute("data-unread-count");
+    targets.forEach(function (target) {
+      target.badge.textContent = "";
+      target.badge.classList.add("hidden");
+      target.navLink.removeAttribute("data-unread-count");
+    });
   }
 
   function showBadge(totalUnread) {
@@ -113,9 +138,11 @@
       return;
     }
     const text = n > 99 ? "99+" : String(Math.trunc(n));
-    badge.textContent = text;
-    badge.classList.remove("hidden");
-    navLink.setAttribute("data-unread-count", text);
+    targets.forEach(function (target) {
+      target.badge.textContent = text;
+      target.badge.classList.remove("hidden");
+      target.navLink.setAttribute("data-unread-count", text);
+    });
   }
 
   function isAbortError(err) {
