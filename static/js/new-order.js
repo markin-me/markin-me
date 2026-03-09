@@ -9947,7 +9947,10 @@
     const addBtnEl = document.getElementById("newOrderAddBtn");
     if (addBtnEl) {
       addBtnEl.addEventListener("click", () => {
-        if (document.body.classList.contains("page-orders")) {
+        if (
+          document.body.classList.contains("page-orders")
+          || document.body.classList.contains("page-courier-screen")
+        ) {
           document.dispatchEvent(new CustomEvent("orders:new-draft-tab-request"));
           return;
         }

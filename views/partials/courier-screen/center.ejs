@@ -1,18 +1,22 @@
-<div class="center-stack">
-  <div class="panel toolbar-island">
-    <div class="toolbar">
-      <div class="toolbar-left">
-        <div class="toolbar-title">
-          <i class="fas fa-truck"></i>
-          <span>Экран курьера</span>
+<div id="ordersCenterPane">
+  <div class="center-stack">
+    <div class="panel toolbar-island">
+      <div class="toolbar orders-toolbar">
+        <div class="toolbar-left">
+          <div class="toolbar-title">
+            <i class="fas fa-truck"></i>
+            <span>Экран курьера</span>
+          </div>
         </div>
       </div>
     </div>
-  </div>
 
-  <div class="panel orders-center-panel">
-    <div class="panel-body no-scrollbar">
-      <p class="muted">Заглушка. Здесь потом будет контент экрана курьера.</p>
+    <div class="panel orders-center orders-center-panel">
+      <%- include('../orders/list') %>
     </div>
   </div>
+</div>
+
+<div class="hidden" id="ordersCheckoutCenterPane">
+  <%- include('../new-order/center') %>
 </div>

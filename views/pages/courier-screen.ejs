@@ -1,10 +1,16 @@
 <%- include('../layouts/app', {
   pageTitle: 'Экран курьера',
   activePage: 'courier-screen',
-  pageClass: 'page-home',
+  pageClass: 'page-courier-screen',
   leftPartial: '../partials/courier-screen/left',
   centerPartial: '../partials/courier-screen/center',
   rightPartial: '../partials/courier-screen/right',
-  extraPartial: null,
-  pageScripts: []
+  extraPartial: '../partials/courier-screen/bottomsheet',
+  pageScripts: [
+    '/static/js/shared-order-panel.js',
+    '/static/js/shared-order-payment.js',
+    '/static/js/new-order.js',
+    '/static/js/courier-screen.js',
+    '/static/js/orders.js'
+  ]
 }) %>

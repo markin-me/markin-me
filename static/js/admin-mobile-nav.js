@@ -40,6 +40,7 @@
 
   const ADAPTERS = {
     orders: resolveOrdersModel,
+    "courier-screen": resolveOrdersModel,
     cash: function () {
       return buildListModel({
         root: document.getElementById("cashJournalFilters"),
