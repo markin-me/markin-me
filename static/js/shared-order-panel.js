@@ -586,6 +586,7 @@
     var footerEl = options && options.footerEl ? options.footerEl : null;
     var clientInfoWrap = options && options.clientInfoWrap ? options.clientInfoWrap : null;
     var helpers = options && options.helpers ? options.helpers : {};
+    var treatOrderCommentAsAddressComment = Boolean(options && options.treatOrderCommentAsAddressComment);
     var printButtons = footerEl ? queryAll(footerEl, '[data-action="order-print"]') : [];
     var infoEls = {
       empty: queryAll(root, '[data-info="empty"]'),
@@ -861,13 +862,22 @@
       }
       setTextAll(infoEls.deliveryAddress, address || "—");
 
-      var addressComment = order.address_comment || "";
-      setTextAll(infoEls.deliveryAddressCommentText, addressComment);
-      setHiddenAll(infoEls.deliveryAddressComment, !addressComment);
+      var addressComment = String(order.address_comment || "").trim();
+      var orderComment = String(order.comment || "").trim();
+      var addressCommentParts = treatOrderCommentAsAddressComment
+        ? [addressComment, orderComment]
+        : [addressComment];
+      var effectiveAddressComment = addressCommentParts
+        .filter(Boolean)
+        .filter(function (value, index, list) {
+          return list.indexOf(value) === index;
+        })
+        .join(" | ");
+      setTextAll(infoEls.deliveryAddressCommentText, effectiveAddressComment);
+      setHiddenAll(infoEls.deliveryAddressComment, !effectiveAddressComment);
 
-      var orderComment = order.comment || "";
-      setTextAll(infoEls.orderCommentText, orderComment);
-      setHiddenAll(infoEls.orderCommentBlock, !orderComment);
+      setTextAll(infoEls.orderCommentText, treatOrderCommentAsAddressComment ? "" : orderComment);
+      setHiddenAll(infoEls.orderCommentBlock, treatOrderCommentAsAddressComment ? true : !orderComment);
 
       var refundState = getRefundState(order);
       var refundStateTitle = getRefundStateTitle(order);

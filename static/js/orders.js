@@ -243,6 +243,7 @@
         footerEl: orderInfoFooter,
         clientInfoWrap,
         enableClientLink: true,
+        treatOrderCommentAsAddressComment: isCourierWorkspace,
         helpers: {
           money,
           formatDateTime,
@@ -270,6 +271,7 @@
         footerEl: sheetOrderInfoFooter,
         clientInfoWrap: null,
         enableClientLink: true,
+        treatOrderCommentAsAddressComment: true,
         helpers: {
           money,
           formatDateTime,
@@ -4216,13 +4218,19 @@
     }
     setTextAll(infoEls.deliveryAddress, address || "?");
 
-    const addressComment = order.address_comment || "";
-    setTextAll(infoEls.deliveryAddressCommentText, addressComment);
-    setHiddenAll(infoEls.deliveryAddressComment, !addressComment);
+    const addressComment = String(order.address_comment || "").trim();
+    const orderComment = String(order.comment || "").trim();
+    const effectiveAddressComment = isCourierWorkspace
+      ? [addressComment, orderComment]
+        .filter(Boolean)
+        .filter((value, index, list) => list.indexOf(value) === index)
+        .join(" | ")
+      : addressComment;
+    setTextAll(infoEls.deliveryAddressCommentText, effectiveAddressComment);
+    setHiddenAll(infoEls.deliveryAddressComment, !effectiveAddressComment);
 
-    const orderComment = order.comment || "";
-    setTextAll(infoEls.orderCommentText, orderComment);
-    setHiddenAll(infoEls.orderCommentBlock, !orderComment);
+    setTextAll(infoEls.orderCommentText, isCourierWorkspace ? "" : orderComment);
+    setHiddenAll(infoEls.orderCommentBlock, isCourierWorkspace ? true : !orderComment);
 
     setHtmlAll(infoEls.itemsList, itemsToHtml(order.items || []));
     
