@@ -214,10 +214,12 @@
     return {
       changed: json?.data?.changed === true,
       cursor: Number.isFinite(nextCursor) && nextCursor > 0 ? nextCursor : cursor,
+      resetRequired: json?.data?.reset_required === true,
+      reason: String(json?.data?.reason || "").trim() || null,
     };
   }
 
-  async function fetchCreatedOrdersSince(sinceCursor) {
+  async function fetchOrdersChanges(sinceCursor) {
     const since = Number(sinceCursor || 0);
     const qs = new URLSearchParams({
       since: String(Number.isFinite(since) && since > 0 ? since : 0),
@@ -228,13 +230,50 @@
       headers: getHeaders(),
       cache: "no-store",
     });
-    if (!res.ok) return [];
+    if (!res.ok) {
+      if (res.status === 404 || res.status === 405 || res.status === 410) {
+        waitSupported = false;
+      }
+      if (res.status === 401) {
+        hideBadge();
+      }
+      return {
+        events: [],
+        cursor,
+        resetRequired: false,
+        reason: null,
+      };
+    }
     const json = await res.json().catch(() => null);
     const events = Array.isArray(json?.data) ? json.data : [];
-    return events
-      .filter((evt) => String(evt?.event || "").toLowerCase() === "order.created")
-      .map((evt) => evt?.data)
-      .filter(Boolean);
+    const nextCursor = Number(json?.cursor || 0);
+    return {
+      events,
+      cursor: Number.isFinite(nextCursor) && nextCursor > 0 ? nextCursor : cursor,
+      resetRequired: json?.reset_required === true,
+      reason: String(json?.reason || "").trim() || null,
+    };
+  }
+
+  async function fetchCreatedOrdersSince(sinceCursor) {
+    const payload = await fetchOrdersChanges(sinceCursor);
+    if (payload.resetRequired) return payload;
+    return {
+      ...payload,
+      orders: payload.events
+        .filter((evt) => String(evt?.event || "").toLowerCase() === "order.created")
+        .map((evt) => evt?.data)
+        .filter(Boolean),
+    };
+  }
+
+  async function bootstrapBadgeState() {
+    const bootstrap = await fetchOrdersChanges(0);
+    if (!bootstrap.resetRequired) {
+      cursor = Number(bootstrap.cursor || 0);
+    }
+    await pullNewOrdersCount();
+    return bootstrap;
   }
 
   function startWaitLoop() {
@@ -244,33 +283,32 @@
     const token = waitLoopToken;
 
     (async function runWaitLoop() {
-      if (!Number.isFinite(cursor) || cursor <= 0) {
-        try {
-          const bootstrap = await fetch(API_BASE + "/changes?since=0&_ts=" + Date.now(), {
-            method: "GET",
-            headers: getHeaders(),
-            cache: "no-store",
-          });
-          if (bootstrap.ok) {
-            const json = await bootstrap.json().catch(() => null);
-            const bootCursor = Number(json?.cursor || 0);
-            if (Number.isFinite(bootCursor) && bootCursor > 0) cursor = bootCursor;
-          }
-        } catch {}
-      }
+      try {
+        await bootstrapBadgeState();
+      } catch {}
       while (waitLoopStarted && token === waitLoopToken) {
         if (!waitSupported) {
-          await sleepMs(FALLBACK_POLL_MS);
+          await sleepMs(WAIT_RETRY_MS);
           continue;
         }
         try {
           const prevCursor = Number(cursor || 0);
           const waited = await waitForOrdersChange();
           if (!waitLoopStarted || token !== waitLoopToken) break;
+          if (waited.resetRequired) {
+            await bootstrapBadgeState();
+            continue;
+          }
           cursor = Number(waited.cursor || cursor || 0);
           if (waited.changed) {
             try {
-              const createdOrders = await fetchCreatedOrdersSince(prevCursor);
+              const payload = await fetchCreatedOrdersSince(prevCursor);
+              if (payload.resetRequired) {
+                await bootstrapBadgeState();
+                continue;
+              }
+              cursor = Number(payload.cursor || cursor || 0);
+              const createdOrders = Array.isArray(payload.orders) ? payload.orders : [];
               if (createdOrders.length) {
                 playNewOrderSound();
                 showNewOrderNotification(createdOrders);
@@ -285,11 +323,14 @@
     })().catch(() => {});
   }
 
-  pullNewOrdersCount().catch(() => {});
+  function restartWaitLoop() {
+    waitLoopStarted = false;
+    waitLoopToken += 1;
+    waitSupported = true;
+    startWaitLoop();
+  }
+
   startWaitLoop();
-  window.setInterval(() => {
-    pullNewOrdersCount().catch(() => {});
-  }, FALLBACK_POLL_MS);
 
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState === "visible") {
@@ -301,7 +342,8 @@
     cursor = 0;
     unreadPrimed = false;
     currentNewCount = 0;
-    pullNewOrdersCount().catch(() => {});
+    hideBadge();
+    restartWaitLoop();
   });
 
   document.addEventListener("click", unlockAlertsOnce, { once: true, passive: true });

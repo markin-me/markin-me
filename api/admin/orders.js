@@ -760,10 +760,26 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       setOrdersNoStore(res);
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
-      const since = req.query.since;
+      const since = Number(req.query.since || 0);
+      const cursorState = ordersEvents.inspectCursor(tenantId, storeId, since);
+      const cursor = Number(cursorState.currentCursor || 0);
+      if (cursorState.resetRequired) {
+        return res.json({
+          ok: true,
+          data: [],
+          cursor,
+          reset_required: true,
+          reason: cursorState.reason || null,
+        });
+      }
       const data = ordersEvents.getChanges(tenantId, storeId, since);
-      const cursor = ordersEvents.getCurrentCursor(tenantId, storeId);
-      res.json({ ok: true, data, cursor });
+      res.json({
+        ok: true,
+        data,
+        cursor,
+        reset_required: false,
+        reason: null,
+      });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: "DB_ERROR" });
@@ -778,13 +794,45 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
       const storeId = helpers.getStoreId(req);
       const since = Number(req.query.since || 0);
       const timeoutMs = Number(req.query.timeout_ms || req.query.timeout || 20000);
-      const cursorNow = ordersEvents.getCurrentCursor(tenantId, storeId);
+      const cursorState = ordersEvents.inspectCursor(tenantId, storeId, since);
+      const cursorNow = Number(cursorState.currentCursor || 0);
+
+      if (cursorState.resetRequired) {
+        return res.json({
+          ok: true,
+          data: {
+            changed: false,
+            timeout: false,
+            cursor: cursorNow,
+            reset_required: true,
+            reason: cursorState.reason || null,
+          },
+        });
+      }
 
       if (Number.isFinite(since) && since > 0 && cursorNow > since) {
-        return res.json({ ok: true, data: { changed: true, timeout: false, cursor: cursorNow } });
+        return res.json({
+          ok: true,
+          data: {
+            changed: true,
+            timeout: false,
+            cursor: cursorNow,
+            reset_required: false,
+            reason: null,
+          },
+        });
       }
       if ((!Number.isFinite(since) || since <= 0) && cursorNow > 0) {
-        return res.json({ ok: true, data: { changed: true, timeout: false, cursor: cursorNow } });
+        return res.json({
+          ok: true,
+          data: {
+            changed: true,
+            timeout: false,
+            cursor: cursorNow,
+            reset_required: false,
+            reason: null,
+          },
+        });
       }
 
       const waitResult = await ordersEvents.waitForChanges(tenantId, storeId, timeoutMs);
@@ -797,6 +845,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
           changed,
           timeout: waitResult?.timeout === true,
           cursor,
+          reset_required: false,
+          reason: null,
         },
       });
     } catch (e) {
