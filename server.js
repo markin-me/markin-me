@@ -29,8 +29,9 @@ const { authMiddleware } = require('./api/middleware/auth');
 
 const app = express();
 const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '1.9.23';
+const APP_CACHE_VERSION = String(TELEGRAM_APP_VERSION || '1.9.23').trim() || '1.9.23';
 const STATIC_ASSET_VERSION = String(
-  process.env.STATIC_ASSET_VERSION || process.env.TG_APP_VERSION || ''
+  process.env.STATIC_ASSET_VERSION || APP_CACHE_VERSION || ''
 ).trim();
 const PORT = process.env.PORT || 3000;
 const TENANT_LOOKUP_CACHE_MS = Number(process.env.TENANT_LOOKUP_CACHE_MS || 60_000);
@@ -241,6 +242,7 @@ app.locals.assetUrl = function assetUrl(src) {
     return src;
   }
 };
+app.locals.appVersion = APP_CACHE_VERSION;
 
 // Helper для версионирования URL картинок по времени изменения файла
 app.locals.imageUrl = function imageUrl(src) {
@@ -448,21 +450,29 @@ app.get('/manifest.json', async (req, res) => {
 });
 
 // Service Worker для PWA (Android / установка на домашний экран)
+const serviceWorkerPrecacheUrls = [
+  '/manifest.json',
+  app.locals.assetUrl('/static/css/style.css'),
+  app.locals.assetUrl('/static/js/auth.js'),
+  app.locals.assetUrl('/static/js/current-time.js'),
+  app.locals.assetUrl('/static/js/theme.js'),
+  app.locals.assetUrl('/static/js/sidebar.js'),
+  app.locals.assetUrl('/static/js/admin-mobile-nav.js'),
+  app.locals.assetUrl('/static/js/chat-sidebar-badge.js'),
+  app.locals.assetUrl('/static/js/appModal.js'),
+  app.locals.assetUrl('/static/js/shared-order-panel.js'),
+  app.locals.assetUrl('/static/js/shared-order-payment.js'),
+  app.locals.assetUrl('/static/js/new-order.js'),
+  app.locals.assetUrl('/static/js/courier-screen.js'),
+  app.locals.assetUrl('/static/js/orders.js')
+];
+const serviceWorkerWarmPages = ['/dashboard/courier-screen'];
 const serviceWorkerScript = `
-var SW_VERSION = 'admin-shell-v3';
+var SW_VERSION = ${JSON.stringify(APP_CACHE_VERSION)};
 var STATIC_CACHE = 'admin-static-' + SW_VERSION;
 var PAGE_CACHE = 'admin-pages-' + SW_VERSION;
-var PRECACHE_URLS = [
-  '/manifest.json',
-  '/static/css/style.css',
-  '/static/js/auth.js',
-  '/static/js/current-time.js',
-  '/static/js/theme.js',
-  '/static/js/sidebar.js',
-  '/static/js/admin-mobile-nav.js',
-  '/static/js/chat-sidebar-badge.js',
-  '/static/js/appModal.js'
-];
+var PRECACHE_URLS = ${JSON.stringify(serviceWorkerPrecacheUrls)};
+var WARM_PAGES = ${JSON.stringify(serviceWorkerWarmPages)};
 
 function shouldCacheResponse(response) {
   return !!response && (response.ok || response.type === 'opaqueredirect');
@@ -470,7 +480,24 @@ function shouldCacheResponse(response) {
 
 async function cacheStaticAssets() {
   var cache = await caches.open(STATIC_CACHE);
-  await cache.addAll(PRECACHE_URLS);
+  await Promise.allSettled(PRECACHE_URLS.map(function (url) {
+    return cache.add(url);
+  }));
+}
+
+async function warmPages() {
+  var cache = await caches.open(PAGE_CACHE);
+  await Promise.allSettled(WARM_PAGES.map(async function (url) {
+    try {
+      var response = await fetch(url, { credentials: 'same-origin' });
+      if (shouldCacheResponse(response)) {
+        await cache.put(url, response.clone());
+      }
+    } catch (err) {
+      return null;
+    }
+    return null;
+  }));
 }
 
 async function cacheFirst(request) {
@@ -494,7 +521,7 @@ async function networkFirst(request) {
     }
     return response;
   } catch (err) {
-    var cached = await cache.match(request);
+    var cached = await cache.match(request) || await cache.match(request.url);
     if (cached) return cached;
     throw err;
   }
@@ -502,7 +529,10 @@ async function networkFirst(request) {
 
 self.addEventListener('install', function (event) {
   event.waitUntil(
-    cacheStaticAssets().catch(function () {}).then(function () {
+    Promise.all([
+      cacheStaticAssets().catch(function () {}),
+      warmPages().catch(function () {})
+    ]).then(function () {
       return self.skipWaiting();
     })
   );
@@ -562,7 +592,7 @@ self.addEventListener('push', function (event) {
       payload = {};
     }
   }
-  var title = String((payload && payload.title) || '\\u041d\\u043e\\u0432\\u043e\\u0435 \\u0441\\u043e\\u043e\\u0431\\u0449\\u0435\\u043d\\u0438\\u0435');
+  var title = String((payload && payload.title) || '\\u041d\\u043e\\u0432\\u043e\\u0435 \\u0441\\u043e\\u043e\\u0431\\u0449\\u0435\u043d\u0438\u0435');
   var body = String((payload && payload.body) || '');
   var tag = String((payload && payload.tag) || 'chat-message');
   var url = String((payload && payload.url) || '/shop');
@@ -596,7 +626,7 @@ self.addEventListener('notificationclick', function (event) {
 `;
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
-  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.send(serviceWorkerScript);
 });
 

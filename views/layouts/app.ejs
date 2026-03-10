@@ -19,6 +19,9 @@
       } catch (e) {}
     })();
   </script>
+  <script>
+    window.__APP_VERSION__ = <%- JSON.stringify(appVersion || '') %>;
+  </script>
 
   <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css') %>" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
@@ -72,8 +75,22 @@
   class="<%= pageClass || '' %>"
   data-admin-active-page="<%= appActivePage %>"
   data-admin-chat-enabled="<%= isAppChatNavEnabled ? '1' : '0' %>"
+  data-app-version="<%= appVersion || '' %>"
 >
   <%- include('../partials/header') %>
+
+  <% if (appActivePage === 'courier-screen') { %>
+    <div id="courierConnectionBanner" class="courier-connection-banner hidden" aria-live="polite" role="status">
+      <span class="courier-connection-banner__text"></span>
+      <button
+        type="button"
+        class="courier-connection-banner__retry hidden"
+        data-action="courier-connection-retry"
+      >
+        Повторить
+      </button>
+    </div>
+  <% } %>
 
   <div class="main-container app-grid">
     <%- include('../partials/sidebar', { activePage: appActivePage, adminNavItems: adminNavItems }) %>
@@ -118,7 +135,7 @@
     (function () {
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
-          navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {});
+          navigator.serviceWorker.register('/sw.js?v=<%= encodeURIComponent(appVersion || "") %>', { scope: '/' }).catch(function () {});
         });
       }
     })();
