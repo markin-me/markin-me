@@ -805,6 +805,9 @@
   let autoAddLoaded = false;
   let upsellLoadPromise = null;
   let upsellLoaded = false;
+  let cartEnhancersPreloadPromise = null;
+  let cartEnhancersRefreshPromise = null;
+  let cartEnhancersLastRefreshSignature = "";
   const upsellDefaultConfigCache = new Map();
   let upsellConfigObserver = null;
   let upsellConfigObserverRoot = null;
@@ -9084,6 +9087,73 @@ function updateCartBadge() {
     return upsellLoadPromise;
   }
 
+  function getCartEnhancersRefreshSignature() {
+    const cartSig = Array.isArray(state.cart)
+      ? state.cart
+        .map((item) => [
+          String(item?.key || ""),
+          String(item?.type || ""),
+          Number(item?.product_id || item?.id || 0),
+          Number(item?.qty || 0),
+          Number(item?.auto_add || 0),
+          Number(item?.auto_add_group_id || 0),
+        ].join(":"))
+        .join("|")
+      : "";
+    const dismissedSig = state.autoAddDismissed instanceof Set
+      ? Array.from(state.autoAddDismissed).sort().join("|")
+      : "";
+    const autoAddSig = autoAddLoaded
+      ? [
+        (state.autoAdd?.groups || []).map((group) => Number(group?.id || 0)).join(","),
+        (state.autoAdd?.items || []).map((item) => Number(item?.product_id || item?.id || 0)).join(","),
+      ].join("::")
+      : "pending";
+    const upsellSig = upsellLoaded
+      ? (state.upsellProducts || []).map((product) => Number(product?.id || 0)).join(",")
+      : "pending";
+    return [cartSig, dismissedSig, autoAddSig, upsellSig].join("|||");
+  }
+
+  async function refreshCartAfterEnhancersLoaded(opts = {}) {
+    if (cartEnhancersRefreshPromise) return cartEnhancersRefreshPromise;
+    const force = !!opts.force;
+    const beforeSignature = getCartEnhancersRefreshSignature();
+    if (!force && beforeSignature === cartEnhancersLastRefreshSignature) return false;
+
+    cartEnhancersRefreshPromise = (async () => {
+      const autoChanged = applyAutoAddRules();
+      clearAutoAddDismissedIfCartEmpty();
+      if (autoChanged) {
+        saveCart();
+        scheduleSyncAllProductCardsFromCart();
+      }
+
+      await warmupCartProducts();
+      renderCart(true);
+      updateCartBadge();
+
+      if (openCartSheetCtx && openCartSheetCtx.listEl && openCartSheetCtx.totalEl) {
+        const { items, total } = renderCartInto(openCartSheetCtx.listEl, openCartSheetCtx.totalEl, null);
+        if (openCartSheetCtx.footerEl) openCartSheetCtx.footerEl.classList.toggle("hidden", items.length === 0);
+        if (openCartSheetCtx.checkoutBtn) {
+          openCartSheetCtx.checkoutBtn.disabled = items.length === 0;
+          const tspan = $(".shop-sheet-checkout-total", openCartSheetCtx.checkoutBtn);
+          if (tspan) tspan.textContent = money(total);
+        }
+        appendUpsellToList(openCartSheetCtx.listEl);
+      }
+      if (window.matchMedia("(max-width: 768px)").matches) updateMobileDeliveryProgress();
+
+      cartEnhancersLastRefreshSignature = getCartEnhancersRefreshSignature();
+      return autoChanged;
+    })().finally(() => {
+      cartEnhancersRefreshPromise = null;
+    });
+
+    return cartEnhancersRefreshPromise;
+  }
+
   function getUpsellDefaultConfigCacheEntry(productId) {
     const pid = Number(productId || 0);
     if (!Number.isFinite(pid) || pid <= 0) return null;
@@ -9222,10 +9292,14 @@ function updateCartBadge() {
   }
 
   async function preloadCartEnhancers() {
-    await Promise.allSettled([loadAutoAdd(), loadUpsellProducts()]);
-    try {
-      if (openCartSheetCtx?.listEl) appendUpsellToList(openCartSheetCtx.listEl);
-    } catch {}
+    if (cartEnhancersPreloadPromise) return cartEnhancersPreloadPromise;
+    cartEnhancersPreloadPromise = (async () => {
+      await Promise.allSettled([loadAutoAdd(), loadUpsellProducts()]);
+      await refreshCartAfterEnhancersLoaded();
+    })().finally(() => {
+      cartEnhancersPreloadPromise = null;
+    });
+    return cartEnhancersPreloadPromise;
   }
 
   function _createUpsellCard(p, scrollEl, upsellEl, listEl) {
@@ -10154,6 +10228,7 @@ async function initCore() {
     // Apply cart-header address mode immediately on first paint.
     showCartView();
     updateCartBadge();
+    try { void preloadCartEnhancers(); } catch {}
     bindLateActionDelegates();
     try { window.scrollTo(0, 0); } catch {}
 

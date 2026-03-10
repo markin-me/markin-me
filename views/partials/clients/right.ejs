@@ -65,10 +65,18 @@
 
     <div id="discountEditorWrap" class="hidden">
       <form id="discountEditorForm" class="form-grid" autocomplete="off">
+        <div class="discount-editor-section-title">Базовые данные</div>
         <div class="field-wrap">
           <label class="field-label" for="de_title">Название *</label>
           <input class="control" id="de_title" name="title" type="text" placeholder="Например: Скидка 10% на всё" required />
         </div>
+
+        <div class="field-wrap">
+          <label class="field-label" for="de_description">Описание</label>
+          <textarea class="control" id="de_description" name="description" rows="3" placeholder="Коротко опишите механику акции для команды"></textarea>
+        </div>
+
+        <div class="discount-editor-section-title">Механика</div>
 
         <div class="field-wrap">
           <div class="discount-choice-grid" data-discount-choice-group="de_mechanic_type">
@@ -406,6 +414,8 @@
           </div>
         </div>
 
+        <div class="discount-editor-section-title">Аудитория</div>
+
         <div class="field-wrap" id="de_customers_wrap">
           <label class="field-label">Клиенты</label>
           <div class="discount-chips-wrap">
@@ -414,6 +424,7 @@
               <i class="fas fa-plus"></i> Добавить клиентов
             </button>
           </div>
+          <div class="field-hint">Если список пустой, акция доступна всем клиентам.</div>
         </div>
 
         <div class="discount-editor-section-title">Ограничения</div>

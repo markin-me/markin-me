@@ -51,6 +51,58 @@ function createOrdersEventsHub() {
     return Number(channel.seq || 0);
   }
 
+  function getOldestCursor(tenantId, storeId) {
+    const channel = getChannel(tenantId, storeId);
+    return Number(channel.log[0]?.id || 0);
+  }
+
+  function inspectCursor(tenantId, storeId, since) {
+    const normalizedSince = Number(since || 0);
+    const sinceCursor = Number.isFinite(normalizedSince) && normalizedSince > 0
+      ? Math.trunc(normalizedSince)
+      : 0;
+    const currentCursor = getCurrentCursor(tenantId, storeId);
+    const oldestCursor = getOldestCursor(tenantId, storeId);
+
+    if (!(sinceCursor > 0)) {
+      return {
+        sinceCursor: 0,
+        currentCursor,
+        oldestCursor,
+        resetRequired: false,
+        reason: null,
+      };
+    }
+
+    if (sinceCursor > currentCursor) {
+      return {
+        sinceCursor,
+        currentCursor,
+        oldestCursor,
+        resetRequired: true,
+        reason: "cursor_regressed",
+      };
+    }
+
+    if (oldestCursor > 0 && sinceCursor < (oldestCursor - 1)) {
+      return {
+        sinceCursor,
+        currentCursor,
+        oldestCursor,
+        resetRequired: true,
+        reason: "cursor_gap",
+      };
+    }
+
+    return {
+      sinceCursor,
+      currentCursor,
+      oldestCursor,
+      resetRequired: false,
+      reason: null,
+    };
+  }
+
   function waitForChanges(tenantId, storeId, timeoutMs) {
     const key = getKey(tenantId, storeId);
     const timeout = Math.min(
@@ -77,7 +129,14 @@ function createOrdersEventsHub() {
     });
   }
 
-  return { publish, getChanges, getCurrentCursor, waitForChanges };
+  return {
+    publish,
+    getChanges,
+    getCurrentCursor,
+    getOldestCursor,
+    inspectCursor,
+    waitForChanges,
+  };
 }
 
 module.exports = { createOrdersEventsHub };

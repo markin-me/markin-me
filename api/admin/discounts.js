@@ -19,6 +19,25 @@ const PROMO_PRODUCT_REWARD_TYPES = new Set(['gift', 'product_discount']);
 const APPLY_TO_TYPES = new Set(['order', 'product', 'category', 'combo']);
 const MECHANIC_TYPES = new Set(['simple_discount', 'buy_x_get_y', 'threshold']);
 const REWARD_TYPES = new Set(['discount', 'bonus', 'gift', 'product_discount', 'mixed']);
+const DISCOUNT_MUTATION_ERROR_CODES = new Set([
+  'TITLE_REQUIRED',
+  'INVALID_CUSTOMERS',
+  'INVALID_PRODUCTS',
+  'INVALID_DATE_RANGE',
+  'PRODUCTS_REQUIRED',
+  'PRODUCTS_NOT_ALLOWED',
+  'PROMO_NOT_AVAILABLE',
+  'PROMO_CODE_TAKEN',
+  'PROMO_CODE_REQUIRED',
+  'PROMO_REWARD_PRODUCTS_REQUIRED',
+  'INVALID_DISCOUNT_VALUE',
+  'INVALID_MECHANIC_CONFIG',
+  'QUALIFYING_ITEMS_REQUIRED',
+  'REWARD_PRODUCTS_REQUIRED',
+  'INVALID_REWARD_DISCOUNT',
+  'THRESHOLD_TIERS_REQUIRED',
+  'INVALID_THRESHOLD_TIER',
+]);
 
 function toText(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -175,6 +194,52 @@ function normalizeEntityList(items, allowedTypes = null) {
   });
 
   return normalized;
+}
+
+function createValidationError(code, statusCode = 400) {
+  const err = new Error(code);
+  err.statusCode = statusCode;
+  return err;
+}
+
+function validateEntityTargets(items, allowedTypes, errorCode) {
+  if (items == null) return [];
+  if (!Array.isArray(items)) {
+    throw createValidationError(errorCode);
+  }
+
+  const normalized = [];
+  const seen = new Set();
+
+  items.forEach((item) => {
+    const entityType = toText(item?.entity_type || item?.target_type || item?.type).toLowerCase();
+    const entityId = Number(item?.entity_id || item?.id || 0);
+    if (!allowedTypes.includes(entityType) || !Number.isInteger(entityId) || entityId <= 0) {
+      throw createValidationError(errorCode);
+    }
+    const key = `${entityType}:${entityId}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    normalized.push({
+      entity_type: entityType,
+      entity_id: entityId,
+      title: toText(item?.title) || null,
+    });
+  });
+
+  return normalized;
+}
+
+function assertValidDateRange(body, existing = null) {
+  const startsAt = toNullableText(body?.starts_at ?? existing?.starts_at);
+  const endsAt = toNullableText(body?.ends_at ?? existing?.ends_at);
+  if (!startsAt || !endsAt) return;
+
+  const startDate = new Date(startsAt);
+  const endDate = new Date(endsAt);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate < startDate) {
+    throw createValidationError('INVALID_DATE_RANGE');
+  }
 }
 
 function normalizeSimpleDiscountMechanic(source = {}, discountRow = {}) {
@@ -415,70 +480,59 @@ function buildMechanicStoragePayload(body, existing = null) {
   };
 }
 
-function assertMechanicIsValid(mechanicType, mechanic) {
+function assertMechanicIsValid(mechanicType, mechanic, { products = [] } = {}) {
   if (mechanicType === 'simple_discount') {
     const isPromo = normalizeSimpleVariant(mechanic?.simple_variant, 'percent') === 'promo_code';
     const reward = isPromo ? mechanic?.promo_reward : mechanic;
     const promoRewardType = isPromo ? normalizePromoRewardType(reward?.reward_type, 'discount') : 'discount';
     const promoProductRewardType = isPromo ? normalizePromoProductRewardType(reward?.product_reward_type ?? reward?.reward_kind, 'gift') : 'gift';
+    const applyTo = normalizeApplyTo(reward?.apply_to, 'order');
+    if (applyTo !== 'order' && !products.length) {
+      throw createValidationError('PRODUCTS_REQUIRED');
+    }
     if (isPromo && promoRewardType === 'product' && promoProductRewardType === 'gift') {
+      if (!products.length) {
+        throw createValidationError('PROMO_REWARD_PRODUCTS_REQUIRED');
+      }
       return;
     }
     if (!(Number(reward?.discount_value) > 0)) {
-      const err = new Error('INVALID_DISCOUNT_VALUE');
-      err.statusCode = 400;
-      throw err;
+      throw createValidationError('INVALID_DISCOUNT_VALUE');
     }
     return;
   }
 
   if (mechanicType === 'buy_x_get_y') {
     if (!(Number(mechanic?.buy_qty) > 0) || !(Number(mechanic?.reward_qty) > 0)) {
-      const err = new Error('INVALID_MECHANIC_CONFIG');
-      err.statusCode = 400;
-      throw err;
+      throw createValidationError('INVALID_MECHANIC_CONFIG');
     }
     if (mechanic.qualifying_mode === 'pool' && !mechanic.qualifying_items.length) {
-      const err = new Error('QUALIFYING_ITEMS_REQUIRED');
-      err.statusCode = 400;
-      throw err;
+      throw createValidationError('QUALIFYING_ITEMS_REQUIRED');
     }
     if (mechanic.reward_source === 'reward_list' && !mechanic.reward_products.length) {
-      const err = new Error('REWARD_PRODUCTS_REQUIRED');
-      err.statusCode = 400;
-      throw err;
+      throw createValidationError('REWARD_PRODUCTS_REQUIRED');
     }
     if (mechanic.reward_kind === 'product_discount' && !(Number(mechanic?.reward_discount?.discount_value) > 0)) {
-      const err = new Error('INVALID_REWARD_DISCOUNT');
-      err.statusCode = 400;
-      throw err;
+      throw createValidationError('INVALID_REWARD_DISCOUNT');
     }
     return;
   }
 
   const tiers = Array.isArray(mechanic?.tiers) ? mechanic.tiers : [];
   if (!tiers.length) {
-    const err = new Error('THRESHOLD_TIERS_REQUIRED');
-    err.statusCode = 400;
-    throw err;
+    throw createValidationError('THRESHOLD_TIERS_REQUIRED');
   }
   for (const tier of tiers) {
     if (!(Number(tier?.min_amount) > 0)) {
-      const err = new Error('INVALID_THRESHOLD_TIER');
-      err.statusCode = 400;
-      throw err;
+      throw createValidationError('INVALID_THRESHOLD_TIER');
     }
     if ((tier.reward_kind === 'gift' || tier.reward_kind === 'product_discount')
       && (!Array.isArray(tier.reward_products) || !tier.reward_products.length)) {
-      const err = new Error('REWARD_PRODUCTS_REQUIRED');
-      err.statusCode = 400;
-      throw err;
+      throw createValidationError('REWARD_PRODUCTS_REQUIRED');
     }
     if ((tier.reward_kind === 'product_discount' || tier.reward_kind === 'order_discount')
       && !(Number(tier?.reward_discount?.discount_value) > 0)) {
-      const err = new Error('INVALID_REWARD_DISCOUNT');
-      err.statusCode = 400;
-      throw err;
+      throw createValidationError('INVALID_REWARD_DISCOUNT');
     }
   }
 }
@@ -517,6 +571,63 @@ function normalizePromoCodeRow(row) {
     usage_count: Number(row.usage_count || 0),
     assigned_customer_id: row.assigned_customer_id == null ? null : Number(row.assigned_customer_id || 0),
   };
+}
+
+function mapDiscountCustomerRow(row) {
+  if (row.customer_id) {
+    return {
+      entity_type: 'customer',
+      entity_id: Number(row.customer_id || 0),
+      title: row.customer_name || row.customer_phone || `Клиент #${row.customer_id}`,
+    };
+  }
+  if (row.customer_category_id) {
+    return {
+      entity_type: 'category',
+      entity_id: Number(row.customer_category_id || 0),
+      title: row.category_title || `Категория #${row.customer_category_id}`,
+    };
+  }
+  return null;
+}
+
+function mapDiscountProductRow(row) {
+  if (row.product_id) {
+    return {
+      entity_type: 'product',
+      entity_id: Number(row.product_id || 0),
+      title: row.product_title || `Товар #${row.product_id}`,
+    };
+  }
+  if (row.category_id) {
+    return {
+      entity_type: 'category',
+      entity_id: Number(row.category_id || 0),
+      title: row.category_title || `Категория #${row.category_id}`,
+    };
+  }
+  if (row.combo_id) {
+    return {
+      entity_type: 'combo',
+      entity_id: Number(row.combo_id || 0),
+      title: row.combo_title || `Комбо #${row.combo_id}`,
+    };
+  }
+  return null;
+}
+
+function groupDiscountRelationRows(rows, mapper) {
+  const result = new Map();
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const discountId = Number(row?.discount_id || 0);
+    const entity = mapper(row);
+    if (!(discountId > 0) || !entity) return;
+    if (!result.has(discountId)) {
+      result.set(discountId, []);
+    }
+    result.get(discountId).push(entity);
+  });
+  return result;
 }
 
 function formatDiscountResponse(discount, { customers = [], products = [], promoCodes = [] } = {}) {
@@ -637,7 +748,7 @@ async function saveDiscountCustomers(conn, tenantId, discountId, customers, repl
   if (!Array.isArray(customers) || !customers.length) return;
 
   for (const customer of customers) {
-    const targetType = toText(customer?.entity_type || customer?.target_type || 'all') || 'all';
+    const targetType = toText(customer?.entity_type || customer?.target_type).toLowerCase();
     const customerId = targetType === 'customer' ? Number(customer?.entity_id || customer?.customer_id || 0) || null : null;
     const categoryId = targetType === 'category' ? Number(customer?.entity_id || customer?.customer_category_id || 0) || null : null;
     await conn.query(
@@ -656,7 +767,7 @@ async function saveDiscountProducts(conn, tenantId, discountId, products, replac
   if (!Array.isArray(products) || !products.length) return;
 
   for (const product of products) {
-    const targetType = toText(product?.entity_type || product?.target_type || 'all') || 'all';
+    const targetType = toText(product?.entity_type || product?.target_type).toLowerCase();
     const productId = targetType === 'product' ? Number(product?.entity_id || product?.product_id || 0) || null : null;
     const categoryId = targetType === 'category' ? Number(product?.entity_id || product?.category_id || 0) || null : null;
     const comboId = targetType === 'combo' ? Number(product?.entity_id || product?.combo_id || 0) || null : null;
@@ -766,9 +877,57 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         [tenantId, storeId]
       );
 
+      const discountIds = discounts
+        .map((discount) => Number(discount?.id || 0))
+        .filter((discountId) => discountId > 0);
+      let customersByDiscountId = new Map();
+      let productsByDiscountId = new Map();
+
+      if (discountIds.length) {
+        const [customerRows, productRows] = await Promise.all([
+          db.query(
+            `SELECT dc.discount_id,
+                    dc.customer_id,
+                    dc.customer_category_id,
+                    c.name AS customer_name,
+                    c.phone AS customer_phone,
+                    cc.title AS category_title
+             FROM mkt_discount_customers dc
+             LEFT JOIN cust_customers c ON c.id = dc.customer_id
+             LEFT JOIN cust_categories cc ON cc.id = dc.customer_category_id
+             WHERE dc.tenant_id = ? AND dc.discount_id IN (?)`,
+            [tenantId, discountIds]
+          ),
+          db.query(
+            `SELECT dp.discount_id,
+                    dp.product_id,
+                    dp.category_id,
+                    dp.combo_id,
+                    p.name AS product_title,
+                    pc.title AS category_title,
+                    cb.title AS combo_title
+             FROM mkt_discount_products dp
+             LEFT JOIN prod_products p ON p.id = dp.product_id
+             LEFT JOIN prod_categories pc ON pc.id = dp.category_id
+             LEFT JOIN prod_combos cb ON cb.id = dp.combo_id
+             WHERE dp.tenant_id = ? AND dp.discount_id IN (?)`,
+            [tenantId, discountIds]
+          ),
+        ]);
+
+        customersByDiscountId = groupDiscountRelationRows(customerRows[0], mapDiscountCustomerRow);
+        productsByDiscountId = groupDiscountRelationRows(productRows[0], mapDiscountProductRow);
+      }
+
       return res.json({
         ok: true,
-        discounts: discounts.map((discount) => formatDiscountResponse(discount)),
+        discounts: discounts.map((discount) => {
+          const discountId = Number(discount?.id || 0);
+          return formatDiscountResponse(discount, {
+            customers: customersByDiscountId.get(discountId) || [],
+            products: productsByDiscountId.get(discountId) || [],
+          });
+        }),
       });
     } catch (err) {
       console.error('GET /api/admin/discounts error:', err);
@@ -1052,19 +1211,25 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       const promoCodeMode = getPromoCodeMode(req.body, null, mechanicPayload);
       const uniqueCodeUsageLimit = getUniqueCodeUsageLimit(req.body, null, promoCodeMode, mechanicPayload);
       const sharedPromo = getSharedCodePayload(req.body);
-      const customers = req.body?.customers;
-      const products = mechanicPayload.mechanicType === 'simple_discount' ? req.body?.products : [];
+      const customers = validateEntityTargets(req.body?.customers, ['customer', 'category'], 'INVALID_CUSTOMERS');
+      const hasExplicitProducts = req.body?.products !== undefined && req.body?.products !== null;
+      const products = mechanicPayload.mechanicType === 'simple_discount'
+        ? validateEntityTargets(req.body?.products, ['product', 'category', 'combo'], 'INVALID_PRODUCTS')
+        : [];
       const promoEnabled = isPromoSimpleDiscountMechanic(mechanicPayload.mechanicType, mechanicPayload.mechanic);
       const promoRewardProducts = promoEnabled ? normalizeEntityList(products, ['product', 'category', 'combo']) : [];
 
       if (!title) {
         return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
       }
-
+      assertValidDateRange(req.body);
+      if (mechanicPayload.mechanicType !== 'simple_discount' && hasExplicitProducts && products.length) {
+        return res.status(400).json({ ok: false, error: 'PRODUCTS_NOT_ALLOWED' });
+      }
       if (!promoEnabled && hasPromoRequest(req.body)) {
         return res.status(400).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
       }
-      assertMechanicIsValid(mechanicPayload.mechanicType, mechanicPayload.mechanic);
+      assertMechanicIsValid(mechanicPayload.mechanicType, mechanicPayload.mechanic, { products });
       if (promoEnabled && normalizePromoRewardType(mechanicPayload.mechanic?.promo_reward?.reward_type, 'discount') === 'product' && !promoRewardProducts.length) {
         return res.status(400).json({ ok: false, error: 'PROMO_REWARD_PRODUCTS_REQUIRED' });
       }
@@ -1166,19 +1331,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         await conn.rollback();
       }
       console.error('POST /api/admin/discounts error:', err);
-      const errorCode = [
-        'PROMO_NOT_AVAILABLE',
-        'PROMO_CODE_TAKEN',
-        'PROMO_CODE_REQUIRED',
-        'PROMO_REWARD_PRODUCTS_REQUIRED',
-        'INVALID_DISCOUNT_VALUE',
-        'INVALID_MECHANIC_CONFIG',
-        'QUALIFYING_ITEMS_REQUIRED',
-        'REWARD_PRODUCTS_REQUIRED',
-        'INVALID_REWARD_DISCOUNT',
-        'THRESHOLD_TIERS_REQUIRED',
-        'INVALID_THRESHOLD_TIER',
-      ].includes(err?.message)
+      const errorCode = DISCOUNT_MUTATION_ERROR_CODES.has(err?.message)
         ? err.message
         : 'SERVER_ERROR';
       return res.status(err?.statusCode || 500).json({ ok: false, error: errorCode });
@@ -1205,7 +1358,6 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
     try {
 
       const title = toText(req.body?.title);
-      const customers = req.body?.customers;
 
       // Проверить существование
       const [[existing]] = await conn.query(
@@ -1223,17 +1375,25 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
       const promoCodeMode = getPromoCodeMode(req.body, existing, mechanicPayload);
       const uniqueCodeUsageLimit = getUniqueCodeUsageLimit(req.body, existing, promoCodeMode, mechanicPayload);
       const sharedPromo = getSharedCodePayload(req.body);
-      const products = mechanicPayload.mechanicType === 'simple_discount' ? req.body?.products : [];
+      const customers = validateEntityTargets(req.body?.customers, ['customer', 'category'], 'INVALID_CUSTOMERS');
+      const hasExplicitProducts = req.body?.products !== undefined && req.body?.products !== null;
+      const products = mechanicPayload.mechanicType === 'simple_discount'
+        ? validateEntityTargets(req.body?.products, ['product', 'category', 'combo'], 'INVALID_PRODUCTS')
+        : [];
       const promoEnabled = isPromoSimpleDiscountMechanic(mechanicPayload.mechanicType, mechanicPayload.mechanic);
       const promoRewardProducts = promoEnabled ? normalizeEntityList(products, ['product', 'category', 'combo']) : [];
 
       if (!(title || toText(existing.title))) {
         return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
       }
+      assertValidDateRange(req.body, existing);
+      if (mechanicPayload.mechanicType !== 'simple_discount' && hasExplicitProducts && products.length) {
+        return res.status(400).json({ ok: false, error: 'PRODUCTS_NOT_ALLOWED' });
+      }
       if (!promoEnabled && hasPromoRequest(req.body)) {
         return res.status(400).json({ ok: false, error: 'PROMO_NOT_AVAILABLE' });
       }
-      assertMechanicIsValid(mechanicPayload.mechanicType, mechanicPayload.mechanic);
+      assertMechanicIsValid(mechanicPayload.mechanicType, mechanicPayload.mechanic, { products });
       if (promoEnabled && normalizePromoRewardType(mechanicPayload.mechanic?.promo_reward?.reward_type, 'discount') === 'product' && !promoRewardProducts.length) {
         return res.status(400).json({ ok: false, error: 'PROMO_REWARD_PRODUCTS_REQUIRED' });
       }
@@ -1359,19 +1519,7 @@ module.exports = function makeAdminDiscountsRouter({ db, helpers }) {
         await conn.rollback();
       }
       console.error('PUT /api/admin/discounts/:id error:', err);
-      const errorCode = [
-        'PROMO_NOT_AVAILABLE',
-        'PROMO_CODE_TAKEN',
-        'PROMO_CODE_REQUIRED',
-        'PROMO_REWARD_PRODUCTS_REQUIRED',
-        'INVALID_DISCOUNT_VALUE',
-        'INVALID_MECHANIC_CONFIG',
-        'QUALIFYING_ITEMS_REQUIRED',
-        'REWARD_PRODUCTS_REQUIRED',
-        'INVALID_REWARD_DISCOUNT',
-        'THRESHOLD_TIERS_REQUIRED',
-        'INVALID_THRESHOLD_TIER',
-      ].includes(err?.message)
+      const errorCode = DISCOUNT_MUTATION_ERROR_CODES.has(err?.message)
         ? err.message
         : 'SERVER_ERROR';
       return res.status(err?.statusCode || 500).json({ ok: false, error: errorCode });
