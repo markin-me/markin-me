@@ -1,4 +1,9 @@
 (function () {
+  if (typeof window !== "undefined" && window.__ordersPageInitialized) return;
+  if (typeof window !== "undefined") {
+    window.__ordersPageInitialized = true;
+  }
+
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
@@ -113,6 +118,7 @@
         method: opts.method || "GET",
         cache: opts.cache || "no-store",
         headers,
+        signal: opts.signal,
         body: opts.body ? JSON.stringify(opts.body) : undefined,
       });
     } catch (err) {
@@ -135,6 +141,14 @@
       throw new Error(err);
     }
     return json;
+  }
+
+  function isAbortError(err) {
+    if (!err) return false;
+    const name = String(err.name || "").toLowerCase();
+    if (name === "aborterror") return true;
+    const message = String(err.message || "").toLowerCase();
+    return message.includes("aborted");
   }
 
   // -----------------------------
@@ -5396,41 +5410,6 @@
     schedulePersistOrdersCache();
   }
 
-  async function fetchChanges() {
-    if (!state.lastEventId) {
-      const bootstrap = await apiJson("/api/admin/orders/changes?since=0");
-      const cursor = Number(bootstrap?.cursor || 0);
-      state.lastEventId = Number.isFinite(cursor) && cursor > 0 ? cursor : null;
-      return;
-    }
-
-    try {
-      const json = await apiJson(`/api/admin/orders/changes?since=${state.lastEventId}`);
-      const cursor = Number(json?.cursor || 0);
-      if (Number.isFinite(cursor) && cursor > 0) {
-        state.lastEventId = Math.max(Number(state.lastEventId || 0), cursor);
-      }
-      const changes = Array.isArray(json.data) ? json.data : [];
-      if (!changes.length) return;
-      changes.forEach((evt) => {
-        state.lastEventId = evt.id || state.lastEventId;
-        handleOrderEvent(evt.data);
-        const eventName = String(evt.event || "").toLowerCase();
-        if (eventName === "order.created") {
-          notifyNewOrders([evt.data]);
-        }
-      });
-    } catch (e) {
-      console.error(e);
-      const prevIds = new Set(state.orders.map((o) => Number(o.id)));
-      await loadAndRenderOrders(true);
-      const newOrders = state.orders.filter((o) => !prevIds.has(Number(o.id)));
-      if (newOrders.length) {
-        notifyNewOrders(newOrders);
-      }
-    }
-  }
-
   // Фоновый опрос списка заказов (резерв, когда SSE обрывается на хостинге)
   // Важно: Chrome троттлит setInterval в фоновых вкладках до 1 раза в минуту и более.
   // При возврате на вкладку вызываем pollOrdersList сразу (visibilitychange).
@@ -5465,13 +5444,6 @@
     } catch (e) {
       console.error(e);
     }
-  }
-
-  function scheduleNextPoll() {
-    if (!ordersPollTimer) return;
-    ordersPollTimer = setTimeout(() => {
-      pollOrdersList().finally(() => scheduleNextPoll());
-    }, ORDERS_POLL_INTERVAL_MS);
   }
 
   function startOrdersPolling() {
@@ -5625,6 +5597,7 @@
 
   let ordersLongPollActive = false;
   let ordersLongPollToken = 0;
+  let ordersWaitAbortController = null;
 
   async function waitOrdersChanges(since, timeoutMs = 20000) {
     const qs = new URLSearchParams({
@@ -5632,19 +5605,30 @@
       timeout_ms: String(Math.max(1000, Number(timeoutMs || 20000))),
       _ts: String(Date.now()),
     });
-    const json = await apiJson(`/api/admin/orders/changes/wait?${qs.toString()}`);
-    const data = json?.data || {};
-    return {
-      changed: data.changed === true,
-      timeout: data.timeout === true,
-      cursor: Number(data.cursor || 0),
-      resetRequired: data.reset_required === true,
-      reason: String(data.reason || "").trim() || null,
-    };
+    const controller = new AbortController();
+    ordersWaitAbortController = controller;
+    try {
+      const json = await apiJson(`/api/admin/orders/changes/wait?${qs.toString()}`, {
+        signal: controller.signal,
+      });
+      const data = json?.data || {};
+      return {
+        changed: data.changed === true,
+        timeout: data.timeout === true,
+        cursor: Number(data.cursor || 0),
+        resetRequired: data.reset_required === true,
+        reason: String(data.reason || "").trim() || null,
+      };
+    } finally {
+      if (ordersWaitAbortController === controller) {
+        ordersWaitAbortController = null;
+      }
+    }
   }
 
   function startOrdersPolling() {
     if (ordersLongPollActive) return;
+    if (document.visibilityState && document.visibilityState !== "visible") return;
     ordersLongPollActive = true;
     ordersLongPollToken += 1;
     const token = ordersLongPollToken;
@@ -5671,6 +5655,7 @@
             }
           }
         } catch (e) {
+          if (isAbortError(e)) return;
           console.error(e);
           await new Promise((resolve) => setTimeout(resolve, 1000));
         }
@@ -5681,6 +5666,10 @@
   }
 
   function stopOrdersPolling() {
+    if (ordersWaitAbortController) {
+      try { ordersWaitAbortController.abort(); } catch {}
+      ordersWaitAbortController = null;
+    }
     if (ordersPollTimer != null && typeof ordersPollTimer === "number") {
       clearTimeout(ordersPollTimer);
     }
@@ -5692,6 +5681,41 @@
     ordersLongPollActive = false;
     ordersLongPollToken += 1;
   }
+
+  async function resumeOrdersRealtime() {
+    if (document.visibilityState && document.visibilityState !== "visible") return;
+    try {
+      if (!state.lastEventId) {
+        await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) });
+      } else {
+        const synced = await synchronizeOrdersChanges({ notifyCreated: false });
+        if (synced?.resetRequired) {
+          await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) });
+        }
+      }
+    } catch (err) {
+      if (!isAbortError(err)) {
+        console.error(err);
+      }
+    }
+    startOrdersPolling();
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      stopOrdersPolling();
+      return;
+    }
+    void resumeOrdersRealtime();
+  });
+
+  window.addEventListener("pagehide", () => {
+    stopOrdersPolling();
+    if (ordersCachePersistTimer) {
+      clearTimeout(ordersCachePersistTimer);
+      ordersCachePersistTimer = null;
+    }
+  });
 
   document.addEventListener("orders:new-draft-tab-request", () => {
     void openNewDraftTab();
@@ -6812,11 +6836,9 @@
 
   window.addEventListener("beforeunload", () => {
     try {
-      persistOrdersCacheNow();
-    } catch {}
-    try {
       persistCourierOfflineState();
     } catch {}
+    stopOrdersPolling();
   });
   // Слушать изменение филиала: переподключить SSE к каналу нового филиала и перезагрузить заказы
   document.addEventListener('tenantStoreChanged', (event) => {

@@ -1,4 +1,5 @@
 const express = require('express');
+const compression = require('compression');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
@@ -43,8 +44,10 @@ const SERVICE_WORKER_VERSION = (() => {
   }
 })();
 const PORT = process.env.PORT || 3000;
+const PERF_CONSOLE_LOGS_ENABLED = String(process.env.ENABLE_PERF_LOGS || '').trim() === '1';
 const TENANT_LOOKUP_CACHE_MS = Number(process.env.TENANT_LOOKUP_CACHE_MS || 60_000);
 const STATIC_FILE_VERSION_CACHE_MS = Number(process.env.STATIC_FILE_VERSION_CACHE_MS || 300_000);
+const SLOW_REQUEST_LOG_MS = Math.max(0, Number(process.env.SLOW_REQUEST_LOG_MS || 1200) || 1200);
 const SYSTEM_SETTINGS_DIR = path.join(__dirname, 'data');
 const SYSTEM_SETTINGS_FILE = path.join(SYSTEM_SETTINGS_DIR, 'system-settings.json');
 const runtimePollingState = {
@@ -56,6 +59,45 @@ const staticVersionCache = new Map();
 let telegramEnvPollingHandle = null;
 let telegramTenantPollingHandle = null;
 let fatalErrorLogged = false;
+
+function nowMs() {
+  return Number(process.hrtime.bigint()) / 1e6;
+}
+
+function formatTimingDuration(value) {
+  const numeric = Math.max(0, Number(value) || 0);
+  return numeric.toFixed(1);
+}
+
+function buildServerTimingHeader(totalMs, metrics) {
+  const items = [`app;dur=${formatTimingDuration(totalMs)}`];
+  const safeMetrics = metrics && typeof metrics === 'object' ? metrics : {};
+  const dbQueryMs = Math.max(0, Number(safeMetrics.dbQueryMs || 0) || 0);
+  const dbWaitMs = Math.max(0, Number(safeMetrics.dbWaitMs || 0) || 0);
+  const dbQueryCount = Math.max(0, Number(safeMetrics.dbQueryCount || 0) || 0);
+  const dbWaitCount = Math.max(0, Number(safeMetrics.dbWaitCount || 0) || 0);
+
+  if (dbQueryMs > 0 || dbQueryCount > 0) {
+    const desc = dbQueryCount > 0 ? `;desc="${dbQueryCount} queries"` : '';
+    items.push(`db;dur=${formatTimingDuration(dbQueryMs)}${desc}`);
+  }
+  if (dbWaitMs > 0 || dbWaitCount > 0) {
+    const desc = dbWaitCount > 0 ? `;desc="${dbWaitCount} acquires"` : '';
+    items.push(`dbwait;dur=${formatTimingDuration(dbWaitMs)}${desc}`);
+  }
+
+  return items.join(', ');
+}
+
+function shouldLogSlowRequest(req) {
+  const pathValue = String(req.path || req.originalUrl || '');
+  if (!pathValue) return true;
+  return !(
+    pathValue.startsWith('/static/')
+    || pathValue.startsWith('/uploads/')
+    || pathValue === '/favicon.ico'
+  );
+}
 
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled promise rejection:', reason);
@@ -127,6 +169,45 @@ app.use(cors());
 app.use(express.json({ limit: '60mb' }));
 app.use(express.urlencoded({ extended: true, limit: '60mb' }));
 app.use(cookieParser());
+app.use((req, res, next) => {
+  const startedAt = nowMs();
+  const metrics = typeof db.createEmptyRequestMetrics === 'function'
+    ? db.createEmptyRequestMetrics()
+    : { dbQueryCount: 0, dbQueryMs: 0, dbWaitCount: 0, dbWaitMs: 0 };
+  const originalWriteHead = res.writeHead;
+
+  res.writeHead = function instrumentedWriteHead(...args) {
+    if (!res.headersSent) {
+      const totalMs = nowMs() - startedAt;
+      res.setHeader('Server-Timing', buildServerTimingHeader(totalMs, metrics));
+      res.setHeader('X-Response-Time', `${Math.round(totalMs)}ms`);
+    }
+    return originalWriteHead.apply(this, args);
+  };
+
+  res.on('finish', () => {
+    const totalMs = nowMs() - startedAt;
+    if (PERF_CONSOLE_LOGS_ENABLED && totalMs >= SLOW_REQUEST_LOG_MS && shouldLogSlowRequest(req)) {
+      console.warn(
+        `[http] slow ${req.method} ${req.originalUrl} ${res.statusCode} ${totalMs.toFixed(1)}ms`
+        + ` (db=${Number(metrics.dbQueryCount || 0)}q/${formatTimingDuration(metrics.dbQueryMs)}ms`
+        + ` wait=${Number(metrics.dbWaitCount || 0)}a/${formatTimingDuration(metrics.dbWaitMs)}ms)`
+      );
+    }
+  });
+
+  if (typeof db.withRequestMetrics === 'function') {
+    return db.withRequestMetrics(metrics, next);
+  }
+  return next();
+});
+app.use(compression({
+  threshold: 1024,
+  filter(req, res) {
+    if (req.headers['x-no-compression']) return false;
+    return compression.filter(req, res);
+  }
+}));
 
 // Статика: долгий кэш для изображений, короткий/по умолчанию — для остального
 app.use('/static', express.static(path.join(__dirname, 'static'), {
