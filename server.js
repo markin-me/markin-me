@@ -386,6 +386,34 @@ function normalizeManifestStartPath(rawStart, options = {}) {
   return pathname.startsWith('/shop') ? pathname : '/shop';
 }
 
+function normalizeManifestTitle(rawTitle, fallback = '') {
+  const value = String(rawTitle || '').replace(/\s+/g, ' ').trim();
+  if (value) return value;
+  return String(fallback || '').replace(/\s+/g, ' ').trim();
+}
+
+function getAdminManifestPageTitle(startPath, fallbackTitle = '') {
+  const pathname = normalizeManifestStartPath(startPath, { appType: 'admin' });
+  const defaults = {
+    '/dashboard/cash': 'Касса',
+    '/dashboard/products': 'Товары',
+    '/dashboard/orders': 'Заказы',
+    '/dashboard/courier-screen': 'Экран курьера',
+    '/dashboard/new-order': 'Новый заказ',
+    '/dashboard/clients': 'Клиенты',
+    '/dashboard/chat': 'Чаты',
+    '/dashboard/team': 'Главная',
+    '/dashboard/settings': 'Настройки',
+  };
+  return normalizeManifestTitle(fallbackTitle, defaults[pathname] || 'Админка');
+}
+
+function buildAdminManifestId(tenantId, startPath) {
+  const normalizedTenantId = Number(tenantId) > 0 ? Number(tenantId) : 0;
+  const normalizedPath = normalizeManifestStartPath(startPath, { appType: 'admin' });
+  return `/pwa/admin/t${normalizedTenantId}${normalizedPath}`;
+}
+
 function resolveManifestIconSrc(rawSrc) {
   const src = String(rawSrc || '').trim();
   if (!src) return '';
@@ -421,6 +449,12 @@ app.locals.manifestUrl = function manifestUrl(options = {}) {
   const versionToken = String(options.versionToken || '').trim();
   if (versionToken) {
     qs.set('v', versionToken);
+  }
+  if (appType === 'admin') {
+    const title = normalizeManifestTitle(options.title);
+    if (title) {
+      qs.set('title', title);
+    }
   }
   return `/manifest.json?${qs.toString()}`;
 };
@@ -606,6 +640,9 @@ app.get('/manifest.json', async (req, res) => {
     });
     const tenantName = (tenant && (tenant.site_name || tenant.name)) ? (tenant.site_name || tenant.name) : 'Магазин';
     const tenantId = Number(tenant && tenant.id ? tenant.id : 0) || 0;
+    const adminPageTitle = appType === 'admin'
+      ? getAdminManifestPageTitle(startPath, req.query.title)
+      : '';
     const scope = appType === 'admin'
       ? '/dashboard/'
       : (tenantHostShop ? '/' : '/shop');
@@ -637,9 +674,11 @@ app.get('/manifest.json', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Vary', 'Host');
     res.json({
-      id: appType === 'admin' ? `/pwa/admin/t${tenantId}` : `/pwa/shop/t${tenantId}`,
-      name: manifestName,
-      short_name: manifestShortName,
+      id: appType === 'admin'
+        ? buildAdminManifestId(tenantId, startPath)
+        : `/pwa/shop/t${tenantId}`,
+      name: appType === 'admin' ? adminPageTitle : manifestName,
+      short_name: appType === 'admin' ? adminPageTitle : manifestShortName,
       description: (tenant && tenant.site_description) ? tenant.site_description : undefined,
       start_url: startPath,
       scope,
@@ -788,6 +827,11 @@ self.addEventListener('fetch', function (event) {
 
   if (url.origin !== self.location.origin) return;
   if (url.pathname.indexOf('/api/') === 0) return;
+
+  if (url.pathname === '/manifest.json') {
+    event.respondWith(fetch(request));
+    return;
+  }
 
   if (
     url.pathname.indexOf('/static/') === 0

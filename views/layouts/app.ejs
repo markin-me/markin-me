@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <%
     const appManifestStartPath = typeof currentPath === 'string' && currentPath ? currentPath : '/dashboard/cash';
+    const appManifestTitle = typeof pageTitle === 'string' && pageTitle.trim() ? pageTitle.trim() : 'Админка';
     const appManifestHref = manifestUrl({
       appType: 'admin',
       startPath: appManifestStartPath,
+      title: appManifestTitle,
       versionToken: appVersion || ''
     });
   %>
@@ -36,8 +38,16 @@
       app: 'admin',
       startPath: <%- JSON.stringify(appManifestStartPath) %>,
       tenantId: 0,
-      versionToken: <%- JSON.stringify(appVersion || '') %>
+      versionToken: <%- JSON.stringify(appVersion || '') %>,
+      installTitle: <%- JSON.stringify(appManifestTitle) %>,
+      installShortName: <%- JSON.stringify(appManifestTitle) %>
     };
+    (function () {
+      var appleTitleMeta = document.getElementById('appAppleMobileWebAppTitle');
+      if (appleTitleMeta) {
+        appleTitleMeta.setAttribute('content', <%- JSON.stringify(appManifestTitle) %>);
+      }
+    })();
   </script>
 
   <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css') %>" />

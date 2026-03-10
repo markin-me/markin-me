@@ -38,6 +38,11 @@ self.addEventListener("fetch", function (event) {
     return;
   }
 
+  if (requestUrl.pathname === "/manifest.json") {
+    event.respondWith(fetch(request));
+    return;
+  }
+
   if (isStaticAssetRequest(requestUrl)) {
     event.respondWith(staleWhileRevalidate(request, CORE_CACHE_NAME));
     return;
@@ -101,7 +106,6 @@ var FONT_CACHE_NAME = "font-" + SW_VERSION;
 var ACTIVE_CACHE_NAMES = [CORE_CACHE_NAME, HTML_CACHE_NAME, FONT_CACHE_NAME];
 var COURIER_SCREEN_PATH = "/dashboard/courier-screen";
 var CORE_ASSETS = [
-  "/manifest.json",
   "/static/css/style.css",
   "/static/js/auth.js",
   "/static/js/current-time.js",
@@ -129,7 +133,7 @@ function isCourierHtmlRequest(request, url) {
 
 function isStaticAssetRequest(url) {
   if (!isSameOrigin(url)) return false;
-  return url.pathname === "/manifest.json" || url.pathname.indexOf("/static/") === 0;
+  return url.pathname.indexOf("/static/") === 0;
 }
 
 function isFontAwesomeRequest(url) {
