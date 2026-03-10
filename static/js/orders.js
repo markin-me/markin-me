@@ -106,6 +106,7 @@
     
     const res = await fetch(url, {
       method: opts.method || "GET",
+      cache: opts.cache || "no-store",
       headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
@@ -298,6 +299,7 @@
   const dateNext = $("#ordersDateNext");
   const dateReset = $("#ordersDateReset");
   const notifyBtn = $("#ordersNotifyBtn");
+  const ordersToolbarTitle = $("#ordersToolbarTitle");
 
   // -----------------------------
   // State
@@ -306,6 +308,7 @@
     statuses: [],
     activeStatusId: isCourierWorkspace ? courierDefaultBucketId : "all",
     orders: [],
+    ordersStageIndex: { all: [], byStatus: Object.create(null) },
     activeOrderId: null,
     draggingOrderId: null,
     draggingOrderIds: [],
@@ -1460,6 +1463,7 @@
       const idx = state.orders.findIndex((order) => Number(order?.id) === Number(fullOrder.id));
       if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...fullOrder };
       else state.orders.unshift(fullOrder);
+      rebuildOrdersStageIndex();
       renderOrders();
       return state.orders.find((order) => Number(order?.id) === Number(fullOrder.id)) || fullOrder;
     } catch (err) {
@@ -1923,6 +1927,30 @@
     }, Math.max(0, Number(delay || 0)));
   }
 
+  function isValidCalendarViewYear(value) {
+    const year = Number(value);
+    return Number.isInteger(year) && year >= 1970 && year <= 9999;
+  }
+
+  function isValidCalendarViewMonth(value) {
+    const month = Number(value);
+    return Number.isInteger(month) && month >= 0 && month <= 11;
+  }
+
+  function isValidCalendarView(year, month) {
+    return isValidCalendarViewYear(year) && isValidCalendarViewMonth(month);
+  }
+
+  function resetDateStateToToday(baseDate = null) {
+    const today = baseDate instanceof Date && !Number.isNaN(baseDate.getTime())
+      ? new Date(baseDate)
+      : getStoreDateNow(state.storeTimezone || "+0");
+    state.date.start = today;
+    state.date.end = new Date(today);
+    state.date.viewYear = today.getFullYear();
+    state.date.viewMonth = today.getMonth();
+  }
+
   function hydrateOrdersFromCache(cache) {
     if (!cache || typeof cache !== "object") return false;
     state.statuses = Array.isArray(cache.statuses) ? cache.statuses : [];
@@ -1936,16 +1964,16 @@
 
     const start = parseDateKey(cache?.date?.start);
     const end = parseDateKey(cache?.date?.end);
-    if (start && end) {
-      state.date.start = start;
-      state.date.end = end;
-    }
-    const viewYear = Number(cache?.date?.viewYear);
-    const viewMonth = Number(cache?.date?.viewMonth);
-    if (Number.isFinite(viewYear) && Number.isFinite(viewMonth)) {
-      state.date.viewYear = viewYear;
-      state.date.viewMonth = viewMonth;
-    }
+    const storeToday = getStoreDateNow(state.storeTimezone || "+0");
+    const todayKey = toDateKey(storeToday);
+    const cacheIsTodayRange = Boolean(
+      start &&
+      end &&
+      toDateKey(start) === todayKey &&
+      toDateKey(end) === todayKey
+    );
+    resetDateStateToToday(storeToday);
+    state.orders = (Array.isArray(state.orders) ? state.orders : []).filter(shouldKeepOrderInState);
 
     state.clientsCache = new Map(
       Array.isArray(cache.clientsCache)
@@ -1967,11 +1995,20 @@
           .filter(Boolean)
         : []
     );
-    restoreTabsFromCache(cache);
+    if (cacheIsTodayRange) {
+      restoreTabsFromCache(cache);
+    } else {
+      tabsState.tabs = [];
+      tabsState.activeKey = null;
+    }
     const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
     state.activeOrderId = activeTab?.type === "order" && normalizeTabMode(activeTab.mode) === "view"
       ? activeTab.orderId
       : null;
+    rebuildOrdersStageIndex();
+    if (!isCourierWorkspace) {
+      syncStageCountsFromOrders();
+    }
     renderCalendar();
     updateDateLabel();
     renderStages();
@@ -2693,6 +2730,79 @@
       .sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || Number(a.id) - Number(b.id));
   }
 
+  function createOrdersStageIndex() {
+    return {
+      all: [],
+      byStatus: Object.create(null),
+    };
+  }
+
+  function getActiveStageMeta() {
+    if (state.activeStatusId === "all") {
+      return { id: "all", title: "Все заказы" };
+    }
+    if (isCourierWorkspace) {
+      return courierBucketDefs.find((bucket) => String(bucket.id) === String(state.activeStatusId)) || null;
+    }
+    const statusId = Number(state.activeStatusId);
+    return Number.isFinite(statusId) && statusId > 0 ? (getStatusMetaById(statusId) || null) : null;
+  }
+
+  function getActiveStageTitle() {
+    return String(getActiveStageMeta()?.title || (isCourierWorkspace ? "Заказы" : "Все заказы")).trim() || "Заказы";
+  }
+
+  function updateOrdersToolbarTitle() {
+    if (!ordersToolbarTitle || isCourierWorkspace) return;
+    ordersToolbarTitle.textContent = getActiveStageTitle();
+  }
+
+  function rebuildOrdersStageIndex() {
+    const index = createOrdersStageIndex();
+    const source = Array.isArray(state.orders) ? state.orders : [];
+    source.forEach((order) => {
+      index.all.push(order);
+      const statusId = extractOrderStatusId(order);
+      if (!statusId) return;
+      const key = String(statusId);
+      if (!Array.isArray(index.byStatus[key])) {
+        index.byStatus[key] = [];
+      }
+      index.byStatus[key].push(order);
+    });
+    state.ordersStageIndex = index;
+  }
+
+  function getOrdersForActiveStage() {
+    if (isCourierWorkspace) {
+      return (Array.isArray(state.orders) ? state.orders : []).filter(orderMatchesFilters);
+    }
+    if (state.activeStatusId === "all") {
+      return Array.isArray(state.ordersStageIndex?.all) ? state.ordersStageIndex.all : [];
+    }
+    return Array.isArray(state.ordersStageIndex?.byStatus?.[String(state.activeStatusId)])
+      ? state.ordersStageIndex.byStatus[String(state.activeStatusId)]
+      : [];
+  }
+
+  function reorderOrdersWithinActiveStage(draggedId, targetId) {
+    const stageOrders = getOrdersForActiveStage().slice();
+    const fromIndex = stageOrders.findIndex((order) => Number(order?.id || 0) === Number(draggedId || 0));
+    const toIndex = stageOrders.findIndex((order) => Number(order?.id || 0) === Number(targetId || 0));
+    if (fromIndex < 0 || toIndex < 0) return null;
+
+    const [moved] = stageOrders.splice(fromIndex, 1);
+    stageOrders.splice(toIndex, 0, moved);
+
+    const stageIds = new Set(stageOrders.map((order) => Number(order?.id || 0)).filter((id) => id > 0));
+    let cursor = 0;
+    state.orders = (Array.isArray(state.orders) ? state.orders : []).map((order) => (
+      stageIds.has(Number(order?.id || 0)) ? stageOrders[cursor++] : order
+    ));
+    rebuildOrdersStageIndex();
+    return stageOrders;
+  }
+
   function getActiveOrder() {
     if (!state.activeOrderId) return null;
     const orderId = Number(state.activeOrderId);
@@ -2828,6 +2938,7 @@
       }
 
       state.orders[orderIdx] = optimisticOrder;
+      rebuildOrdersStageIndex();
       const countersChanged = applyStageCountersDelta(prevOrder, optimisticOrder);
       if (countersChanged) renderStages();
       renderOrders();
@@ -2846,7 +2957,6 @@
         method: "PUT",
         body: { status_id: nextStatusId },
       });
-      scheduleStageRefresh();
     } catch (err) {
       if (optimisticApplied && prevOrder) {
         const rollbackIdx = state.orders.findIndex((row) => Number(row?.id || 0) === id);
@@ -2855,6 +2965,7 @@
         } else {
           state.orders.push(prevOrder);
         }
+        rebuildOrdersStageIndex();
       }
       try {
         await loadStatuses();
@@ -3515,7 +3626,19 @@
         schedulePersistOrdersCache();
         return;
       }
-      loadAndRenderOrders(false).catch(console.error);
+      if (!tabsState.tabs.length) {
+        const activeOrder = state.activeOrderId
+          ? state.orders.find((order) => Number(order?.id || 0) === Number(state.activeOrderId || 0)) || null
+          : null;
+        if (!activeOrder || !orderMatchesFilters(activeOrder)) {
+          state.activeOrderId = null;
+          setInfo(null);
+        } else {
+          setInfo(activeOrder);
+        }
+      }
+      renderOrders();
+      schedulePersistOrdersCache();
     });
 
     return btn;
@@ -3528,6 +3651,7 @@
       const active = String(state.activeStatusId) === String(id);
       b.classList.toggle("is-active", active);
     });
+    updateOrdersToolbarTitle();
   }
 
   function clearStageDropover() {
@@ -3638,6 +3762,7 @@
             countersChanged = applyStageCountersDelta(current, optimisticOrder) || countersChanged;
           }
           if (!requestOrderIds.length) return;
+          rebuildOrdersStageIndex();
 
           requestOrderIds.forEach((id) => state.selectedOrderIds.delete(Number(id)));
 
@@ -3656,7 +3781,6 @@
               body: { status_id: statusId },
             }))
           );
-          scheduleStageRefresh();
         } catch (err) {
           console.error(err);
           try {
@@ -3719,8 +3843,32 @@
   // -----------------------------
   // Orders list
   // -----------------------------
-  function orderMatchesFilters(order) {
+  function orderMatchesDateRange(order) {
     if (!order) return false;
+
+    if (state.date.start && state.date.end) {
+      const dateStr = order.scheduled_at || order.created_at;
+      const d = new Date(String(dateStr).replace(' ', 'T'));
+      if (Number.isNaN(d.getTime())) return false;
+
+      const key = toDateKey(d);
+      const startKey = toDateKey(state.date.start);
+      const endKey = toDateKey(state.date.end);
+
+      if (key < startKey || key > endKey) return false;
+    }
+
+    return true;
+  }
+
+  function shouldKeepOrderInState(order) {
+    if (!order) return false;
+    if (isCourierWorkspace && !isDeliveryOrder(order)) return false;
+    return orderMatchesDateRange(order);
+  }
+
+  function orderMatchesFilters(order) {
+    if (!shouldKeepOrderInState(order)) return false;
 
     if (isCourierWorkspace) {
       const bucketId = getCourierBucketId(order);
@@ -3819,19 +3967,15 @@
       const targetId = Number(row.getAttribute("data-order-id"));
       if (!draggedId || !targetId || draggedId === targetId) return;
 
-      const idxFrom = state.orders.findIndex((x) => Number(x.id) === Number(draggedId));
-      const idxTo = state.orders.findIndex((x) => Number(x.id) === Number(targetId));
-      if (idxFrom < 0 || idxTo < 0) return;
-
-      const moved = state.orders.splice(idxFrom, 1)[0];
-      state.orders.splice(idxTo, 0, moved);
+      const stageOrders = reorderOrdersWithinActiveStage(draggedId, targetId);
+      if (!stageOrders || !stageOrders.length) return;
 
       try {
         await apiJson(`/api/admin/orders/reorder`, {
           method: "PUT",
           body: {
             status_id: Number(state.activeStatusId),
-            orderedIds: state.orders.map((x) => Number(x.id)),
+            orderedIds: stageOrders.map((x) => Number(x.id)),
           },
         });
 
@@ -4065,11 +4209,10 @@
     elOrdersList.innerHTML = "";
 
     normalizeSelectedOrderIds();
-    const list = state.orders || [];
-    const filtered = list.filter(orderMatchesFilters);
+    const filtered = getOrdersForActiveStage();
     if (!filtered.length) {
       if (elEmptyHint) elEmptyHint.classList.remove("hidden");
-      if (!tabsState.tabs.length) {
+      if (!tabsState.tabs.length || !state.activeOrderId) {
         setInfo(null);
       }
       syncActiveOrderRowState();
@@ -4085,6 +4228,12 @@
 
     if (tabsState.tabs.length) {
       syncActiveOrderRowState();
+    } else if (state.activeOrderId) {
+      const hasActiveInStage = filtered.some((order) => Number(order?.id || 0) === Number(state.activeOrderId || 0));
+      if (!hasActiveInStage) {
+        state.activeOrderId = null;
+        setInfo(null);
+      }
     } else if (!state.activeOrderId) {
       setInfo(null);
     }
@@ -4139,9 +4288,6 @@
 
   async function loadOrders() {
     const qs = new URLSearchParams();
-    if (!isCourierWorkspace && state.activeStatusId !== "all") {
-      qs.set("status_id", String(state.activeStatusId));
-    }
     if (state.date.start && state.date.end) {
       qs.set("start_date", toDateKey(state.date.start));
       qs.set("end_date", toDateKey(state.date.end));
@@ -4151,7 +4297,11 @@
 
     const json = await apiJson(`/api/admin/orders?${qs.toString()}`);
     const rows = Array.isArray(json.data) ? json.data : [];
-    state.orders = isCourierWorkspace ? rows.filter(isDeliveryOrder) : rows;
+    state.orders = rows.filter(shouldKeepOrderInState);
+    rebuildOrdersStageIndex();
+    if (!isCourierWorkspace) {
+      syncStageCountsFromOrders();
+    }
   }
 
   async function loadAndRenderOrders(keepSelection = false) {
@@ -4163,8 +4313,8 @@
     await loadOrders();
     if (isCourierWorkspace) {
       ensureActiveStatusSelection();
-      renderStages();
     }
+    renderStages();
     renderOrders();
 
     if (tabsState.tabs.length) {
@@ -4226,8 +4376,14 @@
   function renderCalendar() {
     if (!dateGrid || !dateTitle) return;
 
-    const year = state.date.viewYear;
-    const month = state.date.viewMonth;
+    if (!isValidCalendarView(state.date.viewYear, state.date.viewMonth)) {
+      const fallbackDate = state.date.start || getStoreDateNow(state.storeTimezone || "+0");
+      state.date.viewYear = fallbackDate.getFullYear();
+      state.date.viewMonth = fallbackDate.getMonth();
+    }
+
+    const year = Number(state.date.viewYear);
+    const month = Number(state.date.viewMonth);
     const first = new Date(year, month, 1);
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const offset = (first.getDay() + 6) % 7;
@@ -4417,7 +4573,6 @@
     const nextStatusId = extractOrderStatusId(nextOrder);
 
     if (!nextStatusId && !prevStatusId) return false;
-    if (prevStatusId && !nextStatusId) return false;
     if (prevStatusId && nextStatusId && prevStatusId === nextStatusId) return false;
 
     let changed = false;
@@ -4446,31 +4601,61 @@
     return changed;
   }
 
+  function syncStageCountsFromOrders() {
+    if (!Array.isArray(state.statuses) || !state.statuses.length) return;
+    state.statuses.forEach((status) => {
+      status.count = 0;
+    });
+    (Array.isArray(state.orders) ? state.orders : []).forEach((order) => {
+      const statusId = extractOrderStatusId(order);
+      if (!statusId) return;
+      const status = state.statuses.find((item) => Number(item?.id) === statusId);
+      if (status) {
+        status.count = Math.max(0, Number(status.count || 0)) + 1;
+      }
+    });
+  }
+
   function handleOrderEvent(order) {
     if (!order || !order.id) return;
 
     const idx = state.orders.findIndex((o) => Number(o.id) === Number(order.id));
     const wasExisting = idx >= 0;
     const prevOrder = wasExisting ? state.orders[idx] : null;
-    if (isCourierWorkspace && !isDeliveryOrder(order)) {
-      if (wasExisting) {
-        state.orders.splice(idx, 1);
+    const prevVisible = orderMatchesFilters(prevOrder);
+    const shouldKeep = shouldKeepOrderInState(order);
+    let nextOrder = null;
+    let nextVisible = false;
+
+    if (!shouldKeep) {
+      if (!wasExisting) return;
+      state.orders.splice(idx, 1);
+      rebuildOrdersStageIndex();
+      if (!tabsState.tabs.length && Number(state.activeOrderId || 0) === Number(order.id)) {
+        state.activeOrderId = null;
+        setInfo(null);
       }
-      upsertOrderRow(order);
-      renderStages();
+      if (applyStageCountersDelta(prevOrder, null)) {
+        renderStages();
+      }
       renderOrders();
+      schedulePersistOrdersCache();
       return;
     }
+
     if (wasExisting) {
-      state.orders[idx] = { ...state.orders[idx], ...order };
+      nextOrder = { ...state.orders[idx], ...order };
+      state.orders[idx] = nextOrder;
     } else {
-      state.orders.unshift(order);
+      nextOrder = { ...order };
+      state.orders.unshift(nextOrder);
     }
 
-    upsertOrderRow(order);
+    rebuildOrdersStageIndex();
+    nextVisible = orderMatchesFilters(nextOrder);
     const tab = tabsState.tabs.find((t) => Number(t.orderId) === Number(order.id));
     if (tab) {
-      tab.order = { ...tab.order, ...order };
+      tab.order = { ...tab.order, ...nextOrder };
       tab.title = buildOrderTabTitle(tab.order);
       if (tabsState.activeKey === tab.key) {
         state.activeOrderId = tab.orderId;
@@ -4479,15 +4664,24 @@
       renderOrderTabs();
       syncActiveOrderRowState();
     } else if (state.activeOrderId && Number(state.activeOrderId) === Number(order.id)) {
-      setInfo(order);
+      if (nextVisible) {
+        setInfo(nextOrder);
+      } else {
+        state.activeOrderId = null;
+        setInfo(null);
+      }
     }
 
-    if (applyStageCountersDelta(prevOrder, order)) {
+    if (applyStageCountersDelta(prevOrder, nextOrder)) {
       renderStages();
     }
-    scheduleStageRefresh();
+    if (!wasExisting || prevVisible !== nextVisible) {
+      renderOrders();
+    } else {
+      upsertOrderRow(nextOrder);
+    }
 
-    const statusCode = (order.status_code || "").toLowerCase();
+    const statusCode = (nextOrder.status_code || "").toLowerCase();
     if (statusCode === "cancelled" || statusCode === "canceled") {
       const url = state.tenantSounds && state.tenantSounds.sound_order_cancelled_url;
       if (url) playNotificationSound(url);
@@ -4549,12 +4743,10 @@
           notifyNewOrders(newOrders);
         }
       } else if (newOrders.length) {
-        for (const nextOrder of newOrders) {
-          applyStageCountersDelta(null, nextOrder);
-        }
         renderStages();
-        scheduleStageRefresh();
         notifyNewOrders(newOrders);
+      } else {
+        renderStages();
       }
       renderOrders();
       if (tabsState.tabs.length) {
@@ -4618,9 +4810,6 @@
       void tickChanges();
     }
 
-    if (ordersPollTimer) return;
-    ordersPollTimer = true;
-    scheduleNextPoll();
   }
 
   async function waitOrdersChanges(since, timeoutMs = 20000) {
@@ -5650,7 +5839,7 @@
       state.date.start = storeNow;
       state.date.end = storeNow;
     }
-    if (!Number.isFinite(Number(state.date.viewYear)) || !Number.isFinite(Number(state.date.viewMonth))) {
+    if (!isValidCalendarView(state.date.viewYear, state.date.viewMonth)) {
       const baseDate = state.date.start || getStoreDateNow(state.storeTimezone || "+0");
       state.date.viewYear = baseDate.getFullYear();
       state.date.viewMonth = baseDate.getMonth();
@@ -5684,6 +5873,7 @@
       const hydratedFromCache = hydrateOrdersFromCache(cachedBootstrap);
 
       await loadStoreTimezone();
+      resetDateStateToToday();
       ensureDateStateInitialized();
       renderCalendar();
       updateDateLabel();
@@ -5722,6 +5912,7 @@
         try {
           await loadStatuses();
           ensureActiveStatusSelection();
+          if (!isCourierWorkspace) syncStageCountsFromOrders();
           renderStages();
           await loadAndRenderOrders(Boolean(tabsState.tabs.length || state.activeOrderId));
         } catch (refreshErr) {
@@ -5733,6 +5924,7 @@
         }
       } else {
         ensureActiveStatusSelection();
+        if (!isCourierWorkspace) syncStageCountsFromOrders();
         renderStages();
         renderOrders();
         schedulePersistOrdersCache(0);
@@ -5782,6 +5974,7 @@
     closeSheet();
     loadStoreTimezone()
       .then(() => {
+        resetDateStateToToday();
         ensureDateStateInitialized();
         renderCalendar();
         updateDateLabel();

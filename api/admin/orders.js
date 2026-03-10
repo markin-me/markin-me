@@ -314,6 +314,46 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
     return storeTimezone || '+0';
   }
 
+  function setOrdersNoStore(res) {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+  }
+
+  function pad2(value) {
+    return String(Number(value) || 0).padStart(2, '0');
+  }
+
+  function addDaysToDateKey(dateKey, days) {
+    const [year, month, day] = String(dateKey || '').split('-').map(Number);
+    const next = new Date(Date.UTC(year || 0, (month || 1) - 1, day || 1));
+    next.setUTCDate(next.getUTCDate() + Number(days || 0));
+    return `${next.getUTCFullYear()}-${pad2(next.getUTCMonth() + 1)}-${pad2(next.getUTCDate())}`;
+  }
+
+  function formatUtcDateTime(ms) {
+    const date = new Date(ms);
+    return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())} ${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}:${pad2(date.getUTCSeconds())}`;
+  }
+
+  function localDateKeyToUtcDateTime(dateKey, offsetMinutes) {
+    const [year, month, day] = String(dateKey || '').split('-').map(Number);
+    const utcMs = Date.UTC(year || 0, (month || 1) - 1, day || 1, 0, 0, 0) - (Number(offsetMinutes || 0) * 60 * 1000);
+    return formatUtcDateTime(utcMs);
+  }
+
+  function buildOrderDateBounds(range, storeTimezone) {
+    if (!range) return null;
+    const offsetMinutes = helpers.parseTimezoneOffsetToMinutes(storeTimezone);
+    const nextDayKey = addDaysToDateKey(range.end, 1);
+    return {
+      scheduledStart: `${range.start} 00:00:00`,
+      scheduledEndExclusive: `${nextDayKey} 00:00:00`,
+      createdStartUtc: localDateKeyToUtcDateTime(range.start, offsetMinutes),
+      createdEndUtcExclusive: localDateKeyToUtcDateTime(nextDayKey, offsetMinutes),
+    };
+  }
+
   async function fetchOrderPayload(tenantId, storeId, id, opts = {}) {
     const storeTimezone = opts.storeTimezone ?? await getStoreTimezone(tenantId, storeId);
     const [rows] = await db.query(
@@ -466,19 +506,30 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   // GET /api/admin/orders/statuses
   router.get("/statuses", async (req, res) => {
     try {
+      setOrdersNoStore(res);
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const range = normalizeDateRange(req.query.start_date, req.query.end_date);
       const storeTimezone = await getStoreTimezone(tenantId, storeId);
-      const storeOffsetMinutes = helpers.parseTimezoneOffsetToMinutes(storeTimezone);
+      const bounds = buildOrderDateBounds(range, storeTimezone);
 
-      // Use scheduled_at if available, otherwise fall back to created_at
-      const joinDate = range
-        ? "AND DATE(COALESCE(o.scheduled_at, TIMESTAMPADD(MINUTE, ?, o.created_at))) BETWEEN ? AND ?"
+      const joinDate = bounds
+        ? `AND (
+             (o.scheduled_at IS NOT NULL AND o.scheduled_at >= ? AND o.scheduled_at < ?)
+             OR
+             (o.scheduled_at IS NULL AND o.created_at >= ? AND o.created_at < ?)
+           )`
         : "";
 
       const params = [];
-      if (range) params.push(storeOffsetMinutes, range.start, range.end);
+      if (bounds) {
+        params.push(
+          bounds.scheduledStart,
+          bounds.scheduledEndExclusive,
+          bounds.createdStartUtc,
+          bounds.createdEndUtcExclusive
+        );
+      }
       params.push(tenantId, storeId);
 
       const [rows] = await db.query(
@@ -525,15 +576,16 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   // GET /api/admin/orders
   router.get("/", async (req, res) => {
     try {
+      setOrdersNoStore(res);
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
 
       const statusId = Number(req.query.status_id || 0);
-      const limit = Math.min(200, Math.max(10, Number(req.query.limit || 50)));
+      const limit = Math.min(500, Math.max(10, Number(req.query.limit || 50)));
       const offset = Math.max(0, Number(req.query.offset || 0));
       const range = normalizeDateRange(req.query.start_date, req.query.end_date);
       const storeTimezone = await getStoreTimezone(tenantId, storeId);
-      const storeOffsetMinutes = helpers.parseTimezoneOffsetToMinutes(storeTimezone);
+      const bounds = buildOrderDateBounds(range, storeTimezone);
 
       let where = `o.tenant_id=? AND o.store_id=? AND o.is_active=1`;
       const params = [tenantId, storeId];
@@ -543,10 +595,18 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
         params.push(statusId);
       }
 
-      if (range) {
-        // Use scheduled_at if available, otherwise fall back to created_at
-        where += ` AND DATE(COALESCE(o.scheduled_at, TIMESTAMPADD(MINUTE, ?, o.created_at))) BETWEEN ? AND ?`;
-        params.push(storeOffsetMinutes, range.start, range.end);
+      if (bounds) {
+        where += ` AND (
+          (o.scheduled_at IS NOT NULL AND o.scheduled_at >= ? AND o.scheduled_at < ?)
+          OR
+          (o.scheduled_at IS NULL AND o.created_at >= ? AND o.created_at < ?)
+        )`;
+        params.push(
+          bounds.scheduledStart,
+          bounds.scheduledEndExclusive,
+          bounds.createdStartUtc,
+          bounds.createdEndUtcExclusive
+        );
       }
 
       const orderBy = (Number.isFinite(statusId) && statusId > 0)
@@ -697,6 +757,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   // GET /api/admin/orders/changes?since=cursor
   router.get("/changes", (req, res) => {
     try {
+      setOrdersNoStore(res);
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const since = req.query.since;
@@ -712,6 +773,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents }) {
   // GET /api/admin/orders/changes/wait?since=cursor&timeout_ms=20000
   router.get("/changes/wait", async (req, res) => {
     try {
+      setOrdersNoStore(res);
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const since = Number(req.query.since || 0);

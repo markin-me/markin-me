@@ -573,168 +573,9 @@
   const PRODUCTS_PAGE_LIMIT = 80;
   const PRODUCTS_SCROLL_THRESHOLD_PX = 220;
   let productsRequestToken = 0;
-  const PRODUCTS_CACHE_VERSION = 1;
-  const PRODUCTS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-  let productsCachePersistTimer = null;
-
-  function getStoreIdFromStorage() {
-    try {
-      const storeId = Number(localStorage.getItem("activeStoreId") || 0);
-      return Number.isFinite(storeId) && storeId > 0 ? storeId : 0;
-    } catch {
-      return 0;
-    }
-  }
-
-  function productsCacheKey() {
-    return `products_bootstrap_v${PRODUCTS_CACHE_VERSION}_t${TENANT_ID}_s${getStoreIdFromStorage()}`;
-  }
-
-  function readProductsBootstrapCache() {
-    try {
-      const raw = localStorage.getItem(productsCacheKey());
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      const ts = Number(parsed?.ts || 0);
-      if (!(ts > 0) || Date.now() - ts > PRODUCTS_CACHE_MAX_AGE_MS) return null;
-      return parsed?.data && typeof parsed.data === "object" ? parsed.data : null;
-    } catch {
-      return null;
-    }
-  }
-
-  function persistProductsCacheNow() {
-    const payload = {
-      ts: Date.now(),
-      data: {
-        mode: String(state.mode || "products"),
-        categories: Array.isArray(state.categories) ? state.categories : [],
-        allCategoryId: Number.isFinite(Number(state.allCategoryId)) ? Number(state.allCategoryId) : null,
-        currentCategoryId: Number.isFinite(Number(state.currentCategoryId)) ? Number(state.currentCategoryId) : null,
-        products: Array.isArray(state.products) ? state.products : [],
-        productsOffset: Math.max(0, Number(state.productsOffset || 0)),
-        productsTotal: Math.max(0, Number(state.productsTotal || 0)),
-        productsHasMore: Boolean(state.productsHasMore),
-        combosInCategory: Array.isArray(state.combosInCategory) ? state.combosInCategory : [],
-        selectedProductId: Number.isFinite(Number(state.selectedProductId)) ? Number(state.selectedProductId) : null,
-        selectedProductIds: Array.from(state.selectedProductIds || [])
-          .map((id) => Number(id || 0))
-          .filter((id) => id > 0),
-        units: Array.isArray(state.units) ? state.units : [],
-        unitConversions: Array.isArray(state.unitConversions) ? state.unitConversions : [],
-        productsByCategoryCache: Array.from(state.productsByCategoryCache instanceof Map ? state.productsByCategoryCache.entries() : [])
-          .map(([key, value]) => ({
-            key: String(key || ""),
-            products: Array.isArray(value?.products) ? value.products : [],
-            productsOffset: Math.max(0, Number(value?.productsOffset || 0)),
-            productsTotal: Math.max(0, Number(value?.productsTotal || 0)),
-            productsHasMore: Boolean(value?.productsHasMore),
-            combosInCategory: Array.isArray(value?.combosInCategory) ? value.combosInCategory : [],
-            ts: Number(value?.ts || 0) || 0,
-          }))
-          .filter((row) => row.key),
-        productDetailsCache: Array.from(state.productDetailsCache instanceof Map ? state.productDetailsCache.entries() : [])
-          .map(([id, value]) => ({
-            id: Number(id || 0),
-            product: value?.product && typeof value.product === "object" ? value.product : null,
-            categories: Array.isArray(value?.categories) ? value.categories : [],
-            optionAssignments: Array.isArray(value?.optionAssignments) ? value.optionAssignments : [],
-            ts: Number(value?.ts || 0) || 0,
-          }))
-          .filter((row) => row.id > 0),
-      },
-    };
-
-    try {
-      localStorage.setItem(productsCacheKey(), JSON.stringify(payload));
-    } catch {}
-  }
 
   function schedulePersistProductsCache(delay = 180) {
-    if (productsCachePersistTimer) clearTimeout(productsCachePersistTimer);
-    productsCachePersistTimer = setTimeout(() => {
-      productsCachePersistTimer = null;
-      persistProductsCacheNow();
-    }, Math.max(0, Number(delay || 0)));
-  }
-
-  function hydrateProductsFromCache(cache) {
-    if (!cache || typeof cache !== "object") return false;
-
-    const cachedCategories = Array.isArray(cache.categories) ? cache.categories : [];
-    const cachedProducts = Array.isArray(cache.products) ? cache.products : [];
-    const cachedCombos = Array.isArray(cache.combosInCategory) ? cache.combosInCategory : [];
-    const cachedUnits = Array.isArray(cache.units) ? cache.units : [];
-    const cachedUnitConversions = Array.isArray(cache.unitConversions) ? cache.unitConversions : [];
-    const cachedByCategoryRows = Array.isArray(cache.productsByCategoryCache) ? cache.productsByCategoryCache : [];
-    const cachedProductDetailsRows = Array.isArray(cache.productDetailsCache) ? cache.productDetailsCache : [];
-
-    if (!cachedCategories.length && !cachedProducts.length) return false;
-
-    state.categories = cachedCategories;
-    state.allCategoryId = Number(cache.allCategoryId || 0) || (state.categories.find((c) => c.code === "all") || {}).id || null;
-    const cachedCategoryId = Number(cache.currentCategoryId || 0);
-    state.currentCategoryId = cachedCategoryId > 0
-      ? cachedCategoryId
-      : (state.allCategoryId || (state.categories[0] && state.categories[0].id) || null);
-    state.products = cachedProducts;
-    state.productsOffset = Math.max(0, Number(cache.productsOffset || cachedProducts.length || 0));
-    state.productsTotal = Math.max(state.productsOffset, Number(cache.productsTotal || cachedProducts.length || 0));
-    state.productsHasMore = Boolean(cache.productsHasMore);
-    state.productsLoading = false;
-    state.combosInCategory = cachedCombos;
-    state.selectedProductId = Number(cache.selectedProductId || 0) || null;
-    state.selectedProductIds = new Set(
-      (Array.isArray(cache.selectedProductIds) ? cache.selectedProductIds : [])
-        .map((id) => Number(id || 0))
-        .filter((id) => id > 0)
-    );
-    state.units = cachedUnits;
-    state.unitConversions = cachedUnitConversions;
-    state.productsByCategoryCache = new Map();
-    cachedByCategoryRows.forEach((row) => {
-      const key = String(row?.key || "").trim();
-      if (!key) return;
-      state.productsByCategoryCache.set(key, {
-        products: Array.isArray(row?.products) ? row.products : [],
-        productsOffset: Math.max(0, Number(row?.productsOffset || 0)),
-        productsTotal: Math.max(0, Number(row?.productsTotal || 0)),
-        productsHasMore: Boolean(row?.productsHasMore),
-        combosInCategory: Array.isArray(row?.combosInCategory) ? row.combosInCategory : [],
-        ts: Number(row?.ts || 0) || 0,
-      });
-    });
-    state.productDetailsCache = new Map();
-    cachedProductDetailsRows.forEach((row) => {
-      const id = Number(row?.id || 0);
-      if (!(id > 0)) return;
-      state.productDetailsCache.set(id, {
-        product: row?.product && typeof row.product === "object" ? row.product : null,
-        categories: Array.isArray(row?.categories) ? row.categories : [],
-        optionAssignments: Array.isArray(row?.optionAssignments) ? row.optionAssignments : [],
-        ts: Number(row?.ts || 0) || 0,
-      });
-    });
-    if (
-      state.currentCategoryId &&
-      Array.isArray(state.products) &&
-      state.products.length &&
-      !state.productsByCategoryCache.has(normalizeCategoryCacheKey(state.currentCategoryId))
-    ) {
-      setCachedCategoryProducts(state.currentCategoryId, {
-        products: state.products,
-        productsOffset: state.productsOffset,
-        productsTotal: state.productsTotal,
-        productsHasMore: state.productsHasMore,
-        combosInCategory: state.combosInCategory,
-      });
-    }
-
-    if (state.selectedProductId && !state.products.some((product) => Number(product?.id || 0) === Number(state.selectedProductId))) {
-      state.selectedProductId = null;
-    }
-
-    return true;
+    return;
   }
 
   function normalizeCategoryCacheKey(categoryId) {
@@ -11005,6 +10846,19 @@ const isViewMode = state.comboPanel.mode === "view";
       if (state.currentCategoryId && state.currentCategoryId !== state.allCategoryId) defaultSelected.add(state.currentCategoryId);
     }
 
+    const cachedProductDetails = product?.id ? getCachedProductDetails(product.id) : null;
+    const initialSelectedCategories = (
+      Number(state.selectedProductId) === Number(product?.id)
+        ? state.selectedProductCategories
+        : cachedProductDetails?.categories
+    );
+    if (Array.isArray(initialSelectedCategories)) {
+      initialSelectedCategories.forEach((category) => {
+        const categoryId = Number(category?.id ?? category);
+        if (Number.isFinite(categoryId) && categoryId > 0) defaultSelected.add(categoryId);
+      });
+    }
+
     const initialPhotos = product && Array.isArray(product.photos) ? product.photos.slice(0, 10) : [];
 
     const draft = {
@@ -18194,15 +18048,6 @@ const isViewMode = state.comboPanel.mode === "view";
       bindAccordionContainer(comboInfo);
     }
     bindEvents();
-
-    const cachedBootstrap = readProductsBootstrapCache();
-    const hydratedFromCache = hydrateProductsFromCache(cachedBootstrap);
-    if (hydratedFromCache) {
-      enterProductsMode(state.currentCategoryId);
-      renderCategoriesNav();
-      renderProductsList();
-      schedulePersistProductsCache(0);
-    }
 
     await loadUnitsManagement();
     await loadUnitConversions();
