@@ -4714,10 +4714,6 @@ body.page-cash #clientAddresses .shop-address-actions{
     gap:0;
   }
 
-  body.page-courier-screen #ordersCenterPane > .center-stack > .toolbar-island{
-    display:none;
-  }
-
   body.page-courier-screen #ordersCenterPane > .center-stack > .orders-center-panel{
     border:none;
     border-radius:0;
