@@ -176,7 +176,9 @@ async function staleWhileRevalidate(request, cacheName) {
 
 function shouldCacheResponse(response) {
   if (!response) return false;
-  return response.ok || response.type === "opaque";
+  if (response.type === "opaque") return true;
+  // Cache API does not support storing partial content responses (206).
+  return response.status === 200;
 }
 
 async function warmCourierScreenHtml() {
