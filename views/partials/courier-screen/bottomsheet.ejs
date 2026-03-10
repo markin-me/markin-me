@@ -2,8 +2,8 @@
 
 <section class="sheet" id="orderSheet" aria-hidden="true">
   <div class="sheet-header">
-    <div class="sheet-title">Информация</div>
-    <button class="icon-btn sheet-close" id="sheetClose" type="button" aria-label="Закрыть">
+    <div class="sheet-title">&#x418;&#x43D;&#x444;&#x43E;&#x440;&#x43C;&#x430;&#x446;&#x438;&#x44F;</div>
+    <button class="icon-btn sheet-close" id="sheetClose" type="button" aria-label="&#x417;&#x430;&#x43A;&#x440;&#x44B;&#x442;&#x44C;">
       <i class="fas fa-times"></i>
     </button>
   </div>
@@ -12,28 +12,17 @@
     <%- include('../orders/info_content') %>
   </div>
 
-  <div class="order-info-footer hidden" id="sheetOrderInfoFooter" data-role="order-info-footer">
-    <div class="order-footer-actions">
+  <div class="order-info-footer order-info-footer--payment-only hidden" id="sheetOrderInfoFooter" data-role="order-info-footer">
+    <div class="order-footer-actions order-footer-actions--payment-only">
       <button
         class="order-footer-status-pill order-payment-pill"
         type="button"
         data-action="order-mark-paid"
         data-role="order-info-payment-btn"
-        aria-label="Оплата заказа"
+        aria-label="&#x41E;&#x43F;&#x43B;&#x430;&#x442;&#x430; &#x437;&#x430;&#x43A;&#x430;&#x437;&#x430;"
       >
-        <span>Принять оплату</span>
+        <span>&#x41F;&#x440;&#x438;&#x43D;&#x44F;&#x442;&#x44C; &#x43E;&#x43F;&#x43B;&#x430;&#x442;&#x443;</span>
       </button>
-      <button class="order-footer-status-pill" type="button" data-action="order-status-next" aria-label="Статус заказа">
-        <span data-info="order-status">—</span>
-      </button>
-      <div class="order-head-actions order-footer-icon-actions">
-        <button class="icon-btn order-footer-icon-btn" type="button" data-action="order-edit" aria-label="Редактировать">
-          <i class="fas fa-pen"></i>
-        </button>
-        <button class="icon-btn order-footer-icon-btn" type="button" data-action="order-print" aria-label="Печать">
-          <i class="fas fa-print"></i>
-        </button>
-      </div>
     </div>
   </div>
 </section>

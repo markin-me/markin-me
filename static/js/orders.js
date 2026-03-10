@@ -207,6 +207,8 @@
   const backdrop = $("#sheetBackdrop");
   const closeBtn = $("#sheetClose");
   const sheetTitleEl = $(".sheet-title", sheet || document);
+  let sheetReturnFocusEl = null;
+  let sheetBodyTabIndexAdded = false;
   const desktopClientDom = createClientDomRefs(document);
   const sheetClientDom = isCourierScreenPage && sheet ? createClientDomRefs(sheet) : null;
   const clientSurfaces = [desktopClientDom, sheetClientDom].filter((dom) => dom && dom.infoWrap);
@@ -1012,10 +1014,21 @@
     return `кв ${m[1]}`;
   }
 
+  function stripApartmentToken(token) {
+    const src = String(token || "").trim();
+    if (!src) return "";
+    return src
+      .replace(/\b[\p{L}\d\-\/]+\s*\u043a\u0432(?:\u0430\u0440\u0442\u0438\u0440\u0430)?\.?\b/iu, "")
+      .replace(/\b\u043a\u0432(?:\u0430\u0440\u0442\u0438\u0440\u0430)?\.?\s*[\p{L}\d\-\/]+\b/iu, "")
+      .replace(/\s{2,}/g, " ")
+      .replace(/[\s,;]+$/u, "")
+      .trim();
+  }
+
   function normalizeHouseToken(token) {
     const src = String(token || "").trim();
     if (!src) return "";
-    const re = /(?:\u0434(?:\u043e\u043c)?\.?)\s*([\p{L}\d\-\/]+)/iu;
+    const re = /^(?:\u0434(?:\u043e\u043c)?\.?)\s*([\p{L}\d\-\/]+)$/iu;
     const m = src.match(re);
     if (m && m[1]) return m[1];
     if (/^\d+[\p{L}\-\/]*$/iu.test(src)) return src;
@@ -1042,42 +1055,21 @@
     if (!raw) return "?";
     const tokens = raw.split(",").map((v) => String(v || "").trim()).filter(Boolean);
     if (!tokens.length) return raw;
+    const cleanedTokens = tokens
+      .map((token) => stripApartmentToken(token))
+      .map((token) => String(token || "").trim())
+      .filter(Boolean);
+    if (!cleanedTokens.length) return raw;
+    if (cleanedTokens.length === 1) return cleanedTokens[0];
 
-    let aptPart = "";
-    for (const token of tokens) {
-      const apt = normalizeApartmentToken(token);
-      if (apt) {
-        aptPart = apt;
-        break;
-      }
-    }
+    const first = cleanedTokens[0];
+    const second = cleanedTokens[1];
+    if (first && normalizeHouseToken(second)) return `${first}, ${second}`;
+    if (!looksLikeStreetToken(first) && looksLikeStreetToken(second)) return second;
 
-    const explicitStreetIdx = tokens.findIndex((token) => looksLikeStreetToken(token) && !normalizeHouseToken(token));
-    const houseIdx = tokens.findIndex((token) => !!normalizeHouseToken(token));
-    let streetPart = explicitStreetIdx >= 0 ? (tokens[explicitStreetIdx] || "") : "";
-
-    if (!streetPart) {
-      const beforeHouse = (houseIdx >= 0 ? tokens.slice(0, houseIdx) : tokens)
-        .filter((token) => !isMetaAddressToken(token) && !normalizeHouseToken(token));
-      if (beforeHouse.length) streetPart = beforeHouse[beforeHouse.length - 1] || "";
-    }
-
-    if (!streetPart) {
-      const fallbackStreetIdx = tokens.findIndex((token) => !isMetaAddressToken(token) && looksLikeStreetToken(token));
-      if (fallbackStreetIdx >= 0) streetPart = tokens[fallbackStreetIdx] || "";
-    }
-
-    if (streetPart && !/\d/.test(streetPart)) {
-      const houseToken = houseIdx >= 0 ? tokens[houseIdx] || "" : "";
-      const house = normalizeHouseToken(houseToken);
-      if (house) streetPart = `${streetPart} ${house}`.trim();
-    }
-
-    if (!streetPart) streetPart = raw;
-    if (aptPart && !/\b(?:\u043a\u0432(?:\u0430\u0440\u0442\u0438\u0440\u0430)?\.?)\s*[\p{L}\d\-\/]+\b/iu.test(streetPart)) {
-      return `${streetPart}, ${aptPart}`;
-    }
-    return streetPart;
+    const streetLike = cleanedTokens.find((token) => looksLikeStreetToken(token) && !normalizeHouseToken(token));
+    if (streetLike) return streetLike;
+    return first;
   }
 
   function buildOrderTabKey(orderId) {
@@ -4234,8 +4226,53 @@
   // -----------------------------
   // Sheet
   // -----------------------------
+  function focusOutsideSheetBeforeHide() {
+    if (!sheet) return;
+    const activeEl = document.activeElement;
+    if (!activeEl || !sheet.contains(activeEl)) return;
+
+    const canRestoreFocus = sheetReturnFocusEl
+      && sheetReturnFocusEl !== document.body
+      && typeof sheetReturnFocusEl.focus === "function"
+      && document.documentElement.contains(sheetReturnFocusEl)
+      && !sheet.contains(sheetReturnFocusEl);
+
+    if (canRestoreFocus) {
+      try {
+        sheetReturnFocusEl.focus({ preventScroll: true });
+      } catch (_) {
+        try {
+          sheetReturnFocusEl.focus();
+        } catch (_) {}
+      }
+    }
+
+    if (sheet.contains(document.activeElement)) {
+      try {
+        activeEl.blur();
+      } catch (_) {}
+    }
+
+    if (sheet.contains(document.activeElement) && document.body && typeof document.body.focus === "function") {
+      const hadBodyTabIndex = document.body.hasAttribute("tabindex");
+      if (!hadBodyTabIndex) {
+        document.body.setAttribute("tabindex", "-1");
+        sheetBodyTabIndexAdded = true;
+      }
+      try {
+        document.body.focus({ preventScroll: true });
+      } catch (_) {
+        try {
+          document.body.focus();
+        } catch (_) {}
+      }
+    }
+  }
+
   function openSheet() {
     if (!sheet || !backdrop) return;
+    const activeEl = document.activeElement;
+    sheetReturnFocusEl = activeEl && !sheet.contains(activeEl) ? activeEl : null;
     sheet.classList.add("is-open");
     backdrop.classList.add("is-active");
     sheet.setAttribute("aria-hidden", "false");
@@ -4245,11 +4282,17 @@
 
   function closeSheet() {
     if (!sheet || !backdrop) return;
+    focusOutsideSheetBeforeHide();
     sheet.classList.remove("is-open");
     backdrop.classList.remove("is-active");
     sheet.setAttribute("aria-hidden", "true");
     backdrop.setAttribute("aria-hidden", "true");
     document.body.classList.remove("sheet-open");
+    if (sheetBodyTabIndexAdded) {
+      document.body.removeAttribute("tabindex");
+      sheetBodyTabIndexAdded = false;
+    }
+    sheetReturnFocusEl = null;
   }
 
   // -----------------------------

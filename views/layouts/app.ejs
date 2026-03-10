@@ -3,10 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <%
+    const appManifestStartPath = typeof currentPath === 'string' && currentPath ? currentPath : '/dashboard/cash';
+    const appManifestHref = manifestUrl({
+      appType: 'admin',
+      startPath: appManifestStartPath,
+      versionToken: appVersion || ''
+    });
+  %>
   <title><%= pageTitle || 'Админка' %></title>
   <link id="appFavicon" rel="icon" />
   <link id="appAppleTouchIcon" rel="apple-touch-icon" />
-  <link id="appManifest" rel="manifest" href="/manifest.json" />
+  <link id="appManifest" rel="manifest" href="<%= appManifestHref %>" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Админка" id="appAppleMobileWebAppTitle" />
 
   <script>
     (function () {
@@ -21,6 +32,12 @@
   </script>
   <script>
     window.__APP_VERSION__ = <%- JSON.stringify(appVersion || '') %>;
+    window.__APP_MANIFEST_CONTEXT__ = {
+      app: 'admin',
+      startPath: <%- JSON.stringify(appManifestStartPath) %>,
+      tenantId: 0,
+      versionToken: <%- JSON.stringify(appVersion || '') %>
+    };
   </script>
 
   <link rel="stylesheet" href="<%= assetUrl('/static/css/style.css') %>" />
@@ -135,7 +152,7 @@
     (function () {
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
-          navigator.serviceWorker.register('/sw.js?v=<%= encodeURIComponent(appVersion || "") %>', { scope: '/' }).catch(function () {});
+          navigator.serviceWorker.register('/sw.js?v=<%= encodeURIComponent(serviceWorkerVersion || appVersion || "") %>', { scope: '/' }).catch(function () {});
         });
       }
     })();
