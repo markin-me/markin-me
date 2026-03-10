@@ -43,6 +43,11 @@ self.addEventListener("fetch", function (event) {
     return;
   }
 
+  if (requestUrl.pathname === "/manifest.json") {
+    event.respondWith(fetch(request));
+    return;
+  }
+
   if (isStaticAssetRequest(requestUrl)) {
     event.respondWith(staleWhileRevalidate(request, CORE_CACHE_NAME));
     return;
@@ -107,7 +112,6 @@ var IMAGE_CACHE_NAME = "markinme-images-v1";
 var ACTIVE_CACHE_NAMES = [CORE_CACHE_NAME, HTML_CACHE_NAME, FONT_CACHE_NAME, IMAGE_CACHE_NAME];
 var COURIER_SCREEN_PATH = "/dashboard/courier-screen";
 var CORE_ASSETS = [
-  "/manifest.json",
   "/static/css/style.css",
   "/static/js/auth.js",
   "/static/js/current-time.js",
@@ -135,7 +139,7 @@ function isCourierHtmlRequest(request, url) {
 
 function isStaticAssetRequest(url) {
   if (!isSameOrigin(url)) return false;
-  return url.pathname === "/manifest.json" || url.pathname.indexOf("/static/") === 0;
+  return url.pathname.indexOf("/static/") === 0;
 }
 
 function isFontAwesomeRequest(url) {
@@ -206,7 +210,9 @@ async function staleWhileRevalidate(request, cacheName) {
 
 function shouldCacheResponse(response) {
   if (!response) return false;
-  return response.ok || response.type === "opaque";
+  if (response.type === "opaque") return true;
+  // Cache API does not support storing partial content responses (206).
+  return response.status === 200;
 }
 
 async function warmCourierScreenHtml() {

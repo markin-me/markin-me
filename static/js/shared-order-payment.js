@@ -9,6 +9,85 @@
   ];
   var paymentMethodsCache = [];
   var paymentMethodsPromise = null;
+  var paymentMethodsCacheStorageKey = '';
+  var PAYMENT_METHODS_CACHE_VERSION = 1;
+  var PAYMENT_METHODS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+  function getTenantIdFromStorage() {
+    try {
+      var tenantRaw = localStorage.getItem('tenant');
+      var tenant = tenantRaw ? JSON.parse(tenantRaw) : null;
+      var id = Number(tenant && tenant.id || 0);
+      return Number.isFinite(id) && id > 0 ? id : 0;
+    } catch (err) {
+      return 0;
+    }
+  }
+
+  function getStoreIdFromStorage() {
+    try {
+      var activeStoreId = Number(localStorage.getItem('activeStoreId') || 0);
+      return Number.isFinite(activeStoreId) && activeStoreId > 0 ? activeStoreId : 0;
+    } catch (err) {
+      return 0;
+    }
+  }
+
+  function paymentMethodsCacheKey() {
+    return 'shared_order_payment_methods_v' + PAYMENT_METHODS_CACHE_VERSION + '_t' + getTenantIdFromStorage() + '_s' + getStoreIdFromStorage();
+  }
+
+  function normalizePaymentMethodsPayload(items) {
+    return (Array.isArray(items) ? items : []).map(function (item) {
+      var code = String(item && item.code || '').trim();
+      if (!code) return null;
+      return {
+        code: code,
+        title: String(item && item.title || '').trim(),
+        icon: String(item && item.icon || '').trim(),
+        is_active: Object.prototype.hasOwnProperty.call(item || {}, 'is_active')
+          ? Number(item && item.is_active || 0)
+          : 1,
+      };
+    }).filter(Boolean);
+  }
+
+  function readPersistedPaymentMethods() {
+    try {
+      var raw = localStorage.getItem(paymentMethodsCacheKey());
+      if (!raw) return [];
+      var parsed = JSON.parse(raw);
+      var ts = Number(parsed && parsed.ts || 0);
+      if (!(ts > 0) || Date.now() - ts > PAYMENT_METHODS_CACHE_MAX_AGE_MS) return [];
+      return normalizePaymentMethodsPayload(parsed && parsed.items);
+    } catch (err) {
+      return [];
+    }
+  }
+
+  function persistPaymentMethods(items) {
+    try {
+      paymentMethodsCacheStorageKey = paymentMethodsCacheKey();
+      localStorage.setItem(paymentMethodsCacheKey(), JSON.stringify({
+        ts: Date.now(),
+        items: normalizePaymentMethodsPayload(items),
+      }));
+    } catch (err) {}
+  }
+
+  function ensurePaymentMethodsHydrated() {
+    var cacheKey = paymentMethodsCacheKey();
+    if (paymentMethodsCacheStorageKey && paymentMethodsCacheStorageKey !== cacheKey) {
+      paymentMethodsCache = [];
+      paymentMethodsPromise = null;
+    }
+    paymentMethodsCacheStorageKey = cacheKey;
+    if (Array.isArray(paymentMethodsCache) && paymentMethodsCache.length) return;
+    var persisted = readPersistedPaymentMethods();
+    if (persisted.length) {
+      paymentMethodsCache = persisted;
+    }
+  }
 
   function escapeHtml(value) {
     return String(value == null ? '' : value)
@@ -115,6 +194,7 @@
   }
 
   function getActivePaymentMethods(order) {
+    ensurePaymentMethodsHydrated();
     var source = Array.isArray(paymentMethodsCache) && paymentMethodsCache.length
       ? paymentMethodsCache
       : getFallbackPaymentMethods(order);
@@ -132,7 +212,10 @@
     });
   }
 
-  function ensurePaymentMethodsLoaded(apiJson, order) {
+  function ensurePaymentMethodsLoaded(apiJson, order, options) {
+    var opts = options || {};
+    var cacheOnly = !!opts.cacheOnly;
+    ensurePaymentMethodsHydrated();
     if (Array.isArray(paymentMethodsCache) && paymentMethodsCache.length) {
       return Promise.resolve(getActivePaymentMethods(order));
     }
@@ -141,12 +224,16 @@
         return getActivePaymentMethods(order);
       });
     }
+    if (cacheOnly) {
+      return Promise.reject(new Error('PAYMENT_METHODS_OFFLINE_UNAVAILABLE'));
+    }
     paymentMethodsPromise = apiJson('/api/admin/tenant/order-payments').then(function (json) {
-      paymentMethodsCache = Array.isArray(json && json.items) ? json.items.slice() : [];
+      paymentMethodsCache = normalizePaymentMethodsPayload(json && json.items);
+      persistPaymentMethods(paymentMethodsCache);
       return paymentMethodsCache;
     }).catch(function (err) {
       console.error('shared order payment methods load error:', err);
-      paymentMethodsCache = [];
+      paymentMethodsCache = readPersistedPaymentMethods();
       return paymentMethodsCache;
     }).finally(function () {
       paymentMethodsPromise = null;
@@ -154,6 +241,20 @@
     return paymentMethodsPromise.then(function () {
       return getActivePaymentMethods(order);
     });
+  }
+
+  function getPaymentMethodMeta(code, order) {
+    var normalizedCode = String(code || '').trim();
+    if (!normalizedCode) return null;
+    var methods = getActivePaymentMethods(order);
+    var matched = methods.find(function (item) {
+      return normalizeText(item && item.code) === normalizeText(normalizedCode);
+    });
+    if (matched) return Object.assign({}, matched);
+    var fallback = getFallbackPaymentMethods(order).find(function (item) {
+      return normalizeText(item && item.code) === normalizeText(normalizedCode);
+    });
+    return fallback ? Object.assign({}, fallback) : null;
   }
 
   function normalizeCashPaymentAmount(value) {
@@ -1031,11 +1132,13 @@
     var order = options.order || null;
     var apiJson = options.apiJson;
     var collectPayloadOnly = !!options.collectPayloadOnly;
+    var cacheOnlyPaymentMethods = !!options.cacheOnlyPaymentMethods;
     var money = typeof options.money === 'function' ? options.money : function (value) { return String(value || 0); };
     var formatDateTimeNumeric = typeof options.formatDateTimeNumeric === 'function' ? options.formatDateTimeNumeric : function () { return ''; };
     var getOrderIdFn = typeof options.getOrderId === 'function' ? options.getOrderId : getOrderId;
     var getOrderNumberFn = typeof options.getOrderNumber === 'function' ? options.getOrderNumber : getOrderNumber;
     var isPaidOrderFn = typeof options.isPaidOrder === 'function' ? options.isPaidOrder : isPaidOrder;
+    var submitPayload = typeof options.submitPayload === 'function' ? options.submitPayload : null;
     var onSuccess = typeof options.onSuccess === 'function' ? options.onSuccess : function () {};
     var onError = typeof options.onError === 'function'
       ? options.onError
@@ -1119,11 +1222,13 @@
     var order = options.order || null;
     var apiJson = options.apiJson;
     var collectPayloadOnly = !!options.collectPayloadOnly;
+    var cacheOnlyPaymentMethods = !!options.cacheOnlyPaymentMethods;
     var money = typeof options.money === 'function' ? options.money : function (value) { return String(value || 0); };
     var formatDateTimeNumeric = typeof options.formatDateTimeNumeric === 'function' ? options.formatDateTimeNumeric : function () { return ''; };
     var getOrderIdFn = typeof options.getOrderId === 'function' ? options.getOrderId : getOrderId;
     var getOrderNumberFn = typeof options.getOrderNumber === 'function' ? options.getOrderNumber : getOrderNumber;
     var isPaidOrderFn = typeof options.isPaidOrder === 'function' ? options.isPaidOrder : isPaidOrder;
+    var submitPayload = typeof options.submitPayload === 'function' ? options.submitPayload : null;
     var onSuccess = typeof options.onSuccess === 'function' ? options.onSuccess : function () {};
     var onError = typeof options.onError === 'function'
       ? options.onError
@@ -1166,7 +1271,9 @@
         });
       }
 
-      return ensurePaymentMethodsLoaded(apiJson, resolvedOrder).then(function (paymentMethods) {
+      return ensurePaymentMethodsLoaded(apiJson, resolvedOrder, {
+        cacheOnly: cacheOnlyPaymentMethods,
+      }).then(function (paymentMethods) {
         var methods = Array.isArray(paymentMethods) && paymentMethods.length ? paymentMethods : getActivePaymentMethods(resolvedOrder);
         var controller = mode === 'refund'
           ? createRefundModalController({
@@ -1204,6 +1311,24 @@
               if (collectPayloadOnly) {
                 finish(payload);
                 return true;
+              }
+              if (submitPayload) {
+                return Promise.resolve(submitPayload({
+                  mode: mode,
+                  order: resolvedOrder,
+                  orderId: orderId,
+                  payload: payload,
+                })).then(function (result) {
+                  var data = result && typeof result === 'object' && Object.prototype.hasOwnProperty.call(result, 'data')
+                    ? result.data
+                    : result;
+                  if (data) onSuccess(data);
+                  finish(data);
+                  return true;
+                }).catch(function (err) {
+                  controller.setError(translateOrderSettlementError(err, mode));
+                  return false;
+                });
               }
               return apiJson(
                 mode === 'refund'
@@ -1247,9 +1372,17 @@
     open: open,
     getRefundState: getRefundState,
     getRefundStateTitle: getRefundStateTitle,
+    warmCache: function (apiJson, order) {
+      return ensurePaymentMethodsLoaded(apiJson, order);
+    },
+    hasCachedMethods: function (order) {
+      return getActivePaymentMethods(order).length > 0;
+    },
+    getPaymentMethodMeta: getPaymentMethodMeta,
     clearCache: function () {
       paymentMethodsCache = [];
       paymentMethodsPromise = null;
+      paymentMethodsCacheStorageKey = '';
     },
   };
 })();

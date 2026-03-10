@@ -1,4 +1,9 @@
 (function () {
+  if (typeof window !== "undefined" && window.__chatSidebarBadgeInitialized) return;
+  if (typeof window !== "undefined") {
+    window.__chatSidebarBadgeInitialized = true;
+  }
+
   const targets = [
     {
       navLink: document.getElementById("sidebarChatNavLink"),
@@ -718,6 +723,7 @@
   function startPolling() {
     if (!chatWidgetEnabled) return;
     if (isChatPageActive()) return;
+    if (document.visibilityState && document.visibilityState !== "visible") return;
     pullUnreadCount().catch(function () {});
     if (CHAT_SSE_ENABLED) {
       ensureUnreadSseConnection();
@@ -738,9 +744,20 @@
 
   document.addEventListener("visibilitychange", function () {
     if (!chatWidgetEnabled) return;
-    if (document.visibilityState === "visible") {
-      pullUnreadCount().catch(function () {});
+    if (document.visibilityState === "hidden") {
+      stopPolling();
+      return;
     }
+    startPolling();
+    pullUnreadCount().catch(function () {});
+  });
+
+  window.addEventListener("pagehide", function () {
+    stopPolling();
+  });
+
+  window.addEventListener("beforeunload", function () {
+    stopPolling();
   });
 
   document.addEventListener("tenantStoreChanged", function () {

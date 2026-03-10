@@ -145,6 +145,26 @@
     return "кв " + match[1];
   }
 
+  function stripApartmentToken(token) {
+    var src = String(token || "").trim();
+    if (!src) return "";
+    return src
+      .replace(/\b[\p{L}\d\-\/]+\s*\u043a\u0432(?:\u0430\u0440\u0442\u0438\u0440\u0430)?\.?\b/iu, "")
+      .replace(/\b\u043a\u0432(?:\u0430\u0440\u0442\u0438\u0440\u0430)?\.?\s*[\p{L}\d\-\/]+\b/iu, "")
+      .replace(/\s{2,}/g, " ")
+      .replace(/[\s,;]+$/u, "")
+      .trim();
+  }
+
+  function resolveStandaloneHouseToken(token) {
+    var src = String(token || "").trim();
+    if (!src) return "";
+    var match = src.match(/^(?:\u0434(?:\u043e\u043c)?\.?)\s*([\p{L}\d\-\/]+)$/iu);
+    if (match && match[1]) return match[1];
+    if (/^\d+[\p{L}\-\/]*$/iu.test(src)) return src;
+    return "";
+  }
+
   function normalizeHouseToken(token) {
     var src = String(token || "").trim();
     if (!src) return "";
@@ -176,44 +196,46 @@
       return String(value || "").trim();
     }).filter(Boolean);
     if (!tokens.length) return raw;
+    var cleanedTokens = tokens.map(function (token) {
+      return stripApartmentToken(token);
+    }).map(function (token) {
+      return String(token || "").trim();
+    }).filter(Boolean);
+    if (!cleanedTokens.length) return raw;
+    if (cleanedTokens.length === 1) return cleanedTokens[0];
 
-    var aptPart = "";
-    tokens.some(function (token) {
-      var apt = normalizeApartmentToken(token);
-      if (!apt) return false;
-      aptPart = apt;
-      return true;
-    });
+    var first = cleanedTokens[0];
+    var second = cleanedTokens[1];
+    if (first && resolveStandaloneHouseToken(second)) return first + ", " + second;
+    if (!looksLikeStreetToken(first) && looksLikeStreetToken(second)) return second;
 
-    var explicitStreetIdx = tokens.findIndex(function (token) {
-      return looksLikeStreetToken(token) && !normalizeHouseToken(token);
+    var streetLike = cleanedTokens.find(function (token) {
+      return looksLikeStreetToken(token) && !resolveStandaloneHouseToken(token);
     });
-    var houseIdx = tokens.findIndex(function (token) {
-      return !!normalizeHouseToken(token);
-    });
-    var streetPart = explicitStreetIdx >= 0 ? (tokens[explicitStreetIdx] || "") : "";
+    if (streetLike) return streetLike;
+    return first;
 
     if (!streetPart) {
-      var beforeHouse = (houseIdx >= 0 ? tokens.slice(0, houseIdx) : tokens).filter(function (token) {
-        return !isMetaAddressToken(token) && !normalizeHouseToken(token);
+      var beforeHouse = (houseIdx >= 0 ? streetTokens.slice(0, houseIdx) : streetTokens).filter(function (token) {
+        return !isMetaAddressToken(token) && !resolveStandaloneHouseToken(token);
       });
       if (beforeHouse.length) streetPart = beforeHouse[beforeHouse.length - 1] || "";
     }
 
     if (!streetPart) {
-      var fallbackStreetIdx = tokens.findIndex(function (token) {
+      var fallbackStreetIdx = streetTokens.findIndex(function (token) {
         return !isMetaAddressToken(token) && looksLikeStreetToken(token);
       });
-      if (fallbackStreetIdx >= 0) streetPart = tokens[fallbackStreetIdx] || "";
+      if (fallbackStreetIdx >= 0) streetPart = streetTokens[fallbackStreetIdx] || "";
     }
 
     if (streetPart && !/\d/.test(streetPart)) {
-      var houseToken = houseIdx >= 0 ? tokens[houseIdx] || "" : "";
-      var house = normalizeHouseToken(houseToken);
+      var houseToken = houseIdx >= 0 ? streetTokens[houseIdx] || "" : "";
+      var house = resolveStandaloneHouseToken(houseToken);
       if (house) streetPart = (streetPart + " " + house).trim();
     }
 
-    if (!streetPart) streetPart = raw;
+    if (!streetPart) streetPart = stripApartmentToken(raw) || raw;
     if (aptPart && !/\b(?:кв(?:артира)?\.?)\s*[\p{L}\d\-\/]+\b/iu.test(streetPart)) {
       return streetPart + ", " + aptPart;
     }
@@ -564,6 +586,7 @@
     var footerEl = options && options.footerEl ? options.footerEl : null;
     var clientInfoWrap = options && options.clientInfoWrap ? options.clientInfoWrap : null;
     var helpers = options && options.helpers ? options.helpers : {};
+    var treatOrderCommentAsAddressComment = Boolean(options && options.treatOrderCommentAsAddressComment);
     var printButtons = footerEl ? queryAll(footerEl, '[data-action="order-print"]') : [];
     var infoEls = {
       empty: queryAll(root, '[data-info="empty"]'),
@@ -839,13 +862,22 @@
       }
       setTextAll(infoEls.deliveryAddress, address || "—");
 
-      var addressComment = order.address_comment || "";
-      setTextAll(infoEls.deliveryAddressCommentText, addressComment);
-      setHiddenAll(infoEls.deliveryAddressComment, !addressComment);
+      var addressComment = String(order.address_comment || "").trim();
+      var orderComment = String(order.comment || "").trim();
+      var addressCommentParts = treatOrderCommentAsAddressComment
+        ? [addressComment, orderComment]
+        : [addressComment];
+      var effectiveAddressComment = addressCommentParts
+        .filter(Boolean)
+        .filter(function (value, index, list) {
+          return list.indexOf(value) === index;
+        })
+        .join(" | ");
+      setTextAll(infoEls.deliveryAddressCommentText, effectiveAddressComment);
+      setHiddenAll(infoEls.deliveryAddressComment, !effectiveAddressComment);
 
-      var orderComment = order.comment || "";
-      setTextAll(infoEls.orderCommentText, orderComment);
-      setHiddenAll(infoEls.orderCommentBlock, !orderComment);
+      setTextAll(infoEls.orderCommentText, treatOrderCommentAsAddressComment ? "" : orderComment);
+      setHiddenAll(infoEls.orderCommentBlock, treatOrderCommentAsAddressComment ? true : !orderComment);
 
       var refundState = getRefundState(order);
       var refundStateTitle = getRefundStateTitle(order);

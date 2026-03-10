@@ -70,12 +70,43 @@
     <!-- Форма редактирования скидки -->
     <div id="discountEditorWrap" class="hidden">
       <form id="discountEditorForm" class="form-grid" autocomplete="off">
+        <div class="discount-editor-section-title">Базовые данные</div>
         <div class="field-wrap">
           <label class="field-label" for="de_title">Название *</label>
           <input class="control" id="de_title" name="title" type="text" placeholder="Например: Скидка 10% на всё" required />
         </div>
 
-        <div class="form-row-2">
+        <div class="field-wrap">
+          <label class="field-label" for="de_description">Описание</label>
+          <textarea class="control" id="de_description" name="description" rows="3" placeholder="Коротко опишите механику акции для команды"></textarea>
+        </div>
+
+        <div class="discount-editor-section-title">Механика</div>
+
+        <div class="field-wrap">
+          <div class="discount-choice-grid" data-discount-choice-group="de_mechanic_type">
+            <button class="cash-payment-method-pill discount-choice-pill" type="button" data-discount-choice-value="simple_discount" aria-pressed="false">
+              <span class="cash-payment-method-pill-icon"><i class="fas fa-percent"></i></span>
+              <span class="cash-payment-method-pill-title">Скидка</span>
+            </button>
+            <button class="cash-payment-method-pill discount-choice-pill" type="button" data-discount-choice-value="buy_x_get_y" aria-pressed="false">
+              <span class="cash-payment-method-pill-icon"><i class="fas fa-gift"></i></span>
+              <span class="cash-payment-method-pill-title">5+1</span>
+            </button>
+            <button class="cash-payment-method-pill discount-choice-pill" type="button" data-discount-choice-value="threshold" aria-pressed="false">
+              <span class="cash-payment-method-pill-icon"><i class="fas fa-layer-group"></i></span>
+              <span class="cash-payment-method-pill-title">Пороговая</span>
+            </button>
+          </div>
+          <select class="control hidden" id="de_mechanic_type" name="mechanic_type">
+            <option value="simple_discount">Скидка</option>
+            <option value="buy_x_get_y">5+1</option>
+            <option value="threshold">Пороговая</option>
+          </select>
+        </div>
+
+        <div class="discount-editor-section" id="de_simple_wrap">
+          <div class="discount-editor-section-title">Основное</div>
           <div class="field-wrap">
             <label class="field-label" for="de_discount_type">Тип скидки</label>
             <select class="control" id="de_discount_type" name="discount_type">
@@ -111,7 +142,7 @@
           </div>
         </div>
 
-        <!-- Выбранные клиенты (чипсы) -->
+        <div class="discount-editor-section-title">Аудитория</div>
         <div class="field-wrap" id="de_customers_wrap">
           <label class="field-label">Клиенты</label>
           <div class="discount-chips-wrap">
@@ -120,6 +151,7 @@
               <i class="fas fa-plus"></i> Добавить клиентов
             </button>
           </div>
+          <div class="field-hint">Если список пустой, акция доступна всем клиентам.</div>
         </div>
 
         <div class="form-row-2">

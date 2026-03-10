@@ -3,13 +3,28 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <%
+    const appleIcon = (typeof tenant !== 'undefined' && tenant) ? (tenant.apple_touch_icon_url || tenant.logo_light_url || tenant.logo_dark_url || tenant.favicon_light_url || tenant.favicon_dark_url) : '';
+    const shopManifestVersion = (typeof tenant !== 'undefined' && tenant && tenant.updated_at) ? String(tenant.updated_at) : String(appVersion || '');
+    const shopManifestStartPath = typeof currentPath === 'string' && currentPath ? currentPath : '/shop';
+    const shopManifestHref = manifestUrl({
+      appType: 'shop',
+      startPath: shopManifestStartPath,
+      tenantId: tenantId || ((typeof tenant !== 'undefined' && tenant && tenant.id) ? tenant.id : 0),
+      versionToken: shopManifestVersion
+    });
+    const shopPwaTitle = (typeof tenant !== 'undefined' && tenant && (tenant.site_name || tenant.name))
+      ? (tenant.site_name || tenant.name)
+      : (pageTitle || 'Витрина');
+  %>
   <title><%= pageTitle || 'Витрина' %></title>
   <meta name="tenant_id" content="<%= tenantId || 1 %>" />
   <link id="appFavicon" rel="icon" />
-  <% const appleIcon = (typeof tenant !== 'undefined' && tenant) ? (tenant.apple_touch_icon_url || tenant.logo_light_url || tenant.logo_dark_url || tenant.favicon_light_url || tenant.favicon_dark_url) : ''; %>
-  <% const manifestVer = (typeof tenant !== 'undefined' && tenant && tenant.updated_at) ? encodeURIComponent(String(tenant.updated_at)) : ''; %>
   <link id="appAppleTouchIcon" rel="apple-touch-icon" href="<%= appleIcon || '' %>" />
-  <link id="appManifest" rel="manifest" href="/manifest.json<%= manifestVer ? ('?v=' + manifestVer) : '' %>" />
+  <link id="appManifest" rel="manifest" href="<%= shopManifestHref %>" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="<%= shopPwaTitle %>" id="appAppleMobileWebAppTitle" />
   <meta name="theme-color" content="#ffffff" id="themeColorMeta" />
 
   <script>
@@ -21,6 +36,15 @@
         if (m) m.content = t === 'dark' ? '#1a1a1a' : '#ffffff';
       } catch (e) {}
     })();
+  </script>
+  <script>
+    window.__APP_VERSION__ = <%- JSON.stringify(appVersion || '') %>;
+    window.__APP_MANIFEST_CONTEXT__ = {
+      app: 'shop',
+      startPath: <%- JSON.stringify(shopManifestStartPath) %>,
+      tenantId: <%- JSON.stringify((tenantId || ((typeof tenant !== 'undefined' && tenant && tenant.id) ? tenant.id : 0)) || 0) %>,
+      versionToken: <%- JSON.stringify(shopManifestVersion) %>
+    };
   </script>
   <% if (typeof tenant !== 'undefined' && tenant) { %>
     <script>
@@ -97,7 +121,7 @@
     (function () {
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
-          navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {});
+          navigator.serviceWorker.register('/sw.js?v=<%= encodeURIComponent(serviceWorkerVersion || appVersion || "") %>', { scope: '/' }).catch(function () {});
         });
       }
     })();

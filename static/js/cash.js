@@ -1,4 +1,9 @@
 (function () {
+  if (typeof window !== 'undefined' && window.__cashPageInitialized) return;
+  if (typeof window !== 'undefined') {
+    window.__cashPageInitialized = true;
+  }
+
   try {
     var filtersEl = document.getElementById('cashJournalFilters');
     var journalListEl = document.getElementById('cashJournalList');
@@ -57,6 +62,7 @@
       { value: 'other', label: 'Другая сумма' },
     ];
     var clickTimer = null;
+    var waitAbortController = null;
     var state = {
       statuses: [],
       orders: [],
@@ -93,7 +99,9 @@
       headers['x-store-id'] = storeId;
       return fetch(url, {
         method: opts.method || 'GET',
+        cache: opts.cache || 'no-store',
         headers: headers,
+        signal: opts.signal,
         body: body == null ? undefined : (typeof body === 'string' ? body : JSON.stringify(body)),
       }).then(function (res) {
         if (res.status === 401) {
@@ -112,6 +120,14 @@
 
     function sleepMs(ms) {
       return new Promise(function (resolve) { window.setTimeout(resolve, Math.max(0, Number(ms || 0))); });
+    }
+
+    function isAbortError(err) {
+      if (!err) return false;
+      var name = String(err.name || '').toLowerCase();
+      if (name === 'aborterror') return true;
+      var message = String(err.message || '').toLowerCase();
+      return message.indexOf('aborted') !== -1;
     }
 
     function money(value) {
@@ -2119,6 +2135,35 @@
       syncTabsWithLatestOrders();
     }
 
+    function removeOrderFromState(orderId) {
+      var id = Number(orderId || 0);
+      if (!(id > 0)) return false;
+      var index = state.orders.findIndex(function (row) { return getOrderId(row) === id; });
+      if (index === -1) return false;
+      state.orders.splice(index, 1);
+      syncTabsWithLatestOrders();
+      return true;
+    }
+
+    function orderMatchesActiveDateRange(order) {
+      if (!(getOrderId(order) > 0)) return false;
+      if (!state.date.start || !state.date.end) return true;
+      var parts = parseLocalDateParts(order && (order.scheduled_at || order.created_at));
+      if (!parts) return false;
+      var key = [String(parts.year || ''), String(parts.month).padStart(2, '0'), String(parts.day).padStart(2, '0')].join('-');
+      var startKey = toDateKey(state.date.start);
+      var endKey = toDateKey(state.date.end);
+      return key >= startKey && key <= endKey;
+    }
+
+    function applyOrderChange(order) {
+      var orderId = getOrderId(order);
+      if (!(orderId > 0)) return false;
+      if (!orderMatchesActiveDateRange(order)) return removeOrderFromState(orderId);
+      updateOrderInState(order);
+      return true;
+    }
+
     function buildDateQuery(qs) {
       if (state.date.start && state.date.end) {
         qs.set('start_date', toDateKey(state.date.start));
@@ -2144,6 +2189,17 @@
 
     function updateDateLabel() {
       if (dateLabel) dateLabel.textContent = formatDateLabel(state.date.start, state.date.end);
+    }
+
+    function resetDateStateToToday(baseDate) {
+      var today = baseDate instanceof Date && !Number.isNaN(baseDate.getTime())
+        ? new Date(baseDate)
+        : getStoreDateNow(state.storeTimezone || '+0');
+      state.date.start = today;
+      state.date.end = new Date(today);
+      state.date.viewYear = today.getFullYear();
+      state.date.viewMonth = today.getMonth();
+      updateDateLabel();
     }
 
     function ensureDateStateInitialized() {
@@ -2669,18 +2725,50 @@
       });
     }
 
+    function fetchOrderChanges() {
+      return apiJson('/api/admin/orders/changes?since=' + String(Number(state.eventsCursor || 0))).then(function (json) {
+        var cursor = Number(json && json.cursor || 0);
+        if (Number.isFinite(cursor) && cursor > 0) state.eventsCursor = Math.max(Number(state.eventsCursor || 0), cursor);
+        var changes = Array.isArray(json && json.data) ? json.data : [];
+        var changed = false;
+        changes.forEach(function (evt) {
+          var eventId = Number(evt && evt.id || 0);
+          if (Number.isFinite(eventId) && eventId > 0) state.eventsCursor = Math.max(Number(state.eventsCursor || 0), eventId);
+          var eventName = String(evt && evt.event || '').toLowerCase();
+          if (eventName !== 'order.created' && eventName !== 'order.updated') return;
+          if (applyOrderChange(evt && evt.data)) changed = true;
+        });
+        if (changed) renderAll();
+      });
+    }
+
     function waitForOrderChanges() {
       var qs = new URLSearchParams({
         since: String(Number(state.eventsCursor || 0)),
         timeout_ms: String(WAIT_TIMEOUT_MS),
         _ts: String(Date.now()),
       });
-      return apiJson('/api/admin/orders/changes/wait?' + qs.toString()).then(function (json) {
+      var controller = new AbortController();
+      waitAbortController = controller;
+      return apiJson('/api/admin/orders/changes/wait?' + qs.toString(), { signal: controller.signal }).then(function (json) {
         return json && json.data ? json.data : {};
+      }).finally(function () {
+        if (waitAbortController === controller) {
+          waitAbortController = null;
+        }
       });
     }
 
+    function stopWaitLoop() {
+      state.waitLoopToken += 1;
+      if (waitAbortController) {
+        try { waitAbortController.abort(); } catch {}
+        waitAbortController = null;
+      }
+    }
+
     function startWaitLoop() {
+      if (document.visibilityState && document.visibilityState !== 'visible') return;
       var token = ++state.waitLoopToken;
       (async function runWaitLoop() {
         if (!(Number(state.eventsCursor || 0) > 0)) await bootstrapEventsCursor();
@@ -2688,9 +2776,19 @@
           try {
             var data = await waitForOrderChanges();
             var cursor = Number(data && data.cursor || 0);
-            if (Number.isFinite(cursor) && cursor > 0) state.eventsCursor = cursor;
-            if (data && data.changed === true) await loadOrders();
+            if (data && data.changed === true) {
+              try {
+                await fetchOrderChanges();
+              } catch (deltaErr) {
+                console.error('cash changes fetch error:', deltaErr);
+                if (Number.isFinite(cursor) && cursor > 0) state.eventsCursor = cursor;
+                await loadOrders();
+              }
+            } else if (Number.isFinite(cursor) && cursor > 0 && !(Number(state.eventsCursor || 0) > 0)) {
+              state.eventsCursor = cursor;
+            }
           } catch (err) {
+            if (isAbortError(err)) return;
             console.error('cash wait loop error:', err);
             await sleepMs(WAIT_RETRY_MS);
           }
@@ -2977,10 +3075,24 @@
     }
 
     document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState === 'visible') loadOrders();
+      if (document.visibilityState === 'hidden') {
+        stopWaitLoop();
+        return;
+      }
+      loadOrders();
+      startWaitLoop();
+    });
+
+    window.addEventListener('pagehide', function () {
+      stopWaitLoop();
+    });
+
+    window.addEventListener('beforeunload', function () {
+      stopWaitLoop();
     });
 
     document.addEventListener('tenantStoreChanged', function () {
+      stopWaitLoop();
       state.orders = [];
       state.statuses = [];
       state.paymentMethods = [];
@@ -2991,6 +3103,7 @@
       tabsState.tabs = [];
       tabsState.activeKey = null;
       loadStoreTimezone().finally(function () {
+        resetDateStateToToday();
         ensureDateStateInitialized();
         renderCalendar();
         bootstrapEventsCursor().finally(function () {
@@ -3003,6 +3116,7 @@
     });
 
     loadStoreTimezone().finally(function () {
+      resetDateStateToToday();
       ensureDateStateInitialized();
       renderCalendar();
       renderAll();

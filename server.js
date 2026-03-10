@@ -1,4 +1,5 @@
 const express = require('express');
+const compression = require('compression');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
@@ -28,13 +29,25 @@ const makeChatTempRouter = require('./api/chatTemp');
 const { authMiddleware } = require('./api/middleware/auth');
 
 const app = express();
-const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '1.9.23';
+const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '2';
+const APP_CACHE_VERSION = String(TELEGRAM_APP_VERSION || '1.9.23').trim() || '1.9.23';
 const STATIC_ASSET_VERSION = String(
-  process.env.STATIC_ASSET_VERSION || process.env.TG_APP_VERSION || ''
+  process.env.STATIC_ASSET_VERSION || APP_CACHE_VERSION || ''
 ).trim();
+const SERVICE_WORKER_VERSION = (() => {
+  try {
+    const stat = fs.statSync(__filename);
+    const mtimeVersion = Math.round(stat.mtimeMs || stat.mtime.getTime());
+    return `${APP_CACHE_VERSION}-${mtimeVersion}`;
+  } catch (e) {
+    return APP_CACHE_VERSION;
+  }
+})();
 const PORT = process.env.PORT || 3000;
+const PERF_CONSOLE_LOGS_ENABLED = String(process.env.ENABLE_PERF_LOGS || '').trim() === '1';
 const TENANT_LOOKUP_CACHE_MS = Number(process.env.TENANT_LOOKUP_CACHE_MS || 60_000);
 const STATIC_FILE_VERSION_CACHE_MS = Number(process.env.STATIC_FILE_VERSION_CACHE_MS || 300_000);
+const SLOW_REQUEST_LOG_MS = Math.max(0, Number(process.env.SLOW_REQUEST_LOG_MS || 1200) || 1200);
 const SYSTEM_SETTINGS_DIR = path.join(__dirname, 'data');
 const SYSTEM_SETTINGS_FILE = path.join(SYSTEM_SETTINGS_DIR, 'system-settings.json');
 const runtimePollingState = {
@@ -46,6 +59,45 @@ const staticVersionCache = new Map();
 let telegramEnvPollingHandle = null;
 let telegramTenantPollingHandle = null;
 let fatalErrorLogged = false;
+
+function nowMs() {
+  return Number(process.hrtime.bigint()) / 1e6;
+}
+
+function formatTimingDuration(value) {
+  const numeric = Math.max(0, Number(value) || 0);
+  return numeric.toFixed(1);
+}
+
+function buildServerTimingHeader(totalMs, metrics) {
+  const items = [`app;dur=${formatTimingDuration(totalMs)}`];
+  const safeMetrics = metrics && typeof metrics === 'object' ? metrics : {};
+  const dbQueryMs = Math.max(0, Number(safeMetrics.dbQueryMs || 0) || 0);
+  const dbWaitMs = Math.max(0, Number(safeMetrics.dbWaitMs || 0) || 0);
+  const dbQueryCount = Math.max(0, Number(safeMetrics.dbQueryCount || 0) || 0);
+  const dbWaitCount = Math.max(0, Number(safeMetrics.dbWaitCount || 0) || 0);
+
+  if (dbQueryMs > 0 || dbQueryCount > 0) {
+    const desc = dbQueryCount > 0 ? `;desc="${dbQueryCount} queries"` : '';
+    items.push(`db;dur=${formatTimingDuration(dbQueryMs)}${desc}`);
+  }
+  if (dbWaitMs > 0 || dbWaitCount > 0) {
+    const desc = dbWaitCount > 0 ? `;desc="${dbWaitCount} acquires"` : '';
+    items.push(`dbwait;dur=${formatTimingDuration(dbWaitMs)}${desc}`);
+  }
+
+  return items.join(', ');
+}
+
+function shouldLogSlowRequest(req) {
+  const pathValue = String(req.path || req.originalUrl || '');
+  if (!pathValue) return true;
+  return !(
+    pathValue.startsWith('/static/')
+    || pathValue.startsWith('/uploads/')
+    || pathValue === '/favicon.ico'
+  );
+}
 
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled promise rejection:', reason);
@@ -117,6 +169,45 @@ app.use(cors());
 app.use(express.json({ limit: '60mb' }));
 app.use(express.urlencoded({ extended: true, limit: '60mb' }));
 app.use(cookieParser());
+app.use((req, res, next) => {
+  const startedAt = nowMs();
+  const metrics = typeof db.createEmptyRequestMetrics === 'function'
+    ? db.createEmptyRequestMetrics()
+    : { dbQueryCount: 0, dbQueryMs: 0, dbWaitCount: 0, dbWaitMs: 0 };
+  const originalWriteHead = res.writeHead;
+
+  res.writeHead = function instrumentedWriteHead(...args) {
+    if (!res.headersSent) {
+      const totalMs = nowMs() - startedAt;
+      res.setHeader('Server-Timing', buildServerTimingHeader(totalMs, metrics));
+      res.setHeader('X-Response-Time', `${Math.round(totalMs)}ms`);
+    }
+    return originalWriteHead.apply(this, args);
+  };
+
+  res.on('finish', () => {
+    const totalMs = nowMs() - startedAt;
+    if (PERF_CONSOLE_LOGS_ENABLED && totalMs >= SLOW_REQUEST_LOG_MS && shouldLogSlowRequest(req)) {
+      console.warn(
+        `[http] slow ${req.method} ${req.originalUrl} ${res.statusCode} ${totalMs.toFixed(1)}ms`
+        + ` (db=${Number(metrics.dbQueryCount || 0)}q/${formatTimingDuration(metrics.dbQueryMs)}ms`
+        + ` wait=${Number(metrics.dbWaitCount || 0)}a/${formatTimingDuration(metrics.dbWaitMs)}ms)`
+      );
+    }
+  });
+
+  if (typeof db.withRequestMetrics === 'function') {
+    return db.withRequestMetrics(metrics, next);
+  }
+  return next();
+});
+app.use(compression({
+  threshold: 1024,
+  filter(req, res) {
+    if (req.headers['x-no-compression']) return false;
+    return compression.filter(req, res);
+  }
+}));
 
 // Статика: долгий кэш для изображений, короткий/по умолчанию — для остального
 app.use('/static', express.static(path.join(__dirname, 'static'), {
@@ -215,14 +306,16 @@ async function findTenantBySubdomain(subdomain) {
 }
 
 function getStaticFileVersionCached(relativePath) {
-  if (STATIC_ASSET_VERSION) return STATIC_ASSET_VERSION;
   const cacheKey = `static:version:${relativePath}`;
   const cached = getFreshCachedValue(staticVersionCache, cacheKey);
   if (cached.hit) return cached.value;
 
   const filePath = path.join(__dirname, 'static', relativePath);
   const stat = fs.statSync(filePath);
-  const version = Math.round(stat.mtimeMs || stat.mtime.getTime());
+  const mtimeVersion = Math.round(stat.mtimeMs || stat.mtime.getTime());
+  const version = STATIC_ASSET_VERSION
+    ? `${STATIC_ASSET_VERSION}-${mtimeVersion}`
+    : mtimeVersion;
   setCachedValue(staticVersionCache, cacheKey, version, STATIC_FILE_VERSION_CACHE_MS);
   return version;
 }
@@ -241,6 +334,135 @@ app.locals.assetUrl = function assetUrl(src) {
     return src;
   }
 };
+app.locals.appVersion = APP_CACHE_VERSION;
+app.locals.serviceWorkerVersion = SERVICE_WORKER_VERSION;
+
+function toManifestPathname(rawPath) {
+  const fallback = '/';
+  const raw = String(rawPath || '').trim();
+  if (!raw) return fallback;
+  try {
+    const parsed = new URL(raw, 'https://manifest.local');
+    const pathname = String(parsed.pathname || '').trim();
+    return pathname.startsWith('/') ? pathname : fallback;
+  } catch (e) {
+    const cleaned = raw.split('#')[0].split('?')[0].trim();
+    if (!cleaned) return fallback;
+    return cleaned.startsWith('/') ? cleaned : `/${cleaned.replace(/^\/+/, '')}`;
+  }
+}
+
+function isBlockedShopManifestPath(pathname) {
+  const pathValue = toManifestPathname(pathname);
+  return (
+    pathValue.startsWith('/dashboard')
+    || pathValue.startsWith('/api/')
+    || pathValue === '/login'
+    || pathValue === '/register'
+    || pathValue === '/manifest.json'
+    || pathValue === '/sw.js'
+    || pathValue === '/telegram/app'
+    || pathValue === '/max-app'
+  );
+}
+
+function normalizeManifestApp(rawApp) {
+  return String(rawApp || '').trim().toLowerCase() === 'admin' ? 'admin' : 'shop';
+}
+
+function normalizeManifestStartPath(rawStart, options = {}) {
+  const appType = normalizeManifestApp(options.appType);
+  const tenantHostShop = Boolean(options.tenantHostShop);
+  const pathname = toManifestPathname(rawStart);
+
+  if (appType === 'admin') {
+    return pathname.startsWith('/dashboard/') ? pathname : '/dashboard/cash';
+  }
+
+  if (tenantHostShop) {
+    return isBlockedShopManifestPath(pathname) ? '/' : pathname;
+  }
+
+  return pathname.startsWith('/shop') ? pathname : '/shop';
+}
+
+function normalizeManifestTitle(rawTitle, fallback = '') {
+  const value = String(rawTitle || '').replace(/\s+/g, ' ').trim();
+  if (value) return value;
+  return String(fallback || '').replace(/\s+/g, ' ').trim();
+}
+
+function getAdminManifestPageTitle(startPath, fallbackTitle = '') {
+  const pathname = normalizeManifestStartPath(startPath, { appType: 'admin' });
+  const defaults = {
+    '/dashboard/cash': 'Касса',
+    '/dashboard/products': 'Товары',
+    '/dashboard/orders': 'Заказы',
+    '/dashboard/courier-screen': 'Экран курьера',
+    '/dashboard/new-order': 'Новый заказ',
+    '/dashboard/clients': 'Клиенты',
+    '/dashboard/chat': 'Чаты',
+    '/dashboard/team': 'Главная',
+    '/dashboard/settings': 'Настройки',
+  };
+  return normalizeManifestTitle(fallbackTitle, defaults[pathname] || 'Админка');
+}
+
+function buildAdminManifestId(tenantId, startPath) {
+  const normalizedTenantId = Number(tenantId) > 0 ? Number(tenantId) : 0;
+  const normalizedPath = normalizeManifestStartPath(startPath, { appType: 'admin' });
+  return `/pwa/admin/t${normalizedTenantId}${normalizedPath}`;
+}
+
+function resolveManifestIconSrc(rawSrc) {
+  const src = String(rawSrc || '').trim();
+  if (!src) return '';
+  if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) return src;
+  if (!src.startsWith('/')) return '';
+
+  const localPath = path.join(__dirname, src.replace(/^\/+/, '').replace(/\//g, path.sep));
+  try {
+    return fs.existsSync(localPath) ? src : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function pickManifestIconSrc(candidates) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  for (const candidate of list) {
+    const resolved = resolveManifestIconSrc(candidate);
+    if (resolved) return resolved;
+  }
+  return '';
+}
+
+app.locals.manifestUrl = function manifestUrl(options = {}) {
+  const appType = normalizeManifestApp(options.appType);
+  const qs = new URLSearchParams();
+  qs.set('app', appType);
+  qs.set('start', toManifestPathname(options.startPath));
+  const tenantId = Number(options.tenantId);
+  if (Number.isFinite(tenantId) && tenantId > 0) {
+    qs.set('tenant_id', String(tenantId));
+  }
+  const versionToken = String(options.versionToken || '').trim();
+  if (versionToken) {
+    qs.set('v', versionToken);
+  }
+  if (appType === 'admin') {
+    const title = normalizeManifestTitle(options.title);
+    if (title) {
+      qs.set('title', title);
+    }
+  }
+  return `/manifest.json?${qs.toString()}`;
+};
+
+app.use((req, res, next) => {
+  res.locals.currentPath = toManifestPathname(req.path || '/');
+  next();
+});
 
 // Helper для версионирования URL картинок по времени изменения файла
 app.locals.imageUrl = function imageUrl(src) {
@@ -409,16 +631,36 @@ app.use('/api/auth', makeAuthRouter({ db, helpers }));
 // ------------------------------
 app.get('/manifest.json', async (req, res) => {
   try {
+    const appType = normalizeManifestApp(req.query.app);
     const tenant = await resolveTenant(req);
+    const tenantHostShop = Boolean(await findTenantByHost(req.hostname));
+    const startPath = normalizeManifestStartPath(req.query.start, {
+      appType,
+      tenantHostShop,
+    });
+    const tenantName = (tenant && (tenant.site_name || tenant.name)) ? (tenant.site_name || tenant.name) : 'Магазин';
+    const tenantId = Number(tenant && tenant.id ? tenant.id : 0) || 0;
+    const adminPageTitle = appType === 'admin'
+      ? getAdminManifestPageTitle(startPath, req.query.title)
+      : '';
+    const scope = appType === 'admin'
+      ? '/dashboard/'
+      : (tenantHostShop ? '/' : '/shop');
+    const manifestName = appType === 'admin'
+      ? `${tenantName} Админка`
+      : tenantName;
+    const manifestShortName = appType === 'admin'
+      ? 'Админка'
+      : tenantName;
     const name = (tenant && (tenant.site_name || tenant.name)) ? (tenant.site_name || tenant.name) : 'Магазин';
-    const iconBase = tenant && (
-      tenant.android_icon_url ||
-      tenant.apple_touch_icon_url ||
-      tenant.logo_light_url ||
-      tenant.logo_dark_url ||
-      tenant.favicon_light_url ||
+    const iconBase = pickManifestIconSrc(tenant ? [
+      tenant.android_icon_url,
+      tenant.apple_touch_icon_url,
+      tenant.logo_light_url,
+      tenant.logo_dark_url,
+      tenant.favicon_light_url,
       tenant.favicon_dark_url
-    );
+    ] : []);
 
     const icons = [];
     if (iconBase) {
@@ -428,13 +670,18 @@ app.get('/manifest.json', async (req, res) => {
       icons.push({ src: iconBase, sizes: '512x512', purpose: 'maskable' });
     }
 
-    res.setHeader('Content-Type', 'application/manifest+json');
+    res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Vary', 'Host');
     res.json({
-      name,
-      short_name: name,
+      id: appType === 'admin'
+        ? buildAdminManifestId(tenantId, startPath)
+        : `/pwa/shop/t${tenantId}`,
+      name: appType === 'admin' ? adminPageTitle : manifestName,
+      short_name: appType === 'admin' ? adminPageTitle : manifestShortName,
       description: (tenant && tenant.site_description) ? tenant.site_description : undefined,
-      start_url: '/shop',
-      scope: '/',
+      start_url: startPath,
+      scope,
       display: 'standalone',
       orientation: 'portrait',
       background_color: '#ffffff',
@@ -448,23 +695,40 @@ app.get('/manifest.json', async (req, res) => {
 });
 
 // Service Worker для PWA (Android / установка на домашний экран)
+const serviceWorkerPrecacheUrls = [
+  app.locals.assetUrl('/static/css/style.css'),
+  app.locals.assetUrl('/static/js/auth.js'),
+  app.locals.assetUrl('/static/js/current-time.js'),
+  app.locals.assetUrl('/static/js/theme.js'),
+  app.locals.assetUrl('/static/js/sidebar.js'),
+  app.locals.assetUrl('/static/js/admin-mobile-nav.js'),
+  app.locals.assetUrl('/static/js/chat-sidebar-badge.js'),
+  app.locals.assetUrl('/static/js/appModal.js'),
+  app.locals.assetUrl('/static/js/shared-order-panel.js'),
+  app.locals.assetUrl('/static/js/shared-order-payment.js'),
+  app.locals.assetUrl('/static/js/new-order.js'),
+  app.locals.assetUrl('/static/js/courier-screen.js'),
+  app.locals.assetUrl('/static/js/orders.js')
+];
+const serviceWorkerWarmPages = [
+  '/dashboard/cash',
+  '/dashboard/products',
+  '/dashboard/orders',
+  '/dashboard/courier-screen',
+  '/dashboard/new-order',
+  '/dashboard/clients',
+  '/dashboard/chat',
+  '/dashboard/team',
+  '/dashboard/settings'
+];
 const serviceWorkerScript = `
-var SW_VERSION = 'admin-shell-v3';
+var SW_VERSION = ${JSON.stringify(APP_CACHE_VERSION)};
 var STATIC_CACHE = 'admin-static-' + SW_VERSION;
 var PAGE_CACHE = 'admin-pages-' + SW_VERSION;
 var CHAT_IMAGE_CACHE_NAME = 'chat-images-v1';
 var CHAT_IMAGE_CACHE_MAX_ITEMS = 180;
-var PRECACHE_URLS = [
-  '/manifest.json',
-  '/static/css/style.css',
-  '/static/js/auth.js',
-  '/static/js/current-time.js',
-  '/static/js/theme.js',
-  '/static/js/sidebar.js',
-  '/static/js/admin-mobile-nav.js',
-  '/static/js/chat-sidebar-badge.js',
-  '/static/js/appModal.js'
-];
+var PRECACHE_URLS = ${JSON.stringify(serviceWorkerPrecacheUrls)};
+var WARM_PAGES = ${JSON.stringify(serviceWorkerWarmPages)};
 
 function shouldCacheResponse(response) {
   return !!response && (response.ok || response.type === 'opaqueredirect');
@@ -514,7 +778,24 @@ async function handleChatImageFetch(request) {
 
 async function cacheStaticAssets() {
   var cache = await caches.open(STATIC_CACHE);
-  await cache.addAll(PRECACHE_URLS);
+  await Promise.allSettled(PRECACHE_URLS.map(function (url) {
+    return cache.add(url);
+  }));
+}
+
+async function warmPages() {
+  await Promise.allSettled(WARM_PAGES.map(async function (url) {
+    try {
+      var response = await fetch(url, { credentials: 'same-origin' });
+      if (shouldCacheResponse(response)) {
+        var cache = await caches.open(PAGE_CACHE);
+        await cache.put(url, response.clone());
+      }
+    } catch (err) {
+      return null;
+    }
+    return null;
+  }));
 }
 
 async function cacheFirst(request) {
@@ -529,24 +810,34 @@ async function cacheFirst(request) {
   return response;
 }
 
-async function networkFirst(request) {
+async function fetchAndCachePage(request) {
   var cache = await caches.open(PAGE_CACHE);
-  try {
-    var response = await fetch(request);
-    if (shouldCacheResponse(response)) {
-      cache.put(request, response.clone()).catch(function () {});
-    }
-    return response;
-  } catch (err) {
-    var cached = await cache.match(request);
-    if (cached) return cached;
-    throw err;
+  var response = await fetch(request);
+  if (shouldCacheResponse(response)) {
+    cache.put(request, response.clone()).catch(function () {});
   }
+  return response;
+}
+
+async function staleWhileRevalidate(request, event) {
+  var cache = await caches.open(PAGE_CACHE);
+  var cached = await cache.match(request) || await cache.match(request.url);
+  var networkPromise = fetchAndCachePage(request);
+
+  if (event && typeof event.waitUntil === 'function') {
+    event.waitUntil(networkPromise.catch(function () {}));
+  }
+
+  if (cached) return cached;
+  return networkPromise;
 }
 
 self.addEventListener('install', function (event) {
   event.waitUntil(
-    cacheStaticAssets().catch(function () {}).then(function () {
+    Promise.all([
+      cacheStaticAssets().catch(function () {}),
+      warmPages().catch(function () {})
+    ]).then(function () {
       return self.skipWaiting();
     })
   );
@@ -586,9 +877,13 @@ self.addEventListener('fetch', function (event) {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.indexOf('/api/') === 0) return;
 
+  if (url.pathname === '/manifest.json') {
+    event.respondWith(fetch(request));
+    return;
+  }
+
   if (
     url.pathname.indexOf('/static/') === 0
-    || url.pathname === '/manifest.json'
     || url.pathname === '/sw.js'
   ) {
     event.respondWith(cacheFirst(request));
@@ -596,7 +891,7 @@ self.addEventListener('fetch', function (event) {
   }
 
   if (request.mode === 'navigate' && url.pathname.indexOf('/dashboard') === 0) {
-    event.respondWith(networkFirst(request));
+    event.respondWith(staleWhileRevalidate(request, event));
   }
 });
 
@@ -611,7 +906,7 @@ self.addEventListener('push', function (event) {
       payload = {};
     }
   }
-  var title = String((payload && payload.title) || '\\u041d\\u043e\\u0432\\u043e\\u0435 \\u0441\\u043e\\u043e\\u0431\\u0449\\u0435\\u043d\\u0438\\u0435');
+  var title = String((payload && payload.title) || '\\u041d\\u043e\\u0432\\u043e\\u0435 \\u0441\\u043e\\u043e\\u0431\\u0449\\u0435\u043d\u0438\u0435');
   var body = String((payload && payload.body) || '');
   var tag = String((payload && payload.tag) || 'chat-message');
   var url = String((payload && payload.url) || '/shop');
@@ -645,7 +940,7 @@ self.addEventListener('notificationclick', function (event) {
 `;
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
-  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.send(serviceWorkerScript);
 });
 
@@ -653,6 +948,7 @@ app.use(async (req, res, next) => {
   if (
     req.path.startsWith('/api')
     || req.path.startsWith('/static')
+    || req.path.startsWith('/dashboard')
     || req.path === '/manifest.json'
     || req.path === '/sw.js'
     || req.path === '/max-app'

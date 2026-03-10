@@ -1,4 +1,9 @@
 (function () {
+  if (typeof window !== "undefined" && window.__ordersPageInitialized) return;
+  if (typeof window !== "undefined") {
+    window.__ordersPageInitialized = true;
+  }
+
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
@@ -21,6 +26,9 @@
   const tenantId = getTenantId();
   const SHARED_ORDER_DETAILS_CACHE_KEY = `dashboard:orders:details:v1:${tenantId}`;
   const SHARED_ORDER_DETAILS_CACHE_MAX = 400;
+  const appVersion = String(window.__APP_VERSION__ || document.body?.dataset?.appVersion || "")
+    .trim()
+    .replace(/[^a-z0-9._-]+/gi, "_") || "dev";
   const rawWorkspaceConfig = window.OrderWorkspaceConfig && typeof window.OrderWorkspaceConfig === "object"
     ? window.OrderWorkspaceConfig
     : {};
@@ -88,6 +96,22 @@
         .replace(/_+/g, "_"))
       .filter(Boolean)
   );
+  function toStatusIdSet(value) {
+    const values = Array.isArray(value) ? value : [value];
+    return new Set(
+      values
+        .map((item) => Number(item))
+        .filter((item) => Number.isFinite(item) && item >= 0)
+    );
+  }
+  function toStatusId(value) {
+    const id = Number(value);
+    return Number.isFinite(id) && id >= 0 ? id : null;
+  }
+  const courierAvailableStatusIds = toStatusIdSet(rawWorkspaceConfig.courierAvailableStatusIds);
+  const courierTransitStatusId = toStatusId(rawWorkspaceConfig.courierTransitStatusId);
+  const courierDeliveredStatusId = toStatusId(rawWorkspaceConfig.courierDeliveredStatusId);
+  const courierCanceledStatusIds = toStatusIdSet(rawWorkspaceConfig.courierCanceledStatusIds);
   const ordersCacheScope = String(rawWorkspaceConfig.cacheScope || workspaceMode || "orders").trim().toLowerCase() || "orders";
 
   async function apiJson(url, opts = {}) {
@@ -107,11 +131,19 @@
     // Добавляем ID выбранной Филиалы
     headers['x-store-id'] = storeId;
     
-    const res = await fetch(url, {
-      method: opts.method || "GET",
-      headers,
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
+    let res;
+    try {
+      res = await fetch(url, {
+        method: opts.method || "GET",
+        cache: opts.cache || "no-store",
+        headers,
+        signal: opts.signal,
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+    } catch (err) {
+      markCourierOfflineFromError(err);
+      throw err;
+    }
     
     // Если 401 - перенаправляем на логин
     if (res.status === 401) {
@@ -159,6 +191,14 @@
     try {
       localStorage.setItem(SHARED_ORDER_DETAILS_CACHE_KEY, JSON.stringify(compacted));
     } catch {}
+  }
+
+  function isAbortError(err) {
+    if (!err) return false;
+    const name = String(err.name || "").toLowerCase();
+    if (name === "aborterror") return true;
+    const message = String(err.message || "").toLowerCase();
+    return message.includes("aborted");
   }
 
   // -----------------------------
@@ -231,6 +271,8 @@
   const backdrop = $("#sheetBackdrop");
   const closeBtn = $("#sheetClose");
   const sheetTitleEl = $(".sheet-title", sheet || document);
+  let sheetReturnFocusEl = null;
+  let sheetBodyTabIndexAdded = false;
   const desktopClientDom = createClientDomRefs(document);
   const sheetClientDom = isCourierScreenPage && sheet ? createClientDomRefs(sheet) : null;
   const clientSurfaces = [desktopClientDom, sheetClientDom].filter((dom) => dom && dom.infoWrap);
@@ -265,6 +307,7 @@
         footerEl: orderInfoFooter,
         clientInfoWrap,
         enableClientLink: true,
+        treatOrderCommentAsAddressComment: isCourierWorkspace,
         helpers: {
           money,
           formatDateTime,
@@ -292,6 +335,7 @@
         footerEl: sheetOrderInfoFooter,
         clientInfoWrap: null,
         enableClientLink: true,
+        treatOrderCommentAsAddressComment: true,
         helpers: {
           money,
           formatDateTime,
@@ -320,6 +364,13 @@
   const orderInfoPaymentButtons = isCourierScreenPage
     ? [orderInfoPaymentBtn, sheetOrderInfoPaymentBtn].filter(Boolean)
     : [orderInfoPaymentBtn].filter(Boolean);
+  const courierConnectionBanner = isCourierWorkspace ? $("#courierConnectionBanner") : null;
+  const courierConnectionBannerText = courierConnectionBanner
+    ? $(".courier-connection-banner__text", courierConnectionBanner)
+    : null;
+  const courierConnectionBannerRetryBtn = courierConnectionBanner
+    ? $('[data-action="courier-connection-retry"]', courierConnectionBanner)
+    : null;
 
   const closeButtons = $$('[data-action="order-close"]');
 
@@ -332,6 +383,7 @@
   const dateNext = $("#ordersDateNext");
   const dateReset = $("#ordersDateReset");
   const notifyBtn = $("#ordersNotifyBtn");
+  const ordersToolbarTitle = $("#ordersToolbarTitle");
 
   // -----------------------------
   // State
@@ -340,6 +392,7 @@
     statuses: [],
     activeStatusId: isCourierWorkspace ? courierDefaultBucketId : "all",
     orders: [],
+    ordersStageIndex: { all: [], byStatus: Object.create(null) },
     activeOrderId: null,
     draggingOrderId: null,
     draggingOrderIds: [],
@@ -362,9 +415,19 @@
     activeKey: null,
   };
 
-  const ORDERS_CACHE_VERSION = 3;
+  const ORDERS_CACHE_VERSION = 4;
   const ORDERS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+  const COURIER_OFFLINE_QUEUE_VERSION = 1;
   let ordersCachePersistTimer = null;
+  const courierOfflineState = {
+    queue: [],
+    shadowOrders: new Map(),
+    syncing: false,
+    online: navigator.onLine !== false,
+    syncError: "",
+    transientBanner: null,
+    restoredHideTimer: null,
+  };
 
   // -----------------------------
   // Helpers
@@ -585,14 +648,47 @@
     return String(order?.method_code || "").trim().toLowerCase() === deliveryMethodCode;
   }
 
+  function getCourierOrderStatusId(order) {
+    const id = Number(order?.status_id);
+    return Number.isFinite(id) ? id : null;
+  }
+
+  function matchesCourierCanceledStatus(statusMeta) {
+    const statusId = Number(statusMeta?.id);
+    if (Number.isFinite(statusId) && courierCanceledStatusIds.has(statusId)) return true;
+    return isCanceledStatusMeta(statusMeta);
+  }
+
+  function getCourierConfiguredStatusMeta(statusId, order, fallbackTitle = "") {
+    if (!Number.isFinite(Number(statusId)) || Number(statusId) < 0) return null;
+    const normalizedId = Number(statusId);
+    const configured = getStatusMetaById(normalizedId);
+    if (configured) return configured;
+    if (Number(order?.status_id) === normalizedId) {
+      const currentStatus = getOrderStatusMeta(order);
+      return { ...currentStatus, id: normalizedId, title: currentStatus?.title || fallbackTitle };
+    }
+    return {
+      id: normalizedId,
+      code: "",
+      title: fallbackTitle,
+      icon: "",
+      is_final: normalizedId === courierDeliveredStatusId ? 1 : 0,
+    };
+  }
+
   function matchesCourierDeliveredStatus(statusMeta) {
     if (!statusMeta) return false;
+    const statusId = Number(statusMeta?.id);
+    if (Number.isFinite(statusId) && courierDeliveredStatusId !== null && statusId === courierDeliveredStatusId) {
+      return true;
+    }
     if (normalizeStatusCode(statusMeta) === "delivered") return true;
     const statusTokens = [statusMeta?.code, statusMeta?.title]
       .map(normalizeCourierAlias)
       .filter(Boolean);
     if (statusTokens.some((token) => courierDeliveredAliases.has(token))) return true;
-    return Number(statusMeta?.is_final || 0) === 1 && !isCanceledStatusMeta(statusMeta);
+    return Number(statusMeta?.is_final || 0) === 1 && !matchesCourierCanceledStatus(statusMeta);
   }
 
   function getOrderStatusMeta(order) {
@@ -609,6 +705,15 @@
     if (!isCourierWorkspace || !isDeliveryOrder(order)) return null;
 
     const statusMeta = getOrderStatusMeta(order);
+    const currentStatusId = getCourierOrderStatusId(order);
+    if (currentStatusId !== null) {
+      if (courierCanceledStatusIds.has(currentStatusId)) return null;
+      if (courierDeliveredStatusId !== null && currentStatusId === courierDeliveredStatusId) return "delivered";
+      if (courierTransitStatusId !== null && currentStatusId === courierTransitStatusId) return "in-transit";
+      if (courierAvailableStatusIds.size) {
+        return courierAvailableStatusIds.has(currentStatusId) ? "available" : null;
+      }
+    }
     if (matchesCourierDeliveredStatus(statusMeta)) return "delivered";
 
     const statusTokens = [
@@ -624,7 +729,7 @@
       return "in-transit";
     }
 
-    if (isCanceledStatusMeta(statusMeta) || isFinalStatusMeta(statusMeta)) {
+    if (matchesCourierCanceledStatus(statusMeta) || isFinalStatusMeta(statusMeta)) {
       return null;
     }
 
@@ -649,6 +754,9 @@
 
   function getCourierTransitStatusMeta(order) {
     if (!isCourierWorkspace) return null;
+    if (courierTransitStatusId !== null) {
+      return getCourierConfiguredStatusMeta(courierTransitStatusId, order, "В пути");
+    }
     const statuses = getSortedStatuses();
     if (!statuses.length) return null;
 
@@ -669,6 +777,9 @@
 
   function getCourierDeliveredStatusMeta(order) {
     if (!isCourierWorkspace) return null;
+    if (courierDeliveredStatusId !== null) {
+      return getCourierConfiguredStatusMeta(courierDeliveredStatusId, order, "Доставлен");
+    }
     const statuses = getSortedStatuses();
     if (!statuses.length) return null;
 
@@ -694,20 +805,26 @@
     const currentStatus = getOrderStatusMeta(order);
     const transitStatus = getCourierTransitStatusMeta(order);
     const deliveredStatus = getCourierDeliveredStatusMeta(order);
+    const currentStatusId = getCourierOrderStatusId(order);
+    const deliveredStatusId = Number(deliveredStatus?.id ?? -1);
+    const transitStatusId = Number(transitStatus?.id ?? -1);
     const isEligibleOrder = isCourierWorkspace
       && isDeliveryOrder(order)
-      && !isCanceledStatusMeta(currentStatus)
+      && !matchesCourierCanceledStatus(currentStatus)
       && !matchesCourierDeliveredStatus(currentStatus);
-    const isAlreadyTransit = transitStatus && Number(transitStatus.id || 0) === Number(currentStatus?.id || 0);
+    const isAlreadyTransit = currentStatusId !== null && transitStatusId >= 0
+      ? transitStatusId === currentStatusId
+      : Boolean(transitStatus && Number(transitStatus.id || 0) === Number(currentStatus?.id || 0));
     const isAlreadyDelivered = matchesCourierDeliveredStatus(currentStatus);
+    const isCurrentDeliveredStatus = currentStatusId !== null && deliveredStatusId >= 0 && deliveredStatusId === currentStatusId;
     const canPickup = Boolean(isEligibleOrder && transitStatus && !isAlreadyTransit);
     const canDeliver = Boolean(
       isCourierWorkspace
       && isDeliveryOrder(order)
-      && !isCanceledStatusMeta(currentStatus)
+      && !matchesCourierCanceledStatus(currentStatus)
       && isAlreadyTransit
       && deliveredStatus
-      && Number(deliveredStatus.id || 0) !== Number(currentStatus?.id || 0)
+      && Number(deliveredStatus.id || 0) !== Number(currentStatusId)
     );
     let disabledReason = "";
     let actionLabel = "Забрать";
@@ -720,11 +837,16 @@
       actionLabel = "Доставлен";
       actionIcon = "fas fa-circle-check";
       targetStatus = deliveredStatus;
+    } else if (isCurrentDeliveredStatus) {
+      actionLabel = "Доставлен";
+      actionIcon = "fas fa-circle-check";
+      targetStatus = deliveredStatus;
+      disabledReason = "Заказ уже доставлен";
     } else if (!transitStatus) {
       disabledReason = "Не найден статус «В пути»";
     } else if (isAlreadyTransit) {
       disabledReason = "Заказ уже в пути";
-    } else if (isFinalStatusMeta(currentStatus) || isAlreadyDelivered || isDeliveredStatusMeta(currentStatus) || isCanceledStatusMeta(currentStatus)) {
+    } else if (isFinalStatusMeta(currentStatus) || isAlreadyDelivered || isDeliveredStatusMeta(currentStatus) || matchesCourierCanceledStatus(currentStatus)) {
       disabledReason = "Действие недоступно для финального статуса";
     }
 
@@ -958,10 +1080,21 @@
     return `кв ${m[1]}`;
   }
 
+  function stripApartmentToken(token) {
+    const src = String(token || "").trim();
+    if (!src) return "";
+    return src
+      .replace(/\b[\p{L}\d\-\/]+\s*\u043a\u0432(?:\u0430\u0440\u0442\u0438\u0440\u0430)?\.?\b/iu, "")
+      .replace(/\b\u043a\u0432(?:\u0430\u0440\u0442\u0438\u0440\u0430)?\.?\s*[\p{L}\d\-\/]+\b/iu, "")
+      .replace(/\s{2,}/g, " ")
+      .replace(/[\s,;]+$/u, "")
+      .trim();
+  }
+
   function normalizeHouseToken(token) {
     const src = String(token || "").trim();
     if (!src) return "";
-    const re = /(?:\u0434(?:\u043e\u043c)?\.?)\s*([\p{L}\d\-\/]+)/iu;
+    const re = /^(?:\u0434(?:\u043e\u043c)?\.?)\s*([\p{L}\d\-\/]+)$/iu;
     const m = src.match(re);
     if (m && m[1]) return m[1];
     if (/^\d+[\p{L}\-\/]*$/iu.test(src)) return src;
@@ -988,42 +1121,21 @@
     if (!raw) return "?";
     const tokens = raw.split(",").map((v) => String(v || "").trim()).filter(Boolean);
     if (!tokens.length) return raw;
+    const cleanedTokens = tokens
+      .map((token) => stripApartmentToken(token))
+      .map((token) => String(token || "").trim())
+      .filter(Boolean);
+    if (!cleanedTokens.length) return raw;
+    if (cleanedTokens.length === 1) return cleanedTokens[0];
 
-    let aptPart = "";
-    for (const token of tokens) {
-      const apt = normalizeApartmentToken(token);
-      if (apt) {
-        aptPart = apt;
-        break;
-      }
-    }
+    const first = cleanedTokens[0];
+    const second = cleanedTokens[1];
+    if (first && normalizeHouseToken(second)) return `${first}, ${second}`;
+    if (!looksLikeStreetToken(first) && looksLikeStreetToken(second)) return second;
 
-    const explicitStreetIdx = tokens.findIndex((token) => looksLikeStreetToken(token) && !normalizeHouseToken(token));
-    const houseIdx = tokens.findIndex((token) => !!normalizeHouseToken(token));
-    let streetPart = explicitStreetIdx >= 0 ? (tokens[explicitStreetIdx] || "") : "";
-
-    if (!streetPart) {
-      const beforeHouse = (houseIdx >= 0 ? tokens.slice(0, houseIdx) : tokens)
-        .filter((token) => !isMetaAddressToken(token) && !normalizeHouseToken(token));
-      if (beforeHouse.length) streetPart = beforeHouse[beforeHouse.length - 1] || "";
-    }
-
-    if (!streetPart) {
-      const fallbackStreetIdx = tokens.findIndex((token) => !isMetaAddressToken(token) && looksLikeStreetToken(token));
-      if (fallbackStreetIdx >= 0) streetPart = tokens[fallbackStreetIdx] || "";
-    }
-
-    if (streetPart && !/\d/.test(streetPart)) {
-      const houseToken = houseIdx >= 0 ? tokens[houseIdx] || "" : "";
-      const house = normalizeHouseToken(houseToken);
-      if (house) streetPart = `${streetPart} ${house}`.trim();
-    }
-
-    if (!streetPart) streetPart = raw;
-    if (aptPart && !/\b(?:\u043a\u0432(?:\u0430\u0440\u0442\u0438\u0440\u0430)?\.?)\s*[\p{L}\d\-\/]+\b/iu.test(streetPart)) {
-      return `${streetPart}, ${aptPart}`;
-    }
-    return streetPart;
+    const streetLike = cleanedTokens.find((token) => looksLikeStreetToken(token) && !normalizeHouseToken(token));
+    if (streetLike) return streetLike;
+    return first;
   }
 
   function buildOrderTabKey(orderId) {
@@ -1383,6 +1495,21 @@
     syncActiveOrderRowState();
     setInfo(orderFromState || tab.order || null);
 
+    if (!orderFromState && tab.orderId) {
+      ensureFullOrderById(tab.orderId)
+        .then((fullOrder) => {
+          if (!fullOrder) return;
+          const activeTab = tabsState.tabs.find((item) => item.key === key);
+          if (!activeTab || tabsState.activeKey !== key) return;
+          activeTab.order = { ...activeTab.order, ...fullOrder };
+          activeTab.title = buildOrderTabTitle(activeTab.order);
+          renderOrderTabs();
+          setInfo(activeTab.order);
+          syncActiveOrderRowState();
+        })
+        .catch(console.error);
+    }
+
     if (openMobile && isMobile()) openSheet();
     schedulePersistOrdersCache();
   }
@@ -1432,11 +1559,13 @@
       const json = await apiJson(`/api/admin/orders/${id}`);
       const fullOrder = json?.data || null;
       if (!fullOrder || !Number.isFinite(Number(fullOrder.id))) return fromState;
+      const nextOrder = overlayCourierShadowOrder(fullOrder);
       const idx = state.orders.findIndex((order) => Number(order?.id) === Number(fullOrder.id));
-      if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...fullOrder };
-      else state.orders.unshift(fullOrder);
+      if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...nextOrder };
+      else state.orders.unshift(nextOrder);
+      rebuildOrdersStageIndex();
       renderOrders();
-      return state.orders.find((order) => Number(order?.id) === Number(fullOrder.id)) || fullOrder;
+      return state.orders.find((order) => Number(order?.id) === Number(fullOrder.id)) || nextOrder;
     } catch (err) {
       console.error(err);
       return fromState;
@@ -1758,7 +1887,427 @@
   }
 
   function ordersCacheKey() {
-    return `orders_bootstrap_v${ORDERS_CACHE_VERSION}_m${ordersCacheScope}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}`;
+    return `orders_bootstrap_v${ORDERS_CACHE_VERSION}_a${appVersion}_m${ordersCacheScope}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}`;
+  }
+
+  function isLikelyNetworkError(err) {
+    const message = String(err?.message || err || "").trim().toLowerCase();
+    if (!message) return false;
+    return (
+      message.includes("failed to fetch")
+      || message.includes("networkerror")
+      || message.includes("network request failed")
+      || message.includes("load failed")
+      || message.includes("network error")
+      || message.includes("fetch failed")
+    );
+  }
+
+  function courierOfflineQueueKey() {
+    return `courier_offline_queue_v${COURIER_OFFLINE_QUEUE_VERSION}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}`;
+  }
+
+  function courierOfflineShadowKey() {
+    return `courier_offline_shadow_v${COURIER_OFFLINE_QUEUE_VERSION}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}`;
+  }
+
+  function normalizeCourierQueueItem(raw) {
+    const type = String(raw?.type || "").trim().toLowerCase();
+    if (type !== "status" && type !== "payment") return null;
+    const orderId = Number(raw?.orderId || 0);
+    if (!(orderId > 0)) return null;
+    const request = raw?.request && typeof raw.request === "object" ? raw.request : {};
+    const url = String(request.url || "").trim();
+    const method = String(request.method || "PUT").trim().toUpperCase() || "PUT";
+    if (!url) return null;
+    return {
+      id: String(raw?.id || `${type}:${orderId}:${Date.now()}:${Math.random()}`).trim(),
+      type,
+      orderId,
+      tenantId: Number(raw?.tenantId || getTenantIdFromStorage() || 0) || 0,
+      storeId: Number(raw?.storeId || getStoreIdFromStorage() || 0) || 0,
+      createdAt: Number(raw?.createdAt || Date.now()) || Date.now(),
+      state: String(raw?.state || "pending").trim().toLowerCase() === "error" ? "error" : "pending",
+      error: raw?.error ? String(raw.error) : "",
+      request: {
+        url,
+        method,
+        body: request.body && typeof request.body === "object" ? request.body : {},
+      },
+      optimisticOrder: raw?.optimisticOrder && typeof raw.optimisticOrder === "object"
+        ? { ...raw.optimisticOrder }
+        : null,
+    };
+  }
+
+  function readCourierOfflineQueue() {
+    try {
+      const raw = localStorage.getItem(courierOfflineQueueKey());
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return (Array.isArray(parsed?.items) ? parsed.items : [])
+        .map(normalizeCourierQueueItem)
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  function readCourierShadowOrders() {
+    try {
+      const raw = localStorage.getItem(courierOfflineShadowKey());
+      if (!raw) return new Map();
+      const parsed = JSON.parse(raw);
+      const rows = Array.isArray(parsed?.orders) ? parsed.orders : [];
+      return new Map(
+        rows
+          .map((row) => {
+            const orderId = Number(Array.isArray(row) ? row[0] : 0);
+            const order = Array.isArray(row) ? row[1] : null;
+            if (!(orderId > 0) || !order || typeof order !== "object") return null;
+            return [orderId, { ...order }];
+          })
+          .filter(Boolean)
+      );
+    } catch {
+      return new Map();
+    }
+  }
+
+  function persistCourierOfflineState() {
+    if (!isCourierWorkspace) return;
+    try {
+      if (courierOfflineState.queue.length) {
+        localStorage.setItem(courierOfflineQueueKey(), JSON.stringify({
+          items: courierOfflineState.queue.map((item) => ({
+            id: item.id,
+            type: item.type,
+            orderId: item.orderId,
+            tenantId: item.tenantId,
+            storeId: item.storeId,
+            createdAt: item.createdAt,
+            state: item.state,
+            error: item.error || "",
+            request: item.request,
+            optimisticOrder: item.optimisticOrder && typeof item.optimisticOrder === "object"
+              ? item.optimisticOrder
+              : null,
+          })),
+        }));
+      } else {
+        localStorage.removeItem(courierOfflineQueueKey());
+      }
+    } catch {}
+
+    try {
+      if (courierOfflineState.shadowOrders.size) {
+        localStorage.setItem(courierOfflineShadowKey(), JSON.stringify({
+          orders: Array.from(courierOfflineState.shadowOrders.entries()).map(([orderId, order]) => [
+            Number(orderId),
+            order && typeof order === "object" ? order : null,
+          ]),
+        }));
+      } else {
+        localStorage.removeItem(courierOfflineShadowKey());
+      }
+    } catch {}
+  }
+
+  function getCourierBannerState() {
+    if (!isCourierWorkspace) return null;
+    const transient = courierOfflineState.transientBanner;
+    if (transient) {
+      if (!transient.expiresAt || transient.expiresAt > Date.now()) {
+        return transient;
+      }
+      courierOfflineState.transientBanner = null;
+    }
+    const failedItem = courierOfflineState.queue[0]?.state === "error"
+      ? courierOfflineState.queue[0]
+      : null;
+    if (failedItem) {
+      return {
+        mode: "error",
+        text: failedItem.error ? `Не удалось отправить изменения: ${failedItem.error}` : "Не удалось отправить изменения",
+        retry: true,
+      };
+    }
+    if (courierOfflineState.syncError) {
+      return {
+        mode: "error",
+        text: courierOfflineState.syncError,
+        retry: true,
+      };
+    }
+    if (courierOfflineState.syncing && courierOfflineState.queue.length) {
+      return {
+        mode: "syncing",
+        text: `Отправляем изменения: ${courierOfflineState.queue.length}`,
+        retry: false,
+      };
+    }
+    if (!courierOfflineState.online && courierOfflineState.queue.length) {
+      return {
+        mode: "offline",
+        text: `Нет интернета. Изменения сохранены и будут отправлены: ${courierOfflineState.queue.length}`,
+        retry: false,
+      };
+    }
+    if (!courierOfflineState.online) {
+      return {
+        mode: "offline",
+        text: "Нет подключения к интернету",
+        retry: false,
+      };
+    }
+    return null;
+  }
+
+  function refreshCourierConnectionBanner() {
+    if (!isCourierWorkspace || !courierConnectionBanner || !courierConnectionBannerText) return;
+    const bannerState = getCourierBannerState();
+    courierConnectionBanner.classList.remove(
+      "courier-connection-banner--offline",
+      "courier-connection-banner--syncing",
+      "courier-connection-banner--online",
+      "courier-connection-banner--error"
+    );
+    if (!bannerState) {
+      courierConnectionBanner.classList.add("hidden");
+      courierConnectionBannerText.textContent = "";
+      if (courierConnectionBannerRetryBtn) {
+        courierConnectionBannerRetryBtn.classList.add("hidden");
+      }
+      return;
+    }
+    courierConnectionBanner.classList.remove("hidden");
+    courierConnectionBanner.classList.add(`courier-connection-banner--${bannerState.mode}`);
+    courierConnectionBannerText.textContent = String(bannerState.text || "").trim();
+    if (courierConnectionBannerRetryBtn) {
+      courierConnectionBannerRetryBtn.classList.toggle("hidden", !bannerState.retry);
+    }
+  }
+
+  function showCourierTransientBanner(mode, text, { retry = false, duration = 2500 } = {}) {
+    if (!isCourierWorkspace) return;
+    const id = `${Date.now()}:${Math.random()}`;
+    courierOfflineState.transientBanner = {
+      id,
+      mode,
+      text,
+      retry,
+      expiresAt: duration > 0 ? Date.now() + duration : 0,
+    };
+    refreshCourierConnectionBanner();
+    if (duration > 0) {
+      setTimeout(() => {
+        if (courierOfflineState.transientBanner?.id !== id) return;
+        courierOfflineState.transientBanner = null;
+        refreshCourierConnectionBanner();
+      }, duration + 30);
+    }
+  }
+
+  function setCourierOnlineState(nextOnline, { showRestored = false } = {}) {
+    if (!isCourierWorkspace) return;
+    const normalized = nextOnline !== false;
+    const prev = courierOfflineState.online;
+    courierOfflineState.online = normalized;
+    if (!normalized) {
+      courierOfflineState.syncing = false;
+    }
+    if (normalized && !prev && showRestored) {
+      showCourierTransientBanner("online", "Подключение восстановлено");
+      return;
+    }
+    refreshCourierConnectionBanner();
+  }
+
+  function syncCourierShadowOrdersFromQueue() {
+    if (!isCourierWorkspace) return;
+    const nextShadowOrders = new Map();
+    courierOfflineState.queue.forEach((item) => {
+      const orderId = Number(item?.orderId || 0);
+      const optimisticOrder = item?.optimisticOrder && typeof item.optimisticOrder === "object"
+        ? { ...item.optimisticOrder }
+        : null;
+      if (!(orderId > 0) || !optimisticOrder) return;
+      nextShadowOrders.set(orderId, optimisticOrder);
+    });
+    courierOfflineState.shadowOrders = nextShadowOrders;
+  }
+
+  function getCourierShadowOrder(orderId) {
+    if (!isCourierWorkspace) return null;
+    return courierOfflineState.shadowOrders.get(Number(orderId || 0)) || null;
+  }
+
+  function overlayCourierShadowOrder(order) {
+    if (!order || !isCourierWorkspace) return order;
+    const shadow = getCourierShadowOrder(order.id);
+    return shadow ? { ...order, ...shadow } : order;
+  }
+
+  function applyCourierShadowOrdersToState() {
+    if (!isCourierWorkspace || !courierOfflineState.shadowOrders.size) return;
+    const existingIds = new Set();
+    state.orders = (Array.isArray(state.orders) ? state.orders : []).map((order) => {
+      const orderId = Number(order?.id || 0);
+      if (orderId > 0) existingIds.add(orderId);
+      return overlayCourierShadowOrder(order);
+    });
+    courierOfflineState.shadowOrders.forEach((order, orderId) => {
+      if (existingIds.has(Number(orderId || 0))) return;
+      if (!order || typeof order !== "object") return;
+      state.orders.unshift({ ...order });
+    });
+  }
+
+  function hydrateCourierOfflineStateFromStorage() {
+    if (!isCourierWorkspace) return;
+    courierOfflineState.queue = readCourierOfflineQueue();
+    courierOfflineState.shadowOrders = readCourierShadowOrders();
+    courierOfflineState.syncing = false;
+    courierOfflineState.syncError = "";
+    courierOfflineState.online = navigator.onLine !== false;
+    if (!courierOfflineState.shadowOrders.size && courierOfflineState.queue.length) {
+      syncCourierShadowOrdersFromQueue();
+      persistCourierOfflineState();
+    }
+    applyCourierShadowOrdersToState();
+    refreshCourierConnectionBanner();
+  }
+
+  function resetCourierOfflineRuntimeState() {
+    if (!isCourierWorkspace) return;
+    courierOfflineState.queue = [];
+    courierOfflineState.shadowOrders = new Map();
+    courierOfflineState.syncing = false;
+    courierOfflineState.syncError = "";
+    courierOfflineState.transientBanner = null;
+    courierOfflineState.online = navigator.onLine !== false;
+    refreshCourierConnectionBanner();
+  }
+
+  function queueCourierMutation({ type, orderId, request, optimisticOrder }) {
+    if (!isCourierWorkspace) return null;
+    const item = normalizeCourierQueueItem({
+      id: `${type}:${Number(orderId || 0)}:${Date.now()}:${Math.random().toString(16).slice(2)}`,
+      type,
+      orderId,
+      tenantId: getTenantIdFromStorage(),
+      storeId: getStoreIdFromStorage(),
+      createdAt: Date.now(),
+      state: "pending",
+      request,
+      optimisticOrder,
+    });
+    if (!item) return null;
+    courierOfflineState.queue.push(item);
+    courierOfflineState.syncError = "";
+    syncCourierShadowOrdersFromQueue();
+    persistCourierOfflineState();
+    refreshCourierConnectionBanner();
+    return item;
+  }
+
+  function updateCourierActiveOrderInfo() {
+    if (!state.activeOrderId) return;
+    const activeOrder = state.orders.find((row) => Number(row?.id || 0) === Number(state.activeOrderId || 0)) || null;
+    if (activeOrder) setInfo(activeOrder);
+  }
+
+  async function processCourierOfflineQueue({ force = false } = {}) {
+    if (!isCourierWorkspace) return;
+    if (courierOfflineState.syncing) return;
+    if (!courierOfflineState.queue.length) {
+      courierOfflineState.syncError = "";
+      syncCourierShadowOrdersFromQueue();
+      persistCourierOfflineState();
+      refreshCourierConnectionBanner();
+      return;
+    }
+    if (!courierOfflineState.online) {
+      refreshCourierConnectionBanner();
+      return;
+    }
+    if (courierOfflineState.queue[0]?.state === "error" && !force) {
+      refreshCourierConnectionBanner();
+      return;
+    }
+
+    let processedAny = false;
+    courierOfflineState.syncing = true;
+    courierOfflineState.syncError = "";
+    refreshCourierConnectionBanner();
+
+    while (courierOfflineState.online && courierOfflineState.queue.length) {
+      const current = courierOfflineState.queue[0];
+      if (!current) break;
+      current.state = "pending";
+      current.error = "";
+      persistCourierOfflineState();
+      refreshCourierConnectionBanner();
+
+      try {
+        const json = await apiJson(current.request.url, {
+          method: current.request.method || "PUT",
+          body: current.request.body || {},
+        });
+        courierOfflineState.queue.shift();
+        processedAny = true;
+        if (json?.data) {
+          handleOrderEvent(json.data);
+        }
+        syncCourierShadowOrdersFromQueue();
+        applyCourierShadowOrdersToState();
+        if (isCourierWorkspace) {
+          ensureActiveStatusSelection();
+          renderStages();
+          renderOrders();
+          if (tabsState.tabs.length) {
+            syncTabsWithLatestOrders();
+          } else {
+            updateCourierActiveOrderInfo();
+          }
+        }
+        persistCourierOfflineState();
+      } catch (err) {
+        courierOfflineState.syncing = false;
+        if (current) {
+          current.state = "pending";
+        }
+        if (isLikelyNetworkError(err)) {
+          setCourierOnlineState(false);
+          persistCourierOfflineState();
+          refreshCourierConnectionBanner();
+          return;
+        }
+        if (current) {
+          current.state = "error";
+          current.error = String(err?.message || "API_ERROR");
+        }
+        courierOfflineState.syncError = "Не удалось отправить изменения";
+        persistCourierOfflineState();
+        refreshCourierConnectionBanner();
+        return;
+      }
+    }
+
+    courierOfflineState.syncing = false;
+    persistCourierOfflineState();
+    if (processedAny && courierOfflineState.online) {
+      showCourierTransientBanner("online", "Подключение восстановлено");
+    } else {
+      refreshCourierConnectionBanner();
+    }
+  }
+
+  function markCourierOfflineFromError(err) {
+    if (!isCourierWorkspace) return false;
+    if (!isLikelyNetworkError(err)) return false;
+    setCourierOnlineState(false);
+    return true;
   }
 
   function readOrdersBootstrapCache() {
@@ -1786,22 +2335,15 @@
     if (type === "order") {
       out.mode = normalizeTabMode(tab.mode);
       const orderId = Number(tab.orderId || 0);
-      out.orderId = Number.isFinite(orderId) && orderId > 0 ? orderId : null;
-      out.order = tab.order && typeof tab.order === "object" ? tab.order : null;
-      out.checkoutSession = tab.checkoutSession && typeof tab.checkoutSession === "object" ? tab.checkoutSession : null;
+      if (!(Number.isFinite(orderId) && orderId > 0)) return null;
+      out.orderId = orderId;
     } else {
       const clientId = Number(tab.clientId || 0);
       out.clientId = Number.isFinite(clientId) && clientId > 0 ? clientId : null;
       out.fallbackName = String(tab.fallbackName || "").trim();
       out.fallbackPhone = String(tab.fallbackPhone || "").trim();
       out.activeContentTab = String(tab.activeContentTab || "addresses");
-      out.isFallbackOnly = tab.isFallbackOnly === true;
-      out.client = tab.client && typeof tab.client === "object" ? tab.client : null;
-      out.addresses = Array.isArray(tab.addresses) ? tab.addresses : null;
-      out.orders = Array.isArray(tab.orders) ? tab.orders : null;
-      out.discounts = Array.isArray(tab.discounts) ? tab.discounts : null;
-      out.fallbackAddresses = Array.isArray(tab.fallbackAddresses) ? tab.fallbackAddresses : null;
-      out.fallbackOrders = Array.isArray(tab.fallbackOrders) ? tab.fallbackOrders : null;
+      if (!out.clientId && !out.fallbackName && !out.fallbackPhone) return null;
     }
     return out.key ? out : null;
   }
@@ -1853,6 +2395,61 @@
       : (restored[restored.length - 1]?.key || null);
   }
 
+  function restoreUiTabsFromCache(payload) {
+    const rows = Array.isArray(payload?.tabs) ? payload.tabs : [];
+    const restored = rows
+      .map((row) => {
+        if (!row || typeof row !== "object") return null;
+        const type = String(row.type || "");
+        const key = String(row.key || "").trim();
+        if (!key || (type !== "order" && type !== "client")) return null;
+        if (type === "order") {
+          const orderId = Number(row.orderId || 0);
+          if (!(Number.isFinite(orderId) && orderId > 0)) return null;
+          return {
+            key,
+            type: "order",
+            mode: normalizeTabMode(row.mode),
+            orderId,
+            title: String(row.title || "").trim() || buildOrderTabTitle({ id: orderId }),
+            order: null,
+            checkoutSession: null,
+          };
+        }
+
+        const clientId = Number(row.clientId || 0);
+        const fallbackName = String(row.fallbackName || "").trim();
+        const fallbackPhone = String(row.fallbackPhone || "").trim();
+        if (!(clientId > 0) && !fallbackName && !fallbackPhone) return null;
+
+        return {
+          key,
+          type: "client",
+          clientId: clientId > 0 ? clientId : null,
+          title: String(row.title || "").trim() || "РљР»РёРµРЅС‚",
+          fallbackName,
+          fallbackPhone,
+          activeContentTab: String(row.activeContentTab || "addresses"),
+          isFallbackOnly: true,
+          client: null,
+          addresses: null,
+          orders: null,
+          discounts: null,
+          fallbackAddresses: [],
+          fallbackOrders: [],
+          loading: false,
+          error: null,
+        };
+      })
+      .filter(Boolean);
+
+    tabsState.tabs = restored;
+    const activeKey = String(payload?.activeKey || "").trim();
+    tabsState.activeKey = restored.some((tab) => tab.key === activeKey)
+      ? activeKey
+      : (restored[restored.length - 1]?.key || null);
+  }
+
   function persistOrdersCacheNow() {
     const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
     if (activeTab) captureCheckoutSessionForTab(activeTab);
@@ -1860,10 +2457,7 @@
     const payload = {
       ts: Date.now(),
       data: {
-        statuses: Array.isArray(state.statuses) ? state.statuses : [],
         activeStatusId: state.activeStatusId,
-        orders: Array.isArray(state.orders) ? state.orders : [],
-        lastEventId: Number(state.lastEventId || 0) || null,
         storeTimezone: String(state.storeTimezone || "+0"),
         date: {
           start: state.date.start ? toDateKey(state.date.start) : null,
@@ -1873,15 +2467,6 @@
         },
         tabs: tabsState.tabs.map(serializeTabForCache).filter(Boolean),
         activeKey: tabsState.activeKey,
-        clientsCache: Array.from(state.clientsCache.entries()).map(([id, data]) => ([
-          Number(id),
-          {
-            client: data?.client && typeof data.client === "object" ? data.client : null,
-            addresses: Array.isArray(data?.addresses) ? data.addresses : [],
-            orders: Array.isArray(data?.orders) ? data.orders : [],
-            discounts: Array.isArray(data?.discounts) ? data.discounts : [],
-          },
-        ])),
       },
     };
 
@@ -1898,66 +2483,57 @@
     }, Math.max(0, Number(delay || 0)));
   }
 
+  function isValidCalendarViewYear(value) {
+    const year = Number(value);
+    return Number.isInteger(year) && year >= 1970 && year <= 9999;
+  }
+
+  function isValidCalendarViewMonth(value) {
+    const month = Number(value);
+    return Number.isInteger(month) && month >= 0 && month <= 11;
+  }
+
+  function isValidCalendarView(year, month) {
+    return isValidCalendarViewYear(year) && isValidCalendarViewMonth(month);
+  }
+
+  function resetDateStateToToday(baseDate = null) {
+    const today = baseDate instanceof Date && !Number.isNaN(baseDate.getTime())
+      ? new Date(baseDate)
+      : getStoreDateNow(state.storeTimezone || "+0");
+    state.date.start = today;
+    state.date.end = new Date(today);
+    state.date.viewYear = today.getFullYear();
+    state.date.viewMonth = today.getMonth();
+  }
+
   function hydrateOrdersFromCache(cache) {
     if (!cache || typeof cache !== "object") return false;
-    state.statuses = Array.isArray(cache.statuses) ? cache.statuses : [];
-    state.activeStatusId = cache.activeStatusId != null ? cache.activeStatusId : "all";
-    state.orders = Array.isArray(cache.orders) ? cache.orders : [];
+    state.statuses = [];
+    state.activeStatusId = cache.activeStatusId != null ? cache.activeStatusId : state.activeStatusId;
+    state.orders = [];
     state.activeOrderId = null;
-    state.lastEventId = Number.isFinite(Number(cache.lastEventId)) && Number(cache.lastEventId) > 0
-      ? Number(cache.lastEventId)
-      : null;
-    state.storeTimezone = String(cache.storeTimezone || state.storeTimezone || "+0");
+    state.lastEventId = null;
+    state.clientsCache = new Map();
 
     const start = parseDateKey(cache?.date?.start);
     const end = parseDateKey(cache?.date?.end);
-    if (start && end) {
-      state.date.start = start;
-      state.date.end = end;
-    }
-    const viewYear = Number(cache?.date?.viewYear);
-    const viewMonth = Number(cache?.date?.viewMonth);
-    if (Number.isFinite(viewYear) && Number.isFinite(viewMonth)) {
-      state.date.viewYear = viewYear;
-      state.date.viewMonth = viewMonth;
+    if (start) state.date.start = start;
+    if (end) state.date.end = end;
+    if (isValidCalendarView(cache?.date?.viewYear, cache?.date?.viewMonth)) {
+      state.date.viewYear = Number(cache.date.viewYear);
+      state.date.viewMonth = Number(cache.date.viewMonth);
+    } else {
+      const baseDate = state.date.start || getStoreDateNow(state.storeTimezone || "+0");
+      state.date.viewYear = baseDate.getFullYear();
+      state.date.viewMonth = baseDate.getMonth();
     }
 
-    state.clientsCache = new Map(
-      Array.isArray(cache.clientsCache)
-        ? cache.clientsCache
-          .map((row) => {
-            const clientId = Number(Array.isArray(row) ? row[0] : 0);
-            const payload = Array.isArray(row) ? row[1] : null;
-            if (!(clientId > 0) || !payload || typeof payload !== "object") return null;
-            return [
-              clientId,
-              {
-                client: payload.client && typeof payload.client === "object" ? payload.client : null,
-                addresses: Array.isArray(payload.addresses) ? payload.addresses : [],
-                orders: Array.isArray(payload.orders) ? payload.orders : [],
-                discounts: Array.isArray(payload.discounts) ? payload.discounts : [],
-              },
-            ];
-          })
-          .filter(Boolean)
-        : []
-    );
-    restoreTabsFromCache(cache);
+    restoreUiTabsFromCache(cache);
     const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
     state.activeOrderId = activeTab?.type === "order" && normalizeTabMode(activeTab.mode) === "view"
       ? activeTab.orderId
       : null;
-    renderCalendar();
-    updateDateLabel();
-    renderStages();
-    renderOrders();
-    renderOrderTabs();
-    if (tabsState.tabs.length) {
-      syncTabsWithLatestOrders();
-    } else {
-      setOrdersCheckoutLayoutEnabled(false);
-      setInfo(null);
-    }
     return true;
   }
 
@@ -2668,6 +3244,79 @@
       .sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || Number(a.id) - Number(b.id));
   }
 
+  function createOrdersStageIndex() {
+    return {
+      all: [],
+      byStatus: Object.create(null),
+    };
+  }
+
+  function getActiveStageMeta() {
+    if (state.activeStatusId === "all") {
+      return { id: "all", title: "Все заказы" };
+    }
+    if (isCourierWorkspace) {
+      return courierBucketDefs.find((bucket) => String(bucket.id) === String(state.activeStatusId)) || null;
+    }
+    const statusId = Number(state.activeStatusId);
+    return Number.isFinite(statusId) && statusId > 0 ? (getStatusMetaById(statusId) || null) : null;
+  }
+
+  function getActiveStageTitle() {
+    return String(getActiveStageMeta()?.title || (isCourierWorkspace ? "Заказы" : "Все заказы")).trim() || "Заказы";
+  }
+
+  function updateOrdersToolbarTitle() {
+    if (!ordersToolbarTitle || isCourierWorkspace) return;
+    ordersToolbarTitle.textContent = getActiveStageTitle();
+  }
+
+  function rebuildOrdersStageIndex() {
+    const index = createOrdersStageIndex();
+    const source = Array.isArray(state.orders) ? state.orders : [];
+    source.forEach((order) => {
+      index.all.push(order);
+      const statusId = extractOrderStatusId(order);
+      if (!statusId) return;
+      const key = String(statusId);
+      if (!Array.isArray(index.byStatus[key])) {
+        index.byStatus[key] = [];
+      }
+      index.byStatus[key].push(order);
+    });
+    state.ordersStageIndex = index;
+  }
+
+  function getOrdersForActiveStage() {
+    if (isCourierWorkspace) {
+      return (Array.isArray(state.orders) ? state.orders : []).filter(orderMatchesFilters);
+    }
+    if (state.activeStatusId === "all") {
+      return Array.isArray(state.ordersStageIndex?.all) ? state.ordersStageIndex.all : [];
+    }
+    return Array.isArray(state.ordersStageIndex?.byStatus?.[String(state.activeStatusId)])
+      ? state.ordersStageIndex.byStatus[String(state.activeStatusId)]
+      : [];
+  }
+
+  function reorderOrdersWithinActiveStage(draggedId, targetId) {
+    const stageOrders = getOrdersForActiveStage().slice();
+    const fromIndex = stageOrders.findIndex((order) => Number(order?.id || 0) === Number(draggedId || 0));
+    const toIndex = stageOrders.findIndex((order) => Number(order?.id || 0) === Number(targetId || 0));
+    if (fromIndex < 0 || toIndex < 0) return null;
+
+    const [moved] = stageOrders.splice(fromIndex, 1);
+    stageOrders.splice(toIndex, 0, moved);
+
+    const stageIds = new Set(stageOrders.map((order) => Number(order?.id || 0)).filter((id) => id > 0));
+    let cursor = 0;
+    state.orders = (Array.isArray(state.orders) ? state.orders : []).map((order) => (
+      stageIds.has(Number(order?.id || 0)) ? stageOrders[cursor++] : order
+    ));
+    rebuildOrdersStageIndex();
+    return stageOrders;
+  }
+
   function getActiveOrder() {
     if (!state.activeOrderId) return null;
     const orderId = Number(state.activeOrderId);
@@ -2690,9 +3339,50 @@
     });
   }
 
+  function buildOptimisticOrderStatusSnapshot(order, nextStatusId) {
+    if (!order || !(Number(order?.id || 0) > 0) || !(Number(nextStatusId || 0) > 0)) return null;
+    const targetStatusMeta = getStatusMetaById(nextStatusId) || null;
+    const optimisticOrder = { ...order, status_id: Number(nextStatusId) };
+    if (targetStatusMeta) {
+      if (targetStatusMeta.title != null) optimisticOrder.status_title = targetStatusMeta.title;
+      if (targetStatusMeta.code != null) optimisticOrder.status_code = targetStatusMeta.code;
+      if (targetStatusMeta.color != null) optimisticOrder.status_color = targetStatusMeta.color;
+    }
+    return optimisticOrder;
+  }
+
+  function buildOptimisticOrderPaymentSnapshot(order, payload) {
+    if (!order || !(Number(order?.id || 0) > 0) || !payload || typeof payload !== "object") return null;
+    const optimisticOrder = { ...order, is_paid: 1 };
+    const paymentCode = String(payload.payment_code || optimisticOrder.payment_code || "").trim();
+    if (paymentCode) {
+      optimisticOrder.payment_code = paymentCode;
+      const paymentMeta = sharedOrderPayment?.getPaymentMethodMeta
+        ? sharedOrderPayment.getPaymentMethodMeta(paymentCode, optimisticOrder)
+        : null;
+      if (paymentMeta?.title) optimisticOrder.payment_title = paymentMeta.title;
+      if (paymentMeta?.icon) optimisticOrder.payment_icon = paymentMeta.icon;
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, "change_from")) {
+      const changeFrom = Number(payload.change_from || 0);
+      optimisticOrder.change_from = Number.isFinite(changeFrom) && changeFrom > 0 ? changeFrom : null;
+    }
+    return optimisticOrder;
+  }
+
+  function applyLocalCourierOrderSnapshot(order) {
+    if (!order || !isCourierWorkspace) return null;
+    handleOrderEvent(order, { localOnly: true, skipStageRefresh: true });
+    return state.orders.find((row) => Number(row?.id || 0) === Number(order.id || 0)) || order;
+  }
+
   async function openOrderPaymentDialog(order) {
     const orderId = Number(order?.id || 0);
     if (!(orderId > 0) || isOrderFullyRefunded(order)) return;
+    if (isCourierWorkspace && !courierOfflineState.online && isPaidOrder(order)) {
+      showCourierTransientBanner("error", "Возврат доступен только при интернете.", { duration: 3200 });
+      return;
+    }
 
     if (!sharedOrderPayment || typeof sharedOrderPayment.open !== "function") {
       if (isPaidOrder(order)) return;
@@ -2708,6 +3398,27 @@
       return;
     }
 
+    const offlineCapable = isCourierWorkspace && !isPaidOrder(order);
+    const useOfflineCollection = offlineCapable && !courierOfflineState.online;
+
+    if (!offlineCapable) {
+      return sharedOrderPayment.open({
+        order,
+        apiJson,
+        money,
+        formatDateTimeNumeric,
+        getOrderId: (row) => Number(row?.id || 0),
+        getOrderNumber,
+        isPaidOrder,
+        onSuccess(updatedOrder) {
+          if (updatedOrder) handleOrderEvent(updatedOrder);
+        },
+        onError(err) {
+          console.error("orders payment modal error:", err);
+        },
+      });
+    }
+
     return sharedOrderPayment.open({
       order,
       apiJson,
@@ -2716,13 +3427,137 @@
       getOrderId: (row) => Number(row?.id || 0),
       getOrderNumber,
       isPaidOrder,
-      onSuccess(updatedOrder) {
-        if (updatedOrder) handleOrderEvent(updatedOrder);
+      cacheOnlyPaymentMethods: !courierOfflineState.online,
+      submitPayload: async ({ payload }) => {
+        const liveOrder = state.orders.find((row) => Number(row?.id || 0) === orderId) || order;
+        const optimisticOrder = buildOptimisticOrderPaymentSnapshot(liveOrder, payload);
+        if (!optimisticOrder) {
+          throw new Error("PAYMENT_PAYLOAD_INVALID");
+        }
+        const appliedOrder = applyLocalCourierOrderSnapshot(optimisticOrder);
+        const queueRequest = {
+          url: `/api/admin/orders/${orderId}/paid`,
+          method: "PUT",
+          body: payload,
+        };
+
+        if (!courierOfflineState.online) {
+          queueCourierMutation({
+            type: "payment",
+            orderId,
+            request: queueRequest,
+            optimisticOrder: appliedOrder || optimisticOrder,
+          });
+          refreshCourierConnectionBanner();
+          return appliedOrder || optimisticOrder;
+        }
+
+        try {
+          const json = await apiJson(queueRequest.url, {
+            method: queueRequest.method,
+            body: queueRequest.body,
+          });
+          if (json?.data) handleOrderEvent(json.data);
+          return json?.data || appliedOrder || optimisticOrder;
+        } catch (err) {
+          if (markCourierOfflineFromError(err)) {
+            queueCourierMutation({
+              type: "payment",
+              orderId,
+              request: queueRequest,
+              optimisticOrder: appliedOrder || optimisticOrder,
+            });
+            refreshCourierConnectionBanner();
+            return appliedOrder || optimisticOrder;
+          }
+          try {
+            await loadAndRenderOrders(true);
+          } catch (syncErr) {
+            console.error(syncErr);
+          }
+          throw err;
+        }
       },
+      onSuccess() {},
       onError(err) {
+        if (String(err?.message || "") === "PAYMENT_METHODS_OFFLINE_UNAVAILABLE") {
+          showCourierTransientBanner("error", "Нет интернета. Способы оплаты ещё не сохранены.", { duration: 3200 });
+          return;
+        }
         console.error("orders payment modal error:", err);
       },
     });
+
+    let paymentPayload = null;
+    try {
+      paymentPayload = await sharedOrderPayment.open({
+        order,
+        apiJson,
+        money,
+        formatDateTimeNumeric,
+        getOrderId: (row) => Number(row?.id || 0),
+        getOrderNumber,
+        isPaidOrder,
+        collectPayloadOnly: true,
+        cacheOnlyPaymentMethods: useOfflineCollection,
+        onError(err) {
+          if (String(err?.message || "") === "PAYMENT_METHODS_OFFLINE_UNAVAILABLE") {
+            showCourierTransientBanner("error", "Нет интернета. Способы оплаты ещё не сохранены.", { duration: 3200 });
+            return;
+          }
+          console.error("orders payment modal error:", err);
+        },
+      });
+    } catch (err) {
+      console.error("orders payment modal error:", err);
+      return;
+    }
+    if (!paymentPayload) return;
+
+    const optimisticOrder = buildOptimisticOrderPaymentSnapshot(order, paymentPayload);
+    if (!optimisticOrder) return;
+    const appliedOrder = applyLocalCourierOrderSnapshot(optimisticOrder);
+    const queueRequest = {
+      url: `/api/admin/orders/${orderId}/paid`,
+      method: "PUT",
+      body: paymentPayload,
+    };
+
+    if (!courierOfflineState.online) {
+      queueCourierMutation({
+        type: "payment",
+        orderId,
+        request: queueRequest,
+        optimisticOrder: appliedOrder || optimisticOrder,
+      });
+      refreshCourierConnectionBanner();
+      return;
+    }
+
+    try {
+      const json = await apiJson(queueRequest.url, {
+        method: queueRequest.method,
+        body: queueRequest.body,
+      });
+      if (json?.data) handleOrderEvent(json.data);
+    } catch (err) {
+      if (markCourierOfflineFromError(err)) {
+        queueCourierMutation({
+          type: "payment",
+          orderId,
+          request: queueRequest,
+          optimisticOrder: appliedOrder || optimisticOrder,
+        });
+        refreshCourierConnectionBanner();
+        return;
+      }
+      try {
+        await loadAndRenderOrders(true);
+      } catch (syncErr) {
+        console.error(syncErr);
+      }
+      console.error("orders payment update error:", err);
+    }
   }
 
   function setStatusControlsDisabled(disabled) {
@@ -2789,20 +3624,15 @@
     const prevOrder = orderIdx >= 0 ? state.orders[orderIdx] : null;
     const prevStatusId = Number(prevOrder?.status_id || 0);
     const prevStatusMeta = getStatusMetaById(prevStatusId) || null;
+    const optimisticOrder = buildOptimisticOrderStatusSnapshot(prevOrder, nextStatusId);
     const targetStatusMeta = getStatusMetaById(nextStatusId) || null;
     if (isForbiddenStatusTransition(prevStatusMeta, targetStatusMeta)) return;
     let optimisticApplied = false;
-    let optimisticOrder = null;
+    let appliedOrder = null;
 
-    if (prevOrder && prevStatusId !== nextStatusId) {
-      optimisticOrder = { ...prevOrder, status_id: nextStatusId };
-      if (targetStatusMeta) {
-        if (targetStatusMeta.title != null) optimisticOrder.status_title = targetStatusMeta.title;
-        if (targetStatusMeta.code != null) optimisticOrder.status_code = targetStatusMeta.code;
-        if (targetStatusMeta.color != null) optimisticOrder.status_color = targetStatusMeta.color;
-      }
-
+    if (optimisticOrder && prevStatusId !== nextStatusId) {
       state.orders[orderIdx] = optimisticOrder;
+      rebuildOrdersStageIndex();
       const countersChanged = applyStageCountersDelta(prevOrder, optimisticOrder);
       if (countersChanged) renderStages();
       renderOrders();
@@ -2814,15 +3644,42 @@
         if (activeOrder) setInfo(activeOrder);
       }
       optimisticApplied = true;
+      appliedOrder = state.orders[orderIdx] || optimisticOrder;
+    }
+
+    const request = {
+      url: `/api/admin/orders/${id}/status`,
+      method: "PUT",
+      body: { status_id: nextStatusId },
+    };
+
+    if (isCourierWorkspace && optimisticApplied && !courierOfflineState.online) {
+      queueCourierMutation({
+        type: "status",
+        orderId: id,
+        request,
+        optimisticOrder: appliedOrder || optimisticOrder,
+      });
+      refreshCourierConnectionBanner();
+      return;
     }
 
     try {
-      await apiJson(`/api/admin/orders/${id}/status`, {
-        method: "PUT",
-        body: { status_id: nextStatusId },
+      await apiJson(request.url, {
+        method: request.method,
+        body: request.body,
       });
-      scheduleStageRefresh();
     } catch (err) {
+      if (isCourierWorkspace && optimisticApplied && markCourierOfflineFromError(err)) {
+        queueCourierMutation({
+          type: "status",
+          orderId: id,
+          request,
+          optimisticOrder: appliedOrder || optimisticOrder,
+        });
+        refreshCourierConnectionBanner();
+        return;
+      }
       if (optimisticApplied && prevOrder) {
         const rollbackIdx = state.orders.findIndex((row) => Number(row?.id || 0) === id);
         if (rollbackIdx >= 0) {
@@ -2830,6 +3687,7 @@
         } else {
           state.orders.push(prevOrder);
         }
+        rebuildOrdersStageIndex();
       }
       try {
         await loadStatuses();
@@ -3425,13 +4283,19 @@
     }
     setTextAll(infoEls.deliveryAddress, address || "?");
 
-    const addressComment = order.address_comment || "";
-    setTextAll(infoEls.deliveryAddressCommentText, addressComment);
-    setHiddenAll(infoEls.deliveryAddressComment, !addressComment);
+    const addressComment = String(order.address_comment || "").trim();
+    const orderComment = String(order.comment || "").trim();
+    const effectiveAddressComment = isCourierWorkspace
+      ? [addressComment, orderComment]
+        .filter(Boolean)
+        .filter((value, index, list) => list.indexOf(value) === index)
+        .join(" | ")
+      : addressComment;
+    setTextAll(infoEls.deliveryAddressCommentText, effectiveAddressComment);
+    setHiddenAll(infoEls.deliveryAddressComment, !effectiveAddressComment);
 
-    const orderComment = order.comment || "";
-    setTextAll(infoEls.orderCommentText, orderComment);
-    setHiddenAll(infoEls.orderCommentBlock, !orderComment);
+    setTextAll(infoEls.orderCommentText, isCourierWorkspace ? "" : orderComment);
+    setHiddenAll(infoEls.orderCommentBlock, isCourierWorkspace ? true : !orderComment);
 
     setHtmlAll(infoEls.itemsList, itemsToHtml(order.items || []));
     
@@ -3444,8 +4308,53 @@
   // -----------------------------
   // Sheet
   // -----------------------------
+  function focusOutsideSheetBeforeHide() {
+    if (!sheet) return;
+    const activeEl = document.activeElement;
+    if (!activeEl || !sheet.contains(activeEl)) return;
+
+    const canRestoreFocus = sheetReturnFocusEl
+      && sheetReturnFocusEl !== document.body
+      && typeof sheetReturnFocusEl.focus === "function"
+      && document.documentElement.contains(sheetReturnFocusEl)
+      && !sheet.contains(sheetReturnFocusEl);
+
+    if (canRestoreFocus) {
+      try {
+        sheetReturnFocusEl.focus({ preventScroll: true });
+      } catch (_) {
+        try {
+          sheetReturnFocusEl.focus();
+        } catch (_) {}
+      }
+    }
+
+    if (sheet.contains(document.activeElement)) {
+      try {
+        activeEl.blur();
+      } catch (_) {}
+    }
+
+    if (sheet.contains(document.activeElement) && document.body && typeof document.body.focus === "function") {
+      const hadBodyTabIndex = document.body.hasAttribute("tabindex");
+      if (!hadBodyTabIndex) {
+        document.body.setAttribute("tabindex", "-1");
+        sheetBodyTabIndexAdded = true;
+      }
+      try {
+        document.body.focus({ preventScroll: true });
+      } catch (_) {
+        try {
+          document.body.focus();
+        } catch (_) {}
+      }
+    }
+  }
+
   function openSheet() {
     if (!sheet || !backdrop) return;
+    const activeEl = document.activeElement;
+    sheetReturnFocusEl = activeEl && !sheet.contains(activeEl) ? activeEl : null;
     sheet.classList.add("is-open");
     backdrop.classList.add("is-active");
     sheet.setAttribute("aria-hidden", "false");
@@ -3455,11 +4364,17 @@
 
   function closeSheet() {
     if (!sheet || !backdrop) return;
+    focusOutsideSheetBeforeHide();
     sheet.classList.remove("is-open");
     backdrop.classList.remove("is-active");
     sheet.setAttribute("aria-hidden", "true");
     backdrop.setAttribute("aria-hidden", "true");
     document.body.classList.remove("sheet-open");
+    if (sheetBodyTabIndexAdded) {
+      document.body.removeAttribute("tabindex");
+      sheetBodyTabIndexAdded = false;
+    }
+    sheetReturnFocusEl = null;
   }
 
   // -----------------------------
@@ -3491,7 +4406,19 @@
         schedulePersistOrdersCache();
         return;
       }
-      loadAndRenderOrders(false).catch(console.error);
+      if (!tabsState.tabs.length) {
+        const activeOrder = state.activeOrderId
+          ? state.orders.find((order) => Number(order?.id || 0) === Number(state.activeOrderId || 0)) || null
+          : null;
+        if (!activeOrder || !orderMatchesFilters(activeOrder)) {
+          state.activeOrderId = null;
+          setInfo(null);
+        } else {
+          setInfo(activeOrder);
+        }
+      }
+      renderOrders();
+      schedulePersistOrdersCache();
     });
 
     return btn;
@@ -3504,6 +4431,7 @@
       const active = String(state.activeStatusId) === String(id);
       b.classList.toggle("is-active", active);
     });
+    updateOrdersToolbarTitle();
   }
 
   function clearStageDropover() {
@@ -3614,6 +4542,7 @@
             countersChanged = applyStageCountersDelta(current, optimisticOrder) || countersChanged;
           }
           if (!requestOrderIds.length) return;
+          rebuildOrdersStageIndex();
 
           requestOrderIds.forEach((id) => state.selectedOrderIds.delete(Number(id)));
 
@@ -3632,7 +4561,6 @@
               body: { status_id: statusId },
             }))
           );
-          scheduleStageRefresh();
         } catch (err) {
           console.error(err);
           try {
@@ -3695,8 +4623,32 @@
   // -----------------------------
   // Orders list
   // -----------------------------
-  function orderMatchesFilters(order) {
+  function orderMatchesDateRange(order) {
     if (!order) return false;
+
+    if (state.date.start && state.date.end) {
+      const dateStr = order.scheduled_at || order.created_at;
+      const d = new Date(String(dateStr).replace(' ', 'T'));
+      if (Number.isNaN(d.getTime())) return false;
+
+      const key = toDateKey(d);
+      const startKey = toDateKey(state.date.start);
+      const endKey = toDateKey(state.date.end);
+
+      if (key < startKey || key > endKey) return false;
+    }
+
+    return true;
+  }
+
+  function shouldKeepOrderInState(order) {
+    if (!order) return false;
+    if (isCourierWorkspace && !isDeliveryOrder(order)) return false;
+    return orderMatchesDateRange(order);
+  }
+
+  function orderMatchesFilters(order) {
+    if (!shouldKeepOrderInState(order)) return false;
 
     if (isCourierWorkspace) {
       const bucketId = getCourierBucketId(order);
@@ -3795,19 +4747,15 @@
       const targetId = Number(row.getAttribute("data-order-id"));
       if (!draggedId || !targetId || draggedId === targetId) return;
 
-      const idxFrom = state.orders.findIndex((x) => Number(x.id) === Number(draggedId));
-      const idxTo = state.orders.findIndex((x) => Number(x.id) === Number(targetId));
-      if (idxFrom < 0 || idxTo < 0) return;
-
-      const moved = state.orders.splice(idxFrom, 1)[0];
-      state.orders.splice(idxTo, 0, moved);
+      const stageOrders = reorderOrdersWithinActiveStage(draggedId, targetId);
+      if (!stageOrders || !stageOrders.length) return;
 
       try {
         await apiJson(`/api/admin/orders/reorder`, {
           method: "PUT",
           body: {
             status_id: Number(state.activeStatusId),
-            orderedIds: state.orders.map((x) => Number(x.id)),
+            orderedIds: stageOrders.map((x) => Number(x.id)),
           },
         });
 
@@ -4041,11 +4989,10 @@
     elOrdersList.innerHTML = "";
 
     normalizeSelectedOrderIds();
-    const list = state.orders || [];
-    const filtered = list.filter(orderMatchesFilters);
+    const filtered = getOrdersForActiveStage();
     if (!filtered.length) {
       if (elEmptyHint) elEmptyHint.classList.remove("hidden");
-      if (!tabsState.tabs.length) {
+      if (!tabsState.tabs.length || !state.activeOrderId) {
         setInfo(null);
       }
       syncActiveOrderRowState();
@@ -4061,6 +5008,12 @@
 
     if (tabsState.tabs.length) {
       syncActiveOrderRowState();
+    } else if (state.activeOrderId) {
+      const hasActiveInStage = filtered.some((order) => Number(order?.id || 0) === Number(state.activeOrderId || 0));
+      if (!hasActiveInStage) {
+        state.activeOrderId = null;
+        setInfo(null);
+      }
     } else if (!state.activeOrderId) {
       setInfo(null);
     }
@@ -4115,9 +5068,6 @@
 
   async function loadOrders() {
     const qs = new URLSearchParams();
-    if (!isCourierWorkspace && state.activeStatusId !== "all") {
-      qs.set("status_id", String(state.activeStatusId));
-    }
     if (state.date.start && state.date.end) {
       qs.set("start_date", toDateKey(state.date.start));
       qs.set("end_date", toDateKey(state.date.end));
@@ -4127,7 +5077,12 @@
 
     const json = await apiJson(`/api/admin/orders?${qs.toString()}`);
     const rows = Array.isArray(json.data) ? json.data : [];
-    state.orders = isCourierWorkspace ? rows.filter(isDeliveryOrder) : rows;
+    state.orders = rows.filter(shouldKeepOrderInState);
+    applyCourierShadowOrdersToState();
+    rebuildOrdersStageIndex();
+    if (!isCourierWorkspace) {
+      syncStageCountsFromOrders();
+    }
   }
 
   async function loadAndRenderOrders(keepSelection = false) {
@@ -4139,8 +5094,8 @@
     await loadOrders();
     if (isCourierWorkspace) {
       ensureActiveStatusSelection();
-      renderStages();
     }
+    renderStages();
     renderOrders();
 
     if (tabsState.tabs.length) {
@@ -4202,8 +5157,14 @@
   function renderCalendar() {
     if (!dateGrid || !dateTitle) return;
 
-    const year = state.date.viewYear;
-    const month = state.date.viewMonth;
+    if (!isValidCalendarView(state.date.viewYear, state.date.viewMonth)) {
+      const fallbackDate = state.date.start || getStoreDateNow(state.storeTimezone || "+0");
+      state.date.viewYear = fallbackDate.getFullYear();
+      state.date.viewMonth = fallbackDate.getMonth();
+    }
+
+    const year = Number(state.date.viewYear);
+    const month = Number(state.date.viewMonth);
     const first = new Date(year, month, 1);
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const offset = (first.getDay() + 6) % 7;
@@ -4393,7 +5354,6 @@
     const nextStatusId = extractOrderStatusId(nextOrder);
 
     if (!nextStatusId && !prevStatusId) return false;
-    if (prevStatusId && !nextStatusId) return false;
     if (prevStatusId && nextStatusId && prevStatusId === nextStatusId) return false;
 
     let changed = false;
@@ -4422,31 +5382,60 @@
     return changed;
   }
 
-  function handleOrderEvent(order) {
+  function syncStageCountsFromOrders() {
+    if (!Array.isArray(state.statuses) || !state.statuses.length) return;
+    state.statuses.forEach((status) => {
+      status.count = 0;
+    });
+    (Array.isArray(state.orders) ? state.orders : []).forEach((order) => {
+      const statusId = extractOrderStatusId(order);
+      if (!statusId) return;
+      const status = state.statuses.find((item) => Number(item?.id) === statusId);
+      if (status) {
+        status.count = Math.max(0, Number(status.count || 0)) + 1;
+      }
+    });
+  }
+
+  function handleOrderEvent(order, { localOnly = false, skipStageRefresh = false } = {}) {
     if (!order || !order.id) return;
 
     const idx = state.orders.findIndex((o) => Number(o.id) === Number(order.id));
     const wasExisting = idx >= 0;
     const prevOrder = wasExisting ? state.orders[idx] : null;
-    if (isCourierWorkspace && !isDeliveryOrder(order)) {
-      if (wasExisting) {
-        state.orders.splice(idx, 1);
+    const prevVisible = orderMatchesFilters(prevOrder);
+    const shouldKeep = shouldKeepOrderInState(order);
+    let nextOrder = null;
+    let nextVisible = false;
+
+    if (!shouldKeep) {
+      if (!wasExisting) return;
+      state.orders.splice(idx, 1);
+      rebuildOrdersStageIndex();
+      if (!tabsState.tabs.length && Number(state.activeOrderId || 0) === Number(order.id)) {
+        state.activeOrderId = null;
+        setInfo(null);
       }
-      upsertOrderRow(order);
-      renderStages();
+      if (applyStageCountersDelta(prevOrder, null)) {
+        renderStages();
+      }
       renderOrders();
+      schedulePersistOrdersCache();
       return;
     }
-    if (wasExisting) {
-      state.orders[idx] = { ...state.orders[idx], ...order };
-    } else {
-      state.orders.unshift(order);
-    }
 
-    upsertOrderRow(order);
+    nextOrder = localOnly ? { ...order } : overlayCourierShadowOrder(order);
+    if (wasExisting) {
+      state.orders[idx] = { ...state.orders[idx], ...nextOrder };
+      nextOrder = state.orders[idx];
+    } else {
+      state.orders.unshift(nextOrder);
+    }
+    rebuildOrdersStageIndex();
+    nextVisible = orderMatchesFilters(nextOrder);
     const tab = tabsState.tabs.find((t) => Number(t.orderId) === Number(order.id));
     if (tab) {
-      tab.order = { ...tab.order, ...order };
+      tab.order = { ...tab.order, ...nextOrder };
       tab.title = buildOrderTabTitle(tab.order);
       if (tabsState.activeKey === tab.key) {
         state.activeOrderId = tab.orderId;
@@ -4455,55 +5444,29 @@
       renderOrderTabs();
       syncActiveOrderRowState();
     } else if (state.activeOrderId && Number(state.activeOrderId) === Number(order.id)) {
-      setInfo(order);
+      if (nextVisible) {
+        setInfo(nextOrder);
+      } else {
+        state.activeOrderId = null;
+        setInfo(null);
+      }
     }
 
-    if (applyStageCountersDelta(prevOrder, order)) {
+    if (applyStageCountersDelta(prevOrder, nextOrder)) {
       renderStages();
     }
-    scheduleStageRefresh();
+    if (!wasExisting || prevVisible !== nextVisible) {
+      renderOrders();
+    } else {
+      upsertOrderRow(nextOrder);
+    }
 
-    const statusCode = (order.status_code || "").toLowerCase();
+    const statusCode = (nextOrder.status_code || "").toLowerCase();
     if (statusCode === "cancelled" || statusCode === "canceled") {
       const url = state.tenantSounds && state.tenantSounds.sound_order_cancelled_url;
       if (url) playNotificationSound(url);
     }
     schedulePersistOrdersCache();
-  }
-
-  async function fetchChanges() {
-    if (!state.lastEventId) {
-      const bootstrap = await apiJson("/api/admin/orders/changes?since=0");
-      const cursor = Number(bootstrap?.cursor || 0);
-      state.lastEventId = Number.isFinite(cursor) && cursor > 0 ? cursor : null;
-      return;
-    }
-
-    try {
-      const json = await apiJson(`/api/admin/orders/changes?since=${state.lastEventId}`);
-      const cursor = Number(json?.cursor || 0);
-      if (Number.isFinite(cursor) && cursor > 0) {
-        state.lastEventId = Math.max(Number(state.lastEventId || 0), cursor);
-      }
-      const changes = Array.isArray(json.data) ? json.data : [];
-      if (!changes.length) return;
-      changes.forEach((evt) => {
-        state.lastEventId = evt.id || state.lastEventId;
-        handleOrderEvent(evt.data);
-        const eventName = String(evt.event || "").toLowerCase();
-        if (eventName === "order.created") {
-          notifyNewOrders([evt.data]);
-        }
-      });
-    } catch (e) {
-      console.error(e);
-      const prevIds = new Set(state.orders.map((o) => Number(o.id)));
-      await loadAndRenderOrders(true);
-      const newOrders = state.orders.filter((o) => !prevIds.has(Number(o.id)));
-      if (newOrders.length) {
-        notifyNewOrders(newOrders);
-      }
-    }
   }
 
   // Фоновый опрос списка заказов (резерв, когда SSE обрывается на хостинге)
@@ -4525,12 +5488,10 @@
           notifyNewOrders(newOrders);
         }
       } else if (newOrders.length) {
-        for (const nextOrder of newOrders) {
-          applyStageCountersDelta(null, nextOrder);
-        }
         renderStages();
-        scheduleStageRefresh();
         notifyNewOrders(newOrders);
+      } else {
+        renderStages();
       }
       renderOrders();
       if (tabsState.tabs.length) {
@@ -4542,13 +5503,6 @@
     } catch (e) {
       console.error(e);
     }
-  }
-
-  function scheduleNextPoll() {
-    if (!ordersPollTimer) return;
-    ordersPollTimer = setTimeout(() => {
-      pollOrdersList().finally(() => scheduleNextPoll());
-    }, ORDERS_POLL_INTERVAL_MS);
   }
 
   function startOrdersPolling() {
@@ -4594,9 +5548,6 @@
       void tickChanges();
     }
 
-    if (ordersPollTimer) return;
-    ordersPollTimer = true;
-    scheduleNextPoll();
   }
 
   async function waitOrdersChanges(since, timeoutMs = 20000) {
@@ -4629,6 +5580,199 @@
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && ordersPollTimer) {
       pollOrdersList().catch(console.error);
+    }
+  });
+
+  function applyOrdersChangesEvents(changes, { notifyCreated = true } = {}) {
+    const rows = Array.isArray(changes) ? changes : [];
+    const createdOrders = [];
+    rows.forEach((evt) => {
+      state.lastEventId = evt?.id || state.lastEventId;
+      handleOrderEvent(evt?.data);
+      if (notifyCreated && String(evt?.event || "").toLowerCase() === "order.created" && evt?.data) {
+        createdOrders.push(evt.data);
+      }
+    });
+    if (notifyCreated && createdOrders.length) {
+      notifyNewOrders(createdOrders);
+    }
+  }
+
+  async function fetchOrdersChanges(since = 0) {
+    const qs = new URLSearchParams({
+      since: String(Math.max(0, Number(since || 0))),
+      _ts: String(Date.now()),
+    });
+    const json = await apiJson(`/api/admin/orders/changes?${qs.toString()}`);
+    const cursor = Number(json?.cursor || 0);
+    return {
+      changes: Array.isArray(json?.data) ? json.data : [],
+      cursor: Number.isFinite(cursor) && cursor > 0 ? cursor : 0,
+      resetRequired: json?.reset_required === true,
+      reason: String(json?.reason || "").trim() || null,
+    };
+  }
+
+  async function synchronizeOrdersChanges({ notifyCreated = true } = {}) {
+    const since = Number(state.lastEventId || 0);
+    const payload = await fetchOrdersChanges(since);
+    if (payload.resetRequired) return payload;
+    if (payload.cursor > 0) {
+      state.lastEventId = since > 0 ? Math.max(since, payload.cursor) : payload.cursor;
+    }
+    if (payload.changes.length) {
+      applyOrdersChangesEvents(payload.changes, { notifyCreated });
+    }
+    return payload;
+  }
+
+  async function bootstrapOrdersData({ keepSelection = false } = {}) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const bootstrap = await fetchOrdersChanges(0);
+      const snapshotCursor = Number(bootstrap.cursor || 0);
+      state.lastEventId = snapshotCursor > 0 ? snapshotCursor : null;
+
+      await loadStatuses();
+      ensureActiveStatusSelection();
+      await loadAndRenderOrders(keepSelection);
+
+      const catchup = await fetchOrdersChanges(snapshotCursor);
+      if (catchup.resetRequired) {
+        state.lastEventId = null;
+        continue;
+      }
+
+      if (catchup.cursor > 0) {
+        state.lastEventId = Math.max(Number(state.lastEventId || 0), catchup.cursor);
+      }
+      if (catchup.changes.length) {
+        applyOrdersChangesEvents(catchup.changes, { notifyCreated: false });
+      }
+      return;
+    }
+
+    throw new Error("ORDERS_BOOTSTRAP_RESET_REQUIRED");
+  }
+
+  let ordersLongPollActive = false;
+  let ordersLongPollToken = 0;
+  let ordersWaitAbortController = null;
+
+  async function waitOrdersChanges(since, timeoutMs = 20000) {
+    const qs = new URLSearchParams({
+      since: String(Number(since || 0)),
+      timeout_ms: String(Math.max(1000, Number(timeoutMs || 20000))),
+      _ts: String(Date.now()),
+    });
+    const controller = new AbortController();
+    ordersWaitAbortController = controller;
+    try {
+      const json = await apiJson(`/api/admin/orders/changes/wait?${qs.toString()}`, {
+        signal: controller.signal,
+      });
+      const data = json?.data || {};
+      return {
+        changed: data.changed === true,
+        timeout: data.timeout === true,
+        cursor: Number(data.cursor || 0),
+        resetRequired: data.reset_required === true,
+        reason: String(data.reason || "").trim() || null,
+      };
+    } finally {
+      if (ordersWaitAbortController === controller) {
+        ordersWaitAbortController = null;
+      }
+    }
+  }
+
+  function startOrdersPolling() {
+    if (ordersLongPollActive) return;
+    if (document.visibilityState && document.visibilityState !== "visible") return;
+    ordersLongPollActive = true;
+    ordersLongPollToken += 1;
+    const token = ordersLongPollToken;
+
+    const tickChanges = async () => {
+      while (ordersLongPollActive && token === ordersLongPollToken) {
+        try {
+          const waited = await waitOrdersChanges(state.lastEventId || 0, 20000);
+          if (!ordersLongPollActive || token !== ordersLongPollToken) return;
+
+          if (waited.resetRequired) {
+            await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) });
+            continue;
+          }
+
+          if (Number.isFinite(waited.cursor) && waited.cursor > 0 && !state.lastEventId) {
+            state.lastEventId = waited.cursor;
+          }
+
+          if (waited.changed) {
+            const synced = await synchronizeOrdersChanges({ notifyCreated: true });
+            if (synced.resetRequired) {
+              await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) });
+            }
+          }
+        } catch (e) {
+          if (isAbortError(e)) return;
+          console.error(e);
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+    };
+
+    void tickChanges();
+  }
+
+  function stopOrdersPolling() {
+    if (ordersWaitAbortController) {
+      try { ordersWaitAbortController.abort(); } catch {}
+      ordersWaitAbortController = null;
+    }
+    if (ordersPollTimer != null && typeof ordersPollTimer === "number") {
+      clearTimeout(ordersPollTimer);
+    }
+    ordersPollTimer = null;
+    if (ordersChangesPollTimer != null && typeof ordersChangesPollTimer === "number") {
+      clearTimeout(ordersChangesPollTimer);
+    }
+    ordersChangesPollTimer = null;
+    ordersLongPollActive = false;
+    ordersLongPollToken += 1;
+  }
+
+  async function resumeOrdersRealtime() {
+    if (document.visibilityState && document.visibilityState !== "visible") return;
+    try {
+      if (!state.lastEventId) {
+        await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) });
+      } else {
+        const synced = await synchronizeOrdersChanges({ notifyCreated: false });
+        if (synced?.resetRequired) {
+          await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) });
+        }
+      }
+    } catch (err) {
+      if (!isAbortError(err)) {
+        console.error(err);
+      }
+    }
+    startOrdersPolling();
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      stopOrdersPolling();
+      return;
+    }
+    void resumeOrdersRealtime();
+  });
+
+  window.addEventListener("pagehide", () => {
+    stopOrdersPolling();
+    if (ordersCachePersistTimer) {
+      clearTimeout(ordersCachePersistTimer);
+      ordersCachePersistTimer = null;
     }
   });
 
@@ -4921,7 +6065,7 @@
     const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
     if (!activeTab || !isCheckoutTab(activeTab)) return;
     closeOrderTab(activeTab.key);
-    pollOrdersList().catch(console.error);
+    bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) }).catch(console.error);
   });
 
   closeButtons.forEach((btn) => btn.addEventListener("click", clearSelection));
@@ -5626,7 +6770,7 @@
       state.date.start = storeNow;
       state.date.end = storeNow;
     }
-    if (!Number.isFinite(Number(state.date.viewYear)) || !Number.isFinite(Number(state.date.viewMonth))) {
+    if (!isValidCalendarView(state.date.viewYear, state.date.viewMonth)) {
       const baseDate = state.date.start || getStoreDateNow(state.storeTimezone || "+0");
       state.date.viewYear = baseDate.getFullYear();
       state.date.viewMonth = baseDate.getMonth();
@@ -5657,60 +6801,31 @@
   async function init() {
     try {
       const cachedBootstrap = readOrdersBootstrapCache();
-      const hydratedFromCache = hydrateOrdersFromCache(cachedBootstrap);
+      hydrateCourierOfflineStateFromStorage();
 
       await loadStoreTimezone();
+      resetDateStateToToday();
+      hydrateOrdersFromCache(cachedBootstrap);
       ensureDateStateInitialized();
       renderCalendar();
       updateDateLabel();
       bindOrderTabsWheelScroll();
 
-      let shouldReloadFromApi = true;
-      const hasWarmCache =
-        hydratedFromCache &&
-        Array.isArray(state.orders) &&
-        state.orders.length > 0 &&
-        (
-          isCourierWorkspace ||
-          (
-            Array.isArray(state.statuses) &&
-            state.statuses.length > 0
-          )
-        );
-
-      if (hasWarmCache && Number(state.lastEventId || 0) > 0) {
-        try {
-          const waitResult = await waitOrdersChanges(state.lastEventId, 1200);
-          if (waitResult.changed) {
-            shouldReloadFromApi = true;
-          } else {
-            shouldReloadFromApi = false;
-            if (Number.isFinite(waitResult.cursor) && waitResult.cursor > 0) {
-              state.lastEventId = waitResult.cursor;
-            }
-          }
-        } catch {
-          shouldReloadFromApi = true;
+      try {
+        await bootstrapOrdersData({ keepSelection: Boolean(tabsState.tabs.length || state.activeOrderId) });
+        if (tabsState.activeKey) {
+          setActiveOrderTab(tabsState.activeKey);
+        } else {
+          renderOrderTabs();
         }
-      }
-
-      if (shouldReloadFromApi) {
-        try {
-          await loadStatuses();
-          ensureActiveStatusSelection();
-          renderStages();
-          await loadAndRenderOrders(Boolean(tabsState.tabs.length || state.activeOrderId));
-        } catch (refreshErr) {
-          console.error(refreshErr);
-          ensureActiveStatusSelection();
-          renderStages();
-          renderOrders();
-          schedulePersistOrdersCache(0);
-        }
-      } else {
+      } catch (refreshErr) {
+        console.error(refreshErr);
         ensureActiveStatusSelection();
         renderStages();
         renderOrders();
+        renderOrderTabs();
+        setOrdersCheckoutLayoutEnabled(false);
+        setInfo(null);
         schedulePersistOrdersCache(0);
       }
 
@@ -5727,6 +6842,17 @@
         console.error(err);
       }
 
+      if (isCourierWorkspace && sharedOrderPayment?.warmCache && courierOfflineState.online) {
+        sharedOrderPayment.warmCache(apiJson, state.orders[0] || null).catch((err) => {
+          console.error("courier payment methods warmup error:", err);
+        });
+      }
+
+      if (isCourierWorkspace) {
+        refreshCourierConnectionBanner();
+        processCourierOfflineQueue().catch(console.error);
+      }
+
       document.addEventListener("click", unlockAudioOnce, { once: true });
       document.addEventListener("keydown", unlockAudioOnce, { once: true });
 
@@ -5739,34 +6865,81 @@
 
   init();
 
+  if (isCourierWorkspace && courierConnectionBannerRetryBtn) {
+    courierConnectionBannerRetryBtn.addEventListener("click", () => {
+      courierOfflineState.syncError = "";
+      setCourierOnlineState(navigator.onLine !== false);
+      processCourierOfflineQueue({ force: true }).catch(console.error);
+    });
+  }
+
+  if (isCourierWorkspace) {
+    window.addEventListener("offline", () => {
+      setCourierOnlineState(false);
+    });
+
+    window.addEventListener("online", () => {
+      const hasPending = courierOfflineState.queue.length > 0;
+      setCourierOnlineState(true, { showRestored: !hasPending });
+      processCourierOfflineQueue().catch(console.error);
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      setCourierOnlineState(navigator.onLine !== false);
+      if (navigator.onLine !== false) {
+        processCourierOfflineQueue().catch(console.error);
+      }
+    });
+  }
+
   window.addEventListener("beforeunload", () => {
     try {
-      persistOrdersCacheNow();
+      persistCourierOfflineState();
     } catch {}
+    stopOrdersPolling();
   });
   // Слушать изменение филиала: переподключить SSE к каналу нового филиала и перезагрузить заказы
   document.addEventListener('tenantStoreChanged', (event) => {
     console.log('Филиал изменен:', event.detail.store);
     state.clientsCache.clear();
+    state.statuses = [];
+    state.orders = [];
+    state.ordersStageIndex = createOrdersStageIndex();
+    state.selectedOrderIds = new Set();
     state.lastEventId = null;
     tabsState.tabs = [];
     tabsState.activeKey = null;
     state.activeOrderId = null;
+    resetCourierOfflineRuntimeState();
+    hydrateCourierOfflineStateFromStorage();
     setOrdersCheckoutLayoutEnabled(false);
+    renderStages();
+    renderOrders();
     renderOrderTabs();
     setInfo(null);
     closeSheet();
     loadStoreTimezone()
       .then(() => {
+        resetDateStateToToday();
         ensureDateStateInitialized();
         renderCalendar();
         updateDateLabel();
-        return loadStatuses();
+        return bootstrapOrdersData({ keepSelection: false });
       })
       .then(() => {
-        ensureActiveStatusSelection();
-        renderStages();
-        return loadAndRenderOrders(false);
+        renderOrderTabs();
+        if (isCourierWorkspace && sharedOrderPayment?.warmCache && courierOfflineState.online) {
+          return sharedOrderPayment.warmCache(apiJson, state.orders[0] || null).catch(() => null);
+        }
+        return null;
+      })
+      .then(() => {
+        if (isCourierWorkspace) {
+          refreshCourierConnectionBanner();
+          return processCourierOfflineQueue().catch(console.error);
+        }
+        return null;
       })
       .catch(console.error);
     stopOrdersPolling();

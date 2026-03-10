@@ -227,9 +227,8 @@
       appleIcon.href = apple;
     }
 
-    if (manifest) {
-      const ver = tenant.updated_at ? encodeURIComponent(String(tenant.updated_at)) : "";
-      manifest.href = `/manifest.json${ver ? `?v=${ver}` : ""}`;
+    if (manifest && typeof window.updateAppManifestBranding === "function") {
+      window.updateAppManifestBranding(tenant);
     }
   }
 
