@@ -236,6 +236,7 @@
   // header profile (? header.ejs ???? id)
   const elHeaderFavoritesBtn = $("#shopHeaderFavBtn");
   const elHeaderProfileBtn = $("#shopProfileBtn");
+  const elCompanyChatOpenBtn = $("#shopCompanyChatOpenBtn");
   const elActiveOrdersBadge = $("#shopActiveOrdersBadge");
   const elActiveOrdersBadgeMobile = $("#shopActiveOrdersBadgeMobile");
   const elActiveOrdersSheetCollapsed = $("#shopActiveOrdersSheetCollapsed");
@@ -6434,14 +6435,42 @@ async function initAddresses() {
     }
   }
 
-  function loadShopChat() {
-    if (window.__shopChatLoaded) return;
-    window.__shopChatLoaded = true;
-    var url = window.__shopChatUrl || '/static/js/shop-company-chat.js';
-    var sc = document.createElement('script');
-    sc.src = url;
-    sc.defer = true;
-    document.head.appendChild(sc);
+  let __shopChatPromise = null;
+  function ensureShopChatLoaded() {
+    if (__shopChatPromise) return __shopChatPromise;
+    __shopChatPromise = new Promise((resolve) => {
+      if (window.__shopChatLoaded) {
+        resolve();
+        return;
+      }
+      const existing = document.querySelector('script[data-shop-chat]');
+      if (existing) {
+        existing.addEventListener('load', () => {
+          window.__shopChatLoaded = true;
+          resolve();
+        });
+        existing.addEventListener('error', () => {
+          __shopChatPromise = null;
+          resolve();
+        });
+        return;
+      }
+      var url = window.__shopChatUrl || '/static/js/shop-company-chat.js';
+      var sc = document.createElement('script');
+      sc.src = url;
+      sc.defer = true;
+      sc.dataset.shopChat = '1';
+      sc.onload = () => {
+        window.__shopChatLoaded = true;
+        resolve();
+      };
+      sc.onerror = () => {
+        __shopChatPromise = null;
+        resolve();
+      };
+      document.head.appendChild(sc);
+    });
+    return __shopChatPromise;
   }
 
   let __shopLatePromise = null;
@@ -6450,7 +6479,6 @@ async function initAddresses() {
     __shopLatePromise = new Promise((resolve) => {
       if (window.__shopLateLoaded) {
         resolve();
-        loadShopChat();
         return;
       }
       const existing = document.querySelector('script[data-shop-late]');
@@ -6462,9 +6490,8 @@ async function initAddresses() {
             initShopLate();
           }
           resolve();
-          loadShopChat();
         });
-        existing.addEventListener('error', () => { resolve(); loadShopChat(); });
+        existing.addEventListener('error', () => { resolve(); });
         return;
       }
       const s = document.createElement('script');
@@ -6478,9 +6505,8 @@ async function initAddresses() {
           initShopLate();
         }
         resolve();
-        loadShopChat();
       };
-      s.onerror = () => { resolve(); loadShopChat(); };
+      s.onerror = () => { resolve(); };
       document.head.appendChild(s);
     });
     return __shopLatePromise;
@@ -6565,6 +6591,21 @@ async function initAddresses() {
     // Core renders cart immediately; late bundle wires complex flows (checkout, clear with confirm, etc.).
     bindClickLazy(elCheckoutBtn);
     bindClickLazy(elCartClearBtn);
+
+    if (elCompanyChatOpenBtn && elCompanyChatOpenBtn.addEventListener) {
+      elCompanyChatOpenBtn.addEventListener(
+        "click",
+        (e) => {
+          if (window.__shopChatLoaded) return;
+          e.preventDefault();
+          e.stopPropagation();
+          ensureShopChatLoaded().then(() => {
+            try { elCompanyChatOpenBtn.click(); } catch {}
+          });
+        },
+        { capture: true }
+      );
+    }
   }
 
   function openComboDetails(comboId, opts = {}) {

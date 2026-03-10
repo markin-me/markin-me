@@ -1,4 +1,9 @@
 (function () {
+  if (typeof window !== 'undefined' && window.__cashPageInitialized) return;
+  if (typeof window !== 'undefined') {
+    window.__cashPageInitialized = true;
+  }
+
   try {
     var filtersEl = document.getElementById('cashJournalFilters');
     var journalListEl = document.getElementById('cashJournalList');
@@ -57,6 +62,7 @@
       { value: 'other', label: 'Другая сумма' },
     ];
     var clickTimer = null;
+    var waitAbortController = null;
     var state = {
       statuses: [],
       orders: [],
@@ -95,6 +101,7 @@
         method: opts.method || 'GET',
         cache: opts.cache || 'no-store',
         headers: headers,
+        signal: opts.signal,
         body: body == null ? undefined : (typeof body === 'string' ? body : JSON.stringify(body)),
       }).then(function (res) {
         if (res.status === 401) {
@@ -113,6 +120,14 @@
 
     function sleepMs(ms) {
       return new Promise(function (resolve) { window.setTimeout(resolve, Math.max(0, Number(ms || 0))); });
+    }
+
+    function isAbortError(err) {
+      if (!err) return false;
+      var name = String(err.name || '').toLowerCase();
+      if (name === 'aborterror') return true;
+      var message = String(err.message || '').toLowerCase();
+      return message.indexOf('aborted') !== -1;
     }
 
     function money(value) {
@@ -2733,12 +2748,27 @@
         timeout_ms: String(WAIT_TIMEOUT_MS),
         _ts: String(Date.now()),
       });
-      return apiJson('/api/admin/orders/changes/wait?' + qs.toString()).then(function (json) {
+      var controller = new AbortController();
+      waitAbortController = controller;
+      return apiJson('/api/admin/orders/changes/wait?' + qs.toString(), { signal: controller.signal }).then(function (json) {
         return json && json.data ? json.data : {};
+      }).finally(function () {
+        if (waitAbortController === controller) {
+          waitAbortController = null;
+        }
       });
     }
 
+    function stopWaitLoop() {
+      state.waitLoopToken += 1;
+      if (waitAbortController) {
+        try { waitAbortController.abort(); } catch {}
+        waitAbortController = null;
+      }
+    }
+
     function startWaitLoop() {
+      if (document.visibilityState && document.visibilityState !== 'visible') return;
       var token = ++state.waitLoopToken;
       (async function runWaitLoop() {
         if (!(Number(state.eventsCursor || 0) > 0)) await bootstrapEventsCursor();
@@ -2758,6 +2788,7 @@
               state.eventsCursor = cursor;
             }
           } catch (err) {
+            if (isAbortError(err)) return;
             console.error('cash wait loop error:', err);
             await sleepMs(WAIT_RETRY_MS);
           }
@@ -3044,10 +3075,24 @@
     }
 
     document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState === 'visible') loadOrders();
+      if (document.visibilityState === 'hidden') {
+        stopWaitLoop();
+        return;
+      }
+      loadOrders();
+      startWaitLoop();
+    });
+
+    window.addEventListener('pagehide', function () {
+      stopWaitLoop();
+    });
+
+    window.addEventListener('beforeunload', function () {
+      stopWaitLoop();
     });
 
     document.addEventListener('tenantStoreChanged', function () {
+      stopWaitLoop();
       state.orders = [];
       state.statuses = [];
       state.paymentMethods = [];

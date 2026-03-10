@@ -1,4 +1,9 @@
 (function () {
+  if (typeof window !== "undefined" && window.__ordersSidebarBadgeInitialized) return;
+  if (typeof window !== "undefined") {
+    window.__ordersSidebarBadgeInitialized = true;
+  }
+
   const navLink = document.getElementById("sidebarOrdersNavLink");
   const badge = document.getElementById("sidebarOrdersUnreadBadge");
   if (!navLink || !badge) return;
@@ -16,6 +21,16 @@
   let unreadPrimed = false;
   let currentNewCount = 0;
   let audioUnlocked = false;
+  let pullAbortController = null;
+  let waitAbortController = null;
+
+  function isAbortError(err) {
+    if (!err) return false;
+    const name = String(err.name || "").toLowerCase();
+    if (name === "aborterror") return true;
+    const message = String(err.message || "").toLowerCase();
+    return message.includes("aborted");
+  }
 
   function money(value) {
     const n = Number(value || 0);
@@ -163,12 +178,15 @@
   async function pullNewOrdersCount() {
     if (inFlight) return;
     inFlight = true;
+    const pullAbort = new AbortController();
+    pullAbortController = pullAbort;
     try {
       const qs = new URLSearchParams({ _ts: String(Date.now()) });
       const res = await fetch(API_BASE + "/new-count?" + qs.toString(), {
         method: "GET",
         headers: getHeaders(),
         cache: "no-store",
+        signal: pullAbort.signal,
       });
       if (!res.ok) {
         if (res.status === 401) hideBadge();
@@ -178,9 +196,13 @@
       const total = Number(json?.data?.total || 0);
       updateNewOrdersCount(total);
       showBadge(total);
-    } catch {
+    } catch (err) {
+      if (isAbortError(err)) return;
       // keep last state on transient errors
     } finally {
+      if (pullAbortController === pullAbort) {
+        pullAbortController = null;
+      }
       inFlight = false;
     }
   }
@@ -192,11 +214,17 @@
       timeout_ms: String(Math.max(1000, WAIT_TIMEOUT_MS)),
       _ts: String(Date.now()),
     });
+    const waitAbort = new AbortController();
+    waitAbortController = waitAbort;
     const res = await fetch(API_BASE + "/changes/wait?" + qs.toString(), {
       method: "GET",
       headers: getHeaders(),
       cache: "no-store",
+      signal: waitAbort.signal,
     });
+    if (waitAbortController === waitAbort) {
+      waitAbortController = null;
+    }
     if (!res.ok) {
       if (res.status === 404 || res.status === 405 || res.status === 410) {
         waitSupported = false;
@@ -278,6 +306,7 @@
 
   function startWaitLoop() {
     if (waitLoopStarted) return;
+    if (document.visibilityState && document.visibilityState !== "visible") return;
     waitLoopStarted = true;
     waitLoopToken += 1;
     const token = waitLoopToken;
@@ -316,16 +345,32 @@
             } catch {}
             await pullNewOrdersCount();
           }
-        } catch {
+        } catch (err) {
+          if (isAbortError(err)) break;
           await sleepMs(WAIT_RETRY_MS);
+        } finally {
+          waitAbortController = null;
         }
       }
     })().catch(() => {});
   }
 
-  function restartWaitLoop() {
+  function stopWaitLoop() {
     waitLoopStarted = false;
     waitLoopToken += 1;
+    if (pullAbortController) {
+      try { pullAbortController.abort(); } catch {}
+      pullAbortController = null;
+    }
+    if (waitAbortController) {
+      try { waitAbortController.abort(); } catch {}
+      waitAbortController = null;
+    }
+    inFlight = false;
+  }
+
+  function restartWaitLoop() {
+    stopWaitLoop();
     waitSupported = true;
     startWaitLoop();
   }
@@ -333,9 +378,12 @@
   startWaitLoop();
 
   document.addEventListener("visibilitychange", function () {
-    if (document.visibilityState === "visible") {
-      pullNewOrdersCount().catch(() => {});
+    if (document.visibilityState === "hidden") {
+      stopWaitLoop();
+      return;
     }
+    restartWaitLoop();
+    pullNewOrdersCount().catch(() => {});
   });
 
   document.addEventListener("tenantStoreChanged", function () {
@@ -349,4 +397,12 @@
   document.addEventListener("click", unlockAlertsOnce, { once: true, passive: true });
   document.addEventListener("touchstart", unlockAlertsOnce, { once: true, passive: true });
   document.addEventListener("keydown", unlockAlertsOnce, { once: true });
+
+  window.addEventListener("pagehide", function () {
+    stopWaitLoop();
+  });
+
+  window.addEventListener("beforeunload", function () {
+    stopWaitLoop();
+  });
 })();
