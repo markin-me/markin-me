@@ -34,7 +34,7 @@ const STATIC_ASSET_VERSION = String(
 ).trim();
 const PORT = process.env.PORT || 3000;
 const TENANT_LOOKUP_CACHE_MS = Number(process.env.TENANT_LOOKUP_CACHE_MS || 60_000);
-const STATIC_FILE_VERSION_CACHE_MS = Number(process.env.STATIC_FILE_VERSION_CACHE_MS || 15_000);
+const STATIC_FILE_VERSION_CACHE_MS = Number(process.env.STATIC_FILE_VERSION_CACHE_MS || 300_000);
 const SYSTEM_SETTINGS_DIR = path.join(__dirname, 'data');
 const SYSTEM_SETTINGS_FILE = path.join(SYSTEM_SETTINGS_DIR, 'system-settings.json');
 const runtimePollingState = {
@@ -449,20 +449,31 @@ app.get('/manifest.json', async (req, res) => {
 
 // Service Worker для PWA (Android / установка на домашний экран)
 const serviceWorkerScript = `
-self.addEventListener('install', function () { self.skipWaiting(); });
-self.addEventListener('activate', function (e) { e.waitUntil(self.clients.claim()); });
+var SW_VERSION = 'admin-shell-v3';
+var STATIC_CACHE = 'admin-static-' + SW_VERSION;
+var PAGE_CACHE = 'admin-pages-' + SW_VERSION;
 var CHAT_IMAGE_CACHE_NAME = 'chat-images-v1';
 var CHAT_IMAGE_CACHE_MAX_ITEMS = 180;
+var PRECACHE_URLS = [
+  '/manifest.json',
+  '/static/css/style.css',
+  '/static/js/auth.js',
+  '/static/js/current-time.js',
+  '/static/js/theme.js',
+  '/static/js/sidebar.js',
+  '/static/js/admin-mobile-nav.js',
+  '/static/js/chat-sidebar-badge.js',
+  '/static/js/appModal.js'
+];
 
-function isChatImageRequest(request) {
-  if (!request || request.method !== 'GET') return false;
-  try {
-    var url = new URL(request.url);
-    if (url.origin !== self.location.origin) return false;
-    return /^\\/(?:uploads|static\\/uploads)\\/chat\\//i.test(String(url.pathname || ''));
-  } catch (err) {
-    return false;
-  }
+function shouldCacheResponse(response) {
+  return !!response && (response.ok || response.type === 'opaqueredirect');
+}
+
+function isChatImageRequest(request, url) {
+  if (!request || request.method !== 'GET' || !url) return false;
+  if (url.origin !== self.location.origin) return false;
+  return /^\\/(?:uploads|static\\/uploads)\\/chat\\//i.test(String(url.pathname || ''));
 }
 
 async function pruneChatImageCache(cache) {
@@ -492,10 +503,7 @@ async function handleChatImageFetch(request) {
   } catch (err) {
     cached = null;
   }
-
-  if (cached) {
-    return cached;
-  }
+  if (cached) return cached;
 
   var response = await fetch(request);
   if (response && response.ok) {
@@ -504,10 +512,94 @@ async function handleChatImageFetch(request) {
   return response;
 }
 
-self.addEventListener('fetch', function (event) {
-  if (!isChatImageRequest(event.request)) return;
-  event.respondWith(handleChatImageFetch(event.request));
+async function cacheStaticAssets() {
+  var cache = await caches.open(STATIC_CACHE);
+  await cache.addAll(PRECACHE_URLS);
+}
+
+async function cacheFirst(request) {
+  var cache = await caches.open(STATIC_CACHE);
+  var cached = await cache.match(request);
+  if (cached) return cached;
+
+  var response = await fetch(request);
+  if (shouldCacheResponse(response)) {
+    cache.put(request, response.clone()).catch(function () {});
+  }
+  return response;
+}
+
+async function networkFirst(request) {
+  var cache = await caches.open(PAGE_CACHE);
+  try {
+    var response = await fetch(request);
+    if (shouldCacheResponse(response)) {
+      cache.put(request, response.clone()).catch(function () {});
+    }
+    return response;
+  } catch (err) {
+    var cached = await cache.match(request);
+    if (cached) return cached;
+    throw err;
+  }
+}
+
+self.addEventListener('install', function (event) {
+  event.waitUntil(
+    cacheStaticAssets().catch(function () {}).then(function () {
+      return self.skipWaiting();
+    })
+  );
 });
+
+self.addEventListener('activate', function (event) {
+  event.waitUntil(
+    caches.keys().then(function (keys) {
+      return Promise.all(
+        keys.map(function (key) {
+          if (key === STATIC_CACHE || key === PAGE_CACHE) return Promise.resolve();
+          return caches.delete(key);
+        })
+      );
+    }).then(function () {
+      return self.clients.claim();
+    })
+  );
+});
+
+self.addEventListener('fetch', function (event) {
+  var request = event.request;
+  if (!request || request.method !== 'GET') return;
+
+  var url;
+  try {
+    url = new URL(request.url);
+  } catch (err) {
+    return;
+  }
+
+  if (isChatImageRequest(request, url)) {
+    event.respondWith(handleChatImageFetch(request));
+    return;
+  }
+
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.indexOf('/api/') === 0) return;
+
+  if (
+    url.pathname.indexOf('/static/') === 0
+    || url.pathname === '/manifest.json'
+    || url.pathname === '/sw.js'
+  ) {
+    event.respondWith(cacheFirst(request));
+    return;
+  }
+
+  if (request.mode === 'navigate' && url.pathname.indexOf('/dashboard') === 0) {
+    event.respondWith(networkFirst(request));
+  }
+});
+
 self.addEventListener('push', function (event) {
   var payload = {};
   try {
@@ -652,6 +744,7 @@ app.get('/max-app', (req, res) => {
 app.get('/dashboard/cash', (req, res) => res.render('pages/cash'));
 app.get('/dashboard/products', (req, res) => res.render('pages/products'));
 app.get('/dashboard/orders', (req, res) => res.render('pages/orders'));
+app.get('/dashboard/courier-screen', (req, res) => res.render('pages/courier-screen'));
 app.get('/dashboard/new-order', (req, res) => res.render('pages/new-order'));
 app.get('/dashboard/clients', (req, res) => res.render('pages/clients', { activePage: 'clients' }));
 app.get('/dashboard/chat', (req, res) => res.render('pages/chat', { activePage: 'chat' }));
@@ -695,7 +788,7 @@ app.use('/api/chat-temp', makeChatTempRouter());
 app.use('/api/admin/clients', authMiddleware, makeAdminClientsRouter({ db, helpers }));
 app.use('/api/admin/discounts', authMiddleware, makeAdminDiscountsRouter({ db, helpers }));
 app.use('/api/admin/orders', authMiddleware, makeAdminOrdersRouter({ db, helpers, ordersEvents }));
-app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers, ordersEvents }));
+app.use('/api/admin/tenant', authMiddleware, makeAdminTenantRouter({ db, helpers }));
 app.use('/api/admin/stock', authMiddleware, makeAdminStockRouter({ db, helpers, ordersEvents }));
 
 // товары/категории/сортировка/загрузка — оставляем старые пути /api/prod_* и /api/sort/*

@@ -21,6 +21,74 @@
   const tenantId = getTenantId();
   const SHARED_ORDER_DETAILS_CACHE_KEY = `dashboard:orders:details:v1:${tenantId}`;
   const SHARED_ORDER_DETAILS_CACHE_MAX = 400;
+  const rawWorkspaceConfig = window.OrderWorkspaceConfig && typeof window.OrderWorkspaceConfig === "object"
+    ? window.OrderWorkspaceConfig
+    : {};
+  const workspaceMode = String(
+    rawWorkspaceConfig.mode
+    || (document.body?.dataset?.adminActivePage === "courier-screen" ? "courier" : "orders")
+  ).trim().toLowerCase();
+  const isCourierWorkspace = workspaceMode === "courier";
+  const courierBucketDefs = (
+    Array.isArray(rawWorkspaceConfig.courierBuckets) && rawWorkspaceConfig.courierBuckets.length
+      ? rawWorkspaceConfig.courierBuckets
+      : [
+          { id: "available", title: "Свободные", icon: "fa-user-clock" },
+          { id: "in-transit", title: "В пути", icon: "fa-truck" },
+          { id: "delivered", title: "Доставлены", icon: "fa-circle-check" },
+        ]
+  ).map((bucket) => ({
+    id: String(bucket?.id || "").trim(),
+    title: String(bucket?.title || "").trim() || "—",
+    icon: String(bucket?.icon || "").trim() || "fa-circle",
+  })).filter((bucket) => bucket.id);
+  const courierDefaultBucketId = String(
+    rawWorkspaceConfig.defaultBucketId || courierBucketDefs[0]?.id || "available"
+  ).trim();
+  const deliveryMethodCode = String(rawWorkspaceConfig.deliveryMethodCode || "delivery").trim().toLowerCase();
+  const courierTransitAliases = new Set(
+    (Array.isArray(rawWorkspaceConfig.courierTransitAliases) ? rawWorkspaceConfig.courierTransitAliases : [
+      "delivery",
+      "delivering",
+      "on_the_way",
+      "in_transit",
+      "courier",
+      "в_пути",
+    ])
+      .map((value) => String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/ё/g, "е")
+        .replace(/[\s-]+/g, "_")
+        .replace(/_+/g, "_"))
+      .filter(Boolean)
+  );
+  const courierDeliveredAliases = new Set(
+    (Array.isArray(rawWorkspaceConfig.courierDeliveredAliases) ? rawWorkspaceConfig.courierDeliveredAliases : [
+      "delivered",
+      "completed",
+      "done",
+      "delivery_done",
+      "доставлен",
+      "доставлена",
+      "доставлено",
+      "доставлены",
+      "вручен",
+      "вручено",
+      "выполнен",
+      "выполнено",
+      "завершен",
+      "завершено",
+    ])
+      .map((value) => String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/ё/g, "е")
+        .replace(/[\s-]+/g, "_")
+        .replace(/_+/g, "_"))
+      .filter(Boolean)
+  );
+  const ordersCacheScope = String(rawWorkspaceConfig.cacheScope || workspaceMode || "orders").trim().toLowerCase() || "orders";
 
   async function apiJson(url, opts = {}) {
     // Получаем токен и store_id из localStorage
@@ -158,25 +226,37 @@
     itemsList: $$('[data-info="items-list"]'),
   };
 
-  const clientInfoWrap = $("#clientInfoWrap");
-  const clientPhoto = $("#clientPhoto");
-  const clientPhotoPlaceholder = $("#clientPhotoPlaceholder");
-  const clientInfoName = $("#clientInfoName");
-  const clientInfoPhone = $("#clientInfoPhone");
-  const clientInfoBirthday = $("#clientInfoBirthday");
-  const clientContentTabs = $("#clientContentTabs");
-  const clientTabAddresses = $("#clientTabAddresses");
-  const clientTabOrders = $("#clientTabOrders");
-  const clientTabDiscounts = $("#clientTabDiscounts");
-  const clientAddressesList = $("#clientAddresses");
-  const clientOrdersList = $("#clientOrdersList");
-  const clientOrdersListView = $("#clientOrdersListView");
-  const clientOrderDetailView = $("#clientOrderDetailView");
-  const clientDiscountsList = $("#clientDiscountsList");
-  const clientDiscountsEmpty = $("#clientDiscountsEmpty");
-  const clientEditNameBtn = $("#clientEditNameBtn");
-  const clientAddrToggleBtn = $("#clientAddrToggleBtn");
-  const clientAddrFormCard = $("#clientAddrFormCard");
+  const isCourierScreenPage = document.body.classList.contains("page-courier-screen");
+  const sheet = $("#orderSheet");
+  const backdrop = $("#sheetBackdrop");
+  const closeBtn = $("#sheetClose");
+  const sheetTitleEl = $(".sheet-title", sheet || document);
+  const desktopClientDom = createClientDomRefs(document);
+  const sheetClientDom = isCourierScreenPage && sheet ? createClientDomRefs(sheet) : null;
+  const clientSurfaces = [desktopClientDom, sheetClientDom].filter((dom) => dom && dom.infoWrap);
+  const {
+    infoWrap: clientInfoWrap,
+    photo: clientPhoto,
+    photoPlaceholder: clientPhotoPlaceholder,
+    infoName: clientInfoName,
+    infoPhone: clientInfoPhone,
+    infoBirthday: clientInfoBirthday,
+    contentTabs: clientContentTabs,
+    tabAddresses: clientTabAddresses,
+    tabOrders: clientTabOrders,
+    tabDiscounts: clientTabDiscounts,
+    addressesList: clientAddressesList,
+    ordersList: clientOrdersList,
+    ordersListView: clientOrdersListView,
+    orderDetailView: clientOrderDetailView,
+    discountsList: clientDiscountsList,
+    discountsEmpty: clientDiscountsEmpty,
+    editNameBtn: clientEditNameBtn,
+    addrToggleBtn: clientAddrToggleBtn,
+    addrFormCard: clientAddrFormCard,
+  } = desktopClientDom;
+  const sheetOrderInfoFooter = isCourierScreenPage && sheet ? $('[data-role="order-info-footer"]', sheet) : null;
+  const sheetOrderInfoPaymentBtn = isCourierScreenPage && sheet ? $('[data-role="order-info-payment-btn"]', sheet) : null;
   const sharedOrderPanel = window.SharedOrderPanel || null;
   const sharedOrderPayment = window.SharedOrderPayment || null;
   const sharedOrderInfoRenderer = sharedOrderPanel && ordersRightPane
@@ -206,12 +286,42 @@
         },
       })
     : null;
+  const sheetOrderInfoRenderer = sharedOrderPanel && isCourierScreenPage && sheet
+    ? sharedOrderPanel.createInfoRenderer({
+        root: sheet,
+        footerEl: sheetOrderInfoFooter,
+        clientInfoWrap: null,
+        enableClientLink: true,
+        helpers: {
+          money,
+          formatDateTime,
+          formatDateTimeNumeric,
+          formatScheduleText,
+          totalQty,
+          buildOrderDiscountSummary,
+          renderOrderDiscountBreakdownHtml,
+          renderOrderPaymentIcon,
+          paymentIcon,
+          getDisplayOrder,
+          itemsToHtml,
+        },
+        renderInlineStatusMenus,
+        afterRender() {
+          setTimeout(() => {
+            initOrderItemPhotos();
+          }, 0);
+        },
+      })
+    : null;
+  const sharedOrderInfoRenderers = [sharedOrderInfoRenderer, sheetOrderInfoRenderer].filter(Boolean);
+  const orderInfoFooters = isCourierScreenPage
+    ? [orderInfoFooter, sheetOrderInfoFooter].filter(Boolean)
+    : [orderInfoFooter].filter(Boolean);
+  const orderInfoPaymentButtons = isCourierScreenPage
+    ? [orderInfoPaymentBtn, sheetOrderInfoPaymentBtn].filter(Boolean)
+    : [orderInfoPaymentBtn].filter(Boolean);
 
   const closeButtons = $$('[data-action="order-close"]');
-
-  const sheet = $("#orderSheet");
-  const backdrop = $("#sheetBackdrop");
-  const closeBtn = $("#sheetClose");
 
   const dateBtn = $("#ordersDateBtn");
   const dateLabel = $("#ordersDateLabel");
@@ -228,7 +338,7 @@
   // -----------------------------
   const state = {
     statuses: [],
-    activeStatusId: "all",
+    activeStatusId: isCourierWorkspace ? courierDefaultBucketId : "all",
     orders: [],
     activeOrderId: null,
     draggingOrderId: null,
@@ -252,7 +362,7 @@
     activeKey: null,
   };
 
-  const ORDERS_CACHE_VERSION = 2;
+  const ORDERS_CACHE_VERSION = 3;
   const ORDERS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
   let ordersCachePersistTimer = null;
 
@@ -460,6 +570,255 @@
 
   function isFinalStatusMeta(statusMeta) {
     return Number(statusMeta?.is_final || 0) === 1 || isCanceledStatusMeta(statusMeta);
+  }
+
+  function normalizeCourierAlias(value) {
+    return String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/ё/g, "е")
+      .replace(/[\s-]+/g, "_")
+      .replace(/_+/g, "_");
+  }
+
+  function isDeliveryOrder(order) {
+    return String(order?.method_code || "").trim().toLowerCase() === deliveryMethodCode;
+  }
+
+  function matchesCourierDeliveredStatus(statusMeta) {
+    if (!statusMeta) return false;
+    if (normalizeStatusCode(statusMeta) === "delivered") return true;
+    const statusTokens = [statusMeta?.code, statusMeta?.title]
+      .map(normalizeCourierAlias)
+      .filter(Boolean);
+    if (statusTokens.some((token) => courierDeliveredAliases.has(token))) return true;
+    return Number(statusMeta?.is_final || 0) === 1 && !isCanceledStatusMeta(statusMeta);
+  }
+
+  function getOrderStatusMeta(order) {
+    return getStatusMetaById(order?.status_id) || {
+      id: order?.status_id ?? null,
+      code: order?.status_code ?? "",
+      title: order?.status_title ?? "",
+      icon: order?.status_icon ?? "",
+      is_final: order?.status_is_final ?? 0,
+    };
+  }
+
+  function getCourierBucketId(order) {
+    if (!isCourierWorkspace || !isDeliveryOrder(order)) return null;
+
+    const statusMeta = getOrderStatusMeta(order);
+    if (matchesCourierDeliveredStatus(statusMeta)) return "delivered";
+
+    const statusTokens = [
+      order?.status_code,
+      order?.status_title,
+      statusMeta?.code,
+      statusMeta?.title,
+    ]
+      .map(normalizeCourierAlias)
+      .filter(Boolean);
+
+    if (statusTokens.some((token) => courierTransitAliases.has(token))) {
+      return "in-transit";
+    }
+
+    if (isCanceledStatusMeta(statusMeta) || isFinalStatusMeta(statusMeta)) {
+      return null;
+    }
+
+    return "available";
+  }
+
+  function getCourierBucketItems() {
+    return courierBucketDefs.map((bucket) => ({
+      ...bucket,
+      count: state.orders.reduce((acc, order) => (
+        getCourierBucketId(order) === bucket.id ? acc + 1 : acc
+      ), 0),
+    }));
+  }
+
+  function normalizePhoneForTel(value) {
+    return String(value || "")
+      .replace(/[^\d+]/g, "")
+      .replace(/^8/, "+7")
+      .replace(/^7/, "+7");
+  }
+
+  function getCourierTransitStatusMeta(order) {
+    if (!isCourierWorkspace) return null;
+    const statuses = getSortedStatuses();
+    if (!statuses.length) return null;
+
+    const currentStatusId = Number(order?.status_id || 0);
+    let fallbackStatus = null;
+
+    for (const status of statuses) {
+      const statusTokens = [status?.code, status?.title]
+        .map(normalizeCourierAlias)
+        .filter(Boolean);
+      if (!statusTokens.some((token) => courierTransitAliases.has(token))) continue;
+      if (Number(status?.id || 0) === currentStatusId) return status;
+      if (!fallbackStatus) fallbackStatus = status;
+    }
+
+    return fallbackStatus;
+  }
+
+  function getCourierDeliveredStatusMeta(order) {
+    if (!isCourierWorkspace) return null;
+    const statuses = getSortedStatuses();
+    if (!statuses.length) return null;
+
+    const currentStatusId = Number(order?.status_id || 0);
+    let aliasMatch = null;
+    let finalFallback = null;
+
+    for (const status of statuses) {
+      if (isCanceledStatusMeta(status)) continue;
+      if (matchesCourierDeliveredStatus(status)) {
+        if (Number(status?.id || 0) === currentStatusId) return status;
+        if (!aliasMatch) aliasMatch = status;
+      }
+      if (!finalFallback && Number(status?.is_final || 0) === 1 && !isCanceledStatusMeta(status)) {
+        finalFallback = status;
+      }
+    }
+
+    return aliasMatch || finalFallback;
+  }
+
+  function getCourierPickupState(order) {
+    const currentStatus = getOrderStatusMeta(order);
+    const transitStatus = getCourierTransitStatusMeta(order);
+    const deliveredStatus = getCourierDeliveredStatusMeta(order);
+    const isEligibleOrder = isCourierWorkspace
+      && isDeliveryOrder(order)
+      && !isCanceledStatusMeta(currentStatus)
+      && !matchesCourierDeliveredStatus(currentStatus);
+    const isAlreadyTransit = transitStatus && Number(transitStatus.id || 0) === Number(currentStatus?.id || 0);
+    const isAlreadyDelivered = matchesCourierDeliveredStatus(currentStatus);
+    const canPickup = Boolean(isEligibleOrder && transitStatus && !isAlreadyTransit);
+    const canDeliver = Boolean(
+      isCourierWorkspace
+      && isDeliveryOrder(order)
+      && !isCanceledStatusMeta(currentStatus)
+      && isAlreadyTransit
+      && deliveredStatus
+      && Number(deliveredStatus.id || 0) !== Number(currentStatus?.id || 0)
+    );
+    let disabledReason = "";
+    let actionLabel = "Забрать";
+    let actionIcon = "fas fa-truck";
+    let targetStatus = transitStatus;
+
+    if (!isDeliveryOrder(order)) {
+      disabledReason = "Действие доступно только для доставки";
+    } else if (canDeliver) {
+      actionLabel = "Доставлен";
+      actionIcon = "fas fa-circle-check";
+      targetStatus = deliveredStatus;
+    } else if (!transitStatus) {
+      disabledReason = "Не найден статус «В пути»";
+    } else if (isAlreadyTransit) {
+      disabledReason = "Заказ уже в пути";
+    } else if (isFinalStatusMeta(currentStatus) || isAlreadyDelivered || isDeliveredStatusMeta(currentStatus) || isCanceledStatusMeta(currentStatus)) {
+      disabledReason = "Действие недоступно для финального статуса";
+    }
+
+    return {
+      canPickup: canPickup || canDeliver,
+      transitStatus: targetStatus,
+      actionLabel,
+      actionIcon,
+      disabledReason,
+    };
+  }
+
+  function buildCourierPickupButtonHtml(order) {
+    const pickupState = getCourierPickupState(order);
+    const targetStatusId = Number(pickupState?.transitStatus?.id || 0);
+    const actionLabel = String(pickupState?.actionLabel || "Забрать").trim() || "Забрать";
+    const actionIcon = String(pickupState?.actionIcon || "fas fa-truck").trim() || "fas fa-truck";
+    const buttonTitle = pickupState.canPickup
+      ? `Перевести в «${String(pickupState?.transitStatus?.title || "В пути").trim() || "В пути"}»`
+      : (pickupState.disabledReason || "Действие недоступно");
+
+    return `
+      <button
+        class="order-courier-action-btn order-courier-action-btn--pickup"
+        type="button"
+        data-action="courier-pickup"
+        data-order-id="${escapeHtml(order?.id || "")}"
+        ${pickupState.canPickup && targetStatusId > 0 ? `data-target-status-id="${escapeHtml(targetStatusId)}"` : ""}
+        ${pickupState.canPickup ? "" : "disabled"}
+        title="${escapeHtml(buttonTitle)}"
+        aria-label="${escapeHtml(buttonTitle)}"
+      >
+        <i class="${escapeHtml(actionIcon)}" aria-hidden="true"></i>
+        <span>Забрать</span>
+      </button>
+    `;
+  }
+
+  function buildCourierActionButtonHtml(order) {
+    const pickupState = getCourierPickupState(order);
+    const targetStatus = pickupState?.transitStatus || null;
+    const targetStatusId = Number(targetStatus?.id || 0);
+    const actionLabel = String(pickupState?.actionLabel || "Забрать").trim() || "Забрать";
+    const actionIcon = String(pickupState?.actionIcon || "fas fa-truck").trim() || "fas fa-truck";
+    const buttonTitle = pickupState.canPickup
+      ? `Перевести в «${String(targetStatus?.title || actionLabel).trim() || actionLabel}»`
+      : (pickupState.disabledReason || "Действие недоступно");
+
+    return `
+      <button
+        class="order-courier-action-btn order-courier-action-btn--pickup"
+        type="button"
+        data-action="courier-pickup"
+        data-order-id="${escapeHtml(order?.id || "")}"
+        ${pickupState.canPickup && targetStatusId > 0 ? `data-target-status-id="${escapeHtml(targetStatusId)}"` : ""}
+        ${pickupState.canPickup ? "" : "disabled"}
+        title="${escapeHtml(buttonTitle)}"
+        aria-label="${escapeHtml(buttonTitle)}"
+      >
+        <i class="${escapeHtml(actionIcon)}" aria-hidden="true"></i>
+        <span>${escapeHtml(actionLabel)}</span>
+      </button>
+    `;
+  }
+
+  function buildCourierCallButtonHtml(order) {
+    const phoneHref = normalizePhoneForTel(order?.customer_phone || "");
+    if (!phoneHref) {
+      return `
+        <button
+          class="order-courier-action-btn order-courier-action-btn--call"
+          type="button"
+          disabled
+          aria-label="Телефон клиента недоступен"
+          title="Телефон клиента недоступен"
+        >
+          <i class="fas fa-phone" aria-hidden="true"></i>
+          <span>Позвонить</span>
+        </button>
+      `;
+    }
+
+    return `
+      <a
+        class="order-courier-action-btn order-courier-action-btn--call"
+        href="tel:${escapeHtml(phoneHref)}"
+        data-action="courier-call"
+        aria-label="Позвонить клиенту"
+        title="Позвонить клиенту"
+      >
+        <i class="fas fa-phone" aria-hidden="true"></i>
+        <span>Позвонить</span>
+      </a>
+    `;
   }
 
   function isForbiddenStatusTransition(fromStatus, toStatus) {
@@ -1142,6 +1501,15 @@
       if (Number.isFinite(localId) && localId > 0) return localId;
     }
 
+    const cachedClientMatch = Array.from(state.clientsCache.entries()).find((entry) => {
+      const clientData = entry?.[1];
+      return normalizePhoneDigits(clientData?.client?.phone) === digits;
+    });
+    if (cachedClientMatch) {
+      const cachedId = Number(cachedClientMatch[0] || 0);
+      if (Number.isFinite(cachedId) && cachedId > 0) return cachedId;
+    }
+
     const qs = new URLSearchParams();
     qs.set("limit", "1");
     qs.set("offset", "0");
@@ -1153,45 +1521,109 @@
     return Number.isFinite(id) && id > 0 ? id : null;
   }
 
-  async function ensureClientTab({ clientId = null, clientPhone = "", clientName = "", activate = true, openMobile = false } = {}) {
+  function getOrderAddressForDisplay(order) {
+    if (!order) return "";
+    const rawAddress = String(order.address || "").trim();
+    if (rawAddress) return rawAddress;
+    if (order.pickup_store_address) {
+      return order.pickup_store_name
+        ? `${order.pickup_store_name}, ${order.pickup_store_address}`
+        : String(order.pickup_store_address || "");
+    }
+    return "";
+  }
+
+  function buildClientFallbackSnapshot(order, fallbackName = "", fallbackPhone = "") {
+    const name = String(order?.customer_name || fallbackName || "").trim();
+    const phone = String(order?.customer_phone || fallbackPhone || "").trim();
+    const address = getOrderAddressForDisplay(order);
+    const addressComment = String(order?.address_comment || "").trim();
+    const client = (name || phone)
+      ? {
+          name: name || "—",
+          phone: phone || "—",
+          birthday: null,
+          photo: "",
+        }
+      : null;
+    const addresses = address
+      ? [{
+          address,
+          comment: addressComment,
+          is_default: 1,
+        }]
+      : [];
+    const orders = order
+      ? [{
+          id: Number(order.id || 0) || null,
+          created_at: order.created_at || null,
+          total_price: Number(order.total_price || 0) || 0,
+          status_title: String(order.status_title || "").trim(),
+        }]
+      : [];
+    return {
+      client,
+      addresses,
+      orders,
+    };
+  }
+
+  async function ensureClientTab({ clientId = null, clientPhone = "", clientName = "", activate = true, openMobile = false, fallbackOrder = null } = {}) {
     let normalizedClientId = Number(clientId || 0);
     const normalizedPhone = String(clientPhone || "").trim();
+    const fallbackSnapshot = buildClientFallbackSnapshot(fallbackOrder, clientName, normalizedPhone);
 
     if (!Number.isFinite(normalizedClientId) || normalizedClientId <= 0) {
-      if (!normalizedPhone) return null;
-      normalizedClientId = await findClientIdByPhone(normalizedPhone);
+      if (normalizedPhone) {
+        try {
+          normalizedClientId = await findClientIdByPhone(normalizedPhone);
+        } catch (err) {
+          console.error(err);
+        }
+      }
     }
-    if (!Number.isFinite(normalizedClientId) || normalizedClientId <= 0) return null;
 
-    const key = buildClientTabKey(normalizedClientId);
+    const hasClientId = Number.isFinite(normalizedClientId) && normalizedClientId > 0;
+    if (!hasClientId && !fallbackSnapshot.client) return null;
+
+    const key = hasClientId
+      ? buildClientTabKey(normalizedClientId)
+      : `client:fallback:${normalizePhoneDigits(normalizedPhone) || Date.now()}`;
     let tab = tabsState.tabs.find((item) => item.key === key);
     if (!tab) {
       tab = {
         key,
         type: "client",
-        clientId: normalizedClientId,
-        title: buildClientTabTitle({ name: clientName, phone: normalizedPhone, id: normalizedClientId }),
+        clientId: hasClientId ? normalizedClientId : null,
+        title: buildClientTabTitle({ name: clientName, phone: normalizedPhone, id: hasClientId ? normalizedClientId : null }),
         fallbackName: String(clientName || "").trim(),
         fallbackPhone: normalizedPhone,
         activeContentTab: "addresses",
-        client: null,
+        client: fallbackSnapshot.client,
         addresses: null,
         orders: null,
         discounts: null,
+        fallbackAddresses: fallbackSnapshot.addresses,
+        fallbackOrders: fallbackSnapshot.orders,
+        isFallbackOnly: true,
         loading: false,
         error: null,
       };
       tabsState.tabs.push(tab);
     } else {
+      tab.clientId = hasClientId ? normalizedClientId : (tab.clientId || null);
       tab.type = "client";
       if (!tab.fallbackName && clientName) tab.fallbackName = String(clientName || "").trim();
       if (!tab.fallbackPhone && normalizedPhone) tab.fallbackPhone = normalizedPhone;
       if (!tab.activeContentTab) tab.activeContentTab = "addresses";
+      if (!Array.isArray(tab.fallbackAddresses) || !tab.fallbackAddresses.length) tab.fallbackAddresses = fallbackSnapshot.addresses;
+      if (!Array.isArray(tab.fallbackOrders) || !tab.fallbackOrders.length) tab.fallbackOrders = fallbackSnapshot.orders;
+      if (!tab.client && fallbackSnapshot.client) tab.client = fallbackSnapshot.client;
       const nextTitle = buildClientTabTitle({
         client: tab.client,
         name: tab.fallbackName,
         phone: tab.fallbackPhone,
-        id: normalizedClientId,
+        id: tab.clientId,
       });
       if (nextTitle) tab.title = nextTitle;
     }
@@ -1326,7 +1758,7 @@
   }
 
   function ordersCacheKey() {
-    return `orders_bootstrap_v${ORDERS_CACHE_VERSION}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}`;
+    return `orders_bootstrap_v${ORDERS_CACHE_VERSION}_m${ordersCacheScope}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}`;
   }
 
   function readOrdersBootstrapCache() {
@@ -1363,10 +1795,13 @@
       out.fallbackName = String(tab.fallbackName || "").trim();
       out.fallbackPhone = String(tab.fallbackPhone || "").trim();
       out.activeContentTab = String(tab.activeContentTab || "addresses");
+      out.isFallbackOnly = tab.isFallbackOnly === true;
       out.client = tab.client && typeof tab.client === "object" ? tab.client : null;
       out.addresses = Array.isArray(tab.addresses) ? tab.addresses : null;
       out.orders = Array.isArray(tab.orders) ? tab.orders : null;
       out.discounts = Array.isArray(tab.discounts) ? tab.discounts : null;
+      out.fallbackAddresses = Array.isArray(tab.fallbackAddresses) ? tab.fallbackAddresses : null;
+      out.fallbackOrders = Array.isArray(tab.fallbackOrders) ? tab.fallbackOrders : null;
     }
     return out.key ? out : null;
   }
@@ -1398,10 +1833,13 @@
           fallbackName: String(row.fallbackName || "").trim(),
           fallbackPhone: String(row.fallbackPhone || "").trim(),
           activeContentTab: String(row.activeContentTab || "addresses"),
+          isFallbackOnly: row.isFallbackOnly === true,
           client: row.client && typeof row.client === "object" ? row.client : null,
           addresses: Array.isArray(row.addresses) ? row.addresses : null,
           orders: Array.isArray(row.orders) ? row.orders : null,
           discounts: Array.isArray(row.discounts) ? row.discounts : null,
+          fallbackAddresses: Array.isArray(row.fallbackAddresses) ? row.fallbackAddresses : [],
+          fallbackOrders: Array.isArray(row.fallbackOrders) ? row.fallbackOrders : [],
           loading: false,
           error: null,
         };
@@ -1433,6 +1871,17 @@
           viewYear: Number(state.date.viewYear || 0) || null,
           viewMonth: Number(state.date.viewMonth || 0) || null,
         },
+        tabs: tabsState.tabs.map(serializeTabForCache).filter(Boolean),
+        activeKey: tabsState.activeKey,
+        clientsCache: Array.from(state.clientsCache.entries()).map(([id, data]) => ([
+          Number(id),
+          {
+            client: data?.client && typeof data.client === "object" ? data.client : null,
+            addresses: Array.isArray(data?.addresses) ? data.addresses : [],
+            orders: Array.isArray(data?.orders) ? data.orders : [],
+            discounts: Array.isArray(data?.discounts) ? data.discounts : [],
+          },
+        ])),
       },
     };
 
@@ -1473,15 +1922,42 @@
       state.date.viewMonth = viewMonth;
     }
 
-    tabsState.tabs = [];
-    tabsState.activeKey = null;
+    state.clientsCache = new Map(
+      Array.isArray(cache.clientsCache)
+        ? cache.clientsCache
+          .map((row) => {
+            const clientId = Number(Array.isArray(row) ? row[0] : 0);
+            const payload = Array.isArray(row) ? row[1] : null;
+            if (!(clientId > 0) || !payload || typeof payload !== "object") return null;
+            return [
+              clientId,
+              {
+                client: payload.client && typeof payload.client === "object" ? payload.client : null,
+                addresses: Array.isArray(payload.addresses) ? payload.addresses : [],
+                orders: Array.isArray(payload.orders) ? payload.orders : [],
+                discounts: Array.isArray(payload.discounts) ? payload.discounts : [],
+              },
+            ];
+          })
+          .filter(Boolean)
+        : []
+    );
+    restoreTabsFromCache(cache);
+    const activeTab = tabsState.tabs.find((tab) => tab.key === tabsState.activeKey) || null;
+    state.activeOrderId = activeTab?.type === "order" && normalizeTabMode(activeTab.mode) === "view"
+      ? activeTab.orderId
+      : null;
     renderCalendar();
     updateDateLabel();
     renderStages();
     renderOrders();
-    setOrdersCheckoutLayoutEnabled(false);
-    setInfo(null);
     renderOrderTabs();
+    if (tabsState.tabs.length) {
+      syncTabsWithLatestOrders();
+    } else {
+      setOrdersCheckoutLayoutEnabled(false);
+      setInfo(null);
+    }
     return true;
   }
 
@@ -2202,10 +2678,16 @@
   }
 
   function syncOrderPaymentFooter(order) {
-    if (!orderInfoPaymentBtn) return;
+    if (!orderInfoPaymentButtons.length) return;
     const hasOrder = Number(order?.id || 0) > 0;
-    orderInfoPaymentBtn.disabled = !hasOrder || isOrderFullyRefunded(order);
-    orderInfoPaymentBtn.textContent = getOrderPaymentActionLabel(order);
+    const label = getOrderPaymentActionLabel(order);
+    orderInfoPaymentButtons.forEach((button) => {
+      if (!button) return;
+      button.disabled = !hasOrder || isOrderFullyRefunded(order);
+      const labelEl = button.querySelector("span");
+      if (labelEl) labelEl.textContent = label;
+      else button.textContent = label;
+    });
   }
 
   async function openOrderPaymentDialog(order) {
@@ -2400,40 +2882,87 @@
   bindOrderSummaryDiscountToggles();
 
   function hideOrderClientEditingControls() {
-    if (clientEditNameBtn) clientEditNameBtn.classList.add("hidden");
-    if (clientAddrToggleBtn) clientAddrToggleBtn.classList.add("hidden");
-    if (clientAddrFormCard) clientAddrFormCard.classList.add("hidden");
+    clientSurfaces.forEach((dom) => {
+      if (dom?.editNameBtn) dom.editNameBtn.classList.add("hidden");
+      if (dom?.addrToggleBtn) dom.addrToggleBtn.classList.add("hidden");
+      if (dom?.addrFormCard) dom.addrFormCard.classList.add("hidden");
+    });
   }
 
   hideOrderClientEditingControls();
 
+  function createClientDomRefs(root = document) {
+    return {
+      root,
+      infoWrap: $("#clientInfoWrap", root),
+      photo: $("#clientPhoto", root),
+      photoPlaceholder: $("#clientPhotoPlaceholder", root),
+      infoName: $("#clientInfoName", root),
+      infoPhone: $("#clientInfoPhone", root),
+      infoBirthday: $("#clientInfoBirthday", root),
+      contentTabs: $("#clientContentTabs", root),
+      tabAddresses: $("#clientTabAddresses", root),
+      tabOrders: $("#clientTabOrders", root),
+      tabDiscounts: $("#clientTabDiscounts", root),
+      addressesList: $("#clientAddresses", root),
+      ordersList: $("#clientOrdersList", root),
+      ordersListView: $("#clientOrdersListView", root),
+      orderDetailView: $("#clientOrderDetailView", root),
+      discountsList: $("#clientDiscountsList", root),
+      discountsEmpty: $("#clientDiscountsEmpty", root),
+      editNameBtn: $("#clientEditNameBtn", root),
+      addrToggleBtn: $("#clientAddrToggleBtn", root),
+      addrFormCard: $("#clientAddrFormCard", root),
+    };
+  }
+
+  function setSheetTitle(text) {
+    if (!sheetTitleEl) return;
+    sheetTitleEl.textContent = String(text || "Информация").trim() || "Информация";
+  }
+
+  function hideClientSurfaces() {
+    clientSurfaces.forEach((dom) => {
+      if (dom?.infoWrap) dom.infoWrap.classList.add("hidden");
+    });
+  }
+
   function showEmptyInfo() {
-    if (sharedOrderInfoRenderer) {
-      sharedOrderInfoRenderer.showEmpty();
+    if (sharedOrderInfoRenderers.length) {
+      sharedOrderInfoRenderers.forEach((renderer) => renderer.showEmpty());
+      hideClientSurfaces();
+      setSheetTitle("Информация");
       return;
     }
     setHiddenAll(infoEls.empty, false);
     setHiddenAll(infoEls.content, true);
-    if (clientInfoWrap) clientInfoWrap.classList.add("hidden");
-    if (orderInfoFooter) orderInfoFooter.classList.add("hidden");
+    hideClientSurfaces();
+    orderInfoFooters.forEach((footer) => footer.classList.add("hidden"));
+    setSheetTitle("Информация");
   }
 
   function showOrderInfo() {
-    if (sharedOrderInfoRenderer) {
-      sharedOrderInfoRenderer.showOrder();
+    if (sharedOrderInfoRenderers.length) {
+      sharedOrderInfoRenderers.forEach((renderer) => renderer.showOrder());
+      hideClientSurfaces();
+      setSheetTitle("Информация");
       return;
     }
     setHiddenAll(infoEls.empty, true);
     setHiddenAll(infoEls.content, false);
-    if (clientInfoWrap) clientInfoWrap.classList.add("hidden");
-    if (orderInfoFooter) orderInfoFooter.classList.remove("hidden");
+    hideClientSurfaces();
+    orderInfoFooters.forEach((footer) => footer.classList.remove("hidden"));
+    setSheetTitle("Информация");
   }
 
-  function showClientInfo() {
+  function showClientInfo(surface = "desktop") {
     setHiddenAll(infoEls.empty, true);
     setHiddenAll(infoEls.content, true);
-    if (clientInfoWrap) clientInfoWrap.classList.remove("hidden");
-    if (orderInfoFooter) orderInfoFooter.classList.add("hidden");
+    hideClientSurfaces();
+    const targetDom = surface === "sheet" ? sheetClientDom : desktopClientDom;
+    if (targetDom?.infoWrap) targetDom.infoWrap.classList.remove("hidden");
+    orderInfoFooters.forEach((footer) => footer.classList.add("hidden"));
+    setSheetTitle(surface === "sheet" ? "Клиент" : "Информация");
   }
 
   function formatClientDate(value) {
@@ -2456,21 +2985,22 @@
     });
   }
 
-  function setClientPhoto(photoUrl) {
+  function setClientPhoto(photoUrl, domRefs = desktopClientDom) {
+    if (!domRefs) return;
     const src = String(photoUrl || "").trim();
     if (src) {
-      if (clientPhoto) {
-        clientPhoto.src = src;
-        clientPhoto.classList.remove("hidden");
+      if (domRefs.photo) {
+        domRefs.photo.src = src;
+        domRefs.photo.classList.remove("hidden");
       }
-      if (clientPhotoPlaceholder) clientPhotoPlaceholder.classList.add("hidden");
+      if (domRefs.photoPlaceholder) domRefs.photoPlaceholder.classList.add("hidden");
       return;
     }
-    if (clientPhoto) {
-      clientPhoto.removeAttribute("src");
-      clientPhoto.classList.add("hidden");
+    if (domRefs.photo) {
+      domRefs.photo.removeAttribute("src");
+      domRefs.photo.classList.add("hidden");
     }
-    if (clientPhotoPlaceholder) clientPhotoPlaceholder.classList.remove("hidden");
+    if (domRefs.photoPlaceholder) domRefs.photoPlaceholder.classList.remove("hidden");
   }
 
   function getActiveClientTab() {
@@ -2479,38 +3009,42 @@
     return tab;
   }
 
-  function setClientContentTab(tabName) {
+  function setClientContentTab(tabName, domRefs = desktopClientDom) {
     const nextTab = ["addresses", "orders", "discounts"].includes(String(tabName || ""))
       ? String(tabName)
       : "addresses";
     const activeClientTab = getActiveClientTab();
     if (activeClientTab) activeClientTab.activeContentTab = nextTab;
 
-    if (clientContentTabs) {
-      $$("[data-ctab]", clientContentTabs).forEach((btn) => {
+    if (domRefs?.contentTabs) {
+      $$("[data-ctab]", domRefs.contentTabs).forEach((btn) => {
         btn.classList.toggle("is-active", btn.dataset.ctab === nextTab);
       });
     }
 
-    [clientTabAddresses, clientTabOrders, clientTabDiscounts].forEach((panel) => {
+    [domRefs?.tabAddresses, domRefs?.tabOrders, domRefs?.tabDiscounts].forEach((panel) => {
       if (!panel) return;
       panel.classList.toggle("is-active", panel.dataset.ctab === nextTab);
     });
 
-    if (clientOrdersListView) clientOrdersListView.classList.remove("hidden");
-    if (clientOrderDetailView) clientOrderDetailView.classList.add("hidden");
+    if (domRefs?.ordersListView) domRefs.ordersListView.classList.remove("hidden");
+    if (domRefs?.orderDetailView) domRefs.orderDetailView.classList.add("hidden");
   }
 
-  if (clientContentTabs && clientContentTabs.dataset.bound !== "1") {
-    clientContentTabs.dataset.bound = "1";
-    clientContentTabs.addEventListener("click", (event) => {
+  function bindClientContentTabs(domRefs = desktopClientDom) {
+    if (!domRefs?.contentTabs || domRefs.contentTabs.dataset.bound === "1") return;
+    domRefs.contentTabs.dataset.bound = "1";
+    domRefs.contentTabs.addEventListener("click", (event) => {
       const btn = event.target.closest("[data-ctab]");
       if (!btn) return;
       event.preventDefault();
       event.stopPropagation();
-      setClientContentTab(btn.dataset.ctab);
+      setClientContentTab(btn.dataset.ctab, domRefs);
     });
   }
+
+  bindClientContentTabs(desktopClientDom);
+  bindClientContentTabs(sheetClientDom);
 
   function renderClientAddressesHtml(addresses) {
     const list = Array.isArray(addresses) ? addresses : [];
@@ -2595,53 +3129,70 @@
     }).join("");
   }
 
-  function renderClientTabState(tab, { loading = false, error = "" } = {}) {
+  function renderClientTabState(tab, { loading = false, error = "" } = {}, domRefs = desktopClientDom) {
+    if (!domRefs) return;
     const client = tab?.client || null;
     const fallbackName = String(tab?.fallbackName || "").trim();
     const fallbackPhone = String(tab?.fallbackPhone || "").trim();
+    const fallbackAddresses = Array.isArray(tab?.fallbackAddresses) ? tab.fallbackAddresses : [];
+    const fallbackOrders = Array.isArray(tab?.fallbackOrders) ? tab.fallbackOrders : [];
 
-    if (clientInfoName) clientInfoName.textContent = client?.name || fallbackName || "—";
-    if (clientInfoPhone) {
+    if (domRefs.infoName) domRefs.infoName.textContent = client?.name || fallbackName || "—";
+    if (domRefs.infoPhone) {
       const phoneValue = client?.phone || fallbackPhone || "—";
-      clientInfoPhone.textContent = formatPhoneDigitsToRU(phoneValue);
+      domRefs.infoPhone.textContent = formatPhoneDigitsToRU(phoneValue);
     }
-    if (clientInfoBirthday) clientInfoBirthday.textContent = formatClientDate(client?.birthday);
-    setClientPhoto(client?.photo || "");
-    setClientContentTab(tab?.activeContentTab || "addresses");
+    if (domRefs.infoBirthday) domRefs.infoBirthday.textContent = formatClientDate(client?.birthday);
+    setClientPhoto(client?.photo || "", domRefs);
+    setClientContentTab(tab?.activeContentTab || "addresses", domRefs);
 
     if (loading) {
-      if (clientAddressesList) clientAddressesList.innerHTML = '<div class="muted">Загрузка…</div>';
-      if (clientOrdersList) clientOrdersList.innerHTML = '<div class="muted">Загрузка…</div>';
-      if (clientDiscountsList) clientDiscountsList.innerHTML = '<div class="muted">Загрузка…</div>';
-      if (clientDiscountsEmpty) clientDiscountsEmpty.classList.add("hidden");
+      if (domRefs.addressesList) domRefs.addressesList.innerHTML = '<div class="muted">Загрузка…</div>';
+      if (domRefs.ordersList) domRefs.ordersList.innerHTML = '<div class="muted">Загрузка…</div>';
+      if (domRefs.discountsList) domRefs.discountsList.innerHTML = '<div class="muted">Загрузка…</div>';
+      if (domRefs.discountsEmpty) domRefs.discountsEmpty.classList.add("hidden");
       return;
     }
 
     if (error) {
-      if (clientAddressesList) clientAddressesList.innerHTML = `<div class="muted">${escapeHtml(error)}</div>`;
-      if (clientOrdersList) clientOrdersList.innerHTML = "";
-      if (clientDiscountsList) clientDiscountsList.innerHTML = "";
-      if (clientDiscountsEmpty) clientDiscountsEmpty.classList.add("hidden");
+      const errorHtml = `<div class="muted" style="padding:4px 0 8px;">${escapeHtml(error)}</div>`;
+      if (domRefs.addressesList) {
+        domRefs.addressesList.innerHTML = fallbackAddresses.length
+          ? `${errorHtml}${renderClientAddressesHtml(fallbackAddresses)}`
+          : `<div class="muted">${escapeHtml(error)}</div>`;
+      }
+      if (domRefs.ordersList) {
+        domRefs.ordersList.innerHTML = fallbackOrders.length
+          ? `${errorHtml}${renderClientOrdersHistoryHtml(fallbackOrders)}`
+          : `<div class="muted">${escapeHtml(error)}</div>`;
+      }
+      if (domRefs.discountsList) domRefs.discountsList.innerHTML = "";
+      if (domRefs.discountsEmpty) domRefs.discountsEmpty.classList.add("hidden");
       return;
     }
 
-    if (clientAddressesList) clientAddressesList.innerHTML = renderClientAddressesHtml(tab?.addresses);
-    if (clientOrdersList) clientOrdersList.innerHTML = renderClientOrdersHistoryHtml(tab?.orders);
+    const addresses = Array.isArray(tab?.addresses) && tab.addresses.length ? tab.addresses : fallbackAddresses;
+    const orders = Array.isArray(tab?.orders) && tab.orders.length ? tab.orders : fallbackOrders;
+    if (domRefs.addressesList) domRefs.addressesList.innerHTML = renderClientAddressesHtml(addresses);
+    if (domRefs.ordersList) domRefs.ordersList.innerHTML = renderClientOrdersHistoryHtml(orders);
     const discounts = Array.isArray(tab?.discounts) ? tab.discounts : [];
-    if (clientDiscountsList) clientDiscountsList.innerHTML = renderClientDiscountsHtml(discounts);
-    if (clientDiscountsEmpty) clientDiscountsEmpty.classList.toggle("hidden", discounts.length > 0);
+    if (domRefs.discountsList) domRefs.discountsList.innerHTML = renderClientDiscountsHtml(discounts);
+    if (domRefs.discountsEmpty) domRefs.discountsEmpty.classList.toggle("hidden", discounts.length > 0);
   }
 
   async function loadClientTabData(tab, { forceReload = false } = {}) {
     if (!tab || tab.type !== "client") return;
     if (tab.loading) return;
-    if (!forceReload && tab.client && Array.isArray(tab.addresses) && Array.isArray(tab.orders) && Array.isArray(tab.discounts)) return;
+    if (!forceReload && !tab.isFallbackOnly && tab.client && Array.isArray(tab.addresses) && Array.isArray(tab.orders) && Array.isArray(tab.discounts)) return;
+    if (!(Number(tab.clientId || 0) > 0)) return;
 
     tab.loading = true;
     tab.error = null;
+    const activeSurface = tabsState.activeKey === tab.key && isMobile() && sheetClientDom ? "sheet" : "desktop";
+    const activeClientDom = activeSurface === "sheet" ? sheetClientDom : desktopClientDom;
     if (tabsState.activeKey === tab.key) {
-      showClientInfo();
-      renderClientTabState(tab, { loading: true });
+      showClientInfo(activeSurface);
+      renderClientTabState(tab, { loading: true }, activeClientDom);
     }
 
     try {
@@ -2662,6 +3213,7 @@
       tab.discounts = discountsRes.status === "fulfilled" && Array.isArray(discountsRes.value?.data)
         ? discountsRes.value.data
         : [];
+      tab.isFallbackOnly = false;
       tab.error = null;
       tab.title = buildClientTabTitle({
         client: tab.client,
@@ -2676,16 +3228,19 @@
         discounts: tab.discounts,
       });
       renderOrderTabs();
+      schedulePersistOrdersCache();
       if (tabsState.activeKey === tab.key) {
-        showClientInfo();
-        renderClientTabState(tab);
+        showClientInfo(activeSurface);
+        renderClientTabState(tab, {}, activeClientDom);
       }
     } catch (error) {
       console.error(error);
-      tab.error = "Не удалось загрузить данные клиента";
+      tab.error = navigator.onLine === false
+        ? "Нет интернета. Показываем доступные офлайн-данные."
+        : "Не удалось загрузить данные клиента";
       if (tabsState.activeKey === tab.key) {
-        showClientInfo();
-        renderClientTabState(tab, { error: tab.error });
+        showClientInfo(activeSurface);
+        renderClientTabState(tab, { error: tab.error }, activeClientDom);
       }
     } finally {
       tab.loading = false;
@@ -2694,13 +3249,16 @@
 
   async function activateClientTab(tab, { openMobile = false, forceReload = false } = {}) {
     if (!tab || tab.type !== "client") return;
+    const activeSurface = openMobile && isMobile() && sheetClientDom ? "sheet" : "desktop";
+    const activeClientDom = activeSurface === "sheet" ? sheetClientDom : desktopClientDom;
 
     const cached = state.clientsCache.get(Number(tab.clientId));
-    if (cached && !tab.client) {
+    if (cached && (!tab.client || tab.isFallbackOnly)) {
       tab.client = cached.client || null;
       tab.addresses = Array.isArray(cached.addresses) ? cached.addresses : [];
       tab.orders = Array.isArray(cached.orders) ? cached.orders : [];
       tab.discounts = Array.isArray(cached.discounts) ? cached.discounts : [];
+      tab.isFallbackOnly = false;
       tab.title = buildClientTabTitle({
         client: tab.client,
         name: tab.fallbackName,
@@ -2710,10 +3268,10 @@
       renderOrderTabs();
     }
 
-    showClientInfo();
+    showClientInfo(activeSurface);
     renderClientTabState(tab, {
-      loading: !tab.client || !Array.isArray(tab.addresses) || !Array.isArray(tab.orders) || !Array.isArray(tab.discounts),
-    });
+      loading: Number(tab.clientId || 0) > 0 && (tab.isFallbackOnly || !tab.client || !Array.isArray(tab.addresses) || !Array.isArray(tab.orders) || !Array.isArray(tab.discounts)),
+    }, activeClientDom);
     await loadClientTabData(tab, { forceReload });
 
     if (openMobile && isMobile()) openSheet();
@@ -2721,8 +3279,10 @@
 
   function setInfo(order) {
     syncOrderPaymentFooter(order);
-    if (sharedOrderInfoRenderer) {
-      sharedOrderInfoRenderer.setOrder(order);
+    if (sharedOrderInfoRenderers.length) {
+      hideClientSurfaces();
+      setSheetTitle("Информация");
+      sharedOrderInfoRenderers.forEach((renderer) => renderer.setOrder(order));
       return;
     }
     if (!order) {
@@ -2922,6 +3482,15 @@
     btn.addEventListener("click", () => {
       state.activeStatusId = id;
       syncActiveStage();
+      if (isCourierWorkspace) {
+        if (!tabsState.tabs.length) {
+          state.activeOrderId = null;
+          setInfo(null);
+        }
+        renderOrders();
+        schedulePersistOrdersCache();
+        return;
+      }
       loadAndRenderOrders(false).catch(console.error);
     });
 
@@ -2991,7 +3560,7 @@
   }
 
   function wireDragTargets() {
-    if (!elStagesList) return;
+    if (!elStagesList || isCourierWorkspace) return;
 
     $$(".stage-item", elStagesList).forEach((stageBtn) => {
       stageBtn.addEventListener("dragover", (e) => {
@@ -3082,6 +3651,21 @@
     if (!elStagesList) return;
     elStagesList.innerHTML = "";
 
+    if (isCourierWorkspace) {
+      getCourierBucketItems().forEach((bucket) => {
+        elStagesList.appendChild(stageButton({
+          id: bucket.id,
+          title: bucket.title,
+          icon: bucket.icon,
+          count: bucket.count,
+        }));
+      });
+
+      syncActiveStage();
+      schedulePersistOrdersCache();
+      return;
+    }
+
     const allCount = state.statuses.reduce((acc, s) => acc + Number(s.count || 0), 0);
 
     elStagesList.appendChild(stageButton({
@@ -3114,7 +3698,13 @@
   function orderMatchesFilters(order) {
     if (!order) return false;
 
-    if (state.activeStatusId !== "all" && Number(order.status_id) !== Number(state.activeStatusId)) {
+    if (isCourierWorkspace) {
+      const bucketId = getCourierBucketId(order);
+      if (!bucketId) return false;
+      if (String(state.activeStatusId) !== String(bucketId)) {
+        return false;
+      }
+    } else if (state.activeStatusId !== "all" && Number(order.status_id) !== Number(state.activeStatusId)) {
       return false;
     }
 
@@ -3141,12 +3731,16 @@
     row.className = "order-row order-list-card js-order";
     row.setAttribute("role", "button");
     row.setAttribute("tabindex", "0");
-    row.setAttribute("draggable", "true");
+    row.setAttribute("draggable", isCourierWorkspace ? "false" : "true");
     row.setAttribute("data-order-id", String(order.id));
 
     updateOrderRow(row, order);
 
     row.addEventListener("dragstart", (e) => {
+      if (isCourierWorkspace) {
+        e.preventDefault();
+        return;
+      }
       const currentOrderId = Number(order.id) || 0;
       const selectedIds = Array.from(state.selectedOrderIds || [])
         .map((id) => Number(id || 0))
@@ -3181,6 +3775,7 @@
     });
 
     row.addEventListener("dragover", (e) => {
+      if (isCourierWorkspace) return;
       if (state.activeStatusId === "all") return;
       if (Array.isArray(state.draggingOrderIds) && state.draggingOrderIds.length > 1) return;
       e.preventDefault();
@@ -3190,6 +3785,7 @@
     row.addEventListener("dragleave", () => row.classList.remove("is-dropover"));
 
     row.addEventListener("drop", async (e) => {
+      if (isCourierWorkspace) return;
       if (state.activeStatusId === "all") return;
       e.preventDefault();
       row.classList.remove("is-dropover");
@@ -3233,7 +3829,7 @@
       ? sharedOrderPanel.renderOrderTimeIcon(order)
       : renderOrderTimeIcon(order);
     const stageCycleBtnHtml = renderOrderStatusHoverCycleButton(order);
-    const addressCommentDisplay = order.comment || "Нет комментария";
+    const addressCommentDisplay = order.address_comment || order.comment || "Нет комментария";
     const rawAddress = order.address ||
       (order.pickup_store_address
         ? (order.pickup_store_name ? `${order.pickup_store_name}, ${order.pickup_store_address}` : order.pickup_store_address)
@@ -3306,6 +3902,66 @@
           </span>
         </button>
       `;
+
+    if (isCourierWorkspace) {
+      const pickupButtonHtml = buildCourierActionButtonHtml(order);
+      const callButtonHtml = buildCourierCallButtonHtml(order);
+
+      row.innerHTML = `
+        <div class="order-col order-id">
+          <label
+            class="order-id-select-hit"
+            data-action="order-multi-select"
+            data-order-id="${escapeHtml(order.id)}"
+            title="Выбрать заказ"
+          >
+            <input
+              type="checkbox"
+              class="order-id-select-checkbox"
+              data-role="order-multi-checkbox"
+              aria-label="Выбрать заказ №${escapeHtml(order.id)}"
+              tabindex="-1"
+              ${multiSelected ? "checked" : ""}
+            />
+            <div class="order-id-num">${escapeHtml(order.id)}</div>
+            <div class="order-id-time">${escapeHtml(formatTime(order.created_at))}</div>
+          </label>
+        </div>
+
+        <div class="order-col order-indicators">
+          ${timeIconHtml}
+        </div>
+
+        <div class="order-col order-client">
+          <div class="order-client-name"><i class="fas fa-user"></i><span class="order-client-name-text">${escapeHtml(order.customer_name || "?")}</span></div>
+          ${clientPhoneLineHtml}
+        </div>
+
+        <div class="order-col order-address">
+          <div class="order-address-line"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(shortAddressDisplay)}</div>
+          <div class="order-address-comment muted"><i class="far fa-comment"></i> ${escapeHtml(addressCommentDisplay)}</div>
+        </div>
+
+        <div class="order-col order-courier-controls">
+          <div class="order-courier-status-row">
+            <div class="order-col order-stage">
+              ${stageCycleBtnHtml}
+            </div>
+            <div class="order-col order-total">
+              ${paymentHtml}
+            </div>
+          </div>
+          <div class="order-courier-action-row">
+            ${pickupButtonHtml}
+            ${callButtonHtml}
+          </div>
+        </div>
+      `;
+
+      row.classList.remove("is-active");
+      applyOrderMultiSelectionState(row, orderId);
+      return;
+    }
 
     if (sharedOrderPanel && typeof sharedOrderPanel.buildOrderListRowInnerHtml === "function") {
       row.innerHTML = sharedOrderPanel.buildOrderListRowInnerHtml({
@@ -3459,7 +4115,9 @@
 
   async function loadOrders() {
     const qs = new URLSearchParams();
-    if (state.activeStatusId !== "all") qs.set("status_id", String(state.activeStatusId));
+    if (!isCourierWorkspace && state.activeStatusId !== "all") {
+      qs.set("status_id", String(state.activeStatusId));
+    }
     if (state.date.start && state.date.end) {
       qs.set("start_date", toDateKey(state.date.start));
       qs.set("end_date", toDateKey(state.date.end));
@@ -3468,7 +4126,8 @@
     qs.set("offset", "0");
 
     const json = await apiJson(`/api/admin/orders?${qs.toString()}`);
-    state.orders = Array.isArray(json.data) ? json.data : [];
+    const rows = Array.isArray(json.data) ? json.data : [];
+    state.orders = isCourierWorkspace ? rows.filter(isDeliveryOrder) : rows;
   }
 
   async function loadAndRenderOrders(keepSelection = false) {
@@ -3478,6 +4137,10 @@
     }
 
     await loadOrders();
+    if (isCourierWorkspace) {
+      ensureActiveStatusSelection();
+      renderStages();
+    }
     renderOrders();
 
     if (tabsState.tabs.length) {
@@ -3765,6 +4428,15 @@
     const idx = state.orders.findIndex((o) => Number(o.id) === Number(order.id));
     const wasExisting = idx >= 0;
     const prevOrder = wasExisting ? state.orders[idx] : null;
+    if (isCourierWorkspace && !isDeliveryOrder(order)) {
+      if (wasExisting) {
+        state.orders.splice(idx, 1);
+      }
+      upsertOrderRow(order);
+      renderStages();
+      renderOrders();
+      return;
+    }
     if (wasExisting) {
       state.orders[idx] = { ...state.orders[idx], ...order };
     } else {
@@ -3846,7 +4518,13 @@
       const prevIds = new Set(state.orders.map((o) => Number(o.id)));
       await loadOrders();
       const newOrders = state.orders.filter((o) => !prevIds.has(Number(o.id)));
-      if (newOrders.length) {
+      if (isCourierWorkspace) {
+        ensureActiveStatusSelection();
+        renderStages();
+        if (newOrders.length) {
+          notifyNewOrders(newOrders);
+        }
+      } else if (newOrders.length) {
         for (const nextOrder of newOrders) {
           applyStageCountersDelta(null, nextOrder);
         }
@@ -4093,6 +4771,29 @@
       return;
     }
 
+    const courierPickupBtn = e.target.closest('[data-action="courier-pickup"]');
+    if (courierPickupBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (courierPickupBtn.disabled) return;
+      const orderId = Number(courierPickupBtn.getAttribute("data-order-id") || 0);
+      const targetStatusId = Number(courierPickupBtn.getAttribute("data-target-status-id") || 0);
+      if (!(orderId > 0) || !(targetStatusId > 0)) return;
+      setStatusControlsDisabled(true);
+      try {
+        await updateOrderStatus(orderId, targetStatusId);
+      } finally {
+        setStatusControlsDisabled(false);
+      }
+      return;
+    }
+
+    const courierCallBtn = e.target.closest('[data-action="courier-call"]');
+    if (courierCallBtn) {
+      e.stopPropagation();
+      return;
+    }
+
     const openClientBtn = e.target.closest('[data-action="open-client"]');
     if (openClientBtn) {
       e.preventDefault();
@@ -4102,11 +4803,13 @@
       let clientPhone = String(openClientBtn.getAttribute("data-client-phone") || "").trim();
       let clientName = String(openClientBtn.getAttribute("data-client-name") || "").trim();
 
+      let fallbackOrder = null;
       const row = openClientBtn.closest(".js-order");
       if (row && ((!Number.isFinite(clientId) || clientId <= 0) || !clientPhone || !clientName)) {
         const orderId = Number(row.getAttribute("data-order-id") || 0);
         const order = state.orders.find((x) => Number(x.id) === orderId);
         if (order) {
+          fallbackOrder = order;
           if (!Number.isFinite(clientId) || clientId <= 0) {
             clientId = Number(order.customer_id || 0);
           }
@@ -4122,6 +4825,7 @@
       if ((!Number.isFinite(clientId) || clientId <= 0) || !clientName || !clientPhone) {
         const activeOrder = getActiveOrder();
         if (activeOrder) {
+          fallbackOrder = activeOrder;
           if (!Number.isFinite(clientId) || clientId <= 0) {
             clientId = Number(activeOrder.customer_id || 0);
           }
@@ -4143,6 +4847,7 @@
         clientName,
         activate: true,
         openMobile: true,
+        fallbackOrder,
       }).catch(console.error);
       return;
     }
@@ -4929,6 +5634,14 @@
   }
 
   function ensureActiveStatusSelection() {
+    if (isCourierWorkspace) {
+      const hasCurrent = courierBucketDefs.some((bucket) => String(bucket.id) === String(state.activeStatusId));
+      if (!hasCurrent) {
+        state.activeStatusId = courierDefaultBucketId;
+      }
+      return;
+    }
+
     const sortedStatuses = getSortedStatuses();
     if (!sortedStatuses.length) {
       state.activeStatusId = "all";
@@ -4957,8 +5670,13 @@
         hydratedFromCache &&
         Array.isArray(state.orders) &&
         state.orders.length > 0 &&
-        Array.isArray(state.statuses) &&
-        state.statuses.length > 0;
+        (
+          isCourierWorkspace ||
+          (
+            Array.isArray(state.statuses) &&
+            state.statuses.length > 0
+          )
+        );
 
       if (hasWarmCache && Number(state.lastEventId || 0) > 0) {
         try {

@@ -1,70 +1,24 @@
 <aside id="app-sidebar" class="panel app-sidebar">
-  <% const sidebarTenantChatWidgetRaw = (typeof tenant !== 'undefined' && tenant) ? tenant.chat_widget_enabled : undefined; %>
-  <% const sidebarTenantChatWidgetNorm = String(sidebarTenantChatWidgetRaw == null ? '' : sidebarTenantChatWidgetRaw).trim().toLowerCase(); %>
-  <% const isSidebarChatEnabled = !(
-       sidebarTenantChatWidgetRaw === 0
-       || sidebarTenantChatWidgetRaw === false
-       || sidebarTenantChatWidgetNorm === '0'
-       || sidebarTenantChatWidgetNorm === 'false'
-     ); %>
   <nav class="app-sidebar-nav no-scrollbar">
     <ul class="app-sidebar-list">
-      <li>
-        <a href="/dashboard/cash" class="nav-item <%= activePage === 'cash' ? 'active-nav' : '' %>">
-          <i class="fas fa-cash-register nav-icon"></i>
-          <span class="nav-text">Касса</span>
-        </a>
-      </li>
-      <li>
-        <a href="/dashboard/products" class="nav-item <%= activePage === 'products' ? 'active-nav' : '' %>">
-          <i class="fas fa-box nav-icon"></i>
-          <span class="nav-text">Товары</span>
-        </a>
-      </li>
-
-      <li>
-        <a href="/dashboard/orders" id="sidebarOrdersNavLink" class="nav-item nav-item--chat nav-item--orders <%= activePage === 'orders' ? 'active-nav' : '' %>">
-          <i class="fas fa-shopping-cart nav-icon"></i>
-          <span class="sidebar-chat-unread hidden" id="sidebarOrdersUnreadBadge" aria-live="polite" aria-atomic="true"></span>
-          <span class="nav-text">Заказы</span>
-        </a>
-      </li>
-
-      <li>
-        <a href="/dashboard/new-order" class="nav-item <%= activePage === 'new-order' ? 'active-nav' : '' %>">
-          <i class="fas fa-plus-circle nav-icon"></i>
-          <span class="nav-text">Новый заказ</span>
-        </a>
-      </li>
-
-      <li>
-        <a href="/dashboard/clients" class="nav-item <%= activePage === 'clients' ? 'active-nav' : '' %>">
-          <i class="fas fa-bullhorn nav-icon"></i>
-          <span class="nav-text">Маркетинг</span>
-        </a>
-      </li>
-
-      <li>
-        <a href="/dashboard/team" class="nav-item <%= activePage === 'team' ? 'active-nav' : '' %>">
-          <i class="fas fa-user-tie nav-icon"></i>
-          <span class="nav-text">Команда</span>
-        </a>
-      </li>
-
-      <li class="<%= isSidebarChatEnabled ? '' : 'hidden' %>">
-        <a href="/dashboard/chat" id="sidebarChatNavLink" class="nav-item nav-item--chat <%= activePage === 'chat' ? 'active-nav' : '' %>">
-          <i class="fas fa-comments nav-icon"></i>
-          <span class="nav-text">Чаты</span>
-          <span class="sidebar-chat-unread hidden" id="sidebarChatUnreadBadge" aria-live="polite" aria-atomic="true"></span>
-        </a>
-      </li>
-
-      <li>
-        <a href="/dashboard/settings" class="nav-item <%= activePage === 'settings' ? 'active-nav' : '' %>">
-          <i class="fas fa-cog nav-icon"></i>
-          <span class="nav-text">Настройки</span>
-        </a>
-      </li>
+      <% (Array.isArray(adminNavItems) ? adminNavItems : []).forEach(function (item) { %>
+        <li class="<%= item.hidden ? 'hidden' : '' %>">
+          <a
+            href="<%= item.href %>"
+            <% if (item.desktopId) { %>id="<%= item.desktopId %>"<% } %>
+            class="nav-item <%= item.desktopLinkClasses || '' %> <%= item.key === activePage ? 'active-nav' : '' %>"
+            data-nav-key="<%= item.key %>"
+            aria-label="<%= item.ariaLabel || item.label %>"
+            title="<%= item.label %>"
+          >
+            <i class="fas <%= item.icon %> nav-icon"></i>
+            <% if (item.desktopBadgeId) { %>
+              <span class="sidebar-chat-unread hidden" id="<%= item.desktopBadgeId %>" aria-live="polite" aria-atomic="true"></span>
+            <% } %>
+            <span class="nav-text"><%= item.label %></span>
+          </a>
+        </li>
+      <% }) %>
     </ul>
   </nav>
   <button id="sidebar-edge-toggle" class="sidebar-edge-toggle" type="button" aria-label="Свернуть/развернуть меню">
