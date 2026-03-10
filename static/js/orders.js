@@ -2,6 +2,9 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+  const appVersion = String(window.__APP_VERSION__ || document.body?.dataset?.appVersion || "")
+    .trim()
+    .replace(/[^a-z0-9._-]+/gi, "_") || "dev";
   const rawWorkspaceConfig = window.OrderWorkspaceConfig && typeof window.OrderWorkspaceConfig === "object"
     ? window.OrderWorkspaceConfig
     : {};
@@ -104,12 +107,18 @@
     // Добавляем ID выбранной Филиалы
     headers['x-store-id'] = storeId;
     
-    const res = await fetch(url, {
-      method: opts.method || "GET",
-      cache: opts.cache || "no-store",
-      headers,
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
+    let res;
+    try {
+      res = await fetch(url, {
+        method: opts.method || "GET",
+        cache: opts.cache || "no-store",
+        headers,
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+    } catch (err) {
+      markCourierOfflineFromError(err);
+      throw err;
+    }
     
     // Если 401 - перенаправляем на логин
     if (res.status === 401) {
@@ -287,6 +296,13 @@
   const orderInfoPaymentButtons = isCourierScreenPage
     ? [orderInfoPaymentBtn, sheetOrderInfoPaymentBtn].filter(Boolean)
     : [orderInfoPaymentBtn].filter(Boolean);
+  const courierConnectionBanner = isCourierWorkspace ? $("#courierConnectionBanner") : null;
+  const courierConnectionBannerText = courierConnectionBanner
+    ? $(".courier-connection-banner__text", courierConnectionBanner)
+    : null;
+  const courierConnectionBannerRetryBtn = courierConnectionBanner
+    ? $('[data-action="courier-connection-retry"]', courierConnectionBanner)
+    : null;
 
   const closeButtons = $$('[data-action="order-close"]');
 
@@ -333,7 +349,17 @@
 
   const ORDERS_CACHE_VERSION = 3;
   const ORDERS_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+  const COURIER_OFFLINE_QUEUE_VERSION = 1;
   let ordersCachePersistTimer = null;
+  const courierOfflineState = {
+    queue: [],
+    shadowOrders: new Map(),
+    syncing: false,
+    online: navigator.onLine !== false,
+    syncError: "",
+    transientBanner: null,
+    restoredHideTimer: null,
+  };
 
   // -----------------------------
   // Helpers
@@ -1460,12 +1486,13 @@
       const json = await apiJson(`/api/admin/orders/${id}`);
       const fullOrder = json?.data || null;
       if (!fullOrder || !Number.isFinite(Number(fullOrder.id))) return fromState;
+      const nextOrder = overlayCourierShadowOrder(fullOrder);
       const idx = state.orders.findIndex((order) => Number(order?.id) === Number(fullOrder.id));
-      if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...fullOrder };
-      else state.orders.unshift(fullOrder);
+      if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...nextOrder };
+      else state.orders.unshift(nextOrder);
       rebuildOrdersStageIndex();
       renderOrders();
-      return state.orders.find((order) => Number(order?.id) === Number(fullOrder.id)) || fullOrder;
+      return state.orders.find((order) => Number(order?.id) === Number(fullOrder.id)) || nextOrder;
     } catch (err) {
       console.error(err);
       return fromState;
@@ -1787,7 +1814,427 @@
   }
 
   function ordersCacheKey() {
-    return `orders_bootstrap_v${ORDERS_CACHE_VERSION}_m${ordersCacheScope}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}`;
+    return `orders_bootstrap_v${ORDERS_CACHE_VERSION}_a${appVersion}_m${ordersCacheScope}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}`;
+  }
+
+  function isLikelyNetworkError(err) {
+    const message = String(err?.message || err || "").trim().toLowerCase();
+    if (!message) return false;
+    return (
+      message.includes("failed to fetch")
+      || message.includes("networkerror")
+      || message.includes("network request failed")
+      || message.includes("load failed")
+      || message.includes("network error")
+      || message.includes("fetch failed")
+    );
+  }
+
+  function courierOfflineQueueKey() {
+    return `courier_offline_queue_v${COURIER_OFFLINE_QUEUE_VERSION}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}`;
+  }
+
+  function courierOfflineShadowKey() {
+    return `courier_offline_shadow_v${COURIER_OFFLINE_QUEUE_VERSION}_t${getTenantIdFromStorage()}_s${getStoreIdFromStorage()}`;
+  }
+
+  function normalizeCourierQueueItem(raw) {
+    const type = String(raw?.type || "").trim().toLowerCase();
+    if (type !== "status" && type !== "payment") return null;
+    const orderId = Number(raw?.orderId || 0);
+    if (!(orderId > 0)) return null;
+    const request = raw?.request && typeof raw.request === "object" ? raw.request : {};
+    const url = String(request.url || "").trim();
+    const method = String(request.method || "PUT").trim().toUpperCase() || "PUT";
+    if (!url) return null;
+    return {
+      id: String(raw?.id || `${type}:${orderId}:${Date.now()}:${Math.random()}`).trim(),
+      type,
+      orderId,
+      tenantId: Number(raw?.tenantId || getTenantIdFromStorage() || 0) || 0,
+      storeId: Number(raw?.storeId || getStoreIdFromStorage() || 0) || 0,
+      createdAt: Number(raw?.createdAt || Date.now()) || Date.now(),
+      state: String(raw?.state || "pending").trim().toLowerCase() === "error" ? "error" : "pending",
+      error: raw?.error ? String(raw.error) : "",
+      request: {
+        url,
+        method,
+        body: request.body && typeof request.body === "object" ? request.body : {},
+      },
+      optimisticOrder: raw?.optimisticOrder && typeof raw.optimisticOrder === "object"
+        ? { ...raw.optimisticOrder }
+        : null,
+    };
+  }
+
+  function readCourierOfflineQueue() {
+    try {
+      const raw = localStorage.getItem(courierOfflineQueueKey());
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return (Array.isArray(parsed?.items) ? parsed.items : [])
+        .map(normalizeCourierQueueItem)
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  function readCourierShadowOrders() {
+    try {
+      const raw = localStorage.getItem(courierOfflineShadowKey());
+      if (!raw) return new Map();
+      const parsed = JSON.parse(raw);
+      const rows = Array.isArray(parsed?.orders) ? parsed.orders : [];
+      return new Map(
+        rows
+          .map((row) => {
+            const orderId = Number(Array.isArray(row) ? row[0] : 0);
+            const order = Array.isArray(row) ? row[1] : null;
+            if (!(orderId > 0) || !order || typeof order !== "object") return null;
+            return [orderId, { ...order }];
+          })
+          .filter(Boolean)
+      );
+    } catch {
+      return new Map();
+    }
+  }
+
+  function persistCourierOfflineState() {
+    if (!isCourierWorkspace) return;
+    try {
+      if (courierOfflineState.queue.length) {
+        localStorage.setItem(courierOfflineQueueKey(), JSON.stringify({
+          items: courierOfflineState.queue.map((item) => ({
+            id: item.id,
+            type: item.type,
+            orderId: item.orderId,
+            tenantId: item.tenantId,
+            storeId: item.storeId,
+            createdAt: item.createdAt,
+            state: item.state,
+            error: item.error || "",
+            request: item.request,
+            optimisticOrder: item.optimisticOrder && typeof item.optimisticOrder === "object"
+              ? item.optimisticOrder
+              : null,
+          })),
+        }));
+      } else {
+        localStorage.removeItem(courierOfflineQueueKey());
+      }
+    } catch {}
+
+    try {
+      if (courierOfflineState.shadowOrders.size) {
+        localStorage.setItem(courierOfflineShadowKey(), JSON.stringify({
+          orders: Array.from(courierOfflineState.shadowOrders.entries()).map(([orderId, order]) => [
+            Number(orderId),
+            order && typeof order === "object" ? order : null,
+          ]),
+        }));
+      } else {
+        localStorage.removeItem(courierOfflineShadowKey());
+      }
+    } catch {}
+  }
+
+  function getCourierBannerState() {
+    if (!isCourierWorkspace) return null;
+    const transient = courierOfflineState.transientBanner;
+    if (transient) {
+      if (!transient.expiresAt || transient.expiresAt > Date.now()) {
+        return transient;
+      }
+      courierOfflineState.transientBanner = null;
+    }
+    const failedItem = courierOfflineState.queue[0]?.state === "error"
+      ? courierOfflineState.queue[0]
+      : null;
+    if (failedItem) {
+      return {
+        mode: "error",
+        text: failedItem.error ? `Не удалось отправить изменения: ${failedItem.error}` : "Не удалось отправить изменения",
+        retry: true,
+      };
+    }
+    if (courierOfflineState.syncError) {
+      return {
+        mode: "error",
+        text: courierOfflineState.syncError,
+        retry: true,
+      };
+    }
+    if (courierOfflineState.syncing && courierOfflineState.queue.length) {
+      return {
+        mode: "syncing",
+        text: `Отправляем изменения: ${courierOfflineState.queue.length}`,
+        retry: false,
+      };
+    }
+    if (!courierOfflineState.online && courierOfflineState.queue.length) {
+      return {
+        mode: "offline",
+        text: `Нет интернета. Изменения сохранены и будут отправлены: ${courierOfflineState.queue.length}`,
+        retry: false,
+      };
+    }
+    if (!courierOfflineState.online) {
+      return {
+        mode: "offline",
+        text: "Нет подключения к интернету",
+        retry: false,
+      };
+    }
+    return null;
+  }
+
+  function refreshCourierConnectionBanner() {
+    if (!isCourierWorkspace || !courierConnectionBanner || !courierConnectionBannerText) return;
+    const bannerState = getCourierBannerState();
+    courierConnectionBanner.classList.remove(
+      "courier-connection-banner--offline",
+      "courier-connection-banner--syncing",
+      "courier-connection-banner--online",
+      "courier-connection-banner--error"
+    );
+    if (!bannerState) {
+      courierConnectionBanner.classList.add("hidden");
+      courierConnectionBannerText.textContent = "";
+      if (courierConnectionBannerRetryBtn) {
+        courierConnectionBannerRetryBtn.classList.add("hidden");
+      }
+      return;
+    }
+    courierConnectionBanner.classList.remove("hidden");
+    courierConnectionBanner.classList.add(`courier-connection-banner--${bannerState.mode}`);
+    courierConnectionBannerText.textContent = String(bannerState.text || "").trim();
+    if (courierConnectionBannerRetryBtn) {
+      courierConnectionBannerRetryBtn.classList.toggle("hidden", !bannerState.retry);
+    }
+  }
+
+  function showCourierTransientBanner(mode, text, { retry = false, duration = 2500 } = {}) {
+    if (!isCourierWorkspace) return;
+    const id = `${Date.now()}:${Math.random()}`;
+    courierOfflineState.transientBanner = {
+      id,
+      mode,
+      text,
+      retry,
+      expiresAt: duration > 0 ? Date.now() + duration : 0,
+    };
+    refreshCourierConnectionBanner();
+    if (duration > 0) {
+      setTimeout(() => {
+        if (courierOfflineState.transientBanner?.id !== id) return;
+        courierOfflineState.transientBanner = null;
+        refreshCourierConnectionBanner();
+      }, duration + 30);
+    }
+  }
+
+  function setCourierOnlineState(nextOnline, { showRestored = false } = {}) {
+    if (!isCourierWorkspace) return;
+    const normalized = nextOnline !== false;
+    const prev = courierOfflineState.online;
+    courierOfflineState.online = normalized;
+    if (!normalized) {
+      courierOfflineState.syncing = false;
+    }
+    if (normalized && !prev && showRestored) {
+      showCourierTransientBanner("online", "Подключение восстановлено");
+      return;
+    }
+    refreshCourierConnectionBanner();
+  }
+
+  function syncCourierShadowOrdersFromQueue() {
+    if (!isCourierWorkspace) return;
+    const nextShadowOrders = new Map();
+    courierOfflineState.queue.forEach((item) => {
+      const orderId = Number(item?.orderId || 0);
+      const optimisticOrder = item?.optimisticOrder && typeof item.optimisticOrder === "object"
+        ? { ...item.optimisticOrder }
+        : null;
+      if (!(orderId > 0) || !optimisticOrder) return;
+      nextShadowOrders.set(orderId, optimisticOrder);
+    });
+    courierOfflineState.shadowOrders = nextShadowOrders;
+  }
+
+  function getCourierShadowOrder(orderId) {
+    if (!isCourierWorkspace) return null;
+    return courierOfflineState.shadowOrders.get(Number(orderId || 0)) || null;
+  }
+
+  function overlayCourierShadowOrder(order) {
+    if (!order || !isCourierWorkspace) return order;
+    const shadow = getCourierShadowOrder(order.id);
+    return shadow ? { ...order, ...shadow } : order;
+  }
+
+  function applyCourierShadowOrdersToState() {
+    if (!isCourierWorkspace || !courierOfflineState.shadowOrders.size) return;
+    const existingIds = new Set();
+    state.orders = (Array.isArray(state.orders) ? state.orders : []).map((order) => {
+      const orderId = Number(order?.id || 0);
+      if (orderId > 0) existingIds.add(orderId);
+      return overlayCourierShadowOrder(order);
+    });
+    courierOfflineState.shadowOrders.forEach((order, orderId) => {
+      if (existingIds.has(Number(orderId || 0))) return;
+      if (!order || typeof order !== "object") return;
+      state.orders.unshift({ ...order });
+    });
+  }
+
+  function hydrateCourierOfflineStateFromStorage() {
+    if (!isCourierWorkspace) return;
+    courierOfflineState.queue = readCourierOfflineQueue();
+    courierOfflineState.shadowOrders = readCourierShadowOrders();
+    courierOfflineState.syncing = false;
+    courierOfflineState.syncError = "";
+    courierOfflineState.online = navigator.onLine !== false;
+    if (!courierOfflineState.shadowOrders.size && courierOfflineState.queue.length) {
+      syncCourierShadowOrdersFromQueue();
+      persistCourierOfflineState();
+    }
+    applyCourierShadowOrdersToState();
+    refreshCourierConnectionBanner();
+  }
+
+  function resetCourierOfflineRuntimeState() {
+    if (!isCourierWorkspace) return;
+    courierOfflineState.queue = [];
+    courierOfflineState.shadowOrders = new Map();
+    courierOfflineState.syncing = false;
+    courierOfflineState.syncError = "";
+    courierOfflineState.transientBanner = null;
+    courierOfflineState.online = navigator.onLine !== false;
+    refreshCourierConnectionBanner();
+  }
+
+  function queueCourierMutation({ type, orderId, request, optimisticOrder }) {
+    if (!isCourierWorkspace) return null;
+    const item = normalizeCourierQueueItem({
+      id: `${type}:${Number(orderId || 0)}:${Date.now()}:${Math.random().toString(16).slice(2)}`,
+      type,
+      orderId,
+      tenantId: getTenantIdFromStorage(),
+      storeId: getStoreIdFromStorage(),
+      createdAt: Date.now(),
+      state: "pending",
+      request,
+      optimisticOrder,
+    });
+    if (!item) return null;
+    courierOfflineState.queue.push(item);
+    courierOfflineState.syncError = "";
+    syncCourierShadowOrdersFromQueue();
+    persistCourierOfflineState();
+    refreshCourierConnectionBanner();
+    return item;
+  }
+
+  function updateCourierActiveOrderInfo() {
+    if (!state.activeOrderId) return;
+    const activeOrder = state.orders.find((row) => Number(row?.id || 0) === Number(state.activeOrderId || 0)) || null;
+    if (activeOrder) setInfo(activeOrder);
+  }
+
+  async function processCourierOfflineQueue({ force = false } = {}) {
+    if (!isCourierWorkspace) return;
+    if (courierOfflineState.syncing) return;
+    if (!courierOfflineState.queue.length) {
+      courierOfflineState.syncError = "";
+      syncCourierShadowOrdersFromQueue();
+      persistCourierOfflineState();
+      refreshCourierConnectionBanner();
+      return;
+    }
+    if (!courierOfflineState.online) {
+      refreshCourierConnectionBanner();
+      return;
+    }
+    if (courierOfflineState.queue[0]?.state === "error" && !force) {
+      refreshCourierConnectionBanner();
+      return;
+    }
+
+    let processedAny = false;
+    courierOfflineState.syncing = true;
+    courierOfflineState.syncError = "";
+    refreshCourierConnectionBanner();
+
+    while (courierOfflineState.online && courierOfflineState.queue.length) {
+      const current = courierOfflineState.queue[0];
+      if (!current) break;
+      current.state = "pending";
+      current.error = "";
+      persistCourierOfflineState();
+      refreshCourierConnectionBanner();
+
+      try {
+        const json = await apiJson(current.request.url, {
+          method: current.request.method || "PUT",
+          body: current.request.body || {},
+        });
+        courierOfflineState.queue.shift();
+        processedAny = true;
+        if (json?.data) {
+          handleOrderEvent(json.data);
+        }
+        syncCourierShadowOrdersFromQueue();
+        applyCourierShadowOrdersToState();
+        if (isCourierWorkspace) {
+          ensureActiveStatusSelection();
+          renderStages();
+          renderOrders();
+          if (tabsState.tabs.length) {
+            syncTabsWithLatestOrders();
+          } else {
+            updateCourierActiveOrderInfo();
+          }
+        }
+        persistCourierOfflineState();
+      } catch (err) {
+        courierOfflineState.syncing = false;
+        if (current) {
+          current.state = "pending";
+        }
+        if (isLikelyNetworkError(err)) {
+          setCourierOnlineState(false);
+          persistCourierOfflineState();
+          refreshCourierConnectionBanner();
+          return;
+        }
+        if (current) {
+          current.state = "error";
+          current.error = String(err?.message || "API_ERROR");
+        }
+        courierOfflineState.syncError = "Не удалось отправить изменения";
+        persistCourierOfflineState();
+        refreshCourierConnectionBanner();
+        return;
+      }
+    }
+
+    courierOfflineState.syncing = false;
+    persistCourierOfflineState();
+    if (processedAny && courierOfflineState.online) {
+      showCourierTransientBanner("online", "Подключение восстановлено");
+    } else {
+      refreshCourierConnectionBanner();
+    }
+  }
+
+  function markCourierOfflineFromError(err) {
+    if (!isCourierWorkspace) return false;
+    if (!isLikelyNetworkError(err)) return false;
+    setCourierOnlineState(false);
+    return true;
   }
 
   function readOrdersBootstrapCache() {
@@ -2825,9 +3272,50 @@
     });
   }
 
+  function buildOptimisticOrderStatusSnapshot(order, nextStatusId) {
+    if (!order || !(Number(order?.id || 0) > 0) || !(Number(nextStatusId || 0) > 0)) return null;
+    const targetStatusMeta = getStatusMetaById(nextStatusId) || null;
+    const optimisticOrder = { ...order, status_id: Number(nextStatusId) };
+    if (targetStatusMeta) {
+      if (targetStatusMeta.title != null) optimisticOrder.status_title = targetStatusMeta.title;
+      if (targetStatusMeta.code != null) optimisticOrder.status_code = targetStatusMeta.code;
+      if (targetStatusMeta.color != null) optimisticOrder.status_color = targetStatusMeta.color;
+    }
+    return optimisticOrder;
+  }
+
+  function buildOptimisticOrderPaymentSnapshot(order, payload) {
+    if (!order || !(Number(order?.id || 0) > 0) || !payload || typeof payload !== "object") return null;
+    const optimisticOrder = { ...order, is_paid: 1 };
+    const paymentCode = String(payload.payment_code || optimisticOrder.payment_code || "").trim();
+    if (paymentCode) {
+      optimisticOrder.payment_code = paymentCode;
+      const paymentMeta = sharedOrderPayment?.getPaymentMethodMeta
+        ? sharedOrderPayment.getPaymentMethodMeta(paymentCode, optimisticOrder)
+        : null;
+      if (paymentMeta?.title) optimisticOrder.payment_title = paymentMeta.title;
+      if (paymentMeta?.icon) optimisticOrder.payment_icon = paymentMeta.icon;
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, "change_from")) {
+      const changeFrom = Number(payload.change_from || 0);
+      optimisticOrder.change_from = Number.isFinite(changeFrom) && changeFrom > 0 ? changeFrom : null;
+    }
+    return optimisticOrder;
+  }
+
+  function applyLocalCourierOrderSnapshot(order) {
+    if (!order || !isCourierWorkspace) return null;
+    handleOrderEvent(order, { localOnly: true, skipStageRefresh: true });
+    return state.orders.find((row) => Number(row?.id || 0) === Number(order.id || 0)) || order;
+  }
+
   async function openOrderPaymentDialog(order) {
     const orderId = Number(order?.id || 0);
     if (!(orderId > 0) || isOrderFullyRefunded(order)) return;
+    if (isCourierWorkspace && !courierOfflineState.online && isPaidOrder(order)) {
+      showCourierTransientBanner("error", "Возврат доступен только при интернете.", { duration: 3200 });
+      return;
+    }
 
     if (!sharedOrderPayment || typeof sharedOrderPayment.open !== "function") {
       if (isPaidOrder(order)) return;
@@ -2843,6 +3331,27 @@
       return;
     }
 
+    const offlineCapable = isCourierWorkspace && !isPaidOrder(order);
+    const useOfflineCollection = offlineCapable && !courierOfflineState.online;
+
+    if (!offlineCapable) {
+      return sharedOrderPayment.open({
+        order,
+        apiJson,
+        money,
+        formatDateTimeNumeric,
+        getOrderId: (row) => Number(row?.id || 0),
+        getOrderNumber,
+        isPaidOrder,
+        onSuccess(updatedOrder) {
+          if (updatedOrder) handleOrderEvent(updatedOrder);
+        },
+        onError(err) {
+          console.error("orders payment modal error:", err);
+        },
+      });
+    }
+
     return sharedOrderPayment.open({
       order,
       apiJson,
@@ -2851,13 +3360,137 @@
       getOrderId: (row) => Number(row?.id || 0),
       getOrderNumber,
       isPaidOrder,
-      onSuccess(updatedOrder) {
-        if (updatedOrder) handleOrderEvent(updatedOrder);
+      cacheOnlyPaymentMethods: !courierOfflineState.online,
+      submitPayload: async ({ payload }) => {
+        const liveOrder = state.orders.find((row) => Number(row?.id || 0) === orderId) || order;
+        const optimisticOrder = buildOptimisticOrderPaymentSnapshot(liveOrder, payload);
+        if (!optimisticOrder) {
+          throw new Error("PAYMENT_PAYLOAD_INVALID");
+        }
+        const appliedOrder = applyLocalCourierOrderSnapshot(optimisticOrder);
+        const queueRequest = {
+          url: `/api/admin/orders/${orderId}/paid`,
+          method: "PUT",
+          body: payload,
+        };
+
+        if (!courierOfflineState.online) {
+          queueCourierMutation({
+            type: "payment",
+            orderId,
+            request: queueRequest,
+            optimisticOrder: appliedOrder || optimisticOrder,
+          });
+          refreshCourierConnectionBanner();
+          return appliedOrder || optimisticOrder;
+        }
+
+        try {
+          const json = await apiJson(queueRequest.url, {
+            method: queueRequest.method,
+            body: queueRequest.body,
+          });
+          if (json?.data) handleOrderEvent(json.data);
+          return json?.data || appliedOrder || optimisticOrder;
+        } catch (err) {
+          if (markCourierOfflineFromError(err)) {
+            queueCourierMutation({
+              type: "payment",
+              orderId,
+              request: queueRequest,
+              optimisticOrder: appliedOrder || optimisticOrder,
+            });
+            refreshCourierConnectionBanner();
+            return appliedOrder || optimisticOrder;
+          }
+          try {
+            await loadAndRenderOrders(true);
+          } catch (syncErr) {
+            console.error(syncErr);
+          }
+          throw err;
+        }
       },
+      onSuccess() {},
       onError(err) {
+        if (String(err?.message || "") === "PAYMENT_METHODS_OFFLINE_UNAVAILABLE") {
+          showCourierTransientBanner("error", "Нет интернета. Способы оплаты ещё не сохранены.", { duration: 3200 });
+          return;
+        }
         console.error("orders payment modal error:", err);
       },
     });
+
+    let paymentPayload = null;
+    try {
+      paymentPayload = await sharedOrderPayment.open({
+        order,
+        apiJson,
+        money,
+        formatDateTimeNumeric,
+        getOrderId: (row) => Number(row?.id || 0),
+        getOrderNumber,
+        isPaidOrder,
+        collectPayloadOnly: true,
+        cacheOnlyPaymentMethods: useOfflineCollection,
+        onError(err) {
+          if (String(err?.message || "") === "PAYMENT_METHODS_OFFLINE_UNAVAILABLE") {
+            showCourierTransientBanner("error", "Нет интернета. Способы оплаты ещё не сохранены.", { duration: 3200 });
+            return;
+          }
+          console.error("orders payment modal error:", err);
+        },
+      });
+    } catch (err) {
+      console.error("orders payment modal error:", err);
+      return;
+    }
+    if (!paymentPayload) return;
+
+    const optimisticOrder = buildOptimisticOrderPaymentSnapshot(order, paymentPayload);
+    if (!optimisticOrder) return;
+    const appliedOrder = applyLocalCourierOrderSnapshot(optimisticOrder);
+    const queueRequest = {
+      url: `/api/admin/orders/${orderId}/paid`,
+      method: "PUT",
+      body: paymentPayload,
+    };
+
+    if (!courierOfflineState.online) {
+      queueCourierMutation({
+        type: "payment",
+        orderId,
+        request: queueRequest,
+        optimisticOrder: appliedOrder || optimisticOrder,
+      });
+      refreshCourierConnectionBanner();
+      return;
+    }
+
+    try {
+      const json = await apiJson(queueRequest.url, {
+        method: queueRequest.method,
+        body: queueRequest.body,
+      });
+      if (json?.data) handleOrderEvent(json.data);
+    } catch (err) {
+      if (markCourierOfflineFromError(err)) {
+        queueCourierMutation({
+          type: "payment",
+          orderId,
+          request: queueRequest,
+          optimisticOrder: appliedOrder || optimisticOrder,
+        });
+        refreshCourierConnectionBanner();
+        return;
+      }
+      try {
+        await loadAndRenderOrders(true);
+      } catch (syncErr) {
+        console.error(syncErr);
+      }
+      console.error("orders payment update error:", err);
+    }
   }
 
   function setStatusControlsDisabled(disabled) {
@@ -2924,19 +3557,13 @@
     const prevOrder = orderIdx >= 0 ? state.orders[orderIdx] : null;
     const prevStatusId = Number(prevOrder?.status_id || 0);
     const prevStatusMeta = getStatusMetaById(prevStatusId) || null;
+    const optimisticOrder = buildOptimisticOrderStatusSnapshot(prevOrder, nextStatusId);
     const targetStatusMeta = getStatusMetaById(nextStatusId) || null;
     if (isForbiddenStatusTransition(prevStatusMeta, targetStatusMeta)) return;
     let optimisticApplied = false;
-    let optimisticOrder = null;
+    let appliedOrder = null;
 
-    if (prevOrder && prevStatusId !== nextStatusId) {
-      optimisticOrder = { ...prevOrder, status_id: nextStatusId };
-      if (targetStatusMeta) {
-        if (targetStatusMeta.title != null) optimisticOrder.status_title = targetStatusMeta.title;
-        if (targetStatusMeta.code != null) optimisticOrder.status_code = targetStatusMeta.code;
-        if (targetStatusMeta.color != null) optimisticOrder.status_color = targetStatusMeta.color;
-      }
-
+    if (optimisticOrder && prevStatusId !== nextStatusId) {
       state.orders[orderIdx] = optimisticOrder;
       rebuildOrdersStageIndex();
       const countersChanged = applyStageCountersDelta(prevOrder, optimisticOrder);
@@ -2950,14 +3577,42 @@
         if (activeOrder) setInfo(activeOrder);
       }
       optimisticApplied = true;
+      appliedOrder = state.orders[orderIdx] || optimisticOrder;
+    }
+
+    const request = {
+      url: `/api/admin/orders/${id}/status`,
+      method: "PUT",
+      body: { status_id: nextStatusId },
+    };
+
+    if (isCourierWorkspace && optimisticApplied && !courierOfflineState.online) {
+      queueCourierMutation({
+        type: "status",
+        orderId: id,
+        request,
+        optimisticOrder: appliedOrder || optimisticOrder,
+      });
+      refreshCourierConnectionBanner();
+      return;
     }
 
     try {
-      await apiJson(`/api/admin/orders/${id}/status`, {
-        method: "PUT",
-        body: { status_id: nextStatusId },
+      await apiJson(request.url, {
+        method: request.method,
+        body: request.body,
       });
     } catch (err) {
+      if (isCourierWorkspace && optimisticApplied && markCourierOfflineFromError(err)) {
+        queueCourierMutation({
+          type: "status",
+          orderId: id,
+          request,
+          optimisticOrder: appliedOrder || optimisticOrder,
+        });
+        refreshCourierConnectionBanner();
+        return;
+      }
       if (optimisticApplied && prevOrder) {
         const rollbackIdx = state.orders.findIndex((row) => Number(row?.id || 0) === id);
         if (rollbackIdx >= 0) {
@@ -4298,6 +4953,7 @@
     const json = await apiJson(`/api/admin/orders?${qs.toString()}`);
     const rows = Array.isArray(json.data) ? json.data : [];
     state.orders = rows.filter(shouldKeepOrderInState);
+    applyCourierShadowOrdersToState();
     rebuildOrdersStageIndex();
     if (!isCourierWorkspace) {
       syncStageCountsFromOrders();
@@ -4616,7 +5272,7 @@
     });
   }
 
-  function handleOrderEvent(order) {
+  function handleOrderEvent(order, { localOnly = false, skipStageRefresh = false } = {}) {
     if (!order || !order.id) return;
 
     const idx = state.orders.findIndex((o) => Number(o.id) === Number(order.id));
@@ -4643,14 +5299,13 @@
       return;
     }
 
+    nextOrder = localOnly ? { ...order } : overlayCourierShadowOrder(order);
     if (wasExisting) {
-      nextOrder = { ...state.orders[idx], ...order };
-      state.orders[idx] = nextOrder;
+      state.orders[idx] = { ...state.orders[idx], ...nextOrder };
+      nextOrder = state.orders[idx];
     } else {
-      nextOrder = { ...order };
       state.orders.unshift(nextOrder);
     }
-
     rebuildOrdersStageIndex();
     nextVisible = orderMatchesFilters(nextOrder);
     const tab = tabsState.tabs.find((t) => Number(t.orderId) === Number(order.id));
@@ -5871,6 +6526,7 @@
     try {
       const cachedBootstrap = readOrdersBootstrapCache();
       const hydratedFromCache = hydrateOrdersFromCache(cachedBootstrap);
+      hydrateCourierOfflineStateFromStorage();
 
       await loadStoreTimezone();
       resetDateStateToToday();
@@ -5943,6 +6599,17 @@
         console.error(err);
       }
 
+      if (isCourierWorkspace && sharedOrderPayment?.warmCache && courierOfflineState.online) {
+        sharedOrderPayment.warmCache(apiJson, state.orders[0] || null).catch((err) => {
+          console.error("courier payment methods warmup error:", err);
+        });
+      }
+
+      if (isCourierWorkspace) {
+        refreshCourierConnectionBanner();
+        processCourierOfflineQueue().catch(console.error);
+      }
+
       document.addEventListener("click", unlockAudioOnce, { once: true });
       document.addEventListener("keydown", unlockAudioOnce, { once: true });
 
@@ -5955,9 +6622,40 @@
 
   init();
 
+  if (isCourierWorkspace && courierConnectionBannerRetryBtn) {
+    courierConnectionBannerRetryBtn.addEventListener("click", () => {
+      courierOfflineState.syncError = "";
+      setCourierOnlineState(navigator.onLine !== false);
+      processCourierOfflineQueue({ force: true }).catch(console.error);
+    });
+  }
+
+  if (isCourierWorkspace) {
+    window.addEventListener("offline", () => {
+      setCourierOnlineState(false);
+    });
+
+    window.addEventListener("online", () => {
+      const hasPending = courierOfflineState.queue.length > 0;
+      setCourierOnlineState(true, { showRestored: !hasPending });
+      processCourierOfflineQueue().catch(console.error);
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      setCourierOnlineState(navigator.onLine !== false);
+      if (navigator.onLine !== false) {
+        processCourierOfflineQueue().catch(console.error);
+      }
+    });
+  }
+
   window.addEventListener("beforeunload", () => {
     try {
       persistOrdersCacheNow();
+    } catch {}
+    try {
+      persistCourierOfflineState();
     } catch {}
   });
   // Слушать изменение филиала: переподключить SSE к каналу нового филиала и перезагрузить заказы
@@ -5968,6 +6666,8 @@
     tabsState.tabs = [];
     tabsState.activeKey = null;
     state.activeOrderId = null;
+    resetCourierOfflineRuntimeState();
+    hydrateCourierOfflineStateFromStorage();
     setOrdersCheckoutLayoutEnabled(false);
     renderOrderTabs();
     setInfo(null);
@@ -5984,6 +6684,19 @@
         ensureActiveStatusSelection();
         renderStages();
         return loadAndRenderOrders(false);
+      })
+      .then(() => {
+        if (isCourierWorkspace && sharedOrderPayment?.warmCache && courierOfflineState.online) {
+          return sharedOrderPayment.warmCache(apiJson, state.orders[0] || null).catch(() => null);
+        }
+        return null;
+      })
+      .then(() => {
+        if (isCourierWorkspace) {
+          refreshCourierConnectionBanner();
+          return processCourierOfflineQueue().catch(console.error);
+        }
+        return null;
       })
       .catch(console.error);
     stopOrdersPolling();
