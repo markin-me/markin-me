@@ -11,6 +11,12 @@
     }
   }
 
+  function normalizeManifestTitle(value, fallback = '') {
+    const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+    if (normalized) return normalized;
+    return String(fallback || '').replace(/\s+/g, ' ').trim();
+  }
+
   function getManifestContext() {
     const raw = window.__APP_MANIFEST_CONTEXT__;
     if (!raw || typeof raw !== 'object') {
@@ -18,14 +24,25 @@
         app: 'shop',
         startPath: window.location.pathname || '/shop',
         tenantId: 0,
-        versionToken: ''
+        versionToken: '',
+        installTitle: '',
+        installShortName: ''
       };
     }
+    const defaultAdminTitle = normalizeManifestTitle(document.title, 'Админка');
     return {
       app: raw.app === 'admin' ? 'admin' : 'shop',
       startPath: typeof raw.startPath === 'string' && raw.startPath ? raw.startPath : (window.location.pathname || '/shop'),
       tenantId: Number(raw.tenantId || 0) || 0,
-      versionToken: String(raw.versionToken || '')
+      versionToken: String(raw.versionToken || ''),
+      installTitle: normalizeManifestTitle(
+        raw.installTitle,
+        raw.app === 'admin' ? defaultAdminTitle : ''
+      ),
+      installShortName: normalizeManifestTitle(
+        raw.installShortName,
+        raw.installTitle || (raw.app === 'admin' ? defaultAdminTitle : '')
+      )
     };
   }
 
@@ -43,6 +60,11 @@
         ? (source.versionToken || '')
         : (ctx.versionToken || '')
     ).trim();
+    const installTitle = normalizeManifestTitle(
+      Object.prototype.hasOwnProperty.call(source, 'installTitle')
+        ? source.installTitle
+        : ctx.installTitle
+    );
 
     url.searchParams.set('app', app);
     url.searchParams.set('start', startPath);
@@ -51,6 +73,9 @@
     }
     if (versionToken) {
       url.searchParams.set('v', versionToken);
+    }
+    if (app === 'admin' && installTitle) {
+      url.searchParams.set('title', installTitle);
     }
     return url.pathname + url.search;
   }
@@ -66,12 +91,20 @@
     const versionToken = tenant && tenant.updated_at
       ? String(tenant.updated_at)
       : ctx.versionToken;
+    const installTitle = ctx.app === 'admin'
+      ? normalizeManifestTitle(ctx.installTitle, document.title || 'Админка')
+      : '';
+    const installShortName = ctx.app === 'admin'
+      ? normalizeManifestTitle(ctx.installShortName, installTitle || 'Админка')
+      : '';
 
     window.__APP_MANIFEST_CONTEXT__ = {
       app: ctx.app,
       startPath: ctx.startPath,
       tenantId,
-      versionToken
+      versionToken,
+      installTitle,
+      installShortName
     };
 
     if (manifest) {
@@ -79,7 +112,8 @@
         app: ctx.app,
         startPath: ctx.startPath,
         tenantId,
-        versionToken
+        versionToken,
+        installTitle
       });
     }
 
@@ -88,6 +122,9 @@
         appleTitle.content = brandName ? `${brandName} Админка` : 'Админка';
       } else if (brandName) {
         appleTitle.content = brandName;
+      }
+      if (ctx.app === 'admin') {
+        appleTitle.content = installShortName || installTitle || 'Админка';
       }
     }
   }
