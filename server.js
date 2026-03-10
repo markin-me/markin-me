@@ -590,7 +590,17 @@ const serviceWorkerPrecacheUrls = [
   app.locals.assetUrl('/static/js/courier-screen.js'),
   app.locals.assetUrl('/static/js/orders.js')
 ];
-const serviceWorkerWarmPages = ['/dashboard/courier-screen'];
+const serviceWorkerWarmPages = [
+  '/dashboard/cash',
+  '/dashboard/products',
+  '/dashboard/orders',
+  '/dashboard/courier-screen',
+  '/dashboard/new-order',
+  '/dashboard/clients',
+  '/dashboard/chat',
+  '/dashboard/team',
+  '/dashboard/settings'
+];
 const serviceWorkerScript = `
 var SW_VERSION = ${JSON.stringify(APP_CACHE_VERSION)};
 var STATIC_CACHE = 'admin-static-' + SW_VERSION;
@@ -610,11 +620,11 @@ async function cacheStaticAssets() {
 }
 
 async function warmPages() {
-  var cache = await caches.open(PAGE_CACHE);
   await Promise.allSettled(WARM_PAGES.map(async function (url) {
     try {
       var response = await fetch(url, { credentials: 'same-origin' });
       if (shouldCacheResponse(response)) {
+        var cache = await caches.open(PAGE_CACHE);
         await cache.put(url, response.clone());
       }
     } catch (err) {
@@ -636,19 +646,26 @@ async function cacheFirst(request) {
   return response;
 }
 
-async function networkFirst(request) {
+async function fetchAndCachePage(request) {
   var cache = await caches.open(PAGE_CACHE);
-  try {
-    var response = await fetch(request);
-    if (shouldCacheResponse(response)) {
-      cache.put(request, response.clone()).catch(function () {});
-    }
-    return response;
-  } catch (err) {
-    var cached = await cache.match(request) || await cache.match(request.url);
-    if (cached) return cached;
-    throw err;
+  var response = await fetch(request);
+  if (shouldCacheResponse(response)) {
+    cache.put(request, response.clone()).catch(function () {});
   }
+  return response;
+}
+
+async function staleWhileRevalidate(request, event) {
+  var cache = await caches.open(PAGE_CACHE);
+  var cached = await cache.match(request) || await cache.match(request.url);
+  var networkPromise = fetchAndCachePage(request);
+
+  if (event && typeof event.waitUntil === 'function') {
+    event.waitUntil(networkPromise.catch(function () {}));
+  }
+
+  if (cached) return cached;
+  return networkPromise;
 }
 
 self.addEventListener('install', function (event) {
@@ -700,7 +717,7 @@ self.addEventListener('fetch', function (event) {
   }
 
   if (request.mode === 'navigate' && url.pathname.indexOf('/dashboard') === 0) {
-    event.respondWith(networkFirst(request));
+    event.respondWith(staleWhileRevalidate(request, event));
   }
 });
 
@@ -757,6 +774,7 @@ app.use(async (req, res, next) => {
   if (
     req.path.startsWith('/api')
     || req.path.startsWith('/static')
+    || req.path.startsWith('/dashboard')
     || req.path === '/manifest.json'
     || req.path === '/sw.js'
     || req.path === '/max-app'
