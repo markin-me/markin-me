@@ -69,6 +69,22 @@
         .replace(/_+/g, "_"))
       .filter(Boolean)
   );
+  function toStatusIdSet(value) {
+    const values = Array.isArray(value) ? value : [value];
+    return new Set(
+      values
+        .map((item) => Number(item))
+        .filter((item) => Number.isFinite(item) && item >= 0)
+    );
+  }
+  function toStatusId(value) {
+    const id = Number(value);
+    return Number.isFinite(id) && id >= 0 ? id : null;
+  }
+  const courierAvailableStatusIds = toStatusIdSet(rawWorkspaceConfig.courierAvailableStatusIds);
+  const courierTransitStatusId = toStatusId(rawWorkspaceConfig.courierTransitStatusId);
+  const courierDeliveredStatusId = toStatusId(rawWorkspaceConfig.courierDeliveredStatusId);
+  const courierCanceledStatusIds = toStatusIdSet(rawWorkspaceConfig.courierCanceledStatusIds);
   const ordersCacheScope = String(rawWorkspaceConfig.cacheScope || workspaceMode || "orders").trim().toLowerCase() || "orders";
 
   async function apiJson(url, opts = {}) {
@@ -535,14 +551,47 @@
     return String(order?.method_code || "").trim().toLowerCase() === deliveryMethodCode;
   }
 
+  function getCourierOrderStatusId(order) {
+    const id = Number(order?.status_id);
+    return Number.isFinite(id) ? id : null;
+  }
+
+  function matchesCourierCanceledStatus(statusMeta) {
+    const statusId = Number(statusMeta?.id);
+    if (Number.isFinite(statusId) && courierCanceledStatusIds.has(statusId)) return true;
+    return isCanceledStatusMeta(statusMeta);
+  }
+
+  function getCourierConfiguredStatusMeta(statusId, order, fallbackTitle = "") {
+    if (!Number.isFinite(Number(statusId)) || Number(statusId) < 0) return null;
+    const normalizedId = Number(statusId);
+    const configured = getStatusMetaById(normalizedId);
+    if (configured) return configured;
+    if (Number(order?.status_id) === normalizedId) {
+      const currentStatus = getOrderStatusMeta(order);
+      return { ...currentStatus, id: normalizedId, title: currentStatus?.title || fallbackTitle };
+    }
+    return {
+      id: normalizedId,
+      code: "",
+      title: fallbackTitle,
+      icon: "",
+      is_final: normalizedId === courierDeliveredStatusId ? 1 : 0,
+    };
+  }
+
   function matchesCourierDeliveredStatus(statusMeta) {
     if (!statusMeta) return false;
+    const statusId = Number(statusMeta?.id);
+    if (Number.isFinite(statusId) && courierDeliveredStatusId !== null && statusId === courierDeliveredStatusId) {
+      return true;
+    }
     if (normalizeStatusCode(statusMeta) === "delivered") return true;
     const statusTokens = [statusMeta?.code, statusMeta?.title]
       .map(normalizeCourierAlias)
       .filter(Boolean);
     if (statusTokens.some((token) => courierDeliveredAliases.has(token))) return true;
-    return Number(statusMeta?.is_final || 0) === 1 && !isCanceledStatusMeta(statusMeta);
+    return Number(statusMeta?.is_final || 0) === 1 && !matchesCourierCanceledStatus(statusMeta);
   }
 
   function getOrderStatusMeta(order) {
@@ -559,6 +608,15 @@
     if (!isCourierWorkspace || !isDeliveryOrder(order)) return null;
 
     const statusMeta = getOrderStatusMeta(order);
+    const currentStatusId = getCourierOrderStatusId(order);
+    if (currentStatusId !== null) {
+      if (courierCanceledStatusIds.has(currentStatusId)) return null;
+      if (courierDeliveredStatusId !== null && currentStatusId === courierDeliveredStatusId) return "delivered";
+      if (courierTransitStatusId !== null && currentStatusId === courierTransitStatusId) return "in-transit";
+      if (courierAvailableStatusIds.size) {
+        return courierAvailableStatusIds.has(currentStatusId) ? "available" : null;
+      }
+    }
     if (matchesCourierDeliveredStatus(statusMeta)) return "delivered";
 
     const statusTokens = [
@@ -574,7 +632,7 @@
       return "in-transit";
     }
 
-    if (isCanceledStatusMeta(statusMeta) || isFinalStatusMeta(statusMeta)) {
+    if (matchesCourierCanceledStatus(statusMeta) || isFinalStatusMeta(statusMeta)) {
       return null;
     }
 
@@ -599,6 +657,9 @@
 
   function getCourierTransitStatusMeta(order) {
     if (!isCourierWorkspace) return null;
+    if (courierTransitStatusId !== null) {
+      return getCourierConfiguredStatusMeta(courierTransitStatusId, order, "В пути");
+    }
     const statuses = getSortedStatuses();
     if (!statuses.length) return null;
 
@@ -619,6 +680,9 @@
 
   function getCourierDeliveredStatusMeta(order) {
     if (!isCourierWorkspace) return null;
+    if (courierDeliveredStatusId !== null) {
+      return getCourierConfiguredStatusMeta(courierDeliveredStatusId, order, "Доставлен");
+    }
     const statuses = getSortedStatuses();
     if (!statuses.length) return null;
 
@@ -644,23 +708,26 @@
     const currentStatus = getOrderStatusMeta(order);
     const transitStatus = getCourierTransitStatusMeta(order);
     const deliveredStatus = getCourierDeliveredStatusMeta(order);
-    const currentStatusId = Number(currentStatus?.id || 0);
-    const deliveredStatusId = Number(deliveredStatus?.id || 0);
+    const currentStatusId = getCourierOrderStatusId(order);
+    const deliveredStatusId = Number(deliveredStatus?.id ?? -1);
+    const transitStatusId = Number(transitStatus?.id ?? -1);
     const isEligibleOrder = isCourierWorkspace
       && isDeliveryOrder(order)
-      && !isCanceledStatusMeta(currentStatus)
+      && !matchesCourierCanceledStatus(currentStatus)
       && !matchesCourierDeliveredStatus(currentStatus);
-    const isAlreadyTransit = transitStatus && Number(transitStatus.id || 0) === Number(currentStatus?.id || 0);
+    const isAlreadyTransit = currentStatusId !== null && transitStatusId >= 0
+      ? transitStatusId === currentStatusId
+      : Boolean(transitStatus && Number(transitStatus.id || 0) === Number(currentStatus?.id || 0));
     const isAlreadyDelivered = matchesCourierDeliveredStatus(currentStatus);
-    const isCurrentDeliveredStatus = deliveredStatusId > 0 && deliveredStatusId === currentStatusId;
+    const isCurrentDeliveredStatus = currentStatusId !== null && deliveredStatusId >= 0 && deliveredStatusId === currentStatusId;
     const canPickup = Boolean(isEligibleOrder && transitStatus && !isAlreadyTransit);
     const canDeliver = Boolean(
       isCourierWorkspace
       && isDeliveryOrder(order)
-      && !isCanceledStatusMeta(currentStatus)
+      && !matchesCourierCanceledStatus(currentStatus)
       && isAlreadyTransit
       && deliveredStatus
-      && Number(deliveredStatus.id || 0) !== Number(currentStatus?.id || 0)
+      && Number(deliveredStatus.id || 0) !== Number(currentStatusId)
     );
     let disabledReason = "";
     let actionLabel = "Забрать";
@@ -682,7 +749,7 @@
       disabledReason = "Не найден статус «В пути»";
     } else if (isAlreadyTransit) {
       disabledReason = "Заказ уже в пути";
-    } else if (isFinalStatusMeta(currentStatus) || isAlreadyDelivered || isDeliveredStatusMeta(currentStatus) || isCanceledStatusMeta(currentStatus)) {
+    } else if (isFinalStatusMeta(currentStatus) || isAlreadyDelivered || isDeliveredStatusMeta(currentStatus) || matchesCourierCanceledStatus(currentStatus)) {
       disabledReason = "Действие недоступно для финального статуса";
     }
 

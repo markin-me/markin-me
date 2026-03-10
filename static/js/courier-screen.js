@@ -9,6 +9,10 @@
       { id: "in-transit", title: "В пути", icon: "fa-truck" },
       { id: "delivered", title: "Доставлены", icon: "fa-circle-check" },
     ],
+    courierAvailableStatusIds: [0, 1, 2],
+    courierTransitStatusId: 3,
+    courierDeliveredStatusId: 4,
+    courierCanceledStatusIds: [5],
     courierTransitAliases: [
       "delivery",
       "delivering",
