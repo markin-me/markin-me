@@ -1081,60 +1081,28 @@
 
   // Отдельный endpoint для сохранения только default_value_index
   async function apiSetVariantGroupDefaultIndex(groupId, index) {
-    console.log('apiSetVariantGroupDefaultIndex - groupId:', groupId, 'index:', index);
     const url = `/api/admin/variants/groups/${groupId}/defaultIndex`;
     try {
-      const res = await fetch(url, {
-        headers: { 
-          "Content-Type": "application/json", 
-          "x-tenant-id": String(TENANT_ID) 
-        },
+      const data = await api(url, {
         method: "PATCH",
         body: JSON.stringify({ default_value_index: index }),
       });
-      
-      console.log('apiSetVariantGroupDefaultIndex - response status:', res.status);
-      const data = await res.json();
-      console.log('apiSetVariantGroupDefaultIndex - response data:', data);
-      
-      if (!res.ok || !data || data.ok === false) {
-        const error = new Error(data?.error || `HTTP_${res.status}`);
-        console.error('apiSetVariantGroupDefaultIndex - error:', error);
-        throw error;
-      }
       return data;
     } catch (error) {
-      console.error('apiSetVariantGroupDefaultIndex - fetch error:', error);
       throw error;
     }
   }
 
   async function apiPatchVariantGroup(id, payload) {
-    console.log('apiPatchVariantGroup - id:', id);
-    console.log('apiPatchVariantGroup - payload:', payload);
-    console.log('apiPatchVariantGroup - payload.default_value_index:', payload.default_value_index);
     const url = `/api/admin/variants/groups/${id}`;
-    console.log('apiPatchVariantGroup - URL:', url);
     const body = JSON.stringify(payload);
-    console.log('apiPatchVariantGroup - body string:', body);
     try {
-      const res = await fetch(url, {
-        headers: { "Content-Type": "application/json", "x-tenant-id": String(TENANT_ID) },
+      const data = await api(url, {
         method: "PATCH",
         body: body,
       });
-      console.log('apiPatchVariantGroup - response status:', res.status);
-      console.log('apiPatchVariantGroup - response ok:', res.ok);
-      const data = await res.json().catch(() => null);
-      console.log('apiPatchVariantGroup - response data:', data);
-      if (!res.ok || !data || data.ok === false) {
-        const error = new Error((data && data.error) || `HTTP_${res.status}`);
-        console.error('apiPatchVariantGroup - error:', error);
-        throw error;
-      }
       return data;
     } catch (error) {
-      console.error('apiPatchVariantGroup - fetch error:', error);
       throw error;
     }
   }
@@ -1903,20 +1871,9 @@
   }
 
   async function loadVariantGroupDetails(id) {
-    console.log('loadVariantGroupDetails - loading group:', id);
     const res = await apiGetVariantGroup(id);
     const data = res.data || null;
-    console.log('loadVariantGroupDetails - loaded data:', {
-      id,
-      hasData: !!data,
-      hasGroup: !!data?.group,
-      groupId: data?.group?.id,
-      default_value_index: data?.group?.default_value_index,
-      default_value_index_type: typeof data?.group?.default_value_index,
-      values: data?.group?.values,
-      valuesLength: data?.group?.values?.length
-    });
-    
+
     if (data && data.tiers) {
       // Ensure tiers have discount_type for rendering (API returns only discount_percent)
       data.tiers = data.tiers.map(tier => ({
@@ -1927,10 +1884,6 @@
       }));
     }
     state.variantGroupDetails = data;
-    console.log('loadVariantGroupDetails - stored in state.variantGroupDetails:', {
-      groupId: state.variantGroupDetails?.group?.id,
-      default_value_index: state.variantGroupDetails?.group?.default_value_index
-    });
   }
 
   async function ensureVariantGroupDetails(groupId) {
@@ -6023,11 +5976,7 @@ function updateOptionGroupSelectionUi() {
     const defaultIdx = state.variantDraft?.group?.default_value_index != null 
       ? Number(state.variantDraft.group.default_value_index)
       : null;
-    
-    // Отладочный вывод
-    console.log('getVariantGroupFormValues - draft.default_value_index:', state.variantDraft?.group?.default_value_index);
-    console.log('getVariantGroupFormValues - defaultIdx:', defaultIdx);
-    
+
     return {
       title: variantGroupTitleInput?.value || "",
       unit_id: variantGroupUnitIdInput?.value || null,
@@ -6177,73 +6126,29 @@ function updateOptionGroupSelectionUi() {
     // Создаем новый обработчик с делегированием
     variantItemsList._defaultStarHandler = async (e) => {
       const btn = e.target.closest("[data-variant-star]");
-      if (!btn) {
-        console.log('Star clicked - button not found (clicked outside star button)');
-        return;
-      }
+      if (!btn) return;
       
       e.stopPropagation();
       e.preventDefault();
-      
-      console.log('Star clicked - BUTTON FOUND:', {
-        buttonElement: btn,
-        dataset: btn.dataset,
-        dataVariantStar: btn.dataset.variantStar,
-        buttonText: btn.textContent || btn.innerHTML,
-        buttonClasses: btn.className
-      });
-      
+
       // Защита от множественных кликов
-      if (isSavingDefaultIndex) {
-        console.log('Star clicked - already saving, ignoring duplicate click');
-        return;
-      }
+      if (isSavingDefaultIndex) return;
       
       const variantIdxRaw = btn.dataset.variantStar;
       const variantIdx = Number(variantIdxRaw);
-      console.log('Star clicked - INDEX EXTRACTION:', {
-        raw: variantIdxRaw,
-        parsed: variantIdx,
-        isFinite: Number.isFinite(variantIdx),
-        type: typeof variantIdxRaw
-      });
-      
-      if (!Number.isFinite(variantIdx)) {
-        console.error('Star clicked - INVALID INDEX:', {
-          raw: variantIdxRaw,
-          parsed: variantIdx,
-          type: typeof variantIdxRaw
-        });
-        return;
-      }
+      if (!Number.isFinite(variantIdx)) return;
       
       // Инициализируем draft, если его нет
       if (!state.variantDraft) {
-        console.log('Star clicked - variantDraft is null, attempting to initialize from variantGroupDetails');
         if (state.variantGroupDetails?.group) {
           state.variantDraft = {
             group: { ...state.variantGroupDetails.group },
             tiers: [...(state.variantGroupDetails.tiers || [])],
             assignments: [...(state.variantGroupDetails.assignments || [])]
           };
-          console.log('Star clicked - initialized variantDraft from variantGroupDetails:', {
-            groupId: state.variantDraft.group.id,
-            default_value_index: state.variantDraft.group.default_value_index,
-            valuesCount: state.variantDraft.group.values?.length
-          });
         } else {
-          console.error('Star clicked - no variantDraft and no variantGroupDetails, cannot proceed', {
-            hasVariantGroupDetails: !!state.variantGroupDetails,
-            hasGroup: !!state.variantGroupDetails?.group
-          });
           return; // Нет данных для работы
         }
-      } else {
-        console.log('Star clicked - variantDraft exists:', {
-          groupId: state.variantDraft.group?.id,
-          default_value_index: state.variantDraft.group?.default_value_index,
-          valuesCount: state.variantDraft.group?.values?.length
-        });
       }
       
       // Защита от множественных кликов
@@ -6258,28 +6163,17 @@ function updateOptionGroupSelectionUi() {
       
       // Проверяем валидность индекса
       const values = state.variantDraft.group.values || [];
-      console.log('Star clicked - validating index:', {
-        variantIdx,
-        valuesLength: values.length,
-        values: values
-      });
       if (variantIdx < 0 || variantIdx >= values.length) {
-        console.error('Star clicked - invalid index:', {
-          variantIdx,
-          valuesLength: values.length,
-          validRange: `0-${values.length - 1}`
-        });
         isSavingDefaultIndex = false;
         btn.style.opacity = "1";
         btn.style.pointerEvents = "auto";
         showToast("Неверный индекс варианта", "error");
         return;
       }
-        
+
       // Проверяем, не устанавливаем ли мы то же значение
       const currentDefaultIdx = state.variantDraft.group.default_value_index;
       if (currentDefaultIdx === variantIdx) {
-        console.log('Star clicked - same value, skipping save:', variantIdx);
         isSavingDefaultIndex = false;
         btn.style.opacity = "1";
         btn.style.pointerEvents = "auto";
@@ -6288,10 +6182,7 @@ function updateOptionGroupSelectionUi() {
       
       // Устанавливаем выбранный вариант как дефолтный
       state.variantDraft.group.default_value_index = variantIdx;
-      
-      console.log('Star clicked - setting default_value_index to:', variantIdx);
-      console.log('Star clicked - draft after update:', state.variantDraft.group);
-      
+
       // Обновляем скрытый input для совместимости
       if (variantGroupDefaultValueIndexInput) {
         variantGroupDefaultValueIndexInput.value = String(variantIdx);
@@ -6303,81 +6194,34 @@ function updateOptionGroupSelectionUi() {
       if (!groupId && state.variantGroupDetails?.group?.id) {
         groupId = Number(state.variantGroupDetails.group.id);
         state.selectedVariantGroupId = groupId; // Сохраняем для будущих кликов
-        console.log('Star clicked - groupId obtained from variantGroupDetails:', groupId);
       }
       const mode = state.variantPanel?.mode;
       const isEditMode = (mode === "edit" || mode === "view") && groupId && Number.isFinite(groupId);
-      
-      console.log('Star clicked - isEditMode check:', {
-        groupId,
-        mode,
-        isEditMode,
-        hasSelectedId: !!groupId,
-        panelMode: mode
-      });
-      
+
       if (isEditMode) {
         try {
-          console.log('Star clicked - attempting to save default_value_index:', variantIdx, 'for group:', groupId);
-          console.log('Star clicked - FULL DIAGNOSTIC BEFORE SAVE:', {
-            variantIdx,
-            groupId,
-            mode,
-            payload: { default_value_index: variantIdx },
-            currentDraftValue: state.variantDraft.group.default_value_index,
-            currentDetailsValue: state.variantGroupDetails?.group?.default_value_index,
-            valuesArray: state.variantDraft.group.values,
-            valuesLength: state.variantDraft.group.values?.length
-          });
-          
           // Используем отдельный endpoint для сохранения default_value_index
-          const result = await apiSetVariantGroupDefaultIndex(groupId, variantIdx);
-          
-          console.log('Star clicked - FULL DIAGNOSTIC AFTER SAVE:', {
-            variantIdx,
-            groupId,
-            result,
-            draftValueAfterSave: state.variantDraft.group.default_value_index,
-            detailsValueAfterSave: state.variantGroupDetails?.group?.default_value_index
-          });
-          
-          console.log('Star clicked - default_value_index saved to DB successfully:', variantIdx, 'result:', result);
-          
+          await apiSetVariantGroupDefaultIndex(groupId, variantIdx);
+
           // Проверяем, что значение действительно сохранилось - перезагружаем данные
-          console.log('Star clicked - reloading group details to verify save...');
           await loadVariantGroupDetails(groupId);
-          console.log('Star clicked - VERIFICATION AFTER RELOAD:', {
-            reloadedValue: state.variantGroupDetails?.group?.default_value_index,
-            expectedValue: variantIdx,
-            match: state.variantGroupDetails?.group?.default_value_index === variantIdx
-          });
-          
+
           // Обновляем значение в загруженных деталях группы
           if (state.variantGroupDetails?.group) {
             state.variantGroupDetails.group.default_value_index = variantIdx;
-            console.log('Star clicked - updated variantGroupDetails.group.default_value_index to:', variantIdx);
           }
           
           // Также обновляем в списке групп для синхронизации
           const groupInList = state.variantGroups?.find(g => Number(g.id) === groupId);
           if (groupInList) {
             groupInList.default_value_index = variantIdx;
-            console.log('Star clicked - updated group in list default_value_index to:', variantIdx);
           }
           
           // Обновляем draft для синхронизации
           if (state.variantDraft?.group) {
             state.variantDraft.group.default_value_index = variantIdx;
-            console.log('Star clicked - updated variantDraft.group.default_value_index to:', variantIdx);
           }
         } catch (error) {
-          console.error('Star clicked - failed to save default_value_index:', error);
-          console.error('Star clicked - error details:', {
-            message: error.message,
-            stack: error.stack,
-            groupId,
-            variantIdx
-          });
           showToast("Не удалось сохранить вариант по умолчанию", "error");
           // Откатываем изменения в draft при ошибке
           state.variantDraft.group.default_value_index = currentDefaultIdx;
@@ -6390,21 +6234,6 @@ function updateOptionGroupSelectionUi() {
         }
       } else {
         // В режиме создания новой группы - только помечаем как измененное
-        const reason = !groupId 
-          ? 'no groupId' 
-          : mode !== "edit" && mode !== "view" 
-            ? `mode is "${mode}", not "edit" or "view"` 
-            : !Number.isFinite(groupId)
-              ? 'groupId is not a valid number'
-              : 'unknown';
-        console.log('Star clicked - NOT saving to DB (not in edit mode):', {
-          groupId,
-          mode,
-          reason,
-          hasSelectedVariantGroupId: !!state.selectedVariantGroupId,
-          hasVariantGroupDetails: !!state.variantGroupDetails,
-          variantGroupDetailsGroupId: state.variantGroupDetails?.group?.id
-        });
         if (state.variantPanel) {
           state.variantPanel.itemsDirty = true;
         }
@@ -8084,11 +7913,7 @@ const isViewMode = state.comboPanel.mode === "view";
   async function saveVariantGroup() {
     if (!variantGroupForm) return;
     const formValues = getVariantGroupFormValues();
-    
-    // Отладочный вывод для проверки значения
-    console.log('saveVariantGroup - formValues:', formValues);
-    console.log('saveVariantGroup - draft.default_value_index:', state.variantDraft?.group?.default_value_index);
-    
+
     // Важно: default_value_index может быть 0 (первый вариант), поэтому проверяем !== undefined и !== null
     const defaultIdx = formValues.default_value_index !== undefined && formValues.default_value_index !== null
       ? Number(formValues.default_value_index)
@@ -8101,10 +7926,6 @@ const isViewMode = state.comboPanel.mode === "view";
       is_active: formValues.is_active || 0,
       default_value_index: defaultIdx,
     };
-    
-    console.log('saveVariantGroup - formValues.default_value_index:', formValues.default_value_index);
-    console.log('saveVariantGroup - defaultIdx:', defaultIdx);
-    console.log('saveVariantGroup - payload:', payload);
 
     if (!payload.title) {
       variantGroupTitleInput?.focus();
@@ -8179,25 +8000,10 @@ const isViewMode = state.comboPanel.mode === "view";
       }
     }
 
-    // Отладочный вывод для проверки условий
-    console.log('saveVariantGroup - state.selectedVariantGroupId:', state.selectedVariantGroupId);
-    console.log('saveVariantGroup - state.variantPanel.mode:', state.variantPanel.mode);
-    console.log('saveVariantGroup - payload before merge:', payload);
-    
     if (state.selectedVariantGroupId) {
-      if (state.variantPanel.mode !== "edit") {
-        console.log('saveVariantGroup - EXIT: mode is not "edit"');
-        return;
-      }
+      if (state.variantPanel.mode !== "edit") return;
       const groupId = state.selectedVariantGroupId;
       const values = state.variantDraft?.group?.values || [];
-      
-      console.log('saveVariantGroup - groupId:', groupId);
-      console.log('saveVariantGroup - values:', values);
-      
-      // Логируем финальный объект перед отправкой
-      const finalPayload = { ...payload, values };
-      console.log('saveVariantGroup - final payload for PATCH:', finalPayload);
       const tiers = state.variantDraft?.tiers || [];
       const tiersPayload = values.map((value, idx) => {
         const tier = tiers.find(t => Number(t.sort_order) === idx) || { discount_type: "percent", discount_percent: 0 };
@@ -8235,14 +8041,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
       try {
         const patchPayload = { ...payload, values };
-        console.log('saveVariantGroup - calling apiPatchVariantGroup with:', patchPayload);
-        try {
-          const patchResult = await apiPatchVariantGroup(groupId, patchPayload);
-          console.log('saveVariantGroup - apiPatchVariantGroup result:', patchResult);
-        } catch (patchError) {
-          console.error('saveVariantGroup - apiPatchVariantGroup ERROR:', patchError);
-          throw patchError;
-        }
+        await apiPatchVariantGroup(groupId, patchPayload);
         await apiSaveVariantGroupTiers(groupId, { tiers: tiersPayload, delete_ids: deleteTierIds });
         if (toAdd.length) {
           await apiAddVariantGroupAssignments(groupId, toAdd);
@@ -8274,14 +8073,6 @@ const isViewMode = state.comboPanel.mode === "view";
         console.error("Error saving variant group:", e);
         return;
       }
-    } else {
-      console.log('saveVariantGroup - EXIT: state.selectedVariantGroupId is not set');
-      console.log('saveVariantGroup - Cannot save: no group ID available');
-      console.log('saveVariantGroup - Current state:', {
-        selectedVariantGroupId: state.selectedVariantGroupId,
-        mode: state.variantPanel.mode,
-        draft: state.variantDraft
-      });
     }
   }
 
