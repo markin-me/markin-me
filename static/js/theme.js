@@ -11,6 +11,89 @@
     }
   }
 
+  function getManifestContext() {
+    const raw = window.__APP_MANIFEST_CONTEXT__;
+    if (!raw || typeof raw !== 'object') {
+      return {
+        app: 'shop',
+        startPath: window.location.pathname || '/shop',
+        tenantId: 0,
+        versionToken: ''
+      };
+    }
+    return {
+      app: raw.app === 'admin' ? 'admin' : 'shop',
+      startPath: typeof raw.startPath === 'string' && raw.startPath ? raw.startPath : (window.location.pathname || '/shop'),
+      tenantId: Number(raw.tenantId || 0) || 0,
+      versionToken: String(raw.versionToken || '')
+    };
+  }
+
+  function buildManifestHref(options) {
+    const ctx = getManifestContext();
+    const url = new URL('/manifest.json', window.location.origin);
+    const source = options && typeof options === 'object' ? options : {};
+    const app = source.app === 'admin' ? 'admin' : ctx.app;
+    const startPath = typeof source.startPath === 'string' && source.startPath
+      ? source.startPath
+      : ctx.startPath;
+    const tenantId = Number(source.tenantId || ctx.tenantId || 0) || 0;
+    const versionToken = String(
+      Object.prototype.hasOwnProperty.call(source, 'versionToken')
+        ? (source.versionToken || '')
+        : (ctx.versionToken || '')
+    ).trim();
+
+    url.searchParams.set('app', app);
+    url.searchParams.set('start', startPath);
+    if (tenantId > 0) {
+      url.searchParams.set('tenant_id', String(tenantId));
+    }
+    if (versionToken) {
+      url.searchParams.set('v', versionToken);
+    }
+    return url.pathname + url.search;
+  }
+
+  function updateManifestBranding(tenant) {
+    const manifest = document.getElementById('appManifest');
+    const appleTitle = document.getElementById('appAppleMobileWebAppTitle');
+    const ctx = getManifestContext();
+    const brandName = tenant && (tenant.name || tenant.site_name)
+      ? String(tenant.name || tenant.site_name).trim()
+      : '';
+    const tenantId = Number(tenant && tenant.id ? tenant.id : ctx.tenantId || 0) || 0;
+    const versionToken = tenant && tenant.updated_at
+      ? String(tenant.updated_at)
+      : ctx.versionToken;
+
+    window.__APP_MANIFEST_CONTEXT__ = {
+      app: ctx.app,
+      startPath: ctx.startPath,
+      tenantId,
+      versionToken
+    };
+
+    if (manifest) {
+      manifest.href = buildManifestHref({
+        app: ctx.app,
+        startPath: ctx.startPath,
+        tenantId,
+        versionToken
+      });
+    }
+
+    if (appleTitle) {
+      if (ctx.app === 'admin') {
+        appleTitle.content = brandName ? `${brandName} Админка` : 'Админка';
+      } else if (brandName) {
+        appleTitle.content = brandName;
+      }
+    }
+  }
+
+  window.updateAppManifestBranding = updateManifestBranding;
+
   function applyBrand(theme) {
     const tenant = getTenantFromStorage();
     const logoImg = document.getElementById('headerLogoImg');
@@ -18,7 +101,6 @@
     const brandNameEl = document.getElementById('headerBrandName');
     const favicon = document.getElementById('appFavicon');
     const appleIcon = document.getElementById('appAppleTouchIcon');
-    const manifest = document.getElementById('appManifest');
 
     if (tenant) {
       const brandName = tenant.name || tenant.site_name || '';
@@ -65,12 +147,9 @@
       if (appleIcon && apple) {
         appleIcon.href = apple;
       }
-
-      if (manifest) {
-        const ver = tenant.updated_at ? encodeURIComponent(String(tenant.updated_at)) : '';
-        manifest.href = `/manifest.json${ver ? `?v=${ver}` : ''}`;
-      }
     }
+
+    updateManifestBranding(tenant);
   }
 
   function applyTheme(theme) {
@@ -79,23 +158,20 @@
     if (btn) {
       const icon = btn.querySelector('i');
       if (icon) {
-        // moon for light, sun for dark (so it shows what you'll switch to)
         icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
       }
     }
-    var themeColorMeta = document.getElementById('themeColorMeta');
+    const themeColorMeta = document.getElementById('themeColorMeta');
     if (themeColorMeta) {
       themeColorMeta.content = theme === 'dark' ? '#1a1a1a' : '#ffffff';
     }
     applyBrand(theme);
   }
 
-  // init theme (prefer saved, else light by default)
   const saved = localStorage.getItem(STORAGE_KEY);
   const initial = saved || 'light';
   applyTheme(initial);
 
-  // handle toggle button (if present)
   const btn = document.getElementById('theme-toggle');
   if (btn) {
     btn.addEventListener('click', function () {

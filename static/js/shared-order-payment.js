@@ -1222,11 +1222,13 @@
     var order = options.order || null;
     var apiJson = options.apiJson;
     var collectPayloadOnly = !!options.collectPayloadOnly;
+    var cacheOnlyPaymentMethods = !!options.cacheOnlyPaymentMethods;
     var money = typeof options.money === 'function' ? options.money : function (value) { return String(value || 0); };
     var formatDateTimeNumeric = typeof options.formatDateTimeNumeric === 'function' ? options.formatDateTimeNumeric : function () { return ''; };
     var getOrderIdFn = typeof options.getOrderId === 'function' ? options.getOrderId : getOrderId;
     var getOrderNumberFn = typeof options.getOrderNumber === 'function' ? options.getOrderNumber : getOrderNumber;
     var isPaidOrderFn = typeof options.isPaidOrder === 'function' ? options.isPaidOrder : isPaidOrder;
+    var submitPayload = typeof options.submitPayload === 'function' ? options.submitPayload : null;
     var onSuccess = typeof options.onSuccess === 'function' ? options.onSuccess : function () {};
     var onError = typeof options.onError === 'function'
       ? options.onError

@@ -28,11 +28,20 @@ const makeChatTempRouter = require('./api/chatTemp');
 const { authMiddleware } = require('./api/middleware/auth');
 
 const app = express();
-const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '1.9.23';
+const TELEGRAM_APP_VERSION = process.env.TG_APP_VERSION || '2';
 const APP_CACHE_VERSION = String(TELEGRAM_APP_VERSION || '1.9.23').trim() || '1.9.23';
 const STATIC_ASSET_VERSION = String(
   process.env.STATIC_ASSET_VERSION || APP_CACHE_VERSION || ''
 ).trim();
+const SERVICE_WORKER_VERSION = (() => {
+  try {
+    const stat = fs.statSync(__filename);
+    const mtimeVersion = Math.round(stat.mtimeMs || stat.mtime.getTime());
+    return `${APP_CACHE_VERSION}-${mtimeVersion}`;
+  } catch (e) {
+    return APP_CACHE_VERSION;
+  }
+})();
 const PORT = process.env.PORT || 3000;
 const TENANT_LOOKUP_CACHE_MS = Number(process.env.TENANT_LOOKUP_CACHE_MS || 60_000);
 const STATIC_FILE_VERSION_CACHE_MS = Number(process.env.STATIC_FILE_VERSION_CACHE_MS || 300_000);
@@ -216,14 +225,16 @@ async function findTenantBySubdomain(subdomain) {
 }
 
 function getStaticFileVersionCached(relativePath) {
-  if (STATIC_ASSET_VERSION) return STATIC_ASSET_VERSION;
   const cacheKey = `static:version:${relativePath}`;
   const cached = getFreshCachedValue(staticVersionCache, cacheKey);
   if (cached.hit) return cached.value;
 
   const filePath = path.join(__dirname, 'static', relativePath);
   const stat = fs.statSync(filePath);
-  const version = Math.round(stat.mtimeMs || stat.mtime.getTime());
+  const mtimeVersion = Math.round(stat.mtimeMs || stat.mtime.getTime());
+  const version = STATIC_ASSET_VERSION
+    ? `${STATIC_ASSET_VERSION}-${mtimeVersion}`
+    : mtimeVersion;
   setCachedValue(staticVersionCache, cacheKey, version, STATIC_FILE_VERSION_CACHE_MS);
   return version;
 }
@@ -243,6 +254,100 @@ app.locals.assetUrl = function assetUrl(src) {
   }
 };
 app.locals.appVersion = APP_CACHE_VERSION;
+app.locals.serviceWorkerVersion = SERVICE_WORKER_VERSION;
+
+function toManifestPathname(rawPath) {
+  const fallback = '/';
+  const raw = String(rawPath || '').trim();
+  if (!raw) return fallback;
+  try {
+    const parsed = new URL(raw, 'https://manifest.local');
+    const pathname = String(parsed.pathname || '').trim();
+    return pathname.startsWith('/') ? pathname : fallback;
+  } catch (e) {
+    const cleaned = raw.split('#')[0].split('?')[0].trim();
+    if (!cleaned) return fallback;
+    return cleaned.startsWith('/') ? cleaned : `/${cleaned.replace(/^\/+/, '')}`;
+  }
+}
+
+function isBlockedShopManifestPath(pathname) {
+  const pathValue = toManifestPathname(pathname);
+  return (
+    pathValue.startsWith('/dashboard')
+    || pathValue.startsWith('/api/')
+    || pathValue === '/login'
+    || pathValue === '/register'
+    || pathValue === '/manifest.json'
+    || pathValue === '/sw.js'
+    || pathValue === '/telegram/app'
+    || pathValue === '/max-app'
+  );
+}
+
+function normalizeManifestApp(rawApp) {
+  return String(rawApp || '').trim().toLowerCase() === 'admin' ? 'admin' : 'shop';
+}
+
+function normalizeManifestStartPath(rawStart, options = {}) {
+  const appType = normalizeManifestApp(options.appType);
+  const tenantHostShop = Boolean(options.tenantHostShop);
+  const pathname = toManifestPathname(rawStart);
+
+  if (appType === 'admin') {
+    return pathname.startsWith('/dashboard/') ? pathname : '/dashboard/cash';
+  }
+
+  if (tenantHostShop) {
+    return isBlockedShopManifestPath(pathname) ? '/' : pathname;
+  }
+
+  return pathname.startsWith('/shop') ? pathname : '/shop';
+}
+
+function resolveManifestIconSrc(rawSrc) {
+  const src = String(rawSrc || '').trim();
+  if (!src) return '';
+  if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) return src;
+  if (!src.startsWith('/')) return '';
+
+  const localPath = path.join(__dirname, src.replace(/^\/+/, '').replace(/\//g, path.sep));
+  try {
+    return fs.existsSync(localPath) ? src : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function pickManifestIconSrc(candidates) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  for (const candidate of list) {
+    const resolved = resolveManifestIconSrc(candidate);
+    if (resolved) return resolved;
+  }
+  return '';
+}
+
+app.locals.manifestUrl = function manifestUrl(options = {}) {
+  const appType = normalizeManifestApp(options.appType);
+  const qs = new URLSearchParams();
+  qs.set('app', appType);
+  qs.set('start', toManifestPathname(options.startPath));
+  const tenantId = Number(options.tenantId);
+  if (Number.isFinite(tenantId) && tenantId > 0) {
+    qs.set('tenant_id', String(tenantId));
+  }
+  const versionToken = String(options.versionToken || '').trim();
+  if (versionToken) {
+    qs.set('v', versionToken);
+  }
+  return `/manifest.json?${qs.toString()}`;
+};
+
+app.use((req, res, next) => {
+  res.locals.currentPath = toManifestPathname(req.path || '/');
+  next();
+});
 
 // Helper для версионирования URL картинок по времени изменения файла
 app.locals.imageUrl = function imageUrl(src) {
@@ -411,16 +516,33 @@ app.use('/api/auth', makeAuthRouter({ db, helpers }));
 // ------------------------------
 app.get('/manifest.json', async (req, res) => {
   try {
+    const appType = normalizeManifestApp(req.query.app);
     const tenant = await resolveTenant(req);
+    const tenantHostShop = Boolean(await findTenantByHost(req.hostname));
+    const startPath = normalizeManifestStartPath(req.query.start, {
+      appType,
+      tenantHostShop,
+    });
+    const tenantName = (tenant && (tenant.site_name || tenant.name)) ? (tenant.site_name || tenant.name) : 'Магазин';
+    const tenantId = Number(tenant && tenant.id ? tenant.id : 0) || 0;
+    const scope = appType === 'admin'
+      ? '/dashboard/'
+      : (tenantHostShop ? '/' : '/shop');
+    const manifestName = appType === 'admin'
+      ? `${tenantName} Админка`
+      : tenantName;
+    const manifestShortName = appType === 'admin'
+      ? 'Админка'
+      : tenantName;
     const name = (tenant && (tenant.site_name || tenant.name)) ? (tenant.site_name || tenant.name) : 'Магазин';
-    const iconBase = tenant && (
-      tenant.android_icon_url ||
-      tenant.apple_touch_icon_url ||
-      tenant.logo_light_url ||
-      tenant.logo_dark_url ||
-      tenant.favicon_light_url ||
+    const iconBase = pickManifestIconSrc(tenant ? [
+      tenant.android_icon_url,
+      tenant.apple_touch_icon_url,
+      tenant.logo_light_url,
+      tenant.logo_dark_url,
+      tenant.favicon_light_url,
       tenant.favicon_dark_url
-    );
+    ] : []);
 
     const icons = [];
     if (iconBase) {
@@ -430,13 +552,16 @@ app.get('/manifest.json', async (req, res) => {
       icons.push({ src: iconBase, sizes: '512x512', purpose: 'maskable' });
     }
 
-    res.setHeader('Content-Type', 'application/manifest+json');
+    res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Vary', 'Host');
     res.json({
-      name,
-      short_name: name,
+      id: appType === 'admin' ? `/pwa/admin/t${tenantId}` : `/pwa/shop/t${tenantId}`,
+      name: manifestName,
+      short_name: manifestShortName,
       description: (tenant && tenant.site_description) ? tenant.site_description : undefined,
-      start_url: '/shop',
-      scope: '/',
+      start_url: startPath,
+      scope,
       display: 'standalone',
       orientation: 'portrait',
       background_color: '#ffffff',
@@ -451,7 +576,6 @@ app.get('/manifest.json', async (req, res) => {
 
 // Service Worker для PWA (Android / установка на домашний экран)
 const serviceWorkerPrecacheUrls = [
-  '/manifest.json',
   app.locals.assetUrl('/static/css/style.css'),
   app.locals.assetUrl('/static/js/auth.js'),
   app.locals.assetUrl('/static/js/current-time.js'),
@@ -569,7 +693,6 @@ self.addEventListener('fetch', function (event) {
 
   if (
     url.pathname.indexOf('/static/') === 0
-    || url.pathname === '/manifest.json'
     || url.pathname === '/sw.js'
   ) {
     event.respondWith(cacheFirst(request));
