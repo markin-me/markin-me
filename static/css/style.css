@@ -13257,10 +13257,6 @@ body.page-chat .panel{
   -webkit-touch-callout:none;
 }
 
-.chat-message:has(.chat-message-reaction-pill){
-  margin-bottom:12px;
-}
-
 .chat-message--in{
   align-self:flex-start;
 }
@@ -13665,6 +13661,9 @@ body.page-chat .panel{
   margin-top:0;
   position:static;
   transform:none;
+  transform-origin:center;
+  appearance:none;
+  -webkit-appearance:none;
   display:inline-flex;
   align-items:center;
   justify-content:center;
@@ -13678,10 +13677,18 @@ body.page-chat .panel{
   font-size:30px;
   line-height:1;
   cursor:pointer;
+  outline:none;
+  -webkit-tap-highlight-color:transparent;
+  touch-action:manipulation;
   transition:
     opacity var(--dur-fast) var(--ease-smooth),
     transform var(--dur-fast) var(--ease-smooth);
   z-index:1;
+}
+
+.chat-message-reaction-pill.is-reaction-pop{
+  animation:chat-reaction-pill-pop 240ms cubic-bezier(.18,.88,.24,1.18) both;
+  animation-delay:var(--reaction-pop-delay, 0ms);
 }
 
 .chat-message-reactions{
@@ -13723,16 +13730,49 @@ body.page-chat .panel{
 
 .chat-message-reaction-pill:active{
   transform:scale(.96);
+  background:transparent !important;
+  box-shadow:none !important;
+  outline:none !important;
+  -webkit-tap-highlight-color:transparent;
 }
 
 .chat-message-reaction-pill:focus-visible{
   outline:none;
+  box-shadow:none;
   opacity:.9;
+}
+
+.chat-message-reaction-pill:focus{
+  outline:none;
+  box-shadow:none;
 }
 
 .chat-message--out .chat-message-reaction-pill{
   right:auto;
   left:auto;
+}
+
+@keyframes chat-reaction-pill-pop{
+  0%{
+    opacity:0;
+    transform:translateY(8px) scale(.7);
+  }
+  68%{
+    opacity:1;
+    transform:translateY(-2px) scale(1.12);
+  }
+  100%{
+    opacity:1;
+    transform:translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce){
+  .chat-message-reaction-pill.is-reaction-pop{
+    animation:none;
+    opacity:1;
+    transform:none;
+  }
 }
 
 .chat-message-bubble.is-emoji-only{
@@ -14225,8 +14265,10 @@ body.page-chat .panel{
 }
 
 .chat-emoji-glyph--reaction{
-  width:26px;
-  height:26px;
+  width:28px;
+  height:28px;
+  display:block;
+  overflow:visible;
   filter:none !important;
   -webkit-filter:none !important;
   text-shadow:none !important;
@@ -14235,8 +14277,16 @@ body.page-chat .panel{
 }
 
 .chat-emoji-glyph--pill{
-  width:32px;
-  height:32px;
+  width:34px;
+  height:34px;
+  display:block;
+  border-radius:999px;
+  background-color:transparent !important;
+  overflow:visible;
+  pointer-events:none;
+  user-select:none;
+  -webkit-user-select:none;
+  -webkit-tap-highlight-color:transparent;
 }
 
 .chat-emoji-glyph--composer{
@@ -14647,6 +14697,8 @@ body.page-chat .panel{
 .chat-reaction-btn{
   width:32px;
   height:32px;
+  appearance:none;
+  -webkit-appearance:none;
   border:0;
   background:transparent;
   border-radius:8px;
@@ -14655,10 +14707,19 @@ body.page-chat .panel{
   font-size:22px;
   line-height:1;
   cursor:pointer;
+  outline:none;
+  -webkit-tap-highlight-color:transparent;
+  touch-action:manipulation;
   box-shadow:none;
   transition:
     opacity var(--dur-fast) var(--ease-smooth),
     transform var(--dur-fast) var(--ease-smooth);
+}
+
+.chat-reaction-btn:focus,
+.chat-reaction-btn:focus-visible{
+  outline:none;
+  box-shadow:none;
 }
 
 .chat-reaction-btn:hover{
@@ -14745,6 +14806,13 @@ body.page-chat .panel{
   animation:chat-reaction-expand .22s cubic-bezier(.22,.76,.24,1);
 }
 
+.chat-reaction-bar.is-expanded .chat-reaction-btn.chat-reaction-extra,
+.chat-reaction-bar.is-expanded .chat-reaction-btn[data-chat-reaction-slot="extra-all"]{
+  animation:chat-reaction-extra-in .18s cubic-bezier(.2,.88,.28,1) both;
+  transform-origin:center;
+  will-change:transform, opacity;
+}
+
 @keyframes chat-reaction-pop{
   from{
     opacity:0;
@@ -14753,6 +14821,17 @@ body.page-chat .panel{
   72%{
     opacity:1;
     transform:translateY(-1px) scale(1.01);
+  }
+  to{
+    opacity:1;
+    transform:translateY(0) scale(1);
+  }
+}
+
+@keyframes chat-reaction-extra-in{
+  from{
+    opacity:0;
+    transform:translateY(6px) scale(.72);
   }
   to{
     opacity:1;

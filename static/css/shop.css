@@ -7037,8 +7037,13 @@ body.page-shop .shop-company-chat-btn{
   height: 40px;
   border-radius: 50%;
   border: 0;
+  appearance: none;
+  -webkit-appearance: none;
   background: var(--color-surface-2);
   color: var(--color-text-muted);
+  outline: none;
+  box-shadow: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 body.page-shop .shop-company-chat-unread{
@@ -7065,6 +7070,22 @@ body.page-shop .shop-company-chat-unread{
 body.page-shop .shop-company-chat-btn:hover{
   background: var(--color-surface-2);
   color: var(--color-text);
+}
+
+body.page-shop .shop-company-chat-btn:focus,
+body.page-shop .shop-company-chat-btn:focus-visible,
+body.page-shop .shop-company-chat-btn:active{
+  outline: none;
+  box-shadow: none;
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  -webkit-tap-highlight-color: transparent;
+}
+
+body.page-shop .shop-company-chat-btn > i,
+body.page-shop .shop-company-chat-btn > .shop-company-chat-unread{
+  pointer-events: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .shop-company-chat-overlay{
@@ -7849,10 +7870,6 @@ body.page-shop .shop-company-chat-btn:hover{
   user-select: none;
 }
 
-.shop-company-chat-bubble.has-reaction{
-  margin-bottom: 12px;
-}
-
 .shop-company-chat-row.is-user .shop-company-chat-bubble{
   background: #5f6167;
   color: #ffffff;
@@ -8263,9 +8280,12 @@ body.page-shop .shop-company-chat-btn:hover{
 .shop-company-chat-reaction-pill{
   margin: 0;
   position: static;
+  appearance: none;
+  -webkit-appearance: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  transform-origin: center;
   min-height: 34px;
   min-width: 34px;
   padding: 0 2px;
@@ -8276,7 +8296,28 @@ body.page-shop .shop-company-chat-btn:hover{
   font-size: 30px;
   line-height: 1;
   cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
   z-index: 1;
+}
+
+.shop-company-chat-reaction-pill:focus,
+.shop-company-chat-reaction-pill:focus-visible{
+  outline: none;
+  box-shadow: none;
+}
+
+.shop-company-chat-reaction-pill:active{
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.shop-company-chat-reaction-pill.is-reaction-pop{
+  animation: shop-company-chat-reaction-pill-pop 240ms cubic-bezier(.18,.88,.24,1.18) both;
+  animation-delay: var(--reaction-pop-delay, 0ms);
 }
 
 .shop-company-chat-reactions{
@@ -8309,6 +8350,29 @@ body.page-shop .shop-company-chat-btn:hover{
 
 .shop-company-chat-row.is-user .shop-company-chat-reaction-pill + .shop-company-chat-reaction-pill{
   margin-right: -12px;
+}
+
+@keyframes shop-company-chat-reaction-pill-pop{
+  0%{
+    opacity: 0;
+    transform: translateY(8px) scale(.7);
+  }
+  68%{
+    opacity: 1;
+    transform: translateY(-2px) scale(1.12);
+  }
+  100%{
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce){
+  .shop-company-chat-reaction-pill.is-reaction-pop{
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .shop-company-chat-bubble.is-emoji-only{
@@ -8447,6 +8511,28 @@ body.page-shop .shop-company-chat-btn:hover{
   }
 }
 
+@keyframes shop-company-chat-context-reactions-expand{
+  from{
+    opacity: .92;
+    transform: translateY(-2px) scale(.985);
+  }
+  to{
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes shop-company-chat-context-extra-in{
+  from{
+    opacity: 0;
+    transform: translateY(6px) scale(.72);
+  }
+  to{
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .shop-company-chat-context-reactions{
   display: flex;
   align-items: center;
@@ -8495,6 +8581,7 @@ body.page-shop .shop-company-chat-btn:hover{
   padding: 2px;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--color-border), transparent 12%) transparent;
+  animation: shop-company-chat-context-reactions-expand .2s cubic-bezier(.22,.76,.24,1);
 }
 
 .shop-company-chat-context-reaction--toggle{
@@ -8524,6 +8611,13 @@ body.page-shop .shop-company-chat-btn:hover{
 
 .shop-company-chat-context-reaction--extra{
   order: 3;
+}
+
+.shop-company-chat-context-menu.is-reactions-expanded .shop-company-chat-context-reaction--extra,
+.shop-company-chat-context-menu.is-reactions-expanded .shop-company-chat-context-reaction[data-chat-msg-reaction-slot="extra-all"]{
+  animation: shop-company-chat-context-extra-in .18s cubic-bezier(.2,.88,.28,1) both;
+  transform-origin: center;
+  will-change: transform, opacity;
 }
 
 .shop-company-chat-context-menu.is-reactions-expanded .shop-company-chat-context-reactions::-webkit-scrollbar{
@@ -8780,6 +8874,8 @@ body.page-shop .shop-company-chat-btn:hover{
 .shop-company-chat-reaction-btn{
   width: 32px;
   height: 32px;
+  appearance: none;
+  -webkit-appearance: none;
   border: 0;
   background: transparent;
   border-radius: 8px;
@@ -8788,10 +8884,19 @@ body.page-shop .shop-company-chat-btn:hover{
   font-size: 22px;
   line-height: 1;
   cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
   box-shadow: none;
   transition:
     opacity var(--dur-fast) var(--ease-smooth),
     transform var(--dur-fast) var(--ease-smooth);
+}
+
+.shop-company-chat-reaction-btn:focus,
+.shop-company-chat-reaction-btn:focus-visible{
+  outline: none;
+  box-shadow: none;
 }
 
 .shop-company-chat-reaction-btn:hover{
@@ -8878,6 +8983,13 @@ body.page-shop .shop-company-chat-btn:hover{
   animation: shop-company-chat-reaction-expand .22s cubic-bezier(.22,.76,.24,1);
 }
 
+.shop-company-chat-reaction-bar.is-expanded .shop-company-chat-reaction-btn.shop-company-chat-reaction-extra,
+.shop-company-chat-reaction-bar.is-expanded .shop-company-chat-reaction-btn[data-reaction-slot="extra-all"]{
+  animation: shop-company-chat-reaction-extra-in .18s cubic-bezier(.2,.88,.28,1) both;
+  transform-origin: center;
+  will-change: transform, opacity;
+}
+
 @keyframes shop-company-chat-reaction-pop{
   from{
     opacity: 0;
@@ -8897,6 +9009,17 @@ body.page-shop .shop-company-chat-btn:hover{
   from{
     opacity: .72;
     transform: translateY(4px) scale(.97);
+  }
+  to{
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes shop-company-chat-reaction-extra-in{
+  from{
+    opacity: 0;
+    transform: translateY(6px) scale(.72);
   }
   to{
     opacity: 1;
@@ -9146,8 +9269,10 @@ body.page-shop .shop-company-chat-btn:hover{
 }
 
 .shop-company-chat-emoji-glyph--reaction{
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
+  display: block;
+  overflow: visible;
   filter: none !important;
   -webkit-filter: none !important;
   text-shadow: none !important;
@@ -9156,8 +9281,16 @@ body.page-shop .shop-company-chat-btn:hover{
 }
 
 .shop-company-chat-emoji-glyph--pill{
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
+  display: block;
+  border-radius: 999px;
+  background-color: transparent !important;
+  overflow: visible;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .shop-company-chat-emoji-glyph--composer{

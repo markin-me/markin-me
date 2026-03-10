@@ -140,6 +140,7 @@
   const CHAT_KEYBOARD_INSET_ANIMATION_MS = 220;
   const CHAT_EMOJI_SHEET_SETTLE_MS = 280;
   const CHAT_SCROLL_DOWN_SHOW_DISTANCE_PX = 6;
+  const CHAT_REACTION_PENDING_TTL_MS = 10000;
   const CHAT_TYPING_HEARTBEAT_MS = 500;
   const CHAT_TYPING_IDLE_STOP_MS = 2800;
   const CHAT_TYPING_BLUR_STOP_MS = 180;
@@ -355,15 +356,20 @@
   let sharedHistoryNextBeforeId = null;
   let sharedHistoryLoading = false;
   let reactionMessageId = "";
+  const reactionRenderSignatures = new Map();
+  const pendingReactionPopKeys = new Set();
+  const pendingReactionOverrides = new Map();
   let contextMenuMessageId = "";
   let contextMenuEl = null;
   let contextMenuEditBtn = null;
   let contextMenuDeleteBtn = null;
+  let contextMenuAnchorPoint = null;
   let editingMessageId = "";
   let deleteConfirmUi = null;
   let pendingDeleteConfirm = null;
   let deleteConfirmCloseTimer = 0;
   let suppressTapUntil = 0;
+  const CHAT_TOUCH_MENU_INTERACTION_GUARD_MS = 380;
   let hardContextMenuBlockBound = false;
   let touchGesture = null;
   let orderCardMouseDrag = null;
@@ -3946,7 +3952,7 @@
     const opts = options || {};
     const appendOlder = opts.appendOlder === true;
     const preserveHistory = opts.preserveHistory === true && !appendOlder;
-    const incomingEntries = Array.isArray(mappedEntries) ? mappedEntries : [];
+    const incomingEntries = applyPendingReactionOverridesToEntries(Array.isArray(mappedEntries) ? mappedEntries : []);
     const currentEntries = Array.isArray(liveEntries) ? liveEntries : [];
     const entries = appendOlder
       ? mergeSharedEntryLists(incomingEntries, currentEntries)
@@ -4515,8 +4521,8 @@
   function getEmojiAtlasRenderCellSize(glyphClassName) {
     const cls = String(glyphClassName || "");
     if (!cls) return 24;
-    if (cls.indexOf("shop-company-chat-emoji-glyph--reaction") !== -1) return 26;
-    if (cls.indexOf("shop-company-chat-emoji-glyph--pill") !== -1) return 32;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--reaction") !== -1) return 28;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--pill") !== -1) return 34;
     if (cls.indexOf("shop-company-chat-emoji-glyph--composer") !== -1) return 30;
     if (cls.indexOf("shop-company-chat-emoji-glyph--picker") !== -1) return 24;
     if (
@@ -4528,8 +4534,15 @@
     return 24;
   }
 
+  function shouldPreferEmojiAssetGlyph(glyphClassName, emojiValue) {
+    const cls = String(glyphClassName || "");
+    if (cls.indexOf("shop-company-chat-emoji-glyph--pill") === -1) return false;
+    return normalizeReactionValue(emojiValue) === normalizeReactionValue("\u2764\uFE0F");
+  }
+
   function createEmojiAtlasGlyph(glyphClassName, emojiValue) {
     if (EMOJI_NATIVE_RENDER_ONLY) return null;
+    if (shouldPreferEmojiAssetGlyph(glyphClassName, emojiValue)) return null;
     const pos = getEmojiAtlasPosition(emojiValue);
     if (!pos) return null;
     const xPercent = EMOJI_ATLAS_COLUMNS > 1 ? (pos.col / (EMOJI_ATLAS_COLUMNS - 1)) * 100 : 0;
@@ -4771,6 +4784,111 @@
     if (outReaction) items.push({ actor: "out", reaction: outReaction });
     if (inReaction) items.push({ actor: "in", reaction: inReaction });
     return items;
+  }
+
+  function getReactionRenderScopeKey() {
+    const profile = chatClientProfile && typeof chatClientProfile === "object" ? chatClientProfile : null;
+    const profileId = String(profile && (profile.id || profile.phone || profile.customer_id) || "").trim();
+    if (profileId) return profileId;
+    return isAdminClientChatMode ? "admin-client-chat" : "shop-client-chat";
+  }
+
+  function getReactionRenderKey(messageId) {
+    const scopeKey = getReactionRenderScopeKey();
+    const entryKey = String(messageId || "").trim();
+    return `${scopeKey}:${entryKey}`;
+  }
+
+  function getPendingReactionOverride(messageId) {
+    const key = getReactionRenderKey(messageId);
+    if (!key) return null;
+    const pending = pendingReactionOverrides.get(key);
+    if (!pending) return null;
+    const expiresAt = Number(pending.expiresAt || 0);
+    if (expiresAt > 0 && expiresAt < Date.now()) {
+      pendingReactionOverrides.delete(key);
+      pendingReactionPopKeys.delete(key);
+      return null;
+    }
+    return pending;
+  }
+
+  function setPendingReactionOverride(messageId, reaction) {
+    const key = getReactionRenderKey(messageId);
+    if (!key) return;
+    pendingReactionOverrides.set(key, {
+      actor: CHAT_REACTION_ACTOR,
+      reaction: String(reaction || "").trim(),
+      expiresAt: Date.now() + CHAT_REACTION_PENDING_TTL_MS,
+    });
+  }
+
+  function clearPendingReactionOverride(messageId) {
+    const key = getReactionRenderKey(messageId);
+    if (!key) return;
+    pendingReactionOverrides.delete(key);
+    pendingReactionPopKeys.delete(key);
+  }
+
+  function applyPendingReactionOverrideToEntry(entry) {
+    if (!entry || typeof entry !== "object" || entry.type !== "message") return entry;
+    const messageId = String(entry.id || "").trim();
+    if (!messageId) return entry;
+    const pending = getPendingReactionOverride(messageId);
+    if (!pending) return entry;
+    const remoteActorReaction = String(getEntryActorReaction(entry, pending.actor) || "");
+    const expectedReaction = String(pending.reaction || "");
+    if (normalizeReactionValue(remoteActorReaction) === normalizeReactionValue(expectedReaction)) {
+      clearPendingReactionOverride(messageId);
+      return entry;
+    }
+    const clonedEntry = { ...entry, reactions: { ...ensureEntryReactions(entry) } };
+    const actorKey = pending.actor === "out" ? "out" : "in";
+    clonedEntry.reactions[actorKey] = expectedReaction;
+    clonedEntry.reaction = String(clonedEntry.reactions[CHAT_REACTION_ACTOR] || "");
+    return clonedEntry;
+  }
+
+  function applyPendingReactionOverridesToEntries(entries) {
+    return (Array.isArray(entries) ? entries : []).map(function (entry) {
+      return applyPendingReactionOverrideToEntry(entry);
+    });
+  }
+
+  function markPendingReactionPop(messageId) {
+    const key = getReactionRenderKey(messageId);
+    if (!key) return;
+    pendingReactionPopKeys.add(key);
+  }
+
+  function getReactionRenderSignature(reactionItems) {
+    return (Array.isArray(reactionItems) ? reactionItems : [])
+      .map(function (item) {
+        const actor = String(item && item.actor || "").trim();
+        const reaction = normalizeReactionValue(item && item.reaction || "");
+        return actor && reaction ? `${actor}:${reaction}` : "";
+      })
+      .filter(Boolean)
+      .join("|");
+  }
+
+  function shouldAnimateReaction(reactionItems, messageId) {
+    const key = getReactionRenderKey(messageId);
+    if (!key) return false;
+    const signature = getReactionRenderSignature(reactionItems);
+    const prevSignature = reactionRenderSignatures.get(key);
+    const hasPendingLocalPop = pendingReactionPopKeys.has(key);
+    reactionRenderSignatures.set(key, signature);
+    if (!signature) {
+      pendingReactionPopKeys.delete(key);
+      return false;
+    }
+    if (hasPendingLocalPop) {
+      pendingReactionPopKeys.delete(key);
+      return true;
+    }
+    if (prevSignature === undefined) return false;
+    return prevSignature !== signature;
   }
 
   function getReplyPreviewText(text) {
@@ -5377,6 +5495,8 @@
     hideEmojiPopover();
     bindMobileKeyboardViewportSync();
     setMobileKeyboardInset(0);
+    overlay.hidden = false;
+    void overlay.offsetWidth;
     overlay.classList.add("is-open");
     overlay.setAttribute("aria-hidden", "false");
     document.body.classList.add("shop-company-chat-open");
@@ -5460,6 +5580,10 @@
     resetFeedImageDrop();
     overlay.classList.remove("is-open");
     overlay.setAttribute("aria-hidden", "true");
+    window.setTimeout(function () {
+      if (overlay.classList.contains("is-open")) return;
+      overlay.hidden = true;
+    }, 240);
     document.body.classList.remove("shop-company-chat-open");
     unlockBackgroundPageScrollForChat();
     unbindMobileKeyboardViewportSync();
@@ -5920,6 +6044,11 @@
     if (menu.dataset.bound === "1") return;
     menu.dataset.bound = "1";
     menu.addEventListener("click", function (event) {
+      if (Date.now() < suppressTapUntil) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       const reactionBtn = event.target.closest("[data-chat-msg-reaction]");
       if (reactionBtn) {
         const messageId = contextMenuMessageId;
@@ -5988,11 +6117,31 @@
 
   function hideContextMenu() {
     if (!contextMenuEl) return;
+    if (contextMenuEl.__touchGuardTimer) {
+      window.clearTimeout(contextMenuEl.__touchGuardTimer);
+      contextMenuEl.__touchGuardTimer = 0;
+    }
+    contextMenuEl.style.pointerEvents = "";
     contextMenuEl.classList.add("hidden");
     setContextMenuReactionsExpanded(false);
     contextMenuEl.style.left = "";
     contextMenuEl.style.top = "";
     contextMenuMessageId = "";
+    contextMenuAnchorPoint = null;
+  }
+
+  function armContextMenuTouchGuard() {
+    if (!contextMenuEl) return;
+    if (contextMenuEl.__touchGuardTimer) {
+      window.clearTimeout(contextMenuEl.__touchGuardTimer);
+      contextMenuEl.__touchGuardTimer = 0;
+    }
+    contextMenuEl.style.pointerEvents = "none";
+    contextMenuEl.__touchGuardTimer = window.setTimeout(function () {
+      contextMenuEl.__touchGuardTimer = 0;
+      if (!contextMenuEl || contextMenuEl.classList.contains("hidden")) return;
+      contextMenuEl.style.pointerEvents = "";
+    }, CHAT_TOUCH_MENU_INTERACTION_GUARD_MS);
   }
 
   function ensureDeleteConfirmUi() {
@@ -6191,10 +6340,11 @@
     box.style.top = Math.round(top) + "px";
   }
 
-  function showMessageContextMenu(x, y, messageId) {
+  function showMessageContextMenu(x, y, messageId, options) {
     const id = String(messageId || "");
     const entry = findMessageEntry(id);
     if (!id || !entry) return;
+    const opts = options && typeof options === "object" ? options : null;
 
     ensureContextMenu();
     contextMenuMessageId = id;
@@ -6204,7 +6354,16 @@
     if (contextMenuDeleteBtn) contextMenuDeleteBtn.classList.remove("hidden");
 
     hideEmojiPopover();
+    contextMenuAnchorPoint = {
+      x: Number(x) || 0,
+      y: Number(y) || 0,
+    };
     positionFloatingBox(contextMenuEl, x, y, 8);
+    if (opts && opts.touchGuard === true) {
+      armContextMenuTouchGuard();
+    } else if (contextMenuEl) {
+      contextMenuEl.style.pointerEvents = "";
+    }
     hideReactionBar();
   }
 
@@ -6933,15 +7092,19 @@
 
     const reactionItems = getEntryReactionItems(entry);
     if (reactionItems.length) {
+      const animateReactionPop = shouldAnimateReaction(reactionItems, entry.id);
       bubble.classList.add("has-reaction");
       const reactionsWrap = document.createElement("div");
-      reactionsWrap.className = "shop-company-chat-reactions";
+      reactionsWrap.className = "shop-company-chat-reactions" + (animateReactionPop ? " is-reaction-pop" : "");
 
       reactionItems.forEach(function (itemReaction, reactionIndex) {
         const reaction = document.createElement("button");
         reaction.type = "button";
-        reaction.className = "shop-company-chat-reaction-pill";
+        reaction.className = "shop-company-chat-reaction-pill" + (animateReactionPop ? " is-reaction-pop" : "");
         reaction.style.zIndex = String(10 + Number(reactionIndex || 0));
+        if (animateReactionPop) {
+          reaction.style.setProperty("--reaction-pop-delay", String(Number(reactionIndex || 0) * 32) + "ms");
+        }
         reaction.dataset.messageId = String(entry.id || "");
         reaction.dataset.reactionActor = String(itemReaction.actor || "");
         reaction.title = itemReaction.actor === CHAT_REACTION_ACTOR ? "\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c \u0440\u0435\u0430\u043a\u0446\u0438\u044e" : "\u0420\u0435\u0430\u043a\u0446\u0438\u044f \u0441\u043e\u0431\u0435\u0441\u0435\u0434\u043d\u0438\u043a\u0430";
@@ -7975,6 +8138,11 @@
 
   function refreshContextMenuReactionBoxPosition() {
     if (!contextMenuEl || contextMenuEl.classList.contains("hidden")) return;
+    const anchor = contextMenuAnchorPoint;
+    if (anchor && Number.isFinite(anchor.x) && Number.isFinite(anchor.y)) {
+      positionFloatingBox(contextMenuEl, anchor.x, anchor.y, 8);
+      return;
+    }
     const left = Number.parseFloat(contextMenuEl.style.left || "");
     const top = Number.parseFloat(contextMenuEl.style.top || "");
     if (!Number.isFinite(left) || !Number.isFinite(top)) return;
@@ -7995,6 +8163,10 @@
       }).catch(function () {});
     }
     reactionBar.classList.toggle("is-expanded", isExpanded);
+    if (!reactionBar.classList.contains("hidden") && reactionMessageId) {
+      const anchor = thread.querySelector('[data-message-id="' + cssEscape(reactionMessageId) + '"]');
+      if (anchor) positionReactionBar(anchor);
+    }
     const toggleBtn = reactionBar.querySelector('[data-reaction="__toggle_more__"]');
     if (!toggleBtn) return;
     toggleBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
@@ -8182,12 +8354,15 @@
 
   function toggleReaction(messageId, reaction) {
     const entry = findMessageEntry(messageId);
-    if (!entry) return;
+    if (!entry) return false;
 
     const next = String(reaction || "").trim();
-    if (!next) return;
-    if (!setEntryActorReaction(entry, CHAT_REACTION_ACTOR, next)) return;
+    if (!next) return false;
+    if (!setEntryActorReaction(entry, CHAT_REACTION_ACTOR, next)) return false;
     markSharedThreadMutated();
+    setPendingReactionOverride(messageId, getEntryActorReaction(entry, CHAT_REACTION_ACTOR));
+    markPendingReactionPop(messageId);
+    triggerReactionFeedback();
 
     const prevTop = feed.scrollTop;
     renderThread();
@@ -8202,6 +8377,7 @@
         });
       });
     }
+    return true;
   }
 
   function setMessageDeliveryStatus(messageId, nextStatus, options) {
@@ -8303,6 +8479,19 @@
     const hasCoarsePointer = typeof window.matchMedia === "function"
       && window.matchMedia("(pointer: coarse)").matches;
     return hasTouchPoints || hasCoarsePointer;
+  }
+
+  function triggerReactionFeedback() {
+    try {
+      const tgHaptics = window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.HapticFeedback;
+      if (tgHaptics && typeof tgHaptics.impactOccurred === "function") {
+        tgHaptics.impactOccurred("light");
+        return;
+      }
+    } catch (_) {}
+    if (navigator.vibrate && typeof navigator.vibrate === "function") {
+      navigator.vibrate(12);
+    }
   }
 
   function parseCssLengthPx(value) {
@@ -10199,7 +10388,9 @@
 
     event.preventDefault();
     suppressTapUntil = Date.now() + 260;
-    showMessageContextMenu(event.clientX, event.clientY, messageId);
+    showMessageContextMenu(event.clientX, event.clientY, messageId, {
+      touchGuard: isTouchGeneratedClick(event),
+    });
   });
 
   thread.addEventListener("touchstart", function (event) {
@@ -10318,7 +10509,9 @@
       if (!touchGesture || touchGesture.messageId !== messageId) return;
       touchGesture.longPressFired = true;
       suppressTapUntil = Date.now() + 640;
-      showMessageContextMenu(touchGesture.lastX, touchGesture.lastY, messageId);
+      showMessageContextMenu(touchGesture.lastX, touchGesture.lastY, messageId, {
+        touchGuard: true,
+      });
     }, LONG_PRESS_MS);
   }, { passive: true });
 
@@ -10604,6 +10797,11 @@
   }, { passive: false });
 
   reactionBar.addEventListener("click", function (event) {
+    if (Date.now() < suppressTapUntil) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     const btn = event.target.closest("[data-reaction]");
     if (!btn) return;
     const reaction = String(btn.getAttribute("data-reaction") || "");

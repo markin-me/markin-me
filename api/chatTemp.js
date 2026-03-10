@@ -22,6 +22,12 @@ const CHAT_TYPING_HEARTBEAT_COALESCE_MS = parsePositiveInt(
 const CHAT_UPLOAD_MAX_FILE_BYTES = 20 * 1024 * 1024;
 const CHAT_SUMMARIES_PAGE_DEFAULT_LIMIT = 50;
 const CHAT_SUMMARIES_PAGE_MAX_LIMIT = 200;
+const CHAT_SUMMARIES_PAGE_CACHE_TTL_MS = parsePositiveInt(
+  process.env.CHAT_SUMMARIES_PAGE_CACHE_TTL_MS,
+  1200,
+  0,
+  10000
+);
 const CHAT_THREAD_PAGE_DEFAULT_LIMIT = 60;
 const CHAT_THREAD_PAGE_MAX_LIMIT = 200;
 const CHAT_GUEST_THREAD_TTL_DAYS_DEFAULT = parsePositiveInt(
@@ -120,6 +126,7 @@ const guestThreadCleanupState = new Map();
 const tenantPushCompanyTitleCache = new Map();
 const tenantChatWidgetState = new Map();
 const typingDbTtlCleanupState = new Map();
+const summariesPageRequestCache = new Map();
 let ensurePushSubscriptionsTablePromise = null;
 let ensureHiddenMessagesTablePromise = null;
 let ensureChatCoreIndexesPromise = null;
@@ -1855,6 +1862,25 @@ function getTenantChangeEntry(tenantId, create = false) {
   return entry || null;
 }
 
+function getSummariesPageCacheKey(tenantId, limit, offset) {
+  const tenantKey = getTenantKey(tenantId);
+  if (!tenantKey) return "";
+  const safeLimit = Math.max(0, Math.trunc(Number(limit) || 0));
+  const safeOffset = Math.max(0, Math.trunc(Number(offset) || 0));
+  return `${tenantKey}:${safeLimit}:${safeOffset}`;
+}
+
+function clearSummariesPageCacheForTenant(tenantId) {
+  const tenantKey = getTenantKey(tenantId);
+  if (!tenantKey) return;
+  const prefix = `${tenantKey}:`;
+  Array.from(summariesPageRequestCache.keys()).forEach((cacheKey) => {
+    if (String(cacheKey || "").startsWith(prefix)) {
+      summariesPageRequestCache.delete(cacheKey);
+    }
+  });
+}
+
 async function ensureTenantChangeEntryLoaded(tenantId) {
   const entry = getTenantChangeEntry(tenantId, true);
   if (!entry) return {
@@ -1874,6 +1900,7 @@ async function ensureTenantChangeEntryLoaded(tenantId) {
 }
 
 function touchTenantChange(tenantId, updatedAt = "") {
+  clearSummariesPageCacheForTenant(tenantId);
   const entry = getTenantChangeEntry(tenantId, true);
   if (!entry) return {
     updatedAt: String(updatedAt || ""),
@@ -3685,19 +3712,80 @@ async function listSummariesPage(tenantId, { limit, offset, actorKey = "out" } =
     CHAT_SUMMARIES_PAGE_MAX_LIMIT
   );
   const safeOffset = Math.max(0, Math.trunc(Number(offset) || 0));
+  const cacheKey = getSummariesPageCacheKey(tenantId, safeLimit, safeOffset);
+  const now = Date.now();
+  const cachedEntry = cacheKey ? summariesPageRequestCache.get(cacheKey) : null;
+  let rawPage = null;
 
-  const [rows, countRows] = await Promise.all([
-    querySummaryRowsForPage(tenantId, { limit: safeLimit, offset: safeOffset }),
-    db.query(
-      `SELECT COUNT(*) AS total
-         FROM chat_threads
-        WHERE tenant_id = ?`,
-      [tenantId]
-    ),
-  ]);
+  if (cachedEntry) {
+    if (cachedEntry.value && Number(cachedEntry.expiresAt || 0) > now) {
+      rawPage = cachedEntry.value;
+    } else if (cachedEntry.promise) {
+      rawPage = await cachedEntry.promise;
+    } else {
+      summariesPageRequestCache.delete(cacheKey);
+    }
+  }
 
-  const total = Number(countRows?.[0]?.[0]?.total || countRows?.[0]?.total || 0);
-  const mappedRows = (Array.isArray(rows) ? rows : [])
+  if (!rawPage) {
+    const requestPromise = (async () => {
+      const rows = await querySummaryRowsForPage(tenantId, {
+        limit: safeLimit,
+        offset: safeOffset,
+      });
+      const normalizedRows = Array.isArray(rows) ? rows : [];
+      let total = 0;
+
+      if (normalizedRows.length < safeLimit) {
+        total = safeOffset + normalizedRows.length;
+      } else {
+        const [countRows] = await db.query(
+          `SELECT COUNT(*) AS total
+             FROM chat_threads
+            WHERE tenant_id = ?`,
+          [tenantId]
+        );
+        total = Number(countRows?.[0]?.[0]?.total || countRows?.[0]?.total || 0);
+      }
+
+      return {
+        rows: normalizedRows,
+        total,
+        limit: safeLimit,
+        offset: safeOffset,
+        hasMore: safeOffset + normalizedRows.length < total,
+      };
+    })();
+
+    if (cacheKey) {
+      summariesPageRequestCache.set(cacheKey, {
+        promise: requestPromise,
+        expiresAt: now + CHAT_SUMMARIES_PAGE_CACHE_TTL_MS,
+      });
+    }
+
+    try {
+      rawPage = await requestPromise;
+    } catch (err) {
+      if (cacheKey) {
+        const currentEntry = summariesPageRequestCache.get(cacheKey);
+        if (currentEntry && currentEntry.promise === requestPromise) {
+          summariesPageRequestCache.delete(cacheKey);
+        }
+      }
+      throw err;
+    }
+
+    if (cacheKey) {
+      summariesPageRequestCache.set(cacheKey, {
+        value: rawPage,
+        expiresAt: Date.now() + CHAT_SUMMARIES_PAGE_CACHE_TTL_MS,
+      });
+    }
+  }
+
+  const total = Number(rawPage?.total || 0);
+  const mappedRows = (Array.isArray(rawPage?.rows) ? rawPage.rows : [])
     .map((row) => mapSummaryRow(row, actorKey))
     .filter((row) => Number.isFinite(Number(row.client_id)) && Number(row.client_id) > 0);
 

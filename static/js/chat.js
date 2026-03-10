@@ -38,6 +38,7 @@
   const CHAT_CLIENTS_PAGE_SIZE = 20;
   const CHAT_CLIENTS_LOAD_MORE_THRESHOLD_PX = 140;
   const CHAT_CLIENTS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+  const CHAT_REMOTE_CLIENTS_PAGE_CACHE_TTL_MS = 1200;
   const CLIENT_DETAILS_SHARED_CACHE_TTL_MS = 10 * 60 * 1000;
   const SHARED_ORDER_DETAILS_CACHE_TTL_MS = 15 * 60 * 1000;
   const SHARED_ORDER_DETAILS_CACHE_MAX = 400;
@@ -54,6 +55,7 @@
   const CHAT_THREAD_LOAD_MORE_THRESHOLD_PX = 20;
   const CHAT_TOUCH_CONTEXT_LONG_PRESS_MS = 430;
   const CHAT_TOUCH_CONTEXT_MOVE_CANCEL_PX = 9;
+  const CHAT_REACTION_PENDING_TTL_MS = 10000;
   const CHAT_DROP_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif|heic|heif)$/i;
   const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
   const IMAGE_OPTIMIZE_SKIP_BELOW_BYTES = 700 * 1024;
@@ -334,6 +336,10 @@
   let attachPreviewDraftRestoreToken = 0;
   let uiStatePersistTimer = 0;
   let pinnedBottomLayoutSyncRaf = 0;
+  const threadReactionRenderSignatures = new Map();
+  const pendingThreadReactionPopKeys = new Set();
+  const pendingThreadReactionOverrides = new Map();
+  const remoteClientsPageRequests = new Map();
 
   function schedulePinnedBottomLayoutSync() {
     if (pinnedBottomLayoutSyncRaf) return;
@@ -368,6 +374,19 @@
     return hasTouchPoints || hasCoarsePointer;
   }
 
+  function triggerReactionFeedback() {
+    try {
+      const tgHaptics = window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.HapticFeedback;
+      if (tgHaptics && typeof tgHaptics.impactOccurred === "function") {
+        tgHaptics.impactOccurred("light");
+        return;
+      }
+    } catch (_) {}
+    if (navigator.vibrate && typeof navigator.vibrate === "function") {
+      navigator.vibrate(12);
+    }
+  }
+
   function isAndroidYandexBrowser() {
     const ua = String((navigator && navigator.userAgent) || "");
     if (!ua) return false;
@@ -393,6 +412,8 @@
   const unansweredAlertSeqByClient = Object.create(null);
   const unansweredAlertLastNotifiedIncomingByClient = Object.create(null);
   let suppressTouchClickUntil = 0;
+  const CHAT_TOUCH_MENU_INTERACTION_GUARD_MS = 380;
+  let reactionBarAnchorRect = null;
   let activeThreadSsePullTimer = 0;
   let activeThreadSsePullInFlight = false;
   let activeThreadSsePullPending = false;
@@ -1817,7 +1838,10 @@
     if (!key) return false;
     const appendOlder = options.appendOlder === true;
     const preserveHistory = options.preserveHistory === true && !appendOlder;
-    const incomingNext = Array.isArray(snapshot.messages) ? snapshot.messages : [];
+    const incomingNext = applyPendingThreadReactionOverridesToMessages(
+      key,
+      Array.isArray(snapshot.messages) ? snapshot.messages : []
+    );
     const prev = Array.isArray(state.store.threads[key]) ? state.store.threads[key] : [];
     const next = appendOlder
       ? sanitizeThread(incomingNext.concat(prev))
@@ -2400,23 +2424,51 @@
       ? Math.max(1, Math.min(200, Math.trunc(limitRaw)))
       : CHAT_CLIENTS_PAGE_SIZE;
     const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? Math.trunc(offsetRaw) : 0;
+    const requestKey = `${limit}:${offset}`;
+    const cachedEntry = remoteClientsPageRequests.get(requestKey);
+    const now = Date.now();
+
+    if (cachedEntry) {
+      if (cachedEntry.value && Number(cachedEntry.expiresAt || 0) > now) {
+        return cachedEntry.value;
+      }
+      if (cachedEntry.promise) {
+        return cachedEntry.promise;
+      }
+      remoteClientsPageRequests.delete(requestKey);
+    }
+
     const qs = new URLSearchParams({
       _ts: String(Date.now()),
       limit: String(limit),
       offset: String(offset),
     });
-    const json = await apiJson(`${CHAT_TEMP_API_BASE}/clients?${qs.toString()}`);
-    const rows = Array.isArray(json?.data) ? json.data : [];
-    const totalRaw = Number(json?.total);
-    const total = Number.isFinite(totalRaw) && totalRaw >= 0 ? Math.trunc(totalRaw) : 0;
-    const hasMore = json?.has_more === true || (total > 0 && (offset + rows.length) < total);
-    return {
-      rows,
-      total,
-      limit,
-      offset,
-      hasMore,
-    };
+    const requestPromise = apiJson(`${CHAT_TEMP_API_BASE}/clients?${qs.toString()}`)
+      .then((json) => {
+        const rows = Array.isArray(json?.data) ? json.data : [];
+        const totalRaw = Number(json?.total);
+        const total = Number.isFinite(totalRaw) && totalRaw >= 0 ? Math.trunc(totalRaw) : 0;
+        const hasMore = json?.has_more === true || (total > 0 && (offset + rows.length) < total);
+        const page = {
+          rows,
+          total,
+          limit,
+          offset,
+          hasMore,
+        };
+        remoteClientsPageRequests.set(requestKey, {
+          value: page,
+          expiresAt: Date.now() + CHAT_REMOTE_CLIENTS_PAGE_CACHE_TTL_MS,
+        });
+        return page;
+      })
+      .catch((err) => {
+        remoteClientsPageRequests.delete(requestKey);
+        throw err;
+      });
+
+    remoteClientsPageRequests.set(requestKey, { promise: requestPromise });
+    return requestPromise;
   }
 
   function normalizeClientNameIdentity(value) {
@@ -4865,8 +4917,8 @@
   function getEmojiAtlasRenderCellSize(glyphClassName) {
     const cls = String(glyphClassName || "");
     if (!cls) return 24;
-    if (cls.indexOf("shop-company-chat-emoji-glyph--reaction") !== -1 || cls.indexOf("chat-emoji-glyph--reaction") !== -1) return 26;
-    if (cls.indexOf("shop-company-chat-emoji-glyph--pill") !== -1 || cls.indexOf("chat-emoji-glyph--pill") !== -1) return 32;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--reaction") !== -1 || cls.indexOf("chat-emoji-glyph--reaction") !== -1) return 28;
+    if (cls.indexOf("shop-company-chat-emoji-glyph--pill") !== -1 || cls.indexOf("chat-emoji-glyph--pill") !== -1) return 34;
     if (cls.indexOf("shop-company-chat-emoji-glyph--composer") !== -1 || cls.indexOf("chat-emoji-glyph--composer") !== -1) return 30;
     if (cls.indexOf("shop-company-chat-emoji-glyph--picker") !== -1 || cls.indexOf("chat-emoji-glyph--picker") !== -1) return 24;
     if (
@@ -5091,6 +5143,104 @@
     if (outReaction) items.push({ actor: "out", reaction: outReaction });
     if (inReaction) items.push({ actor: "in", reaction: inReaction });
     return items;
+  }
+
+  function getThreadReactionRenderKey(clientId, messageId) {
+    const clientKey = normalizeClientIdKey(clientId) || "thread";
+    const entryKey = String(messageId || "").trim();
+    return `${clientKey}:${entryKey}`;
+  }
+
+  function getPendingThreadReactionOverride(clientId, messageId) {
+    const key = getThreadReactionRenderKey(clientId, messageId);
+    if (!key) return null;
+    const pending = pendingThreadReactionOverrides.get(key);
+    if (!pending) return null;
+    const expiresAt = Number(pending.expiresAt || 0);
+    if (expiresAt > 0 && expiresAt < Date.now()) {
+      pendingThreadReactionOverrides.delete(key);
+      pendingThreadReactionPopKeys.delete(key);
+      return null;
+    }
+    return pending;
+  }
+
+  function setPendingThreadReactionOverride(clientId, messageId, reaction) {
+    const key = getThreadReactionRenderKey(clientId, messageId);
+    if (!key) return;
+    pendingThreadReactionOverrides.set(key, {
+      actor: CHAT_REACTION_ACTOR,
+      reaction: String(reaction || "").trim(),
+      expiresAt: Date.now() + CHAT_REACTION_PENDING_TTL_MS,
+    });
+  }
+
+  function clearPendingThreadReactionOverride(clientId, messageId) {
+    const key = getThreadReactionRenderKey(clientId, messageId);
+    if (!key) return;
+    pendingThreadReactionOverrides.delete(key);
+    pendingThreadReactionPopKeys.delete(key);
+  }
+
+  function applyPendingThreadReactionOverrideToMessage(clientId, message) {
+    if (!message || typeof message !== "object") return message;
+    const messageId = String(message.id || "").trim();
+    if (!messageId) return message;
+    const pending = getPendingThreadReactionOverride(clientId, messageId);
+    if (!pending) return message;
+    const remoteActorReaction = String(getMessageActorReaction(message, pending.actor) || "");
+    const expectedReaction = String(pending.reaction || "");
+    if (normalizeReactionValue(remoteActorReaction) === normalizeReactionValue(expectedReaction)) {
+      clearPendingThreadReactionOverride(clientId, messageId);
+      return message;
+    }
+    const clonedMessage = { ...message, reactions: { ...ensureMessageReactions(message) } };
+    const actorKey = pending.actor === "in" ? "in" : "out";
+    clonedMessage.reactions[actorKey] = expectedReaction;
+    clonedMessage.reaction = String(clonedMessage.reactions[CHAT_REACTION_ACTOR] || "");
+    return clonedMessage;
+  }
+
+  function applyPendingThreadReactionOverridesToMessages(clientId, messages) {
+    return (Array.isArray(messages) ? messages : []).map((message) => (
+      applyPendingThreadReactionOverrideToMessage(clientId, message)
+    ));
+  }
+
+  function markPendingThreadReactionPop(clientId, messageId) {
+    const key = getThreadReactionRenderKey(clientId, messageId);
+    if (!key) return;
+    pendingThreadReactionPopKeys.add(key);
+  }
+
+  function getThreadReactionRenderSignature(reactionItems) {
+    return (Array.isArray(reactionItems) ? reactionItems : [])
+      .map((item) => {
+        const actor = String(item && item.actor || "").trim();
+        const reaction = normalizeReactionValue(item && item.reaction || "");
+        return actor && reaction ? `${actor}:${reaction}` : "";
+      })
+      .filter(Boolean)
+      .join("|");
+  }
+
+  function shouldAnimateThreadReaction(clientId, messageId, reactionItems) {
+    const key = getThreadReactionRenderKey(clientId, messageId);
+    if (!key) return false;
+    const signature = getThreadReactionRenderSignature(reactionItems);
+    const prevSignature = threadReactionRenderSignatures.get(key);
+    const hasPendingLocalPop = pendingThreadReactionPopKeys.has(key);
+    threadReactionRenderSignatures.set(key, signature);
+    if (!signature) {
+      pendingThreadReactionPopKeys.delete(key);
+      return false;
+    }
+    if (hasPendingLocalPop) {
+      pendingThreadReactionPopKeys.delete(key);
+      return true;
+    }
+    if (prevSignature === undefined) return false;
+    return prevSignature !== signature;
   }
 
   function normalizePhoneDigits(value) { return String(value || "").replace(/\D+/g, ""); }
@@ -6248,12 +6398,21 @@
       ensureEmojiDatasetLoaded().then(() => {
         if (!dom.center.reactionBar || !dom.center.reactionBar.classList.contains("is-expanded")) return;
         ensureReactionBarAllEmojiButtons();
-        if (dom.center.contextMenu && !dom.center.contextMenu.classList.contains("hidden")) {
-          positionReactionBar(dom.center.contextMenu.getBoundingClientRect());
-        }
+        const anchorRect = reactionBarAnchorRect
+          || (dom.center.contextMenu && !dom.center.contextMenu.classList.contains("hidden")
+            ? dom.center.contextMenu.getBoundingClientRect()
+            : null);
+        if (anchorRect) positionReactionBar(anchorRect);
       }).catch(() => {});
     }
     dom.center.reactionBar.classList.toggle("is-expanded", isExpanded);
+    if (!dom.center.reactionBar.classList.contains("hidden")) {
+      const anchorRect = reactionBarAnchorRect
+        || (dom.center.contextMenu && !dom.center.contextMenu.classList.contains("hidden")
+          ? dom.center.contextMenu.getBoundingClientRect()
+          : null);
+      if (anchorRect) positionReactionBar(anchorRect);
+    }
     const toggleBtn = $('[data-chat-reaction="__toggle_more__"]', dom.center.reactionBar);
     if (!toggleBtn) return;
     toggleBtn.setAttribute("aria-expanded", isExpanded ? "true" : "false");
@@ -6884,6 +7043,9 @@
     if (!setMessageActorReaction(msg, CHAT_REACTION_ACTOR, reaction)) return false;
     markThreadMutated(clientId);
     saveStore();
+    setPendingThreadReactionOverride(clientId, messageId, getMessageActorReaction(msg, CHAT_REACTION_ACTOR));
+    markPendingThreadReactionPop(clientId, messageId);
+    triggerReactionFeedback();
     enqueueRemoteMutation(clientId, () => remotePatchMessage(clientId, messageId, {
       reaction: String(getMessageActorReaction(msg, CHAT_REACTION_ACTOR) || ""),
       reactions: ensureMessageReactions(msg),
@@ -7330,12 +7492,35 @@
   }
 
   function hideMessageContextMenu() {
-    if (dom.center.contextMenu) dom.center.contextMenu.classList.add("hidden");
+    if (dom.center.contextMenu) {
+      if (dom.center.contextMenu.__touchGuardTimer) {
+        window.clearTimeout(dom.center.contextMenu.__touchGuardTimer);
+        dom.center.contextMenu.__touchGuardTimer = 0;
+      }
+      dom.center.contextMenu.style.pointerEvents = "";
+      dom.center.contextMenu.classList.add("hidden");
+    }
     if (dom.center.reactionBar) {
       dom.center.reactionBar.classList.add("hidden");
       setReactionBarExpanded(false);
     }
+    reactionBarAnchorRect = null;
     state.contextMessageId = null;
+  }
+
+  function armContextMenuTouchGuard() {
+    const menu = dom.center.contextMenu;
+    if (!menu) return;
+    if (menu.__touchGuardTimer) {
+      window.clearTimeout(menu.__touchGuardTimer);
+      menu.__touchGuardTimer = 0;
+    }
+    menu.style.pointerEvents = "none";
+    menu.__touchGuardTimer = window.setTimeout(() => {
+      menu.__touchGuardTimer = 0;
+      if (menu.classList.contains("hidden")) return;
+      menu.style.pointerEvents = "";
+    }, CHAT_TOUCH_MENU_INTERACTION_GUARD_MS);
   }
 
   function ensureClientContextMenu() {
@@ -7635,11 +7820,19 @@
       btn.classList.toggle("is-active", isActive);
     });
 
+    reactionBarAnchorRect = menuRect
+      ? {
+          left: Number(menuRect.left || 0),
+          top: Number(menuRect.top || 0),
+          bottom: Number(menuRect.bottom || 0),
+          right: Number(menuRect.right || 0),
+        }
+      : null;
     dom.center.reactionBar.classList.remove("hidden");
     positionReactionBar(menuRect);
   }
 
-  function showMessageContextMenu(x, y, messageId) {
+  function showMessageContextMenu(x, y, messageId, options = {}) {
     if (!state.activeClientId || !dom.center.contextMenu) return;
     const message = findThreadMessage(state.activeClientId, messageId);
     if (!message) return;
@@ -7652,6 +7845,11 @@
     if (dom.center.menuDeleteAction) dom.center.menuDeleteAction.classList.remove("hidden");
 
     positionFloatingBox(dom.center.contextMenu, x, y, 8);
+    if (options.touchGuard === true) {
+      armContextMenuTouchGuard();
+    } else {
+      dom.center.contextMenu.style.pointerEvents = "";
+    }
     showReactionBarForMessage(message, dom.center.contextMenu.getBoundingClientRect());
   }
 
@@ -8122,15 +8320,19 @@
 
     const reactionItems = getMessageReactionItems(msg);
     if (reactionItems.length && bubble) {
+      const animateReactionPop = shouldAnimateThreadReaction(state.activeClientId, messageId, reactionItems);
       const reactionsWrap = document.createElement("div");
-      reactionsWrap.className = "chat-message-reactions";
+      reactionsWrap.className = `chat-message-reactions${animateReactionPop ? " is-reaction-pop" : ""}`;
       bubble.classList.add("has-reaction");
 
       reactionItems.forEach((itemReaction, reactionIndex) => {
         const reactionBtn = document.createElement("button");
         reactionBtn.type = "button";
-        reactionBtn.className = "chat-message-reaction-pill";
+        reactionBtn.className = `chat-message-reaction-pill${animateReactionPop ? " is-reaction-pop" : ""}`;
         reactionBtn.style.zIndex = String(10 + reactionIndex);
+        if (animateReactionPop) {
+          reactionBtn.style.setProperty("--reaction-pop-delay", `${reactionIndex * 32}ms`);
+        }
         reactionBtn.setAttribute("data-chat-msg-reaction-toggle", messageId);
         reactionBtn.setAttribute("data-chat-reaction-value", String(itemReaction.reaction || ""));
         reactionBtn.setAttribute("data-chat-reaction-actor", String(itemReaction.actor || ""));
@@ -9016,7 +9218,9 @@
         return;
       }
       event.preventDefault();
-      showMessageContextMenu(event.clientX, event.clientY, messageId);
+      showMessageContextMenu(event.clientX, event.clientY, messageId, {
+        touchGuard: isTouchGeneratedClick(event),
+      });
     });
 
     dom.center.messages.addEventListener("contextmenu", (event) => {
@@ -9106,7 +9310,9 @@
           renderMessages();
           return;
         }
-        showMessageContextMenu(touchContextGesture.lastX, touchContextGesture.lastY, messageId);
+        showMessageContextMenu(touchContextGesture.lastX, touchContextGesture.lastY, messageId, {
+          touchGuard: true,
+        });
       }, CHAT_TOUCH_CONTEXT_LONG_PRESS_MS);
     }, { passive: false });
 
@@ -9291,6 +9497,11 @@
     }, { passive: false });
 
     dom.center.contextMenu.addEventListener("click", (event) => {
+      if (Date.now() < Number(suppressTouchClickUntil || 0)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       const actionBtn = event.target.closest("[data-chat-msg-action]");
       if (!actionBtn) return;
       const action = actionBtn.getAttribute("data-chat-msg-action");
@@ -9307,6 +9518,11 @@
 
     if (dom.center.reactionBar) {
       dom.center.reactionBar.addEventListener("click", (event) => {
+        if (Date.now() < Number(suppressTouchClickUntil || 0)) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         const btn = event.target.closest("[data-chat-reaction]");
         if (!btn) return;
         const reaction = btn.getAttribute("data-chat-reaction");
