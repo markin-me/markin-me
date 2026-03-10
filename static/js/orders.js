@@ -644,12 +644,15 @@
     const currentStatus = getOrderStatusMeta(order);
     const transitStatus = getCourierTransitStatusMeta(order);
     const deliveredStatus = getCourierDeliveredStatusMeta(order);
+    const currentStatusId = Number(currentStatus?.id || 0);
+    const deliveredStatusId = Number(deliveredStatus?.id || 0);
     const isEligibleOrder = isCourierWorkspace
       && isDeliveryOrder(order)
       && !isCanceledStatusMeta(currentStatus)
       && !matchesCourierDeliveredStatus(currentStatus);
     const isAlreadyTransit = transitStatus && Number(transitStatus.id || 0) === Number(currentStatus?.id || 0);
     const isAlreadyDelivered = matchesCourierDeliveredStatus(currentStatus);
+    const isCurrentDeliveredStatus = deliveredStatusId > 0 && deliveredStatusId === currentStatusId;
     const canPickup = Boolean(isEligibleOrder && transitStatus && !isAlreadyTransit);
     const canDeliver = Boolean(
       isCourierWorkspace
@@ -670,6 +673,11 @@
       actionLabel = "Доставлен";
       actionIcon = "fas fa-circle-check";
       targetStatus = deliveredStatus;
+    } else if (isCurrentDeliveredStatus) {
+      actionLabel = "Доставлен";
+      actionIcon = "fas fa-circle-check";
+      targetStatus = deliveredStatus;
+      disabledReason = "Заказ уже доставлен";
     } else if (!transitStatus) {
       disabledReason = "Не найден статус «В пути»";
     } else if (isAlreadyTransit) {
