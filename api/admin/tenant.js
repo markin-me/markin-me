@@ -4,6 +4,24 @@ const crypto = require('crypto');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const { domainToASCII } = require('url');
+const { getEffectiveTelegramBotConfig, getEffectiveMapProviderConfig } = require('../../data/system-settings');
+const { geocodeStoreAddress } = require('../../data/map-geocoder');
+const {
+  normalizeLocalAddressText,
+  searchLocalAddressSuggest,
+  resolveLocalityByInput,
+  getLocalAddressIndexRowBySourceKey,
+} = require('../../data/local-address-index');
+const {
+  normalizeHouseToken: normalizeAddressServiceHouseToken,
+  isHouseToken: isAddressServiceHouseToken,
+  extractHouseToken: extractAddressServiceHouseToken,
+  removeHouseToken: removeAddressServiceHouseToken,
+} = require('../../services/address-service/src/normalization');
+const {
+  isAddressServiceConfigured,
+  resolveAddress: resolveAddressThroughService,
+} = require('../../data/address-service-client');
 
 module.exports = function makeAdminTenantRouter({ db, helpers }) {
   const router = express.Router();
@@ -50,6 +68,8 @@ module.exports = function makeAdminTenantRouter({ db, helpers }) {
   let ensureTenantChatColumnsPromise = null;
   let orderDeliveryTypeColumnsReady = false;
   let ensureOrderDeliveryTypeColumnsPromise = null;
+  let storeAddressIdentityColumnsReady = false;
+  let ensureStoreAddressIdentityColumnsPromise = null;
 
   function normalizeSubdomain(value) {
     if (value === undefined || value === null) return null;
@@ -629,25 +649,586 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
   );
 }
 
-  async function fetchStoreWithHours(tenantId, storeId) {
-    const [rows] = await db.query(
-    `SELECT tenant_id, id, code, name, address, city, phone, timezone, is_active, use_global_hours, use_delivery_hours, created_at, updated_at
+function normalizeStoreCoordinateValue(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Number(numeric.toFixed(7)) : null;
+}
+
+function parseStoreCoordinate(value, axis) {
+  const numeric = helpers.numOrNull(value);
+  if (numeric === null) return { value: null };
+  const limit = axis === 'lat' ? 90 : 180;
+  if (numeric < -limit || numeric > limit) {
+    return { error: axis === 'lat' ? 'INVALID_LAT' : 'INVALID_LNG' };
+  }
+  return { value: Number(Number(numeric).toFixed(7)) };
+}
+
+async function ensureStoreAddressIdentityColumns() {
+  if (storeAddressIdentityColumnsReady) return true;
+  if (ensureStoreAddressIdentityColumnsPromise) return ensureStoreAddressIdentityColumnsPromise;
+
+  ensureStoreAddressIdentityColumnsPromise = (async () => {
+    const [columnRows] = await db.query('SHOW COLUMNS FROM ten_stores');
+    const existing = new Set((Array.isArray(columnRows) ? columnRows : []).map((row) => String(row?.Field || '').trim()).filter(Boolean));
+    const requiredColumns = [
+      { name: 'address_ref', sql: "VARCHAR(255) NULL AFTER address" },
+      { name: 'address_raw_input', sql: "VARCHAR(512) NULL AFTER address_ref" },
+      { name: 'address_normalized_display', sql: "VARCHAR(512) NULL AFTER address_raw_input" },
+      { name: 'address_street', sql: "VARCHAR(255) NULL AFTER address_normalized_display" },
+      { name: 'address_house', sql: "VARCHAR(128) NULL AFTER address_street" },
+      { name: 'address_context_locality', sql: "VARCHAR(255) NULL AFTER address_house" },
+    ];
+
+    for (const column of requiredColumns) {
+      if (existing.has(column.name)) continue;
+      try {
+        await db.query(`ALTER TABLE ten_stores ADD COLUMN \`${column.name}\` ${column.sql}`);
+        existing.add(column.name);
+      } catch (err) {
+        if (String(err?.code || '') === 'ER_DUP_FIELDNAME') {
+          existing.add(column.name);
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    storeAddressIdentityColumnsReady = requiredColumns.every((column) => existing.has(column.name));
+    return storeAddressIdentityColumnsReady;
+  })()
+    .catch((err) => {
+      ensureStoreAddressIdentityColumnsPromise = null;
+      throw err;
+    })
+    .finally(() => {
+      if (storeAddressIdentityColumnsReady) {
+        ensureStoreAddressIdentityColumnsPromise = null;
+      }
+    });
+
+  return ensureStoreAddressIdentityColumnsPromise;
+}
+
+function normalizeStoreRecord(store) {
+  if (!store || typeof store !== 'object') return store;
+  return {
+    ...store,
+    lat: normalizeStoreCoordinateValue(store.lat),
+    lng: normalizeStoreCoordinateValue(store.lng),
+    address_ref: helpers.strOrNull(store.address_ref),
+    address_raw_input: helpers.strOrNull(store.address_raw_input),
+    address_normalized_display: helpers.strOrNull(store.address_normalized_display),
+    address_street: helpers.strOrNull(store.address_street),
+    address_house: helpers.strOrNull(store.address_house),
+    address_context_locality: helpers.strOrNull(store.address_context_locality),
+  };
+}
+
+function getStoreGeocodingHttpStatus(errorCode) {
+  if (errorCode === 'ADDRESS_REQUIRED' || errorCode === 'CITY_REQUIRED' || errorCode === 'CITY_SELECTION_REQUIRED' || errorCode === 'HOUSE_REQUIRED' || errorCode === 'GEOCODER_NOT_CONFIGURED') return 400;
+  if (errorCode === 'ADDRESS_NOT_FOUND' || errorCode === 'ADDRESS_CITY_NOT_FOUND' || errorCode === 'ADDRESS_COORDINATES_NOT_FOUND') return 400;
+  if (errorCode === 'ADDRESS_SELECTION_REQUIRED') return 409;
+  if (errorCode === 'ADDRESS_SERVICE_NOT_CONFIGURED' || errorCode === 'ADDRESS_SERVICE_UNAVAILABLE' || errorCode === 'ADDRESS_SERVICE_TIMEOUT') return 503;
+  if (errorCode === 'ADDRESS_CONFIRMATION_REQUIRED') return 409;
+  return 502;
+}
+
+function buildStoreGeocodeQuery(address, city) {
+  const parts = [
+    helpers.strOrNull(city),
+    helpers.strOrNull(address),
+  ].filter(Boolean);
+  return parts.length ? parts.join(', ') : helpers.strOrNull(address);
+}
+
+function normalizeStoreComparableStreet(value) {
+  return normalizeLocalAddressText(value)
+    .replace(/\b(?:улица|ул|переулок|пер|проспект|пр-кт|проезд|пр-д|шоссе|площадь|пл|бульвар|бул|набережная|наб|микрорайон|мкр|квартал|кв-л)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isStoreOrdinalAddressPair(token, nextToken) {
+  return /^\d+$/.test(String(token || '').trim()) && /^(й|я|ый|ая)$/.test(String(nextToken || '').trim());
+}
+
+function isStoreStandaloneHouseToken(token) {
+  return isAddressServiceHouseToken(token);
+}
+
+function buildStoreAddressComparableParts(value) {
+  const houseToken = extractAddressServiceHouseToken(value);
+  const streetText = houseToken
+    ? removeAddressServiceHouseToken(value, houseToken)
+    : normalizeLocalAddressText(value);
+  return {
+    street: normalizeStoreComparableStreet(streetText),
+    house: normalizeAddressServiceHouseToken(houseToken),
+  };
+}
+
+function normalizeStoreAddressComparable(value) {
+  const parts = buildStoreAddressComparableParts(value);
+  return [parts.street, parts.house].filter(Boolean).join('|');
+}
+
+function hasMaterialStoreNormalizationDifference(inputCity, inputAddress, normalizedCity, normalizedAddress) {
+  const cityChanged = normalizeLocalAddressText(inputCity) !== normalizeLocalAddressText(normalizedCity);
+  const addressChanged = normalizeStoreAddressComparable(inputAddress) !== normalizeStoreAddressComparable(normalizedAddress);
+  return cityChanged || addressChanged;
+}
+
+function buildStoreNormalizationPayload(candidate) {
+  return {
+    city: helpers.strOrNull(candidate && candidate.city),
+    address: helpers.strOrNull(candidate && candidate.address),
+    address_street: helpers.strOrNull(candidate && candidate.address_street),
+    address_house: helpers.strOrNull(candidate && candidate.address_house),
+    resolved_city_source_key: helpers.strOrNull(candidate && candidate.resolved_city_source_key),
+    selected_source_key: helpers.strOrNull(candidate && candidate.selected_source_key),
+    selected_object_type: helpers.strOrNull(candidate && candidate.selected_object_type),
+    selected_context_locality: helpers.strOrNull(candidate && candidate.selected_context_locality),
+    typed_house_part: helpers.strOrNull(candidate && candidate.typed_house_part),
+  };
+}
+
+function buildStoreSavedAddress(baseCityName, contextLocality, addressLabel) {
+  const baseCity = helpers.strOrNull(baseCityName);
+  const context = helpers.strOrNull(contextLocality);
+  const address = helpers.strOrNull(addressLabel);
+  if (!address) return null;
+  if (!context) return address;
+  if (normalizeLocalAddressText(baseCity) === normalizeLocalAddressText(context)) return address;
+  if (normalizeLocalAddressText(address).startsWith(normalizeLocalAddressText(context))) return address;
+  return `${context}, ${address}`;
+}
+
+function buildStoreStreetHouseLabel(streetValue, houseValue) {
+  const street = helpers.strOrNull(streetValue);
+  const house = helpers.strOrNull(houseValue);
+  if (!street) return null;
+  return [street, house].filter(Boolean).join(', ');
+}
+
+function isStoreAddressMapModeEnabled() {
+  try {
+    return Boolean(getEffectiveMapProviderConfig().store_address_map_enabled);
+  } catch (_) {
+    return false;
+  }
+}
+
+function buildManualStoreLocation(address, city, options = {}) {
+  const normalizedStreet = helpers.strOrNull(options.addressStreet);
+  const normalizedHouse = helpers.strOrNull(options.addressHouse);
+  const normalizedCity = helpers.strOrNull(city);
+  const contextLocality = helpers.strOrNull(options.addressContextLocality || options.selectedContextLocality);
+  const shortAddress = helpers.strOrNull(address) || buildStoreStreetHouseLabel(normalizedStreet, normalizedHouse);
+  const savedAddress = buildStoreSavedAddress(normalizedCity, contextLocality || normalizedCity, shortAddress) || shortAddress;
+  if (!normalizedCity) {
+    return { ok: false, error: 'CITY_REQUIRED' };
+  }
+  if (!savedAddress) {
+    return { ok: false, error: 'ADDRESS_REQUIRED' };
+  }
+  return {
+    ok: true,
+    data: {
+      city: normalizedCity,
+      address: savedAddress,
+      lat: null,
+      lng: null,
+      address_ref: null,
+      address_raw_input: savedAddress,
+      address_normalized_display: savedAddress,
+      address_street: normalizedStreet,
+      address_house: normalizedHouse,
+      address_context_locality: contextLocality,
+      resolved_city_source_key: null,
+      selected_source_key: null,
+      selected_object_type: null,
+      selected_context_locality: contextLocality,
+      typed_house_part: helpers.strOrNull(options.typedHousePart) || normalizedHouse,
+    },
+  };
+}
+
+function parseAddressServiceRootCityCode(value) {
+  const raw = helpers.strOrNull(value);
+  if (!raw) return null;
+  if (raw.startsWith('root-city:')) {
+    return raw.slice('root-city:'.length) || null;
+  }
+  return raw;
+}
+
+async function resolveStoreLocationByAddress(address, city, options = {}) {
+  const normalizedStreet = helpers.strOrNull(options.addressStreet);
+  const normalizedHouse = helpers.strOrNull(options.addressHouse);
+  const normalizedAddress = helpers.strOrNull(address) || buildStoreStreetHouseLabel(normalizedStreet, normalizedHouse);
+  const normalizedCity = helpers.strOrNull(city);
+  if (!normalizedCity) {
+    return { ok: false, error: 'CITY_SELECTION_REQUIRED' };
+  }
+  if (!normalizedAddress) {
+    return { ok: false, error: 'ADDRESS_REQUIRED' };
+  }
+
+  if (isAddressServiceConfigured()) {
+    const rootCityCode = parseAddressServiceRootCityCode(options.resolvedCitySourceKey);
+    const serviceResult = await resolveAddressThroughService({
+      city: normalizedCity,
+      city_code: rootCityCode,
+      address: normalizedAddress,
+      address_street: normalizedStreet,
+      address_house: normalizedHouse,
+      selected_source_key: helpers.strOrNull(options.selectedSourceKey),
+      selected_object_type: helpers.strOrNull(options.selectedObjectType),
+      selected_context_locality: helpers.strOrNull(options.selectedContextLocality),
+      typed_house_part: helpers.strOrNull(options.typedHousePart),
+      raw_input: normalizedAddress,
+      confirm_normalized: helpers.toBool(options.confirmNormalized, false),
+    });
+    if (!serviceResult || !serviceResult.ok) {
+      return {
+        ok: false,
+        error: serviceResult && serviceResult.error ? serviceResult.error : 'ADDRESS_SERVICE_UNAVAILABLE',
+      };
+    }
+    if (serviceResult.data && serviceResult.data.needs_choice) {
+      const candidates = Array.isArray(serviceResult.data.candidates) ? serviceResult.data.candidates : [];
+      if (candidates.length === 1) {
+        const candidate = candidates[0];
+        return {
+          ok: false,
+          error: 'ADDRESS_CONFIRMATION_REQUIRED',
+          data: {
+            normalization: {
+              city: normalizedCity,
+              address: helpers.strOrNull(candidate && (candidate.display || candidate.value || candidate.label)),
+              address_street: normalizedStreet,
+              address_house: normalizedHouse,
+              resolved_city_source_key: helpers.strOrNull(options.resolvedCitySourceKey),
+              selected_source_key: helpers.strOrNull(candidate && candidate.source_key),
+              selected_object_type: helpers.strOrNull(candidate && candidate.object_type),
+              selected_context_locality: helpers.strOrNull(candidate && (candidate.context_display || candidate.context_locality || candidate.city_name)),
+              typed_house_part: helpers.strOrNull(options.typedHousePart),
+            },
+          },
+        };
+      }
+      return { ok: false, error: 'ADDRESS_SELECTION_REQUIRED' };
+    }
+
+    const serviceData = serviceResult.data || {};
+    const resolvedDisplay = helpers.strOrNull(serviceData.normalized_display) || normalizedAddress;
+    const contextLocality = helpers.strOrNull(serviceData.context_display) || normalizedCity;
+    const resolvedSelectedSourceKey = helpers.strOrNull(options.selectedSourceKey)
+      || helpers.strOrNull(serviceData.selected_source_key)
+      || helpers.strOrNull(serviceData.address_ref);
+    const resolvedSelectedObjectType = helpers.strOrNull(options.selectedObjectType)
+      || helpers.strOrNull(serviceData.selected_object_type)
+      || 'address';
+    const resolvedTypedHousePart = helpers.strOrNull(options.typedHousePart)
+      || helpers.strOrNull(serviceData.typed_house_part);
+    const resolvedStreet = helpers.strOrNull(serviceData.street_display) || normalizedStreet;
+    const resolvedHouse = helpers.strOrNull(serviceData.house_number) || normalizedHouse || resolvedTypedHousePart;
+    let lat = normalizeStoreCoordinateValue(serviceData.lat);
+    let lng = normalizeStoreCoordinateValue(serviceData.lng);
+    if (lat === null || lng === null) {
+      const serviceQuery = buildStoreGeocodeQuery(resolvedDisplay, contextLocality || normalizedCity);
+      if (serviceQuery) {
+        const geocode = await geocodeStoreAddress(serviceQuery);
+        if (geocode && geocode.ok && geocode.data && geocode.data.item) {
+          lat = normalizeStoreCoordinateValue(geocode.data.item.lat);
+          lng = normalizeStoreCoordinateValue(geocode.data.item.lng);
+        }
+      }
+    }
+    return {
+      ok: true,
+      data: {
+        city: normalizedCity,
+        address: buildStoreSavedAddress(normalizedCity, contextLocality, resolvedDisplay) || resolvedDisplay,
+        lat,
+        lng,
+        address_ref: helpers.strOrNull(serviceData.address_ref),
+        address_raw_input: normalizedAddress,
+        address_normalized_display: resolvedDisplay,
+        address_street: resolvedStreet,
+        address_house: resolvedHouse,
+        address_context_locality: contextLocality,
+        resolved_city_source_key: helpers.strOrNull(options.resolvedCitySourceKey),
+        selected_source_key: resolvedSelectedSourceKey,
+        selected_object_type: resolvedSelectedObjectType,
+        selected_context_locality: contextLocality,
+        typed_house_part: resolvedTypedHousePart,
+      },
+    };
+  }
+
+  const resolvedCity = await resolveLocalityByInput(normalizedCity, {
+    sourceKey: helpers.strOrNull(options.resolvedCitySourceKey),
+    rootOnly: true,
+  });
+  if (!resolvedCity) {
+    return { ok: false, error: 'CITY_SELECTION_REQUIRED' };
+  }
+
+  const selectedSourceKey = helpers.strOrNull(options.selectedSourceKey);
+  const selectedObjectType = helpers.strOrNull(options.selectedObjectType);
+  const selectedContextLocality = helpers.strOrNull(options.selectedContextLocality);
+  const typedHousePart = helpers.strOrNull(options.typedHousePart);
+  const confirmNormalized = helpers.toBool(options.confirmNormalized, false);
+  if (
+    selectedObjectType === 'context-locality' &&
+    normalizeLocalAddressText(normalizedAddress) === normalizeLocalAddressText(selectedContextLocality)
+  ) {
+    return { ok: false, error: 'ADDRESS_REQUIRED' };
+  }
+  let selectedRow = null;
+  if (selectedSourceKey) {
+    selectedRow = await getLocalAddressIndexRowBySourceKey(selectedSourceKey);
+  }
+
+  const createCandidate = (addressLabel, config = {}) => {
+    const actualLocality = helpers.strOrNull(config.actualLocality || selectedContextLocality || resolvedCity.name) || resolvedCity.name;
+    const shortAddress = helpers.strOrNull(addressLabel);
+    const savedAddress = buildStoreSavedAddress(resolvedCity.name, actualLocality, shortAddress);
+    return {
+      city: resolvedCity.name,
+      address: savedAddress,
+      address_ref: helpers.strOrNull(config.selectedSourceKey),
+      address_raw_input: normalizedAddress,
+      address_normalized_display: savedAddress || shortAddress,
+      address_street: helpers.strOrNull(config.addressStreet || normalizedStreet),
+      address_house: helpers.strOrNull(config.addressHouse || normalizedHouse || config.typedHousePart),
+      address_context_locality: helpers.strOrNull(actualLocality),
+      lat: config.lat === undefined ? null : normalizeStoreCoordinateValue(config.lat),
+      lng: config.lng === undefined ? null : normalizeStoreCoordinateValue(config.lng),
+      is_exact_address: helpers.toBool(config.isExactAddress, false),
+      resolved_city_source_key: helpers.strOrNull(resolvedCity.source_key),
+      selected_source_key: helpers.strOrNull(config.selectedSourceKey),
+      selected_object_type: helpers.strOrNull(config.selectedObjectType),
+      selected_context_locality: helpers.strOrNull(actualLocality),
+      typed_house_part: helpers.strOrNull(config.typedHousePart),
+      lookup_city: actualLocality,
+      lookup_address: shortAddress,
+    };
+  };
+
+  let candidate = null;
+  if (selectedRow && selectedObjectType === 'address' && String(selectedRow.object_type || '').trim() === 'address') {
+    candidate = createCandidate(helpers.strOrNull(selectedRow.label), {
+      actualLocality: helpers.strOrNull(selectedRow.locality_name),
+      lat: selectedRow.lat,
+      lng: selectedRow.lng,
+      isExactAddress: true,
+      selectedSourceKey: helpers.strOrNull(selectedRow.source_key),
+      selectedObjectType: 'address',
+    });
+  } else if (
+    selectedRow
+    && (selectedObjectType === 'street' || selectedObjectType === 'typed-address')
+    && String(selectedRow.object_type || '').trim() === 'street'
+  ) {
+    const streetLabel = helpers.strOrNull(selectedRow.label) || helpers.strOrNull(selectedRow.street_name);
+    const normalizedStreetInput = normalizeLocalAddressText(streetLabel);
+    const normalizedAddressInput = normalizeLocalAddressText(normalizedAddress);
+    let housePart = typedHousePart || normalizedHouse || normalizedAddress;
+    if (normalizedStreetInput && normalizedAddressInput.startsWith(normalizedStreetInput)) {
+      housePart = normalizedAddress.slice(streetLabel.length).replace(/^[,\s]+/, '').trim();
+    }
+    if (!housePart) {
+      return { ok: false, error: 'HOUSE_REQUIRED' };
+    }
+    const localSearch = await searchLocalAddressSuggest('house', housePart, {
+      city: resolvedCity.name,
+      citySourceKey: helpers.strOrNull(resolvedCity.source_key),
+      selectedSourceKey: helpers.strOrNull(selectedRow.source_key),
+      limit: 12,
+    });
+    if (localSearch && localSearch.ok) {
+      const normalizedHousePart = normalizeAddressServiceHouseToken(housePart);
+      const exactAddressItem = (Array.isArray(localSearch.data && localSearch.data.items) ? localSearch.data.items : [])
+        .find((item) => (
+          String(item && item.object_type || '').trim() === 'address'
+          && normalizeAddressServiceHouseToken(item && item.house_number) === normalizedHousePart
+        ));
+      if (exactAddressItem) {
+        candidate = createCandidate([streetLabel, helpers.strOrNull(exactAddressItem.house_number)].filter(Boolean).join(', '), {
+          actualLocality: helpers.strOrNull(exactAddressItem.context_locality || exactAddressItem.city_name),
+          addressStreet: streetLabel,
+          addressHouse: helpers.strOrNull(exactAddressItem.house_number),
+          lat: exactAddressItem.lat,
+          lng: exactAddressItem.lng,
+          isExactAddress: true,
+          selectedSourceKey: helpers.strOrNull(exactAddressItem.source_key),
+          selectedObjectType: 'address',
+        });
+      } else {
+        candidate = createCandidate([streetLabel, housePart].filter(Boolean).join(', '), {
+          actualLocality: helpers.strOrNull(selectedRow.locality_name),
+          addressStreet: streetLabel,
+          addressHouse: helpers.strOrNull(housePart),
+          selectedSourceKey: helpers.strOrNull(selectedRow.source_key),
+          selectedObjectType: 'street',
+          typedHousePart: helpers.strOrNull(housePart),
+        });
+      }
+    }
+  }
+
+  if (!candidate) {
+    const localSearch = await searchLocalAddressSuggest('address', normalizedAddress, {
+      city: resolvedCity.name,
+      citySourceKey: resolvedCity.source_key,
+      limit: 12,
+    });
+    if (localSearch && localSearch.ok) {
+      const normalizedTypedHouse = normalizeAddressServiceHouseToken(extractAddressServiceHouseToken(normalizedAddress));
+      const exactAddressItem = (Array.isArray(localSearch.data && localSearch.data.items) ? localSearch.data.items : [])
+        .find((item) => (
+          String(item && item.object_type || '').trim() === 'address'
+          && (!normalizedTypedHouse || normalizeAddressServiceHouseToken(item && item.house_number) === normalizedTypedHouse)
+        ));
+      if (exactAddressItem) {
+        candidate = createCandidate(helpers.strOrNull(exactAddressItem.value || exactAddressItem.label), {
+          actualLocality: helpers.strOrNull(exactAddressItem.context_locality || exactAddressItem.city_name),
+          lat: exactAddressItem.lat,
+          lng: exactAddressItem.lng,
+          isExactAddress: true,
+          selectedSourceKey: helpers.strOrNull(exactAddressItem.source_key),
+          selectedObjectType: 'address',
+        });
+      }
+    }
+  }
+
+  if (!candidate) {
+    candidate = createCandidate(normalizedAddress, {
+      actualLocality: selectedContextLocality || resolvedCity.name,
+      selectedObjectType: null,
+    });
+  }
+
+  const comparableInputAddress = buildStoreSavedAddress(
+    resolvedCity.name,
+    selectedContextLocality || (selectedRow && helpers.strOrNull(selectedRow.locality_name)),
+    normalizedAddress
+  ) || normalizedAddress;
+
+  if (!confirmNormalized && hasMaterialStoreNormalizationDifference(normalizedCity, comparableInputAddress, candidate.city, candidate.address)) {
+    return {
+      ok: false,
+      error: 'ADDRESS_CONFIRMATION_REQUIRED',
+      data: {
+        normalization: buildStoreNormalizationPayload(candidate),
+      },
+    };
+  }
+
+  if (candidate.lat !== null && candidate.lng !== null) {
+    return {
+      ok: true,
+      data: {
+        city: candidate.city,
+        address: candidate.address,
+        address_ref: candidate.address_ref,
+        address_raw_input: candidate.address_raw_input,
+        address_normalized_display: candidate.address_normalized_display,
+        lat: candidate.lat,
+        lng: candidate.lng,
+        resolved_city_source_key: candidate.resolved_city_source_key,
+        selected_source_key: candidate.selected_source_key,
+        selected_object_type: candidate.selected_object_type,
+        selected_context_locality: candidate.selected_context_locality,
+        typed_house_part: candidate.typed_house_part,
+      },
+    };
+  }
+
+  const query = buildStoreGeocodeQuery(candidate.lookup_address || candidate.address, candidate.lookup_city || candidate.city);
+  if (!query) {
+    return { ok: false, error: 'ADDRESS_REQUIRED' };
+  }
+  const geocode = await geocodeStoreAddress(query);
+  if (!geocode || !geocode.ok || !geocode.data || !geocode.data.item) {
+    return { ok: false, error: geocode && geocode.error ? geocode.error : 'GEOCODER_UPSTREAM_ERROR' };
+  }
+  const item = geocode.data.item;
+  const cityName = helpers.strOrNull(item.city_name);
+  const lat = normalizeStoreCoordinateValue(item.lat);
+  const lng = normalizeStoreCoordinateValue(item.lng);
+  if (!cityName) return { ok: false, error: 'ADDRESS_CITY_NOT_FOUND' };
+  if (lat === null || lng === null) return { ok: false, error: 'ADDRESS_COORDINATES_NOT_FOUND' };
+  const finalizedCandidate = candidate && candidate.is_exact_address
+    ? candidate
+    : {
+      ...candidate,
+      city: resolvedCity.name,
+      address: buildStoreSavedAddress(
+        resolvedCity.name,
+        candidate.selected_context_locality || cityName,
+        candidate.lookup_address || candidate.address || normalizedAddress
+      ) || candidate.address,
+    };
+  if (
+    !confirmNormalized &&
+    finalizedCandidate &&
+    hasMaterialStoreNormalizationDifference(normalizedCity, comparableInputAddress, finalizedCandidate.city, finalizedCandidate.address)
+  ) {
+    return {
+      ok: false,
+      error: 'ADDRESS_CONFIRMATION_REQUIRED',
+      data: {
+        normalization: buildStoreNormalizationPayload(finalizedCandidate),
+      },
+    };
+  }
+  return {
+    ok: true,
+    data: {
+      city: finalizedCandidate.city || cityName,
+      address: finalizedCandidate.address || normalizedAddress,
+      address_ref: finalizedCandidate.address_ref,
+      address_raw_input: finalizedCandidate.address_raw_input || normalizedAddress,
+      address_normalized_display: finalizedCandidate.address_normalized_display || finalizedCandidate.address || normalizedAddress,
+      address_street: finalizedCandidate.address_street || normalizedStreet,
+      address_house: finalizedCandidate.address_house || normalizedHouse || finalizedCandidate.typed_house_part || null,
+      address_context_locality: finalizedCandidate.address_context_locality || finalizedCandidate.selected_context_locality || null,
+      lat,
+      lng,
+      resolved_city_source_key: finalizedCandidate.resolved_city_source_key,
+      selected_source_key: finalizedCandidate.selected_source_key,
+      selected_object_type: finalizedCandidate.selected_object_type,
+      selected_context_locality: finalizedCandidate.selected_context_locality,
+      typed_house_part: finalizedCandidate.typed_house_part,
+    },
+  };
+}
+
+async function fetchStoreWithHours(tenantId, storeId) {
+  await ensureStoreAddressIdentityColumns();
+  const [rows] = await db.query(
+    `SELECT tenant_id, id, code, name, address, address_ref, address_raw_input, address_normalized_display, address_street, address_house, address_context_locality, city, floor, apartment, cabinet, address_comment, lat, lng, phone, timezone, is_active, use_global_hours, use_delivery_hours, created_at, updated_at
        FROM ten_stores
        WHERE tenant_id=? AND id=? LIMIT 1`,
     [tenantId, storeId]
   );
-    if (!rows.length) return null;
-    const store = rows[0];
-    const hoursRows = await loadStoreHoursForStores(tenantId, [storeId]);
-    const hoursMap = organizeStoreHours(hoursRows);
-    store.hours = hoursMap.get(storeId) || [];
-    const deliveryRows = await loadStoreDeliveryHoursForStores(tenantId, [storeId]);
-    const deliveryMap = organizeStoreHours(deliveryRows);
-    store.delivery_hours = deliveryMap.get(storeId) || [];
-    store.use_global_hours = Number(store.use_global_hours) === 1 ? 1 : 0;
-    store.use_delivery_hours = Number(store.use_delivery_hours) === 1 ? 1 : 0;
-    return store;
-  }
+  if (!rows.length) return null;
+  const store = normalizeStoreRecord(rows[0]);
+  const hoursRows = await loadStoreHoursForStores(tenantId, [storeId]);
+  const hoursMap = organizeStoreHours(hoursRows);
+  store.hours = hoursMap.get(storeId) || [];
+  const deliveryRows = await loadStoreDeliveryHoursForStores(tenantId, [storeId]);
+  const deliveryMap = organizeStoreHours(deliveryRows);
+  store.delivery_hours = deliveryMap.get(storeId) || [];
+  store.use_global_hours = Number(store.use_global_hours) === 1 ? 1 : 0;
+  store.use_delivery_hours = Number(store.use_delivery_hours) === 1 ? 1 : 0;
+  return store;
+}
 
   // ------------------------------
   // Upload: tenant assets (logo/favicon)
@@ -1219,11 +1800,12 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
 
   router.get('/stores', async (req, res) => {
     try {
+      await ensureStoreAddressIdentityColumns();
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
       if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
 
       const [rows] = await db.query(
-        `SELECT tenant_id, id, code, name, address, city, phone, timezone, is_active, use_global_hours, use_delivery_hours, created_at, updated_at
+        `SELECT tenant_id, id, code, name, address, address_ref, address_raw_input, address_normalized_display, address_street, address_house, address_context_locality, city, floor, apartment, cabinet, address_comment, lat, lng, phone, timezone, is_active, use_global_hours, use_delivery_hours, created_at, updated_at
          FROM ten_stores
          WHERE tenant_id=?
          ORDER BY id ASC`,
@@ -1236,7 +1818,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const hoursMap = organizeStoreHours(hoursRows);
       const deliveryMap = organizeStoreHours(deliveryRows);
       const enriched = stores.map((store) => ({
-        ...store,
+        ...normalizeStoreRecord(store),
         use_global_hours: Number(store.use_global_hours) === 1 ? 1 : 0,
         use_delivery_hours: Number(store.use_delivery_hours) === 1 ? 1 : 0,
         hours: hoursMap.get(Number(store.id)) || []
@@ -1250,13 +1832,33 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
     }
   });
 
-    router.post('/stores', async (req, res) => {
+  router.post('/stores', async (req, res) => {
       try {
+      await ensureStoreAddressIdentityColumns();
       const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
       const name = helpers.strOrNull(req.body.name);
       const codeInput = helpers.strOrNull(req.body.code);
+      const cityInput = helpers.strOrNull(req.body.city);
       const address = helpers.strOrNull(req.body.address);
-      const city = helpers.strOrNull(req.body.city);
+      const addressStreet = helpers.strOrNull(req.body.address_street);
+      const addressHouse = helpers.strOrNull(req.body.address_house);
+      const addressContextLocality = helpers.strOrNull(req.body.address_context_locality);
+      const resolvedCitySourceKey = helpers.strOrNull(req.body.resolved_city_source_key);
+      const selectedSourceKey = helpers.strOrNull(req.body.selected_source_key);
+      const selectedObjectType = helpers.strOrNull(req.body.selected_object_type);
+      const selectedContextLocality = helpers.strOrNull(req.body.selected_context_locality);
+      const typedHousePart = helpers.strOrNull(req.body.typed_house_part);
+      const confirmNormalized = helpers.toBool(req.body.confirm_normalized, false);
+      const floor = helpers.strOrNull(req.body.floor);
+      const apartment = helpers.strOrNull(req.body.apartment);
+      const cabinet = helpers.strOrNull(req.body.cabinet);
+      const addressComment = helpers.strOrNull(req.body.address_comment);
+      const latResult = req.body.lat !== undefined ? parseStoreCoordinate(req.body.lat, 'lat') : null;
+      if (latResult && latResult.error) return res.status(400).json({ ok: false, error: latResult.error });
+      const lngResult = req.body.lng !== undefined ? parseStoreCoordinate(req.body.lng, 'lng') : null;
+      if (lngResult && lngResult.error) return res.status(400).json({ ok: false, error: lngResult.error });
+      const explicitLat = latResult ? latResult.value : undefined;
+      const explicitLng = lngResult ? lngResult.value : undefined;
       const phone = helpers.strOrNull(req.body.phone);
       let timezone = helpers.strOrNull(req.body.timezone);
       const isActive = helpers.toBool(req.body.is_active, true) ? 1 : 0;
@@ -1264,12 +1866,39 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       const useDeliveryHours = helpers.toBool(req.body.use_delivery_hours, false) ? 1 : 0;
       const hoursPayload = Array.isArray(req.body.hours) ? req.body.hours : null;
       const deliveryHoursPayload = Array.isArray(req.body.delivery_hours) ? req.body.delivery_hours : null;
+      const storeAddressMapEnabled = isStoreAddressMapModeEnabled();
 
       if (!tenantId) {
         return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
       }
       if (!name) {
         return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
+      }
+
+      const useResolvedMapAddress = storeAddressMapEnabled && Boolean(selectedSourceKey && selectedObjectType);
+      const location = useResolvedMapAddress
+        ? await resolveStoreLocationByAddress(address, cityInput, {
+          addressStreet,
+          addressHouse,
+          resolvedCitySourceKey,
+          selectedSourceKey,
+          selectedObjectType,
+          selectedContextLocality: addressContextLocality || selectedContextLocality,
+          typedHousePart,
+          confirmNormalized,
+        })
+        : buildManualStoreLocation(address, cityInput, {
+          addressStreet,
+          addressHouse,
+          addressContextLocality: addressContextLocality || selectedContextLocality,
+          typedHousePart,
+        });
+      if (!location.ok) {
+        return res.status(getStoreGeocodingHttpStatus(location.error)).json({
+          ok: false,
+          error: location.error,
+          normalization: location.data && location.data.normalization ? location.data.normalization : undefined,
+        });
       }
 
       if (!timezone) {
@@ -1291,8 +1920,32 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
       }
 
       await db.query(
-        'INSERT INTO ten_stores (tenant_id, id, code, name, address, city, phone, timezone, is_active, use_global_hours, use_delivery_hours) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-        [tenantId, nextId, code, name, address, city, phone, timezone, isActive, useGlobalHours, useDeliveryHours]
+        'INSERT INTO ten_stores (tenant_id, id, code, name, address, address_ref, address_raw_input, address_normalized_display, address_street, address_house, address_context_locality, city, floor, apartment, cabinet, address_comment, lat, lng, phone, timezone, is_active, use_global_hours, use_delivery_hours) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        [
+          tenantId,
+          nextId,
+          code,
+          name,
+          location.data.address,
+          location.data.address_ref || null,
+          location.data.address_raw_input || address,
+          location.data.address_normalized_display || location.data.address,
+          location.data.address_street || addressStreet,
+          location.data.address_house || addressHouse,
+          location.data.address_context_locality || addressContextLocality || location.data.selected_context_locality || null,
+          location.data.city,
+          floor,
+          apartment,
+          cabinet,
+          addressComment,
+          explicitLat !== undefined ? explicitLat : location.data.lat,
+          explicitLng !== undefined ? explicitLng : location.data.lng,
+          phone,
+          timezone,
+          isActive,
+          useGlobalHours,
+          useDeliveryHours,
+        ]
       );
 
       if (hoursPayload !== null) {
@@ -1312,13 +1965,14 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
 
     router.patch('/stores/:id', async (req, res) => {
       try {
+        await ensureStoreAddressIdentityColumns();
         const tenantId = req.user?.tenantId ?? helpers.getTenantId(req);
         const id = helpers.numOrNull(req.params.id);
         if (!tenantId) return res.status(400).json({ ok: false, error: 'TENANT_REQUIRED' });
         if (!id) return res.status(400).json({ ok: false, error: 'ID_REQUIRED' });
 
         const [existingRows] = await db.query(
-          'SELECT tenant_id, id, code, name, address, city, phone, timezone, is_active FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
+          'SELECT tenant_id, id, code, name, address, address_ref, address_raw_input, address_normalized_display, address_street, address_house, address_context_locality, city, floor, apartment, cabinet, address_comment, lat, lng, phone, timezone, is_active FROM ten_stores WHERE tenant_id=? AND id=? LIMIT 1',
           [tenantId, id]
         );
         if (!existingRows.length) {
@@ -1329,7 +1983,26 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         const name = req.body.name !== undefined ? helpers.strOrNull(req.body.name) : undefined;
         const code = req.body.code !== undefined ? helpers.strOrNull(req.body.code) : undefined;
         const address = req.body.address !== undefined ? helpers.strOrNull(req.body.address) : undefined;
+        const addressStreet = req.body.address_street !== undefined ? helpers.strOrNull(req.body.address_street) : undefined;
+        const addressHouse = req.body.address_house !== undefined ? helpers.strOrNull(req.body.address_house) : undefined;
+        const addressContextLocality = req.body.address_context_locality !== undefined ? helpers.strOrNull(req.body.address_context_locality) : undefined;
         const city = req.body.city !== undefined ? helpers.strOrNull(req.body.city) : undefined;
+        const resolvedCitySourceKey = req.body.resolved_city_source_key !== undefined ? helpers.strOrNull(req.body.resolved_city_source_key) : undefined;
+        const selectedSourceKey = req.body.selected_source_key !== undefined ? helpers.strOrNull(req.body.selected_source_key) : undefined;
+        const selectedObjectType = req.body.selected_object_type !== undefined ? helpers.strOrNull(req.body.selected_object_type) : undefined;
+        const selectedContextLocality = req.body.selected_context_locality !== undefined ? helpers.strOrNull(req.body.selected_context_locality) : undefined;
+        const typedHousePart = req.body.typed_house_part !== undefined ? helpers.strOrNull(req.body.typed_house_part) : undefined;
+        const confirmNormalized = req.body.confirm_normalized !== undefined ? helpers.toBool(req.body.confirm_normalized, false) : false;
+        const floor = req.body.floor !== undefined ? helpers.strOrNull(req.body.floor) : undefined;
+        const apartment = req.body.apartment !== undefined ? helpers.strOrNull(req.body.apartment) : undefined;
+        const cabinet = req.body.cabinet !== undefined ? helpers.strOrNull(req.body.cabinet) : undefined;
+        const addressComment = req.body.address_comment !== undefined ? helpers.strOrNull(req.body.address_comment) : undefined;
+        const latResult = req.body.lat !== undefined ? parseStoreCoordinate(req.body.lat, 'lat') : null;
+        if (latResult && latResult.error) return res.status(400).json({ ok: false, error: latResult.error });
+        const lngResult = req.body.lng !== undefined ? parseStoreCoordinate(req.body.lng, 'lng') : null;
+        if (lngResult && lngResult.error) return res.status(400).json({ ok: false, error: lngResult.error });
+        const lat = latResult ? latResult.value : undefined;
+        const lng = lngResult ? lngResult.value : undefined;
         const phone = req.body.phone !== undefined ? helpers.strOrNull(req.body.phone) : undefined;
         const timezone = req.body.timezone !== undefined ? helpers.strOrNull(req.body.timezone) : undefined;
         const useGlobalHours = req.body.use_global_hours !== undefined ? (helpers.toBool(req.body.use_global_hours, false) ? 1 : 0) : undefined;
@@ -1337,9 +2010,16 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         const hoursPayload = Array.isArray(req.body.hours) ? req.body.hours : null;
         const deliveryHoursPayload = Array.isArray(req.body.delivery_hours) ? req.body.delivery_hours : null;
         const isActive = req.body.is_active !== undefined ? (helpers.toBool(req.body.is_active, true) ? 1 : 0) : undefined;
+        const storeAddressMapEnabled = isStoreAddressMapModeEnabled();
 
         if (name !== undefined && !name) {
           return res.status(400).json({ ok: false, error: 'NAME_REQUIRED' });
+        }
+        if (city !== undefined && !city) {
+          return res.status(400).json({ ok: false, error: 'CITY_REQUIRED' });
+        }
+        if (address !== undefined && !address && addressStreet === undefined) {
+          return res.status(400).json({ ok: false, error: 'ADDRESS_REQUIRED' });
         }
 
         if (code !== undefined && code !== existing.code) {
@@ -1354,6 +2034,64 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
           }
         }
 
+        let resolvedLocation = null;
+        let finalLat = lat;
+        let finalLng = lng;
+        const nextCityForGeocode = city !== undefined ? city : helpers.strOrNull(existing.city);
+        const nextContextLocality = addressContextLocality !== undefined
+          ? addressContextLocality
+          : helpers.strOrNull(existing.address_context_locality);
+        const nextAddressStreet = addressStreet !== undefined ? addressStreet : helpers.strOrNull(existing.address_street);
+        const nextAddressHouse = addressHouse !== undefined ? addressHouse : helpers.strOrNull(existing.address_house);
+        const nextAddressForGeocode = address !== undefined
+          ? address
+          : (buildStoreSavedAddress(
+            nextCityForGeocode,
+            nextContextLocality || nextCityForGeocode,
+            buildStoreStreetHouseLabel(nextAddressStreet, nextAddressHouse)
+          ) || helpers.strOrNull(existing.address));
+        if (
+          (address !== undefined && address !== helpers.strOrNull(existing.address))
+          || (addressStreet !== undefined && addressStreet !== helpers.strOrNull(existing.address_street))
+          || (addressHouse !== undefined && addressHouse !== helpers.strOrNull(existing.address_house))
+          || (addressContextLocality !== undefined && addressContextLocality !== helpers.strOrNull(existing.address_context_locality))
+          || (city !== undefined && city !== helpers.strOrNull(existing.city))
+        ) {
+          const useResolvedMapAddress = storeAddressMapEnabled && Boolean(selectedSourceKey && selectedObjectType);
+          const location = useResolvedMapAddress
+            ? await resolveStoreLocationByAddress(nextAddressForGeocode, nextCityForGeocode, {
+              addressStreet: nextAddressStreet,
+              addressHouse: nextAddressHouse,
+              resolvedCitySourceKey,
+              selectedSourceKey,
+              selectedObjectType,
+              selectedContextLocality: nextContextLocality || selectedContextLocality,
+              typedHousePart,
+              confirmNormalized,
+            })
+            : buildManualStoreLocation(nextAddressForGeocode, nextCityForGeocode, {
+              addressStreet: nextAddressStreet,
+              addressHouse: nextAddressHouse,
+              addressContextLocality: nextContextLocality,
+              typedHousePart,
+            });
+          if (!location.ok) {
+            return res.status(getStoreGeocodingHttpStatus(location.error)).json({
+              ok: false,
+              error: location.error,
+              normalization: location.data && location.data.normalization ? location.data.normalization : undefined,
+            });
+          }
+          resolvedLocation = location.data;
+          if (storeAddressMapEnabled) {
+            if (finalLat === undefined) finalLat = resolvedLocation.lat;
+            if (finalLng === undefined) finalLng = resolvedLocation.lng;
+          } else {
+            if (finalLat === undefined) finalLat = null;
+            if (finalLng === undefined) finalLng = null;
+          }
+        }
+
         const updates = [];
         const params = [];
         if (name !== undefined) {
@@ -1364,13 +2102,64 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
           updates.push('code=?');
           params.push(code);
         }
-        if (address !== undefined) {
+        if (address !== undefined || resolvedLocation) {
           updates.push('address=?');
-          params.push(address);
+          params.push(resolvedLocation ? resolvedLocation.address : address);
         }
-        if (city !== undefined) {
+        if (addressStreet !== undefined || resolvedLocation) {
+          updates.push('address_street=?');
+          params.push(resolvedLocation ? (resolvedLocation.address_street || nextAddressStreet || null) : addressStreet);
+        }
+        if (addressHouse !== undefined || resolvedLocation) {
+          updates.push('address_house=?');
+          params.push(resolvedLocation ? (resolvedLocation.address_house || nextAddressHouse || null) : addressHouse);
+        }
+        if (addressContextLocality !== undefined || resolvedLocation) {
+          updates.push('address_context_locality=?');
+          params.push(resolvedLocation
+            ? (resolvedLocation.address_context_locality || nextContextLocality || resolvedLocation.selected_context_locality || null)
+            : addressContextLocality);
+        }
+        if (resolvedLocation) {
+          updates.push('address_ref=?');
+          params.push(storeAddressMapEnabled ? (resolvedLocation.address_ref || null) : null);
+          updates.push('address_raw_input=?');
+          params.push(resolvedLocation.address_raw_input || nextAddressForGeocode || null);
+          updates.push('address_normalized_display=?');
+          params.push(resolvedLocation.address_normalized_display || resolvedLocation.address || null);
+          updates.push('city=?');
+          params.push(resolvedLocation.city);
+          updates.push('lat=?');
+          params.push(finalLat);
+          updates.push('lng=?');
+          params.push(finalLng);
+        } else if (address === undefined && addressStreet === undefined && addressHouse === undefined && city !== undefined) {
           updates.push('city=?');
           params.push(city);
+        }
+        if (!resolvedLocation && lat !== undefined) {
+          updates.push('lat=?');
+          params.push(lat);
+        }
+        if (!resolvedLocation && lng !== undefined) {
+          updates.push('lng=?');
+          params.push(lng);
+        }
+        if (floor !== undefined) {
+          updates.push('floor=?');
+          params.push(floor);
+        }
+        if (apartment !== undefined) {
+          updates.push('apartment=?');
+          params.push(apartment);
+        }
+        if (cabinet !== undefined) {
+          updates.push('cabinet=?');
+          params.push(cabinet);
+        }
+        if (addressComment !== undefined) {
+          updates.push('address_comment=?');
+          params.push(addressComment);
         }
         if (phone !== undefined) {
           updates.push('phone=?');
@@ -2102,7 +2891,7 @@ async function saveStoreDeliveryHours(tenantId, storeId, hours) {
         [tenantId, storeId, token, expiresAt, secretKey]
       );
 
-      const botUsername = (process.env.TELEGRAM_BOT_USERNAME || '').trim();
+      const botUsername = getEffectiveTelegramBotConfig().telegram_bot_username;
       const link = botUsername ? `https://t.me/${botUsername}?start=${token}` : null;
 
       res.json({ ok: true, token, link, expires_at: expiresAt.toISOString() });

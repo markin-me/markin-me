@@ -5,6 +5,7 @@ const path = require('path');
 const multer = require('multer');
 const { sendNewOrderNotification } = require('../telegramNotifications');
 const { sendOrderToPrintBot } = require('../printPush');
+const { getEffectiveTelegramBotConfig } = require('../../data/system-settings');
 const discountHelpers = require('../helpers/discounts');
 const {
   makeLinkToken,
@@ -7553,7 +7554,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             if (ordersEvents && typeof ordersEvents.publish === 'function') {
               ordersEvents.publish(tenantId, orderStoreId, 'order.created', payload);
             }
-            const botToken = process.env.TELEGRAM_BOT_TOKEN;
+            const botToken = getEffectiveTelegramBotConfig().telegram_bot_token;
             if (botToken) {
               sendNewOrderNotification(tenantId, orderStoreId, payload, { db, botToken }).catch((err) =>
                 console.error('Telegram new order notify:', err)

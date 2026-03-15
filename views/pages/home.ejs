@@ -6,7 +6,10 @@
   centerPartial: '../partials/home/center',
   rightPartial: '../partials/home/right',
   extraPartial: null,
+  pageStyles: activePage === 'settings'
+    ? ['/static/vendor/leaflet/leaflet.css']
+    : [],
   pageScripts: activePage === 'settings'
-    ? ['/static/js/settings-tenant.js']
+    ? ['/static/vendor/leaflet/leaflet.js', '/static/js/settings-tenant.js']
     : []
 }) %>
